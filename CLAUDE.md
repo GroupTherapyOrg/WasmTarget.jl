@@ -118,6 +118,10 @@ Per-function compilation state:
 13. **JS Interop**: externref (JSValue type), imports with RefTypes
 14. **Wasm Globals**: Mutable/immutable globals, exported to JS
 15. **Callbacks**: Exported functions work as JS event handlers
+16. **Tables**: funcref and externref tables with element segments
+17. **Indirect Calls**: call_indirect for dynamic dispatch
+18. **Linear Memory**: Memory sections with load/store operations
+19. **Data Segments**: Initialize memory with constant data (strings, bytes)
 
 ### Therapy.jl Pattern Demo
 
@@ -142,23 +146,22 @@ This pattern enables Therapy.jl to:
 
 ### Test Coverage
 
-~173 tests organized in phases:
+~199 tests organized in phases:
 - Phase 1-3: Infrastructure, builder, compiler basics
 - Phase 4-6: Control flow, integers, type conversions
 - Phase 7-9: Structs, tuples, arrays
 - Phase 10-12: JS imports, loops, recursion
 - Phase 13-15: Struct access, floats, strings
 - Phase 16-17: Multi-function modules, JS interop
+- Phase 18: Tables, memory, and data segments
 
 ## Future Work (Roadmap for Therapy.jl)
 
 ### Near-Term (WasmTarget.jl)
 
-1. **funcref Exports**: Pass Wasm functions to JS as callbacks
-2. **Tables**: For indirect function calls
-3. **More String Operations**: Concatenation, comparison
-4. **Memory Operations**: Linear memory access if needed
-5. **Better Error Messages**: Source location tracking
+1. **More String Operations**: Concatenation, comparison
+2. **Better Error Messages**: Source location tracking
+3. **funcref Support**: ref.func and function reference passing
 
 ### Medium-Term (Therapy.jl Foundation)
 

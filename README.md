@@ -11,6 +11,9 @@ A Julia-to-WebAssembly compiler targeting the WasmGC (Garbage Collection) propos
 - **Multi-Function Modules**: Compile multiple functions into a single module with cross-function calls
 - **Multiple Dispatch**: Same function name with different type signatures dispatches correctly
 - **JS Interop**: `externref` support for holding JavaScript objects, import JS functions
+- **Tables**: Function reference tables for indirect calls and dynamic dispatch
+- **Linear Memory**: Memory sections with load/store operations and data initialization
+- **Globals**: Mutable and immutable global variables, exportable to JS
 
 ## Requirements
 
@@ -134,12 +137,25 @@ For advanced use cases, you can use the Builder API directly:
 
 ```julia
 using WasmTarget
-using WasmTarget: WasmModule, add_import!, add_function!, add_export!, to_bytes
+using WasmTarget: WasmModule, add_import!, add_function!, add_export!,
+                  add_global!, add_global_export!, add_table!, add_memory!,
+                  add_data_segment!, to_bytes, I32, FuncRef, Opcode
 
 mod = WasmModule()
 
 # Add imports
 add_import!(mod, "env", "log", [I32], [])
+
+# Add globals for state
+count_idx = add_global!(mod, I32, true, 0)  # mutable i32 initialized to 0
+add_global_export!(mod, "count", count_idx)
+
+# Add tables for function references
+table_idx = add_table!(mod, FuncRef, 4)  # table of 4 funcrefs
+
+# Add linear memory
+mem_idx = add_memory!(mod, 1)  # 1 page (64KB)
+add_data_segment!(mod, 0, 0, "Hello, World!")  # initialize with string
 
 # Build module
 bytes = to_bytes(mod)
