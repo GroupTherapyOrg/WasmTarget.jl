@@ -1280,6 +1280,28 @@ end
             @test validate_wasm(wasm_bytes)
         end
 
+        # String concatenation
+        @noinline function str_concat(a::String, b::String)::String
+            return a * b
+        end
+
+        @testset "String concatenation" begin
+            wasm_bytes = WasmTarget.compile(str_concat, (String, String))
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+        end
+
+        # String equality
+        @noinline function str_equal(a::String, b::String)::Bool
+            return a == b
+        end
+
+        @testset "String equality" begin
+            wasm_bytes = WasmTarget.compile(str_equal, (String, String))
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+        end
+
     end
 
     # ========================================================================
