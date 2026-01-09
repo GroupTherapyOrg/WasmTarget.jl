@@ -1821,10 +1821,33 @@ function generate_void_flow(ctx::CompilationContext, blocks::Vector{BasicBlock},
                     # But we need to drop any value on the stack
                     push!(compiled, j)
                 elseif inner isa Core.GotoIfNot
-                    # Nested conditional in void context (from && operator)
-                    append!(bytes, compile_void_nested_conditional(ctx, code, j, compiled, ssa_use_count))
+                    # Check if this GotoIfNot is a ternary pattern (has a phi node)
+                    # If so, use compile_ternary_for_phi to produce the phi value
+                    inner_goto_if_not = inner::Core.GotoIfNot
+                    inner_else_target = inner_goto_if_not.dest
+
+                    # Look for a phi node after the inner else target
+                    phi_idx_for_ternary = nothing
+                    for k in inner_else_target:length(code)
+                        if code[k] isa Core.PhiNode
+                            phi_idx_for_ternary = k
+                            break
+                        end
+                        if code[k] isa Core.GotoIfNot || (code[k] isa Expr && code[k].head === :call)
+                            break  # Past the ternary
+                        end
+                    end
+
+                    if phi_idx_for_ternary !== nothing && haskey(ctx.phi_locals, phi_idx_for_ternary)
+                        # This is a ternary pattern - use compile_ternary_for_phi
+                        append!(bytes, compile_ternary_for_phi(ctx, code, j, compiled))
+                    else
+                        # Regular nested conditional in void context (from && operator)
+                        append!(bytes, compile_void_nested_conditional(ctx, code, j, compiled, ssa_use_count))
+                    end
                 elseif inner isa Core.PhiNode
-                    # Phi handled by compile_ternary_for_phi
+                    # Phi already handled by compile_ternary_for_phi if it was part of a ternary
+                    # If not handled, just skip it
                     push!(compiled, j)
                 else
                     append!(bytes, compile_statement(inner, j, ctx))
@@ -1883,8 +1906,29 @@ function generate_void_flow(ctx::CompilationContext, blocks::Vector{BasicBlock},
                 elseif inner isa Core.GotoNode
                     push!(compiled, j)
                 elseif inner isa Core.GotoIfNot
-                    # Another conditional in else branch - handle recursively
-                    append!(bytes, compile_void_nested_conditional(ctx, code, j, compiled, ssa_use_count))
+                    # Check if this GotoIfNot is a ternary pattern (has a phi node)
+                    inner_goto_if_not = inner::Core.GotoIfNot
+                    inner_else_target = inner_goto_if_not.dest
+
+                    phi_idx_for_ternary = nothing
+                    for k in inner_else_target:length(code)
+                        if code[k] isa Core.PhiNode
+                            phi_idx_for_ternary = k
+                            break
+                        end
+                        if code[k] isa Core.GotoIfNot || (code[k] isa Expr && code[k].head === :call)
+                            break
+                        end
+                    end
+
+                    if phi_idx_for_ternary !== nothing && haskey(ctx.phi_locals, phi_idx_for_ternary)
+                        append!(bytes, compile_ternary_for_phi(ctx, code, j, compiled))
+                    else
+                        append!(bytes, compile_void_nested_conditional(ctx, code, j, compiled, ssa_use_count))
+                    end
+                elseif inner isa Core.PhiNode
+                    # Phi already handled by compile_ternary_for_phi
+                    push!(compiled, j)
                 else
                     append!(bytes, compile_statement(inner, j, ctx))
                     push!(compiled, j)
@@ -1970,10 +2014,30 @@ function compile_void_nested_conditional(ctx::CompilationContext, code, start_id
             push!(bytes, Opcode.RETURN)
             push!(compiled, j)
         elseif inner isa Core.GotoIfNot
-            # RECURSION: Another conditional (from && chain)
-            append!(bytes, compile_void_nested_conditional(ctx, code, j, compiled, ssa_use_count))
+            # Check if this GotoIfNot is a ternary pattern (has a phi node)
+            inner_goto_if_not = inner::Core.GotoIfNot
+            inner_else_target = inner_goto_if_not.dest
+
+            phi_idx_for_ternary = nothing
+            for k in inner_else_target:length(code)
+                if code[k] isa Core.PhiNode
+                    phi_idx_for_ternary = k
+                    break
+                end
+                if code[k] isa Core.GotoIfNot || (code[k] isa Expr && code[k].head === :call)
+                    break
+                end
+            end
+
+            if phi_idx_for_ternary !== nothing && haskey(ctx.phi_locals, phi_idx_for_ternary)
+                # This is a ternary pattern - use compile_ternary_for_phi
+                append!(bytes, compile_ternary_for_phi(ctx, code, j, compiled))
+            else
+                # RECURSION: Another conditional (from && chain)
+                append!(bytes, compile_void_nested_conditional(ctx, code, j, compiled, ssa_use_count))
+            end
         elseif inner isa Core.PhiNode
-            # Skip phi nodes in void context
+            # Phi already handled by compile_ternary_for_phi if it was part of a ternary
             push!(compiled, j)
         else
             # Regular statement (including setter calls)
