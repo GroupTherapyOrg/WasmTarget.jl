@@ -15,6 +15,10 @@ include("Runtime/Intrinsics.jl")
 # Main API
 export compile, compile_multi, WasmModule, to_bytes
 export WasmGlobal, global_index, global_eltype
+# Therapy.jl integration - direct IR compilation for reactive handlers
+export compile_handler, compile_closure_body, DOMBindingSpec, TypeRegistry
+export add_import!, add_global!, add_global_export!, add_function!, add_export!
+export I32, I64, F32, F64, NumType, Opcode, ExternRef
 
 """
     compile(f, arg_types) -> Vector{UInt8}

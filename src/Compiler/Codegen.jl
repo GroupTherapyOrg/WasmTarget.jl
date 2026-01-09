@@ -405,7 +405,17 @@ function compile_module(functions::Vector)::WasmModule
 end
 
 """
-    compile_handler(closure, signal_fields, export_name; globals, imports) -> WasmModule
+Specification for a DOM update call after signal write.
+Used by compile_handler to inject DOM update calls after signal writes.
+"""
+struct DOMBindingSpec
+    import_idx::UInt32          # Index of the DOM import function
+    const_args::Vector{Int32}   # Constant arguments (e.g., hydration key)
+    include_signal_value::Bool  # Whether to pass signal value as final arg
+end
+
+"""
+    compile_handler(closure, signal_fields, export_name; globals, imports, dom_bindings) -> WasmModule
 
 Compile a Therapy.jl event handler closure to WebAssembly with signal substitution.
 
@@ -415,6 +425,9 @@ The `signal_fields` dict maps captured closure field names to their signal info:
 
 The handler closure should take no arguments. Signal getters/setters are captured
 in the closure and compiled to Wasm global.get/global.set operations.
+
+When `dom_bindings` is provided, DOM update calls are automatically injected after
+each signal write. This is used by Therapy.jl for reactive DOM updates.
 
 # Example
 ```julia
@@ -434,7 +447,8 @@ function compile_handler(
     signal_fields::Dict{Symbol, Tuple{Bool, UInt32, Type}},
     export_name::String;
     globals::Vector{Tuple{Type, Any}} = Tuple{Type, Any}[],  # (type, initial_value) pairs
-    imports::Vector = []  # Import specs (to be defined)
+    imports::Vector{Tuple{String, String, Vector, Vector}} = Tuple{String, String, Vector, Vector}[],  # (module, name, params, results)
+    dom_bindings::Dict{UInt32, Vector{DOMBindingSpec}} = Dict{UInt32, Vector{DOMBindingSpec}}()  # global_idx -> DOM updates
 )::WasmModule
     # Get typed IR for the closure (no arguments since it's a thunk)
     typed_results = Base.code_typed(closure, ())
@@ -448,7 +462,11 @@ function compile_handler(
     type_registry = TypeRegistry()
 
     # Add imports first (they affect function indices)
-    # TODO: Phase 4 will add import registration
+    import_indices = Dict{Tuple{String, String}, UInt32}()
+    for (mod_name, func_name, params, results) in imports
+        idx = add_import!(mod, mod_name, func_name, params, results)
+        import_indices[(mod_name, func_name)] = idx
+    end
 
     # Create globals from signal fields
     # Collect unique global indices and their types
@@ -490,6 +508,13 @@ function compile_handler(
         captured_signal_fields[field_name] = (is_getter, global_idx)
     end
 
+    # Convert DOMBindingSpec to internal format for CompilationContext
+    # Internal format: global_idx -> [(import_idx, const_args), ...]
+    internal_dom_bindings = Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}()
+    for (global_idx, specs) in dom_bindings
+        internal_dom_bindings[global_idx] = [(spec.import_idx, spec.const_args) for spec in specs]
+    end
+
     # Compile the closure body
     # Closures have one implicit argument (_1 = self)
     ctx = CompilationContext(
@@ -498,7 +523,8 @@ function compile_handler(
         return_type,
         mod,
         type_registry;
-        captured_signal_fields = captured_signal_fields
+        captured_signal_fields = captured_signal_fields,
+        dom_bindings = internal_dom_bindings
     )
     body = generate_body(ctx)
 
@@ -514,6 +540,49 @@ function compile_handler(
     add_export!(mod, export_name, 0, func_idx)
 
     return mod
+end
+
+"""
+    compile_closure_body(closure, captured_signal_fields, mod, type_registry; dom_bindings) -> (Vector{UInt8}, Vector{NumType})
+
+Compile a closure body to Wasm bytecode without creating a new module.
+Returns the body bytecode and locals needed for the function.
+
+This is the lower-level API used by Therapy.jl to compile handler closures
+into an existing module with shared globals and imports.
+
+The `captured_signal_fields` maps field names to (is_getter, global_idx).
+The `dom_bindings` maps global_idx to list of (import_idx, const_args) tuples.
+"""
+function compile_closure_body(
+    closure::Function,
+    captured_signal_fields::Dict{Symbol, Tuple{Bool, UInt32}},
+    mod::WasmModule,
+    type_registry::TypeRegistry;
+    dom_bindings::Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}} = Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}()
+)
+    # Get typed IR for the closure
+    typed_results = Base.code_typed(closure, ())
+    if isempty(typed_results)
+        error("Could not get typed IR for handler closure")
+    end
+    code_info, return_type = typed_results[1]
+
+    # Create compilation context
+    ctx = CompilationContext(
+        code_info,
+        (),  # No explicit arguments
+        return_type,
+        mod,
+        type_registry;
+        captured_signal_fields = captured_signal_fields,
+        dom_bindings = dom_bindings
+    )
+
+    # Generate body
+    body = generate_body(ctx)
+
+    return (body, ctx.locals)
 end
 
 """
@@ -624,13 +693,17 @@ mutable struct CompilationContext
     signal_ssa_getters::Dict{Int, UInt32}   # SSA id (from getfield) -> Wasm global index
     signal_ssa_setters::Dict{Int, UInt32}   # SSA id (from getfield) -> Wasm global index
     captured_signal_fields::Dict{Symbol, Tuple{Bool, UInt32}}  # field_name -> (is_getter, global_idx)
+    # DOM bindings for Therapy.jl - emit DOM update calls after signal writes
+    # Maps global_idx -> [(import_idx, [hk_arg, ...]), ...]
+    dom_bindings::Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}
 end
 
 function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
                            func_registry::Union{FunctionRegistry, Nothing}=nothing,
                            func_idx::UInt32=UInt32(0), func_ref=nothing,
                            global_args::Set{Int}=Set{Int}(),
-                           captured_signal_fields::Dict{Symbol, Tuple{Bool, UInt32}}=Dict{Symbol, Tuple{Bool, UInt32}}())
+                           captured_signal_fields::Dict{Symbol, Tuple{Bool, UInt32}}=Dict{Symbol, Tuple{Bool, UInt32}}(),
+                           dom_bindings::Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}=Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}())
     # Calculate n_params excluding WasmGlobal arguments (they're phantom)
     n_real_params = count(i -> !(i in global_args), 1:length(arg_types))
     ctx = CompilationContext(
@@ -651,7 +724,8 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         global_args,
         Dict{Int, UInt32}(),    # signal_ssa_getters
         Dict{Int, UInt32}(),    # signal_ssa_setters
-        captured_signal_fields  # captured signal field mappings
+        captured_signal_fields, # captured signal field mappings
+        dom_bindings            # DOM bindings for Therapy.jl
     )
     # Analyze SSA types and allocate locals for multi-use SSAs
     analyze_ssa_types!(ctx)
@@ -677,36 +751,13 @@ function analyze_signal_captures!(ctx::CompilationContext)
 
     code = ctx.code_info.code
 
-    # Track CompilableSignal/CompilableSetter SSAs
-    compilable_ssas = Dict{Int, Tuple{Bool, UInt32}}()  # ssa -> (is_getter, global_idx)
+    # For Therapy.jl: captured signal fields are getter/setter FUNCTIONS (closures)
+    # When we see getfield(_1, :count) where :count is a getter, the resulting SSA
+    # is a function that when invoked returns the signal value.
+    # We directly map these to signal_ssa_getters/setters so that when compile_invoke
+    # sees invoke(%ssa), it knows to emit global.get/global.set.
 
-    # Track Signal SSAs (from getfield(CompilableSignal/Setter, :signal))
-    signal_ssas = Dict{Int, UInt32}()  # ssa -> global_idx
-
-    # First pass: find closure field accesses and CompilableSignal/Setter
-    for (i, stmt) in enumerate(code)
-        if stmt isa Expr && stmt.head === :call
-            func = stmt.args[1]
-            if func isa GlobalRef && func.mod === Core && func.name === :getfield
-                target = stmt.args[2]
-                field_ref = stmt.args[3]
-                field_name = field_ref isa QuoteNode ? field_ref.value : field_ref
-
-                # Check if this is getfield(_1, :fieldname) - getting captured closure field
-                # Target can be Core.SlotNumber(1) or Core.Argument(1)
-                is_closure_self = (target isa Core.SlotNumber && target.id == 1) ||
-                                  (target isa Core.Argument && target.n == 1)
-                if is_closure_self
-                    if field_name isa Symbol && haskey(ctx.captured_signal_fields, field_name)
-                        is_getter, global_idx = ctx.captured_signal_fields[field_name]
-                        compilable_ssas[i] = (is_getter, global_idx)
-                    end
-                end
-            end
-        end
-    end
-
-    # Second pass: find getfield(CompilableSignal/Setter, :signal) -> Signal
+    # First pass: find closure field accesses to signal getter/setter functions
     for (i, stmt) in enumerate(code)
         if stmt isa Expr && stmt.head === :call
             func = stmt.args[1]
@@ -719,7 +770,70 @@ function analyze_signal_captures!(ctx::CompilationContext)
                 field_ref = stmt.args[3]
                 field_name = field_ref isa QuoteNode ? field_ref.value : field_ref
 
-                # Check if target is a CompilableSignal/Setter and field is :signal
+                # Check if this is getfield(_1, :fieldname) - getting captured closure field
+                # Target can be Core.SlotNumber(1) or Core.Argument(1)
+                is_closure_self = (target isa Core.SlotNumber && target.id == 1) ||
+                                  (target isa Core.Argument && target.n == 1)
+                if is_closure_self
+                    if field_name isa Symbol && haskey(ctx.captured_signal_fields, field_name)
+                        is_getter, global_idx = ctx.captured_signal_fields[field_name]
+                        # Directly map the SSA to signal getter/setter
+                        # When this SSA is invoked, it becomes a signal read or write
+                        if is_getter
+                            ctx.signal_ssa_getters[i] = global_idx
+                        else
+                            ctx.signal_ssa_setters[i] = global_idx
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    # Also handle WasmGlobal-style patterns (for compatibility with WasmGlobal{T, IDX})
+    # Track CompilableSignal/CompilableSetter SSAs
+    compilable_ssas = Dict{Int, Tuple{Bool, UInt32}}()  # ssa -> (is_getter, global_idx)
+
+    # Track Signal SSAs (from getfield(CompilableSignal/Setter, :signal))
+    signal_ssas = Dict{Int, UInt32}()  # ssa -> global_idx
+
+    # Find getfield(_1, :fieldname) that might be WasmGlobal-style
+    for (i, stmt) in enumerate(code)
+        if stmt isa Expr && stmt.head === :call
+            func = stmt.args[1]
+            # Handle both Core.getfield and Base.getfield
+            is_getfield = (func isa GlobalRef &&
+                          ((func.mod === Core && func.name === :getfield) ||
+                           (func.mod === Base && func.name === :getfield)))
+            if is_getfield && length(stmt.args) >= 3
+                target = stmt.args[2]
+                field_ref = stmt.args[3]
+                field_name = field_ref isa QuoteNode ? field_ref.value : field_ref
+
+                is_closure_self = (target isa Core.SlotNumber && target.id == 1) ||
+                                  (target isa Core.Argument && target.n == 1)
+                if is_closure_self
+                    if field_name isa Symbol && haskey(ctx.captured_signal_fields, field_name)
+                        is_getter, global_idx = ctx.captured_signal_fields[field_name]
+                        compilable_ssas[i] = (is_getter, global_idx)
+                    end
+                end
+            end
+        end
+    end
+
+    # Find getfield(CompilableSignal/Setter, :signal) -> Signal
+    for (i, stmt) in enumerate(code)
+        if stmt isa Expr && stmt.head === :call
+            func = stmt.args[1]
+            is_getfield = (func isa GlobalRef &&
+                          ((func.mod === Core && func.name === :getfield) ||
+                           (func.mod === Base && func.name === :getfield)))
+            if is_getfield && length(stmt.args) >= 3
+                target = stmt.args[2]
+                field_ref = stmt.args[3]
+                field_name = field_ref isa QuoteNode ? field_ref.value : field_ref
+
                 if target isa Core.SSAValue && field_name === :signal
                     if haskey(compilable_ssas, target.id)
                         _, global_idx = compilable_ssas[target.id]
@@ -730,7 +844,7 @@ function analyze_signal_captures!(ctx::CompilationContext)
         end
     end
 
-    # Third pass: mark getfield(Signal, :value) as signal reads
+    # Mark getfield(Signal, :value) as signal reads
     # and setfield!(Signal, :value, x) as signal writes
     for (i, stmt) in enumerate(code)
         if stmt isa Expr && stmt.head === :call
@@ -1400,6 +1514,7 @@ end
 
 """
 Generate code for a simple if-then-else pattern.
+Handles both return-based patterns and phi node patterns (ternary expressions).
 """
 function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
     bytes = UInt8[]
@@ -1418,53 +1533,126 @@ function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBloc
     # We need to push it
     append!(bytes, compile_value(goto_if_not.cond, ctx))
 
-    # Determine result type for the if block
-    # Use concrete type for structs so the block has the correct type
-    result_type = julia_to_wasm_type_concrete(ctx.return_type, ctx)
-
-    # Start if block (condition is on stack)
-    # if (result type) ... else ... end
-    push!(bytes, Opcode.IF)
-    append!(bytes, encode_block_type(result_type))  # Block type = result type
-
-    # Find the then-branch (statements between GotoIfNot and target)
-    # and else-branch (statements at and after target)
+    # Find the then-branch and else-branch boundaries
     then_start = first_block.end_idx + 1
     else_start = target_label
 
-    # Generate then-branch (executed when condition is TRUE, i.e., NOT jumping)
-    for i in then_start:else_start-1
-        stmt = code[i]
-        if stmt isa Core.ReturnNode
-            if isdefined(stmt, :val)
-                append!(bytes, compile_value(stmt.val, ctx))
-            end
-            # Don't emit return - the value stays on stack for the if result
-        else
-            append!(bytes, compile_statement(stmt, i, ctx))
-        end
-    end
-
-    # Else branch
-    push!(bytes, Opcode.ELSE)
-
-    # Generate else-branch
+    # Check if there's a phi node that merges the branches
+    # Pattern: then-branch jumps to merge point, else-branch falls through, phi at merge
+    phi_idx = nothing
+    phi_node = nothing
     for i in else_start:length(code)
-        stmt = code[i]
-        if stmt isa Core.ReturnNode
-            if isdefined(stmt, :val)
-                append!(bytes, compile_value(stmt.val, ctx))
-            end
-        else
-            append!(bytes, compile_statement(stmt, i, ctx))
+        if code[i] isa Core.PhiNode
+            phi_idx = i
+            phi_node = code[i]
+            break
         end
     end
 
-    # End if
-    push!(bytes, Opcode.END)
+    if phi_node !== nothing
+        # Phi node pattern (ternary expression)
+        # The phi provides values for each branch - use those directly
+        phi_type = get(ctx.ssa_types, phi_idx, Int32)
+        result_type = julia_to_wasm_type_concrete(phi_type, ctx)
 
-    # The result of if...else...end is on the stack, return it
-    push!(bytes, Opcode.RETURN)
+        # Start if block with phi result type
+        push!(bytes, Opcode.IF)
+        append!(bytes, encode_block_type(result_type))
+
+        # Get the phi values for each edge
+        # The phi edges reference statement numbers that lead to the phi
+        then_value = nothing
+        else_value = nothing
+
+        for (edge_idx, edge) in enumerate(phi_node.edges)
+            val = phi_node.values[edge_idx]
+            if edge < else_start
+                # This edge comes from the then-branch (before else_start)
+                then_value = val
+            else
+                # This edge comes from the else-branch
+                else_value = val
+            end
+        end
+
+        # Then-branch: push the then-value
+        if then_value !== nothing
+            append!(bytes, compile_value(then_value, ctx))
+        end
+
+        # Else branch
+        push!(bytes, Opcode.ELSE)
+
+        # Else-branch: push the else-value
+        if else_value !== nothing
+            append!(bytes, compile_value(else_value, ctx))
+        end
+
+        # End if - phi result is on the stack
+        push!(bytes, Opcode.END)
+
+        # Store phi result to local if it has one
+        if haskey(ctx.phi_locals, phi_idx)
+            local_idx = ctx.phi_locals[phi_idx]
+            push!(bytes, Opcode.LOCAL_SET)
+            append!(bytes, encode_leb128_unsigned(local_idx))
+        end
+
+        # Generate code after the phi node
+        for i in phi_idx+1:length(code)
+            stmt = code[i]
+            if stmt isa Core.ReturnNode
+                if isdefined(stmt, :val)
+                    append!(bytes, compile_value(stmt.val, ctx))
+                end
+                push!(bytes, Opcode.RETURN)
+            elseif !(stmt === nothing)
+                append!(bytes, compile_statement(stmt, i, ctx))
+            end
+        end
+    else
+        # Return-based pattern (original logic)
+        # Determine result type for the if block
+        result_type = julia_to_wasm_type_concrete(ctx.return_type, ctx)
+
+        # Start if block (condition is on stack)
+        push!(bytes, Opcode.IF)
+        append!(bytes, encode_block_type(result_type))
+
+        # Generate then-branch (executed when condition is TRUE)
+        for i in then_start:else_start-1
+            stmt = code[i]
+            if stmt isa Core.ReturnNode
+                if isdefined(stmt, :val)
+                    append!(bytes, compile_value(stmt.val, ctx))
+                end
+                # Don't emit return - the value stays on stack for the if result
+            else
+                append!(bytes, compile_statement(stmt, i, ctx))
+            end
+        end
+
+        # Else branch
+        push!(bytes, Opcode.ELSE)
+
+        # Generate else-branch
+        for i in else_start:length(code)
+            stmt = code[i]
+            if stmt isa Core.ReturnNode
+                if isdefined(stmt, :val)
+                    append!(bytes, compile_value(stmt.val, ctx))
+                end
+            else
+                append!(bytes, compile_statement(stmt, i, ctx))
+            end
+        end
+
+        # End if
+        push!(bytes, Opcode.END)
+
+        # The result of if...else...end is on the stack, return it
+        push!(bytes, Opcode.RETURN)
+    end
 
     return bytes
 end
@@ -1791,45 +1979,74 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
 
     # Special case for signal read: getfield(Signal, :value) -> global.get
     # This is detected by analyze_signal_captures! and stored in signal_ssa_getters
-    if haskey(ctx.signal_ssa_getters, idx)
-        global_idx = ctx.signal_ssa_getters[idx]
-        push!(bytes, Opcode.GLOBAL_GET)
-        append!(bytes, encode_leb128_unsigned(global_idx))
-        return bytes
+    # ONLY applies to actual getfield(Signal, :value) calls (WasmGlobal pattern)
+    # For Therapy.jl closures, signal_ssa_getters maps closure field SSAs - handled in compile_invoke
+    is_getfield_value = is_func(func, :getfield) && length(args) >= 2
+    if is_getfield_value && haskey(ctx.signal_ssa_getters, idx)
+        # Check that this is accessing :value field (WasmGlobal pattern)
+        field_ref = args[2]
+        field_name = field_ref isa QuoteNode ? field_ref.value : field_ref
+        if field_name === :value
+            global_idx = ctx.signal_ssa_getters[idx]
+            push!(bytes, Opcode.GLOBAL_GET)
+            append!(bytes, encode_leb128_unsigned(global_idx))
+            return bytes
+        end
     end
 
     # Special case for signal write: setfield!(Signal, :value, x) -> global.set
     # This is detected by analyze_signal_captures! and stored in signal_ssa_setters
-    if haskey(ctx.signal_ssa_setters, idx)
-        # The value to write is the 4th argument (setfield!(target, field, value))
+    # ONLY applies to actual setfield! calls (WasmGlobal pattern), NOT closure field access
+    is_setfield_call = is_func(func, :setfield!) && length(args) >= 3
+    if is_setfield_call && haskey(ctx.signal_ssa_setters, idx)
+        # The value to write is the 3rd argument (args = [target, field, value])
         global_idx = ctx.signal_ssa_setters[idx]
-        value_arg = args[3]  # args = [target, field, value]
+        value_arg = args[3]
         append!(bytes, compile_value(value_arg, ctx))
         push!(bytes, Opcode.GLOBAL_SET)
         append!(bytes, encode_leb128_unsigned(global_idx))
+
+        # Inject DOM update calls for this signal (Therapy.jl reactive updates)
+        if haskey(ctx.dom_bindings, global_idx)
+            for (import_idx, const_args) in ctx.dom_bindings[global_idx]
+                # Push constant arguments (e.g., hydration key)
+                for arg in const_args
+                    push!(bytes, Opcode.I32_CONST)
+                    append!(bytes, encode_leb128_signed(Int(arg)))
+                end
+                # Push the signal value (re-read from global)
+                push!(bytes, Opcode.GLOBAL_GET)
+                append!(bytes, encode_leb128_unsigned(global_idx))
+                # Call the DOM import function
+                push!(bytes, Opcode.CALL)
+                append!(bytes, encode_leb128_unsigned(import_idx))
+            end
+        end
+
         # setfield! returns the value written, so re-read it
         push!(bytes, Opcode.GLOBAL_GET)
         append!(bytes, encode_leb128_unsigned(global_idx))
         return bytes
     end
 
-    # Special case for Core.getfield on closure (_1) accessing captured signal fields
-    # These produce intermediate SSA values (CompilableSignal/Setter structs)
-    # Skip them - the actual read/write happens on the inner Signal object
-    if func isa GlobalRef && func.mod === Core && func.name === :getfield
-        if length(args) >= 2
-            target = args[1]
-            field_ref = args[2]
-            # Target can be Core.SlotNumber(1) or Core.Argument(1)
-            is_closure_self = (target isa Core.SlotNumber && target.id == 1) ||
-                              (target isa Core.Argument && target.n == 1)
-            if is_closure_self
-                # This is accessing a field of the closure
-                field_name = field_ref isa QuoteNode ? field_ref.value : field_ref
-                if field_name isa Symbol && haskey(ctx.captured_signal_fields, field_name)
-                    # Skip - this produces a CompilableSignal/Setter reference
-                    return bytes
-                end
+    # Special case for getfield on closure (_1) accessing captured signal fields
+    # These produce intermediate SSA values (getter/setter functions)
+    # Skip them - the actual read/write happens when the function is invoked
+    is_getfield_closure = (func isa GlobalRef &&
+                          ((func.mod === Core && func.name === :getfield) ||
+                           (func.mod === Base && func.name === :getfield)))
+    if is_getfield_closure && length(args) >= 2
+        target = args[1]
+        field_ref = args[2]
+        # Target can be Core.SlotNumber(1) or Core.Argument(1)
+        is_closure_self = (target isa Core.SlotNumber && target.id == 1) ||
+                          (target isa Core.Argument && target.n == 1)
+        if is_closure_self
+            # This is accessing a field of the closure
+            field_name = field_ref isa QuoteNode ? field_ref.value : field_ref
+            if field_name isa Symbol && haskey(ctx.captured_signal_fields, field_name)
+                # Skip - this produces a getter/setter function reference
+                return bytes
             end
         end
     end
@@ -2481,6 +2698,24 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
             # Store to global
             push!(bytes, Opcode.GLOBAL_SET)
             append!(bytes, encode_leb128_unsigned(global_idx))
+
+            # Inject DOM update calls for this signal (Therapy.jl reactive updates)
+            if haskey(ctx.dom_bindings, global_idx)
+                for (import_idx, const_args) in ctx.dom_bindings[global_idx]
+                    # Push constant arguments (e.g., hydration key)
+                    for arg in const_args
+                        push!(bytes, Opcode.I32_CONST)
+                        append!(bytes, encode_leb128_signed(Int(arg)))
+                    end
+                    # Push the signal value (re-read from global)
+                    push!(bytes, Opcode.GLOBAL_GET)
+                    append!(bytes, encode_leb128_unsigned(global_idx))
+                    # Call the DOM import function
+                    push!(bytes, Opcode.CALL)
+                    append!(bytes, encode_leb128_unsigned(import_idx))
+                end
+            end
+
             # Setter returns the value in Therapy.jl, so re-read it
             push!(bytes, Opcode.GLOBAL_GET)
             append!(bytes, encode_leb128_unsigned(global_idx))
