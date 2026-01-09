@@ -352,6 +352,63 @@ macro test_wasm_output(wasm_bytes, func_name, args, expected)
 end
 
 # ============================================================================
+# Wasm Validation
+# ============================================================================
+
+"""
+    validate_wasm(wasm_bytes::Vector{UInt8}) -> Bool
+
+Validate a WebAssembly module by attempting to instantiate it in Node.js.
+Returns true if the module is valid, false otherwise.
+"""
+function validate_wasm(wasm_bytes::Vector{UInt8})
+    if NODE_CMD === nothing
+        @warn "Node.js not available. Skipping Wasm validation."
+        return true  # Assume valid if we can't check
+    end
+
+    dir = mktempdir()
+    wasm_path = joinpath(dir, "module.wasm")
+    js_path = joinpath(dir, "validator.mjs")
+
+    # Write the Wasm binary
+    write(wasm_path, wasm_bytes)
+
+    # Generate the validator script
+    validator_script = """
+import fs from 'fs';
+
+const bytes = fs.readFileSync('$(escape_string(wasm_path))');
+
+async function validate() {
+    try {
+        const wasmModule = await WebAssembly.instantiate(bytes, {});
+        console.log("VALID");
+        process.exit(0);
+    } catch (e) {
+        console.error('Validation error:', e.message);
+        process.exit(1);
+    }
+}
+
+validate();
+"""
+
+    open(js_path, "w") do io
+        print(io, validator_script)
+    end
+
+    # Run Node.js
+    try
+        node_cmd = NEEDS_EXPERIMENTAL_FLAG ? `$NODE_CMD --experimental-wasm-gc $js_path` : `$NODE_CMD $js_path`
+        output = read(pipeline(node_cmd; stderr=stderr), String)
+        return strip(output) == "VALID"
+    catch e
+        return false
+    end
+end
+
+# ============================================================================
 # Debug Utilities
 # ============================================================================
 

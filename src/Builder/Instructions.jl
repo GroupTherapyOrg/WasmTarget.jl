@@ -366,6 +366,21 @@ function add_import!(mod::WasmModule,
     return UInt32(length(mod.imports) - 1)  # Import function indices
 end
 
+# Overload for WasmValType (supports RefType, externref, etc.)
+function add_import!(mod::WasmModule,
+                     module_name::String,
+                     field_name::String,
+                     params::Vector{<:WasmValType},
+                     results::Vector{<:WasmValType})::UInt32
+    # Convert to WasmValType vectors
+    param_vec = WasmValType[p for p in params]
+    result_vec = WasmValType[r for r in results]
+    ft = FuncType(param_vec, result_vec)
+    type_idx = add_type!(mod, ft)
+    push!(mod.imports, WasmImport(module_name, field_name, 0x00, type_idx))
+    return UInt32(length(mod.imports) - 1)
+end
+
 """
     num_imported_funcs(mod) -> Int
 

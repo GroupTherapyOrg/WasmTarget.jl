@@ -1,7 +1,7 @@
 # Wasm Types - Value types, Reference types, and composite types
 # Reference: https://webassembly.github.io/spec/core/binary/types.html
 
-export ValType, NumType, RefType, ConcreteRef, FuncType, StructType, ArrayType, FieldType, CompositeType, WasmValType
+export ValType, NumType, RefType, ConcreteRef, FuncType, StructType, ArrayType, FieldType, CompositeType, WasmValType, JSValue
 
 # ============================================================================
 # Value Types (Section 5.3.1)
@@ -174,6 +174,20 @@ Limits(min::Integer) = Limits(UInt32(min), nothing)
 Limits(min::Integer, max::Integer) = Limits(UInt32(min), UInt32(max))
 
 # ============================================================================
+# JS Interop Types
+# ============================================================================
+
+"""
+    JSValue
+
+A Julia type representing a JavaScript value held as an externref.
+Used for DOM elements, JS objects, and other JS values.
+
+This is a primitive type to prevent Julia from optimizing it away.
+"""
+primitive type JSValue 64 end
+
+# ============================================================================
 # Helper functions
 # ============================================================================
 
@@ -195,6 +209,9 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
     elseif T === UInt8 || T === Int8 || T === UInt16 || T === Int16
         # Smaller integers also use i32
         return I32
+    elseif T === JSValue
+        # JS values are held as externref
+        return ExternRef
     elseif T === String
         # Strings are represented as WasmGC arrays
         return ArrayRef

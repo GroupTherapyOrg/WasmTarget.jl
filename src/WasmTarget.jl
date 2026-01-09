@@ -13,7 +13,7 @@ include("Compiler/Codegen.jl")
 include("Runtime/Intrinsics.jl")
 
 # Main API
-export compile, WasmModule, to_bytes
+export compile, compile_multi, WasmModule, to_bytes
 
 """
     compile(f, arg_types) -> Vector{UInt8}
@@ -34,5 +34,28 @@ end
 
 # Convenience method for single argument type
 compile(f, arg_type::Type) = compile(f, (arg_type,))
+
+"""
+    compile_multi(functions::Vector) -> Vector{UInt8}
+
+Compile multiple Julia functions into a single WebAssembly module.
+
+Each element should be (function, arg_types) or (function, arg_types, name).
+
+# Example
+```julia
+wasm_bytes = compile_multi([
+    (add, (Int32, Int32)),
+    (sub, (Int32, Int32)),
+    (helper, (Int32,), "internal_helper"),
+])
+```
+
+Functions can call each other within the module.
+"""
+function compile_multi(functions::Vector)::Vector{UInt8}
+    mod = compile_module(functions)
+    return to_bytes(mod)
+end
 
 end # module

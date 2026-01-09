@@ -1,7 +1,7 @@
 # Code Generation - Julia IR to Wasm instructions
 # Maps Julia SSA statements to WebAssembly bytecode
 
-export compile_function
+export compile_function, compile_module, FunctionRegistry
 
 # ============================================================================
 # Struct Type Registry
@@ -27,6 +27,86 @@ mutable struct TypeRegistry
 end
 
 TypeRegistry() = TypeRegistry(Dict{DataType, StructInfo}(), Dict{Type, UInt32}(), nothing)
+
+# ============================================================================
+# Function Registry - for multi-function modules
+# ============================================================================
+
+"""
+Information about a compiled function within a module.
+"""
+struct FunctionInfo
+    name::String
+    func_ref::Any           # Original Julia function
+    arg_types::Tuple        # Argument types for dispatch
+    wasm_idx::UInt32        # Index in the Wasm module
+end
+
+"""
+Registry for functions within a module, enabling cross-function calls.
+"""
+mutable struct FunctionRegistry
+    functions::Dict{String, FunctionInfo}       # name -> info
+    by_ref::Dict{Any, Vector{FunctionInfo}}     # func_ref -> infos (for dispatch)
+end
+
+FunctionRegistry() = FunctionRegistry(Dict{String, FunctionInfo}(), Dict{Any, Vector{FunctionInfo}}())
+
+"""
+Register a function in the registry.
+"""
+function register_function!(registry::FunctionRegistry, name::String, func_ref, arg_types::Tuple, wasm_idx::UInt32)
+    info = FunctionInfo(name, func_ref, arg_types, wasm_idx)
+    registry.functions[name] = info
+
+    # Also index by function reference for dispatch
+    if !haskey(registry.by_ref, func_ref)
+        registry.by_ref[func_ref] = FunctionInfo[]
+    end
+    push!(registry.by_ref[func_ref], info)
+
+    return info
+end
+
+"""
+Look up a function by name.
+"""
+function get_function(registry::FunctionRegistry, name::String)::Union{FunctionInfo, Nothing}
+    return get(registry.functions, name, nothing)
+end
+
+"""
+Look up a function by reference and argument types (for dispatch).
+"""
+function get_function(registry::FunctionRegistry, func_ref, arg_types::Tuple)::Union{FunctionInfo, Nothing}
+    infos = get(registry.by_ref, func_ref, nothing)
+    infos === nothing && return nothing
+
+    # Find matching signature (exact match for now)
+    for info in infos
+        if info.arg_types == arg_types
+            return info
+        end
+    end
+
+    # Try to find a compatible signature (subtype matching)
+    for info in infos
+        if length(info.arg_types) == length(arg_types)
+            match = true
+            for (expected, actual) in zip(info.arg_types, arg_types)
+                if !(actual <: expected)
+                    match = false
+                    break
+                end
+            end
+            if match
+                return info
+            end
+        end
+    end
+
+    return nothing
+end
 
 """
 Get or create an array type for a given element type.
@@ -92,6 +172,10 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
             type_idx = get_array_type!(mod, registry, elem_type)
             return ConcreteRef(type_idx, true)
         end
+    elseif T === String
+        # Strings are WasmGC arrays of bytes
+        type_idx = get_string_array_type!(mod, registry)
+        return ConcreteRef(type_idx, true)
     else
         return julia_to_wasm_type(T)
     end
@@ -116,7 +200,7 @@ function compile_function(f, arg_types::Tuple, func_name::String)::WasmModule
     # Create type registry for struct mappings
     type_registry = TypeRegistry()
 
-    # Register any struct types used in parameters
+    # Register any struct/array/string types used in parameters
     for T in arg_types
         if is_struct_type(T)
             register_struct_type!(mod, type_registry, T)
@@ -124,15 +208,20 @@ function compile_function(f, arg_types::Tuple, func_name::String)::WasmModule
             # Register array type for Vector parameters
             elem_type = eltype(T)
             get_array_type!(mod, type_registry, elem_type)
+        elseif T === String
+            # Register string array type
+            get_string_array_type!(mod, type_registry)
         end
     end
 
-    # Register return type if it's a struct
+    # Register return type if it's a struct/array/string
     if is_struct_type(return_type)
         register_struct_type!(mod, type_registry, return_type)
     elseif return_type <: AbstractVector
         elem_type = eltype(return_type)
         get_array_type!(mod, type_registry, elem_type)
+    elseif return_type === String
+        get_string_array_type!(mod, type_registry)
     end
 
     # Determine Wasm types for parameters and return (using concrete types for GC refs)
@@ -158,6 +247,107 @@ function compile_function(f, arg_types::Tuple, func_name::String)::WasmModule
 end
 
 """
+    compile_module(functions::Vector) -> WasmModule
+
+Compile multiple Julia functions into a single WebAssembly module.
+
+Each element of `functions` should be a tuple of (function, arg_types) or
+(function, arg_types, name). If name is omitted, the function's name is used.
+
+# Example
+```julia
+mod = compile_module([
+    (add, (Int32, Int32)),
+    (sub, (Int32, Int32)),
+    (mul, (Int32, Int32), "multiply"),
+])
+```
+
+Functions can call each other within the module.
+"""
+function compile_module(functions::Vector)::WasmModule
+    # Create shared module and registries
+    mod = WasmModule()
+    type_registry = TypeRegistry()
+    func_registry = FunctionRegistry()
+
+    # Normalize input: ensure each entry is (func, arg_types, name)
+    normalized = []
+    for entry in functions
+        if length(entry) == 2
+            f, arg_types = entry
+            name = string(nameof(f))
+            push!(normalized, (f, arg_types, name))
+        else
+            push!(normalized, entry)
+        end
+    end
+
+    # First pass: register types and reserve function slots
+    # We need to know all function indices before compiling bodies
+    function_data = []  # Store (f, arg_types, name, code_info, return_type) for each function
+
+    for (f, arg_types, name) in normalized
+        # Get typed IR
+        code_info, return_type = get_typed_ir(f, arg_types)
+
+        # Register types used in parameters
+        for T in arg_types
+            if is_struct_type(T)
+                register_struct_type!(mod, type_registry, T)
+            elseif T <: AbstractVector
+                elem_type = eltype(T)
+                get_array_type!(mod, type_registry, elem_type)
+            elseif T === String
+                get_string_array_type!(mod, type_registry)
+            end
+        end
+
+        # Register return type
+        if is_struct_type(return_type)
+            register_struct_type!(mod, type_registry, return_type)
+        elseif return_type <: AbstractVector
+            elem_type = eltype(return_type)
+            get_array_type!(mod, type_registry, elem_type)
+        elseif return_type === String
+            get_string_array_type!(mod, type_registry)
+        end
+
+        push!(function_data, (f, arg_types, name, code_info, return_type))
+    end
+
+    # Calculate function indices (accounting for imports)
+    # Functions are added in order, so index = n_imports + position - 1
+    n_imports = length(mod.imports)
+    for (i, (f, arg_types, name, _, _)) in enumerate(function_data)
+        func_idx = UInt32(n_imports + i - 1)
+        register_function!(func_registry, name, f, arg_types, func_idx)
+    end
+
+    # Second pass: compile function bodies
+    for (i, (f, arg_types, name, code_info, return_type)) in enumerate(function_data)
+        func_idx = UInt32(n_imports + i - 1)
+
+        # Generate function body
+        ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
+                                func_registry=func_registry, func_idx=func_idx, func_ref=f)
+        body = generate_body(ctx)
+
+        # Get param/result types
+        param_types = WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in arg_types]
+        result_types = return_type === Nothing ? WasmValType[] : WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
+
+        # Add function to module
+        actual_idx = add_function!(mod, param_types, result_types, ctx.locals, body)
+
+        # Export the function
+        add_export!(mod, name, 0, actual_idx)
+    end
+
+    return mod
+end
+
+"""
 Check if a type is a user-defined struct (not a primitive or special type).
 """
 function is_struct_type(T::Type)::Bool
@@ -167,8 +357,9 @@ function is_struct_type(T::Type)::Bool
     T === Nothing && return false
     T === Char && return false
 
-    # Arrays have special handling - not user structs
+    # Arrays and strings have special handling - not user structs
     T <: AbstractArray && return false
+    T === String && return false
 
     # Check if it's a concrete struct type
     return isconcretetype(T) && isstructtype(T) && !(T <: Tuple)
@@ -256,11 +447,13 @@ mutable struct CompilationContext
     loop_headers::Set{Int}       # Line numbers that are loop headers (targets of backward jumps)
     mod::WasmModule              # The module being built
     type_registry::TypeRegistry  # Struct type mappings
+    func_registry::Union{FunctionRegistry, Nothing}  # Function mappings for cross-calls
     func_idx::UInt32             # Index of the function being compiled (for recursion)
     func_ref::Any                # Reference to original function (for self-call detection)
 end
 
 function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
+                           func_registry::Union{FunctionRegistry, Nothing}=nothing,
                            func_idx::UInt32=UInt32(0), func_ref=nothing)
     ctx = CompilationContext(
         code_info,
@@ -274,6 +467,7 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         Set{Int}(),
         mod,
         type_registry,
+        func_registry,
         func_idx,
         func_ref
     )
@@ -330,6 +524,10 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
             type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
             return ConcreteRef(type_idx, true)
         end
+    elseif T === String
+        # Strings are WasmGC arrays of bytes
+        type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+        return ConcreteRef(type_idx, true)
     elseif T isa DataType && T.name.name === :MemoryRef
         # MemoryRef{T} maps to the array type for element T
         # This is Julia's internal type for array element access
@@ -1146,6 +1344,23 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
     elseif val isa Float64
         push!(bytes, Opcode.F64_CONST)
         append!(bytes, reinterpret(UInt8, [val]))
+
+    elseif val isa String
+        # String constant - create a WasmGC array with the characters
+        # Get the string array type
+        type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+
+        # Push each character as an i32
+        for c in val
+            push!(bytes, Opcode.I32_CONST)
+            append!(bytes, encode_leb128_signed(Int32(c)))
+        end
+
+        # array.new_fixed $type_idx $length
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_NEW_FIXED)
+        append!(bytes, encode_leb128_unsigned(type_idx))
+        append!(bytes, encode_leb128_unsigned(length(val)))
     end
 
     return bytes
@@ -1173,6 +1388,41 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         append!(bytes, compile_value(args[1], ctx))  # cond
         push!(bytes, Opcode.SELECT)
         return bytes
+    end
+
+    # Special case for Core.sizeof - returns byte size
+    # For strings/arrays, this is the array length
+    if is_func(func, :sizeof) && length(args) == 1
+        arg = args[1]
+        arg_type = infer_value_type(arg, ctx)
+
+        if arg_type === String || arg_type <: AbstractVector
+            # For strings and arrays, sizeof is the array length
+            append!(bytes, compile_value(arg, ctx))
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ARRAY_LEN)
+            # array.len returns i32, extend to i64 for Julia's Int
+            push!(bytes, Opcode.I64_EXTEND_I32_S)
+            return bytes
+        end
+        # For other types, fall through to error
+    end
+
+    # Special case for length - returns character count for strings, element count for arrays
+    if is_func(func, :length) && length(args) == 1
+        arg = args[1]
+        arg_type = infer_value_type(arg, ctx)
+
+        if arg_type === String || arg_type <: AbstractVector
+            # For strings (i32-per-char) and arrays, length is the array length
+            append!(bytes, compile_value(arg, ctx))
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ARRAY_LEN)
+            # array.len returns i32, extend to i64 for Julia's Int
+            push!(bytes, Opcode.I64_EXTEND_I32_S)
+            return bytes
+        end
+        # For other types, fall through to error
     end
 
     # Special case for getfield - struct/tuple field access
@@ -1711,10 +1961,36 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 end
             end
 
+            # Check for cross-function call within the module first
+            cross_call_handled = false
+            if ctx.func_registry !== nothing && func_ref isa GlobalRef && !is_self_call
+                # Try to find this function in our registry
+                called_func = try
+                    getfield(func_ref.mod, func_ref.name)
+                catch
+                    nothing
+                end
+
+                if called_func !== nothing
+                    # Infer argument types for dispatch
+                    call_arg_types = tuple([infer_value_type(arg, ctx) for arg in args]...)
+                    target_info = get_function(ctx.func_registry, called_func, call_arg_types)
+
+                    if target_info !== nothing
+                        # Cross-function call - emit call instruction with target index
+                        push!(bytes, Opcode.CALL)
+                        append!(bytes, encode_leb128_unsigned(target_info.wasm_idx))
+                        cross_call_handled = true
+                    end
+                end
+            end
+
             if is_self_call
                 # Self-recursive call - emit call instruction
                 push!(bytes, Opcode.CALL)
                 append!(bytes, encode_leb128_unsigned(ctx.func_idx))
+            elseif cross_call_handled
+                # Already handled above
             elseif name === :+ || name === :add_int
                 push!(bytes, is_32bit ? Opcode.I32_ADD : Opcode.I64_ADD)
             elseif name === :- || name === :sub_int
@@ -1726,6 +2002,12 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 # Clear the stack first (arguments were pushed but not needed)
                 bytes = UInt8[]  # Reset - don't need the pushed args
                 push!(bytes, Opcode.UNREACHABLE)
+            elseif name === :length
+                # String/array length - argument already pushed, emit array.len
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ARRAY_LEN)
+                # array.len returns i32, extend to i64 for Julia's Int
+                push!(bytes, Opcode.I64_EXTEND_I32_S)
             else
                 error("Unsupported method: $name")
             end

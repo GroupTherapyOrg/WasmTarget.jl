@@ -65,6 +65,32 @@ end
     end
 end
 
+# Cross-function call test functions (must be at module level)
+@noinline function cross_helper_double(x::Int32)::Int32
+    return x * Int32(2)
+end
+
+@noinline function cross_use_helper(x::Int32)::Int32
+    return cross_helper_double(x) + Int32(1)
+end
+
+# Multiple dispatch test functions
+@noinline function dispatch_process(x::Int32)::Int32
+    return x * Int32(2)
+end
+
+@noinline function dispatch_process(x::Int64)::Int64
+    return x * Int64(3)
+end
+
+@noinline function dispatch_use_i32(x::Int32)::Int32
+    return dispatch_process(x) + Int32(1)
+end
+
+@noinline function dispatch_use_i64(x::Int64)::Int64
+    return dispatch_process(x) + Int64(1)
+end
+
 @testset "WasmTarget.jl" begin
 
     # ========================================================================
@@ -1206,6 +1232,140 @@ end
             @test run_wasm(wasm_bytes, "test_branch", Int32(30), Int32(20)) == 100
             # sum = 101 > 100, so return 101 - 50 = 51
             @test run_wasm(wasm_bytes, "test_branch", Int32(100), Int32(1)) == 51
+        end
+
+    end
+
+    # ========================================================================
+    # Phase 15: Strings
+    # ========================================================================
+    @testset "Phase 15: Strings" begin
+
+        # String sizeof - returns byte length of string
+        @noinline function str_sizeof(s::String)::Int64
+            return sizeof(s)
+        end
+
+        @testset "String sizeof compilation" begin
+            wasm_bytes = WasmTarget.compile(str_sizeof, (String,))
+            @test length(wasm_bytes) > 0
+
+            # Validate the module
+            @test validate_wasm(wasm_bytes)
+        end
+
+        # String length - returns character count
+        @noinline function str_length(s::String)::Int64
+            return length(s)
+        end
+
+        @testset "String length compilation" begin
+            wasm_bytes = WasmTarget.compile(str_length, (String,))
+            @test length(wasm_bytes) > 0
+
+            # Validate the module
+            @test validate_wasm(wasm_bytes)
+        end
+
+        # String literal - returns a constant string
+        @noinline function str_literal()::String
+            return "hello"
+        end
+
+        @testset "String literal compilation" begin
+            wasm_bytes = WasmTarget.compile(str_literal, ())
+            @test length(wasm_bytes) > 0
+
+            # Validate the module
+            @test validate_wasm(wasm_bytes)
+        end
+
+    end
+
+    # ========================================================================
+    # Phase 16: Multi-Function Modules
+    # ========================================================================
+    @testset "Phase 16: Multi-Function Modules" begin
+
+        @noinline function multi_add(a::Int32, b::Int32)::Int32
+            return a + b
+        end
+
+        @noinline function multi_sub(a::Int32, b::Int32)::Int32
+            return a - b
+        end
+
+        @noinline function multi_mul(a::Int32, b::Int32)::Int32
+            return a * b
+        end
+
+        @testset "Multiple functions in one module" begin
+            wasm_bytes = WasmTarget.compile_multi([
+                (multi_add, (Int32, Int32)),
+                (multi_sub, (Int32, Int32)),
+                (multi_mul, (Int32, Int32)),
+            ])
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+
+            # Test each function works correctly
+            @test run_wasm(wasm_bytes, "multi_add", Int32(5), Int32(3)) == 8
+            @test run_wasm(wasm_bytes, "multi_sub", Int32(10), Int32(4)) == 6
+            @test run_wasm(wasm_bytes, "multi_mul", Int32(6), Int32(7)) == 42
+        end
+
+        @testset "Cross-function calls" begin
+            # Uses module-level functions: cross_helper_double, cross_use_helper
+            wasm_bytes = WasmTarget.compile_multi([
+                (cross_helper_double, (Int32,)),
+                (cross_use_helper, (Int32,)),
+            ])
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+
+            # Test helper directly
+            @test run_wasm(wasm_bytes, "cross_helper_double", Int32(5)) == 10
+
+            # Test function that calls another function
+            @test run_wasm(wasm_bytes, "cross_use_helper", Int32(5)) == 11   # 5*2 + 1
+            @test run_wasm(wasm_bytes, "cross_use_helper", Int32(10)) == 21  # 10*2 + 1
+        end
+
+        @testset "Multiple dispatch" begin
+            # Same function (dispatch_process) with different type signatures
+            wasm_bytes = WasmTarget.compile_multi([
+                (dispatch_process, (Int32,), "process_i32"),
+                (dispatch_process, (Int64,), "process_i64"),
+                (dispatch_use_i32, (Int32,)),
+                (dispatch_use_i64, (Int64,)),
+            ])
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+
+            # Test direct calls to each dispatch variant
+            @test run_wasm(wasm_bytes, "process_i32", Int32(5)) == 10   # 5*2
+            @test run_wasm(wasm_bytes, "process_i64", Int64(5)) == 15   # 5*3
+
+            # Test calls through dispatching functions
+            @test run_wasm(wasm_bytes, "dispatch_use_i32", Int32(5)) == 11  # 5*2 + 1
+            @test run_wasm(wasm_bytes, "dispatch_use_i64", Int64(5)) == 16  # 5*3 + 1
+        end
+
+    end
+
+    # ========================================================================
+    # Phase 17: JS Interop (externref)
+    # ========================================================================
+    @testset "Phase 17: JS Interop" begin
+
+        @testset "externref pass-through" begin
+            @noinline function jsval_passthrough(x::JSValue)::JSValue
+                return x
+            end
+
+            wasm_bytes = WasmTarget.compile(jsval_passthrough, (JSValue,))
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
         end
 
     end
