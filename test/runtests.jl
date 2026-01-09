@@ -1373,6 +1373,38 @@ end
             @test run_wasm(wasm_bytes, "dispatch_use_i64", Int64(5)) == 16  # 5*3 + 1
         end
 
+        # Result type pattern test
+        mutable struct ResultType
+            success::Bool
+            value::Int32
+        end
+
+        @noinline function result_try_div(a::Int32, b::Int32)::ResultType
+            if b == Int32(0)
+                return ResultType(false, Int32(0))
+            else
+                return ResultType(true, a ÷ b)
+            end
+        end
+
+        @noinline function result_get_value(r::ResultType)::Int32
+            return r.value
+        end
+
+        @noinline function result_is_success(r::ResultType)::Bool
+            return r.success
+        end
+
+        @testset "Result type pattern" begin
+            wasm_bytes = WasmTarget.compile_multi([
+                (result_try_div, (Int32, Int32)),
+                (result_get_value, (ResultType,)),
+                (result_is_success, (ResultType,))
+            ])
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+        end
+
     end
 
     # ========================================================================

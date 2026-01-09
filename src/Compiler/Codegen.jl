@@ -589,6 +589,35 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
 end
 
 """
+Encode a block result type (for if/block/loop).
+Handles both simple types (i32/i64/f32/f64) and concrete reference types.
+Returns a vector of bytes to append to the instruction stream.
+"""
+function encode_block_type(result_type::WasmValType)::Vector{UInt8}
+    bytes = UInt8[]
+    if result_type isa NumType
+        push!(bytes, UInt8(result_type))
+    elseif result_type isa RefType
+        push!(bytes, UInt8(result_type))
+    elseif result_type isa ConcreteRef
+        # Concrete reference type: 0x63 (nullable) or 0x64 (non-nullable) + type index
+        if result_type.nullable
+            push!(bytes, 0x63)  # ref null
+        else
+            push!(bytes, 0x64)  # ref
+        end
+        # Type index as signed LEB128
+        append!(bytes, encode_leb128_signed(Int64(result_type.type_idx)))
+    elseif result_type isa UInt8
+        push!(bytes, result_type)
+    else
+        # Fallback - try to convert to UInt8
+        push!(bytes, UInt8(result_type))
+    end
+    return bytes
+end
+
+"""
 Analyze control flow to find loops and handle phi nodes.
 """
 function analyze_control_flow!(ctx::CompilationContext)
@@ -663,6 +692,21 @@ function allocate_ssa_locals!(ctx::CompilationContext)
 
             if any_has_local
                 # All SSA args need locals
+                for id in ssa_args
+                    push!(needs_local_set, id)
+                end
+            end
+        end
+
+        # Also handle :new expressions - struct fields need correct ordering
+        if stmt isa Expr && stmt.head === :new
+            # args[1] is the type, args[2:end] are field values
+            field_values = stmt.args[2:end]
+            ssa_args = [arg.id for arg in field_values if arg isa Core.SSAValue]
+
+            # If there are multiple field values and any is an SSA, all SSA args need locals
+            # This ensures we can push values in the correct field order
+            if length(field_values) > 1 && !isempty(ssa_args)
                 for id in ssa_args
                     push!(needs_local_set, id)
                 end
@@ -1066,12 +1110,13 @@ function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBloc
     append!(bytes, compile_value(goto_if_not.cond, ctx))
 
     # Determine result type for the if block
-    result_type = julia_to_wasm_type(ctx.return_type)
+    # Use concrete type for structs so the block has the correct type
+    result_type = julia_to_wasm_type_concrete(ctx.return_type, ctx)
 
     # Start if block (condition is on stack)
     # if (result type) ... else ... end
     push!(bytes, Opcode.IF)
-    push!(bytes, UInt8(result_type))  # Block type = result type
+    append!(bytes, encode_block_type(result_type))  # Block type = result type
 
     # Find the then-branch (statements between GotoIfNot and target)
     # and else-branch (statements at and after target)
@@ -1145,7 +1190,7 @@ Generate nested if-else for multiple conditionals.
 """
 function generate_nested_conditionals(ctx::CompilationContext, blocks, code, conditionals)::Vector{UInt8}
     bytes = UInt8[]
-    result_type = julia_to_wasm_type(ctx.return_type)
+    result_type = julia_to_wasm_type_concrete(ctx.return_type, ctx)
 
     # Build a recursive if-else structure
     function gen_conditional(cond_idx::Int)::Vector{UInt8}
@@ -1185,7 +1230,7 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
 
         # if block
         push!(inner_bytes, Opcode.IF)
-        push!(inner_bytes, UInt8(result_type))
+        append!(inner_bytes, encode_block_type(result_type))
 
         # Then branch - find the return after this block
         then_start = block.end_idx + 1
