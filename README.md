@@ -26,7 +26,7 @@ A Julia-to-WebAssembly compiler targeting the WasmGC (Garbage Collection) propos
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/your-username/WasmTarget.jl")
+Pkg.add(url="https://github.com/TherapeuticJulia/WasmTarget.jl")
 ```
 
 ## Quick Start
