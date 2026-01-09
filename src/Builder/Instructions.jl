@@ -1,7 +1,7 @@
 # WebAssembly Instructions and Opcodes
 # Reference: https://webassembly.github.io/spec/core/binary/instructions.html
 
-export Opcode, WasmModule, WasmImport, WasmTable, WasmMemory, add_function!, add_import!, add_export!, add_struct_type!, add_array_type!, add_table!, add_table_export!, add_elem_segment!, add_memory!, add_memory_export!, to_bytes
+export Opcode, WasmModule, WasmImport, WasmTable, WasmMemory, WasmDataSegment, add_function!, add_import!, add_export!, add_struct_type!, add_array_type!, add_table!, add_table_export!, add_elem_segment!, add_memory!, add_memory_export!, add_data_segment!, to_bytes
 
 # ============================================================================
 # Opcodes (Section 5.4)
@@ -322,6 +322,17 @@ struct WasmMemory
 end
 
 """
+    WasmDataSegment
+
+A data segment for initializing linear memory with constant data.
+"""
+struct WasmDataSegment
+    memory_idx::UInt32       # Which memory to initialize
+    offset::UInt32           # Offset in memory (constant)
+    data::Vector{UInt8}      # The data to initialize with
+end
+
+"""
     WasmModule
 
 A WebAssembly module builder. Use this to construct modules programmatically.
@@ -335,9 +346,10 @@ mutable struct WasmModule
     globals::Vector{WasmGlobal}   # Global variables
     exports::Vector{WasmExport}
     elem_segments::Vector{WasmElemSegment}  # Element segments for table init
+    data_segments::Vector{WasmDataSegment}  # Data segments for memory init
 end
 
-WasmModule() = WasmModule(CompositeType[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobal[], WasmExport[], WasmElemSegment[])
+WasmModule() = WasmModule(CompositeType[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobal[], WasmExport[], WasmElemSegment[], WasmDataSegment[])
 
 # ============================================================================
 # Module Building API
@@ -560,6 +572,21 @@ function add_memory_export!(mod::WasmModule, name::String, memory_idx::Integer)
     add_export!(mod, name, 2, memory_idx)  # kind 2 = memory
 end
 
+"""
+    add_data_segment!(mod, memory_idx, offset, data)
+
+Add a data segment to initialize linear memory with constant data.
+Data can be a Vector{UInt8} or a String.
+"""
+function add_data_segment!(mod::WasmModule, memory_idx::Integer, offset::Integer, data::Vector{UInt8})
+    push!(mod.data_segments, WasmDataSegment(UInt32(memory_idx), UInt32(offset), data))
+    return mod
+end
+
+function add_data_segment!(mod::WasmModule, memory_idx::Integer, offset::Integer, data::String)
+    add_data_segment!(mod, memory_idx, offset, Vector{UInt8}(codeunits(data)))
+end
+
 # ============================================================================
 # Binary Serialization
 # ============================================================================
@@ -577,6 +604,7 @@ const SECTION_GLOBAL = 0x06
 const SECTION_EXPORT = 0x07
 const SECTION_ELEMENT = 0x09
 const SECTION_CODE = 0x0A
+const SECTION_DATA = 0x0B
 
 """
     to_bytes(mod::WasmModule) -> Vector{UInt8}
@@ -734,6 +762,24 @@ function to_bytes(mod::WasmModule)::Vector{UInt8}
                 # Write body size then body
                 write_u32!(section, length(body_writer.buffer))
                 append!(section.buffer, body_writer.buffer)
+            end
+        end
+    end
+
+    # Data section
+    if !isempty(mod.data_segments)
+        write_section!(w, SECTION_DATA) do section
+            write_u32!(section, length(mod.data_segments))
+            for data in mod.data_segments
+                # Active data segment (mode 0): memory index 0
+                write_byte!(section, 0x00)
+                # Offset expression (i32.const offset)
+                push!(section.buffer, Opcode.I32_CONST)
+                append!(section.buffer, encode_leb128_signed(Int32(data.offset)))
+                push!(section.buffer, Opcode.END)
+                # Data bytes
+                write_u32!(section, length(data.data))
+                append!(section.buffer, data.data)
             end
         end
     end

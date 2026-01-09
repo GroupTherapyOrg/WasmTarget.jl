@@ -1646,6 +1646,72 @@ end
             @test validate_wasm(bytes)
         end
 
+        @testset "Data segment with string" begin
+            mod = WasmTarget.WasmModule()
+
+            # Add memory
+            mem_idx = WasmTarget.add_memory!(mod, 1)
+            WasmTarget.add_memory_export!(mod, "memory", mem_idx)
+
+            # Initialize memory with "Hello"
+            WasmTarget.add_data_segment!(mod, 0, 0, "Hello")
+
+            # Add a function to read the first byte
+            func_idx = WasmTarget.add_function!(
+                mod,
+                WasmTarget.WasmValType[],
+                [WasmTarget.I32],
+                WasmTarget.WasmValType[],
+                UInt8[
+                    WasmTarget.Opcode.I32_CONST, 0x00,  # address 0
+                    WasmTarget.Opcode.I32_LOAD, 0x00, 0x00,  # load (unaligned)
+                    WasmTarget.Opcode.END
+                ]
+            )
+            WasmTarget.add_export!(mod, "read_first", 0, func_idx)
+
+            bytes = WasmTarget.to_bytes(mod)
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+
+            # Test via Node.js - "Hello" as little-endian i32 is 'H' + 'e'<<8 + 'l'<<16 + 'l'<<24
+            # = 0x48 + 0x65<<8 + 0x6c<<16 + 0x6c<<24 = 0x6c6c6548
+            expected = Int32('H') | (Int32('e') << 8) | (Int32('l') << 16) | (Int32('l') << 24)
+            @test run_wasm(bytes, "read_first") == expected
+        end
+
+        @testset "Data segment with raw bytes" begin
+            mod = WasmTarget.WasmModule()
+
+            mem_idx = WasmTarget.add_memory!(mod, 1)
+
+            # Initialize with raw bytes [1, 2, 3, 4] at offset 16 (multiple of 4 for alignment)
+            WasmTarget.add_data_segment!(mod, 0, 16, UInt8[1, 2, 3, 4])
+
+            # Function to load i32 from offset 16
+            # Note: i32.const uses signed LEB128, 16 = 0x10 fits in single byte
+            func_idx = WasmTarget.add_function!(
+                mod,
+                WasmTarget.WasmValType[],
+                [WasmTarget.I32],
+                WasmTarget.WasmValType[],
+                UInt8[
+                    WasmTarget.Opcode.I32_CONST, 0x10,    # 16
+                    WasmTarget.Opcode.I32_LOAD, 0x02, 0x00,  # align=4, offset=0
+                    WasmTarget.Opcode.END
+                ]
+            )
+            WasmTarget.add_export!(mod, "read_data", 0, func_idx)
+
+            bytes = WasmTarget.to_bytes(mod)
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+
+            # Little-endian: [1, 2, 3, 4] = 0x04030201
+            expected = Int32(1) | (Int32(2) << 8) | (Int32(3) << 16) | (Int32(4) << 24)
+            @test run_wasm(bytes, "read_data") == expected
+        end
+
     end
 
 end
