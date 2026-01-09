@@ -283,6 +283,10 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
     elseif T === UInt8 || T === Int8 || T === UInt16 || T === Int16
         # Smaller integers also use i32
         return I32
+    elseif T === Nothing
+        # Nothing has no Wasm representation - handled specially
+        # Return I32 as a placeholder (functions returning Nothing don't actually return)
+        return I32
     elseif T === JSValue
         # JS values are held as externref
         return ExternRef
@@ -298,12 +302,73 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
     elseif T <: WasmGlobal
         # WasmGlobal is passed as a WasmGC struct (holds just value since idx is in type)
         return StructRef
+    elseif T isa Union
+        # Handle Union types by finding a common Wasm type
+        return resolve_union_type(T)
     elseif isconcretetype(T) && isstructtype(T)
         # User-defined structs map to WasmGC structs
         return StructRef
     else
         error("Unsupported Julia type for Wasm: $T")
     end
+end
+
+"""
+Resolve a Union type to a common Wasm type.
+
+Strategy:
+- Union{Nothing, T} -> type of T (Nothing is "no value")
+- Union{T1, T2, ...} where all are numeric -> widest numeric type
+- Otherwise error
+"""
+function resolve_union_type(T::Union)::WasmValType
+    # Get the union types
+    types = Base.uniontypes(T)
+
+    # Filter out Nothing
+    non_nothing = filter(t -> t !== Nothing, types)
+
+    if isempty(non_nothing)
+        # Union of just Nothing - shouldn't happen but handle it
+        return I32
+    elseif length(non_nothing) == 1
+        # Union{Nothing, T} -> T
+        return julia_to_wasm_type(non_nothing[1])
+    else
+        # Multiple non-Nothing types - find common numeric type
+        return find_common_wasm_type(non_nothing)
+    end
+end
+
+"""
+Find a common Wasm type for a list of Julia types.
+For numeric types, returns the widest type.
+"""
+function find_common_wasm_type(types::Vector)::WasmValType
+    # Check if all are numeric
+    if all(t -> t <: Number, types)
+        # Prefer i64 over i32, f64 over f32
+        has_i64 = any(t -> t === Int64 || t === UInt64 || t === Int, types)
+        has_f64 = any(t -> t === Float64, types)
+        has_f32 = any(t -> t === Float32, types)
+        has_float = has_f64 || has_f32
+
+        if has_float
+            return has_f64 ? F64 : F32
+        elseif has_i64
+            return I64
+        else
+            return I32
+        end
+    end
+
+    # Check if all are reference types (strings, arrays, structs)
+    if all(t -> t === String || t <: AbstractArray || (isconcretetype(t) && isstructtype(t)), types)
+        # Use generic reference type
+        return StructRef
+    end
+
+    error("Cannot find common Wasm type for Union of: $(types)")
 end
 
 """

@@ -559,14 +559,18 @@ function compile_closure_body(
     captured_signal_fields::Dict{Symbol, Tuple{Bool, UInt32}},
     mod::WasmModule,
     type_registry::TypeRegistry;
-    dom_bindings::Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}} = Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}()
+    dom_bindings::Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}} = Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}(),
+    void_return::Bool = false
 )
     # Get typed IR for the closure
     typed_results = Base.code_typed(closure, ())
     if isempty(typed_results)
         error("Could not get typed IR for handler closure")
     end
-    code_info, return_type = typed_results[1]
+    code_info, inferred_return_type = typed_results[1]
+
+    # For void handlers (like Therapy.jl event handlers), override return type
+    return_type = void_return ? Nothing : inferred_return_type
 
     # Create compilation context
     ctx = CompilationContext(
@@ -990,6 +994,17 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
             type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
             return ConcreteRef(type_idx, true)
         end
+    elseif T isa Union
+        # Handle Union types by resolving to non-Nothing type
+        types = Base.uniontypes(T)
+        non_nothing = filter(t -> t !== Nothing, types)
+        if length(non_nothing) == 1
+            # Union{Nothing, T} -> use T's concrete type
+            return julia_to_wasm_type_concrete(non_nothing[1], ctx)
+        else
+            # Multiple non-Nothing types - fall back to standard resolution
+            return julia_to_wasm_type(T)
+        end
     else
         # Use the standard conversion for non-struct types
         return julia_to_wasm_type(T)
@@ -1226,6 +1241,10 @@ function count_ssa_uses!(stmt, uses::Dict{Int, Int})
         count_ssa_uses!(stmt.val, uses)
     elseif stmt isa Core.GotoIfNot
         count_ssa_uses!(stmt.cond, uses)
+    elseif stmt isa Core.PhiNode
+        for val in stmt.values
+            count_ssa_uses!(val, uses)
+        end
     end
 end
 
@@ -1520,15 +1539,33 @@ end
 """
 Check if this is a simple if-then-else pattern.
 Pattern: condition, GotoIfNot, then-code, return, else-code, return
+
+A simple conditional has exactly 2-3 blocks:
+- Block 1: condition computation, ends with GotoIfNot
+- Block 2: then-branch code
+- Block 3 (optional): else-branch code
+
+If there are more blocks or nested conditionals, it's not simple.
 """
 function is_simple_conditional(blocks::Vector{BasicBlock}, code)
-    # Simple pattern has 2-3 blocks with specific structure
-    if length(blocks) < 2
+    # Simple pattern has exactly 2-3 blocks
+    if length(blocks) < 2 || length(blocks) > 3
         return false
     end
 
     # First block should end with GotoIfNot
-    return blocks[1].terminator isa Core.GotoIfNot
+    if !(blocks[1].terminator isa Core.GotoIfNot)
+        return false
+    end
+
+    # Check that other blocks don't have GotoIfNot (no nested conditionals)
+    for i in 2:length(blocks)
+        if blocks[i].terminator isa Core.GotoIfNot
+            return false
+        end
+    end
+
+    return true
 end
 
 """
@@ -1683,6 +1720,13 @@ Uses nested blocks with br instructions.
 function generate_complex_flow(ctx::CompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
     bytes = UInt8[]
 
+    # For void return types (like event handlers), use a simpler approach:
+    # just execute all statements in order and return at the end
+    if ctx.return_type === Nothing
+        append!(bytes, generate_void_flow(ctx, blocks, code))
+        return bytes
+    end
+
     # For now, handle multi-way conditionals by nesting if-else
     # This works for patterns like: if ... elseif ... else ... end
 
@@ -1696,6 +1740,269 @@ function generate_complex_flow(ctx::CompilationContext, blocks::Vector{BasicBloc
         for block in blocks
             append!(bytes, generate_block_code(ctx, block))
         end
+    end
+
+    return bytes
+end
+
+"""
+Generate code for void functions (no return value).
+Compiles all statements sequentially, using structured control flow for conditionals.
+"""
+function generate_void_flow(ctx::CompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
+    bytes = UInt8[]
+
+    # Track which statements we've already compiled
+    compiled = Set{Int}()
+
+    # Count how many times each SSA value is used (to determine if we need to DROP)
+    # SSA values that are used elsewhere should NOT be dropped - they stay on stack
+    ssa_use_count = Dict{Int, Int}()
+    for stmt in code
+        count_ssa_uses!(stmt, ssa_use_count)
+    end
+
+    # Process statements in order
+    i = 1
+    while i <= length(code)
+        if i in compiled
+            i += 1
+            continue
+        end
+
+        stmt = code[i]
+
+        if stmt === nothing
+            push!(compiled, i)
+            i += 1
+            continue
+        end
+
+        if stmt isa Core.ReturnNode
+            # Void return - just return
+            push!(bytes, Opcode.RETURN)
+            push!(compiled, i)
+            i += 1
+            continue
+        end
+
+        if stmt isa Core.GotoNode
+            # Unconditional jump - skip (handled by structured control flow)
+            push!(compiled, i)
+            i += 1
+            continue
+        end
+
+        if stmt isa Core.GotoIfNot
+            # Conditional - compile as void if-block
+            goto_if_not = stmt
+            else_target = goto_if_not.dest
+
+            # Push condition
+            append!(bytes, compile_value(goto_if_not.cond, ctx))
+            push!(compiled, i)
+
+            # Start void if block
+            push!(bytes, Opcode.IF)
+            push!(bytes, 0x40)
+
+            # Compile then-branch (i+1 to else_target-1)
+            for j in (i+1):(else_target-1)
+                if j in compiled
+                    continue
+                end
+                inner = code[j]
+                if inner === nothing
+                    push!(compiled, j)
+                elseif inner isa Core.GotoNode
+                    push!(compiled, j)
+                elseif inner isa Core.ReturnNode
+                    # Don't return here - we're in a branch
+                    # But we need to drop any value on the stack
+                    push!(compiled, j)
+                elseif inner isa Core.GotoIfNot
+                    # Nested conditional - compile inner ternary
+                    append!(bytes, compile_ternary_for_phi(ctx, code, j, compiled))
+                elseif inner isa Core.PhiNode
+                    # Phi handled by compile_ternary_for_phi
+                    push!(compiled, j)
+                else
+                    append!(bytes, compile_statement(inner, j, ctx))
+                    push!(compiled, j)
+                    # Check if this statement leaves a value on stack that we need to drop
+                    # In void functions, return statements are skipped, so values meant for
+                    # returns stay on stack. We need to drop them.
+                    if inner isa Expr && (inner.head === :call || inner.head === :invoke)
+                        # First check if this is a signal setter invoke - these ALWAYS need DROP
+                        # because setters push a return value that won't be used in void context
+                        is_setter_call = false
+                        if inner.head === :invoke && length(inner.args) >= 2
+                            func_ref = inner.args[2]
+                            if func_ref isa Core.SSAValue
+                                is_setter_call = haskey(ctx.signal_ssa_setters, func_ref.id)
+                            end
+                        end
+
+                        if is_setter_call
+                            # Signal setters push a return value that won't be used
+                            push!(bytes, Opcode.DROP)
+                        else
+                            # For other calls, check type and use count
+                            stmt_type = get(ctx.ssa_types, j, Nothing)
+                            if stmt_type !== Nothing && stmt_type !== Any
+                                is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
+                                if !is_nothing_union
+                                    # This call produces a value
+                                    if !haskey(ctx.ssa_locals, j) && !haskey(ctx.phi_locals, j)
+                                        use_count = get(ssa_use_count, j, 0)
+                                        if use_count == 0
+                                            push!(bytes, Opcode.DROP)
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+
+            # Else branch
+            push!(bytes, Opcode.ELSE)
+
+            # Compile else-branch (else_target to end or next structure)
+            for j in else_target:length(code)
+                if j in compiled
+                    continue
+                end
+                inner = code[j]
+                if inner === nothing
+                    push!(compiled, j)
+                elseif inner isa Core.ReturnNode
+                    # Don't return here either
+                    push!(compiled, j)
+                elseif inner isa Core.GotoNode
+                    push!(compiled, j)
+                elseif inner isa Core.GotoIfNot
+                    # Another conditional in else - shouldn't happen in simple if-else
+                    break
+                else
+                    append!(bytes, compile_statement(inner, j, ctx))
+                    push!(compiled, j)
+                end
+            end
+
+            push!(bytes, Opcode.END)
+
+            # Mark all statements up to else_target as compiled
+            for j in i:else_target
+                push!(compiled, j)
+            end
+
+            i = else_target + 1
+            continue
+        end
+
+        # Regular statement
+        append!(bytes, compile_statement(stmt, i, ctx))
+        push!(compiled, i)
+        i += 1
+    end
+
+    # Final return (in case we didn't hit one)
+    push!(bytes, Opcode.RETURN)
+
+    return bytes
+end
+
+"""
+Compile a ternary expression (if-then-else with phi) that produces a value.
+Returns bytecode that computes the ternary and stores to the phi local.
+"""
+function compile_ternary_for_phi(ctx::CompilationContext, code, cond_idx::Int, compiled::Set{Int})::Vector{UInt8}
+    bytes = UInt8[]
+
+    goto_if_not = code[cond_idx]::Core.GotoIfNot
+    else_target = goto_if_not.dest
+
+    # Find the phi node after the else branch
+    phi_idx = nothing
+    for j in else_target:length(code)
+        if code[j] isa Core.PhiNode
+            phi_idx = j
+            break
+        end
+        if code[j] isa Core.GotoIfNot || (code[j] isa Core.Expr && code[j].head === :call)
+            break  # Past the ternary
+        end
+    end
+
+    if phi_idx === nothing
+        # No phi - this might be a void conditional inside, just skip
+        push!(compiled, cond_idx)
+        return bytes
+    end
+
+    phi_node = code[phi_idx]::Core.PhiNode
+
+    # Check if we have a local for this phi
+    if !haskey(ctx.phi_locals, phi_idx)
+        push!(compiled, cond_idx)
+        push!(compiled, phi_idx)
+        return bytes
+    end
+
+    local_idx = ctx.phi_locals[phi_idx]
+    phi_type = get(ctx.ssa_types, phi_idx, Int64)
+    wasm_type = julia_to_wasm_type_concrete(phi_type, ctx)
+
+    # Push condition
+    append!(bytes, compile_value(goto_if_not.cond, ctx))
+    push!(compiled, cond_idx)
+
+    # Start if block with result type
+    push!(bytes, Opcode.IF)
+    append!(bytes, encode_block_type(wasm_type))
+
+    # Get then-value from phi
+    then_value = nothing
+    else_value = nothing
+    for (edge_idx, edge) in enumerate(phi_node.edges)
+        if edge < else_target
+            then_value = phi_node.values[edge_idx]
+        else
+            else_value = phi_node.values[edge_idx]
+        end
+    end
+
+    # Then branch - push value
+    if then_value !== nothing
+        append!(bytes, compile_value(then_value, ctx))
+    else
+        # Fallback
+        push!(bytes, Opcode.I64_CONST)
+        push!(bytes, 0x00)
+    end
+
+    # Else branch
+    push!(bytes, Opcode.ELSE)
+
+    # Else branch - push value
+    if else_value !== nothing
+        append!(bytes, compile_value(else_value, ctx))
+    else
+        push!(bytes, Opcode.I64_CONST)
+        push!(bytes, 0x00)
+    end
+
+    push!(bytes, Opcode.END)
+
+    # Store result to phi local
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(local_idx))
+
+    # Mark the GotoNode, nothing, and phi as compiled
+    for j in cond_idx+1:phi_idx
+        push!(compiled, j)
     end
 
     return bytes
