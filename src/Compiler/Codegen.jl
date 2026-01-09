@@ -1821,8 +1821,8 @@ function generate_void_flow(ctx::CompilationContext, blocks::Vector{BasicBlock},
                     # But we need to drop any value on the stack
                     push!(compiled, j)
                 elseif inner isa Core.GotoIfNot
-                    # Nested conditional - compile inner ternary
-                    append!(bytes, compile_ternary_for_phi(ctx, code, j, compiled))
+                    # Nested conditional in void context (from && operator)
+                    append!(bytes, compile_void_nested_conditional(ctx, code, j, compiled, ssa_use_count))
                 elseif inner isa Core.PhiNode
                     # Phi handled by compile_ternary_for_phi
                     push!(compiled, j)
@@ -1883,8 +1883,8 @@ function generate_void_flow(ctx::CompilationContext, blocks::Vector{BasicBlock},
                 elseif inner isa Core.GotoNode
                     push!(compiled, j)
                 elseif inner isa Core.GotoIfNot
-                    # Another conditional in else - shouldn't happen in simple if-else
-                    break
+                    # Another conditional in else branch - handle recursively
+                    append!(bytes, compile_void_nested_conditional(ctx, code, j, compiled, ssa_use_count))
                 else
                     append!(bytes, compile_statement(inner, j, ctx))
                     push!(compiled, j)
@@ -1910,6 +1910,108 @@ function generate_void_flow(ctx::CompilationContext, blocks::Vector{BasicBlock},
 
     # Final return (in case we didn't hit one)
     push!(bytes, Opcode.RETURN)
+
+    return bytes
+end
+
+"""
+Compile a nested conditional in void context (e.g., from && operators).
+This handles patterns like `a && b && c` which compile to nested GotoIfNot.
+
+For `a && b`:
+  %1 = a()
+  GotoIfNot %1 → end
+  %2 = b()
+  GotoIfNot %2 → end
+  # then code
+  end:
+
+Compiles to:
+  a()
+  if
+    b()
+    if
+      ;; then code
+    end
+  end
+"""
+function compile_void_nested_conditional(ctx::CompilationContext, code, start_idx::Int, compiled::Set{Int}, ssa_use_count::Dict{Int,Int})::Vector{UInt8}
+    bytes = UInt8[]
+
+    goto_if_not = code[start_idx]::Core.GotoIfNot
+    end_target = goto_if_not.dest
+
+    # Push condition
+    append!(bytes, compile_value(goto_if_not.cond, ctx))
+    push!(compiled, start_idx)
+
+    # Start void if block
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)  # void block type
+
+    # Process statements in the then-branch (start_idx+1 to end_target-1)
+    for j in (start_idx+1):(end_target-1)
+        if j in compiled
+            continue
+        end
+
+        inner = code[j]
+
+        if inner === nothing
+            push!(compiled, j)
+        elseif inner isa Core.GotoNode
+            # Skip unconditional jumps in && chain
+            push!(compiled, j)
+        elseif inner isa Core.ReturnNode
+            # Early return inside conditional
+            if isdefined(inner, :val) && inner.val !== nothing
+                # Non-void return - but we're in void handler, just return
+            end
+            push!(bytes, Opcode.RETURN)
+            push!(compiled, j)
+        elseif inner isa Core.GotoIfNot
+            # RECURSION: Another conditional (from && chain)
+            append!(bytes, compile_void_nested_conditional(ctx, code, j, compiled, ssa_use_count))
+        elseif inner isa Core.PhiNode
+            # Skip phi nodes in void context
+            push!(compiled, j)
+        else
+            # Regular statement (including setter calls)
+            append!(bytes, compile_statement(inner, j, ctx))
+            push!(compiled, j)
+
+            # Drop unused values in void context
+            if inner isa Expr && (inner.head === :call || inner.head === :invoke)
+                is_setter_call = false
+                if inner.head === :invoke && length(inner.args) >= 2
+                    func_ref = inner.args[2]
+                    if func_ref isa Core.SSAValue
+                        is_setter_call = haskey(ctx.signal_ssa_setters, func_ref.id)
+                    end
+                end
+
+                if is_setter_call
+                    push!(bytes, Opcode.DROP)
+                else
+                    stmt_type = get(ctx.ssa_types, j, Nothing)
+                    if stmt_type !== Nothing && stmt_type !== Any
+                        is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
+                        if !is_nothing_union
+                            if !haskey(ctx.ssa_locals, j) && !haskey(ctx.phi_locals, j)
+                                use_count = get(ssa_use_count, j, 0)
+                                if use_count == 0
+                                    push!(bytes, Opcode.DROP)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    # End if block (no else for && pattern - false case just skips)
+    push!(bytes, Opcode.END)
 
     return bytes
 end
