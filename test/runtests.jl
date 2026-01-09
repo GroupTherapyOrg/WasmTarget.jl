@@ -1387,4 +1387,197 @@ end
 
     end
 
+    # ========================================================================
+    # Phase 18: Tables and Indirect Calls
+    # ========================================================================
+    @testset "Phase 18: Tables" begin
+
+        @testset "Basic table creation" begin
+            mod = WasmTarget.WasmModule()
+
+            # Add a funcref table with 4 slots
+            table_idx = WasmTarget.add_table!(mod, WasmTarget.FuncRef, 4)
+            @test table_idx == 0
+
+            # Add some functions to populate the table
+            func1_idx = WasmTarget.add_function!(
+                mod,
+                [WasmTarget.I32],
+                [WasmTarget.I32],
+                WasmTarget.WasmValType[],
+                UInt8[
+                    WasmTarget.Opcode.LOCAL_GET, 0x00,  # get param
+                    WasmTarget.Opcode.I32_CONST, 0x02,  # push 2
+                    WasmTarget.Opcode.I32_MUL,          # multiply
+                    WasmTarget.Opcode.END
+                ]
+            )
+
+            func2_idx = WasmTarget.add_function!(
+                mod,
+                [WasmTarget.I32],
+                [WasmTarget.I32],
+                WasmTarget.WasmValType[],
+                UInt8[
+                    WasmTarget.Opcode.LOCAL_GET, 0x00,  # get param
+                    WasmTarget.Opcode.I32_CONST, 0x03,  # push 3
+                    WasmTarget.Opcode.I32_MUL,          # multiply
+                    WasmTarget.Opcode.END
+                ]
+            )
+
+            # Export them for testing
+            WasmTarget.add_export!(mod, "double", 0, func1_idx)
+            WasmTarget.add_export!(mod, "triple", 0, func2_idx)
+
+            bytes = WasmTarget.to_bytes(mod)
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+
+            # Test the functions work
+            @test run_wasm(bytes, "double", Int32(5)) == 10
+            @test run_wasm(bytes, "triple", Int32(5)) == 15
+        end
+
+        @testset "Table with element segment" begin
+            mod = WasmTarget.WasmModule()
+
+            # Add funcref table
+            table_idx = WasmTarget.add_table!(mod, WasmTarget.FuncRef, 4)
+
+            # Add two functions with same signature
+            func_double = WasmTarget.add_function!(
+                mod,
+                [WasmTarget.I32],
+                [WasmTarget.I32],
+                WasmTarget.WasmValType[],
+                UInt8[
+                    WasmTarget.Opcode.LOCAL_GET, 0x00,
+                    WasmTarget.Opcode.I32_CONST, 0x02,
+                    WasmTarget.Opcode.I32_MUL,
+                    WasmTarget.Opcode.END
+                ]
+            )
+
+            func_triple = WasmTarget.add_function!(
+                mod,
+                [WasmTarget.I32],
+                [WasmTarget.I32],
+                WasmTarget.WasmValType[],
+                UInt8[
+                    WasmTarget.Opcode.LOCAL_GET, 0x00,
+                    WasmTarget.Opcode.I32_CONST, 0x03,
+                    WasmTarget.Opcode.I32_MUL,
+                    WasmTarget.Opcode.END
+                ]
+            )
+
+            # Initialize table with element segment
+            WasmTarget.add_elem_segment!(mod, 0, 0, [func_double, func_triple])
+
+            # Export table for JS inspection
+            WasmTarget.add_table_export!(mod, "funcs", table_idx)
+
+            bytes = WasmTarget.to_bytes(mod)
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+        end
+
+        @testset "Table with limits" begin
+            mod = WasmTarget.WasmModule()
+
+            # Table with both min and max
+            table_idx = WasmTarget.add_table!(mod, WasmTarget.FuncRef, 2, 10)
+            @test table_idx == 0
+
+            bytes = WasmTarget.to_bytes(mod)
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+        end
+
+        @testset "externref table" begin
+            mod = WasmTarget.WasmModule()
+
+            # Table for holding JS objects
+            table_idx = WasmTarget.add_table!(mod, WasmTarget.ExternRef, 8)
+            WasmTarget.add_table_export!(mod, "objects", table_idx)
+
+            bytes = WasmTarget.to_bytes(mod)
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+        end
+
+        @testset "call_indirect" begin
+            mod = WasmTarget.WasmModule()
+
+            # Add function type for i32 -> i32
+            type_idx = WasmTarget.add_type!(mod, WasmTarget.FuncType(
+                [WasmTarget.I32],
+                [WasmTarget.I32]
+            ))
+
+            # Add funcref table
+            table_idx = WasmTarget.add_table!(mod, WasmTarget.FuncRef, 4)
+
+            # Add two functions with the same signature
+            func_double = WasmTarget.add_function!(
+                mod,
+                [WasmTarget.I32],
+                [WasmTarget.I32],
+                WasmTarget.WasmValType[],
+                UInt8[
+                    WasmTarget.Opcode.LOCAL_GET, 0x00,
+                    WasmTarget.Opcode.I32_CONST, 0x02,
+                    WasmTarget.Opcode.I32_MUL,
+                    WasmTarget.Opcode.END
+                ]
+            )
+
+            func_triple = WasmTarget.add_function!(
+                mod,
+                [WasmTarget.I32],
+                [WasmTarget.I32],
+                WasmTarget.WasmValType[],
+                UInt8[
+                    WasmTarget.Opcode.LOCAL_GET, 0x00,
+                    WasmTarget.Opcode.I32_CONST, 0x03,
+                    WasmTarget.Opcode.I32_MUL,
+                    WasmTarget.Opcode.END
+                ]
+            )
+
+            # Initialize table: [func_double, func_triple]
+            WasmTarget.add_elem_segment!(mod, 0, 0, [func_double, func_triple])
+
+            # Add a dispatcher function that takes (value, index) and calls indirectly
+            # call_indirect format: call_indirect type_idx table_idx
+            dispatcher = WasmTarget.add_function!(
+                mod,
+                [WasmTarget.I32, WasmTarget.I32],  # value, table_index
+                [WasmTarget.I32],
+                WasmTarget.WasmValType[],
+                UInt8[
+                    WasmTarget.Opcode.LOCAL_GET, 0x00,  # push value
+                    WasmTarget.Opcode.LOCAL_GET, 0x01,  # push table index
+                    WasmTarget.Opcode.CALL_INDIRECT,
+                    type_idx % UInt8,                   # type index
+                    0x00,                               # table index
+                    WasmTarget.Opcode.END
+                ]
+            )
+
+            WasmTarget.add_export!(mod, "dispatch", 0, dispatcher)
+
+            bytes = WasmTarget.to_bytes(mod)
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+
+            # dispatch(5, 0) should call func_double(5) = 10
+            @test run_wasm(bytes, "dispatch", Int32(5), Int32(0)) == 10
+            # dispatch(5, 1) should call func_triple(5) = 15
+            @test run_wasm(bytes, "dispatch", Int32(5), Int32(1)) == 15
+        end
+
+    end
+
 end

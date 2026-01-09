@@ -1,7 +1,7 @@
 # WebAssembly Instructions and Opcodes
 # Reference: https://webassembly.github.io/spec/core/binary/instructions.html
 
-export Opcode, WasmModule, WasmImport, add_function!, add_import!, add_export!, add_struct_type!, add_array_type!, to_bytes
+export Opcode, WasmModule, WasmImport, WasmTable, add_function!, add_import!, add_export!, add_struct_type!, add_array_type!, add_table!, add_table_export!, add_elem_segment!, to_bytes
 
 # ============================================================================
 # Opcodes (Section 5.4)
@@ -290,6 +290,28 @@ struct WasmGlobal
 end
 
 """
+    WasmTable
+
+A WebAssembly table for holding references (funcref, externref).
+"""
+struct WasmTable
+    reftype::RefType         # funcref (0x70) or externref (0x6F)
+    min::UInt32              # Minimum size
+    max::Union{UInt32, Nothing}  # Maximum size (nothing = no max)
+end
+
+"""
+    WasmElemSegment
+
+An element segment for initializing tables with function references.
+"""
+struct WasmElemSegment
+    table_idx::UInt32        # Which table to initialize
+    offset::UInt32           # Offset in table (constant)
+    func_indices::Vector{UInt32}  # Function indices to place in table
+end
+
+"""
     WasmModule
 
 A WebAssembly module builder. Use this to construct modules programmatically.
@@ -298,11 +320,13 @@ mutable struct WasmModule
     types::Vector{CompositeType}  # Can contain FuncType, StructType, ArrayType
     imports::Vector{WasmImport}   # Imported functions/tables/etc
     functions::Vector{WasmFunction}
+    tables::Vector{WasmTable}     # Tables for funcref/externref
     globals::Vector{WasmGlobal}   # Global variables
     exports::Vector{WasmExport}
+    elem_segments::Vector{WasmElemSegment}  # Element segments for table init
 end
 
-WasmModule() = WasmModule(CompositeType[], WasmImport[], WasmFunction[], WasmGlobal[], WasmExport[])
+WasmModule() = WasmModule(CompositeType[], WasmImport[], WasmFunction[], WasmTable[], WasmGlobal[], WasmExport[], WasmElemSegment[])
 
 # ============================================================================
 # Module Building API
@@ -475,6 +499,36 @@ function add_global_export!(mod::WasmModule, name::String, global_idx::Integer)
     add_export!(mod, name, 3, global_idx)  # kind 3 = global
 end
 
+"""
+    add_table!(mod, reftype, min, max=nothing) -> table_idx
+
+Add a table to the module. Tables hold references (funcref or externref).
+"""
+function add_table!(mod::WasmModule, reftype::RefType, min::Integer, max::Union{Integer, Nothing}=nothing)::UInt32
+    max_val = max === nothing ? nothing : UInt32(max)
+    push!(mod.tables, WasmTable(reftype, UInt32(min), max_val))
+    return UInt32(length(mod.tables) - 1)
+end
+
+"""
+    add_table_export!(mod, name, table_idx)
+
+Export a table.
+"""
+function add_table_export!(mod::WasmModule, name::String, table_idx::Integer)
+    add_export!(mod, name, 1, table_idx)  # kind 1 = table
+end
+
+"""
+    add_elem_segment!(mod, table_idx, offset, func_indices)
+
+Add an element segment to initialize a table with function references.
+"""
+function add_elem_segment!(mod::WasmModule, table_idx::Integer, offset::Integer, func_indices::Vector{<:Integer})
+    push!(mod.elem_segments, WasmElemSegment(UInt32(table_idx), UInt32(offset), UInt32[f for f in func_indices]))
+    return mod
+end
+
 # ============================================================================
 # Binary Serialization
 # ============================================================================
@@ -486,8 +540,10 @@ const WASM_VERSION = UInt8[0x01, 0x00, 0x00, 0x00]  # version 1
 const SECTION_TYPE = 0x01
 const SECTION_IMPORT = 0x02
 const SECTION_FUNCTION = 0x03
+const SECTION_TABLE = 0x04
 const SECTION_GLOBAL = 0x06
 const SECTION_EXPORT = 0x07
+const SECTION_ELEMENT = 0x09
 const SECTION_CODE = 0x0A
 
 """
@@ -535,6 +591,25 @@ function to_bytes(mod::WasmModule)::Vector{UInt8}
         end
     end
 
+    # Table section
+    if !isempty(mod.tables)
+        write_section!(w, SECTION_TABLE) do section
+            write_u32!(section, length(mod.tables))
+            for table in mod.tables
+                write_valtype!(section, table.reftype)
+                # Limits: 0x00 = min only, 0x01 = min and max
+                if table.max === nothing
+                    write_byte!(section, 0x00)
+                    write_u32!(section, table.min)
+                else
+                    write_byte!(section, 0x01)
+                    write_u32!(section, table.min)
+                    write_u32!(section, table.max)
+                end
+            end
+        end
+    end
+
     # Global section
     if !isempty(mod.globals)
         write_section!(w, SECTION_GLOBAL) do section
@@ -557,6 +632,27 @@ function to_bytes(mod::WasmModule)::Vector{UInt8}
                 write_name!(section, exp.name)
                 write_byte!(section, exp.kind)
                 write_u32!(section, exp.idx)
+            end
+        end
+    end
+
+    # Element section
+    if !isempty(mod.elem_segments)
+        write_section!(w, SECTION_ELEMENT) do section
+            write_u32!(section, length(mod.elem_segments))
+            for elem in mod.elem_segments
+                # Element segment kind 0: active, table index 0, funcref
+                # Binary format: flags (0) + offset expr + vec(funcidx)
+                write_byte!(section, 0x00)  # flags: active segment, table 0
+                # Offset expression (i32.const offset)
+                push!(section.buffer, Opcode.I32_CONST)
+                append!(section.buffer, encode_leb128_signed(Int32(elem.offset)))
+                push!(section.buffer, Opcode.END)
+                # Vector of function indices
+                write_u32!(section, length(elem.func_indices))
+                for func_idx in elem.func_indices
+                    write_u32!(section, func_idx)
+                end
             end
         end
     end
