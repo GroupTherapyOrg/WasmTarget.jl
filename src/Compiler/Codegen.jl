@@ -1118,6 +1118,7 @@ We need locals when:
 1. An SSA value is used multiple times
 2. An SSA value is not used immediately (intervening stack operations)
 3. An SSA value is used in a multi-arg call where a sibling arg has a local
+4. An SSA value is defined inside a loop but used outside (e.g., in return)
 """
 function allocate_ssa_locals!(ctx::CompilationContext)
     code = ctx.code_info.code
@@ -1128,8 +1129,36 @@ function allocate_ssa_locals!(ctx::CompilationContext)
         count_ssa_uses!(stmt, ssa_uses)
     end
 
+    # Find loop bounds (header to backward goto)
+    loop_bounds = Dict{Int, Int}()  # header => back_edge_idx
+    for (i, stmt) in enumerate(code)
+        if stmt isa Core.GotoNode && stmt.label < i
+            # This is a backward jump
+            header = stmt.label
+            loop_bounds[header] = i
+        end
+    end
+
     # First pass: allocate locals for SSAs used more than once or with intervening ops
     needs_local_set = Set{Int}()
+
+    # Find SSAs defined inside a loop but used outside
+    # These need locals because stack values don't persist across Wasm block boundaries
+    for (header, back_edge) in loop_bounds
+        for (i, stmt) in enumerate(code)
+            # Check if SSA i is defined inside this loop
+            if i >= header && i <= back_edge
+                # Check if it's used after the loop (in return or other statements)
+                for (j, other) in enumerate(code)
+                    if j > back_edge && references_ssa(other, i)
+                        # SSA i is defined inside loop but used outside - needs local
+                        push!(needs_local_set, i)
+                        break
+                    end
+                end
+            end
+        end
+    end
     for (ssa_id, use_count) in ssa_uses
         if haskey(ctx.phi_locals, ssa_id)
             # Phi nodes already have locals
@@ -1398,8 +1427,34 @@ function infer_value_type(val, ctx::CompilationContext)
         return Float32
     elseif val isa Bool
         return Bool
+    elseif val isa Char
+        return Char
     elseif val isa WasmGlobal
         return typeof(val)
+    elseif val isa GlobalRef
+        # GlobalRef to a constant - infer type from the actual value
+        try
+            actual_val = getfield(val.mod, val.name)
+            if actual_val isa Int32
+                return Int32
+            elseif actual_val isa Int64 || actual_val isa Int
+                return Int64
+            elseif actual_val isa Float32
+                return Float32
+            elseif actual_val isa Float64
+                return Float64
+            elseif actual_val isa Bool
+                return Bool
+            elseif actual_val isa Char
+                return Char
+            elseif actual_val isa Type
+                return Type  # Type references
+            else
+                return typeof(actual_val)
+            end
+        catch
+            # If we can't evaluate, default to Int64
+        end
     end
     return Int64
 end
@@ -1537,6 +1592,19 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
         end
     end
 
+    # Find loop bounds (header to back-edge)
+    loop_header = first(ctx.loop_headers)  # Assuming single loop for now
+    back_edge_idx = nothing
+    for (i, stmt) in enumerate(code)
+        if stmt isa Core.GotoNode && stmt.label == loop_header
+            back_edge_idx = i
+            break
+        end
+    end
+    if back_edge_idx === nothing
+        back_edge_idx = length(code)
+    end
+
     # block $exit (for breaking out of loop)
     push!(bytes, Opcode.BLOCK)
     push!(bytes, 0x40)  # void block type
@@ -1545,8 +1613,9 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
     push!(bytes, Opcode.LOOP)
     push!(bytes, 0x40)  # void block type
 
-    # Generate loop body
-    for (i, stmt) in enumerate(code)
+    # Generate loop body (only statements within loop bounds)
+    for i in 1:back_edge_idx
+        stmt = code[i]
         if stmt isa Core.PhiNode
             # Skip phi nodes in the body - they're handled via locals
             continue
@@ -1582,6 +1651,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                 push!(bytes, 0x00)  # Branch to loop (depth 0)
             end
         elseif stmt isa Core.ReturnNode
+            # Return inside loop - shouldn't normally happen, but handle it
             if isdefined(stmt, :val)
                 append!(bytes, compile_value(stmt.val, ctx))
             end
@@ -1597,13 +1667,16 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
     # End block
     push!(bytes, Opcode.END)
 
-    # After loop exits, return the result (last phi value typically)
-    # Find the return value
-    for (i, stmt) in enumerate(code)
-        if stmt isa Core.ReturnNode && isdefined(stmt, :val)
-            append!(bytes, compile_value(stmt.val, ctx))
+    # Generate code AFTER the loop (statements that run after loop exits)
+    for i in (back_edge_idx + 1):length(code)
+        stmt = code[i]
+        if stmt isa Core.ReturnNode
+            if isdefined(stmt, :val)
+                append!(bytes, compile_value(stmt.val, ctx))
+            end
             push!(bytes, Opcode.RETURN)
-            break
+        elseif !(stmt === nothing)
+            append!(bytes, compile_statement(stmt, i, ctx))
         end
     end
 
