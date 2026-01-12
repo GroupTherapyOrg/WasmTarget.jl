@@ -121,9 +121,14 @@ end
 Check if character is ASCII letter (a-z, A-Z).
 """
 @noinline function is_ascii_alpha(c::Int32)::Bool
-    lower = c >= Int32(97) && c <= Int32(122)  # 'a' = 97, 'z' = 122
-    upper = c >= Int32(65) && c <= Int32(90)   # 'A' = 65, 'Z' = 90
-    return lower || upper
+    # Early return pattern avoids phi nodes in IR
+    if c >= Int32(97) && c <= Int32(122)  # 'a' = 97, 'z' = 122
+        return true
+    end
+    if c >= Int32(65) && c <= Int32(90)   # 'A' = 65, 'Z' = 90
+        return true
+    end
+    return false
 end
 
 """
@@ -132,7 +137,14 @@ end
 Check if character is ASCII alphanumeric.
 """
 @noinline function is_ascii_alphanum(c::Int32)::Bool
-    return is_ascii_digit(c) || is_ascii_alpha(c)
+    # Early return pattern avoids || which creates complex control flow
+    if is_ascii_digit(c)
+        return true
+    end
+    if is_ascii_alpha(c)
+        return true
+    end
+    return false
 end
 
 """
@@ -141,12 +153,26 @@ end
 Check if character is ASCII whitespace (space, tab, newline, etc.).
 """
 @noinline function is_ascii_space(c::Int32)::Bool
-    return c == Int32(32) ||   # space
-           c == Int32(9) ||    # tab
-           c == Int32(10) ||   # newline
-           c == Int32(13) ||   # carriage return
-           c == Int32(12) ||   # form feed
-           c == Int32(11)      # vertical tab
+    # Early return pattern avoids || which creates complex control flow
+    if c == Int32(32)   # space
+        return true
+    end
+    if c == Int32(9)    # tab
+        return true
+    end
+    if c == Int32(10)   # newline
+        return true
+    end
+    if c == Int32(13)   # carriage return
+        return true
+    end
+    if c == Int32(12)   # form feed
+        return true
+    end
+    if c == Int32(11)   # vertical tab
+        return true
+    end
+    return false
 end
 
 """
@@ -155,7 +181,14 @@ end
 Check if character is newline.
 """
 @noinline function is_ascii_newline(c::Int32)::Bool
-    return c == Int32(10) || c == Int32(13)  # LF or CR
+    # Early return pattern avoids || which creates complex control flow
+    if c == Int32(10)  # LF
+        return true
+    end
+    if c == Int32(13)  # CR
+        return true
+    end
+    return false
 end
 
 """
@@ -164,10 +197,17 @@ end
 Check if character is hex digit (0-9, a-f, A-F).
 """
 @noinline function is_ascii_hex(c::Int32)::Bool
-    digit = c >= Int32(48) && c <= Int32(57)   # 0-9
-    lower = c >= Int32(97) && c <= Int32(102)  # a-f
-    upper = c >= Int32(65) && c <= Int32(70)   # A-F
-    return digit || lower || upper
+    # Early return pattern avoids phi nodes in IR
+    if c >= Int32(48) && c <= Int32(57)   # 0-9
+        return true
+    end
+    if c >= Int32(97) && c <= Int32(102)  # a-f
+        return true
+    end
+    if c >= Int32(65) && c <= Int32(70)   # A-F
+        return true
+    end
+    return false
 end
 
 """
@@ -176,7 +216,14 @@ end
 Check if character can start an identifier (letter or underscore).
 """
 @noinline function is_identifier_start(c::Int32)::Bool
-    return is_ascii_alpha(c) || c == Int32(95)  # '_' = 95
+    # Early return pattern avoids || which creates complex control flow
+    if is_ascii_alpha(c)
+        return true
+    end
+    if c == Int32(95)  # '_' = 95
+        return true
+    end
+    return false
 end
 
 """
@@ -185,7 +232,14 @@ end
 Check if character can continue an identifier (alphanumeric or underscore).
 """
 @noinline function is_identifier_char(c::Int32)::Bool
-    return is_ascii_alphanum(c) || c == Int32(95)
+    # Early return pattern avoids || which creates complex control flow
+    if is_ascii_alphanum(c)
+        return true
+    end
+    if c == Int32(95)  # '_'
+        return true
+    end
+    return false
 end
 
 """
@@ -194,19 +248,51 @@ end
 Check if character is an operator character.
 """
 @noinline function is_operator_char(c::Int32)::Bool
-    return c == Int32(43) ||   # +
-           c == Int32(45) ||   # -
-           c == Int32(42) ||   # *
-           c == Int32(47) ||   # /
-           c == Int32(37) ||   # %
-           c == Int32(94) ||   # ^
-           c == Int32(38) ||   # &
-           c == Int32(124) ||  # |
-           c == Int32(60) ||   # <
-           c == Int32(62) ||   # >
-           c == Int32(61) ||   # =
-           c == Int32(33) ||   # !
-           c == Int32(126) ||  # ~
-           c == Int32(58) ||   # :
-           c == Int32(36)      # $
+    # Early return pattern avoids || which creates complex control flow
+    if c == Int32(43)    # +
+        return true
+    end
+    if c == Int32(45)    # -
+        return true
+    end
+    if c == Int32(42)    # *
+        return true
+    end
+    if c == Int32(47)    # /
+        return true
+    end
+    if c == Int32(37)    # %
+        return true
+    end
+    if c == Int32(94)    # ^
+        return true
+    end
+    if c == Int32(38)    # &
+        return true
+    end
+    if c == Int32(124)   # |
+        return true
+    end
+    if c == Int32(60)    # <
+        return true
+    end
+    if c == Int32(62)    # >
+        return true
+    end
+    if c == Int32(61)    # =
+        return true
+    end
+    if c == Int32(33)    # !
+        return true
+    end
+    if c == Int32(126)   # ~
+        return true
+    end
+    if c == Int32(58)    # :
+        return true
+    end
+    if c == Int32(36)    # $
+        return true
+    end
+    return false
 end
