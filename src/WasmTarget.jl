@@ -14,6 +14,7 @@ include("Runtime/Intrinsics.jl")
 include("Runtime/StringOps.jl")
 include("Runtime/ArrayOps.jl")
 include("Runtime/SimpleDict.jl")
+include("Runtime/ByteBuffer.jl")
 
 # Main API
 export compile, compile_multi, WasmModule, to_bytes

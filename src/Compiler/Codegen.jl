@@ -1649,6 +1649,12 @@ Handles both return-based patterns and phi node patterns (ternary expressions).
 function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
     bytes = UInt8[]
 
+    # Count SSA uses (for drop logic)
+    ssa_use_count = Dict{Int, Int}()
+    for stmt in code
+        count_ssa_uses!(stmt, ssa_use_count)
+    end
+
     # First block: statements up to the condition
     first_block = blocks[1]
     goto_if_not = first_block.terminator::Core.GotoIfNot
@@ -1757,8 +1763,26 @@ function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBloc
                     append!(bytes, compile_value(stmt.val, ctx))
                 end
                 # Don't emit return - the value stays on stack for the if result
+            elseif stmt === nothing
+                # Skip nothing statements
             else
                 append!(bytes, compile_statement(stmt, i, ctx))
+
+                # Drop unused values from calls (like setfield! which returns a value)
+                if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
+                    stmt_type = get(ctx.ssa_types, i, Nothing)
+                    if stmt_type !== Nothing && stmt_type !== Any
+                        is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
+                        if !is_nothing_union
+                            if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
+                                use_count = get(ssa_use_count, i, 0)
+                                if use_count == 0
+                                    push!(bytes, Opcode.DROP)
+                                end
+                            end
+                        end
+                    end
+                end
             end
         end
 
@@ -1772,8 +1796,26 @@ function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBloc
                 if isdefined(stmt, :val)
                     append!(bytes, compile_value(stmt.val, ctx))
                 end
+            elseif stmt === nothing
+                # Skip nothing statements
             else
                 append!(bytes, compile_statement(stmt, i, ctx))
+
+                # Drop unused values from calls (like setfield! which returns a value)
+                if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
+                    stmt_type = get(ctx.ssa_types, i, Nothing)
+                    if stmt_type !== Nothing && stmt_type !== Any
+                        is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
+                        if !is_nothing_union
+                            if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
+                                use_count = get(ssa_use_count, i, 0)
+                                if use_count == 0
+                                    push!(bytes, Opcode.DROP)
+                                end
+                            end
+                        end
+                    end
+                end
             end
         end
 
