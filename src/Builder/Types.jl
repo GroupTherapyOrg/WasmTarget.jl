@@ -39,6 +39,7 @@ Reference types in WebAssembly (including WasmGC extensions).
     I31Ref = 0x6C     # i31ref (WasmGC)
     StructRef = 0x6B  # structref (WasmGC)
     ArrayRef = 0x6A   # arrayref (WasmGC)
+    ExnRef = 0x69     # exnref (exception handling)
 end
 
 """

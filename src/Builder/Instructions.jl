@@ -1,7 +1,7 @@
 # WebAssembly Instructions and Opcodes
 # Reference: https://webassembly.github.io/spec/core/binary/instructions.html
 
-export Opcode, WasmModule, WasmImport, WasmTable, WasmMemory, WasmDataSegment, add_function!, add_import!, add_export!, add_struct_type!, add_array_type!, add_table!, add_table_export!, add_elem_segment!, add_memory!, add_memory_export!, add_data_segment!, to_bytes
+export Opcode, WasmModule, WasmImport, WasmTable, WasmMemory, WasmDataSegment, WasmTag, add_function!, add_import!, add_export!, add_struct_type!, add_array_type!, add_table!, add_table_export!, add_elem_segment!, add_memory!, add_memory_export!, add_data_segment!, add_tag!, to_bytes
 
 # ============================================================================
 # Opcodes (Section 5.4)
@@ -22,6 +22,17 @@ module Opcode
     const RETURN = 0x0F
     const CALL = 0x10
     const CALL_INDIRECT = 0x11
+
+    # Exception handling instructions (Wasm 3.0)
+    const THROW = 0x08         # throw tag_idx - throw exception with tag
+    const THROW_REF = 0x0A     # throw_ref - rethrow exception from exnref
+    const TRY_TABLE = 0x1F     # try_table blocktype catch* - structured exception handler
+
+    # Catch clause types for try_table
+    const CATCH = 0x00         # catch tag_idx label_idx
+    const CATCH_REF = 0x01     # catch_ref tag_idx label_idx (pushes exnref)
+    const CATCH_ALL = 0x02     # catch_all label_idx
+    const CATCH_ALL_REF = 0x03 # catch_all_ref label_idx (pushes exnref)
 
     # Parametric instructions
     const DROP = 0x1A
@@ -333,6 +344,16 @@ struct WasmDataSegment
 end
 
 """
+    WasmTag
+
+An exception tag for WebAssembly exception handling.
+Tags identify exception types and have an associated type signature.
+"""
+struct WasmTag
+    type_idx::UInt32         # Index of FuncType (params define exception payload)
+end
+
+"""
     WasmModule
 
 A WebAssembly module builder. Use this to construct modules programmatically.
@@ -347,9 +368,10 @@ mutable struct WasmModule
     exports::Vector{WasmExport}
     elem_segments::Vector{WasmElemSegment}  # Element segments for table init
     data_segments::Vector{WasmDataSegment}  # Data segments for memory init
+    tags::Vector{WasmTag}         # Exception tags for exception handling
 end
 
-WasmModule() = WasmModule(CompositeType[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobalDef[], WasmExport[], WasmElemSegment[], WasmDataSegment[])
+WasmModule() = WasmModule(CompositeType[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobalDef[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[])
 
 # ============================================================================
 # Module Building API
@@ -587,6 +609,17 @@ function add_data_segment!(mod::WasmModule, memory_idx::Integer, offset::Integer
     add_data_segment!(mod, memory_idx, offset, Vector{UInt8}(codeunits(data)))
 end
 
+"""
+    add_tag!(mod, type_idx) -> tag_idx
+
+Add an exception tag to the module and return its index.
+The type_idx refers to a FuncType whose params define the exception payload.
+"""
+function add_tag!(mod::WasmModule, type_idx::Integer)::UInt32
+    push!(mod.tags, WasmTag(UInt32(type_idx)))
+    return UInt32(length(mod.tags) - 1)
+end
+
 # ============================================================================
 # Binary Serialization
 # ============================================================================
@@ -605,6 +638,7 @@ const SECTION_EXPORT = 0x07
 const SECTION_ELEMENT = 0x09
 const SECTION_CODE = 0x0A
 const SECTION_DATA = 0x0B
+const SECTION_TAG = 0x0D      # Exception tags (section 13)
 
 """
     to_bytes(mod::WasmModule) -> Vector{UInt8}
@@ -684,6 +718,18 @@ function to_bytes(mod::WasmModule)::Vector{UInt8}
                     write_u32!(section, mem.min)
                     write_u32!(section, mem.max)
                 end
+            end
+        end
+    end
+
+    # Tag section (exception handling)
+    if !isempty(mod.tags)
+        write_section!(w, SECTION_TAG) do section
+            write_u32!(section, length(mod.tags))
+            for tag in mod.tags
+                # Tag format: attribute (0x00 = exception) + type_idx
+                write_byte!(section, 0x00)  # exception attribute
+                write_u32!(section, tag.type_idx)
             end
         end
     end

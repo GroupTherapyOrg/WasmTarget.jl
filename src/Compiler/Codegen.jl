@@ -3124,6 +3124,12 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
             append!(bytes, encode_leb128_unsigned(local_idx))
         end
 
+    elseif stmt isa Core.EnterNode
+        # Exception handling: Enter try block
+        # For now, we just skip this - full implementation requires try_table
+        # The catch destination is in stmt.catch_dest
+        # TODO: Implement full try/catch with try_table instruction
+
     elseif stmt isa GlobalRef
         # GlobalRef statement - evaluate the constant and push it
         # This handles things like Main.SLOT_EMPTY that are module-level constants
@@ -3155,6 +3161,14 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
             # This is a no-op that produces a Bool (we push false since we're not doing checks)
             push!(stmt_bytes, Opcode.I32_CONST)
             push!(stmt_bytes, 0x00)  # false = no bounds checking
+        elseif stmt.head === :leave
+            # Exception handling: Leave try block
+            # For now, skip - full implementation requires try_table control flow
+            # TODO: Implement proper br out of try_table
+        elseif stmt.head === :pop_exception
+            # Exception handling: Pop exception from handler stack
+            # For now, skip - full implementation requires exnref handling
+            # TODO: Implement proper exception value handling
         end
 
         append!(bytes, stmt_bytes)
