@@ -4,7 +4,7 @@
 # In WASM, strings are stored as i32 arrays (one element per character).
 # These functions compile to direct array operations.
 
-export str_char, str_setchar!, str_len, str_new, str_copy, str_substr
+export str_char, str_setchar!, str_len, str_new, str_copy, str_substr, str_eq, str_hash
 
 """
     str_char(s::String, i::Int)::Int32
@@ -154,4 +154,29 @@ str_eq("hello", "world")  # Returns false
 """
 @noinline function str_eq(a::String, b::String)::Bool
     return Base.inferencebarrier(a == b)::Bool
+end
+
+"""
+    str_hash(s::String)::Int32
+
+Compute a hash value for the string.
+Uses Java-style hash: h = 31 * h + char[i] for each character.
+Result is masked to positive Int32 range.
+
+This is the same algorithm used by SimpleDict for Int32 keys,
+extended to work with strings.
+
+# Example
+```julia
+h = str_hash("hello")  # Returns consistent Int32 hash value
+```
+"""
+@noinline function str_hash(s::String)::Int32
+    # Julia fallback - compute hash
+    h = Int32(0)
+    for c in s
+        h = Int32(31) * h + Int32(UInt8(c))
+        h = h & Int32(0x7FFFFFFF)  # Keep positive
+    end
+    return Base.inferencebarrier(h)::Int32
 end

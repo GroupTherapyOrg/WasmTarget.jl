@@ -14,7 +14,7 @@ struct StructInfo
     julia_type::DataType
     wasm_type_idx::UInt32
     field_names::Vector{Symbol}
-    field_types::Vector{DataType}
+    field_types::Vector{Type}  # Can include Union types
 end
 
 """
@@ -133,6 +133,25 @@ function get_string_array_type!(mod::WasmModule, registry::TypeRegistry)::UInt32
         registry.string_array_idx = add_array_type!(mod, I32, true)
     end
     return registry.string_array_idx
+end
+
+"""
+Get or create an array type that holds string references.
+Used for StringDict keys array.
+"""
+function get_string_ref_array_type!(mod::WasmModule, registry::TypeRegistry)::UInt32
+    # First ensure string array type exists
+    str_type_idx = get_string_array_type!(mod, registry)
+
+    # Create array type for string refs if not exists
+    # Key: use Vector{String} as the Julia type marker
+    if !haskey(registry.arrays, Vector{String})
+        # Element type is (ref null str_type_idx) - ConcreteRef with nullable=true
+        str_ref_type = ConcreteRef(str_type_idx, true)
+        arr_idx = add_array_type!(mod, str_ref_type, true)
+        registry.arrays[Vector{String}] = arr_idx
+    end
+    return registry.arrays[Vector{String}]
 end
 
 """
@@ -704,6 +723,9 @@ function register_closure_type!(mod::WasmModule, registry::TypeRegistry, T::Data
     return info
 end
 
+# Track types currently being registered to prevent infinite recursion
+const _registering_types = Set{DataType}()
+
 """
 Register a Julia struct type in the Wasm module.
 """
@@ -711,6 +733,22 @@ function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataT
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
 
+    # Prevent infinite recursion for self-referential types (like GreenNode)
+    if T in _registering_types
+        # Type is being registered - we'll handle this as a forward reference
+        # For now, use abstract StructRef since concrete index isn't known yet
+        return nothing  # Caller should handle this
+    end
+
+    push!(_registering_types, T)
+    try
+        return _register_struct_type_impl!(mod, registry, T)
+    finally
+        delete!(_registering_types, T)
+    end
+end
+
+function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T::DataType)
     # Get field information
     field_names = [fieldname(T, i) for i in 1:fieldcount(T)]
     field_types = [fieldtype(T, i) for i in 1:fieldcount(T)]
@@ -719,13 +757,77 @@ function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataT
     wasm_fields = FieldType[]
     for ft in field_types
         # For array fields, use concrete reference to registered array type
-        if ft <: AbstractVector
+        if ft === Vector{String}
+            # Special case: Vector{String} is array of string refs
+            array_type_idx = get_string_ref_array_type!(mod, registry)
+            wasm_vt = ConcreteRef(array_type_idx, true)  # nullable reference
+        elseif ft <: AbstractVector
             elem_type = eltype(ft)
             array_type_idx = get_array_type!(mod, registry, elem_type)
             wasm_vt = ConcreteRef(array_type_idx, true)  # nullable reference
         elseif ft === String
             str_type_idx = get_string_array_type!(mod, registry)
             wasm_vt = ConcreteRef(str_type_idx, true)
+        elseif isprimitivetype(ft)
+            # Custom primitive types (e.g., JuliaSyntax.Kind) - map by size
+            sz = sizeof(ft)
+            if sz <= 4
+                wasm_vt = I32
+            elseif sz <= 8
+                wasm_vt = I64
+            else
+                error("Primitive type too large for Wasm field: $ft ($sz bytes)")
+            end
+        elseif ft isa Union
+            # Handle Union{Nothing, T} as nullable reference to T
+            union_types = Base.uniontypes(ft)
+            non_nothing = filter(t -> t !== Nothing, union_types)
+            if length(non_nothing) == 1
+                inner_type = non_nothing[1]
+                if inner_type <: AbstractVector
+                    # Union{Nothing, Vector{...}} - nullable array ref
+                    elem_type = eltype(inner_type)
+                    # Check for recursive types (elem_type is currently being registered)
+                    if elem_type in _registering_types
+                        # Self-referential type - use abstract ArrayRef for now
+                        wasm_vt = ArrayRef
+                    else
+                        # For non-recursive types, register the element type first
+                        if isconcretetype(elem_type) && isstructtype(elem_type)
+                            register_struct_type!(mod, registry, elem_type)
+                        end
+                        array_type_idx = get_array_type!(mod, registry, elem_type)
+                        wasm_vt = ConcreteRef(array_type_idx, true)  # nullable
+                    end
+                elseif isconcretetype(inner_type) && isstructtype(inner_type)
+                    # Union{Nothing, SomeStruct} - nullable struct ref
+                    if inner_type in _registering_types
+                        # Self-referential type - use abstract StructRef
+                        wasm_vt = StructRef
+                    else
+                        register_struct_type!(mod, registry, inner_type)
+                        info = registry.structs[inner_type]
+                        wasm_vt = ConcreteRef(info.wasm_type_idx, true)  # nullable
+                    end
+                else
+                    wasm_vt = julia_to_wasm_type(ft)
+                end
+            else
+                wasm_vt = julia_to_wasm_type(ft)
+            end
+        elseif isconcretetype(ft) && isstructtype(ft)
+            # Nested struct type - recursively register it
+            if ft in _registering_types
+                # Self-referential type - use abstract StructRef
+                wasm_vt = StructRef
+            else
+                nested_info = register_struct_type!(mod, registry, ft)
+                if nested_info !== nothing
+                    wasm_vt = ConcreteRef(nested_info.wasm_type_idx, true)
+                else
+                    wasm_vt = StructRef  # Forward reference
+                end
+            end
         else
             wasm_vt = julia_to_wasm_type(ft)
         end
@@ -1355,9 +1457,17 @@ function allocate_ssa_locals!(ctx::CompilationContext)
     # Actually allocate the locals
     for ssa_id in sort(collect(needs_local_set))
         if !haskey(ctx.ssa_locals, ssa_id)  # Skip phi nodes already added
-            wasm_type = get(ctx.ssa_types, ssa_id, Int64)
+            ssa_type = get(ctx.ssa_types, ssa_id, Int64)
+
+            # Skip MemoryRef types - they're "virtual" types that represent
+            # two stack values (array_ref, i32_index) and can't be stored in a single local
+            if ssa_type isa DataType && (ssa_type.name.name === :MemoryRef || ssa_type.name.name === :GenericMemoryRef)
+                continue
+            end
+
+            wasm_type = julia_to_wasm_type_concrete(ssa_type, ctx)
             local_idx = ctx.n_params + length(ctx.locals)
-            push!(ctx.locals, julia_to_wasm_type_concrete(wasm_type, ctx))
+            push!(ctx.locals, wasm_type)
             ctx.ssa_locals[ssa_id] = local_idx
         end
     end
@@ -1396,6 +1506,31 @@ function needs_local(ctx::CompilationContext, ssa_id::Int)
         stmt = code[i]
         if stmt isa Core.GotoIfNot || stmt isa Core.GotoNode
             return true
+        end
+    end
+
+    # If SSA is defined inside a loop and there are conditionals in the loop,
+    # we need a local to ensure stack balance across control flow
+    for header in ctx.loop_headers
+        # Find corresponding back-edge
+        back_edge = nothing
+        for (i, stmt) in enumerate(code)
+            if stmt isa Core.GotoNode && stmt.label == header
+                back_edge = i
+                break
+            end
+        end
+        if back_edge !== nothing && ssa_id >= header && ssa_id <= back_edge
+            # SSA is defined inside this loop
+            # Check if there are any conditionals in the loop
+            for i in header:back_edge
+                if code[i] isa Core.GotoIfNot
+                    # Loop has a conditional (not the exit condition if it's at the start)
+                    if i != header && i != header + 1
+                        return true
+                    end
+                end
+            end
         end
     end
 
@@ -1557,6 +1692,12 @@ function infer_value_type(val, ctx::CompilationContext)
         catch
             # If we can't evaluate, default to Int64
         end
+    elseif isprimitivetype(typeof(val))
+        # Custom primitive type (e.g., JuliaSyntax.Kind) - return actual type
+        return typeof(val)
+    elseif isstructtype(typeof(val)) && !isa(val, Type) && !isa(val, Function) && !isa(val, Module)
+        # Struct constant - return actual type
+        return typeof(val)
     end
     return Int64
 end
@@ -2005,27 +2146,15 @@ Wasm loop structure:
       (br \$continue) ; loop back
     )
   )
+
+Following dart2wasm patterns for inner conditionals:
+- Loop exit: GotoIfNot with target > back_edge → br_if to outer block
+- Inner conditional: GotoIfNot with target <= back_edge → nested block/br pattern
+- Dead code (boundscheck false): Skip unreachable branches entirely
 """
 function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
     bytes = UInt8[]
     code = ctx.code_info.code
-
-    # Initialize phi node locals with their entry values
-    for (i, stmt) in enumerate(code)
-        if stmt isa Core.PhiNode
-            # Find the entry value (from edge BEFORE the phi node)
-            for (edge_idx, edge) in enumerate(stmt.edges)
-                if edge < i  # Entry edge (from before the phi node)
-                    val = stmt.values[edge_idx]
-                    append!(bytes, compile_value(val, ctx))
-                    local_idx = ctx.phi_locals[i]
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(local_idx))
-                    break
-                end
-            end
-        end
-    end
 
     # Find loop bounds (header to back-edge)
     loop_header = first(ctx.loop_headers)  # Assuming single loop for now
@@ -2040,6 +2169,79 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
         back_edge_idx = length(code)
     end
 
+    # Identify dead code regions (boundscheck false patterns)
+    # Pattern: boundscheck(false) at line N, GotoIfNot %N at line N+1
+    # The boundscheck, GotoIfNot, and code from N+2 to target-1 are all dead
+    dead_regions = Set{Int}()
+    boundscheck_jumps = Dict{Int, Int}()  # GotoIfNot line → target (for always-jump)
+    for i in 1:length(code)
+        stmt = code[i]
+        if stmt isa Expr && stmt.head === :boundscheck && length(stmt.args) == 1 && stmt.args[1] === false
+            # Check if next line is GotoIfNot using this boundscheck
+            if i + 1 <= length(code) && code[i + 1] isa Core.GotoIfNot
+                goto_stmt = code[i + 1]
+                if goto_stmt.cond isa Core.SSAValue && goto_stmt.cond.id == i
+                    # This GotoIfNot always jumps (boundscheck is always false)
+                    boundscheck_jumps[i + 1] = goto_stmt.dest
+                    # Mark the boundscheck itself and lines from i+2 to target-1 as dead
+                    push!(dead_regions, i)  # boundscheck(false) - no need to emit
+                    for j in (i + 2):(goto_stmt.dest - 1)
+                        push!(dead_regions, j)
+                    end
+                end
+            end
+        end
+    end
+
+    # Identify inner conditional GotoIfNot statements (target within loop)
+    # Only for REAL conditionals (not boundscheck always-jump patterns or dead code)
+    inner_conditionals = Dict{Int, Int}()  # GotoIfNot line → merge point
+    for i in 1:back_edge_idx
+        # Skip dead code and boundscheck jumps
+        if i in dead_regions || haskey(boundscheck_jumps, i)
+            continue
+        end
+        stmt = code[i]
+        if stmt isa Core.GotoIfNot
+            target = stmt.dest
+            # Inner conditional: target is within loop, not the exit
+            if target <= back_edge_idx && target > i
+                inner_conditionals[i] = target
+            end
+        end
+    end
+
+    # Initialize LOOP phi node locals with their entry values
+    # Loop phis are at the loop header and have one edge from BEFORE the loop
+    # Inner conditional phis (within the loop) should NOT be initialized here
+    for (i, stmt) in enumerate(code)
+        if stmt isa Core.PhiNode && haskey(ctx.phi_locals, i)
+            # Only initialize if this is a LOOP phi (at or near loop header)
+            # Loop phis have an entry edge from before the loop header
+            # Inner conditional phis have all edges from within the loop
+            is_loop_phi = false
+            entry_edge = nothing
+            entry_val = nothing
+
+            for (edge_idx, edge) in enumerate(stmt.edges)
+                if edge < loop_header
+                    # Entry edge from before the loop
+                    is_loop_phi = true
+                    entry_edge = edge
+                    entry_val = stmt.values[edge_idx]
+                    break
+                end
+            end
+
+            if is_loop_phi && entry_val !== nothing
+                append!(bytes, compile_value(entry_val, ctx))
+                local_idx = ctx.phi_locals[i]
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(local_idx))
+            end
+        end
+    end
+
     # block $exit (for breaking out of loop)
     push!(bytes, Opcode.BLOCK)
     push!(bytes, 0x40)  # void block type
@@ -2048,26 +2250,128 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
     push!(bytes, Opcode.LOOP)
     push!(bytes, 0x40)  # void block type
 
+    # Track block depth for inner conditionals
+    # Key: merge point line number, Value: true if block is open
+    open_blocks = Dict{Int, Bool}()
+    current_depth = 0  # 0 = inside loop, additional depth for inner blocks
+
     # Generate loop body (only statements within loop bounds)
-    for i in 1:back_edge_idx
+    i = 1
+    while i <= back_edge_idx
+        # Check if we need to close any blocks at this merge point
+        if haskey(open_blocks, i) && open_blocks[i]
+            # Before closing the block, set the then-value for any phi at this merge point
+            # The then-branch ends here, so we need to store the value
+            if code[i] isa Core.PhiNode && haskey(ctx.phi_locals, i)
+                phi_stmt = code[i]::Core.PhiNode
+                # Find the then-value (edge from before this line, NOT the GotoIfNot)
+                # The then-branch is the fall-through, so look for edge from line i-1
+                for (edge_idx, edge) in enumerate(phi_stmt.edges)
+                    # The then-edge comes from the line just before the merge (the last then-stmt)
+                    # Or more precisely, any edge that's not the GotoIfNot line
+                    edge_stmt = get(code, edge, nothing)
+                    if edge_stmt !== nothing && !(edge_stmt isa Core.GotoIfNot)
+                        val = phi_stmt.values[edge_idx]
+                        append!(bytes, compile_value(val, ctx))
+                        local_idx = ctx.phi_locals[i]
+                        push!(bytes, Opcode.LOCAL_SET)
+                        append!(bytes, encode_leb128_unsigned(local_idx))
+                        break
+                    end
+                end
+            end
+            push!(bytes, Opcode.END)
+            open_blocks[i] = false
+            current_depth -= 1
+        end
+
         stmt = code[i]
+
+        # Skip dead code regions
+        if i in dead_regions
+            i += 1
+            continue
+        end
+
         if stmt isa Core.PhiNode
-            # Skip phi nodes in the body - they're handled via locals
+            # Phi nodes in loops are handled via locals
+            # For inner conditional phi nodes, we need to handle the merge
+            if haskey(ctx.phi_locals, i)
+                # The phi local should already have the correct value
+                # (set by either branch)
+            end
+            i += 1
             continue
         elseif stmt isa Core.GotoIfNot
-            # This is the loop exit condition
-            # Push condition
-            append!(bytes, compile_value(stmt.cond, ctx))
-            # If condition is FALSE, break out (br_if $exit with inverted condition)
-            push!(bytes, Opcode.I32_EQZ)  # Invert: if NOT condition
-            push!(bytes, Opcode.BR_IF)
-            push!(bytes, 0x01)  # Break to outer block (depth 1)
+            target = stmt.dest
+
+            # Skip boundscheck always-jump patterns (condition is always false)
+            if haskey(boundscheck_jumps, i)
+                # The dead region will be skipped, just continue
+                i += 1
+                continue
+            elseif target > back_edge_idx
+                # This is the LOOP EXIT condition
+                append!(bytes, compile_value(stmt.cond, ctx))
+                push!(bytes, Opcode.I32_EQZ)  # Invert: if NOT condition
+                push!(bytes, Opcode.BR_IF)
+                push!(bytes, UInt8(1 + current_depth))  # Break to exit block
+            elseif haskey(inner_conditionals, i)
+                # This is an INNER CONDITIONAL
+                # dart2wasm pattern: block + br_if to skip then-branch
+                merge_point = inner_conditionals[i]
+
+                # Check if there's a phi node at the merge point
+                merge_phi = nothing
+                if code[merge_point] isa Core.PhiNode
+                    merge_phi = merge_point
+                end
+
+                # If this conditional has a phi node, we need to set the else-value
+                # before the branch (it gets set if we skip the then-branch)
+                if merge_phi !== nothing && haskey(ctx.phi_locals, merge_phi)
+                    phi_stmt = code[merge_phi]::Core.PhiNode
+                    # Find the value for the else branch (edge from this GotoIfNot)
+                    for (edge_idx, edge) in enumerate(phi_stmt.edges)
+                        if edge == i
+                            val = phi_stmt.values[edge_idx]
+                            append!(bytes, compile_value(val, ctx))
+                            local_idx = ctx.phi_locals[merge_phi]
+                            push!(bytes, Opcode.LOCAL_SET)
+                            append!(bytes, encode_leb128_unsigned(local_idx))
+                            break
+                        end
+                    end
+                end
+
+                # Open a block for the then-branch
+                push!(bytes, Opcode.BLOCK)
+                push!(bytes, 0x40)  # void block type
+                open_blocks[merge_point] = true
+                current_depth += 1
+
+                # Branch to merge point if condition is FALSE
+                append!(bytes, compile_value(stmt.cond, ctx))
+                push!(bytes, Opcode.I32_EQZ)  # Invert condition
+                push!(bytes, Opcode.BR_IF)
+                push!(bytes, 0x00)  # Branch to the block we just opened (depth 0)
+            else
+                # Fallback: treat as simple forward branch (skip to target)
+                push!(bytes, Opcode.BLOCK)
+                push!(bytes, 0x40)
+                open_blocks[target] = true
+                current_depth += 1
+                append!(bytes, compile_value(stmt.cond, ctx))
+                push!(bytes, Opcode.I32_EQZ)
+                push!(bytes, Opcode.BR_IF)
+                push!(bytes, 0x00)
+            end
         elseif stmt isa Core.GotoNode
             if stmt.label in ctx.loop_headers
                 # This is the loop-back jump
                 # First update phi locals with their iteration values
                 for (j, phi_stmt) in enumerate(code)
-                    if phi_stmt isa Core.PhiNode
+                    if phi_stmt isa Core.PhiNode && haskey(ctx.phi_locals, j)
                         # Find the iteration value (from the back-edge - AFTER the phi node)
                         for (edge_idx, edge) in enumerate(phi_stmt.edges)
                             if edge > j  # Back-edge (from after the phi node)
@@ -2083,16 +2387,46 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                 end
                 # Continue loop
                 push!(bytes, Opcode.BR)
-                push!(bytes, 0x00)  # Branch to loop (depth 0)
+                push!(bytes, UInt8(current_depth))  # Branch to loop (accounting for open blocks)
+            elseif stmt.label > i && stmt.label <= back_edge_idx
+                # Forward jump within loop - branch to that point
+                # This handles the then-branch jumping to merge point
+                if haskey(open_blocks, stmt.label) && open_blocks[stmt.label]
+                    # Jump to merge point - handle phi update if needed
+                    if code[stmt.label] isa Core.PhiNode && haskey(ctx.phi_locals, stmt.label)
+                        phi_stmt = code[stmt.label]::Core.PhiNode
+                        for (edge_idx, edge) in enumerate(phi_stmt.edges)
+                            if edge == i
+                                val = phi_stmt.values[edge_idx]
+                                append!(bytes, compile_value(val, ctx))
+                                local_idx = ctx.phi_locals[stmt.label]
+                                push!(bytes, Opcode.LOCAL_SET)
+                                append!(bytes, encode_leb128_unsigned(local_idx))
+                                break
+                            end
+                        end
+                    end
+                    push!(bytes, Opcode.BR)
+                    push!(bytes, 0x00)  # Branch to inner block
+                end
             end
         elseif stmt isa Core.ReturnNode
-            # Return inside loop - shouldn't normally happen, but handle it
             if isdefined(stmt, :val)
                 append!(bytes, compile_value(stmt.val, ctx))
             end
             push!(bytes, Opcode.RETURN)
-        elseif !(stmt === nothing)
+        elseif stmt === nothing
+            # Skip nothing statements
+        else
             append!(bytes, compile_statement(stmt, i, ctx))
+        end
+        i += 1
+    end
+
+    # Close any remaining open blocks
+    for (merge_point, is_open) in open_blocks
+        if is_open
+            push!(bytes, Opcode.END)
         end
     end
 
@@ -3106,6 +3440,269 @@ function generate_and_pattern(ctx::CompilationContext, blocks, code, conditional
 end
 
 """
+Detect OR pattern: multiple conditionals where each then-branch jumps to the same phi node.
+Returns (phi_idx, or_conditions, next_conditional_idx) or nothing.
+
+OR pattern IR example (a || b || c):
+  1: a
+  2: goto %4 if not %1
+  3: goto %9  (then-branch)
+  4: b
+  5: goto %7 if not %4
+  6: goto %9  (then-branch)
+  7: c
+  8: goto %9
+  9: φ (%3 => %1, %6 => %4, %8 => %7)
+  10: goto %N if not %9  (uses the phi)
+"""
+function detect_or_pattern(code, conditionals)
+    if length(conditionals) < 1
+        return nothing
+    end
+
+    # For each conditional, check if the then-branch (fall-through) has a GotoNode
+    # that jumps to a phi node
+    phi_targets = Dict{Int, Vector{Tuple{Int, Int}}}()  # phi_idx => [(cond_idx, goto_idx), ...]
+
+    for (cond_idx, (block_idx, block)) in enumerate(conditionals)
+        goto_if_not = block.terminator::Core.GotoIfNot
+        then_start = block.end_idx + 1
+        else_target = goto_if_not.dest
+        then_end = else_target - 1
+
+        # Look for GotoNode in then-branch
+        for i in then_start:min(then_end, length(code))
+            stmt = code[i]
+            if stmt isa Core.GotoNode && stmt.label > i
+                target = stmt.label
+                if target <= length(code) && code[target] isa Core.PhiNode
+                    # Found a then-branch GotoNode to a phi
+                    if !haskey(phi_targets, target)
+                        phi_targets[target] = []
+                    end
+                    push!(phi_targets[target], (cond_idx, i))
+                end
+                break
+            end
+        end
+    end
+
+    # Check if we have a phi with multiple incoming OR conditions
+    # Return the FIRST one (lowest phi_idx) to process patterns in code order
+    best_phi_idx = nothing
+    best_cond_infos = nothing
+    best_next_cond_idx = nothing
+
+    for (phi_idx, cond_infos) in phi_targets
+        if length(cond_infos) >= 2
+            # Only consider if this is earlier than our current best
+            if best_phi_idx === nothing || phi_idx < best_phi_idx
+                # Found an OR pattern - verify all edges are from these conditions
+                phi_stmt = code[phi_idx]::Core.PhiNode
+
+                # Find the conditional that USES this phi (tests the OR result)
+                next_cond_idx = nothing
+                for (j, (_, b)) in enumerate(conditionals)
+                    goto_if_not = b.terminator::Core.GotoIfNot
+                    if goto_if_not.cond isa Core.SSAValue && goto_if_not.cond.id == phi_idx
+                        next_cond_idx = j
+                        break
+                    end
+                end
+
+                best_phi_idx = phi_idx
+                best_cond_infos = cond_infos
+                best_next_cond_idx = next_cond_idx
+            end
+        end
+    end
+
+    if best_phi_idx !== nothing
+        return (best_phi_idx, best_cond_infos, best_next_cond_idx)
+    end
+
+    return nothing
+end
+
+"""
+Generate code for OR pattern (a || b || c producing boolean phi).
+Creates nested if-else structure that evaluates each condition.
+"""
+function generate_or_pattern(ctx::CompilationContext, blocks, code, conditionals, result_type, or_pattern, ssa_use_count)::Vector{UInt8}
+    bytes = UInt8[]
+    phi_idx, cond_infos, next_cond_idx = or_pattern
+    phi_stmt = code[phi_idx]::Core.PhiNode
+
+    # Sort conditions by their index (they should be in order)
+    sorted_conds = sort(cond_infos, by=x -> x[1])
+
+    # Helper to generate code for OR condition at index i
+    function gen_or_cond(idx::Int)::Vector{UInt8}
+        inner_bytes = UInt8[]
+
+        if idx > length(sorted_conds)
+            # Last condition (the one without a GotoNode in then-branch)
+            # Find the last edge in the phi - this is the final condition value
+            last_edge = nothing
+            last_val = nothing
+            for (edge_idx, edge) in enumerate(phi_stmt.edges)
+                # Find edge that's not from one of the GotoNode lines
+                is_goto_edge = any(ci -> ci[2] == edge, sorted_conds)
+                if !is_goto_edge
+                    last_edge = edge
+                    last_val = phi_stmt.values[edge_idx]
+                    break
+                end
+            end
+
+            if last_val !== nothing
+                # For SSAValue with no local, we need to compile the statement
+                if last_val isa Core.SSAValue && !haskey(ctx.ssa_locals, last_val.id) && !haskey(ctx.phi_locals, last_val.id)
+                    # Compile the statement for this SSA value
+                    stmt = code[last_val.id]
+                    if stmt !== nothing
+                        append!(inner_bytes, compile_statement(stmt, last_val.id, ctx))
+                    end
+                else
+                    # Has a local or is not SSAValue - use compile_value
+                    append!(inner_bytes, compile_value(last_val, ctx))
+                end
+            else
+                # Fallback - push false
+                push!(inner_bytes, Opcode.I32_CONST)
+                append!(inner_bytes, encode_leb128_signed(0))
+            end
+
+            return inner_bytes
+        end
+
+        cond_idx, goto_line = sorted_conds[idx]
+        block_idx, block = conditionals[cond_idx]
+        goto_if_not = block.terminator::Core.GotoIfNot
+
+        # Generate all statements in the block (including the condition)
+        # compile_statement will store to local if needed, then compile_value will load
+        for j in block.start_idx:block.end_idx-1
+            stmt = code[j]
+            if stmt !== nothing && !(stmt isa Core.GotoIfNot) && !(stmt isa Core.GotoNode) && !(stmt isa Core.PhiNode)
+                append!(inner_bytes, compile_statement(stmt, j, ctx))
+            end
+        end
+
+        # Push condition (will load from local if multi-use, or assume on stack if single-use)
+        append!(inner_bytes, compile_value(goto_if_not.cond, ctx))
+
+        # IF with i32 result (for the phi value)
+        push!(inner_bytes, Opcode.IF)
+        push!(inner_bytes, 0x7f)  # i32 result type
+
+        # Then-branch: condition was true
+        # For || pattern, phi value = condition = true = 1
+        # We push constant 1 instead of trying to re-compile the condition
+        push!(inner_bytes, Opcode.I32_CONST)
+        append!(inner_bytes, encode_leb128_signed(1))
+
+        # Else-branch: condition was false, evaluate next condition
+        push!(inner_bytes, Opcode.ELSE)
+        append!(inner_bytes, gen_or_cond(idx + 1))
+
+        push!(inner_bytes, Opcode.END)
+
+        return inner_bytes
+    end
+
+    # Generate the nested OR conditions
+    append!(bytes, gen_or_cond(1))
+
+    # Store result in phi local
+    if haskey(ctx.phi_locals, phi_idx)
+        local_idx = ctx.phi_locals[phi_idx]
+        push!(bytes, Opcode.LOCAL_SET)
+        append!(bytes, encode_leb128_unsigned(local_idx))
+    end
+
+    # Now continue with the conditional that uses the phi
+    if next_cond_idx !== nothing
+        # Generate the rest of the conditionals starting from next_cond_idx
+        remaining_conds = [(i, conditionals[i]) for i in next_cond_idx:length(conditionals)]
+        if !isempty(remaining_conds)
+            # Generate remaining conditionals recursively
+            append!(bytes, generate_remaining_conditionals(ctx, blocks, code, remaining_conds, result_type, ssa_use_count))
+        end
+    end
+
+    return bytes
+end
+
+"""
+Generate code for remaining conditionals after OR pattern.
+"""
+function generate_remaining_conditionals(ctx::CompilationContext, blocks, code, remaining_conds, result_type, ssa_use_count)::Vector{UInt8}
+    bytes = UInt8[]
+
+    if isempty(remaining_conds)
+        return bytes
+    end
+
+    _, (block_idx, block) = remaining_conds[1]
+    goto_if_not = block.terminator::Core.GotoIfNot
+
+    # Push condition (which might be a phi local)
+    append!(bytes, compile_value(goto_if_not.cond, ctx))
+
+    # Generate IF
+    push!(bytes, Opcode.IF)
+    append!(bytes, encode_block_type(result_type))
+
+    # Then-branch: generate code from block.end_idx + 1 to goto_if_not.dest - 1
+    then_start = block.end_idx + 1
+    then_end = goto_if_not.dest - 1
+
+    for i in then_start:min(then_end, length(code))
+        stmt = code[i]
+        if stmt isa Core.ReturnNode
+            if isdefined(stmt, :val)
+                append!(bytes, compile_value(stmt.val, ctx))
+            end
+            break
+        elseif stmt === nothing
+            # Skip
+        elseif !(stmt isa Core.GotoIfNot) && !(stmt isa Core.GotoNode) && !(stmt isa Core.PhiNode)
+            append!(bytes, compile_statement(stmt, i, ctx))
+        end
+    end
+
+    # Else-branch
+    push!(bytes, Opcode.ELSE)
+
+    # Check for more conditionals in else branch
+    rest_conds = remaining_conds[2:end]
+    if !isempty(rest_conds)
+        # Recurse for remaining conditionals
+        append!(bytes, generate_remaining_conditionals(ctx, blocks, code, rest_conds, result_type, ssa_use_count))
+    else
+        # Generate code from goto_if_not.dest to end (else branch)
+        for i in goto_if_not.dest:length(code)
+            stmt = code[i]
+            if stmt isa Core.ReturnNode
+                if isdefined(stmt, :val)
+                    append!(bytes, compile_value(stmt.val, ctx))
+                end
+                break
+            elseif stmt === nothing
+                # Skip
+            elseif !(stmt isa Core.GotoIfNot) && !(stmt isa Core.GotoNode) && !(stmt isa Core.PhiNode)
+                append!(bytes, compile_statement(stmt, i, ctx))
+            end
+        end
+    end
+
+    push!(bytes, Opcode.END)
+
+    return bytes
+end
+
+"""
 Generate nested if-else for multiple conditionals.
 """
 function generate_nested_conditionals(ctx::CompilationContext, blocks, code, conditionals)::Vector{UInt8}
@@ -3128,6 +3725,21 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
             # && pattern: use block/br_if approach
             return generate_and_pattern(ctx, blocks, code, conditionals, result_type, first_dest, ssa_use_count)
         end
+    end
+
+    # Check for || pattern: conditionals where then-branch (fall-through) jumps to a phi
+    # Pattern: cond1 || cond2 || cond3 generates:
+    #   1: cond1
+    #   2: goto %4 if not %1
+    #   3: goto %phi  (then-branch when cond1 is true)
+    #   4: cond2
+    #   5: goto %7 if not %4
+    #   6: goto %phi  (then-branch when cond2 is true)
+    #   ...
+    #   phi: φ (%3 => %1, %6 => %4, ...)
+    or_pattern = detect_or_pattern(code, conditionals)
+    if or_pattern !== nothing
+        return generate_or_pattern(ctx, blocks, code, conditionals, result_type, or_pattern, ssa_use_count)
     end
 
     # Build a recursive if-else structure
@@ -3730,6 +4342,33 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         # QuoteNode wraps a constant value - unwrap and compile
         append!(bytes, compile_value(val.value, ctx))
 
+    elseif isprimitivetype(typeof(val)) && !isa(val, Bool) && !isa(val, Char) &&
+           !isa(val, Int8) && !isa(val, Int16) && !isa(val, Int32) && !isa(val, Int64) &&
+           !isa(val, UInt8) && !isa(val, UInt16) && !isa(val, UInt32) && !isa(val, UInt64) &&
+           !isa(val, Float32) && !isa(val, Float64)
+        # Custom primitive type (e.g., JuliaSyntax.Kind) - bitcast to integer
+        T = typeof(val)
+        sz = sizeof(T)
+        if sz == 1
+            int_val = Core.Intrinsics.bitcast(UInt8, val)
+            push!(bytes, Opcode.I32_CONST)
+            append!(bytes, encode_leb128_signed(Int32(int_val)))
+        elseif sz == 2
+            int_val = Core.Intrinsics.bitcast(UInt16, val)
+            push!(bytes, Opcode.I32_CONST)
+            append!(bytes, encode_leb128_signed(Int32(int_val)))
+        elseif sz == 4
+            int_val = Core.Intrinsics.bitcast(UInt32, val)
+            push!(bytes, Opcode.I32_CONST)
+            append!(bytes, encode_leb128_signed(Int32(int_val)))
+        elseif sz == 8
+            int_val = Core.Intrinsics.bitcast(UInt64, val)
+            push!(bytes, Opcode.I64_CONST)
+            append!(bytes, encode_leb128_signed(Int64(int_val)))
+        else
+            error("Primitive type with unsupported size for Wasm: $T ($sz bytes)")
+        end
+
     elseif isstructtype(typeof(val)) && !isa(val, Type) && !isa(val, Function) && !isa(val, Module)
         # Struct constant - create it with struct.new
         T = typeof(val)
@@ -4233,7 +4872,9 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
 
     # Determine argument type for opcode selection
     arg_type = length(args) > 0 ? infer_value_type(args[1], ctx) : Int64
-    is_32bit = arg_type === Int32 || arg_type === UInt32 || arg_type === Bool || arg_type === Char
+    is_32bit = arg_type === Int32 || arg_type === UInt32 || arg_type === Bool || arg_type === Char ||
+               arg_type === Int16 || arg_type === UInt16 || arg_type === Int8 || arg_type === UInt8 ||
+               (isprimitivetype(arg_type) && sizeof(arg_type) <= 4)
 
     # Match intrinsics by name
     if is_func(func, :add_int)
@@ -4421,11 +5062,43 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         push!(bytes, arg_type === Float32 ? Opcode.F32_NEG : Opcode.F64_NEG)
 
     # Type conversions
-    elseif is_func(func, :sext_int)  # Sign extend i32 to i64
-        push!(bytes, Opcode.I64_EXTEND_I32_S)
+    elseif is_func(func, :sext_int)  # Sign extend
+        # sext_int(TargetType, value) - first arg is target type
+        target_type_ref = args[1]
+        # Extract actual type from GlobalRef if needed
+        target_type = if target_type_ref isa GlobalRef
+            try
+                getfield(target_type_ref.mod, target_type_ref.name)
+            catch
+                target_type_ref
+            end
+        else
+            target_type_ref
+        end
+        if target_type === Int64 || target_type === UInt64
+            # Extending to 64-bit - emit extend instruction
+            push!(bytes, Opcode.I64_EXTEND_I32_S)
+        end
+        # If extending to 32-bit (Int32), it's a no-op since small types already map to i32
 
-    elseif is_func(func, :zext_int)  # Zero extend i32 to i64
-        push!(bytes, Opcode.I64_EXTEND_I32_U)
+    elseif is_func(func, :zext_int)  # Zero extend
+        # zext_int(TargetType, value) - first arg is target type
+        target_type_ref = args[1]
+        # Extract actual type from GlobalRef if needed
+        target_type = if target_type_ref isa GlobalRef
+            try
+                getfield(target_type_ref.mod, target_type_ref.name)
+            catch
+                target_type_ref
+            end
+        else
+            target_type_ref
+        end
+        if target_type === Int64 || target_type === UInt64
+            # Extending to 64-bit - emit extend instruction
+            push!(bytes, Opcode.I64_EXTEND_I32_U)
+        end
+        # If extending to 32-bit (UInt32/Int32), it's a no-op since small types already map to i32
 
     elseif is_func(func, :trunc_int)  # Truncate i64 to i32
         push!(bytes, Opcode.I32_WRAP_I64)
@@ -4435,7 +5108,9 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         # Need to check: target float type (first arg) and source int type (second arg)
         target_type = args[1]  # Float32 or Float64
         source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
-        source_is_32bit = source_type === Int32 || source_type === UInt32 || source_type === Char
+        source_is_32bit = source_type === Int32 || source_type === UInt32 || source_type === Char ||
+                          source_type === Int16 || source_type === UInt16 || source_type === Int8 || source_type === UInt8 ||
+                          (isprimitivetype(source_type) && sizeof(source_type) <= 4)
 
         if target_type === Float32
             push!(bytes, source_is_32bit ? Opcode.F32_CONVERT_I32_S : Opcode.F32_CONVERT_I64_S)
@@ -4446,7 +5121,9 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
     elseif is_func(func, :uitofp)  # Unsigned int to float
         target_type = args[1]
         source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
-        source_is_32bit = source_type === Int32 || source_type === UInt32 || source_type === Char
+        source_is_32bit = source_type === Int32 || source_type === UInt32 || source_type === Char ||
+                          source_type === Int16 || source_type === UInt16 || source_type === Int8 || source_type === UInt8 ||
+                          (isprimitivetype(source_type) && sizeof(source_type) <= 4)
 
         if target_type === Float32
             push!(bytes, source_is_32bit ? Opcode.F32_CONVERT_I32_U : Opcode.F32_CONVERT_I64_U)
@@ -4545,6 +5222,40 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         # We only pushed the value (args[2]) since args[1] is a QuoteNode
         # The value is already on stack, nothing more to do
 
+    # isa() - type checking for Union discrimination
+    elseif is_func(func, :isa) && length(args) >= 2
+        # isa(value, Type) - check if value is of given type
+        # For Union{Nothing, T}, this is used to discriminate the union
+        value_arg = args[1]
+        type_arg = args[2]
+
+        # Get the type being checked
+        check_type = if type_arg isa Type
+            type_arg
+        elseif type_arg isa GlobalRef
+            Core.eval(type_arg.mod, type_arg.name)
+        else
+            nothing
+        end
+
+        if check_type === Nothing
+            # isa(x, Nothing) -> ref.is_null
+            # For nullable references, Nothing corresponds to null
+            append!(bytes, compile_value(value_arg, ctx))
+            push!(bytes, Opcode.REF_IS_NULL)
+        elseif check_type !== nothing && isconcretetype(check_type)
+            # isa(x, ConcreteType) -> check if reference is non-null
+            # For Union{Nothing, T}, checking isa(x, T) is equivalent to !isnull
+            # Use ref.is_null and negate it
+            append!(bytes, compile_value(value_arg, ctx))
+            push!(bytes, Opcode.REF_IS_NULL)
+            push!(bytes, Opcode.I32_EQZ)  # negate: 1->0, 0->1
+        else
+            # Unknown type - return false (0)
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x00)
+        end
+
     # throw() - compile to WASM throw instruction
     elseif func isa GlobalRef && func.name === :throw
         # Ensure module has an exception tag (tag 0)
@@ -4628,7 +5339,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
     end
 
     arg_type = length(args) > 0 ? infer_value_type(args[1], ctx) : Int64
-    is_32bit = arg_type === Int32 || arg_type === UInt32 || arg_type === Bool || arg_type === Char
+    is_32bit = arg_type === Int32 || arg_type === UInt32 || arg_type === Bool || arg_type === Char ||
+               arg_type === Int16 || arg_type === UInt16 || arg_type === Int8 || arg_type === UInt8 ||
+               (isprimitivetype(arg_type) && sizeof(arg_type) <= 4)
 
     mi = expr.args[1]
     if mi isa Core.MethodInstance
@@ -4920,6 +5633,111 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 push!(bytes, Opcode.LOCAL_GET)
                 append!(bytes, encode_leb128_unsigned(result_local))
 
+            # WasmTarget string operations - str_hash(s) -> Int32
+            elseif name === :str_hash && length(args) == 1
+                # Compute string hash using Java-style: h = 31 * h + char[i]
+                # Uses a loop over the string characters
+                str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+
+                bytes = UInt8[]
+
+                # Allocate locals for this operation
+                str_local = ctx.n_params + length(ctx.locals)
+                push!(ctx.locals, ConcreteRef(str_type_idx))  # string reference
+
+                len_local = ctx.n_params + length(ctx.locals)
+                push!(ctx.locals, I32)  # string length
+
+                hash_local = ctx.n_params + length(ctx.locals)
+                push!(ctx.locals, I32)  # running hash
+
+                i_local = ctx.n_params + length(ctx.locals)
+                push!(ctx.locals, I32)  # loop index
+
+                # Store string reference
+                append!(bytes, compile_value(args[1], ctx))
+                push!(bytes, Opcode.LOCAL_TEE)
+                append!(bytes, encode_leb128_unsigned(str_local))
+
+                # Get length
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ARRAY_LEN)
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(len_local))
+
+                # Initialize hash = 0
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(hash_local))
+
+                # Initialize i = 0
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(i_local))
+
+                # Loop over characters
+                push!(bytes, Opcode.BLOCK)  # outer block for exit
+                push!(bytes, 0x40)  # void
+                push!(bytes, Opcode.LOOP)  # loop
+                push!(bytes, 0x40)  # void
+
+                # Check i < len
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(i_local))
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(len_local))
+                push!(bytes, Opcode.I32_GE_S)
+                push!(bytes, Opcode.BR_IF)
+                push!(bytes, 0x01)  # break to outer block if done
+
+                # hash = 31 * hash + char[i]
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(hash_local))
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(31))
+                push!(bytes, Opcode.I32_MUL)
+
+                # Get char at index i (0-based)
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(str_local))
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(i_local))
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ARRAY_GET)
+                append!(bytes, encode_leb128_unsigned(str_type_idx))
+
+                push!(bytes, Opcode.I32_ADD)
+
+                # Mask to positive: & 0x7FFFFFFF
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(0x7FFFFFFF))
+                push!(bytes, Opcode.I32_AND)
+
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(hash_local))
+
+                # i++
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(i_local))
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x01)
+                push!(bytes, Opcode.I32_ADD)
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(i_local))
+
+                # Continue loop
+                push!(bytes, Opcode.BR)
+                push!(bytes, 0x00)
+
+                push!(bytes, Opcode.END)  # end loop
+                push!(bytes, Opcode.END)  # end block
+
+                # Return hash
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(hash_local))
+
             # ================================================================
             # WasmTarget array operations - arr_new, arr_get, arr_set!, arr_len
             # ================================================================
@@ -5015,6 +5833,291 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 push!(bytes, Opcode.GC_PREFIX)
                 push!(bytes, Opcode.ARRAY_LEN)
 
+            # ================================================================
+            # SimpleDict operations - hash table for Int32 keys/values
+            # ================================================================
+
+            # sd_new(capacity::Int32) -> SimpleDict
+            elseif name === :sd_new && length(args) == 1
+                bytes = UInt8[]
+
+                # Register SimpleDict struct type
+                register_struct_type!(ctx.mod, ctx.type_registry, SimpleDict)
+                dict_info = ctx.type_registry.structs[SimpleDict]
+                dict_type_idx = dict_info.wasm_type_idx
+
+                # Get array type for Int32 arrays
+                arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, Int32)
+
+                # Compile capacity argument
+                append!(bytes, compile_value(args[1], ctx))
+                cap_type = infer_value_type(args[1], ctx)
+                if cap_type === Int64 || cap_type === Int
+                    push!(bytes, Opcode.I32_WRAP_I64)
+                end
+
+                # Store capacity in a local so we can use it multiple times
+                cap_local = ctx.n_params + length(ctx.locals)
+                push!(ctx.locals, I32)
+                push!(bytes, Opcode.LOCAL_TEE)
+                append!(bytes, encode_leb128_unsigned(cap_local))
+
+                # Create keys array: array.new_default arr_type_idx
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
+                append!(bytes, encode_leb128_unsigned(arr_type_idx))
+
+                # Create values array
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(cap_local))
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
+                append!(bytes, encode_leb128_unsigned(arr_type_idx))
+
+                # Create slots array
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(cap_local))
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
+                append!(bytes, encode_leb128_unsigned(arr_type_idx))
+
+                # Push count = 0
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+
+                # Push capacity
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(cap_local))
+
+                # struct.new SimpleDict (fields: keys, values, slots, count, capacity)
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.STRUCT_NEW)
+                append!(bytes, encode_leb128_unsigned(dict_type_idx))
+
+            # sd_length(d::SimpleDict) -> Int32
+            elseif name === :sd_length && length(args) == 1
+                # Args already compiled (d is on stack)
+                # Get the count field (index 3)
+                register_struct_type!(ctx.mod, ctx.type_registry, SimpleDict)
+                dict_info = ctx.type_registry.structs[SimpleDict]
+                dict_type_idx = dict_info.wasm_type_idx
+
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.STRUCT_GET)
+                append!(bytes, encode_leb128_unsigned(dict_type_idx))
+                append!(bytes, encode_leb128_unsigned(3))  # count is field 3 (0-indexed)
+
+            # sd_haskey(d::SimpleDict, key::Int32) -> Bool
+            elseif name === :sd_haskey && length(args) == 2
+                # Implement linear probing to find key
+                bytes = compile_sd_find_slot(args, ctx)
+                # Result is slot index (positive if found, negative if not found, 0 if full)
+                # Convert to bool: slot > 0
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+                push!(bytes, Opcode.I32_GT_S)
+
+            # sd_get(d::SimpleDict, key::Int32) -> Int32
+            elseif name === :sd_get && length(args) == 2
+                # Find slot, then get value
+                bytes = compile_sd_find_slot(args, ctx)
+
+                # Store slot in local
+                slot_local = ctx.n_params + length(ctx.locals)
+                push!(ctx.locals, I32)
+                push!(bytes, Opcode.LOCAL_TEE)
+                append!(bytes, encode_leb128_unsigned(slot_local))
+
+                # Check if found (slot > 0)
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+                push!(bytes, Opcode.I32_GT_S)
+
+                # if found: get value, else: return 0
+                push!(bytes, Opcode.IF)
+                push!(bytes, 0x7F)  # result type i32
+
+                # Get dict reference again for struct.get
+                append!(bytes, compile_value(args[1], ctx))
+                register_struct_type!(ctx.mod, ctx.type_registry, SimpleDict)
+                dict_info = ctx.type_registry.structs[SimpleDict]
+                dict_type_idx = dict_info.wasm_type_idx
+                arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, Int32)
+
+                # Get values array (field 1)
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.STRUCT_GET)
+                append!(bytes, encode_leb128_unsigned(dict_type_idx))
+                append!(bytes, encode_leb128_unsigned(1))  # values field
+
+                # Get index (slot - 1 for 0-based)
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(slot_local))
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x01)
+                push!(bytes, Opcode.I32_SUB)
+
+                # array.get
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ARRAY_GET)
+                append!(bytes, encode_leb128_unsigned(arr_type_idx))
+
+                push!(bytes, Opcode.ELSE)
+                # Not found - return 0
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+                push!(bytes, Opcode.END)
+
+            # sd_set!(d::SimpleDict, key::Int32, value::Int32) -> Nothing
+            elseif name === :sd_set! && length(args) == 3
+                bytes = compile_sd_set(args, ctx)
+
+            # ================================================================
+            # StringDict operations - hash table for String keys, Int32 values
+            # ================================================================
+
+            # sdict_new(capacity::Int32) -> StringDict
+            elseif name === :sdict_new && length(args) == 1
+                bytes = UInt8[]
+
+                # Register StringDict struct type
+                register_struct_type!(ctx.mod, ctx.type_registry, StringDict)
+                dict_info = ctx.type_registry.structs[StringDict]
+                dict_type_idx = dict_info.wasm_type_idx
+
+                # Get array types
+                str_ref_arr_type_idx = get_string_ref_array_type!(ctx.mod, ctx.type_registry)
+                i32_arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, Int32)
+                str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+
+                # Compile capacity argument
+                append!(bytes, compile_value(args[1], ctx))
+                cap_type = infer_value_type(args[1], ctx)
+                if cap_type === Int64 || cap_type === Int
+                    push!(bytes, Opcode.I32_WRAP_I64)
+                end
+
+                # Store capacity in local
+                cap_local = ctx.n_params + length(ctx.locals)
+                push!(ctx.locals, I32)
+                push!(bytes, Opcode.LOCAL_TEE)
+                append!(bytes, encode_leb128_unsigned(cap_local))
+
+                # Create keys array (array of string refs, initialized with empty strings)
+                # First create empty string to use as default
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)  # empty string length = 0
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
+                append!(bytes, encode_leb128_unsigned(str_type_idx))
+
+                # Store empty string for array.new_fixed
+                empty_str_local = ctx.n_params + length(ctx.locals)
+                push!(ctx.locals, ConcreteRef(str_type_idx))
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(empty_str_local))
+
+                # Create keys array with capacity elements, filled with empty string ref
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(empty_str_local))
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(cap_local))
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ARRAY_NEW)
+                append!(bytes, encode_leb128_unsigned(str_ref_arr_type_idx))
+
+                # Create values array
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(cap_local))
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
+                append!(bytes, encode_leb128_unsigned(i32_arr_type_idx))
+
+                # Create slots array
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(cap_local))
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
+                append!(bytes, encode_leb128_unsigned(i32_arr_type_idx))
+
+                # Push count = 0
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+
+                # Push capacity
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(cap_local))
+
+                # struct.new StringDict (fields: keys, values, slots, count, capacity)
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.STRUCT_NEW)
+                append!(bytes, encode_leb128_unsigned(dict_type_idx))
+
+            # sdict_length(d::StringDict) -> Int32
+            elseif name === :sdict_length && length(args) == 1
+                register_struct_type!(ctx.mod, ctx.type_registry, StringDict)
+                dict_info = ctx.type_registry.structs[StringDict]
+                dict_type_idx = dict_info.wasm_type_idx
+
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.STRUCT_GET)
+                append!(bytes, encode_leb128_unsigned(dict_type_idx))
+                append!(bytes, encode_leb128_unsigned(3))  # count is field 3
+
+            # sdict_haskey(d::StringDict, key::String) -> Bool
+            elseif name === :sdict_haskey && length(args) == 2
+                bytes = compile_sdict_find_slot(args, ctx)
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+                push!(bytes, Opcode.I32_GT_S)
+
+            # sdict_get(d::StringDict, key::String) -> Int32
+            elseif name === :sdict_get && length(args) == 2
+                bytes = compile_sdict_find_slot(args, ctx)
+
+                slot_local = ctx.n_params + length(ctx.locals)
+                push!(ctx.locals, I32)
+                push!(bytes, Opcode.LOCAL_TEE)
+                append!(bytes, encode_leb128_unsigned(slot_local))
+
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+                push!(bytes, Opcode.I32_GT_S)
+
+                push!(bytes, Opcode.IF)
+                push!(bytes, 0x7F)  # i32 result
+
+                # Get dict again and get values[slot-1]
+                append!(bytes, compile_value(args[1], ctx))
+                register_struct_type!(ctx.mod, ctx.type_registry, StringDict)
+                dict_info = ctx.type_registry.structs[StringDict]
+                dict_type_idx = dict_info.wasm_type_idx
+                i32_arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, Int32)
+
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.STRUCT_GET)
+                append!(bytes, encode_leb128_unsigned(dict_type_idx))
+                append!(bytes, encode_leb128_unsigned(1))  # values field
+
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(slot_local))
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x01)
+                push!(bytes, Opcode.I32_SUB)
+
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ARRAY_GET)
+                append!(bytes, encode_leb128_unsigned(i32_arr_type_idx))
+
+                push!(bytes, Opcode.ELSE)
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+                push!(bytes, Opcode.END)
+
+            # sdict_set!(d::StringDict, key::String, value::Int32) -> Nothing
+            elseif name === :sdict_set! && length(args) == 3
+                bytes = compile_sdict_set(args, ctx)
+
             else
                 error("Unsupported method: $name")
             end
@@ -5037,6 +6140,9 @@ function is_func(func, name::Symbol)::Bool
     elseif func isa Core.IntrinsicFunction
         # Compare intrinsic by string representation
         return Symbol(func) === name
+    elseif typeof(func) <: Core.Builtin
+        # Builtin functions like isa, typeof, etc.
+        return nameof(func) === name
     end
     return false
 end
@@ -5387,6 +6493,1428 @@ function compile_string_equal(str1, str2, ctx::CompilationContext)::Vector{UInt8
     push!(bytes, Opcode.END)  # end result block
 
     push!(bytes, Opcode.END)  # end if-else (lengths comparison)
+
+    return bytes
+end
+
+# ============================================================================
+# SimpleDict Operations - Hash Table Bytecode Generation
+# ============================================================================
+
+"""
+Find slot for a key in SimpleDict.
+Returns: positive if found, negative if insert location, 0 if full.
+
+Algorithm: Linear probing with hash = (key * 31) & 0x7FFFFFFF % capacity + 1
+Slot states: 0=empty, 1=occupied, 2=deleted
+"""
+function compile_sd_find_slot(args, ctx::CompilationContext)::Vector{UInt8}
+    bytes = UInt8[]
+
+    # Register SimpleDict type
+    register_struct_type!(ctx.mod, ctx.type_registry, SimpleDict)
+    dict_info = ctx.type_registry.structs[SimpleDict]
+    dict_type_idx = dict_info.wasm_type_idx
+    arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, Int32)
+
+    # Allocate locals for this operation
+    d_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, ConcreteRef(dict_type_idx))  # d reference
+
+    key_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)  # key
+
+    capacity_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)  # capacity
+
+    start_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)  # start hash
+
+    iter_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)  # iteration counter
+
+    slot_idx_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)  # current slot index
+
+    slot_state_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)  # current slot state
+
+    result_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)  # result to return
+
+    # Store d in local
+    append!(bytes, compile_value(args[1], ctx))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+
+    # Store key in local (ensure i32)
+    append!(bytes, compile_value(args[2], ctx))
+    key_type = infer_value_type(args[2], ctx)
+    if key_type === Int64 || key_type === Int
+        push!(bytes, Opcode.I32_WRAP_I64)
+    end
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(key_local))
+
+    # Get capacity from dict struct (field 4)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(dict_type_idx))
+    append!(bytes, encode_leb128_unsigned(4))  # capacity is field 4
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(capacity_local))
+
+    # Compute hash: (key * 31) & 0x7FFFFFFF % capacity + 1
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(key_local))
+    push!(bytes, Opcode.I32_CONST)
+    append!(bytes, encode_leb128_signed(31))
+    push!(bytes, Opcode.I32_MUL)
+    push!(bytes, Opcode.I32_CONST)
+    append!(bytes, encode_leb128_signed(0x7FFFFFFF))
+    push!(bytes, Opcode.I32_AND)
+    # % capacity
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(capacity_local))
+    push!(bytes, Opcode.I32_REM_S)
+    # + 1 (1-based index)
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(start_local))
+
+    # Initialize iter = 0
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(iter_local))
+
+    # Initialize result = 0 (will be set in loop)
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+
+    # Outer block for breaking out with result
+    push!(bytes, Opcode.BLOCK)  # block $done
+    push!(bytes, 0x40)  # void
+
+    # Loop for probing
+    push!(bytes, Opcode.LOOP)  # loop $probe
+    push!(bytes, 0x40)  # void
+
+    # Check if iter >= capacity (table full)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(iter_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(capacity_local))
+    push!(bytes, Opcode.I32_GE_S)
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)  # void
+    # result = 0 (full), break
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+    push!(bytes, Opcode.BR)
+    push!(bytes, 0x02)  # break to $done (past loop and if)
+    push!(bytes, Opcode.END)  # end if
+
+    # Calculate slot index: ((start + iter - 1) % capacity) + 1
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(start_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(iter_local))
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_SUB)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(capacity_local))
+    push!(bytes, Opcode.I32_REM_S)
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+
+    # Get slot state from slots array
+    # slots = d.slots (field 2)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(dict_type_idx))
+    append!(bytes, encode_leb128_unsigned(2))  # slots is field 2
+    # array.get with slot_idx - 1 (0-based)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_SUB)
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_GET)
+    append!(bytes, encode_leb128_unsigned(arr_type_idx))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(slot_state_local))
+
+    # Check slot state
+    # If empty (0): return -slot_idx (insert here)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_state_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)  # SLOT_EMPTY
+    push!(bytes, Opcode.I32_EQ)
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)  # void
+    # result = -slot_idx
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+    push!(bytes, Opcode.I32_SUB)  # 0 - slot_idx = -slot_idx
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+    push!(bytes, Opcode.BR)
+    push!(bytes, 0x02)  # break to $done
+    push!(bytes, Opcode.END)  # end if (empty check)
+
+    # If occupied (1): check if key matches
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_state_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)  # SLOT_OCCUPIED
+    push!(bytes, Opcode.I32_EQ)
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)  # void
+
+    # Get key from keys array and compare
+    # keys = d.keys (field 0)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(dict_type_idx))
+    append!(bytes, encode_leb128_unsigned(0))  # keys is field 0
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_SUB)
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_GET)
+    append!(bytes, encode_leb128_unsigned(arr_type_idx))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(key_local))
+    push!(bytes, Opcode.I32_EQ)
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)  # void
+    # Key matches! result = slot_idx
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+    push!(bytes, Opcode.BR)
+    push!(bytes, 0x03)  # break to $done: 0=this if, 1=occupied if, 2=loop, 3=block
+    push!(bytes, Opcode.END)  # end if (key match)
+
+    push!(bytes, Opcode.END)  # end if (occupied check)
+
+    # Continue probing: iter++
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(iter_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(iter_local))
+
+    # Loop back
+    push!(bytes, Opcode.BR)
+    push!(bytes, 0x00)  # continue loop
+
+    push!(bytes, Opcode.END)  # end loop
+    push!(bytes, Opcode.END)  # end block $done
+
+    # Return result
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+
+    return bytes
+end
+
+"""
+Set key=value in SimpleDict.
+Uses find_slot logic then updates or inserts.
+"""
+function compile_sd_set(args, ctx::CompilationContext)::Vector{UInt8}
+    bytes = UInt8[]
+
+    # Register SimpleDict type
+    register_struct_type!(ctx.mod, ctx.type_registry, SimpleDict)
+    dict_info = ctx.type_registry.structs[SimpleDict]
+    dict_type_idx = dict_info.wasm_type_idx
+    arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, Int32)
+
+    # Store d, key, value in locals
+    d_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, ConcreteRef(dict_type_idx))
+
+    key_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+
+    value_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+
+    # Store d
+    append!(bytes, compile_value(args[1], ctx))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+
+    # Store key
+    append!(bytes, compile_value(args[2], ctx))
+    key_type = infer_value_type(args[2], ctx)
+    if key_type === Int64 || key_type === Int
+        push!(bytes, Opcode.I32_WRAP_I64)
+    end
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(key_local))
+
+    # Store value
+    append!(bytes, compile_value(args[3], ctx))
+    val_type = infer_value_type(args[3], ctx)
+    if val_type === Int64 || val_type === Int
+        push!(bytes, Opcode.I32_WRAP_I64)
+    end
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(value_local))
+
+    # Find slot using inline find_slot logic
+    # Create args array for find_slot call
+    find_args = [Core.SlotNumber(0), Core.SlotNumber(0)]  # placeholder - we'll use locals directly
+
+    # Actually, we need to call find_slot with (d, key) - build temporary SSA refs
+    # Instead, let's inline a simpler version that just returns slot
+
+    # For sd_set!, we need to:
+    # 1. Find the slot (same probing logic)
+    # 2. If slot > 0: update value
+    # 3. If slot < 0: insert at -slot and increment count
+
+    # Allocate more locals for probing
+    capacity_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+
+    start_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+
+    iter_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+
+    slot_idx_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+
+    slot_state_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+
+    result_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+
+    # Get capacity
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(dict_type_idx))
+    append!(bytes, encode_leb128_unsigned(4))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(capacity_local))
+
+    # Compute hash
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(key_local))
+    push!(bytes, Opcode.I32_CONST)
+    append!(bytes, encode_leb128_signed(31))
+    push!(bytes, Opcode.I32_MUL)
+    push!(bytes, Opcode.I32_CONST)
+    append!(bytes, encode_leb128_signed(0x7FFFFFFF))
+    push!(bytes, Opcode.I32_AND)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(capacity_local))
+    push!(bytes, Opcode.I32_REM_S)
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(start_local))
+
+    # Initialize iter = 0, result = 0
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(iter_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+
+    # Probe loop (same as find_slot)
+    push!(bytes, Opcode.BLOCK)  # $done
+    push!(bytes, 0x40)
+    push!(bytes, Opcode.LOOP)  # $probe
+    push!(bytes, 0x40)
+
+    # Check iter >= capacity
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(iter_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(capacity_local))
+    push!(bytes, Opcode.I32_GE_S)
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+    push!(bytes, Opcode.BR)
+    push!(bytes, 0x02)
+    push!(bytes, Opcode.END)
+
+    # Calculate slot index
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(start_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(iter_local))
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_SUB)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(capacity_local))
+    push!(bytes, Opcode.I32_REM_S)
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+
+    # Get slot state
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(dict_type_idx))
+    append!(bytes, encode_leb128_unsigned(2))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_SUB)
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_GET)
+    append!(bytes, encode_leb128_unsigned(arr_type_idx))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(slot_state_local))
+
+    # Check empty
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_state_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.I32_EQ)
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+    push!(bytes, Opcode.I32_SUB)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+    push!(bytes, Opcode.BR)
+    push!(bytes, 0x02)
+    push!(bytes, Opcode.END)
+
+    # Check occupied
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_state_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_EQ)
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)
+    # Check key match
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(dict_type_idx))
+    append!(bytes, encode_leb128_unsigned(0))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_SUB)
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_GET)
+    append!(bytes, encode_leb128_unsigned(arr_type_idx))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(key_local))
+    push!(bytes, Opcode.I32_EQ)
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+    push!(bytes, Opcode.BR)
+    push!(bytes, 0x03)  # break to $done: 0=this if, 1=occupied if, 2=loop, 3=block
+    push!(bytes, Opcode.END)
+    push!(bytes, Opcode.END)
+
+    # Continue probing
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(iter_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(iter_local))
+    push!(bytes, Opcode.BR)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.END)  # loop
+    push!(bytes, Opcode.END)  # block
+
+    # Now result has slot: positive = update, negative = insert, 0 = full
+    # Check if slot > 0 (update existing)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.I32_GT_S)
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)  # void
+
+    # Update: values[slot-1] = value
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(dict_type_idx))
+    append!(bytes, encode_leb128_unsigned(1))  # values
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_SUB)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(value_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_SET)
+    append!(bytes, encode_leb128_unsigned(arr_type_idx))
+
+    push!(bytes, Opcode.ELSE)
+
+    # Check if slot < 0 (insert new)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.I32_LT_S)
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)
+
+    # Calculate insert index: -result - 1
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+    push!(bytes, Opcode.I32_SUB)  # -result = positive slot
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_SUB)  # -1 for 0-based index
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))  # reuse as insert index
+
+    # keys[idx] = key
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(dict_type_idx))
+    append!(bytes, encode_leb128_unsigned(0))  # keys
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(key_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_SET)
+    append!(bytes, encode_leb128_unsigned(arr_type_idx))
+
+    # values[idx] = value
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(dict_type_idx))
+    append!(bytes, encode_leb128_unsigned(1))  # values
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(value_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_SET)
+    append!(bytes, encode_leb128_unsigned(arr_type_idx))
+
+    # slots[idx] = 1 (occupied)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(dict_type_idx))
+    append!(bytes, encode_leb128_unsigned(2))  # slots
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)  # SLOT_OCCUPIED
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_SET)
+    append!(bytes, encode_leb128_unsigned(arr_type_idx))
+
+    # count++ (struct.set for field 3)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(dict_type_idx))
+    append!(bytes, encode_leb128_unsigned(3))  # count
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_SET)
+    append!(bytes, encode_leb128_unsigned(dict_type_idx))
+    append!(bytes, encode_leb128_unsigned(3))
+
+    push!(bytes, Opcode.END)  # if slot < 0
+    push!(bytes, Opcode.END)  # else
+
+    # Result is void - nothing left on stack
+    return bytes
+end
+
+"""
+Find slot for a String key in StringDict.
+Returns: positive if found, negative if insert location, 0 if full.
+
+Uses str_hash for hashing and string comparison for key matching.
+"""
+function compile_sdict_find_slot(args, ctx::CompilationContext)::Vector{UInt8}
+    bytes = UInt8[]
+
+    # Register StringDict type and get indices
+    register_struct_type!(ctx.mod, ctx.type_registry, StringDict)
+    dict_info = ctx.type_registry.structs[StringDict]
+    dict_type_idx = dict_info.wasm_type_idx
+    str_ref_arr_type_idx = get_string_ref_array_type!(ctx.mod, ctx.type_registry)
+    i32_arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, Int32)
+    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+
+    # Allocate locals
+    d_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, ConcreteRef(dict_type_idx))
+
+    key_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, ConcreteRef(str_type_idx))  # string ref
+
+    capacity_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+
+    start_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+
+    iter_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+
+    slot_idx_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+
+    slot_state_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+
+    result_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+
+    stored_key_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, ConcreteRef(str_type_idx))  # for key comparison
+
+    # Store d in local
+    append!(bytes, compile_value(args[1], ctx))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+
+    # Store key in local
+    append!(bytes, compile_value(args[2], ctx))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(key_local))
+
+    # Get capacity
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(dict_type_idx))
+    append!(bytes, encode_leb128_unsigned(4))  # capacity is field 4
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(capacity_local))
+
+    # Compute hash using str_hash inlined
+    # h = 0; for each char: h = (31 * h + char) & 0x7FFFFFFF
+    hash_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+    len_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+    i_hash_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+
+    # Get string length
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(key_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_LEN)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(len_local))
+
+    # Initialize hash = 0, i = 0
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(hash_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(i_hash_local))
+
+    # Hash loop
+    push!(bytes, Opcode.BLOCK)
+    push!(bytes, 0x40)
+    push!(bytes, Opcode.LOOP)
+    push!(bytes, 0x40)
+
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(i_hash_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(len_local))
+    push!(bytes, Opcode.I32_GE_S)
+    push!(bytes, Opcode.BR_IF)
+    push!(bytes, 0x01)
+
+    # hash = (31 * hash + char) & 0x7FFFFFFF
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(hash_local))
+    push!(bytes, Opcode.I32_CONST)
+    append!(bytes, encode_leb128_signed(31))
+    push!(bytes, Opcode.I32_MUL)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(key_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(i_hash_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_GET)
+    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.I32_CONST)
+    append!(bytes, encode_leb128_signed(0x7FFFFFFF))
+    push!(bytes, Opcode.I32_AND)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(hash_local))
+
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(i_hash_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(i_hash_local))
+    push!(bytes, Opcode.BR)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.END)
+    push!(bytes, Opcode.END)
+
+    # start = (hash % capacity) + 1
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(hash_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(capacity_local))
+    push!(bytes, Opcode.I32_REM_S)
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(start_local))
+
+    # Initialize iter = 0, result = 0
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(iter_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+
+    # Probe loop
+    push!(bytes, Opcode.BLOCK)  # $done
+    push!(bytes, 0x40)
+    push!(bytes, Opcode.LOOP)  # $probe
+    push!(bytes, 0x40)
+
+    # Check iter >= capacity
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(iter_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(capacity_local))
+    push!(bytes, Opcode.I32_GE_S)
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+    push!(bytes, Opcode.BR)
+    push!(bytes, 0x02)
+    push!(bytes, Opcode.END)
+
+    # slot_idx = ((start + iter - 1) % capacity) + 1
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(start_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(iter_local))
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_SUB)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(capacity_local))
+    push!(bytes, Opcode.I32_REM_S)
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+
+    # Get slot state
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(dict_type_idx))
+    append!(bytes, encode_leb128_unsigned(2))  # slots field
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_SUB)
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_GET)
+    append!(bytes, encode_leb128_unsigned(i32_arr_type_idx))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(slot_state_local))
+
+    # Check empty
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_state_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.I32_EQ)
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+    push!(bytes, Opcode.I32_SUB)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+    push!(bytes, Opcode.BR)
+    push!(bytes, 0x02)
+    push!(bytes, Opcode.END)
+
+    # Check occupied
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_state_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_EQ)
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)
+
+    # Get stored key at this slot
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(dict_type_idx))
+    append!(bytes, encode_leb128_unsigned(0))  # keys field
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_SUB)
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_GET)
+    append!(bytes, encode_leb128_unsigned(str_ref_arr_type_idx))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(stored_key_local))
+
+    # Compare strings using inlined string equality
+    # First compare lengths, then compare characters
+    append!(bytes, compile_string_eq_inline(key_local, stored_key_local, str_type_idx, ctx))
+
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+    push!(bytes, Opcode.BR)
+    push!(bytes, 0x03)  # break to $done: 0=this if, 1=occupied if, 2=loop, 3=block
+    push!(bytes, Opcode.END)
+
+    push!(bytes, Opcode.END)  # occupied
+
+    # Continue probing
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(iter_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(iter_local))
+    push!(bytes, Opcode.BR)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.END)  # loop
+    push!(bytes, Opcode.END)  # block
+
+    # Return result
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+
+    return bytes
+end
+
+"""
+Inline string equality comparison.
+Compares two string locals and leaves 0 or 1 on stack.
+"""
+function compile_string_eq_inline(str1_local::Int, str2_local::Int, str_type_idx::UInt32, ctx::CompilationContext)::Vector{UInt8}
+    bytes = UInt8[]
+
+    # Allocate locals for comparison
+    len1_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+    len2_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+    cmp_i_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+
+    # Get lengths
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(str1_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_LEN)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(len1_local))
+
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(str2_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_LEN)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(len2_local))
+
+    # Compare lengths first
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(len1_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(len2_local))
+    push!(bytes, Opcode.I32_NE)
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x7F)  # i32 result
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)  # not equal
+    push!(bytes, Opcode.ELSE)
+
+    # Lengths equal - compare characters
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(cmp_i_local))
+
+    # Result block
+    push!(bytes, Opcode.BLOCK)
+    push!(bytes, 0x7F)  # i32 result
+
+    # Loop
+    push!(bytes, Opcode.LOOP)
+    push!(bytes, 0x40)
+
+    # Check i >= len
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(cmp_i_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(len1_local))
+    push!(bytes, Opcode.I32_GE_S)
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)  # all matched
+    push!(bytes, Opcode.BR)
+    push!(bytes, 0x02)  # to result block
+    push!(bytes, Opcode.END)
+
+    # Compare chars at i
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(str1_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(cmp_i_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_GET)
+    append!(bytes, encode_leb128_unsigned(str_type_idx))
+
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(str2_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(cmp_i_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_GET)
+    append!(bytes, encode_leb128_unsigned(str_type_idx))
+
+    push!(bytes, Opcode.I32_NE)
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)  # mismatch
+    push!(bytes, Opcode.BR)
+    push!(bytes, 0x02)  # to result block
+    push!(bytes, Opcode.END)
+
+    # i++
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(cmp_i_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(cmp_i_local))
+    push!(bytes, Opcode.BR)
+    push!(bytes, 0x00)
+
+    push!(bytes, Opcode.END)  # loop
+
+    # Unreachable - loop always exits via br
+    push!(bytes, Opcode.UNREACHABLE)
+
+    push!(bytes, Opcode.END)  # result block
+
+    push!(bytes, Opcode.END)  # else of length comparison
+
+    return bytes
+end
+
+"""
+Set key=value in StringDict.
+"""
+function compile_sdict_set(args, ctx::CompilationContext)::Vector{UInt8}
+    bytes = UInt8[]
+
+    # Register types
+    register_struct_type!(ctx.mod, ctx.type_registry, StringDict)
+    dict_info = ctx.type_registry.structs[StringDict]
+    dict_type_idx = dict_info.wasm_type_idx
+    str_ref_arr_type_idx = get_string_ref_array_type!(ctx.mod, ctx.type_registry)
+    i32_arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, Int32)
+    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+
+    # Store d, key, value in locals
+    d_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, ConcreteRef(dict_type_idx))
+
+    key_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, ConcreteRef(str_type_idx))
+
+    value_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+
+    append!(bytes, compile_value(args[1], ctx))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+
+    append!(bytes, compile_value(args[2], ctx))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(key_local))
+
+    append!(bytes, compile_value(args[3], ctx))
+    val_type = infer_value_type(args[3], ctx)
+    if val_type === Int64 || val_type === Int
+        push!(bytes, Opcode.I32_WRAP_I64)
+    end
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(value_local))
+
+    # Call find_slot inline (reuse most of the code from sdict_find_slot)
+    # For simplicity, we'll duplicate the probing logic here
+
+    capacity_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+    start_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+    iter_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+    slot_idx_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+    slot_state_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+    result_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+    hash_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+    len_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+    i_hash_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+    stored_key_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, ConcreteRef(str_type_idx))
+
+    # Get capacity
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(dict_type_idx))
+    append!(bytes, encode_leb128_unsigned(4))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(capacity_local))
+
+    # Compute hash (same as find_slot)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(key_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_LEN)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(len_local))
+
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(hash_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(i_hash_local))
+
+    push!(bytes, Opcode.BLOCK)
+    push!(bytes, 0x40)
+    push!(bytes, Opcode.LOOP)
+    push!(bytes, 0x40)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(i_hash_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(len_local))
+    push!(bytes, Opcode.I32_GE_S)
+    push!(bytes, Opcode.BR_IF)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(hash_local))
+    push!(bytes, Opcode.I32_CONST)
+    append!(bytes, encode_leb128_signed(31))
+    push!(bytes, Opcode.I32_MUL)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(key_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(i_hash_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_GET)
+    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.I32_CONST)
+    append!(bytes, encode_leb128_signed(0x7FFFFFFF))
+    push!(bytes, Opcode.I32_AND)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(hash_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(i_hash_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(i_hash_local))
+    push!(bytes, Opcode.BR)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.END)
+    push!(bytes, Opcode.END)
+
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(hash_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(capacity_local))
+    push!(bytes, Opcode.I32_REM_S)
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(start_local))
+
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(iter_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+
+    # Probe loop
+    push!(bytes, Opcode.BLOCK)
+    push!(bytes, 0x40)
+    push!(bytes, Opcode.LOOP)
+    push!(bytes, 0x40)
+
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(iter_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(capacity_local))
+    push!(bytes, Opcode.I32_GE_S)
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+    push!(bytes, Opcode.BR)
+    push!(bytes, 0x02)
+    push!(bytes, Opcode.END)
+
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(start_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(iter_local))
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_SUB)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(capacity_local))
+    push!(bytes, Opcode.I32_REM_S)
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(dict_type_idx))
+    append!(bytes, encode_leb128_unsigned(2))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_SUB)
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_GET)
+    append!(bytes, encode_leb128_unsigned(i32_arr_type_idx))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(slot_state_local))
+
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_state_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.I32_EQ)
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+    push!(bytes, Opcode.I32_SUB)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+    push!(bytes, Opcode.BR)
+    push!(bytes, 0x02)
+    push!(bytes, Opcode.END)
+
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_state_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_EQ)
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)
+
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(dict_type_idx))
+    append!(bytes, encode_leb128_unsigned(0))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_SUB)
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_GET)
+    append!(bytes, encode_leb128_unsigned(str_ref_arr_type_idx))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(stored_key_local))
+
+    append!(bytes, compile_string_eq_inline(key_local, stored_key_local, str_type_idx, ctx))
+
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+    push!(bytes, Opcode.BR)
+    push!(bytes, 0x03)  # break to $done: 0=this if, 1=occupied if, 2=loop, 3=block
+    push!(bytes, Opcode.END)
+    push!(bytes, Opcode.END)
+
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(iter_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(iter_local))
+    push!(bytes, Opcode.BR)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.END)
+    push!(bytes, Opcode.END)
+
+    # Now handle update or insert based on result
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.I32_GT_S)
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)
+
+    # Update: values[result-1] = value
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(dict_type_idx))
+    append!(bytes, encode_leb128_unsigned(1))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_SUB)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(value_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_SET)
+    append!(bytes, encode_leb128_unsigned(i32_arr_type_idx))
+
+    push!(bytes, Opcode.ELSE)
+
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.I32_LT_S)
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)
+
+    # Insert: calculate index = -result - 1
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+    push!(bytes, Opcode.I32_SUB)
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_SUB)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+
+    # keys[idx] = key
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(dict_type_idx))
+    append!(bytes, encode_leb128_unsigned(0))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(key_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_SET)
+    append!(bytes, encode_leb128_unsigned(str_ref_arr_type_idx))
+
+    # values[idx] = value
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(dict_type_idx))
+    append!(bytes, encode_leb128_unsigned(1))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(value_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_SET)
+    append!(bytes, encode_leb128_unsigned(i32_arr_type_idx))
+
+    # slots[idx] = 1
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(dict_type_idx))
+    append!(bytes, encode_leb128_unsigned(2))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_idx_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_SET)
+    append!(bytes, encode_leb128_unsigned(i32_arr_type_idx))
+
+    # count++
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(d_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(dict_type_idx))
+    append!(bytes, encode_leb128_unsigned(3))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_SET)
+    append!(bytes, encode_leb128_unsigned(dict_type_idx))
+    append!(bytes, encode_leb128_unsigned(3))
+
+    push!(bytes, Opcode.END)  # if slot < 0
+    push!(bytes, Opcode.END)  # else
 
     return bytes
 end

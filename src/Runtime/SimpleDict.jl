@@ -8,6 +8,7 @@
 # - Simple hash function for Int32 keys (extensible)
 
 export SimpleDict, sd_new, sd_get, sd_set!, sd_haskey, sd_length
+export StringDict, sdict_new, sdict_get, sdict_set!, sdict_haskey, sdict_length
 
 # Slot states
 const SLOT_EMPTY = Int32(0)
@@ -197,5 +198,153 @@ end
 Return number of entries in dictionary.
 """
 @noinline function sd_length(d::SimpleDict)::Int32
+    return d.count
+end
+
+# ============================================================================
+# StringDict - Hash table with String keys, Int32 values
+# ============================================================================
+
+"""
+StringDict - A hash table for String → Int32 mappings.
+
+Used for symbol tables, keyword lookups, etc.
+"""
+mutable struct StringDict
+    keys::Vector{String}     # Key storage (strings)
+    values::Vector{Int32}    # Value storage
+    slots::Vector{Int32}     # Slot states: 0=empty, 1=occupied, 2=deleted
+    count::Int32             # Number of occupied slots
+    capacity::Int32          # Size of arrays
+end
+
+# Global sink to prevent optimization
+const _SDICT_SINK = Ref{Int32}(0)
+
+"""
+    sdict_new(capacity::Int32)::StringDict
+
+Create a new StringDict with the given initial capacity.
+"""
+@noinline function sdict_new(capacity::Int32)::StringDict
+    keys = Vector{String}(undef, capacity)
+    values = arr_new(Int32, capacity)
+    slots = arr_new(Int32, capacity)
+
+    # Initialize keys with empty strings (placeholders)
+    for i in 1:capacity
+        keys[i] = ""
+    end
+
+    return StringDict(keys, values, slots, Int32(0), capacity)
+end
+
+"""
+Hash function for StringDict - delegates to str_hash.
+"""
+@noinline function sdict_hash(key::String, capacity::Int32)::Int32
+    h = str_hash(key)
+    result = (h % capacity) + Int32(1)  # 1-based index
+    return result
+end
+
+"""
+    sdict_find_slot(d::StringDict, key::String)::Int32
+
+Find the slot for a key. Returns slot_index if found (positive),
+or -slot_index if not found (negative indicates where to insert).
+"""
+@noinline function sdict_find_slot(d::StringDict, key::String)::Int32
+    start = sdict_hash(key, d.capacity)
+    return sdict_probe(d, key, start, Int32(0))
+end
+
+# Helper for probing
+@noinline function sdict_probe(d::StringDict, key::String, start::Int32, iter::Int32)::Int32
+    if iter >= d.capacity
+        return Int32(0)  # Table full
+    end
+
+    i = ((start + iter - Int32(1)) % d.capacity) + Int32(1)
+    slot_state = arr_get(d.slots, i)
+
+    result = sdict_check_slot(d, key, i, start, iter, slot_state)
+    return result
+end
+
+@noinline function sdict_check_slot(d::StringDict, key::String, i::Int32, start::Int32, iter::Int32, slot_state::Int32)::Int32
+    if slot_state == SLOT_EMPTY
+        return -i  # Insert here
+    end
+    if slot_state == SLOT_OCCUPIED
+        return sdict_check_key(d, key, i, start, iter)
+    end
+    # Deleted slot - continue probing
+    return sdict_probe(d, key, start, iter + Int32(1))
+end
+
+@noinline function sdict_check_key(d::StringDict, key::String, i::Int32, start::Int32, iter::Int32)::Int32
+    # Compare strings using str_eq
+    if d.keys[i] == key
+        return i  # Found
+    end
+    return sdict_probe(d, key, start, iter + Int32(1))
+end
+
+"""
+    sdict_get(d::StringDict, key::String)::Int32
+
+Get value for key. Returns 0 if not found.
+"""
+@noinline function sdict_get(d::StringDict, key::String)::Int32
+    slot = sdict_find_slot(d, key)
+    if slot > Int32(0)
+        return arr_get(d.values, slot)
+    else
+        return Int32(0)  # Not found
+    end
+end
+
+"""
+    sdict_haskey(d::StringDict, key::String)::Bool
+
+Check if key exists in dictionary.
+"""
+@noinline function sdict_haskey(d::StringDict, key::String)::Bool
+    slot = sdict_find_slot(d, key)
+    return slot > Int32(0)
+end
+
+"""
+    sdict_set!(d::StringDict, key::String, value::Int32)::Nothing
+
+Set key to value. Overwrites if key exists.
+"""
+@noinline function sdict_set!(d::StringDict, key::String, value::Int32)::Nothing
+    slot = sdict_find_slot(d, key)
+
+    if slot > Int32(0)
+        # Key exists - update value
+        arr_set!(d.values, slot, value)
+    elseif slot < Int32(0)
+        # Key doesn't exist - insert at returned slot
+        insert_slot = -slot
+        d.keys[insert_slot] = key
+        arr_set!(d.values, insert_slot, value)
+        arr_set!(d.slots, insert_slot, SLOT_OCCUPIED)
+        d.count = d.count + Int32(1)
+    end
+    # slot == 0 means table full - silently fail for now
+
+    _SDICT_SINK[] = value
+    return nothing
+end
+
+"""
+    sdict_length(d::StringDict)::Int32
+
+Return number of entries in dictionary.
+"""
+@noinline function sdict_length(d::StringDict)::Int32
     return d.count
 end

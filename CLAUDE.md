@@ -125,6 +125,16 @@ Per-function compilation state:
 19. **Data Segments**: Initialize memory with constant data (strings, bytes)
 20. **Result Type Patterns**: Error handling with custom result structs and control flow
 21. **WasmGlobal{T, IDX}**: Type-safe global variable handles with compile-time indices
+22. **Array Access in Loops**: Conditionals inside loops with array operations (dart2wasm patterns)
+23. **SimpleDict**: Hash table with Int32 keys/values, linear probing (sd_new, sd_get, sd_set!, sd_haskey, sd_length)
+24. **StringDict**: Hash table with String keys/Int32 values (sdict_new, sdict_get, sdict_set!, sdict_haskey, sdict_length)
+25. **str_hash**: String hashing function for hash tables
+26. **Primitive Types**: Custom primitive types (e.g., JuliaSyntax.Kind 16-bit)
+27. **Union Type Discrimination**: `isa` operator for Union{Nothing, T} patterns
+28. **Recursive Struct Registration**: Self-referential types like GreenNode
+29. **Nested Struct Types**: Automatically register nested struct field types
+30. **JuliaSyntax.jl Support**: 29+ functions from JuliaSyntax compile and run correctly
+31. **Multi-edge OR Patterns**: `a || b || c` with 3+ conditions producing a phi node
 
 ### WasmGlobal - Direct Julia Compilation with Wasm Globals
 
@@ -186,7 +196,7 @@ This pattern enables Therapy.jl to:
 
 ### Test Coverage
 
-~205 tests organized in phases:
+~259 tests organized in phases:
 - Phase 1-3: Infrastructure, builder, compiler basics
 - Phase 4-6: Control flow, integers, type conversions
 - Phase 7-9: Structs, tuples, arrays
@@ -194,6 +204,8 @@ This pattern enables Therapy.jl to:
 - Phase 13-15: Struct access, floats, strings
 - Phase 16-17: Multi-function modules, JS interop
 - Phase 18: Tables, memory, and data segments
+- Phase 19: SimpleDict (Int32 keys)
+- Phase 20: StringDict (String keys)
 
 ## dart2wasm Parallel Architecture
 
@@ -225,19 +237,20 @@ Julia source → Julia compiler → IR (Base.code_typed) → WasmTarget.jl → W
 
 ### Two Compilation Paths
 
-1. **Main path (Therapy.jl)**: Compile user code at build time
+1. **Build-time path (Therapy.jl apps)**: Compile user code at build time
    - Parse/analyze using Julia's compiler
    - Generate WASM via WasmTarget.jl
-   - Ship to browser
+   - Ship pre-compiled WASM to browser
 
-2. **Tooling path (optional)**: Compile Julia tools to WASM
-   - Tokenizer/parser running in browser
-   - Useful for REPL, syntax highlighting, interactive tutorials
-   - JuliaSyntax.jl in WASM would enable browser-based Julia
+2. **Runtime path (Browser REPL)**: Compile Julia tools to WASM so the compiler runs in-browser
+   - JuliaSyntax.jl in WASM for parsing
+   - JuliaLowering.jl in WASM for lowering
+   - WasmTarget.jl in WASM for codegen
+   - Result: Like Rust Playground - write Julia, compile & execute entirely in browser, no server
 
 ## Roadmap: Path to dart2wasm Parity
 
-The goal is full dart2wasm parity, which then enables self-hosting (compiling JuliaSyntax.jl to WASM for browser-based REPL).
+The goal is full dart2wasm parity: being able to compile arbitrary Julia code to WASM for browser execution. Unlike dart2wasm (where the Dart compiler runs natively), our ultimate goal is to have WasmTarget.jl itself run in the browser as WASM - enabling a fully client-side Julia REPL like Rust Playground.
 
 ### Current Status (as of Jan 2026)
 
@@ -251,10 +264,11 @@ The goal is full dart2wasm parity, which then enables self-hosting (compiling Ju
 | Try/catch exceptions | ✅ | ✅ |
 | Closures | ✅ | ✅ |
 | Full multiple dispatch | ✅ | ⚠️ partial |
-| Standard library | ✅ | ❌ minimal |
-| DOM runtime | ✅ | ❌ |
+| Standard library | ✅ | ⚠️ SimpleDict + StringDict done |
+| DOM runtime | ✅ | ⚠️ via Therapy.jl (imports work) |
+| JuliaSyntax.jl | ✅ | ✅ 29+ functions compile and run |
 
-**Estimated parity: ~50%**
+**Estimated parity: ~70%** (JuliaSyntax.jl functions working, DOM via Therapy.jl)
 
 ### Phase 1: Control Flow Completeness ✅ COMPLETE
 
@@ -289,24 +303,32 @@ Goal: Support all Julia language features that dart2wasm supports for Dart.
    - Julia inlines closure bodies when type is known at compile time
    - Multi-field closures supported (multiple captured variables)
 
-2. **Full multiple dispatch**: Runtime method lookup
+2. **Array Access in Loops** ✅ COMPLETE
+   - Conditionals inside loops with array element access
+   - dart2wasm-style nested block/br patterns for inner conditionals
+   - Dead code elimination for `@inbounds boundscheck(false)` patterns
+   - MemoryRef types handled as virtual stack pairs (no local allocation)
+   - Phi node value flow for inner conditional merge points
+   - Correct loop phi vs inner conditional phi initialization
+
+3. **Full multiple dispatch**: Runtime method lookup
    - Method tables
    - Dynamic dispatch via call_indirect
 
-3. **Abstract types and unions**: Type hierarchy support
+4. **Abstract types and unions**: Type hierarchy support
    - Union type handling
    - Abstract type dispatch
 
-4. **Generators/iterators**: If needed for standard library
+5. **Generators/iterators**: If needed for standard library
 
 **Success criteria**: Can compile JuliaSyntax.jl's code patterns.
 
-### Phase 3: Standard Library
+### Phase 3: Standard Library (In Progress)
 
 Goal: Core Julia functionality available in WASM.
 
-1. **String operations**: Full string API
-2. **Collections**: Dict, Set, etc.
+1. **String operations**: ✅ str_hash complete
+2. **Collections**: ✅ SimpleDict + StringDict (hash tables with Int32/String keys)
 3. **Math functions**: Comprehensive math library
 4. **I/O abstractions**: Print, string formatting
 
@@ -334,26 +356,59 @@ Goal: Julia compiler runs in the browser.
 
 **Success criteria**: Type Julia code in browser, see results.
 
-### Phase 6: Therapy.jl Framework
+### Phase 6: Browser REPL for WasmTarget.jl Docs
 
-Goal: Full reactive web framework.
+Goal: Interactive documentation with live Julia-to-WASM compilation.
 
-1. **Signal primitives**: Fine-grained reactivity
-2. **Component macros**: @component, @effect, @html
-3. **Server functions**: RPC to Julia backend
-4. **SSR + Hydration**: Server-side rendering
-5. **Routing**: Client-side navigation
+**Architecture**: Fully client-side (like Rust Playground)
+- **Compiler in browser**: WasmTarget.jl itself compiled to WASM (from Phase 5)
+- **No Julia server required**: Everything runs in the browser
+- **UI built with Therapy.jl**: Homepage features a big Julia REPL terminal
 
-**Success criteria**: Production-ready web framework.
+This is the same architecture as Rust Playground (https://play.rust-lang.org/) where the compiler runs in the browser via WASM, not on a server.
+
+1. **Self-hosted compiler**: Phase 5 enables WasmTarget.jl to run in browser as WASM
+2. **REPL UI**: Terminal-style interface built with Therapy.jl, CodeMirror for editing
+3. **Interactive execution**: Write Julia code → compile via WASM compiler → run result in browser
+4. **Documenter.jl integration**: Homepage is the REPL, docs surround it
+
+**Success criteria**: Users can write Julia code in browser, compile and execute it entirely client-side (no server roundtrip).
+
+## TherapeuticJulia Ecosystem
+
+WasmTarget.jl is part of the TherapeuticJulia ecosystem (sibling packages):
+
+```
+TherapeuticJulia/
+├── WasmTarget.jl    # This package: Julia → WASM compiler (foundation)
+├── Therapy.jl       # Reactive web framework (Leptos-style, uses WasmTarget)
+└── Sessions.jl      # VSCode+Pluto hybrid IDE (uses Therapy.jl)
+```
+
+**Dependency hierarchy:**
+1. **WasmTarget.jl** - Most fundamental. No dependencies on siblings.
+2. **Therapy.jl** - Depends on WasmTarget.jl for compiling event handlers to WASM
+3. **Sessions.jl** - Depends on Therapy.jl for UI components
+
+**Important:** Therapy.jl is a **separate, already-functional package** with:
+- Fine-grained reactivity (signals, effects, memos)
+- JSX-style components (Div, Button, Span, etc.)
+- SSR with hydration
+- File-path routing
+- Tailwind CSS integration
+- Direct IR compilation to WASM via WasmTarget.jl
+
+WasmTarget.jl's job is to provide the WASM compilation foundation. Therapy.jl handles the reactive framework concerns.
 
 ## Future Work (Post-Parity)
 
 Once dart2wasm parity is achieved:
 
-1. **Reactive Notebooks**: Pluto.jl alternative in browser
-2. **Julia Package Ecosystem**: Compile popular packages to WASM
-3. **Performance optimization**: Match dart2wasm's performance
-4. **Developer tooling**: Source maps, debugging, hot reload
+1. **Browser REPL**: Interactive Julia in WasmTarget.jl docs
+2. **Sessions.jl maturity**: Full notebook IDE in browser
+3. **Julia Package Ecosystem**: Compile popular packages to WASM
+4. **Performance optimization**: Match dart2wasm's performance
+5. **Developer tooling**: Source maps, debugging, hot reload
 
 ## Key Decisions and Rationale
 
@@ -363,10 +418,11 @@ Once dart2wasm parity is achieved:
 - Better integration with JS GC
 - Simpler code generation
 
-### Why no closures?
-- Julia IR for closures is complex (environment capture)
-- Macros can achieve same goals at compile time
-- Better performance (no runtime environment lookup)
+### Closure Support
+- Closures ARE supported (Phase 2 complete)
+- Closure structs with captured variables compile to WasmGC structs
+- Julia inlines closure bodies when type is known at compile time
+- Works seamlessly with Therapy.jl event handlers
 
 ### Why primitive type for JSValue?
 - Empty structs are optimized away by Julia

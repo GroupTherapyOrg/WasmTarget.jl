@@ -1302,6 +1302,36 @@ end
             @test validate_wasm(wasm_bytes)
         end
 
+        # String hashing for dict keys
+        @testset "String hash" begin
+            function test_str_hash()::Int32
+                return str_hash("hello")
+            end
+
+            wasm_bytes = WasmTarget.compile(test_str_hash, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            # Verify hash matches Julia's fallback
+            @test run_wasm(wasm_bytes, "test_str_hash") == str_hash("hello")
+        end
+
+        @testset "String hash consistency" begin
+            function test_hash_diff()::Int32
+                h1 = str_hash("hello")
+                h2 = str_hash("world")
+                if h1 == h2
+                    return Int32(0)
+                else
+                    return Int32(1)
+                end
+            end
+
+            wasm_bytes = WasmTarget.compile(test_hash_diff, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_hash_diff") == 1  # Different strings have different hashes
+        end
+
     end
 
     # ========================================================================
@@ -1764,6 +1794,264 @@ end
             # Little-endian: [1, 2, 3, 4] = 0x04030201
             expected = Int32(1) | (Int32(2) << 8) | (Int32(3) << 16) | (Int32(4) << 24)
             @test run_wasm(bytes, "read_data") == expected
+        end
+
+    end
+
+    # ================================================================
+    # Phase 19: SimpleDict (Hash Table) Support
+    # ================================================================
+
+    @testset "Phase 19: SimpleDict operations" begin
+
+        @testset "sd_new creates dictionary" begin
+            # Simple function that creates dict and returns its length (should be 0)
+            function test_dict_new()::Int32
+                d = sd_new(Int32(8))
+                return sd_length(d)
+            end
+
+            bytes = compile(test_dict_new, ())
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test run_wasm(bytes, "test_dict_new") == 0
+        end
+
+        @testset "sd_set! and sd_get" begin
+            # Set a key-value pair and retrieve it
+            function test_dict_set_get()::Int32
+                d = sd_new(Int32(8))
+                sd_set!(d, Int32(5), Int32(42))
+                return sd_get(d, Int32(5))
+            end
+
+            bytes = compile(test_dict_set_get, ())
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test run_wasm(bytes, "test_dict_set_get") == 42
+        end
+
+        @testset "sd_haskey" begin
+            # Check if key exists
+            function test_dict_haskey()::Int32
+                d = sd_new(Int32(8))
+                sd_set!(d, Int32(10), Int32(100))
+                if sd_haskey(d, Int32(10))
+                    return Int32(1)
+                else
+                    return Int32(0)
+                end
+            end
+
+            bytes = compile(test_dict_haskey, ())
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test run_wasm(bytes, "test_dict_haskey") == 1
+        end
+
+        @testset "sd_haskey returns false for missing key" begin
+            function test_dict_haskey_missing()::Int32
+                d = sd_new(Int32(8))
+                sd_set!(d, Int32(10), Int32(100))
+                if sd_haskey(d, Int32(99))
+                    return Int32(1)
+                else
+                    return Int32(0)
+                end
+            end
+
+            bytes = compile(test_dict_haskey_missing, ())
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test run_wasm(bytes, "test_dict_haskey_missing") == 0
+        end
+
+        @testset "sd_length increases with inserts" begin
+            function test_dict_length()::Int32
+                d = sd_new(Int32(8))
+                sd_set!(d, Int32(1), Int32(10))
+                sd_set!(d, Int32(2), Int32(20))
+                sd_set!(d, Int32(3), Int32(30))
+                return sd_length(d)
+            end
+
+            bytes = compile(test_dict_length, ())
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test run_wasm(bytes, "test_dict_length") == 3
+        end
+
+        @testset "sd_set! updates existing key" begin
+            function test_dict_update()::Int32
+                d = sd_new(Int32(8))
+                sd_set!(d, Int32(5), Int32(10))
+                sd_set!(d, Int32(5), Int32(99))  # Update same key
+                return sd_get(d, Int32(5))
+            end
+
+            bytes = compile(test_dict_update, ())
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test run_wasm(bytes, "test_dict_update") == 99
+        end
+
+        @testset "sd_get returns 0 for missing key" begin
+            function test_dict_get_missing()::Int32
+                d = sd_new(Int32(8))
+                sd_set!(d, Int32(5), Int32(42))
+                return sd_get(d, Int32(99))  # Key doesn't exist
+            end
+
+            bytes = compile(test_dict_get_missing, ())
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test run_wasm(bytes, "test_dict_get_missing") == 0
+        end
+
+        @testset "Multiple keys with linear probing" begin
+            # Test that hash collisions are handled
+            function test_dict_collisions()::Int32
+                d = sd_new(Int32(4))  # Small capacity to force collisions
+                sd_set!(d, Int32(1), Int32(11))
+                sd_set!(d, Int32(5), Int32(55))  # May collide with key 1
+                sd_set!(d, Int32(9), Int32(99))  # May collide with previous
+                # Verify all keys are retrievable
+                return sd_get(d, Int32(1)) + sd_get(d, Int32(5)) + sd_get(d, Int32(9))
+            end
+
+            bytes = compile(test_dict_collisions, ())
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test run_wasm(bytes, "test_dict_collisions") == (11 + 55 + 99)
+        end
+
+    end
+
+    # ================================================================
+    # Phase 20: StringDict (String-keyed Hash Table) Support
+    # ================================================================
+
+    @testset "Phase 20: StringDict operations" begin
+
+        @testset "sdict_new creates dictionary" begin
+            # Simple function that creates dict and returns its length (should be 0)
+            function test_sdict_new()::Int32
+                d = sdict_new(Int32(8))
+                return sdict_length(d)
+            end
+
+            bytes = compile(test_sdict_new, ())
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test run_wasm(bytes, "test_sdict_new") == 0
+        end
+
+        @testset "sdict_set! and sdict_get" begin
+            # Set a key-value pair and retrieve it
+            function test_sdict_set_get()::Int32
+                d = sdict_new(Int32(8))
+                sdict_set!(d, "hello", Int32(42))
+                return sdict_get(d, "hello")
+            end
+
+            bytes = compile(test_sdict_set_get, ())
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test run_wasm(bytes, "test_sdict_set_get") == 42
+        end
+
+        @testset "sdict_haskey" begin
+            # Check if key exists
+            function test_sdict_haskey()::Int32
+                d = sdict_new(Int32(8))
+                sdict_set!(d, "test", Int32(100))
+                if sdict_haskey(d, "test")
+                    return Int32(1)
+                else
+                    return Int32(0)
+                end
+            end
+
+            bytes = compile(test_sdict_haskey, ())
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test run_wasm(bytes, "test_sdict_haskey") == 1
+        end
+
+        @testset "sdict_haskey returns false for missing key" begin
+            function test_sdict_haskey_missing()::Int32
+                d = sdict_new(Int32(8))
+                sdict_set!(d, "exists", Int32(100))
+                if sdict_haskey(d, "missing")
+                    return Int32(1)
+                else
+                    return Int32(0)
+                end
+            end
+
+            bytes = compile(test_sdict_haskey_missing, ())
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test run_wasm(bytes, "test_sdict_haskey_missing") == 0
+        end
+
+        @testset "sdict_length increases with inserts" begin
+            function test_sdict_length()::Int32
+                d = sdict_new(Int32(8))
+                sdict_set!(d, "one", Int32(10))
+                sdict_set!(d, "two", Int32(20))
+                sdict_set!(d, "three", Int32(30))
+                return sdict_length(d)
+            end
+
+            bytes = compile(test_sdict_length, ())
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test run_wasm(bytes, "test_sdict_length") == 3
+        end
+
+        @testset "sdict_set! updates existing key" begin
+            function test_sdict_update()::Int32
+                d = sdict_new(Int32(8))
+                sdict_set!(d, "key", Int32(10))
+                sdict_set!(d, "key", Int32(99))  # Update same key
+                return sdict_get(d, "key")
+            end
+
+            bytes = compile(test_sdict_update, ())
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test run_wasm(bytes, "test_sdict_update") == 99
+        end
+
+        @testset "sdict_get returns 0 for missing key" begin
+            function test_sdict_get_missing()::Int32
+                d = sdict_new(Int32(8))
+                sdict_set!(d, "exists", Int32(42))
+                return sdict_get(d, "nothere")  # Key doesn't exist
+            end
+
+            bytes = compile(test_sdict_get_missing, ())
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test run_wasm(bytes, "test_sdict_get_missing") == 0
+        end
+
+        @testset "Multiple string keys" begin
+            # Test with multiple string keys
+            function test_sdict_multi()::Int32
+                d = sdict_new(Int32(8))
+                sdict_set!(d, "apple", Int32(1))
+                sdict_set!(d, "banana", Int32(2))
+                sdict_set!(d, "cherry", Int32(3))
+                # Verify all keys are retrievable
+                return sdict_get(d, "apple") + sdict_get(d, "banana") + sdict_get(d, "cherry")
+            end
+
+            bytes = compile(test_sdict_multi, ())
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test run_wasm(bytes, "test_sdict_multi") == (1 + 2 + 3)
         end
 
     end

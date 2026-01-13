@@ -312,6 +312,16 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
     elseif isconcretetype(T) && isstructtype(T)
         # User-defined structs map to WasmGC structs
         return StructRef
+    elseif isprimitivetype(T)
+        # Custom primitive types (e.g., JuliaSyntax.Kind) - map by size
+        sz = sizeof(T)
+        if sz <= 4
+            return I32
+        elseif sz <= 8
+            return I64
+        else
+            error("Primitive type too large for Wasm: $T ($sz bytes)")
+        end
     else
         error("Unsupported Julia type for Wasm: $T")
     end
