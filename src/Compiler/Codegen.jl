@@ -1092,10 +1092,11 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
         # Strings are WasmGC arrays of bytes
         type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
         return ConcreteRef(type_idx, true)
-    elseif T isa DataType && T.name.name === :MemoryRef
-        # MemoryRef{T} maps to the array type for element T
+    elseif T isa DataType && (T.name.name === :MemoryRef || T.name.name === :GenericMemoryRef)
+        # MemoryRef{T} / GenericMemoryRef maps to the array type for element T
         # This is Julia's internal type for array element access
-        elem_type = T.parameters[1]
+        # GenericMemoryRef parameters: (atomicity, element_type, addrspace)
+        elem_type = T.name.name === :GenericMemoryRef ? T.parameters[2] : T.parameters[1]
         if haskey(ctx.type_registry.arrays, elem_type)
             type_idx = ctx.type_registry.arrays[elem_type]
             return ConcreteRef(type_idx, true)
