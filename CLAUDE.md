@@ -249,12 +249,12 @@ The goal is full dart2wasm parity, which then enables self-hosting (compiling Ju
 | JS interop (externref) | ✅ | ✅ |
 | `\|\|`/`&&` operators | ✅ | ✅ |
 | Try/catch exceptions | ✅ | ✅ |
-| Closures | ✅ | ❌ |
+| Closures | ✅ | ✅ |
 | Full multiple dispatch | ✅ | ⚠️ partial |
 | Standard library | ✅ | ❌ minimal |
 | DOM runtime | ✅ | ❌ |
 
-**Estimated parity: ~40%**
+**Estimated parity: ~50%**
 
 ### Phase 1: Control Flow Completeness ✅ COMPLETE
 
@@ -277,14 +277,17 @@ Goal: Handle ALL Julia IR control flow patterns natively.
 
 **Success criteria**: Can compile any Julia function without control flow errors. ✅ ACHIEVED
 
-### Phase 2: Language Feature Completeness
+### Phase 2: Language Feature Completeness (Closures ✅ COMPLETE)
 
 Goal: Support all Julia language features that dart2wasm supports for Dart.
 
-1. **Closures**: Environment capture and closure compilation
-   - Closure struct generation
-   - Captured variable handling
-   - funcref for closure calls
+1. **Closures** ✅ COMPLETE
+   - Closure struct generation (WasmGC structs with captured fields)
+   - Captured variable handling (struct.get for field access)
+   - Closure creation via %new expression
+   - Closure passing between functions
+   - Julia inlines closure bodies when type is known at compile time
+   - Multi-field closures supported (multiple captured variables)
 
 2. **Full multiple dispatch**: Runtime method lookup
    - Method tables
