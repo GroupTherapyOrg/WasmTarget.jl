@@ -140,7 +140,20 @@ Get a concrete Wasm type for a Julia type, using the module and registry.
 This is used before CompilationContext is created.
 """
 function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry)::WasmValType
-    if is_struct_type(T)
+    if is_closure_type(T)
+        # Closure types are structs with captured variables
+        if haskey(registry.structs, T)
+            info = registry.structs[T]
+            return ConcreteRef(info.wasm_type_idx, true)
+        else
+            register_closure_type!(mod, registry, T)
+            if haskey(registry.structs, T)
+                info = registry.structs[T]
+                return ConcreteRef(info.wasm_type_idx, true)
+            end
+        end
+        return StructRef
+    elseif is_struct_type(T)
         if haskey(registry.structs, T)
             info = registry.structs[T]
             return ConcreteRef(info.wasm_type_idx, true)
@@ -201,6 +214,15 @@ function compile_function(f, arg_types::Tuple, func_name::String)::WasmModule
     # Create type registry for struct mappings
     type_registry = TypeRegistry()
 
+    # Check if this is a closure (function with captured variables)
+    # For closures, we need to include the closure object as the first argument
+    closure_type = typeof(f)
+    is_closure = is_closure_type(closure_type)
+    if is_closure
+        # Prepend the closure type to arg_types
+        arg_types = (closure_type, arg_types...)
+    end
+
     # Detect WasmGlobal arguments (phantom params that map to Wasm globals)
     global_args = Set{Int}()
     for (i, T) in enumerate(arg_types)
@@ -217,12 +239,15 @@ function compile_function(f, arg_types::Tuple, func_name::String)::WasmModule
         end
     end
 
-    # Register any struct/array/string types used in parameters (skip WasmGlobal)
+    # Register any struct/array/string/closure types used in parameters (skip WasmGlobal)
     for (i, T) in enumerate(arg_types)
         if i in global_args
             continue  # Skip WasmGlobal
         end
-        if is_struct_type(T)
+        if is_closure_type(T)
+            # Closure types need special registration
+            register_closure_type!(mod, type_registry, T)
+        elseif is_struct_type(T)
             register_struct_type!(mod, type_registry, T)
         elseif T <: AbstractVector
             # Register array type for Vector parameters
@@ -614,6 +639,57 @@ function is_struct_type(T::Type)::Bool
 end
 
 is_struct_type(::Any) = false
+
+"""
+Check if type is a closure (subtype of Function with captured fields).
+"""
+function is_closure_type(T::Type)::Bool
+    # Must be a subtype of Function
+    !(T <: Function) && return false
+    # Must have fields (captured variables)
+    fieldcount(T) == 0 && return false
+    # Must be a concrete struct type
+    return isconcretetype(T) && isstructtype(T)
+end
+
+is_closure_type(::Any) = false
+
+"""
+Register a closure type as a WasmGC struct.
+"""
+function register_closure_type!(mod::WasmModule, registry::TypeRegistry, T::DataType)
+    # Already registered?
+    haskey(registry.structs, T) && return registry.structs[T]
+
+    # Get field information
+    field_names = [fieldname(T, i) for i in 1:fieldcount(T)]
+    field_types = [fieldtype(T, i) for i in 1:fieldcount(T)]
+
+    # Create WasmGC field types (same logic as register_struct_type)
+    wasm_fields = FieldType[]
+    for ft in field_types
+        if ft <: AbstractVector
+            elem_type = eltype(ft)
+            array_type_idx = get_array_type!(mod, registry, elem_type)
+            wasm_vt = ConcreteRef(array_type_idx, true)
+        elseif ft === String
+            str_type_idx = get_string_array_type!(mod, registry)
+            wasm_vt = ConcreteRef(str_type_idx, true)
+        else
+            wasm_vt = julia_to_wasm_type(ft)
+        end
+        push!(wasm_fields, FieldType(wasm_vt, false))  # immutable for closures
+    end
+
+    # Add struct type to module
+    type_idx = add_struct_type!(mod, wasm_fields)
+
+    # Record mapping
+    info = StructInfo(T, type_idx, field_names, field_types)
+    registry.structs[T] = info
+
+    return info
+end
 
 """
 Register a Julia struct type in the Wasm module.
@@ -1411,7 +1487,16 @@ end
 
 function infer_value_type(val, ctx::CompilationContext)
     if val isa Core.Argument
-        idx = val.n - 1
+        # For closures, _1 is the closure object (arg_types[1])
+        # For regular functions, arguments start at _2 (arg_types[1])
+        # We detect closures by checking if arg_types[1] is a closure type
+        if length(ctx.arg_types) >= 1 && is_closure_type(ctx.arg_types[1])
+            # Closure: direct mapping
+            idx = val.n
+        else
+            # Regular function: skip _1 (function type in IR)
+            idx = val.n - 1
+        end
         if idx >= 1 && idx <= length(ctx.arg_types)
             return ctx.arg_types[idx]
         end
@@ -3539,15 +3624,22 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         # Otherwise, assume it's on the stack (for single-use SSAs in sequence)
 
     elseif val isa Core.Argument
-        # Argument(2) is arg_types[1], Argument(3) is arg_types[2], etc.
-        arg_idx = val.n - 1  # Convert to 1-based arg_types index
+        # For closures, _1 is the closure object (arg_types[1])
+        # For regular functions, arguments start at _2 (arg_types[1])
+        if length(ctx.arg_types) >= 1 && is_closure_type(ctx.arg_types[1])
+            # Closure: direct mapping
+            arg_idx = val.n
+        else
+            # Regular function: skip _1 (function type in IR)
+            arg_idx = val.n - 1
+        end
 
         # WasmGlobal arguments don't have locals - they're accessed via global.get/set
         # in the getfield/setfield handlers, so we skip emitting anything here
         if arg_idx in ctx.global_args
             # WasmGlobal arg - no local.get needed (handled by getfield/setfield)
             # Return empty bytes
-        elseif arg_idx >= 1
+        elseif arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
             # Calculate local index: count non-WasmGlobal args before this one
             local_idx = count(i -> !(i in ctx.global_args), 1:arg_idx-1)
             push!(bytes, Opcode.LOCAL_GET)
@@ -3849,6 +3941,34 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
                 end
                 return bytes
+            end
+        end
+
+        # Handle closure field access (captured variables)
+        if is_closure_type(obj_type)
+            # Register closure type if not already
+            if !haskey(ctx.type_registry.structs, obj_type)
+                register_closure_type!(ctx.mod, ctx.type_registry, obj_type)
+            end
+
+            if haskey(ctx.type_registry.structs, obj_type)
+                info = ctx.type_registry.structs[obj_type]
+
+                field_sym = if field_ref isa QuoteNode
+                    field_ref.value
+                else
+                    field_ref
+                end
+
+                field_idx = findfirst(==(field_sym), info.field_names)
+                if field_idx !== nothing
+                    append!(bytes, compile_value(obj_arg, ctx))
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.STRUCT_GET)
+                    append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
+                    append!(bytes, encode_leb128_unsigned(field_idx - 1))
+                    return bytes
+                end
             end
         end
 
