@@ -37,6 +37,7 @@ module Opcode
     # Parametric instructions
     const DROP = 0x1A
     const SELECT = 0x1B
+    const SELECT_T = 0x1C  # Typed select (followed by type count and types)
 
     # Variable instructions
     const LOCAL_GET = 0x20

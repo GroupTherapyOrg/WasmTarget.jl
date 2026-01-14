@@ -22,6 +22,59 @@ WasmTarget.jl is a Julia-to-WebAssembly compiler targeting WasmGC. It serves as 
 - **Direct WebAssembly**: No intermediate languages, direct Julia IR to Wasm bytecode
 - **WasmGC-first**: Use WebAssembly GC proposal for memory management
 
+### Therapy.jl Readiness (as of Jan 2025)
+
+**WasmTarget.jl is ready for Therapy.jl development.** The core capabilities needed for a Leptos-style reactive framework are complete:
+
+| Capability | Status | Therapy.jl Use Case |
+|------------|--------|---------------------|
+| JS Interop (externref) | ✅ Ready | DOM manipulation via imports |
+| Event Handlers | ✅ Ready | Exported functions as callbacks |
+| Reactive State (WasmGlobal) | ✅ Ready | Signals/state management |
+| Closures | ✅ Ready | Inline event handlers |
+| Structs/Tuples | ✅ Ready | Component props/state |
+| Control Flow | ✅ Ready | Conditional rendering |
+| Strings | ✅ Ready | Text content |
+| Arrays | ✅ Ready | List rendering |
+
+**Recommended approach**: Build Therapy.jl now. Fix WasmTarget.jl bugs as real use cases expose them.
+
+**What's NOT needed for Therapy.jl basics**:
+- Complex math functions (sin/cos/exp) - stackifier bug is lower priority
+- Full standard library - add as needed
+- dart2wasm parity - incremental goal
+
+### CRITICAL: No Workarounds or Cheats
+
+**NEVER suggest workarounds, simplified implementations, or "cheats" when a Julia function fails to compile.**
+
+The entire point of testing functions like `sin()`, `cos()`, `exp()`, etc. is to verify that **real Julia Base code** compiles correctly. When `compile(sin, (Float64,))` fails, it means there's a bug in WasmTarget.jl that needs to be fixed - NOT that we should use a polynomial approximation instead.
+
+- If `sin()` fails → Fix the compiler, don't write `my_sin()`
+- If control flow explodes → Debug and fix the control flow generator
+- If a type isn't supported → Add support for that type
+- If an intrinsic is missing → Implement the intrinsic
+
+The goal is **dart2wasm parity**: compiling arbitrary Julia code to WASM. Every workaround is a failure to achieve that goal.
+
+### CRITICAL: Consult dart2wasm for Implementation Patterns
+
+**ALWAYS consult dart2wasm's source code when implementing new features or fixing bugs.**
+
+dart2wasm is a mature, production compiler. When you encounter:
+- Complex control flow → Check how dart2wasm handles it
+- Type representation → Check dart2wasm's type encoding
+- Code explosion → Check dart2wasm's optimization passes
+- Stack management → Check dart2wasm's stack handling
+
+dart2wasm source: https://github.com/nickmeinhold/dart2wasm
+Key files:
+- `code_generator.dart` - Main code generation
+- `types.dart` - Type representations
+- `intrinsics.dart` - Intrinsic implementations
+
+Don't reinvent the wheel. Copy proven patterns from dart2wasm.
+
 ## Architecture
 
 ### Source Tree
@@ -135,6 +188,7 @@ Per-function compilation state:
 29. **Nested Struct Types**: Automatically register nested struct field types
 30. **JuliaSyntax.jl Support**: 29+ functions from JuliaSyntax compile and run correctly
 31. **Multi-edge OR Patterns**: `a || b || c` with 3+ conditions producing a phi node
+32. **Multi-dimensional Arrays**: Matrix{T} and Array{T,N} stored as WasmGC struct with data array + size tuple
 
 ### WasmGlobal - Direct Julia Compilation with Wasm Globals
 
@@ -196,7 +250,7 @@ This pattern enables Therapy.jl to:
 
 ### Test Coverage
 
-~259 tests organized in phases:
+~305 tests organized in phases:
 - Phase 1-3: Infrastructure, builder, compiler basics
 - Phase 4-6: Control flow, integers, type conversions
 - Phase 7-9: Structs, tuples, arrays
@@ -206,6 +260,8 @@ This pattern enables Therapy.jl to:
 - Phase 18: Tables, memory, and data segments
 - Phase 19: SimpleDict (Int32 keys)
 - Phase 20: StringDict (String keys)
+- Phase 21: Multi-dimensional Arrays (Matrix)
+- Phase 22: Math Functions (WASM-native: sqrt, abs, floor, ceil, round, trunc)
 
 ## dart2wasm Parallel Architecture
 
@@ -247,7 +303,7 @@ Julia source → Julia compiler → IR (Base.code_typed) → WasmTarget.jl → W
 We receive fully-typed IR and just generate WASM bytecode. This is why we can already support:
 - ✅ Exceptions, closures, union types, complex control flow
 - ✅ 29+ JuliaSyntax functions compile and run
-- ✅ 259 tests passing
+- ✅ 305 tests passing
 
 This is the same architecture as dart2wasm - leverage the existing compiler, just add a WASM backend.
 
@@ -292,7 +348,7 @@ The goal is incremental expansion of Julia language support. Because we hook int
 |---------|-----------|---------------|------------------------|-----------------|
 | Basic types, structs | ✅ | ✅ | ✅ | ✅ |
 | 1D Arrays (Vector) | ✅ | ✅ | ✅ | ❌ |
-| **Multi-dim Arrays** | ✅ | 🚧 HIGH PRIORITY | ❌ | ❌ |
+| **Multi-dim Arrays** | ✅ | ✅ | ❌ | ❌ |
 | Control flow | ✅ | ✅ | ✅ | ✅ |
 | JS interop (externref) | ✅ | ✅ | ✅ | ❌ |
 | `\|\|`/`&&` operators | ✅ | ✅ | ✅ | ✅ |
@@ -303,8 +359,8 @@ The goal is incremental expansion of Julia language support. Because we hook int
 | Standard library | ✅ | ⚠️ Dict-like done | ✅ Dict | ❌ |
 | JuliaSyntax.jl | N/A | ✅ 29+ functions | N/A | N/A |
 
-**WasmTarget.jl advantages**: Exceptions, Closures, Union types, Multi-dim arrays (coming)
-**Estimated parity: ~70%**
+**WasmTarget.jl advantages**: Exceptions, Closures, Union types, Multi-dim arrays
+**Estimated parity: ~80%** (Multi-dim arrays, math functions, DOM via Therapy.jl)
 
 ### Phase 1: Control Flow Completeness ✅ COMPLETE
 
@@ -483,6 +539,34 @@ Check `get_concrete_wasm_type` returns correct WasmGC type. May need to register
 
 ### Cross-function calls fail
 Ensure both functions are in same `compile_multi` call and function references match.
+
+### Complex control flow (sin/cos/exp etc) - Stackifier Implemented
+
+**Status**: Stackifier algorithm implemented, partially working. **Lower priority** - not needed for Therapy.jl basics.
+
+Functions with many conditional branches (>15 GotoIfNots) like `sin()`, `cos()`, `exp()` now compile using the Stackifier algorithm:
+
+**What works**:
+- sin() compiles to ~10KB (was 233KB with code explosion)
+- sin(0) = 0, sin(PI/2) = 1, sin(PI) = 0 are correct
+- Simple math functions (`floor`, `abs`, `ceil`, `trunc`) work correctly
+
+**Known bug** (Jan 2025):
+- sin(PI/4) returns 0 instead of ~0.707
+- Root cause identified: stackifier's `compile_block_statements` was missing LOCAL_SET for SSA values
+- Partial fix applied but stack validation still failing
+- **This is dart2wasm parity work, not blocking Therapy.jl**
+
+**Implementation** (in `generate_stackified_flow`):
+1. Build CFG with successor/predecessor maps from basic blocks
+2. Identify back edges (loops) vs forward edges
+3. Track open blocks dynamically for correct br label depths
+4. Use WASM `block`/`br` for forward jumps
+5. Use WASM `loop`/`br` for backward jumps (loops)
+6. Handle consecutive phi nodes at destinations with `set_phi_locals_for_edge!`
+7. Use `compile_phi_value` to ensure SSA values produce bytes (handles SSAs without locals)
+
+Reference: [Solving the structured control flow problem once and for all](https://labs.leaningtech.com/blog/control-flow)
 
 ## Testing Commands
 

@@ -287,6 +287,9 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
     elseif T === UInt8 || T === Int8 || T === UInt16 || T === Int16
         # Smaller integers also use i32
         return I32
+    elseif T === Int128 || T === UInt128
+        # 128-bit integers are represented as WasmGC structs with two i64 fields
+        return StructRef
     elseif T === Nothing
         # Nothing has no Wasm representation - handled specially
         # Return I32 as a placeholder (functions returning Nothing don't actually return)

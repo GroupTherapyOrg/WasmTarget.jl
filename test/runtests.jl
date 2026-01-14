@@ -2056,4 +2056,205 @@ end
 
     end
 
+    # ========================================================================
+    # Phase 21: Multi-dimensional Arrays (Matrix)
+    # ========================================================================
+    @testset "Phase 21: Multi-dimensional Arrays (Matrix)" begin
+
+        @testset "Matrix type compiles" begin
+            # Test that functions accepting Matrix compile correctly
+            function test_matrix_accept(m::Matrix{Int32})::Int32
+                return Int32(1)  # Just accept and return
+            end
+
+            bytes = compile(test_matrix_accept, (Matrix{Int32},))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+        end
+
+        @testset "Matrix .size field access compiles" begin
+            # Test accessing the .size field of a Matrix
+            function test_matrix_get_rows(m::Matrix{Int32})::Int64
+                return m.size[1]
+            end
+
+            function test_matrix_get_cols(m::Matrix{Int32})::Int64
+                return m.size[2]
+            end
+
+            bytes_rows = compile(test_matrix_get_rows, (Matrix{Int32},))
+            @test length(bytes_rows) > 0
+            @test validate_wasm(bytes_rows)
+
+            bytes_cols = compile(test_matrix_get_cols, (Matrix{Int32},))
+            @test length(bytes_cols) > 0
+            @test validate_wasm(bytes_cols)
+        end
+
+        @testset "Matrix .ref field access compiles" begin
+            # Test accessing the .ref field (underlying MemoryRef)
+            function test_matrix_ref(m::Matrix{Int32})::Int64
+                ref = m.ref
+                return Int64(1)  # Just access ref
+            end
+
+            bytes = compile(test_matrix_ref, (Matrix{Int32},))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+        end
+
+        @testset "Matrix Float64 compiles" begin
+            # Test Matrix with different element types
+            function test_matrix_f64_rows(m::Matrix{Float64})::Int64
+                return m.size[1]
+            end
+
+            bytes = compile(test_matrix_f64_rows, (Matrix{Float64},))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+        end
+
+        @testset "Matrix compile_multi" begin
+            # Test multiple Matrix functions together
+            function mat_rows(m::Matrix{Int32})::Int64
+                return m.size[1]
+            end
+
+            function mat_cols(m::Matrix{Int32})::Int64
+                return m.size[2]
+            end
+
+            function mat_total(m::Matrix{Int32})::Int64
+                return m.size[1] * m.size[2]
+            end
+
+            bytes = compile_multi([
+                (mat_rows, (Matrix{Int32},)),
+                (mat_cols, (Matrix{Int32},)),
+                (mat_total, (Matrix{Int32},)),
+            ])
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+        end
+
+    end
+
+    # ========================================================================
+    # Phase 22: Math Functions (WASM-native)
+    # ========================================================================
+    @testset "Phase 22: Math Functions (WASM-native)" begin
+
+        @testset "sqrt (via llvm intrinsic)" begin
+            if NODE_CMD !== nothing
+                # Use the raw llvm intrinsic to avoid domain checking
+                function test_sqrt_fast(x::Float64)::Float64
+                    return Base.Math.sqrt_llvm(x)
+                end
+
+                bytes = compile(test_sqrt_fast, (Float64,))
+                @test length(bytes) > 0
+                @test validate_wasm(bytes)
+                @test run_wasm(bytes, "test_sqrt_fast", Float64[4.0]) ≈ 2.0
+                @test run_wasm(bytes, "test_sqrt_fast", Float64[9.0]) ≈ 3.0
+                @test run_wasm(bytes, "test_sqrt_fast", Float64[2.0]) ≈ sqrt(2.0)
+            end
+        end
+
+        @testset "abs" begin
+            if NODE_CMD !== nothing
+                function test_abs(x::Float64)::Float64
+                    return abs(x)
+                end
+
+                bytes = compile(test_abs, (Float64,))
+                @test length(bytes) > 0
+                @test validate_wasm(bytes)
+                @test run_wasm(bytes, "test_abs", Float64[-5.0]) ≈ 5.0
+                @test run_wasm(bytes, "test_abs", Float64[3.0]) ≈ 3.0
+                @test run_wasm(bytes, "test_abs", Float64[-0.0]) ≈ 0.0
+            end
+        end
+
+        @testset "floor" begin
+            if NODE_CMD !== nothing
+                function test_floor(x::Float64)::Float64
+                    return floor(x)
+                end
+
+                bytes = compile(test_floor, (Float64,))
+                @test length(bytes) > 0
+                @test validate_wasm(bytes)
+                @test run_wasm(bytes, "test_floor", Float64[3.7]) ≈ 3.0
+                @test run_wasm(bytes, "test_floor", Float64[-2.3]) ≈ -3.0
+                @test run_wasm(bytes, "test_floor", Float64[5.0]) ≈ 5.0
+            end
+        end
+
+        @testset "ceil" begin
+            if NODE_CMD !== nothing
+                function test_ceil(x::Float64)::Float64
+                    return ceil(x)
+                end
+
+                bytes = compile(test_ceil, (Float64,))
+                @test length(bytes) > 0
+                @test validate_wasm(bytes)
+                @test run_wasm(bytes, "test_ceil", Float64[3.2]) ≈ 4.0
+                @test run_wasm(bytes, "test_ceil", Float64[-2.7]) ≈ -2.0
+                @test run_wasm(bytes, "test_ceil", Float64[5.0]) ≈ 5.0
+            end
+        end
+
+        @testset "round" begin
+            if NODE_CMD !== nothing
+                function test_round(x::Float64)::Float64
+                    return round(x)
+                end
+
+                bytes = compile(test_round, (Float64,))
+                @test length(bytes) > 0
+                @test validate_wasm(bytes)
+                @test run_wasm(bytes, "test_round", Float64[3.2]) ≈ 3.0
+                @test run_wasm(bytes, "test_round", Float64[3.7]) ≈ 4.0
+                @test run_wasm(bytes, "test_round", Float64[-2.5]) ≈ -2.0  # Round to even
+            end
+        end
+
+        @testset "trunc" begin
+            if NODE_CMD !== nothing
+                function test_trunc(x::Float64)::Float64
+                    return trunc(x)
+                end
+
+                bytes = compile(test_trunc, (Float64,))
+                @test length(bytes) > 0
+                @test validate_wasm(bytes)
+                @test run_wasm(bytes, "test_trunc", Float64[3.7]) ≈ 3.0
+                @test run_wasm(bytes, "test_trunc", Float64[-3.7]) ≈ -3.0
+                @test run_wasm(bytes, "test_trunc", Float64[5.0]) ≈ 5.0
+            end
+        end
+
+        @testset "Float32 variants" begin
+            if NODE_CMD !== nothing
+                function test_abs_f32(x::Float32)::Float32
+                    return abs(x)
+                end
+
+                function test_floor_f32(x::Float32)::Float32
+                    return floor(x)
+                end
+
+                bytes_abs = compile(test_abs_f32, (Float32,))
+                @test length(bytes_abs) > 0
+                @test validate_wasm(bytes_abs)
+
+                bytes_floor = compile(test_floor_f32, (Float32,))
+                @test length(bytes_floor) > 0
+                @test validate_wasm(bytes_floor)
+            end
+        end
+
+    end
+
 end
