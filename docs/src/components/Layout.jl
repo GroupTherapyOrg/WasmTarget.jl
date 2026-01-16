@@ -15,17 +15,18 @@ function Layout(children...; title="WasmTarget.jl")
                 Div(:class => "flex justify-between h-16",
                     # Logo
                     Div(:class => "flex items-center",
-                        A(:href => "./", :class => "flex items-center",
+                        A(:href => "/WasmTarget.jl/", :class => "flex items-center",
                             Span(:class => "text-2xl font-bold text-cyan-500 dark:text-cyan-400", "WasmTarget"),
                             Span(:class => "text-2xl font-light text-stone-400 dark:text-stone-500", ".jl")
                         )
                     ),
                     # Navigation Links
+                    # Use absolute paths with base path for reliable GitHub Pages navigation
                     Div(:class => "hidden sm:flex sm:items-center sm:space-x-6",
-                        NavItem("./", "Playground"),
-                        NavItem("manual/", "Manual"),
-                        NavItem("features/", "Features"),
-                        NavItem("api/", "API"),
+                        NavItem("/WasmTarget.jl/", "Playground"),
+                        NavItem("/WasmTarget.jl/manual/", "Manual"),
+                        NavItem("/WasmTarget.jl/features/", "Features"),
+                        NavItem("/WasmTarget.jl/api/", "API"),
                         # GitHub link
                         A(:href => "https://github.com/GroupTherapyOrg/WasmTarget.jl",
                           :class => "text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200 transition-colors",
@@ -55,7 +56,7 @@ function Layout(children...; title="WasmTarget.jl")
                         "Built with ",
                         A(:href => "https://github.com/GroupTherapyOrg/Therapy.jl", :class => "text-cyan-500 dark:text-cyan-400 hover:text-cyan-600 dark:hover:text-cyan-300", :target => "_blank", "Therapy.jl"),
                         " - Powered by ",
-                        A(:href => "./", :class => "text-cyan-500 dark:text-cyan-400 hover:text-cyan-600 dark:hover:text-cyan-300", "WasmTarget.jl")
+                        A(:href => "/WasmTarget.jl/", :class => "text-cyan-500 dark:text-cyan-400 hover:text-cyan-600 dark:hover:text-cyan-300", "WasmTarget.jl")
                     ),
                     P(:class => "text-stone-400 dark:text-stone-500 text-sm",
                         "MIT License"
