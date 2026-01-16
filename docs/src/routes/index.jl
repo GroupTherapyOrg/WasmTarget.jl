@@ -94,6 +94,15 @@ function JuliaPlayground()
                 const output = document.getElementById('output-content');
                 const status = document.getElementById('status-indicator');
 
+                // Check for code passed from manual "Try in Playground" links
+                const playgroundCode = localStorage.getItem('playground-code');
+                if (playgroundCode && editor) {
+                    editor.value = playgroundCode;
+                    localStorage.removeItem('playground-code');
+                    // Update output to show loaded code
+                    output.innerHTML = '<span class="text-emerald-400">Code loaded from manual!</span>\n\nClick "Run" to compile and execute.';
+                }
+
                 runBtn.addEventListener('click', function() {
                     const code = editor.value;
                     status.textContent = 'Compiling...';
@@ -131,6 +140,71 @@ function JuliaPlayground()
     )
 end
 
+"""
+Interactive Julia Manual feature card for the home page.
+"""
+function ManualFeatureSection()
+    Div(:class => "mt-16 mb-8",
+        # Section header
+        Div(:class => "text-center mb-8",
+            H2(:class => "text-3xl font-bold text-stone-800 dark:text-stone-100",
+                "Interactive Julia Manual"
+            ),
+            P(:class => "text-stone-500 dark:text-stone-400 mt-2 max-w-2xl mx-auto",
+                "Learn Julia through hands-on examples that run real compiled code in your browser."
+            )
+        ),
+
+        # Feature card
+        A(:href => "manual/",
+          :class => "group block max-w-4xl mx-auto p-8 bg-gradient-to-br from-cyan-50 to-teal-50 dark:from-cyan-900/20 dark:to-teal-900/20 rounded-2xl border border-cyan-200 dark:border-cyan-800 hover:border-cyan-400 dark:hover:border-cyan-600 hover:shadow-xl hover:shadow-cyan-500/10 transition-all duration-300",
+            Div(:class => "flex flex-col md:flex-row items-center gap-8",
+                # Icon
+                Div(:class => "flex-shrink-0 w-20 h-20 bg-gradient-to-br from-cyan-400 to-teal-500 rounded-2xl flex items-center justify-center shadow-lg shadow-cyan-500/20 group-hover:scale-105 transition-transform duration-300",
+                    Svg(:class => "w-10 h-10 text-white", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
+                        Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
+                             :d => "M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253")
+                    )
+                ),
+                # Content
+                Div(:class => "flex-1 text-center md:text-left",
+                    H3(:class => "text-2xl font-bold text-stone-800 dark:text-stone-100 group-hover:text-cyan-600 dark:group-hover:text-cyan-400 transition-colors",
+                        "10 Interactive Chapters"
+                    ),
+                    P(:class => "text-stone-600 dark:text-stone-400 mt-2 mb-4",
+                        "From variables to multiple dispatch, each chapter features live code examples compiled to WebAssembly. Click, edit, and see results instantly - all running in your browser."
+                    ),
+                    # Chapter tags
+                    Div(:class => "flex flex-wrap justify-center md:justify-start gap-2",
+                        Span(:class => "px-3 py-1 text-xs rounded-full bg-cyan-100 dark:bg-cyan-900/40 text-cyan-700 dark:text-cyan-300", "Variables"),
+                        Span(:class => "px-3 py-1 text-xs rounded-full bg-cyan-100 dark:bg-cyan-900/40 text-cyan-700 dark:text-cyan-300", "Functions"),
+                        Span(:class => "px-3 py-1 text-xs rounded-full bg-cyan-100 dark:bg-cyan-900/40 text-cyan-700 dark:text-cyan-300", "Control Flow"),
+                        Span(:class => "px-3 py-1 text-xs rounded-full bg-cyan-100 dark:bg-cyan-900/40 text-cyan-700 dark:text-cyan-300", "Types"),
+                        Span(:class => "px-3 py-1 text-xs rounded-full bg-cyan-100 dark:bg-cyan-900/40 text-cyan-700 dark:text-cyan-300", "Arrays"),
+                        Span(:class => "px-3 py-1 text-xs rounded-full bg-stone-200 dark:bg-stone-700 text-stone-600 dark:text-stone-400", "+5 more")
+                    )
+                ),
+                # Arrow
+                Div(:class => "flex-shrink-0 hidden md:block",
+                    Svg(:class => "w-8 h-8 text-cyan-400 group-hover:text-cyan-500 group-hover:translate-x-2 transition-all duration-300",
+                        :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
+                        Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
+                             :d => "M9 5l7 7-7 7")
+                    )
+                )
+            )
+        ),
+
+        # WasmTarget.jl note
+        Div(:class => "max-w-4xl mx-auto mt-4 text-center",
+            P(:class => "text-sm text-stone-500 dark:text-stone-500",
+                "Examples run real Julia code compiled to WebAssembly by WasmTarget.jl. ",
+                A(:href => "features/", :class => "text-cyan-500 hover:text-cyan-600 dark:text-cyan-400 dark:hover:text-cyan-300 underline", "See supported features →")
+            )
+        )
+    )
+end
+
 function Index()
     Layout(
         Div(:class => "py-8",
@@ -145,7 +219,10 @@ function Index()
             ),
 
             # Main Playground
-            JuliaPlayground()
+            JuliaPlayground(),
+
+            # Interactive Julia Manual Section
+            ManualFeatureSection()
         )
     )
 end

@@ -23,6 +23,7 @@ function Layout(children...; title="WasmTarget.jl")
                     # Navigation Links
                     Div(:class => "hidden sm:flex sm:items-center sm:space-x-6",
                         NavItem("./", "Playground"),
+                        NavItem("manual/", "Manual"),
                         NavItem("features/", "Features"),
                         NavItem("api/", "API"),
                         # GitHub link

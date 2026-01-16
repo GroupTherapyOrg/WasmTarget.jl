@@ -2257,4 +2257,284 @@ end
 
     end
 
+    # ========================================================================
+    # Phase 23: Void Control Flow Tests
+    # Tests for complex control flow in void-returning functions (event handlers)
+    # Covers: nested &&/||, sequential ifs, early returns
+    # ========================================================================
+    @testset "Phase 23: Void Control Flow" begin
+
+        # Test helper: a mutable struct to track side effects
+        mutable struct VoidTestState
+            value::Int32
+        end
+
+        # ----------------------------------------------------------------
+        # Test 1: Simple nested && operator (a && b && c pattern)
+        # ----------------------------------------------------------------
+        @testset "Nested && (triple condition)" begin
+            @noinline function void_nested_and(state::VoidTestState, a::Int32, b::Int32, c::Int32)::Nothing
+                if a > Int32(0) && b > Int32(0) && c > Int32(0)
+                    state.value = Int32(1)
+                end
+                return nothing
+            end
+
+            bytes = compile(void_nested_and, (VoidTestState, Int32, Int32, Int32))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+        end
+
+        # ----------------------------------------------------------------
+        # Test 2: Nested || operator (a || b || c pattern)
+        # ----------------------------------------------------------------
+        @testset "Nested || (triple condition)" begin
+            @noinline function void_nested_or(state::VoidTestState, a::Int32, b::Int32, c::Int32)::Nothing
+                if a > Int32(0) || b > Int32(0) || c > Int32(0)
+                    state.value = Int32(1)
+                end
+                return nothing
+            end
+
+            bytes = compile(void_nested_or, (VoidTestState, Int32, Int32, Int32))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+        end
+
+        # ----------------------------------------------------------------
+        # Test 3: Mixed && and || (a && (b || c) pattern)
+        # ----------------------------------------------------------------
+        @testset "Mixed && and ||" begin
+            @noinline function void_mixed_and_or(state::VoidTestState, a::Int32, b::Int32, c::Int32)::Nothing
+                if a > Int32(0) && (b > Int32(0) || c > Int32(0))
+                    state.value = Int32(1)
+                end
+                return nothing
+            end
+
+            bytes = compile(void_mixed_and_or, (VoidTestState, Int32, Int32, Int32))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+        end
+
+        # ----------------------------------------------------------------
+        # Test 4: Sequential if blocks
+        # ----------------------------------------------------------------
+        @testset "Sequential if blocks" begin
+            @noinline function void_sequential_ifs(state::VoidTestState, a::Int32, b::Int32)::Nothing
+                if a > Int32(0)
+                    state.value = state.value + Int32(1)
+                end
+                if b > Int32(0)
+                    state.value = state.value + Int32(10)
+                end
+                return nothing
+            end
+
+            bytes = compile(void_sequential_ifs, (VoidTestState, Int32, Int32))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+        end
+
+        # ----------------------------------------------------------------
+        # Test 5: Three sequential if blocks
+        # ----------------------------------------------------------------
+        @testset "Three sequential if blocks" begin
+            @noinline function void_three_ifs(state::VoidTestState, a::Int32, b::Int32, c::Int32)::Nothing
+                if a > Int32(0)
+                    state.value = state.value + Int32(1)
+                end
+                if b > Int32(0)
+                    state.value = state.value + Int32(10)
+                end
+                if c > Int32(0)
+                    state.value = state.value + Int32(100)
+                end
+                return nothing
+            end
+
+            bytes = compile(void_three_ifs, (VoidTestState, Int32, Int32, Int32))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+        end
+
+        # ----------------------------------------------------------------
+        # Test 6: Early return in void function
+        # ----------------------------------------------------------------
+        @testset "Early return in void function" begin
+            @noinline function void_early_return(state::VoidTestState, cond::Int32)::Nothing
+                if cond > Int32(0)
+                    return nothing
+                end
+                state.value = Int32(42)
+                return nothing
+            end
+
+            bytes = compile(void_early_return, (VoidTestState, Int32))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+        end
+
+        # ----------------------------------------------------------------
+        # Test 7: Early return with && condition
+        # ----------------------------------------------------------------
+        @testset "Early return with && condition" begin
+            @noinline function void_early_return_and(state::VoidTestState, a::Int32, b::Int32)::Nothing
+                if a > Int32(0) && b > Int32(0)
+                    return nothing
+                end
+                state.value = Int32(99)
+                return nothing
+            end
+
+            bytes = compile(void_early_return_and, (VoidTestState, Int32, Int32))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+        end
+
+        # ----------------------------------------------------------------
+        # Test 8: Nested if-else in void function
+        # ----------------------------------------------------------------
+        @testset "Nested if-else in void function" begin
+            @noinline function void_nested_if_else(state::VoidTestState, a::Int32, b::Int32)::Nothing
+                if a > Int32(0)
+                    if b > Int32(0)
+                        state.value = Int32(1)
+                    else
+                        state.value = Int32(2)
+                    end
+                else
+                    state.value = Int32(3)
+                end
+                return nothing
+            end
+
+            bytes = compile(void_nested_if_else, (VoidTestState, Int32, Int32))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+        end
+
+        # ----------------------------------------------------------------
+        # Test 9: Quadruple && chain (winner checking pattern)
+        # ----------------------------------------------------------------
+        @testset "Quadruple && chain" begin
+            @noinline function void_quad_and(state::VoidTestState, a::Int32, b::Int32, c::Int32, d::Int32)::Nothing
+                if a == Int32(1) && b == Int32(1) && c == Int32(1) && d == Int32(1)
+                    state.value = Int32(100)
+                end
+                return nothing
+            end
+
+            bytes = compile(void_quad_and, (VoidTestState, Int32, Int32, Int32, Int32))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+        end
+
+        # ----------------------------------------------------------------
+        # Test 10: Complex TicTacToe-like winner checking pattern
+        # ----------------------------------------------------------------
+        @testset "TicTacToe winner pattern" begin
+            @noinline function void_check_winner(state::VoidTestState, r1::Int32, r2::Int32, r3::Int32)::Nothing
+                # Check if all three are equal and non-zero (like checking a row)
+                if r1 != Int32(0) && r1 == r2 && r2 == r3
+                    state.value = r1  # Winner found
+                end
+                return nothing
+            end
+
+            bytes = compile(void_check_winner, (VoidTestState, Int32, Int32, Int32))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+        end
+
+        # ----------------------------------------------------------------
+        # Test 11: Multiple early returns
+        # ----------------------------------------------------------------
+        @testset "Multiple early returns" begin
+            @noinline function void_multiple_returns(state::VoidTestState, code::Int32)::Nothing
+                if code == Int32(1)
+                    state.value = Int32(10)
+                    return nothing
+                end
+                if code == Int32(2)
+                    state.value = Int32(20)
+                    return nothing
+                end
+                if code == Int32(3)
+                    state.value = Int32(30)
+                    return nothing
+                end
+                state.value = Int32(0)
+                return nothing
+            end
+
+            bytes = compile(void_multiple_returns, (VoidTestState, Int32))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+        end
+
+        # ----------------------------------------------------------------
+        # Test 12: If-else chain (switch-like pattern)
+        # ----------------------------------------------------------------
+        @testset "If-else chain" begin
+            @noinline function void_if_else_chain(state::VoidTestState, x::Int32)::Nothing
+                if x < Int32(0)
+                    state.value = Int32(-1)
+                elseif x == Int32(0)
+                    state.value = Int32(0)
+                elseif x < Int32(10)
+                    state.value = Int32(1)
+                else
+                    state.value = Int32(2)
+                end
+                return nothing
+            end
+
+            bytes = compile(void_if_else_chain, (VoidTestState, Int32))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+        end
+
+        # ----------------------------------------------------------------
+        # Test 13: Conditional with loop inside
+        # ----------------------------------------------------------------
+        @testset "Conditional with loop inside" begin
+            @noinline function void_cond_with_loop(state::VoidTestState, n::Int32)::Nothing
+                if n > Int32(0)
+                    i = Int32(0)
+                    while i < n
+                        state.value = state.value + Int32(1)
+                        i = i + Int32(1)
+                    end
+                end
+                return nothing
+            end
+
+            bytes = compile(void_cond_with_loop, (VoidTestState, Int32))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+        end
+
+        # ----------------------------------------------------------------
+        # Test 14: Pure void function (no side effects, just control flow)
+        # ----------------------------------------------------------------
+        @testset "Pure void with complex control flow" begin
+            @noinline function void_pure_complex(a::Int32, b::Int32, c::Int32)::Nothing
+                if a > Int32(0) && b > Int32(0)
+                    if c > Int32(0)
+                        # Do nothing
+                    end
+                elseif a > Int32(0) || b > Int32(0)
+                    # Do nothing
+                end
+                return nothing
+            end
+
+            bytes = compile(void_pure_complex, (Int32, Int32, Int32))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+        end
+
+    end
+
 end

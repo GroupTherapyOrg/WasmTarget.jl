@@ -3984,6 +3984,13 @@ Handles both return-based patterns and phi node patterns (ternary expressions).
 function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
     bytes = UInt8[]
 
+    # For void return types (like event handlers), delegate to generate_void_flow
+    # which properly handles if blocks with void block type (0x40) instead of trying
+    # to produce a value
+    if ctx.return_type === Nothing
+        return generate_void_flow(ctx, blocks, code)
+    end
+
     # Count SSA uses (for drop logic)
     ssa_use_count = Dict{Int, Int}()
     for stmt in code
@@ -5112,6 +5119,30 @@ function generate_void_flow(ctx::CompilationContext, blocks::Vector{BasicBlock},
             goto_if_not = stmt
             else_target = goto_if_not.dest
 
+            # Determine if this is an if-then-else or just if-then by checking for a GotoNode
+            # at the end of the then-branch that jumps past the else_target.
+            # If-then-else pattern:
+            #   GotoIfNot → else_target
+            #   then-code
+            #   GotoNode → merge_point  ← jumps PAST else_target
+            #   else_target: else-code
+            #   merge_point: ...
+            # If-then pattern (no else):
+            #   GotoIfNot → merge_point
+            #   then-code
+            #   merge_point: continuation  ← no GotoNode, code continues sequentially
+            has_else_branch = false
+            for j in (i+1):(else_target-1)
+                if code[j] isa Core.GotoNode
+                    goto_node = code[j]::Core.GotoNode
+                    # If the GotoNode jumps past else_target, we have an else branch
+                    if goto_node.label > else_target
+                        has_else_branch = true
+                        break
+                    end
+                end
+            end
+
             # Push condition
             append!(bytes, compile_value(goto_if_not.cond, ctx))
             push!(compiled, i)
@@ -5131,8 +5162,8 @@ function generate_void_flow(ctx::CompilationContext, blocks::Vector{BasicBlock},
                 elseif inner isa Core.GotoNode
                     push!(compiled, j)
                 elseif inner isa Core.ReturnNode
-                    # Don't return here - we're in a branch
-                    # But we need to drop any value on the stack
+                    # Early return inside conditional - emit return instruction
+                    push!(bytes, Opcode.RETURN)
                     push!(compiled, j)
                 elseif inner isa Core.GotoIfNot
                     # Check if this GotoIfNot is a ternary pattern (has a phi node)
@@ -5203,76 +5234,100 @@ function generate_void_flow(ctx::CompilationContext, blocks::Vector{BasicBlock},
                 end
             end
 
-            # Else branch
-            push!(bytes, Opcode.ELSE)
+            if has_else_branch
+                # Else branch - only emit when there's actual else code
+                push!(bytes, Opcode.ELSE)
 
-            # Compile else-branch (else_target to end or next structure)
-            for j in else_target:length(code)
-                if j in compiled
-                    continue
+                # Find where the else branch ends (the merge point from the GotoNode)
+                else_end = length(code)
+                for j in (i+1):(else_target-1)
+                    if code[j] isa Core.GotoNode
+                        goto_node = code[j]::Core.GotoNode
+                        if goto_node.label > else_target
+                            else_end = goto_node.label - 1
+                            break
+                        end
+                    end
                 end
-                inner = code[j]
-                if inner === nothing
-                    push!(compiled, j)
-                elseif inner isa Core.ReturnNode
-                    # Don't return here either
-                    push!(compiled, j)
-                elseif inner isa Core.GotoNode
-                    push!(compiled, j)
-                elseif inner isa Core.GotoIfNot
-                    # Check if this GotoIfNot is a ternary pattern (has a phi node)
-                    inner_goto_if_not = inner::Core.GotoIfNot
-                    inner_else_target = inner_goto_if_not.dest
 
-                    phi_idx_for_ternary = nothing
-                    for k in inner_else_target:length(code)
-                        if code[k] isa Core.PhiNode
-                            phi_idx_for_ternary = k
-                            break
-                        end
-                        if code[k] isa Core.GotoIfNot || (code[k] isa Expr && code[k].head === :call)
-                            break
-                        end
+                # Compile else-branch (else_target to else_end)
+                for j in else_target:else_end
+                    if j in compiled
+                        continue
                     end
+                    inner = code[j]
+                    if inner === nothing
+                        push!(compiled, j)
+                    elseif inner isa Core.ReturnNode
+                        # Early return inside else branch - emit return instruction
+                        push!(bytes, Opcode.RETURN)
+                        push!(compiled, j)
+                    elseif inner isa Core.GotoNode
+                        push!(compiled, j)
+                    elseif inner isa Core.GotoIfNot
+                        # Check if this GotoIfNot is a ternary pattern (has a phi node)
+                        inner_goto_if_not = inner::Core.GotoIfNot
+                        inner_else_target = inner_goto_if_not.dest
 
-                    if phi_idx_for_ternary !== nothing && haskey(ctx.phi_locals, phi_idx_for_ternary)
-                        append!(bytes, compile_ternary_for_phi(ctx, code, j, compiled))
+                        phi_idx_for_ternary = nothing
+                        for k in inner_else_target:length(code)
+                            if code[k] isa Core.PhiNode
+                                phi_idx_for_ternary = k
+                                break
+                            end
+                            if code[k] isa Core.GotoIfNot || (code[k] isa Expr && code[k].head === :call)
+                                break
+                            end
+                        end
+
+                        if phi_idx_for_ternary !== nothing && haskey(ctx.phi_locals, phi_idx_for_ternary)
+                            append!(bytes, compile_ternary_for_phi(ctx, code, j, compiled))
+                        else
+                            append!(bytes, compile_void_nested_conditional(ctx, code, j, compiled, ssa_use_count))
+                        end
+                    elseif inner isa Core.PhiNode
+                        # Phi already handled by compile_ternary_for_phi
+                        push!(compiled, j)
                     else
-                        append!(bytes, compile_void_nested_conditional(ctx, code, j, compiled, ssa_use_count))
-                    end
-                elseif inner isa Core.PhiNode
-                    # Phi already handled by compile_ternary_for_phi
-                    push!(compiled, j)
-                else
-                    append!(bytes, compile_statement(inner, j, ctx))
-                    push!(compiled, j)
+                        append!(bytes, compile_statement(inner, j, ctx))
+                        push!(compiled, j)
 
-                    # Drop unused values in void context (else branch)
-                    if inner isa Expr && (inner.head === :call || inner.head === :invoke)
-                        stmt_type = get(ctx.ssa_types, j, Nothing)
-                        if stmt_type !== Nothing  # Only skip if type is definitely Nothing
-                            is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
-                            if !is_nothing_union
-                                if !haskey(ctx.ssa_locals, j) && !haskey(ctx.phi_locals, j)
-                                    use_count = get(ssa_use_count, j, 0)
-                                    if use_count == 0
-                                        push!(bytes, Opcode.DROP)
+                        # Drop unused values in void context (else branch)
+                        if inner isa Expr && (inner.head === :call || inner.head === :invoke)
+                            stmt_type = get(ctx.ssa_types, j, Nothing)
+                            if stmt_type !== Nothing  # Only skip if type is definitely Nothing
+                                is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
+                                if !is_nothing_union
+                                    if !haskey(ctx.ssa_locals, j) && !haskey(ctx.phi_locals, j)
+                                        use_count = get(ssa_use_count, j, 0)
+                                        if use_count == 0
+                                            push!(bytes, Opcode.DROP)
+                                        end
                                     end
                                 end
                             end
                         end
                     end
                 end
+
+                # Mark all statements up to else_end as compiled (not beyond)
+                for j in i:else_end
+                    push!(compiled, j)
+                end
+
+                push!(bytes, Opcode.END)
+                i = else_end + 1
+            else
+                # No else branch - just end the if block and continue from else_target
+                # Mark only the then-branch as compiled, else_target onwards will be processed
+                # by the main loop
+                for j in i:(else_target-1)
+                    push!(compiled, j)
+                end
+
+                push!(bytes, Opcode.END)
+                i = else_target
             end
-
-            push!(bytes, Opcode.END)
-
-            # Mark all statements up to else_target as compiled
-            for j in i:else_target
-                push!(compiled, j)
-            end
-
-            i = else_target + 1
             continue
         end
 
