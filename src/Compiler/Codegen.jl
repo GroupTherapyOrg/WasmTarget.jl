@@ -7529,9 +7529,9 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
 
     # Special case for signal read: getfield(Signal, :value) -> global.get
     # This is detected by analyze_signal_captures! and stored in signal_ssa_getters
-    # ONLY applies to actual getfield(Signal, :value) calls (WasmGlobal pattern)
+    # ONLY applies to actual getfield/getproperty(Signal, :value) calls (WasmGlobal pattern)
     # For Therapy.jl closures, signal_ssa_getters maps closure field SSAs - handled in compile_invoke
-    is_getfield_value = is_func(func, :getfield) && length(args) >= 2
+    is_getfield_value = (is_func(func, :getfield) || is_func(func, :getproperty)) && length(args) >= 2
     if is_getfield_value && haskey(ctx.signal_ssa_getters, idx)
         # Check that this is accessing :value field (WasmGlobal pattern)
         field_ref = args[2]
@@ -7546,8 +7546,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
 
     # Special case for signal write: setfield!(Signal, :value, x) -> global.set
     # This is detected by analyze_signal_captures! and stored in signal_ssa_setters
-    # ONLY applies to actual setfield! calls (WasmGlobal pattern), NOT closure field access
-    is_setfield_call = is_func(func, :setfield!) && length(args) >= 3
+    # ONLY applies to actual setfield!/setproperty! calls (WasmGlobal pattern), NOT closure field access
+    is_setfield_call = (is_func(func, :setfield!) || is_func(func, :setproperty!)) && length(args) >= 3
     if is_setfield_call && haskey(ctx.signal_ssa_setters, idx)
         # The value to write is the 3rd argument (args = [target, field, value])
         global_idx = ctx.signal_ssa_setters[idx]
@@ -7745,11 +7745,26 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         # For other types, fall through to error
     end
 
-    # Special case for getfield - struct/tuple field access
-    if is_func(func, :getfield) && length(args) >= 2
+    # Special case for getfield/getproperty - struct/tuple field access
+    # In newer Julia, obj.field compiles to Base.getproperty(obj, :field)
+    # rather than Core.getfield(obj, :field)
+    if (is_func(func, :getfield) || is_func(func, :getproperty)) && length(args) >= 2
         obj_arg = args[1]
         field_ref = args[2]
         obj_type = infer_value_type(obj_arg, ctx)
+
+        # Handle Memory{T}.instance pattern (Julia 1.11+ Vector allocation)
+        # This pattern appears as Core.getproperty(Memory{T}, :instance)
+        # where Memory{T} is passed directly as a DataType
+        # We compile it to create an empty WasmGC array placeholder
+        # The actual array will be created by the :new expression that uses this
+        field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
+        if field_sym === :instance && obj_arg isa DataType && obj_arg <: Memory
+            # This is Memory{T}.instance - we return nothing here
+            # The actual array allocation will be done by the phi and :new expressions
+            # For now, return empty bytes - this value gets merged via phi
+            return bytes
+        end
 
         # Handle WasmGlobal field access (:value -> global.get)
         if obj_type <: WasmGlobal
@@ -8129,9 +8144,10 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         end
     end
 
-    # Special case for setfield! - mutable struct field assignment
+    # Special case for setfield!/setproperty! - mutable struct field assignment
     # Also handles WasmGlobal (:value -> global.set)
-    if is_func(func, :setfield!) && length(args) >= 3
+    # In newer Julia, obj.field = val compiles to Base.setproperty!(obj, :field, val)
+    if (is_func(func, :setfield!) || is_func(func, :setproperty!)) && length(args) >= 3
         obj_arg = args[1]
         field_ref = args[2]
         value_arg = args[3]
