@@ -1332,6 +1332,339 @@ end
             @test run_wasm(wasm_bytes, "test_hash_diff") == 1  # Different strings have different hashes
         end
 
+        # ======================================================================
+        # BROWSER-010: New String Operations
+        # ======================================================================
+
+        @testset "str_find - basic search" begin
+            function test_str_find_basic()::Int32
+                return str_find("hello world", "world")
+            end
+
+            wasm_bytes = WasmTarget.compile(test_str_find_basic, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_str_find_basic") == 7  # "world" starts at position 7
+        end
+
+        @testset "str_find - not found" begin
+            function test_str_find_notfound()::Int32
+                return str_find("hello world", "xyz")
+            end
+
+            wasm_bytes = WasmTarget.compile(test_str_find_notfound, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_str_find_notfound") == 0  # Not found returns 0
+        end
+
+        @testset "str_contains - found" begin
+            function test_str_contains_found()::Int32
+                if str_contains("hello world", "world")
+                    return Int32(1)
+                else
+                    return Int32(0)
+                end
+            end
+
+            wasm_bytes = WasmTarget.compile(test_str_contains_found, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_str_contains_found") == 1
+        end
+
+        @testset "str_contains - not found" begin
+            function test_str_contains_notfound()::Int32
+                if str_contains("hello world", "xyz")
+                    return Int32(1)
+                else
+                    return Int32(0)
+                end
+            end
+
+            wasm_bytes = WasmTarget.compile(test_str_contains_notfound, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_str_contains_notfound") == 0
+        end
+
+        @testset "str_startswith - true case" begin
+            function test_str_startswith_true()::Int32
+                if str_startswith("hello world", "hello")
+                    return Int32(1)
+                else
+                    return Int32(0)
+                end
+            end
+
+            wasm_bytes = WasmTarget.compile(test_str_startswith_true, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_str_startswith_true") == 1
+        end
+
+        @testset "str_startswith - false case" begin
+            function test_str_startswith_false()::Int32
+                if str_startswith("hello world", "world")
+                    return Int32(1)
+                else
+                    return Int32(0)
+                end
+            end
+
+            wasm_bytes = WasmTarget.compile(test_str_startswith_false, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_str_startswith_false") == 0
+        end
+
+        @testset "str_endswith - true case" begin
+            function test_str_endswith_true()::Int32
+                if str_endswith("hello world", "world")
+                    return Int32(1)
+                else
+                    return Int32(0)
+                end
+            end
+
+            wasm_bytes = WasmTarget.compile(test_str_endswith_true, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_str_endswith_true") == 1
+        end
+
+        @testset "str_endswith - false case" begin
+            function test_str_endswith_false()::Int32
+                if str_endswith("hello world", "hello")
+                    return Int32(1)
+                else
+                    return Int32(0)
+                end
+            end
+
+            wasm_bytes = WasmTarget.compile(test_str_endswith_false, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_str_endswith_false") == 0
+        end
+
+        # ========================================================================
+        # BROWSER-010: str_uppercase, str_lowercase, str_trim
+        # ========================================================================
+
+        @testset "str_uppercase - basic" begin
+            function test_str_uppercase()::Int32
+                result = str_uppercase("hello")
+                # Check first char is 'H' (72)
+                return str_char(result, Int32(1))
+            end
+
+            wasm_bytes = WasmTarget.compile(test_str_uppercase, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_str_uppercase") == 72  # 'H'
+        end
+
+        @testset "str_uppercase - mixed case" begin
+            function test_str_uppercase_mixed()::Int32
+                result = str_uppercase("HeLLo WoRLD")
+                # Check length is preserved
+                len = str_len(result)
+                # Check some characters
+                first = str_char(result, Int32(1))  # 'H' = 72
+                fifth = str_char(result, Int32(5))  # 'O' = 79
+                space = str_char(result, Int32(6))  # ' ' = 32
+                last = str_char(result, Int32(11)) # 'D' = 68
+                # Return sum as verification
+                return first + fifth + space + last
+            end
+
+            wasm_bytes = WasmTarget.compile(test_str_uppercase_mixed, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_str_uppercase_mixed") == 72 + 79 + 32 + 68  # 251
+        end
+
+        @testset "str_lowercase - basic" begin
+            function test_str_lowercase()::Int32
+                result = str_lowercase("HELLO")
+                # Check first char is 'h' (104)
+                return str_char(result, Int32(1))
+            end
+
+            wasm_bytes = WasmTarget.compile(test_str_lowercase, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_str_lowercase") == 104  # 'h'
+        end
+
+        @testset "str_lowercase - mixed case" begin
+            function test_str_lowercase_mixed()::Int32
+                result = str_lowercase("HeLLo WoRLD")
+                # Check length is preserved
+                len = str_len(result)
+                # Check some characters
+                first = str_char(result, Int32(1))  # 'h' = 104
+                fifth = str_char(result, Int32(5))  # 'o' = 111
+                space = str_char(result, Int32(6))  # ' ' = 32
+                last = str_char(result, Int32(11)) # 'd' = 100
+                # Return sum as verification
+                return first + fifth + space + last
+            end
+
+            wasm_bytes = WasmTarget.compile(test_str_lowercase_mixed, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_str_lowercase_mixed") == 104 + 111 + 32 + 100  # 347
+        end
+
+        @testset "str_trim - leading and trailing spaces" begin
+            function test_str_trim_both()::Int32
+                result = str_trim("  hello  ")
+                # Length should be 5
+                return str_len(result)
+            end
+
+            wasm_bytes = WasmTarget.compile(test_str_trim_both, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_str_trim_both") == 5
+        end
+
+        @testset "str_trim - content preserved" begin
+            function test_str_trim_content()::Int32
+                result = str_trim("  hello  ")
+                # First char should be 'h' (104)
+                return str_char(result, Int32(1))
+            end
+
+            wasm_bytes = WasmTarget.compile(test_str_trim_content, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_str_trim_content") == 104  # 'h'
+        end
+
+        @testset "str_trim - no whitespace" begin
+            function test_str_trim_no_ws()::Int32
+                result = str_trim("hello")
+                # Length should remain 5
+                return str_len(result)
+            end
+
+            wasm_bytes = WasmTarget.compile(test_str_trim_no_ws, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_str_trim_no_ws") == 5
+        end
+
+        @testset "str_trim - all whitespace" begin
+            function test_str_trim_all_ws()::Int32
+                result = str_trim("   ")
+                # Length should be 0
+                return str_len(result)
+            end
+
+            wasm_bytes = WasmTarget.compile(test_str_trim_all_ws, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_str_trim_all_ws") == 0
+        end
+
+        @testset "str_trim - tabs and newlines" begin
+            function test_str_trim_special()::Int32
+                # "\thello\n" - tab at start, newline at end
+                s = str_new(Int32(7))
+                str_setchar!(s, Int32(1), Int32(9))   # tab
+                str_setchar!(s, Int32(2), Int32(104)) # h
+                str_setchar!(s, Int32(3), Int32(101)) # e
+                str_setchar!(s, Int32(4), Int32(108)) # l
+                str_setchar!(s, Int32(5), Int32(108)) # l
+                str_setchar!(s, Int32(6), Int32(111)) # o
+                str_setchar!(s, Int32(7), Int32(10))  # newline
+                result = str_trim(s)
+                # Length should be 5
+                return str_len(result)
+            end
+
+            wasm_bytes = WasmTarget.compile(test_str_trim_special, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_str_trim_special") == 5
+        end
+
+        # BROWSER-010: Dedicated tests for str_char and str_substr
+
+        @testset "str_char - get character at index" begin
+            function test_str_char_basic()::Int32
+                s = "hello"
+                return str_char(s, Int32(1))  # 'h' = 104
+            end
+
+            wasm_bytes = WasmTarget.compile(test_str_char_basic, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_str_char_basic") == 104  # 'h'
+        end
+
+        @testset "str_char - multiple positions" begin
+            function test_str_char_multi()::Int32
+                s = "hello"
+                # Sum first and last character: 'h'(104) + 'o'(111) = 215
+                return str_char(s, Int32(1)) + str_char(s, Int32(5))
+            end
+
+            wasm_bytes = WasmTarget.compile(test_str_char_multi, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_str_char_multi") == 215
+        end
+
+        @testset "str_substr - extract substring" begin
+            function test_str_substr_basic()::Int32
+                s = "hello world"
+                sub = str_substr(s, Int32(7), Int32(5))  # "world"
+                return str_len(sub)
+            end
+
+            wasm_bytes = WasmTarget.compile(test_str_substr_basic, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_str_substr_basic") == 5
+        end
+
+        @testset "str_substr - verify content" begin
+            function test_str_substr_content()::Int32
+                s = "hello world"
+                sub = str_substr(s, Int32(7), Int32(5))  # "world"
+                # Return first char of "world" = 'w' = 119
+                return str_char(sub, Int32(1))
+            end
+
+            wasm_bytes = WasmTarget.compile(test_str_substr_content, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_str_substr_content") == 119  # 'w'
+        end
+
+        @testset "str_char - character comparison for tokenizer" begin
+            # This test verifies the pattern used in tokenizer
+            function test_char_comparison()::Int32
+                s = "hello"
+                c = str_char(s, Int32(1))
+                # Compare character to ASCII code
+                if c == Int32(104)  # 'h'
+                    return Int32(1)
+                else
+                    return Int32(0)
+                end
+            end
+
+            wasm_bytes = WasmTarget.compile(test_char_comparison, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_char_comparison") == 1
+        end
+
     end
 
     # ========================================================================
