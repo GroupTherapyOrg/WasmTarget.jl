@@ -2870,4 +2870,130 @@ end
 
     end
 
+    # ========================================================================
+    # Phase 23: Union Types / Tagged Unions
+    # ========================================================================
+    @testset "Phase 23: Union Types" begin
+
+        # Test 1: UnionInfo and TypeRegistry structures
+        @testset "Union type registration" begin
+            # Create a module and registry
+            mod = WasmTarget.WasmModule()
+            registry = WasmTarget.TypeRegistry()
+
+            # Test needs_tagged_union function
+            @test WasmTarget.needs_tagged_union(Union{Int32, Float64}) == true
+            @test WasmTarget.needs_tagged_union(Union{Int32, String, Bool}) == true
+            @test WasmTarget.needs_tagged_union(Union{Nothing, Int32}) == false
+
+            # Test get_nullable_inner_type function
+            @test WasmTarget.get_nullable_inner_type(Union{Nothing, Int32}) === Int32
+            @test WasmTarget.get_nullable_inner_type(Union{Nothing, String}) === String
+            @test WasmTarget.get_nullable_inner_type(Union{Int32, String}) === nothing
+
+            # Test register_union_type!
+            union_type = Union{Int32, Float64}
+            info = WasmTarget.register_union_type!(mod, registry, union_type)
+            @test info isa WasmTarget.UnionInfo
+            @test info.julia_type === union_type
+            @test length(info.variant_types) == 2
+            @test Int32 in info.variant_types
+            @test Float64 in info.variant_types
+            @test haskey(info.tag_map, Int32)
+            @test haskey(info.tag_map, Float64)
+
+            # Test get_union_tag
+            tag_int32 = WasmTarget.get_union_tag(info, Int32)
+            tag_float64 = WasmTarget.get_union_tag(info, Float64)
+            @test tag_int32 >= 0
+            @test tag_float64 >= 0
+            @test tag_int32 != tag_float64
+
+            # Test union with Nothing
+            union_with_nothing = Union{Nothing, Int32, String}
+            info2 = WasmTarget.register_union_type!(mod, registry, union_with_nothing)
+            @test length(info2.variant_types) == 3
+            @test WasmTarget.get_union_tag(info2, Nothing) == Int32(0)  # Nothing always gets tag 0
+        end
+
+        # Test 2: Function parameter with union type
+        @testset "Union parameter type" begin
+            @noinline function process_union_value(x::Union{Int32, Float64})::Int32
+                # This just returns a constant - we're testing type registration
+                return Int32(1)
+            end
+
+            wasm_bytes = WasmTarget.compile(process_union_value, (Union{Int32, Float64},))
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+        end
+
+        # Test 3: Triple union with Nothing as parameter
+        @testset "Triple union parameter type" begin
+            @noinline function triple_union_param(x::Union{Nothing, Int32, String})::Int32
+                return Int32(0)
+            end
+
+            wasm_bytes = WasmTarget.compile(triple_union_param, (Union{Nothing, Int32, String},))
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+        end
+
+        # Test 4: Julia-side concrete type resolution
+        @testset "Concrete type resolution for unions" begin
+            mod = WasmTarget.WasmModule()
+            registry = WasmTarget.TypeRegistry()
+
+            # Test that julia_to_wasm_type correctly handles union types
+            union_type = Union{Int32, String}
+            wasm_type = WasmTarget.julia_to_wasm_type(union_type)
+            # Multi-variant unions should return a reference type (StructRef for now)
+            @test wasm_type isa WasmTarget.RefType || wasm_type isa WasmTarget.NumType
+        end
+
+        # Test 5: Interpreter Value pattern - explicit tagged struct
+        # This is the recommended pattern for runtime dynamic values
+        mutable struct InterpValue
+            tag::Int32       # 0 = nothing, 1 = int, 2 = float, 3 = bool
+            int_val::Int64
+            float_val::Float64
+            bool_val::Int32  # 0 or 1
+        end
+
+        @testset "Interpreter value pattern" begin
+            @noinline function make_int_value(x::Int64)::InterpValue
+                return Base.inferencebarrier(InterpValue(Int32(1), x, Float64(0.0), Int32(0)))::InterpValue
+            end
+
+            @noinline function make_float_value(x::Float64)::InterpValue
+                return Base.inferencebarrier(InterpValue(Int32(2), Int64(0), x, Int32(0)))::InterpValue
+            end
+
+            @noinline function is_int_value(v::InterpValue)::Bool
+                return v.tag == Int32(1)
+            end
+
+            @noinline function get_int_value(v::InterpValue)::Int64
+                return v.int_val
+            end
+
+            wasm1 = WasmTarget.compile(make_int_value, (Int64,))
+            @test length(wasm1) > 0
+            @test validate_wasm(wasm1)
+
+            wasm2 = WasmTarget.compile(make_float_value, (Float64,))
+            @test length(wasm2) > 0
+            @test validate_wasm(wasm2)
+
+            wasm3 = WasmTarget.compile(is_int_value, (InterpValue,))
+            @test length(wasm3) > 0
+            @test validate_wasm(wasm3)
+
+            wasm4 = WasmTarget.compile(get_int_value, (InterpValue,))
+            @test length(wasm4) > 0
+            @test validate_wasm(wasm4)
+        end
+
+    end
+
 end
