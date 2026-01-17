@@ -23,7 +23,8 @@ function Layout(children...; title="WasmTarget.jl")
                     # Navigation Links
                     # Use absolute paths with base path for reliable GitHub Pages navigation
                     Div(:class => "hidden sm:flex sm:items-center sm:space-x-6",
-                        NavItem("/WasmTarget.jl/", "Playground"),
+                        NavItem("/WasmTarget.jl/", "Home"),
+                        NavItem("/WasmTarget.jl/playground/", "Playground"),
                         NavItem("/WasmTarget.jl/manual/", "Manual"),
                         NavItem("/WasmTarget.jl/features/", "Features"),
                         NavItem("/WasmTarget.jl/api/", "API"),
