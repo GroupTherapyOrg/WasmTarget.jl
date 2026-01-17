@@ -28,6 +28,71 @@ end
     end
 end
 
+# Mutual recursion test functions (BROWSER-013)
+@noinline function is_even_mutual(n::Int32)::Int32
+    if n == Int32(0)
+        return Int32(1)  # true
+    else
+        return is_odd_mutual(n - Int32(1))
+    end
+end
+
+@noinline function is_odd_mutual(n::Int32)::Int32
+    if n == Int32(0)
+        return Int32(0)  # false
+    else
+        return is_even_mutual(n - Int32(1))
+    end
+end
+
+# Deep recursion test function (BROWSER-013)
+@noinline function deep_recursion_test(n::Int32, depth::Int32)::Int32
+    if depth <= Int32(0)
+        return n
+    else
+        return deep_recursion_test(n + Int32(1), depth - Int32(1))
+    end
+end
+
+# Complex while loop condition test (BROWSER-013)
+@noinline function complex_while_test(n::Int32)::Int32
+    result::Int32 = Int32(0)
+    i::Int32 = Int32(0)
+    @inbounds while i < n && result < Int32(100)
+        result = result + i
+        i = i + Int32(1)
+    end
+    return result
+end
+
+# Nested conditional test function (BROWSER-013)
+@noinline function nested_cond_test(a::Int32, b::Int32)::Int32
+    if a > Int32(0)
+        if b > Int32(0)
+            return a + b
+        else
+            return a - b
+        end
+    else
+        if b > Int32(0)
+            return b - a
+        else
+            return a * b
+        end
+    end
+end
+
+# Multi-branch if-elseif-else test (BROWSER-013)
+@noinline function classify_number_test(n::Int32)::Int32
+    if n < Int32(0)
+        return Int32(-1)  # negative
+    elseif n == Int32(0)
+        return Int32(0)   # zero
+    else
+        return Int32(1)   # positive
+    end
+end
+
 # Struct for testing compiled struct field access
 mutable struct TestPoint2D
     x::Int32
@@ -2992,6 +3057,82 @@ end
             wasm4 = WasmTarget.compile(get_int_value, (InterpValue,))
             @test length(wasm4) > 0
             @test validate_wasm(wasm4)
+        end
+
+    end
+
+    # ========================================================================
+    # Phase 24: Advanced Recursion and Control Flow (BROWSER-013)
+    # Tests for: mutual recursion, deep call stacks, complex control flow
+    # Required for the interpreter's recursive eval() function
+    # ========================================================================
+    @testset "Phase 24: Advanced Recursion and Control Flow" begin
+
+        @testset "Mutual recursion" begin
+            # Compile both functions together to enable cross-calls
+            wasm_bytes = WasmTarget.compile_multi([
+                (is_even_mutual, (Int32,)),
+                (is_odd_mutual, (Int32,))
+            ])
+            @test length(wasm_bytes) > 0
+
+            # Test is_even
+            @test run_wasm(wasm_bytes, "is_even_mutual", Int32(0)) == 1   # true
+            @test run_wasm(wasm_bytes, "is_even_mutual", Int32(1)) == 0   # false
+            @test run_wasm(wasm_bytes, "is_even_mutual", Int32(4)) == 1   # true
+            @test run_wasm(wasm_bytes, "is_even_mutual", Int32(5)) == 0   # false
+            @test run_wasm(wasm_bytes, "is_even_mutual", Int32(10)) == 1  # true
+
+            # Test is_odd
+            @test run_wasm(wasm_bytes, "is_odd_mutual", Int32(0)) == 0   # false
+            @test run_wasm(wasm_bytes, "is_odd_mutual", Int32(1)) == 1   # true
+            @test run_wasm(wasm_bytes, "is_odd_mutual", Int32(4)) == 0   # false
+            @test run_wasm(wasm_bytes, "is_odd_mutual", Int32(5)) == 1   # true
+        end
+
+        @testset "Deep recursion (stack depth)" begin
+            wasm_bytes = WasmTarget.compile(deep_recursion_test, (Int32, Int32))
+            @test length(wasm_bytes) > 0
+
+            # Test with increasing depths
+            @test run_wasm(wasm_bytes, "deep_recursion_test", Int32(0), Int32(1)) == 1
+            @test run_wasm(wasm_bytes, "deep_recursion_test", Int32(0), Int32(10)) == 10
+            @test run_wasm(wasm_bytes, "deep_recursion_test", Int32(0), Int32(100)) == 100
+            @test run_wasm(wasm_bytes, "deep_recursion_test", Int32(0), Int32(500)) == 500
+            @test run_wasm(wasm_bytes, "deep_recursion_test", Int32(0), Int32(1000)) == 1000
+        end
+
+        @testset "Complex while loop with && condition" begin
+            wasm_bytes = WasmTarget.compile(complex_while_test, (Int32,))
+            @test length(wasm_bytes) > 0
+
+            # Test various inputs
+            @test run_wasm(wasm_bytes, "complex_while_test", Int32(5)) == 10   # 0+1+2+3+4 = 10
+            @test run_wasm(wasm_bytes, "complex_while_test", Int32(10)) == 45  # 0+1+...+9 = 45
+            @test run_wasm(wasm_bytes, "complex_while_test", Int32(20)) == 105 # stops when result >= 100
+        end
+
+        @testset "Nested conditionals" begin
+            wasm_bytes = WasmTarget.compile(nested_cond_test, (Int32, Int32))
+            @test length(wasm_bytes) > 0
+
+            # Test all four branches
+            @test run_wasm(wasm_bytes, "nested_cond_test", Int32(5), Int32(3)) == 8    # a>0, b>0: a+b
+            @test run_wasm(wasm_bytes, "nested_cond_test", Int32(5), Int32(-3)) == 8   # a>0, b<=0: a-b
+            @test run_wasm(wasm_bytes, "nested_cond_test", Int32(-5), Int32(3)) == 8   # a<=0, b>0: b-a
+            @test run_wasm(wasm_bytes, "nested_cond_test", Int32(-5), Int32(-3)) == 15 # a<=0, b<=0: a*b
+        end
+
+        @testset "Multi-branch if-elseif-else" begin
+            wasm_bytes = WasmTarget.compile(classify_number_test, (Int32,))
+            @test length(wasm_bytes) > 0
+
+            # Test all three branches
+            @test run_wasm(wasm_bytes, "classify_number_test", Int32(-5)) == -1  # negative
+            @test run_wasm(wasm_bytes, "classify_number_test", Int32(-1)) == -1  # negative
+            @test run_wasm(wasm_bytes, "classify_number_test", Int32(0)) == 0    # zero
+            @test run_wasm(wasm_bytes, "classify_number_test", Int32(1)) == 1    # positive
+            @test run_wasm(wasm_bytes, "classify_number_test", Int32(100)) == 1  # positive
         end
 
     end
