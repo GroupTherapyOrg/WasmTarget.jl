@@ -4,7 +4,8 @@
 # In WASM, strings are stored as i32 arrays (one element per character).
 # These functions compile to direct array operations.
 
-export str_char, str_setchar!, str_len, str_new, str_copy, str_substr, str_eq, str_hash
+export str_char, str_setchar!, str_len, str_new, str_copy, str_substr, str_eq, str_hash,
+       str_contains, str_find, str_uppercase, str_lowercase, str_trim, str_startswith, str_endswith
 
 """
     str_char(s::String, i::Int)::Int32
@@ -179,4 +180,266 @@ h = str_hash("hello")  # Returns consistent Int32 hash value
         h = h & Int32(0x7FFFFFFF)  # Keep positive
     end
     return Base.inferencebarrier(h)::Int32
+end
+
+# =============================================================================
+# BROWSER-010: New String Operations (expanded Julia subset for dart2wasm parity)
+# =============================================================================
+
+"""
+    str_find(haystack::String, needle::String)::Int32
+
+Find the first occurrence of `needle` in `haystack`.
+Returns 1-based index of first match, or Int32(0) if not found.
+
+Compiles to a WASM loop with character comparisons.
+
+# Example
+```julia
+str_find("hello world", "world")  # Returns Int32(7)
+str_find("hello world", "xyz")    # Returns Int32(0)
+```
+"""
+@noinline function str_find(haystack::String, needle::String)::Int32
+    haystack_len = str_len(haystack)
+    needle_len = str_len(needle)
+
+    # Empty needle always found at position 1
+    if needle_len == Int32(0)
+        return Int32(1)
+    end
+
+    # Needle longer than haystack - not found
+    if needle_len > haystack_len
+        return Int32(0)
+    end
+
+    # Search for needle
+    i = Int32(1)
+    last_start = haystack_len - needle_len + Int32(1)
+    while i <= last_start
+        # Check if needle matches at position i
+        found = true
+        j = Int32(1)
+        while j <= needle_len
+            if str_char(haystack, i + j - Int32(1)) != str_char(needle, j)
+                found = false
+                break
+            end
+            j = j + Int32(1)
+        end
+        if found
+            return i
+        end
+        i = i + Int32(1)
+    end
+
+    return Int32(0)
+end
+
+"""
+    str_contains(haystack::String, needle::String)::Bool
+
+Check if `haystack` contains `needle`.
+Returns true if `needle` is found anywhere in `haystack`.
+
+# Example
+```julia
+str_contains("hello world", "world")  # Returns true
+str_contains("hello world", "xyz")    # Returns false
+```
+"""
+@noinline function str_contains(haystack::String, needle::String)::Bool
+    return Base.inferencebarrier(str_find(haystack, needle) > Int32(0))::Bool
+end
+
+"""
+    str_startswith(s::String, prefix::String)::Bool
+
+Check if string `s` starts with `prefix`.
+
+# Example
+```julia
+str_startswith("hello world", "hello")  # Returns true
+str_startswith("hello world", "world")  # Returns false
+```
+"""
+@noinline function str_startswith(s::String, prefix::String)::Bool
+    s_len = str_len(s)
+    prefix_len = str_len(prefix)
+
+    if prefix_len > s_len
+        return Base.inferencebarrier(false)::Bool
+    end
+
+    i = Int32(1)
+    while i <= prefix_len
+        if str_char(s, i) != str_char(prefix, i)
+            return Base.inferencebarrier(false)::Bool
+        end
+        i = i + Int32(1)
+    end
+
+    return Base.inferencebarrier(true)::Bool
+end
+
+"""
+    str_endswith(s::String, suffix::String)::Bool
+
+Check if string `s` ends with `suffix`.
+
+# Example
+```julia
+str_endswith("hello world", "world")  # Returns true
+str_endswith("hello world", "hello")  # Returns false
+```
+"""
+@noinline function str_endswith(s::String, suffix::String)::Bool
+    s_len = str_len(s)
+    suffix_len = str_len(suffix)
+
+    if suffix_len > s_len
+        return Base.inferencebarrier(false)::Bool
+    end
+
+    start_pos = s_len - suffix_len + Int32(1)
+    i = Int32(1)
+    while i <= suffix_len
+        if str_char(s, start_pos + i - Int32(1)) != str_char(suffix, i)
+            return Base.inferencebarrier(false)::Bool
+        end
+        i = i + Int32(1)
+    end
+
+    return Base.inferencebarrier(true)::Bool
+end
+
+# ASCII character code constants
+const _CHAR_A_UPPER = Int32(65)   # 'A'
+const _CHAR_Z_UPPER = Int32(90)   # 'Z'
+const _CHAR_A_LOWER = Int32(97)   # 'a'
+const _CHAR_Z_LOWER = Int32(122)  # 'z'
+const _CHAR_CASE_DIFF = Int32(32) # Difference between upper and lower case
+
+"""
+    str_uppercase(s::String)::String
+
+Convert all lowercase ASCII letters in the string to uppercase.
+Non-ASCII characters are unchanged.
+
+Returns a new string with uppercase letters.
+
+# Example
+```julia
+str_uppercase("Hello World")  # Returns "HELLO WORLD"
+str_uppercase("abc123")       # Returns "ABC123"
+```
+"""
+@noinline function str_uppercase(s::String)::String
+    len = str_len(s)
+    result = str_new(len)
+
+    i = Int32(1)
+    while i <= len
+        c = str_char(s, i)
+        # Check if lowercase letter
+        if c >= _CHAR_A_LOWER && c <= _CHAR_Z_LOWER
+            c = c - _CHAR_CASE_DIFF  # Convert to uppercase
+        end
+        str_setchar!(result, i, c)
+        i = i + Int32(1)
+    end
+
+    return Base.inferencebarrier(result)::String
+end
+
+"""
+    str_lowercase(s::String)::String
+
+Convert all uppercase ASCII letters in the string to lowercase.
+Non-ASCII characters are unchanged.
+
+Returns a new string with lowercase letters.
+
+# Example
+```julia
+str_lowercase("Hello World")  # Returns "hello world"
+str_lowercase("ABC123")       # Returns "abc123"
+```
+"""
+@noinline function str_lowercase(s::String)::String
+    len = str_len(s)
+    result = str_new(len)
+
+    i = Int32(1)
+    while i <= len
+        c = str_char(s, i)
+        # Check if uppercase letter
+        if c >= _CHAR_A_UPPER && c <= _CHAR_Z_UPPER
+            c = c + _CHAR_CASE_DIFF  # Convert to lowercase
+        end
+        str_setchar!(result, i, c)
+        i = i + Int32(1)
+    end
+
+    return Base.inferencebarrier(result)::String
+end
+
+# ASCII whitespace characters
+const _CHAR_SPACE = Int32(32)  # ' '
+const _CHAR_TAB = Int32(9)     # '\t'
+const _CHAR_NEWLINE = Int32(10) # '\n'
+const _CHAR_CR = Int32(13)     # '\r'
+
+"""
+    _is_whitespace(c::Int32)::Bool
+
+Internal helper to check if a character is ASCII whitespace.
+"""
+@inline function _is_whitespace(c::Int32)::Bool
+    return c == _CHAR_SPACE || c == _CHAR_TAB || c == _CHAR_NEWLINE || c == _CHAR_CR
+end
+
+"""
+    str_trim(s::String)::String
+
+Remove leading and trailing ASCII whitespace from the string.
+Whitespace includes: space, tab, newline, carriage return.
+
+Returns a new string with whitespace trimmed.
+
+# Example
+```julia
+str_trim("  hello  ")     # Returns "hello"
+str_trim("\\t\\nhello\\n")  # Returns "hello"
+```
+"""
+@noinline function str_trim(s::String)::String
+    len = str_len(s)
+
+    # Handle empty string
+    if len == Int32(0)
+        return Base.inferencebarrier(s)::String
+    end
+
+    # Find start (skip leading whitespace)
+    start_pos = Int32(1)
+    while start_pos <= len && _is_whitespace(str_char(s, start_pos))
+        start_pos = start_pos + Int32(1)
+    end
+
+    # All whitespace
+    if start_pos > len
+        return Base.inferencebarrier("")::String
+    end
+
+    # Find end (skip trailing whitespace)
+    end_pos = len
+    while end_pos >= start_pos && _is_whitespace(str_char(s, end_pos))
+        end_pos = end_pos - Int32(1)
+    end
+
+    # Extract substring
+    new_len = end_pos - start_pos + Int32(1)
+    return str_substr(s, start_pos, new_len)
 end

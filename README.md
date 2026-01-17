@@ -190,19 +190,17 @@ src/
 
 ## Examples
 
-See the `examples/` directory for practical demos:
+See the [Features page](https://grouptherapyorg.github.io/WasmTarget.jl/features/) for interactive examples with live demos.
 
-- **counter_demo.jl**: Interactive counter showing the Therapy.jl reactive pattern
-  - Wasm globals for state management
-  - Exported functions as event handlers
-  - JS imports for DOM manipulation
+### Advanced Patterns
 
-Run the counter demo:
-```bash
-julia --project=. examples/counter_demo.jl
-cd examples && python3 -m http.server 8080
-# Open http://localhost:8080/counter.html
-```
+The test suite contains comprehensive examples of all features:
+
+- **[Wasm Globals](https://github.com/GroupTherapyOrg/WasmTarget.jl/blob/main/test/runtests.jl#L1455)**: Reactive state management pattern (Therapy.jl foundation)
+- **[Tables & Indirect Calls](https://github.com/GroupTherapyOrg/WasmTarget.jl/blob/main/test/runtests.jl#L1477)**: Dynamic dispatch via function references
+- **[Memory & Data Segments](https://github.com/GroupTherapyOrg/WasmTarget.jl/blob/main/test/runtests.jl#L1600)**: Linear memory with initialization
+
+All examples in the documentation link directly to tested code in the repository.
 
 ## Testing
 
