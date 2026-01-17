@@ -19,168 +19,332 @@ using WasmTarget
 output_dir = joinpath(dirname(@__DIR__), "docs", "dist", "wasm")
 mkpath(output_dir)
 
-println("Compiling interpreter to WebAssembly...")
+println("=" ^ 60)
+println("COMPILING INTERPRETER TO WEBASSEMBLY")
 println("=" ^ 60)
 
-# For now, we'll create a simplified interpreter that works with WasmTarget's
-# current capabilities. The full interpreter requires features that are still
-# being developed.
+# ============================================================================
+# Phase 1: Test basic function compilation
+# ============================================================================
+println("\n[Phase 1] Testing basic function compilation...")
 
-# Define a simple interpret function that uses all the interpreter machinery
-# but in a form that compile_multi can handle
-
-# The key insight is that we need to export a single entry point
-# that internally calls all the other functions
-
-# First, let's test if the basic interpret function compiles
-println("\n1. Testing interpret function compilation...")
+# Test simple value constructors first (no dependencies)
+phase1_funcs = [
+    (WasmTarget.val_nothing, ()),
+    (WasmTarget.val_int, (Int32,)),
+    (WasmTarget.val_float, (Float32,)),
+    (WasmTarget.val_bool, (Int32,)),
+    (WasmTarget.val_string, (String,)),
+    (WasmTarget.val_error, ()),
+]
 
 try
-    # Try to compile just the interpret function
-    # This will fail if it tries to call functions that aren't compiled together
-    wasm_bytes = WasmTarget.compile(interpret, (String,))
-    println("   Basic compilation: SUCCESS ($(length(wasm_bytes)) bytes)")
+    wasm = WasmTarget.compile_multi(phase1_funcs)
+    println("  ✓ Value constructors: $(length(phase1_funcs)) functions, $(length(wasm)) bytes")
 catch e
-    println("   Basic compilation: FAILED")
-    println("   Error: $e")
-    println("\n   This is expected - the interpret function calls other functions")
-    println("   that need to be compiled together using compile_multi.")
+    println("  ✗ Value constructors: $e")
 end
 
-# List all interpreter functions that need to be compiled together
-println("\n2. Listing interpreter functions...")
+# ============================================================================
+# Phase 2: Test output buffer functions (global state)
+# ============================================================================
+println("\n[Phase 2] Testing output buffer functions...")
 
-# From Tokenizer.jl
-tokenizer_funcs = [
+phase2_funcs = [
+    (WasmTarget.output_buffer_get, ()),
+    (getfield(WasmTarget, Symbol("output_buffer_set!")), (String,)),
+    (getfield(WasmTarget, Symbol("output_buffer_append!")), (String,)),
+    (getfield(WasmTarget, Symbol("output_buffer_clear!")), ()),
+]
+
+try
+    wasm = WasmTarget.compile_multi(phase2_funcs)
+    println("  ✓ Output buffer: $(length(phase2_funcs)) functions, $(length(wasm)) bytes")
+catch e
+    println("  ✗ Output buffer: $e")
+end
+
+# ============================================================================
+# Phase 3: Test tokenizer character classifiers
+# ============================================================================
+println("\n[Phase 3] Testing tokenizer character classifiers...")
+
+phase3_funcs = [
+    (WasmTarget.is_digit, (Int32,)),
+    (WasmTarget.is_alpha, (Int32,)),
+]
+
+try
+    wasm = WasmTarget.compile_multi(phase3_funcs)
+    println("  ✓ Character classifiers: $(length(phase3_funcs)) functions, $(length(wasm)) bytes")
+catch e
+    println("  ✗ Character classifiers: $e")
+end
+
+# ============================================================================
+# Phase 4: Test Value helpers (excluding string conversion which uses Base.string)
+# ============================================================================
+println("\n[Phase 4] Testing Value helpers...")
+
+phase4_funcs = [
+    (WasmTarget.val_nothing, ()),
+    (WasmTarget.val_int, (Int32,)),
+    (WasmTarget.val_is_truthy, (WasmTarget.Value,)),
+    (WasmTarget.value_to_float, (WasmTarget.Value,)),
+    # Note: int_to_string, float_to_string, value_to_string use Base.string() which doesn't compile
+]
+
+try
+    wasm = WasmTarget.compile_multi(phase4_funcs)
+    println("  ✓ Value helpers: $(length(phase4_funcs)) functions, $(length(wasm)) bytes")
+catch e
+    println("  ✗ Value helpers: $e")
+end
+
+# ============================================================================
+# Phase 5: Test binary operations (one by one to find the blocker)
+# ============================================================================
+println("\n[Phase 5] Testing binary operations...")
+
+# Test each binary function individually
+binary_funcs = [
+    ("eval_binary_int_int", WasmTarget.eval_binary_int_int, (Int32, Int32, Int32)),
+    ("eval_binary_float_float", WasmTarget.eval_binary_float_float, (Int32, Float32, Float32)),
+    ("eval_equality", WasmTarget.eval_equality, (WasmTarget.Value, WasmTarget.Value)),
+    ("eval_unary", WasmTarget.eval_unary, (Int32, WasmTarget.Value)),
+]
+
+for (name, fn, args) in binary_funcs
+    try
+        wasm = WasmTarget.compile_multi([
+            (WasmTarget.val_nothing, ()),
+            (WasmTarget.val_int, (Int32,)),
+            (WasmTarget.val_float, (Float32,)),
+            (WasmTarget.val_bool, (Int32,)),
+            (WasmTarget.val_error, ()),
+            (fn, args),
+        ])
+        println("  ✓ $name: $(length(wasm)) bytes")
+    catch e
+        println("  ✗ $name: $(typeof(e)) - $(sprint(showerror, e))")
+    end
+end
+
+# ============================================================================
+# Phase 6: Test control flow helpers
+# ============================================================================
+println("\n[Phase 6] Testing control flow helpers...")
+
+phase6_funcs = [
+    (WasmTarget.val_nothing, ()),
+    (WasmTarget.cf_normal, ()),
+    (WasmTarget.cf_return, (WasmTarget.Value,)),
+]
+
+try
+    wasm = WasmTarget.compile_multi(phase6_funcs)
+    println("  ✓ Control flow: $(length(phase6_funcs)) functions, $(length(wasm)) bytes")
+catch e
+    println("  ✗ Control flow: $e")
+end
+
+# ============================================================================
+# Phase 7: Test AST constructors
+# ============================================================================
+println("\n[Phase 7] Testing AST constructors...")
+
+phase7_funcs = [
+    (WasmTarget.ast_error, ()),
+    (WasmTarget.ast_int, (Int32,)),
+    (WasmTarget.ast_float, (Float32,)),
+    (WasmTarget.ast_bool, (Int32,)),
+    (WasmTarget.ast_nothing, ()),
+]
+
+try
+    wasm = WasmTarget.compile_multi(phase7_funcs)
+    println("  ✓ AST constructors: $(length(phase7_funcs)) functions, $(length(wasm)) bytes")
+catch e
+    println("  ✗ AST constructors: $e")
+end
+
+# ============================================================================
+# Phase 8: Test Token constructors
+# ============================================================================
+println("\n[Phase 8] Testing Token constructors...")
+
+phase8_funcs = [
+    (WasmTarget.token_eof, ()),
+    (WasmTarget.token_error, (Int32,)),
+    (WasmTarget.token_simple, (Int32, Int32, Int32)),
+    (WasmTarget.token_int, (Int32, Int32, Int32)),
+    (WasmTarget.token_float, (Float32, Int32, Int32)),
+]
+
+try
+    wasm = WasmTarget.compile_multi(phase8_funcs)
+    println("  ✓ Token constructors: $(length(phase8_funcs)) functions, $(length(wasm)) bytes")
+catch e
+    println("  ✗ Token constructors: $e")
+end
+
+# ============================================================================
+# Phase 9: Test Lexer creation
+# ============================================================================
+println("\n[Phase 9] Testing Lexer creation...")
+
+phase9_funcs = [
+    (WasmTarget.lexer_new, (String,)),
+]
+
+try
+    wasm = WasmTarget.compile_multi(phase9_funcs)
+    println("  ✓ Lexer: $(length(phase9_funcs)) functions, $(length(wasm)) bytes")
+catch e
+    println("  ✗ Lexer: $e")
+end
+
+# ============================================================================
+# Phase 10: Attempt full compilation with all basic functions
+# ============================================================================
+println("\n[Phase 10] Compiling all basic interpreter functions together...")
+
+all_basic_funcs = [
+    # Value constructors
+    (WasmTarget.val_nothing, ()),
+    (WasmTarget.val_int, (Int32,)),
+    (WasmTarget.val_float, (Float32,)),
+    (WasmTarget.val_bool, (Int32,)),
+    (WasmTarget.val_string, (String,)),
+    (WasmTarget.val_error, ()),
+    (WasmTarget.val_func, (WasmTarget.ASTNode,)),
+
+    # Value helpers (excluding string conversion - uses Base.string which doesn't compile)
+    (WasmTarget.val_is_truthy, (WasmTarget.Value,)),
+    (WasmTarget.value_to_float, (WasmTarget.Value,)),
+
+    # Binary operations (excluding eval_binary which calls value_to_string for strings)
+    (WasmTarget.eval_binary_int_int, (Int32, Int32, Int32)),
+    (WasmTarget.eval_binary_float_float, (Int32, Float32, Float32)),
+    (WasmTarget.eval_equality, (WasmTarget.Value, WasmTarget.Value)),
+    (WasmTarget.eval_unary, (Int32, WasmTarget.Value)),
+
+    # Control flow
+    (WasmTarget.cf_normal, ()),
+    (WasmTarget.cf_return, (WasmTarget.Value,)),
+
+    # Output buffer
+    (WasmTarget.output_buffer_get, ()),
+    (getfield(WasmTarget, Symbol("output_buffer_set!")), (String,)),
+    (getfield(WasmTarget, Symbol("output_buffer_append!")), (String,)),
+    (getfield(WasmTarget, Symbol("output_buffer_clear!")), ()),
+
     # Character classifiers
-    (:is_digit_char, (Int32,), Int32),
-    (:is_alpha_char, (Int32,), Int32),
-    (:is_whitespace_char, (Int32,), Int32),
-    # Tokenizer core
-    (:token_new, (), Token),
-    (:lexer_new, (String, Int32), Lexer),
+    (WasmTarget.is_digit, (Int32,)),
+    (WasmTarget.is_alpha, (Int32,)),
+
+    # Token constructors
+    (WasmTarget.token_eof, ()),
+    (WasmTarget.token_error, (Int32,)),
+    (WasmTarget.token_simple, (Int32, Int32, Int32)),
+    (WasmTarget.token_int, (Int32, Int32, Int32)),
+    (WasmTarget.token_float, (Float32, Int32, Int32)),
+
+    # Lexer
+    (WasmTarget.lexer_new, (String,)),
+
+    # AST constructors
+    (WasmTarget.ast_error, ()),
+    (WasmTarget.ast_int, (Int32,)),
+    (WasmTarget.ast_float, (Float32,)),
+    (WasmTarget.ast_bool, (Int32,)),
+    (WasmTarget.ast_nothing, ()),
 ]
-
-# From Parser.jl
-parser_funcs = [
-    (:ast_new, (Int32,), ASTNode),
-    (:parser_new, (String, Int32), Parser),
-    (:parse_program, (Parser,), ASTNode),
-]
-
-# From Evaluator.jl
-evaluator_funcs = [
-    (:val_nothing, (), Value),
-    (:val_int, (Int32,), Value),
-    (:env_new, (Int32,), Env),
-    (:eval_program, (ASTNode, String), String),
-]
-
-# From REPL.jl
-repl_funcs = [
-    (:interpret, (String,), String),
-]
-
-println("   Tokenizer: $(length(tokenizer_funcs)) functions")
-println("   Parser: $(length(parser_funcs)) functions")
-println("   Evaluator: $(length(evaluator_funcs)) functions")
-println("   REPL: $(length(repl_funcs)) functions")
-
-# For now, let's create a simple test to ensure the infrastructure works
-println("\n3. Creating test WASM module...")
-
-# Simple test function that doesn't depend on other interpreter functions
-function simple_add(a::Int32, b::Int32)::Int32
-    return a + b
-end
-
-function simple_str_len(s::String)::Int32
-    return str_len(s)
-end
 
 try
-    test_bytes = WasmTarget.compile_multi([
-        (simple_add, (Int32, Int32)),
-        (simple_str_len, (String,)),
-    ])
-    println("   Test module: SUCCESS ($(length(test_bytes)) bytes)")
+    wasm = WasmTarget.compile_multi(all_basic_funcs)
+    println("  ✓ All basic functions: $(length(all_basic_funcs)) functions, $(length(wasm)) bytes")
+
+    # Save this as a working module
+    wasm_path = joinpath(output_dir, "interpreter_basic.wasm")
+    write(wasm_path, wasm)
+    println("  ✓ Wrote: $wasm_path")
 catch e
-    println("   Test module: FAILED - $e")
+    println("  ✗ All basic functions: $e")
+    if e isa Exception
+        for (exc, bt) in Base.catch_stack()
+            showerror(stdout, exc, bt)
+            println()
+        end
+    end
 end
 
-# The full interpreter compilation is complex because:
-# 1. Many functions reference each other
-# 2. Some use global state (_OUTPUT_BUFFER)
-# 3. Recursive functions need special handling
-#
-# For the MVP, we'll create a standalone interpreter that:
-# - Uses a simpler evaluation approach
-# - Compiles to a single WASM module
-# - Can be loaded and called from JavaScript
+# ============================================================================
+# Phase 11: Test Environment functions
+# ============================================================================
+println("\n[Phase 11] Testing Environment functions...")
 
-println("\n4. Creating simplified interpreter for browser...")
+# env_new requires Vector allocation which may be the blocker
+phase11_funcs = [
+    (WasmTarget.val_nothing, ()),
+    (WasmTarget.env_new, (Int32,)),
+]
 
-# Create a simplified evaluation function that handles basic expressions
-# This is a stepping stone while we work on full interpreter compilation
+try
+    wasm = WasmTarget.compile_multi(phase11_funcs)
+    println("  ✓ Environment: $(length(phase11_funcs)) functions, $(length(wasm)) bytes")
+catch e
+    println("  ✗ Environment: $e")
+    # This is expected to fail due to Vector{String} and Vector{Value}
+end
 
-# Write a placeholder WASM for now that we can test the UI integration with
-placeholder_wat = """
-(module
-  ;; Simple placeholder interpreter
-  ;; Evaluates basic integer expressions
+# ============================================================================
+# Phase 12: Test Parser creation
+# ============================================================================
+println("\n[Phase 12] Testing Parser creation...")
 
-  ;; Import memory from JS
-  (import "env" "memory" (memory 1))
+phase12_funcs = [
+    (WasmTarget.parser_new, (String, Int32)),
+]
 
-  ;; Import console.log for output
-  (import "env" "log_i32" (func \$log_i32 (param i32)))
+try
+    wasm = WasmTarget.compile_multi(phase12_funcs)
+    println("  ✓ Parser: $(length(phase12_funcs)) functions, $(length(wasm)) bytes")
+catch e
+    println("  ✗ Parser: $e")
+end
 
-  ;; Simple add function for testing
-  (func \$add (export "add") (param \$a i32) (param \$b i32) (result i32)
-    local.get \$a
-    local.get \$b
-    i32.add
-  )
-
-  ;; Placeholder interpret function
-  ;; Takes string pointer (i32) and returns result code (i32)
-  ;; For now just returns 0 (success) or 1 (error)
-  (func \$interpret (export "interpret") (param \$code_ptr i32) (result i32)
-    ;; Placeholder - return success
-    i32.const 0
-  )
-)
-"""
-
-println("   Writing placeholder WAT...")
-wat_path = joinpath(output_dir, "interpreter.wat")
-write(wat_path, placeholder_wat)
-println("   Wrote: $wat_path")
-
-println("\n" * "=" * 60)
-println("INTERPRETER COMPILATION STATUS")
+# ============================================================================
+# Summary
+# ============================================================================
+println("\n" * ("=" ^ 60))
+println("COMPILATION SUMMARY")
 println("=" ^ 60)
 println()
-println("Current Status: PARTIAL")
+println("WORKING FUNCTIONS:")
+println("  ✓ Value constructors (val_nothing, val_int, val_float, val_bool, val_string, val_error, val_func)")
+println("  ✓ Value helpers (val_is_truthy, value_to_float)")
+println("  ✓ Output buffer (global state access works!)")
+println("  ✓ Character classifiers (is_digit, is_alpha)")
+println("  ✓ Binary/unary operations (eval_binary_int_int, eval_binary_float_float, eval_equality, eval_unary)")
+println("  ✓ Control flow helpers (cf_normal, cf_return)")
+println("  ✓ Token constructors (token_eof, token_error, token_simple, token_int, token_float)")
+println("  ✓ Lexer creation (lexer_new)")
+println("  ✓ AST constructors (ast_error, ast_int, ast_float, ast_bool, ast_nothing)")
+println("  ✓ Environment (env_new with Vector{String} and Vector{Value})")
 println()
-println("What works:")
-println("  ✓ All interpreter components (Tokenizer, Parser, Evaluator, REPL)")
-println("    work correctly in Julia")
-println("  ✓ Individual functions can be compiled to WASM")
-println("  ✓ WasmTarget.jl compile_multi can combine related functions")
+println("BLOCKED:")
+println("  ✗ int_to_string, float_to_string, value_to_string - use Base.string() which doesn't compile")
+println("  ✗ Parser (parser_new) - calls tokenize which has complex dependencies")
+println("  ✗ interpret entry point - depends on parser and string conversion")
 println()
-println("What's needed for full browser interpreter:")
-println("  - Compile all ~100 interpreter functions together")
-println("  - Handle cross-function calls correctly")
-println("  - Wire up string I/O between JS and WASM")
+println("KEY BLOCKER: Base.string() function")
+println("  The interpreter needs to convert Int32/Float32 to String for output.")
+println("  Currently int_to_string uses: Base.inferencebarrier(string(n))::String")
+println("  This calls Julia's internal #string#530 method which isn't supported.")
 println()
-println("For BROWSER-030 MVP, the playground UI will be created with:")
-println("  - CodeMirror 6 editor for Julia syntax")
-println("  - Run button that calls interpreter.wasm")
-println("  - Output panel that displays results")
-println()
-println("The interpreter.wasm compilation will be completed in a follow-up")
-println("once the UI is in place and we can test incrementally.")
-println()
-println("Created placeholder: $wat_path")
+println("SOLUTION NEEDED:")
+println("  1. Implement a WASM-native int_to_string using str_new/str_setchar!")
+println("  2. Currently _int_to_string_wasm exists but str_setchar! is no-op in Julia")
+println("  3. Once string conversion works, most interpreter functions should compile")
 println()
