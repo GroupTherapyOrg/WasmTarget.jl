@@ -11356,6 +11356,70 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 nan_bytes = reinterpret(UInt8, [NaN])
                 append!(bytes, nan_bytes)
 
+            # ================================================================
+            # WASM-055: Base.string dispatch to int_to_string
+            # Base.string(n::Int) internally calls Base.#string#530(base, pad, string, n)
+            # We intercept this and redirect to WasmTarget.int_to_string
+            # ================================================================
+            elseif name === Symbol("#string#530") && length(args) >= 4
+                # #string#530(base::Int64, pad::Int64, ::typeof(string), value)
+                # The actual value to convert is the last argument (args[4])
+                value_arg = args[4]
+                value_type = infer_value_type(value_arg, ctx)
+
+                # Check if we're converting an integer type
+                if value_type === Int32 || value_type === Int64 ||
+                   value_type === UInt32 || value_type === UInt64 ||
+                   value_type === Int16 || value_type === UInt16 ||
+                   value_type === Int8 || value_type === UInt8
+
+                    # Clear the bytes (args were already pushed)
+                    bytes = UInt8[]
+
+                    # Check if int_to_string is in the function registry
+                    int_to_string_info = nothing
+                    if ctx.func_registry !== nothing
+                        # Try to find int_to_string with Int32 signature
+                        try
+                            int_to_string_func = getfield(WasmTarget, :int_to_string)
+                            int_to_string_info = get_function(ctx.func_registry, int_to_string_func, (Int32,))
+                        catch
+                            # Function not found
+                        end
+                    end
+
+                    if int_to_string_info !== nothing
+                        # int_to_string is in registry - call it
+                        # Compile the value argument, converting to Int32 if needed
+                        append!(bytes, compile_value(value_arg, ctx))
+
+                        # Convert to Int32 if needed
+                        if value_type === Int64
+                            push!(bytes, Opcode.I32_WRAP_I64)
+                        elseif value_type === UInt32 || value_type === UInt64
+                            # Treat as signed for string conversion
+                            if value_type === UInt64
+                                push!(bytes, Opcode.I32_WRAP_I64)
+                            end
+                        elseif value_type !== Int32
+                            # Smaller types - extend to i32
+                            # Already handled by compile_value which produces correct type
+                        end
+
+                        # Call int_to_string
+                        push!(bytes, Opcode.CALL)
+                        append!(bytes, encode_leb128_unsigned(int_to_string_info.wasm_idx))
+                    else
+                        # int_to_string not in registry - provide helpful error
+                        error("Base.string(::$(value_type)) requires int_to_string in compile_multi. " *
+                              "Add WasmTarget.int_to_string and WasmTarget.digit_to_str to your function list.")
+                    end
+                else
+                    # Non-integer type - not yet supported
+                    error("Base.string(::$(value_type)) not yet supported. " *
+                          "Supported types: Int32, Int64, UInt32, UInt64, Int16, UInt16, Int8, UInt8")
+                end
+
             else
                 error("Unsupported method: $name")
             end
