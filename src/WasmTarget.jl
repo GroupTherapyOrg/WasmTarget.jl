@@ -21,6 +21,7 @@ include("Runtime/Tokenizer.jl")
 include("Interpreter/Tokenizer.jl")
 include("Interpreter/Parser.jl")
 include("Interpreter/Evaluator.jl")
+include("Interpreter/REPL.jl")
 
 # Main API
 export compile, compile_multi, WasmModule, to_bytes
