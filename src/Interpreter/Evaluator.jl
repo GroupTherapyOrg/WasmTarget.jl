@@ -22,6 +22,7 @@ export val_nothing, val_int, val_float, val_bool, val_string, val_func, val_erro
 export env_new, env_get, env_set!, env_push_scope!, env_pop_scope!
 export eval_node, eval_program
 export ControlFlow, CF_NORMAL, CF_RETURN
+export OutputBuffer, output_buffer_get, output_buffer_set!, output_buffer_append!, output_buffer_clear!
 
 # ============================================================================
 # Value Type Constants
@@ -339,8 +340,34 @@ Returns (handled::Int32, result::Value) - handled is 1 if this was a builtin.
 end
 
 """Output implementation - stores output in env for later retrieval."""
-# Global output buffer (simplified - in real implementation would be more sophisticated)
-const _OUTPUT_BUFFER = Ref{String}("")
+# Output buffer struct - mutable struct is easier to compile than Ref{String}
+# Using a mutable struct with a single field allows WasmGC compilation
+mutable struct OutputBuffer
+    content::String
+end
+
+# Global output buffer (module-level mutable struct instance)
+const _OUTPUT_BUFFER = OutputBuffer("")
+
+# Helper functions for output buffer access (compile cleanly to struct.get/struct.set)
+@noinline function output_buffer_get()::String
+    return _OUTPUT_BUFFER.content
+end
+
+@noinline function output_buffer_set!(s::String)::Nothing
+    _OUTPUT_BUFFER.content = s
+    return nothing
+end
+
+@noinline function output_buffer_append!(s::String)::Nothing
+    _OUTPUT_BUFFER.content = _OUTPUT_BUFFER.content * s
+    return nothing
+end
+
+@noinline function output_buffer_clear!()::Nothing
+    _OUTPUT_BUFFER.content = ""
+    return nothing
+end
 
 @noinline function builtin_println(args::Vector{Value}, num_args::Int32, env::Env)::Value
     output = ""
@@ -353,7 +380,7 @@ const _OUTPUT_BUFFER = Ref{String}("")
         i = i + Int32(1)
     end
     output = output * "\n"
-    _OUTPUT_BUFFER[] = _OUTPUT_BUFFER[] * output
+    output_buffer_append!(output)
     return val_nothing()
 end
 
@@ -367,7 +394,7 @@ end
         output = output * value_to_string(args[i])
         i = i + Int32(1)
     end
-    _OUTPUT_BUFFER[] = _OUTPUT_BUFFER[] * output
+    output_buffer_append!(output)
     return val_nothing()
 end
 
@@ -1257,7 +1284,7 @@ Evaluate a complete program. Returns the output as a string.
 """
 @noinline function eval_program(program::ASTNode, source::String)::String
     # Clear output buffer
-    _OUTPUT_BUFFER[] = ""
+    output_buffer_clear!()
 
     # Create environment
     env = env_new(Int32(1024))  # Capacity for 1024 variables
@@ -1266,7 +1293,7 @@ Evaluate a complete program. Returns the output as a string.
     (result, _) = eval_node(program, source, env)
 
     # If no output was produced but we have a result, show it
-    output = _OUTPUT_BUFFER[]
+    output = output_buffer_get()
     if str_len(output) == Int32(0) && result.tag != VAL_NOTHING
         output = value_to_string(result)
     end
@@ -1278,13 +1305,13 @@ end
 Get current output buffer contents (for testing).
 """
 @noinline function get_output()::String
-    return _OUTPUT_BUFFER[]
+    return output_buffer_get()
 end
 
 """
 Clear output buffer.
 """
 @noinline function clear_output()::Nothing
-    _OUTPUT_BUFFER[] = ""
+    output_buffer_clear!()
     return nothing
 end
