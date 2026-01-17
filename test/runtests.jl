@@ -3225,4 +3225,247 @@ end
 
     end
 
+    # ========================================================================
+    # Phase 26: Interpreter Parser and AST (BROWSER-021)
+    # Tests for the Julia interpreter parser that builds AST from tokens
+    # ========================================================================
+    @testset "Phase 26: Interpreter Parser and AST" begin
+
+        # Include the parser module (tokenizer already included in Phase 25)
+        include("../src/Interpreter/Parser.jl")
+
+        @testset "Parser - Literal expressions" begin
+            # Integer literal
+            p1 = parser_new("42", Int32(100))
+            ast1 = parse_expression(p1)
+            @test ast1.kind == AST_INT_LIT
+            @test ast1.int_value == Int32(42)
+
+            # Float literal
+            p2 = parser_new("3.14", Int32(100))
+            ast2 = parse_expression(p2)
+            @test ast2.kind == AST_FLOAT_LIT
+            @test ast2.float_value ≈ Float32(3.14)
+
+            # Boolean true
+            p3 = parser_new("true", Int32(100))
+            ast3 = parse_expression(p3)
+            @test ast3.kind == AST_BOOL_LIT
+            @test ast3.int_value == Int32(1)
+
+            # Boolean false
+            p4 = parser_new("false", Int32(100))
+            ast4 = parse_expression(p4)
+            @test ast4.kind == AST_BOOL_LIT
+            @test ast4.int_value == Int32(0)
+
+            # Nothing
+            p5 = parser_new("nothing", Int32(100))
+            ast5 = parse_expression(p5)
+            @test ast5.kind == AST_NOTHING_LIT
+
+            # Identifier
+            p6 = parser_new("foo", Int32(100))
+            ast6 = parse_expression(p6)
+            @test ast6.kind == AST_IDENT
+            @test ast6.str_start == Int32(1)
+            @test ast6.str_length == Int32(3)
+        end
+
+        @testset "Parser - Binary expressions" begin
+            # Addition
+            p1 = parser_new("1 + 2", Int32(100))
+            ast1 = parse_expression(p1)
+            @test ast1.kind == AST_BINARY
+            @test ast1.op == OP_ADD
+            @test ast1.left.kind == AST_INT_LIT
+            @test ast1.left.int_value == Int32(1)
+            @test ast1.right.kind == AST_INT_LIT
+            @test ast1.right.int_value == Int32(2)
+
+            # Multiplication with precedence
+            p2 = parser_new("1 + 2 * 3", Int32(100))
+            ast2 = parse_expression(p2)
+            @test ast2.kind == AST_BINARY
+            @test ast2.op == OP_ADD
+            @test ast2.left.int_value == Int32(1)
+            @test ast2.right.kind == AST_BINARY
+            @test ast2.right.op == OP_MUL
+
+            # Comparison
+            p3 = parser_new("x < 10", Int32(100))
+            ast3 = parse_expression(p3)
+            @test ast3.kind == AST_BINARY
+            @test ast3.op == OP_LT
+
+            # Equality
+            p4 = parser_new("a == b", Int32(100))
+            ast4 = parse_expression(p4)
+            @test ast4.kind == AST_BINARY
+            @test ast4.op == OP_EQ
+
+            # Logical operators
+            p5 = parser_new("x && y || z", Int32(100))
+            ast5 = parse_expression(p5)
+            @test ast5.kind == AST_BINARY
+            @test ast5.op == OP_OR  # || has lower precedence
+        end
+
+        @testset "Parser - Unary expressions" begin
+            # Negation
+            p1 = parser_new("-5", Int32(100))
+            ast1 = parse_expression(p1)
+            @test ast1.kind == AST_UNARY
+            @test ast1.op == OP_NEG
+            @test ast1.left.kind == AST_INT_LIT
+            @test ast1.left.int_value == Int32(5)
+
+            # Not
+            p2 = parser_new("not true", Int32(100))
+            ast2 = parse_expression(p2)
+            @test ast2.kind == AST_UNARY
+            @test ast2.op == OP_NOT
+        end
+
+        @testset "Parser - Parenthesized expressions" begin
+            # (1 + 2) * 3 - should compute 1+2 first
+            p1 = parser_new("(1 + 2) * 3", Int32(100))
+            ast1 = parse_expression(p1)
+            @test ast1.kind == AST_BINARY
+            @test ast1.op == OP_MUL
+            @test ast1.left.kind == AST_BINARY
+            @test ast1.left.op == OP_ADD
+        end
+
+        @testset "Parser - Function calls" begin
+            # Single argument
+            p1 = parser_new("foo(5)", Int32(100))
+            ast1 = parse_expression(p1)
+            @test ast1.kind == AST_CALL
+            @test ast1.left.kind == AST_IDENT
+            @test ast1.num_children == Int32(1)
+            @test ast1.children[1].kind == AST_INT_LIT
+
+            # Multiple arguments
+            p2 = parser_new("bar(1, 2, 3)", Int32(100))
+            ast2 = parse_expression(p2)
+            @test ast2.kind == AST_CALL
+            @test ast2.num_children == Int32(3)
+
+            # No arguments
+            p3 = parser_new("baz()", Int32(100))
+            ast3 = parse_expression(p3)
+            @test ast3.kind == AST_CALL
+            @test ast3.num_children == Int32(0)
+        end
+
+        @testset "Parser - Assignment" begin
+            p1 = parser_new("x = 5", Int32(100))
+            parser_skip_terminators!(p1)
+            ast1 = parse_statement(p1)
+            @test ast1.kind == AST_ASSIGN
+            @test ast1.left.kind == AST_IDENT
+            @test ast1.right.kind == AST_INT_LIT
+            @test ast1.right.int_value == Int32(5)
+        end
+
+        @testset "Parser - If statements" begin
+            # Simple if
+            p1 = parser_new("if x\n  y\nend", Int32(100))
+            parser_skip_terminators!(p1)
+            ast1 = parse_statement(p1)
+            @test ast1.kind == AST_IF
+            @test ast1.left.kind == AST_IDENT  # condition
+            @test ast1.num_children >= Int32(1)  # then body
+
+            # If-else
+            p2 = parser_new("if x\n  1\nelse\n  2\nend", Int32(100))
+            parser_skip_terminators!(p2)
+            ast2 = parse_statement(p2)
+            @test ast2.kind == AST_IF
+            @test ast2.right !== nothing  # else branch
+            @test ast2.right.kind == AST_BLOCK
+        end
+
+        @testset "Parser - While loops" begin
+            p1 = parser_new("while x < 10\n  x = x + 1\nend", Int32(100))
+            parser_skip_terminators!(p1)
+            ast1 = parse_statement(p1)
+            @test ast1.kind == AST_WHILE
+            @test ast1.left.kind == AST_BINARY  # condition
+            @test ast1.num_children >= Int32(1)  # body
+        end
+
+        @testset "Parser - For loops" begin
+            p1 = parser_new("for i in range\n  x = i\nend", Int32(100))
+            parser_skip_terminators!(p1)
+            ast1 = parse_statement(p1)
+            @test ast1.kind == AST_FOR
+            @test ast1.left.kind == AST_IDENT  # iterator var
+            @test ast1.right.kind == AST_IDENT  # iterable
+        end
+
+        @testset "Parser - Function definitions" begin
+            p1 = parser_new("function add(a, b)\n  return a + b\nend", Int32(100))
+            parser_skip_terminators!(p1)
+            ast1 = parse_statement(p1)
+            @test ast1.kind == AST_FUNC
+            @test ast1.int_value == Int32(2)  # 2 parameters
+            # Children: params + body
+            @test ast1.num_children >= Int32(3)  # 2 params + 1 return stmt
+        end
+
+        @testset "Parser - Return statements" begin
+            # Return with value
+            p1 = parser_new("return 42", Int32(100))
+            parser_skip_terminators!(p1)
+            ast1 = parse_statement(p1)
+            @test ast1.kind == AST_RETURN
+            @test ast1.left !== nothing
+            @test ast1.left.kind == AST_INT_LIT
+
+            # Return without value
+            p2 = parser_new("return\n", Int32(100))
+            parser_skip_terminators!(p2)
+            ast2 = parse_statement(p2)
+            @test ast2.kind == AST_RETURN
+            @test ast2.left === nothing
+        end
+
+        @testset "Parser - Full program" begin
+            code = """
+            x = 5
+            y = 10
+            z = x + y
+            """
+            p1 = parser_new(code, Int32(100))
+            ast1 = parse_program(p1)
+            @test ast1.kind == AST_PROGRAM
+            @test ast1.num_children == Int32(3)
+            @test ast1.children[1].kind == AST_ASSIGN
+            @test ast1.children[2].kind == AST_ASSIGN
+            @test ast1.children[3].kind == AST_ASSIGN
+        end
+
+        @testset "Parser - Complex program" begin
+            code = """
+            function factorial(n)
+                if n <= 1
+                    return 1
+                else
+                    return n * factorial(n - 1)
+                end
+            end
+            result = factorial(5)
+            """
+            p1 = parser_new(code, Int32(200))
+            ast1 = parse_program(p1)
+            @test ast1.kind == AST_PROGRAM
+            @test ast1.num_children == Int32(2)  # function def + assignment
+            @test ast1.children[1].kind == AST_FUNC
+            @test ast1.children[2].kind == AST_ASSIGN
+        end
+
+    end
+
 end
