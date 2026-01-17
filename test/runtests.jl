@@ -3468,4 +3468,358 @@ end
 
     end
 
+    # ========================================================================
+    # Phase 27: Interpreter Evaluator (BROWSER-022)
+    # Tests for the Julia interpreter evaluator that executes AST nodes
+    # ========================================================================
+    @testset "Phase 27: Interpreter Evaluator" begin
+
+        # Include the evaluator module (tokenizer and parser already included)
+        include("../src/Interpreter/Evaluator.jl")
+
+        @testset "Evaluator - Literal values" begin
+            # Integer literal
+            p1 = parser_new("42", Int32(100))
+            ast1 = parse_expression(p1)
+            env = env_new(Int32(100))
+            (val1, _) = eval_node(ast1, "42", env)
+            @test val1.tag == VAL_INT
+            @test val1.int_val == Int32(42)
+
+            # Float literal
+            p2 = parser_new("3.14", Int32(100))
+            ast2 = parse_expression(p2)
+            (val2, _) = eval_node(ast2, "3.14", env)
+            @test val2.tag == VAL_FLOAT
+            @test val2.float_val ≈ Float32(3.14)
+
+            # Boolean true
+            p3 = parser_new("true", Int32(100))
+            ast3 = parse_expression(p3)
+            (val3, _) = eval_node(ast3, "true", env)
+            @test val3.tag == VAL_BOOL
+            @test val3.int_val == Int32(1)
+
+            # Boolean false
+            p4 = parser_new("false", Int32(100))
+            ast4 = parse_expression(p4)
+            (val4, _) = eval_node(ast4, "false", env)
+            @test val4.tag == VAL_BOOL
+            @test val4.int_val == Int32(0)
+
+            # Nothing
+            p5 = parser_new("nothing", Int32(100))
+            ast5 = parse_expression(p5)
+            (val5, _) = eval_node(ast5, "nothing", env)
+            @test val5.tag == VAL_NOTHING
+        end
+
+        @testset "Evaluator - Arithmetic operations" begin
+            env = env_new(Int32(100))
+
+            # Addition
+            p1 = parser_new("3 + 5", Int32(100))
+            ast1 = parse_expression(p1)
+            (val1, _) = eval_node(ast1, "3 + 5", env)
+            @test val1.tag == VAL_INT
+            @test val1.int_val == Int32(8)
+
+            # Subtraction
+            p2 = parser_new("10 - 4", Int32(100))
+            ast2 = parse_expression(p2)
+            (val2, _) = eval_node(ast2, "10 - 4", env)
+            @test val2.tag == VAL_INT
+            @test val2.int_val == Int32(6)
+
+            # Multiplication
+            p3 = parser_new("7 * 6", Int32(100))
+            ast3 = parse_expression(p3)
+            (val3, _) = eval_node(ast3, "7 * 6", env)
+            @test val3.tag == VAL_INT
+            @test val3.int_val == Int32(42)
+
+            # Division
+            p4 = parser_new("20 / 4", Int32(100))
+            ast4 = parse_expression(p4)
+            (val4, _) = eval_node(ast4, "20 / 4", env)
+            @test val4.tag == VAL_INT
+            @test val4.int_val == Int32(5)
+
+            # Modulo
+            p5 = parser_new("17 % 5", Int32(100))
+            ast5 = parse_expression(p5)
+            (val5, _) = eval_node(ast5, "17 % 5", env)
+            @test val5.tag == VAL_INT
+            @test val5.int_val == Int32(2)
+
+            # Power
+            p6 = parser_new("2 ^ 3", Int32(100))
+            ast6 = parse_expression(p6)
+            (val6, _) = eval_node(ast6, "2 ^ 3", env)
+            @test val6.tag == VAL_INT
+            @test val6.int_val == Int32(8)
+        end
+
+        @testset "Evaluator - Comparison operations" begin
+            env = env_new(Int32(100))
+
+            # Less than
+            p1 = parser_new("3 < 5", Int32(100))
+            ast1 = parse_expression(p1)
+            (val1, _) = eval_node(ast1, "3 < 5", env)
+            @test val1.tag == VAL_BOOL
+            @test val1.int_val == Int32(1)  # true
+
+            p2 = parser_new("5 < 3", Int32(100))
+            ast2 = parse_expression(p2)
+            (val2, _) = eval_node(ast2, "5 < 3", env)
+            @test val2.int_val == Int32(0)  # false
+
+            # Equality
+            p3 = parser_new("5 == 5", Int32(100))
+            ast3 = parse_expression(p3)
+            (val3, _) = eval_node(ast3, "5 == 5", env)
+            @test val3.int_val == Int32(1)
+
+            p4 = parser_new("5 == 3", Int32(100))
+            ast4 = parse_expression(p4)
+            (val4, _) = eval_node(ast4, "5 == 3", env)
+            @test val4.int_val == Int32(0)
+
+            # Greater than or equal
+            p5 = parser_new("5 >= 5", Int32(100))
+            ast5 = parse_expression(p5)
+            (val5, _) = eval_node(ast5, "5 >= 5", env)
+            @test val5.int_val == Int32(1)
+        end
+
+        @testset "Evaluator - Logical operations" begin
+            env = env_new(Int32(100))
+
+            # AND with both true
+            p1 = parser_new("true && true", Int32(100))
+            ast1 = parse_expression(p1)
+            (val1, _) = eval_node(ast1, "true && true", env)
+            @test val1.tag == VAL_BOOL
+            @test val1.int_val == Int32(1)
+
+            # AND with one false (short-circuit)
+            p2 = parser_new("false && true", Int32(100))
+            ast2 = parse_expression(p2)
+            (val2, _) = eval_node(ast2, "false && true", env)
+            @test val2.int_val == Int32(0)
+
+            # OR with one true (short-circuit)
+            p3 = parser_new("true || false", Int32(100))
+            ast3 = parse_expression(p3)
+            (val3, _) = eval_node(ast3, "true || false", env)
+            @test val3.int_val == Int32(1)
+
+            # OR with both false
+            p4 = parser_new("false || false", Int32(100))
+            ast4 = parse_expression(p4)
+            (val4, _) = eval_node(ast4, "false || false", env)
+            @test val4.int_val == Int32(0)
+        end
+
+        @testset "Evaluator - Unary operations" begin
+            env = env_new(Int32(100))
+
+            # Negation
+            p1 = parser_new("-5", Int32(100))
+            ast1 = parse_expression(p1)
+            (val1, _) = eval_node(ast1, "-5", env)
+            @test val1.tag == VAL_INT
+            @test val1.int_val == Int32(-5)
+
+            # Not
+            p2 = parser_new("not true", Int32(100))
+            ast2 = parse_expression(p2)
+            (val2, _) = eval_node(ast2, "not true", env)
+            @test val2.tag == VAL_BOOL
+            @test val2.int_val == Int32(0)
+        end
+
+        @testset "Evaluator - Variable assignment and lookup" begin
+            env = env_new(Int32(100))
+            source = "x = 42"
+
+            # Parse and evaluate assignment
+            p1 = parser_new(source, Int32(100))
+            ast1 = parse_statement(p1)
+            (val1, _) = eval_node(ast1, source, env)
+            @test val1.tag == VAL_INT
+            @test val1.int_val == Int32(42)
+
+            # Check variable is stored
+            x_val = env_get(env, "x")
+            @test x_val.tag == VAL_INT
+            @test x_val.int_val == Int32(42)
+
+            # Variable lookup in expression
+            source2 = "x + 8"
+            p2 = parser_new(source2, Int32(100))
+            ast2 = parse_expression(p2)
+            (val2, _) = eval_node(ast2, source2, env)
+            @test val2.tag == VAL_INT
+            @test val2.int_val == Int32(50)
+        end
+
+        @testset "Evaluator - If statements" begin
+            # If with true condition
+            code1 = """
+            x = 0
+            if true
+                x = 1
+            end
+            x
+            """
+            p1 = parser_new(code1, Int32(100))
+            prog1 = parse_program(p1)
+            output1 = eval_program(prog1, code1)
+            @test contains(output1, "1")
+
+            # If with false condition
+            code2 = """
+            x = 0
+            if false
+                x = 1
+            end
+            x
+            """
+            p2 = parser_new(code2, Int32(100))
+            prog2 = parse_program(p2)
+            output2 = eval_program(prog2, code2)
+            @test contains(output2, "0")
+
+            # If-else
+            code3 = """
+            x = 5
+            if x > 10
+                y = 1
+            else
+                y = 2
+            end
+            y
+            """
+            p3 = parser_new(code3, Int32(100))
+            prog3 = parse_program(p3)
+            output3 = eval_program(prog3, code3)
+            @test contains(output3, "2")
+        end
+
+        @testset "Evaluator - While loops" begin
+            code1 = """
+            x = 0
+            i = 0
+            while i < 5
+                x = x + i
+                i = i + 1
+            end
+            x
+            """
+            p1 = parser_new(code1, Int32(100))
+            prog1 = parse_program(p1)
+            output1 = eval_program(prog1, code1)
+            @test contains(output1, "10")  # 0+1+2+3+4 = 10
+        end
+
+        @testset "Evaluator - User-defined functions" begin
+            code1 = """
+            function add(a, b)
+                return a + b
+            end
+            add(3, 5)
+            """
+            p1 = parser_new(code1, Int32(200))
+            prog1 = parse_program(p1)
+            output1 = eval_program(prog1, code1)
+            @test contains(output1, "8")
+
+            # Recursive function
+            code2 = """
+            function fact(n)
+                if n <= 1
+                    return 1
+                else
+                    return n * fact(n - 1)
+                end
+            end
+            fact(5)
+            """
+            p2 = parser_new(code2, Int32(200))
+            prog2 = parse_program(p2)
+            output2 = eval_program(prog2, code2)
+            @test contains(output2, "120")
+        end
+
+        @testset "Evaluator - Built-in functions" begin
+            # println
+            code1 = "println(42)"
+            p1 = parser_new(code1, Int32(100))
+            prog1 = parse_program(p1)
+            clear_output()
+            eval_program(prog1, code1)
+            @test contains(get_output(), "42")
+
+            # abs
+            code2 = "abs(-5)"
+            p2 = parser_new(code2, Int32(100))
+            prog2 = parse_program(p2)
+            output2 = eval_program(prog2, code2)
+            @test contains(output2, "5")
+
+            # min
+            code3 = "min(3, 7)"
+            p3 = parser_new(code3, Int32(100))
+            prog3 = parse_program(p3)
+            output3 = eval_program(prog3, code3)
+            @test contains(output3, "3")
+
+            # max
+            code4 = "max(3, 7)"
+            p4 = parser_new(code4, Int32(100))
+            prog4 = parse_program(p4)
+            output4 = eval_program(prog4, code4)
+            @test contains(output4, "7")
+        end
+
+        @testset "Evaluator - Complex program" begin
+            # FizzBuzz-like program
+            code1 = """
+            i = 1
+            while i <= 3
+                if i == 1
+                    println(1)
+                elseif i == 2
+                    println(2)
+                else
+                    println(3)
+                end
+                i = i + 1
+            end
+            """
+            p1 = parser_new(code1, Int32(200))
+            prog1 = parse_program(p1)
+            clear_output()
+            eval_program(prog1, code1)
+            output1 = get_output()
+            @test contains(output1, "1")
+            @test contains(output1, "2")
+            @test contains(output1, "3")
+        end
+
+        @testset "Evaluator - The playground example" begin
+            # x = 5; y = 3; println(x + y)
+            code = "x = 5; y = 3; println(x + y)"
+            p = parser_new(code, Int32(100))
+            prog = parse_program(p)
+            clear_output()
+            eval_program(prog, code)
+            output = get_output()
+            @test contains(output, "8")
+        end
+
+    end
+
 end
