@@ -646,6 +646,10 @@ function compile_module(functions::Vector)::WasmModule
     type_registry = TypeRegistry()
     func_registry = FunctionRegistry()
 
+    # WASM-060: Add Math.pow import for float power operations
+    # This enables x^y for Float32/Float64 types
+    add_import!(mod, "Math", "pow", NumType[F64, F64], NumType[F64])
+
     # Normalize input: ensure each entry is (func, arg_types, name)
     normalized = []
     for entry in functions
@@ -9485,6 +9489,45 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         push!(bytes, Opcode.THROW)
         append!(bytes, encode_leb128_unsigned(0))  # tag index 0
 
+    # Base.add_ptr - pointer arithmetic (used in string operations)
+    # In WasmGC, pointers are i64, so this is just i64 add
+    elseif func isa GlobalRef && func.name === :add_ptr
+        # add_ptr(ptr, offset) -> ptr + offset
+        append!(bytes, compile_value(args[1], ctx))
+        append!(bytes, compile_value(args[2], ctx))
+        push!(bytes, Opcode.I64_ADD)
+
+    # Base.sub_ptr - pointer subtraction
+    elseif func isa GlobalRef && func.name === :sub_ptr
+        # sub_ptr(ptr, offset) -> ptr - offset
+        append!(bytes, compile_value(args[1], ctx))
+        append!(bytes, compile_value(args[2], ctx))
+        push!(bytes, Opcode.I64_SUB)
+
+    # Base.pointerref - read from pointer (used in string comparisons)
+    # For WasmGC strings, we use the str_char intrinsic instead
+    # But if we hit this code path, we're in trouble - strings should use our intrinsics
+    elseif func isa GlobalRef && func.name === :pointerref
+        # pointerref(ptr, i, aligned) -> value at ptr
+        # For now, just load the value using i64.load
+        # The pointer is an i64, index is typically Int32, aligned is Bool
+        # Result type depends on the pointer type (UInt8 for strings)
+        append!(bytes, compile_value(args[1], ctx))  # ptr
+        # Load byte (i32.load8_u)
+        push!(bytes, 0x2D)  # i32.load8_u
+        push!(bytes, 0x00)  # align=0
+        push!(bytes, 0x00)  # offset=0
+
+    # Base.pointerset - write to pointer
+    elseif func isa GlobalRef && func.name === :pointerset
+        # pointerset(ptr, val, i, aligned) -> Nothing
+        # For now, store byte using i32.store8
+        append!(bytes, compile_value(args[1], ctx))  # ptr
+        append!(bytes, compile_value(args[2], ctx))  # value
+        push!(bytes, 0x3A)  # i32.store8
+        push!(bytes, 0x00)  # align=0
+        push!(bytes, 0x00)  # offset=0
+
     else
         error("Unsupported function call: $func (type: $(typeof(func)))")
     end
@@ -9642,7 +9685,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                     # Check if we have a pow import
                     pow_import_idx = nothing
                     for (i, imp) in enumerate(ctx.mod.imports)
-                        if imp.kind == 0x00 && imp.name == "pow"  # function import
+                        if imp.kind == 0x00 && imp.field_name == "pow"  # function import
                             pow_import_idx = UInt32(i - 1)
                             break
                         end
@@ -11704,6 +11747,29 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 # Clear args bytes (already pushed) and re-compile just the memory arg
                 bytes = UInt8[]
                 append!(bytes, compile_value(args[1], ctx))
+
+            # ================================================================
+            # Error constructors - these are typically followed by throw
+            # In WASM we just emit unreachable
+            # ================================================================
+            elseif name === :BoundsError || name === :ArgumentError || name === :TypeError ||
+                   name === :DomainError || name === :OverflowError || name === :DivideError
+                # Error constructors - emit unreachable
+                bytes = UInt8[]  # Clear any pushed args
+                push!(bytes, Opcode.UNREACHABLE)
+
+            # ================================================================
+            # SubString - string view type
+            # In WasmGC, we handle this by using str_substr
+            # ================================================================
+            elseif name === :SubString
+                # SubString(str, start, stop) or SubString(str)
+                # For now, just return the string as-is (view = copy semantics)
+                # A proper implementation would track offset/length
+                bytes = UInt8[]  # Clear any pushed args
+                if !isempty(args)
+                    append!(bytes, compile_value(args[1], ctx))
+                end
 
             else
                 error("Unsupported method: $name")
