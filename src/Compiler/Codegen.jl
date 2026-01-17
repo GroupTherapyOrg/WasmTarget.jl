@@ -8573,6 +8573,15 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         return bytes
     end
 
+    # Special case for Core.memoryref - creates MemoryRef from Memory
+    # memoryref(memory::Memory{T}) -> MemoryRef{T}
+    # In WasmGC, this is a no-op since Memory IS the array
+    if is_func(func, :memoryref) && length(args) == 1
+        # Pass through the array reference - Memory and MemoryRef are the same in WasmGC
+        append!(bytes, compile_value(args[1], ctx))
+        return bytes
+    end
+
     # Special case for memoryrefnew - handle both patterns:
     # 1. memoryrefnew(memory) -> MemoryRef (for Vector allocation, just pass through)
     # 2. memoryrefnew(base_ref, index, boundscheck) -> MemoryRef at offset
@@ -11628,6 +11637,17 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                     error("Base.string(::$(value_type)) not yet supported. " *
                           "Supported types: Int32, Int64, UInt32, UInt64, Int16, UInt16, Int8, UInt8")
                 end
+
+            # ================================================================
+            # Julia 1.11+ Memory API: Core.memoryref
+            # Creates MemoryRef from Memory - in WasmGC this is a no-op
+            # ================================================================
+            elseif name === :memoryref && length(args) == 1
+                # Core.memoryref(memory::Memory{T}) -> MemoryRef{T}
+                # In WasmGC, Memory and MemoryRef are both the array reference
+                # Clear args bytes (already pushed) and re-compile just the memory arg
+                bytes = UInt8[]
+                append!(bytes, compile_value(args[1], ctx))
 
             else
                 error("Unsupported method: $name")
