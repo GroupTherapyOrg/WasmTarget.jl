@@ -5227,9 +5227,18 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
     # Initialize LOOP phi node locals with their entry values
     # Loop phis are at the loop header and have one edge from BEFORE the loop
     # Inner conditional phis (within the loop) should NOT be initialized here
+    # PRE-LOOP phis (before loop_header) must NOT be initialized here either -
+    # their edges are also "before the loop" but they're not loop phis, they're
+    # conditional phis that will be set during pre-loop code generation.
     for (i, stmt) in enumerate(code)
         if stmt isa Core.PhiNode && haskey(ctx.phi_locals, i)
-            # Only initialize if this is a LOOP phi (at or near loop header)
+            # Only initialize if this is a LOOP phi (at or AFTER loop header)
+            # Phis BEFORE loop_header are pre-loop conditional phis, not loop phis
+            if i < loop_header
+                # Skip pre-loop phis - they'll be initialized in PHASE 1
+                continue
+            end
+
             # Loop phis have an entry edge from before the loop header
             # Inner conditional phis have all edges from within the loop
             is_loop_phi = false
