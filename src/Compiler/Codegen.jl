@@ -3675,7 +3675,9 @@ function analyze_ssa_types!(ctx::CompilationContext)
     ssatypes = ctx.code_info.ssavaluetypes
     if ssatypes isa Vector
         for (i, T) in enumerate(ssatypes)
-            if T !== Any && T !== Nothing
+            # Store all concrete types including Nothing (needed for function dispatch)
+            # Only skip Any as it provides no useful information
+            if T !== Any
                 ctx.ssa_types[i] = T
             end
         end
@@ -9528,6 +9530,39 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         push!(bytes, 0x00)  # align=0
         push!(bytes, 0x00)  # offset=0
 
+    # Cross-function call via GlobalRef (dynamic dispatch when Julia can't specialize)
+    elseif func isa GlobalRef && ctx.func_registry !== nothing
+        # Try to find this function in our registry
+        called_func = try
+            getfield(func.mod, func.name)
+        catch
+            nothing
+        end
+
+        if called_func !== nothing
+            # Push arguments first
+            for arg in args
+                append!(bytes, compile_value(arg, ctx))
+            end
+
+            # Infer argument types for dispatch
+            call_arg_types = tuple([infer_value_type(arg, ctx) for arg in args]...)
+            target_info = get_function(ctx.func_registry, called_func, call_arg_types)
+
+            if target_info !== nothing
+                # Cross-function call - emit call instruction with target index
+                push!(bytes, Opcode.CALL)
+                append!(bytes, encode_leb128_unsigned(target_info.wasm_idx))
+            else
+                # No matching signature - likely dead code from Union type branches
+                # Emit unreachable instead of error (the branch won't be taken at runtime)
+                bytes = UInt8[]  # Clear pushed args
+                push!(bytes, Opcode.UNREACHABLE)
+            end
+        else
+            error("Unsupported function call: $func (type: $(typeof(func)))")
+        end
+
     else
         error("Unsupported function call: $func (type: $(typeof(func)))")
     end
@@ -9618,12 +9653,23 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
 
             # Check if this is a self-recursive call
             # The second argument of invoke is the function reference
+            # It can be a GlobalRef directly, or an SSA value that points to a GlobalRef
             func_ref = expr.args[2]
+
+            # If func_ref is an SSA value, try to resolve it to the underlying GlobalRef
+            actual_func_ref = func_ref
+            if func_ref isa Core.SSAValue
+                ssa_stmt = ctx.code_info.code[func_ref.id]
+                if ssa_stmt isa GlobalRef
+                    actual_func_ref = ssa_stmt
+                end
+            end
+
             is_self_call = false
-            if ctx.func_ref !== nothing && func_ref isa GlobalRef
+            if ctx.func_ref !== nothing && actual_func_ref isa GlobalRef
                 # Check if this GlobalRef refers to the same function
                 try
-                    called_func = getfield(func_ref.mod, func_ref.name)
+                    called_func = getfield(actual_func_ref.mod, actual_func_ref.name)
                     is_self_call = called_func === ctx.func_ref
                 catch
                     is_self_call = false
@@ -9632,10 +9678,10 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
 
             # Check for cross-function call within the module first
             cross_call_handled = false
-            if ctx.func_registry !== nothing && func_ref isa GlobalRef && !is_self_call
+            if ctx.func_registry !== nothing && actual_func_ref isa GlobalRef && !is_self_call
                 # Try to find this function in our registry
                 called_func = try
-                    getfield(func_ref.mod, func_ref.name)
+                    getfield(actual_func_ref.mod, actual_func_ref.name)
                 catch
                     nothing
                 end
@@ -11753,7 +11799,8 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
             # In WASM we just emit unreachable
             # ================================================================
             elseif name === :BoundsError || name === :ArgumentError || name === :TypeError ||
-                   name === :DomainError || name === :OverflowError || name === :DivideError
+                   name === :DomainError || name === :OverflowError || name === :DivideError ||
+                   name === :InexactError
                 # Error constructors - emit unreachable
                 bytes = UInt8[]  # Clear any pushed args
                 push!(bytes, Opcode.UNREACHABLE)
