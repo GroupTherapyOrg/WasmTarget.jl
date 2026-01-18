@@ -397,14 +397,27 @@ function compile_function(f, arg_types::Tuple, func_name::String)::WasmModule
     # This allows recursive calls to work
     expected_func_idx = UInt32(0)
 
-    # Generate function body with the function reference for self-call detection
-    ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
-                            func_idx=expected_func_idx, func_ref=f, global_args=global_args,
-                            is_compiled_closure=is_closure)
-    body = generate_body(ctx)
+    # Check if this is an intrinsic function that needs special code generation
+    intrinsic_body = is_intrinsic_function(f) ? generate_intrinsic_body(f, arg_types, mod, type_registry) : nothing
+
+    local body::Vector{UInt8}
+    local locals::Vector{WasmValType}
+
+    if intrinsic_body !== nothing
+        # Use the intrinsic body directly
+        body = intrinsic_body
+        locals = WasmValType[]  # Intrinsics don't need additional locals
+    else
+        # Generate function body with the function reference for self-call detection
+        ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
+                                func_idx=expected_func_idx, func_ref=f, global_args=global_args,
+                                is_compiled_closure=is_closure)
+        body = generate_body(ctx)
+        locals = ctx.locals
+    end
 
     # Add function to module
-    func_idx = add_function!(mod, param_types, result_types, ctx.locals, body)
+    func_idx = add_function!(mod, param_types, result_types, locals, body)
 
     # Export the function
     add_export!(mod, func_name, 0, func_idx)
@@ -620,6 +633,108 @@ function infer_runtime_func_arg_types(name::Symbol)::Union{Tuple, Nothing}
 end
 
 """
+Check if a function is a WasmTarget intrinsic that needs special code generation.
+Returns true if the function should be generated as an intrinsic instead of compiling Julia IR.
+"""
+function is_intrinsic_function(f::Function)::Bool
+    fname = nameof(f)
+    return fname in [:str_char, :str_len, :str_eq, :str_new, :str_setchar!, :str_concat]
+end
+
+"""
+Generate intrinsic function body for WasmTarget runtime functions.
+These functions have special WASM implementations that differ from their Julia fallbacks.
+Returns the function body bytes, or nothing if not an intrinsic.
+"""
+function generate_intrinsic_body(f::Function, arg_types::Tuple, mod::WasmModule, type_registry::TypeRegistry)::Union{Vector{UInt8}, Nothing}
+    fname = nameof(f)
+    bytes = UInt8[]
+
+    # Get string array type for string operations
+    str_type_idx = get_string_array_type!(mod, type_registry)
+
+    if fname === :str_char
+        # str_char(s::String, i::Int32)::Int32
+        # Gets character at 1-based index
+        # local 0 = string (array ref)
+        # local 1 = index (i32)
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x00)  # string
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x01)  # index
+        # Subtract 1 for 0-based indexing
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x01)
+        push!(bytes, Opcode.I32_SUB)
+        # array.get
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_GET)
+        append!(bytes, encode_leb128_unsigned(str_type_idx))
+        push!(bytes, Opcode.END)
+        return bytes
+
+    elseif fname === :str_len
+        # str_len(s::String)::Int32
+        # Returns length of string array
+        # local 0 = string (array ref)
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x00)  # string
+        # array.len
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_LEN)
+        push!(bytes, Opcode.END)
+        return bytes
+
+    elseif fname === :str_eq
+        # str_eq(a::String, b::String)::Bool
+        # Compare two strings character by character
+        # This is complex - we need a loop
+        # For now, return a simple stub
+        # TODO: Implement proper string comparison loop
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x00)  # a
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x01)  # b
+        push!(bytes, Opcode.REF_EQ)
+        push!(bytes, Opcode.END)
+        return bytes
+
+    elseif fname === :str_new
+        # str_new(len::Int32)::String
+        # Create new string array of given length
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x00)  # length
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
+        append!(bytes, encode_leb128_unsigned(str_type_idx))
+        push!(bytes, Opcode.END)
+        return bytes
+
+    elseif fname === :str_setchar!
+        # str_setchar!(s::String, i::Int32, c::Int32)::Nothing
+        # Sets character at 1-based index
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x00)  # string
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x01)  # index
+        # Subtract 1 for 0-based indexing
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x01)
+        push!(bytes, Opcode.I32_SUB)
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x02)  # char
+        # array.set
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_SET)
+        append!(bytes, encode_leb128_unsigned(str_type_idx))
+        push!(bytes, Opcode.END)
+        return bytes
+    end
+
+    return nothing
+end
+
+"""
     compile_module(functions::Vector) -> WasmModule
 
 Compile multiple Julia functions into a single WebAssembly module.
@@ -791,12 +906,25 @@ function compile_module(functions::Vector)::WasmModule
     for (i, (f, arg_types, name, code_info, return_type, global_args, is_closure)) in enumerate(function_data)
         func_idx = UInt32(n_imports + i - 1)
 
-        # Generate function body
-        ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
-                                func_registry=func_registry, func_idx=func_idx, func_ref=f,
-                                global_args=global_args, is_compiled_closure=is_closure,
-                                module_globals=module_globals)
-        body = generate_body(ctx)
+        # Check if this is an intrinsic function that needs special code generation
+        intrinsic_body = is_intrinsic_function(f) ? generate_intrinsic_body(f, arg_types, mod, type_registry) : nothing
+
+        local body::Vector{UInt8}
+        local locals::Vector{WasmValType}
+
+        if intrinsic_body !== nothing
+            # Use the intrinsic body directly
+            body = intrinsic_body
+            locals = WasmValType[]  # Intrinsics don't need additional locals
+        else
+            # Generate function body from Julia IR
+            ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
+                                    func_registry=func_registry, func_idx=func_idx, func_ref=f,
+                                    global_args=global_args, is_compiled_closure=is_closure,
+                                    module_globals=module_globals)
+            body = generate_body(ctx)
+            locals = ctx.locals
+        end
 
         # Get param/result types (skip WasmGlobal args)
         param_types = WasmValType[]
@@ -808,7 +936,7 @@ function compile_module(functions::Vector)::WasmModule
         result_types = return_type === Nothing ? WasmValType[] : WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
 
         # Add function to module
-        actual_idx = add_function!(mod, param_types, result_types, ctx.locals, body)
+        actual_idx = add_function!(mod, param_types, result_types, locals, body)
 
         # Export the function
         add_export!(mod, name, 0, actual_idx)
@@ -1234,7 +1362,29 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
     field_types_vec = DataType[]
 
     for (i, ft) in enumerate(elem_types)
-        wasm_vt = julia_to_wasm_type(ft)
+        # Use concrete types for fields that need specific WASM types
+        # This ensures consistency between struct field types and local variable types
+        wasm_vt = if ft === String
+            # String field needs concrete array type
+            type_idx = get_string_array_type!(mod, registry)
+            ConcreteRef(type_idx, true)
+        elseif ft <: AbstractVector
+            # Vector field needs concrete array type
+            elem_type = eltype(ft)
+            type_idx = get_array_type!(mod, registry, elem_type)
+            ConcreteRef(type_idx, true)
+        elseif isconcretetype(ft) && isstructtype(ft) && !(ft <: Tuple)
+            # Nested struct - register and use concrete ref
+            nested_info = register_struct_type!(mod, registry, ft)
+            if nested_info !== nothing
+                ConcreteRef(nested_info.wasm_type_idx, true)
+            else
+                julia_to_wasm_type(ft)
+            end
+        else
+            # For primitives and other types, use generic mapping
+            julia_to_wasm_type(ft)
+        end
         push!(wasm_fields, FieldType(wasm_vt, false))  # Tuples are immutable
         push!(field_names, Symbol(i))  # Use numeric names
         push!(field_types_vec, ft isa DataType ? ft : Any)
@@ -3397,6 +3547,20 @@ function allocate_ssa_locals!(ctx::CompilationContext)
         end
     end
 
+    # Find SSAs that produce values and are followed by control flow
+    # In Wasm, stack values don't persist across block boundaries
+    # So any value produced before a GotoNode/GotoIfNot/PhiNode must be stored
+    for (i, stmt) in enumerate(code)
+        if produces_stack_value(stmt) && i < length(code)
+            next_stmt = code[i + 1]
+            # If the NEXT statement is control flow (not intermediate), this SSA needs a local
+            # This handles cases where we create a value and immediately enter control flow
+            if next_stmt isa Core.GotoNode || next_stmt isa Core.GotoIfNot
+                push!(needs_local_set, i)
+            end
+        end
+    end
+
     for (ssa_id, use_count) in ssa_uses
         if haskey(ctx.phi_locals, ssa_id)
             # Phi nodes already have locals
@@ -3511,6 +3675,17 @@ function allocate_ssa_locals!(ctx::CompilationContext)
                 continue
             end
 
+            # Skip Nothing type - nothing is compiled as ref.null, not i32
+            # Trying to store it in an i32 local causes type errors
+            if ssa_type === Nothing
+                continue
+            end
+
+            # Skip bottom type (Union{}) - unreachable code
+            if ssa_type === Union{}
+                continue
+            end
+
             wasm_type = julia_to_wasm_type_concrete(ssa_type, ctx)
             local_idx = ctx.n_params + length(ctx.locals)
             push!(ctx.locals, wasm_type)
@@ -3589,7 +3764,7 @@ Check if a statement produces a value on the stack.
 function produces_stack_value(stmt)
     # Most expressions produce values
     if stmt isa Expr
-        return stmt.head in (:call, :invoke, :new, :boundscheck)
+        return stmt.head in (:call, :invoke, :new, :boundscheck, :tuple)
     end
     if stmt isa Core.PhiNode
         return true
@@ -5314,27 +5489,17 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 # Nothing statement
 
             else
-                # Regular statement
+                # Regular statement - compile_statement handles local.set internally
+                # for statements that produce values and have ssa_locals allocated
                 stmt_bytes = compile_statement(stmt, i, ctx)
                 append!(block_bytes, stmt_bytes)
 
-                # If this SSA value needs a local, store it
-                # (This was missing in stackifier - values weren't being stored!)
-                # Only store if the statement type is NOT Nothing (void)
-                stmt_type = get(ctx.ssa_types, i, Any)
-                produces_value = stmt_type !== Nothing &&
-                                !(stmt_type isa Union && Nothing in Base.uniontypes(stmt_type))
-                if haskey(ctx.ssa_locals, i) && !isempty(stmt_bytes)
-                    if produces_value
-                        local_idx = ctx.ssa_locals[i]
-                        println("DEBUG STORE: Statement $i ($(typeof(stmt))) type=$stmt_type -> local $local_idx, $(length(stmt_bytes)) bytes")
-                        push!(block_bytes, Opcode.LOCAL_SET)
-                        append!(block_bytes, encode_leb128_unsigned(local_idx))
-                    else
-                        println("DEBUG SKIP STORE: Statement $i ($(typeof(stmt))) type=$stmt_type - no value")
-                    end
-                elseif stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
-                    # Drop unused values that don't have locals
+                # NOTE: compile_statement already adds LOCAL_SET for SSA values
+                # that need storing. We don't add another one here to avoid
+                # duplicate stores that would cause "not enough arguments on stack" errors.
+
+                # Only drop unused values that don't have locals
+                if !haskey(ctx.ssa_locals, i) && stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
                     stmt_type = get(ctx.ssa_types, i, Any)
                     if stmt_type !== Nothing
                         is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
@@ -7903,9 +8068,73 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
 
     info = ctx.type_registry.structs[struct_type]
 
-    # Push field values in order
-    for val in field_values
-        append!(bytes, compile_value(val, ctx))
+    # Push field values in order, handling Union field types
+    for (i, val) in enumerate(field_values)
+        field_type = info.field_types[i]
+
+        # Check if this field is a Union type that needs wrapping
+        if field_type isa Union && needs_tagged_union(field_type)
+            # Get the value's actual type
+            val_type = if val isa Core.SSAValue
+                get(ctx.ssa_types, val.id, Any)
+            elseif val isa GlobalRef
+                actual_val = try getfield(val.mod, val.name) catch; nothing end
+                typeof(actual_val)
+            else
+                typeof(val)
+            end
+
+            # Compile the value first
+            append!(bytes, compile_value(val, ctx))
+
+            # Wrap it in the tagged union
+            append!(bytes, emit_wrap_union_value(ctx, val_type, field_type))
+        elseif field_type isa Union
+            # Simple nullable union (Union{Nothing, T})
+            inner_type = get_nullable_inner_type(field_type)
+
+            # Get the value's actual type
+            val_type = if val isa Core.SSAValue
+                get(ctx.ssa_types, val.id, Any)
+            elseif val isa GlobalRef
+                actual_val = try getfield(val.mod, val.name) catch; nothing end
+                typeof(actual_val)
+            else
+                typeof(val)
+            end
+
+            if val_type === Nothing
+                # For Nothing, emit ref.null with the appropriate type
+                if inner_type !== nothing && isconcretetype(inner_type) && isstructtype(inner_type)
+                    # Nullable struct ref - emit null reference
+                    if haskey(ctx.type_registry.structs, inner_type)
+                        inner_info = ctx.type_registry.structs[inner_type]
+                        push!(bytes, Opcode.REF_NULL)
+                        append!(bytes, encode_leb128_unsigned(inner_info.wasm_type_idx))
+                    else
+                        # Use generic null
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(StructRef))
+                    end
+                elseif inner_type !== nothing && inner_type <: AbstractVector
+                    # Nullable array ref
+                    elem_type = eltype(inner_type)
+                    arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
+                    push!(bytes, Opcode.REF_NULL)
+                    append!(bytes, encode_leb128_unsigned(arr_type_idx))
+                else
+                    # Generic nullable - use structref null
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, UInt8(StructRef))
+                end
+            else
+                # Non-null value - just compile normally
+                append!(bytes, compile_value(val, ctx))
+            end
+        else
+            # Regular field - compile value directly
+            append!(bytes, compile_value(val, ctx))
+        end
     end
 
     # struct.new type_idx
@@ -8017,6 +8246,14 @@ Compile a value reference (SSA, Argument, or Literal).
 """
 function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
     bytes = UInt8[]
+
+    # Handle nothing explicitly - it's the Julia singleton
+    if val === nothing
+        # Nothing doesn't have a runtime value in WasmGC
+        # Caller should handle this case (e.g., for Union{Nothing, T} fields)
+        # Return empty bytes - nothing to push
+        return bytes
+    end
 
     if val isa Core.SSAValue
         # Check if this SSA has a local allocated (either regular or phi)
@@ -8686,7 +8923,12 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                         # The tuple value needs to be compiled as an array first
 
                         # Get or create array type for this element type
-                        array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
+                        # Use concrete types for String elements to match tuple field types
+                        array_type_idx = if elem_type === String
+                            get_string_ref_array_type!(ctx.mod, ctx.type_registry)
+                        else
+                            get_array_type!(ctx.mod, ctx.type_registry, elem_type)
+                        end
 
                         # Compile the tuple as an array
                         # First compile the tuple value
