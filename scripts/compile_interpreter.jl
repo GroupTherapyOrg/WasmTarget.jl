@@ -41,6 +41,12 @@ string_ops = [
     # str_concat uses * operator which is already handled
 ]
 
+# String creation/mutation for JS<->WASM marshaling
+string_marshaling = [
+    (WasmTarget.str_new, (Int32,)),
+    (getfield(WasmTarget, Symbol("str_setchar!")), (String, Int32, Int32)),
+]
+
 # Value constructors
 value_constructors = [
     (WasmTarget.val_nothing, ()),
@@ -331,6 +337,7 @@ all_funcs = vcat(
     # Core string operations
     string_funcs,
     string_ops,
+    string_marshaling,  # For JS<->WASM string marshaling
 
     # Value system
     value_constructors,

@@ -374,7 +374,13 @@ end
 
             try {
                 // Load the real WasmGC interpreter compiled by WasmTarget.jl
-                const wasmPath = '/WasmTarget.jl/wasm/interpreter.wasm';
+                // Try multiple paths for different deployment scenarios
+                const wasmPaths = [
+                    '/WasmTarget.jl/wasm/interpreter.wasm',  // GitHub Pages with base_path
+                    '/wasm/interpreter.wasm',                 // Local dev without base_path
+                    './wasm/interpreter.wasm',                // Relative from current page
+                    '/dist/wasm/interpreter.wasm',            // Alternative path
+                ];
 
                 // Math.pow import required by the interpreter
                 const importObject = {
@@ -383,12 +389,27 @@ end
                     }
                 };
 
-                const response = await fetch(wasmPath);
-                if (!response.ok) {
-                    throw new Error('Failed to fetch interpreter.wasm: ' + response.status);
+                let instance = null;
+                let loadedPath = null;
+
+                for (const wasmPath of wasmPaths) {
+                    try {
+                        const response = await fetch(wasmPath);
+                        if (response.ok) {
+                            const result = await WebAssembly.instantiateStreaming(response, importObject);
+                            instance = result.instance;
+                            loadedPath = wasmPath;
+                            break;
+                        }
+                    } catch (e) {
+                        console.log('Failed to load from ' + wasmPath + ':', e.message);
+                    }
                 }
 
-                const { instance } = await WebAssembly.instantiateStreaming(response, importObject);
+                if (!instance) {
+                    throw new Error('Could not load interpreter.wasm from any path');
+                }
+
                 interpreterModule = instance;
                 interpreterReady = true;
 
@@ -398,7 +419,7 @@ end
                     runButton.disabled = false;
                 }
 
-                console.log('WasmGC interpreter loaded successfully');
+                console.log('WasmGC interpreter loaded from:', loadedPath);
                 console.log('Available exports:', Object.keys(instance.exports));
             } catch (err) {
                 console.error('Failed to load WasmGC interpreter:', err);
@@ -412,6 +433,29 @@ end
                     runButton.disabled = false;
                 }
             }
+        }
+
+        // String marshaling helpers for WasmGC
+        // WasmGC strings are i32 arrays, JS strings are UTF-16
+        function jsToWasmString(jsStr, exports) {
+            // Create a WASM string using str_new and str_setchar!
+            const len = jsStr.length;
+            const wasmStr = exports.str_new(len);
+            for (let i = 0; i < len; i++) {
+                exports['str_setchar!'](wasmStr, i + 1, jsStr.charCodeAt(i));
+            }
+            return wasmStr;
+        }
+
+        function wasmToJsString(wasmStr, exports) {
+            // Read a WASM string using str_len and str_char
+            if (!wasmStr) return '';
+            const len = exports.str_len(wasmStr);
+            let result = '';
+            for (let i = 0; i < len; i++) {
+                result += String.fromCharCode(exports.str_char(wasmStr, i + 1));
+            }
+            return result;
         }
 
         // Simple JavaScript interpreter for basic Julia syntax
@@ -531,17 +575,24 @@ end
 
                 if (interpreterModule && interpreterModule.exports.interpret) {
                     // Use real WasmGC interpreter
-                    // The interpret function takes a string and returns a string
                     const exports = interpreterModule.exports;
 
-                    // Convert JS string to WASM string
-                    // For now, try calling interpret directly
-                    // Note: This requires proper string marshaling which may need adjustment
                     try {
-                        result = exports.interpret(code);
+                        // Convert JS string to WASM string
+                        const wasmCode = jsToWasmString(code, exports);
+
+                        // Clear output buffer before running
+                        if (exports.clear_output) {
+                            exports.clear_output();
+                        }
+
+                        // Call the interpreter
+                        exports.interpret(wasmCode);
+
                         // Get output from the interpreter's output buffer
                         if (exports.get_output) {
-                            result = exports.get_output();
+                            const wasmOutput = exports.get_output();
+                            result = wasmToJsString(wasmOutput, exports);
                         }
                     } catch (wasmErr) {
                         console.error('WASM execution error:', wasmErr);
