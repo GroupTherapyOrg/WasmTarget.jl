@@ -913,8 +913,15 @@ const FUNCTYPE_BYTE = 0x60
 const STRUCTTYPE_BYTE = 0x5F
 const ARRAYTYPE_BYTE = 0x5E
 
+# WasmGC subtype opcodes (required for GC types)
+const SUB_BYTE = 0x50       # sub (non-final subtype)
+const SUB_FINAL_BYTE = 0x4F # sub final (final subtype, no further subtyping)
+const REC_BYTE = 0x4E       # rec (recursive type group)
+
 """
 Write a composite type to the type section.
+For function types, write directly (no sub wrapper needed for backward compat).
+For struct/array types, wrap in sub final.
 """
 function write_composite_type!(w::WasmWriter, ft::FuncType)
     write_byte!(w, FUNCTYPE_BYTE)
@@ -931,6 +938,9 @@ function write_composite_type!(w::WasmWriter, ft::FuncType)
 end
 
 function write_composite_type!(w::WasmWriter, st::StructType)
+    # WasmGC struct types must be wrapped in "sub final" for the current spec
+    write_byte!(w, SUB_FINAL_BYTE)  # 0x4F = sub final
+    write_u32!(w, 0)                # 0 supertypes
     write_byte!(w, STRUCTTYPE_BYTE)
     write_u32!(w, length(st.fields))
     for field in st.fields
@@ -939,6 +949,9 @@ function write_composite_type!(w::WasmWriter, st::StructType)
 end
 
 function write_composite_type!(w::WasmWriter, at::ArrayType)
+    # WasmGC array types must be wrapped in "sub final" for the current spec
+    write_byte!(w, SUB_FINAL_BYTE)  # 0x4F = sub final
+    write_u32!(w, 0)                # 0 supertypes
     write_byte!(w, ARRAYTYPE_BYTE)
     write_field_type!(w, at.elem)
 end

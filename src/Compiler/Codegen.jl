@@ -3048,6 +3048,9 @@ mutable struct CompilationContext
     # Module-level globals: maps (Module, Symbol) -> Wasm global index
     # Used for const mutable struct instances that should be shared across functions
     module_globals::Dict{Tuple{Module, Symbol}, UInt32}
+    # Scratch local indices for string operations (fixed at allocation time)
+    # Tuple of (result_local, str1_local, str2_local, len1_local, i_local) or nothing
+    scratch_locals::Union{Nothing, NTuple{5, Int}}
 end
 
 function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
@@ -3081,7 +3084,8 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         Dict{Int, UInt32}(),    # signal_ssa_setters
         captured_signal_fields, # captured signal field mappings
         dom_bindings,           # DOM bindings for Therapy.jl
-        module_globals          # Module-level globals (const mutable structs)
+        module_globals,         # Module-level globals (const mutable structs)
+        nothing                 # scratch_locals (set by allocate_scratch_locals!)
     )
     # Analyze SSA types and allocate locals for multi-use SSAs
     analyze_ssa_types!(ctx)
@@ -3247,6 +3251,7 @@ end
 """
 Allocate scratch locals for complex operations like string concatenation.
 These are extra locals beyond what SSA analysis requires.
+Stores the indices in ctx.scratch_locals for later use.
 """
 function allocate_scratch_locals!(ctx::CompilationContext)
     # Check if any SSA type is String - if so, we need scratch locals
@@ -3278,6 +3283,18 @@ function allocate_scratch_locals!(ctx::CompilationContext)
         str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
         str_ref_type = ConcreteRef(str_type_idx, true)
 
+        # Calculate indices BEFORE adding locals (indices are n_params + current local count)
+        scratch_base = ctx.n_params + length(ctx.locals)
+        result_local = scratch_base      # ref for result
+        str1_local = scratch_base + 1    # ref for str1
+        str2_local = scratch_base + 2    # ref for str2
+        len1_local = scratch_base + 3    # i32 for len1
+        i_local = scratch_base + 4       # i32 for len2/index
+
+        # Store the indices in context
+        ctx.scratch_locals = (result_local, str1_local, str2_local, len1_local, i_local)
+
+        # Now add the locals
         push!(ctx.locals, str_ref_type)  # result/scratch ref 1
         push!(ctx.locals, str_ref_type)  # scratch ref 2
         push!(ctx.locals, str_ref_type)  # scratch ref 3
@@ -3565,9 +3582,6 @@ function allocate_ssa_locals!(ctx::CompilationContext)
         if haskey(ctx.phi_locals, ssa_id)
             # Phi nodes already have locals
             ctx.ssa_locals[ssa_id] = ctx.phi_locals[ssa_id]
-            if ssa_id == 80
-                println("DEBUG: Phi 80 - ssa_locals[80] = phi_locals[80] = $(ctx.phi_locals[80])")
-            end
         elseif use_count > 1 || needs_local(ctx, ssa_id)
             push!(needs_local_set, ssa_id)
         end
@@ -3961,6 +3975,77 @@ function get_wasm_global_idx(val, ctx::CompilationContext)::Union{Int, Nothing}
         return global_index(val_type)
     end
     return nothing
+end
+
+"""
+Check if a call/invoke statement produces a value on the WASM stack.
+Returns false for calls to functions that return Nothing (void).
+This checks the MethodInstance's return type for invoke, which is more reliable
+than the SSA type which can be `Any` in some contexts.
+"""
+function statement_produces_wasm_value(stmt::Expr, idx::Int, ctx::CompilationContext)::Bool
+    # Get the SSA type first
+    stmt_type = get(ctx.ssa_types, idx, Any)
+
+    # If SSA type is definitely Nothing, no value produced
+    if stmt_type === Nothing
+        return false
+    end
+
+    # If SSA type is a Union containing Nothing, no value produced (void in WASM)
+    if stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
+        return false
+    end
+
+    # For invoke statements, check the MethodInstance's return type
+    if stmt.head === :invoke && length(stmt.args) >= 1
+        mi_or_ci = stmt.args[1]
+        mi = if mi_or_ci isa Core.MethodInstance
+            mi_or_ci
+        elseif isdefined(Core, :CodeInstance) && mi_or_ci isa Core.CodeInstance
+            mi_or_ci.def
+        else
+            nothing
+        end
+        if mi isa Core.MethodInstance
+            # Get the return type from the MethodInstance
+            # specTypes contains the return type
+            ret_type = mi.specTypes
+            # The return type is the rettype field when available
+            if isdefined(mi, :rettype)
+                ret_type = mi.rettype
+                if ret_type === Nothing
+                    return false
+                end
+            end
+        end
+    end
+
+    # If SSA type is Any, be conservative and assume it might be Nothing
+    # (e.g., when Julia's optimizer didn't infer the type precisely)
+    if stmt_type === Any
+        # Check if it's an invoke - we can get more precise info
+        if stmt.head === :invoke && length(stmt.args) >= 1
+            mi_or_ci = stmt.args[1]
+            mi = if mi_or_ci isa Core.MethodInstance
+                mi_or_ci
+            elseif isdefined(Core, :CodeInstance) && mi_or_ci isa Core.CodeInstance
+                mi_or_ci.def
+            else
+                nothing
+            end
+            if mi isa Core.MethodInstance && isdefined(mi, :rettype) && mi.rettype === Nothing
+                return false
+            end
+        end
+        # For Any type that's not a known Nothing invoke, check the function registry
+        # to see if we compiled this function with void return
+        # For now, conservatively assume Any might be Nothing
+        return false  # Be safe - don't DROP if type is Any
+    end
+
+    # For other types (concrete types that aren't Nothing), value is produced
+    return true
 end
 
 # ============================================================================
@@ -5722,15 +5807,13 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
 
                 # Only drop unused values that don't have locals
                 if !haskey(ctx.ssa_locals, i) && stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
-                    stmt_type = get(ctx.ssa_types, i, Any)
-                    if stmt_type !== Nothing
-                        is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
-                        if !is_nothing_union
-                            if !haskey(ctx.phi_locals, i)
-                                use_count = get(ssa_use_count, i, 0)
-                                if use_count == 0
-                                    push!(block_bytes, Opcode.DROP)
-                                end
+                    # Use statement_produces_wasm_value to check if the call actually
+                    # produces a value on the stack (handles Any type correctly)
+                    if statement_produces_wasm_value(stmt, i, ctx)
+                        if !haskey(ctx.phi_locals, i)
+                            use_count = get(ssa_use_count, i, 0)
+                            if use_count == 0
+                                push!(block_bytes, Opcode.DROP)
                             end
                         end
                     end
@@ -5854,11 +5937,6 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
         if val isa Core.SSAValue
             # Debug trace for specific SSAs
             if val.id in [45, 80, 84, 85, 93, 95]
-                has_ssa = haskey(ctx.ssa_locals, val.id)
-                has_phi = haskey(ctx.phi_locals, val.id)
-                ssa_local = has_ssa ? ctx.ssa_locals[val.id] : -1
-                phi_local = has_phi ? ctx.phi_locals[val.id] : -1
-                println("DEBUG compile_phi_value: %$(val.id) ssa_local=$ssa_local phi_local=$phi_local")
             end
             # Check if this SSA has a local allocated
             if haskey(ctx.ssa_locals, val.id)
@@ -5909,14 +5987,6 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                     for (edge_idx, edge) in enumerate(stmt.edges)
                         if edge == terminator_idx
                             val = stmt.values[edge_idx]
-                            if terminator_idx in [87, 96] || (terminator_idx == 55 && i == 80) # Debug: trace specific cases
-                                println("DEBUG TRACE: Setting phi $i from edge $terminator_idx with value $val")
-                                if val isa Core.SSAValue
-                                    has_ssa = haskey(ctx.ssa_locals, val.id)
-                                    has_phi = haskey(ctx.phi_locals, val.id)
-                                    println("DEBUG TRACE:   -> %$(val.id) has ssa_local=$has_ssa phi_local=$has_phi")
-                                end
-                            end
                             append!(bytes, compile_phi_value(val))
                             local_idx = ctx.phi_locals[i]
                             push!(bytes, Opcode.LOCAL_SET)
@@ -5926,21 +5996,10 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                             break
                         end
                     end
-                    if !found_edge
-                        println("WARNING: No matching edge for phi $i from terminator $terminator_idx, edges=$(stmt.edges)")
-                    end
-                else
-                    println("WARNING: Phi $i has no phi_local allocated")
                 end
             else
                 break  # Phi nodes are consecutive at the start
             end
-        end
-        if phi_count > 0
-            println("DEBUG: Set $phi_count phi values from terminator $terminator_idx to block $dest_block (dest_start=$dest_start)")
-        end
-        if phi_count == 0 && dest_start <= length(code) && code[dest_start] isa Core.PhiNode
-            println("WARNING: Block $dest_block starts with phi at $dest_start but no phi values were set from edge $terminator_idx")
         end
     end
 
@@ -5967,7 +6026,6 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
 
         # Handle the terminator
         term = block.terminator
-        println("DEBUG: Block $block_idx ($( block.start_idx)-$(block.end_idx)) terminator: $(typeof(term)) = $term")
         if term isa Core.ReturnNode
             if isdefined(term, :val)
                 append!(bytes, compile_value(term.val, ctx))
@@ -6075,12 +6133,10 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
             # No explicit terminator (GotoNode, GotoIfNot, ReturnNode)
             # This block falls through to the next block
             # Check if next block has phi nodes that need values from this edge
-            println("DEBUG: Block $block_idx has fallthrough terminator: $(typeof(term))")
             next_block_idx = block_idx + 1
             if next_block_idx <= length(blocks)
                 # The edge for fallthrough is the last statement of this block
                 terminator_idx = block.end_idx
-                println("DEBUG: Setting phi for fallthrough from block $block_idx (edge $terminator_idx) to block $next_block_idx")
                 set_phi_locals_for_edge!(bytes, next_block_idx, terminator_idx)
             end
         end
@@ -6388,17 +6444,12 @@ function generate_void_flow(ctx::CompilationContext, blocks::Vector{BasicBlock},
                             # Signal setters push a return value that won't be used
                             push!(bytes, Opcode.DROP)
                         else
-                            # For other calls, check type and use count
-                            stmt_type = get(ctx.ssa_types, j, Nothing)
-                            if stmt_type !== Nothing  # Only skip if type is definitely Nothing
-                                is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
-                                if !is_nothing_union
-                                    # This call produces a value
-                                    if !haskey(ctx.ssa_locals, j) && !haskey(ctx.phi_locals, j)
-                                        use_count = get(ssa_use_count, j, 0)
-                                        if use_count == 0
-                                            push!(bytes, Opcode.DROP)
-                                        end
+                            # For other calls, check if statement produces a value and use count
+                            if statement_produces_wasm_value(inner, j, ctx)
+                                if !haskey(ctx.ssa_locals, j) && !haskey(ctx.phi_locals, j)
+                                    use_count = get(ssa_use_count, j, 0)
+                                    if use_count == 0
+                                        push!(bytes, Opcode.DROP)
                                     end
                                 end
                             end
@@ -7435,7 +7486,6 @@ Generate nested if-else for multiple conditionals.
 function generate_nested_conditionals(ctx::CompilationContext, blocks, code, conditionals)::Vector{UInt8}
     bytes = UInt8[]
     result_type = julia_to_wasm_type_concrete(ctx.return_type, ctx)
-    println("DEBUG: generate_nested_conditionals called with $(length(conditionals)) conditionals")
 
     # Count SSA uses for drop logic
     ssa_use_count = Dict{Int, Int}()
@@ -7631,7 +7681,6 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
             phi_idx, goto_idx = found_phi_pattern
             phi_node = code[phi_idx]::Core.PhiNode
             phi_type = get(ctx.ssa_types, phi_idx, Bool)
-            println("DEBUG: Found phi pattern - phi_idx=$phi_idx phi_type=$phi_type is_bool=$(phi_type === Bool)")
 
             # Check if this is a boolean && pattern or a ternary with computed values
             is_boolean_phi = phi_type === Bool
@@ -10638,11 +10687,11 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 # Extract substring: create new string and copy characters
                 str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
 
-                # Use scratch locals
-                n_locals_before_scratch = length(ctx.locals) - 5
-                scratch_base = ctx.n_params + n_locals_before_scratch
-                result_local = scratch_base      # ref for result
-                src_local = scratch_base + 1     # ref for source string
+                # Use scratch locals stored in context
+                if ctx.scratch_locals === nothing
+                    error("String operations require scratch locals but none were allocated")
+                end
+                result_local, src_local, _, _, _ = ctx.scratch_locals
 
                 # Clear bytes - recompile in correct order
                 bytes = UInt8[]
@@ -12667,17 +12716,11 @@ function compile_string_concat_with_locals(str1, str2, ctx::CompilationContext):
 
     str_type_idx = ctx.type_registry.string_array_idx
 
-    # Use scratch locals allocated at the end of ctx.locals
-    # The scratch locals are: ref1, ref2, ref3, i32_1, i32_2
-    # They start at index (n_params + n_other_locals)
-    n_locals_before_scratch = length(ctx.locals) - 5  # 5 scratch locals
-    scratch_base = ctx.n_params + n_locals_before_scratch
-
-    result_local = scratch_base      # ref for result
-    str1_local = scratch_base + 1    # ref for str1
-    str2_local = scratch_base + 2    # ref for str2
-    len1_local = scratch_base + 3    # i32 for len1
-    i_local = scratch_base + 4       # i32 for len2/index
+    # Use scratch locals stored in context (allocated at compile context creation time)
+    if ctx.scratch_locals === nothing
+        error("String operations require scratch locals but none were allocated")
+    end
+    result_local, str1_local, str2_local, len1_local, i_local = ctx.scratch_locals
 
     # Store str1
     append!(bytes, compile_value(str1, ctx))
@@ -12767,15 +12810,11 @@ function compile_string_equal(str1, str2, ctx::CompilationContext)::Vector{UInt8
 
     str_type_idx = ctx.type_registry.string_array_idx
 
-    # Use scratch locals allocated at the end of ctx.locals
-    n_locals_before_scratch = length(ctx.locals) - 5  # 5 scratch locals
-    scratch_base = ctx.n_params + n_locals_before_scratch
-
-    # Use scratch locals: ref1, ref2, i32_1 (len), i32_2 (i)
-    str1_local = scratch_base + 1    # ref for str1
-    str2_local = scratch_base + 2    # ref for str2
-    len_local = scratch_base + 3     # i32 for len
-    i_local = scratch_base + 4       # i32 for loop index
+    # Use scratch locals stored in context (allocated at compile context creation time)
+    if ctx.scratch_locals === nothing
+        error("String operations require scratch locals but none were allocated")
+    end
+    _, str1_local, str2_local, len_local, i_local = ctx.scratch_locals
 
     # Store str1 and str2
     append!(bytes, compile_value(str1, ctx))
