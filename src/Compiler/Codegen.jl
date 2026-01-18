@@ -191,7 +191,21 @@ function get_array_type!(mod::WasmModule, registry::TypeRegistry, elem_type::Typ
     end
 
     # Create the array type
-    wasm_elem_type = julia_to_wasm_type(elem_type)
+    # Check if element type is currently being registered (self-referential)
+    local wasm_elem_type
+    if haskey(_registering_types, elem_type)
+        reserved_idx = _registering_types[elem_type]
+        if reserved_idx >= 0
+            # Use concrete reference to the reserved type index
+            wasm_elem_type = ConcreteRef(UInt32(reserved_idx), true)
+        else
+            # Being registered but not self-referential - use get_concrete_wasm_type
+            wasm_elem_type = get_concrete_wasm_type(elem_type, mod, registry)
+        end
+    else
+        # Not being registered - use get_concrete_wasm_type for proper type lookup
+        wasm_elem_type = get_concrete_wasm_type(elem_type, mod, registry)
+    end
     type_idx = add_array_type!(mod, wasm_elem_type, true)  # mutable arrays
     registry.arrays[elem_type] = type_idx
     return type_idx
@@ -1208,7 +1222,29 @@ function register_closure_type!(mod::WasmModule, registry::TypeRegistry, T::Data
 end
 
 # Track types currently being registered to prevent infinite recursion
-const _registering_types = Set{DataType}()
+# Maps type -> reserved type index for self-referential types, or -1 for normal types
+const _registering_types = Dict{DataType, Int}()
+
+"""
+Check if a type is self-referential (has fields that reference itself).
+"""
+function is_self_referential_type(T::DataType)::Bool
+    for i in 1:fieldcount(T)
+        ft = fieldtype(T, i)
+        # Check nullable fields (Union{Nothing, T})
+        if ft isa Union
+            inner = get_nullable_inner_type(ft)
+            if inner !== nothing && inner === T
+                return true
+            end
+        end
+        # Check array fields (Vector{T})
+        if ft <: AbstractVector && eltype(ft) === T
+            return true
+        end
+    end
+    return false
+end
 
 """
 Register a Julia struct type in the Wasm module.
@@ -1217,19 +1253,186 @@ function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataT
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
 
-    # Prevent infinite recursion for self-referential types (like GreenNode)
-    if T in _registering_types
-        # Type is being registered - we'll handle this as a forward reference
-        # For now, use abstract StructRef since concrete index isn't known yet
-        return nothing  # Caller should handle this
+    # Prevent infinite recursion for self-referential types
+    if haskey(_registering_types, T)
+        # Type is being registered - return nothing so caller handles it
+        return nothing
     end
 
-    push!(_registering_types, T)
-    try
-        return _register_struct_type_impl!(mod, registry, T)
-    finally
-        delete!(_registering_types, T)
+    # Check if this is a self-referential type
+    if is_self_referential_type(T)
+        # For self-referential types with Vector{T} fields, we use rec groups
+        # to allow concrete type references between struct and array types.
+
+        # Step 1: Add struct placeholder first (with placeholder fields)
+        # We need the struct index before creating array types that reference it
+        temp_fields = FieldType[]
+        for i in 1:fieldcount(T)
+            ft = fieldtype(T, i)
+            if ft === Int32 || ft === UInt32 || ft === Bool || ft === Char ||
+               ft === Int8 || ft === UInt8 || ft === Int16 || ft === UInt16
+                push!(temp_fields, FieldType(I32, true))
+            elseif ft === Int64 || ft === UInt64 || ft === Int
+                push!(temp_fields, FieldType(I64, true))
+            elseif ft === Float32
+                push!(temp_fields, FieldType(F32, true))
+            elseif ft === Float64
+                push!(temp_fields, FieldType(F64, true))
+            elseif ft <: AbstractVector || ft === String
+                push!(temp_fields, FieldType(ArrayRef, true))  # Placeholder
+            else
+                push!(temp_fields, FieldType(StructRef, true))  # Placeholder
+            end
+        end
+        reserved_idx = add_struct_type!(mod, temp_fields)
+        _registering_types[T] = Int(reserved_idx)
+
+        # Step 2: Create array types for Vector{T} fields with concrete element type
+        # Now that we have reserved_idx, array types can reference it
+        array_type_indices = Dict{Int, UInt32}()
+        for i in 1:fieldcount(T)
+            ft = fieldtype(T, i)
+            if ft <: AbstractVector && eltype(ft) === T
+                # Use concrete reference to the reserved struct index
+                arr_idx = add_array_type!(mod, ConcreteRef(reserved_idx, true), true)
+                array_type_indices[i] = arr_idx
+                registry.arrays[T] = arr_idx
+            elseif ft isa Union
+                inner = get_nullable_inner_type(ft)
+                if inner !== nothing && inner <: AbstractVector && eltype(inner) === T
+                    arr_idx = add_array_type!(mod, ConcreteRef(reserved_idx, true), true)
+                    array_type_indices[i] = arr_idx
+                    registry.arrays[T] = arr_idx
+                end
+            end
+        end
+
+        # Step 3: Add rec group for the struct and its array types
+        if !isempty(array_type_indices)
+            rec_group = UInt32[reserved_idx]
+            for arr_idx in values(array_type_indices)
+                push!(rec_group, arr_idx)
+            end
+            add_rec_group!(mod, rec_group)
+        end
+
+        try
+            return _register_struct_type_impl_with_reserved!(mod, registry, T, reserved_idx)
+        finally
+            delete!(_registering_types, T)
+        end
+    else
+        # Non-self-referential type - standard registration
+        _registering_types[T] = -1
+        try
+            return _register_struct_type_impl!(mod, registry, T)
+        finally
+            delete!(_registering_types, T)
+        end
     end
+end
+
+"""
+Register a self-referential struct type using a pre-reserved type index.
+The placeholder struct was already added; we update it with the correct fields.
+"""
+function _register_struct_type_impl_with_reserved!(mod::WasmModule, registry::TypeRegistry, T::DataType, reserved_idx::UInt32)
+    field_names = [fieldname(T, i) for i in 1:fieldcount(T)]
+    field_types = [fieldtype(T, i) for i in 1:fieldcount(T)]
+
+    # Build the proper fields with correct self-references
+    # Note: rec groups are already set up by register_struct_type!
+    wasm_fields = FieldType[]
+    for ft in field_types
+        if ft === Vector{String}
+            array_type_idx = get_string_ref_array_type!(mod, registry)
+            wasm_vt = ConcreteRef(array_type_idx, true)
+        elseif ft <: AbstractVector
+            elem_type = eltype(ft)
+            if !haskey(_registering_types, elem_type) && isconcretetype(elem_type) && isstructtype(elem_type)
+                register_struct_type!(mod, registry, elem_type)
+            end
+            array_type_idx = get_array_type!(mod, registry, elem_type)
+            wasm_vt = ConcreteRef(array_type_idx, true)
+        elseif ft === String
+            str_type_idx = get_string_array_type!(mod, registry)
+            wasm_vt = ConcreteRef(str_type_idx, true)
+        elseif ft === Any
+            wasm_vt = ExternRef
+        elseif ft === Int32 || ft === UInt32 || ft === Bool || ft === Char ||
+               ft === Int8 || ft === UInt8 || ft === Int16 || ft === UInt16
+            wasm_vt = I32
+        elseif ft === Int64 || ft === UInt64 || ft === Int
+            wasm_vt = I64
+        elseif ft === Float32
+            wasm_vt = F32
+        elseif ft === Float64
+            wasm_vt = F64
+        elseif isprimitivetype(ft)
+            sz = sizeof(ft)
+            wasm_vt = sz <= 4 ? I32 : I64
+        elseif ft isa Union
+            inner_type = get_nullable_inner_type(ft)
+            if inner_type !== nothing
+                if inner_type <: AbstractVector
+                    elem_type = eltype(inner_type)
+                    if !haskey(_registering_types, elem_type) && isconcretetype(elem_type) && isstructtype(elem_type)
+                        register_struct_type!(mod, registry, elem_type)
+                    end
+                    array_type_idx = get_array_type!(mod, registry, elem_type)
+                    wasm_vt = ConcreteRef(array_type_idx, true)
+                elseif isconcretetype(inner_type) && isstructtype(inner_type)
+                    if haskey(_registering_types, inner_type)
+                        r_idx = _registering_types[inner_type]
+                        if r_idx >= 0
+                            wasm_vt = ConcreteRef(UInt32(r_idx), true)
+                        else
+                            wasm_vt = StructRef
+                        end
+                    else
+                        register_struct_type!(mod, registry, inner_type)
+                        info = registry.structs[inner_type]
+                        wasm_vt = ConcreteRef(info.wasm_type_idx, true)
+                    end
+                else
+                    wasm_vt = julia_to_wasm_type(ft)
+                end
+            elseif needs_tagged_union(ft)
+                union_info = register_union_type!(mod, registry, ft)
+                wasm_vt = ConcreteRef(union_info.wasm_type_idx, true)
+            else
+                wasm_vt = julia_to_wasm_type(ft)
+            end
+        elseif isconcretetype(ft) && isstructtype(ft)
+            if haskey(_registering_types, ft)
+                r_idx = _registering_types[ft]
+                if r_idx >= 0
+                    wasm_vt = ConcreteRef(UInt32(r_idx), true)
+                else
+                    wasm_vt = StructRef
+                end
+            else
+                nested_info = register_struct_type!(mod, registry, ft)
+                if nested_info !== nothing
+                    wasm_vt = ConcreteRef(nested_info.wasm_type_idx, true)
+                else
+                    wasm_vt = StructRef
+                end
+            end
+        else
+            wasm_vt = julia_to_wasm_type(ft)
+        end
+        push!(wasm_fields, FieldType(wasm_vt, true))
+    end
+
+    # Update the placeholder struct with the correct fields
+    mod.types[reserved_idx + 1] = StructType(wasm_fields)
+
+    # Record mapping (rec groups already set up by register_struct_type!)
+    info = StructInfo(T, reserved_idx, field_names, field_types)
+    registry.structs[T] = info
+
+    return info
 end
 
 function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T::DataType)
@@ -1284,23 +1487,22 @@ function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T:
                 if inner_type <: AbstractVector
                     # Union{Nothing, Vector{...}} - nullable array ref
                     elem_type = eltype(inner_type)
-                    # Check for recursive types (elem_type is currently being registered)
-                    if elem_type in _registering_types
-                        # Self-referential type - use abstract ArrayRef for now
-                        wasm_vt = ArrayRef
-                    else
-                        # For non-recursive types, register the element type first
-                        if isconcretetype(elem_type) && isstructtype(elem_type)
-                            register_struct_type!(mod, registry, elem_type)
-                        end
-                        array_type_idx = get_array_type!(mod, registry, elem_type)
-                        wasm_vt = ConcreteRef(array_type_idx, true)  # nullable
+                    # For non-recursive types, register the element type first
+                    if !haskey(_registering_types, elem_type) && isconcretetype(elem_type) && isstructtype(elem_type)
+                        register_struct_type!(mod, registry, elem_type)
                     end
+                    # get_array_type! handles self-referential types
+                    array_type_idx = get_array_type!(mod, registry, elem_type)
+                    wasm_vt = ConcreteRef(array_type_idx, true)  # nullable
                 elseif isconcretetype(inner_type) && isstructtype(inner_type)
                     # Union{Nothing, SomeStruct} - nullable struct ref
-                    if inner_type in _registering_types
-                        # Self-referential type - use abstract StructRef
-                        wasm_vt = StructRef
+                    if haskey(_registering_types, inner_type)
+                        reserved_idx = _registering_types[inner_type]
+                        if reserved_idx >= 0
+                            wasm_vt = ConcreteRef(UInt32(reserved_idx), true)  # nullable
+                        else
+                            wasm_vt = StructRef  # Not a self-referential type being registered
+                        end
                     else
                         register_struct_type!(mod, registry, inner_type)
                         info = registry.structs[inner_type]
@@ -1318,9 +1520,13 @@ function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T:
             end
         elseif isconcretetype(ft) && isstructtype(ft)
             # Nested struct type - recursively register it
-            if ft in _registering_types
-                # Self-referential type - use abstract StructRef
-                wasm_vt = StructRef
+            if haskey(_registering_types, ft)
+                reserved_idx = _registering_types[ft]
+                if reserved_idx >= 0
+                    wasm_vt = ConcreteRef(UInt32(reserved_idx), true)
+                else
+                    wasm_vt = StructRef  # Non-self-referential type being registered
+                end
             else
                 nested_info = register_struct_type!(mod, registry, ft)
                 if nested_info !== nothing
@@ -8445,9 +8651,10 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
 
             # Get the element type from Memory{T}
             # Memory{T} is actually GenericMemory{:not_atomic, T, ...}
+            # The memory type is at args[6] (not args[7])
             elem_type = Int32  # default
-            if length(expr.args) >= 7
-                mem_type = expr.args[7]
+            if length(expr.args) >= 6
+                mem_type = expr.args[6]
                 if mem_type isa DataType && mem_type.name.name === :GenericMemory && length(mem_type.parameters) >= 2
                     # GenericMemory parameters: (atomicity, element_type, addrspace)
                     elem_type = mem_type.parameters[2]
@@ -8463,8 +8670,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
                 end
             end
 
-            # Get the length argument (usually args[8])
-            len_arg = length(expr.args) >= 8 ? expr.args[8] : nothing
+            # Get the length argument (at args[7] or args[8])
+            len_arg = length(expr.args) >= 7 ? expr.args[7] : nothing
 
             # Get or create array type for this element type
             arr_type_idx = if elem_type <: AbstractVector || (elem_type isa DataType && isstructtype(elem_type))

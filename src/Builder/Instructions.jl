@@ -1,7 +1,7 @@
 # WebAssembly Instructions and Opcodes
 # Reference: https://webassembly.github.io/spec/core/binary/instructions.html
 
-export Opcode, WasmModule, WasmImport, WasmTable, WasmMemory, WasmDataSegment, WasmTag, add_function!, add_import!, add_export!, add_struct_type!, add_array_type!, add_table!, add_table_export!, add_elem_segment!, add_memory!, add_memory_export!, add_data_segment!, add_tag!, add_global_ref!, to_bytes
+export Opcode, WasmModule, WasmImport, WasmTable, WasmMemory, WasmDataSegment, WasmTag, add_function!, add_import!, add_export!, add_struct_type!, add_array_type!, add_rec_group!, add_table!, add_table_export!, add_elem_segment!, add_memory!, add_memory_export!, add_data_segment!, add_tag!, add_global_ref!, to_bytes
 
 # ============================================================================
 # Opcodes (Section 5.4)
@@ -243,8 +243,10 @@ module Opcode
     const REF_AS_NON_NULL = 0xD4  # ref.as_non_null : [(ref null $t)] -> [(ref $t)]
 
     # GC casting operations (0xFB prefix)
-    const REF_CAST = 0x17         # ref.cast (ref null? $t) : [(ref null? $ht)] -> [(ref null? $t)]
-    const REF_TEST = 0x14         # ref.test (ref null? $t) : [(ref null? $ht)] -> [i32]
+    const REF_TEST = 0x14         # ref.test (ref $t) : [(ref null? $ht)] -> [i32]
+    const REF_TEST_NULL = 0x15    # ref.test null (ref null $t) : [(ref null? $ht)] -> [i32]
+    const REF_CAST = 0x16         # ref.cast (ref $t) : [(ref null? $ht)] -> [(ref $t)]
+    const REF_CAST_NULL = 0x17    # ref.cast null (ref null $t) : [(ref null? $ht)] -> [(ref null $t)]
     const BR_ON_CAST = 0x18       # br_on_cast
     const BR_ON_CAST_FAIL = 0x19  # br_on_cast_fail
 
@@ -361,6 +363,7 @@ A WebAssembly module builder. Use this to construct modules programmatically.
 """
 mutable struct WasmModule
     types::Vector{CompositeType}  # Can contain FuncType, StructType, ArrayType
+    rec_groups::Vector{Vector{UInt32}}  # Recursive type groups (indices into types)
     imports::Vector{WasmImport}   # Imported functions/tables/etc
     functions::Vector{WasmFunction}
     tables::Vector{WasmTable}     # Tables for funcref/externref
@@ -372,7 +375,7 @@ mutable struct WasmModule
     tags::Vector{WasmTag}         # Exception tags for exception handling
 end
 
-WasmModule() = WasmModule(CompositeType[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobalDef[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[])
+WasmModule() = WasmModule(CompositeType[], Vector{UInt32}[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobalDef[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[])
 
 # ============================================================================
 # Module Building API
@@ -429,6 +432,19 @@ Add an array type to the module and return its index.
 """
 function add_array_type!(mod::WasmModule, elem_type::WasmValType, mutable_::Bool=true)::UInt32
     add_type!(mod, ArrayType(FieldType(elem_type, mutable_)))
+end
+
+"""
+    add_rec_group!(mod, type_indices)
+
+Mark the given type indices as belonging to the same recursive type group.
+Types in a rec group can reference each other (forward references allowed).
+"""
+function add_rec_group!(mod::WasmModule, type_indices::Vector{UInt32})
+    # Only add if not empty and not already a rec group
+    if !isempty(type_indices)
+        push!(mod.rec_groups, type_indices)
+    end
 end
 
 """
@@ -690,9 +706,48 @@ function to_bytes(mod::WasmModule)::Vector{UInt8}
     # Type section
     if !isempty(mod.types)
         write_section!(w, SECTION_TYPE) do section
-            write_u32!(section, length(mod.types))
-            for ct in mod.types
-                write_composite_type!(section, ct)
+            # Build mapping from type index to rec group
+            type_to_group = Dict{UInt32, Int}()
+            for (gi, group) in enumerate(mod.rec_groups)
+                for ti in group
+                    type_to_group[ti] = gi
+                end
+            end
+
+            # Count effective entries: each rec group counts as 1, plus ungrouped types
+            written_groups = Set{Int}()
+            ungrouped_count = 0
+            for (i, _) in enumerate(mod.types)
+                ti = UInt32(i - 1)
+                if haskey(type_to_group, ti)
+                    push!(written_groups, type_to_group[ti])
+                else
+                    ungrouped_count += 1
+                end
+            end
+            entry_count = length(written_groups) + ungrouped_count
+            write_u32!(section, entry_count)
+
+            # Write types, grouping rec groups together
+            written = Set{UInt32}()
+            for (i, ct) in enumerate(mod.types)
+                ti = UInt32(i - 1)
+                ti in written && continue
+
+                if haskey(type_to_group, ti)
+                    # Write the rec group
+                    group = mod.rec_groups[type_to_group[ti]]
+                    write_byte!(section, REC_BYTE)  # 0x4E = rec
+                    write_u32!(section, length(group))
+                    for gti in group
+                        write_composite_type!(section, mod.types[gti + 1])
+                        push!(written, gti)
+                    end
+                else
+                    # Write single type (implicit rec group of 1)
+                    write_composite_type!(section, ct)
+                    push!(written, ti)
+                end
             end
         end
     end
@@ -972,6 +1027,22 @@ function write_valtype!(w::WasmWriter, vt::NumType)
 end
 
 function write_valtype!(w::WasmWriter, vt::RefType)
+    # FuncRef (0x70) and ExternRef (0x6F) are nullable shorthand forms
+    # Abstract GC heap types (StructRef, ArrayRef, etc.) need nullable wrapper
+    # when used as locals/params: (ref null struct) = 0x63 + heaptype
+    if vt == StructRef || vt == ArrayRef || vt == EqRef || vt == AnyRef || vt == I31Ref
+        write_byte!(w, 0x63)  # ref null prefix
+        write_byte!(w, UInt8(vt))
+    else
+        # FuncRef, ExternRef are already nullable shorthand
+        write_byte!(w, UInt8(vt))
+    end
+end
+
+function write_valtype!(w::WasmWriter, vt::HeapType)
+    # HeapType values used as locals/params should be nullable
+    # (ref null heaptype) = 0x63 followed by heaptype code
+    write_byte!(w, 0x63)  # ref null prefix
     write_byte!(w, UInt8(vt))
 end
 
