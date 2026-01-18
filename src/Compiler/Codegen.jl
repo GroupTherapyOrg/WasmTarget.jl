@@ -5224,46 +5224,6 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
         end
     end
 
-    # Initialize LOOP phi node locals with their entry values
-    # Loop phis are at the loop header and have one edge from BEFORE the loop
-    # Inner conditional phis (within the loop) should NOT be initialized here
-    # PRE-LOOP phis (before loop_header) must NOT be initialized here either -
-    # their edges are also "before the loop" but they're not loop phis, they're
-    # conditional phis that will be set during pre-loop code generation.
-    for (i, stmt) in enumerate(code)
-        if stmt isa Core.PhiNode && haskey(ctx.phi_locals, i)
-            # Only initialize if this is a LOOP phi (at or AFTER loop header)
-            # Phis BEFORE loop_header are pre-loop conditional phis, not loop phis
-            if i < loop_header
-                # Skip pre-loop phis - they'll be initialized in PHASE 1
-                continue
-            end
-
-            # Loop phis have an entry edge from before the loop header
-            # Inner conditional phis have all edges from within the loop
-            is_loop_phi = false
-            entry_edge = nothing
-            entry_val = nothing
-
-            for (edge_idx, edge) in enumerate(stmt.edges)
-                if edge < loop_header
-                    # Entry edge from before the loop
-                    is_loop_phi = true
-                    entry_edge = edge
-                    entry_val = stmt.values[edge_idx]
-                    break
-                end
-            end
-
-            if is_loop_phi && entry_val !== nothing
-                append!(bytes, compile_value(entry_val, ctx))
-                local_idx = ctx.phi_locals[i]
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(local_idx))
-            end
-        end
-    end
-
     # ============================================================
     # PHASE 1: Generate PRE-LOOP code (lines 1 to loop_header - 1)
     # This handles early return guards, pre-loop conditionals, etc.
@@ -5535,6 +5495,39 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
     end
 
     # ============================================================
+    # Initialize LOOP phi node locals with their entry values
+    # This MUST happen AFTER PHASE 1 (pre-loop code) because loop phi entry
+    # values may reference pre-loop phi results.
+    # ============================================================
+    for (i, stmt) in enumerate(code)
+        if stmt isa Core.PhiNode && haskey(ctx.phi_locals, i)
+            # Only initialize if this is a LOOP phi (at or AFTER loop header)
+            if i < loop_header
+                continue
+            end
+
+            # Loop phis have an entry edge from before the loop header
+            is_loop_phi = false
+            entry_val = nothing
+
+            for (edge_idx, edge) in enumerate(stmt.edges)
+                if edge < loop_header
+                    is_loop_phi = true
+                    entry_val = stmt.values[edge_idx]
+                    break
+                end
+            end
+
+            if is_loop_phi && entry_val !== nothing
+                append!(bytes, compile_value(entry_val, ctx))
+                local_idx = ctx.phi_locals[i]
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(local_idx))
+            end
+        end
+    end
+
+    # ============================================================
     # PHASE 2: Generate LOOP code (lines loop_header to back_edge_idx)
     # ============================================================
 
@@ -5785,6 +5778,22 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
 
         # Close any open blocks at this merge point
         while !isempty(post_loop_block_stack) && post_loop_block_stack[end] == i
+            # If this merge point is a phi, set the phi local from the fall-through edge
+            # The fall-through edge is the line right before this merge point (i-1)
+            if i <= length(code) && code[i] isa Core.PhiNode && haskey(ctx.phi_locals, i)
+                phi_stmt = code[i]::Core.PhiNode
+                prev_line = i - 1
+                # Find edge value from fall-through (the line just before phi)
+                for (edge_idx, edge) in enumerate(phi_stmt.edges)
+                    if edge == prev_line
+                        edge_val = phi_stmt.values[edge_idx]
+                        append!(bytes, compile_value(edge_val, ctx))
+                        push!(bytes, Opcode.LOCAL_SET)
+                        append!(bytes, encode_leb128_unsigned(ctx.phi_locals[i]))
+                        break
+                    end
+                end
+            end
             push!(bytes, Opcode.END)
             pop!(post_loop_block_stack)
         end
@@ -5802,6 +5811,22 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
             push!(bytes, 0x40)  # void block type
             push!(post_loop_block_stack, target)
 
+            # If target is a phi, set the phi local BEFORE branching
+            # When condition is FALSE, we skip to phi with edge value from this line
+            if target <= length(code) && code[target] isa Core.PhiNode && haskey(ctx.phi_locals, target)
+                phi_stmt = code[target]::Core.PhiNode
+                # Find edge value for when we skip (edge from this line)
+                for (edge_idx, edge) in enumerate(phi_stmt.edges)
+                    if edge == i
+                        edge_val = phi_stmt.values[edge_idx]
+                        append!(bytes, compile_value(edge_val, ctx))
+                        push!(bytes, Opcode.LOCAL_SET)
+                        append!(bytes, encode_leb128_unsigned(ctx.phi_locals[target]))
+                        break
+                    end
+                end
+            end
+
             # Branch if condition is FALSE (skip then-branch)
             append!(bytes, compile_value(stmt.cond, ctx))
             push!(bytes, Opcode.I32_EQZ)
@@ -5817,12 +5842,29 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                     break
                 end
             end
+
+            # If target is a phi, set the phi local BEFORE branching
+            if stmt.label <= length(code) && code[stmt.label] isa Core.PhiNode && haskey(ctx.phi_locals, stmt.label)
+                phi_stmt = code[stmt.label]::Core.PhiNode
+                # Find edge value for this GotoNode (edge from this line)
+                for (edge_idx, edge) in enumerate(phi_stmt.edges)
+                    if edge == i
+                        edge_val = phi_stmt.values[edge_idx]
+                        append!(bytes, compile_value(edge_val, ctx))
+                        push!(bytes, Opcode.LOCAL_SET)
+                        append!(bytes, encode_leb128_unsigned(ctx.phi_locals[stmt.label]))
+                        break
+                    end
+                end
+            end
+
             if depth >= 0 && !isempty(post_loop_block_stack)
                 push!(bytes, Opcode.BR)
                 push!(bytes, UInt8(depth))
             end
         elseif stmt isa Core.PhiNode
-            # Skip phi nodes in post-loop - they're typically not used here
+            # Phi nodes in post-loop are merge points - they're handled when blocks close
+            # The phi local should already be set by the branches leading here
             continue
         elseif stmt === nothing
             # Skip nothing statements
@@ -8991,20 +9033,29 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
     # 1. All blocks that are return blocks (have ReturnNode terminator)
     # 2. The function uses void IF blocks because both branches terminate
     #
-    # A simpler check: if there are only return blocks (no fall-through needed),
-    # then the code after gen_conditional is unreachable.
+    # For typed IF blocks (with result type), each branch produces a value,
+    # and the IF itself returns a value. If the function returns this value,
+    # we don't need RETURN or UNREACHABLE - just fall through with value on stack.
+    #
+    # For void IF blocks where branches use RETURN, code after IF is unreachable.
     #
     # Count actual return blocks vs total blocks
     return_blocks = count(b -> b.terminator isa Core.ReturnNode, blocks)
     total_blocks = length(blocks)
 
-    # If there are multiple return blocks (at least 2), it means different branches return.
-    # In this case, the code after the IF is unreachable.
-    # We emit UNREACHABLE to mark this as dead code (WASM still validates it).
-    # For single-return-block functions (simple if-else with one return at end),
-    # we need the outer RETURN.
-    if return_blocks >= 2
-        # Multiple return blocks - branches return inside, code after IF is unreachable
+    # Check if we're using typed IF blocks (branches produce values)
+    # If so, the value is on the stack and we just fall through
+    # The gen_conditional function uses typed blocks when there's a phi merge
+    # or when branches don't use explicit RETURN
+    #
+    # If return_blocks >= 2 AND the result_type is not void (0x40),
+    # the IF produced a value and we don't emit anything
+    if result_type isa ConcreteRef || result_type === I32 || result_type === I64 ||
+       result_type === F32 || result_type === F64
+        # Typed result - IF produces value, fall through with value on stack
+        # No RETURN or UNREACHABLE needed
+    elseif return_blocks >= 2
+        # Multiple return blocks with void result - branches return inside
         push!(bytes, Opcode.UNREACHABLE)
     else
         push!(bytes, Opcode.RETURN)
