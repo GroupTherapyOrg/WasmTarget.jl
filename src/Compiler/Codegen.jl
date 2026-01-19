@@ -13780,6 +13780,84 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                     append!(bytes, compile_value(args[1], ctx))
                 end
 
+            # ================================================================
+            # PURE-004: Base.string dispatch for Float32/Float64
+            # When Julia compiles string(x::Float32), it invokes the Ryu method
+            # We intercept and redirect to our simpler float_to_string
+            # ================================================================
+            elseif name === :string && length(args) == 1
+                value_arg = args[1]
+                value_type = infer_value_type(value_arg, ctx)
+
+                if value_type === Float32 || value_type === Float64
+                    # Clear bytes - recompile the argument
+                    bytes = UInt8[]
+
+                    # Look up float_to_string in the function registry
+                    float_to_string_info = nothing
+                    if ctx.func_registry !== nothing
+                        try
+                            float_to_string_func = getfield(WasmTarget, :float_to_string)
+                            float_to_string_info = get_function(ctx.func_registry, float_to_string_func, (Float32,))
+                        catch
+                            # Function not found
+                        end
+                    end
+
+                    if float_to_string_info !== nothing
+                        # Compile the value argument
+                        append!(bytes, compile_value(value_arg, ctx))
+
+                        # Convert Float64 to Float32 if needed (our float_to_string takes Float32)
+                        if value_type === Float64
+                            push!(bytes, 0xB6)  # f32.demote_f64
+                        end
+
+                        # Call float_to_string
+                        push!(bytes, Opcode.CALL)
+                        append!(bytes, encode_leb128_unsigned(float_to_string_info.wasm_idx))
+                    else
+                        error("Base.string(::$(value_type)) requires float_to_string in compile_multi. " *
+                              "Add WasmTarget.float_to_string, WasmTarget.int_to_string, and WasmTarget.digit_to_str to your function list.")
+                    end
+                elseif value_type === Int32 || value_type === Int64 ||
+                       value_type === UInt32 || value_type === UInt64 ||
+                       value_type === Int16 || value_type === UInt16 ||
+                       value_type === Int8 || value_type === UInt8
+                    # Integer types - redirect to int_to_string
+                    bytes = UInt8[]
+
+                    int_to_string_info = nothing
+                    if ctx.func_registry !== nothing
+                        try
+                            int_to_string_func = getfield(WasmTarget, :int_to_string)
+                            int_to_string_info = get_function(ctx.func_registry, int_to_string_func, (Int32,))
+                        catch
+                            # Function not found
+                        end
+                    end
+
+                    if int_to_string_info !== nothing
+                        append!(bytes, compile_value(value_arg, ctx))
+
+                        # Convert to Int32 if needed
+                        if value_type === Int64
+                            push!(bytes, Opcode.I32_WRAP_I64)
+                        elseif value_type === UInt64
+                            push!(bytes, Opcode.I32_WRAP_I64)
+                        end
+
+                        push!(bytes, Opcode.CALL)
+                        append!(bytes, encode_leb128_unsigned(int_to_string_info.wasm_idx))
+                    else
+                        error("Base.string(::$(value_type)) requires int_to_string in compile_multi. " *
+                              "Add WasmTarget.int_to_string and WasmTarget.digit_to_str to your function list.")
+                    end
+                else
+                    error("Base.string(::$(value_type)) not yet supported. " *
+                          "Supported types: Float32, Float64, Int32, Int64, UInt32, UInt64, Int16, UInt16, Int8, UInt8")
+                end
+
             else
                 error("Unsupported method: $name")
             end
