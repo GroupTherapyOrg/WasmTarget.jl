@@ -3748,36 +3748,10 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
         end
         # Fallback to abstract StructRef
         return StructRef
-    elseif T <: AbstractArray  # Handles Vector, Matrix, and higher-dim arrays
-        # 1D arrays (Vector) are stored as plain WasmGC arrays
-        # Multi-dim arrays (Matrix, etc.) are stored as structs with data + size
-        if T <: AbstractVector
-            elem_type = eltype(T)
-            if haskey(ctx.type_registry.arrays, elem_type)
-                type_idx = ctx.type_registry.arrays[elem_type]
-                return ConcreteRef(type_idx, true)
-            else
-                # Register it now
-                type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-                return ConcreteRef(type_idx, true)
-            end
-        else
-            # Matrix and higher-dim arrays: register as struct
-            if haskey(ctx.type_registry.structs, T)
-                info = ctx.type_registry.structs[T]
-                return ConcreteRef(info.wasm_type_idx, true)
-            else
-                info = register_matrix_type!(ctx.mod, ctx.type_registry, T)
-                return ConcreteRef(info.wasm_type_idx, true)
-            end
-        end
-    elseif T === String
-        # Strings are WasmGC arrays of bytes
-        type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-        return ConcreteRef(type_idx, true)
     elseif T isa DataType && (T.name.name === :MemoryRef || T.name.name === :GenericMemoryRef)
         # MemoryRef{T} / GenericMemoryRef maps to the array type for element T
         # This is Julia's internal type for array element access
+        # IMPORTANT: Check this BEFORE AbstractArray since MemoryRef <: AbstractArray
         # GenericMemoryRef parameters: (atomicity, element_type, addrspace)
         elem_type = T.name.name === :GenericMemoryRef ? T.parameters[2] : T.parameters[1]
         if haskey(ctx.type_registry.arrays, elem_type)
@@ -3787,8 +3761,9 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
             type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
             return ConcreteRef(type_idx, true)
         end
-    elseif T isa DataType && T.name.name === :GenericMemory
-        # GenericMemory is the backing storage for Vector (Julia 1.11+)
+    elseif T isa DataType && (T.name.name === :Memory || T.name.name === :GenericMemory)
+        # GenericMemory/Memory is the backing storage for Vector (Julia 1.11+)
+        # IMPORTANT: Check this BEFORE AbstractArray since Memory <: AbstractArray
         # Parameters are: (atomicity, element_type, addrspace)
         # In WasmGC, it's the same as the array
         elem_type = T.parameters[2]  # Element type is second parameter
@@ -3799,6 +3774,28 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
             type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
             return ConcreteRef(type_idx, true)
         end
+    elseif T <: AbstractArray  # Handles Vector, Matrix, and higher-dim arrays
+        # In Julia 1.11+, Vector is a struct with :ref (MemoryRef) and :size fields
+        # Check if the type is registered as a struct first (for Vector/Matrix)
+        if haskey(ctx.type_registry.structs, T)
+            info = ctx.type_registry.structs[T]
+            return ConcreteRef(info.wasm_type_idx, true)
+        end
+
+        # 1D arrays (Vector) are stored as WasmGC structs (with ref and size fields)
+        if T <: AbstractVector
+            # Register Vector as a struct type
+            info = register_vector_type!(ctx.mod, ctx.type_registry, T)
+            return ConcreteRef(info.wasm_type_idx, true)
+        else
+            # Matrix and higher-dim arrays: also stored as structs
+            info = register_matrix_type!(ctx.mod, ctx.type_registry, T)
+            return ConcreteRef(info.wasm_type_idx, true)
+        end
+    elseif T === String
+        # Strings are WasmGC arrays of bytes
+        type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+        return ConcreteRef(type_idx, true)
     elseif T === Int128 || T === UInt128
         # 128-bit integers are represented as WasmGC structs with two i64 fields
         if haskey(ctx.type_registry.structs, T)
@@ -6621,6 +6618,47 @@ Reference: https://labs.leaningtech.com/blog/control-flow
 """
 function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
     # ========================================================================
+    # STEP 0: BOUNDSCHECK PATTERN DETECTION
+    # ========================================================================
+    # We emit i32.const 0 for boundscheck, so GotoIfNot following boundscheck
+    # ALWAYS jumps (since NOT 0 = TRUE). Track these patterns to skip dead code.
+
+    boundscheck_jumps = Set{Int}()  # Statement indices of GotoIfNot that always jump
+    dead_regions = Set{Int}()       # Statement indices that are dead code
+    dead_blocks = Set{Int}()        # Block indices that are entirely dead
+
+    for i in 1:length(code)
+        stmt = code[i]
+        if stmt isa Expr && stmt.head === :boundscheck && length(stmt.args) >= 1
+            if i + 1 <= length(code) && code[i + 1] isa Core.GotoIfNot
+                goto_stmt = code[i + 1]::Core.GotoIfNot
+                if goto_stmt.cond isa Core.SSAValue && goto_stmt.cond.id == i
+                    push!(boundscheck_jumps, i + 1)
+                    push!(dead_regions, i)
+                    target = goto_stmt.dest
+                    for j in (i + 2):(target - 1)
+                        push!(dead_regions, j)
+                    end
+                end
+            end
+        end
+    end
+
+    # Mark blocks as dead if all their statements are in dead regions
+    for (block_idx, block) in enumerate(blocks)
+        all_dead = true
+        for i in block.start_idx:block.end_idx
+            if !(i in dead_regions) && !(i in boundscheck_jumps)
+                all_dead = false
+                break
+            end
+        end
+        if all_dead
+            push!(dead_blocks, block_idx)
+        end
+    end
+
+    # ========================================================================
     # STEP 1: Build Control Flow Graph
     # ========================================================================
 
@@ -6642,19 +6680,36 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
     end
 
     for (block_idx, block) in enumerate(blocks)
+        # Skip dead blocks entirely - don't add edges to/from them
+        if block_idx in dead_blocks
+            continue
+        end
+
         term = block.terminator
         if term isa Core.GotoIfNot
-            # Two successors: true branch (fall through) and false branch (dest)
-            dest_block = get(stmt_to_block, term.dest, nothing)
-            fall_through_block = block_idx < length(blocks) ? block_idx + 1 : nothing
+            # Check if this is a boundscheck-based always-jump
+            term_idx = block.end_idx
+            if term_idx in boundscheck_jumps
+                # This GotoIfNot ALWAYS jumps (boundscheck is 0, NOT 0 = TRUE)
+                # Only add the jump target as successor, NOT the fall-through
+                dest_block = get(stmt_to_block, term.dest, nothing)
+                if dest_block !== nothing && !(dest_block in dead_blocks)
+                    push!(successors[block_idx], dest_block)
+                    push!(predecessors[dest_block], block_idx)
+                end
+            else
+                # Real conditional: two successors
+                dest_block = get(stmt_to_block, term.dest, nothing)
+                fall_through_block = block_idx < length(blocks) ? block_idx + 1 : nothing
 
-            if fall_through_block !== nothing && fall_through_block <= length(blocks)
-                push!(successors[block_idx], fall_through_block)
-                push!(predecessors[fall_through_block], block_idx)
-            end
-            if dest_block !== nothing
-                push!(successors[block_idx], dest_block)
-                push!(predecessors[dest_block], block_idx)
+                if fall_through_block !== nothing && fall_through_block <= length(blocks) && !(fall_through_block in dead_blocks)
+                    push!(successors[block_idx], fall_through_block)
+                    push!(predecessors[fall_through_block], block_idx)
+                end
+                if dest_block !== nothing && !(dest_block in dead_blocks)
+                    push!(successors[block_idx], dest_block)
+                    push!(predecessors[dest_block], block_idx)
+                end
             end
         elseif term isa Core.GotoNode
             dest_block = get(stmt_to_block, term.label, nothing)
@@ -6829,18 +6884,36 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
     # Create a big block structure with all targets as labeled positions
 
     # Collect all unique forward jump targets (excluding immediate fall-through)
+    # Also exclude dead blocks and treat boundscheck-based jumps correctly
     non_trivial_targets = Set{Int}()
     for (block_idx, block) in enumerate(blocks)
+        # Skip dead blocks
+        if block_idx in dead_blocks
+            continue
+        end
+
         term = block.terminator
+        term_idx = block.end_idx
+
         if term isa Core.GotoIfNot
-            # The false branch destination
-            dest_block = get(stmt_to_block, term.dest, nothing)
-            if dest_block !== nothing && dest_block != block_idx + 1
-                push!(non_trivial_targets, dest_block)
+            # Check if this is a boundscheck always-jump
+            if term_idx in boundscheck_jumps
+                # Boundscheck jumps ALWAYS go to dest, so it's like an unconditional jump
+                # Only record it as non-trivial if it's not immediate fall-through
+                dest_block = get(stmt_to_block, term.dest, nothing)
+                if dest_block !== nothing && dest_block != block_idx + 1 && !(dest_block in dead_blocks)
+                    push!(non_trivial_targets, dest_block)
+                end
+            else
+                # Real conditional - the false branch destination
+                dest_block = get(stmt_to_block, term.dest, nothing)
+                if dest_block !== nothing && dest_block != block_idx + 1 && !(dest_block in dead_blocks)
+                    push!(non_trivial_targets, dest_block)
+                end
             end
         elseif term isa Core.GotoNode
             dest_block = get(stmt_to_block, term.label, nothing)
-            if dest_block !== nothing && dest_block != block_idx + 1
+            if dest_block !== nothing && dest_block != block_idx + 1 && !(dest_block in dead_blocks)
                 push!(non_trivial_targets, dest_block)
             end
         end
@@ -7010,6 +7083,11 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
             push!(bytes, Opcode.END)  # End the block for this target
         end
 
+        # Skip dead blocks (from boundscheck patterns)
+        if block_idx in dead_blocks
+            continue
+        end
+
         # Check if we're entering a loop
         is_loop_header = block_idx in loop_headers
 
@@ -7020,11 +7098,93 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
         end
 
         # Compile the block's statements (not the terminator, we handle it separately)
-        append!(bytes, compile_block_statements(block, true))
+        # Skip any dead statements within the block
+        block_bytes = UInt8[]
+        for i in block.start_idx:block.end_idx
+            # Skip dead statements
+            if i in dead_regions
+                continue
+            end
+            if i in boundscheck_jumps
+                continue  # This GotoIfNot always jumps - skip it (handled below)
+            end
+
+            stmt = code[i]
+
+            # Skip terminator if we're going to handle it separately
+            if i == block.end_idx && (stmt isa Core.GotoIfNot || stmt isa Core.GotoNode || stmt isa Core.ReturnNode)
+                continue
+            end
+
+            if stmt isa Core.ReturnNode
+                if isdefined(stmt, :val)
+                    append!(block_bytes, compile_value(stmt.val, ctx))
+                end
+                push!(block_bytes, Opcode.RETURN)
+
+            elseif stmt isa Core.GotoIfNot
+                # GotoIfNot: handled by control flow structure
+                # Nothing to emit here
+
+            elseif stmt isa Core.GotoNode
+                # Unconditional goto: handled by control flow structure
+                # Nothing to emit here
+
+            elseif stmt isa Core.PhiNode
+                # Phi nodes: check if we're falling through from a previous statement
+                if haskey(ctx.phi_locals, i)
+                    for (edge_idx, edge) in enumerate(stmt.edges)
+                        if edge >= block.start_idx && edge < i
+                            val = stmt.values[edge_idx]
+                            phi_value_bytes = compile_phi_value(val, i)
+                            if !isempty(phi_value_bytes)
+                                append!(block_bytes, phi_value_bytes)
+                                local_idx = ctx.phi_locals[i]
+                                push!(block_bytes, Opcode.LOCAL_SET)
+                                append!(block_bytes, encode_leb128_unsigned(local_idx))
+                            end
+                            break
+                        end
+                    end
+                end
+
+            elseif stmt === nothing
+                # Nothing statement
+
+            else
+                stmt_bytes = compile_statement(stmt, i, ctx)
+                append!(block_bytes, stmt_bytes)
+
+                if !haskey(ctx.ssa_locals, i) && stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
+                    if statement_produces_wasm_value(stmt, i, ctx)
+                        if !haskey(ctx.phi_locals, i)
+                            use_count = get(ssa_use_count, i, 0)
+                            if use_count == 0
+                                push!(block_bytes, Opcode.DROP)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        append!(bytes, block_bytes)
 
         # Handle the terminator
         term = block.terminator
-        if term isa Core.ReturnNode
+        terminator_idx = block.end_idx
+
+        # Check if this terminator is a boundscheck always-jump
+        if terminator_idx in boundscheck_jumps && term isa Core.GotoIfNot
+            # This is an always-jump - emit unconditional br to the target
+            dest_block = get(stmt_to_block, term.dest, nothing)
+            if dest_block !== nothing && dest_block > block_idx && dest_block in non_trivial_targets
+                label_depth = get_forward_label_depth(dest_block)
+                push!(bytes, Opcode.BR)
+                append!(bytes, encode_leb128_unsigned(label_depth))
+            end
+            # Otherwise, it's just a fall-through to a live block - nothing needed
+
+        elseif term isa Core.ReturnNode
             if isdefined(term, :val)
                 append!(bytes, compile_value(term.val, ctx))
             end
@@ -7032,7 +7192,6 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
 
         elseif term isa Core.GotoIfNot
             dest_block = get(stmt_to_block, term.dest, nothing)
-            terminator_idx = block.end_idx  # The SSA index of this GotoIfNot
 
             # Check if destination has phi nodes that need values from this edge
             has_phi = dest_block !== nothing && dest_has_phi_from_edge(dest_block, terminator_idx)
@@ -8586,6 +8745,112 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
         count_ssa_uses!(stmt, ssa_use_count)
     end
 
+    # ========================================================================
+    # BOUNDSCHECK PATTERN DETECTION
+    # ========================================================================
+    # We emit i32.const 0 for boundscheck, so GotoIfNot following boundscheck
+    # ALWAYS jumps (since NOT 0 = TRUE). We need to:
+    # 1. Filter out these fake conditionals (they're always-jump, not real conditionals)
+    # 2. Track dead code regions (fall-through path that's never taken)
+    # 3. Generate code that goes directly to the jump target
+
+    boundscheck_jumps = Set{Int}()  # Statement indices of GotoIfNot that always jump
+    dead_regions = Set{Int}()       # Statement indices that are dead code
+
+    for i in 1:length(code)
+        stmt = code[i]
+        if stmt isa Expr && stmt.head === :boundscheck && length(stmt.args) >= 1
+            # Check if next statement is a GotoIfNot using this boundscheck result
+            if i + 1 <= length(code) && code[i + 1] isa Core.GotoIfNot
+                goto_stmt = code[i + 1]::Core.GotoIfNot
+                if goto_stmt.cond isa Core.SSAValue && goto_stmt.cond.id == i
+                    # This is a boundscheck+GotoIfNot pattern - the GotoIfNot always jumps
+                    push!(boundscheck_jumps, i + 1)
+                    # Mark the boundscheck as dead (we don't need to emit i32.const 0)
+                    push!(dead_regions, i)
+                    # Mark the fall-through path as dead (from GotoIfNot+1 to target-1)
+                    target = goto_stmt.dest
+                    for j in (i + 2):(target - 1)
+                        push!(dead_regions, j)
+                    end
+                end
+            end
+        end
+    end
+
+    # Filter out boundscheck-based conditionals - they're not real conditionals
+    # Also filter out conditionals that are entirely within dead regions
+    real_conditionals = filter(conditionals) do (block_idx, block)
+        term_idx = block.end_idx
+        if term_idx in boundscheck_jumps
+            return false  # This is an always-jump, not a real conditional
+        end
+        if term_idx in dead_regions
+            return false  # This conditional is inside dead code
+        end
+        return true
+    end
+
+    # If we filtered out all conditionals, we just need to emit the code
+    # that the boundscheck jumps to
+    if isempty(real_conditionals)
+        # Find the first non-dead statement after any boundscheck jumps
+        # This is the actual code that should run
+        first_live = 1
+        for i in 1:length(code)
+            if !(i in dead_regions)
+                first_live = i
+                break
+            end
+        end
+
+        # Generate code starting from first_live, skipping any remaining dead regions
+        for i in first_live:length(code)
+            if i in dead_regions
+                continue
+            end
+            if i in boundscheck_jumps
+                continue  # Skip the always-jump GotoIfNot
+            end
+            stmt = code[i]
+            if stmt isa Core.ReturnNode
+                if isdefined(stmt, :val)
+                    append!(bytes, compile_value(stmt.val, ctx))
+                end
+                push!(bytes, Opcode.RETURN)
+            elseif stmt === nothing
+                # Skip
+            elseif stmt isa Core.GotoNode
+                # Skip forward gotos that were part of the dead structure
+            elseif stmt isa Core.GotoIfNot
+                # Skip conditionals that are part of dead structure
+            else
+                append!(bytes, compile_statement(stmt, i, ctx))
+
+                # Drop unused values
+                if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
+                    stmt_type = get(ctx.ssa_types, i, Any)
+                    if stmt_type !== Nothing && stmt_type !== Union{}
+                        is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
+                        if !is_nothing_union
+                            if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
+                                use_count = get(ssa_use_count, i, 0)
+                                if use_count == 0
+                                    push!(bytes, Opcode.DROP)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        return bytes
+    end
+
+    # Use real_conditionals for the rest of the function
+    conditionals = real_conditionals
+
     # Check for && pattern: all conditionals jump to the same destination
     # This pattern needs special handling with block/br_if instead of nested if/else
     if length(conditionals) >= 2
@@ -9149,10 +9414,13 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
         if found_forward_goto !== nothing && else_terminates
             # Both branches terminate - use void result type
             push!(inner_bytes, 0x40)  # void block type
-        elseif then_ends_unreachable || found_base_closure_invoke
-            # Then-branch ends with unreachable - use void block type
-            # The unreachable statement doesn't produce a value, so we can't use typed result
-            push!(inner_bytes, 0x40)  # void block type
+        elseif (then_ends_unreachable || found_base_closure_invoke)
+            # Then-branch ends with unreachable.
+            # In WASM, unreachable can "produce" any type, so we CAN use typed result
+            # if the else branch produces a value. Use the return type for the if block.
+            # This allows the else branch to leave a value on the stack that becomes
+            # the if result (and ultimately the return value).
+            append!(inner_bytes, encode_block_type(result_type))
         else
             append!(inner_bytes, encode_block_type(result_type))
         end
@@ -9478,13 +9746,29 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
         # 1. The statement produced bytecode (!isempty(stmt_bytes)), OR
         # 2. The statement is a passthrough (memoryrefnew, Vector %new) where the value
         #    is expected to be on the stack from an earlier SSA
+        # BUT NOT if the statement ends with UNREACHABLE (there's no value on stack)
         #
         # Skipped signal statements return empty bytes and are NOT passthroughs, so
         # they correctly get no local.set.
         if haskey(ctx.ssa_locals, idx)
+            # Don't emit local.set after unreachable - there's no value on the stack.
+            # We detect unreachable in two ways:
+            # 1. Type-based: Union{} means the statement never returns (throws/unreachable)
+            # 2. Bytecode-based: if the statement ends with UNREACHABLE opcode (0x00)
+            #    AND is preceded by DROP (0x1A) - this is our Base closure pattern
+            #    (we emit DROP then UNREACHABLE for closures we can't compile)
+            stmt_type = get(ctx.ssa_types, idx, Any)
+            is_unreachable_type = stmt_type === Union{}
+            # Check for DROP+UNREACHABLE pattern at end of bytecode
+            # This handles Base closure invokes which have non-Union{} return type
+            # but we emit UNREACHABLE anyway
+            is_unreachable_bytecode = length(stmt_bytes) >= 2 &&
+                                       stmt_bytes[end] == Opcode.UNREACHABLE &&
+                                       stmt_bytes[end-1] == Opcode.DROP
+            is_unreachable = is_unreachable_type || is_unreachable_bytecode
             # Also store for passthrough statements that have a value on the stack
             # but don't emit their own bytecode (like memoryrefnew, Vector %new)
-            should_store = !isempty(stmt_bytes) || is_passthrough_statement(stmt, ctx)
+            should_store = (!isempty(stmt_bytes) || is_passthrough_statement(stmt, ctx)) && !is_unreachable
             if should_store
                 local_idx = ctx.ssa_locals[idx]
                 push!(bytes, Opcode.LOCAL_SET)
