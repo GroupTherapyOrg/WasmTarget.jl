@@ -10132,6 +10132,13 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
                 # Non-null value - just compile normally
                 append!(bytes, compile_value(val, ctx))
             end
+        elseif field_type === Any
+            # Any field maps to externref in WasmGC
+            # We need to convert internal refs to externref using extern.convert_any
+            append!(bytes, compile_value(val, ctx))
+            # Convert internal ref to externref
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
         else
             # Regular field - compile value directly
             append!(bytes, compile_value(val, ctx))
@@ -10342,6 +10349,11 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
 
     elseif val isa Char
         # Char is represented as i32 (Unicode codepoint)
+        push!(bytes, Opcode.I32_CONST)
+        append!(bytes, encode_leb128_signed(Int32(val)))
+
+    elseif val isa Int8 || val isa UInt8 || val isa Int16 || val isa UInt16
+        # Small integers - stored as i32 in WASM
         push!(bytes, Opcode.I32_CONST)
         append!(bytes, encode_leb128_signed(Int32(val)))
 
