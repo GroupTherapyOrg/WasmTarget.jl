@@ -3339,6 +3339,9 @@ mutable struct CompilationContext
     # Scratch local indices for string operations (fixed at allocation time)
     # Tuple of (result_local, str1_local, str2_local, len1_local, i_local) or nothing
     scratch_locals::Union{Nothing, NTuple{5, Int}}
+    # MemoryRef offset tracking: maps SSA id -> index SSA/value for memoryrefnew(ref, index, bc)
+    # Used by memoryrefoffset to get the offset. Fresh refs (not in this map) have offset 1.
+    memoryref_offsets::Dict{Int, Any}
 end
 
 function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
@@ -3373,7 +3376,8 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         captured_signal_fields, # captured signal field mappings
         dom_bindings,           # DOM bindings for Therapy.jl
         module_globals,         # Module-level globals (const mutable structs)
-        nothing                 # scratch_locals (set by allocate_scratch_locals!)
+        nothing,                # scratch_locals (set by allocate_scratch_locals!)
+        Dict{Int, Any}()        # memoryref_offsets (populated during compilation)
     )
     # Analyze SSA types and allocate locals for multi-use SSAs
     analyze_ssa_types!(ctx)
@@ -10416,6 +10420,33 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         return bytes
     end
 
+    # Special case for memoryrefoffset - get the 1-based offset of a MemoryRef
+    # This is used by push!, resize!, and other dynamic array operations
+    # Fresh MemoryRefs (from Core.memoryref, getfield(vec, :ref)) have offset 1
+    # Indexed MemoryRefs (from memoryrefnew(ref, index, bc)) have offset = index
+    if is_func(func, :memoryrefoffset) && length(args) >= 1
+        ref_arg = args[1]
+
+        # Check if this ref came from a memoryrefnew with an index
+        if ref_arg isa Core.SSAValue && haskey(ctx.memoryref_offsets, ref_arg.id)
+            # This MemoryRef has a recorded offset - compile the index value
+            index_val = ctx.memoryref_offsets[ref_arg.id]
+            append!(bytes, compile_value(index_val, ctx))
+
+            # Ensure result is i64 (Julia's Int)
+            idx_type = infer_value_type(index_val, ctx)
+            if idx_type !== Int64 && idx_type !== Int
+                # Convert to i64 if needed
+                push!(bytes, Opcode.I64_EXTEND_I32_S)
+            end
+        else
+            # Fresh MemoryRef - offset is always 1
+            push!(bytes, Opcode.I64_CONST)
+            push!(bytes, 0x01)  # 1
+        end
+        return bytes
+    end
+
     # Special case for memoryrefset! - array element assignment
     # memoryrefset!(ref, value, ordering, boundscheck) -> stores value in array
     # In Julia, setindex! returns the stored value, so we need to return it too
@@ -10471,11 +10502,15 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
     if is_func(func, :memoryrefnew)
         if length(args) == 1
             # Single arg: just wrapping a Memory - pass through the array reference
+            # This is a "fresh" MemoryRef with offset 1
             append!(bytes, compile_value(args[1], ctx))
             return bytes
         elseif length(args) >= 2
             base_ref = args[1]
             index = args[2]
+
+            # Record the offset for this MemoryRef SSA so memoryrefoffset can use it
+            ctx.memoryref_offsets[idx] = index
 
             # Compile the base array reference
             append!(bytes, compile_value(base_ref, ctx))
