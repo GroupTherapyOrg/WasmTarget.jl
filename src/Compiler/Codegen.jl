@@ -1013,10 +1013,10 @@ function compile_module(functions::Vector)::WasmModule
             register_closure_type!(mod, type_registry, return_type)
         elseif is_struct_type(return_type)
             register_struct_type!(mod, type_registry, return_type)
-        elseif return_type <: AbstractVector
+        elseif return_type !== Union{} && return_type <: AbstractVector
             # Vector is now a struct with (ref, size) for setfield! support
             register_vector_type!(mod, type_registry, return_type)
-        elseif return_type <: AbstractArray
+        elseif return_type !== Union{} && return_type <: AbstractArray
             # Multi-dimensional arrays (Matrix, etc.) - register as struct
             register_matrix_type!(mod, type_registry, return_type)
         elseif return_type === String
@@ -1883,6 +1883,11 @@ function register_matrix_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
 
+    # Guard against Union{} (bottom type) - can't create a matrix of it
+    if T === Union{}
+        error("Cannot register matrix type for Union{} (bottom type)")
+    end
+
     # Get element type and dimensionality
     elem_type = eltype(T)
     N = ndims(T)
@@ -1931,6 +1936,11 @@ The size field is mutable to support setfield!(v, :size, (n,)) for push!/resize!
 function register_vector_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
+
+    # Guard against Union{} (bottom type) - can't create a vector of it
+    if T === Union{}
+        error("Cannot register vector type for Union{} (bottom type)")
+    end
 
     # Get element type
     elem_type = eltype(T)
@@ -4660,6 +4670,12 @@ function infer_value_type(val, ctx::CompilationContext)
         catch
             # If we can't evaluate, default to Int64
         end
+    elseif val isa QuoteNode
+        # QuoteNode wraps a value - return the type of the wrapped value
+        return typeof(val.value)
+    elseif val isa Type
+        # Type{T} references - return Type{T}
+        return Type{val}
     elseif isprimitivetype(typeof(val))
         # Custom primitive type (e.g., JuliaSyntax.Kind) - return actual type
         return typeof(val)
@@ -12751,9 +12767,10 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
 
             # String concatenation: string * string -> string
             # Julia compiles string concatenation to Base._string
+            # Also handle String, Symbol for error message construction
             elseif (name === :* || name === :_string) && length(args) >= 2 &&
-                   infer_value_type(args[1], ctx) === String &&
-                   infer_value_type(args[2], ctx) === String
+                   (infer_value_type(args[1], ctx) === String || infer_value_type(args[1], ctx) === Symbol) &&
+                   (infer_value_type(args[2], ctx) === String || infer_value_type(args[2], ctx) === Symbol)
                 # String concatenation using WasmGC array operations
                 # For now, handle 2-string concat (most common case)
                 if length(args) == 2
