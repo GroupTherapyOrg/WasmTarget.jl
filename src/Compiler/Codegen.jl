@@ -350,6 +350,13 @@ end
 Compile a Julia function to a WebAssembly module.
 """
 function compile_function(f, arg_types::Tuple, func_name::String)::WasmModule
+    # Use compile_module for single functions too, enabling auto-discovery of dependencies
+    # This ensures that cross-function calls work correctly
+    return compile_module([(f, arg_types, func_name)])
+end
+
+# Legacy implementation kept for reference - now unused
+function _compile_function_legacy(f, arg_types::Tuple, func_name::String)::WasmModule
     # Get typed IR
     code_info, return_type = get_typed_ir(f, arg_types)
 
@@ -540,11 +547,26 @@ function discover_dependencies(functions::Vector)::Vector
 end
 
 """
-Scan an expression for WasmTarget runtime function calls.
+Scan an expression for WasmTarget runtime function calls and external method invocations.
 """
 function scan_expr_for_deps!(expr::Expr, seen_funcs::Set, to_add::Vector, to_scan::Vector)
     # Check if this is an invoke expression
     if expr.head === :invoke && length(expr.args) >= 2
+        # Check for MethodInstance in args[1] - this enables auto-discovery of external methods
+        mi_or_ci = expr.args[1]
+        mi = if mi_or_ci isa Core.MethodInstance
+            mi_or_ci
+        elseif isdefined(Core, :CodeInstance) && mi_or_ci isa Core.CodeInstance
+            mi_or_ci.def
+        else
+            nothing
+        end
+
+        if mi !== nothing
+            check_and_add_external_method!(mi, seen_funcs, to_add, to_scan)
+        end
+
+        # Also check GlobalRef for WasmTarget runtime functions
         func_ref = expr.args[2]
         if func_ref isa GlobalRef
             check_and_add_runtime_func!(func_ref, seen_funcs, to_add, to_scan)
@@ -562,6 +584,97 @@ function scan_expr_for_deps!(expr::Expr, seen_funcs::Set, to_add::Vector, to_sca
             scan_expr_for_deps!(arg, seen_funcs, to_add, to_scan)
         end
     end
+end
+
+"""
+Set of modules whose methods should NOT be auto-discovered and compiled.
+These modules contain intrinsics, special handling, or are too complex.
+"""
+const SKIP_AUTODISCOVER_MODULES = Set([
+    :Core,
+    :Base,
+    :Main,
+])
+
+"""
+Set of method names that should be skipped during auto-discovery.
+These are handled specially in compile_invoke or are error/throw functions.
+"""
+const SKIP_AUTODISCOVER_METHODS = Set([
+    :throw, :rethrow, :ArgumentError, :BoundsError,
+    :_throw_argerror, :throw_boundserror,
+    :_throw_not_readable, :_throw_not_writable,
+    :throw_inexacterror,
+])
+
+"""
+Check if a MethodInstance should be auto-discovered and compiled.
+"""
+function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set, to_add::Vector, to_scan::Vector)
+    meth = mi.def
+    if !(meth isa Method)
+        return
+    end
+
+    mod = meth.module
+    mod_name = nameof(mod)
+    meth_name = meth.name
+
+    # Skip core modules - these are handled specially
+    if mod_name in SKIP_AUTODISCOVER_MODULES || mod === Core || mod === Base
+        return
+    end
+
+    # Skip error/throw functions
+    if meth_name in SKIP_AUTODISCOVER_METHODS
+        return
+    end
+
+    # Get the function and argument types from the MethodInstance
+    func = nothing
+    arg_types = nothing
+
+    try
+        # Get the function - for constructors, it's the type itself
+        sig = mi.specTypes
+        if sig <: Tuple && length(sig.parameters) >= 1
+            func_type = sig.parameters[1]
+            if func_type isa DataType && func_type <: Function
+                # Regular function call
+                # The function is stored in the Method's sig
+                func = getfield(mod, meth_name)
+                arg_types = Tuple(sig.parameters[2:end])
+            elseif func_type isa DataType && func_type <: Type
+                # Constructor call - function is the type
+                # e.g., ParseStream(args...) where func_type = Type{ParseStream}
+                inner_type = func_type.parameters[1]
+                # inner_type can be DataType or UnionAll (for parametric types like Lexer{IO})
+                if inner_type isa DataType || inner_type isa UnionAll
+                    func = inner_type
+                    arg_types = Tuple(sig.parameters[2:end])
+                end
+            end
+        end
+    catch
+        return  # Can't extract function/types
+    end
+
+    if func === nothing || arg_types === nothing
+        return
+    end
+
+    # Create a unique key for this function+types combination
+    key = (func, arg_types)
+    if key in seen_funcs
+        return
+    end
+
+    # Add to seen and to_add
+    push!(seen_funcs, key)
+    name = string(meth_name)
+    entry = (func, arg_types, name)
+    push!(to_add, entry)
+    push!(to_scan, entry)  # Also scan this function for its deps
 end
 
 """
@@ -677,7 +790,11 @@ end
 Check if a function is a WasmTarget intrinsic that needs special code generation.
 Returns true if the function should be generated as an intrinsic instead of compiling Julia IR.
 """
-function is_intrinsic_function(f::Function)::Bool
+function is_intrinsic_function(f)::Bool
+    # Only functions can be intrinsics, not types (constructors)
+    if !(f isa Function)
+        return false
+    end
     fname = nameof(f)
     return fname in [:str_char, :str_len, :str_eq, :str_new, :str_setchar!, :str_concat, :str_substr]
 end
@@ -687,7 +804,11 @@ Generate intrinsic function body for WasmTarget runtime functions.
 These functions have special WASM implementations that differ from their Julia fallbacks.
 Returns the function body bytes, or nothing if not an intrinsic.
 """
-function generate_intrinsic_body(f::Function, arg_types::Tuple, mod::WasmModule, type_registry::TypeRegistry)::Union{Vector{UInt8}, Nothing}
+function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_registry::TypeRegistry)::Union{Vector{UInt8}, Nothing}
+    # Only functions can have intrinsic bodies
+    if !(f isa Function)
+        return nothing
+    end
     fname = nameof(f)
     bytes = UInt8[]
 
@@ -1315,6 +1436,12 @@ Register a Julia struct type in the Wasm module.
 function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataType)
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
+
+    # Redirect Tuple types to their specialized registration function
+    # Tuples have integer field names (1, 2, ...) not symbols
+    if T <: Tuple
+        return register_tuple_type!(mod, registry, T)
+    end
 
     # Prevent infinite recursion for self-referential types
     if haskey(_registering_types, T)
@@ -10087,6 +10214,18 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
             append!(bytes, encode_leb128_unsigned(arr_type_idx))
 
             return bytes
+        elseif name === :jl_string_to_genericmemory
+            # Convert String to Memory{UInt8}
+            # In WasmGC, String and Memory{UInt8} both use the same byte array representation
+            # So this is essentially just passing through the underlying array
+
+            # The string argument is at args[6]
+            if length(expr.args) >= 6
+                str_arg = expr.args[6]
+                append!(bytes, compile_value(str_arg, ctx))
+            end
+
+            return bytes
         end
     end
 
@@ -12465,12 +12604,18 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
 
             # Check for cross-function call within the module first
             cross_call_handled = false
-            if ctx.func_registry !== nothing && actual_func_ref isa GlobalRef && !is_self_call
+            if ctx.func_registry !== nothing && !is_self_call
                 # Try to find this function in our registry
-                called_func = try
-                    getfield(actual_func_ref.mod, actual_func_ref.name)
-                catch
-                    nothing
+                called_func = nothing
+                if actual_func_ref isa GlobalRef
+                    called_func = try
+                        getfield(actual_func_ref.mod, actual_func_ref.name)
+                    catch
+                        nothing
+                    end
+                elseif actual_func_ref isa DataType || actual_func_ref isa UnionAll
+                    # For constructor calls, the func_ref might be the type directly
+                    called_func = actual_func_ref
                 end
 
                 if called_func !== nothing
