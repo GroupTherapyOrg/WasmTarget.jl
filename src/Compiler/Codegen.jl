@@ -4242,6 +4242,7 @@ Check if a statement is a passthrough that doesn't emit bytecode but relies on
 a value already being on the stack from an earlier SSA.
 Examples:
 - memoryrefnew(memory) - just passes through the array reference
+- Core.memoryref(memory) via :invoke - also a passthrough
 Note: Vector{T} is NO LONGER a passthrough - it's now a struct with (ref, size) fields.
 """
 function is_passthrough_statement(stmt, ctx::CompilationContext)
@@ -4249,7 +4250,7 @@ function is_passthrough_statement(stmt, ctx::CompilationContext)
         return false
     end
 
-    # Check for memoryrefnew with single arg (passthrough pattern)
+    # Check for memoryrefnew with single arg (passthrough pattern) via :call
     if stmt.head === :call
         func = stmt.args[1]
         is_memrefnew = (func isa GlobalRef && func.mod === Core && func.name === :memoryrefnew) ||
@@ -4257,6 +4258,28 @@ function is_passthrough_statement(stmt, ctx::CompilationContext)
         if is_memrefnew && length(stmt.args) == 2
             # Single arg memoryrefnew is a passthrough
             return true
+        end
+    end
+
+    # Check for Core.memoryref via :invoke - this is also a passthrough
+    # Julia uses :invoke for Core.memoryref(memory::Memory{T}) -> MemoryRef{T}
+    # In WasmGC, this is a no-op since Memory and MemoryRef are both the array
+    if stmt.head === :invoke && length(stmt.args) >= 3
+        # args[1] is MethodInstance, args[2] is function ref, args[3:end] are actual args
+        func_ref = stmt.args[2]
+        args = stmt.args[3:end]
+
+        # Check if it's Core.memoryref with single arg
+        is_memoryref = func_ref === :(Core.memoryref) ||
+                       (func_ref isa GlobalRef && func_ref.mod === Core && func_ref.name === :memoryref)
+
+        if is_memoryref && length(args) == 1
+            arg = args[1]
+            # It's a passthrough if the single arg is an SSA that doesn't have a local
+            # (meaning its value is still on the stack from the previous statement)
+            if arg isa Core.SSAValue && !haskey(ctx.ssa_locals, arg.id)
+                return true
+            end
         end
     end
 
