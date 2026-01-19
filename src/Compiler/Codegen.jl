@@ -1532,9 +1532,22 @@ function _register_struct_type_impl_with_reserved!(mod::WasmModule, registry::Ty
 
     # Build the proper fields with correct self-references
     # Note: rec groups are already set up by register_struct_type!
+    #
+    # IMPORTANT: Check Memory/MemoryRef BEFORE AbstractVector because
+    # Memory <: AbstractVector but should map to raw array, not Vector struct
     wasm_fields = FieldType[]
     for ft in field_types
-        if ft === Vector{String}
+        if ft isa DataType && (ft.name.name === :MemoryRef || ft.name.name === :GenericMemoryRef)
+            # MemoryRef{T} / GenericMemoryRef maps to array type for element T
+            elem_type = ft.name.name === :GenericMemoryRef ? ft.parameters[2] : ft.parameters[1]
+            array_type_idx = get_array_type!(mod, registry, elem_type)
+            wasm_vt = ConcreteRef(array_type_idx, true)
+        elseif ft isa DataType && (ft.name.name === :Memory || ft.name.name === :GenericMemory)
+            # Memory{T} / GenericMemory maps to array type for element T
+            elem_type = eltype(ft)
+            array_type_idx = get_array_type!(mod, registry, elem_type)
+            wasm_vt = ConcreteRef(array_type_idx, true)
+        elseif ft === Vector{String}
             # Vector{String} is a struct with (array-of-string-refs, size tuple)
             info = register_vector_type!(mod, registry, ft)
             wasm_vt = ConcreteRef(info.wasm_type_idx, true)
@@ -1552,16 +1565,6 @@ function _register_struct_type_impl_with_reserved!(mod::WasmModule, registry::Ty
             if !haskey(_registering_types, elem_type) && isconcretetype(elem_type) && isstructtype(elem_type)
                 register_struct_type!(mod, registry, elem_type)
             end
-            array_type_idx = get_array_type!(mod, registry, elem_type)
-            wasm_vt = ConcreteRef(array_type_idx, true)
-        elseif ft isa DataType && (ft.name.name === :MemoryRef || ft.name.name === :GenericMemoryRef)
-            # MemoryRef{T} / GenericMemoryRef maps to array type for element T
-            elem_type = ft.name.name === :GenericMemoryRef ? ft.parameters[2] : ft.parameters[1]
-            array_type_idx = get_array_type!(mod, registry, elem_type)
-            wasm_vt = ConcreteRef(array_type_idx, true)
-        elseif ft isa DataType && (ft.name.name === :Memory || ft.name.name === :GenericMemory)
-            # Memory{T} / GenericMemory maps to array type for element T
-            elem_type = eltype(ft)
             array_type_idx = get_array_type!(mod, registry, elem_type)
             wasm_vt = ConcreteRef(array_type_idx, true)
         elseif ft === String
@@ -1665,7 +1668,21 @@ function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T:
         # For array fields, use concrete reference to registered array type
         # But for Vector{T}, use the Vector struct type (with ref and size fields)
         # since Vector in Julia 1.11+ is a struct, not a raw array
-        if ft === Vector{String}
+        #
+        # IMPORTANT: Check Memory/MemoryRef BEFORE AbstractVector because
+        # Memory <: AbstractVector but should map to raw array, not Vector struct
+        if ft isa DataType && (ft.name.name === :MemoryRef || ft.name.name === :GenericMemoryRef)
+            # MemoryRef{T} / GenericMemoryRef maps to array type for element T
+            # GenericMemoryRef parameters: (atomicity, element_type, addrspace)
+            elem_type = ft.name.name === :GenericMemoryRef ? ft.parameters[2] : ft.parameters[1]
+            array_type_idx = get_array_type!(mod, registry, elem_type)
+            wasm_vt = ConcreteRef(array_type_idx, true)  # nullable reference
+        elseif ft isa DataType && (ft.name.name === :Memory || ft.name.name === :GenericMemory)
+            # Memory{T} / GenericMemory maps to array type for element T
+            elem_type = eltype(ft)
+            array_type_idx = get_array_type!(mod, registry, elem_type)
+            wasm_vt = ConcreteRef(array_type_idx, true)  # nullable reference
+        elseif ft === Vector{String}
             # Special case: Vector{String} is a struct with array-of-string-refs + size tuple
             # Register as Vector struct type
             info = register_vector_type!(mod, registry, ft)
@@ -1677,17 +1694,6 @@ function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T:
             wasm_vt = ConcreteRef(info.wasm_type_idx, true)
         elseif ft <: AbstractVector
             # Generic AbstractVector without concrete type - use raw array
-            elem_type = eltype(ft)
-            array_type_idx = get_array_type!(mod, registry, elem_type)
-            wasm_vt = ConcreteRef(array_type_idx, true)  # nullable reference
-        elseif ft isa DataType && (ft.name.name === :MemoryRef || ft.name.name === :GenericMemoryRef)
-            # MemoryRef{T} / GenericMemoryRef maps to array type for element T
-            # GenericMemoryRef parameters: (atomicity, element_type, addrspace)
-            elem_type = ft.name.name === :GenericMemoryRef ? ft.parameters[2] : ft.parameters[1]
-            array_type_idx = get_array_type!(mod, registry, elem_type)
-            wasm_vt = ConcreteRef(array_type_idx, true)  # nullable reference
-        elseif ft isa DataType && (ft.name.name === :Memory || ft.name.name === :GenericMemory)
-            # Memory{T} / GenericMemory maps to array type for element T
             elem_type = eltype(ft)
             array_type_idx = get_array_type!(mod, registry, elem_type)
             wasm_vt = ConcreteRef(array_type_idx, true)  # nullable reference
@@ -4293,9 +4299,21 @@ function allocate_ssa_locals!(ctx::CompilationContext)
         if !haskey(ctx.ssa_locals, ssa_id)  # Skip phi nodes already added
             ssa_type = get(ctx.ssa_types, ssa_id, Int64)
 
-            # MemoryRef types in WasmGC are just array references, so they CAN be stored in a local
-            # (They're NOT two stack values - that's only relevant for linear memory, not WasmGC)
-            # So we don't skip them anymore.
+            # Skip multi-arg memoryrefnew results - they leave [array_ref, i32_index] on stack
+            # and can't be stored in a single local. They must be used immediately.
+            stmt = ctx.code_info.code[ssa_id]
+            if stmt isa Expr && stmt.head === :call
+                func = stmt.args[1]
+                is_memrefnew = (func isa GlobalRef &&
+                                (func.mod === Core || func.mod === Base) &&
+                                func.name === :memoryrefnew) ||
+                               (func === :(Core.memoryrefnew)) ||
+                               (func === :(Base.memoryrefnew))
+                if is_memrefnew && length(stmt.args) >= 4  # func + 3 args = 4 total
+                    # Multi-arg memoryrefnew - don't allocate a local
+                    continue
+                end
+            end
 
             # Skip Nothing type - nothing is compiled as ref.null, not i32
             # Trying to store it in an i32 local causes type errors
@@ -12136,6 +12154,13 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
 
         source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
 
+        # Determine source and target WASM bit widths
+        source_is_64bit = source_type === Int64 || source_type === UInt64 || source_type === Int
+        target_is_32bit = target_type === Int32 || target_type === UInt32 ||
+                          target_type === Int16 || target_type === UInt16 ||
+                          target_type === Int8 || target_type === UInt8 ||
+                          target_type === Bool || target_type === Char
+
         if source_type === Int128 || source_type === UInt128
             # Truncating from 128-bit - extract lo part
             source_type_idx = get_int128_type!(ctx.mod, ctx.type_registry, source_type)
@@ -12145,11 +12170,11 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             append!(bytes, encode_leb128_unsigned(0))  # Field 0 = lo
 
             # Now we have i64, may need to wrap to i32
-            if target_type === Int32 || target_type === UInt32
+            if target_is_32bit
                 push!(bytes, Opcode.I32_WRAP_I64)
             end
-        elseif target_type === Int32 || target_type === UInt32
-            # Standard i64 to i32 truncation
+        elseif source_is_64bit && target_is_32bit
+            # i64 to i32 truncation (includes UInt8, Int8, UInt16, Int16 targets)
             push!(bytes, Opcode.I32_WRAP_I64)
         end
         # i64 to i64 or i32 to i32 is a no-op
