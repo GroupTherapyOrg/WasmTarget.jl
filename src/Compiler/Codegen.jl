@@ -12481,6 +12481,91 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             error("Unsupported function call: $func (type: $(typeof(func)))")
         end
 
+    # NamedTuple{names}(tuple) - convert tuple to named tuple
+    # This pattern appears in keyword argument handling
+    # Check: func is UnionAll and func <: NamedTuple
+    elseif func isa UnionAll && func <: NamedTuple
+        # func is NamedTuple{(:name1, :name2, ...)}
+        # args[1] should be a tuple with the values
+        # The result is a NamedTuple which is a struct with named fields
+
+        # Extract the names from the type
+        # NamedTuple{names} has structure: UnionAll(T, NamedTuple{names, T})
+        # So func.body is NamedTuple{names, T<:Tuple} and we need to get names from there
+        inner_type = func.body  # e.g., NamedTuple{(:filename, :first_line), T<:Tuple}
+
+        # Check if inner_type is a DataType (it might be a UnionAll if func is the generic NamedTuple)
+        names = nothing
+        if inner_type isa DataType && length(inner_type.parameters) >= 1
+            names = inner_type.parameters[1]  # Get the first type parameter (the names tuple)
+        end
+
+        if names isa Tuple && length(args) == 1
+            # Get the tuple argument type to determine value types
+            tuple_arg = args[1]
+            tuple_type = infer_value_type(tuple_arg, ctx)
+
+            if tuple_type <: Tuple
+                # Construct the concrete NamedTuple type
+                value_types = tuple_type.parameters
+                nt_type = NamedTuple{names, Tuple{value_types...}}
+
+                # Register the NamedTuple type as a struct
+                if !haskey(ctx.type_registry.structs, nt_type)
+                    register_struct_type!(ctx.mod, ctx.type_registry, nt_type)
+                end
+
+                if haskey(ctx.type_registry.structs, nt_type)
+                    info = ctx.type_registry.structs[nt_type]
+
+                    # Compile the tuple argument - this pushes the tuple struct
+                    append!(bytes, compile_value(tuple_arg, ctx))
+
+                    # The tuple is already a struct with the same field layout as the NamedTuple
+                    # (both are structs with fields in order)
+                    # For identical memory layout, we can just ref.cast
+                    # But if types differ, we need to extract fields and create new struct
+
+                    # Get tuple type info
+                    if haskey(ctx.type_registry.structs, tuple_type)
+                        tuple_info = ctx.type_registry.structs[tuple_type]
+
+                        if length(value_types) == length(names)
+                            # Create a temporary local to hold the tuple
+                            tuple_local = allocate_local!(ctx, ConcreteRef(tuple_info.wasm_type_idx, true))
+                            push!(bytes, Opcode.LOCAL_SET)
+                            append!(bytes, encode_leb128_unsigned(tuple_local))
+
+                            # Extract each field from tuple and push for struct.new
+                            for (i, (name, vtype)) in enumerate(zip(names, value_types))
+                                push!(bytes, Opcode.LOCAL_GET)
+                                append!(bytes, encode_leb128_unsigned(tuple_local))
+                                push!(bytes, Opcode.GC_PREFIX)
+                                push!(bytes, Opcode.STRUCT_GET)
+                                append!(bytes, encode_leb128_unsigned(tuple_info.wasm_type_idx))
+                                append!(bytes, encode_leb128_unsigned(i - 1))  # 0-indexed field
+                            end
+
+                            # Create the NamedTuple struct
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.STRUCT_NEW)
+                            append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
+                        else
+                            error("NamedTuple/Tuple field count mismatch: $(length(names)) vs $(length(value_types))")
+                        end
+                    else
+                        error("Tuple type not registered: $tuple_type")
+                    end
+                else
+                    error("Failed to register NamedTuple type: $nt_type")
+                end
+            else
+                error("NamedTuple constructor argument is not a Tuple: $tuple_type")
+            end
+        else
+            error("NamedTuple constructor requires exactly one tuple argument, got $(length(args)) args")
+        end
+
     else
         error("Unsupported function call: $func (type: $(typeof(func)))")
     end
