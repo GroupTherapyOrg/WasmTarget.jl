@@ -3914,4 +3914,107 @@ end
 
     end
 
+    # ========================================================================
+    # Phase 30: Type Inference (PURE-031)
+    # Tests for the TypeInference module that infers types over lowered IR
+    # ========================================================================
+    @testset "Phase 30: Type Inference" begin
+
+        @testset "infer_expr basic arithmetic types" begin
+            # Int64 + Int64 = Int64
+            result = infer_expr(:(1 + 2))
+            @test result.return_type == T_INT64
+
+            # Int64 - Int64 = Int64
+            result2 = infer_expr(:(10 - 3))
+            @test result2.return_type == T_INT64
+
+            # Int64 * Int64 = Int64
+            result3 = infer_expr(:(4 * 5))
+            @test result3.return_type == T_INT64
+        end
+
+        @testset "infer_expr comparison types" begin
+            # Comparisons return Bool
+            result = infer_expr(:(3 < 5))
+            # After lowering, comparisons use IR_LT
+            # Check that the IR has a comparison with Bool type
+            stmts, _, nslots = lower_expr(:(3 < 5))
+            inf = infer_types(stmts, nslots)
+            lt_idx = findfirst(s -> s.opcode == WasmTarget.IR_LT, stmts)
+            if lt_idx !== nothing
+                @test inf.stmt_types[lt_idx] == T_BOOL
+            end
+        end
+
+        @testset "infer_expr variable slot types" begin
+            # Variable assigned Int64 should have slot type Int64
+            result = infer_expr(:(x = 5; x + 1))
+            @test result.slot_types[1] == T_INT64  # slot 1 = x
+
+            # Multiple variables
+            result2 = infer_expr(:(a = 10; b = 20; a + b))
+            @test result2.slot_types[1] == T_INT64  # slot 1 = a
+            @test result2.slot_types[2] == T_INT64  # slot 2 = b
+            @test result2.return_type == T_INT64
+        end
+
+        @testset "infer_expr return type propagation" begin
+            # Simple constant returns Int64
+            stmts = [IRStmt(WasmTarget.IR_CONST, Int32(0), Int32(0), Int64(42), Int32(0)),
+                     IRStmt(WasmTarget.IR_RETURN, Int32(1), Int32(0), Int64(0), Int32(0))]
+            result = infer_types(stmts, Int32(0))
+            @test result.return_type == T_INT64
+        end
+
+        @testset "widen_types correctness" begin
+            # Same types don't widen
+            @test WasmTarget.widen_types(T_INT64, T_INT64) == T_INT64
+            @test WasmTarget.widen_types(T_FLOAT64, T_FLOAT64) == T_FLOAT64
+
+            # Unknown yields the other type
+            @test WasmTarget.widen_types(T_UNKNOWN, T_INT64) == T_INT64
+            @test WasmTarget.widen_types(T_INT64, T_UNKNOWN) == T_INT64
+
+            # Different types widen to Any
+            @test WasmTarget.widen_types(T_INT64, T_FLOAT64) == T_ANY
+            @test WasmTarget.widen_types(T_BOOL, T_INT64) == T_ANY
+        end
+
+        @testset "infer_binop correctness" begin
+            # Arithmetic follows operand types
+            @test WasmTarget.infer_binop(WasmTarget.IR_ADD, T_INT64, T_INT64) == T_INT64
+            @test WasmTarget.infer_binop(WasmTarget.IR_SUB, T_INT64, T_INT64) == T_INT64
+            @test WasmTarget.infer_binop(WasmTarget.IR_MUL, T_INT64, T_INT64) == T_INT64
+
+            # Float64 dominates
+            @test WasmTarget.infer_binop(WasmTarget.IR_ADD, T_FLOAT64, T_INT64) == T_FLOAT64
+            @test WasmTarget.infer_binop(WasmTarget.IR_MUL, T_INT64, T_FLOAT64) == T_FLOAT64
+
+            # Division always Float64
+            @test WasmTarget.infer_binop(WasmTarget.IR_DIV, T_INT64, T_INT64) == T_FLOAT64
+
+            # Comparisons always Bool
+            @test WasmTarget.infer_binop(WasmTarget.IR_LT, T_INT64, T_INT64) == T_BOOL
+            @test WasmTarget.infer_binop(WasmTarget.IR_GT, T_FLOAT64, T_FLOAT64) == T_BOOL
+            @test WasmTarget.infer_binop(WasmTarget.IR_EQ, T_INT64, T_INT64) == T_BOOL
+        end
+
+        @testset "infer_types compiles to WasmGC" begin
+            wasm_bytes = WasmTarget.compile(infer_types, (Vector{IRStmt}, Int32))
+            @test length(wasm_bytes) > 0
+            # Use wasm-tools validate (WasmGC modules can't instantiate in Node without GC runtime)
+            path = tempname() * ".wasm"
+            write(path, wasm_bytes)
+            @test success(run(pipeline(`wasm-tools validate $path --features=gc`, stderr=devnull, stdout=devnull), wait=true))
+            rm(path, force=true)
+        end
+
+        @testset "infer_types produces substantial WasmGC module" begin
+            wasm_bytes = WasmTarget.compile(infer_types, (Vector{IRStmt}, Int32))
+            @test length(wasm_bytes) > 2000  # infer_types is ~3058 bytes
+        end
+
+    end
+
 end

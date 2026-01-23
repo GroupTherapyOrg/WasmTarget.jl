@@ -18,6 +18,7 @@ include("Runtime/ByteBuffer.jl")
 include("Runtime/Tokenizer.jl")
 include("Runtime/ExprEval.jl")
 include("Runtime/Lowering.jl")
+include("Runtime/TypeInference.jl")
 
 # Interpreter - Julia interpreter written in WasmTarget-compatible Julia
 include("Interpreter/Tokenizer.jl")
