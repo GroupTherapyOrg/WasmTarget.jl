@@ -301,8 +301,9 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
     elseif T === JSValue
         # JS values are held as externref
         return ExternRef
-    elseif T === String
-        # Strings are represented as WasmGC arrays
+    elseif T === String || T === Symbol
+        # Strings and Symbols are represented as WasmGC byte arrays
+        # Symbol is stored as its name string
         return ArrayRef
     elseif T <: Tuple
         # Tuples map to WasmGC structs
