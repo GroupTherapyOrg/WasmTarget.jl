@@ -444,7 +444,7 @@ function _compile_function_legacy(f, arg_types::Tuple, func_name::String)::WasmM
             push!(param_types, get_concrete_wasm_type(T, mod, type_registry))
         end
     end
-    result_types = return_type === Nothing ? WasmValType[] : WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
+    result_types = (return_type === Nothing || return_type === Union{}) ? WasmValType[] : WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
 
     # For single-function modules, the function index is 0
     # This allows recursive calls to work
@@ -1113,6 +1113,9 @@ function compile_module(functions::Vector)::WasmModule
         register_function!(func_registry, name, f, arg_types, func_idx, return_type)
     end
 
+    # Track export names to avoid duplicates (WASM requires unique export names)
+    export_name_counts = Dict{String, Int}()
+
     # Second pass: compile function bodies
     for (i, (f, arg_types, name, code_info, return_type, global_args, is_closure)) in enumerate(function_data)
         func_idx = UInt32(n_imports + i - 1)
@@ -1144,13 +1147,19 @@ function compile_module(functions::Vector)::WasmModule
                 push!(param_types, get_concrete_wasm_type(T, mod, type_registry))
             end
         end
-        result_types = return_type === Nothing ? WasmValType[] : WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
+        result_types = (return_type === Nothing || return_type === Union{}) ? WasmValType[] : WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
 
         # Add function to module
         actual_idx = add_function!(mod, param_types, result_types, locals, body)
 
-        # Export the function
-        add_export!(mod, name, 0, actual_idx)
+        # Export the function with a unique name
+        export_name = name
+        count = get(export_name_counts, name, 0)
+        if count > 0
+            export_name = "$(name)_$(count)"
+        end
+        export_name_counts[name] = count + 1
+        add_export!(mod, export_name, 0, actual_idx)
     end
 
     return mod
@@ -1375,10 +1384,11 @@ function is_closure_type(T::Type)::Bool
     T === Union{} && return false
     # Must be a subtype of Function
     !(T <: Function) && return false
+    # Must be a concrete struct type (fieldcount throws for abstract types)
+    isconcretetype(T) && isstructtype(T) || return false
     # Must have fields (captured variables)
     fieldcount(T) == 0 && return false
-    # Must be a concrete struct type
-    return isconcretetype(T) && isstructtype(T)
+    return true
 end
 
 is_closure_type(::Any) = false
@@ -1598,7 +1608,8 @@ function _register_struct_type_impl_with_reserved!(mod::WasmModule, registry::Ty
             end
             array_type_idx = get_array_type!(mod, registry, elem_type)
             wasm_vt = ConcreteRef(array_type_idx, true)
-        elseif ft === String
+        elseif ft === String || ft === Symbol
+            # Strings and Symbols are WasmGC byte arrays
             str_type_idx = get_string_array_type!(mod, registry)
             wasm_vt = ConcreteRef(str_type_idx, true)
         elseif ft === Any
@@ -1612,6 +1623,9 @@ function _register_struct_type_impl_with_reserved!(mod::WasmModule, registry::Ty
             wasm_vt = F32
         elseif ft === Float64
             wasm_vt = F64
+        elseif ft === Nothing
+            # Nothing is a singleton type — no data, represent as i32 placeholder
+            wasm_vt = I32
         elseif isprimitivetype(ft)
             sz = sizeof(ft)
             wasm_vt = sz <= 4 ? I32 : I64
@@ -1728,7 +1742,8 @@ function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T:
             elem_type = eltype(ft)
             array_type_idx = get_array_type!(mod, registry, elem_type)
             wasm_vt = ConcreteRef(array_type_idx, true)  # nullable reference
-        elseif ft === String
+        elseif ft === String || ft === Symbol
+            # Strings and Symbols are WasmGC byte arrays
             str_type_idx = get_string_array_type!(mod, registry)
             wasm_vt = ConcreteRef(str_type_idx, true)
         elseif ft === Any
@@ -1745,6 +1760,9 @@ function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T:
             wasm_vt = F32
         elseif ft === Float64
             wasm_vt = F64
+        elseif ft === Nothing
+            # Nothing is a singleton type — no data, represent as i32 placeholder
+            wasm_vt = I32
         elseif isprimitivetype(ft)
             # Custom primitive types (e.g., JuliaSyntax.Kind) - map by size
             sz = sizeof(ft)
@@ -3935,6 +3953,10 @@ Convert a Julia type to a WasmValType, using concrete references for struct/arra
 This is like `julia_to_wasm_type` but returns `ConcreteRef` for registered types.
 """
 function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
+    # Vararg is a type modifier, not a proper type — treat as anyref
+    if T isa Core.TypeofVararg
+        return AnyRef
+    end
     # Union{} (TypeofBottom) is the bottom type — no values exist of this type.
     # Used for unreachable code paths. Map to I32 as placeholder.
     if T === Union{}
@@ -4136,9 +4158,16 @@ function analyze_control_flow!(ctx::CompilationContext)
     # Allocate locals for phi nodes (they need to persist across iterations)
     for (i, stmt) in enumerate(code)
         if stmt isa Core.PhiNode
-            wasm_type = get(ctx.ssa_types, i, Int64)
+            phi_julia_type = get(ctx.ssa_types, i, Int64)
+            phi_wasm_type = julia_to_wasm_type_concrete(phi_julia_type, ctx)
+
+            # Phi locals always use the type derived from the phi's Julia type.
+            # Edge type incompatibility is handled downstream by
+            # set_phi_locals_for_edge! and the inline phi handler,
+            # which emit type-safe defaults for incompatible edges.
+
             local_idx = ctx.n_params + length(ctx.locals)
-            push!(ctx.locals, julia_to_wasm_type_concrete(wasm_type, ctx))
+            push!(ctx.locals, phi_wasm_type)
             ctx.phi_locals[i] = local_idx
         end
     end
@@ -4197,10 +4226,13 @@ function allocate_ssa_locals!(ctx::CompilationContext)
     # not where the SSA was computed (the value is no longer on the stack)
     for (i, stmt) in enumerate(code)
         if stmt isa Core.PhiNode
-            for val in stmt.values
-                if val isa Core.SSAValue && !(code[val.id] isa Core.PhiNode)
-                    # This is a non-phi SSA referenced by a phi - needs local
-                    push!(needs_local_set, val.id)
+            for j in 1:length(stmt.values)
+                if isassigned(stmt.values, j)
+                    val = stmt.values[j]
+                    if val isa Core.SSAValue && !(code[val.id] isa Core.PhiNode)
+                        # This is a non-phi SSA referenced by a phi - needs local
+                        push!(needs_local_set, val.id)
+                    end
                 end
             end
         end
@@ -4391,7 +4423,33 @@ function allocate_ssa_locals!(ctx::CompilationContext)
                 continue
             end
 
-            wasm_type = julia_to_wasm_type_concrete(ssa_type, ctx)
+            # For PiNodes: the local type should match the VALUE's Wasm type,
+            # not the narrowed type. PiNode narrows Julia types but doesn't change
+            # the Wasm representation — it's the same value on the stack.
+            effective_type = ssa_type
+            if stmt isa Core.PiNode
+                if stmt.val isa Core.SSAValue
+                    val_type = get(ctx.ssa_types, stmt.val.id, nothing)
+                    if val_type !== nothing
+                        effective_type = val_type
+                    end
+                elseif stmt.val isa Core.Argument
+                    arg_idx = stmt.val.n
+                    if arg_idx <= length(ctx.code_info.slottypes)
+                        effective_type = ctx.code_info.slottypes[arg_idx]
+                    end
+                end
+            end
+
+            wasm_type = julia_to_wasm_type_concrete(effective_type, ctx)
+
+            # Debug: print when a ref-typed local is allocated for a PiNode or potential mismatch
+            if wasm_type isa ConcreteRef && wasm_type.type_idx == 70
+                @debug "ALLOC LOCAL ref(70): SSA $ssa_id, stmt=$(typeof(stmt)), ssa_type=$ssa_type, effective_type=$effective_type"
+                if stmt isa Core.PiNode
+                    @debug "  PiNode val=$(stmt.val), val_type=$(stmt.val isa Core.SSAValue ? get(ctx.ssa_types, stmt.val.id, nothing) : nothing)"
+                end
+            end
             local_idx = ctx.n_params + length(ctx.locals)
             push!(ctx.locals, wasm_type)
             ctx.ssa_locals[ssa_id] = local_idx
@@ -4583,8 +4641,10 @@ function count_ssa_uses!(stmt, uses::Dict{Int, Int})
     elseif stmt isa Core.GotoIfNot
         count_ssa_uses!(stmt.cond, uses)
     elseif stmt isa Core.PhiNode
-        for val in stmt.values
-            count_ssa_uses!(val, uses)
+        for i in 1:length(stmt.values)
+            if isassigned(stmt.values, i)
+                count_ssa_uses!(stmt.values[i], uses)
+            end
         end
     end
 end
@@ -5632,6 +5692,96 @@ Following dart2wasm patterns for inner conditionals:
 - Inner conditional: GotoIfNot with target <= back_edge → nested block/br pattern
 - Dead code (boundscheck false): Skip unreachable branches entirely
 """
+
+"""
+Determine the Wasm type that a phi edge value will produce on the stack.
+Used to check compatibility before storing to a phi local.
+"""
+function get_phi_edge_wasm_type(val, ctx::CompilationContext)::Union{WasmValType, Nothing}
+    if val isa Core.SSAValue
+        edge_julia_type = get(ctx.ssa_types, val.id, nothing)
+        if edge_julia_type !== nothing
+            return julia_to_wasm_type_concrete(edge_julia_type, ctx)
+        end
+    elseif val isa Core.Argument
+        arg_idx = val.n
+        if arg_idx <= length(ctx.code_info.slottypes)
+            edge_julia_type = ctx.code_info.slottypes[arg_idx]
+            return julia_to_wasm_type_concrete(edge_julia_type, ctx)
+        end
+    elseif val isa Int64 || val isa UInt64 || val isa Int
+        return I64
+    elseif val isa Int32 || val isa UInt32 || val isa Bool || val isa UInt8 || val isa Int8 || val isa UInt16 || val isa Int16
+        return I32
+    elseif val isa Float64
+        return F64
+    elseif val isa Float32
+        return F32
+    end
+    return nothing
+end
+
+"""
+Check if two Wasm types are compatible for local.set (value can be stored in local).
+"""
+function wasm_types_compatible(local_type::WasmValType, value_type::WasmValType)::Bool
+    if local_type == value_type
+        return true
+    end
+    local_is_numeric = local_type === I32 || local_type === I64 || local_type === F32 || local_type === F64
+    value_is_numeric = value_type === I32 || value_type === I64 || value_type === F32 || value_type === F64
+    local_is_ref = local_type isa ConcreteRef || local_type === StructRef || local_type === ArrayRef || local_type === ExternRef || local_type === AnyRef
+    value_is_ref = value_type isa ConcreteRef || value_type === StructRef || value_type === ArrayRef || value_type === ExternRef || value_type === AnyRef
+    # Numeric and ref are never compatible
+    if (local_is_numeric && value_is_ref) || (local_is_ref && value_is_numeric)
+        return false
+    end
+    # Two different numeric types are NOT compatible (i32 != i64 for local.set)
+    if local_is_numeric && value_is_numeric && local_type != value_type
+        return false
+    end
+    # Different concrete refs are not directly compatible
+    if local_type isa ConcreteRef && value_type isa ConcreteRef && local_type.type_idx != value_type.type_idx
+        return false
+    end
+    return true
+end
+
+"""
+Emit bytecode to store a phi edge value to a phi local, with type compatibility checking.
+If the edge value type is incompatible with the phi local type (e.g., ref vs numeric),
+the store is skipped (these represent unreachable code paths in Union types).
+If the edge value is i32 but the local is i64, adds I64_EXTEND_I32_S.
+Returns true if the store was emitted, false if skipped.
+"""
+function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::CompilationContext)::Bool
+    if !haskey(ctx.phi_locals, phi_ssa_idx)
+        return false
+    end
+    local_idx = ctx.phi_locals[phi_ssa_idx]
+    phi_local_type = ctx.locals[local_idx - ctx.n_params + 1]
+    edge_val_type = get_phi_edge_wasm_type(val, ctx)
+
+    if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type)
+        # Type mismatch: skip this store (unreachable path for Union types)
+        return false
+    end
+
+    value_bytes = compile_value(val, ctx)
+    if isempty(value_bytes)
+        return false
+    end
+
+    append!(bytes, value_bytes)
+    # Widen i32 to i64 if needed
+    if edge_val_type !== nothing && phi_local_type === I64 && edge_val_type === I32
+        push!(bytes, Opcode.I64_EXTEND_I32_S)
+    end
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(local_idx))
+    return true
+end
+
 function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
     bytes = UInt8[]
     code = ctx.code_info.code
@@ -5778,10 +5928,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                             edge_stmt = get(code, edge, nothing)
                             if edge_stmt !== nothing && !(edge_stmt isa Core.GotoIfNot)
                                 val = phi_stmt.values[edge_idx]
-                                append!(bytes, compile_value(val, ctx))
-                                local_idx = ctx.phi_locals[i]
-                                push!(bytes, Opcode.LOCAL_SET)
-                                append!(bytes, encode_leb128_unsigned(local_idx))
+                                emit_phi_local_set!(bytes, val, i, ctx)
                                 break
                             end
                         end
@@ -5802,10 +5949,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                                 for (edge_idx, edge) in enumerate(phi_stmt.edges)
                                     if edge < i
                                         val = phi_stmt.values[edge_idx]
-                                        append!(bytes, compile_value(val, ctx))
-                                        local_idx = ctx.phi_locals[mp]
-                                        push!(bytes, Opcode.LOCAL_SET)
-                                        append!(bytes, encode_leb128_unsigned(local_idx))
+                                        emit_phi_local_set!(bytes, val, mp, ctx)
                                         break
                                     end
                                 end
@@ -5833,10 +5977,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                         end
                         if max_edge_idx > 0
                             val = phi_stmt.values[max_edge_idx]
-                            append!(bytes, compile_value(val, ctx))
-                            local_idx = ctx.phi_locals[i]
-                            push!(bytes, Opcode.LOCAL_SET)
-                            append!(bytes, encode_leb128_unsigned(local_idx))
+                            emit_phi_local_set!(bytes, val, i, ctx)
                         end
                     end
                     push!(bytes, Opcode.END)
@@ -5866,10 +6007,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                         for (edge_idx, edge) in enumerate(phi_stmt.edges)
                             if edge == i
                                 val = phi_stmt.values[edge_idx]
-                                append!(bytes, compile_value(val, ctx))
-                                local_idx = ctx.phi_locals[target]
-                                push!(bytes, Opcode.LOCAL_SET)
-                                append!(bytes, encode_leb128_unsigned(local_idx))
+                                emit_phi_local_set!(bytes, val, target, ctx)
                                 break
                             end
                         end
@@ -5953,10 +6091,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                             for (edge_idx, edge) in enumerate(phi_stmt.edges)
                                 if edge == i
                                     val = phi_stmt.values[edge_idx]
-                                    append!(bytes, compile_value(val, ctx))
-                                    local_idx = ctx.phi_locals[target]
-                                    push!(bytes, Opcode.LOCAL_SET)
-                                    append!(bytes, encode_leb128_unsigned(local_idx))
+                                    emit_phi_local_set!(bytes, val, target, ctx)
                                     break
                                 end
                             end
@@ -5990,10 +6125,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                                 for (edge_idx, edge) in enumerate(phi_stmt.edges)
                                     if edge == i
                                         val = phi_stmt.values[edge_idx]
-                                        append!(bytes, compile_value(val, ctx))
-                                        local_idx = ctx.phi_locals[j]
-                                        push!(bytes, Opcode.LOCAL_SET)
-                                        append!(bytes, encode_leb128_unsigned(local_idx))
+                                        emit_phi_local_set!(bytes, val, j, ctx)
                                         break
                                     end
                                 end
@@ -6008,10 +6140,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                         for (edge_idx, edge) in enumerate(phi_stmt.edges)
                             if edge == i
                                 val = phi_stmt.values[edge_idx]
-                                append!(bytes, compile_value(val, ctx))
-                                local_idx = ctx.phi_locals[stmt.label]
-                                push!(bytes, Opcode.LOCAL_SET)
-                                append!(bytes, encode_leb128_unsigned(local_idx))
+                                emit_phi_local_set!(bytes, val, stmt.label, ctx)
                                 break
                             end
                         end
@@ -6067,10 +6196,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
             end
 
             if is_loop_phi && entry_val !== nothing
-                append!(bytes, compile_value(entry_val, ctx))
-                local_idx = ctx.phi_locals[i]
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(local_idx))
+                emit_phi_local_set!(bytes, entry_val, i, ctx)
             end
         end
     end
@@ -6109,10 +6235,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                     edge_stmt = get(code, edge, nothing)
                     if edge_stmt !== nothing && !(edge_stmt isa Core.GotoIfNot)
                         val = phi_stmt.values[edge_idx]
-                        append!(bytes, compile_value(val, ctx))
-                        local_idx = ctx.phi_locals[i]
-                        push!(bytes, Opcode.LOCAL_SET)
-                        append!(bytes, encode_leb128_unsigned(local_idx))
+                        emit_phi_local_set!(bytes, val, i, ctx)
                         break
                     end
                 end
@@ -6172,10 +6295,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                     for (edge_idx, edge) in enumerate(phi_stmt.edges)
                         if edge == i
                             val = phi_stmt.values[edge_idx]
-                            append!(bytes, compile_value(val, ctx))
-                            local_idx = ctx.phi_locals[merge_phi]
-                            push!(bytes, Opcode.LOCAL_SET)
-                            append!(bytes, encode_leb128_unsigned(local_idx))
+                            emit_phi_local_set!(bytes, val, merge_phi, ctx)
                             break
                         end
                     end
@@ -6213,10 +6333,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                         for (edge_idx, edge) in enumerate(phi_stmt.edges)
                             if edge > j  # Back-edge (from after the phi node)
                                 val = phi_stmt.values[edge_idx]
-                                append!(bytes, compile_value(val, ctx))
-                                local_idx = ctx.phi_locals[j]
-                                push!(bytes, Opcode.LOCAL_SET)
-                                append!(bytes, encode_leb128_unsigned(local_idx))
+                                emit_phi_local_set!(bytes, val, j, ctx)
                                 break
                             end
                         end
@@ -6235,11 +6352,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                         for (edge_idx, edge) in enumerate(phi_stmt.edges)
                             if edge == i
                                 val = phi_stmt.values[edge_idx]
-                                append!(bytes, compile_value(val, ctx))
-                                local_idx = ctx.phi_locals[stmt.label]
-                                # Use LOCAL_TEE to keep value on stack for branch target
-                                push!(bytes, Opcode.LOCAL_TEE)
-                                append!(bytes, encode_leb128_unsigned(local_idx))
+                                emit_phi_local_set!(bytes, val, stmt.label, ctx)
                                 break
                             end
                         end
@@ -6329,10 +6442,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                 # or any edge that's > the loop header and <= back_edge_idx
                 if edge >= loop_header && edge <= back_edge_idx
                     val = phi_stmt.values[edge_idx]
-                    append!(bytes, compile_value(val, ctx))
-                    local_idx = ctx.phi_locals[post_loop_skip_phi_target]
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(local_idx))
+                    emit_phi_local_set!(bytes, val, post_loop_skip_phi_target, ctx)
                     break
                 end
             end
@@ -6359,9 +6469,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                 for (edge_idx, edge) in enumerate(phi_stmt.edges)
                     if edge == prev_line
                         edge_val = phi_stmt.values[edge_idx]
-                        append!(bytes, compile_value(edge_val, ctx))
-                        push!(bytes, Opcode.LOCAL_SET)
-                        append!(bytes, encode_leb128_unsigned(ctx.phi_locals[i]))
+                        emit_phi_local_set!(bytes, edge_val, i, ctx)
                         break
                     end
                 end
@@ -6391,9 +6499,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                 for (edge_idx, edge) in enumerate(phi_stmt.edges)
                     if edge == i
                         edge_val = phi_stmt.values[edge_idx]
-                        append!(bytes, compile_value(edge_val, ctx))
-                        push!(bytes, Opcode.LOCAL_SET)
-                        append!(bytes, encode_leb128_unsigned(ctx.phi_locals[target]))
+                        emit_phi_local_set!(bytes, edge_val, target, ctx)
                         break
                     end
                 end
@@ -6422,9 +6528,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                 for (edge_idx, edge) in enumerate(phi_stmt.edges)
                     if edge == i
                         edge_val = phi_stmt.values[edge_idx]
-                        append!(bytes, compile_value(edge_val, ctx))
-                        push!(bytes, Opcode.LOCAL_SET)
-                        append!(bytes, encode_leb128_unsigned(ctx.phi_locals[stmt.label]))
+                        emit_phi_local_set!(bytes, edge_val, stmt.label, ctx)
                         break
                     end
                 end
@@ -7151,14 +7255,27 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                         # Check if this edge is from within the same block (internal fallthrough)
                         if edge >= block.start_idx && edge < i
                             # This is an internal fallthrough edge - set the phi local
-                            val = stmt.values[edge_idx]
-                            phi_value_bytes = compile_phi_value(val, i)
-                            # Only emit local_set if we actually have a value on the stack
-                            if !isempty(phi_value_bytes)
-                                append!(block_bytes, phi_value_bytes)
+                            if isassigned(stmt.values, edge_idx)
+                                val = stmt.values[edge_idx]
+                                # Check type compatibility before storing
                                 local_idx = ctx.phi_locals[i]
-                                push!(block_bytes, Opcode.LOCAL_SET)
-                                append!(block_bytes, encode_leb128_unsigned(local_idx))
+                                phi_local_type = ctx.locals[local_idx - ctx.n_params + 1]
+                                edge_val_type = get_phi_edge_wasm_type(val)
+                                if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type)
+                                    break  # Skip incompatible edge
+                                end
+                                phi_value_bytes = compile_phi_value(val, i)
+                                # Only emit local_set if we actually have a value on the stack
+                                if !isempty(phi_value_bytes)
+                                    if edge_val_type !== nothing && phi_local_type === I64 && edge_val_type === I32
+                                        append!(block_bytes, phi_value_bytes)
+                                        push!(block_bytes, Opcode.I64_EXTEND_I32_S)
+                                    else
+                                        append!(block_bytes, phi_value_bytes)
+                                    end
+                                    push!(block_bytes, Opcode.LOCAL_SET)
+                                    append!(block_bytes, encode_leb128_unsigned(local_idx))
+                                end
                             end
                             break
                         end
@@ -7367,9 +7484,6 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
     function compile_phi_value(val, phi_idx::Int)::Vector{UInt8}
         result = UInt8[]
         if val isa Core.SSAValue
-            # Debug trace for specific SSAs
-            if val.id in [45, 80, 84, 85, 93, 95]
-            end
             # Check if this SSA has a local allocated
             if haskey(ctx.ssa_locals, val.id)
                 local_idx = ctx.ssa_locals[val.id]
@@ -7382,34 +7496,114 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
             else
                 # SSA without local - need to recompute the statement
                 # This should ideally not happen for phi values, but handle it
-                println("WARNING: SSA %$(val.id) has no local in compile_phi_value, recomputing: $(code[val.id])")
                 stmt = code[val.id]
                 if stmt !== nothing && !(stmt isa Core.PhiNode)
                     append!(result, compile_statement(stmt, val.id, ctx))
                 else
-                    # Can't recompute - this is likely a bug
-                    # Try compile_value as fallback
+                    # Can't recompute - try compile_value as fallback
                     append!(result, compile_value(val, ctx))
                 end
             end
         elseif val === nothing || (val isa GlobalRef && val.name === :nothing)
             # Value is `nothing` (can be Core.nothing or Main.nothing in IR)
-            # Check if we need to emit ref.null for Union{T, Nothing} phi
-            phi_type = get(ctx.ssa_types, phi_idx, nothing)
-            if phi_type !== nothing && phi_type !== Nothing
-                # Phi expects a value but we have nothing - emit ref.null
-                wasm_type = julia_to_wasm_type_concrete(phi_type, ctx)
-                if wasm_type isa ConcreteRef
+            # Emit the appropriate null/zero for the phi local's ACTUAL wasm type
+            # (which may differ from the Julia type due to phi type resolution)
+            if haskey(ctx.phi_locals, phi_idx)
+                local_idx = ctx.phi_locals[phi_idx]
+                local_wasm_type = ctx.locals[local_idx - ctx.n_params + 1]
+                if local_wasm_type isa ConcreteRef
                     push!(result, Opcode.REF_NULL)
-                    append!(result, encode_leb128_unsigned(wasm_type.type_idx))
+                    append!(result, encode_leb128_unsigned(local_wasm_type.type_idx))
+                elseif local_wasm_type === ExternRef
+                    push!(result, Opcode.REF_NULL)
+                    push!(result, UInt8(ExternRef))
+                elseif local_wasm_type === StructRef
+                    push!(result, Opcode.REF_NULL)
+                    push!(result, UInt8(StructRef))
+                elseif local_wasm_type === ArrayRef
+                    push!(result, Opcode.REF_NULL)
+                    push!(result, UInt8(ArrayRef))
+                elseif local_wasm_type === AnyRef
+                    push!(result, Opcode.REF_NULL)
+                    push!(result, UInt8(AnyRef))
+                elseif local_wasm_type === I64
+                    push!(result, Opcode.I64_CONST)
+                    push!(result, 0x00)
+                elseif local_wasm_type === F32
+                    push!(result, Opcode.F32_CONST)
+                    append!(result, UInt8[0x00, 0x00, 0x00, 0x00])
+                elseif local_wasm_type === F64
+                    push!(result, Opcode.F64_CONST)
+                    append!(result, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                else
+                    # I32 default
+                    push!(result, Opcode.I32_CONST)
+                    push!(result, 0x00)
                 end
+            else
+                # No phi local found — emit i32(0) as placeholder
+                push!(result, Opcode.I32_CONST)
+                push!(result, 0x00)
             end
-            # If phi_type is Nothing, return empty bytes (nothing to push)
         else
             # Not an SSA and not nothing - just compile directly
             append!(result, compile_value(val, ctx))
         end
         return result
+    end
+
+    # Helper: determine the Wasm type that a phi edge value will produce on the stack
+    function get_phi_edge_wasm_type(val)::Union{WasmValType, Nothing}
+        if val isa Core.SSAValue
+            edge_julia_type = get(ctx.ssa_types, val.id, nothing)
+            if edge_julia_type !== nothing
+                return julia_to_wasm_type_concrete(edge_julia_type, ctx)
+            end
+        elseif val isa Core.Argument
+            arg_idx = val.n
+            if arg_idx <= length(ctx.code_info.slottypes)
+                edge_julia_type = ctx.code_info.slottypes[arg_idx]
+                return julia_to_wasm_type_concrete(edge_julia_type, ctx)
+            end
+        elseif val isa Int64 || val isa UInt64 || val isa Int
+            return I64
+        elseif val isa Int32 || val isa UInt32 || val isa Bool || val isa UInt8 || val isa Int8 || val isa UInt16 || val isa Int16
+            return I32
+        elseif val isa Float64
+            return F64
+        elseif val isa Float32
+            return F32
+        end
+        return nothing
+    end
+
+    # Helper: check if two Wasm types are compatible for local.set
+    function wasm_types_compatible(local_type::WasmValType, value_type::WasmValType)::Bool
+        if local_type == value_type
+            return true
+        end
+        # Numeric types: i32 can be widened to i64 (via i64.extend_i32_s)
+        # but they're NOT directly compatible for local.set
+        local_is_numeric = local_type === I32 || local_type === I64 || local_type === F32 || local_type === F64
+        value_is_numeric = value_type === I32 || value_type === I64 || value_type === F32 || value_type === F64
+        local_is_ref = local_type isa ConcreteRef || local_type === StructRef || local_type === ArrayRef || local_type === ExternRef || local_type === AnyRef
+        value_is_ref = value_type isa ConcreteRef || value_type === StructRef || value_type === ArrayRef || value_type === ExternRef || value_type === AnyRef
+        # Numeric and ref are never compatible
+        if local_is_numeric && value_is_ref
+            return false
+        end
+        if local_is_ref && value_is_numeric
+            return false
+        end
+        # Two different numeric types are NOT compatible (i32 != i64 for local.set)
+        if local_is_numeric && value_is_numeric && local_type != value_type
+            return false
+        end
+        # Different concrete refs are not directly compatible
+        if local_type isa ConcreteRef && value_type isa ConcreteRef && local_type.type_idx != value_type.type_idx
+            return false
+        end
+        return true
     end
 
     # Helper to set all phi locals at destination
@@ -7431,15 +7625,35 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                     found_edge = false
                     for (edge_idx, edge) in enumerate(stmt.edges)
                         if edge == terminator_idx
-                            val = stmt.values[edge_idx]
-                            phi_value_bytes = compile_phi_value(val, i)
-                            # Only emit local_set if we actually have a value on the stack
-                            if !isempty(phi_value_bytes)
-                                append!(bytes, phi_value_bytes)
+                            if isassigned(stmt.values, edge_idx)
+                                val = stmt.values[edge_idx]
+                                # Check type compatibility before emitting local.set
                                 local_idx = ctx.phi_locals[i]
-                                push!(bytes, Opcode.LOCAL_SET)
-                                append!(bytes, encode_leb128_unsigned(local_idx))
-                                phi_count += 1
+                                phi_local_type = ctx.locals[local_idx - ctx.n_params + 1]
+                                edge_val_type = get_phi_edge_wasm_type(val)
+
+                                if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type)
+                                    # Type mismatch: edge value type is incompatible with phi local.
+                                    # Skip this store — the value can't be stored in this local.
+                                    # This happens when Julia Union types have mixed primitive/ref variants.
+                                    found_edge = true
+                                    break
+                                end
+
+                                phi_value_bytes = compile_phi_value(val, i)
+                                # Only emit local_set if we actually have a value on the stack
+                                if !isempty(phi_value_bytes)
+                                    # Add numeric type widening if needed (e.g., i32 value into i64 local)
+                                    if edge_val_type !== nothing && phi_local_type === I64 && edge_val_type === I32
+                                        append!(bytes, phi_value_bytes)
+                                        push!(bytes, Opcode.I64_EXTEND_I32_S)
+                                    else
+                                        append!(bytes, phi_value_bytes)
+                                    end
+                                    push!(bytes, Opcode.LOCAL_SET)
+                                    append!(bytes, encode_leb128_unsigned(local_idx))
+                                    phi_count += 1
+                                end
                             end
                             found_edge = true
                             break
@@ -7524,13 +7738,26 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 if haskey(ctx.phi_locals, i)
                     for (edge_idx, edge) in enumerate(stmt.edges)
                         if edge >= block.start_idx && edge < i
-                            val = stmt.values[edge_idx]
-                            phi_value_bytes = compile_phi_value(val, i)
-                            if !isempty(phi_value_bytes)
-                                append!(block_bytes, phi_value_bytes)
+                            if isassigned(stmt.values, edge_idx)
+                                val = stmt.values[edge_idx]
+                                # Check type compatibility before storing
                                 local_idx = ctx.phi_locals[i]
-                                push!(block_bytes, Opcode.LOCAL_SET)
-                                append!(block_bytes, encode_leb128_unsigned(local_idx))
+                                phi_local_type = ctx.locals[local_idx - ctx.n_params + 1]
+                                edge_val_type = get_phi_edge_wasm_type(val)
+                                if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type)
+                                    break  # Skip incompatible edge
+                                end
+                                phi_value_bytes = compile_phi_value(val, i)
+                                if !isempty(phi_value_bytes)
+                                    if edge_val_type !== nothing && phi_local_type === I64 && edge_val_type === I32
+                                        append!(block_bytes, phi_value_bytes)
+                                        push!(block_bytes, Opcode.I64_EXTEND_I32_S)
+                                    else
+                                        append!(block_bytes, phi_value_bytes)
+                                    end
+                                    push!(block_bytes, Opcode.LOCAL_SET)
+                                    append!(block_bytes, encode_leb128_unsigned(local_idx))
+                                end
                             end
                             break
                         end
@@ -10050,20 +10277,21 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
 
     elseif stmt isa Core.PiNode
         # PiNode is a type assertion - just pass through the value
-        # BUT: If the result type is Nothing, the value won't be used in a meaningful way
-        # (consumers will emit ref.null instead), so don't push anything
         pi_type = get(ctx.ssa_types, idx, Any)
         if pi_type !== Nothing
             append!(bytes, compile_value(stmt.val, ctx))
-
-            # If this SSA value needs a local, store it (and remove from stack)
-            if haskey(ctx.ssa_locals, idx)
-                local_idx = ctx.ssa_locals[idx]
-                push!(bytes, Opcode.LOCAL_SET)  # Use SET not TEE to not leave on stack
-                append!(bytes, encode_leb128_unsigned(local_idx))
-            end
+        else
+            # Nothing-typed PiNode — push i32(0) as placeholder (Nothing maps to I32)
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x00)
         end
-        # If pi_type is Nothing, emit nothing - consumers will handle it
+
+        # If this SSA value needs a local, store it (and remove from stack)
+        if haskey(ctx.ssa_locals, idx)
+            local_idx = ctx.ssa_locals[idx]
+            push!(bytes, Opcode.LOCAL_SET)  # Use SET not TEE to not leave on stack
+            append!(bytes, encode_leb128_unsigned(local_idx))
+        end
 
     elseif stmt isa Core.EnterNode
         # Exception handling: Enter try block
@@ -10135,6 +10363,15 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
 
         append!(bytes, stmt_bytes)
 
+        # If the statement type is Union{} (bottom/never returns), emit unreachable
+        # This handles calls to error/throw functions that have void return type in wasm
+        # The unreachable instruction is polymorphic and satisfies any type expectation
+        stmt_type_check = get(ctx.ssa_types, idx, Any)
+        if stmt_type_check === Union{} && !isempty(stmt_bytes) &&
+           !(length(stmt_bytes) >= 1 && stmt_bytes[end] == Opcode.UNREACHABLE)
+            push!(bytes, Opcode.UNREACHABLE)
+        end
+
         # If this SSA value needs a local, store it (and remove from stack)
         # We use LOCAL_SET (not LOCAL_TEE) to avoid leaving extra values on stack
         # that would interfere with later operations. Values will be retrieved
@@ -10202,7 +10439,8 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
     # Special case: Dict{K,V} construction
     # Dict starts with empty Memory arrays (length 0), but our inline setindex!/getindex
     # use linear scan and need initial capacity. Replace empty arrays with capacity-16 arrays.
-    if struct_type <: AbstractDict
+    # NOTE: Only match concrete Dict types, not AbstractDict (Base.Pairs <: AbstractDict but has 2 fields)
+    if struct_type <: Dict
         K = keytype(struct_type)
         V = valtype(struct_type)
 
@@ -10579,9 +10817,9 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
 
     # Handle nothing explicitly - it's the Julia singleton
     if val === nothing
-        # Nothing doesn't have a runtime value in WasmGC
-        # Caller should handle this case (e.g., for Union{Nothing, T} fields)
-        # Return empty bytes - nothing to push
+        # Nothing maps to i32 in WasmGC — push i32(0) as placeholder
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x00)
         return bytes
     end
 
@@ -10666,13 +10904,21 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         push!(bytes, Opcode.I32_CONST)
         append!(bytes, encode_leb128_signed(Int32(val)))
 
-    elseif val isa Int32 || val isa UInt32
+    elseif val isa Int32
         push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int32(val)))
+        append!(bytes, encode_leb128_signed(val))
 
-    elseif val isa Int64 || val isa UInt64 || val isa Int
+    elseif val isa UInt32
+        push!(bytes, Opcode.I32_CONST)
+        append!(bytes, encode_leb128_signed(reinterpret(Int32, val)))
+
+    elseif val isa Int64 || val isa Int
         push!(bytes, Opcode.I64_CONST)
         append!(bytes, encode_leb128_signed(Int64(val)))
+
+    elseif val isa UInt64
+        push!(bytes, Opcode.I64_CONST)
+        append!(bytes, encode_leb128_signed(reinterpret(Int64, val)))
 
     elseif val isa Int128 || val isa UInt128
         # 128-bit integers are represented as WasmGC structs with (lo, hi) fields
@@ -10811,6 +11057,15 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         # Type{T} singleton - represented as i32 constant (type tag for dispatch)
         push!(bytes, Opcode.I32_CONST)
         push!(bytes, 0x00)
+
+    elseif val isa Function && isstructtype(typeof(val)) && fieldcount(typeof(val)) == 0
+        # Function singleton (e.g., typeof(some_function)) — empty struct with no fields
+        T = typeof(val)
+        info = register_struct_type!(ctx.mod, ctx.type_registry, T)
+        type_idx = info.wasm_type_idx
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.STRUCT_NEW)
+        append!(bytes, encode_leb128_unsigned(type_idx))
 
     elseif isstructtype(typeof(val)) && !isa(val, Function) && !isa(val, Module)
         # Struct constant - create it with struct.new
@@ -12989,14 +13244,15 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
         nothing
     end
 
-    # Get parameter types from the method signature if available
+    # Get parameter types from the specialized method instance if available
+    # Use specTypes (concrete types) not def.sig (generic signature with Any)
     param_types = nothing
-    if mi isa Core.MethodInstance && mi.def isa Method
-        sig = mi.def.sig
-        if sig isa DataType && sig <: Tuple
-            # sig is Tuple{typeof(func), arg1_type, arg2_type, ...}
+    if mi isa Core.MethodInstance
+        spec = mi.specTypes
+        if spec isa DataType && spec <: Tuple
+            # specTypes is Tuple{typeof(func), arg1_type, arg2_type, ...}
             # We want arg types starting from index 2
-            param_types = sig.parameters[2:end]
+            param_types = spec.parameters[2:end]
         end
     end
 
@@ -13013,41 +13269,41 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
         if is_nothing_arg && param_types !== nothing && arg_idx <= length(param_types)
             # Get the parameter type from the method signature
             param_type = param_types[arg_idx]
-            # If it's a Union with Nothing, emit ref.null for the non-Nothing type
-            if param_type isa Union
-                # Find the non-Nothing type in the union
-                non_nothing_type = nothing
-                for t in Base.uniontypes(param_type)
-                    if t !== Nothing
-                        non_nothing_type = t
-                        break
-                    end
-                end
-                if non_nothing_type !== nothing
-                    wasm_type = julia_to_wasm_type_concrete(non_nothing_type, ctx)
-                    if wasm_type isa ConcreteRef
-                        push!(bytes, Opcode.REF_NULL)
-                        append!(bytes, encode_leb128_unsigned(wasm_type.type_idx))
-                    else
-                        # Fallback to compile_value
-                        append!(bytes, compile_value(arg, ctx))
-                    end
-                else
-                    append!(bytes, compile_value(arg, ctx))
-                end
-            elseif param_type !== Nothing
-                # Parameter type is not Union but not Nothing - emit ref.null for it
-                wasm_type = julia_to_wasm_type_concrete(param_type, ctx)
-                if wasm_type isa ConcreteRef
-                    push!(bytes, Opcode.REF_NULL)
-                    append!(bytes, encode_leb128_unsigned(wasm_type.type_idx))
-                else
-                    append!(bytes, compile_value(arg, ctx))
-                end
+            wasm_type = julia_to_wasm_type_concrete(param_type, ctx)
+            # Emit the appropriate null/zero value based on the wasm type
+            if wasm_type isa ConcreteRef
+                push!(bytes, Opcode.REF_NULL)
+                append!(bytes, encode_leb128_unsigned(wasm_type.type_idx))
+            elseif wasm_type === ExternRef
+                push!(bytes, Opcode.REF_NULL)
+                push!(bytes, UInt8(ExternRef))
+            elseif wasm_type === AnyRef
+                push!(bytes, Opcode.REF_NULL)
+                push!(bytes, UInt8(AnyRef))
+            elseif wasm_type === StructRef
+                push!(bytes, Opcode.REF_NULL)
+                push!(bytes, UInt8(StructRef))
+            elseif wasm_type === ArrayRef
+                push!(bytes, Opcode.REF_NULL)
+                push!(bytes, UInt8(ArrayRef))
+            elseif wasm_type === I64
+                push!(bytes, Opcode.I64_CONST)
+                push!(bytes, 0x00)
+            elseif wasm_type === F32
+                push!(bytes, Opcode.F32_CONST)
+                append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+            elseif wasm_type === F64
+                push!(bytes, Opcode.F64_CONST)
+                append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
             else
-                # Parameter type is Nothing itself, no value needed
-                append!(bytes, compile_value(arg, ctx))
+                # I32 or other — push i32(0)
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
             end
+        elseif is_nothing_arg
+            # Nothing arg without param_types — emit ref.null externref as safe default
+            push!(bytes, Opcode.REF_NULL)
+            push!(bytes, UInt8(ExternRef))
         else
             append!(bytes, compile_value(arg, ctx))
         end
