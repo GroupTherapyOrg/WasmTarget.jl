@@ -3853,4 +3853,65 @@ end
 
     end
 
+    # ========================================================================
+    # Phase 29: Pure-Julia Lowering Pass (PURE-030)
+    # Tests for the Lowering module that compiles Expr → linear IR in WasmGC
+    # ========================================================================
+    @testset "Phase 29: Pure-Julia Lowering" begin
+
+        @testset "lower_expr produces correct IR for arithmetic" begin
+            stmts, result, nslots = lower_expr(:(1 + 2))
+            # Should produce: CONST 1, CONST 2, ADD %1 %2, RETURN
+            @test length(stmts) == 4
+            @test stmts[1].opcode == WasmTarget.IR_CONST && stmts[1].value == 1
+            @test stmts[2].opcode == WasmTarget.IR_CONST && stmts[2].value == 2
+            @test stmts[3].opcode == WasmTarget.IR_ADD && stmts[3].arg1 == 1 && stmts[3].arg2 == 2
+            @test stmts[4].opcode == WasmTarget.IR_RETURN && stmts[4].arg1 == 3
+        end
+
+        @testset "lower_expr handles variable scoping" begin
+            stmts, result, nslots = lower_expr(:(x = 5; x + 1))
+            # CONST 5, STORE slot1, LOAD slot1, CONST 1, ADD, RETURN
+            @test nslots >= 1
+            @test any(s -> s.opcode == WasmTarget.IR_STORE && s.value == 1, stmts)
+            @test any(s -> s.opcode == WasmTarget.IR_LOAD && s.value == 1, stmts)
+            @test stmts[end].opcode == WasmTarget.IR_RETURN
+
+            # Multiple variables get different slots
+            stmts2, _, nslots2 = lower_expr(:(a = 10; b = 20; a + b))
+            @test nslots2 >= 2
+            stores = filter(s -> s.opcode == WasmTarget.IR_STORE, stmts2)
+            @test length(stores) == 2
+            @test stores[1].value != stores[2].value  # Different slots
+        end
+
+        @testset "lower_expr handles control flow" begin
+            stmts, result, nslots = lower_expr(:(if true 1 else 2 end))
+            # Should have GOTOIFNOT and GOTO
+            @test any(s -> s.opcode == WasmTarget.IR_GOTOIFNOT, stmts)
+            @test any(s -> s.opcode == WasmTarget.IR_GOTO, stmts)
+            @test stmts[end].opcode == WasmTarget.IR_RETURN
+        end
+
+        @testset "lower_node compiles to WasmGC" begin
+            wasm_bytes = WasmTarget.compile(lower_node, (Vector{ExprNode}, Int32, LoweringContext))
+            @test length(wasm_bytes) > 0
+            # Use wasm-tools validate (acceptance criteria: "wasm-tools validate passes")
+            path = tempname() * ".wasm"
+            write(path, wasm_bytes)
+            @test success(run(pipeline(`wasm-tools validate $path --features=gc`, stderr=devnull, stdout=devnull), wait=true))
+            rm(path, force=true)
+        end
+
+        @testset "lower_node validates as standalone WasmGC module" begin
+            wasm_bytes = WasmTarget.compile(lower_node, (Vector{ExprNode}, Int32, LoweringContext))
+            @test length(wasm_bytes) > 4000  # lower_node is ~4791 bytes
+            path = tempname() * ".wasm"
+            write(path, wasm_bytes)
+            @test success(run(pipeline(`wasm-tools validate $path --features=gc`, stderr=devnull, stdout=devnull), wait=true))
+            rm(path, force=true)
+        end
+
+    end
+
 end
