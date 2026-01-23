@@ -7512,21 +7512,80 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
         return false
     end
 
+    # Helper: emit a type-safe default value for a given WasmValType
+    function emit_phi_type_default(wasm_type::WasmValType)::Vector{UInt8}
+        result = UInt8[]
+        if wasm_type isa ConcreteRef
+            push!(result, Opcode.REF_NULL)
+            append!(result, encode_leb128_unsigned(wasm_type.type_idx))
+        elseif wasm_type === StructRef
+            push!(result, Opcode.REF_NULL)
+            push!(result, UInt8(StructRef))
+        elseif wasm_type === ArrayRef
+            push!(result, Opcode.REF_NULL)
+            push!(result, UInt8(ArrayRef))
+        elseif wasm_type === ExternRef
+            push!(result, Opcode.REF_NULL)
+            push!(result, UInt8(ExternRef))
+        elseif wasm_type === AnyRef
+            push!(result, Opcode.REF_NULL)
+            push!(result, UInt8(AnyRef))
+        elseif wasm_type === I64
+            push!(result, Opcode.I64_CONST)
+            push!(result, 0x00)
+        elseif wasm_type === I32
+            push!(result, Opcode.I32_CONST)
+            push!(result, 0x00)
+        elseif wasm_type === F64
+            push!(result, Opcode.F64_CONST)
+            append!(result, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+        elseif wasm_type === F32
+            push!(result, Opcode.F32_CONST)
+            append!(result, UInt8[0x00, 0x00, 0x00, 0x00])
+        else
+            push!(result, Opcode.I32_CONST)
+            push!(result, 0x00)
+        end
+        return result
+    end
+
     # Helper to compile a value, ensuring it actually produces bytes
     # For SSAValues without locals, we need to recompute the value
     # phi_idx: the SSA index of the phi node we're setting (to get the phi's type)
     function compile_phi_value(val, phi_idx::Int)::Vector{UInt8}
         result = UInt8[]
         if val isa Core.SSAValue
+            # Determine the phi local's wasm type for compatibility checking
+            phi_local_wasm_type = nothing
+            if haskey(ctx.phi_locals, phi_idx)
+                phi_local_idx = ctx.phi_locals[phi_idx]
+                phi_local_wasm_type = ctx.locals[phi_local_idx - ctx.n_params + 1]
+            end
+
             # Check if this SSA has a local allocated
             if haskey(ctx.ssa_locals, val.id)
                 local_idx = ctx.ssa_locals[val.id]
-                push!(result, Opcode.LOCAL_GET)
-                append!(result, encode_leb128_unsigned(local_idx))
+                # Check type compatibility: the SSA local's type must match the phi local's type
+                local_array_idx = local_idx - ctx.n_params + 1
+                ssa_local_type = local_array_idx >= 1 && local_array_idx <= length(ctx.locals) ? ctx.locals[local_array_idx] : nothing
+                if phi_local_wasm_type !== nothing && ssa_local_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_local_type)
+                    # Type mismatch: emit type-safe default for the phi local's type
+                    @warn "PHI TYPE MISMATCH: phi_local=$(phi_local_wasm_type) ssa_local=$(ssa_local_type) val.id=$(val.id) phi_idx=$(phi_idx)"
+                    append!(result, emit_phi_type_default(phi_local_wasm_type))
+                else
+                    push!(result, Opcode.LOCAL_GET)
+                    append!(result, encode_leb128_unsigned(local_idx))
+                end
             elseif haskey(ctx.phi_locals, val.id)
                 local_idx = ctx.phi_locals[val.id]
-                push!(result, Opcode.LOCAL_GET)
-                append!(result, encode_leb128_unsigned(local_idx))
+                # Check type compatibility for phi-to-phi
+                src_local_type = ctx.locals[local_idx - ctx.n_params + 1]
+                if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, src_local_type)
+                    append!(result, emit_phi_type_default(phi_local_wasm_type))
+                else
+                    push!(result, Opcode.LOCAL_GET)
+                    append!(result, encode_leb128_unsigned(local_idx))
+                end
             else
                 # SSA without local - need to recompute the statement
                 # This should ideally not happen for phi values, but handle it
@@ -10380,7 +10439,53 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
         # PiNode is a type assertion - just pass through the value
         pi_type = get(ctx.ssa_types, idx, Any)
         if pi_type !== Nothing
-            append!(bytes, compile_value(stmt.val, ctx))
+            # Check type compatibility before storing PiNode value
+            if haskey(ctx.ssa_locals, idx)
+                local_idx = ctx.ssa_locals[idx]
+                local_array_idx = local_idx - ctx.n_params + 1
+                pi_local_type = local_array_idx >= 1 && local_array_idx <= length(ctx.locals) ? ctx.locals[local_array_idx] : nothing
+                # Determine the value's wasm type
+                val_wasm_type = get_phi_edge_wasm_type(stmt.val, ctx)
+                if pi_local_type !== nothing && val_wasm_type !== nothing && !wasm_types_compatible(pi_local_type, val_wasm_type)
+                    @warn "PINODE TYPE FIX: local_type=$pi_local_type val_type=$val_wasm_type idx=$idx"
+                    # Type mismatch: emit type-safe default for the local's type
+                    if pi_local_type isa ConcreteRef
+                        push!(bytes, Opcode.REF_NULL)
+                        append!(bytes, encode_leb128_unsigned(pi_local_type.type_idx))
+                    elseif pi_local_type === StructRef
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(StructRef))
+                    elseif pi_local_type === ArrayRef
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(ArrayRef))
+                    elseif pi_local_type === ExternRef
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(ExternRef))
+                    elseif pi_local_type === AnyRef
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(AnyRef))
+                    elseif pi_local_type === I64
+                        push!(bytes, Opcode.I64_CONST)
+                        push!(bytes, 0x00)
+                    elseif pi_local_type === I32
+                        push!(bytes, Opcode.I32_CONST)
+                        push!(bytes, 0x00)
+                    elseif pi_local_type === F64
+                        push!(bytes, Opcode.F64_CONST)
+                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                    elseif pi_local_type === F32
+                        push!(bytes, Opcode.F32_CONST)
+                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+                    else
+                        push!(bytes, Opcode.I32_CONST)
+                        push!(bytes, 0x00)
+                    end
+                else
+                    append!(bytes, compile_value(stmt.val, ctx))
+                end
+            else
+                append!(bytes, compile_value(stmt.val, ctx))
+            end
         else
             # Nothing-typed PiNode — push i32(0) as placeholder (Nothing maps to I32)
             push!(bytes, Opcode.I32_CONST)
@@ -12741,22 +12846,28 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             # 128-bit left shift: stack has [x_struct, n_i64]
             append!(bytes, emit_int128_shl(ctx, arg_type))
         else
-            if is_32bit && length(args) >= 2
+            if length(args) >= 2
                 shift_type = infer_value_type(args[2], ctx)
-                if shift_type === Int64 || shift_type === UInt64
+                if is_32bit && (shift_type === Int64 || shift_type === UInt64)
                     # Truncate i64 shift amount to i32
                     push!(bytes, Opcode.I32_WRAP_I64)
+                elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
+                    # Extend i32 shift amount to i64 (Wasm requires matching types)
+                    push!(bytes, Opcode.I64_EXTEND_I32_S)
                 end
             end
             push!(bytes, is_32bit ? Opcode.I32_SHL : Opcode.I64_SHL)
         end
 
     elseif is_func(func, :ashr_int)  # arithmetic shift right
-        if is_32bit && length(args) >= 2
+        if length(args) >= 2
             shift_type = infer_value_type(args[2], ctx)
-            if shift_type === Int64 || shift_type === UInt64
+            if is_32bit && (shift_type === Int64 || shift_type === UInt64)
                 # Truncate i64 shift amount to i32
                 push!(bytes, Opcode.I32_WRAP_I64)
+            elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
+                # Extend i32 shift amount to i64 (Wasm requires matching types)
+                push!(bytes, Opcode.I64_EXTEND_I32_S)
             end
         end
         push!(bytes, is_32bit ? Opcode.I32_SHR_S : Opcode.I64_SHR_S)
@@ -12766,11 +12877,14 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             # 128-bit logical right shift: stack has [x_struct, n_i64]
             append!(bytes, emit_int128_lshr(ctx, arg_type))
         else
-            if is_32bit && length(args) >= 2
+            if length(args) >= 2
                 shift_type = infer_value_type(args[2], ctx)
-                if shift_type === Int64 || shift_type === UInt64
+                if is_32bit && (shift_type === Int64 || shift_type === UInt64)
                     # Truncate i64 shift amount to i32
                     push!(bytes, Opcode.I32_WRAP_I64)
+                elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
+                    # Extend i32 shift amount to i64 (Wasm requires matching types)
+                    push!(bytes, Opcode.I64_EXTEND_I32_S)
                 end
             end
             push!(bytes, is_32bit ? Opcode.I32_SHR_U : Opcode.I64_SHR_U)
@@ -12828,6 +12942,59 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         if target_type === Int64 || target_type === UInt64
             # Extending to 64-bit - emit extend instruction
             push!(bytes, Opcode.I64_EXTEND_I32_S)
+        elseif target_type === Int128 || target_type === UInt128
+            # Sign-extending to 128-bit - create struct with (lo=value, hi=sign_extension)
+            # The value is already on the stack (i64)
+            source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
+
+            # If source is 32-bit, sign-extend to 64-bit first
+            if source_type === Int32 || source_type === UInt32 || source_type === Int16 || source_type === Int8
+                push!(bytes, Opcode.I64_EXTEND_I32_S)
+            end
+
+            # Now we have i64 on stack (the lo part)
+            # Need to duplicate it to compute the hi part (sign extension)
+            # Use a scratch local: store, load twice
+            scratch_idx = ctx.n_params + length(ctx.locals)
+            push!(ctx.locals, I64)
+
+            # Store to scratch
+            push!(bytes, Opcode.LOCAL_TEE)
+            append!(bytes, encode_leb128_unsigned(scratch_idx))
+
+            # Compute hi = lo >> 63 (arithmetic shift, gives 0 or -1)
+            push!(bytes, Opcode.I64_CONST)
+            push!(bytes, 0x3f)  # 63
+            push!(bytes, Opcode.I64_SHR_S)
+
+            # Stack now has [hi]. Need [lo, hi] for struct.new
+            # Load lo from scratch
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(scratch_idx))
+
+            # Swap: need lo on bottom, hi on top
+            # Actually struct.new takes fields in order: field0=lo, field1=hi
+            # Stack order for struct.new is: [lo, hi] (bottom to top)
+            # We have [hi] and need to get [lo, hi]
+            # So: store hi, get lo, get hi
+            scratch2_idx = ctx.n_params + length(ctx.locals)
+            push!(ctx.locals, I64)
+            push!(bytes, Opcode.LOCAL_SET)
+            append!(bytes, encode_leb128_unsigned(scratch2_idx))
+
+            # Push lo
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(scratch_idx))
+
+            # Push hi
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(scratch2_idx))
+
+            # Create the 128-bit struct (lo, hi)
+            type_idx = get_int128_type!(ctx.mod, ctx.type_registry, target_type)
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.STRUCT_NEW)
+            append!(bytes, encode_leb128_unsigned(type_idx))
         end
         # If extending to 32-bit (Int32), it's a no-op since small types already map to i32
 
