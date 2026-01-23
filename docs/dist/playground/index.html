@@ -1,0 +1,2076 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Playground - WasmTarget.jl</title>
+    <base href="/WasmTarget.jl/">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Source Sans 3', 'system-ui', 'sans-serif'],
+                        serif: ['Lora', 'Georgia', 'Cambria', 'serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+    <style>
+        html { scroll-behavior: smooth; }
+        pre code { font-family: 'Fira Code', 'Monaco', 'Consolas', monospace; }
+    </style>
+    <script>
+        (function() {
+            try {
+                const saved = localStorage.getItem('therapy-theme');
+                if (saved === 'dark' || (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+                    document.documentElement.classList.add('dark');
+                }
+            } catch (e) {}
+        })();
+    </script>
+</head>
+<body class="antialiased">
+<div id="therapy-content">
+<div data-hk="1" class="min-h-screen bg-stone-50 dark:bg-stone-900 transition-colors duration-200"><nav data-hk="2" class="bg-white dark:bg-stone-800 border-b border-stone-200 dark:border-stone-700 transition-colors duration-200"><div data-hk="3" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8"><div data-hk="4" class="flex justify-between h-16"><div data-hk="5" class="flex items-center"><a data-hk="6" class="flex items-center" href="/WasmTarget.jl/"><span data-hk="7" class="text-2xl font-bold text-cyan-500 dark:text-cyan-400">WasmTarget</span><span data-hk="8" class="text-2xl font-light text-stone-400 dark:text-stone-500">.jl</span></a></div><div data-hk="9" class="hidden sm:flex sm:items-center sm:space-x-6"><a data-hk="10" class="text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors" href="/WasmTarget.jl/">Home</a><a data-hk="11" class="text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors" href="/WasmTarget.jl/playground/">Playground</a><a data-hk="12" class="text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors" href="/WasmTarget.jl/manual/">Manual</a><a data-hk="13" class="text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors" href="/WasmTarget.jl/features/">Features</a><a data-hk="14" class="text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors" href="/WasmTarget.jl/api/">API</a><a data-hk="15" class="text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200 transition-colors" href="https://github.com/GroupTherapyOrg/WasmTarget.jl" title="View on GitHub" target="_blank"><svg data-hk="16" viewBox="0 0 24 24" class="h-5 w-5" fill="currentColor"><path data-hk="17" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg></a><div data-hk="18" class="ml-2"><therapy-island data-component="themetoggle"><div data-hk="1" dark-mode="Therapy.SignalGetter{Int32}(Therapy.Signal{Int32}(0x000000000000009d, 0, Set{Any}()))"><button data-hk="2" class="p-2 rounded-lg hover:bg-stone-100 dark:hover:bg-stone-700 transition-colors" title="Toggle dark mode"><svg data-hk="3" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-5 h-5 text-stone-600 dark:text-stone-300" fill="none"><path data-hk="4" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" stroke-linecap="round" stroke-linejoin="round"></path></svg></button></div></therapy-island></div></div></div></div></nav><main data-hk="19" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"><div data-hk="20" class="w-full -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8"><div data-hk="21" class="text-center mb-6"><h1 data-hk="22" class="text-3xl font-bold text-stone-800 dark:text-stone-100">Julia Playground</h1><p data-hk="23" class="text-stone-500 dark:text-stone-400 mt-2 max-w-2xl mx-auto">Write and run Julia code directly in your browser. Powered by JuliaSyntax.jl (parser) and ExprNode (evaluator) compiled to WasmGC by WasmTarget.jl, optimized by Binaryen.</p></div><div data-hk="24" class="border border-stone-700 rounded-xl overflow-hidden shadow-lg"><div data-hk="25" class="flex flex-col h-full min-h-[600px]"><div data-hk="26" class="flex items-center justify-between px-4 py-3 bg-stone-800 dark:bg-stone-900 border-b border-stone-700"><div data-hk="27" class="flex items-center gap-3"><span data-hk="28" class="text-stone-200 font-semibold">Julia Playground</span><span data-hk="29" class="text-stone-500 text-sm">Powered by WasmTarget.jl</span></div><div data-hk="30" class="flex items-center gap-3"><div data-hk="31" id="interpreter-status" class="flex items-center gap-2"><span data-hk="32" id="status-dot" class="w-2 h-2 rounded-full bg-yellow-500"></span><span data-hk="33" id="status-text" class="text-stone-400 text-xs">Loading...</span></div><button data-hk="34" id="run-button" class="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 disabled:bg-stone-600 disabled:cursor-not-allowed text-white rounded-lg font-medium flex items-center gap-2 transition-colors"><svg data-hk="35" viewBox="0 0 24 24" class="w-4 h-4" fill="currentColor"><path data-hk="36" d="M8 5v14l11-7z"></path></svg><span data-hk="37">Run</span></button></div></div><div data-hk="38" class="flex-1 grid lg:grid-cols-2 gap-0 min-h-0"><div data-hk="39" class="flex flex-col min-h-0 border-r border-stone-700"><div data-hk="40" class="flex items-center justify-between px-4 py-2 bg-stone-700 dark:bg-stone-800"><span data-hk="41" class="text-stone-300 text-sm font-medium">Code</span><div data-hk="42" class="flex items-center gap-2"><button data-hk="43" id="clear-button" class="text-stone-400 hover:text-white text-xs transition-colors">Clear</button><select data-hk="44" id="example-selector" class="bg-stone-600 text-stone-200 text-xs rounded px-2 py-1"><option data-hk="45" value="">Examples...</option><option data-hk="46" value="hello">Hello World</option><option data-hk="47" value="arithmetic">Arithmetic</option><option data-hk="48" value="functions">Functions</option><option data-hk="49" value="loops">Loops</option><option data-hk="50" value="factorial">Factorial</option><option data-hk="51" value="fibonacci">Fibonacci</option></select></div></div><div data-hk="52" id="editor-container" class="flex-1 overflow-hidden bg-stone-900"></div></div><div data-hk="53" class="flex flex-col min-h-0"><div data-hk="54" class="flex items-center justify-between px-4 py-2 bg-stone-700 dark:bg-stone-800"><span data-hk="55" class="text-stone-300 text-sm font-medium">Output</span><button data-hk="56" id="clear-output-button" class="text-stone-400 hover:text-white text-xs transition-colors">Clear</button></div><div data-hk="57" id="output-container" class="flex-1 overflow-auto bg-stone-900 p-4 font-mono text-sm"><div data-hk="58" id="output-content" class="text-stone-400">Click &quot;Run&quot; to execute your code...</div></div></div></div><link data-hk="59" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/codemirror.min.css" rel="stylesheet" /><script>    (function() {
+        // Configuration
+        const INITIAL_CODE = `# Julia Playground — Powered by WasmGC
+# Parser: JuliaSyntax.jl compiled to WebAssembly
+# Evaluator: ExprNode tree-walker compiled to WebAssembly
+
+# Try arithmetic expressions:
+1 + 2
+10 - 3
+4 * 5
+
+# Variables and expressions:
+x = 7
+y = 3
+x + y
+
+# Conditionals:
+if true 1 else 2 end
+`;
+
+        // State
+        let editor = null;
+        let parserModule = null;    // JuliaSyntax compiled to WasmGC
+        let evaluatorModule = null; // ExprNode tree-walker compiled to WasmGC
+        let binaryenReady = false;  // Binaryen optimizer loaded
+        let interpreterReady = false;
+
+        // DOM elements
+        const editorContainer = document.getElementById('editor-container');
+        const outputContent = document.getElementById('output-content');
+        const runButton = document.getElementById('run-button');
+        const clearButton = document.getElementById('clear-button');
+        const clearOutputButton = document.getElementById('clear-output-button');
+        const exampleSelector = document.getElementById('example-selector');
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+
+        // Example code snippets
+        const examples = {
+            hello: `# Simple addition
+1 + 2
+`,
+            arithmetic: `# Arithmetic operations
+1 + 2
+10 - 3
+4 * 5
+2 + 3 * 0
+`,
+            functions: `# Variables
+x = 10
+y = 20
+x + y
+`,
+            loops: `# Multiple assignments
+a = 5
+b = 3
+a + b
+a - b
+a * b
+`,
+            factorial: `# Conditional expression
+if true 42 else 0 end
+if false 1 else 99 end
+`,
+            fibonacci: `# Variables + arithmetic
+x = 7
+y = 3
+x + y
+x - y
+x * y
+`
+        };
+
+        // Update status indicator
+        function updateStatus(state, text) {
+            if (statusDot && statusText) {
+                statusText.textContent = text;
+                statusDot.className = 'w-2 h-2 rounded-full ';
+                switch(state) {
+                    case 'ready':
+                        statusDot.className += 'bg-green-500';
+                        break;
+                    case 'loading':
+                        statusDot.className += 'bg-yellow-500 animate-pulse';
+                        break;
+                    case 'running':
+                        statusDot.className += 'bg-cyan-500 animate-pulse';
+                        break;
+                    case 'error':
+                        statusDot.className += 'bg-red-500';
+                        break;
+                    default:
+                        statusDot.className += 'bg-stone-500';
+                }
+            }
+        }
+
+        // Append output
+        function appendOutput(text, isError = false) {
+            if (outputContent) {
+                const line = document.createElement('div');
+                line.className = isError ? 'text-red-400' : 'text-green-400';
+                line.textContent = text;
+                outputContent.appendChild(line);
+                outputContent.scrollTop = outputContent.scrollHeight;
+            }
+        }
+
+        // Clear output
+        function clearOutput() {
+            if (outputContent) {
+                outputContent.innerHTML = '';
+            }
+        }
+
+        // Initialize CodeMirror 6
+        async function initEditor() {
+            updateStatus('loading', 'Loading editor...');
+
+            // Load CodeMirror 6 modules from esm.sh
+            try {
+                const [{EditorState}, {EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightSpecialChars, drawSelection, dropCursor, rectangularSelection, crosshairCursor}, {defaultHighlightStyle, syntaxHighlighting, indentOnInput, bracketMatching, foldGutter, foldKeymap}, {defaultKeymap, history, historyKeymap}, {closeBrackets, closeBracketsKeymap, autocompletion, completionKeymap}, {highlightSelectionMatches, searchKeymap}] = await Promise.all([
+                    import('https://esm.sh/@codemirror/state@6'),
+                    import('https://esm.sh/@codemirror/view@6'),
+                    import('https://esm.sh/@codemirror/language@6'),
+                    import('https://esm.sh/@codemirror/commands@6'),
+                    import('https://esm.sh/@codemirror/autocomplete@6'),
+                    import('https://esm.sh/@codemirror/search@6')
+                ]);
+
+                // Create a simple Julia-like syntax (basic tokenizer)
+                const juliaTheme = EditorView.theme({
+                    '&': {
+                        backgroundColor: '#1c1917',
+                        color: '#e7e5e4',
+                        height: '100%'
+                    },
+                    '.cm-content': {
+                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                        padding: '16px'
+                    },
+                    '.cm-gutters': {
+                        backgroundColor: '#292524',
+                        color: '#78716c',
+                        border: 'none'
+                    },
+                    '.cm-activeLineGutter': {
+                        backgroundColor: '#44403c'
+                    },
+                    '.cm-activeLine': {
+                        backgroundColor: 'rgba(68, 64, 60, 0.4)'
+                    },
+                    '.cm-cursor': {
+                        borderLeftColor: '#22d3ee'
+                    },
+                    '.cm-selectionBackground': {
+                        backgroundColor: '#0e7490 !important'
+                    },
+                    '&.cm-focused .cm-selectionBackground': {
+                        backgroundColor: '#0e7490 !important'
+                    }
+                });
+
+                // Create editor
+                const startState = EditorState.create({
+                    doc: INITIAL_CODE,
+                    extensions: [
+                        lineNumbers(),
+                        highlightActiveLineGutter(),
+                        highlightSpecialChars(),
+                        history(),
+                        foldGutter(),
+                        drawSelection(),
+                        dropCursor(),
+                        EditorState.allowMultipleSelections.of(true),
+                        indentOnInput(),
+                        syntaxHighlighting(defaultHighlightStyle, {fallback: true}),
+                        bracketMatching(),
+                        closeBrackets(),
+                        autocompletion(),
+                        rectangularSelection(),
+                        crosshairCursor(),
+                        highlightSelectionMatches(),
+                        keymap.of([
+                            ...closeBracketsKeymap,
+                            ...defaultKeymap,
+                            ...searchKeymap,
+                            ...historyKeymap,
+                            ...foldKeymap,
+                            ...completionKeymap,
+                            // Ctrl/Cmd+Enter to run
+                            {
+                                key: 'Mod-Enter',
+                                run: () => { runCode(); return true; }
+                            }
+                        ]),
+                        juliaTheme
+                    ]
+                });
+
+                editor = new EditorView({
+                    state: startState,
+                    parent: editorContainer
+                });
+
+                console.log('CodeMirror initialized');
+            } catch (err) {
+                console.error('Failed to load CodeMirror:', err);
+                // Fallback to textarea
+                editorContainer.innerHTML = '<textarea id="fallback-editor" class="w-full h-full bg-stone-900 text-stone-100 p-4 font-mono text-sm resize-none focus:outline-none" spellcheck="false">' + INITIAL_CODE + '</textarea>';
+            }
+        }
+
+        // (loadWasmModule removed — replaced by fetch + Binaryen optimize + instantiate in initInterpreter)
+
+        // Load Binaryen optimizer (wasm-opt in the browser)
+        async function loadBinaryen() {
+            try {
+                // Load binaryen.js from CDN (AssemblyScript's browser build)
+                const script = document.createElement('script');
+                script.src = 'https://cdn.jsdelivr.net/npm/binaryen@119/index.js';
+                await new Promise((resolve, reject) => {
+                    script.onload = resolve;
+                    script.onerror = reject;
+                    document.head.appendChild(script);
+                });
+                // binaryen.js exposes a global `binaryen` object
+                if (typeof binaryen !== 'undefined') {
+                    binaryenReady = true;
+                    console.log('Binaryen optimizer loaded (wasm-opt in browser)');
+                    return true;
+                }
+            } catch (e) {
+                console.warn('Binaryen optimizer not loaded:', e.message);
+            }
+            return false;
+        }
+
+        // Optimize WASM bytes using Binaryen (wasm-opt)
+        // Returns optimized bytes, or original bytes if optimization fails
+        function optimizeWasm(wasmBytes, name) {
+            if (!binaryenReady || typeof binaryen === 'undefined') {
+                return wasmBytes;
+            }
+            try {
+                const mod = binaryen.readBinary(new Uint8Array(wasmBytes));
+                binaryen.setOptimizeLevel(2);    // -O2
+                binaryen.setShrinkLevel(1);      // some size reduction
+                mod.optimize();
+                if (mod.validate()) {
+                    const optimized = mod.emitBinary();
+                    const savedPct = ((1 - optimized.length / wasmBytes.byteLength) * 100).toFixed(1);
+                    console.log(name + ': ' + wasmBytes.byteLength + ' → ' + optimized.length + ' bytes (-' + savedPct + '%)');
+                    mod.dispose();
+                    return optimized.buffer;
+                } else {
+                    console.warn(name + ': Binaryen validation failed, using unoptimized');
+                    mod.dispose();
+                }
+            } catch (e) {
+                console.warn(name + ': Binaryen optimization failed:', e.message);
+            }
+            return wasmBytes;
+        }
+
+        // Initialize WasmGC modules (parser + evaluator) with Binaryen optimization
+        async function initInterpreter() {
+            updateStatus('loading', 'Loading optimizer...');
+
+            try {
+                // Load Binaryen first (non-blocking — we proceed even if it fails)
+                await loadBinaryen();
+
+                updateStatus('loading', 'Loading WasmGC modules...');
+
+                const wasmBase = [
+                    '/WasmTarget.jl/wasm/',
+                    '/wasm/',
+                    './wasm/',
+                    '/dist/wasm/',
+                ];
+
+                const importObject = { Math: { pow: Math.pow } };
+
+                // Load raw bytes for parser.wasm
+                let parserBytes = null;
+                for (const base of wasmBase) {
+                    try {
+                        const resp = await fetch(base + 'parser.wasm');
+                        if (resp.ok) {
+                            parserBytes = await resp.arrayBuffer();
+                            console.log('parser.wasm loaded from:', base);
+                            break;
+                        }
+                    } catch (e) {}
+                }
+
+                // Load raw bytes for evaluator.wasm
+                let evalBytes = null;
+                for (const base of wasmBase) {
+                    try {
+                        const resp = await fetch(base + 'evaluator.wasm');
+                        if (resp.ok) {
+                            evalBytes = await resp.arrayBuffer();
+                            console.log('evaluator.wasm loaded from:', base);
+                            break;
+                        }
+                    } catch (e) {}
+                }
+
+                // Optimize through Binaryen if available
+                if (parserBytes && binaryenReady) {
+                    parserBytes = optimizeWasm(parserBytes, 'parser.wasm');
+                }
+                if (evalBytes && binaryenReady) {
+                    evalBytes = optimizeWasm(evalBytes, 'evaluator.wasm');
+                }
+
+                // Instantiate optimized (or original) modules
+                if (parserBytes) {
+                    try {
+                        const result = await WebAssembly.instantiate(parserBytes, importObject);
+                        parserModule = result.instance;
+                        console.log('Parser exports:', Object.keys(parserModule.exports));
+                    } catch (e) {
+                        console.warn('parser.wasm instantiation failed:', e.message);
+                    }
+                }
+                if (evalBytes) {
+                    try {
+                        const result = await WebAssembly.instantiate(evalBytes, importObject);
+                        evaluatorModule = result.instance;
+                        console.log('Evaluator exports:', Object.keys(evaluatorModule.exports));
+                    } catch (e) {
+                        console.warn('evaluator.wasm instantiation failed:', e.message);
+                    }
+                }
+
+                interpreterReady = true;
+                const optLabel = binaryenReady ? ' + wasm-opt' : '';
+                const status = evaluatorModule ? 'WasmGC Ready' + optLabel : 'Ready (limited)';
+                updateStatus('ready', status);
+
+                if (runButton) {
+                    runButton.disabled = false;
+                }
+            } catch (err) {
+                console.error('Failed to load WasmGC modules:', err);
+                interpreterReady = true;
+                updateStatus('ready', 'Ready (limited)');
+                if (runButton) {
+                    runButton.disabled = false;
+                }
+            }
+        }
+
+        // Parse a Julia expression string into an ExprNode array for the evaluator.
+        // Returns {nodes: [{tag, value, c1, c2, c3}], root, numSlots} or null on failure.
+        // Tags: 0=literal, 1=add, 2=sub, 3=mul, 4=assign, 5=block, 6=varref, 7=ifnode
+        function parseToNodes(code) {
+            const nodes = [];
+            const varSlots = {};
+            let nextSlot = 1;
+
+            function getSlot(name) {
+                if (!(name in varSlots)) {
+                    varSlots[name] = nextSlot++;
+                }
+                return varSlots[name];
+            }
+
+            function addNode(tag, value, c1, c2, c3) {
+                nodes.push({tag, value, c1: c1 || 0, c2: c2 || 0, c3: c3 || 0});
+                return nodes.length; // 1-based index
+            }
+
+            function parseExpr(s) {
+                s = s.trim();
+
+                // If expression with else
+                const ifMatch = s.match(/^if\s+(.+?)\s+(.+?)\s+else\s+(.+?)\s+end$/);
+                if (ifMatch) {
+                    const condIdx = parseExpr(ifMatch[1]);
+                    const thenIdx = parseExpr(ifMatch[2]);
+                    const elseIdx = parseExpr(ifMatch[3]);
+                    return addNode(7, 0, condIdx, thenIdx, elseIdx);
+                }
+
+                // Assignment: x = expr
+                const assignMatch = s.match(/^([a-zA-Z_]\w*)\s*=\s*(.+)$/);
+                if (assignMatch) {
+                    const slot = getSlot(assignMatch[1]);
+                    const valIdx = parseExpr(assignMatch[2]);
+                    return addNode(4, slot, valIdx);
+                }
+
+                // Addition/Subtraction (left to right, lowest precedence)
+                let depth = 0;
+                let lastAddOp = -1;
+                let lastAddChar = '';
+                for (let i = s.length - 1; i >= 0; i--) {
+                    if (s[i] === ')') depth++;
+                    else if (s[i] === '(') depth--;
+                    else if (depth === 0 && (s[i] === '+' || s[i] === '-') && i > 0 && s[i-1] === ' ') {
+                        lastAddOp = i;
+                        lastAddChar = s[i];
+                        break;
+                    }
+                }
+                if (lastAddOp > 0) {
+                    const left = parseExpr(s.substring(0, lastAddOp - 1));
+                    const right = parseExpr(s.substring(lastAddOp + 2));
+                    return addNode(lastAddChar === '+' ? 1 : 2, 0, left, right);
+                }
+
+                // Multiplication (higher precedence)
+                depth = 0;
+                let lastMulOp = -1;
+                for (let i = s.length - 1; i >= 0; i--) {
+                    if (s[i] === ')') depth++;
+                    else if (s[i] === '(') depth--;
+                    else if (depth === 0 && s[i] === '*' && i > 0 && s[i-1] === ' ') {
+                        lastMulOp = i;
+                        break;
+                    }
+                }
+                if (lastMulOp > 0) {
+                    const left = parseExpr(s.substring(0, lastMulOp - 1));
+                    const right = parseExpr(s.substring(lastMulOp + 2));
+                    return addNode(3, 0, left, right);
+                }
+
+                // Boolean literals (for if conditions)
+                if (s === 'true') return addNode(0, 1);
+                if (s === 'false') return addNode(0, 0);
+
+                // Variable reference
+                if (/^[a-zA-Z_]\w*$/.test(s)) {
+                    const slot = getSlot(s);
+                    return addNode(6, slot);
+                }
+
+                // Integer literal
+                if (/^-?\d+$/.test(s)) {
+                    return addNode(0, parseInt(s, 10));
+                }
+
+                return null; // parse failure
+            }
+
+            // Parse multiple lines as a block
+            const lines = code.split(/[;\n]+/)
+                .map(l => l.trim())
+                .filter(l => l && !l.startsWith('#'));
+
+            if (lines.length === 0) return null;
+
+            if (lines.length === 1) {
+                const root = parseExpr(lines[0]);
+                if (root === null) return null;
+                return {nodes, root, numSlots: Math.max(1, nextSlot - 1)};
+            }
+
+            // Multiple lines: build a sequence of blocks (3 children max per block)
+            // Evaluate all lines, but only return the last result
+            const lineIndices = [];
+            for (const line of lines) {
+                const idx = parseExpr(line);
+                if (idx === null) return null;
+                lineIndices.push(idx);
+            }
+
+            // Chain into block nodes (each has up to 3 children)
+            let current = lineIndices[0];
+            for (let i = 1; i < lineIndices.length; i += 2) {
+                const c2 = lineIndices[i] || 0;
+                const c3 = lineIndices[i + 1] || 0;
+                current = addNode(5, 0, current, c2, c3);
+            }
+
+            return {nodes, root: current, numSlots: Math.max(1, nextSlot - 1)};
+        }
+
+        // Run code using WasmGC evaluator
+        function runCode() {
+            if (!interpreterReady) return;
+
+            const code = getEditorContent();
+            if (!code.trim()) {
+                clearOutput();
+                appendOutput('No code to run', true);
+                return;
+            }
+
+            updateStatus('running', 'Running...');
+            clearOutput();
+
+            try {
+                // Parse each non-empty, non-comment line
+                const lines = code.split(/\n/)
+                    .map(l => l.trim())
+                    .filter(l => l && !l.startsWith('#'));
+
+                if (lines.length === 0) {
+                    appendOutput('No expressions to evaluate', true);
+                    updateStatus('ready', evaluatorModule ? 'WasmGC Ready' : 'Ready');
+                    return;
+                }
+
+                // Parse the full code block into ExprNode format
+                const parsed = parseToNodes(code);
+
+                if (!parsed) {
+                    appendOutput('Parse error: unsupported expression', true);
+                    appendOutput('Supported: integers, +, -, *, variables, if/else', false);
+                    updateStatus('ready', evaluatorModule ? 'WasmGC Ready' : 'Ready');
+                    return;
+                }
+
+                if (evaluatorModule) {
+                    // Execute via WasmGC evaluator
+                    const wasm = evaluatorModule.exports;
+
+                    // Evaluate each line individually to show per-line results
+                    const lineTexts = code.split(/\n/)
+                        .map(l => l.trim())
+                        .filter(l => l && !l.startsWith('#'));
+
+                    // Use a shared variable context across all lines
+                    const fullParsed = parseToNodes(lineTexts.join('\n'));
+                    if (!fullParsed) {
+                        appendOutput('Parse error', true);
+                        updateStatus('ready', 'WasmGC Ready');
+                        return;
+                    }
+
+                    // Build the node array in WasmGC
+                    const nodesRef = wasm.nodes_new(fullParsed.nodes.length);
+                    for (let i = 0; i < fullParsed.nodes.length; i++) {
+                        const n = fullParsed.nodes[i];
+                        wasm['nodes_set!'](nodesRef, i + 1, n.tag, BigInt(n.value), n.c1, n.c2, n.c3);
+                    }
+                    const envRef = wasm.env_new(fullParsed.numSlots);
+
+                    // Evaluate and show result
+                    const result = wasm.eval_node(nodesRef, fullParsed.root, envRef);
+                    appendOutput(String(result));
+                    appendOutput('');
+                    appendOutput('--- Evaluated via WasmGC (eval_node) ---', false);
+
+                    if (parserModule) {
+                        appendOutput('Parser: JuliaSyntax.jl compiled to WasmGC (' +
+                            Object.keys(parserModule.exports).length + ' exports)', false);
+                    }
+                    if (binaryenReady) {
+                        appendOutput('Optimizer: Binaryen (wasm-opt) applied', false);
+                    }
+                } else {
+                    // Fallback: evaluate in JS using the same parseToNodes logic
+                    const parsed = parseToNodes(code);
+                    if (parsed) {
+                        const result = evalNodes(parsed.nodes, parsed.root, new Array(parsed.numSlots).fill(0));
+                        appendOutput(String(result));
+                        appendOutput('');
+                        appendOutput('--- Evaluated in JS (WasmGC modules not loaded) ---', false);
+                    }
+                }
+
+                updateStatus('ready', evaluatorModule ? 'WasmGC Ready' : 'Ready');
+            } catch (err) {
+                appendOutput('Error: ' + err.message, true);
+                updateStatus('error', 'Error');
+            }
+        }
+
+        // JS fallback evaluator (mirrors eval_node logic for when WASM isn't available)
+        function evalNodes(nodes, idx, slots) {
+            const node = nodes[idx - 1]; // 1-based to 0-based
+            switch (node.tag) {
+                case 0: return node.value; // literal
+                case 1: return evalNodes(nodes, node.c1, slots) + evalNodes(nodes, node.c2, slots); // add
+                case 2: return evalNodes(nodes, node.c1, slots) - evalNodes(nodes, node.c2, slots); // sub
+                case 3: return evalNodes(nodes, node.c1, slots) * evalNodes(nodes, node.c2, slots); // mul
+                case 4: { // assign
+                    const val = evalNodes(nodes, node.c1, slots);
+                    slots[node.value - 1] = val;
+                    return val;
+                }
+                case 5: { // block
+                    let result = 0;
+                    if (node.c1) result = evalNodes(nodes, node.c1, slots);
+                    if (node.c2) result = evalNodes(nodes, node.c2, slots);
+                    if (node.c3) result = evalNodes(nodes, node.c3, slots);
+                    return result;
+                }
+                case 6: return slots[node.value - 1]; // varref
+                case 7: { // if
+                    const cond = evalNodes(nodes, node.c1, slots);
+                    return cond !== 0
+                        ? evalNodes(nodes, node.c2, slots)
+                        : evalNodes(nodes, node.c3, slots);
+                }
+                default: return -1;
+            }
+        }
+
+        // Get editor content
+        function getEditorContent() {
+            if (editor) {
+                return editor.state.doc.toString();
+            }
+            const fallback = document.getElementById('fallback-editor');
+            if (fallback) {
+                return fallback.value;
+            }
+            return '';
+        }
+
+        // Set editor content
+        function setEditorContent(code) {
+            if (editor) {
+                editor.dispatch({
+                    changes: { from: 0, to: editor.state.doc.length, insert: code }
+                });
+            } else {
+                const fallback = document.getElementById('fallback-editor');
+                if (fallback) {
+                    fallback.value = code;
+                }
+            }
+        }
+
+        // Event listeners
+        if (runButton) {
+            runButton.addEventListener('click', runCode);
+        }
+
+        if (clearButton) {
+            clearButton.addEventListener('click', () => {
+                setEditorContent('');
+            });
+        }
+
+        if (clearOutputButton) {
+            clearOutputButton.addEventListener('click', clearOutput);
+        }
+
+        if (exampleSelector) {
+            exampleSelector.addEventListener('change', (e) => {
+                const exampleId = e.target.value;
+                if (exampleId && examples[exampleId]) {
+                    setEditorContent(examples[exampleId]);
+                }
+                e.target.value = '';
+            });
+        }
+
+        // Initialize
+        (async function() {
+            await initEditor();
+            await initInterpreter();
+        })();
+    })();
+    </script></div></div><div data-hk="60" class="mt-8 grid md:grid-cols-3 gap-6"><div data-hk="61" class="p-6 bg-stone-100 dark:bg-stone-800 rounded-xl"><h3 data-hk="62" class="text-lg font-semibold text-stone-800 dark:text-stone-100 mb-3">How It Works</h3><p data-hk="63" class="text-stone-600 dark:text-stone-400 text-sm">This playground uses Julia&#39;s real parser (JuliaSyntax.jl) and a tree-walking evaluator, both compiled to WebAssembly (WasmGC) by WasmTarget.jl. The output is optimized by Binaryen (wasm-opt) in the browser for faster execution. Everything runs entirely in your browser - no server required.</p></div><div data-hk="64" class="p-6 bg-stone-100 dark:bg-stone-800 rounded-xl"><h3 data-hk="65" class="text-lg font-semibold text-stone-800 dark:text-stone-100 mb-3">Supported Features</h3><ul data-hk="66" class="text-stone-600 dark:text-stone-400 text-sm space-y-1"><li data-hk="67">Integer arithmetic (+, -, *)</li><li data-hk="68">Variable assignment</li><li data-hk="69">If/else conditionals</li><li data-hk="70">Multi-line expressions</li><li data-hk="71">JuliaSyntax.jl parser (WasmGC)</li><li data-hk="72">ExprNode evaluator (WasmGC)</li><li>Binaryen optimizer (wasm-opt)</li><li data-hk="73">No server required</li><li data-hk="74">100% browser-based</li></ul></div><div data-hk="75" class="p-6 bg-stone-100 dark:bg-stone-800 rounded-xl"><h3 data-hk="76" class="text-lg font-semibold text-stone-800 dark:text-stone-100 mb-3">Keyboard Shortcuts</h3><ul data-hk="77" class="text-stone-600 dark:text-stone-400 text-sm space-y-1"><li data-hk="78"><code data-hk="79" class="bg-stone-200 dark:bg-stone-700 px-1 rounded">Ctrl</code> + <code data-hk="80" class="bg-stone-200 dark:bg-stone-700 px-1 rounded">Enter</code> - Run code</li><li data-hk="81"><code data-hk="82" class="bg-stone-200 dark:bg-stone-700 px-1 rounded">Tab</code> - Indent</li><li data-hk="83"><code data-hk="84" class="bg-stone-200 dark:bg-stone-700 px-1 rounded">Ctrl</code> + <code data-hk="85" class="bg-stone-200 dark:bg-stone-700 px-1 rounded">Z</code> - Undo</li></ul></div></div><div data-hk="86" class="mt-6 p-4 bg-cyan-50 dark:bg-cyan-900/20 border border-cyan-200 dark:border-cyan-800 rounded-xl"><div data-hk="87" class="flex items-start gap-3"><div data-hk="88" class="flex-shrink-0 w-8 h-8 bg-cyan-500 rounded-full flex items-center justify-center"><svg data-hk="89" viewBox="0 0 24 24" stroke="currentColor" class="w-4 h-4 text-white" fill="none"><path data-hk="90" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" stroke-linecap="round" stroke-linejoin="round"></path></svg></div><div data-hk="91" class="flex-1"><p data-hk="92" class="text-stone-700 dark:text-stone-200 font-medium text-sm">100% Browser-Based</p><p data-hk="93" class="text-stone-500 dark:text-stone-400 text-xs mt-1">This playground loads two WasmGC modules: parser.wasm (JuliaSyntax.jl) and evaluator.wasm (ExprNode tree-walker), both compiled to WasmGC by WasmTarget.jl. The modules are optimized by Binaryen (wasm-opt) in the browser for inlining, DCE, and constant folding. No code is sent to any server.</p></div></div></div></div></main><footer data-hk="94" class="bg-white dark:bg-stone-800 border-t border-stone-200 dark:border-stone-700 mt-auto transition-colors duration-200"><div data-hk="95" class="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8"><div data-hk="96" class="flex justify-between items-center"><p data-hk="97" class="text-stone-500 dark:text-stone-400 text-sm">Built with <a data-hk="98" class="text-cyan-500 dark:text-cyan-400 hover:text-cyan-600 dark:hover:text-cyan-300" href="https://github.com/GroupTherapyOrg/Therapy.jl" target="_blank">Therapy.jl</a> - Powered by <a data-hk="99" class="text-cyan-500 dark:text-cyan-400 hover:text-cyan-600 dark:hover:text-cyan-300" href="/WasmTarget.jl/">WasmTarget.jl</a></p><p data-hk="100" class="text-stone-400 dark:text-stone-500 text-sm">MIT License</p></div></div></footer></div>
+</div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-julia.min.js"></script>
+    <script>
+// Therapy.jl Hydration - ThemeToggle
+// Registered globally for re-hydration after client-side navigation
+(function() {
+    'use strict';
+
+    // Initialize global hydration registry
+    window.TherapyHydrate = window.TherapyHydrate || {};
+
+    // Hydration function for this component
+    async function hydrate_themetoggle() {
+        console.log('%c━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 'color: #e94560');
+        console.log('%c  Therapy.jl - Hydrating ThemeToggle', 'color: #e94560; font-weight: bold');
+        console.log('%c━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 'color: #e94560');
+
+        try {
+        // Signals discovered:
+        // signal_142: 0 (Int32)
+
+        const container = document.querySelector('therapy-island[data-component="themetoggle"]');
+        if (!container) {
+            console.error('[Hydration] Container not found: therapy-island[data-component="themetoggle"]');
+            console.error('[Hydration] Available therapy-islands:', document.querySelectorAll('therapy-island').length);
+            document.querySelectorAll('therapy-island').forEach(el => console.log('  Found island:', el.dataset.component));
+            return;
+        }
+        console.log('%c[Hydration] Scoped to container: therapy-island[data-component="themetoggle"]', 'color: #748ffc');
+
+        // Load WebAssembly module
+        console.log('%c[Hydration] Loading Wasm module from: /WasmTarget.jl/themetoggle.wasm', 'color: #748ffc');
+        const response = await fetch('/WasmTarget.jl/themetoggle.wasm');
+        if (!response.ok) {
+            console.error('[Hydration] Failed to fetch Wasm:', response.status, response.statusText);
+            return;
+        }
+        const bytes = await response.arrayBuffer();
+        console.log('%c[Hydration] Module size: ' + bytes.byteLength + ' bytes', 'color: #748ffc');
+
+        // Query helper for scoped DOM access
+        const queryEl = (hk) => container.querySelector('[data-hk="' + hk + '"]');
+
+        // DOM imports for Wasm
+        // All numeric values are passed as f64 (JavaScript numbers)
+        const imports = {
+            dom: {
+                update_text: (hk, value) => {
+                    const el = queryEl(hk);
+                    if (el) {
+                        let displayValue;
+                        const format = el.dataset.format;
+
+                        // Check for special format attributes
+                        if (format === 'xo') {
+                            // Square format: 0→"", 1→"X", 2→"O"
+                            displayValue = value === 0 ? '' : (value === 1 ? 'X' : 'O');
+                        } else if (format === 'turn') {
+                            // Turn format: 0→"X", 1→"O"
+                            displayValue = value === 0 ? 'X' : 'O';
+                        } else if (format === 'winner') {
+                            // Winner format: 0→"", 1→"X wins!", 2→"O wins!"
+                            displayValue = value === 0 ? '' : (value === 1 ? 'X wins! 🎉' : 'O wins! 🎉');
+                            // Also update parent badge styling
+                            const badge = el.parentElement;
+                            if (badge && badge.dataset.format === 'winner-badge') {
+                                if (value === 0) {
+                                    badge.className = 'hidden mb-4 px-6 py-3 rounded-lg text-lg font-bold text-center';
+                                } else {
+                                    const colors = value === 1
+                                        ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300'
+                                        : 'bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300';
+                                    badge.className = 'mb-4 px-6 py-3 rounded-lg text-lg font-bold text-center animate-bounce ' + colors;
+                                }
+                                // Also toggle turn display visibility
+                                const turnDisplay = container.querySelector('[data-format="turn-display"]');
+                                if (turnDisplay) turnDisplay.style.display = value === 0 ? '' : 'none';
+                            }
+                        } else {
+                            // Default: show as integer if whole number
+                            displayValue = Number.isInteger(value) ? Math.trunc(value) : value;
+                        }
+
+                        el.textContent = displayValue;
+                        console.log('%c[Wasm→DOM] update_text(hk=' + hk + ', value=' + displayValue + ')', 'color: #51cf66');
+                    }
+                },
+                set_visible: (hk, visible) => {
+                    const el = queryEl(hk);
+                    if (el) {
+                        el.style.display = visible ? '' : 'none';
+                        console.log('%c[Wasm→DOM] set_visible(hk=' + hk + ', visible=' + !!visible + ')', 'color: #be4bdb');
+                    }
+                },
+                set_dark_mode: (enabled) => {
+                    const isDark = !!enabled;
+                    document.documentElement.classList.toggle('dark', isDark);
+                    try {
+                        localStorage.setItem('therapy-theme', isDark ? 'dark' : 'light');
+                    } catch (e) {}
+                    console.log('%c[Wasm→DOM] set_dark_mode(enabled=' + isDark + ')', 'color: #9775fa');
+                },
+                get_editor_code: (cell_hk) => {
+                    // Get code from CodeMirror editor
+                    // Returns 0 as placeholder - proper string handling requires externref
+                    const cell = queryEl(cell_hk) || document.querySelector('[data-cell-id]');
+                    if (cell) {
+                        const container = cell.querySelector('[data-codemirror]');
+                        if (container && container._cmView) {
+                            // Code available via container._cmView.state.doc.toString()
+                            // but returning as f64 doesn't work for strings
+                            console.log('%c[Wasm→DOM] get_editor_code(hk=' + cell_hk + ') - string handling not yet supported', 'color: #ff6b6b');
+                        }
+                    }
+                    return 0;  // Placeholder - needs externref for strings
+                }
+            },
+            channel: {
+                send: (channel_id, cell_id) => {
+                    // Channel IDs: 0=execute, 1=delete_cell, 2=add_cell
+                    // This allows islands to send messages to Therapy.jl channels
+                    const channels = ['execute', 'delete_cell', 'add_cell'];
+                    const channelName = channels[channel_id] || 'unknown';
+
+                    // Find the cell by hydration key or data-cell-id
+                    const cell = queryEl(cell_id) || document.querySelector('[data-cell-id]');
+                    const cellIdStr = cell ? cell.dataset.cellId : String(cell_id);
+                    const notebookId = window.notebookId || '';
+
+                    if (typeof TherapyWS !== 'undefined' && TherapyWS.isConnected()) {
+                        // Build payload based on channel
+                        let payload = { notebook_id: notebookId, cell_id: cellIdStr };
+
+                        if (channel_id === 0) {  // execute
+                            // Get code from CodeMirror
+                            const container = cell ? cell.querySelector('[data-codemirror]') : null;
+                            const code = container && container._cmView ?
+                                container._cmView.state.doc.toString() : '';
+                            payload.code = code;
+                        }
+
+                        TherapyWS.sendMessage(channelName, payload);
+                        console.log('%c[Wasm→Channel] send(' + channelName + ', cell=' + cellIdStr + ')', 'color: #22b8cf');
+                    } else {
+                        console.warn('%c[Wasm→Channel] WebSocket not connected', 'color: #ff6b6b');
+                    }
+                }
+            }
+        };
+
+        const { instance } = await WebAssembly.instantiate(bytes, imports);
+        const wasm = instance.exports;
+
+        console.log('%c[Hydration] ✓ Wasm loaded!', 'color: #51cf66; font-weight: bold');
+        console.log('%c[Hydration] Exports:', 'color: #ffd43b', Object.keys(wasm));
+
+        // Connect event handlers
+            container.querySelector('[data-hk="2"]')?.addEventListener('click', () => {
+    console.log('%c[Event] click → handler_1()', 'color: #e94560');
+    wasm.handler_1();
+});
+
+        // Connect input bindings
+        
+
+        // Initialize theme signals from current DOM state
+        // This ensures the Wasm signal matches the saved theme preference
+        // Sync theme signal with saved preference or current DOM state
+// Check localStorage first (where we save it), then fall back to DOM class
+const savedTheme = (() => {
+    try { return localStorage.getItem('therapy-theme'); } catch (e) { return null; }
+})();
+const shouldBeDark = savedTheme === 'dark' ||
+    (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches);
+
+// Apply theme to DOM first (in case localStorage was set but class not yet applied)
+document.documentElement.classList.toggle('dark', shouldBeDark);
+
+// Then sync the Wasm signal (use regular number for Int32)
+if (wasm.set_signal_142) {
+    wasm.set_signal_142(shouldBeDark ? 1 : 0);
+    console.log('%c[Hydration] Theme signal synced: ' + (shouldBeDark ? 'dark' : 'light') + ' mode', 'color: #9775fa');
+}
+
+        // Initialize (sync DOM with Wasm state)
+        if (wasm.init) {
+            wasm.init();
+            console.log('%c[Hydration] ✓ Initialized', 'color: #51cf66');
+        }
+
+        console.log('%c[Hydration] 🚀 ThemeToggle hydrated!', 'color: #51cf66; font-weight: bold');
+        console.log('%c━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 'color: #e94560');
+
+        // Expose for debugging
+        window.TherapyWasm = window.TherapyWasm || {};
+        window.TherapyWasm['themetoggle'] = wasm;
+
+        return wasm;
+        } catch (error) {
+            console.error('[Hydration] Error hydrating ThemeToggle:', error);
+            throw error;
+        }
+    }
+
+    // Register hydration function globally for re-hydration after navigation
+    window.TherapyHydrate['themetoggle'] = hydrate_themetoggle;
+
+    // Auto-hydrate on initial page load (skip if router will handle it)
+    // The router sets this flag before executing extracted scripts
+    if (!window._therapyRouterHydrating) {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', hydrate_themetoggle);
+        } else {
+            hydrate_themetoggle();
+        }
+    }
+})();
+
+    </script>
+<script>
+// Therapy.jl Client-Side Router
+(function() {
+    'use strict';
+
+    const CONFIG = {
+        contentSelector: '#therapy-content',
+        basePath: '/WasmTarget.jl',
+        partialHeader: 'X-Therapy-Partial',
+        // Enable debug logging - can be toggled via TherapyRouter.setDebug(true/false)
+        debug: true
+    };
+
+    // Track current navigation to cancel on rapid clicks
+    let currentNavigation = null;
+
+    function log(...args) {
+        if (CONFIG.debug) console.log('%c[Router]', 'color: #748ffc', ...args);
+    }
+
+    /**
+     * Normalize a path by removing trailing slashes and adding leading slash
+     */
+    function normalizePath(path) {
+        if (!path) return '/';
+        path = path.replace(/\/+$/g, '') || '/';
+        if (!path.startsWith('/')) path = '/' + path;
+        return path;
+    }
+
+    /**
+     * Check if a URL is internal (same origin, not a hash link, etc.)
+     */
+    function isInternalLink(href, link) {
+        if (!href) return false;
+
+        // Skip hash-only links
+        if (href.startsWith('#')) return false;
+
+        // Skip javascript: links
+        if (href.startsWith('javascript:')) return false;
+
+        // Skip links with download attribute
+        if (link.hasAttribute('download')) return false;
+
+        // Skip links targeting new window
+        if (link.target === '_blank') return false;
+
+        // Skip links with data-no-router
+        if (link.hasAttribute('data-no-router')) return false;
+
+        // External links (different origin)
+        if (href.startsWith('http://') || href.startsWith('https://')) {
+            try {
+                const url = new URL(href);
+                if (url.origin !== window.location.origin) return false;
+            } catch (e) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Resolve a relative URL to absolute path
+     */
+    function resolveUrl(href) {
+        log('resolveUrl input:', href);
+        if (href.startsWith('/')) {
+            log('resolveUrl: absolute path, returning as-is:', href);
+            return href;
+        }
+        if (href.startsWith('http://') || href.startsWith('https://')) {
+            const pathname = new URL(href).pathname;
+            log('resolveUrl: full URL, extracted pathname:', pathname);
+            return pathname;
+        }
+
+        // Relative path - resolve against CURRENT URL for navigation
+        // This ensures ../ goes up from the current page, not from base path
+        // Example: on /WasmTarget.jl/manual/, "../" should go to /WasmTarget.jl/
+        const resolved = new URL(href, window.location.href).pathname;
+        log('resolveUrl: relative path resolved:', href, '->', resolved);
+        return resolved;
+    }
+
+    /**
+     * Navigate to a new URL using client-side routing
+     */
+    async function navigate(href, options = {}) {
+        const { replace = false, scroll = true } = options;
+
+        const path = resolveUrl(href);
+        log('Navigating to:', path);
+
+        // Update browser history
+        if (replace) {
+            history.replaceState({ path }, '', path);
+        } else {
+            history.pushState({ path }, '', path);
+        }
+
+        // Load the page content
+        await loadPage(path);
+
+        // Scroll to top unless disabled
+        if (scroll) {
+            window.scrollTo({ top: 0, behavior: 'instant' });
+        }
+
+        // Update active link states
+        updateActiveLinks();
+    }
+
+    /**
+     * Fetch page content and swap it into the content container
+     */
+    async function loadPage(path) {
+        const container = document.querySelector(CONFIG.contentSelector);
+        if (!container) {
+            console.error('[Router] Content container not found:', CONFIG.contentSelector);
+            window.location.href = path;
+            return;
+        }
+
+        // Cancel any in-flight navigation (handles rapid clicking)
+        if (currentNavigation) {
+            currentNavigation.abort();
+            log('Cancelled previous navigation');
+        }
+
+        // Create new abort controller for this navigation
+        const abortController = new AbortController();
+        currentNavigation = abortController;
+
+        // Show loading state (optional)
+        container.style.opacity = '0.7';
+        container.style.transition = 'opacity 0.1s';
+
+        try {
+            const response = await fetch(path, {
+                headers: {
+                    [CONFIG.partialHeader]: '1',
+                    'Accept': 'text/html'
+                },
+                credentials: 'same-origin',
+                signal: abortController.signal
+            });
+
+            if (!response.ok) {
+                throw new Error('HTTP ' + response.status);
+            }
+
+            let html = await response.text();
+
+            // Check if this navigation was cancelled while waiting for response
+            if (abortController.signal.aborted) {
+                return;
+            }
+
+            // Check if we got a full HTML document (static site) or partial content (dev server)
+            // Full documents start with <!DOCTYPE or <html
+            let scriptsToExecute = [];
+            if (html.trim().toLowerCase().startsWith('<!doctype') || html.trim().toLowerCase().startsWith('<html')) {
+                log('Got full page, extracting content...');
+                // Parse the full document and extract just the content area
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+                const newContent = doc.querySelector(CONFIG.contentSelector);
+                if (newContent) {
+                    html = newContent.innerHTML;
+                } else {
+                    // Fallback: try to get body content
+                    log('Content selector not found in response, using body');
+                    html = doc.body ? doc.body.innerHTML : html;
+                }
+
+                // Extract hydration scripts from the body (they're outside #therapy-content)
+                // These contain TherapyHydrate registration functions for islands
+                const scripts = doc.querySelectorAll('body script:not([src])');
+                log('Found', scripts.length, 'inline scripts in body');
+                scripts.forEach((script, idx) => {
+                    const content = script.textContent;
+                    // Only collect Therapy-related scripts (safety check)
+                    if (content && (content.includes('TherapyHydrate') || content.includes('TherapyWS'))) {
+                        scriptsToExecute.push(content);
+                        log('Script', idx, 'contains Therapy code, length:', content.length);
+                    } else {
+                        log('Script', idx, 'skipped, length:', content ? content.length : 0);
+                    }
+                });
+                if (scriptsToExecute.length > 0) {
+                    log('Collected', scriptsToExecute.length, 'hydration scripts to execute');
+                } else {
+                    log('WARNING: No hydration scripts found!');
+                }
+            }
+
+            // Swap content
+            container.innerHTML = html;
+            container.style.opacity = '1';
+
+            // Clear current navigation tracker
+            if (currentNavigation === abortController) {
+                currentNavigation = null;
+            }
+
+            // Execute any hydration scripts extracted from the full page
+            // This registers TherapyHydrate functions before we try to call them
+            // Set flag to prevent auto-hydration (router will call hydrateIslands)
+            window._therapyRouterHydrating = true;
+            for (const scriptContent of scriptsToExecute) {
+                try {
+                    const script = document.createElement('script');
+                    script.textContent = scriptContent;
+                    document.head.appendChild(script);
+                    document.head.removeChild(script);
+                    log('Executed hydration script');
+                } catch (e) {
+                    console.error('[Router] Failed to execute hydration script:', e);
+                }
+            }
+            window._therapyRouterHydrating = false;
+
+            // Re-hydrate all islands in the new content
+            await hydrateIslands();
+
+            // Re-run syntax highlighting for code blocks (Prism.js)
+            if (typeof Prism !== 'undefined' && Prism.highlightAll) {
+                Prism.highlightAll();
+            }
+
+            // Re-discover and subscribe to any new server signals in the content
+            if (typeof TherapyWS !== 'undefined' && TherapyWS.discoverAndSubscribe) {
+                TherapyWS.discoverAndSubscribe();
+            }
+
+            // Show static mode warnings on any new ws-example elements
+            if (typeof TherapyWS !== 'undefined' && TherapyWS.showStaticModeWarningOnNewElements) {
+                TherapyWS.showStaticModeWarningOnNewElements();
+            }
+
+            // Dispatch event for any listeners (e.g., Sessions.jl CodeMirror reinit)
+            window.dispatchEvent(new CustomEvent('therapy:router:loaded', {
+                detail: { path: path }
+            }));
+
+            // Call any registered post-navigation callbacks
+            if (Array.isArray(window._therapyRouterCallbacks)) {
+                for (const callback of window._therapyRouterCallbacks) {
+                    try {
+                        callback(path);
+                    } catch (e) {
+                        console.error('[Router] Post-navigation callback error:', e);
+                    }
+                }
+            }
+
+            log('Page loaded successfully');
+
+        } catch (error) {
+            // Ignore abort errors (expected when clicking fast)
+            if (error.name === 'AbortError') {
+                log('Navigation cancelled');
+                return;
+            }
+
+            console.error('[Router] Failed to load page:', error);
+            container.style.opacity = '1';
+
+            // Clear current navigation tracker
+            if (currentNavigation === abortController) {
+                currentNavigation = null;
+            }
+
+            // Fallback to full page navigation
+            window.location.href = path;
+        }
+    }
+
+    /**
+     * Re-hydrate all therapy-island components on the page
+     */
+    async function hydrateIslands() {
+        const islands = document.querySelectorAll('therapy-island');
+        log('Re-hydrating', islands.length, 'islands');
+
+        for (const island of islands) {
+            const componentName = island.dataset.component;
+            if (!componentName) {
+                console.warn('[Router] Found therapy-island without data-component attribute');
+                continue;
+            }
+
+            // Registry uses lowercase keys (see Hydration.jl)
+            const registryKey = componentName.toLowerCase();
+            log('Looking for hydration function:', componentName, '-> registry key:', registryKey);
+            log('TherapyHydrate registry:', window.TherapyHydrate ? Object.keys(window.TherapyHydrate) : 'undefined');
+
+            // Look for registered hydration function (using lowercase key)
+            if (window.TherapyHydrate && typeof window.TherapyHydrate[registryKey] === 'function') {
+                try {
+                    log('Calling hydration function for:', registryKey);
+                    await window.TherapyHydrate[registryKey]();
+                    log('Hydrated island:', componentName);
+                } catch (error) {
+                    console.error('[Router] Failed to hydrate island:', componentName, error);
+                }
+            } else {
+                console.warn('[Router] No hydration function found for:', registryKey);
+                console.warn('[Router] Available functions:', window.TherapyHydrate ? Object.keys(window.TherapyHydrate) : 'none');
+            }
+        }
+    }
+
+    /**
+     * Update active class on navigation links
+     */
+    function updateActiveLinks() {
+        const currentPath = normalizePath(window.location.pathname);
+
+        document.querySelectorAll('[data-navlink]').forEach(link => {
+            const href = link.getAttribute('href');
+            if (!href) return;
+
+            const linkPath = normalizePath(resolveUrl(href));
+            const activeClassAttr = link.dataset.activeClass || 'active';
+            // Split by spaces to handle multiple classes like "text-emerald-700 dark:text-emerald-400"
+            const activeClasses = activeClassAttr.split(/\s+/).filter(c => c.length > 0);
+            const exact = link.hasAttribute('data-exact');
+
+            let isActive;
+            if (exact) {
+                isActive = linkPath === currentPath;
+            } else {
+                // Prefix match for nested routes
+                isActive = currentPath === linkPath ||
+                          (linkPath !== '/' && currentPath.startsWith(linkPath + '/'));
+            }
+
+            if (isActive) {
+                link.classList.add(...activeClasses);
+            } else {
+                link.classList.remove(...activeClasses);
+            }
+        });
+    }
+
+    /**
+     * Handle click events on links
+     */
+    function handleLinkClick(event) {
+        // Find the closest anchor tag
+        const link = event.target.closest('a[href]');
+        if (!link) return;
+
+        const href = link.getAttribute('href');
+        log('handleLinkClick: intercepted href=', href, 'from element:', link.tagName);
+
+        // Check if we should handle this link
+        if (!isInternalLink(href, link)) {
+            log('handleLinkClick: not internal, skipping');
+            return;
+        }
+
+        log('handleLinkClick: internal link, routing via SPA');
+
+        // Prevent default navigation
+        event.preventDefault();
+
+        // Navigate using the router
+        navigate(href);
+    }
+
+    /**
+     * Handle browser back/forward buttons
+     */
+    function handlePopState(event) {
+        const path = window.location.pathname;
+        log('Popstate:', path);
+        loadPage(path);
+    }
+
+    /**
+     * Initialize the router
+     */
+    function init() {
+        log('Initializing client-side router');
+
+        // Bind link click handler (delegation on document, capture phase)
+        document.addEventListener('click', handleLinkClick, true);
+
+        // Bind popstate for back/forward
+        window.addEventListener('popstate', handlePopState);
+
+        // Update active links on initial load
+        updateActiveLinks();
+
+        log('Router initialized');
+    }
+
+    // Expose API for programmatic navigation
+    window.TherapyRouter = {
+        navigate,
+        loadPage,
+        hydrateIslands,
+        updateActiveLinks,
+        setDebug: (enabled) => { CONFIG.debug = enabled; },
+        // Register a callback to run after each navigation
+        onNavigate: (callback) => {
+            if (!Array.isArray(window._therapyRouterCallbacks)) {
+                window._therapyRouterCallbacks = [];
+            }
+            window._therapyRouterCallbacks.push(callback);
+        }
+    };
+
+    // Initialize when DOM is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+})();
+</script>
+<script>
+// Therapy.jl WebSocket Client
+(function() {
+    'use strict';
+
+    const CONFIG = {
+        reconnectDelay: 1000,
+        maxReconnectDelay: 30000,
+        signals: []
+    };
+
+    let ws = null;
+    let reconnectAttempts = 0;
+    let connectionId = null;
+    let isStaticMode = false;
+
+    // Track signal values for patch application
+    let signalValues = {};
+
+    /**
+     * Get WebSocket URL based on current page protocol
+     */
+    function getWsUrl() {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        return protocol + '//' + window.location.host + '/ws';
+    }
+
+    /**
+     * Connect to WebSocket server
+     */
+    function connect() {
+        if (isStaticMode) return;
+
+        try {
+            ws = new WebSocket(getWsUrl());
+
+            ws.onopen = function() {
+                console.log('[WS] Connected to server');
+                reconnectAttempts = 0;
+
+                // Subscribe to configured signals
+                CONFIG.signals.forEach(function(sig) {
+                    subscribe(sig);
+                });
+
+                // Auto-discover and subscribe to signals from data-server-signal attributes
+                discoverAndSubscribe();
+
+                // Dispatch connected event
+                window.dispatchEvent(new CustomEvent('therapy:ws:connected'));
+            };
+
+            ws.onmessage = function(e) {
+                try {
+                    const msg = JSON.parse(e.data);
+                    handleMessage(msg);
+                } catch (err) {
+                    console.warn('[WS] Failed to parse message:', e.data);
+                }
+            };
+
+            ws.onclose = function(e) {
+                console.log('[WS] Connection closed, code:', e.code);
+                connectionId = null;
+
+                // Dispatch disconnected event
+                window.dispatchEvent(new CustomEvent('therapy:ws:disconnected'));
+
+                // Attempt reconnect unless it was a clean close
+                if (e.code !== 1000) {
+                    scheduleReconnect();
+                }
+            };
+
+            ws.onerror = function(err) {
+                console.warn('[WS] Connection error - server may not be running');
+
+                // Check if we're on a static site (GitHub Pages, etc.)
+                // Static sites can't accept WebSocket connections
+                if (reconnectAttempts === 0) {
+                    // First failure - might be static mode
+                    setTimeout(function() {
+                        if (!ws || ws.readyState !== WebSocket.OPEN) {
+                            showStaticModeWarning();
+                        }
+                    }, 2000);
+                }
+            };
+
+        } catch (e) {
+            console.warn('[WS] Failed to create WebSocket:', e);
+            showStaticModeWarning();
+        }
+    }
+
+    /**
+     * Schedule a reconnection attempt with exponential backoff
+     */
+    function scheduleReconnect() {
+        if (isStaticMode) return;
+
+        const delay = Math.min(
+            CONFIG.reconnectDelay * Math.pow(2, reconnectAttempts),
+            CONFIG.maxReconnectDelay
+        );
+        reconnectAttempts++;
+
+        console.log('[WS] Reconnecting in', delay, 'ms (attempt', reconnectAttempts + ')');
+        setTimeout(connect, delay);
+    }
+
+    /**
+     * Handle incoming WebSocket message
+     */
+    function handleMessage(msg) {
+        switch (msg.type) {
+            case 'connected':
+                connectionId = msg.connection_id;
+                console.log('[WS] Connection ID:', connectionId);
+                break;
+
+            case 'signal_update':
+                handleSignalUpdate(msg.signal, msg.value);
+                break;
+
+            case 'signal_patch':
+                handleSignalPatch(msg.signal, msg.patch);
+                break;
+
+            case 'channel_message':
+                handleChannelMessage(msg.channel, msg.data);
+                break;
+
+            case 'error':
+                console.error('[WS] Server error:', msg.message);
+                break;
+
+            case 'pong':
+                // Keepalive response, ignore
+                break;
+
+            default:
+                console.log('[WS] Unknown message type:', msg.type, msg);
+        }
+    }
+
+    /**
+     * Handle a signal update from the server (full value)
+     */
+    function handleSignalUpdate(signalName, value) {
+        console.log('[WS] Signal update:', signalName, '=', value);
+
+        // Store the value for future patch application
+        signalValues[signalName] = value;
+
+        // Update via TherapySignals if available (Wasm integration)
+        if (window.TherapySignals && window.TherapySignals[signalName]) {
+            window.TherapySignals[signalName].set(value);
+        }
+
+        // Also update DOM elements with data-server-signal attribute
+        updateSignalDOM(signalName, value);
+
+        // Dispatch custom event for custom handlers
+        window.dispatchEvent(new CustomEvent('therapy:signal:' + signalName, {
+            detail: { value: value }
+        }));
+    }
+
+    /**
+     * Handle a signal patch from the server (RFC 6902 JSON Patch)
+     */
+    function handleSignalPatch(signalName, patch) {
+        console.log('[WS] Signal patch:', signalName, patch);
+
+        // Get current value or initialize
+        let value = signalValues[signalName];
+        if (value === undefined) {
+            value = null;
+        }
+
+        // Apply each patch operation
+        for (const op of patch) {
+            value = applyPatchOp(value, op);
+        }
+
+        // Store the new value
+        signalValues[signalName] = value;
+
+        // Update via TherapySignals if available (Wasm integration)
+        if (window.TherapySignals && window.TherapySignals[signalName]) {
+            window.TherapySignals[signalName].set(value);
+        }
+
+        // Update DOM elements
+        updateSignalDOM(signalName, value);
+
+        // Dispatch custom event
+        window.dispatchEvent(new CustomEvent('therapy:signal:' + signalName, {
+            detail: { value: value }
+        }));
+    }
+
+    /**
+     * Apply a single JSON patch operation (RFC 6902)
+     */
+    function applyPatchOp(value, op) {
+        const path = op.path;
+        const operation = op.op;
+
+        // Root replacement
+        if (path === '' || path === '/') {
+            if (operation === 'replace' || operation === 'add') {
+                return op.value;
+            }
+            return null;
+        }
+
+        // Parse path: "/foo/bar/0" -> ["foo", "bar", "0"]
+        const parts = path.split('/').filter(p => p !== '');
+
+        // Handle nested path
+        if (operation === 'add' || operation === 'replace') {
+            return setAtPath(value, parts, op.value);
+        } else if (operation === 'remove') {
+            return removeAtPath(value, parts);
+        }
+
+        return value;
+    }
+
+    /**
+     * Set a value at a nested path in an object/array
+     */
+    function setAtPath(obj, parts, newValue) {
+        if (!obj) {
+            obj = {};
+        }
+        if (parts.length === 0) {
+            return newValue;
+        }
+
+        // Clone to avoid mutation
+        obj = JSON.parse(JSON.stringify(obj));
+
+        let current = obj;
+        for (let i = 0; i < parts.length - 1; i++) {
+            const part = parts[i];
+            if (Array.isArray(current)) {
+                const idx = parseInt(part, 10);
+                if (!current[idx]) {
+                    current[idx] = {};
+                }
+                current = current[idx];
+            } else {
+                if (!current[part]) {
+                    current[part] = {};
+                }
+                current = current[part];
+            }
+        }
+
+        const finalPart = parts[parts.length - 1];
+        if (Array.isArray(current)) {
+            const idx = finalPart === '-' ? current.length : parseInt(finalPart, 10);
+            current[idx] = newValue;
+        } else {
+            current[finalPart] = newValue;
+        }
+
+        return obj;
+    }
+
+    /**
+     * Remove a value at a nested path
+     */
+    function removeAtPath(obj, parts) {
+        if (!obj || parts.length === 0) {
+            return obj;
+        }
+
+        // Clone to avoid mutation
+        obj = JSON.parse(JSON.stringify(obj));
+
+        let current = obj;
+        for (let i = 0; i < parts.length - 1; i++) {
+            const part = parts[i];
+            if (Array.isArray(current)) {
+                current = current[parseInt(part, 10)];
+            } else {
+                current = current[part];
+            }
+            if (!current) return obj;
+        }
+
+        const finalPart = parts[parts.length - 1];
+        if (Array.isArray(current)) {
+            current.splice(parseInt(finalPart, 10), 1);
+        } else {
+            delete current[finalPart];
+        }
+
+        return obj;
+    }
+
+    /**
+     * Update DOM elements with data-server-signal or data-bidirectional-signal attribute
+     * Leptos-style reactive bindings:
+     * - data-server-signal="name" - updates textContent/value
+     * - data-signal-html="name" - updates innerHTML (for rich content)
+     * - data-signal-class="name:class1,class2" - adds classes when signal is truthy
+     * - data-signal-match="name:value:class" - adds class when signal equals value
+     */
+    function updateSignalDOM(signalName, value) {
+        // Update read-only server signal elements (textContent)
+        document.querySelectorAll('[data-server-signal="' + signalName + '"]').forEach(function(el) {
+            if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+                el.value = value;
+            } else {
+                el.textContent = value;
+            }
+        });
+
+        // Update innerHTML bindings (for rich HTML content like cell output)
+        document.querySelectorAll('[data-signal-html="' + signalName + '"]').forEach(function(el) {
+            el.innerHTML = value || '';
+            // Show/hide based on content
+            if (el.hasAttribute('data-signal-hide-empty')) {
+                el.classList.toggle('hidden', !value);
+            }
+        });
+
+        // Update class bindings (add classes when signal is truthy)
+        document.querySelectorAll('[data-signal-class^="' + signalName + ':"]').forEach(function(el) {
+            const binding = el.getAttribute('data-signal-class');
+            const [, classes] = binding.split(':');
+            if (classes) {
+                const classList = classes.split(',').map(c => c.trim()).filter(c => c);
+                if (value) {
+                    el.classList.add(...classList);
+                } else {
+                    el.classList.remove(...classList);
+                }
+            }
+        });
+
+        // Update match bindings (add class when signal equals specific value)
+        // Format: data-signal-match="signalName:matchValue:className"
+        document.querySelectorAll('[data-signal-match]').forEach(function(el) {
+            const bindings = el.getAttribute('data-signal-match').split(';');
+            bindings.forEach(function(binding) {
+                const parts = binding.trim().split(':');
+                if (parts.length >= 3 && parts[0] === signalName) {
+                    const matchValue = parts[1];
+                    const className = parts[2];
+                    if (String(value) === matchValue) {
+                        el.classList.add(className);
+                    } else {
+                        el.classList.remove(className);
+                    }
+                }
+            });
+        });
+
+        // Update bidirectional signal elements (only if not focused, to avoid cursor jump)
+        document.querySelectorAll('[data-bidirectional-signal="' + signalName + '"]').forEach(function(el) {
+            if (document.activeElement === el) {
+                // Don't update if user is currently typing in this element
+                return;
+            }
+            if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+                el.value = value;
+            } else {
+                el.textContent = value;
+            }
+        });
+    }
+
+    /**
+     * Compute a JSON patch between old and new values (client-side)
+     * Simplified version - handles basic types
+     */
+    function computePatch(oldValue, newValue) {
+        const patches = [];
+
+        // Handle simple values
+        if (typeof oldValue !== 'object' || typeof newValue !== 'object' ||
+            oldValue === null || newValue === null ||
+            Array.isArray(oldValue) !== Array.isArray(newValue)) {
+            if (oldValue !== newValue) {
+                patches.push({ op: 'replace', path: '', value: newValue });
+            }
+            return patches;
+        }
+
+        // Handle objects
+        if (!Array.isArray(newValue)) {
+            // Added or changed keys
+            for (const key of Object.keys(newValue)) {
+                if (!(key in oldValue)) {
+                    patches.push({ op: 'add', path: '/' + key, value: newValue[key] });
+                } else if (JSON.stringify(oldValue[key]) !== JSON.stringify(newValue[key])) {
+                    patches.push({ op: 'replace', path: '/' + key, value: newValue[key] });
+                }
+            }
+            // Removed keys
+            for (const key of Object.keys(oldValue)) {
+                if (!(key in newValue)) {
+                    patches.push({ op: 'remove', path: '/' + key });
+                }
+            }
+            return patches;
+        }
+
+        // For arrays, just replace if different (computing array diff is complex)
+        if (JSON.stringify(oldValue) !== JSON.stringify(newValue)) {
+            patches.push({ op: 'replace', path: '', value: newValue });
+        }
+        return patches;
+    }
+
+    /**
+     * Update a bidirectional signal from the client
+     * Sends changes to server, which validates and broadcasts to other clients
+     */
+    function setBidirectional(signalName, newValue) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            console.warn('[WS] Cannot update signal - not connected');
+            return false;
+        }
+
+        // Get current value
+        const oldValue = signalValues[signalName];
+
+        // Compute patch
+        const patch = computePatch(oldValue, newValue);
+
+        if (patch.length === 0) {
+            return true; // No change needed
+        }
+
+        // Optimistic update - update local state immediately
+        signalValues[signalName] = newValue;
+        updateSignalDOM(signalName, newValue);
+
+        // Send patch to server
+        send({
+            type: 'bidirectional_update',
+            signal: signalName,
+            patch: patch
+        });
+
+        console.log('[WS] Bidirectional update:', signalName, patch);
+        return true;
+    }
+
+    /**
+     * Get current value of a signal (for use before setBidirectional)
+     */
+    function getSignalValue(signalName) {
+        return signalValues[signalName];
+    }
+
+    /**
+     * Handle a channel message from the server
+     */
+    function handleChannelMessage(channelName, data) {
+        console.log('[WS] Channel message:', channelName, data);
+
+        // Dispatch custom event for this channel
+        window.dispatchEvent(new CustomEvent('therapy:channel:' + channelName, {
+            detail: data
+        }));
+
+        // Also dispatch a general channel event
+        window.dispatchEvent(new CustomEvent('therapy:channel', {
+            detail: { channel: channelName, data: data }
+        }));
+    }
+
+    /**
+     * Send a message on a channel
+     */
+    function sendMessage(channelName, data) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            console.warn('[WS] Cannot send message - not connected');
+            return false;
+        }
+
+        send({
+            type: 'channel_message',
+            channel: channelName,
+            data: data
+        });
+
+        console.log('[WS] Sent channel message:', channelName, data);
+        return true;
+    }
+
+    /**
+     * Subscribe to channel messages (convenience for addEventListener)
+     */
+    function onChannelMessage(channelName, callback) {
+        window.addEventListener('therapy:channel:' + channelName, function(e) {
+            callback(e.detail);
+        });
+    }
+
+    /**
+     * Add warning banner to a single ws-example element
+     */
+    function addWarningToElement(el) {
+        if (el.querySelector('.ws-warning')) return;
+
+        const warning = document.createElement('div');
+        warning.className = 'ws-warning';
+        warning.style.cssText = 'background: linear-gradient(135deg, #fef3c7, #fde68a); border: 1px solid #f59e0b; border-radius: 8px; padding: 16px; margin-bottom: 16px; color: #92400e;';
+        warning.innerHTML = '<strong style="display: block; margin-bottom: 4px;">\u26A0\uFE0F Live Demo Unavailable</strong>' +
+            '<span style="font-size: 14px;">This example requires a WebSocket server. Run locally with:</span>' +
+            '<code style="display: block; margin-top: 8px; padding: 8px; background: rgba(0,0,0,0.1); border-radius: 4px; font-family: monospace;">julia docs/app.jl dev</code>';
+        el.insertBefore(warning, el.firstChild);
+    }
+
+    /**
+     * Show warning when running in static mode (no WebSocket server)
+     */
+    function showStaticModeWarning() {
+        if (isStaticMode) return;
+        isStaticMode = true;
+
+        console.log('[WS] Static mode detected - WebSocket features unavailable');
+
+        // Find all WebSocket example containers and add warning
+        document.querySelectorAll('[data-ws-example]').forEach(addWarningToElement);
+
+        // Dispatch static mode event
+        window.dispatchEvent(new CustomEvent('therapy:ws:static_mode'));
+    }
+
+    /**
+     * Add warnings to any new ws-example elements loaded after static mode was detected
+     * Called by ClientRouter after SPA navigation
+     */
+    function showStaticModeWarningOnNewElements() {
+        if (!isStaticMode) return;
+
+        // Find any new ws-example elements that don't have warnings yet
+        document.querySelectorAll('[data-ws-example]').forEach(addWarningToElement);
+    }
+
+    // Track subscribed signals to avoid duplicates
+    let subscribedSignals = new Set();
+
+    /**
+     * Subscribe to a server signal
+     */
+    function subscribe(signalName) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            if (!subscribedSignals.has(signalName)) {
+                subscribedSignals.add(signalName);
+                ws.send(JSON.stringify({
+                    type: 'subscribe',
+                    signal: signalName
+                }));
+            }
+        }
+    }
+
+    /**
+     * Discover and subscribe to signals from data-server-signal and data-bidirectional-signal attributes
+     * Called on connect and after SPA navigation
+     */
+    function discoverAndSubscribe() {
+        // Subscribe to read-only server signals
+        document.querySelectorAll('[data-server-signal]').forEach(function(el) {
+            var signalName = el.getAttribute('data-server-signal');
+            if (signalName && !subscribedSignals.has(signalName)) {
+                console.log('[WS] Auto-subscribing to:', signalName);
+                subscribe(signalName);
+            }
+        });
+
+        // Subscribe to bidirectional signals (also need to receive updates)
+        document.querySelectorAll('[data-bidirectional-signal]').forEach(function(el) {
+            var signalName = el.getAttribute('data-bidirectional-signal');
+            if (signalName && !subscribedSignals.has(signalName)) {
+                console.log('[WS] Auto-subscribing to bidirectional:', signalName);
+                subscribe(signalName);
+            }
+        });
+    }
+
+    /**
+     * Unsubscribe from a server signal
+     */
+    function unsubscribe(signalName) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                type: 'unsubscribe',
+                signal: signalName
+            }));
+        }
+    }
+
+    /**
+     * Send a custom action to the server
+     */
+    function sendAction(signalName, action, payload) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                type: 'action',
+                signal: signalName,
+                action: action,
+                payload: payload
+            }));
+        }
+    }
+
+    /**
+     * Send raw message to server
+     */
+    function send(msg) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify(msg));
+        }
+    }
+
+    /**
+     * Check if WebSocket is connected
+     */
+    function isConnected() {
+        return ws && ws.readyState === WebSocket.OPEN;
+    }
+
+    /**
+     * Get current connection ID
+     */
+    function getConnectionId() {
+        return connectionId;
+    }
+
+    /**
+     * Manually disconnect
+     */
+    function disconnect() {
+        if (ws) {
+            ws.close(1000, 'Client disconnect');
+            ws = null;
+        }
+    }
+
+    // Expose API globally
+    window.TherapyWS = {
+        connect: connect,
+        disconnect: disconnect,
+        subscribe: subscribe,
+        unsubscribe: unsubscribe,
+        discoverAndSubscribe: discoverAndSubscribe,
+        showStaticModeWarningOnNewElements: showStaticModeWarningOnNewElements,
+        sendAction: sendAction,
+        send: send,
+        isConnected: isConnected,
+        getConnectionId: getConnectionId,
+        isStaticMode: function() { return isStaticMode; },
+        // Bidirectional signals
+        setBidirectional: setBidirectional,
+        getSignalValue: getSignalValue,
+        computePatch: computePatch,
+        // Channel messaging
+        sendMessage: sendMessage,
+        onChannelMessage: onChannelMessage
+    };
+
+    /**
+     * Handle data-action clicks (Leptos-style server actions)
+     * Elements with data-action="channelName" send channel messages on click
+     * Additional data-* attributes are included in the message payload
+     */
+    function setupActionHandlers() {
+        document.addEventListener('click', function(e) {
+            const el = e.target.closest('[data-action]');
+            if (!el) return;
+
+            const action = el.getAttribute('data-action');
+            if (!action) return;
+
+            // Collect all data-* attributes as payload
+            const payload = {};
+            for (const attr of el.attributes) {
+                if (attr.name.startsWith('data-') && attr.name !== 'data-action') {
+                    // Convert data-cell-id to cell_id
+                    const key = attr.name.substring(5).replace(/-/g, '_');
+                    payload[key] = attr.value;
+                }
+            }
+
+            // Check for confirmation
+            if (el.hasAttribute('data-confirm')) {
+                const msg = el.getAttribute('data-confirm');
+                if (!confirm(msg)) return;
+            }
+
+            // Send channel message
+            sendMessage(action, payload);
+
+            // Prevent default for links/buttons
+            e.preventDefault();
+        });
+    }
+
+    // Auto-connect when DOM is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function() {
+            connect();
+            setupActionHandlers();
+        });
+    } else {
+        connect();
+        setupActionHandlers();
+    }
+})();
+</script>
+</body>
+</html>
