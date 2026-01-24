@@ -10986,7 +10986,64 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                         push!(bytes, 0x00)
                     end
                 else
-                    append!(bytes, compile_value(stmt.val, ctx))
+                    val_bytes = compile_value(stmt.val, ctx)
+                    # Safety: if compile_value produced a numeric value (i32_const, i64_const,
+                    # or local.get of numeric local) but pi_local_type is a ref type,
+                    # emit ref.null instead. This happens when val_wasm_type is nothing
+                    # (can't determine source type) but the PiNode's target local is ref-typed.
+                    if pi_local_type !== nothing && (pi_local_type isa ConcreteRef || pi_local_type === StructRef || pi_local_type === ArrayRef || pi_local_type === ExternRef || pi_local_type === AnyRef)
+                        is_numeric_val = false
+                        if !isempty(val_bytes)
+                            first_op = val_bytes[1]
+                            if first_op == Opcode.I32_CONST || first_op == Opcode.I64_CONST || first_op == Opcode.F32_CONST || first_op == Opcode.F64_CONST
+                                is_numeric_val = true
+                            elseif first_op == 0x20  # LOCAL_GET
+                                # Decode local index, check type
+                                src_idx = 0; shift = 0; leb_end = 0
+                                for bi in 2:length(val_bytes)
+                                    b = val_bytes[bi]
+                                    src_idx |= (Int(b & 0x7f) << shift)
+                                    shift += 7
+                                    if (b & 0x80) == 0
+                                        leb_end = bi
+                                        break
+                                    end
+                                end
+                                if leb_end == length(val_bytes)
+                                    arr_idx = src_idx - ctx.n_params + 1
+                                    if arr_idx >= 1 && arr_idx <= length(ctx.locals)
+                                        src_type = ctx.locals[arr_idx]
+                                        if src_type === I32 || src_type === I64 || src_type === F32 || src_type === F64
+                                            is_numeric_val = true
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                        if is_numeric_val
+                            # Replace with ref.null of the correct type
+                            if pi_local_type isa ConcreteRef
+                                push!(bytes, Opcode.REF_NULL)
+                                append!(bytes, encode_leb128_signed(Int64(pi_local_type.type_idx)))
+                            elseif pi_local_type === ArrayRef
+                                push!(bytes, Opcode.REF_NULL)
+                                push!(bytes, UInt8(ArrayRef))
+                            elseif pi_local_type === ExternRef
+                                push!(bytes, Opcode.REF_NULL)
+                                push!(bytes, UInt8(ExternRef))
+                            elseif pi_local_type === AnyRef
+                                push!(bytes, Opcode.REF_NULL)
+                                push!(bytes, UInt8(AnyRef))
+                            else
+                                push!(bytes, Opcode.REF_NULL)
+                                push!(bytes, UInt8(StructRef))
+                            end
+                        else
+                            append!(bytes, val_bytes)
+                        end
+                    else
+                        append!(bytes, val_bytes)
+                    end
                 end
             end
             # else: no ssa_local — compile_value will re-emit the value on demand
@@ -11068,69 +11125,132 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
             # TODO: Implement proper exception value handling
         end
 
-        # Safety check: if stmt_bytes is EXACTLY a local.get of an incompatible type
-        # and we need to store to an SSA local, replace with type-safe default
+        # Safety check: if stmt_bytes produces a value incompatible with the SSA local type,
+        # replace with type-safe default. Catches:
+        # (1) Pure local.get of incompatible type
+        # (2) Numeric constants (i32_const, i64_const, f32_const, f64_const) stored into ref-typed locals
         ssa_type_mismatch = false
-        if haskey(ctx.ssa_locals, idx) && length(stmt_bytes) >= 2 && stmt_bytes[1] == 0x20  # LOCAL_GET
+        if haskey(ctx.ssa_locals, idx) && length(stmt_bytes) >= 2
             local_idx = ctx.ssa_locals[idx]
             local_array_idx = local_idx - ctx.n_params + 1
             local_wasm_type = local_array_idx >= 1 && local_array_idx <= length(ctx.locals) ? ctx.locals[local_array_idx] : nothing
             if local_wasm_type !== nothing
-                # Decode the source local.get index and verify it consumes ALL bytes
-                src_local_idx = 0
-                shift = 0
-                leb_end = 0
-                for bi in 2:length(stmt_bytes)
-                    b = stmt_bytes[bi]
-                    src_local_idx |= (Int(b & 0x7f) << shift)
-                    shift += 7
-                    if (b & 0x80) == 0
-                        leb_end = bi
-                        break
+                needs_type_safe_default = false
+
+                if stmt_bytes[1] == 0x20  # LOCAL_GET
+                    # Decode the source local.get index and verify it consumes ALL bytes
+                    src_local_idx = 0
+                    shift = 0
+                    leb_end = 0
+                    for bi in 2:length(stmt_bytes)
+                        b = stmt_bytes[bi]
+                        src_local_idx |= (Int(b & 0x7f) << shift)
+                        shift += 7
+                        if (b & 0x80) == 0
+                            leb_end = bi
+                            break
+                        end
+                    end
+                    # Only apply safety check if stmt_bytes is EXACTLY local.get <idx>
+                    is_pure_local_get = (leb_end == length(stmt_bytes))
+                    src_array_idx = src_local_idx - ctx.n_params + 1
+                    if is_pure_local_get && src_array_idx >= 1 && src_array_idx <= length(ctx.locals)
+                        src_wasm_type = ctx.locals[src_array_idx]
+                        if !wasm_types_compatible(local_wasm_type, src_wasm_type)
+                            needs_type_safe_default = true
+                        end
+                    end
+                elseif (stmt_bytes[1] == Opcode.I32_CONST || stmt_bytes[1] == Opcode.I64_CONST ||
+                        stmt_bytes[1] == Opcode.F32_CONST || stmt_bytes[1] == Opcode.F64_CONST)
+                    # Numeric constant being stored into a ref-typed local
+                    if local_wasm_type isa ConcreteRef || local_wasm_type === StructRef ||
+                       local_wasm_type === ArrayRef || local_wasm_type === ExternRef || local_wasm_type === AnyRef
+                        needs_type_safe_default = true
                     end
                 end
-                # Only apply safety check if stmt_bytes is EXACTLY local.get <idx>
-                is_pure_local_get = (leb_end == length(stmt_bytes))
-                src_array_idx = src_local_idx - ctx.n_params + 1
-                if is_pure_local_get && src_array_idx >= 1 && src_array_idx <= length(ctx.locals)
-                    src_wasm_type = ctx.locals[src_array_idx]
-                    if !wasm_types_compatible(local_wasm_type, src_wasm_type)
-                        ssa_type_mismatch = true
-                        # Emit type-safe default instead of the incompatible local.get
-                        if local_wasm_type isa ConcreteRef
-                            push!(bytes, Opcode.REF_NULL)
-                            append!(bytes, encode_leb128_signed(Int64(local_wasm_type.type_idx)))
-                        elseif local_wasm_type === ExternRef
-                            push!(bytes, Opcode.REF_NULL)
-                            push!(bytes, UInt8(ExternRef))
-                        elseif local_wasm_type === StructRef
-                            push!(bytes, Opcode.REF_NULL)
-                            push!(bytes, UInt8(StructRef))
-                        elseif local_wasm_type === ArrayRef
-                            push!(bytes, Opcode.REF_NULL)
-                            push!(bytes, UInt8(ArrayRef))
-                        elseif local_wasm_type === AnyRef
-                            push!(bytes, Opcode.REF_NULL)
-                            push!(bytes, UInt8(AnyRef))
-                        elseif local_wasm_type === I64
-                            push!(bytes, Opcode.I64_CONST)
-                            push!(bytes, 0x00)
-                        elseif local_wasm_type === I32
-                            push!(bytes, Opcode.I32_CONST)
-                            push!(bytes, 0x00)
-                        elseif local_wasm_type === F64
-                            push!(bytes, Opcode.F64_CONST)
-                            append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-                        elseif local_wasm_type === F32
-                            push!(bytes, Opcode.F32_CONST)
-                            append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
-                        else
-                            push!(bytes, Opcode.I32_CONST)
-                            push!(bytes, 0x00)
+
+                # Check if stmt_bytes ends with struct_get whose result type is incompatible
+                # with the target local. struct_get = [0xFB, 0x02, type_leb, field_leb]
+                if !needs_type_safe_default && length(stmt_bytes) >= 4 && local_wasm_type isa ConcreteRef
+                    # Find the last struct_get in stmt_bytes by scanning backward for 0xFB 0x02
+                    sg_pos = 0
+                    for si in (length(stmt_bytes) - 3):-1:1
+                        if stmt_bytes[si] == Opcode.GC_PREFIX && stmt_bytes[si + 1] == Opcode.STRUCT_GET
+                            sg_pos = si
+                            break
                         end
-                        push!(bytes, Opcode.LOCAL_SET)
-                        append!(bytes, encode_leb128_unsigned(local_idx))
                     end
+                    if sg_pos > 0 && sg_pos + 2 <= length(stmt_bytes)
+                        # Decode type_idx LEB128
+                        sg_type_idx = 0
+                        sg_shift = 0
+                        sg_bi = sg_pos + 2
+                        while sg_bi <= length(stmt_bytes)
+                            b = stmt_bytes[sg_bi]
+                            sg_type_idx |= (Int(b & 0x7f) << sg_shift)
+                            sg_shift += 7
+                            sg_bi += 1
+                            (b & 0x80) == 0 && break
+                        end
+                        # Decode field_idx LEB128
+                        sg_field_idx = 0
+                        sg_shift = 0
+                        while sg_bi <= length(stmt_bytes)
+                            b = stmt_bytes[sg_bi]
+                            sg_field_idx |= (Int(b & 0x7f) << sg_shift)
+                            sg_shift += 7
+                            sg_bi += 1
+                            (b & 0x80) == 0 && break
+                        end
+                        # Check: is the struct_get the LAST instruction? (sg_bi - 1 == length)
+                        if sg_bi - 1 == length(stmt_bytes) && sg_type_idx + 1 <= length(ctx.mod.types)
+                            mod_type = ctx.mod.types[sg_type_idx + 1]
+                            if mod_type isa StructType && sg_field_idx + 1 <= length(mod_type.fields)
+                                field_result_type = mod_type.fields[sg_field_idx + 1].valtype
+                                if field_result_type isa ConcreteRef && !wasm_types_compatible(local_wasm_type, field_result_type)
+                                    needs_type_safe_default = true
+                                end
+                            end
+                        end
+                    end
+                end
+
+                if needs_type_safe_default
+                    ssa_type_mismatch = true
+                    # Emit type-safe default instead of the incompatible value
+                    if local_wasm_type isa ConcreteRef
+                        push!(bytes, Opcode.REF_NULL)
+                        append!(bytes, encode_leb128_signed(Int64(local_wasm_type.type_idx)))
+                    elseif local_wasm_type === ExternRef
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(ExternRef))
+                    elseif local_wasm_type === StructRef
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(StructRef))
+                    elseif local_wasm_type === ArrayRef
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(ArrayRef))
+                    elseif local_wasm_type === AnyRef
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(AnyRef))
+                    elseif local_wasm_type === I64
+                        push!(bytes, Opcode.I64_CONST)
+                        push!(bytes, 0x00)
+                    elseif local_wasm_type === I32
+                        push!(bytes, Opcode.I32_CONST)
+                        push!(bytes, 0x00)
+                    elseif local_wasm_type === F64
+                        push!(bytes, Opcode.F64_CONST)
+                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                    elseif local_wasm_type === F32
+                        push!(bytes, Opcode.F32_CONST)
+                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+                    else
+                        push!(bytes, Opcode.I32_CONST)
+                        push!(bytes, 0x00)
+                    end
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(local_idx))
                 end
             end
         end
@@ -11450,10 +11570,43 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
         elseif field_type === Any
             # Any field maps to externref in WasmGC
             # We need to convert internal refs to externref using extern.convert_any
-            append!(bytes, compile_value(val, ctx))
-            # Convert internal ref to externref
-            push!(bytes, Opcode.GC_PREFIX)
-            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+            val_bytes = compile_value(val, ctx)
+            # Safety: if compile_value produced local.get of a numeric local (I32/I64),
+            # extern_convert_any will fail because it requires anyref input.
+            # Emit ref.null extern instead.
+            is_numeric_local = false
+            if length(val_bytes) >= 2 && val_bytes[1] == 0x20
+                # Decode LEB128 source local index
+                src_idx = 0; shift = 0; leb_end = 0
+                for bi in 2:length(val_bytes)
+                    b = val_bytes[bi]
+                    src_idx |= (Int(b & 0x7f) << shift)
+                    shift += 7
+                    if (b & 0x80) == 0
+                        leb_end = bi
+                        break
+                    end
+                end
+                if leb_end == length(val_bytes)  # Pure local.get (no trailing instructions)
+                    arr_idx = src_idx - ctx.n_params + 1
+                    if arr_idx >= 1 && arr_idx <= length(ctx.locals)
+                        src_type = ctx.locals[arr_idx]
+                        if src_type === I32 || src_type === I64 || src_type === F32 || src_type === F64
+                            is_numeric_local = true
+                        end
+                    end
+                end
+            end
+            if is_numeric_local
+                # Numeric local can't be extern_convert_any'd — emit ref.null extern
+                push!(bytes, Opcode.REF_NULL)
+                push!(bytes, UInt8(ExternRef))
+            else
+                append!(bytes, val_bytes)
+                # Convert internal ref to externref
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+            end
         else
             # Regular field - compile value directly
             # Safety: if compile_value produces a local.get of a numeric local (i64/i32)
