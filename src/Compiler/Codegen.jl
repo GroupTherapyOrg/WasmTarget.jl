@@ -4270,6 +4270,56 @@ function allocate_ssa_locals!(ctx::CompilationContext)
                 push!(needs_local_set, i)
             end
         end
+        # PiNodes used across control flow boundaries need locals.
+        # Without a local, compile_value assumes the value is on the stack,
+        # but in branching code the stack value may be in a different block.
+        if stmt isa Core.PiNode && !haskey(ctx.phi_locals, i)
+            # Check if there's any control flow between this PiNode and its uses
+            for j in (i+1):length(code)
+                use_stmt = code[j]
+                if references_ssa(use_stmt, i) && !(use_stmt isa Core.PhiNode)
+                    # Found a non-phi use. If there's control flow between PiNode and use, need a local.
+                    has_cf_between = false
+                    for k in (i+1):(j-1)
+                        if code[k] isa Core.GotoNode || code[k] isa Core.GotoIfNot
+                            has_cf_between = true
+                            break
+                        end
+                    end
+                    if has_cf_between
+                        push!(needs_local_set, i)
+                        break
+                    end
+                end
+            end
+        end
+    end
+
+    # Find SSA values used across control flow boundaries.
+    # In Wasm, stack values don't persist across block/branch boundaries.
+    # Any SSA defined before a GotoNode/GotoIfNot and used after it needs a local.
+    for (i, stmt) in enumerate(code)
+        if produces_stack_value(stmt)
+            # Check all uses of this SSA
+            found_use = false
+            for (j, use_stmt) in enumerate(code)
+                if j > i && references_ssa(use_stmt, i)
+                    found_use = true
+                    # Check if there's any control flow between definition and use
+                    has_cf = false
+                    for k in (i+1):(j-1)
+                        if code[k] isa Core.GotoNode || code[k] isa Core.GotoIfNot
+                            has_cf = true
+                            break
+                        end
+                    end
+                    if has_cf
+                        push!(needs_local_set, i)
+                        break
+                    end
+                end
+            end
+        end
     end
 
     for (ssa_id, use_count) in ssa_uses
@@ -4281,40 +4331,23 @@ function allocate_ssa_locals!(ctx::CompilationContext)
         end
     end
 
-    # Second pass: if any arg in a multi-arg call has a local, all args need locals
-    # to ensure correct stack ordering
+    # Second pass: ALL SSA args in calls/invokes/new/return/GotoIfNot need locals.
+    # In Wasm, we can't rely on stack values being available because the stackified
+    # flow generator may insert block boundaries between the SSA definition and its use.
     for (i, stmt) in enumerate(code)
-        if stmt isa Expr && stmt.head === :call
-            args = stmt.args[2:end]
-            ssa_args = [arg.id for arg in args if arg isa Core.SSAValue]
-
-            # Check if any SSA arg has or needs a local
-            any_has_local = any(id in needs_local_set for id in ssa_args)
-
-            if any_has_local
-                # All SSA args need locals
-                for id in ssa_args
-                    push!(needs_local_set, id)
+        if stmt isa Expr
+            # All SSA values referenced in ANY expression need locals
+            for arg in stmt.args
+                if arg isa Core.SSAValue
+                    push!(needs_local_set, arg.id)
                 end
             end
-        end
-
-        # Also handle :invoke expressions (method calls)
-        # args[1] is MethodInstance, args[2] is function ref, args[3:end] are actual arguments
-        if stmt isa Expr && stmt.head === :invoke
-            args = stmt.args[3:end]
-            ssa_args = [arg.id for arg in args if arg isa Core.SSAValue]
-
-            # If there are any SSA args and there are other args before them, need locals
-            # to ensure correct stack ordering (SSA values on stack would be in wrong position)
-            has_non_ssa_args = any(!(arg isa Core.SSAValue) for arg in args)
-
-            if !isempty(ssa_args) && (has_non_ssa_args || length(ssa_args) > 1)
-                # All SSA args need locals to ensure correct stack ordering
-                for id in ssa_args
-                    push!(needs_local_set, id)
-                end
-            end
+        elseif stmt isa Core.ReturnNode && isdefined(stmt, :val) && stmt.val isa Core.SSAValue
+            push!(needs_local_set, stmt.val.id)
+        elseif stmt isa Core.GotoIfNot && stmt.cond isa Core.SSAValue
+            push!(needs_local_set, stmt.cond.id)
+        elseif stmt isa Core.PiNode && stmt.val isa Core.SSAValue
+            push!(needs_local_set, stmt.val.id)
         end
 
         # Also handle :new expressions - struct fields need correct ordering
@@ -4820,11 +4853,14 @@ function analyze_ssa_types!(ctx::CompilationContext)
                 # Check the Julia field type directly (no registry lookup needed)
                 if obj_type isa DataType && isstructtype(obj_type) && !isprimitivetype(obj_type)
                     field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
+                    julia_field_type = nothing
                     if field_sym isa Symbol && hasfield(obj_type, field_sym)
                         julia_field_type = fieldtype(obj_type, field_sym)
-                        if julia_field_type === Any
-                            ctx.ssa_types[i] = Any  # Force ExternRef local to match struct.get output
-                        end
+                    elseif field_sym isa Integer && 1 <= field_sym <= fieldcount(obj_type)
+                        julia_field_type = fieldtype(obj_type, Int(field_sym))
+                    end
+                    if julia_field_type === Any
+                        ctx.ssa_types[i] = Any  # Force ExternRef local to match struct.get output
                     end
                 end
             end
@@ -7530,8 +7566,12 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
     # ========================================================================
 
     ssa_use_count = Dict{Int, Int}()
+    ssa_non_phi_uses = Dict{Int, Int}()  # Uses from non-PhiNode statements only
     for stmt in code
         count_ssa_uses!(stmt, ssa_use_count)
+        if !(stmt isa Core.PhiNode)
+            count_ssa_uses!(stmt, ssa_non_phi_uses)
+        end
     end
 
     # ========================================================================
@@ -8356,13 +8396,23 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 stmt_bytes = compile_statement(stmt, i, ctx)
                 append!(block_bytes, stmt_bytes)
 
-                if !haskey(ctx.ssa_locals, i) && stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
-                    if statement_produces_wasm_value(stmt, i, ctx)
-                        if !haskey(ctx.phi_locals, i)
-                            use_count = get(ssa_use_count, i, 0)
-                            if use_count == 0
-                                push!(block_bytes, Opcode.DROP)
+                if !haskey(ctx.ssa_locals, i)
+                    if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
+                        if statement_produces_wasm_value(stmt, i, ctx)
+                            if !haskey(ctx.phi_locals, i)
+                                use_count = get(ssa_use_count, i, 0)
+                                if use_count == 0
+                                    push!(block_bytes, Opcode.DROP)
+                                end
                             end
+                        end
+                    elseif stmt isa Core.PiNode && !isempty(stmt_bytes)
+                        # PiNode without ssa_local pushed a value onto the stack.
+                        # Drop it if it's only used by phi edges (phi stores re-compute
+                        # the value via compile_phi_value, so this stack value is orphaned).
+                        non_phi_uses = get(ssa_non_phi_uses, i, 0)
+                        if non_phi_uses == 0
+                            push!(block_bytes, Opcode.DROP)
                         end
                     end
                 end
@@ -10889,8 +10939,21 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                 pi_local_type = local_array_idx >= 1 && local_array_idx <= length(ctx.locals) ? ctx.locals[local_array_idx] : nothing
                 # Determine the value's wasm type
                 val_wasm_type = get_phi_edge_wasm_type(stmt.val, ctx)
-                if pi_local_type !== nothing && val_wasm_type !== nothing && !wasm_types_compatible(pi_local_type, val_wasm_type)
-                    # Type mismatch: emit type-safe default for the local's type
+                # Check if source is a multi-value expression (e.g., multi-arg memoryrefnew)
+                # that would push >1 value on the stack — local_set only consumes 1.
+                is_multi_value_src = false
+                if stmt.val isa Core.SSAValue && !haskey(ctx.ssa_locals, stmt.val.id) && !haskey(ctx.phi_locals, stmt.val.id)
+                    src_stmt = ctx.code_info.code[stmt.val.id]
+                    if src_stmt isa Expr && src_stmt.head === :call
+                        src_func = src_stmt.args[1]
+                        is_multi_value_src = (src_func isa GlobalRef &&
+                                             (src_func.mod === Core || src_func.mod === Base) &&
+                                             src_func.name === :memoryrefnew &&
+                                             length(src_stmt.args) >= 4)
+                    end
+                end
+                if is_multi_value_src || (pi_local_type !== nothing && val_wasm_type !== nothing && !wasm_types_compatible(pi_local_type, val_wasm_type))
+                    # Type mismatch or multi-value source: emit type-safe default for the local's type
                     if pi_local_type isa ConcreteRef
                         push!(bytes, Opcode.REF_NULL)
                         append!(bytes, encode_leb128_signed(Int64(pi_local_type.type_idx)))
@@ -10925,14 +10988,10 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                 else
                     append!(bytes, compile_value(stmt.val, ctx))
                 end
-            else
-                append!(bytes, compile_value(stmt.val, ctx))
             end
-        else
-            # Nothing-typed PiNode — push i32(0) as placeholder (Nothing maps to I32)
-            push!(bytes, Opcode.I32_CONST)
-            push!(bytes, 0x00)
+            # else: no ssa_local — compile_value will re-emit the value on demand
         end
+        # else: Nothing-typed PiNode without ssa_local — no-op
 
         # If this SSA value needs a local, store it (and remove from stack)
         if haskey(ctx.ssa_locals, idx)
@@ -11076,7 +11135,21 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
             end
         end
 
-        if !ssa_type_mismatch
+        # Multi-arg memoryrefnew pushes 2 values (arrayref + i32_index) on stack
+        # without a local to consume them. Skip appending here — the values are
+        # re-computed on-demand when compile_value is called by the consumer
+        # (memoryrefget/memoryrefset!). This only applies at the top-level statement
+        # emission; re-compilation from compile_value still works fine.
+        is_orphaned_multi_value = false
+        if !isempty(stmt_bytes) && !haskey(ctx.ssa_locals, idx) && stmt isa Expr && stmt.head === :call
+            func_ref = stmt.args[1]
+            is_orphaned_multi_value = (func_ref isa GlobalRef &&
+                                       (func_ref.mod === Core || func_ref.mod === Base) &&
+                                       func_ref.name === :memoryrefnew &&
+                                       length(stmt.args) >= 4)
+        end
+
+        if !ssa_type_mismatch && !is_orphaned_multi_value
             append!(bytes, stmt_bytes)
         end
 
@@ -11685,14 +11758,15 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
             push!(bytes, Opcode.LOCAL_GET)
             append!(bytes, encode_leb128_unsigned(local_idx))
         else
-            # No local - check if this is a PiNode with Nothing type
-            # In that case, we need to emit ref.null for the union type
+            # No local - check if this is a PiNode
             stmt = ctx.code_info.code[val.id]
             if stmt isa Core.PiNode
                 pi_type = get(ctx.ssa_types, val.id, Any)
                 if pi_type === Nothing
-                    # PiNode narrowed to Nothing - we need to emit ref.null
-                    # Get the type of the underlying value to find the union's other type
+                    # PiNode narrowed to Nothing - emit appropriate null/zero value
+                    # Nothing maps to I32 in Wasm, so emit i32.const 0 as default.
+                    # For Union{Nothing, T} where T is a ref type, emit ref.null instead.
+                    emitted_nothing = false
                     if stmt.val isa Core.SSAValue
                         underlying_type = get(ctx.ssa_types, stmt.val.id, Any)
                         # For Union{Nothing, T}, emit ref.null $T
@@ -11701,12 +11775,41 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
                             if wasm_type isa ConcreteRef
                                 push!(bytes, Opcode.REF_NULL)
                                 append!(bytes, encode_leb128_signed(Int64(wasm_type.type_idx)))
+                                emitted_nothing = true
                             end
                         end
                     end
+                    if !emitted_nothing
+                        # Nothing is i32(0) as placeholder — this is what the callee expects
+                        push!(bytes, Opcode.I32_CONST)
+                        push!(bytes, 0x00)
+                    end
+                else
+                    # Non-Nothing PiNode without local: re-emit the underlying value.
+                    # Can't assume it's on the stack since block boundaries clear the stack.
+                    append!(bytes, compile_value(stmt.val, ctx))
+                end
+            else
+                # Non-PiNode SSA without local: re-compile the statement to reproduce its value.
+                if stmt isa Expr && stmt.head === :boundscheck
+                    push!(bytes, Opcode.I32_CONST)
+                    push!(bytes, 0x00)
+                elseif stmt isa Expr && (stmt.head === :call || stmt.head === :invoke || stmt.head === :new || stmt.head === :foreigncall)
+                    # Re-compile the expression to produce its value on the stack.
+                    # Call the specific compiler directly to avoid compile_statement's
+                    # orphan-prevention skip for multi-arg memoryrefnew.
+                    if stmt.head === :call
+                        append!(bytes, compile_call(stmt, val.id, ctx))
+                    elseif stmt.head === :invoke
+                        append!(bytes, compile_invoke(stmt, val.id, ctx))
+                    elseif stmt.head === :new
+                        append!(bytes, compile_new(stmt, val.id, ctx))
+                    elseif stmt.head === :foreigncall
+                        append!(bytes, compile_foreigncall(stmt, val.id, ctx))
+                    end
                 end
             end
-            # Otherwise, assume it's on the stack (for single-use SSAs in sequence)
+            # For non-PiNode SSAs without locals, assume on stack (single-use in sequence)
         end
 
     elseif val isa Core.Argument
