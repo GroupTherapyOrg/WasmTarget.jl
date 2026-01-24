@@ -12028,10 +12028,84 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         info = register_struct_type!(ctx.mod, ctx.type_registry, T)
         type_idx = info.wasm_type_idx
 
-        # Push field values
-        for field_name in fieldnames(T)
+        # Push field values with type safety checks
+        struct_type_def = ctx.mod.types[type_idx + 1]
+        for (fi, field_name) in enumerate(fieldnames(T))
             field_val = getfield(val, field_name)
-            append!(bytes, compile_value(field_val, ctx))
+            field_val_bytes = compile_value(field_val, ctx)
+            # Check field type compatibility
+            replaced = false
+            if struct_type_def isa StructType && fi <= length(struct_type_def.fields)
+                expected_wasm = struct_type_def.fields[fi].valtype
+                if expected_wasm isa ConcreteRef || expected_wasm === StructRef || expected_wasm === ArrayRef || expected_wasm === AnyRef || expected_wasm === ExternRef
+                    # Field expects a ref type — check if field_val_bytes produces something incompatible
+                    need_replace = false
+                    if length(field_val_bytes) >= 3
+                        # Check if ends with struct_new of incompatible type
+                        for scan_pos in (length(field_val_bytes)-2):-1:1
+                            if field_val_bytes[scan_pos] == 0xFB && field_val_bytes[scan_pos+1] == 0x00
+                                sn_type_idx = 0; sn_shift = 0
+                                for bi in (scan_pos+2):length(field_val_bytes)
+                                    b = field_val_bytes[bi]
+                                    sn_type_idx |= (Int(b & 0x7f) << sn_shift)
+                                    sn_shift += 7
+                                    if (b & 0x80) == 0
+                                        if bi == length(field_val_bytes)
+                                            if expected_wasm isa ConcreteRef && sn_type_idx != expected_wasm.type_idx
+                                                need_replace = true
+                                            elseif expected_wasm === ArrayRef || expected_wasm === ExternRef || expected_wasm === AnyRef
+                                                need_replace = true
+                                            end
+                                        end
+                                        break
+                                    end
+                                end
+                                break
+                            end
+                        end
+                    end
+                    if !need_replace && length(field_val_bytes) >= 1
+                        # Check if field produces a numeric value (i32/i64 const or local.get of numeric)
+                        first_byte = field_val_bytes[1]
+                        if first_byte == 0x41 || first_byte == 0x42  # I32_CONST or I64_CONST
+                            need_replace = true
+                        elseif first_byte == 0x20  # LOCAL_GET
+                            src_idx = 0; shift = 0
+                            for bi in 2:length(field_val_bytes)
+                                b = field_val_bytes[bi]
+                                src_idx |= (Int(b & 0x7f) << shift)
+                                shift += 7
+                                (b & 0x80) == 0 && break
+                            end
+                            arr_idx = src_idx - ctx.n_params + 1
+                            if arr_idx >= 1 && arr_idx <= length(ctx.locals)
+                                src_type = ctx.locals[arr_idx]
+                                if src_type === I64 || src_type === I32
+                                    need_replace = true
+                                end
+                            end
+                        end
+                    end
+                    if need_replace
+                        if expected_wasm isa ConcreteRef
+                            push!(bytes, Opcode.REF_NULL)
+                            append!(bytes, encode_leb128_signed(Int64(expected_wasm.type_idx)))
+                        elseif expected_wasm === ArrayRef
+                            push!(bytes, Opcode.REF_NULL)
+                            push!(bytes, UInt8(ArrayRef))
+                        elseif expected_wasm === ExternRef
+                            push!(bytes, Opcode.REF_NULL)
+                            push!(bytes, UInt8(ExternRef))
+                        else
+                            push!(bytes, Opcode.REF_NULL)
+                            push!(bytes, UInt8(StructRef))
+                        end
+                        field_val_bytes = UInt8[]
+                        replaced = true
+                    end
+                end
+            end
+            append!(bytes, field_val_bytes)
         end
 
         # Create the struct
