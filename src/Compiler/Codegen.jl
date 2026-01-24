@@ -5759,6 +5759,11 @@ function generate_branched_loops(ctx::CompilationContext, first_header::Int, fir
                     push!(bytes, Opcode.UNREACHABLE)
                 else
                     append!(bytes, compile_value(stmt.val, ctx))
+                    # If function returns externref but value is concrete ref, convert
+                    func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+                    if func_ret_wasm === ExternRef && val_wasm_type !== I32 && val_wasm_type !== I64 && val_wasm_type !== F32 && val_wasm_type !== F64
+                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                    end
                     push!(bytes, Opcode.RETURN)
                 end
             else
@@ -5828,6 +5833,11 @@ function generate_branched_loops(ctx::CompilationContext, first_header::Int, fir
                     push!(bytes, Opcode.UNREACHABLE)
                 else
                     append!(bytes, compile_value(stmt.val, ctx))
+                    # If function returns externref but value is concrete ref, convert
+                    func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+                    if func_ret_wasm === ExternRef && val_wasm_type !== I32 && val_wasm_type !== I64 && val_wasm_type !== F32 && val_wasm_type !== F64
+                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                    end
                     push!(bytes, Opcode.RETURN)
                 end
             else
@@ -6045,6 +6055,64 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::C
     value_bytes = compile_value(val, ctx)
     if isempty(value_bytes)
         return false
+    end
+
+    # Safety check: if compile_value produced MULTIPLE local_get instructions
+    # (e.g., from a multi-value SSA like memoryrefnew that pushes [base, index]),
+    # we can't store 2+ values in a single phi local. Emit type-safe default instead.
+    if length(value_bytes) >= 4 && value_bytes[1] == 0x20
+        _multi_pos = 1
+        _multi_count = 0
+        _all_local_gets = true
+        while _multi_pos <= length(value_bytes)
+            if value_bytes[_multi_pos] != 0x20
+                _all_local_gets = false
+                break
+            end
+            _multi_pos += 1
+            while _multi_pos <= length(value_bytes) && (value_bytes[_multi_pos] & 0x80) != 0
+                _multi_pos += 1
+            end
+            _multi_pos += 1
+            _multi_count += 1
+        end
+        if _all_local_gets && _multi_pos > length(value_bytes) && _multi_count > 1
+            # Multi-value: emit type-safe default for phi local instead
+            if phi_local_type isa ConcreteRef
+                push!(bytes, Opcode.REF_NULL)
+                append!(bytes, encode_leb128_signed(Int64(phi_local_type.type_idx)))
+            elseif phi_local_type === ExternRef
+                push!(bytes, Opcode.REF_NULL)
+                push!(bytes, UInt8(ExternRef))
+            elseif phi_local_type === StructRef
+                push!(bytes, Opcode.REF_NULL)
+                push!(bytes, UInt8(StructRef))
+            elseif phi_local_type === ArrayRef
+                push!(bytes, Opcode.REF_NULL)
+                push!(bytes, UInt8(ArrayRef))
+            elseif phi_local_type === AnyRef
+                push!(bytes, Opcode.REF_NULL)
+                push!(bytes, UInt8(AnyRef))
+            elseif phi_local_type === I64
+                push!(bytes, Opcode.I64_CONST)
+                push!(bytes, 0x00)
+            elseif phi_local_type === I32
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+            elseif phi_local_type === F64
+                push!(bytes, Opcode.F64_CONST)
+                append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+            elseif phi_local_type === F32
+                push!(bytes, Opcode.F32_CONST)
+                append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+            else
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+            end
+            push!(bytes, Opcode.LOCAL_SET)
+            append!(bytes, encode_leb128_unsigned(local_idx))
+            return true
+        end
     end
 
     # Safety check: if compile_value produced a local.get, verify actual local type
@@ -6487,6 +6555,11 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                         push!(bytes, Opcode.UNREACHABLE)
                     else
                         append!(bytes, compile_value(stmt.val, ctx))
+                        # If function returns externref but value is concrete ref, convert
+                        func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+                        if func_ret_wasm === ExternRef
+                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        end
                         push!(bytes, Opcode.RETURN)
                     end
                 else
@@ -6712,6 +6785,11 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                     push!(bytes, Opcode.UNREACHABLE)
                 else
                     append!(bytes, compile_value(stmt.val, ctx))
+                    # If function returns externref but value is concrete ref, convert
+                    func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+                    if func_ret_wasm === ExternRef && val_wasm_type !== I32 && val_wasm_type !== I64 && val_wasm_type !== F32 && val_wasm_type !== F64
+                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                    end
                     push!(bytes, Opcode.RETURN)
                 end
             else
@@ -6832,6 +6910,11 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                     push!(bytes, Opcode.UNREACHABLE)
                 else
                     append!(bytes, compile_value(stmt.val, ctx))
+                    # If function returns externref but value is concrete ref, convert
+                    func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+                    if func_ret_wasm === ExternRef && val_wasm_type !== I32 && val_wasm_type !== I64 && val_wasm_type !== F32 && val_wasm_type !== F64
+                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                    end
                     push!(bytes, Opcode.RETURN)
                 end
             else
@@ -7085,6 +7168,11 @@ function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBloc
                         push!(bytes, Opcode.UNREACHABLE)
                     else
                         append!(bytes, compile_value(stmt.val, ctx))
+                        # If function returns externref but value is concrete ref, convert
+                        func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+                        if func_ret_wasm === ExternRef
+                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        end
                         push!(bytes, Opcode.RETURN)
                     end
                 else
@@ -7606,6 +7694,11 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                         push!(block_bytes, Opcode.UNREACHABLE)
                     else
                         append!(block_bytes, compile_value(stmt.val, ctx))
+                        # If function returns externref but value is concrete ref, convert
+                        func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+                        if func_ret_wasm === ExternRef && val_wasm_type !== I32 && val_wasm_type !== I64 && val_wasm_type !== F32 && val_wasm_type !== F64
+                            push!(block_bytes, Opcode.EXTERN_CONVERT_ANY)
+                        end
                         push!(block_bytes, Opcode.RETURN)
                     end
                 else
@@ -7673,6 +7766,19 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                     break
                                 end
                                 phi_value_bytes = compile_phi_value(val, i)
+                                # Detect multi-value bytes (all local_gets, N>=2).
+                                if length(phi_value_bytes) >= 4
+                                    _pv_all3 = true; _pv_n3 = 0; _pv_p3 = 1
+                                    while _pv_p3 <= length(phi_value_bytes)
+                                        if phi_value_bytes[_pv_p3] != 0x20; _pv_all3 = false; break; end
+                                        _pv_n3 += 1; _pv_p3 += 1
+                                        while _pv_p3 <= length(phi_value_bytes) && (phi_value_bytes[_pv_p3] & 0x80) != 0; _pv_p3 += 1; end
+                                        _pv_p3 += 1
+                                    end
+                                    if _pv_all3 && _pv_p3 > length(phi_value_bytes) && _pv_n3 >= 2
+                                        phi_value_bytes = emit_phi_type_default(phi_local_type)
+                                    end
+                                end
                                 # Only emit local_set if we actually have a value on the stack
                                 if !isempty(phi_value_bytes)
                                     # Safety check: verify actual local.get type matches phi local
@@ -8184,6 +8290,20 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                 end
 
                                 phi_value_bytes = compile_phi_value(val, i)
+                                # Detect multi-value bytes (all local_gets, N>=2).
+                                # local_set only consumes 1, so N-1 would be orphaned.
+                                if length(phi_value_bytes) >= 4
+                                    _pv_all2 = true; _pv_n2 = 0; _pv_p2 = 1
+                                    while _pv_p2 <= length(phi_value_bytes)
+                                        if phi_value_bytes[_pv_p2] != 0x20; _pv_all2 = false; break; end
+                                        _pv_n2 += 1; _pv_p2 += 1
+                                        while _pv_p2 <= length(phi_value_bytes) && (phi_value_bytes[_pv_p2] & 0x80) != 0; _pv_p2 += 1; end
+                                        _pv_p2 += 1
+                                    end
+                                    if _pv_all2 && _pv_p2 > length(phi_value_bytes) && _pv_n2 >= 2
+                                        phi_value_bytes = emit_phi_type_default(phi_local_type)
+                                    end
+                                end
                                 # Only emit local_set if we actually have a value on the stack
                                 if !isempty(phi_value_bytes)
                                     # Safety check: if compile_phi_value produced a local.get,
@@ -8297,6 +8417,11 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                         push!(block_bytes, Opcode.UNREACHABLE)
                     else
                         append!(block_bytes, compile_value(stmt.val, ctx))
+                        # If function returns externref but value is concrete ref, convert
+                        func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+                        if func_ret_wasm === ExternRef && val_wasm_type !== I32 && val_wasm_type !== I64 && val_wasm_type !== F32 && val_wasm_type !== F64
+                            push!(block_bytes, Opcode.EXTERN_CONVERT_ANY)
+                        end
                         push!(block_bytes, Opcode.RETURN)
                     end
                 else
@@ -8360,6 +8485,21 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                     break
                                 end
                                 phi_value_bytes = compile_phi_value(val, i)
+                                # Detect multi-value bytes (all local_gets, N>=2).
+                                # local_set only consumes 1 value, so N-1 would be orphaned.
+                                if length(phi_value_bytes) >= 4
+                                    _pv_all = true; _pv_n = 0; _pv_p = 1
+                                    while _pv_p <= length(phi_value_bytes)
+                                        if phi_value_bytes[_pv_p] != 0x20; _pv_all = false; break; end
+                                        _pv_n += 1; _pv_p += 1
+                                        while _pv_p <= length(phi_value_bytes) && (phi_value_bytes[_pv_p] & 0x80) != 0; _pv_p += 1; end
+                                        _pv_p += 1
+                                    end
+                                    if _pv_all && _pv_p > length(phi_value_bytes) && _pv_n >= 2
+                                        # Multi-value: replace with type-safe default
+                                        phi_value_bytes = emit_phi_type_default(phi_local_type)
+                                    end
+                                end
                                 if !isempty(phi_value_bytes)
                                     # Safety check: verify actual local.get type matches phi local
                                     actual_val_type = edge_val_type
@@ -8648,6 +8788,11 @@ function generate_linear_flow(ctx::CompilationContext, blocks::Vector{BasicBlock
                         push!(range_bytes, Opcode.UNREACHABLE)
                     else
                         append!(range_bytes, compile_value(stmt.val, ctx))
+                        # If function returns externref but value is concrete ref, convert
+                        func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+                        if func_ret_wasm === ExternRef && val_wasm_type !== I32 && val_wasm_type !== I64 && val_wasm_type !== F32 && val_wasm_type !== F64
+                            push!(range_bytes, Opcode.EXTERN_CONVERT_ANY)
+                        end
                         push!(range_bytes, Opcode.RETURN)
                     end
                 else
@@ -10151,6 +10296,13 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
             if stmt isa Core.ReturnNode
                 if isdefined(stmt, :val)
                     append!(bytes, compile_value(stmt.val, ctx))
+                    # If function returns externref but value is concrete ref, convert
+                    func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+                    val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
+                    is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
+                    if func_ret_wasm === ExternRef && !is_numeric_val
+                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                    end
                 end
                 push!(bytes, Opcode.RETURN)
             elseif stmt === nothing
@@ -10572,6 +10724,13 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                             if stmt isa Core.ReturnNode
                                 if isdefined(stmt, :val)
                                     append!(inner_bytes, compile_value(stmt.val, ctx))
+                                    # If function returns externref but value is concrete ref, convert
+                                    func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+                                    val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
+                                    is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
+                                    if func_ret_wasm === ExternRef && !is_numeric_val
+                                        push!(inner_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                    end
                                 end
                                 push!(inner_bytes, Opcode.RETURN)
                                 break
@@ -10771,6 +10930,13 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                     end
                     # Emit RETURN since we're in a void IF block
                     if else_terminates
+                        # If function returns externref but value is concrete ref, convert
+                        func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+                        val_wasm = isdefined(stmt, :val) ? get_phi_edge_wasm_type(stmt.val, ctx) : nothing
+                        is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
+                        if func_ret_wasm === ExternRef && !is_numeric_val
+                            push!(inner_bytes, Opcode.EXTERN_CONVERT_ANY)
+                        end
                         push!(inner_bytes, Opcode.RETURN)
                     end
                     break
@@ -10976,6 +11142,16 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
     if stmt isa Core.ReturnNode
         if isdefined(stmt, :val)
             append!(bytes, compile_value(stmt.val, ctx))
+            # If function returns externref but value is a concrete ref, convert
+            func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+            if func_ret_wasm === ExternRef
+                # Check if value is numeric (can't convert numeric to externref)
+                val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
+                is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
+                if !is_numeric_val
+                    push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                end
+            end
         end
         push!(bytes, Opcode.RETURN)
 
@@ -11044,11 +11220,67 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                     end
                 else
                     val_bytes = compile_value(stmt.val, ctx)
+                    # Safety: check if val_bytes pushes multiple values (all local_gets, N>=2).
+                    # local_set only consumes 1, so N-1 would be orphaned.
+                    is_multi_value_bytes = false
+                    if length(val_bytes) >= 4
+                        _all_gets = true
+                        _n_gets = 0
+                        _pos = 1
+                        while _pos <= length(val_bytes)
+                            if val_bytes[_pos] != 0x20
+                                _all_gets = false
+                                break
+                            end
+                            _n_gets += 1
+                            _pos += 1
+                            while _pos <= length(val_bytes) && (val_bytes[_pos] & 0x80) != 0
+                                _pos += 1
+                            end
+                            _pos += 1
+                        end
+                        if _all_gets && _pos > length(val_bytes) && _n_gets >= 2
+                            is_multi_value_bytes = true
+                        end
+                    end
+                    if is_multi_value_bytes
+                        # Multi-value source: emit type-safe default for the local's type
+                        if pi_local_type isa ConcreteRef
+                            push!(bytes, Opcode.REF_NULL)
+                            append!(bytes, encode_leb128_signed(Int64(pi_local_type.type_idx)))
+                        elseif pi_local_type === StructRef
+                            push!(bytes, Opcode.REF_NULL)
+                            push!(bytes, UInt8(StructRef))
+                        elseif pi_local_type === ArrayRef
+                            push!(bytes, Opcode.REF_NULL)
+                            push!(bytes, UInt8(ArrayRef))
+                        elseif pi_local_type === ExternRef
+                            push!(bytes, Opcode.REF_NULL)
+                            push!(bytes, UInt8(ExternRef))
+                        elseif pi_local_type === AnyRef
+                            push!(bytes, Opcode.REF_NULL)
+                            push!(bytes, UInt8(AnyRef))
+                        elseif pi_local_type === I64
+                            push!(bytes, Opcode.I64_CONST)
+                            push!(bytes, 0x00)
+                        elseif pi_local_type === I32
+                            push!(bytes, Opcode.I32_CONST)
+                            push!(bytes, 0x00)
+                        elseif pi_local_type === F64
+                            push!(bytes, Opcode.F64_CONST)
+                            append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                        elseif pi_local_type === F32
+                            push!(bytes, Opcode.F32_CONST)
+                            append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+                        else
+                            push!(bytes, Opcode.I32_CONST)
+                            push!(bytes, 0x00)
+                        end
                     # Safety: if compile_value produced a numeric value (i32_const, i64_const,
                     # or local.get of numeric local) but pi_local_type is a ref type,
                     # emit ref.null instead. This happens when val_wasm_type is nothing
                     # (can't determine source type) but the PiNode's target local is ref-typed.
-                    if pi_local_type !== nothing && (pi_local_type isa ConcreteRef || pi_local_type === StructRef || pi_local_type === ArrayRef || pi_local_type === ExternRef || pi_local_type === AnyRef)
+                    elseif pi_local_type !== nothing && (pi_local_type isa ConcreteRef || pi_local_type === StructRef || pi_local_type === ArrayRef || pi_local_type === ExternRef || pi_local_type === AnyRef)
                         is_numeric_val = false
                         if !isempty(val_bytes)
                             first_op = val_bytes[1]
@@ -11417,30 +11649,136 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
             end
         end
 
-        # Multi-arg memoryrefnew pushes 2 values (arrayref + i32_index) on stack
-        # without a local to consume them. Skip appending here — the values are
-        # re-computed on-demand when compile_value is called by the consumer
-        # (memoryrefget/memoryrefset!). This only applies at the top-level statement
-        # emission; re-compilation from compile_value still works fine.
+        # Detect statements that push multiple values on the stack.
+        # This includes multi-arg memoryrefnew (2 values: arrayref + i32_index)
+        # and other array access patterns (base + index local_get pairs).
+        # When no SSA local: skip appending (values re-computed on-demand).
+        # When SSA local exists: emit type-safe default instead (local_set
+        # only consumes 1 value, leaving N-1 orphaned).
         is_orphaned_multi_value = false
-        if !isempty(stmt_bytes) && !haskey(ctx.ssa_locals, idx) && stmt isa Expr && stmt.head === :call
-            func_ref = stmt.args[1]
-            is_orphaned_multi_value = (func_ref isa GlobalRef &&
-                                       (func_ref.mod === Core || func_ref.mod === Base) &&
-                                       func_ref.name === :memoryrefnew &&
-                                       length(stmt.args) >= 4)
+        if !isempty(stmt_bytes) && !ssa_type_mismatch
+            if !haskey(ctx.ssa_locals, idx) && stmt isa Expr && stmt.head === :call
+                func_ref = stmt.args[1]
+                is_orphaned_multi_value = (func_ref isa GlobalRef &&
+                                           (func_ref.mod === Core || func_ref.mod === Base) &&
+                                           func_ref.name === :memoryrefnew &&
+                                           length(stmt.args) >= 4)
+            end
+            # General orphan detection: if stmt_bytes consists entirely of
+            # local_get instructions (opcode 0x20 + LEB128 index) pushing 2+ values,
+            # it's pure stack-pushing with no side effects. Without proper consumption
+            # these values will be orphaned on the stack.
+            # This catches base+index pairs from array access patterns.
+            if !is_orphaned_multi_value && length(stmt_bytes) >= 4
+                all_local_gets = true
+                n_gets = 0
+                pos = 1
+                while pos <= length(stmt_bytes)
+                    if stmt_bytes[pos] != 0x20  # LOCAL_GET opcode
+                        all_local_gets = false
+                        break
+                    end
+                    n_gets += 1
+                    pos += 1
+                    # Skip LEB128 local index
+                    while pos <= length(stmt_bytes) && (stmt_bytes[pos] & 0x80) != 0
+                        pos += 1
+                    end
+                    pos += 1  # final byte of LEB128
+                end
+                if all_local_gets && pos > length(stmt_bytes) && n_gets >= 2
+                    if haskey(ctx.ssa_locals, idx)
+                        # Statement pushes multiple values but has an SSA local.
+                        # local_set would only consume 1, leaving N-1 orphaned.
+                        # Emit type-safe default for the SSA local instead.
+                        local_idx = ctx.ssa_locals[idx]
+                        local_array_idx = local_idx - ctx.n_params + 1
+                        local_wasm_type = local_array_idx >= 1 && local_array_idx <= length(ctx.locals) ? ctx.locals[local_array_idx] : nothing
+                        if local_wasm_type !== nothing
+                            if local_wasm_type isa ConcreteRef
+                                push!(bytes, Opcode.REF_NULL)
+                                append!(bytes, encode_leb128_signed(Int64(local_wasm_type.type_idx)))
+                            elseif local_wasm_type === ExternRef
+                                push!(bytes, Opcode.REF_NULL)
+                                push!(bytes, UInt8(ExternRef))
+                            elseif local_wasm_type === StructRef
+                                push!(bytes, Opcode.REF_NULL)
+                                push!(bytes, UInt8(StructRef))
+                            elseif local_wasm_type === ArrayRef
+                                push!(bytes, Opcode.REF_NULL)
+                                push!(bytes, UInt8(ArrayRef))
+                            elseif local_wasm_type === AnyRef
+                                push!(bytes, Opcode.REF_NULL)
+                                push!(bytes, UInt8(AnyRef))
+                            elseif local_wasm_type === I64
+                                push!(bytes, Opcode.I64_CONST)
+                                push!(bytes, 0x00)
+                            elseif local_wasm_type === I32
+                                push!(bytes, Opcode.I32_CONST)
+                                push!(bytes, 0x00)
+                            elseif local_wasm_type === F64
+                                push!(bytes, Opcode.F64_CONST)
+                                append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                            elseif local_wasm_type === F32
+                                push!(bytes, Opcode.F32_CONST)
+                                append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+                            else
+                                push!(bytes, Opcode.I32_CONST)
+                                push!(bytes, 0x00)
+                            end
+                            push!(bytes, Opcode.LOCAL_SET)
+                            append!(bytes, encode_leb128_unsigned(local_idx))
+                        end
+                        ssa_type_mismatch = true  # Prevent double local_set
+                    end
+                    is_orphaned_multi_value = true
+                end
+            end
+        end
+
+        # Fix for statements with SSA locals that produce multi-value bytecode.
+        # When stmt_bytes starts with a "memoryref pair" (local_get X, local_get Y)
+        # followed by the SAME pair + an operation, the leading pair is orphaned.
+        # Strip the leading orphaned local_gets.
+        if !ssa_type_mismatch && !is_orphaned_multi_value && haskey(ctx.ssa_locals, idx) && length(stmt_bytes) >= 8
+            # Check if bytes start with local_get X, local_get Y pattern
+            if stmt_bytes[1] == 0x20
+                # Parse first local_get
+                _fg_idx1 = 0; _fg_shift = 0; _fg_end1 = 0
+                for _bi in 2:length(stmt_bytes)
+                    b = stmt_bytes[_bi]
+                    _fg_idx1 |= (Int(b & 0x7f) << _fg_shift)
+                    _fg_shift += 7
+                    if (b & 0x80) == 0; _fg_end1 = _bi; break; end
+                end
+                if _fg_end1 > 0 && _fg_end1 < length(stmt_bytes) && stmt_bytes[_fg_end1 + 1] == 0x20
+                    # Parse second local_get
+                    _fg_idx2 = 0; _fg_shift = 0; _fg_end2 = 0
+                    for _bi in (_fg_end1 + 2):length(stmt_bytes)
+                        b = stmt_bytes[_bi]
+                        _fg_idx2 |= (Int(b & 0x7f) << _fg_shift)
+                        _fg_shift += 7
+                        if (b & 0x80) == 0; _fg_end2 = _bi; break; end
+                    end
+                    pair_len = _fg_end2  # Length of the leading pair [get X, get Y]
+                    if _fg_end2 > 0 && pair_len < length(stmt_bytes)
+                        # Check if the SAME pair appears again after the first pair
+                        remaining = @view stmt_bytes[pair_len+1:end]
+                        if length(remaining) > pair_len
+                            prefix = @view stmt_bytes[1:pair_len]
+                            next_prefix = @view remaining[1:pair_len]
+                            if prefix == next_prefix
+                                # Leading pair is duplicated — strip it (it would be orphaned)
+                                stmt_bytes = stmt_bytes[pair_len+1:end]
+                            end
+                        end
+                    end
+                end
+            end
         end
 
         if !ssa_type_mismatch && !is_orphaned_multi_value
             append!(bytes, stmt_bytes)
-        end
-
-        # DEBUG: detect struct_new 129 in stmt_bytes (before safety check can skip it)
-        for _di in 1:length(stmt_bytes)-3
-            if stmt_bytes[_di] == 0xfb && stmt_bytes[_di+1] == 0x00 && stmt_bytes[_di+2] == 0x81 && stmt_bytes[_di+3] == 0x01
-                @warn "DEBUG struct_new 129 in stmt_bytes SSA $idx, head=$(stmt isa Expr ? stmt.head : nothing), len=$(length(stmt_bytes)), pos=$_di, args=$(stmt isa Expr && stmt.head === :new ? stmt.args : nothing)"
-                break
-            end
         end
 
         # If the statement type is Union{} (bottom/never returns), emit unreachable
