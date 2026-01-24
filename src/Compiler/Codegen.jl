@@ -11228,6 +11228,32 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                     end
                 end
 
+                # Check if stmt_bytes is a compound numeric expression stored into a
+                # ref-typed local. Pattern: starts with local.get (0x20) and ends with
+                # a pure stack numeric opcode (no immediate args). This catches cases
+                # like: local.get + i32_wrap_i64 + i32_const + i32_sub → stored in ref local.
+                # We require stmt_bytes[1] == LOCAL_GET to avoid false positives with
+                # constants whose LEB128 values happen to match opcode bytes.
+                if !needs_type_safe_default && length(stmt_bytes) >= 3 &&
+                   stmt_bytes[1] == 0x20 &&  # starts with local.get
+                   (local_wasm_type isa ConcreteRef || local_wasm_type === StructRef ||
+                    local_wasm_type === ArrayRef || local_wasm_type === ExternRef || local_wasm_type === AnyRef)
+                    last_byte = stmt_bytes[end]
+                    # Pure stack ops: single-byte opcodes with NO immediate arguments
+                    is_numeric_stack_op = (
+                        last_byte == 0x45 ||  # i32.eqz
+                        last_byte == 0x50 ||  # i64.eqz
+                        (last_byte >= 0x46 && last_byte <= 0x66) ||  # i32/i64/f32/f64 comparisons
+                        (last_byte >= 0x67 && last_byte <= 0x78) ||  # i32 unary/binary arithmetic
+                        (last_byte >= 0x79 && last_byte <= 0x8a) ||  # i64 unary/binary arithmetic
+                        (last_byte >= 0x8b && last_byte <= 0xa6) ||  # f32/f64 arithmetic
+                        (last_byte >= 0xa7 && last_byte <= 0xc4)     # numeric conversions
+                    )
+                    if is_numeric_stack_op
+                        needs_type_safe_default = true
+                    end
+                end
+
                 # Check if stmt_bytes ENDS with a local.get of incompatible type
                 # (handles non-pure cases like memoryrefset! which returns value after array_set)
                 if !needs_type_safe_default && length(stmt_bytes) >= 2
@@ -11317,19 +11343,26 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                     end
                 end
 
-                # Check if the SSA type of this statement maps to externref but the local
-                # expects a concrete ref. This catches calls, invokes, and any expression
-                # that returns Any/externref but gets stored in a narrower-typed local.
-                if !needs_type_safe_default && needs_ref_cast_local === nothing && local_wasm_type isa ConcreteRef
+                # Check if the SSA type of this statement maps to a type incompatible
+                # with the local. This catches calls, invokes, and compound expressions
+                # that produce numeric/externref/abstract ref but get stored in a ref-typed local.
+                local_is_ref = local_wasm_type isa ConcreteRef || local_wasm_type === StructRef ||
+                               local_wasm_type === ArrayRef || local_wasm_type === ExternRef || local_wasm_type === AnyRef
+                if !needs_type_safe_default && needs_ref_cast_local === nothing && local_is_ref
                     ssa_julia_type = get(ctx.ssa_types, idx, nothing)
                     if ssa_julia_type !== nothing
                         ssa_wasm_type = julia_to_wasm_type_concrete(ssa_julia_type, ctx)
-                        if ssa_wasm_type === ExternRef
+                        if (ssa_wasm_type === I32 || ssa_wasm_type === I64 ||
+                            ssa_wasm_type === F32 || ssa_wasm_type === F64)
+                            # SSA produces numeric value but local expects ref type
+                            # (compound numeric expressions like i32_wrap + i32_sub)
+                            needs_type_safe_default = true
+                        elseif ssa_wasm_type === ExternRef && local_wasm_type isa ConcreteRef
                             # SSA produces externref but local expects concrete ref
                             # Insert: any_convert_extern (externref→anyref) + ref.cast null <type>
                             needs_ref_cast_local = local_wasm_type
                             append!(stmt_bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
-                        elseif (ssa_wasm_type === StructRef || ssa_wasm_type === ArrayRef) && !(ssa_wasm_type === local_wasm_type)
+                        elseif (ssa_wasm_type === StructRef || ssa_wasm_type === ArrayRef) && local_wasm_type isa ConcreteRef
                             # SSA produces abstract structref/arrayref, local expects concrete ref
                             needs_ref_cast_local = local_wasm_type
                         end
@@ -11400,6 +11433,14 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
 
         if !ssa_type_mismatch && !is_orphaned_multi_value
             append!(bytes, stmt_bytes)
+        end
+
+        # DEBUG: detect struct_new 129 in stmt_bytes (before safety check can skip it)
+        for _di in 1:length(stmt_bytes)-3
+            if stmt_bytes[_di] == 0xfb && stmt_bytes[_di+1] == 0x00 && stmt_bytes[_di+2] == 0x81 && stmt_bytes[_di+3] == 0x01
+                @warn "DEBUG struct_new 129 in stmt_bytes SSA $idx, head=$(stmt isa Expr ? stmt.head : nothing), len=$(length(stmt_bytes)), pos=$_di, args=$(stmt isa Expr && stmt.head === :new ? stmt.args : nothing)"
+                break
+            end
         end
 
         # If the statement type is Union{} (bottom/never returns), emit unreachable
@@ -11806,6 +11847,44 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
             if struct_type_def isa StructType && i <= length(struct_type_def.fields)
                 actual_field_wasm = struct_type_def.fields[i].valtype
             end
+            # Safety: if field_bytes is empty (SSA without local, not re-compilable)
+            # and the field expects a ref type, emit ref.null of the correct type.
+            if isempty(field_bytes) && actual_field_wasm !== nothing &&
+               (actual_field_wasm isa ConcreteRef || actual_field_wasm === StructRef ||
+                actual_field_wasm === ArrayRef || actual_field_wasm === AnyRef || actual_field_wasm === ExternRef)
+                if actual_field_wasm isa ConcreteRef
+                    push!(bytes, Opcode.REF_NULL)
+                    append!(bytes, encode_leb128_signed(Int64(actual_field_wasm.type_idx)))
+                elseif actual_field_wasm === ArrayRef
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, UInt8(ArrayRef))
+                elseif actual_field_wasm === ExternRef
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, UInt8(ExternRef))
+                else
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, UInt8(StructRef))
+                end
+                field_bytes = UInt8[]
+            elseif isempty(field_bytes) && actual_field_wasm !== nothing &&
+                   (actual_field_wasm === I32 || actual_field_wasm === I64 ||
+                    actual_field_wasm === F32 || actual_field_wasm === F64)
+                # Empty bytes for numeric field — emit zero constant
+                if actual_field_wasm === I32
+                    push!(bytes, Opcode.I32_CONST)
+                    push!(bytes, 0x00)
+                elseif actual_field_wasm === I64
+                    push!(bytes, Opcode.I64_CONST)
+                    push!(bytes, 0x00)
+                elseif actual_field_wasm === F32
+                    push!(bytes, Opcode.F32_CONST)
+                    append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+                elseif actual_field_wasm === F64
+                    push!(bytes, Opcode.F64_CONST)
+                    append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                end
+                field_bytes = UInt8[]
+            end
             if actual_field_wasm !== nothing && (actual_field_wasm isa ConcreteRef || actual_field_wasm === StructRef || actual_field_wasm === ArrayRef || actual_field_wasm === AnyRef || actual_field_wasm === ExternRef) && length(field_bytes) >= 2 && field_bytes[1] == 0x20
                 # Decode source local index from LEB128
                 src_idx = 0; shift = 0
@@ -11847,6 +11926,49 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
                 end
             end
             append!(bytes, field_bytes)
+        end
+    end
+
+    # If field_values provides fewer values than the struct's actual Wasm field count,
+    # emit default values for the missing fields. This happens when Julia's :new expression
+    # constructs a struct with uninitialized fields (e.g., RefValue{NTuple{50, UInt8}}).
+    struct_type_def = ctx.mod.types[info.wasm_type_idx + 1]
+    if struct_type_def isa StructType
+        n_provided = length(field_values)
+        n_required = length(struct_type_def.fields)
+        for fi in (n_provided + 1):n_required
+            missing_field_type = struct_type_def.fields[fi].valtype
+            if missing_field_type isa ConcreteRef
+                push!(bytes, Opcode.REF_NULL)
+                append!(bytes, encode_leb128_signed(Int64(missing_field_type.type_idx)))
+            elseif missing_field_type === StructRef
+                push!(bytes, Opcode.REF_NULL)
+                push!(bytes, UInt8(StructRef))
+            elseif missing_field_type === ArrayRef
+                push!(bytes, Opcode.REF_NULL)
+                push!(bytes, UInt8(ArrayRef))
+            elseif missing_field_type === ExternRef
+                push!(bytes, Opcode.REF_NULL)
+                push!(bytes, UInt8(ExternRef))
+            elseif missing_field_type === AnyRef
+                push!(bytes, Opcode.REF_NULL)
+                push!(bytes, UInt8(AnyRef))
+            elseif missing_field_type === I64
+                push!(bytes, Opcode.I64_CONST)
+                push!(bytes, 0x00)
+            elseif missing_field_type === I32
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+            elseif missing_field_type === F64
+                push!(bytes, Opcode.F64_CONST)
+                append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+            elseif missing_field_type === F32
+                push!(bytes, Opcode.F32_CONST)
+                append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+            else
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+            end
         end
     end
 
