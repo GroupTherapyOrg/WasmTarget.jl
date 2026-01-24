@@ -11178,7 +11178,9 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
         # replace with type-safe default. Catches:
         # (1) Pure local.get of incompatible type
         # (2) Numeric constants (i32_const, i64_const, f32_const, f64_const) stored into ref-typed locals
+        # (3) struct_get producing abstract ref (structref/arrayref) where concrete ref expected → ref.cast
         ssa_type_mismatch = false
+        needs_ref_cast_local = nothing  # Set to ConcreteRef target type when ref.cast is needed
         if haskey(ctx.ssa_locals, idx) && length(stmt_bytes) >= 2
             local_idx = ctx.ssa_locals[idx]
             local_array_idx = local_idx - ctx.n_params + 1
@@ -11258,10 +11260,42 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                                 field_result_type = mod_type.fields[sg_field_idx + 1].valtype
                                 if field_result_type isa ConcreteRef && !wasm_types_compatible(local_wasm_type, field_result_type)
                                     needs_type_safe_default = true
+                                elseif (field_result_type === StructRef || field_result_type === ArrayRef) && local_wasm_type isa ConcreteRef
+                                    # struct_get produces abstract ref (structref/arrayref) due to forward-reference
+                                    # in struct registration, but the target local expects a concrete ref type.
+                                    # Insert ref.cast null to downcast.
+                                    needs_ref_cast_local = local_wasm_type
                                 end
                             end
                         end
                     end
+                end
+
+                # Check if the SSA type of this statement maps to externref but the local
+                # expects a concrete ref. This catches calls, invokes, and any expression
+                # that returns Any/externref but gets stored in a narrower-typed local.
+                if !needs_type_safe_default && needs_ref_cast_local === nothing && local_wasm_type isa ConcreteRef
+                    ssa_julia_type = get(ctx.ssa_types, idx, nothing)
+                    if ssa_julia_type !== nothing
+                        ssa_wasm_type = julia_to_wasm_type_concrete(ssa_julia_type, ctx)
+                        if ssa_wasm_type === ExternRef
+                            # SSA produces externref but local expects concrete ref
+                            # Insert: any_convert_extern (externref→anyref) + ref.cast null <type>
+                            needs_ref_cast_local = local_wasm_type
+                            append!(stmt_bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                        elseif (ssa_wasm_type === StructRef || ssa_wasm_type === ArrayRef) && !(ssa_wasm_type === local_wasm_type)
+                            # SSA produces abstract structref/arrayref, local expects concrete ref
+                            needs_ref_cast_local = local_wasm_type
+                        end
+                    end
+                end
+
+                if needs_ref_cast_local !== nothing
+                    # struct_get produced abstract ref or call returned externref,
+                    # need to downcast to concrete type.
+                    # Append ref.cast null <type_idx> to stmt_bytes
+                    append!(stmt_bytes, UInt8[Opcode.GC_PREFIX, Opcode.REF_CAST_NULL])
+                    append!(stmt_bytes, encode_leb128_signed(Int64(needs_ref_cast_local.type_idx)))
                 end
 
                 if needs_type_safe_default
@@ -14691,6 +14725,27 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                         push!(bytes, Opcode.CALL)
                         append!(bytes, encode_leb128_unsigned(target_info.wasm_idx))
                         cross_call_handled = true
+                        # Check: if function returns externref but caller expects concrete ref,
+                        # insert any_convert_extern + ref.cast null to bridge the type gap.
+                        # This happens when the function's wasm return type is externref (mapped
+                        # from Any/Union via julia_to_wasm_type) but the caller's SSA local uses
+                        # a tagged union struct (mapped via julia_to_wasm_type_concrete).
+                        if haskey(ctx.ssa_locals, idx)
+                            local_idx_val = ctx.ssa_locals[idx]
+                            local_arr_idx = local_idx_val - ctx.n_params + 1
+                            if local_arr_idx >= 1 && local_arr_idx <= length(ctx.locals)
+                                target_local_type = ctx.locals[local_arr_idx]
+                                if target_local_type isa ConcreteRef
+                                    ret_wasm = julia_to_wasm_type(target_info.return_type)
+                                    if ret_wasm === ExternRef
+                                        # Function returns externref, local expects concrete ref
+                                        append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                                        append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.REF_CAST_NULL])
+                                        append!(bytes, encode_leb128_signed(Int64(target_local_type.type_idx)))
+                                    end
+                                end
+                            end
+                        end
                     end
                 end
             end
