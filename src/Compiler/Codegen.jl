@@ -1991,6 +1991,7 @@ function register_vector_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
         error("Cannot register vector type for Union{} (bottom type)")
     end
 
+
     # Get element type
     elem_type = eltype(T)
 
@@ -4470,8 +4471,11 @@ function allocate_ssa_locals!(ctx::CompilationContext)
 
             wasm_type = julia_to_wasm_type_concrete(effective_type, ctx)
 
-            # For PiNodes where source local has a different concrete ref type,
+            # For PiNodes where source local has a different NUMERIC type,
             # use the source's actual Wasm type to avoid local.get → local.set mismatches.
+            # For ref types, DON'T widen — the compile_statement safety check handles
+            # the store mismatch by emitting ref.null of the target type. Widening ref
+            # types breaks downstream struct.get/array.get operations.
             if stmt isa Core.PiNode && stmt.val isa Core.SSAValue
                 src_local_wasm = nothing
                 if haskey(ctx.ssa_locals, stmt.val.id)
@@ -4487,8 +4491,16 @@ function allocate_ssa_locals!(ctx::CompilationContext)
                         src_local_wasm = ctx.locals[src_ai]
                     end
                 end
+                # Only widen for numeric type mismatches (I32/I64/F32/F64)
+                # Ref type widening breaks struct.get downstream
                 if src_local_wasm !== nothing && src_local_wasm != wasm_type
-                    wasm_type = src_local_wasm
+                    is_numeric_src = src_local_wasm === I32 || src_local_wasm === I64 ||
+                                     src_local_wasm === F32 || src_local_wasm === F64
+                    is_numeric_tgt = wasm_type === I32 || wasm_type === I64 ||
+                                     wasm_type === F32 || wasm_type === F64
+                    if is_numeric_src && is_numeric_tgt
+                        wasm_type = src_local_wasm
+                    end
                 end
             end
 
@@ -4537,6 +4549,7 @@ function allocate_ssa_locals!(ctx::CompilationContext)
             ctx.ssa_locals[ssa_id] = local_idx
         end
     end
+
 end
 
 """
@@ -5988,6 +6001,61 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::C
     value_bytes = compile_value(val, ctx)
     if isempty(value_bytes)
         return false
+    end
+
+    # Safety check: if compile_value produced a local.get, verify actual local type
+    if length(value_bytes) >= 2 && value_bytes[1] == 0x20  # LOCAL_GET
+        got_local_idx = 0
+        shift = 0
+        for bi in 2:length(value_bytes)
+            b = value_bytes[bi]
+            got_local_idx |= (Int(b & 0x7f) << shift)
+            shift += 7
+            if (b & 0x80) == 0
+                break
+            end
+        end
+        got_local_array_idx = got_local_idx - ctx.n_params + 1
+        if got_local_array_idx >= 1 && got_local_array_idx <= length(ctx.locals)
+            actual_val_type = ctx.locals[got_local_array_idx]
+            if !wasm_types_compatible(phi_local_type, actual_val_type)
+                # Incompatible actual type: emit type-safe default
+                if phi_local_type isa ConcreteRef
+                    push!(bytes, Opcode.REF_NULL)
+                    append!(bytes, encode_leb128_signed(Int64(phi_local_type.type_idx)))
+                elseif phi_local_type === ExternRef
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, UInt8(ExternRef))
+                elseif phi_local_type === StructRef
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, UInt8(StructRef))
+                elseif phi_local_type === ArrayRef
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, UInt8(ArrayRef))
+                elseif phi_local_type === AnyRef
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, UInt8(AnyRef))
+                elseif phi_local_type === I64
+                    push!(bytes, Opcode.I64_CONST)
+                    push!(bytes, 0x00)
+                elseif phi_local_type === I32
+                    push!(bytes, Opcode.I32_CONST)
+                    push!(bytes, 0x00)
+                elseif phi_local_type === F64
+                    push!(bytes, Opcode.F64_CONST)
+                    append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                elseif phi_local_type === F32
+                    push!(bytes, Opcode.F32_CONST)
+                    append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+                else
+                    push!(bytes, Opcode.I32_CONST)
+                    push!(bytes, 0x00)
+                end
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(local_idx))
+                return true
+            end
+        end
     end
 
     append!(bytes, value_bytes)
@@ -7559,7 +7627,28 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                 phi_value_bytes = compile_phi_value(val, i)
                                 # Only emit local_set if we actually have a value on the stack
                                 if !isempty(phi_value_bytes)
-                                    if edge_val_type !== nothing && phi_local_type === I64 && edge_val_type === I32
+                                    # Safety check: verify actual local.get type matches phi local
+                                    actual_val_type = edge_val_type
+                                    if length(phi_value_bytes) >= 2 && phi_value_bytes[1] == Opcode.LOCAL_GET
+                                        got_local_idx = 0
+                                        shift = 0
+                                        for bi in 2:length(phi_value_bytes)
+                                            b = phi_value_bytes[bi]
+                                            got_local_idx |= (Int(b & 0x7f) << shift)
+                                            shift += 7
+                                            if (b & 0x80) == 0
+                                                break
+                                            end
+                                        end
+                                        got_local_array_idx = got_local_idx - ctx.n_params + 1
+                                        if got_local_array_idx >= 1 && got_local_array_idx <= length(ctx.locals)
+                                            actual_val_type = ctx.locals[got_local_array_idx]
+                                        end
+                                    end
+
+                                    if actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type)
+                                        append!(block_bytes, emit_phi_type_default(phi_local_type))
+                                    elseif actual_val_type !== nothing && phi_local_type === I64 && actual_val_type === I32
                                         append!(block_bytes, phi_value_bytes)
                                         push!(block_bytes, Opcode.I64_EXTEND_I32_S)
                                     else
@@ -7828,7 +7917,6 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 ssa_local_type = local_array_idx >= 1 && local_array_idx <= length(ctx.locals) ? ctx.locals[local_array_idx] : nothing
                 if phi_local_wasm_type !== nothing && ssa_local_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_local_type)
                     # Type mismatch: emit type-safe default for the phi local's type
-                    @warn "PHI TYPE MISMATCH: phi_local=$(phi_local_wasm_type) ssa_local=$(ssa_local_type) val.id=$(val.id) phi_idx=$(phi_idx)"
                     append!(result, emit_phi_type_default(phi_local_wasm_type))
                 else
                     push!(result, Opcode.LOCAL_GET)
@@ -8050,8 +8138,35 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                 phi_value_bytes = compile_phi_value(val, i)
                                 # Only emit local_set if we actually have a value on the stack
                                 if !isempty(phi_value_bytes)
-                                    # Add numeric type widening if needed (e.g., i32 value into i64 local)
-                                    if edge_val_type !== nothing && phi_local_type === I64 && edge_val_type === I32
+                                    # Safety check: if compile_phi_value produced a local.get,
+                                    # verify the local's actual type matches the phi local type.
+                                    # This catches cases where get_phi_edge_wasm_type reports compatible
+                                    # (from Julia type inference) but the actual local has a different type
+                                    # (e.g., externref from Any-typed struct field overrides).
+                                    actual_val_type = edge_val_type
+                                    if length(phi_value_bytes) >= 2 && phi_value_bytes[1] == Opcode.LOCAL_GET
+                                        # Decode the local index from unsigned LEB128
+                                        got_local_idx = 0
+                                        shift = 0
+                                        for bi in 2:length(phi_value_bytes)
+                                            b = phi_value_bytes[bi]
+                                            got_local_idx |= (Int(b & 0x7f) << shift)
+                                            shift += 7
+                                            if (b & 0x80) == 0
+                                                break
+                                            end
+                                        end
+                                        got_local_array_idx = got_local_idx - ctx.n_params + 1
+                                        if got_local_array_idx >= 1 && got_local_array_idx <= length(ctx.locals)
+                                            actual_val_type = ctx.locals[got_local_array_idx]
+                                        end
+                                    end
+
+                                    if actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type)
+                                        # Type mismatch detected at emit point: replace with default
+                                        append!(bytes, emit_phi_type_default(phi_local_type))
+                                    elseif actual_val_type !== nothing && phi_local_type === I64 && actual_val_type === I32
+                                        # Numeric widening: i32 value into i64 local
                                         append!(bytes, phi_value_bytes)
                                         push!(bytes, Opcode.I64_EXTEND_I32_S)
                                     else
@@ -8198,7 +8313,28 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                 end
                                 phi_value_bytes = compile_phi_value(val, i)
                                 if !isempty(phi_value_bytes)
-                                    if edge_val_type !== nothing && phi_local_type === I64 && edge_val_type === I32
+                                    # Safety check: verify actual local.get type matches phi local
+                                    actual_val_type = edge_val_type
+                                    if length(phi_value_bytes) >= 2 && phi_value_bytes[1] == Opcode.LOCAL_GET
+                                        got_local_idx = 0
+                                        shift = 0
+                                        for bi in 2:length(phi_value_bytes)
+                                            b = phi_value_bytes[bi]
+                                            got_local_idx |= (Int(b & 0x7f) << shift)
+                                            shift += 7
+                                            if (b & 0x80) == 0
+                                                break
+                                            end
+                                        end
+                                        got_local_array_idx = got_local_idx - ctx.n_params + 1
+                                        if got_local_array_idx >= 1 && got_local_array_idx <= length(ctx.locals)
+                                            actual_val_type = ctx.locals[got_local_array_idx]
+                                        end
+                                    end
+
+                                    if actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type)
+                                        append!(block_bytes, emit_phi_type_default(phi_local_type))
+                                    elseif actual_val_type !== nothing && phi_local_type === I64 && actual_val_type === I32
                                         append!(block_bytes, phi_value_bytes)
                                         push!(block_bytes, Opcode.I64_EXTEND_I32_S)
                                     else
@@ -10754,7 +10890,6 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                 # Determine the value's wasm type
                 val_wasm_type = get_phi_edge_wasm_type(stmt.val, ctx)
                 if pi_local_type !== nothing && val_wasm_type !== nothing && !wasm_types_compatible(pi_local_type, val_wasm_type)
-                    @warn "PINODE TYPE FIX: local_type=$pi_local_type val_type=$val_wasm_type idx=$idx"
                     # Type mismatch: emit type-safe default for the local's type
                     if pi_local_type isa ConcreteRef
                         push!(bytes, Opcode.REF_NULL)
@@ -10874,7 +11009,76 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
             # TODO: Implement proper exception value handling
         end
 
-        append!(bytes, stmt_bytes)
+        # Safety check: if stmt_bytes is EXACTLY a local.get of an incompatible type
+        # and we need to store to an SSA local, replace with type-safe default
+        ssa_type_mismatch = false
+        if haskey(ctx.ssa_locals, idx) && length(stmt_bytes) >= 2 && stmt_bytes[1] == 0x20  # LOCAL_GET
+            local_idx = ctx.ssa_locals[idx]
+            local_array_idx = local_idx - ctx.n_params + 1
+            local_wasm_type = local_array_idx >= 1 && local_array_idx <= length(ctx.locals) ? ctx.locals[local_array_idx] : nothing
+            if local_wasm_type !== nothing
+                # Decode the source local.get index and verify it consumes ALL bytes
+                src_local_idx = 0
+                shift = 0
+                leb_end = 0
+                for bi in 2:length(stmt_bytes)
+                    b = stmt_bytes[bi]
+                    src_local_idx |= (Int(b & 0x7f) << shift)
+                    shift += 7
+                    if (b & 0x80) == 0
+                        leb_end = bi
+                        break
+                    end
+                end
+                # Only apply safety check if stmt_bytes is EXACTLY local.get <idx>
+                is_pure_local_get = (leb_end == length(stmt_bytes))
+                src_array_idx = src_local_idx - ctx.n_params + 1
+                if is_pure_local_get && src_array_idx >= 1 && src_array_idx <= length(ctx.locals)
+                    src_wasm_type = ctx.locals[src_array_idx]
+                    if !wasm_types_compatible(local_wasm_type, src_wasm_type)
+                        ssa_type_mismatch = true
+                        # Emit type-safe default instead of the incompatible local.get
+                        if local_wasm_type isa ConcreteRef
+                            push!(bytes, Opcode.REF_NULL)
+                            append!(bytes, encode_leb128_signed(Int64(local_wasm_type.type_idx)))
+                        elseif local_wasm_type === ExternRef
+                            push!(bytes, Opcode.REF_NULL)
+                            push!(bytes, UInt8(ExternRef))
+                        elseif local_wasm_type === StructRef
+                            push!(bytes, Opcode.REF_NULL)
+                            push!(bytes, UInt8(StructRef))
+                        elseif local_wasm_type === ArrayRef
+                            push!(bytes, Opcode.REF_NULL)
+                            push!(bytes, UInt8(ArrayRef))
+                        elseif local_wasm_type === AnyRef
+                            push!(bytes, Opcode.REF_NULL)
+                            push!(bytes, UInt8(AnyRef))
+                        elseif local_wasm_type === I64
+                            push!(bytes, Opcode.I64_CONST)
+                            push!(bytes, 0x00)
+                        elseif local_wasm_type === I32
+                            push!(bytes, Opcode.I32_CONST)
+                            push!(bytes, 0x00)
+                        elseif local_wasm_type === F64
+                            push!(bytes, Opcode.F64_CONST)
+                            append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                        elseif local_wasm_type === F32
+                            push!(bytes, Opcode.F32_CONST)
+                            append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+                        else
+                            push!(bytes, Opcode.I32_CONST)
+                            push!(bytes, 0x00)
+                        end
+                        push!(bytes, Opcode.LOCAL_SET)
+                        append!(bytes, encode_leb128_unsigned(local_idx))
+                    end
+                end
+            end
+        end
+
+        if !ssa_type_mismatch
+            append!(bytes, stmt_bytes)
+        end
 
         # If the statement type is Union{} (bottom/never returns), emit unreachable
         # This handles calls to error/throw functions that have void return type in wasm
@@ -10886,36 +11090,13 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
         end
 
         # If this SSA value needs a local, store it (and remove from stack)
-        # We use LOCAL_SET (not LOCAL_TEE) to avoid leaving extra values on stack
-        # that would interfere with later operations. Values will be retrieved
-        # via local.get when needed.
-        #
-        # We emit local.set if:
-        # 1. The statement produced bytecode (!isempty(stmt_bytes)), OR
-        # 2. The statement is a passthrough (memoryrefnew, Vector %new) where the value
-        #    is expected to be on the stack from an earlier SSA
-        # BUT NOT if the statement ends with UNREACHABLE (there's no value on stack)
-        #
-        # Skipped signal statements return empty bytes and are NOT passthroughs, so
-        # they correctly get no local.set.
-        if haskey(ctx.ssa_locals, idx)
-            # Don't emit local.set after unreachable - there's no value on the stack.
-            # We detect unreachable in two ways:
-            # 1. Type-based: Union{} means the statement never returns (throws/unreachable)
-            # 2. Bytecode-based: if the statement ends with UNREACHABLE opcode (0x00)
-            #    AND is preceded by DROP (0x1A) - this is our Base closure pattern
-            #    (we emit DROP then UNREACHABLE for closures we can't compile)
+        if haskey(ctx.ssa_locals, idx) && !ssa_type_mismatch
             stmt_type = get(ctx.ssa_types, idx, Any)
             is_unreachable_type = stmt_type === Union{}
-            # Check for DROP+UNREACHABLE pattern at end of bytecode
-            # This handles Base closure invokes which have non-Union{} return type
-            # but we emit UNREACHABLE anyway
             is_unreachable_bytecode = length(stmt_bytes) >= 2 &&
                                        stmt_bytes[end] == Opcode.UNREACHABLE &&
                                        stmt_bytes[end-1] == Opcode.DROP
             is_unreachable = is_unreachable_type || is_unreachable_bytecode
-            # Also store for passthrough statements that have a value on the stack
-            # but don't emit their own bytecode (like memoryrefnew, Vector %new)
             should_store = (!isempty(stmt_bytes) || is_passthrough_statement(stmt, ctx)) && !is_unreachable
             if should_store
                 local_idx = ctx.ssa_locals[idx]
@@ -11021,10 +11202,9 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
     # Special case: Vector{T} construction
     # Vector is now a struct with (ref, size) fields to support setfield!(v, :size, ...)
     # The %new(Vector{T}, memref, size_tuple) creates a struct with both fields
-    if struct_type <: AbstractVector && length(field_values) >= 1
+    if struct_type <: Array && length(field_values) >= 1
         # field_values[1] is the MemoryRef (which is actually our array)
         # field_values[2] is the size tuple (Tuple{Int64})
-
         # Register the vector type if not already done
         if !haskey(ctx.type_registry.structs, struct_type)
             register_vector_type!(ctx.mod, ctx.type_registry, struct_type)
@@ -11032,11 +11212,61 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
         vec_info = ctx.type_registry.structs[struct_type]
 
         # Compile field 0: the array reference (from MemoryRef)
-        append!(bytes, compile_value(field_values[1], ctx))
+        # Safety: if the SSA local is numeric (i64/i32) but the Vector struct expects a ref,
+        # emit ref.null of the correct array type instead of the wrong-typed local.get.
+        # This happens with non-Array AbstractVector types (UnitRange, StepRange) whose
+        # fields are i64 but get registered with Vector's ref-based layout.
+        field0_bytes = compile_value(field_values[1], ctx)
+        if length(field0_bytes) >= 2 && field0_bytes[1] == 0x20  # LOCAL_GET = 0x20
+            src_idx = 0; shift = 0
+            for bi in 2:length(field0_bytes)
+                b = field0_bytes[bi]
+                src_idx |= (Int(b & 0x7f) << shift)
+                shift += 7
+                (b & 0x80) == 0 && break
+            end
+            arr_idx = src_idx - ctx.n_params + 1
+            if arr_idx >= 1 && arr_idx <= length(ctx.locals)
+                src_type = ctx.locals[arr_idx]
+                if src_type === I64 || src_type === I32
+                    # Emit ref.null for the data array type instead
+                    data_array_idx = get_array_type!(ctx.mod, ctx.type_registry, eltype(struct_type))
+                    push!(bytes, Opcode.REF_NULL)
+                    append!(bytes, encode_leb128_signed(Int64(data_array_idx)))
+                    field0_bytes = UInt8[]  # Don't append original
+                end
+            end
+        end
+        append!(bytes, field0_bytes)
 
         # Compile field 1: the size tuple
         if length(field_values) >= 2
-            append!(bytes, compile_value(field_values[2], ctx))
+            field1_bytes = compile_value(field_values[2], ctx)
+            if length(field1_bytes) >= 2 && field1_bytes[1] == Opcode.LOCAL_GET
+                src_idx = 0; shift = 0
+                for bi in 2:length(field1_bytes)
+                    b = field1_bytes[bi]
+                    src_idx |= (Int(b & 0x7f) << shift)
+                    shift += 7
+                    (b & 0x80) == 0 && break
+                end
+                arr_idx = src_idx - ctx.n_params + 1
+                if arr_idx >= 1 && arr_idx <= length(ctx.locals)
+                    src_type = ctx.locals[arr_idx]
+                    if src_type === I64 || src_type === I32
+                        # Emit ref.null for the size tuple type instead
+                        size_tuple_type_inner = Tuple{Int64}
+                        if !haskey(ctx.type_registry.structs, size_tuple_type_inner)
+                            register_tuple_type!(ctx.mod, ctx.type_registry, size_tuple_type_inner)
+                        end
+                        size_info_inner = ctx.type_registry.structs[size_tuple_type_inner]
+                        push!(bytes, Opcode.REF_NULL)
+                        append!(bytes, encode_leb128_signed(Int64(size_info_inner.wasm_type_idx)))
+                        field1_bytes = UInt8[]
+                    end
+                end
+            end
+            append!(bytes, field1_bytes)
         else
             # No size provided - get array length and create tuple
             # Push array ref again for array.len
@@ -11153,7 +11383,50 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
             push!(bytes, Opcode.EXTERN_CONVERT_ANY)
         else
             # Regular field - compile value directly
-            append!(bytes, compile_value(val, ctx))
+            # Safety: if compile_value produces a local.get of a numeric local (i64/i32)
+            # but the field expects a ref type, emit ref.null instead.
+            # This happens when phi/PiNode locals are allocated as i64 (due to Union/Any
+            # type inference) but the struct field requires a concrete ref.
+            field_bytes = compile_value(val, ctx)
+            # Look up the actual Wasm field type from the module's type definition
+            actual_field_wasm = nothing
+            struct_type_def = ctx.mod.types[info.wasm_type_idx + 1]
+            if struct_type_def isa StructType && i <= length(struct_type_def.fields)
+                actual_field_wasm = struct_type_def.fields[i].valtype
+            end
+            if actual_field_wasm !== nothing && (actual_field_wasm isa ConcreteRef || actual_field_wasm === StructRef || actual_field_wasm === ArrayRef || actual_field_wasm === AnyRef || actual_field_wasm === ExternRef) && length(field_bytes) >= 2 && field_bytes[1] == 0x20
+                # Decode source local index from LEB128
+                src_idx = 0; shift = 0
+                for bi in 2:length(field_bytes)
+                    b = field_bytes[bi]
+                    src_idx |= (Int(b & 0x7f) << shift)
+                    shift += 7
+                    (b & 0x80) == 0 && break
+                end
+                arr_idx = src_idx - ctx.n_params + 1
+                if arr_idx >= 1 && arr_idx <= length(ctx.locals)
+                    src_type = ctx.locals[arr_idx]
+                    if src_type === I64 || src_type === I32
+                        # Source local is numeric but field expects ref — emit ref.null
+                        # Use the ACTUAL field type from the struct definition
+                        if actual_field_wasm isa ConcreteRef
+                            push!(bytes, Opcode.REF_NULL)
+                            append!(bytes, encode_leb128_signed(Int64(actual_field_wasm.type_idx)))
+                        elseif actual_field_wasm === ArrayRef
+                            push!(bytes, Opcode.REF_NULL)
+                            push!(bytes, UInt8(ArrayRef))
+                        elseif actual_field_wasm === ExternRef
+                            push!(bytes, Opcode.REF_NULL)
+                            push!(bytes, UInt8(ExternRef))
+                        else
+                            push!(bytes, Opcode.REF_NULL)
+                            push!(bytes, UInt8(StructRef))
+                        end
+                        field_bytes = UInt8[]  # Don't append original
+                    end
+                end
+            end
+            append!(bytes, field_bytes)
         end
     end
 
@@ -11873,9 +12146,29 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         arg = args[1]
         arg_type = infer_value_type(arg, ctx)
 
-        if arg_type === String || arg_type <: AbstractVector
+        if arg_type === String || arg_type <: AbstractVector || arg_type === Any
             # For strings and arrays, sizeof is the array length
             append!(bytes, compile_value(arg, ctx))
+            # If the value's wasm local is externref (either because arg_type is Any,
+            # or because a String-typed value came from an Any-typed struct field),
+            # cast to arrayref before array.len
+            needs_cast = arg_type === Any || arg_type === Union{}
+            if !needs_cast && arg isa Core.SSAValue
+                local_idx = get(ctx.ssa_locals, arg.id, get(ctx.phi_locals, arg.id, nothing))
+                if local_idx !== nothing
+                    arr_idx = local_idx - ctx.n_params + 1
+                    if arr_idx >= 1 && arr_idx <= length(ctx.locals) && ctx.locals[arr_idx] === ExternRef
+                        needs_cast = true
+                    end
+                end
+            end
+            if needs_cast
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ANY_CONVERT_EXTERN)  # externref → anyref
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.REF_CAST_NULL)       # anyref → (ref null array)
+                push!(bytes, UInt8(ArrayRef))
+            end
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.ARRAY_LEN)
             # array.len returns i32, extend to i64 for Julia's Int
@@ -11893,6 +12186,21 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         if arg_type === String
             # For strings, length is the array length (each char is one element)
             append!(bytes, compile_value(arg, ctx))
+            # If the value's wasm local is externref (e.g. from an Any-typed struct field),
+            # cast to arrayref before array.len
+            if arg isa Core.SSAValue
+                local_idx = get(ctx.ssa_locals, arg.id, get(ctx.phi_locals, arg.id, nothing))
+                if local_idx !== nothing
+                    arr_idx = local_idx - ctx.n_params + 1
+                    if arr_idx >= 1 && arr_idx <= length(ctx.locals) && ctx.locals[arr_idx] === ExternRef
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.ANY_CONVERT_EXTERN)  # externref → anyref
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.REF_CAST_NULL)       # anyref → (ref null array)
+                        push!(bytes, UInt8(ArrayRef))
+                    end
+                end
+            end
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.ARRAY_LEN)
             # array.len returns i32, extend to i64 for Julia's Int
@@ -14084,6 +14392,14 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
 
             elseif name === :length
                 # String/array length - argument already pushed, emit array.len
+                # If arg type is Any (externref), cast to arrayref first
+                if arg_type === Any || arg_type === Union{}
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.ANY_CONVERT_EXTERN)  # externref → anyref
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.REF_CAST_NULL)       # anyref → (ref null array)
+                    push!(bytes, UInt8(ArrayRef))
+                end
                 push!(bytes, Opcode.GC_PREFIX)
                 push!(bytes, Opcode.ARRAY_LEN)
                 # array.len returns i32, extend to i64 for Julia's Int
