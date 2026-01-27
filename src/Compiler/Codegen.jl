@@ -2940,6 +2940,94 @@ function emit_int128_ult(ctx, arg_type::Type)::Vector{UInt8}
 end
 
 """
+Emit 128-bit signed less-or-equal: a <=_s b
+Stack: [a_struct, b_struct] -> [i32 result (0 or 1)]
+Implementation: (a <_s b) || (a == b)
+"""
+function emit_int128_sle(ctx, arg_type::Type)::Vector{UInt8}
+    bytes = UInt8[]
+    type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
+
+    # Pop b and a to struct locals (so we can use each twice)
+    b_struct_local = length(ctx.locals) + ctx.n_params
+    push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(b_struct_local))
+
+    a_struct_local = length(ctx.locals) + ctx.n_params
+    push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(a_struct_local))
+
+    # Push a and b for slt check
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(a_struct_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(b_struct_local))
+
+    # a <_s b (reuse emit_int128_slt)
+    append!(bytes, emit_int128_slt(ctx, arg_type))
+
+    # Push a and b for eq check
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(a_struct_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(b_struct_local))
+
+    # a == b (reuse emit_int128_eq)
+    append!(bytes, emit_int128_eq(ctx, arg_type))
+
+    # (a < b) || (a == b)
+    push!(bytes, Opcode.I32_OR)
+
+    return bytes
+end
+
+"""
+Emit 128-bit unsigned less-or-equal: a <=_u b
+Stack: [a_struct, b_struct] -> [i32 result (0 or 1)]
+Implementation: (a <_u b) || (a == b)
+"""
+function emit_int128_ule(ctx, arg_type::Type)::Vector{UInt8}
+    bytes = UInt8[]
+    type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
+
+    # Pop b and a to struct locals (so we can use each twice)
+    b_struct_local = length(ctx.locals) + ctx.n_params
+    push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(b_struct_local))
+
+    a_struct_local = length(ctx.locals) + ctx.n_params
+    push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(a_struct_local))
+
+    # Push a and b for ult check
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(a_struct_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(b_struct_local))
+
+    # a <_u b (reuse emit_int128_ult)
+    append!(bytes, emit_int128_ult(ctx, arg_type))
+
+    # Push a and b for eq check
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(a_struct_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(b_struct_local))
+
+    # a == b (reuse emit_int128_eq)
+    append!(bytes, emit_int128_eq(ctx, arg_type))
+
+    # (a < b) || (a == b)
+    push!(bytes, Opcode.I32_OR)
+
+    return bytes
+end
+
+"""
 Emit 128-bit left shift: x << n (where n is 64-bit)
 Stack: [x_struct, n_i64] -> [result_struct]
 Algorithm: result_lo = x_lo << n, result_hi = (x_hi << n) | (x_lo >> (64 - n))
@@ -15046,7 +15134,11 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         end
 
     elseif is_func(func, :sle_int)  # signed less or equal
-        push!(bytes, is_32bit ? Opcode.I32_LE_S : Opcode.I64_LE_S)
+        if is_128bit
+            append!(bytes, emit_int128_sle(ctx, arg_type))
+        else
+            push!(bytes, is_32bit ? Opcode.I32_LE_S : Opcode.I64_LE_S)
+        end
 
     elseif is_func(func, :ult_int)  # unsigned less than
         if is_128bit
@@ -15056,7 +15148,11 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         end
 
     elseif is_func(func, :ule_int)  # unsigned less or equal
-        push!(bytes, is_32bit ? Opcode.I32_LE_U : Opcode.I64_LE_U)
+        if is_128bit
+            append!(bytes, emit_int128_ule(ctx, arg_type))
+        else
+            push!(bytes, is_32bit ? Opcode.I32_LE_U : Opcode.I64_LE_U)
+        end
 
     elseif is_func(func, :eq_int)
         if is_128bit
