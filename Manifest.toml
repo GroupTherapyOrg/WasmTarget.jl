@@ -1,8 +1,8 @@
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.11.7"
+julia_version = "1.12.4"
 manifest_format = "2.0"
-project_hash = "e76c8d8b6903988ed339882daca83df642a8acc5"
+project_hash = "2231529eda4a748347577994117e99661c6e5ad8"
 
 [[deps.Dates]]
 deps = ["Printf"]
@@ -15,10 +15,20 @@ git-tree-sha1 = "31e996f0a15c7b280ba9f76636b3ff9e2ae58c9a"
 uuid = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 version = "0.21.4"
 
+[[deps.JuliaLowering]]
+deps = ["JuliaSyntax"]
+git-tree-sha1 = "0b60a73fae88b4ead9bd0f3dbf118ee5946e054a"
+repo-rev = "main"
+repo-url = "https://github.com/c42f/JuliaLowering.jl"
+uuid = "f3c80556-a63f-4383-b822-37d64f81a311"
+version = "1.0.0-DEV"
+
 [[deps.JuliaSyntax]]
-git-tree-sha1 = "0d4b3dab95018bcf3925204475693d9f09dc45b8"
+git-tree-sha1 = "3cba7508d9abcf3e1c6583396b1e60e68624c131"
+repo-rev = "main"
+repo-url = "https://github.com/JuliaLang/JuliaSyntax.jl"
 uuid = "70703baa-626e-46a2-a12c-08ffd08c73b4"
-version = "1.0.2"
+version = "2.0.0-DEV"
 
 [[deps.Mmap]]
 uuid = "a63ad114-7e13-5084-954f-fe012c677804"
@@ -32,9 +42,9 @@ version = "2.8.3"
 
 [[deps.PrecompileTools]]
 deps = ["Preferences"]
-git-tree-sha1 = "5aa36f7049a63a1528fe8f7c3f2113413ffd4e1f"
+git-tree-sha1 = "07a921781cab75691315adc645096ed5e370cb77"
 uuid = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
-version = "1.2.1"
+version = "1.3.3"
 
 [[deps.Preferences]]
 deps = ["TOML"]
@@ -69,3 +79,9 @@ version = "1.11.0"
 [[deps.Unicode]]
 uuid = "4ec0a83e-493e-50e2-b9ac-8f72acf5a8f5"
 version = "1.11.0"
+
+[[deps.WasmTarget]]
+deps = ["JSON", "JuliaLowering", "JuliaSyntax"]
+path = "."
+uuid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+version = "0.1.0"
