@@ -15666,6 +15666,9 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                             push!(bytes, Opcode.GC_PREFIX)
                             push!(bytes, Opcode.REF_CAST_NULL)
                             append!(bytes, encode_leb128_signed(Int64(expected_wasm.type_idx)))
+                        elseif expected_wasm === ExternRef && (actual_wasm isa ConcreteRef || actual_wasm === StructRef || actual_wasm === ArrayRef || actual_wasm === AnyRef)
+                            # Concrete or abstract ref to externref — insert extern.convert_any
+                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
                         end
                     end
                 end
@@ -15970,6 +15973,10 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                         push!(bytes, Opcode.DROP)
                         push!(bytes, Opcode.I64_CONST)
                         push!(bytes, 0x00)
+                    elseif expected_wasm === ExternRef && (actual_wasm isa ConcreteRef || actual_wasm === StructRef || actual_wasm === ArrayRef || actual_wasm === AnyRef)
+                        # Concrete or abstract ref to externref — insert extern.convert_any
+                        # extern.convert_any converts anyref → externref (concrete refs are subtypes of anyref)
+                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
                     end
                 end
             end
