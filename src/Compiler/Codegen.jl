@@ -12150,6 +12150,18 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                             # SSA produces abstract structref/arrayref, local expects concrete ref
                             needs_ref_cast_local = local_wasm_type
                         end
+                        # PURE-036ae: Also check signature-level type mapping.
+                        # When a cross-function call returns a struct type, the function's Wasm
+                        # signature uses julia_to_wasm_type (returns StructRef) but the local
+                        # was allocated using julia_to_wasm_type_concrete (returns ConcreteRef).
+                        # Check if the signature-level type is StructRef/ArrayRef.
+                        if needs_ref_cast_local === nothing && !needs_type_safe_default && local_wasm_type isa ConcreteRef
+                            sig_wasm_type = julia_to_wasm_type(ssa_julia_type)
+                            if (sig_wasm_type === StructRef || sig_wasm_type === ArrayRef)
+                                # Function signature returns abstract ref, local expects concrete
+                                needs_ref_cast_local = local_wasm_type
+                            end
+                        end
                     end
                 end
 
