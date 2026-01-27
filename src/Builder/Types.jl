@@ -301,9 +301,10 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
     elseif T === JSValue
         # JS values are held as externref
         return ExternRef
-    elseif T === String || T === Symbol
+    elseif T === String || T === Symbol || T <: AbstractString
         # Strings and Symbols are represented as WasmGC byte arrays
         # Symbol is stored as its name string
+        # AbstractString maps to String representation (concrete in WasmGC)
         return ArrayRef
     elseif T <: Tuple
         # Tuples map to WasmGC structs
@@ -320,6 +321,13 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
     elseif isconcretetype(T) && isstructtype(T)
         # User-defined structs map to WasmGC structs
         return StructRef
+    elseif T <: Function
+        # Abstract Function types (non-closure) map to externref
+        return ExternRef
+    elseif T <: Type
+        # Type{X} is a singleton type (the only value is X itself)
+        # Represent as i32 constant tag — used for dispatch, not actual data
+        return I32
     elseif isprimitivetype(T)
         # Custom primitive types (e.g., JuliaSyntax.Kind) - map by size
         sz = sizeof(T)
@@ -385,12 +393,14 @@ function find_common_wasm_type(types::Vector)::WasmValType
     end
 
     # Check if all are reference types (strings, arrays, structs)
-    if all(t -> t === String || t <: AbstractArray || (isconcretetype(t) && isstructtype(t)), types)
+    if all(t -> t === String || t === Symbol || t <: AbstractArray || (isconcretetype(t) && isstructtype(t)), types)
         # Use generic reference type
         return StructRef
     end
 
-    error("Cannot find common Wasm type for Union of: $(types)")
+    # Heterogeneous union (mix of primitives, strings, structs, etc.)
+    # Use externref as the universal boxed value type (same as Any)
+    return ExternRef
 end
 
 """

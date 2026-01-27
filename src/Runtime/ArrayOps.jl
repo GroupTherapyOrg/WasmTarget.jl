@@ -42,6 +42,45 @@ end
     return arr_new(T, Int32(len))
 end
 
+@noinline function arr_new(::Type{T}, len::Int32)::Vector{T} where T
+    # Generic fallback - compiled to array.new_default
+    return Base.inferencebarrier(Vector{T}(undef, Int(len)))::Vector{T}
+end
+
+"""
+    _resize!(arr::Vector{T}, n::Integer)::Vector{T}
+
+Internal implementation of resize! for WasmTarget.
+The compiler redirects Base.resize! to this function.
+"""
+function _resize!(arr::Vector{T}, n::Integer)::Vector{T} where T
+    n_int = Int(n)
+    len = length(arr)
+    if n_int == len
+        return arr
+    end
+
+    # Create new vector (which creates new backing memory)
+    # This compiles to array.new_default
+    new_arr = arr_new(T, Int32(n_int))
+
+    # Copy existing data
+    limit = len < n_int ? len : n_int
+    i = 1
+    while i <= limit
+        new_arr[i] = arr[i]
+        i += 1
+    end
+
+    # Swap backing store
+    # Vector has fields :ref (MemoryRef) and :size (Tuple)
+    # We copy these from the new vector to the old one
+    setfield!(arr, :ref, getfield(new_arr, :ref))
+    setfield!(arr, :size, getfield(new_arr, :size))
+
+    return arr
+end
+
 """
     arr_get(arr::Vector{T}, i::Int32)::T
 

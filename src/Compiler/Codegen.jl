@@ -14827,18 +14827,96 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 push!(bytes, Opcode.DROP)
                 push!(bytes, Opcode.I32_CONST)
                 push!(bytes, 0x00)
-            elseif !is_32bit && arg2_type === Nothing
-                # arg1 is 64-bit, arg2 is Nothing (i32). Extend i32 to i64 before comparing.
-                push!(bytes, Opcode.I64_EXTEND_I32_S)
-                push!(bytes, Opcode.I64_EQ)
-            elseif is_32bit && arg_type === Nothing && !is_ref_type_or_union(arg2_type)
-                # arg1 is Nothing (i32), arg2 is 64-bit - mismatched types
-                push!(bytes, Opcode.DROP)
-                push!(bytes, Opcode.DROP)
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
             else
-                push!(bytes, is_32bit ? Opcode.I32_EQ : Opcode.I64_EQ)
+                # Both args are numeric. Check actual Wasm types to select correct opcode.
+                # Julia type inference (is_32bit) may differ from actual Wasm local types.
+                local arg1_actual_32bit = is_32bit
+                local arg2_actual_32bit = arg2_type === Nothing || arg2_type === Bool ||
+                                          arg2_type === Int32 || arg2_type === UInt32 ||
+                                          arg2_type === Int16 || arg2_type === UInt16 ||
+                                          arg2_type === Int8 || arg2_type === UInt8 || arg2_type === Char
+
+                # Check arg1's actual Wasm local type (may differ from Julia type inference)
+                if length(args) >= 1
+                    local arg1_chk = compile_value(args[1], ctx)
+                    if length(arg1_chk) >= 2 && arg1_chk[1] == Opcode.LOCAL_GET
+                        local idx_chk = 0
+                        local sh_chk = 0
+                        local p_chk = 2
+                        while p_chk <= length(arg1_chk)
+                            b = arg1_chk[p_chk]
+                            idx_chk |= (Int(b & 0x7f) << sh_chk)
+                            sh_chk += 7
+                            p_chk += 1
+                            (b & 0x80) == 0 && break
+                        end
+                        local off_chk = idx_chk - ctx.n_params
+                        if off_chk >= 0 && off_chk < length(ctx.locals)
+                            local lt_chk = ctx.locals[off_chk + 1]
+                            arg1_actual_32bit = (lt_chk === I32)
+                        elseif idx_chk < ctx.n_params && idx_chk < length(ctx.arg_types)
+                            # Function parameter - check arg_types
+                            local ptype = ctx.arg_types[idx_chk + 1]
+                            local pwasm = julia_to_wasm_type_concrete(ptype, ctx)
+                            arg1_actual_32bit = (pwasm === I32)
+                        end
+                    elseif length(arg1_chk) >= 1 && arg1_chk[1] == Opcode.I32_CONST
+                        arg1_actual_32bit = true
+                    elseif length(arg1_chk) >= 1 && arg1_chk[1] == Opcode.I64_CONST
+                        arg1_actual_32bit = false
+                    end
+                end
+
+                # Check arg2's actual Wasm type (may differ from Julia type inference)
+                if length(args) >= 2
+                    local arg2_chk = compile_value(args[2], ctx)
+                    if length(arg2_chk) >= 2 && arg2_chk[1] == Opcode.LOCAL_GET
+                        local idx2_chk = 0
+                        local sh2_chk = 0
+                        local p2_chk = 2
+                        while p2_chk <= length(arg2_chk)
+                            b = arg2_chk[p2_chk]
+                            idx2_chk |= (Int(b & 0x7f) << sh2_chk)
+                            sh2_chk += 7
+                            p2_chk += 1
+                            (b & 0x80) == 0 && break
+                        end
+                        local off2_chk = idx2_chk - ctx.n_params
+                        if off2_chk >= 0 && off2_chk < length(ctx.locals)
+                            local lt2_chk = ctx.locals[off2_chk + 1]
+                            arg2_actual_32bit = (lt2_chk === I32)
+                        elseif idx2_chk < ctx.n_params && idx2_chk < length(ctx.arg_types)
+                            # Function parameter - check arg_types
+                            local ptype2 = ctx.arg_types[idx2_chk + 1]
+                            local pwasm2 = julia_to_wasm_type_concrete(ptype2, ctx)
+                            arg2_actual_32bit = (pwasm2 === I32)
+                        end
+                    elseif length(arg2_chk) >= 1 && arg2_chk[1] == Opcode.I32_CONST
+                        arg2_actual_32bit = true
+                    elseif length(arg2_chk) >= 1 && arg2_chk[1] == Opcode.I64_CONST
+                        arg2_actual_32bit = false
+                    end
+                end
+
+                # Select opcode based on actual Wasm types
+                if arg1_actual_32bit && arg2_actual_32bit
+                    # Both i32 - use i32_eq
+                    push!(bytes, Opcode.I32_EQ)
+                elseif arg1_actual_32bit && !arg2_actual_32bit
+                    # arg1 is i32, arg2 is i64 - extend arg1 to i64
+                    # But arg1 is already on stack below arg2. We need to swap and extend.
+                    # Simpler: just compare as i32 if we can truncate arg2
+                    # Since arg2 is on top of stack, wrap it to i32
+                    push!(bytes, Opcode.I32_WRAP_I64)
+                    push!(bytes, Opcode.I32_EQ)
+                elseif !arg1_actual_32bit && arg2_actual_32bit
+                    # arg1 is i64, arg2 is i32 - extend arg2 (on top of stack) to i64
+                    push!(bytes, Opcode.I64_EXTEND_I32_S)
+                    push!(bytes, Opcode.I64_EQ)
+                else
+                    # Both i64 - use i64_eq
+                    push!(bytes, Opcode.I64_EQ)
+                end
             end
         end
 
