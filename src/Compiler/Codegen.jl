@@ -15186,23 +15186,42 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         end
 
         if called_func !== nothing
-            # Push arguments first
-            for arg in args
-                append!(bytes, compile_value(arg, ctx))
-            end
-
-            # Infer argument types for dispatch
+            # Infer argument types BEFORE pushing (need for type checking)
             call_arg_types = tuple([infer_value_type(arg, ctx) for arg in args]...)
             target_info = get_function(ctx.func_registry, called_func, call_arg_types)
 
             if target_info !== nothing
+                # Push arguments with type checking
+                for (arg_idx, arg) in enumerate(args)
+                    append!(bytes, compile_value(arg, ctx))
+                    # Check if arg type matches expected param type
+                    if arg_idx <= length(target_info.arg_types)
+                        expected_julia_type = target_info.arg_types[arg_idx]
+                        expected_wasm = get_concrete_wasm_type(expected_julia_type, ctx.mod, ctx.type_registry)
+                        actual_julia_type = call_arg_types[arg_idx]
+                        actual_wasm = get_concrete_wasm_type(actual_julia_type, ctx.mod, ctx.type_registry)
+
+                        if expected_wasm isa ConcreteRef && actual_wasm isa ConcreteRef
+                            if expected_wasm.type_idx != actual_wasm.type_idx
+                                # Different ref types — insert ref.cast null to expected type
+                                push!(bytes, Opcode.GC_PREFIX)
+                                push!(bytes, Opcode.REF_CAST_NULL)
+                                append!(bytes, encode_leb128_signed(Int64(expected_wasm.type_idx)))
+                            end
+                        elseif expected_wasm isa ConcreteRef && (actual_wasm === StructRef || actual_wasm === ArrayRef || actual_wasm === AnyRef)
+                            # Abstract ref to concrete ref — insert ref.cast null
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.REF_CAST_NULL)
+                            append!(bytes, encode_leb128_signed(Int64(expected_wasm.type_idx)))
+                        end
+                    end
+                end
                 # Cross-function call - emit call instruction with target index
                 push!(bytes, Opcode.CALL)
                 append!(bytes, encode_leb128_unsigned(target_info.wasm_idx))
             else
                 # No matching signature - likely dead code from Union type branches
                 # Emit unreachable instead of error (the branch won't be taken at runtime)
-                bytes = UInt8[]  # Clear pushed args
                 push!(bytes, Opcode.UNREACHABLE)
             end
         else
@@ -15370,10 +15389,32 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
         nothing
     end
 
-    # Get parameter types from the specialized method instance if available
-    # Use specTypes (concrete types) not def.sig (generic signature with Any)
+    # Early self-call detection: check if this is a recursive call to ourselves
+    func_ref_early = expr.args[2]
+    actual_func_ref_early = func_ref_early
+    if func_ref_early isa Core.SSAValue
+        ssa_stmt = ctx.code_info.code[func_ref_early.id]
+        if ssa_stmt isa GlobalRef
+            actual_func_ref_early = ssa_stmt
+        end
+    end
+    is_self_call_early = false
+    if ctx.func_ref !== nothing && actual_func_ref_early isa GlobalRef
+        try
+            called_func = getfield(actual_func_ref_early.mod, actual_func_ref_early.name)
+            is_self_call_early = called_func === ctx.func_ref
+        catch
+            is_self_call_early = false
+        end
+    end
+
+    # Get parameter types - for self-calls, use ctx.arg_types (the function's compiled signature)
+    # For other calls, use mi.specTypes (the call site's specialized types)
     param_types = nothing
-    if mi isa Core.MethodInstance
+    if is_self_call_early
+        # Self-call: use the function's actual compiled parameter types
+        param_types = ctx.arg_types
+    elseif mi isa Core.MethodInstance
         spec = mi.specTypes
         if spec isa DataType && spec <: Tuple
             # specTypes is Tuple{typeof(func), arg1_type, arg2_type, ...}
@@ -15432,6 +15473,53 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
             push!(bytes, UInt8(ExternRef))
         else
             append!(bytes, compile_value(arg, ctx))
+            # Check if argument's actual Wasm type matches expected param type
+            # If both are ConcreteRef but with different type indices, insert ref.cast
+            if param_types !== nothing && arg_idx <= length(param_types)
+                expected_julia_type = param_types[arg_idx]
+                # Skip non-Type values (e.g., Vararg markers)
+                if expected_julia_type isa Type
+                    expected_wasm = get_concrete_wasm_type(expected_julia_type, ctx.mod, ctx.type_registry)
+                    actual_julia_type = infer_value_type(arg, ctx)
+                    actual_wasm = get_concrete_wasm_type(actual_julia_type, ctx.mod, ctx.type_registry)
+
+                    if expected_wasm isa ConcreteRef && actual_wasm isa ConcreteRef
+                        if expected_wasm.type_idx != actual_wasm.type_idx
+                            # Different ref types — insert ref.cast null to expected type
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.REF_CAST_NULL)
+                            append!(bytes, encode_leb128_signed(Int64(expected_wasm.type_idx)))
+                        end
+                    elseif expected_wasm isa ConcreteRef && (actual_wasm === StructRef || actual_wasm === ArrayRef || actual_wasm === AnyRef)
+                        # Abstract ref to concrete ref — insert ref.cast null
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.REF_CAST_NULL)
+                        append!(bytes, encode_leb128_signed(Int64(expected_wasm.type_idx)))
+                    elseif expected_wasm === I32 && actual_wasm === I64
+                        # i64 to i32 — insert i32.wrap_i64
+                        push!(bytes, Opcode.I32_WRAP_I64)
+                    elseif expected_wasm === I64 && actual_wasm === I32
+                        # i32 to i64 — insert i64.extend_i32_s
+                        push!(bytes, Opcode.I64_EXTEND_I32_S)
+                    elseif expected_wasm === F32 && actual_wasm === F64
+                        # f64 to f32 — insert f32.demote_f64
+                        push!(bytes, Opcode.F32_DEMOTE_F64)
+                    elseif expected_wasm === F64 && actual_wasm === F32
+                        # f32 to f64 — insert f64.promote_f32
+                        push!(bytes, Opcode.F64_PROMOTE_F32)
+                    elseif expected_wasm === I32 && (actual_wasm isa ConcreteRef || actual_wasm === StructRef || actual_wasm === ArrayRef || actual_wasm === ExternRef || actual_wasm === AnyRef)
+                        # ref to i32 — drop and push 0 (type mismatch, likely dead code)
+                        push!(bytes, Opcode.DROP)
+                        push!(bytes, Opcode.I32_CONST)
+                        push!(bytes, 0x00)
+                    elseif expected_wasm === I64 && (actual_wasm isa ConcreteRef || actual_wasm === StructRef || actual_wasm === ArrayRef || actual_wasm === ExternRef || actual_wasm === AnyRef)
+                        # ref to i64 — drop and push 0 (type mismatch, likely dead code)
+                        push!(bytes, Opcode.DROP)
+                        push!(bytes, Opcode.I64_CONST)
+                        push!(bytes, 0x00)
+                    end
+                end
+            end
         end
     end
 
