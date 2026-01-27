@@ -5220,7 +5220,119 @@ function generate_body(ctx::CompilationContext)::Vector{UInt8}
     # Generate code using structured control flow
     bytes = generate_structured(ctx, blocks)
 
+    # PURE-036y: Post-process to fix broken SELECT instructions.
+    # Pattern: [local.get N, struct.new M, select] without a condition is broken.
+    # Fix by removing the struct.new and select, keeping only local.get.
+    bytes = fix_broken_select_instructions(bytes)
+
     return bytes
+end
+
+"""
+PURE-036y: Scan bytecode for broken SELECT (0x1b) instructions that don't have
+proper operands. The broken pattern is:
+  [... local.get, struct.new, select ...] where there's no condition pushed.
+
+For each broken SELECT found, remove the preceding struct.new and the SELECT,
+leaving only the first value (which becomes the result).
+"""
+function fix_broken_select_instructions(bytes::Vector{UInt8})::Vector{UInt8}
+    result = UInt8[]
+    i = 1
+    fixes = 0
+
+    while i <= length(bytes)
+        # Look for SELECT opcode (0x1b)
+        if bytes[i] == 0x1b  # SELECT
+            # Check if the preceding bytes match the broken pattern:
+            # [...] local.get LEB128 struct.new LEB128 select
+            #
+            # We need to scan backwards to find:
+            # 1. struct.new (0xfb 0x00 LEB128_type_idx) just before the select
+            # 2. local.get (0x20 LEB128_local_idx) just before the struct.new
+            #
+            # If we find this pattern and nothing between them (no condition),
+            # it's a broken SELECT.
+
+            result_len = length(result)
+
+            # Try to match struct.new pattern at end of result
+            # struct.new encoding: 0xfb 0x00 LEB128_type_idx
+            struct_new_pos = 0
+            struct_new_len = 0
+
+            # Scan backwards for GC_PREFIX (0xfb) followed by STRUCT_NEW (0x00)
+            if result_len >= 3
+                # Check for struct.new 3 specifically: [0xfb, 0x00, 0x03]
+                if result[end-2] == 0xfb && result[end-1] == 0x00
+                    # Found struct.new, calculate its length
+                    # Type index is LEB128 starting at result[end]
+                    # For small indices (< 128), it's just 1 byte
+                    struct_new_pos = result_len - 2
+                    # Calculate LEB128 length
+                    leb_start = result_len
+                    while leb_start <= result_len && (result[leb_start] & 0x80) != 0
+                        leb_start += 1
+                    end
+                    struct_new_len = result_len - struct_new_pos + 1
+
+                    # Now check for local.get before struct.new
+                    local_get_end = struct_new_pos - 1
+                    if local_get_end >= 2
+                        # Find local.get (0x20) by scanning backwards
+                        # local.get encoding: 0x20 LEB128_local_idx
+                        # The LEB128 ends at local_get_end
+                        local_get_start = 0
+
+                        # Scan backwards to find 0x20
+                        j = local_get_end
+                        while j >= 1
+                            if result[j] == 0x20
+                                # Found potential local.get start
+                                # Verify it's a valid LEB128 sequence
+                                leb_len = local_get_end - j
+                                valid = true
+                                for k in (j+1):local_get_end-1
+                                    if k <= length(result) && (result[k] & 0x80) == 0
+                                        # This byte ends the LEB128 early
+                                        valid = false
+                                        break
+                                    end
+                                end
+                                if valid && local_get_end <= length(result) && (result[local_get_end] & 0x80) == 0
+                                    local_get_start = j
+                                    break
+                                end
+                            end
+                            j -= 1
+                            if local_get_end - j > 10  # LEB128 can't be more than 10 bytes
+                                break
+                            end
+                        end
+
+                        if local_get_start > 0
+                            # Found the pattern: local.get + struct.new + select
+                            # This is a broken SELECT (no condition between struct.new and select)
+                            # Fix: remove struct.new and select, keep local.get
+                            resize!(result, local_get_end)
+                            fixes += 1
+                            i += 1  # Skip the select
+                            continue
+                        end
+                    end
+                end
+            end
+        end
+
+        push!(result, bytes[i])
+        i += 1
+    end
+
+    if fixes > 0
+        @info "PURE-036y: Fixed $fixes broken SELECT instructions"
+    end
+
+    return result
 end
 
 """
@@ -13169,6 +13281,58 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         true_bytes = compile_value(args[2], ctx)   # true_val
         false_bytes = compile_value(args[3], ctx)  # false_val
         cond_bytes = compile_value(args[1], ctx)   # cond
+
+        # PURE-036y: Validate that cond_bytes pushes an i32 value, not a ref or nothing.
+        # Check for struct.new (0xfb 0x00 or 0xfb 0x01) which produces ref instead of i32.
+        cond_is_ref = false
+        if length(cond_bytes) >= 3
+            # Scan for GC_PREFIX + STRUCT_NEW pattern
+            for i in 1:(length(cond_bytes)-1)
+                if cond_bytes[i] == 0xfb && (cond_bytes[i+1] == 0x00 || cond_bytes[i+1] == 0x01)
+                    cond_is_ref = true
+                    break
+                end
+            end
+        end
+        # Also check if cond_bytes is just a local.get of a ref-typed local/param
+        if !cond_is_ref && length(cond_bytes) >= 2 && cond_bytes[1] == 0x20  # LOCAL_GET
+            # Decode LEB128 to get local index
+            local_idx = 0
+            shift = 0
+            for i in 2:length(cond_bytes)
+                b = cond_bytes[i]
+                local_idx |= (b & 0x7f) << shift
+                if (b & 0x80) == 0
+                    break
+                end
+                shift += 7
+            end
+            # Check if this local is ref-typed
+            arr_idx = local_idx - ctx.n_params + 1
+            if arr_idx >= 1 && arr_idx <= length(ctx.locals)
+                local_type = ctx.locals[arr_idx]
+                if local_type isa ConcreteRef || local_type === StructRef ||
+                   local_type === ArrayRef || local_type === ExternRef || local_type === AnyRef
+                    cond_is_ref = true
+                end
+            elseif local_idx < ctx.n_params && local_idx >= 0
+                # It's a parameter - check its type
+                param_idx = local_idx + 1
+                if param_idx <= length(ctx.arg_types)
+                    param_wasm = julia_to_wasm_type_concrete(ctx.arg_types[param_idx], ctx)
+                    if param_wasm isa ConcreteRef || param_wasm === StructRef ||
+                       param_wasm === ArrayRef || param_wasm === ExternRef || param_wasm === AnyRef
+                        cond_is_ref = true
+                    end
+                end
+            end
+        end
+
+        # If cond produces ref, fall back to just true_bytes (can't use as SELECT condition)
+        if cond_is_ref
+            append!(bytes, true_bytes)
+            return bytes
+        end
 
         # If any compile_value returned empty, select would have insufficient operands.
         # Fall back to emitting just the true value (or a type-safe default).
