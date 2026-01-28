@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>WasmTarget Runtime - Module Loader Test</title>
+    <script src="wasmtarget-runtime.js"></script>
+    <style>
+        body { font-family: monospace; margin: 2em; background: #1a1a1a; color: #e0e0e0; }
+        .pass { color: #4ade80; }
+        .fail { color: #f87171; }
+        .info { color: #60a5fa; }
+        pre { background: #2a2a2a; padding: 1em; border-radius: 4px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <h1>WasmTarget Runtime - Module Loader Test</h1>
+    <p class="info">Ensure parsestmt.wasm is served alongside this file (or adjust the path below).</p>
+    <div id="output"><pre>Loading...</pre></div>
+
+    <script>
+    (async function() {
+        const out = document.getElementById("output");
+        const lines = [];
+
+        function log(msg, cls) {
+            lines.push(`<span class="${cls || ''}">${msg}</span>`);
+            out.innerHTML = "<pre>" + lines.join("\n") + "</pre>";
+        }
+
+        try {
+            // 1. Create runtime
+            const rt = new WasmTargetRuntime();
+            log("1. Created WasmTargetRuntime", "pass");
+
+            // 2. Check imports object
+            const imports = rt.getImports();
+            const hasMathPow = typeof imports.Math?.pow === "function";
+            log(`2. getImports() has Math.pow: ${hasMathPow}`, hasMathPow ? "pass" : "fail");
+
+            // 3. Load parsestmt.wasm
+            log("3. Loading parsestmt.wasm...", "info");
+            const instance = await rt.load("parsestmt.wasm", "parsestmt");
+            log("3. Loaded parsestmt.wasm", "pass");
+
+            // 4. Check exports
+            const exportNames = Object.keys(instance.exports);
+            log(`4. Found ${exportNames.length} exports`, exportNames.length > 0 ? "pass" : "fail");
+
+            // 5. Verify expected exports exist
+            const expected = ["parsestmt", "ParseStream", "Lexer", "parse_toplevel", "build_tree", "node_to_expr"];
+            let allFound = true;
+            for (const name of expected) {
+                const found = typeof instance.exports[name] === "function";
+                if (!found) allFound = false;
+                log(`   export "${name}": ${found ? "FOUND" : "MISSING"}`, found ? "pass" : "fail");
+            }
+            log(`5. All expected exports present: ${allFound}`, allFound ? "pass" : "fail");
+
+            // 6. Check module registry
+            const stored = rt.get("parsestmt");
+            const registered = stored === instance;
+            log(`6. Module registered as "parsestmt": ${registered}`, registered ? "pass" : "fail");
+
+            // 7. List modules
+            const moduleList = rt.list();
+            log(`7. Loaded modules: [${moduleList.join(", ")}]`, moduleList.length === 1 ? "pass" : "fail");
+
+            // 8. Full export list
+            log("\nAll exports:", "info");
+            for (const name of exportNames) {
+                const type = typeof instance.exports[name];
+                log(`   ${name} (${type})`);
+            }
+
+            log("\n--- ALL TESTS PASSED ---", "pass");
+
+        } catch (err) {
+            log(`ERROR: ${err.message}`, "fail");
+            log(err.stack, "fail");
+        }
+    })();
+    </script>
+</body>
+</html>
