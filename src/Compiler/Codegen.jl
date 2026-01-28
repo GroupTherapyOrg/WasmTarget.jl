@@ -6194,6 +6194,10 @@ function get_phi_edge_wasm_type(val, ctx::CompilationContext)::Union{WasmValType
         return F64
     elseif val isa Float32
         return F32
+    elseif val isa Symbol || val isa String
+        # PURE-036ba: Symbol and String compile to array<i32> (string array type)
+        str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+        return ConcreteRef(str_type_idx, false)  # non-nullable since array.new_fixed produces non-nullable ref
     end
     return nothing
 end
@@ -8572,6 +8576,10 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
             return F64
         elseif val isa Float32
             return F32
+        elseif val isa Symbol || val isa String
+            # PURE-036ba: Symbol and String compile to array<i32> (string array type)
+            str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+            return ConcreteRef(str_type_idx, false)  # non-nullable since array.new_fixed produces non-nullable ref
         end
         return nothing
     end
