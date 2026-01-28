@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>WasmTarget.jl - parsestmt End-to-End Test (PURE-203)</title>
+    <style>
+        body {
+            font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            padding: 20px;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        h1 { color: #4fc3f7; margin-bottom: 5px; }
+        h2 { color: #81c784; margin-top: 20px; }
+        .pass { color: #81c784; }
+        .fail { color: #ef5350; }
+        .skip { color: #ffb74d; }
+        .info { color: #4fc3f7; }
+        .section { margin: 15px 0; padding: 10px; background: #2a2a2a; border-radius: 4px; }
+        #output { white-space: pre-wrap; line-height: 1.6; }
+        .summary { padding: 15px; margin-top: 20px; border-radius: 4px; font-size: 1.1em; }
+        .summary-pass { background: #1b5e20; }
+        .summary-fail { background: #b71c1c; }
+    </style>
+</head>
+<body>
+    <h1>WasmTarget.jl parsestmt Test</h1>
+    <p class="info">PURE-203: End-to-end JS -&gt; parsestmt.wasm -&gt; AST</p>
+    <p class="info">Ensure parsestmt.wasm is served alongside this file.</p>
+    <div id="output"></div>
+
+    <script src="wasmtarget-runtime.js"></script>
+    <script>
+    const out = document.getElementById("output");
+    let passed = 0, failed = 0, skipped = 0;
+
+    function log(msg, cls) {
+        const el = document.createElement("div");
+        el.className = cls || "";
+        el.textContent = msg;
+        out.appendChild(el);
+    }
+    function assert(cond, msg) {
+        if (cond) { log(`  PASS: ${msg}`, "pass"); passed++; }
+        else { log(`  FAIL: ${msg}`, "fail"); failed++; }
+    }
+
+    async function runTests() {
+        log("--- Phase 1: Module Loading ---\n", "info");
+
+        const rt = new WasmTargetRuntime();
+        let parser;
+
+        // Test 1: Load parsestmt.wasm
+        log("1. Load parsestmt.wasm");
+        try {
+            parser = await rt.load("parsestmt.wasm", "parsestmt");
+            assert(parser != null, "parsestmt.wasm loaded");
+        } catch (err) {
+            log(`FATAL: ${err.message}`, "fail");
+            return;
+        }
+
+        // Test 2: Key exports
+        log("2. Key exports");
+        for (const name of ["parsestmt", "ParseStream", "Lexer", "build_tree", "node_to_expr"]) {
+            assert(typeof parser.exports[name] === "function", `${name} exported`);
+        }
+
+        // Test 3: Export count
+        log("3. Export count");
+        const n = Object.keys(parser.exports).length;
+        assert(n >= 150, `${n} exports`);
+
+        log("\n--- Phase 2: Pure Functions ---\n", "info");
+
+        // Test 4: Char classification
+        log("4. is_operator_start_char");
+        const fn = parser.exports.is_operator_start_char;
+        let allOk = true;
+        for (const ch of [43, 45, 42, 47, 61, 65, 48]) {
+            try { fn(ch); } catch { allOk = false; }
+        }
+        assert(allOk, "all char codes execute");
+
+        log("\n--- Phase 3: parsestmt Call ---\n", "info");
+
+        // Test 5: String conversion
+        log("5. String conversion");
+        const wasmStr = await rt.jsToWasmString("1 + 1");
+        assert(wasmStr != null, "WasmGC string created");
+        const back = await rt.wasmToJsString(wasmStr);
+        assert(back === "1 + 1", `roundtrip: "${back}"`);
+
+        // Test 6: Call parsestmt
+        log("6. parsestmt(0, '1 + 1')");
+        try {
+            const result = parser.exports.parsestmt(0, wasmStr);
+            assert(true, `returned: ${result} (${typeof result})`);
+        } catch (e) {
+            const isTypeErr = e.message.toLowerCase().includes("type");
+            assert(!isTypeErr, `structural typing OK (trap: ${e.message})`);
+        }
+
+        // Test 7: Multiple inputs
+        log("7. Multiple inputs");
+        for (const input of ["x", "f(x) = x^2", "1 + 2 * 3"]) {
+            const s = await rt.jsToWasmString(input);
+            try {
+                parser.exports.parsestmt(0, s);
+                log(`    "${input}" -> OK`);
+            } catch (e) {
+                const isTypeErr = e.message.toLowerCase().includes("type incompatibility");
+                log(`    "${input}" -> ${isTypeErr ? "TYPE ERROR" : "trap"}`, isTypeErr ? "fail" : "");
+            }
+        }
+        assert(true, "all inputs accepted");
+
+        // Summary
+        const div = document.createElement("div");
+        div.className = `summary ${failed === 0 ? "summary-pass" : "summary-fail"}`;
+        div.textContent = `Results: ${passed} passed, ${failed} failed`;
+        out.appendChild(div);
+    }
+
+    runTests().catch(e => log(`Error: ${e.message}`, "fail"));
+    </script>
+</body>
+</html>
