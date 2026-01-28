@@ -10,9 +10,14 @@
  *   console.log(Object.keys(mod.exports));
  */
 
+// Embedded string bridge module (164 bytes, compiled by WasmTarget.jl).
+// Exports: str_new(i32)->array<i32>, str_setchar!(array,i32,i32), str_char(array,i32)->i32, str_len(array)->i32
+const STRING_BRIDGE_BASE64 = "AGFzbQEAAAABJgZgAnx8AXxPAF5/AWABfwFjAWADYwF/fwBgAmMBfwF/YAFjAQF/AgwBBE1hdGgDcG93AAADBQQCAwQFBy8EB3N0cl9uZXcAAQxzdHJfc2V0Y2hhciEAAghzdHJfY2hhcgADB3N0cl9sZW4ABAosBAcAIAD7BwELDgAgACABQQFrIAL7DgELDAAgACABQQFr+wsBCwYAIAD7Dws=";
+
 class WasmTargetRuntime {
     constructor() {
         this.modules = new Map(); // name -> WebAssembly.Instance
+        this._stringBridge = null; // Lazily initialized
     }
 
     /**
@@ -100,6 +105,71 @@ class WasmTargetRuntime {
             throw new Error(`"${funcName}" is not an exported function of "${moduleName}"`);
         }
         return fn(...args);
+    }
+
+    /**
+     * Initialize the string bridge module (lazy, called automatically).
+     * The bridge provides str_new, str_setchar!, str_char, str_len as Wasm exports
+     * that create and manipulate WasmGC array<i32> strings compatible with all
+     * WasmTarget-compiled modules (structural typing).
+     *
+     * @returns {Promise<void>}
+     */
+    async _initStringBridge() {
+        if (this._stringBridge) return;
+
+        // Decode base64 to bytes
+        let bytes;
+        if (typeof atob === "function") {
+            // Browser
+            const bin = atob(STRING_BRIDGE_BASE64);
+            bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        } else {
+            // Node.js
+            bytes = Buffer.from(STRING_BRIDGE_BASE64, "base64");
+        }
+
+        const imports = this.getImports();
+        const { instance } = await WebAssembly.instantiate(bytes, imports);
+        this._stringBridge = instance.exports;
+    }
+
+    /**
+     * Convert a JavaScript string to a WasmGC array<i32> (one codepoint per element).
+     * Handles full Unicode including emoji and supplementary plane characters.
+     *
+     * @param {string} str - The JavaScript string to convert
+     * @returns {Promise<object>} A WasmGC array<i32> ref usable as a string argument
+     */
+    async jsToWasmString(str) {
+        await this._initStringBridge();
+        const { str_new, "str_setchar!": str_setchar } = this._stringBridge;
+
+        const codepoints = [...str]; // Iterate by codepoint, not UTF-16 code unit
+        const wasmStr = str_new(codepoints.length);
+        for (let i = 0; i < codepoints.length; i++) {
+            str_setchar(wasmStr, i + 1, codepoints[i].codePointAt(0)); // 1-based index
+        }
+        return wasmStr;
+    }
+
+    /**
+     * Convert a WasmGC array<i32> string back to a JavaScript string.
+     *
+     * @param {object} wasmStr - A WasmGC array<i32> ref (from jsToWasmString or module output)
+     * @returns {Promise<string>} The JavaScript string
+     */
+    async wasmToJsString(wasmStr) {
+        await this._initStringBridge();
+        const { str_char, str_len } = this._stringBridge;
+
+        const len = str_len(wasmStr);
+        let result = "";
+        for (let i = 0; i < len; i++) {
+            result += String.fromCodePoint(str_char(wasmStr, i + 1)); // 1-based index
+        }
+        return result;
     }
 }
 
