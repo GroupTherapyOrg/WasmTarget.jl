@@ -12061,6 +12061,10 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
        result_type === F32 || result_type === F64
         # Typed result - IF produces value, fall through with value on stack
         # No RETURN or UNREACHABLE needed
+    elseif result_type === ExternRef
+        # ExternRef result - IF produces void, need ref.null extern before RETURN
+        push!(bytes, Opcode.REF_NULL, UInt8(ExternRef))
+        push!(bytes, Opcode.RETURN)
     else
         push!(bytes, Opcode.RETURN)
     end
