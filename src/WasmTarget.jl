@@ -17,12 +17,6 @@ include("Runtime/SimpleDict.jl")
 include("Runtime/ByteBuffer.jl")
 include("Runtime/Tokenizer.jl")
 
-# Interpreter - Julia interpreter written in WasmTarget-compatible Julia
-include("Interpreter/Tokenizer.jl")
-include("Interpreter/Parser.jl")
-include("Interpreter/Evaluator.jl")
-include("Interpreter/REPL.jl")
-
 # Main API
 export compile, compile_multi, WasmModule, to_bytes
 export WasmGlobal, global_index, global_eltype

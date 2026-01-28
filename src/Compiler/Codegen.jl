@@ -15540,9 +15540,99 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         if haskey(ctx.type_registry.structs, tuple_type)
             info = ctx.type_registry.structs[tuple_type]
 
-            # Push all tuple elements
-            for arg in args
-                append!(bytes, compile_value(arg, ctx))
+            # Push all tuple elements with type safety for externref fields
+            # PURE-142: Core.tuple args may be phi locals typed as i64 but
+            # struct field expects externref (Any-typed tuple element)
+            struct_type_def = ctx.mod.types[info.wasm_type_idx + 1]
+            for (fi, arg) in enumerate(args)
+                arg_bytes = compile_value(arg, ctx)
+                expected_wasm = nothing
+                if struct_type_def isa StructType && fi <= length(struct_type_def.fields)
+                    expected_wasm = struct_type_def.fields[fi].valtype
+                end
+                if expected_wasm === ExternRef
+                    # Check if arg_bytes is a numeric value (i32/i64 const or numeric local)
+                    is_numeric_arg = false
+                    if length(arg_bytes) >= 1 && (arg_bytes[1] == 0x41 || arg_bytes[1] == 0x42)
+                        is_numeric_arg = true
+                    elseif length(arg_bytes) >= 2 && arg_bytes[1] == 0x20
+                        src_idx = 0; shift = 0; leb_end = 0
+                        for bi in 2:length(arg_bytes)
+                            b = arg_bytes[bi]
+                            src_idx |= (Int(b & 0x7f) << shift)
+                            shift += 7
+                            if (b & 0x80) == 0; leb_end = bi; break; end
+                        end
+                        if leb_end == length(arg_bytes)
+                            arr_idx = src_idx - ctx.n_params + 1
+                            if arr_idx >= 1 && arr_idx <= length(ctx.locals)
+                                src_type = ctx.locals[arr_idx]
+                                if src_type === I32 || src_type === I64 || src_type === F32 || src_type === F64
+                                    is_numeric_arg = true
+                                end
+                            end
+                        end
+                    end
+                    if is_numeric_arg
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(ExternRef))
+                    else
+                        append!(bytes, arg_bytes)
+                        # Convert internal ref to externref if not already externref
+                        is_already_extern = false
+                        if length(arg_bytes) >= 2 && arg_bytes[1] == 0x20
+                            src_idx2 = 0; shift2 = 0
+                            for bi in 2:length(arg_bytes)
+                                b = arg_bytes[bi]
+                                src_idx2 |= (Int(b & 0x7f) << shift2)
+                                shift2 += 7
+                                (b & 0x80) == 0 && break
+                            end
+                            arr_idx2 = src_idx2 - ctx.n_params + 1
+                            if arr_idx2 >= 1 && arr_idx2 <= length(ctx.locals)
+                                is_already_extern = (ctx.locals[arr_idx2] === ExternRef)
+                            end
+                        end
+                        if !is_already_extern
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        end
+                    end
+                elseif expected_wasm isa ConcreteRef || expected_wasm === StructRef || expected_wasm === ArrayRef || expected_wasm === AnyRef
+                    # Ref-typed field: check for numeric local mismatch
+                    is_numeric_arg = false
+                    if length(arg_bytes) >= 2 && arg_bytes[1] == 0x20
+                        src_idx = 0; shift = 0; leb_end = 0
+                        for bi in 2:length(arg_bytes)
+                            b = arg_bytes[bi]
+                            src_idx |= (Int(b & 0x7f) << shift)
+                            shift += 7
+                            if (b & 0x80) == 0; leb_end = bi; break; end
+                        end
+                        if leb_end == length(arg_bytes)
+                            arr_idx = src_idx - ctx.n_params + 1
+                            if arr_idx >= 1 && arr_idx <= length(ctx.locals)
+                                src_type = ctx.locals[arr_idx]
+                                if src_type === I32 || src_type === I64 || src_type === F32 || src_type === F64
+                                    is_numeric_arg = true
+                                end
+                            end
+                        end
+                    end
+                    if is_numeric_arg
+                        if expected_wasm isa ConcreteRef
+                            push!(bytes, Opcode.REF_NULL)
+                            append!(bytes, encode_leb128_signed(Int64(expected_wasm.type_idx)))
+                        else
+                            push!(bytes, Opcode.REF_NULL)
+                            push!(bytes, UInt8(expected_wasm isa UInt8 ? expected_wasm : StructRef))
+                        end
+                    else
+                        append!(bytes, arg_bytes)
+                    end
+                else
+                    append!(bytes, arg_bytes)
+                end
             end
 
             # struct.new
@@ -15717,10 +15807,21 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     pos += 1
                     (b & 0x80) == 0 && break
                 end
-                if pos - 1 == length(val_bytes) && src_idx < length(ctx.locals)
-                    src_type = ctx.locals[src_idx + 1]
+                # PURE-142: Fix indexing - src_idx is absolute local index (includes params),
+                # but ctx.locals only contains non-param locals. Must subtract n_params.
+                local local_offset = src_idx - ctx.n_params
+                if pos - 1 == length(val_bytes) && local_offset >= 0 && local_offset < length(ctx.locals)
+                    src_type = ctx.locals[local_offset + 1]
                     if src_type === I64 || src_type === I32 || src_type === F64 || src_type === F32
                         is_numeric_val = true
+                    end
+                elseif pos - 1 == length(val_bytes) && src_idx < ctx.n_params
+                    # It's a parameter - check param types
+                    if src_idx < length(ctx.arg_types)
+                        param_type = ctx.arg_types[src_idx + 1]
+                        if param_type === I64 || param_type === I32 || param_type === F64 || param_type === F32
+                            is_numeric_val = true
+                        end
                     end
                 end
             elseif length(val_bytes) >= 1 && (val_bytes[1] == Opcode.I32_CONST || val_bytes[1] == Opcode.I64_CONST || val_bytes[1] == Opcode.F32_CONST || val_bytes[1] == Opcode.F64_CONST)
@@ -16175,6 +16276,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             # Also check for local.get of ref-typed local
             local arg1_wasm_is_ref = arg1_is_ref
             local arg2_wasm_is_ref = arg2_is_ref
+            local arg1_is_externref = (arg_type === Any)
+            local arg2_is_externref = (arg2_type === Any)
             # Check Wasm representation for any potentially mixed comparison
             # (when one arg is ref-typed or Nothing, verify actual Wasm types)
             if arg_type === Nothing || arg2_type === Nothing || arg1_is_ref || arg2_is_ref
@@ -16207,6 +16310,11 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                                 local ltype_1 = ctx.locals[local_offset_1 + 1]
                                 arg1_wasm_is_ref = ltype_1 isa ConcreteRef || ltype_1 === StructRef ||
                                                    ltype_1 === ArrayRef || ltype_1 === ExternRef || ltype_1 === AnyRef
+                                arg1_is_externref = (ltype_1 === ExternRef)
+                            elseif local_idx_1 < ctx.n_params && local_idx_1 < length(ctx.arg_types)
+                                local ptype_1 = ctx.arg_types[local_idx_1 + 1]
+                                local pwasm_1 = julia_to_wasm_type_concrete(ptype_1, ctx)
+                                arg1_is_externref = (pwasm_1 === ExternRef)
                             end
                         end
                     end
@@ -16236,6 +16344,11 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                                 local ltype_2 = ctx.locals[local_offset_2 + 1]
                                 arg2_wasm_is_ref = ltype_2 isa ConcreteRef || ltype_2 === StructRef ||
                                                    ltype_2 === ArrayRef || ltype_2 === ExternRef || ltype_2 === AnyRef
+                                arg2_is_externref = (ltype_2 === ExternRef)
+                            elseif local_idx_2 < ctx.n_params && local_idx_2 < length(ctx.arg_types)
+                                local ptype_2 = ctx.arg_types[local_idx_2 + 1]
+                                local pwasm_2 = julia_to_wasm_type_concrete(ptype_2, ctx)
+                                arg2_is_externref = (pwasm_2 === ExternRef)
                             end
                         end
                     end
@@ -16243,6 +16356,34 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             end
             # BOTH args must be ref types to use ref.eq
             if arg1_wasm_is_ref && arg2_wasm_is_ref
+                # ref.eq requires eqref operands. externref is NOT eqref.
+                # Convert externref → anyref → eqref before ref.eq
+                if arg1_is_externref && arg2_is_externref
+                    # Both externref: convert arg2 (top), save, convert arg1, restore
+                    local tmp_eq = allocate_local!(ctx, EqRef)
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(tmp_eq))
+                    # Now arg1 (externref) is on top
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(tmp_eq))
+                elseif arg1_is_externref
+                    # arg1 is externref (under arg2 on stack): save arg2, convert arg1, restore arg2
+                    local tmp_eq2 = allocate_local!(ctx, EqRef)
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(tmp_eq2))
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(tmp_eq2))
+                elseif arg2_is_externref
+                    # arg2 is externref (top of stack): just convert it
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                end
                 # ref.eq is a standalone opcode (0xD3), not under GC_PREFIX
                 push!(bytes, Opcode.REF_EQ)
             elseif arg1_wasm_is_ref && !arg2_wasm_is_ref
@@ -16437,6 +16578,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             # Check actual Wasm representation for Nothing-typed args
             local arg1_wasm_is_ref_ne = arg1_is_ref_ne
             local arg2_wasm_is_ref_ne = arg2_is_ref_ne
+            local arg1_is_externref_ne = (arg_type === Any)
+            local arg2_is_externref_ne = (arg2_type_ne === Any)
             # Check Wasm representation for any potentially mixed comparison
             if arg_type === Nothing || arg2_type_ne === Nothing || arg1_is_ref_ne || arg2_is_ref_ne
                 # For Nothing-typed args, check actual Wasm representation
@@ -16495,6 +16638,29 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             end
             # BOTH args must be ref types to use ref.eq
             if arg1_wasm_is_ref_ne && arg2_wasm_is_ref_ne
+                # Convert externref → eqref before ref.eq (same pattern as === handler)
+                if arg1_is_externref_ne && arg2_is_externref_ne
+                    local tmp_ne = allocate_local!(ctx, EqRef)
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(tmp_ne))
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(tmp_ne))
+                elseif arg1_is_externref_ne
+                    local tmp_ne2 = allocate_local!(ctx, EqRef)
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(tmp_ne2))
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(tmp_ne2))
+                elseif arg2_is_externref_ne
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                end
                 push!(bytes, Opcode.REF_EQ)
                 push!(bytes, Opcode.I32_EQZ)  # Negate for !==
             elseif arg1_wasm_is_ref_ne && !arg2_wasm_is_ref_ne
