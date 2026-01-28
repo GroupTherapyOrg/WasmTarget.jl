@@ -8515,7 +8515,14 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 # SSA without local - need to recompute the statement
                 # This should ideally not happen for phi values, but handle it
                 stmt = code[val.id]
-                if stmt !== nothing && !(stmt isa Core.PhiNode)
+                # PURE-036bg: Check type compatibility for recomputed SSA values
+                # The compiled statement may produce a type incompatible with the phi local
+                ssa_julia_type = get(ctx.ssa_types, val.id, Any)
+                ssa_wasm_type = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
+                if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_wasm_type)
+                    # Type mismatch: emit type-safe default instead of recomputing
+                    append!(result, emit_phi_type_default(phi_local_wasm_type))
+                elseif stmt !== nothing && !(stmt isa Core.PhiNode)
                     append!(result, compile_statement(stmt, val.id, ctx))
                 else
                     # Can't recompute - try compile_value as fallback
@@ -12879,6 +12886,42 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
             should_store = (!isempty(stmt_bytes) || is_passthrough_statement(stmt, ctx)) && !is_unreachable
             if should_store
                 local_idx = ctx.ssa_locals[idx]
+                local_array_idx = local_idx - ctx.n_params + 1
+                local_type = local_array_idx >= 1 && local_array_idx <= length(ctx.locals) ? ctx.locals[local_array_idx] : nothing
+
+
+                # PURE-036bg: Check if value type matches local type
+                # When multiple SSAs share a local but have incompatible types (e.g., in dead code),
+                # DROP the value and emit a type-safe default instead of causing validation error.
+                value_wasm_type = get_concrete_wasm_type(stmt_type, ctx.mod, ctx.type_registry)
+                if local_type !== nothing && !wasm_types_compatible(local_type, value_wasm_type)
+                    # Type mismatch: drop the value and emit type-safe default
+                    push!(bytes, Opcode.DROP)
+                    if local_type isa ConcreteRef
+                        push!(bytes, Opcode.REF_NULL)
+                        append!(bytes, encode_leb128_signed(Int64(local_type.type_idx)))
+                    elseif local_type === StructRef
+                        push!(bytes, Opcode.REF_NULL, UInt8(StructRef))
+                    elseif local_type === ArrayRef
+                        push!(bytes, Opcode.REF_NULL, UInt8(ArrayRef))
+                    elseif local_type === ExternRef
+                        push!(bytes, Opcode.REF_NULL, UInt8(ExternRef))
+                    elseif local_type === AnyRef
+                        push!(bytes, Opcode.REF_NULL, UInt8(AnyRef))
+                    elseif local_type === I64
+                        push!(bytes, Opcode.I64_CONST, 0x00)
+                    elseif local_type === I32
+                        push!(bytes, Opcode.I32_CONST, 0x00)
+                    elseif local_type === F64
+                        push!(bytes, Opcode.F64_CONST)
+                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                    elseif local_type === F32
+                        push!(bytes, Opcode.F32_CONST)
+                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+                    else
+                        push!(bytes, Opcode.I32_CONST, 0x00)
+                    end
+                end
                 push!(bytes, Opcode.LOCAL_SET)
                 append!(bytes, encode_leb128_unsigned(local_idx))
             end
