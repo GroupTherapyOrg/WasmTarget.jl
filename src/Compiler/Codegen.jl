@@ -14194,10 +14194,41 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         info = register_tuple_type!(ctx.mod, ctx.type_registry, T)
         type_idx = info.wasm_type_idx
 
+        # Get the struct type definition to check expected field types
+        struct_type_def = ctx.mod.types[type_idx + 1]
+
         # Push field values (tuples use 1-based indexing)
         for i in 1:length(val)
             field_val = val[i]
-            append!(bytes, compile_value(field_val, ctx))
+            # PURE-141: When field value is a Type constant and field expects a ref type,
+            # emit ref.null instead of i32.const 0 (compile_value(Type) returns i32)
+            expected_wasm = nothing
+            if struct_type_def isa StructType && i <= length(struct_type_def.fields)
+                expected_wasm = struct_type_def.fields[i].valtype
+            end
+            if field_val isa Type && expected_wasm !== nothing &&
+               (expected_wasm isa ConcreteRef || expected_wasm === StructRef ||
+                expected_wasm === ArrayRef || expected_wasm === AnyRef || expected_wasm === ExternRef)
+                # Type value needs ref type - emit ref.null of expected type
+                if expected_wasm isa ConcreteRef
+                    push!(bytes, Opcode.REF_NULL)
+                    append!(bytes, encode_leb128_signed(Int64(expected_wasm.type_idx)))
+                elseif expected_wasm === ArrayRef
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, UInt8(ArrayRef))
+                elseif expected_wasm === ExternRef
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, UInt8(ExternRef))
+                elseif expected_wasm === AnyRef
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, UInt8(AnyRef))
+                else
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, UInt8(StructRef))
+                end
+            else
+                append!(bytes, compile_value(field_val, ctx))
+            end
         end
 
         # Create the struct
