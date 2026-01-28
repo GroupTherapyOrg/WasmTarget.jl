@@ -16760,8 +16760,12 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             local isa_val_wasm = nothing
             if value_arg isa Core.SSAValue
                 local isa_local_idx = get(ctx.ssa_locals, value_arg.id, nothing)
-                if isa_local_idx !== nothing && isa_local_idx < length(ctx.locals)
-                    isa_val_wasm = ctx.locals[isa_local_idx + 1]
+                # Fix: isa_local_idx includes n_params, but ctx.locals only has non-param locals
+                if isa_local_idx !== nothing
+                    local local_offset = isa_local_idx - ctx.n_params
+                    if local_offset >= 0 && local_offset < length(ctx.locals)
+                        isa_val_wasm = ctx.locals[local_offset + 1]
+                    end
                 end
             end
             if isa_val_wasm !== nothing && (isa_val_wasm === I64 || isa_val_wasm === I32 || isa_val_wasm === F64 || isa_val_wasm === F32)
@@ -16779,8 +16783,12 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             local isa2_val_wasm = nothing
             if value_arg isa Core.SSAValue
                 local isa2_local_idx = get(ctx.ssa_locals, value_arg.id, nothing)
-                if isa2_local_idx !== nothing && isa2_local_idx < length(ctx.locals)
-                    isa2_val_wasm = ctx.locals[isa2_local_idx + 1]
+                # Fix: isa2_local_idx includes n_params, but ctx.locals only has non-param locals
+                if isa2_local_idx !== nothing
+                    local local_offset = isa2_local_idx - ctx.n_params
+                    if local_offset >= 0 && local_offset < length(ctx.locals)
+                        isa2_val_wasm = ctx.locals[local_offset + 1]
+                    end
                 end
             end
             if isa2_val_wasm !== nothing && (isa2_val_wasm === I64 || isa2_val_wasm === I32 || isa2_val_wasm === F64 || isa2_val_wasm === F32)
