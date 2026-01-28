@@ -2129,6 +2129,10 @@ Check if a type is a reference type (struct or Union containing struct).
 Used to determine if ref.eq should be used for comparison.
 """
 function is_ref_type_or_union(T::Type)::Bool
+    # Any maps to externref (reference type)
+    if T === Any
+        return true
+    end
     # Direct struct types (excluding primitive types)
     if T isa DataType && isstructtype(T) && !isprimitivetype(T)
         return true
@@ -4619,7 +4623,7 @@ function allocate_ssa_locals!(ctx::CompilationContext)
     # Actually allocate the locals
     for ssa_id in sort(collect(needs_local_set))
         if !haskey(ctx.ssa_locals, ssa_id)  # Skip phi nodes already added
-            ssa_type = get(ctx.ssa_types, ssa_id, Int64)
+            ssa_type = get(ctx.ssa_types, ssa_id, Any)
 
             # Skip multi-arg memoryrefnew results - they leave [array_ref, i32_index] on stack
             # and can't be stored in a single local. They must be used immediately.
@@ -5178,7 +5182,7 @@ function infer_value_type(val, ctx::CompilationContext)
             return ctx.arg_types[idx]
         end
     elseif val isa Core.SSAValue
-        return get(ctx.ssa_types, val.id, Int64)
+        return get(ctx.ssa_types, val.id, Any)
     elseif val isa Int64 || val isa Int
         return Int64
     elseif val isa Int32
@@ -13430,12 +13434,31 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
         elseif field_type === Any
             # Any field maps to externref in WasmGC
             # We need to convert internal refs to externref using extern.convert_any
+            # PURE-044: Check for nothing values FIRST before compile_value
+            # compile_value(nothing) returns i32.const 0, which can't be extern.convert_any'd
+            is_nothing_val = val === nothing ||
+                            (val isa GlobalRef && val.name === :nothing) ||
+                            (val isa Core.SSAValue && begin
+                                ssa_stmt_check = ctx.code_info.code[val.id]
+                                (ssa_stmt_check isa GlobalRef && ssa_stmt_check.name === :nothing) ||
+                                (ssa_stmt_check isa Core.PiNode && ssa_stmt_check.typ === Nothing)
+                            end)
+            if is_nothing_val
+                # Nothing value for Any field → emit ref.null extern
+                push!(bytes, Opcode.REF_NULL)
+                push!(bytes, UInt8(ExternRef))
+                continue  # Skip to next field
+            end
+
             val_bytes = compile_value(val, ctx)
             # Safety: if compile_value produced local.get of a numeric local (I32/I64),
             # extern_convert_any will fail because it requires anyref input.
             # Emit ref.null extern instead.
             is_numeric_local = false
-            if length(val_bytes) >= 2 && val_bytes[1] == 0x20
+            # PURE-044: Also check for i32.const/i64.const (happens with dead code paths)
+            if length(val_bytes) >= 1 && (val_bytes[1] == 0x41 || val_bytes[1] == 0x42)  # I32_CONST or I64_CONST
+                is_numeric_local = true
+            elseif length(val_bytes) >= 2 && val_bytes[1] == 0x20
                 # Decode LEB128 source local index
                 src_idx = 0; shift = 0; leb_end = 0
                 for bi in 2:length(val_bytes)
@@ -13809,10 +13832,21 @@ function infer_value_wasm_type(val, ctx::CompilationContext)::WasmValType
     if val === nothing
         return I32
     end
-    # PURE-036ay: Handle GlobalRef to nothing (e.g., JuliaSyntax.nothing)
-    # compile_value recursively resolves this to nothing which emits i32_const 0
-    if val isa GlobalRef && val.name === :nothing
-        return I32
+    # PURE-043: Handle GlobalRef by resolving it and recursively determining type
+    # GlobalRef to nothing emits i32.const 0; GlobalRef to Type emits i32.const 0;
+    # GlobalRef to struct instance emits struct_new
+    if val isa GlobalRef
+        if val.name === :nothing
+            return I32
+        end
+        # Resolve the GlobalRef to get the actual value
+        try
+            actual_val = getfield(val.mod, val.name)
+            return infer_value_wasm_type(actual_val, ctx)
+        catch
+            # If we can't resolve, fall back to ExternRef
+            return ExternRef
+        end
     end
     if val isa Core.SSAValue
         if haskey(ctx.ssa_locals, val.id)
@@ -13847,6 +13881,20 @@ function infer_value_wasm_type(val, ctx::CompilationContext)::WasmValType
             return F64
         elseif val isa Float32
             return F32
+        elseif val isa QuoteNode
+            # PURE-043: QuoteNode wraps a value - recursively determine its type
+            return infer_value_wasm_type(val.value, ctx)
+        elseif val isa Symbol || val isa String
+            # PURE-043: Symbol/String compile to array_new_fixed (ConcreteRef)
+            str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+            return ConcreteRef(str_type_idx, false)
+        elseif val isa Type
+            # PURE-043: Type values (like Bool, Int64) compile to i32.const 0 (type tag)
+            # Must check BEFORE isstructtype since typeof(Type) is DataType (a struct)
+            return I32
+        elseif isstructtype(typeof(val))
+            # PURE-043: Struct values compile to struct_new (ConcreteRef)
+            return get_concrete_wasm_type(typeof(val), ctx.mod, ctx.type_registry)
         else
             return ExternRef
         end
@@ -14178,6 +14226,16 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         # Ensure struct type is registered and get its type index
         info = register_struct_type!(ctx.mod, ctx.type_registry, T)
         type_idx = info.wasm_type_idx
+
+        # Check for undefined fields before attempting to compile struct constant
+        # Core types like TypeName often have undefined fields (e.g., partial)
+        has_undefined = any(!isdefined(val, fn) for fn in fieldnames(T))
+        if has_undefined
+            # Struct has undefined fields - emit ref.null for the struct type
+            push!(bytes, Opcode.REF_NULL)
+            append!(bytes, encode_leb128_signed(Int64(type_idx)))
+            return bytes
+        end
 
         # Push field values with type safety checks
         struct_type_def = ctx.mod.types[type_idx + 1]
@@ -15658,6 +15716,9 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
     # Push arguments onto the stack (normal case)
     # Skip Type arguments (e.g., first arg of sext_int, zext_int, trunc_int, bitcast)
     # These are compile-time type parameters, not runtime values
+    # EXCEPTION: For === and !== comparisons, Type values ARE runtime values
+    # (they get compiled to i32 type tags and compared)
+    is_equality_comparison = is_func(func, :(===)) || is_func(func, :(!==))
     for arg in args
         # Check if this argument is a type reference
         is_type_arg = false
@@ -15673,7 +15734,9 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             catch
             end
         end
-        if is_type_arg
+        # Skip Type args for intrinsics (e.g., sext_int(Int64, x))
+        # but NOT for equality comparisons (e.g., x === SomeType)
+        if is_type_arg && !is_equality_comparison
             continue
         end
         append!(bytes, compile_value(arg, ctx))
@@ -17325,18 +17388,31 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
     end
 
     # Push arguments (for non-signal calls)
+    # PURE-044: Track which args had extern.convert_any emitted to avoid double conversion
+    extern_convert_emitted_args = falses(length(args))
     for (arg_idx, arg) in enumerate(args)
         # PURE-036z: Track if extern.convert_any was already emitted for this arg
         # to avoid double conversion (externref → externref fails because externref not subtype of anyref)
         extern_convert_emitted = false
 
         # Check if this is a nothing argument that needs ref.null
+        # PURE-044: Also check PiNode with typ === Nothing (Union dispatch pattern)
         is_nothing_arg = arg === nothing ||
                         (arg isa GlobalRef && arg.name === :nothing) ||
                         (arg isa Core.SSAValue && begin
                             ssa_stmt = ctx.code_info.code[arg.id]
-                            ssa_stmt isa GlobalRef && ssa_stmt.name === :nothing
+                            (ssa_stmt isa GlobalRef && ssa_stmt.name === :nothing) ||
+                            (ssa_stmt isa Core.PiNode && ssa_stmt.typ === Nothing)
                         end)
+
+        # PURE-044: Also check if param_types expects Nothing (Union dispatch to different signatures)
+        # This handles the case where the arg is a phi value but param expects Nothing (i32)
+        if !is_nothing_arg && param_types !== nothing && arg_idx <= length(param_types)
+            param_type = param_types[arg_idx]
+            if param_type === Nothing
+                is_nothing_arg = true
+            end
+        end
 
         if is_nothing_arg && param_types !== nothing && arg_idx <= length(param_types)
             # Get the parameter type from the method signature
@@ -17512,6 +17588,8 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 end
             end
         end
+        # PURE-044: Record if extern.convert_any was emitted for this arg
+        extern_convert_emitted_args[arg_idx] = extern_convert_emitted
     end
 
     arg_type = length(args) > 0 ? infer_value_type(args[1], ctx) : Int64
@@ -17588,7 +17666,8 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                         n_args = length(args)
                         if n_args > 0
                             last_arg_idx = n_args
-                            if last_arg_idx <= length(target_info.arg_types)
+                            # PURE-044: Skip if extern.convert_any was already emitted in argument loop
+                            if last_arg_idx <= length(target_info.arg_types) && !extern_convert_emitted_args[last_arg_idx]
                                 last_target_julia = target_info.arg_types[last_arg_idx]
                                 last_target_wasm = get_concrete_wasm_type(last_target_julia, ctx.mod, ctx.type_registry)
                                 last_actual_julia = call_arg_types[last_arg_idx]
@@ -17621,7 +17700,8 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                         # where the middle arg (externref) is getting a concrete ref
                         if n_args >= 2
                             for mid_arg_idx in n_args-1:-1:1  # Check from second-to-last to first
-                                if mid_arg_idx <= length(target_info.arg_types)
+                                # PURE-044: Skip if extern.convert_any was already emitted in argument loop
+                                if mid_arg_idx <= length(target_info.arg_types) && !extern_convert_emitted_args[mid_arg_idx]
                                     mid_target_julia = target_info.arg_types[mid_arg_idx]
                                     mid_target_wasm = get_concrete_wasm_type(mid_target_julia, ctx.mod, ctx.type_registry)
                                     mid_actual_julia = call_arg_types[mid_arg_idx]
