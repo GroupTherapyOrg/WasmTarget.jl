@@ -6103,6 +6103,9 @@ function generate_branched_loops(ctx::CompilationContext, first_header::Int, fir
                         if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
                             push!(bytes, Opcode.GC_PREFIX)
                             push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        # PURE-207: If value is I32 but return is I64, extend
+                        elseif val_wasm_type === I32 && func_ret_wasm === I64
+                            push!(bytes, Opcode.I64_EXTEND_I32_S)
                         end
                     end
                     push!(bytes, Opcode.RETURN)
@@ -6186,6 +6189,9 @@ function generate_branched_loops(ctx::CompilationContext, first_header::Int, fir
                         if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
                             push!(bytes, Opcode.GC_PREFIX)
                             push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        # PURE-207: If value is I32 but return is I64, extend
+                        elseif val_wasm_type === I32 && func_ret_wasm === I64
+                            push!(bytes, Opcode.I64_EXTEND_I32_S)
                         end
                     end
                     push!(bytes, Opcode.RETURN)
@@ -6936,6 +6942,9 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                         if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
                             push!(bytes, Opcode.GC_PREFIX)
                             push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        # PURE-207: If value is I32 but return is I64, extend
+                        elseif val_wasm_type === I32 && func_ret_wasm === I64
+                            push!(bytes, Opcode.I64_EXTEND_I32_S)
                         end
                         push!(bytes, Opcode.RETURN)
                     end
@@ -7174,6 +7183,9 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                         if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
                             push!(bytes, Opcode.GC_PREFIX)
                             push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        # PURE-207: If value is I32 but return is I64, extend
+                        elseif val_wasm_type === I32 && func_ret_wasm === I64
+                            push!(bytes, Opcode.I64_EXTEND_I32_S)
                         end
                     end
                     push!(bytes, Opcode.RETURN)
@@ -7308,6 +7320,9 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                         if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
                             push!(bytes, Opcode.GC_PREFIX)
                             push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        # PURE-207: If value is I32 but return is I64, extend
+                        elseif val_wasm_type === I32 && func_ret_wasm === I64
+                            push!(bytes, Opcode.I64_EXTEND_I32_S)
                         end
                     end
                     push!(bytes, Opcode.RETURN)
@@ -7575,6 +7590,9 @@ function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBloc
                             if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
                                 push!(bytes, Opcode.GC_PREFIX)
                                 push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                            # PURE-207: If value is I32 but return is I64, extend
+                            elseif val_wasm_type === I32 && func_ret_wasm === I64
+                                push!(bytes, Opcode.I64_EXTEND_I32_S)
                             end
                         end
                         push!(bytes, Opcode.RETURN)
@@ -8188,6 +8206,9 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                             if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
                                 push!(block_bytes, Opcode.GC_PREFIX)
                                 push!(block_bytes, Opcode.EXTERN_CONVERT_ANY)
+                            # PURE-207: If value is I32 but return is I64, extend
+                            elseif val_wasm_type === I32 && func_ret_wasm === I64
+                                push!(block_bytes, Opcode.I64_EXTEND_I32_S)
                             end
                         end
                         push!(block_bytes, Opcode.RETURN)
@@ -8979,6 +9000,9 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                             if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
                                 push!(block_bytes, Opcode.GC_PREFIX)
                                 push!(block_bytes, Opcode.EXTERN_CONVERT_ANY)
+                            # PURE-207: If value is I32 but return is I64, extend
+                            elseif val_wasm_type === I32 && func_ret_wasm === I64
+                                push!(block_bytes, Opcode.I64_EXTEND_I32_S)
                             end
                         end
                         # DEBUG: Before RETURN emission (inline path line 8833)
@@ -9214,6 +9238,9 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                 push!(bytes, Opcode.GC_PREFIX)
                                 push!(bytes, Opcode.EXTERN_CONVERT_ANY)
                             end
+                        # PURE-207: If value is I32 but return is I64, extend
+                        elseif val_wasm_type === I32 && func_ret_wasm === I64
+                            push!(bytes, Opcode.I64_EXTEND_I32_S)
                         end
                     end
                     # DEBUG: Before RETURN emission (terminator path line 9035)
@@ -9430,6 +9457,9 @@ function generate_linear_flow(ctx::CompilationContext, blocks::Vector{BasicBlock
                             if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
                                 push!(range_bytes, Opcode.GC_PREFIX)
                                 push!(range_bytes, Opcode.EXTERN_CONVERT_ANY)
+                            # PURE-207: If value is I32 but return is I64, extend
+                            elseif val_wasm_type === I32 && func_ret_wasm === I64
+                                push!(range_bytes, Opcode.I64_EXTEND_I32_S)
                             end
                         end
                         push!(range_bytes, Opcode.RETURN)
@@ -12333,6 +12363,9 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                 if func_ret_wasm === ExternRef && val_wasm !== ExternRef
                     push!(bytes, Opcode.GC_PREFIX)
                     push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                # PURE-207: If value is I32 but return is I64, extend
+                elseif val_wasm === I32 && func_ret_wasm === I64
+                    push!(bytes, Opcode.I64_EXTEND_I32_S)
                 end
             end
         end
@@ -13951,6 +13984,11 @@ function return_type_compatible(value_type::WasmValType, return_type::WasmValTyp
     if return_type === AnyRef
         return value_type isa ConcreteRef || value_type === StructRef || value_type === ArrayRef
     end
+    # PURE-207: I32 is compatible with I64 (needs i64_extend_i32_s at call site)
+    # This handles Union{Nothing, Int64} returns where nothing compiles to i32.const 0
+    if value_type === I32 && return_type === I64
+        return true
+    end
     return false
 end
 
@@ -15505,6 +15543,45 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         # Return the original value (not externref-converted) — compile_statement
         # safety check handles any type mismatch with the target SSA local
         append!(bytes, compile_value(value_arg, ctx))
+        return bytes
+    end
+
+    # Special case for Core.memorynew - creates a new Memory{T} backing store
+    # memorynew(Memory{T}, size) -> Memory{T}
+    # In WasmGC, Memory{T} IS an array, so this compiles to array.new_default
+    if is_func(func, :memorynew) && length(args) >= 2
+        mem_type = args[1]  # Memory{T} type (compile-time constant)
+        size_arg = args[2]  # size (may be literal or SSA)
+
+        # Extract element type from Memory{T}
+        elem_type = if mem_type isa DataType && mem_type <: Memory
+            if mem_type.name.name === :Memory && length(mem_type.parameters) >= 1
+                mem_type.parameters[1]
+            elseif mem_type.name.name === :GenericMemory && length(mem_type.parameters) >= 2
+                mem_type.parameters[2]
+            else
+                Int32  # default
+            end
+        else
+            Int32  # default
+        end
+
+        arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
+
+        # Compile size argument
+        if size_arg isa Int || size_arg isa Int64
+            # Literal size - emit as i32 constant
+            push!(bytes, Opcode.I32_CONST)
+            append!(bytes, encode_leb128_signed(Int64(size_arg)))
+        else
+            # SSA or other expression - compile and convert to i32
+            append!(bytes, compile_value(size_arg, ctx))
+            push!(bytes, Opcode.I32_WRAP_I64)
+        end
+
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
+        append!(bytes, encode_leb128_unsigned(arr_type_idx))
         return bytes
     end
 

@@ -99,13 +99,13 @@ console.log("\n--- Phase 3: parse_expr_string Call ---\n");
             console.log(`    Result keys: ${Object.keys(result).join(", ")}`);
         }
     } catch (e) {
-        const msg = e.message.toLowerCase();
+        const msg = (e.message || String(e)).toLowerCase();
         const isTypeError = msg.includes("type incompatibility") || msg.includes("type mismatch");
         if (isTypeError) {
             assert(false, `TYPE ERROR: ${e.message}`);
         } else {
-            // Runtime trap is informative but not a type error
-            console.log(`  INFO: parse_expr_string traps at runtime: ${e.message}`);
+            const errKind = e.constructor?.name === "Exception" ? "wasm exception" : (e.message || "unknown");
+            console.log(`  INFO: parse_expr_string traps at runtime: ${errKind}`);
             assert(true, "structural typing OK (runtime trap, not type error)");
         }
     }
@@ -120,12 +120,13 @@ console.log("\n--- Phase 3: parse_expr_string Call ---\n");
             const result = parser.exports.parse_expr_string(wasmStr);
             console.log(`    "${input}" -> returned (no trap): ${result}`);
         } catch (e) {
-            const msg = e.message.toLowerCase();
+            const msg = (e.message || String(e)).toLowerCase();
             const isTypeError = msg.includes("type incompatibility") || msg.includes("type mismatch");
             if (isTypeError) {
                 console.log(`    "${input}" -> TYPE ERROR: ${e.message}`);
             } else {
-                console.log(`    "${input}" -> trap: ${e.message}`);
+                const errKind = e.constructor?.name === "Exception" ? "wasm exception" : (e.message || "unknown");
+                console.log(`    "${input}" -> trap: ${errKind}`);
             }
         }
     }
