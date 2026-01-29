@@ -12067,12 +12067,29 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
             end
         end
 
+        # PURE-220: Check if then-branch has a return statement
+        # If the then-branch has a Base closure invoke (like _growend!) but NO return,
+        # the closure handler produces side-effect code without a stack result.
+        # In this case we need a void block type, not a typed result block.
+        then_has_return_stmt = false
+        for i in then_start:min(then_end, length(code))
+            if code[i] isa Core.ReturnNode
+                then_has_return_stmt = true
+                break
+            end
+        end
+
         # if block
         push!(inner_bytes, Opcode.IF)
         if found_forward_goto !== nothing && else_terminates
             # Both branches terminate - use void result type
             push!(inner_bytes, 0x40)  # void block type
-        elseif (then_ends_unreachable || found_base_closure_invoke)
+        elseif found_base_closure_invoke && !then_has_return_stmt
+            # PURE-220: Base closure invoke (e.g. _growend!) with no return in then-branch.
+            # The closure handler emits side-effect code (array growth) that does NOT
+            # produce a wasm value. Use void block type and emit continuation after END.
+            push!(inner_bytes, 0x40)  # void block type
+        elseif then_ends_unreachable
             # Then-branch ends with unreachable.
             # In WASM, unreachable can "produce" any type, so we CAN use typed result
             # if the else branch produces a value. Use the return type for the if block.
@@ -12194,6 +12211,30 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
             # This handles short-circuit && patterns
             append!(inner_bytes, gen_conditional(cond_idx + 1))
         elseif !found_return
+            # PURE-220: If the then-branch is a side-effect-only closure (like _growend!),
+            # the IF block is void. Close it with END and emit continuation AFTER the block.
+            if found_base_closure_invoke && !then_has_return_stmt
+                push!(inner_bytes, Opcode.END)  # Close void IF block
+
+                # Find the conditional at dest (if any)
+                dest_cond_idx = nothing
+                for (j, (_, b)) in enumerate(conditionals)
+                    if b.start_idx >= goto_if_not.dest
+                        dest_cond_idx = j
+                        break
+                    end
+                end
+
+                # Generate continuation code AFTER the void IF block
+                if dest_cond_idx !== nothing
+                    append!(inner_bytes, gen_conditional(dest_cond_idx; target_idx=goto_if_not.dest))
+                else
+                    append!(inner_bytes, gen_conditional(length(conditionals) + 1; target_idx=goto_if_not.dest))
+                end
+
+                return inner_bytes
+            end
+
             # Then branch doesn't return and has no nested conditionals
             # Generate code from goto dest to the first return/conditional
             # IMPORTANT: Stop at the first return or when entering another conditional's block
@@ -15570,14 +15611,33 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
 
         # Compile size argument
+        # WasmGC arrays are fixed-size — they cannot be resized after creation.
+        # Julia's push!/append! with _growend! handles growth by creating new arrays,
+        # but we enforce a minimum capacity so that small initial allocations
+        # (e.g., Vector{T}() which uses memorynew(Memory{T}, 0)) have room for
+        # initial push! operations before needing the first growth.
+        min_capacity = 16
         if size_arg isa Int || size_arg isa Int64
-            # Literal size - emit as i32 constant
+            # Literal size - emit as i32 constant with minimum capacity
+            actual_size = max(Int64(size_arg), min_capacity)
             push!(bytes, Opcode.I32_CONST)
-            append!(bytes, encode_leb128_signed(Int64(size_arg)))
+            append!(bytes, encode_leb128_signed(actual_size))
         else
-            # SSA or other expression - compile and convert to i32
+            # SSA or other expression - compile, convert to i32, apply minimum
             append!(bytes, compile_value(size_arg, ctx))
             push!(bytes, Opcode.I32_WRAP_I64)
+            # Ensure minimum capacity: max(size, min_capacity)
+            push!(bytes, Opcode.LOCAL_TEE)
+            local cap_check_local = allocate_local!(ctx, I32)
+            append!(bytes, encode_leb128_unsigned(cap_check_local))
+            push!(bytes, Opcode.I32_CONST)
+            append!(bytes, encode_leb128_signed(Int64(min_capacity)))
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(cap_check_local))
+            push!(bytes, Opcode.I32_CONST)
+            append!(bytes, encode_leb128_signed(Int64(min_capacity)))
+            push!(bytes, Opcode.I32_GE_S)
+            push!(bytes, Opcode.SELECT)  # select(size, min_cap, size >= min_cap)
         end
 
         push!(bytes, Opcode.GC_PREFIX)
@@ -17544,6 +17604,13 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
     bytes = UInt8[]
     args = expr.args[3:end]
 
+    # DEBUG: trace all invokes
+    _ci = expr.args[1]
+    _mi_dbg = if _ci isa Core.MethodInstance; _ci; elseif isdefined(Core, :CodeInstance) && _ci isa Core.CodeInstance; _ci.def; else; nothing; end
+    if _mi_dbg isa Core.MethodInstance && _mi_dbg.def isa Method && startswith(string(_mi_dbg.def.name), "#")
+        println("DEBUG_INVOKE_ENTRY func_idx=$(ctx.func_idx) idx=$idx name=$(_mi_dbg.def.name) nargs=$(length(args))")
+    end
+
     # Check for signal substitution (Therapy.jl closures)
     # When calling through a captured signal getter/setter, emit global.get/set directly
     func_ref = expr.args[2]
@@ -17910,6 +17977,17 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                (isprimitivetype(arg_type) && sizeof(arg_type) <= 4)
 
     # mi was already extracted above for parameter type checking
+    # DEBUG: trace invoke resolution
+    if mi === nothing
+        println("DEBUG_INVOKE_MI func_idx=$(ctx.func_idx) mi=nothing mi_or_ci_type=$(typeof(mi_or_ci))")
+    elseif !(mi isa Core.MethodInstance)
+        println("DEBUG_INVOKE_MI func_idx=$(ctx.func_idx) mi_type=$(typeof(mi)) mi=$mi")
+    else
+        meth_check = mi.def
+        if !(meth_check isa Method)
+            println("DEBUG_INVOKE_MI func_idx=$(ctx.func_idx) meth_type=$(typeof(meth_check)) meth=$meth_check")
+        end
+    end
     if mi isa Core.MethodInstance
         meth = mi.def
         if meth isa Method
@@ -18085,6 +18163,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 end
             end
 
+            if startswith(string(name), "#")
+                println("DEBUG_HASH_NAME func_idx=$(ctx.func_idx) name=$name is_self_call=$is_self_call cross_call=$cross_call_handled module=$(meth.module)")
+            end
             if is_self_call
                 # Self-recursive call - emit call instruction
                 push!(bytes, Opcode.CALL)
@@ -20320,12 +20401,10 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
             # Handle print_to_string (used in string interpolation / error messages)
             # Returns an empty string since this is typically used for error message construction
             elseif name === :print_to_string
-                # Drop all arguments that are on the stack
-                for arg in args
-                    if arg isa Core.SSAValue && !haskey(ctx.ssa_locals, arg.id) && !haskey(ctx.phi_locals, arg.id)
-                        push!(bytes, Opcode.DROP)
-                    end
-                end
+                # Discard all compiled argument bytes (including literal strings on stack)
+                # The argument loop compiled all args (Strings, SSAValues, etc.) into bytes.
+                # We must discard ALL of them, not just SSAValues without locals.
+                bytes = UInt8[]
                 # Return empty string (empty byte array)
                 type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
                 push!(bytes, Opcode.GC_PREFIX)
@@ -20349,56 +20428,155 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 push!(bytes, Opcode.I32_CONST)
                 push!(bytes, 0x00)
 
-            # Handle push!/pop! growth closures from Base
+            # Handle push!/pop! growth closures from Base (_growend!)
             # These are generated when Julia inlines push! and need to resize the array
-            # The closure name starts with # (e.g., #133#134)
+            # The closure name starts with # (e.g., #_growend!##0)
             # For WasmGC, we implement array growth inline:
             # 1. Allocate new array with 2x capacity
-            # 2. Copy elements from old array
+            # 2. Copy elements from old array using array.copy
             # 3. Update the vector's ref field
             elseif meth.module === Base && startswith(string(name), "#")
-                # This is a Base closure, likely for array growth during push!
-                # The closure captures the vector and needs to grow it
+                println("DEBUG_CLOSURE_INVOKE func_idx=$(ctx.func_idx) name=$name module=$(meth.module)")
+                # Clear any accumulated bytes from argument compilation
+                bytes = UInt8[]
 
-                # For now, implement simple array growth:
-                # We need access to the vector to grow it, which is the first captured field
-                # But this is complex - for MVP, we simply return the existing ref
-                # This means push! will fail if capacity is exceeded
-                #
-                # TODO: Implement full growth logic:
-                # 1. Get vector from closure captures
-                # 2. Allocate new array with 2x size
-                # 3. Copy elements
-                # 4. Update vector.ref
-
-                # For now, emit unreachable since this code path should not be taken
-                # if the array was pre-allocated with enough capacity.
-                #
-                # The closure struct was created by the previous statement (a :new expression)
-                # and is still on the stack. We need to drop it before emitting unreachable
-                # so the WASM validator doesn't complain about leftover values.
-                #
-                # The func_ref (closure object) is expr.args[2], which is an SSAValue
-                # pointing to the :new statement that created the closure struct.
-                # If it's on the stack (no local allocated), drop it.
+                # Drop the closure object from the stack if it's there
                 func_ref = expr.args[2]
                 if func_ref isa Core.SSAValue
                     if !haskey(ctx.ssa_locals, func_ref.id) && !haskey(ctx.phi_locals, func_ref.id)
-                        # Closure is on the stack - drop it before unreachable
-                        bytes = UInt8[]  # Clear any accumulated bytes
                         push!(bytes, Opcode.DROP)
-                    else
-                        bytes = UInt8[]  # Clear any accumulated bytes
                     end
-                else
-                    bytes = UInt8[]  # Clear any accumulated bytes
                 end
-                push!(bytes, Opcode.UNREACHABLE)
+
+                # Find the vector being grown from the :new expression
+                # The closure's first captured field is the vector
+                vec_arg = nothing
+                vec_julia_type = nothing
+                if func_ref isa Core.SSAValue
+                    new_stmt = ctx.code_info.code[func_ref.id]
+                    if new_stmt isa Expr && new_stmt.head === :new && length(new_stmt.args) >= 2
+                        vec_arg = new_stmt.args[2]  # First captured field = vector
+                    end
+                end
+
+                # Get the vector Julia type from the closure type's first field
+                closure_type = mi.specTypes.parameters[1]
+                if length(fieldnames(closure_type)) >= 1
+                    vec_julia_type = fieldtype(closure_type, 1)
+                end
+
+                # Emit array growth code if we can determine the vector type
+                ssa_type_here = get(ctx.ssa_types, idx, Any)
+                has_local_here = haskey(ctx.ssa_locals, idx)
+                vec_in_registry = vec_julia_type !== nothing && haskey(ctx.type_registry.structs, vec_julia_type)
+                println("DEBUG_GROWEND func_idx=$(ctx.func_idx) idx=$idx ssa_type=$ssa_type_here has_local=$has_local_here vec_type=$vec_julia_type vec_arg=$(vec_arg) vec_in_registry=$vec_in_registry")
+                if vec_arg !== nothing && vec_julia_type !== nothing &&
+                   vec_julia_type <: AbstractVector && haskey(ctx.type_registry.structs, vec_julia_type)
+
+                    vec_info = ctx.type_registry.structs[vec_julia_type]
+                    vec_type_idx = vec_info.wasm_type_idx
+                    elem_type = eltype(vec_julia_type)
+                    arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
+
+                    # Allocate scratch locals for array growth
+                    old_arr_local = allocate_local!(ctx, ConcreteRef(arr_type_idx, true))
+                    new_arr_local = allocate_local!(ctx, ConcreteRef(arr_type_idx, true))
+                    old_cap_local = allocate_local!(ctx, I32)
+                    vec_scratch_local = allocate_local!(ctx, ConcreteRef(vec_type_idx, true))
+
+                    # 1. Get the vector and store in local
+                    append!(bytes, compile_value(vec_arg, ctx))
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL)
+                    append!(bytes, encode_leb128_unsigned(vec_type_idx))
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(vec_scratch_local))
+
+                    # 2. Get old backing array and store
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(vec_scratch_local))
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.STRUCT_GET)
+                    append!(bytes, encode_leb128_unsigned(vec_type_idx))
+                    append!(bytes, encode_leb128_unsigned(0))  # field 0 = array ref
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL)
+                    append!(bytes, encode_leb128_unsigned(arr_type_idx))
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(old_arr_local))
+
+                    # 3. Get old capacity
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(old_arr_local))
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.ARRAY_LEN)
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(old_cap_local))
+
+                    # 4. New capacity = max(old_cap * 2, old_cap + 4)
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(old_cap_local))
+                    push!(bytes, Opcode.I32_CONST)
+                    append!(bytes, encode_leb128_signed(Int64(2)))
+                    push!(bytes, Opcode.I32_MUL)
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(old_cap_local))
+                    push!(bytes, Opcode.I32_CONST)
+                    append!(bytes, encode_leb128_signed(Int64(4)))
+                    push!(bytes, Opcode.I32_ADD)
+                    # select: [val_true, val_false, cond] -> val_true if cond!=0
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(old_cap_local))
+                    push!(bytes, Opcode.I32_CONST)
+                    append!(bytes, encode_leb128_signed(Int64(2)))
+                    push!(bytes, Opcode.I32_MUL)
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(old_cap_local))
+                    push!(bytes, Opcode.I32_CONST)
+                    append!(bytes, encode_leb128_signed(Int64(4)))
+                    push!(bytes, Opcode.I32_ADD)
+                    push!(bytes, Opcode.I32_GE_S)
+                    push!(bytes, Opcode.SELECT)
+
+                    # 5. Create new array with new capacity
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.ARRAY_NEW_DEFAULT)
+                    append!(bytes, encode_leb128_unsigned(arr_type_idx))
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(new_arr_local))
+
+                    # 6. Copy old elements: array.copy [dst, dst_off, src, src_off, len]
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(new_arr_local))
+                    push!(bytes, Opcode.I32_CONST, 0x00)  # dst_off = 0
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(old_arr_local))
+                    push!(bytes, Opcode.I32_CONST, 0x00)  # src_off = 0
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(old_cap_local))
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.ARRAY_COPY)
+                    append!(bytes, encode_leb128_unsigned(arr_type_idx))
+                    append!(bytes, encode_leb128_unsigned(arr_type_idx))
+
+                    # 7. Update vector's backing array field
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(vec_scratch_local))
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(new_arr_local))
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.STRUCT_SET)
+                    append!(bytes, encode_leb128_unsigned(vec_type_idx))
+                    append!(bytes, encode_leb128_unsigned(0))  # field 0 = array ref
+
+                    # 8. Growth code is side-effect only — no wasm value produced.
+                    #    Mark the SSA type as Nothing so statement_produces_wasm_value
+                    #    returns false and flow generators don't emit DROP.
+                    ctx.ssa_types[idx] = Nothing
+
+                else
+                    # Fallback: can't determine vector type — emit unreachable
+                    push!(bytes, Opcode.UNREACHABLE)
+                end
 
             else
                 # Unknown method — emit unreachable (will trap at runtime)
                 # This allows compilation to succeed for code paths that
                 # don't actually reach these methods.
+                println("DEBUG_UNKNOWN_INVOKE func_idx=$(ctx.func_idx) name=$name module=$(meth.module) startswith_hash=$(startswith(string(name), "#"))")
                 @warn "Stubbing unsupported method: $name (will trap at runtime)" maxlog=1
                 push!(bytes, Opcode.UNREACHABLE)
             end
