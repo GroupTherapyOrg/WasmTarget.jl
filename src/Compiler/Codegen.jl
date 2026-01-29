@@ -11244,101 +11244,61 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
         if cond_idx > length(conditionals)
             # No more conditionals - generate code starting from target_idx
             # This should generate the "else" path for the control flow
-            for block in blocks
-                # Find the block that contains or starts at target_idx
-                if target_idx > 0 && block.start_idx <= target_idx && target_idx <= block.end_idx && block.terminator isa Core.ReturnNode
-                    # target_idx is inside this block - generate from target_idx to end
-                    for i in target_idx:block.end_idx
-                        stmt = code[i]
-                        if stmt isa Core.ReturnNode
-                            if isdefined(stmt, :val)
-                                # PURE-036af: Handle numeric-to-externref case
-                                func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
-                                val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
-                                is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
-                                if func_ret_wasm === ExternRef && is_numeric_val
-                                    # Can't convert numeric to externref - return ref.null extern instead
-                                    push!(inner_bytes, Opcode.REF_NULL)
-                                    push!(inner_bytes, UInt8(ExternRef))
-                                else
-                                    append!(inner_bytes, compile_value(stmt.val, ctx))
-                                    if func_ret_wasm === ExternRef && val_wasm !== ExternRef
-                                        push!(inner_bytes, Opcode.GC_PREFIX)
-                                        push!(inner_bytes, Opcode.EXTERN_CONVERT_ANY)
-                                    end
-                                end
-                            end
-                            push!(inner_bytes, Opcode.RETURN)
-                        elseif !(stmt isa Core.GotoIfNot)
-                            append!(inner_bytes, compile_statement(stmt, i, ctx))
-
-                            # Drop unused values (but NOT for Union{} which never returns)
-                            if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
-                                stmt_type = get(ctx.ssa_types, i, Any)
-                                # Union{} means the call never returns (throws), so no value to drop
-                                if stmt_type !== Nothing && stmt_type !== Union{}
-                                    is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
-                                    if !is_nothing_union
-                                        if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
-                                            use_count = get(ssa_use_count, i, 0)
-                                            if use_count == 0
-                                                push!(inner_bytes, Opcode.DROP)
-                                            end
-                                        end
-                                    end
-                                end
-                            end
-                        end
-                    end
-                    break
-                elseif target_idx > 0 && block.start_idx >= target_idx && block.terminator isa Core.ReturnNode
-                    for i in block.start_idx:block.end_idx
-                        stmt = code[i]
-                        if stmt isa Core.ReturnNode
-                            if isdefined(stmt, :val)
-                                # PURE-036af: Handle numeric-to-externref case
-                                func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
-                                val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
-                                is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
-                                if func_ret_wasm === ExternRef && is_numeric_val
-                                    # Can't convert numeric to externref - return ref.null extern instead
-                                    push!(inner_bytes, Opcode.REF_NULL)
-                                    push!(inner_bytes, UInt8(ExternRef))
-                                else
-                                    append!(inner_bytes, compile_value(stmt.val, ctx))
-                                    if func_ret_wasm === ExternRef && val_wasm !== ExternRef
-                                        push!(inner_bytes, Opcode.GC_PREFIX)
-                                        push!(inner_bytes, Opcode.EXTERN_CONVERT_ANY)
-                                    end
-                                end
+            if target_idx > 0
+                # PURE-220: Generate ALL statements from target_idx through the return,
+                # spanning across block boundaries. Previous code only looked at individual
+                # blocks which missed intermediate statements (e.g. size update + element
+                # write between a _growend! conditional and the return block).
+                for i in target_idx:length(code)
+                    stmt = code[i]
+                    if stmt isa Core.ReturnNode
+                        if isdefined(stmt, :val)
+                            # PURE-036af: Handle numeric-to-externref case
+                            func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+                            val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
+                            is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
+                            if func_ret_wasm === ExternRef && is_numeric_val
+                                push!(inner_bytes, Opcode.REF_NULL)
+                                push!(inner_bytes, UInt8(ExternRef))
                             else
-                                # ReturnNode without val is `unreachable` - emit WASM unreachable
-                                push!(inner_bytes, Opcode.UNREACHABLE)
+                                append!(inner_bytes, compile_value(stmt.val, ctx))
+                                if func_ret_wasm === ExternRef && val_wasm !== ExternRef
+                                    push!(inner_bytes, Opcode.GC_PREFIX)
+                                    push!(inner_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                end
                             end
-                            push!(inner_bytes, Opcode.RETURN)
-                        elseif !(stmt isa Core.GotoIfNot)
-                            append!(inner_bytes, compile_statement(stmt, i, ctx))
+                        else
+                            push!(inner_bytes, Opcode.UNREACHABLE)
+                        end
+                        push!(inner_bytes, Opcode.RETURN)
+                        break
+                    elseif stmt === nothing || stmt isa Core.GotoNode || stmt isa Core.GotoIfNot
+                        # Skip control flow (already handled by structure)
+                    else
+                        append!(inner_bytes, compile_statement(stmt, i, ctx))
 
-                            # Drop unused values (but NOT for Union{} which never returns)
-                            if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
-                                stmt_type = get(ctx.ssa_types, i, Any)
-                                # Union{} means the call never returns (throws), so no value to drop
-                                if stmt_type !== Nothing && stmt_type !== Union{}
-                                    is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
-                                    if !is_nothing_union
-                                        if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
-                                            use_count = get(ssa_use_count, i, 0)
-                                            if use_count == 0
-                                                push!(inner_bytes, Opcode.DROP)
-                                            end
+                        # Drop unused values (but NOT for Union{} which never returns)
+                        if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
+                            stmt_type = get(ctx.ssa_types, i, Any)
+                            if stmt_type !== Nothing && stmt_type !== Union{}
+                                is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
+                                if !is_nothing_union
+                                    if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
+                                        use_count = get(ssa_use_count, i, 0)
+                                        if use_count == 0
+                                            push!(inner_bytes, Opcode.DROP)
                                         end
                                     end
                                 end
                             end
                         end
                     end
-                    break
-                elseif target_idx == 0 && block.terminator isa Core.ReturnNode
+                end
+                return inner_bytes
+            end
+
+            for block in blocks
+                if target_idx == 0 && block.terminator isa Core.ReturnNode
                     # Fallback: find first return block
                     for i in block.start_idx:block.end_idx
                         stmt = code[i]
@@ -12225,8 +12185,37 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                     end
                 end
 
-                # Generate continuation code AFTER the void IF block
+                # PURE-220: Generate intermediate statements between the goto dest
+                # and the next conditional's block. These are the continuation statements
+                # (size update, element write) that run after both branches of the if.
                 if dest_cond_idx !== nothing
+                    next_block_start = conditionals[dest_cond_idx][2].start_idx
+                    for i in goto_if_not.dest:next_block_start-1
+                        stmt = code[i]
+                        if stmt === nothing || stmt isa Core.GotoNode || stmt isa Core.GotoIfNot
+                            # Skip control flow (gotos handled by structure)
+                        else
+                            stmt_bytes = compile_statement(stmt, i, ctx)
+                            append!(inner_bytes, stmt_bytes)
+
+                            # Drop unused call results
+                            if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
+                                stmt_type = get(ctx.ssa_types, i, Any)
+                                if stmt_type !== Nothing
+                                    is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
+                                    if !is_nothing_union
+                                        if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
+                                            use_count = get(ssa_use_count, i, 0)
+                                            if use_count == 0
+                                                push!(inner_bytes, Opcode.DROP)
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    # Now generate the next conditional
                     append!(inner_bytes, gen_conditional(dest_cond_idx; target_idx=goto_if_not.dest))
                 else
                     append!(inner_bytes, gen_conditional(length(conditionals) + 1; target_idx=goto_if_not.dest))
