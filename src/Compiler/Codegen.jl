@@ -8396,6 +8396,31 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
     # Create a big block structure with all targets as labeled positions
 
     # Collect all unique forward jump targets (excluding immediate fall-through)
+    # Helper: resolve a dest_block through boundscheck chains to find the real non-dead target.
+    # When a GotoIfNot targets a dead boundscheck block, that block's terminator always jumps
+    # to another block. Follow the chain until we find a non-dead block.
+    function resolve_through_dead_boundscheck(dest_block::Int)::Union{Int, Nothing}
+        visited = Set{Int}()
+        current = dest_block
+        while current !== nothing && current in dead_blocks && !(current in visited)
+            push!(visited, current)
+            blk = blocks[current]
+            t = blk.terminator
+            if t isa Core.GotoIfNot && blk.end_idx in boundscheck_jumps
+                # Boundscheck always-jump: follow to its destination
+                current = get(stmt_to_block, t.dest, nothing)
+            elseif t isa Core.GotoNode
+                current = get(stmt_to_block, t.label, nothing)
+            else
+                return nothing
+            end
+        end
+        if current !== nothing && !(current in dead_blocks)
+            return current
+        end
+        return nothing
+    end
+
     # Also exclude dead blocks and treat boundscheck-based jumps correctly
     non_trivial_targets = Set{Int}()
     for (block_idx, block) in enumerate(blocks)
@@ -8413,18 +8438,27 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 # Boundscheck jumps ALWAYS go to dest, so it's like an unconditional jump
                 # Only record it as non-trivial if it's not immediate fall-through
                 dest_block = get(stmt_to_block, term.dest, nothing)
+                if dest_block !== nothing && dest_block in dead_blocks
+                    dest_block = resolve_through_dead_boundscheck(dest_block)
+                end
                 if dest_block !== nothing && dest_block != block_idx + 1 && !(dest_block in dead_blocks)
                     push!(non_trivial_targets, dest_block)
                 end
             else
                 # Real conditional - the false branch destination
                 dest_block = get(stmt_to_block, term.dest, nothing)
+                if dest_block !== nothing && dest_block in dead_blocks
+                    dest_block = resolve_through_dead_boundscheck(dest_block)
+                end
                 if dest_block !== nothing && dest_block != block_idx + 1 && !(dest_block in dead_blocks)
                     push!(non_trivial_targets, dest_block)
                 end
             end
         elseif term isa Core.GotoNode
             dest_block = get(stmt_to_block, term.label, nothing)
+            if dest_block !== nothing && dest_block in dead_blocks
+                dest_block = resolve_through_dead_boundscheck(dest_block)
+            end
             if dest_block !== nothing && dest_block != block_idx + 1 && !(dest_block in dead_blocks)
                 push!(non_trivial_targets, dest_block)
             end
@@ -9260,6 +9294,11 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
 
         elseif term isa Core.GotoIfNot
             dest_block = get(stmt_to_block, term.dest, nothing)
+
+            # Resolve through dead boundscheck blocks to find real target
+            if dest_block !== nothing && dest_block in dead_blocks
+                dest_block = resolve_through_dead_boundscheck(dest_block)
+            end
 
             # Check if destination has phi nodes that need values from this edge
             has_phi = dest_block !== nothing && dest_has_phi_from_edge(dest_block, terminator_idx)
@@ -12757,18 +12796,41 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                    (local_wasm_type isa ConcreteRef || local_wasm_type === StructRef ||
                     local_wasm_type === ArrayRef || local_wasm_type === ExternRef || local_wasm_type === AnyRef)
                     last_byte = stmt_bytes[end]
-                    # Pure stack ops: single-byte opcodes with NO immediate arguments
-                    is_numeric_stack_op = (
-                        last_byte == 0x45 ||  # i32.eqz
-                        last_byte == 0x50 ||  # i64.eqz
-                        (last_byte >= 0x46 && last_byte <= 0x66) ||  # i32/i64/f32/f64 comparisons
-                        (last_byte >= 0x67 && last_byte <= 0x78) ||  # i32 unary/binary arithmetic
-                        (last_byte >= 0x79 && last_byte <= 0x8a) ||  # i64 unary/binary arithmetic
-                        (last_byte >= 0x8b && last_byte <= 0xa6) ||  # f32/f64 arithmetic
-                        (last_byte >= 0xa7 && last_byte <= 0xc4)     # numeric conversions
-                    )
-                    if is_numeric_stack_op
-                        needs_type_safe_default = true
+                    # PURE-220: Check that the last byte is NOT an operand of a
+                    # trailing LOCAL_GET/LOCAL_SET/LOCAL_TEE instruction.
+                    # scan backward to check if there's a 0x20/0x21/0x22 (local.get/set/tee)
+                    # whose LEB128 operand ends at stmt_bytes[end].
+                    ends_with_local_op = false
+                    for si in (length(stmt_bytes) - 1):-1:max(1, length(stmt_bytes) - 5)
+                        if stmt_bytes[si] == 0x20 || stmt_bytes[si] == 0x21 || stmt_bytes[si] == 0x22
+                            # Check if the LEB128 after this opcode reaches exactly to end
+                            leb_check_end = si
+                            for bi in (si + 1):length(stmt_bytes)
+                                leb_check_end = bi
+                                if (stmt_bytes[bi] & 0x80) == 0
+                                    break
+                                end
+                            end
+                            if leb_check_end == length(stmt_bytes)
+                                ends_with_local_op = true
+                            end
+                            break
+                        end
+                    end
+                    if !ends_with_local_op
+                        # Pure stack ops: single-byte opcodes with NO immediate arguments
+                        is_numeric_stack_op = (
+                            last_byte == 0x45 ||  # i32.eqz
+                            last_byte == 0x50 ||  # i64.eqz
+                            (last_byte >= 0x46 && last_byte <= 0x66) ||  # i32/i64/f32/f64 comparisons
+                            (last_byte >= 0x67 && last_byte <= 0x78) ||  # i32 unary/binary arithmetic
+                            (last_byte >= 0x79 && last_byte <= 0x8a) ||  # i64 unary/binary arithmetic
+                            (last_byte >= 0x8b && last_byte <= 0xa6) ||  # f32/f64 arithmetic
+                            (last_byte >= 0xa7 && last_byte <= 0xc4)     # numeric conversions
+                        )
+                        if is_numeric_stack_op
+                            needs_type_safe_default = true
+                        end
                     end
                 end
 
@@ -20555,6 +20617,13 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                     #    Mark the SSA type as Nothing so statement_produces_wasm_value
                     #    returns false and flow generators don't emit DROP.
                     ctx.ssa_types[idx] = Nothing
+                    # Also remove the SSA local to prevent compile_statement's
+                    # safety check from replacing the growth code with ref.null.
+                    # The growth code starts with local.get of the vector, which
+                    # has a different type than the MemoryRef SSA local — without
+                    # this delete, the safety check sees a type mismatch and
+                    # replaces all growth code with a type-safe default.
+                    delete!(ctx.ssa_locals, idx)
 
                 else
                     # Fallback: can't determine vector type — emit unreachable
