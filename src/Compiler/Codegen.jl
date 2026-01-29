@@ -12664,8 +12664,12 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                 elseif (stmt_bytes[1] == Opcode.I32_CONST || stmt_bytes[1] == Opcode.I64_CONST ||
                         stmt_bytes[1] == Opcode.F32_CONST || stmt_bytes[1] == Opcode.F64_CONST)
                     # Numeric constant being stored into a ref-typed local
-                    if local_wasm_type isa ConcreteRef || local_wasm_type === StructRef ||
-                       local_wasm_type === ArrayRef || local_wasm_type === ExternRef || local_wasm_type === AnyRef
+                    # PURE-204: Skip for invoke/call results — their stmt_bytes start with
+                    # i32.const for the first argument but contain a CALL that returns a ref type.
+                    is_call_result = stmt isa Expr && (stmt.head === :invoke || stmt.head === :call)
+                    if !is_call_result &&
+                       (local_wasm_type isa ConcreteRef || local_wasm_type === StructRef ||
+                        local_wasm_type === ArrayRef || local_wasm_type === ExternRef || local_wasm_type === AnyRef)
                         needs_type_safe_default = true
                     end
                 end
@@ -12849,15 +12853,36 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                 end
 
                 if needs_ref_cast_local !== nothing
-                    # struct_get produced abstract ref or call returned externref,
-                    # need to downcast to concrete type.
-                    # PURE-036bj: if source is externref, first convert to anyref
-                    if needs_any_convert_extern
-                        append!(stmt_bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                    # PURE-204: Check if stmt_bytes end with a numeric constant (i32.const, i64.const, etc.)
+                    # This happens when SSA type is Union{Nothing, T} — ssa_wasm_type maps to T's ConcreteRef,
+                    # but the actual value is nothing (i32.const 0). ref.cast requires anyref, not i32.
+                    # Switch to type_safe_default instead.
+                    ends_with_numeric = false
+                    if length(stmt_bytes) >= 2
+                        last_opcode_pos = length(stmt_bytes)
+                        # Check for i32.const 0 (2 bytes: 0x41 0x00)
+                        if stmt_bytes[end-1] == Opcode.I32_CONST && stmt_bytes[end] == 0x00
+                            ends_with_numeric = true
+                        # Check for i64.const 0 (2 bytes: 0x42 0x00)
+                        elseif stmt_bytes[end-1] == Opcode.I64_CONST && stmt_bytes[end] == 0x00
+                            ends_with_numeric = true
+                        end
                     end
-                    # Append ref.cast null <type_idx> to stmt_bytes
-                    append!(stmt_bytes, UInt8[Opcode.GC_PREFIX, Opcode.REF_CAST_NULL])
-                    append!(stmt_bytes, encode_leb128_signed(Int64(needs_ref_cast_local.type_idx)))
+                    if ends_with_numeric
+                        # Numeric constant can't be ref_cast'd — use type_safe_default
+                        needs_type_safe_default = true
+                        needs_ref_cast_local = nothing
+                    else
+                        # struct_get produced abstract ref or call returned externref,
+                        # need to downcast to concrete type.
+                        # PURE-036bj: if source is externref, first convert to anyref
+                        if needs_any_convert_extern
+                            append!(stmt_bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                        end
+                        # Append ref.cast null <type_idx> to stmt_bytes
+                        append!(stmt_bytes, UInt8[Opcode.GC_PREFIX, Opcode.REF_CAST_NULL])
+                        append!(stmt_bytes, encode_leb128_signed(Int64(needs_ref_cast_local.type_idx)))
+                    end
                 end
 
                 if needs_type_safe_default
