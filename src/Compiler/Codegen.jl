@@ -12763,12 +12763,22 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                     local_wasm_type === ArrayRef || local_wasm_type === ExternRef || local_wasm_type === AnyRef)
                     last_byte = stmt_bytes[end]
                     # PURE-220: Check that the last byte is NOT an operand of a
-                    # trailing LOCAL_GET/LOCAL_SET/LOCAL_TEE instruction.
-                    # scan backward to check if there's a 0x20/0x21/0x22 (local.get/set/tee)
-                    # whose LEB128 operand ends at stmt_bytes[end].
-                    ends_with_local_op = false
-                    for si in (length(stmt_bytes) - 1):-1:max(1, length(stmt_bytes) - 5)
-                        if stmt_bytes[si] == 0x20 || stmt_bytes[si] == 0x21 || stmt_bytes[si] == 0x22
+                    # trailing instruction with LEB128 immediate.
+                    # Scan backward for opcodes followed by LEB128 operands:
+                    #   LOCAL_GET/SET/TEE (0x20-0x22), CALL (0x10),
+                    #   CALL_INDIRECT (0x11), BR (0x0C), BR_IF (0x0D),
+                    #   GLOBAL_GET/SET (0x23/0x24).
+                    # When the function index in a CALL instruction's LEB128 encoding
+                    # has its last byte in the numeric opcode range (0x46-0xC4), the
+                    # check falsely triggers. E.g. call 80 → bytes [0x10, 0x50],
+                    # and 0x50 = i64.eqz.
+                    ends_with_leb_operand = false
+                    for si in (length(stmt_bytes) - 1):-1:max(1, length(stmt_bytes) - 6)
+                        b = stmt_bytes[si]
+                        if b == 0x20 || b == 0x21 || b == 0x22 ||  # local.get/set/tee
+                           b == 0x10 || b == 0x11 ||                # call/call_indirect
+                           b == 0x23 || b == 0x24 ||                # global.get/set
+                           b == 0x0C || b == 0x0D                   # br/br_if
                             # Check if the LEB128 after this opcode reaches exactly to end
                             leb_check_end = si
                             for bi in (si + 1):length(stmt_bytes)
@@ -12778,12 +12788,12 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                                 end
                             end
                             if leb_check_end == length(stmt_bytes)
-                                ends_with_local_op = true
+                                ends_with_leb_operand = true
                             end
                             break
                         end
                     end
-                    if !ends_with_local_op
+                    if !ends_with_leb_operand
                         # Pure stack ops: single-byte opcodes with NO immediate arguments
                         is_numeric_stack_op = (
                             last_byte == 0x45 ||  # i32.eqz
