@@ -14155,9 +14155,10 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         push!(bytes, val ? 0x01 : 0x00)
 
     elseif val isa Char
-        # Char is represented as i32 (Unicode codepoint)
+        # Char is represented as i32 (raw UInt32 bits, not Unicode codepoint)
+        # Use reinterpret to avoid InvalidCharError for invalid chars like EOF_CHAR (0xFFFFFFFF)
         push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int32(val)))
+        append!(bytes, encode_leb128_signed(reinterpret(Int32, reinterpret(UInt32, val))))
 
     elseif val isa Int8 || val isa UInt8 || val isa Int16 || val isa UInt16
         # Small integers - stored as i32 in WASM
