@@ -17857,12 +17857,40 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
         if pi_ssa_stmt isa GlobalRef
             actual_func_ref_early = pi_ssa_stmt
         end
+    elseif func_ref_early isa Core.Argument
+        # PURE-220: Higher-order function calls — extract function from mi.specTypes
+        if mi isa Core.MethodInstance
+            spec = mi.specTypes
+            if spec isa DataType && spec <: Tuple && length(spec.parameters) >= 1
+                func_type = spec.parameters[1]
+                if func_type isa DataType
+                    try
+                        actual_func_ref_early = func_type.instance
+                    catch; end
+                end
+            end
+        end
     end
     is_self_call_early = false
     if ctx.func_ref !== nothing && actual_func_ref_early isa GlobalRef
         try
             called_func = getfield(actual_func_ref_early.mod, actual_func_ref_early.name)
-            is_self_call_early = called_func === ctx.func_ref
+            if called_func === ctx.func_ref
+                # PURE-220: Also check arity — overloaded methods share the same function
+                # object but have different specTypes. A call to a different overload is NOT
+                # a self-call (e.g., parse_comma(ps) calling parse_comma(ps, true)).
+                if mi isa Core.MethodInstance
+                    spec = mi.specTypes
+                    if spec isa DataType && spec <: Tuple
+                        call_nargs = length(spec.parameters) - 1  # subtract typeof(func)
+                        is_self_call_early = call_nargs == length(ctx.arg_types)
+                    else
+                        is_self_call_early = true
+                    end
+                else
+                    is_self_call_early = true
+                end
+            end
         catch
             is_self_call_early = false
         end
@@ -18149,6 +18177,20 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 if ssa_stmt isa GlobalRef
                     actual_func_ref = ssa_stmt
                 end
+            elseif func_ref isa Core.Argument
+                # PURE-220: Higher-order function calls (e.g., parse_Nary's `down(ps)`)
+                # func_ref is a function parameter. Extract actual function from mi.specTypes.
+                if mi isa Core.MethodInstance
+                    spec = mi.specTypes
+                    if spec isa DataType && spec <: Tuple && length(spec.parameters) >= 1
+                        func_type = spec.parameters[1]
+                        if func_type isa DataType
+                            try
+                                actual_func_ref = func_type.instance
+                            catch; end
+                        end
+                    end
+                end
             end
 
             is_self_call = false
@@ -18156,13 +18198,39 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 # Check if this GlobalRef refers to the same function
                 try
                     called_func = getfield(actual_func_ref.mod, actual_func_ref.name)
-                    is_self_call = called_func === ctx.func_ref
+                    if called_func === ctx.func_ref
+                        # PURE-220: Also check arity for overloaded methods
+                        if mi isa Core.MethodInstance
+                            spec = mi.specTypes
+                            if spec isa DataType && spec <: Tuple
+                                call_nargs = length(spec.parameters) - 1
+                                is_self_call = call_nargs == length(ctx.arg_types)
+                            else
+                                is_self_call = true
+                            end
+                        else
+                            is_self_call = true
+                        end
+                    end
                 catch
                     is_self_call = false
                 end
             elseif ctx.func_ref !== nothing && actual_func_ref isa Function
                 # PURE-209a: Function object direct comparison
-                is_self_call = actual_func_ref === ctx.func_ref
+                if actual_func_ref === ctx.func_ref
+                    # PURE-220: Also check arity for overloaded methods
+                    if mi isa Core.MethodInstance
+                        spec = mi.specTypes
+                        if spec isa DataType && spec <: Tuple
+                            call_nargs = length(spec.parameters) - 1
+                            is_self_call = call_nargs == length(ctx.arg_types)
+                        else
+                            is_self_call = true
+                        end
+                    else
+                        is_self_call = true
+                    end
+                end
             end
 
             # Check for cross-function call within the module first
@@ -18183,6 +18251,17 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                     # PURE-209a: For default-arg methods, func_ref can be a Function object
                     # (e.g., typeof(next_token) for next_token(lexer, true))
                     called_func = actual_func_ref
+                elseif actual_func_ref isa Core.Argument && mi isa Core.MethodInstance
+                    # PURE-220: Fallback for Core.Argument — extract from mi.specTypes
+                    spec = mi.specTypes
+                    if spec isa DataType && spec <: Tuple && length(spec.parameters) >= 1
+                        func_type = spec.parameters[1]
+                        if func_type isa DataType
+                            try
+                                called_func = func_type.instance
+                            catch; end
+                        end
+                    end
                 end
 
                 if called_func !== nothing
@@ -18282,6 +18361,13 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                         push!(bytes, Opcode.CALL)
                         append!(bytes, encode_leb128_unsigned(target_info.wasm_idx))
                         cross_call_handled = true
+                        # PURE-220: For higher-order calls (Core.Argument func_ref), if SSA has
+                        # no local and target returns non-void, drop the unused return value.
+                        # Previously these emitted unreachable (making the code dead), but now
+                        # with actual calls, the return value stays on the stack.
+                        if func_ref isa Core.Argument && !haskey(ctx.ssa_locals, idx) && target_info.return_type !== Nothing
+                            push!(bytes, Opcode.DROP)
+                        end
                         # Check: if function returns externref but caller expects concrete ref,
                         # insert any_convert_extern + ref.cast null to bridge the type gap.
                         # This happens when the function's wasm return type is externref (mapped
@@ -18300,6 +18386,10 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                                         append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.REF_CAST_NULL])
                                         append!(bytes, encode_leb128_signed(Int64(target_local_type.type_idx)))
                                     end
+                                elseif target_local_type === ExternRef && func_ref isa Core.Argument
+                                    # PURE-220: Higher-order call returns concrete ref but local expects externref
+                                    # (SSA type is Any because the function parameter is generic)
+                                    append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.EXTERN_CONVERT_ANY])
                                 end
                             end
                         end
