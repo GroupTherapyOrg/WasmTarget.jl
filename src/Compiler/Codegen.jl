@@ -20358,15 +20358,20 @@ function is_boolean_value(val, ctx::CompilationContext)::Bool
     if val isa Core.SSAValue
         # Check if the SSA value is from a comparison
         stmt = ctx.code_info.code[val.id]
-        if stmt isa Expr && stmt.head === :call
-            return is_comparison(stmt.args[1])
+        if stmt isa Expr && stmt.head === :call && is_comparison(stmt.args[1])
+            return true
         end
-        # Check if SSA has Bool inferred type (e.g., phi node results)
+        # Check if SSA has Bool inferred type (e.g., phi node results, getfield of Bool fields)
         if infer_value_type(val, ctx) === Bool
             return true
         end
     elseif val isa Bool
         return true
+    elseif val isa Core.Argument
+        # Function parameters typed as Bool
+        if infer_value_type(val, ctx) === Bool
+            return true
+        end
     end
     return false
 end
