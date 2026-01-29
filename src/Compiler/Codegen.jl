@@ -14391,7 +14391,57 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         dict_keys = getfield(val, :keys)
         dict_vals = getfield(val, :vals)
 
-        # field 0: slots — array of UInt8 (stored as i32)
+        # Helper: emit default value for an array element type
+        function emit_array_default!(bytes, arr_type_idx, elem_type, ctx)
+            wasm_et = julia_to_wasm_type(elem_type)
+            if wasm_et === I32
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+            elseif wasm_et === I64
+                push!(bytes, Opcode.I64_CONST)
+                push!(bytes, 0x00)
+            elseif wasm_et === F32
+                push!(bytes, Opcode.F32_CONST)
+                append!(bytes, reinterpret(UInt8, [Float32(0)]))
+            elseif wasm_et === F64
+                push!(bytes, Opcode.F64_CONST)
+                append!(bytes, reinterpret(UInt8, [Float64(0)]))
+            else
+                # Ref type (String, struct, etc.) — look up concrete array element type
+                arr_type_def = ctx.mod.types[arr_type_idx + 1]
+                if arr_type_def isa ArrayType
+                    evtype = arr_type_def.elem.valtype
+                    if evtype isa ConcreteRef
+                        push!(bytes, Opcode.REF_NULL)
+                        append!(bytes, encode_leb128_signed(Int64(evtype.type_idx)))
+                    else
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(StructRef))
+                    end
+                else
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, UInt8(StructRef))
+                end
+            end
+        end
+
+        # Helper: compile Memory elements, handling UndefRefError for ref-typed slots
+        function compile_memory_elements!(bytes, mem, arr_type_idx, elem_type, ctx)
+            for i in 1:length(mem)
+                try
+                    v = mem[i]
+                    append!(bytes, compile_value(v, ctx))
+                catch e
+                    if e isa UndefRefError
+                        emit_array_default!(bytes, arr_type_idx, elem_type, ctx)
+                    else
+                        rethrow()
+                    end
+                end
+            end
+        end
+
+        # field 0: slots — array of UInt8 (always defined, never throws)
         for i in 1:length(dict_slots)
             push!(bytes, Opcode.I32_CONST)
             append!(bytes, encode_leb128_signed(Int32(dict_slots[i])))
@@ -14401,21 +14451,15 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         append!(bytes, encode_leb128_unsigned(slots_arr_type))
         append!(bytes, encode_leb128_unsigned(length(dict_slots)))
 
-        # field 1: keys — array of K
-        for i in 1:length(dict_keys)
-            kv = dict_keys[i]
-            append!(bytes, compile_value(kv, ctx))
-        end
+        # field 1: keys — array of K (may have undef for ref-typed keys)
+        compile_memory_elements!(bytes, dict_keys, keys_arr_type, K, ctx)
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.ARRAY_NEW_FIXED)
         append!(bytes, encode_leb128_unsigned(keys_arr_type))
         append!(bytes, encode_leb128_unsigned(length(dict_keys)))
 
-        # field 2: vals — array of V
-        for i in 1:length(dict_vals)
-            vv = dict_vals[i]
-            append!(bytes, compile_value(vv, ctx))
-        end
+        # field 2: vals — array of V (may have undef for ref-typed vals)
+        compile_memory_elements!(bytes, dict_vals, vals_arr_type, V, ctx)
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.ARRAY_NEW_FIXED)
         append!(bytes, encode_leb128_unsigned(vals_arr_type))
