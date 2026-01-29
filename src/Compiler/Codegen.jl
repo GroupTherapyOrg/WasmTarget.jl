@@ -12083,7 +12083,30 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
         if found_forward_goto !== nothing
             # The then-branch is a forward goto to a merge point
             # Generate the code at the merge point target
+            #
+            # PURE-220: Build set of error-path indices to skip.
+            # When the merge range contains GotoIfNot statements (e.g., boundscheck
+            # patterns: GotoIfNot → GotoNode → error_code → unreachable → merge),
+            # we skip the GotoIfNot but must also skip the error-path code it guards.
+            # Pattern: GotoIfNot(dest=d) at j, GotoNode(label=t) at j+1 → skip d..t-1
+            error_path_indices = Set{Int}()
+            for j in found_forward_goto:length(code)
+                if code[j] isa Core.GotoIfNot
+                    d = code[j].dest
+                    # Find the GotoNode right after (the success skip)
+                    if j + 1 <= length(code) && code[j + 1] isa Core.GotoNode
+                        t = code[j + 1].label
+                        for k in d:(t - 1)
+                            push!(error_path_indices, k)
+                        end
+                    end
+                end
+            end
+
             for i in found_forward_goto:length(code)
+                if i in error_path_indices
+                    continue  # Skip error-path code guarded by skipped GotoIfNot
+                end
                 stmt = code[i]
                 if stmt isa Core.ReturnNode
                     if isdefined(stmt, :val)
