@@ -17673,6 +17673,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
             catch
                 nothing
             end
+        elseif actual_func_ref_early isa Function
+            # PURE-209a: func_ref can be a Function object directly (default-arg methods)
+            called_func_early = actual_func_ref_early
         elseif mi isa Core.MethodInstance && mi.def isa Method
             # Fallback: get function from MethodInstance
             # The function is typically the first arg in specTypes
@@ -17935,6 +17938,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 catch
                     is_self_call = false
                 end
+            elseif ctx.func_ref !== nothing && actual_func_ref isa Function
+                # PURE-209a: Function object direct comparison
+                is_self_call = actual_func_ref === ctx.func_ref
             end
 
             # Check for cross-function call within the module first
@@ -17950,6 +17956,10 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                     end
                 elseif actual_func_ref isa DataType || actual_func_ref isa UnionAll
                     # For constructor calls, the func_ref might be the type directly
+                    called_func = actual_func_ref
+                elseif actual_func_ref isa Function
+                    # PURE-209a: For default-arg methods, func_ref can be a Function object
+                    # (e.g., typeof(next_token) for next_token(lexer, true))
                     called_func = actual_func_ref
                 end
 
