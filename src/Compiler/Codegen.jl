@@ -13569,7 +13569,18 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
             # Emit ref.null extern instead.
             is_numeric_local = false
             # PURE-044: Also check for i32.const/i64.const (happens with dead code paths)
-            if length(val_bytes) >= 1 && (val_bytes[1] == 0x41 || val_bytes[1] == 0x42)  # I32_CONST or I64_CONST
+            # PURE-220: But NOT if bytes contain GC instructions (struct.new, array.new_fixed)
+            # which indicate a complex ref value (String, Symbol), not a simple numeric.
+            ends_with_ref_producing_gc = false
+            for scan_i in 1:(length(val_bytes)-1)
+                if val_bytes[scan_i] == 0xFB  # GC_PREFIX
+                    gc_op = val_bytes[scan_i + 1]
+                    if gc_op == 0x00 || gc_op == 0x1A || gc_op == 0x1B  # struct.new, array.new_fixed, array.new_default
+                        ends_with_ref_producing_gc = true
+                    end
+                end
+            end
+            if length(val_bytes) >= 1 && (val_bytes[1] == 0x41 || val_bytes[1] == 0x42) && !ends_with_ref_producing_gc  # I32_CONST or I64_CONST
                 is_numeric_local = true
             elseif length(val_bytes) >= 2 && val_bytes[1] == 0x20
                 # Decode LEB128 source local index
@@ -14359,6 +14370,82 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         push!(bytes, Opcode.STRUCT_NEW)
         append!(bytes, encode_leb128_unsigned(type_idx))
 
+    elseif typeof(val) <: Dict
+        # Dict constant with pre-populated data — materialize Memory fields as arrays
+        T = typeof(val)
+        K = keytype(val)
+        V = valtype(val)
+
+        if !haskey(ctx.type_registry.structs, T)
+            register_struct_type!(ctx.mod, ctx.type_registry, T)
+        end
+        dict_info = ctx.type_registry.structs[T]
+
+        slots_arr_type = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
+        keys_arr_type = get_array_type!(ctx.mod, ctx.type_registry, K)
+        vals_arr_type = get_array_type!(ctx.mod, ctx.type_registry, V)
+
+        # Get the raw internal arrays from the Dict
+        # Dict internals: slots, keys, vals are Memory{UInt8}, Memory{K}, Memory{V}
+        dict_slots = getfield(val, :slots)
+        dict_keys = getfield(val, :keys)
+        dict_vals = getfield(val, :vals)
+
+        # field 0: slots — array of UInt8 (stored as i32)
+        for i in 1:length(dict_slots)
+            push!(bytes, Opcode.I32_CONST)
+            append!(bytes, encode_leb128_signed(Int32(dict_slots[i])))
+        end
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_NEW_FIXED)
+        append!(bytes, encode_leb128_unsigned(slots_arr_type))
+        append!(bytes, encode_leb128_unsigned(length(dict_slots)))
+
+        # field 1: keys — array of K
+        for i in 1:length(dict_keys)
+            kv = dict_keys[i]
+            append!(bytes, compile_value(kv, ctx))
+        end
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_NEW_FIXED)
+        append!(bytes, encode_leb128_unsigned(keys_arr_type))
+        append!(bytes, encode_leb128_unsigned(length(dict_keys)))
+
+        # field 2: vals — array of V
+        for i in 1:length(dict_vals)
+            vv = dict_vals[i]
+            append!(bytes, compile_value(vv, ctx))
+        end
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_NEW_FIXED)
+        append!(bytes, encode_leb128_unsigned(vals_arr_type))
+        append!(bytes, encode_leb128_unsigned(length(dict_vals)))
+
+        # field 3: ndel (i64)
+        push!(bytes, Opcode.I64_CONST)
+        append!(bytes, encode_leb128_signed(Int64(getfield(val, :ndel))))
+
+        # field 4: count (i64)
+        push!(bytes, Opcode.I64_CONST)
+        append!(bytes, encode_leb128_signed(Int64(getfield(val, :count))))
+
+        # field 5: age (u64, stored as i64)
+        push!(bytes, Opcode.I64_CONST)
+        append!(bytes, encode_leb128_signed(Int64(getfield(val, :age))))
+
+        # field 6: idxfloor (i64)
+        push!(bytes, Opcode.I64_CONST)
+        append!(bytes, encode_leb128_signed(Int64(getfield(val, :idxfloor))))
+
+        # field 7: maxprobe (i64)
+        push!(bytes, Opcode.I64_CONST)
+        append!(bytes, encode_leb128_signed(Int64(getfield(val, :maxprobe))))
+
+        # struct.new
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.STRUCT_NEW)
+        append!(bytes, encode_leb128_unsigned(dict_info.wasm_type_idx))
+
     elseif isstructtype(typeof(val)) && !isa(val, Function) && !isa(val, Module)
         # Struct constant - create it with struct.new
         T = typeof(val)
@@ -14415,8 +14502,21 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
                     end
                     if !need_replace && length(field_val_bytes) >= 1
                         # Check if field produces a numeric value (i32/i64 const or local.get of numeric)
+                        # BUT NOT if the bytes end with struct.new or array.new_fixed (GC_PREFIX + opcode)
+                        # which indicates a complex ref value (String, Symbol, struct), not a simple numeric.
+                        # String constants start with i32.const (char 1) but end with array.new_fixed.
                         first_byte = field_val_bytes[1]
-                        if first_byte == 0x41 || first_byte == 0x42  # I32_CONST or I64_CONST
+                        ends_with_ref_producing_gc = false
+                        for scan_i in 1:(length(field_val_bytes)-1)
+                            if field_val_bytes[scan_i] == 0xFB  # GC_PREFIX
+                                gc_op = field_val_bytes[scan_i + 1]
+                                # 0x00 = struct.new, 0x1A = array.new_fixed, 0x1B = array.new_default
+                                if gc_op == 0x00 || gc_op == 0x1A || gc_op == 0x1B
+                                    ends_with_ref_producing_gc = true
+                                end
+                            end
+                        end
+                        if (first_byte == 0x41 || first_byte == 0x42) && !ends_with_ref_producing_gc  # I32_CONST or I64_CONST
                             need_replace = true
                         elseif first_byte == 0x20  # LOCAL_GET
                             src_idx = 0; shift = 0
@@ -15719,8 +15819,19 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 end
                 if expected_wasm === ExternRef
                     # Check if arg_bytes is a numeric value (i32/i64 const or numeric local)
+                    # PURE-220: But NOT if bytes contain GC instructions (struct.new, array.new_fixed)
+                    # which indicate a complex ref value (String, Symbol), not a simple numeric.
                     is_numeric_arg = false
-                    if length(arg_bytes) >= 1 && (arg_bytes[1] == 0x41 || arg_bytes[1] == 0x42)
+                    ends_with_ref_producing_gc = false
+                    for scan_i in 1:(length(arg_bytes)-1)
+                        if arg_bytes[scan_i] == 0xFB  # GC_PREFIX
+                            gc_op = arg_bytes[scan_i + 1]
+                            if gc_op == 0x00 || gc_op == 0x1A || gc_op == 0x1B
+                                ends_with_ref_producing_gc = true
+                            end
+                        end
+                    end
+                    if length(arg_bytes) >= 1 && (arg_bytes[1] == 0x41 || arg_bytes[1] == 0x42) && !ends_with_ref_producing_gc
                         is_numeric_arg = true
                     elseif length(arg_bytes) >= 2 && arg_bytes[1] == 0x20
                         src_idx = 0; shift = 0; leb_end = 0
