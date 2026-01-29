@@ -8516,7 +8516,16 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
         # open_blocks is [largest, ..., smallest] so target at end has depth 0
         for (i, t) in enumerate(reverse(open_blocks))
             if t == target_block
-                return i - 1 + length(open_loops)  # Account for any open loops
+                # Only add loop offset for targets OUTSIDE all loops.
+                # Inner targets (inside a loop) have their BLOCKs nested inside
+                # the LOOP instruction, so the loop label is ABOVE them, not below.
+                # Adding length(open_loops) for inner targets would overshoot by
+                # counting loop labels that are above the target's block.
+                if haskey(target_loop, target_block)
+                    return i - 1  # Inner target: no loop offset
+                else
+                    return i - 1 + length(open_loops)  # Outer target: add loop offset
+                end
             end
         end
         # Target not in open blocks - shouldn't happen for non_trivial_targets
