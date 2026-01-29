@@ -7197,13 +7197,16 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
         elseif stmt === nothing
             # Skip nothing statements
         else
-            append!(bytes, compile_statement(stmt, i, ctx))
+            compiled_stmt_bytes = compile_statement(stmt, i, ctx)
+            append!(bytes, compiled_stmt_bytes)
 
             # Drop unused values from calls (prevents stack pollution in loops)
             if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
+                # PURE-220: Skip if compile_statement already emitted a DROP
+                already_dropped = !isempty(compiled_stmt_bytes) && compiled_stmt_bytes[end] == Opcode.DROP
                 # Use statement_produces_wasm_value for consistent handling
                 # This checks the function registry for accurate return type info
-                if statement_produces_wasm_value(stmt, i, ctx)
+                if !already_dropped && statement_produces_wasm_value(stmt, i, ctx)
                     if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                         use_count = get(ssa_use_count, i, 0)
                         if use_count == 0
@@ -8340,9 +8343,11 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
 
                 # Only drop unused values that don't have locals
                 if !haskey(ctx.ssa_locals, i) && stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
+                    # PURE-220: Skip if compile_statement already emitted a DROP
+                    already_dropped = !isempty(stmt_bytes) && stmt_bytes[end] == Opcode.DROP
                     # Use statement_produces_wasm_value to check if the call actually
                     # produces a value on the stack (handles Any type correctly)
-                    if statement_produces_wasm_value(stmt, i, ctx)
+                    if !already_dropped && statement_produces_wasm_value(stmt, i, ctx)
                         if !haskey(ctx.phi_locals, i)
                             use_count = get(ssa_use_count, i, 0)
                             if use_count == 0
@@ -9155,8 +9160,10 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 append!(block_bytes, stmt_bytes)
 
                 if !haskey(ctx.ssa_locals, i)
+                    # PURE-220: Skip if compile_statement already emitted a DROP
+                    already_dropped = !isempty(stmt_bytes) && stmt_bytes[end] == Opcode.DROP
                     if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
-                        if statement_produces_wasm_value(stmt, i, ctx)
+                        if !already_dropped && statement_produces_wasm_value(stmt, i, ctx)
                             if !haskey(ctx.phi_locals, i)
                                 use_count = get(ssa_use_count, i, 0)
                                 if use_count == 0
@@ -9730,7 +9737,8 @@ function generate_void_flow(ctx::CompilationContext, blocks::Vector{BasicBlock},
                     # If not handled, just skip it
                     push!(compiled, j)
                 else
-                    append!(bytes, compile_statement(inner, j, ctx))
+                    compiled_bytes = compile_statement(inner, j, ctx)
+                    append!(bytes, compiled_bytes)
                     push!(compiled, j)
 
                     # Check if this statement produces Union{} (never returns, e.g., throw)
@@ -9744,6 +9752,10 @@ function generate_void_flow(ctx::CompilationContext, blocks::Vector{BasicBlock},
                     # In void functions, return statements are skipped, so values meant for
                     # returns stay on stack. We need to drop them.
                     if inner isa Expr && (inner.head === :call || inner.head === :invoke)
+                        # PURE-220: Skip if compile_statement already emitted a DROP
+                        # (e.g., compile_invoke adds DROP for higher-order Core.Argument calls)
+                        already_has_drop = !isempty(compiled_bytes) && compiled_bytes[end] == Opcode.DROP
+
                         # First check if this is a signal setter invoke - these ALWAYS need DROP
                         # because setters push a return value that won't be used in void context
                         is_setter_call = false
@@ -9754,10 +9766,10 @@ function generate_void_flow(ctx::CompilationContext, blocks::Vector{BasicBlock},
                             end
                         end
 
-                        if is_setter_call
+                        if is_setter_call && !already_has_drop
                             # Signal setters push a return value that won't be used
                             push!(bytes, Opcode.DROP)
-                        else
+                        elseif !already_has_drop
                             # For other calls, check if statement produces a value and use count
                             if statement_produces_wasm_value(inner, j, ctx)
                                 if !haskey(ctx.ssa_locals, j) && !haskey(ctx.phi_locals, j)
