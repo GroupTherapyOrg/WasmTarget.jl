@@ -4008,21 +4008,22 @@ These are extra locals beyond what SSA analysis requires.
 Stores the indices in ctx.scratch_locals for later use.
 """
 function allocate_scratch_locals!(ctx::CompilationContext)
-    # Check if any SSA type is String - if so, we need scratch locals
+    # Check if any SSA type is String or Symbol - if so, we need scratch locals
+    # Symbol uses same array<i32> representation as String and needs element-wise comparison
     needs_string_scratch = false
     for (_, T) in ctx.ssa_types
-        if T === String
+        if T === String || T === Symbol
             needs_string_scratch = true
             break
         end
     end
 
-    # Also check if return type or arg types include String
-    if ctx.return_type === String
+    # Also check if return type or arg types include String/Symbol
+    if ctx.return_type === String || ctx.return_type === Symbol
         needs_string_scratch = true
     end
     for T in ctx.arg_types
-        if T === String
+        if T === String || T === Symbol
             needs_string_scratch = true
             break
         end
@@ -15875,12 +15876,13 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         return bytes
     end
 
-    # Special case for string equality/identity comparison (=== and !==)
-    # Must be handled before generic argument pushing since strings are refs, not integers
+    # Special case for string/symbol equality/identity comparison (=== and !==)
+    # Must be handled before generic argument pushing since strings/symbols are refs, not integers
+    # Symbol uses same array<i32> representation as String, so ref.eq would fail (reference equality)
     if (is_func(func, :(===)) || is_func(func, :(!==))) && length(args) == 2
         arg1_type = infer_value_type(args[1], ctx)
         arg2_type = infer_value_type(args[2], ctx)
-        if arg1_type === String && arg2_type === String
+        if (arg1_type === String || arg1_type === Symbol) && (arg2_type === String || arg2_type === Symbol)
             append!(bytes, compile_string_equal(args[1], args[2], ctx))
             if is_func(func, :(!==))
                 # Negate the result for !==
