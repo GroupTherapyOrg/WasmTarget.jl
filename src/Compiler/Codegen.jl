@@ -12680,7 +12680,15 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                 # like: local.get + i32_wrap_i64 + i32_const + i32_sub → stored in ref local.
                 # We require stmt_bytes[1] == LOCAL_GET to avoid false positives with
                 # constants whose LEB128 values happen to match opcode bytes.
-                if !needs_type_safe_default && length(stmt_bytes) >= 3 &&
+                # PURE-206: Skip for Int128/UInt128 SSAs — their intrinsic code
+                # (sext_int, add_int, etc.) ends with struct_new whose LEB128 type
+                # index byte can be misidentified as a numeric opcode.
+                ssa_is_128bit = false
+                if local_wasm_type isa ConcreteRef
+                    ssa_jt_128 = get(ctx.ssa_types, idx, nothing)
+                    ssa_is_128bit = (ssa_jt_128 === Int128 || ssa_jt_128 === UInt128)
+                end
+                if !needs_type_safe_default && !ssa_is_128bit && length(stmt_bytes) >= 3 &&
                    stmt_bytes[1] == 0x20 &&  # starts with local.get
                    (local_wasm_type isa ConcreteRef || local_wasm_type === StructRef ||
                     local_wasm_type === ArrayRef || local_wasm_type === ExternRef || local_wasm_type === AnyRef)
