@@ -16568,14 +16568,10 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                            is_func(func, :ult_int) || is_func(func, :ule_int) ||
                            is_func(func, :add_int) || is_func(func, :sub_int) ||
                            is_func(func, :mul_int)
-    if is_numeric_intrinsic
-        @info "PURE-046 DEBUG: numeric intrinsic arg_type=$arg_type, isprimitivetype=$(isprimitivetype(arg_type)), is_128bit=$is_128bit"
-    end
     if is_numeric_intrinsic && (arg_type === Any ||
                                  (!isprimitivetype(arg_type) && !is_128bit && !(arg_type <: Integer)))
         # Type-confused code path - externref used as numeric
         # Emit unreachable since we can't do numeric ops on externref
-        @info "PURE-046: Emitting UNREACHABLE for type-confused numeric intrinsic: arg_type=$arg_type"
         push!(bytes, Opcode.UNREACHABLE)
         return bytes
     end
@@ -16653,12 +16649,9 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 (b & 0x80) == 0 && break
             end
             local offset_chk2 = local_idx_chk2 - ctx.n_params
-            @info "PURE-046 DEBUG local check: local_idx=$local_idx_chk2, n_params=$(ctx.n_params), offset=$offset_chk2, locals=$(length(ctx.locals))"
             if offset_chk2 >= 0 && offset_chk2 < length(ctx.locals)
                 local lt_chk2 = ctx.locals[offset_chk2 + 1]
-                @info "PURE-046 DEBUG: local type=$lt_chk2, ExternRef=$ExternRef"
                 if lt_chk2 === ExternRef
-                    @info "PURE-046: Emitting UNREACHABLE for externref local in numeric intrinsic"
                     push!(bytes, Opcode.UNREACHABLE)
                     return bytes
                 end
@@ -18368,7 +18361,15 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                     spec = mi.specTypes
                     if spec isa DataType && spec <: Tuple
                         call_nargs = length(spec.parameters) - 1  # subtract typeof(func)
-                        is_self_call_early = call_nargs == length(ctx.arg_types)
+                        # PURE-047: Check both arity AND parameter types — same-arity overloads
+                        # (e.g., validate_code!(errors, mi, c) vs validate_code!(errors, c, bool))
+                        # share the function object and arity but have different specTypes.
+                        if call_nargs == length(ctx.arg_types)
+                            call_arg_types = spec.parameters[2:end]
+                            is_self_call_early = all(call_arg_types[i] <: ctx.arg_types[i] for i in 1:call_nargs)
+                        else
+                            is_self_call_early = false
+                        end
                     else
                         is_self_call_early = true
                     end
@@ -18684,12 +18685,15 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 try
                     called_func = getfield(actual_func_ref.mod, actual_func_ref.name)
                     if called_func === ctx.func_ref
-                        # PURE-220: Also check arity for overloaded methods
+                        # PURE-220/047: Check arity AND types for overloaded methods
                         if mi isa Core.MethodInstance
                             spec = mi.specTypes
                             if spec isa DataType && spec <: Tuple
                                 call_nargs = length(spec.parameters) - 1
-                                is_self_call = call_nargs == length(ctx.arg_types)
+                                if call_nargs == length(ctx.arg_types)
+                                    call_arg_types = spec.parameters[2:end]
+                                    is_self_call = all(call_arg_types[i] <: ctx.arg_types[i] for i in 1:call_nargs)
+                                end
                             else
                                 is_self_call = true
                             end
@@ -18703,12 +18707,15 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
             elseif ctx.func_ref !== nothing && actual_func_ref isa Function
                 # PURE-209a: Function object direct comparison
                 if actual_func_ref === ctx.func_ref
-                    # PURE-220: Also check arity for overloaded methods
+                    # PURE-220/047: Check arity AND types for overloaded methods
                     if mi isa Core.MethodInstance
                         spec = mi.specTypes
                         if spec isa DataType && spec <: Tuple
                             call_nargs = length(spec.parameters) - 1
-                            is_self_call = call_nargs == length(ctx.arg_types)
+                            if call_nargs == length(ctx.arg_types)
+                                call_arg_types = spec.parameters[2:end]
+                                is_self_call = all(call_arg_types[i] <: ctx.arg_types[i] for i in 1:call_nargs)
+                            end
                         else
                             is_self_call = true
                         end
