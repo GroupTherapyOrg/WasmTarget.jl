@@ -4306,27 +4306,8 @@ function analyze_control_flow!(ctx::CompilationContext)
     # Allocate locals for phi nodes (they need to persist across iterations)
     for (i, stmt) in enumerate(code)
         if stmt isa Core.PhiNode
-            # PURE-048: Use ssavaluetypes directly as fallback, not Int64.
-            # analyze_ssa_types! skips Any-typed SSAs, but phi nodes with type Any
-            # must map to ExternRef, not I64. Fall back to ssavaluetypes[i] first.
-            phi_julia_type = get(ctx.ssa_types, i, nothing)
-            if phi_julia_type === nothing
-                ssatypes = ctx.code_info.ssavaluetypes
-                if ssatypes isa Vector && i <= length(ssatypes)
-                    phi_julia_type = ssatypes[i]
-                else
-                    phi_julia_type = Int64
-                end
-            end
+            phi_julia_type = get(ctx.ssa_types, i, Int64)
             phi_wasm_type = julia_to_wasm_type_concrete(phi_julia_type, ctx)
-
-            # PURE-048: For Any-typed phis, use AnyRef instead of ExternRef.
-            # ExternRef is for JS interop boundaries; internally, AnyRef is the
-            # proper GC supertype. extern_convert_any expects anyref input, so
-            # ExternRef phi locals cause "expected subtype of anyref" errors.
-            if phi_wasm_type === ExternRef && (phi_julia_type === Any || isabstracttype(phi_julia_type))
-                phi_wasm_type = AnyRef
-            end
 
             # Phi locals always use the type derived from the phi's Julia type.
             # Edge type incompatibility is handled downstream by
@@ -6618,35 +6599,10 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::C
         end
     end
 
-    # PURE-048: Final safety net — if value_bytes are numeric (i32/i64 const) but phi local is ref type,
-    # replace with ref.null of the correct type. This catches edge cases where compile_value(nothing)
-    # returns i32.const 0 but the phi local was upgraded to AnyRef/ExternRef/ConcreteRef.
-    phi_local_is_ref = phi_local_type isa ConcreteRef || phi_local_type === StructRef || phi_local_type === ArrayRef || phi_local_type === ExternRef || phi_local_type === AnyRef
-    value_is_numeric_const = !isempty(value_bytes) && (value_bytes[1] == Opcode.I32_CONST || value_bytes[1] == Opcode.I64_CONST || value_bytes[1] == Opcode.F32_CONST || value_bytes[1] == Opcode.F64_CONST)
-    if phi_local_is_ref && value_is_numeric_const
-        # Replace numeric constant with ref.null of the correct type
-        if phi_local_type isa ConcreteRef
-            push!(bytes, Opcode.REF_NULL)
-            append!(bytes, encode_leb128_signed(Int64(phi_local_type.type_idx)))
-        elseif phi_local_type === AnyRef
-            push!(bytes, Opcode.REF_NULL)
-            push!(bytes, UInt8(AnyRef))
-        elseif phi_local_type === ExternRef
-            push!(bytes, Opcode.REF_NULL)
-            push!(bytes, UInt8(ExternRef))
-        elseif phi_local_type === StructRef
-            push!(bytes, Opcode.REF_NULL)
-            push!(bytes, UInt8(StructRef))
-        elseif phi_local_type === ArrayRef
-            push!(bytes, Opcode.REF_NULL)
-            push!(bytes, UInt8(ArrayRef))
-        end
-    else
-        append!(bytes, value_bytes)
-        # Widen i32 to i64 if needed
-        if edge_val_type !== nothing && phi_local_type === I64 && edge_val_type === I32
-            push!(bytes, Opcode.I64_EXTEND_I32_S)
-        end
+    append!(bytes, value_bytes)
+    # Widen i32 to i64 if needed
+    if edge_val_type !== nothing && phi_local_type === I64 && edge_val_type === I32
+        push!(bytes, Opcode.I64_EXTEND_I32_S)
     end
     push!(bytes, Opcode.LOCAL_SET)
     append!(bytes, encode_leb128_unsigned(local_idx))
@@ -7623,19 +7579,8 @@ function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBloc
     if phi_node !== nothing
         # Phi node pattern (ternary expression)
         # The phi provides values for each branch - use those directly
-        # PURE-048: Use ssavaluetypes fallback instead of Int32 default.
-        # analyze_ssa_types! skips Any-typed SSAs, but phi nodes with type Any
-        # must map to AnyRef, not I32.
-        phi_type = get(ctx.ssa_types, phi_idx, nothing)
-        if phi_type === nothing
-            ssatypes = ctx.code_info.ssavaluetypes
-            phi_type = (ssatypes isa Vector && phi_idx <= length(ssatypes)) ? ssatypes[phi_idx] : Int32
-        end
+        phi_type = get(ctx.ssa_types, phi_idx, Int32)
         result_type = julia_to_wasm_type_concrete(phi_type, ctx)
-        # PURE-048: Match phi local allocation — Any/abstract → AnyRef not ExternRef
-        if result_type === ExternRef && (phi_type === Any || isabstracttype(phi_type))
-            result_type = AnyRef
-        end
 
         # Start if block with phi result type
         push!(bytes, Opcode.IF)
@@ -8909,14 +8854,6 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
 
     # Helper: determine the Wasm type that a phi edge value will produce on the stack
     function get_phi_edge_wasm_type(val)::Union{WasmValType, Nothing}
-        # PURE-048: Handle nothing literal — compile_value(nothing) emits i32_const 0
-        if val === nothing
-            return I32
-        end
-        # PURE-048: Handle GlobalRef to nothing (e.g., Compiler.nothing, Base.nothing)
-        if val isa GlobalRef && val.name === :nothing
-            return I32
-        end
         if val isa Core.SSAValue
             # If the SSA has a local allocated, return the local's actual Wasm type.
             # This is what local.get will actually push on the stack, which may differ
@@ -9081,18 +9018,6 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                 end
 
                                 phi_value_bytes = compile_phi_value(val, i)
-                                # PURE-048: If compile_phi_value produced a numeric constant (i32/i64/f32/f64)
-                                # but the phi local is a ref type, replace with ref.null of the correct type.
-                                # This happens when GlobalRef values (e.g., Base.Any, Compiler.Type) compile
-                                # to i32.const 0 as a placeholder but the phi local is AnyRef/ConcreteRef.
-                                if !isempty(phi_value_bytes)
-                                    _first_byte = phi_value_bytes[1]
-                                    _is_numeric = _first_byte == Opcode.I32_CONST || _first_byte == Opcode.I64_CONST || _first_byte == Opcode.F32_CONST || _first_byte == Opcode.F64_CONST
-                                    _is_ref_local = phi_local_type isa ConcreteRef || phi_local_type === StructRef || phi_local_type === ArrayRef || phi_local_type === AnyRef || phi_local_type === ExternRef
-                                    if _is_numeric && _is_ref_local
-                                        phi_value_bytes = emit_phi_type_default(phi_local_type)
-                                    end
-                                end
                                 # Detect multi-value bytes (all local_gets, N>=2).
                                 # local_set only consumes 1, so N-1 would be orphaned.
                                 if length(phi_value_bytes) >= 4
@@ -9313,16 +9238,6 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                     break
                                 end
                                 phi_value_bytes = compile_phi_value(val, i)
-                                # PURE-048: If compile_phi_value produced a numeric constant but phi local
-                                # is a ref type, replace with ref.null of the correct type.
-                                if !isempty(phi_value_bytes)
-                                    _first_byte2 = phi_value_bytes[1]
-                                    _is_numeric2 = _first_byte2 == Opcode.I32_CONST || _first_byte2 == Opcode.I64_CONST || _first_byte2 == Opcode.F32_CONST || _first_byte2 == Opcode.F64_CONST
-                                    _is_ref_local2 = phi_local_type isa ConcreteRef || phi_local_type === StructRef || phi_local_type === ArrayRef || phi_local_type === AnyRef || phi_local_type === ExternRef
-                                    if _is_numeric2 && _is_ref_local2
-                                        phi_value_bytes = emit_phi_type_default(phi_local_type)
-                                    end
-                                end
                                 # Detect multi-value bytes (all local_gets, N>=2).
                                 # local_set only consumes 1 value, so N-1 would be orphaned.
                                 if length(phi_value_bytes) >= 4
@@ -10390,17 +10305,8 @@ function compile_ternary_for_phi(ctx::CompilationContext, code, cond_idx::Int, c
     end
 
     local_idx = ctx.phi_locals[phi_idx]
-    # PURE-048: Use ssavaluetypes fallback instead of Int64 default
-    phi_type = get(ctx.ssa_types, phi_idx, nothing)
-    if phi_type === nothing
-        ssatypes = ctx.code_info.ssavaluetypes
-        phi_type = (ssatypes isa Vector && phi_idx <= length(ssatypes)) ? ssatypes[phi_idx] : Int64
-    end
+    phi_type = get(ctx.ssa_types, phi_idx, Int64)
     wasm_type = julia_to_wasm_type_concrete(phi_type, ctx)
-    # PURE-048: Match phi local allocation — Any/abstract → AnyRef not ExternRef
-    if wasm_type === ExternRef && (phi_type === Any || isabstracttype(phi_type))
-        wasm_type = AnyRef
-    end
 
     # Push condition
     append!(bytes, compile_value(goto_if_not.cond, ctx))
@@ -13030,25 +12936,6 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                 # compile_value returns empty bytes for Functions, Types, etc.
                 if !isempty(value_bytes) && haskey(ctx.ssa_locals, idx)
                     local_idx = ctx.ssa_locals[idx]
-                    local_array_idx = local_idx - ctx.n_params + 1
-                    local_wasm_type = local_array_idx >= 1 && local_array_idx <= length(ctx.locals) ? ctx.locals[local_array_idx] : nothing
-                    # PURE-048: Check if value is numeric but local is ref type
-                    # This happens when GlobalRef evaluates to nothing (i32.const 0)
-                    # but the local is AnyRef/ExternRef/ConcreteRef (from phi local allocation)
-                    local_is_ref = local_wasm_type !== nothing && (local_wasm_type isa ConcreteRef || local_wasm_type === StructRef || local_wasm_type === ArrayRef || local_wasm_type === ExternRef || local_wasm_type === AnyRef)
-                    value_is_numeric = value_bytes[1] == Opcode.I32_CONST || value_bytes[1] == Opcode.I64_CONST || value_bytes[1] == Opcode.F32_CONST || value_bytes[1] == Opcode.F64_CONST
-                    if local_is_ref && value_is_numeric
-                        # Replace numeric constant with ref.null of the correct type
-                        # Remove the numeric bytes we already appended
-                        resize!(bytes, length(bytes) - length(value_bytes))
-                        if local_wasm_type isa ConcreteRef
-                            push!(bytes, Opcode.REF_NULL)
-                            append!(bytes, encode_leb128_signed(Int64(local_wasm_type.type_idx)))
-                        else
-                            push!(bytes, Opcode.REF_NULL)
-                            push!(bytes, UInt8(local_wasm_type))
-                        end
-                    end
                     push!(bytes, Opcode.LOCAL_SET)
                     append!(bytes, encode_leb128_unsigned(local_idx))
                 end
@@ -15570,7 +15457,6 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             if elem_type === Any
                 # Check if value is a numeric type — emit ref.null extern instead
                 local is_numeric_item = false
-                local is_already_externref_item = false
                 if length(item_bytes) >= 2 && item_bytes[1] == Opcode.LOCAL_GET
                     local src_idx_i = 0
                     local shift_i = 0
@@ -15582,28 +15468,18 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                         pos_i += 1
                         (b & 0x80) == 0 && break
                     end
-                    local arr_idx_i = src_idx_i - ctx.n_params + 1
-                    if pos_i - 1 == length(item_bytes) && arr_idx_i >= 1 && arr_idx_i <= length(ctx.locals)
-                        src_type_i = ctx.locals[arr_idx_i]
+                    if pos_i - 1 == length(item_bytes) && src_idx_i < length(ctx.locals)
+                        src_type_i = ctx.locals[src_idx_i + 1]
                         if src_type_i === I64 || src_type_i === I32 || src_type_i === F64 || src_type_i === F32
                             is_numeric_item = true
-                        elseif src_type_i === ExternRef
-                            # PURE-048: Value is already externref — no conversion needed
-                            is_already_externref_item = true
                         end
                     end
                 elseif length(item_bytes) >= 1 && (item_bytes[1] == Opcode.I32_CONST || item_bytes[1] == Opcode.I64_CONST || item_bytes[1] == Opcode.F32_CONST || item_bytes[1] == Opcode.F64_CONST)
                     is_numeric_item = true
-                elseif length(item_bytes) >= 2 && item_bytes[1] == Opcode.REF_NULL && item_bytes[2] == UInt8(ExternRef)
-                    # PURE-048: ref.null extern is already externref
-                    is_already_externref_item = true
                 end
                 if is_numeric_item
                     push!(bytes, Opcode.REF_NULL)
                     push!(bytes, UInt8(ExternRef))
-                elseif is_already_externref_item
-                    # PURE-048: Value is already externref, skip extern_convert_any
-                    append!(bytes, item_bytes)
                 else
                     append!(bytes, item_bytes)
                     # extern.convert_any: (ref null X) → externref
@@ -16158,7 +16034,6 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         local wasm_elem_type = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
         if wasm_elem_type === ExternRef
             local is_numeric_mset = false
-            local is_already_externref = false
             if length(mset_val_bytes) >= 2 && mset_val_bytes[1] == Opcode.LOCAL_GET
                 local src_idx_m = 0
                 local shift_m = 0
@@ -16170,28 +16045,18 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     pos_m += 1
                     (b & 0x80) == 0 && break
                 end
-                local arr_idx_m = src_idx_m - ctx.n_params + 1
-                if pos_m - 1 == length(mset_val_bytes) && arr_idx_m >= 1 && arr_idx_m <= length(ctx.locals)
-                    src_type_m = ctx.locals[arr_idx_m]
+                if pos_m - 1 == length(mset_val_bytes) && src_idx_m < length(ctx.locals)
+                    src_type_m = ctx.locals[src_idx_m + 1]
                     if src_type_m === I64 || src_type_m === I32 || src_type_m === F64 || src_type_m === F32
                         is_numeric_mset = true
-                    elseif src_type_m === ExternRef
-                        # PURE-048: Value is already externref — no conversion needed
-                        is_already_externref = true
                     end
                 end
             elseif length(mset_val_bytes) >= 1 && (mset_val_bytes[1] == Opcode.I32_CONST || mset_val_bytes[1] == Opcode.I64_CONST || mset_val_bytes[1] == Opcode.F32_CONST || mset_val_bytes[1] == Opcode.F64_CONST)
                 is_numeric_mset = true
-            elseif length(mset_val_bytes) >= 2 && mset_val_bytes[1] == Opcode.REF_NULL && mset_val_bytes[2] == UInt8(ExternRef)
-                # PURE-048: ref.null extern is already externref
-                is_already_externref = true
             end
             if is_numeric_mset
                 push!(bytes, Opcode.REF_NULL)
                 push!(bytes, UInt8(ExternRef))
-            elseif is_already_externref
-                # PURE-048: Value is already externref, skip extern_convert_any
-                append!(bytes, mset_val_bytes)
             else
                 append!(bytes, mset_val_bytes)
                 push!(bytes, Opcode.GC_PREFIX)
@@ -16214,9 +16079,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     pos_r += 1
                     (b & 0x80) == 0 && break
                 end
-                local arr_idx_r = src_idx_r - ctx.n_params + 1
-                if pos_r - 1 == length(mset_val_bytes) && arr_idx_r >= 1 && arr_idx_r <= length(ctx.locals)
-                    src_type_r = ctx.locals[arr_idx_r]
+                if pos_r - 1 == length(mset_val_bytes) && src_idx_r < length(ctx.locals)
+                    src_type_r = ctx.locals[src_idx_r + 1]
                     if src_type_r === I64 || src_type_r === I32 || src_type_r === F64 || src_type_r === F32
                         is_numeric_for_ref = true
                     end
@@ -20758,7 +20622,6 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 if elem_type === Any
                     # Check if value is numeric — emit ref.null extern instead
                     local is_numeric_val = false
-                    local is_already_externref_val = false
                     if length(val_bytes) >= 2 && val_bytes[1] == Opcode.LOCAL_GET
                         local src_idx_v = 0
                         local shift_v = 0
@@ -20770,28 +20633,18 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                             pos_v += 1
                             (b & 0x80) == 0 && break
                         end
-                        local arr_idx_v = src_idx_v - ctx.n_params + 1
-                        if pos_v - 1 == length(val_bytes) && arr_idx_v >= 1 && arr_idx_v <= length(ctx.locals)
-                            src_type_v = ctx.locals[arr_idx_v]
+                        if pos_v - 1 == length(val_bytes) && src_idx_v < length(ctx.locals)
+                            src_type_v = ctx.locals[src_idx_v + 1]
                             if src_type_v === I64 || src_type_v === I32 || src_type_v === F64 || src_type_v === F32
                                 is_numeric_val = true
-                            elseif src_type_v === ExternRef
-                                # PURE-048: Value is already externref — no conversion needed
-                                is_already_externref_val = true
                             end
                         end
                     elseif length(val_bytes) >= 1 && (val_bytes[1] == Opcode.I32_CONST || val_bytes[1] == Opcode.I64_CONST || val_bytes[1] == Opcode.F32_CONST || val_bytes[1] == Opcode.F64_CONST)
                         is_numeric_val = true
-                    elseif length(val_bytes) >= 2 && val_bytes[1] == Opcode.REF_NULL && val_bytes[2] == UInt8(ExternRef)
-                        # PURE-048: ref.null extern is already externref
-                        is_already_externref_val = true
                     end
                     if is_numeric_val
                         push!(bytes, Opcode.REF_NULL)
                         push!(bytes, UInt8(ExternRef))
-                    elseif is_already_externref_val
-                        # PURE-048: Value is already externref, skip extern_convert_any
-                        append!(bytes, val_bytes)
                     else
                         append!(bytes, val_bytes)
                         # extern.convert_any: (ref null X) → externref
