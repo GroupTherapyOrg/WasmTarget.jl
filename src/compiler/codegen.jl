@@ -20402,7 +20402,43 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 push!(bytes, Opcode.I32_SUB)
 
                 # Value
-                append!(bytes, compile_value(args[3], ctx))
+                local val_bytes = compile_value(args[3], ctx)
+                # PURE-045: If elem_type is Any (externref array), convert ref→externref
+                if elem_type === Any
+                    # Check if value is numeric — emit ref.null extern instead
+                    local is_numeric_val = false
+                    if length(val_bytes) >= 2 && val_bytes[1] == Opcode.LOCAL_GET
+                        local src_idx_v = 0
+                        local shift_v = 0
+                        local pos_v = 2
+                        while pos_v <= length(val_bytes)
+                            b = val_bytes[pos_v]
+                            src_idx_v |= (Int(b & 0x7f) << shift_v)
+                            shift_v += 7
+                            pos_v += 1
+                            (b & 0x80) == 0 && break
+                        end
+                        if pos_v - 1 == length(val_bytes) && src_idx_v < length(ctx.locals)
+                            src_type_v = ctx.locals[src_idx_v + 1]
+                            if src_type_v === I64 || src_type_v === I32 || src_type_v === F64 || src_type_v === F32
+                                is_numeric_val = true
+                            end
+                        end
+                    elseif length(val_bytes) >= 1 && (val_bytes[1] == Opcode.I32_CONST || val_bytes[1] == Opcode.I64_CONST || val_bytes[1] == Opcode.F32_CONST || val_bytes[1] == Opcode.F64_CONST)
+                        is_numeric_val = true
+                    end
+                    if is_numeric_val
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(ExternRef))
+                    else
+                        append!(bytes, val_bytes)
+                        # extern.convert_any: (ref null X) → externref
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                    end
+                else
+                    append!(bytes, val_bytes)
+                end
 
                 # array.set
                 push!(bytes, Opcode.GC_PREFIX)
