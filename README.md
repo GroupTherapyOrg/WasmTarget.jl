@@ -202,24 +202,97 @@ Tests require Node.js 20+ for WasmGC execution.
 
 ## Comparison with Other Projects
 
-| Feature | WasmTarget.jl | WasmCompiler.jl | WebAssemblyCompiler.jl |
-|---------|--------------|-----------------|------------------------|
-| **Approach** | WasmGC (structs, arrays) | Linear memory | WasmGC |
-| **Julia Version** | 1.12+ | 1.6+ | 1.9+ |
-| **Type System** | Full Julia types | Basic types | Subset of types |
-| **Self-Hosting** | Yes (M4) | No | No |
-| **Active** | Yes | Dormant | Active |
-| **Control Flow** | Full (phi, complex) | Basic | Good |
-| **JS Interop** | externref | imports/exports | externref |
+### Julia → WebAssembly Compilers
+
+| Feature | WasmTarget.jl | WebAssemblyCompiler.jl |
+|---------|--------------|------------------------|
+| **Memory Model** | WasmGC (structs, arrays) | WasmGC via Binaryen |
+| **Julia Version** | 1.12+ | 1.9+ |
+| **IR Source** | `Base.code_typed()` | Julia IR via Binaryen |
+| **Self-Hosting** | Yes (M4 complete) | No |
+| **Status** | Active (2026) | Experimental (2023) |
+| **Type Stability** | Required | Required |
+| **Dynamic Dispatch** | No | No |
+
+#### Type Support Comparison
+
+| Type | WasmTarget.jl | WebAssemblyCompiler.jl |
+|------|--------------|------------------------|
+| `Int32`, `Int64` | ✅ | ✅ |
+| `Int128` | ✅ (i64 pair) | ❌ |
+| `Float32`, `Float64` | ✅ | ✅ |
+| `Bool` | ✅ | ✅ |
+| `String` | ✅ (array\<i32\>) | ✅ |
+| `Symbol` | ✅ (array\<i32\>) | ✅ |
+| `Vector{T}` | ✅ | ✅ (1D only) |
+| Multi-dimensional arrays | ❌ | ❌ |
+| `Dict` | ✅ (constants) | ✅ (no string keys) |
+| `Tuple`, `NamedTuple` | ✅ | ✅ |
+| User structs | ✅ | ✅ |
+| `Union` types | Basic | ❌ |
+| `Any` / externref | ✅ | ✅ |
+| Pointers | ❌ | ❌ |
+
+#### Control Flow Comparison
+
+| Feature | WasmTarget.jl | WebAssemblyCompiler.jl |
+|---------|--------------|------------------------|
+| Loops | ✅ Full support | ✅ |
+| Recursion | ✅ | ✅ |
+| Phi nodes | ✅ (stackified) | Unknown |
+| Complex conditionals | ✅ | ✅ |
+| Exception handling | ❌ (use Result types) | ❌ |
+| Varargs | ✅ | ✅ |
+| Keyword arguments | ✅ | ✅ |
+
+#### Key Differences
+
+**WasmTarget.jl:**
+- Directly compiles Julia's typed SSA IR to Wasm bytecode
+- Handles complex control flow (141+ conditionals, phi nodes)
+- Self-hosting: can compile its own compiler to Wasm
+- Targets browser REPL as end goal (M5-M7)
+- ~21K lines of Codegen.jl
+
+**WebAssemblyCompiler.jl:**
+- Uses Binaryen as intermediate representation
+- Simpler compilation path (Julia IR → Binaryen → Wasm)
+- Focuses on numerical/simulation use cases (Lorenz demo)
+- No self-hosting goal
+- Smaller codebase
 
 ### Architectural Inspiration: dart2wasm
 
-WasmTarget's architecture is influenced by dart2wasm, Dart's official WebAssembly compiler:
-- Both use WasmGC for managed memory (no manual malloc/free)
-- Both compile a garbage-collected language to Wasm
-- Both handle complex control flow with phi nodes and stackification
+WasmTarget's architecture is influenced by [dart2wasm](https://dart.dev/web/wasm), Dart's official WebAssembly compiler:
 
-Key difference: WasmTarget leverages Julia's existing compiler pipeline (JuliaSyntax, JuliaLowering, typeinf) rather than building a separate frontend.
+| Aspect | dart2wasm | WasmTarget.jl |
+|--------|-----------|---------------|
+| **Language** | Dart | Julia |
+| **Memory** | WasmGC | WasmGC |
+| **Frontend** | Shared Dart frontend | Julia's JuliaSyntax/JuliaLowering |
+| **Output** | .wasm + .mjs runtime | .wasm binary |
+| **JS Interop** | `@pragma("wasm:import/export")` | `externref` + imports |
+| **Optimization** | Binaryen post-processing | Native Wasm emission |
+| **GC** | WebAssembly GC proposal | WebAssembly GC proposal |
+| **Status** | Production (Flutter Web) | Experimental (M5 in progress) |
+
+**Shared approaches:**
+- Both compile garbage-collected languages to WasmGC (no manual memory management)
+- Both handle complex control flow with stackification
+- Both support externref for JS object passing
+- Both require type stability (Dart is statically typed; Julia requires inference)
+
+**Key difference:** WasmTarget leverages Julia's *existing* compiler infrastructure (JuliaSyntax, JuliaLowering, Core.Compiler.typeinf) rather than building a separate frontend. This "PURE route" means WasmTarget benefits from upstream Julia improvements automatically.
+
+### Other Related Projects
+
+| Project | Description | Approach |
+|---------|-------------|----------|
+| [WebAssembly.jl](https://github.com/MikeInnes/WebAssembly.jl) | Wasm IR manipulation in Julia | Low-level tools |
+| [Charlotte.jl](https://github.com/MikeInnes/Charlotte.jl) | Experimental Julia→JS/Wasm | Targets JS |
+| [julia-wasm](https://github.com/Keno/julia-wasm) | Run full Julia runtime on Wasm | Emscripten |
+
+WasmTarget.jl occupies a unique position: it's a *compiler* for Julia functions (not the full runtime), targeting WasmGC for efficient browser execution.
 
 ## Related Projects
 
