@@ -1494,6 +1494,7 @@ function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataT
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
 
+
     # Redirect Tuple types to their specialized registration function
     # Tuples have integer field names (1, 2, ...) not symbols
     if T <: Tuple
@@ -1757,8 +1758,10 @@ function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T:
             # Register it as a Vector struct type, not a raw array
             info = register_vector_type!(mod, registry, ft)
             wasm_vt = ConcreteRef(info.wasm_type_idx, true)
-        elseif ft <: AbstractVector
+        elseif ft <: AbstractVector && !(ft isa Union)
             # Generic AbstractVector without concrete type - use raw array
+            # PURE-046: Check !(ft isa Union) because Union{Memory{UInt8}, Memory{UInt16}, ...}
+            # would match ft <: AbstractVector but should be handled as a tagged union instead.
             elem_type = eltype(ft)
             array_type_idx = get_array_type!(mod, registry, elem_type)
             wasm_vt = ConcreteRef(array_type_idx, true)  # nullable reference
