@@ -15882,13 +15882,21 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         ref_arg = args[1]
         ref_type = infer_value_type(ref_arg, ctx)
 
-        # Extract element type from MemoryRef{T} or GenericMemoryRef{atomicity, T, addrspace}
+        # Extract element type from MemoryRef{T}, GenericMemoryRef{atomicity, T, addrspace},
+        # Memory{T}, or GenericMemory{atomicity, T, addrspace}
+        # PURE-045: Also handle Memory types for direct array access patterns
         elem_type = Int32  # default
         if ref_type isa DataType
             if ref_type.name.name === :MemoryRef
                 elem_type = ref_type.parameters[1]
             elseif ref_type.name.name === :GenericMemoryRef
                 # GenericMemoryRef has parameters (atomicity, element_type, addrspace)
+                elem_type = ref_type.parameters[2]
+            elseif ref_type.name.name === :Memory && length(ref_type.parameters) >= 1
+                # Memory{T} - element type is first parameter
+                elem_type = ref_type.parameters[1]
+            elseif ref_type.name.name === :GenericMemory && length(ref_type.parameters) >= 2
+                # GenericMemory{atomicity, T, addrspace} - element type is second parameter
                 elem_type = ref_type.parameters[2]
             end
         end
@@ -15944,13 +15952,21 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         value_arg = args[2]
         ref_type = infer_value_type(ref_arg, ctx)
 
-        # Extract element type from MemoryRef{T} or GenericMemoryRef{atomicity, T, addrspace}
+        # Extract element type from MemoryRef{T}, GenericMemoryRef{atomicity, T, addrspace},
+        # Memory{T}, or GenericMemory{atomicity, T, addrspace}
+        # PURE-045: Also handle Memory types for direct array access patterns
         elem_type = Int32  # default
         if ref_type isa DataType
             if ref_type.name.name === :MemoryRef
                 elem_type = ref_type.parameters[1]
             elseif ref_type.name.name === :GenericMemoryRef
                 # GenericMemoryRef has parameters (atomicity, element_type, addrspace)
+                elem_type = ref_type.parameters[2]
+            elseif ref_type.name.name === :Memory && length(ref_type.parameters) >= 1
+                # Memory{T} - element type is first parameter
+                elem_type = ref_type.parameters[1]
+            elseif ref_type.name.name === :GenericMemory && length(ref_type.parameters) >= 2
+                # GenericMemory{atomicity, T, addrspace} - element type is second parameter
                 elem_type = ref_type.parameters[2]
             end
         end
