@@ -6,8 +6,8 @@ include("builder/writer.jl")
 include("builder/instructions.jl")
 
 # Compiler - Julia IR to Wasm translation
-include("Compiler/IR.jl")
-include("Compiler/Codegen.jl")
+include("compiler/ir.jl")
+include("compiler/codegen.jl")
 
 # Runtime - Intrinsics and stdlib mapping
 include("Runtime/Intrinsics.jl")
