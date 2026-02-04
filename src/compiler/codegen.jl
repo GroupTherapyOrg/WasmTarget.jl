@@ -15464,6 +15464,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             if elem_type === Any
                 # Check if value is a numeric type — emit ref.null extern instead
                 local is_numeric_item = false
+                local is_already_externref_item = false
                 if length(item_bytes) >= 2 && item_bytes[1] == Opcode.LOCAL_GET
                     local src_idx_i = 0
                     local shift_i = 0
@@ -15479,14 +15480,23 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                         src_type_i = ctx.locals[src_idx_i + 1]
                         if src_type_i === I64 || src_type_i === I32 || src_type_i === F64 || src_type_i === F32
                             is_numeric_item = true
+                        elseif src_type_i === ExternRef
+                            # PURE-048: Value is already externref — no conversion needed
+                            is_already_externref_item = true
                         end
                     end
                 elseif length(item_bytes) >= 1 && (item_bytes[1] == Opcode.I32_CONST || item_bytes[1] == Opcode.I64_CONST || item_bytes[1] == Opcode.F32_CONST || item_bytes[1] == Opcode.F64_CONST)
                     is_numeric_item = true
+                elseif length(item_bytes) >= 2 && item_bytes[1] == Opcode.REF_NULL && item_bytes[2] == UInt8(ExternRef)
+                    # PURE-048: ref.null extern is already externref
+                    is_already_externref_item = true
                 end
                 if is_numeric_item
                     push!(bytes, Opcode.REF_NULL)
                     push!(bytes, UInt8(ExternRef))
+                elseif is_already_externref_item
+                    # PURE-048: Value is already externref, skip extern_convert_any
+                    append!(bytes, item_bytes)
                 else
                     append!(bytes, item_bytes)
                     # extern.convert_any: (ref null X) → externref
@@ -16041,6 +16051,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         local wasm_elem_type = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
         if wasm_elem_type === ExternRef
             local is_numeric_mset = false
+            local is_already_externref = false
             if length(mset_val_bytes) >= 2 && mset_val_bytes[1] == Opcode.LOCAL_GET
                 local src_idx_m = 0
                 local shift_m = 0
@@ -16056,14 +16067,23 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     src_type_m = ctx.locals[src_idx_m + 1]
                     if src_type_m === I64 || src_type_m === I32 || src_type_m === F64 || src_type_m === F32
                         is_numeric_mset = true
+                    elseif src_type_m === ExternRef
+                        # PURE-048: Value is already externref — no conversion needed
+                        is_already_externref = true
                     end
                 end
             elseif length(mset_val_bytes) >= 1 && (mset_val_bytes[1] == Opcode.I32_CONST || mset_val_bytes[1] == Opcode.I64_CONST || mset_val_bytes[1] == Opcode.F32_CONST || mset_val_bytes[1] == Opcode.F64_CONST)
                 is_numeric_mset = true
+            elseif length(mset_val_bytes) >= 2 && mset_val_bytes[1] == Opcode.REF_NULL && mset_val_bytes[2] == UInt8(ExternRef)
+                # PURE-048: ref.null extern is already externref
+                is_already_externref = true
             end
             if is_numeric_mset
                 push!(bytes, Opcode.REF_NULL)
                 push!(bytes, UInt8(ExternRef))
+            elseif is_already_externref
+                # PURE-048: Value is already externref, skip extern_convert_any
+                append!(bytes, mset_val_bytes)
             else
                 append!(bytes, mset_val_bytes)
                 push!(bytes, Opcode.GC_PREFIX)
@@ -20629,6 +20649,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 if elem_type === Any
                     # Check if value is numeric — emit ref.null extern instead
                     local is_numeric_val = false
+                    local is_already_externref_val = false
                     if length(val_bytes) >= 2 && val_bytes[1] == Opcode.LOCAL_GET
                         local src_idx_v = 0
                         local shift_v = 0
@@ -20644,14 +20665,23 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                             src_type_v = ctx.locals[src_idx_v + 1]
                             if src_type_v === I64 || src_type_v === I32 || src_type_v === F64 || src_type_v === F32
                                 is_numeric_val = true
+                            elseif src_type_v === ExternRef
+                                # PURE-048: Value is already externref — no conversion needed
+                                is_already_externref_val = true
                             end
                         end
                     elseif length(val_bytes) >= 1 && (val_bytes[1] == Opcode.I32_CONST || val_bytes[1] == Opcode.I64_CONST || val_bytes[1] == Opcode.F32_CONST || val_bytes[1] == Opcode.F64_CONST)
                         is_numeric_val = true
+                    elseif length(val_bytes) >= 2 && val_bytes[1] == Opcode.REF_NULL && val_bytes[2] == UInt8(ExternRef)
+                        # PURE-048: ref.null extern is already externref
+                        is_already_externref_val = true
                     end
                     if is_numeric_val
                         push!(bytes, Opcode.REF_NULL)
                         push!(bytes, UInt8(ExternRef))
+                    elseif is_already_externref_val
+                        # PURE-048: Value is already externref, skip extern_convert_any
+                        append!(bytes, val_bytes)
                     else
                         append!(bytes, val_bytes)
                         # extern.convert_any: (ref null X) → externref
