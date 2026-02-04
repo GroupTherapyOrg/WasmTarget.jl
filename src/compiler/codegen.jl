@@ -7598,8 +7598,19 @@ function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBloc
     if phi_node !== nothing
         # Phi node pattern (ternary expression)
         # The phi provides values for each branch - use those directly
-        phi_type = get(ctx.ssa_types, phi_idx, Int32)
+        # PURE-048: Use ssavaluetypes fallback instead of Int32 default.
+        # analyze_ssa_types! skips Any-typed SSAs, but phi nodes with type Any
+        # must map to AnyRef, not I32.
+        phi_type = get(ctx.ssa_types, phi_idx, nothing)
+        if phi_type === nothing
+            ssatypes = ctx.code_info.ssavaluetypes
+            phi_type = (ssatypes isa Vector && phi_idx <= length(ssatypes)) ? ssatypes[phi_idx] : Int32
+        end
         result_type = julia_to_wasm_type_concrete(phi_type, ctx)
+        # PURE-048: Match phi local allocation — Any/abstract → AnyRef not ExternRef
+        if result_type === ExternRef && (phi_type === Any || isabstracttype(phi_type))
+            result_type = AnyRef
+        end
 
         # Start if block with phi result type
         push!(bytes, Opcode.IF)
@@ -8873,6 +8884,14 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
 
     # Helper: determine the Wasm type that a phi edge value will produce on the stack
     function get_phi_edge_wasm_type(val)::Union{WasmValType, Nothing}
+        # PURE-048: Handle nothing literal — compile_value(nothing) emits i32_const 0
+        if val === nothing
+            return I32
+        end
+        # PURE-048: Handle GlobalRef to nothing (e.g., Compiler.nothing, Base.nothing)
+        if val isa GlobalRef && val.name === :nothing
+            return I32
+        end
         if val isa Core.SSAValue
             # If the SSA has a local allocated, return the local's actual Wasm type.
             # This is what local.get will actually push on the stack, which may differ
