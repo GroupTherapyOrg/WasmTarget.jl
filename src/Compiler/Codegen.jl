@@ -16088,9 +16088,21 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
 
                 field_idx = findfirst(==(field_sym), info.field_names)
                 if field_idx !== nothing
+                    # PURE-045: Check if field is Any type (maps to externref in Wasm)
+                    field_type = field_idx <= length(info.field_types) ? info.field_types[field_idx] : Any
+
                     # struct.set expects: [ref, value]
                     append!(bytes, compile_value(obj_arg, ctx))
                     append!(bytes, compile_value(value_arg, ctx))
+
+                    # PURE-045: If field type is Any (externref), convert concrete ref to externref
+                    if field_type === Any
+                        # Value is likely a concrete ref (struct, array, etc.) that needs conversion
+                        # extern.convert_any converts anyref (which includes all concrete refs) to externref
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                    end
+
                     push!(bytes, Opcode.GC_PREFIX)
                     push!(bytes, Opcode.STRUCT_SET)
                     append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
