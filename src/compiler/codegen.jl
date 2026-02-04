@@ -14797,6 +14797,15 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         push!(bytes, Opcode.I32_CONST)
         push!(bytes, 0x00)
 
+    elseif val isa Module
+        # Module constant — empty struct (fieldcount=0), like Function singletons.
+        # Used for === identity checks (ref.eq). Each struct.new creates a unique ref.
+        info = register_struct_type!(ctx.mod, ctx.type_registry, Module)
+        type_idx = info.wasm_type_idx
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.STRUCT_NEW)
+        append!(bytes, encode_leb128_unsigned(type_idx))
+
     elseif val isa Function && isstructtype(typeof(val)) && fieldcount(typeof(val)) == 0
         # Function singleton (e.g., typeof(some_function)) — empty struct with no fields
         T = typeof(val)
