@@ -4320,6 +4320,14 @@ function analyze_control_flow!(ctx::CompilationContext)
             end
             phi_wasm_type = julia_to_wasm_type_concrete(phi_julia_type, ctx)
 
+            # PURE-048: For Any-typed phis, use AnyRef instead of ExternRef.
+            # ExternRef is for JS interop boundaries; internally, AnyRef is the
+            # proper GC supertype. extern_convert_any expects anyref input, so
+            # ExternRef phi locals cause "expected subtype of anyref" errors.
+            if phi_wasm_type === ExternRef && (phi_julia_type === Any || isabstracttype(phi_julia_type))
+                phi_wasm_type = AnyRef
+            end
+
             # Phi locals always use the type derived from the phi's Julia type.
             # Edge type incompatibility is handled downstream by
             # set_phi_locals_for_edge! and the inline phi handler,
@@ -10323,6 +10331,10 @@ function compile_ternary_for_phi(ctx::CompilationContext, code, cond_idx::Int, c
         phi_type = (ssatypes isa Vector && phi_idx <= length(ssatypes)) ? ssatypes[phi_idx] : Int64
     end
     wasm_type = julia_to_wasm_type_concrete(phi_type, ctx)
+    # PURE-048: Match phi local allocation — Any/abstract → AnyRef not ExternRef
+    if wasm_type === ExternRef && (phi_type === Any || isabstracttype(phi_type))
+        wasm_type = AnyRef
+    end
 
     # Push condition
     append!(bytes, compile_value(goto_if_not.cond, ctx))
