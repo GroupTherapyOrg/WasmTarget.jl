@@ -6618,10 +6618,35 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::C
         end
     end
 
-    append!(bytes, value_bytes)
-    # Widen i32 to i64 if needed
-    if edge_val_type !== nothing && phi_local_type === I64 && edge_val_type === I32
-        push!(bytes, Opcode.I64_EXTEND_I32_S)
+    # PURE-048: Final safety net — if value_bytes are numeric (i32/i64 const) but phi local is ref type,
+    # replace with ref.null of the correct type. This catches edge cases where compile_value(nothing)
+    # returns i32.const 0 but the phi local was upgraded to AnyRef/ExternRef/ConcreteRef.
+    phi_local_is_ref = phi_local_type isa ConcreteRef || phi_local_type === StructRef || phi_local_type === ArrayRef || phi_local_type === ExternRef || phi_local_type === AnyRef
+    value_is_numeric_const = !isempty(value_bytes) && (value_bytes[1] == Opcode.I32_CONST || value_bytes[1] == Opcode.I64_CONST || value_bytes[1] == Opcode.F32_CONST || value_bytes[1] == Opcode.F64_CONST)
+    if phi_local_is_ref && value_is_numeric_const
+        # Replace numeric constant with ref.null of the correct type
+        if phi_local_type isa ConcreteRef
+            push!(bytes, Opcode.REF_NULL)
+            append!(bytes, encode_leb128_signed(Int64(phi_local_type.type_idx)))
+        elseif phi_local_type === AnyRef
+            push!(bytes, Opcode.REF_NULL)
+            push!(bytes, UInt8(AnyRef))
+        elseif phi_local_type === ExternRef
+            push!(bytes, Opcode.REF_NULL)
+            push!(bytes, UInt8(ExternRef))
+        elseif phi_local_type === StructRef
+            push!(bytes, Opcode.REF_NULL)
+            push!(bytes, UInt8(StructRef))
+        elseif phi_local_type === ArrayRef
+            push!(bytes, Opcode.REF_NULL)
+            push!(bytes, UInt8(ArrayRef))
+        end
+    else
+        append!(bytes, value_bytes)
+        # Widen i32 to i64 if needed
+        if edge_val_type !== nothing && phi_local_type === I64 && edge_val_type === I32
+            push!(bytes, Opcode.I64_EXTEND_I32_S)
+        end
     end
     push!(bytes, Opcode.LOCAL_SET)
     append!(bytes, encode_leb128_unsigned(local_idx))
@@ -12983,6 +13008,25 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                 # compile_value returns empty bytes for Functions, Types, etc.
                 if !isempty(value_bytes) && haskey(ctx.ssa_locals, idx)
                     local_idx = ctx.ssa_locals[idx]
+                    local_array_idx = local_idx - ctx.n_params + 1
+                    local_wasm_type = local_array_idx >= 1 && local_array_idx <= length(ctx.locals) ? ctx.locals[local_array_idx] : nothing
+                    # PURE-048: Check if value is numeric but local is ref type
+                    # This happens when GlobalRef evaluates to nothing (i32.const 0)
+                    # but the local is AnyRef/ExternRef/ConcreteRef (from phi local allocation)
+                    local_is_ref = local_wasm_type !== nothing && (local_wasm_type isa ConcreteRef || local_wasm_type === StructRef || local_wasm_type === ArrayRef || local_wasm_type === ExternRef || local_wasm_type === AnyRef)
+                    value_is_numeric = value_bytes[1] == Opcode.I32_CONST || value_bytes[1] == Opcode.I64_CONST || value_bytes[1] == Opcode.F32_CONST || value_bytes[1] == Opcode.F64_CONST
+                    if local_is_ref && value_is_numeric
+                        # Replace numeric constant with ref.null of the correct type
+                        # Remove the numeric bytes we already appended
+                        resize!(bytes, length(bytes) - length(value_bytes))
+                        if local_wasm_type isa ConcreteRef
+                            push!(bytes, Opcode.REF_NULL)
+                            append!(bytes, encode_leb128_signed(Int64(local_wasm_type.type_idx)))
+                        else
+                            push!(bytes, Opcode.REF_NULL)
+                            push!(bytes, UInt8(local_wasm_type))
+                        end
+                    end
                     push!(bytes, Opcode.LOCAL_SET)
                     append!(bytes, encode_leb128_unsigned(local_idx))
                 end
