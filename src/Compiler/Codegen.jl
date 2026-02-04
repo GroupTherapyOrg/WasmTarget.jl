@@ -20763,7 +20763,8 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                     # 1. Get the vector and store in local
                     append!(bytes, compile_value(vec_arg, ctx))
                     push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL)
-                    append!(bytes, encode_leb128_unsigned(vec_type_idx))
+                    # PURE-045: heap type for ref.cast must use signed LEB128
+                    append!(bytes, encode_leb128_signed(Int64(vec_type_idx)))
                     push!(bytes, Opcode.LOCAL_SET)
                     append!(bytes, encode_leb128_unsigned(vec_scratch_local))
 
@@ -20774,7 +20775,8 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                     append!(bytes, encode_leb128_unsigned(vec_type_idx))
                     append!(bytes, encode_leb128_unsigned(0))  # field 0 = array ref
                     push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL)
-                    append!(bytes, encode_leb128_unsigned(arr_type_idx))
+                    # PURE-045: heap type for ref.cast must use signed LEB128
+                    append!(bytes, encode_leb128_signed(Int64(arr_type_idx)))
                     push!(bytes, Opcode.LOCAL_SET)
                     append!(bytes, encode_leb128_unsigned(old_arr_local))
 
