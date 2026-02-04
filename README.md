@@ -1,71 +1,62 @@
 # WasmTarget.jl
 
-A Julia-to-WebAssembly compiler targeting the WasmGC (Garbage Collection) proposal. This package compiles Julia functions directly to WebAssembly binaries that can run in modern browsers and Node.js environments with WasmGC support.
+A Julia-to-WebAssembly compiler targeting the WasmGC (Garbage Collection) proposal. WasmTarget compiles Julia functions directly to WebAssembly binaries that run in modern browsers and Node.js with WasmGC support.
+
+## Current Status (Feb 2026)
+
+**Self-hosting achieved.** WasmTarget can compile itself to WebAssembly.
+
+| Milestone | Status | Details |
+|-----------|--------|---------|
+| **M1** | Complete | JuliaSyntax.parsestmt validates (477 funcs, 803KB) |
+| **M1b** | Complete | JuliaSyntax v2.0.0-DEV validates (488 funcs, ~1MB) |
+| **M2** | Complete | JuliaLowering._to_lowered_expr validates (32 funcs, 8KB) |
+| **M3** | Complete | Core.Compiler.typeinf validates (6 funcs, 5KB) |
+| **M4** | Complete | **WasmTarget.compile compiles itself (44 funcs, 15KB)** |
+| **M5** | In Progress | Browser integration (JS runtime, string interop) |
+| **M6** | Planned | Binaryen.js optimization |
+| **M7** | Planned | GitHub Pages deployment with full Julia REPL |
 
 ## Features
 
-- **Direct Compilation**: Compile Julia functions to WebAssembly without intermediate languages
+- **Direct Compilation**: Julia functions to WebAssembly without intermediate languages
 - **WasmGC Support**: Uses WebAssembly GC proposal for structs, arrays, and reference types
-- **Type Support**: Integers (32/64-bit), floats, booleans, strings, structs, tuples, and arrays
-- **Control Flow**: Full support for loops, recursion, branches, and phi nodes
+- **Type Support**: Integers (32/64/128-bit), floats, booleans, strings, symbols, structs, tuples, and arrays
+- **Control Flow**: Full support for loops, recursion, branches, phi nodes, and complex conditionals
 - **Multi-Function Modules**: Compile multiple functions into a single module with cross-function calls
 - **Multiple Dispatch**: Same function name with different type signatures dispatches correctly
 - **JS Interop**: `externref` support for holding JavaScript objects, import JS functions
 - **Tables**: Function reference tables for indirect calls and dynamic dispatch
 - **Linear Memory**: Memory sections with load/store operations and data initialization
 - **Globals**: Mutable and immutable global variables, exportable to JS
-- **String Operations**: String concatenation (`*`) and equality comparison (`==`)
-- **Result Type Patterns**: Error handling via custom result structs with control flow
+- **String/Symbol Operations**: String concatenation, equality comparison, Symbol handling
 
 ## Requirements
 
-- Julia 1.9+
+- Julia 1.12+ (required for latest JuliaSyntax and type inference features)
 - Node.js 20+ for testing (v23+ recommended for stable WasmGC support)
+- `wasm-tools` for validation (`cargo install wasm-tools`)
 
 ## Installation
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/TherapeuticJulia/WasmTarget.jl")
+Pkg.add(url="https://github.com/GroupTherapyOrg/WasmTarget.jl")
 ```
 
 ## Quick Start
 
-### Single Function
+### Simple Function
 
 ```julia
 using WasmTarget
 
-# Define a function
 @noinline function add(a::Int32, b::Int32)::Int32
     return a + b
 end
 
-# Compile to WebAssembly
 wasm_bytes = compile(add, (Int32, Int32))
-
-# Write to file
 write("add.wasm", wasm_bytes)
-```
-
-### Multiple Functions
-
-```julia
-using WasmTarget
-
-@noinline function helper(x::Int32)::Int32
-    return x * Int32(2)
-end
-
-@noinline function use_helper(x::Int32)::Int32
-    return helper(x) + Int32(1)
-end
-
-# Compile multiple functions into one module
-wasm_bytes = compile_multi([
-    (helper, (Int32,)),
-    (use_helper, (Int32,)),
-])
 ```
 
 ### Running in JavaScript
@@ -79,140 +70,160 @@ WebAssembly.instantiate(bytes).then(mod => {
 });
 ```
 
+### Compile JuliaSyntax Parser
+
+```julia
+using WasmTarget, JuliaSyntax
+
+# Wrapper to avoid Type{Expr} parameter
+parse_expr_string(s::String) = parsestmt(Expr, s)
+
+bytes = compile(parse_expr_string, (String,))
+write("parsestmt.wasm", bytes)
+
+# Validate
+run(`wasm-tools validate --features=gc parsestmt.wasm`)
+```
+
+## Architecture: The PURE Route
+
+WasmTarget uses Julia's existing compiler infrastructure rather than reimplementing it:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    COMPILE TIME (dev machine)                   │
+│                                                                 │
+│  Julia Source Code                                              │
+│       ↓                                                         │
+│  JuliaSyntax.parsestmt     → AST (Expr)              [M1b]      │
+│       ↓                                                         │
+│  JuliaLowering._to_lowered_expr → Lowered IR         [M2]       │
+│       ↓                                                         │
+│  Core.Compiler.typeinf     → Typed CodeInfo          [M3]       │
+│       ↓                                                         │
+│  WasmTarget.compile        → Wasm bytes              [M4]       │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│                    RUNTIME (browser/Node.js)                    │
+│                                                                 │
+│  WebAssembly.instantiate() → Running code                       │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Self-Hosting Vision (M4 Complete)
+
+WasmTarget compiles itself to WebAssembly:
+
+```
+parsestmt.wasm (488 funcs, ~1MB)   ← Parses Julia code
+       ↓
+lowering.wasm (32 funcs, ~8KB)     ← Lowers to IR
+       ↓
+typeinf.wasm (6 funcs, ~5KB)       ← Type inference
+       ↓
+codegen.wasm (44 funcs, ~15KB)     ← SELF-HOSTED COMPILER
+       ↓
+User's compiled Wasm               ← Runs in browser
+```
+
+The goal: a full Julia REPL in the browser, compiling Julia code to Wasm at native speed, with no server required.
+
 ## Supported Types
 
 | Julia Type | WebAssembly Type |
 |------------|------------------|
 | `Int32`, `UInt32` | `i32` |
 | `Int64`, `UInt64`, `Int` | `i64` |
+| `Int128`, `UInt128` | `(i64, i64)` pair |
 | `Float32` | `f32` |
 | `Float64` | `f64` |
 | `Bool` | `i32` (0 or 1) |
-| `String` | WasmGC array of i32 |
+| `String`, `Symbol` | WasmGC `array<i32>` |
+| `Nothing` | `i32` (0) |
 | User structs | WasmGC struct |
 | `Tuple{...}` | WasmGC struct |
-| `Vector{T}` | WasmGC array |
+| `Vector{T}` | WasmGC `struct{array_ref, size}` |
+| `Any` | `externref` |
 | `JSValue` | `externref` |
 
-## Advanced Usage
-
-### Structs
-
-```julia
-mutable struct Point
-    x::Int32
-    y::Int32
-end
-
-@noinline function point_sum(p::Point)::Int32
-    return p.x + p.y
-end
-
-wasm_bytes = compile(point_sum, (Point,))
-```
-
-### JavaScript Interop
-
-```julia
-using WasmTarget
-
-# JSValue represents a JavaScript object (externref)
-@noinline function process_js(obj::JSValue)::JSValue
-    return obj
-end
-
-wasm_bytes = compile(process_js, (JSValue,))
-```
-
-### Custom Exports
-
-```julia
-# Give a custom export name
-wasm_bytes = compile_multi([
-    (my_function, (Int32,), "customName"),
-])
-```
-
-### Low-Level API
-
-For advanced use cases, you can use the Builder API directly:
-
-```julia
-using WasmTarget
-using WasmTarget: WasmModule, add_import!, add_function!, add_export!,
-                  add_global!, add_global_export!, add_table!, add_memory!,
-                  add_data_segment!, to_bytes, I32, FuncRef, Opcode
-
-mod = WasmModule()
-
-# Add imports
-add_import!(mod, "env", "log", [I32], [])
-
-# Add globals for state
-count_idx = add_global!(mod, I32, true, 0)  # mutable i32 initialized to 0
-add_global_export!(mod, "count", count_idx)
-
-# Add tables for function references
-table_idx = add_table!(mod, FuncRef, 4)  # table of 4 funcrefs
-
-# Add linear memory
-mem_idx = add_memory!(mod, 1)  # 1 page (64KB)
-add_data_segment!(mod, 0, 0, "Hello, World!")  # initialize with string
-
-# Build module
-bytes = to_bytes(mod)
-```
-
-## Architecture
+## Project Structure
 
 ```
 src/
-  WasmTarget.jl          # Main entry point, compile() API
+  WasmTarget.jl              # Entry point: compile(), compile_multi()
   Builder/
-    Types.jl             # Wasm type definitions (NumType, RefType, etc.)
-    Writer.jl            # Binary serialization to .wasm format
-    Instructions.jl      # Module building, function/type management
+    Types.jl                 # Wasm type definitions (I32, I64, RefType, etc.)
+    Writer.jl                # Binary serialization to .wasm format
+    Instructions.jl          # Module building, opcodes
   Compiler/
-    IR.jl                # Julia IR extraction via code_typed
-    Codegen.jl           # IR to Wasm bytecode translation
+    IR.jl                    # Julia IR extraction via code_typed
+    Codegen.jl               # IR → Wasm bytecode (~21K lines)
   Runtime/
-    Intrinsics.jl        # Julia intrinsic to Wasm opcode mapping
+    Intrinsics.jl            # Julia intrinsic → Wasm opcode mapping
+    StringOps.jl             # str_char, str_len, etc. (recognized as intrinsics)
+    ArrayOps.jl              # arr_new, arr_get, etc. (recognized as intrinsics)
+    SimpleDict.jl            # Dictionary operations
+    ByteBuffer.jl            # I/O abstraction
+    Tokenizer.jl             # WASM-compilable tokenizer
 ```
 
-## Limitations
+## Known Limitations
 
-- No closures (use macros for compile-time code generation instead)
-- No exceptions (use Result-type patterns - now supported!)
-- No async/await (use callbacks)
-- Limited Base Julia coverage (focused on core primitives)
-- String indexing not supported (Julia's UTF-8 IR is too complex)
-- Array resize operations (`push!`, `pop!`) not supported (WasmGC arrays are fixed-size)
+### Will Likely Never Work
 
-## Examples
+- **Full Julia Runtime**: No GC, tasks, channels, or IO. WasmGC provides the GC.
+- **Arbitrary FFI**: Only Wasm imports/exports. No libc, BLAS, etc.
+- **Closures**: Use structs or compile-time code generation instead.
+- **Exceptions**: Use Result-type patterns (return `Union{T, Error}`).
+- **Async/Await**: Use callbacks via JS interop.
+- **Reflection**: `methods()`, `fieldnames()` etc. are compile-time only.
 
-See the [Features page](https://grouptherapyorg.github.io/WasmTarget.jl/features/) for interactive examples with live demos.
+### Current Limitations (May Improve)
 
-### Advanced Patterns
-
-The test suite contains comprehensive examples of all features:
-
-- **[Wasm Globals](https://github.com/GroupTherapyOrg/WasmTarget.jl/blob/main/test/runtests.jl#L1455)**: Reactive state management pattern (Therapy.jl foundation)
-- **[Tables & Indirect Calls](https://github.com/GroupTherapyOrg/WasmTarget.jl/blob/main/test/runtests.jl#L1477)**: Dynamic dispatch via function references
-- **[Memory & Data Segments](https://github.com/GroupTherapyOrg/WasmTarget.jl/blob/main/test/runtests.jl#L1600)**: Linear memory with initialization
-
-All examples in the documentation link directly to tested code in the repository.
+- **Base Coverage**: Focused on core primitives. Many Base functions not yet supported.
+- **String Indexing**: Julia's UTF-8 semantics are complex. Use `str_char(s, i)` intrinsic.
+- **Array Resize**: `push!`/`pop!` compile but require runtime support. WasmGC arrays are fixed-size internally; we wrap with capacity tracking.
+- **Union Types**: Basic support. Complex unions may fail.
 
 ## Testing
 
 ```bash
-julia --project=. test/runtests.jl
+# Run main test suite
+julia +1.12 --project=. test/runtests.jl
+
+# Verify all milestones pass
+julia +1.12 --project=. scripts/test_milestones.jl
 ```
 
 Tests require Node.js 20+ for WasmGC execution.
 
+## Comparison with Other Projects
+
+| Feature | WasmTarget.jl | WasmCompiler.jl | WebAssemblyCompiler.jl |
+|---------|--------------|-----------------|------------------------|
+| **Approach** | WasmGC (structs, arrays) | Linear memory | WasmGC |
+| **Julia Version** | 1.12+ | 1.6+ | 1.9+ |
+| **Type System** | Full Julia types | Basic types | Subset of types |
+| **Self-Hosting** | Yes (M4) | No | No |
+| **Active** | Yes | Dormant | Active |
+| **Control Flow** | Full (phi, complex) | Basic | Good |
+| **JS Interop** | externref | imports/exports | externref |
+
+### Architectural Inspiration: dart2wasm
+
+WasmTarget's architecture is influenced by dart2wasm, Dart's official WebAssembly compiler:
+- Both use WasmGC for managed memory (no manual malloc/free)
+- Both compile a garbage-collected language to Wasm
+- Both handle complex control flow with phi nodes and stackification
+
+Key difference: WasmTarget leverages Julia's existing compiler pipeline (JuliaSyntax, JuliaLowering, typeinf) rather than building a separate frontend.
+
 ## Related Projects
 
-This package is designed as the foundation for **Therapy.jl**, a reactive web framework inspired by Leptos (Rust) and SolidJS, bringing Julia to the browser with fine-grained reactivity.
+WasmTarget.jl is the compiler foundation for **Therapy.jl**, a reactive web framework inspired by Leptos (Rust) and SolidJS, bringing Julia to the browser with fine-grained reactivity.
 
 ## License
 
