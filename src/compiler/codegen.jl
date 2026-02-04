@@ -6283,6 +6283,11 @@ function get_phi_edge_wasm_type(val, ctx::CompilationContext)::Union{WasmValType
     if val === nothing
         return I32
     end
+    # PURE-045: Handle GlobalRef to nothing (e.g., Compiler.nothing, Base.nothing)
+    # These compile to i32_const 0 just like literal nothing
+    if val isa GlobalRef && val.name === :nothing
+        return I32
+    end
     if val isa Core.SSAValue
         # If the SSA has a local allocated, return the local's actual Wasm type.
         # This is what local.get will actually push on the stack, which may differ
@@ -6940,7 +6945,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                     push!(bytes, 0x00)
                 end
             elseif stmt isa Core.ReturnNode
-                # PURE-036ag: Early return in pre-loop code with externref conversion
+                # PURE-036ag/PURE-045: Early return in pre-loop code with ref conversion
                 if isdefined(stmt, :val)
                     val_wasm_type = infer_value_wasm_type(stmt.val, ctx)
                     ret_wasm_type = julia_to_wasm_type_concrete(ctx.return_type, ctx)
@@ -6952,6 +6957,16 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                         # Can't convert numeric to externref - return ref.null extern
                         push!(bytes, Opcode.REF_NULL)
                         push!(bytes, UInt8(ExternRef))
+                        push!(bytes, Opcode.RETURN)
+                    elseif func_ret_wasm isa ConcreteRef && is_numeric_val
+                        # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
+                        push!(bytes, Opcode.REF_NULL)
+                        append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                        push!(bytes, Opcode.RETURN)
+                    elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef) && is_numeric_val
+                        # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(func_ret_wasm))
                         push!(bytes, Opcode.RETURN)
                     else
                         append!(bytes, compile_value(stmt.val, ctx))
@@ -7614,12 +7629,20 @@ function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBloc
                     if !return_type_compatible(val_wasm_type, ret_wasm_type)
                         push!(bytes, Opcode.UNREACHABLE)
                     else
-                        # PURE-036ag: Handle numeric-to-externref case
+                        # PURE-036ag/PURE-045: Handle numeric-to-ref case
                         is_numeric_val = val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
                         if func_ret_wasm === ExternRef && is_numeric_val
                             # Can't convert numeric to externref - return ref.null extern instead
                             push!(bytes, Opcode.REF_NULL)
                             push!(bytes, UInt8(ExternRef))
+                        elseif func_ret_wasm isa ConcreteRef && is_numeric_val
+                            # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
+                            push!(bytes, Opcode.REF_NULL)
+                            append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                        elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef) && is_numeric_val
+                            # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
+                            push!(bytes, Opcode.REF_NULL)
+                            push!(bytes, UInt8(func_ret_wasm))
                         else
                             append!(bytes, compile_value(stmt.val, ctx))
                             # If function returns externref but value is concrete ref, convert
@@ -7694,11 +7717,19 @@ function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBloc
                         func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
                         val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                         is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
-                        # PURE-036ag: Handle numeric-to-externref case
+                        # PURE-036ag/PURE-045: Handle numeric-to-ref case
                         if func_ret_wasm === ExternRef && is_numeric_val
                             # Can't convert numeric to externref - return ref.null extern instead
                             push!(bytes, Opcode.REF_NULL)
                             push!(bytes, UInt8(ExternRef))
+                        elseif func_ret_wasm isa ConcreteRef && is_numeric_val
+                            # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
+                            push!(bytes, Opcode.REF_NULL)
+                            append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                        elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef) && is_numeric_val
+                            # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
+                            push!(bytes, Opcode.REF_NULL)
+                            push!(bytes, UInt8(func_ret_wasm))
                         else
                             append!(bytes, compile_value(stmt.val, ctx))
                             # If function returns externref but value is concrete ref, convert
@@ -7732,13 +7763,21 @@ function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBloc
             stmt = code[i]
             if stmt isa Core.ReturnNode
                 if isdefined(stmt, :val)
-                    # PURE-036ag: Handle numeric-to-externref case
+                    # PURE-036ag/PURE-045: Handle numeric-to-ref case
                     func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
                     val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                     is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                     if func_ret_wasm === ExternRef && is_numeric_val
                         push!(bytes, Opcode.REF_NULL)
                         push!(bytes, UInt8(ExternRef))
+                    elseif func_ret_wasm isa ConcreteRef && is_numeric_val
+                        # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
+                        push!(bytes, Opcode.REF_NULL)
+                        append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                    elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef) && is_numeric_val
+                        # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(func_ret_wasm))
                     else
                         append!(bytes, compile_value(stmt.val, ctx))
                         if func_ret_wasm === ExternRef && val_wasm !== ExternRef
@@ -7786,13 +7825,21 @@ function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBloc
             stmt = code[i]
             if stmt isa Core.ReturnNode
                 if isdefined(stmt, :val)
-                    # PURE-036ag: Handle numeric-to-externref case
+                    # PURE-036ag/PURE-045: Handle numeric-to-ref case
                     func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
                     val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                     is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                     if func_ret_wasm === ExternRef && is_numeric_val
                         push!(bytes, Opcode.REF_NULL)
                         push!(bytes, UInt8(ExternRef))
+                    elseif func_ret_wasm isa ConcreteRef && is_numeric_val
+                        # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
+                        push!(bytes, Opcode.REF_NULL)
+                        append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                    elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef) && is_numeric_val
+                        # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(func_ret_wasm))
                     else
                         append!(bytes, compile_value(stmt.val, ctx))
                         if func_ret_wasm === ExternRef && val_wasm !== ExternRef
@@ -7877,13 +7924,21 @@ function compile_nested_if_else(ctx::CompilationContext, code, goto_idx::Int, co
 
         if stmt isa Core.ReturnNode
             if isdefined(stmt, :val)
-                # PURE-036ag: Handle numeric-to-externref case
+                # PURE-036ag/PURE-045: Handle numeric-to-ref case
                 func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
                 val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                 is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                 if func_ret_wasm === ExternRef && is_numeric_val
                     push!(bytes, Opcode.REF_NULL)
                     push!(bytes, UInt8(ExternRef))
+                elseif func_ret_wasm isa ConcreteRef && is_numeric_val
+                    # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
+                    push!(bytes, Opcode.REF_NULL)
+                    append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef) && is_numeric_val
+                    # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, UInt8(func_ret_wasm))
                 else
                     append!(bytes, compile_value(stmt.val, ctx))
                     if func_ret_wasm === ExternRef && val_wasm !== ExternRef
@@ -7932,13 +7987,21 @@ function compile_nested_if_else(ctx::CompilationContext, code, goto_idx::Int, co
 
         if stmt isa Core.ReturnNode
             if isdefined(stmt, :val)
-                # PURE-036ag: Handle numeric-to-externref case
+                # PURE-036ag/PURE-045: Handle numeric-to-ref case
                 func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
                 val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                 is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                 if func_ret_wasm === ExternRef && is_numeric_val
                     push!(bytes, Opcode.REF_NULL)
                     push!(bytes, UInt8(ExternRef))
+                elseif func_ret_wasm isa ConcreteRef && is_numeric_val
+                    # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
+                    push!(bytes, Opcode.REF_NULL)
+                    append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef) && is_numeric_val
+                    # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, UInt8(func_ret_wasm))
                 else
                     append!(bytes, compile_value(stmt.val, ctx))
                     if func_ret_wasm === ExternRef && val_wasm !== ExternRef
@@ -9666,7 +9729,7 @@ function generate_void_flow(ctx::CompilationContext, blocks::Vector{BasicBlock},
         end
 
         if stmt isa Core.ReturnNode
-            # PURE-036ag: Handle ReturnNodes with values, not just void returns
+            # PURE-036ag/PURE-045: Handle ReturnNodes with values, not just void returns
             if isdefined(stmt, :val)
                 func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
                 val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
@@ -9676,6 +9739,14 @@ function generate_void_flow(ctx::CompilationContext, blocks::Vector{BasicBlock},
                     # Can't convert numeric to externref - return ref.null extern instead
                     push!(bytes, Opcode.REF_NULL)
                     push!(bytes, UInt8(ExternRef))
+                elseif func_ret_wasm isa ConcreteRef && is_numeric_val
+                    # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
+                    push!(bytes, Opcode.REF_NULL)
+                    append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef) && is_numeric_val
+                    # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, UInt8(func_ret_wasm))
                 else
                     append!(bytes, compile_value(stmt.val, ctx))
                     # If function returns externref but value is a concrete ref, convert
