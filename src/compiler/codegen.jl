@@ -15980,8 +15980,11 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         # Compile the value to store - we need it twice (for array.set and return)
         # First compile gets the value on stack for array.set
         local mset_val_bytes = compile_value(value_arg, ctx)
-        # If array element type is externref (elem_type is Any), convert ref→externref
-        if elem_type === Any
+        # If array element type is externref (elem_type is Any OR abstract type), convert ref→externref
+        # PURE-045: Check the actual wasm element type, not just elem_type === Any
+        # Abstract types like CallInfo also map to ExternRef
+        local wasm_elem_type = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
+        if wasm_elem_type === ExternRef
             local is_numeric_mset = false
             if length(mset_val_bytes) >= 2 && mset_val_bytes[1] == Opcode.LOCAL_GET
                 local src_idx_m = 0
@@ -16010,6 +16013,37 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 append!(bytes, mset_val_bytes)
                 push!(bytes, Opcode.GC_PREFIX)
                 push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+            end
+        elseif wasm_elem_type isa ConcreteRef
+            # PURE-045: Array of concrete ref types (e.g., struct or array refs)
+            # If value is numeric (nothing represented as i32_const 0), emit ref.null instead
+            local is_numeric_for_ref = false
+            if length(mset_val_bytes) >= 1 && (mset_val_bytes[1] == Opcode.I32_CONST || mset_val_bytes[1] == Opcode.I64_CONST || mset_val_bytes[1] == Opcode.F32_CONST || mset_val_bytes[1] == Opcode.F64_CONST)
+                is_numeric_for_ref = true
+            elseif length(mset_val_bytes) >= 2 && mset_val_bytes[1] == Opcode.LOCAL_GET
+                local src_idx_r = 0
+                local shift_r = 0
+                local pos_r = 2
+                while pos_r <= length(mset_val_bytes)
+                    b = mset_val_bytes[pos_r]
+                    src_idx_r |= (Int(b & 0x7f) << shift_r)
+                    shift_r += 7
+                    pos_r += 1
+                    (b & 0x80) == 0 && break
+                end
+                if pos_r - 1 == length(mset_val_bytes) && src_idx_r < length(ctx.locals)
+                    src_type_r = ctx.locals[src_idx_r + 1]
+                    if src_type_r === I64 || src_type_r === I32 || src_type_r === F64 || src_type_r === F32
+                        is_numeric_for_ref = true
+                    end
+                end
+            end
+            if is_numeric_for_ref
+                # Numeric value (nothing) for ref-typed array — emit ref.null of the element type
+                push!(bytes, Opcode.REF_NULL)
+                append!(bytes, encode_leb128_signed(Int64(wasm_elem_type.type_idx)))
+            else
+                append!(bytes, mset_val_bytes)
             end
         else
             append!(bytes, mset_val_bytes)
