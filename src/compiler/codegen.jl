@@ -9081,6 +9081,18 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                 end
 
                                 phi_value_bytes = compile_phi_value(val, i)
+                                # PURE-048: If compile_phi_value produced a numeric constant (i32/i64/f32/f64)
+                                # but the phi local is a ref type, replace with ref.null of the correct type.
+                                # This happens when GlobalRef values (e.g., Base.Any, Compiler.Type) compile
+                                # to i32.const 0 as a placeholder but the phi local is AnyRef/ConcreteRef.
+                                if !isempty(phi_value_bytes)
+                                    _first_byte = phi_value_bytes[1]
+                                    _is_numeric = _first_byte == Opcode.I32_CONST || _first_byte == Opcode.I64_CONST || _first_byte == Opcode.F32_CONST || _first_byte == Opcode.F64_CONST
+                                    _is_ref_local = phi_local_type isa ConcreteRef || phi_local_type === StructRef || phi_local_type === ArrayRef || phi_local_type === AnyRef || phi_local_type === ExternRef
+                                    if _is_numeric && _is_ref_local
+                                        phi_value_bytes = emit_phi_type_default(phi_local_type)
+                                    end
+                                end
                                 # Detect multi-value bytes (all local_gets, N>=2).
                                 # local_set only consumes 1, so N-1 would be orphaned.
                                 if length(phi_value_bytes) >= 4
@@ -9301,6 +9313,16 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                     break
                                 end
                                 phi_value_bytes = compile_phi_value(val, i)
+                                # PURE-048: If compile_phi_value produced a numeric constant but phi local
+                                # is a ref type, replace with ref.null of the correct type.
+                                if !isempty(phi_value_bytes)
+                                    _first_byte2 = phi_value_bytes[1]
+                                    _is_numeric2 = _first_byte2 == Opcode.I32_CONST || _first_byte2 == Opcode.I64_CONST || _first_byte2 == Opcode.F32_CONST || _first_byte2 == Opcode.F64_CONST
+                                    _is_ref_local2 = phi_local_type isa ConcreteRef || phi_local_type === StructRef || phi_local_type === ArrayRef || phi_local_type === AnyRef || phi_local_type === ExternRef
+                                    if _is_numeric2 && _is_ref_local2
+                                        phi_value_bytes = emit_phi_type_default(phi_local_type)
+                                    end
+                                end
                                 # Detect multi-value bytes (all local_gets, N>=2).
                                 # local_set only consumes 1 value, so N-1 would be orphaned.
                                 if length(phi_value_bytes) >= 4
