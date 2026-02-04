@@ -2153,6 +2153,18 @@ function is_ref_type_or_union(T::Type)::Bool
     if T <: AbstractArray
         return true
     end
+    # String/Symbol map to ArrayRef
+    if T === String || T === Symbol || T <: AbstractString
+        return true
+    end
+    # Abstract types map to ExternRef (e.g., Compiler.CallInfo, AbstractInterpreter)
+    if isabstracttype(T)
+        return true
+    end
+    # UnionAll types map to AnyRef or ExternRef (e.g., Type, parametric types)
+    if T isa UnionAll
+        return true
+    end
     return false
 end
 
@@ -4777,9 +4789,9 @@ function allocate_ssa_locals!(ctx::CompilationContext)
                 end
             end
 
-            # Fix PURE-036be: When wasm_type is ExternRef but SSA is used in boolean context,
-            # type the local as I32 instead. This handles dead code after UNREACHABLE where
-            # the polymorphic stack "produces" an i32 for boolean operations.
+            # Fix PURE-036be/PURE-046: When wasm_type is ExternRef but SSA is used in numeric context,
+            # type the local based on the Julia type inference to match the expected operand type.
+            # This handles dead code after UNREACHABLE and Any-typed struct fields used in comparisons.
             if wasm_type === ExternRef
                 ssa_val = Core.SSAValue(ssa_id)
                 for (j, use_stmt) in enumerate(code)
@@ -4788,21 +4800,37 @@ function allocate_ssa_locals!(ctx::CompilationContext)
                         wasm_type = I32
                         break
                     end
-                    # Check if used as argument to boolean intrinsics (not_int, eq_int, etc)
+                    # Check if used as argument to comparison/boolean intrinsics
                     if use_stmt isa Expr && use_stmt.head === :call && length(use_stmt.args) >= 2
                         func = use_stmt.args[1]
                         if func isa GlobalRef && func.mod in (Core, Base, Core.Intrinsics)
                             fname = func.name
-                            is_bool_op = fname in (:not_int, :eq_int, :ne_int, :slt_int, :sle_int,
-                                                   :ult_int, :ule_int, :and_int, :or_int, :xor_int)
-                            if is_bool_op
+                            # Boolean ops that take boolean/i32 operands
+                            is_bool_op = fname in (:not_int, :and_int, :or_int, :xor_int)
+                            # Comparison ops that can take i32 or i64 operands
+                            is_cmp_op = fname in (:eq_int, :ne_int, :slt_int, :sle_int,
+                                                  :ult_int, :ule_int)
+                            if is_bool_op || is_cmp_op
                                 for arg in use_stmt.args[2:end]
                                     if arg === ssa_val
-                                        wasm_type = I32
+                                        # PURE-046: Use Julia type to determine correct Wasm operand type
+                                        # Compute what Wasm type the Julia type would normally map to
+                                        inferred_wasm = julia_to_wasm_type_concrete(effective_type, ctx)
+                                        if inferred_wasm === I64
+                                            wasm_type = I64
+                                        elseif inferred_wasm === I32 || is_bool_op
+                                            wasm_type = I32
+                                        elseif inferred_wasm isa ConcreteRef || inferred_wasm === ExternRef
+                                            # Int128/UInt128 are structs, keep as ExternRef
+                                            # (comparison ops on these are handled differently)
+                                        else
+                                            # Default to I32 for other cases (F32/F64 shouldn't reach here)
+                                            wasm_type = I32
+                                        end
                                         break
                                     end
                                 end
-                                wasm_type === I32 && break
+                                (wasm_type === I32 || wasm_type === I64) && break
                             end
                         end
                     end
@@ -16525,6 +16553,33 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         end
     end
 
+    # Determine argument type for opcode selection (do this BEFORE compiling args)
+    arg_type = length(args) > 0 ? infer_value_type(args[1], ctx) : Int64
+    is_32bit = arg_type === Int32 || arg_type === UInt32 || arg_type === Bool || arg_type === Char ||
+               arg_type === Int16 || arg_type === UInt16 || arg_type === Int8 || arg_type === UInt8 ||
+               (isprimitivetype(arg_type) && sizeof(arg_type) <= 4)
+    is_128bit = arg_type === Int128 || arg_type === UInt128
+
+    # PURE-046: If arg_type is Any/abstract but the intrinsic expects numeric operands,
+    # the code is type-confused (externref being used as numeric). Emit unreachable
+    # since we can't convert externref to i64 in Wasm.
+    is_numeric_intrinsic = is_func(func, :eq_int) || is_func(func, :ne_int) ||
+                           is_func(func, :slt_int) || is_func(func, :sle_int) ||
+                           is_func(func, :ult_int) || is_func(func, :ule_int) ||
+                           is_func(func, :add_int) || is_func(func, :sub_int) ||
+                           is_func(func, :mul_int)
+    if is_numeric_intrinsic
+        @info "PURE-046 DEBUG: numeric intrinsic arg_type=$arg_type, isprimitivetype=$(isprimitivetype(arg_type)), is_128bit=$is_128bit"
+    end
+    if is_numeric_intrinsic && (arg_type === Any ||
+                                 (!isprimitivetype(arg_type) && !is_128bit && !(arg_type <: Integer)))
+        # Type-confused code path - externref used as numeric
+        # Emit unreachable since we can't do numeric ops on externref
+        @info "PURE-046: Emitting UNREACHABLE for type-confused numeric intrinsic: arg_type=$arg_type"
+        push!(bytes, Opcode.UNREACHABLE)
+        return bytes
+    end
+
     # Push arguments onto the stack (normal case)
     # Skip Type arguments (e.g., first arg of sext_int, zext_int, trunc_int, bitcast)
     # These are compile-time type parameters, not runtime values
@@ -16554,12 +16609,62 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         append!(bytes, compile_value(arg, ctx))
     end
 
-    # Determine argument type for opcode selection
-    arg_type = length(args) > 0 ? infer_value_type(args[1], ctx) : Int64
-    is_32bit = arg_type === Int32 || arg_type === UInt32 || arg_type === Bool || arg_type === Char ||
-               arg_type === Int16 || arg_type === UInt16 || arg_type === Int8 || arg_type === UInt8 ||
-               (isprimitivetype(arg_type) && sizeof(arg_type) <= 4)
-    is_128bit = arg_type === Int128 || arg_type === UInt128
+    # PURE-046: For numeric intrinsics, verify the compiled args don't contain externref
+    # (this catches cases where Julia type inference says Int64 but actual struct field is Any)
+    if is_numeric_intrinsic && length(args) > 0
+        local arg1_bytes = compile_value(args[1], ctx)
+        # Check if arg1 compiles to struct_get that returns externref
+        # GC_PREFIX (0xFB) followed by STRUCT_GET (0x02) indicates struct field access
+        if length(arg1_bytes) >= 4 && arg1_bytes[1] == Opcode.GC_PREFIX && arg1_bytes[2] == 0x02
+            # Decode the struct type index from LEB128
+            local struct_idx = 0
+            local shift = 0
+            local pos = 3
+            while pos <= length(arg1_bytes)
+                b = arg1_bytes[pos]
+                struct_idx |= (Int(b & 0x7f) << shift)
+                shift += 7
+                pos += 1
+                (b & 0x80) == 0 && break
+            end
+            # Check if this struct type has the field as externref
+            # For now, conservatively check if the compiled bytes produce externref
+            # by checking if the SSA type is Any
+            local arg1_ssa = args[1]
+            if arg1_ssa isa Core.SSAValue && haskey(ctx.ssa_types, arg1_ssa.id)
+                local ssa_type = ctx.ssa_types[arg1_ssa.id]
+                if ssa_type === Any
+                    @info "PURE-046: Emitting UNREACHABLE for externref in numeric intrinsic (SSA type is Any)"
+                    push!(bytes, Opcode.UNREACHABLE)
+                    return bytes
+                end
+            end
+        end
+        # Also check for local_get of externref-typed local
+        if length(arg1_bytes) >= 2 && arg1_bytes[1] == Opcode.LOCAL_GET
+            local local_idx_chk2 = 0
+            local shift_chk2 = 0
+            local pos_chk2 = 2
+            while pos_chk2 <= length(arg1_bytes)
+                b = arg1_bytes[pos_chk2]
+                local_idx_chk2 |= (Int(b & 0x7f) << shift_chk2)
+                shift_chk2 += 7
+                pos_chk2 += 1
+                (b & 0x80) == 0 && break
+            end
+            local offset_chk2 = local_idx_chk2 - ctx.n_params
+            @info "PURE-046 DEBUG local check: local_idx=$local_idx_chk2, n_params=$(ctx.n_params), offset=$offset_chk2, locals=$(length(ctx.locals))"
+            if offset_chk2 >= 0 && offset_chk2 < length(ctx.locals)
+                local lt_chk2 = ctx.locals[offset_chk2 + 1]
+                @info "PURE-046 DEBUG: local type=$lt_chk2, ExternRef=$ExternRef"
+                if lt_chk2 === ExternRef
+                    @info "PURE-046: Emitting UNREACHABLE for externref local in numeric intrinsic"
+                    push!(bytes, Opcode.UNREACHABLE)
+                    return bytes
+                end
+            end
+        end
+    end
 
     # Match intrinsics by name
     if is_func(func, :add_int)
@@ -16958,6 +17063,16 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             local arg2_wasm_is_ref = arg2_is_ref
             local arg1_is_externref = (arg_type === Any)
             local arg2_is_externref = (arg2_type === Any)
+            # PURE-046: Any ALWAYS maps to externref, so if arg_type or arg2_type is Any,
+            # the corresponding wasm_is_ref must be true (regardless of local type checks)
+            if arg_type === Any
+                arg1_wasm_is_ref = true
+                arg1_is_externref = true
+            end
+            if arg2_type === Any
+                arg2_wasm_is_ref = true
+                arg2_is_externref = true
+            end
             # Check Wasm representation for any potentially mixed comparison
             # (when one arg is ref-typed or Nothing, verify actual Wasm types)
             if arg_type === Nothing || arg2_type === Nothing || arg1_is_ref || arg2_is_ref
@@ -16968,11 +17083,16 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 # Check arg1's Wasm type when:
                 # - arg_type === Nothing (need to verify if it's actually ref.null or i32)
                 # - arg2_type === Nothing (need to know if arg1 is ref to do proper comparison)
-                if length(args) >= 1 && (arg_type === Nothing || arg2_type === Nothing)
+                # - arg_type === Any (PURE-046: Any maps to externref, must check actual local type)
+                if length(args) >= 1 && (arg_type === Nothing || arg2_type === Nothing || arg_type === Any || arg1_is_ref)
                     local arg1_bytes = compile_value(args[1], ctx)
                     if length(arg1_bytes) >= 1
                         if arg1_bytes[1] == Opcode.REF_NULL
                             arg1_wasm_is_ref = true
+                        elseif arg1_bytes[1] == Opcode.I32_CONST || arg1_bytes[1] == Opcode.I64_CONST ||
+                               arg1_bytes[1] == Opcode.F32_CONST || arg1_bytes[1] == Opcode.F64_CONST
+                            # Numeric constant — definitely NOT a ref, regardless of Julia type
+                            arg1_wasm_is_ref = false
                         elseif arg1_bytes[1] == Opcode.LOCAL_GET && length(arg1_bytes) >= 2
                             local local_idx_1 = 0
                             local shift_1 = 0
@@ -16998,15 +17118,27 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                             end
                         end
                     end
+                    # PURE-046: Override local type check if Julia type is Any
+                    # The local might have been allocated wrong (PURE-036be issue), but
+                    # Any ALWAYS means externref at runtime, so treat it as ref
+                    if arg_type === Any
+                        arg1_wasm_is_ref = true
+                        arg1_is_externref = true
+                    end
                 end
                 # Check arg2's Wasm type when:
                 # - arg2_type === Nothing (need to verify if it's actually ref.null or i32)
                 # - arg_type === Nothing (need to know if arg2 is ref to do proper comparison)
-                if length(args) >= 2 && (arg2_type === Nothing || arg_type === Nothing)
+                # - arg2_type === Any (PURE-046: Any maps to externref, must check actual local type)
+                if length(args) >= 2 && (arg2_type === Nothing || arg_type === Nothing || arg2_type === Any || arg2_is_ref)
                     local arg2_bytes = compile_value(args[2], ctx)
                     if length(arg2_bytes) >= 1
                         if arg2_bytes[1] == Opcode.REF_NULL
                             arg2_wasm_is_ref = true
+                        elseif arg2_bytes[1] == Opcode.I32_CONST || arg2_bytes[1] == Opcode.I64_CONST ||
+                               arg2_bytes[1] == Opcode.F32_CONST || arg2_bytes[1] == Opcode.F64_CONST
+                            # Numeric constant — definitely NOT a ref
+                            arg2_wasm_is_ref = false
                         elseif arg2_bytes[1] == Opcode.LOCAL_GET && length(arg2_bytes) >= 2
                             local local_idx_2 = 0
                             local shift_2 = 0
@@ -17032,9 +17164,15 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                             end
                         end
                     end
+                    # PURE-046: Override local type check if Julia type is Any
+                    # The local might have been allocated wrong (PURE-036be issue), but
+                    # Any ALWAYS means externref at runtime, so treat it as ref
+                    if arg2_type === Any
+                        arg2_wasm_is_ref = true
+                        arg2_is_externref = true
+                    end
                 end
             end
-            # BOTH args must be ref types to use ref.eq
             if arg1_wasm_is_ref && arg2_wasm_is_ref
                 # ref.eq requires eqref operands. externref is NOT eqref.
                 # Convert externref → anyref → eqref before ref.eq
