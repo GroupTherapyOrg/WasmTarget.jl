@@ -10,9 +10,9 @@
 #
 # Story: BROWSER-030
 
-include("../components/Layout.jl")
-include("../components/ThemeToggle.jl")
-include("../components/playground/InterpreterPlayground.jl")
+include("../components/layout.jl")
+include("../components/themetoggle.jl")
+include("../components/playground/interpreterplayground.jl")
 
 """
 Main Playground page component.

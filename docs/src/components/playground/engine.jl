@@ -11,8 +11,8 @@
 #
 # Story: PLAYGROUND-021
 
-include("../Demos.jl")
-include("Examples.jl")
+include("../demos.jl")
+include("examples.jl")
 
 """
 Mapping of example IDs to their pre-compiled island components.

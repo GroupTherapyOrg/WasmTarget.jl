@@ -9,8 +9,8 @@
 # Story: PLAYGROUND-022
 
 # Include dependencies at module level
-include("../Demos.jl")
-include("Examples.jl")
+include("../demos.jl")
+include("examples.jl")
 
 """
 Output state enumeration for visual feedback.
