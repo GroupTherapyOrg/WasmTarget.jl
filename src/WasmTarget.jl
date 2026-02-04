@@ -1,9 +1,9 @@
 module WasmTarget
 
 # Builder - Low-level Wasm binary emitter
-include("Builder/Types.jl")
-include("Builder/Writer.jl")
-include("Builder/Instructions.jl")
+include("builder/types.jl")
+include("builder/writer.jl")
+include("builder/instructions.jl")
 
 # Compiler - Julia IR to Wasm translation
 include("Compiler/IR.jl")
