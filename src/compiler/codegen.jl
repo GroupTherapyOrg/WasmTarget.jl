@@ -15476,8 +15476,9 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                         pos_i += 1
                         (b & 0x80) == 0 && break
                     end
-                    if pos_i - 1 == length(item_bytes) && src_idx_i < length(ctx.locals)
-                        src_type_i = ctx.locals[src_idx_i + 1]
+                    local arr_idx_i = src_idx_i - ctx.n_params + 1
+                    if pos_i - 1 == length(item_bytes) && arr_idx_i >= 1 && arr_idx_i <= length(ctx.locals)
+                        src_type_i = ctx.locals[arr_idx_i]
                         if src_type_i === I64 || src_type_i === I32 || src_type_i === F64 || src_type_i === F32
                             is_numeric_item = true
                         elseif src_type_i === ExternRef
@@ -16063,8 +16064,9 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     pos_m += 1
                     (b & 0x80) == 0 && break
                 end
-                if pos_m - 1 == length(mset_val_bytes) && src_idx_m < length(ctx.locals)
-                    src_type_m = ctx.locals[src_idx_m + 1]
+                local arr_idx_m = src_idx_m - ctx.n_params + 1
+                if pos_m - 1 == length(mset_val_bytes) && arr_idx_m >= 1 && arr_idx_m <= length(ctx.locals)
+                    src_type_m = ctx.locals[arr_idx_m]
                     if src_type_m === I64 || src_type_m === I32 || src_type_m === F64 || src_type_m === F32
                         is_numeric_mset = true
                     elseif src_type_m === ExternRef
@@ -16106,8 +16108,9 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     pos_r += 1
                     (b & 0x80) == 0 && break
                 end
-                if pos_r - 1 == length(mset_val_bytes) && src_idx_r < length(ctx.locals)
-                    src_type_r = ctx.locals[src_idx_r + 1]
+                local arr_idx_r = src_idx_r - ctx.n_params + 1
+                if pos_r - 1 == length(mset_val_bytes) && arr_idx_r >= 1 && arr_idx_r <= length(ctx.locals)
+                    src_type_r = ctx.locals[arr_idx_r]
                     if src_type_r === I64 || src_type_r === I32 || src_type_r === F64 || src_type_r === F32
                         is_numeric_for_ref = true
                     end
@@ -20661,8 +20664,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                             pos_v += 1
                             (b & 0x80) == 0 && break
                         end
-                        if pos_v - 1 == length(val_bytes) && src_idx_v < length(ctx.locals)
-                            src_type_v = ctx.locals[src_idx_v + 1]
+                        local arr_idx_v = src_idx_v - ctx.n_params + 1
+                        if pos_v - 1 == length(val_bytes) && arr_idx_v >= 1 && arr_idx_v <= length(ctx.locals)
+                            src_type_v = ctx.locals[arr_idx_v]
                             if src_type_v === I64 || src_type_v === I32 || src_type_v === F64 || src_type_v === F32
                                 is_numeric_val = true
                             elseif src_type_v === ExternRef
