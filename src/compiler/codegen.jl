@@ -14020,6 +14020,14 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
                         push!(bytes, UInt8(StructRef))
                     end
                     field_bytes = UInt8[]  # Don't append original
+                elseif actual_field_wasm === ExternRef && src_type !== nothing && src_type !== ExternRef
+                    # PURE-046: Source is a concrete ref but field expects externref
+                    # (e.g., abstract type field like AbstractInterpreter registered as externref)
+                    # Need to convert concrete ref to externref using extern.convert_any
+                    append!(bytes, field_bytes)
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                    field_bytes = UInt8[]  # Already appended
                 end
             end
             append!(bytes, field_bytes)
