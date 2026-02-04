@@ -4306,7 +4306,18 @@ function analyze_control_flow!(ctx::CompilationContext)
     # Allocate locals for phi nodes (they need to persist across iterations)
     for (i, stmt) in enumerate(code)
         if stmt isa Core.PhiNode
-            phi_julia_type = get(ctx.ssa_types, i, Int64)
+            # PURE-048: Use ssavaluetypes as fallback instead of Int64.
+            # analyze_ssa_types! skips Any-typed SSAs, but phi nodes with type Any
+            # must map to ExternRef, not I64. Fall back to ssavaluetypes[i] first.
+            phi_julia_type = get(ctx.ssa_types, i, nothing)
+            if phi_julia_type === nothing
+                ssatypes = ctx.code_info.ssavaluetypes
+                if ssatypes isa Vector && i <= length(ssatypes)
+                    phi_julia_type = ssatypes[i]
+                else
+                    phi_julia_type = Int64
+                end
+            end
             phi_wasm_type = julia_to_wasm_type_concrete(phi_julia_type, ctx)
 
             # Phi locals always use the type derived from the phi's Julia type.
@@ -7579,7 +7590,12 @@ function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBloc
     if phi_node !== nothing
         # Phi node pattern (ternary expression)
         # The phi provides values for each branch - use those directly
-        phi_type = get(ctx.ssa_types, phi_idx, Int32)
+        # PURE-048: Use ssavaluetypes fallback instead of Int32 default
+        phi_type = get(ctx.ssa_types, phi_idx, nothing)
+        if phi_type === nothing
+            ssatypes = ctx.code_info.ssavaluetypes
+            phi_type = (ssatypes isa Vector && phi_idx <= length(ssatypes)) ? ssatypes[phi_idx] : Int32
+        end
         result_type = julia_to_wasm_type_concrete(phi_type, ctx)
 
         # Start if block with phi result type
@@ -10305,7 +10321,12 @@ function compile_ternary_for_phi(ctx::CompilationContext, code, cond_idx::Int, c
     end
 
     local_idx = ctx.phi_locals[phi_idx]
-    phi_type = get(ctx.ssa_types, phi_idx, Int64)
+    # PURE-048: Use ssavaluetypes fallback instead of Int64 default
+    phi_type = get(ctx.ssa_types, phi_idx, nothing)
+    if phi_type === nothing
+        ssatypes = ctx.code_info.ssavaluetypes
+        phi_type = (ssatypes isa Vector && phi_idx <= length(ssatypes)) ? ssatypes[phi_idx] : Int64
+    end
     wasm_type = julia_to_wasm_type_concrete(phi_type, ctx)
 
     # Push condition
