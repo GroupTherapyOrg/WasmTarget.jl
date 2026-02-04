@@ -10299,12 +10299,40 @@ function compile_ternary_for_phi(ctx::CompilationContext, code, cond_idx::Int, c
     # Then branch - push value
     if then_value !== nothing
         value_bytes = compile_value(then_value, ctx)
-        append!(bytes, value_bytes)
-        # Ensure value matches block type
-        if wasm_type === I32 && !isempty(value_bytes) && value_bytes[1] == Opcode.I64_CONST
-            push!(bytes, Opcode.I32_WRAP_I64)
-        elseif wasm_type === I64 && !isempty(value_bytes) && value_bytes[1] == Opcode.I32_CONST
-            push!(bytes, Opcode.I64_EXTEND_I32_S)
+        # PURE-045: Check if compiled value's actual type matches expected block type
+        # If value_bytes is local.get of a mismatched type, use type-safe default instead
+        actual_type_mismatch = false
+        if wasm_type isa ConcreteRef && length(value_bytes) >= 2 && value_bytes[1] == Opcode.LOCAL_GET
+            # Decode local index
+            src_idx = 0; shift = 0
+            for bi in 2:length(value_bytes)
+                b = value_bytes[bi]
+                src_idx |= (Int(b & 0x7f) << shift)
+                shift += 7
+                (b & 0x80) == 0 && break
+            end
+            src_arr_idx = src_idx - ctx.n_params + 1
+            if src_arr_idx >= 1 && src_arr_idx <= length(ctx.locals)
+                src_type = ctx.locals[src_arr_idx]
+                if src_type isa ConcreteRef && src_type.type_idx != wasm_type.type_idx
+                    actual_type_mismatch = true
+                elseif !(src_type isa ConcreteRef) && src_type !== wasm_type
+                    actual_type_mismatch = true
+                end
+            end
+        end
+        if actual_type_mismatch
+            # Local type doesn't match expected - emit ref.null of expected type
+            push!(bytes, Opcode.REF_NULL)
+            append!(bytes, encode_leb128_signed(Int64(wasm_type.type_idx)))
+        else
+            append!(bytes, value_bytes)
+            # Ensure value matches block type
+            if wasm_type === I32 && !isempty(value_bytes) && value_bytes[1] == Opcode.I64_CONST
+                push!(bytes, Opcode.I32_WRAP_I64)
+            elseif wasm_type === I64 && !isempty(value_bytes) && value_bytes[1] == Opcode.I32_CONST
+                push!(bytes, Opcode.I64_EXTEND_I32_S)
+            end
         end
     else
         # Fallback: emit type-safe default matching the block type
@@ -10335,12 +10363,40 @@ function compile_ternary_for_phi(ctx::CompilationContext, code, cond_idx::Int, c
     # Else branch - push value
     if else_value !== nothing
         value_bytes = compile_value(else_value, ctx)
-        append!(bytes, value_bytes)
-        # Ensure value matches block type
-        if wasm_type === I32 && !isempty(value_bytes) && value_bytes[1] == Opcode.I64_CONST
-            push!(bytes, Opcode.I32_WRAP_I64)
-        elseif wasm_type === I64 && !isempty(value_bytes) && value_bytes[1] == Opcode.I32_CONST
-            push!(bytes, Opcode.I64_EXTEND_I32_S)
+        # PURE-045: Check if compiled value's actual type matches expected block type
+        # If value_bytes is local.get of a mismatched type, use type-safe default instead
+        actual_type_mismatch = false
+        if wasm_type isa ConcreteRef && length(value_bytes) >= 2 && value_bytes[1] == Opcode.LOCAL_GET
+            # Decode local index
+            src_idx = 0; shift = 0
+            for bi in 2:length(value_bytes)
+                b = value_bytes[bi]
+                src_idx |= (Int(b & 0x7f) << shift)
+                shift += 7
+                (b & 0x80) == 0 && break
+            end
+            src_arr_idx = src_idx - ctx.n_params + 1
+            if src_arr_idx >= 1 && src_arr_idx <= length(ctx.locals)
+                src_type = ctx.locals[src_arr_idx]
+                if src_type isa ConcreteRef && src_type.type_idx != wasm_type.type_idx
+                    actual_type_mismatch = true
+                elseif !(src_type isa ConcreteRef) && src_type !== wasm_type
+                    actual_type_mismatch = true
+                end
+            end
+        end
+        if actual_type_mismatch
+            # Local type doesn't match expected - emit ref.null of expected type
+            push!(bytes, Opcode.REF_NULL)
+            append!(bytes, encode_leb128_signed(Int64(wasm_type.type_idx)))
+        else
+            append!(bytes, value_bytes)
+            # Ensure value matches block type
+            if wasm_type === I32 && !isempty(value_bytes) && value_bytes[1] == Opcode.I64_CONST
+                push!(bytes, Opcode.I32_WRAP_I64)
+            elseif wasm_type === I64 && !isempty(value_bytes) && value_bytes[1] == Opcode.I32_CONST
+                push!(bytes, Opcode.I64_EXTEND_I32_S)
+            end
         end
     else
         # Fallback: emit type-safe default matching the block type
