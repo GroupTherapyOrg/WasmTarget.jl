@@ -9948,8 +9948,10 @@ function generate_void_flow(ctx::CompilationContext, blocks::Vector{BasicBlock},
                             end
                         end
 
-                        if is_setter_call && !already_has_drop
+                        if is_setter_call && !already_has_drop && !haskey(ctx.ssa_locals, j)
                             # Signal setters push a return value that won't be used
+                            # THERAPY-2401: Skip DROP if compile_statement already stored
+                            # the value to an ssa_local via LOCAL_SET (which consumed the stack value)
                             push!(bytes, Opcode.DROP)
                         elseif !already_has_drop
                             # For other calls, check if statement produces a value and use count
@@ -10257,7 +10259,9 @@ function compile_void_nested_conditional(ctx::CompilationContext, code, start_id
                     end
                 end
 
-                if is_setter_call
+                if is_setter_call && !haskey(ctx.ssa_locals, j)
+                    # THERAPY-2401: Skip DROP if compile_statement already stored
+                    # the value to an ssa_local via LOCAL_SET (which consumed the stack value)
                     push!(bytes, Opcode.DROP)
                 else
                     stmt_type = get(ctx.ssa_types, j, Nothing)
