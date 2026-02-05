@@ -4,6 +4,10 @@
 @source "./src/routes/**/*.jl";
 @source "./src/components/**/*.jl";
 
+/* Enable class-based dark mode (toggle via .dark class on <html>) */
+/* Without this, dark: variants only respond to prefers-color-scheme media query */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* Theme customizations */
 @theme {
   --font-sans: 'Source Sans 3', system-ui, sans-serif;
