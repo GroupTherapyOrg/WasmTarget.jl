@@ -19,7 +19,13 @@ ThemeToggle = island(:ThemeToggle) do
     Div(:dark_mode => dark,
         Button(
             :class => "p-2 rounded-lg hover:bg-stone-100 dark:hover:bg-stone-700 transition-colors",
-            :on_click => () -> set_dark(dark() == Int32(0) ? Int32(1) : Int32(0)),
+            :on_click => () -> begin
+                if dark() == Int32(0)
+                    set_dark(Int32(1))
+                else
+                    set_dark(Int32(0))
+                end
+            end,
             :title => "Toggle dark mode",
             # Sun/Moon icon
             Svg(:class => "w-5 h-5 text-stone-600 dark:text-stone-300",
