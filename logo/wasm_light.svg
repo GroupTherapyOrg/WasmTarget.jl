@@ -1,7 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 100" width="700" height="100">
   <rect width="700" height="100" fill="#f8f7f4"/>
-  
-  <text x="28" y="72" font-family="'Optima', 'Palatino Linotype', 'Book Antiqua', serif" font-weight="300" font-size="76" fill="#2a2520" letter-spacing="6">
+  <text x="350" y="72" text-anchor="middle" font-family="'Optima', 'Palatino Linotype', 'Book Antiqua', serif" font-weight="300" font-size="76" fill="#2a2520" letter-spacing="6">
     <tspan>WasmTarget</tspan><tspan fill="#4063d8" opacity="0.30">.</tspan><tspan fill="#9558b2" opacity="0.30">j</tspan><tspan fill="#389826" opacity="0.30">l</tspan>
   </text>
 </svg>
