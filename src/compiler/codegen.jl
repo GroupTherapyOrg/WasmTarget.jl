@@ -14000,7 +14000,9 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
                         if src_idx2 < ctx.n_params
                             if src_idx2 + 1 <= length(ctx.arg_types)
                                 src_t = ctx.arg_types[src_idx2 + 1]
-                                is_already_externref = (src_t === ExternRef)
+                                # PURE-049: arg_types contains Julia types, not WasmValTypes.
+                                # Convert to wasm type before comparing (Any -> ExternRef).
+                                is_already_externref = (julia_to_wasm_type(src_t) === ExternRef)
                             end
                         else
                             arr_idx2 = src_idx2 - ctx.n_params + 1
