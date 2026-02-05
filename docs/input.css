@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+/* Configure content sources for Tailwind v4 */
+@source "./src/routes/**/*.jl";
+@source "./src/components/**/*.jl";
+
+/* Theme customizations */
+@theme {
+  --font-sans: 'Source Sans 3', system-ui, sans-serif;
+  --font-serif: 'Lora', Georgia, Cambria, serif;
+}
+
+/* Custom base styles */
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  pre code {
+    font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+  }
+}

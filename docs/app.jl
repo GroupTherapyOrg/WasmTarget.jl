@@ -41,8 +41,10 @@ app = App(
     components_dir = "src/components",
     title = "WasmTarget.jl",
     output_dir = "dist",
-    # Base path for GitHub Pages (https://therapeuticjulia.github.io/WasmTarget.jl/)
-    base_path = "/WasmTarget.jl"
+    # Base path for GitHub Pages (https://grouptherapyorg.github.io/WasmTarget.jl/)
+    base_path = "/WasmTarget.jl",
+    # App-level layout for SPA navigation (routes return just content, not wrapped in Layout)
+    layout = :Layout
 )
 
 # =============================================================================

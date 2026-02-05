@@ -2,10 +2,15 @@
 #
 # Color scheme: Cyan/teal accents for WasmTarget.jl
 # to differentiate from Therapy.jl's orange/yellow
+#
+# This is the app-level layout (specified in app.jl as layout = :Layout).
+# Routes return just content — this Layout wraps them with nav + footer.
+# The #page-content div enables SPA navigation (client-side router swaps its contents).
 
 """
 Main documentation layout with navigation and footer.
 Uses cyan/teal accent colors with dark mode support.
+Uses NavLink for SPA navigation and active state highlighting.
 """
 function Layout(children...; title="WasmTarget.jl")
     Div(:class => "min-h-screen bg-stone-50 dark:bg-stone-900 transition-colors duration-200",
@@ -15,20 +20,38 @@ function Layout(children...; title="WasmTarget.jl")
                 Div(:class => "flex justify-between h-16",
                     # Logo
                     Div(:class => "flex items-center",
-                        A(:href => "/WasmTarget.jl/", :class => "flex items-center",
+                        A(:href => "./", :class => "flex items-center",
                             Span(:class => "text-2xl font-bold text-cyan-500 dark:text-cyan-400", "WasmTarget"),
                             Span(:class => "text-2xl font-light text-stone-400 dark:text-stone-500", ".jl")
                         )
                     ),
-                    # Navigation Links
-                    # Use absolute paths with base path for reliable GitHub Pages navigation
+                    # Navigation Links - use ./ prefix for base_path compatibility
+                    # The client-side router's resolveUrl() prepends CONFIG.basePath to ./ paths
                     Div(:class => "hidden sm:flex sm:items-center sm:space-x-6",
-                        NavItem("/WasmTarget.jl/", "Home"),
-                        NavItem("/WasmTarget.jl/playground/", "Playground"),
-                        NavItem("/WasmTarget.jl/manual/", "Manual"),
-                        NavItem("/WasmTarget.jl/features/", "Features"),
-                        NavItem("/WasmTarget.jl/api/", "API"),
-                        # GitHub link
+                        NavLink("./", "Home";
+                            class = "text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors",
+                            active_class = "text-cyan-600 dark:text-cyan-400 font-semibold",
+                            exact = true
+                        ),
+                        NavLink("./playground/", "Playground";
+                            class = "text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors",
+                            active_class = "text-cyan-600 dark:text-cyan-400 font-semibold"
+                        ),
+                        NavLink("./manual/", "Manual";
+                            class = "text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors",
+                            active_class = "text-cyan-600 dark:text-cyan-400 font-semibold"
+                        ),
+                        NavLink("./features/", "Features";
+                            class = "text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors",
+                            active_class = "text-cyan-600 dark:text-cyan-400 font-semibold",
+                            exact = true
+                        ),
+                        NavLink("./api/", "API";
+                            class = "text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors",
+                            active_class = "text-cyan-600 dark:text-cyan-400 font-semibold",
+                            exact = true
+                        ),
+                        # GitHub link (external, use regular A tag)
                         A(:href => "https://github.com/GroupTherapyOrg/WasmTarget.jl",
                           :class => "text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200 transition-colors",
                           :target => "_blank",
@@ -44,8 +67,9 @@ function Layout(children...; title="WasmTarget.jl")
             )
         ),
 
-        # Main Content
-        MainEl(:class => "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8",
+        # Main Content - this #page-content ID is REQUIRED for SPA navigation
+        # The client-side router swaps this element's contents during navigation
+        MainEl(:id => "page-content", :class => "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8",
             children...
         ),
 
@@ -57,7 +81,7 @@ function Layout(children...; title="WasmTarget.jl")
                         "Built with ",
                         A(:href => "https://github.com/GroupTherapyOrg/Therapy.jl", :class => "text-cyan-500 dark:text-cyan-400 hover:text-cyan-600 dark:hover:text-cyan-300", :target => "_blank", "Therapy.jl"),
                         " - Powered by ",
-                        A(:href => "/WasmTarget.jl/", :class => "text-cyan-500 dark:text-cyan-400 hover:text-cyan-600 dark:hover:text-cyan-300", "WasmTarget.jl")
+                        A(:href => "./", :class => "text-cyan-500 dark:text-cyan-400 hover:text-cyan-600 dark:hover:text-cyan-300", "WasmTarget.jl")
                     ),
                     P(:class => "text-stone-400 dark:text-stone-500 text-sm",
                         "MIT License"
@@ -66,13 +90,4 @@ function Layout(children...; title="WasmTarget.jl")
             )
         )
     )
-end
-
-"""
-Navigation item component with dark mode support.
-"""
-function NavItem(href, label)
-    A(:href => href,
-      :class => "text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors",
-      label)
 end

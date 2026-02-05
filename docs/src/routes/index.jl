@@ -86,9 +86,11 @@ function JuliaPlayground()
             )
         ),
 
-        # Client-side JS
+        # Client-side JS (singleton guard prevents re-execution during SPA navigation)
         Script(raw"""
             (function() {
+                if (window.__PlaygroundInit) return;
+                window.__PlaygroundInit = true;
                 const editor = document.getElementById('code-editor');
                 const runBtn = document.getElementById('run-btn');
                 const output = document.getElementById('output-content');
@@ -156,7 +158,7 @@ function ManualFeatureSection()
         ),
 
         # Feature card
-        A(:href => "manual/",
+        A(:href => "./manual/",
           :class => "group block max-w-4xl mx-auto p-8 bg-gradient-to-br from-cyan-50 to-teal-50 dark:from-cyan-900/20 dark:to-teal-900/20 rounded-2xl border border-cyan-200 dark:border-cyan-800 hover:border-cyan-400 dark:hover:border-cyan-600 hover:shadow-xl hover:shadow-cyan-500/10 transition-all duration-300",
             Div(:class => "flex flex-col md:flex-row items-center gap-8",
                 # Icon
@@ -199,15 +201,14 @@ function ManualFeatureSection()
         Div(:class => "max-w-4xl mx-auto mt-4 text-center",
             P(:class => "text-sm text-stone-500 dark:text-stone-500",
                 "Examples run real Julia code compiled to WebAssembly by WasmTarget.jl. ",
-                A(:href => "features/", :class => "text-cyan-500 hover:text-cyan-600 dark:text-cyan-400 dark:hover:text-cyan-300 underline", "See supported features →")
+                A(:href => "./features/", :class => "text-cyan-500 hover:text-cyan-600 dark:text-cyan-400 dark:hover:text-cyan-300 underline", "See supported features →")
             )
         )
     )
 end
 
 function Index()
-    Layout(
-        Div(:class => "py-8",
+    Div(:class => "py-8",
             # Header
             Div(:class => "text-center mb-8",
                 H1(:class => "text-4xl font-bold text-stone-800 dark:text-stone-100",
@@ -223,7 +224,6 @@ function Index()
 
             # Interactive Julia Manual Section
             ManualFeatureSection()
-        )
     )
 end
 

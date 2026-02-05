@@ -318,7 +318,7 @@ Circle() = Circle(Int32(1))  # Default radius of 1"""
                         " (like ",
                         Code(:class => "text-stone-600 dark:text-stone-400", "Vector{T}"),
                         "). These advanced features have limited support in WasmTarget.jl — see the ",
-                        A(:href => "../features/",
+                        A(:href => "./features/",
                           :class => "text-cyan-600 dark:text-cyan-400 hover:underline",
                           "Features page"),
                         " for current support status."

@@ -80,7 +80,7 @@ end
 Chapter card component for the manual index grid.
 """
 function ChapterCard(id, title, description, tags)
-    A(:href => "$(id)/",
+    A(:href => "./manual/$(id)/",
       :class => "group block p-6 bg-white dark:bg-stone-800 rounded-xl border border-stone-200 dark:border-stone-700 hover:border-cyan-300 dark:hover:border-cyan-600 hover:shadow-lg hover:shadow-cyan-500/10 transition-all duration-200",
         # Title with arrow
         Div(:class => "flex items-center justify-between mb-3",
@@ -107,7 +107,7 @@ end
 """
 Manual index page with hero section and chapter grid.
 """
-function Index()
+function ManualIndex()
     ManualLayout(chapter_id="", chapter_title=nothing,
         # Hero section
         Div(:class => "text-center mb-12",
@@ -157,7 +157,7 @@ function Index()
                     ),
                     P(:class => "text-sm text-amber-700 dark:text-amber-300 mt-1",
                         "This manual covers the subset of Julia that compiles to WebAssembly via WasmTarget.jl. Some features like varargs, keyword arguments, and the full standard library are not yet supported. ",
-                        A(:href => "../features/",
+                        A(:href => "./features/",
                           :class => "text-amber-800 dark:text-amber-200 underline hover:text-amber-900 dark:hover:text-amber-100",
                           "See the full list of supported features →"
                         )
@@ -184,7 +184,7 @@ function Index()
             P(:class => "text-cyan-100 mb-6",
                 "Start with Variables to learn the basics, or jump to any chapter that interests you."
             ),
-            A(:href => "variables/",
+            A(:href => "./manual/variables/",
               :class => "inline-flex items-center gap-2 bg-white text-cyan-600 px-6 py-3 rounded-lg font-semibold hover:bg-cyan-50 transition-colors shadow-lg",
                 "Start with Variables",
                 Svg(:class => "w-4 h-4", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
@@ -197,4 +197,4 @@ function Index()
 end
 
 # Export
-Index
+ManualIndex

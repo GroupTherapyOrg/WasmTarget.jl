@@ -3,6 +3,10 @@
 # Provides sidebar navigation, breadcrumbs, and prev/next links
 # for the interactive Julia manual chapters.
 # Follows the same cyan/teal color scheme as Layout.jl
+#
+# NOTE: This is an INNER layout — it does NOT include nav or footer.
+# Those are provided by the app-level Layout (layout.jl) via layout = :Layout.
+# This component just provides the sidebar + content area structure.
 
 # Manual chapters in order (id, title, description)
 const MANUAL_CHAPTERS = [
@@ -84,36 +88,27 @@ end
 
 """
 Sidebar navigation item with active state highlighting.
+Uses NavLink for SPA navigation and automatic active state via client-side router.
 """
 function SidebarItem(id, title, description, is_active)
-    base_classes = "block px-3 py-2 rounded-lg text-sm transition-colors"
-    active_classes = is_active ?
-        "bg-cyan-100 dark:bg-cyan-900/30 text-cyan-700 dark:text-cyan-300 font-medium" :
-        "text-stone-600 dark:text-stone-400 hover:bg-stone-100 dark:hover:bg-stone-700"
-
-    A(:href => "$id/",
-      :class => "$base_classes $active_classes",
-        Div(:class => "flex items-center justify-between",
-            Span(title),
-            is_active ? Span(:class => "text-cyan-500",
-                Svg(:class => "w-4 h-4", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
-                    Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
-                         :d => "M9 5l7 7-7 7")
-                )
-            ) : nothing
-        ),
-        Span(:class => "text-xs text-stone-400 dark:text-stone-500 block mt-0.5", description)
+    # Use ./ prefix for base_path compatibility
+    # The client-side router's resolveUrl() prepends CONFIG.basePath to ./ paths
+    NavLink("./manual/$id/", title;
+        class = "block px-3 py-2 rounded-lg text-sm transition-colors text-stone-600 dark:text-stone-400 hover:bg-stone-100 dark:hover:bg-stone-700",
+        active_class = "bg-cyan-100 dark:bg-cyan-900/30 text-cyan-700 dark:text-cyan-300 font-medium",
+        exact = true
     )
 end
 
 """
 Breadcrumb navigation component.
+Uses ./ prefix paths for base_path compatibility.
 """
 function Breadcrumb(chapter_title)
     Nav(:class => "text-sm mb-6", :aria_label => "Breadcrumb",
         Ol(:class => "flex items-center space-x-2",
             Li(:class => "flex items-center",
-                A(:href => "../", :class => "text-stone-500 dark:text-stone-400 hover:text-cyan-500 dark:hover:text-cyan-400",
+                A(:href => "./", :class => "text-stone-500 dark:text-stone-400 hover:text-cyan-500 dark:hover:text-cyan-400",
                     "Home"
                 ),
                 Svg(:class => "w-4 h-4 mx-2 text-stone-400", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
@@ -122,7 +117,7 @@ function Breadcrumb(chapter_title)
                 )
             ),
             Li(:class => "flex items-center",
-                A(:href => "./", :class => "text-stone-500 dark:text-stone-400 hover:text-cyan-500 dark:hover:text-cyan-400",
+                A(:href => "./manual/", :class => "text-stone-500 dark:text-stone-400 hover:text-cyan-500 dark:hover:text-cyan-400",
                     "Manual"
                 ),
                 chapter_title !== nothing ? Svg(:class => "w-4 h-4 mx-2 text-stone-400", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
@@ -139,6 +134,7 @@ end
 
 """
 Previous/Next chapter navigation at the bottom of the page.
+Uses ./ prefix paths for base_path compatibility.
 """
 function ChapterNav(chapter_id::String)
     prev_chapter, next_chapter = get_chapter_nav(chapter_id)
@@ -147,7 +143,7 @@ function ChapterNav(chapter_id::String)
         Div(:class => "flex justify-between",
             # Previous
             prev_chapter !== nothing ?
-                A(:href => "../$(prev_chapter[1])/",
+                A(:href => "./manual/$(prev_chapter[1])/",
                   :class => "group flex items-center text-stone-600 dark:text-stone-400 hover:text-cyan-500 dark:hover:text-cyan-400",
                     Svg(:class => "w-5 h-5 mr-2 transition-transform group-hover:-translate-x-1",
                         :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
@@ -163,7 +159,7 @@ function ChapterNav(chapter_id::String)
 
             # Next
             next_chapter !== nothing ?
-                A(:href => "../$(next_chapter[1])/",
+                A(:href => "./manual/$(next_chapter[1])/",
                   :class => "group flex items-center text-right text-stone-600 dark:text-stone-400 hover:text-cyan-500 dark:hover:text-cyan-400",
                     Div(
                         Span(:class => "text-xs text-stone-400 dark:text-stone-500 block", "Next"),
@@ -183,6 +179,7 @@ end
 """
 Related chapters "See Also" section.
 Shows links to conceptually related chapters (not sequential prev/next).
+Uses ./ prefix paths for base_path compatibility.
 """
 function RelatedChapters(chapter_id::String)
     related = get_related_chapters(chapter_id)
@@ -203,7 +200,7 @@ function RelatedChapters(chapter_id::String)
             )
         ),
         Div(:class => "grid sm:grid-cols-2 lg:grid-cols-3 gap-3",
-            [A(:href => "../$(id)/",
+            [A(:href => "./manual/$(id)/",
                :class => "group flex items-start gap-3 p-3 rounded-lg bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 hover:border-cyan-300 dark:hover:border-cyan-700 hover:shadow-sm transition-all",
                 Div(:class => "flex-shrink-0 w-8 h-8 rounded-lg bg-cyan-100 dark:bg-cyan-900/30 flex items-center justify-center",
                     Svg(:class => "w-4 h-4 text-cyan-600 dark:text-cyan-400",
@@ -238,11 +235,11 @@ function ManualSidebar(current_chapter_id)
                 H2(:class => "text-sm font-semibold text-stone-800 dark:text-stone-200 uppercase tracking-wider",
                     "Julia Manual"
                 ),
-                A(:href => "./", :class => "text-xs text-cyan-500 hover:text-cyan-600 dark:hover:text-cyan-400",
+                A(:href => "./manual/", :class => "text-xs text-cyan-500 hover:text-cyan-600 dark:hover:text-cyan-400",
                     "Overview"
                 )
             ),
-            # Chapter list
+            # Chapter list - uses NavLink for active state highlighting
             Nav(:class => "space-y-1",
                 [SidebarItem(id, title, desc, id == current_chapter_id)
                  for (id, title, desc) in MANUAL_CHAPTERS]...
@@ -292,7 +289,7 @@ function MobileSidebarOverlay(current_chapter_id)
             ),
             # Chapter list
             Nav(:class => "space-y-1",
-                A(:href => "./", :class => "block px-3 py-2 rounded-lg text-sm text-cyan-600 dark:text-cyan-400 hover:bg-stone-100 dark:hover:bg-stone-700 font-medium mb-2",
+                A(:href => "./manual/", :class => "block px-3 py-2 rounded-lg text-sm text-cyan-600 dark:text-cyan-400 hover:bg-stone-100 dark:hover:bg-stone-700 font-medium mb-2",
                     "Overview"
                 ),
                 [SidebarItem(id, title, desc, id == current_chapter_id)
@@ -304,10 +301,14 @@ end
 
 """
 JavaScript for mobile sidebar toggle functionality.
+Singleton guard prevents re-execution during SPA navigation.
 """
 function SidebarScript()
     Script(raw"""
         (function() {
+            if (window.__ManualSidebarInit) return;
+            window.__ManualSidebarInit = true;
+
             const toggle = document.getElementById('sidebar-toggle');
             const overlay = document.getElementById('sidebar-overlay');
             const backdrop = document.getElementById('sidebar-backdrop');
@@ -333,6 +334,8 @@ end
 
 """
 Manual page layout with sidebar, breadcrumbs, and chapter navigation.
+This is an INNER layout — it provides sidebar + content structure.
+The app-level Layout (layout.jl) provides nav bar and footer.
 
 Arguments:
 - `children`: The main content of the page
@@ -348,93 +351,33 @@ ManualLayout(chapter_id="variables", chapter_title="Variables",
 ```
 """
 function ManualLayout(children...; chapter_id::String="", chapter_title::Union{String,Nothing}=nothing)
-    Div(:class => "min-h-screen bg-stone-50 dark:bg-stone-900 transition-colors duration-200",
-        # Navigation (same as Layout.jl)
-        Nav(:class => "bg-white dark:bg-stone-800 border-b border-stone-200 dark:border-stone-700 transition-colors duration-200",
-            Div(:class => "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8",
-                Div(:class => "flex justify-between h-16",
-                    # Logo
-                    Div(:class => "flex items-center",
-                        A(:href => "/WasmTarget.jl/", :class => "flex items-center",
-                            Span(:class => "text-2xl font-bold text-cyan-500 dark:text-cyan-400", "WasmTarget"),
-                            Span(:class => "text-2xl font-light text-stone-400 dark:text-stone-500", ".jl")
-                        )
-                    ),
-                    # Navigation Links - use absolute paths with base path for reliable GitHub Pages navigation
-                    Div(:class => "hidden sm:flex sm:items-center sm:space-x-6",
-                        A(:href => "/WasmTarget.jl/",
-                          :class => "text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors",
-                          "Playground"),
-                        A(:href => "/WasmTarget.jl/manual/",
-                          :class => "text-cyan-600 dark:text-cyan-400 px-3 py-2 text-sm font-medium transition-colors",
-                          "Manual"),
-                        A(:href => "/WasmTarget.jl/features/",
-                          :class => "text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors",
-                          "Features"),
-                        A(:href => "/WasmTarget.jl/api/",
-                          :class => "text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors",
-                          "API"),
-                        # GitHub link
-                        A(:href => "https://github.com/GroupTherapyOrg/WasmTarget.jl",
-                          :class => "text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200 transition-colors",
-                          :target => "_blank",
-                          :title => "View on GitHub",
-                            Svg(:class => "h-5 w-5", :fill => "currentColor", :viewBox => "0 0 24 24",
-                                Path(:d => "M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z")
-                            )
-                        ),
-                        # Theme Toggle
-                        Div(:class => "ml-2", ThemeToggle())
-                    )
-                )
-            )
-        ),
-
+    Div(
         # Main content area with sidebar
-        Div(:class => "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8",
-            Div(:class => "flex gap-8",
-                # Sidebar (desktop)
-                ManualSidebar(chapter_id),
+        Div(:class => "flex gap-8",
+            # Sidebar (desktop)
+            ManualSidebar(chapter_id),
 
-                # Main content
-                MainEl(:class => "flex-1 min-w-0",
-                    # Breadcrumb
-                    Breadcrumb(chapter_title),
+            # Main content
+            Div(:class => "flex-1 min-w-0",
+                # Breadcrumb
+                Breadcrumb(chapter_title),
 
-                    # Content
-                    Article(:class => "prose prose-stone dark:prose-invert prose-cyan max-w-none",
-                        children...
-                    ),
+                # Content
+                Article(:class => "prose prose-stone dark:prose-invert prose-cyan max-w-none",
+                    children...
+                ),
 
-                    # Related chapters "See Also" section (only if chapter_id is provided)
-                    chapter_id != "" ? RelatedChapters(chapter_id) : nothing,
+                # Related chapters "See Also" section (only if chapter_id is provided)
+                chapter_id != "" ? RelatedChapters(chapter_id) : nothing,
 
-                    # Prev/Next navigation (only if chapter_id is provided)
-                    chapter_id != "" ? ChapterNav(chapter_id) : nothing
-                )
+                # Prev/Next navigation (only if chapter_id is provided)
+                chapter_id != "" ? ChapterNav(chapter_id) : nothing
             )
         ),
 
         # Mobile sidebar components
         MobileSidebarToggle(),
         MobileSidebarOverlay(chapter_id),
-        SidebarScript(),
-
-        # Footer
-        Footer(:class => "bg-white dark:bg-stone-800 border-t border-stone-200 dark:border-stone-700 mt-auto transition-colors duration-200",
-            Div(:class => "max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8",
-                Div(:class => "flex justify-between items-center",
-                    P(:class => "text-stone-500 dark:text-stone-400 text-sm",
-                        "Built with ",
-                        A(:href => "https://github.com/GroupTherapyOrg/Therapy.jl", :class => "text-cyan-500 dark:text-cyan-400 hover:text-cyan-600 dark:hover:text-cyan-300", :target => "_blank", "Therapy.jl"),
-                        " - Powered by ",
-                        A(:href => "/WasmTarget.jl/", :class => "text-cyan-500 dark:text-cyan-400 hover:text-cyan-600 dark:hover:text-cyan-300", "WasmTarget.jl")
-                    ),
-                    P(:class => "text-stone-400 dark:text-stone-500 text-sm",
-                        "MIT License"
-                    )
-                )
-            )
-        )
+        SidebarScript()
     )
 end

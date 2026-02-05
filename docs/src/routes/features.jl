@@ -7,7 +7,7 @@
 # Demo components are defined in components/Demos.jl
 
 function Features()
-    Layout(
+    Div(
         # Header
         Div(:class => "py-8 text-center",
             H1(:class => "text-4xl font-bold text-stone-800 dark:text-stone-100 mb-4",
@@ -209,7 +209,7 @@ add_element_segment!(mod, table_idx, 0, [func_double, func_triple])
 
         # CTA
         Div(:class => "py-12 text-center",
-            A(:href => "./",
+            A(:href => "./playground/",
               :class => "bg-cyan-500 hover:bg-cyan-600 text-white px-8 py-3 rounded-lg font-semibold transition-colors",
               "Try the Playground"
             )

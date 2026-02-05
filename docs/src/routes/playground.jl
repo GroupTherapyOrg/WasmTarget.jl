@@ -10,8 +10,8 @@
 #
 # Story: BROWSER-030
 
-include("../components/layout.jl")
-include("../components/themetoggle.jl")
+# InterpreterPlayground is in a subdirectory of components_dir, so it needs explicit include
+# (the framework only auto-loads top-level .jl files from components_dir)
 include("../components/playground/interpreterplayground.jl")
 
 """
@@ -24,9 +24,8 @@ Provides a full-screen interactive Julia playground with:
 - Example code snippets
 """
 function PlaygroundPage()
-    Layout(
-        # Full-width playground container
-        Div(:class => "w-full -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8",
+    # Full-width playground container
+    Div(:class => "w-full -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8",
 
             # Page Header
             Div(:class => "text-center mb-6",
@@ -122,8 +121,6 @@ function PlaygroundPage()
                     )
                 )
             )
-        );
-        title = "Playground - WasmTarget.jl"
     )
 end
 

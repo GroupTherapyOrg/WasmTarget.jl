@@ -5,20 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Playground - WasmTarget.jl</title>
     <base href="/WasmTarget.jl/">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: {
-                extend: {
-                    fontFamily: {
-                        sans: ['Source Sans 3', 'system-ui', 'sans-serif'],
-                        serif: ['Lora', 'Georgia', 'Cambria', 'serif'],
-                    }
-                }
-            }
-        }
-    </script>
+    <link rel="stylesheet" href="/WasmTarget.jl/styles.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -40,31 +27,27 @@
 </head>
 <body class="antialiased">
 <div id="therapy-content">
-<div data-hk="1" class="min-h-screen bg-stone-50 dark:bg-stone-900 transition-colors duration-200"><nav data-hk="2" class="bg-white dark:bg-stone-800 border-b border-stone-200 dark:border-stone-700 transition-colors duration-200"><div data-hk="3" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8"><div data-hk="4" class="flex justify-between h-16"><div data-hk="5" class="flex items-center"><a data-hk="6" class="flex items-center" href="/WasmTarget.jl/"><span data-hk="7" class="text-2xl font-bold text-cyan-500 dark:text-cyan-400">WasmTarget</span><span data-hk="8" class="text-2xl font-light text-stone-400 dark:text-stone-500">.jl</span></a></div><div data-hk="9" class="hidden sm:flex sm:items-center sm:space-x-6"><a data-hk="10" class="text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors" href="/WasmTarget.jl/">Home</a><a data-hk="11" class="text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors" href="/WasmTarget.jl/playground/">Playground</a><a data-hk="12" class="text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors" href="/WasmTarget.jl/manual/">Manual</a><a data-hk="13" class="text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors" href="/WasmTarget.jl/features/">Features</a><a data-hk="14" class="text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors" href="/WasmTarget.jl/api/">API</a><a data-hk="15" class="text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200 transition-colors" href="https://github.com/GroupTherapyOrg/WasmTarget.jl" title="View on GitHub" target="_blank"><svg data-hk="16" viewBox="0 0 24 24" class="h-5 w-5" fill="currentColor"><path data-hk="17" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg></a><div data-hk="18" class="ml-2"><therapy-island data-component="themetoggle"><div data-hk="1" dark-mode="Therapy.SignalGetter{Int32}(Therapy.Signal{Int32}(0x000000000000009d, 0, Set{Any}()))"><button data-hk="2" class="p-2 rounded-lg hover:bg-stone-100 dark:hover:bg-stone-700 transition-colors" title="Toggle dark mode"><svg data-hk="3" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-5 h-5 text-stone-600 dark:text-stone-300" fill="none"><path data-hk="4" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" stroke-linecap="round" stroke-linejoin="round"></path></svg></button></div></therapy-island></div></div></div></div></nav><main data-hk="19" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"><div data-hk="20" class="w-full -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8"><div data-hk="21" class="text-center mb-6"><h1 data-hk="22" class="text-3xl font-bold text-stone-800 dark:text-stone-100">Julia Playground</h1><p data-hk="23" class="text-stone-500 dark:text-stone-400 mt-2 max-w-2xl mx-auto">Write and run Julia code directly in your browser. Powered by JuliaSyntax.jl (parser) and ExprNode (evaluator) compiled to WasmGC by WasmTarget.jl, optimized by Binaryen.</p></div><div data-hk="24" class="border border-stone-700 rounded-xl overflow-hidden shadow-lg"><div data-hk="25" class="flex flex-col h-full min-h-[600px]"><div data-hk="26" class="flex items-center justify-between px-4 py-3 bg-stone-800 dark:bg-stone-900 border-b border-stone-700"><div data-hk="27" class="flex items-center gap-3"><span data-hk="28" class="text-stone-200 font-semibold">Julia Playground</span><span data-hk="29" class="text-stone-500 text-sm">Powered by WasmTarget.jl</span></div><div data-hk="30" class="flex items-center gap-3"><div data-hk="31" id="interpreter-status" class="flex items-center gap-2"><span data-hk="32" id="status-dot" class="w-2 h-2 rounded-full bg-yellow-500"></span><span data-hk="33" id="status-text" class="text-stone-400 text-xs">Loading...</span></div><button data-hk="34" id="run-button" class="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 disabled:bg-stone-600 disabled:cursor-not-allowed text-white rounded-lg font-medium flex items-center gap-2 transition-colors"><svg data-hk="35" viewBox="0 0 24 24" class="w-4 h-4" fill="currentColor"><path data-hk="36" d="M8 5v14l11-7z"></path></svg><span data-hk="37">Run</span></button></div></div><div data-hk="38" class="flex-1 grid lg:grid-cols-2 gap-0 min-h-0"><div data-hk="39" class="flex flex-col min-h-0 border-r border-stone-700"><div data-hk="40" class="flex items-center justify-between px-4 py-2 bg-stone-700 dark:bg-stone-800"><span data-hk="41" class="text-stone-300 text-sm font-medium">Code</span><div data-hk="42" class="flex items-center gap-2"><button data-hk="43" id="clear-button" class="text-stone-400 hover:text-white text-xs transition-colors">Clear</button><select data-hk="44" id="example-selector" class="bg-stone-600 text-stone-200 text-xs rounded px-2 py-1"><option data-hk="45" value="">Examples...</option><option data-hk="46" value="hello">Hello World</option><option data-hk="47" value="arithmetic">Arithmetic</option><option data-hk="48" value="functions">Functions</option><option data-hk="49" value="loops">Loops</option><option data-hk="50" value="factorial">Factorial</option><option data-hk="51" value="fibonacci">Fibonacci</option></select></div></div><div data-hk="52" id="editor-container" class="flex-1 overflow-hidden bg-stone-900"></div></div><div data-hk="53" class="flex flex-col min-h-0"><div data-hk="54" class="flex items-center justify-between px-4 py-2 bg-stone-700 dark:bg-stone-800"><span data-hk="55" class="text-stone-300 text-sm font-medium">Output</span><button data-hk="56" id="clear-output-button" class="text-stone-400 hover:text-white text-xs transition-colors">Clear</button></div><div data-hk="57" id="output-container" class="flex-1 overflow-auto bg-stone-900 p-4 font-mono text-sm"><div data-hk="58" id="output-content" class="text-stone-400">Click &quot;Run&quot; to execute your code...</div></div></div></div><link data-hk="59" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/codemirror.min.css" rel="stylesheet" /><script>    (function() {
+<div data-hk="1" class="min-h-screen bg-stone-50 dark:bg-stone-900 transition-colors duration-200"><nav data-hk="2" class="bg-white dark:bg-stone-800 border-b border-stone-200 dark:border-stone-700 transition-colors duration-200"><div data-hk="3" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8"><div data-hk="4" class="flex justify-between h-16"><div data-hk="5" class="flex items-center"><a data-hk="6" class="flex items-center" href="./"><span data-hk="7" class="text-2xl font-bold text-cyan-500 dark:text-cyan-400">WasmTarget</span><span data-hk="8" class="text-2xl font-light text-stone-400 dark:text-stone-500">.jl</span></a></div><div data-hk="9" class="hidden sm:flex sm:items-center sm:space-x-6"><a data-hk="10" data-active-class="text-cyan-600 dark:text-cyan-400 font-semibold" class="text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors" href="./" data-navlink="true" data-exact="true">Home</a><a data-hk="11" data-active-class="text-cyan-600 dark:text-cyan-400 font-semibold" class="text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors" href="./playground/" data-navlink="true">Playground</a><a data-hk="12" data-active-class="text-cyan-600 dark:text-cyan-400 font-semibold" class="text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors" href="./manual/" data-navlink="true">Manual</a><a data-hk="13" data-active-class="text-cyan-600 dark:text-cyan-400 font-semibold" class="text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors" href="./features/" data-navlink="true" data-exact="true">Features</a><a data-hk="14" data-active-class="text-cyan-600 dark:text-cyan-400 font-semibold" class="text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors" href="./api/" data-navlink="true" data-exact="true">API</a><a data-hk="15" class="text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200 transition-colors" href="https://github.com/GroupTherapyOrg/WasmTarget.jl" title="View on GitHub" target="_blank"><svg data-hk="16" viewBox="0 0 24 24" class="h-5 w-5" fill="currentColor"><path data-hk="17" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg></a><div data-hk="18" class="ml-2"><therapy-island data-component="themetoggle"><div data-hk="1" dark-mode="Therapy.SignalGetter{Int32}(Therapy.Signal{Int32}(0x000000000000009d, 0, Set{Any}()))"><button data-hk="2" class="p-2 rounded-lg hover:bg-stone-100 dark:hover:bg-stone-700 transition-colors" title="Toggle dark mode"><svg data-hk="3" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-5 h-5 text-stone-600 dark:text-stone-300" fill="none"><path data-hk="4" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" stroke-linecap="round" stroke-linejoin="round"></path></svg></button></div></therapy-island></div></div></div></div></nav><main data-hk="19" id="page-content" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"><div data-hk="1" class="w-full -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8"><div data-hk="2" class="text-center mb-6"><h1 data-hk="3" class="text-3xl font-bold text-stone-800 dark:text-stone-100">Julia Playground</h1><p data-hk="4" class="text-stone-500 dark:text-stone-400 mt-2 max-w-2xl mx-auto">Write and run Julia code directly in your browser. Powered by a Julia interpreter compiled to WebAssembly by WasmTarget.jl.</p></div><div data-hk="5" class="border border-stone-700 rounded-xl overflow-hidden shadow-lg"><div data-hk="6" class="flex flex-col h-full min-h-[600px]"><div data-hk="7" class="flex items-center justify-between px-4 py-3 bg-stone-800 dark:bg-stone-900 border-b border-stone-700"><div data-hk="8" class="flex items-center gap-3"><span data-hk="9" class="text-stone-200 font-semibold">Julia Playground</span><span data-hk="10" class="text-stone-500 text-sm">Powered by WasmTarget.jl</span></div><div data-hk="11" class="flex items-center gap-3"><div data-hk="12" id="interpreter-status" class="flex items-center gap-2"><span data-hk="13" id="status-dot" class="w-2 h-2 rounded-full bg-yellow-500"></span><span data-hk="14" id="status-text" class="text-stone-400 text-xs">Loading...</span></div><button data-hk="15" id="run-button" class="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 disabled:bg-stone-600 disabled:cursor-not-allowed text-white rounded-lg font-medium flex items-center gap-2 transition-colors"><svg data-hk="16" viewBox="0 0 24 24" class="w-4 h-4" fill="currentColor"><path data-hk="17" d="M8 5v14l11-7z"></path></svg><span data-hk="18">Run</span></button></div></div><div data-hk="19" class="flex-1 grid lg:grid-cols-2 gap-0 min-h-0"><div data-hk="20" class="flex flex-col min-h-0 border-r border-stone-700"><div data-hk="21" class="flex items-center justify-between px-4 py-2 bg-stone-700 dark:bg-stone-800"><span data-hk="22" class="text-stone-300 text-sm font-medium">Code</span><div data-hk="23" class="flex items-center gap-2"><button data-hk="24" id="clear-button" class="text-stone-400 hover:text-white text-xs transition-colors">Clear</button><select data-hk="25" id="example-selector" class="bg-stone-600 text-stone-200 text-xs rounded px-2 py-1"><option data-hk="26" value="">Examples...</option><option data-hk="27" value="hello">Hello World</option><option data-hk="28" value="arithmetic">Arithmetic</option><option data-hk="29" value="functions">Functions</option><option data-hk="30" value="loops">Loops</option><option data-hk="31" value="factorial">Factorial</option><option data-hk="32" value="fibonacci">Fibonacci</option></select></div></div><div data-hk="33" id="editor-container" class="flex-1 overflow-hidden bg-stone-900"></div></div><div data-hk="34" class="flex flex-col min-h-0"><div data-hk="35" class="flex items-center justify-between px-4 py-2 bg-stone-700 dark:bg-stone-800"><span data-hk="36" class="text-stone-300 text-sm font-medium">Output</span><button data-hk="37" id="clear-output-button" class="text-stone-400 hover:text-white text-xs transition-colors">Clear</button></div><div data-hk="38" id="output-container" class="flex-1 overflow-auto bg-stone-900 p-4 font-mono text-sm"><div data-hk="39" id="output-content" class="text-stone-400">Click &quot;Run&quot; to execute your code...</div></div></div></div><link data-hk="40" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/codemirror.min.css" rel="stylesheet" /><script>    (function() {
         // Configuration
-        const INITIAL_CODE = `# Julia Playground — Powered by WasmGC
-# Parser: JuliaSyntax.jl compiled to WebAssembly
-# Evaluator: ExprNode tree-walker compiled to WebAssembly
+        const INITIAL_CODE = `# Welcome to the Julia Playground!
+# This code runs entirely in your browser via WasmGC.
 
-# Try arithmetic expressions:
-1 + 2
-10 - 3
-4 * 5
-
-# Variables and expressions:
-x = 7
+# Try some basic arithmetic
+x = 5
 y = 3
-x + y
+println(x + y)
 
-# Conditionals:
-if true 1 else 2 end
+# Define a function
+function greet(name)
+    println("Hello, " * name * "!")
+end
+
+greet("World")
 `;
 
         // State
         let editor = null;
-        let parserModule = null;    // JuliaSyntax compiled to WasmGC
-        let evaluatorModule = null; // ExprNode tree-walker compiled to WasmGC
-        let binaryenReady = false;  // Binaryen optimizer loaded
+        let interpreterModule = null;
         let interpreterReady = false;
 
         // DOM elements
@@ -79,37 +62,67 @@ if true 1 else 2 end
 
         // Example code snippets
         const examples = {
-            hello: `# Simple addition
-1 + 2
+            hello: `# Hello World
+println("Hello, World!")
 `,
-            arithmetic: `# Arithmetic operations
-1 + 2
-10 - 3
-4 * 5
-2 + 3 * 0
-`,
-            functions: `# Variables
-x = 10
-y = 20
-x + y
-`,
-            loops: `# Multiple assignments
-a = 5
+            arithmetic: `# Basic Arithmetic
+a = 10
 b = 3
-a + b
-a - b
-a * b
+
+println("a + b = ", a + b)
+println("a - b = ", a - b)
+println("a * b = ", a * b)
+println("a / b = ", a / b)
+println("a % b = ", a % b)
 `,
-            factorial: `# Conditional expression
-if true 42 else 0 end
-if false 1 else 99 end
+            functions: `# Functions
+function greet(name)
+    println("Hello, " * name * "!")
+end
+
+function add(a, b)
+    return a + b
+end
+
+greet("Julia")
+println("2 + 3 = ", add(2, 3))
 `,
-            fibonacci: `# Variables + arithmetic
-x = 7
-y = 3
-x + y
-x - y
-x * y
+            loops: `# Loops
+println("While loop:")
+i = 1
+while i <= 5
+    println(i)
+    i = i + 1
+end
+
+println("For loop:")
+for j in 5
+    println(j)
+end
+`,
+            factorial: `# Factorial (Recursive)
+function factorial(n)
+    if n <= 1
+        return 1
+    end
+    return n * factorial(n - 1)
+end
+
+println("factorial(5) = ", factorial(5))
+println("factorial(10) = ", factorial(10))
+`,
+            fibonacci: `# Fibonacci (Recursive)
+function fib(n)
+    if n <= 1
+        return n
+    end
+    return fib(n - 1) + fib(n - 2)
+end
+
+println("Fibonacci sequence:")
+for i in 10
+    println("fib(", i, ") = ", fib(i))
+end
 `
         };
 
@@ -253,277 +266,195 @@ x * y
             }
         }
 
-        // (loadWasmModule removed — replaced by fetch + Binaryen optimize + instantiate in initInterpreter)
-
-        // Load Binaryen optimizer (wasm-opt in the browser)
-        async function loadBinaryen() {
-            try {
-                // Load binaryen.js from CDN (AssemblyScript's browser build)
-                const script = document.createElement('script');
-                script.src = 'https://cdn.jsdelivr.net/npm/binaryen@119/index.js';
-                await new Promise((resolve, reject) => {
-                    script.onload = resolve;
-                    script.onerror = reject;
-                    document.head.appendChild(script);
-                });
-                // binaryen.js exposes a global `binaryen` object
-                if (typeof binaryen !== 'undefined') {
-                    binaryenReady = true;
-                    console.log('Binaryen optimizer loaded (wasm-opt in browser)');
-                    return true;
-                }
-            } catch (e) {
-                console.warn('Binaryen optimizer not loaded:', e.message);
-            }
-            return false;
-        }
-
-        // Optimize WASM bytes using Binaryen (wasm-opt)
-        // Returns optimized bytes, or original bytes if optimization fails
-        function optimizeWasm(wasmBytes, name) {
-            if (!binaryenReady || typeof binaryen === 'undefined') {
-                return wasmBytes;
-            }
-            try {
-                const mod = binaryen.readBinary(new Uint8Array(wasmBytes));
-                binaryen.setOptimizeLevel(2);    // -O2
-                binaryen.setShrinkLevel(1);      // some size reduction
-                mod.optimize();
-                if (mod.validate()) {
-                    const optimized = mod.emitBinary();
-                    const savedPct = ((1 - optimized.length / wasmBytes.byteLength) * 100).toFixed(1);
-                    console.log(name + ': ' + wasmBytes.byteLength + ' → ' + optimized.length + ' bytes (-' + savedPct + '%)');
-                    mod.dispose();
-                    return optimized.buffer;
-                } else {
-                    console.warn(name + ': Binaryen validation failed, using unoptimized');
-                    mod.dispose();
-                }
-            } catch (e) {
-                console.warn(name + ': Binaryen optimization failed:', e.message);
-            }
-            return wasmBytes;
-        }
-
-        // Initialize WasmGC modules (parser + evaluator) with Binaryen optimization
+        // Initialize WasmGC interpreter
         async function initInterpreter() {
-            updateStatus('loading', 'Loading optimizer...');
+            updateStatus('loading', 'Loading WasmGC interpreter...');
 
             try {
-                // Load Binaryen first (non-blocking — we proceed even if it fails)
-                await loadBinaryen();
-
-                updateStatus('loading', 'Loading WasmGC modules...');
-
-                const wasmBase = [
-                    '/WasmTarget.jl/wasm/',
-                    '/wasm/',
-                    './wasm/',
-                    '/dist/wasm/',
+                // Load the real WasmGC interpreter compiled by WasmTarget.jl
+                // Try multiple paths for different deployment scenarios
+                const wasmPaths = [
+                    '/WasmTarget.jl/wasm/interpreter.wasm',  // GitHub Pages with base_path
+                    '/wasm/interpreter.wasm',                 // Local dev without base_path
+                    './wasm/interpreter.wasm',                // Relative from current page
+                    '/dist/wasm/interpreter.wasm',            // Alternative path
                 ];
 
-                const importObject = { Math: { pow: Math.pow } };
-
-                // Load raw bytes for parser.wasm
-                let parserBytes = null;
-                for (const base of wasmBase) {
-                    try {
-                        const resp = await fetch(base + 'parser.wasm');
-                        if (resp.ok) {
-                            parserBytes = await resp.arrayBuffer();
-                            console.log('parser.wasm loaded from:', base);
-                            break;
-                        }
-                    } catch (e) {}
-                }
-
-                // Load raw bytes for evaluator.wasm
-                let evalBytes = null;
-                for (const base of wasmBase) {
-                    try {
-                        const resp = await fetch(base + 'evaluator.wasm');
-                        if (resp.ok) {
-                            evalBytes = await resp.arrayBuffer();
-                            console.log('evaluator.wasm loaded from:', base);
-                            break;
-                        }
-                    } catch (e) {}
-                }
-
-                // Optimize through Binaryen if available
-                if (parserBytes && binaryenReady) {
-                    parserBytes = optimizeWasm(parserBytes, 'parser.wasm');
-                }
-                if (evalBytes && binaryenReady) {
-                    evalBytes = optimizeWasm(evalBytes, 'evaluator.wasm');
-                }
-
-                // Instantiate optimized (or original) modules
-                if (parserBytes) {
-                    try {
-                        const result = await WebAssembly.instantiate(parserBytes, importObject);
-                        parserModule = result.instance;
-                        console.log('Parser exports:', Object.keys(parserModule.exports));
-                    } catch (e) {
-                        console.warn('parser.wasm instantiation failed:', e.message);
+                // Math.pow import required by the interpreter
+                const importObject = {
+                    Math: {
+                        pow: Math.pow
                     }
-                }
-                if (evalBytes) {
+                };
+
+                let instance = null;
+                let loadedPath = null;
+
+                for (const wasmPath of wasmPaths) {
                     try {
-                        const result = await WebAssembly.instantiate(evalBytes, importObject);
-                        evaluatorModule = result.instance;
-                        console.log('Evaluator exports:', Object.keys(evaluatorModule.exports));
+                        const response = await fetch(wasmPath);
+                        if (response.ok) {
+                            const result = await WebAssembly.instantiateStreaming(response, importObject);
+                            instance = result.instance;
+                            loadedPath = wasmPath;
+                            break;
+                        }
                     } catch (e) {
-                        console.warn('evaluator.wasm instantiation failed:', e.message);
+                        console.log('Failed to load from ' + wasmPath + ':', e.message);
                     }
                 }
 
+                if (!instance) {
+                    throw new Error('Could not load interpreter.wasm from any path');
+                }
+
+                interpreterModule = instance;
                 interpreterReady = true;
-                const optLabel = binaryenReady ? ' + wasm-opt' : '';
-                const status = evaluatorModule ? 'WasmGC Ready' + optLabel : 'Ready (limited)';
-                updateStatus('ready', status);
+
+                updateStatus('ready', 'WasmGC Ready');
 
                 if (runButton) {
                     runButton.disabled = false;
                 }
+
+                console.log('WasmGC interpreter loaded from:', loadedPath);
+                console.log('Available exports:', Object.keys(instance.exports));
             } catch (err) {
-                console.error('Failed to load WasmGC modules:', err);
+                console.error('Failed to load WasmGC interpreter:', err);
+                console.log('Falling back to JavaScript interpreter...');
+
+                // Fallback to JS interpreter if WASM fails
                 interpreterReady = true;
-                updateStatus('ready', 'Ready (limited)');
+                updateStatus('ready', 'Ready (JS fallback)');
+
                 if (runButton) {
                     runButton.disabled = false;
                 }
             }
         }
 
-        // Parse a Julia expression string into an ExprNode array for the evaluator.
-        // Returns {nodes: [{tag, value, c1, c2, c3}], root, numSlots} or null on failure.
-        // Tags: 0=literal, 1=add, 2=sub, 3=mul, 4=assign, 5=block, 6=varref, 7=ifnode
-        function parseToNodes(code) {
-            const nodes = [];
-            const varSlots = {};
-            let nextSlot = 1;
-
-            function getSlot(name) {
-                if (!(name in varSlots)) {
-                    varSlots[name] = nextSlot++;
-                }
-                return varSlots[name];
+        // String marshaling helpers for WasmGC
+        // WasmGC strings are i32 arrays, JS strings are UTF-16
+        function jsToWasmString(jsStr, exports) {
+            // Create a WASM string using str_new and str_setchar!
+            const len = jsStr.length;
+            const wasmStr = exports.str_new(len);
+            for (let i = 0; i < len; i++) {
+                exports['str_setchar!'](wasmStr, i + 1, jsStr.charCodeAt(i));
             }
-
-            function addNode(tag, value, c1, c2, c3) {
-                nodes.push({tag, value, c1: c1 || 0, c2: c2 || 0, c3: c3 || 0});
-                return nodes.length; // 1-based index
-            }
-
-            function parseExpr(s) {
-                s = s.trim();
-
-                // If expression with else
-                const ifMatch = s.match(/^if\s+(.+?)\s+(.+?)\s+else\s+(.+?)\s+end$/);
-                if (ifMatch) {
-                    const condIdx = parseExpr(ifMatch[1]);
-                    const thenIdx = parseExpr(ifMatch[2]);
-                    const elseIdx = parseExpr(ifMatch[3]);
-                    return addNode(7, 0, condIdx, thenIdx, elseIdx);
-                }
-
-                // Assignment: x = expr
-                const assignMatch = s.match(/^([a-zA-Z_]\w*)\s*=\s*(.+)$/);
-                if (assignMatch) {
-                    const slot = getSlot(assignMatch[1]);
-                    const valIdx = parseExpr(assignMatch[2]);
-                    return addNode(4, slot, valIdx);
-                }
-
-                // Addition/Subtraction (left to right, lowest precedence)
-                let depth = 0;
-                let lastAddOp = -1;
-                let lastAddChar = '';
-                for (let i = s.length - 1; i >= 0; i--) {
-                    if (s[i] === ')') depth++;
-                    else if (s[i] === '(') depth--;
-                    else if (depth === 0 && (s[i] === '+' || s[i] === '-') && i > 0 && s[i-1] === ' ') {
-                        lastAddOp = i;
-                        lastAddChar = s[i];
-                        break;
-                    }
-                }
-                if (lastAddOp > 0) {
-                    const left = parseExpr(s.substring(0, lastAddOp - 1));
-                    const right = parseExpr(s.substring(lastAddOp + 2));
-                    return addNode(lastAddChar === '+' ? 1 : 2, 0, left, right);
-                }
-
-                // Multiplication (higher precedence)
-                depth = 0;
-                let lastMulOp = -1;
-                for (let i = s.length - 1; i >= 0; i--) {
-                    if (s[i] === ')') depth++;
-                    else if (s[i] === '(') depth--;
-                    else if (depth === 0 && s[i] === '*' && i > 0 && s[i-1] === ' ') {
-                        lastMulOp = i;
-                        break;
-                    }
-                }
-                if (lastMulOp > 0) {
-                    const left = parseExpr(s.substring(0, lastMulOp - 1));
-                    const right = parseExpr(s.substring(lastMulOp + 2));
-                    return addNode(3, 0, left, right);
-                }
-
-                // Boolean literals (for if conditions)
-                if (s === 'true') return addNode(0, 1);
-                if (s === 'false') return addNode(0, 0);
-
-                // Variable reference
-                if (/^[a-zA-Z_]\w*$/.test(s)) {
-                    const slot = getSlot(s);
-                    return addNode(6, slot);
-                }
-
-                // Integer literal
-                if (/^-?\d+$/.test(s)) {
-                    return addNode(0, parseInt(s, 10));
-                }
-
-                return null; // parse failure
-            }
-
-            // Parse multiple lines as a block
-            const lines = code.split(/[;\n]+/)
-                .map(l => l.trim())
-                .filter(l => l && !l.startsWith('#'));
-
-            if (lines.length === 0) return null;
-
-            if (lines.length === 1) {
-                const root = parseExpr(lines[0]);
-                if (root === null) return null;
-                return {nodes, root, numSlots: Math.max(1, nextSlot - 1)};
-            }
-
-            // Multiple lines: build a sequence of blocks (3 children max per block)
-            // Evaluate all lines, but only return the last result
-            const lineIndices = [];
-            for (const line of lines) {
-                const idx = parseExpr(line);
-                if (idx === null) return null;
-                lineIndices.push(idx);
-            }
-
-            // Chain into block nodes (each has up to 3 children)
-            let current = lineIndices[0];
-            for (let i = 1; i < lineIndices.length; i += 2) {
-                const c2 = lineIndices[i] || 0;
-                const c3 = lineIndices[i + 1] || 0;
-                current = addNode(5, 0, current, c2, c3);
-            }
-
-            return {nodes, root: current, numSlots: Math.max(1, nextSlot - 1)};
+            return wasmStr;
         }
 
-        // Run code using WasmGC evaluator
+        function wasmToJsString(wasmStr, exports) {
+            // Read a WASM string using str_len and str_char
+            if (!wasmStr) return '';
+            const len = exports.str_len(wasmStr);
+            let result = '';
+            for (let i = 0; i < len; i++) {
+                result += String.fromCharCode(exports.str_char(wasmStr, i + 1));
+            }
+            return result;
+        }
+
+        // Simple JavaScript interpreter for basic Julia syntax
+        // This is a placeholder until the WasmGC interpreter is ready
+        function interpretJS(code) {
+            const output = [];
+            const env = {};
+
+            // Split into statements
+            const lines = code.split(/[;\n]+/).filter(l => l.trim() && !l.trim().startsWith('#'));
+
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed) continue;
+
+                // Handle println
+                const printMatch = trimmed.match(/^println\((.*)\)$/);
+                if (printMatch) {
+                    try {
+                        const args = printMatch[1];
+                        // Simple evaluation
+                        const result = evalExpr(args, env);
+                        output.push(String(result));
+                    } catch (e) {
+                        output.push('Error: ' + e.message);
+                    }
+                    continue;
+                }
+
+                // Handle assignment
+                const assignMatch = trimmed.match(/^(\w+)\s*=\s*(.+)$/);
+                if (assignMatch) {
+                    const [, name, expr] = assignMatch;
+                    try {
+                        env[name] = evalExpr(expr, env);
+                    } catch (e) {
+                        output.push('Error in assignment: ' + e.message);
+                    }
+                    continue;
+                }
+            }
+
+            return output.join('\n');
+        }
+
+        // Simple expression evaluator
+        function evalExpr(expr, env) {
+            expr = expr.trim();
+
+            // String literal
+            if (expr.startsWith('"') && expr.endsWith('"')) {
+                return expr.slice(1, -1);
+            }
+
+            // Number literal
+            if (/^-?\d+(\.\d+)?$/.test(expr)) {
+                return parseFloat(expr);
+            }
+
+            // Variable lookup
+            if (/^\w+$/.test(expr) && expr in env) {
+                return env[expr];
+            }
+
+            // String concatenation with *
+            if (expr.includes(' * ')) {
+                const parts = expr.split(' * ').map(p => evalExpr(p.trim(), env));
+                return parts.join('');
+            }
+
+            // Addition
+            if (expr.includes(' + ')) {
+                const parts = expr.split(' + ').map(p => evalExpr(p.trim(), env));
+                if (typeof parts[0] === 'string') {
+                    return parts.join('');
+                }
+                return parts.reduce((a, b) => a + b, 0);
+            }
+
+            // Subtraction
+            if (expr.includes(' - ')) {
+                const parts = expr.split(' - ').map(p => evalExpr(p.trim(), env));
+                return parts.reduce((a, b) => a - b);
+            }
+
+            // Multiplication
+            if (expr.includes(' * ') && !expr.includes('"')) {
+                const parts = expr.split(' * ').map(p => evalExpr(p.trim(), env));
+                return parts.reduce((a, b) => a * b, 1);
+            }
+
+            // Division
+            if (expr.includes(' / ')) {
+                const parts = expr.split(' / ').map(p => evalExpr(p.trim(), env));
+                return parts.reduce((a, b) => a / b);
+            }
+
+            return expr;
+        }
+
+        // Run code using WasmGC interpreter
         function runCode() {
             if (!interpreterReady) return;
 
@@ -538,111 +469,49 @@ x * y
             clearOutput();
 
             try {
-                // Parse each non-empty, non-comment line
-                const lines = code.split(/\n/)
-                    .map(l => l.trim())
-                    .filter(l => l && !l.startsWith('#'));
+                let result;
 
-                if (lines.length === 0) {
-                    appendOutput('No expressions to evaluate', true);
-                    updateStatus('ready', evaluatorModule ? 'WasmGC Ready' : 'Ready');
-                    return;
-                }
+                if (interpreterModule && interpreterModule.exports.interpret) {
+                    // Use real WasmGC interpreter
+                    const exports = interpreterModule.exports;
 
-                // Parse the full code block into ExprNode format
-                const parsed = parseToNodes(code);
+                    try {
+                        // Convert JS string to WASM string
+                        const wasmCode = jsToWasmString(code, exports);
 
-                if (!parsed) {
-                    appendOutput('Parse error: unsupported expression', true);
-                    appendOutput('Supported: integers, +, -, *, variables, if/else', false);
-                    updateStatus('ready', evaluatorModule ? 'WasmGC Ready' : 'Ready');
-                    return;
-                }
+                        // Clear output buffer before running
+                        if (exports.clear_output) {
+                            exports.clear_output();
+                        }
 
-                if (evaluatorModule) {
-                    // Execute via WasmGC evaluator
-                    const wasm = evaluatorModule.exports;
+                        // Call the interpreter
+                        exports.interpret(wasmCode);
 
-                    // Evaluate each line individually to show per-line results
-                    const lineTexts = code.split(/\n/)
-                        .map(l => l.trim())
-                        .filter(l => l && !l.startsWith('#'));
-
-                    // Use a shared variable context across all lines
-                    const fullParsed = parseToNodes(lineTexts.join('\n'));
-                    if (!fullParsed) {
-                        appendOutput('Parse error', true);
-                        updateStatus('ready', 'WasmGC Ready');
-                        return;
-                    }
-
-                    // Build the node array in WasmGC
-                    const nodesRef = wasm.nodes_new(fullParsed.nodes.length);
-                    for (let i = 0; i < fullParsed.nodes.length; i++) {
-                        const n = fullParsed.nodes[i];
-                        wasm['nodes_set!'](nodesRef, i + 1, n.tag, BigInt(n.value), n.c1, n.c2, n.c3);
-                    }
-                    const envRef = wasm.env_new(fullParsed.numSlots);
-
-                    // Evaluate and show result
-                    const result = wasm.eval_node(nodesRef, fullParsed.root, envRef);
-                    appendOutput(String(result));
-                    appendOutput('');
-                    appendOutput('--- Evaluated via WasmGC (eval_node) ---', false);
-
-                    if (parserModule) {
-                        appendOutput('Parser: JuliaSyntax.jl compiled to WasmGC (' +
-                            Object.keys(parserModule.exports).length + ' exports)', false);
-                    }
-                    if (binaryenReady) {
-                        appendOutput('Optimizer: Binaryen (wasm-opt) applied', false);
+                        // Get output from the interpreter's output buffer
+                        if (exports.get_output) {
+                            const wasmOutput = exports.get_output();
+                            result = wasmToJsString(wasmOutput, exports);
+                        }
+                    } catch (wasmErr) {
+                        console.error('WASM execution error:', wasmErr);
+                        // Fall back to JS interpreter
+                        result = interpretJS(code);
                     }
                 } else {
-                    // Fallback: evaluate in JS using the same parseToNodes logic
-                    const parsed = parseToNodes(code);
-                    if (parsed) {
-                        const result = evalNodes(parsed.nodes, parsed.root, new Array(parsed.numSlots).fill(0));
-                        appendOutput(String(result));
-                        appendOutput('');
-                        appendOutput('--- Evaluated in JS (WasmGC modules not loaded) ---', false);
-                    }
+                    // Use JS interpreter as fallback
+                    result = interpretJS(code);
                 }
 
-                updateStatus('ready', evaluatorModule ? 'WasmGC Ready' : 'Ready');
+                if (result) {
+                    String(result).split('\n').forEach(line => {
+                        if (line.trim()) appendOutput(line);
+                    });
+                }
+                appendOutput('\n--- Execution complete ---', false);
+                updateStatus('ready', interpreterModule ? 'WasmGC Ready' : 'Ready');
             } catch (err) {
                 appendOutput('Error: ' + err.message, true);
                 updateStatus('error', 'Error');
-            }
-        }
-
-        // JS fallback evaluator (mirrors eval_node logic for when WASM isn't available)
-        function evalNodes(nodes, idx, slots) {
-            const node = nodes[idx - 1]; // 1-based to 0-based
-            switch (node.tag) {
-                case 0: return node.value; // literal
-                case 1: return evalNodes(nodes, node.c1, slots) + evalNodes(nodes, node.c2, slots); // add
-                case 2: return evalNodes(nodes, node.c1, slots) - evalNodes(nodes, node.c2, slots); // sub
-                case 3: return evalNodes(nodes, node.c1, slots) * evalNodes(nodes, node.c2, slots); // mul
-                case 4: { // assign
-                    const val = evalNodes(nodes, node.c1, slots);
-                    slots[node.value - 1] = val;
-                    return val;
-                }
-                case 5: { // block
-                    let result = 0;
-                    if (node.c1) result = evalNodes(nodes, node.c1, slots);
-                    if (node.c2) result = evalNodes(nodes, node.c2, slots);
-                    if (node.c3) result = evalNodes(nodes, node.c3, slots);
-                    return result;
-                }
-                case 6: return slots[node.value - 1]; // varref
-                case 7: { // if
-                    const cond = evalNodes(nodes, node.c1, slots);
-                    return cond !== 0
-                        ? evalNodes(nodes, node.c2, slots)
-                        : evalNodes(nodes, node.c3, slots);
-                }
-                default: return -1;
             }
         }
 
@@ -703,7 +572,7 @@ x * y
             await initInterpreter();
         })();
     })();
-    </script></div></div><div data-hk="60" class="mt-8 grid md:grid-cols-3 gap-6"><div data-hk="61" class="p-6 bg-stone-100 dark:bg-stone-800 rounded-xl"><h3 data-hk="62" class="text-lg font-semibold text-stone-800 dark:text-stone-100 mb-3">How It Works</h3><p data-hk="63" class="text-stone-600 dark:text-stone-400 text-sm">This playground uses Julia&#39;s real parser (JuliaSyntax.jl) and a tree-walking evaluator, both compiled to WebAssembly (WasmGC) by WasmTarget.jl. The output is optimized by Binaryen (wasm-opt) in the browser for faster execution. Everything runs entirely in your browser - no server required.</p></div><div data-hk="64" class="p-6 bg-stone-100 dark:bg-stone-800 rounded-xl"><h3 data-hk="65" class="text-lg font-semibold text-stone-800 dark:text-stone-100 mb-3">Supported Features</h3><ul data-hk="66" class="text-stone-600 dark:text-stone-400 text-sm space-y-1"><li data-hk="67">Integer arithmetic (+, -, *)</li><li data-hk="68">Variable assignment</li><li data-hk="69">If/else conditionals</li><li data-hk="70">Multi-line expressions</li><li data-hk="71">JuliaSyntax.jl parser (WasmGC)</li><li data-hk="72">ExprNode evaluator (WasmGC)</li><li>Binaryen optimizer (wasm-opt)</li><li data-hk="73">No server required</li><li data-hk="74">100% browser-based</li></ul></div><div data-hk="75" class="p-6 bg-stone-100 dark:bg-stone-800 rounded-xl"><h3 data-hk="76" class="text-lg font-semibold text-stone-800 dark:text-stone-100 mb-3">Keyboard Shortcuts</h3><ul data-hk="77" class="text-stone-600 dark:text-stone-400 text-sm space-y-1"><li data-hk="78"><code data-hk="79" class="bg-stone-200 dark:bg-stone-700 px-1 rounded">Ctrl</code> + <code data-hk="80" class="bg-stone-200 dark:bg-stone-700 px-1 rounded">Enter</code> - Run code</li><li data-hk="81"><code data-hk="82" class="bg-stone-200 dark:bg-stone-700 px-1 rounded">Tab</code> - Indent</li><li data-hk="83"><code data-hk="84" class="bg-stone-200 dark:bg-stone-700 px-1 rounded">Ctrl</code> + <code data-hk="85" class="bg-stone-200 dark:bg-stone-700 px-1 rounded">Z</code> - Undo</li></ul></div></div><div data-hk="86" class="mt-6 p-4 bg-cyan-50 dark:bg-cyan-900/20 border border-cyan-200 dark:border-cyan-800 rounded-xl"><div data-hk="87" class="flex items-start gap-3"><div data-hk="88" class="flex-shrink-0 w-8 h-8 bg-cyan-500 rounded-full flex items-center justify-center"><svg data-hk="89" viewBox="0 0 24 24" stroke="currentColor" class="w-4 h-4 text-white" fill="none"><path data-hk="90" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" stroke-linecap="round" stroke-linejoin="round"></path></svg></div><div data-hk="91" class="flex-1"><p data-hk="92" class="text-stone-700 dark:text-stone-200 font-medium text-sm">100% Browser-Based</p><p data-hk="93" class="text-stone-500 dark:text-stone-400 text-xs mt-1">This playground loads two WasmGC modules: parser.wasm (JuliaSyntax.jl) and evaluator.wasm (ExprNode tree-walker), both compiled to WasmGC by WasmTarget.jl. The modules are optimized by Binaryen (wasm-opt) in the browser for inlining, DCE, and constant folding. No code is sent to any server.</p></div></div></div></div></main><footer data-hk="94" class="bg-white dark:bg-stone-800 border-t border-stone-200 dark:border-stone-700 mt-auto transition-colors duration-200"><div data-hk="95" class="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8"><div data-hk="96" class="flex justify-between items-center"><p data-hk="97" class="text-stone-500 dark:text-stone-400 text-sm">Built with <a data-hk="98" class="text-cyan-500 dark:text-cyan-400 hover:text-cyan-600 dark:hover:text-cyan-300" href="https://github.com/GroupTherapyOrg/Therapy.jl" target="_blank">Therapy.jl</a> - Powered by <a data-hk="99" class="text-cyan-500 dark:text-cyan-400 hover:text-cyan-600 dark:hover:text-cyan-300" href="/WasmTarget.jl/">WasmTarget.jl</a></p><p data-hk="100" class="text-stone-400 dark:text-stone-500 text-sm">MIT License</p></div></div></footer></div>
+    </script></div></div><div data-hk="41" class="mt-8 grid md:grid-cols-3 gap-6"><div data-hk="42" class="p-6 bg-stone-100 dark:bg-stone-800 rounded-xl"><h3 data-hk="43" class="text-lg font-semibold text-stone-800 dark:text-stone-100 mb-3">How It Works</h3><p data-hk="44" class="text-stone-600 dark:text-stone-400 text-sm">This playground runs a Julia interpreter that was written in Julia and compiled to WebAssembly (WasmGC) using WasmTarget.jl. Your code is parsed and executed entirely in your browser - no server required.</p></div><div data-hk="45" class="p-6 bg-stone-100 dark:bg-stone-800 rounded-xl"><h3 data-hk="46" class="text-lg font-semibold text-stone-800 dark:text-stone-100 mb-3">Supported Features</h3><ul data-hk="47" class="text-stone-600 dark:text-stone-400 text-sm space-y-1"><li data-hk="48">Variables and assignment</li><li data-hk="49">Arithmetic operations</li><li data-hk="50">Function definitions</li><li data-hk="51">If/else conditionals</li><li data-hk="52">While and for loops</li><li data-hk="53">Recursion</li><li data-hk="54">String operations</li><li data-hk="55">println() output</li></ul></div><div data-hk="56" class="p-6 bg-stone-100 dark:bg-stone-800 rounded-xl"><h3 data-hk="57" class="text-lg font-semibold text-stone-800 dark:text-stone-100 mb-3">Keyboard Shortcuts</h3><ul data-hk="58" class="text-stone-600 dark:text-stone-400 text-sm space-y-1"><li data-hk="59"><code data-hk="60" class="bg-stone-200 dark:bg-stone-700 px-1 rounded">Ctrl</code> + <code data-hk="61" class="bg-stone-200 dark:bg-stone-700 px-1 rounded">Enter</code> - Run code</li><li data-hk="62"><code data-hk="63" class="bg-stone-200 dark:bg-stone-700 px-1 rounded">Tab</code> - Indent</li><li data-hk="64"><code data-hk="65" class="bg-stone-200 dark:bg-stone-700 px-1 rounded">Ctrl</code> + <code data-hk="66" class="bg-stone-200 dark:bg-stone-700 px-1 rounded">Z</code> - Undo</li></ul></div></div><div data-hk="67" class="mt-6 p-4 bg-cyan-50 dark:bg-cyan-900/20 border border-cyan-200 dark:border-cyan-800 rounded-xl"><div data-hk="68" class="flex items-start gap-3"><div data-hk="69" class="flex-shrink-0 w-8 h-8 bg-cyan-500 rounded-full flex items-center justify-center"><svg data-hk="70" viewBox="0 0 24 24" stroke="currentColor" class="w-4 h-4 text-white" fill="none"><path data-hk="71" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" stroke-linecap="round" stroke-linejoin="round"></path></svg></div><div data-hk="72" class="flex-1"><p data-hk="73" class="text-stone-700 dark:text-stone-200 font-medium text-sm">100% Browser-Based</p><p data-hk="74" class="text-stone-500 dark:text-stone-400 text-xs mt-1">This playground runs entirely in your browser using WebAssembly. No code is sent to any server. The interpreter is built using WasmTarget.jl&#39;s WasmGC compilation, demonstrating that Julia can run in the browser without a traditional server backend.</p></div></div></div></div></main><footer data-hk="20" class="bg-white dark:bg-stone-800 border-t border-stone-200 dark:border-stone-700 mt-auto transition-colors duration-200"><div data-hk="21" class="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8"><div data-hk="22" class="flex justify-between items-center"><p data-hk="23" class="text-stone-500 dark:text-stone-400 text-sm">Built with <a data-hk="24" class="text-cyan-500 dark:text-cyan-400 hover:text-cyan-600 dark:hover:text-cyan-300" href="https://github.com/GroupTherapyOrg/Therapy.jl" target="_blank">Therapy.jl</a> - Powered by <a data-hk="25" class="text-cyan-500 dark:text-cyan-400 hover:text-cyan-600 dark:hover:text-cyan-300" href="./">WasmTarget.jl</a></p><p data-hk="26" class="text-stone-400 dark:text-stone-500 text-sm">MIT License</p></div></div></footer></div>
 </div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-julia.min.js"></script>
@@ -716,8 +585,26 @@ x * y
     // Initialize global hydration registry
     window.TherapyHydrate = window.TherapyHydrate || {};
 
+    // Global tracking of in-flight hydrations (prevents duplicate WASM fetches under rapid clicks)
+    // This is CRITICAL because content swaps remove DOM elements, invalidating data-hydrating attrs
+    window._therapyHydrating = window._therapyHydrating || {};
+    if (window._therapyHydrating['themetoggle']) {
+        console.log('%c[Hydration] ThemeToggle - hydration already in progress (global guard)', 'color: #ffa500');
+        return;
+    }
+
     // Hydration function for this component
     async function hydrate_themetoggle() {
+        // CRITICAL: Global guard against duplicate hydration during rapid clicks
+        // This must be checked BEFORE any async operations (fetch, etc.)
+        // The IIFE-level guard only works for the first script load; this handles re-execution
+        if (window._therapyHydrating['themetoggle']) {
+            console.log('%c[Hydration] ThemeToggle - hydration already in progress (function guard)', 'color: #ffa500');
+            return;
+        }
+        // Mark as hydrating IMMEDIATELY before any async operations
+        window._therapyHydrating['themetoggle'] = true;
+
         console.log('%c━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 'color: #e94560');
         console.log('%c  Therapy.jl - Hydrating ThemeToggle', 'color: #e94560; font-weight: bold');
         console.log('%c━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 'color: #e94560');
@@ -733,6 +620,16 @@ x * y
             document.querySelectorAll('therapy-island').forEach(el => console.log('  Found island:', el.dataset.component));
             return;
         }
+
+        // CRITICAL: Guard against duplicate hydration (fixes rapid-click WASM fetch bug)
+        // Check BEFORE the async fetch starts, not after it completes
+        if (container.dataset.hydrated === 'true' || container.dataset.hydrating === 'true') {
+            console.log('%c[Hydration] Skipping therapy-island[data-component="themetoggle"] - already hydrated/hydrating', 'color: #ffa500');
+            return;
+        }
+        // Mark as hydrating IMMEDIATELY to prevent concurrent calls
+        container.dataset.hydrating = 'true';
+
         console.log('%c[Hydration] Scoped to container: therapy-island[data-component="themetoggle"]', 'color: #748ffc');
 
         // Load WebAssembly module
@@ -870,8 +767,15 @@ x * y
         // Connect input bindings
         
 
+        // Initialize (sync DOM with Wasm state)
+        if (wasm.init) {
+            wasm.init();
+            console.log('%c[Hydration] ✓ Initialized', 'color: #51cf66');
+        }
+
         // Initialize theme signals from current DOM state
-        // This ensures the Wasm signal matches the saved theme preference
+        // MUST run AFTER wasm.init() to override default signal values (0=light)
+        // with the actual saved/system preference
         // Sync theme signal with saved preference or current DOM state
 // Check localStorage first (where we save it), then fall back to DOM class
 const savedTheme = (() => {
@@ -889,14 +793,18 @@ if (wasm.set_signal_142) {
     console.log('%c[Hydration] Theme signal synced: ' + (shouldBeDark ? 'dark' : 'light') + ' mode', 'color: #9775fa');
 }
 
-        // Initialize (sync DOM with Wasm state)
-        if (wasm.init) {
-            wasm.init();
-            console.log('%c[Hydration] ✓ Initialized', 'color: #51cf66');
-        }
-
         console.log('%c[Hydration] 🚀 ThemeToggle hydrated!', 'color: #51cf66; font-weight: bold');
         console.log('%c━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 'color: #e94560');
+
+        // Mark the island as hydrated to prevent re-hydration on SPA navigation
+        // This is especially important for Layout islands like ThemeToggle
+        if (container) {
+            container.dataset.hydrated = 'true';
+            delete container.dataset.hydrating;  // Clear the in-progress flag
+        }
+
+        // Clear the global hydrating flag now that we're done
+        delete window._therapyHydrating['themetoggle'];
 
         // Expose for debugging
         window.TherapyWasm = window.TherapyWasm || {};
@@ -905,6 +813,11 @@ if (wasm.set_signal_142) {
         return wasm;
         } catch (error) {
             console.error('[Hydration] Error hydrating ThemeToggle:', error);
+            // Clear hydrating flags on error so retry is possible
+            if (typeof container !== 'undefined' && container) {
+                delete container.dataset.hydrating;
+            }
+            delete window._therapyHydrating['themetoggle'];
             throw error;
         }
     }
@@ -929,12 +842,21 @@ if (wasm.set_signal_142) {
 (function() {
     'use strict';
 
+    // CRITICAL: Prevent re-execution during SPA navigation.
+    // On static sites, loadPage() extracts inline scripts from the fetched full HTML page.
+    // This router script contains 'TherapyWS' references, so it matches the extraction filter
+    // and gets re-executed on every navigation. Without this guard, each execution adds another
+    // click listener, causing exponential request duplication (1→2→4→8 navigations per click).
+    if (window.TherapyRouter) {
+        return;
+    }
+
     const CONFIG = {
-        contentSelector: '#therapy-content',
+        contentSelector: '#page-content',
         basePath: '/WasmTarget.jl',
         partialHeader: 'X-Therapy-Partial',
-        // Enable debug logging - can be toggled via TherapyRouter.setDebug(true/false)
-        debug: true
+        // Debug logging - toggle via TherapyRouter.setDebug(true/false)
+        debug: false
     };
 
     // Track current navigation to cancel on rapid clicks
@@ -990,25 +912,64 @@ if (wasm.set_signal_142) {
 
     /**
      * Resolve a relative URL to absolute path
+     *
+     * Path resolution rules:
+     * - Absolute paths (/foo) -> returned as-is
+     * - Full URLs (http://...) -> extract pathname
+     * - ./ paths -> resolve against CONFIG.basePath (app root)
+     * - Bare paths (foo/) -> resolve against CONFIG.basePath (app root)
+     * - ../ paths -> resolve against current URL (for going up directories)
      */
     function resolveUrl(href) {
         log('resolveUrl input:', href);
+
+        // Absolute paths - return as-is
         if (href.startsWith('/')) {
             log('resolveUrl: absolute path, returning as-is:', href);
             return href;
         }
+
+        // Full URLs - extract pathname
         if (href.startsWith('http://') || href.startsWith('https://')) {
             const pathname = new URL(href).pathname;
             log('resolveUrl: full URL, extracted pathname:', pathname);
             return pathname;
         }
 
-        // Relative path - resolve against CURRENT URL for navigation
-        // This ensures ../ goes up from the current page, not from base path
-        // Example: on /WasmTarget.jl/manual/, "../" should go to /WasmTarget.jl/
-        const resolved = new URL(href, window.location.href).pathname;
-        log('resolveUrl: relative path resolved:', href, '->', resolved);
-        return resolved;
+        // Parent-relative paths (../) - resolve against current URL
+        // This is intentional for going UP from nested routes
+        // Example: on /Therapy.jl/book/reactivity/, "../" -> /Therapy.jl/book/
+        if (href.startsWith('../')) {
+            const resolved = new URL(href, window.location.href).pathname;
+            log('resolveUrl: parent-relative resolved:', href, '->', resolved);
+            return resolved;
+        }
+
+        // Current-directory relative (./) or bare paths - resolve against BASE PATH
+        // This fixes the path stacking bug where ./foo on /Therapy.jl/learn/
+        // would incorrectly become /Therapy.jl/learn/foo instead of /Therapy.jl/foo
+        const base = CONFIG.basePath || '';
+        let path = href;
+
+        // Remove leading ./ if present
+        if (path.startsWith('./')) {
+            path = path.slice(2);
+        }
+
+        // Build the final path: basePath + "/" + path
+        // Handle edge cases for trailing/leading slashes
+        let result;
+        if (!path) {
+            // ./ alone means "home" (the base path with trailing slash)
+            result = base ? base + '/' : '/';
+        } else if (base.endsWith('/')) {
+            result = base + path;
+        } else {
+            result = base + '/' + path;
+        }
+
+        log('resolveUrl: base-relative resolved:', href, '->', result);
+        return result;
     }
 
     /**
@@ -1206,11 +1167,16 @@ if (wasm.set_signal_142) {
     }
 
     /**
-     * Re-hydrate all therapy-island components on the page
+     * Re-hydrate therapy-island components that haven't been hydrated yet.
+     * Islands in the Layout (like ThemeToggle) persist across SPA navigation,
+     * so we skip them to avoid re-fetching WASM and re-initializing state.
      */
     async function hydrateIslands() {
-        const islands = document.querySelectorAll('therapy-island');
-        log('Re-hydrating', islands.length, 'islands');
+        // Only hydrate islands that haven't been hydrated yet
+        // This prevents duplicate WASM fetches for Layout islands like ThemeToggle
+        const islands = document.querySelectorAll('therapy-island:not([data-hydrated])');
+        const totalIslands = document.querySelectorAll('therapy-island').length;
+        log('Hydrating', islands.length, 'new islands (', totalIslands, 'total on page)');
 
         for (const island of islands) {
             const componentName = island.dataset.component;
@@ -1229,6 +1195,8 @@ if (wasm.set_signal_142) {
                 try {
                     log('Calling hydration function for:', registryKey);
                     await window.TherapyHydrate[registryKey]();
+                    // Mark as hydrated to prevent re-hydration on future navigation
+                    island.dataset.hydrated = 'true';
                     log('Hydrated island:', componentName);
                 } catch (error) {
                     console.error('[Router] Failed to hydrate island:', componentName, error);
@@ -1257,12 +1225,15 @@ if (wasm.set_signal_142) {
             const exact = link.hasAttribute('data-exact');
 
             let isActive;
+            const basePath = normalizePath(CONFIG.basePath || '/');
             if (exact) {
                 isActive = linkPath === currentPath;
             } else {
                 // Prefix match for nested routes
+                // But exclude base path itself (e.g., /Therapy.jl) from prefix matching
+                // to avoid Home link being active on all pages
                 isActive = currentPath === linkPath ||
-                          (linkPath !== '/' && currentPath.startsWith(linkPath + '/'));
+                          (linkPath !== '/' && linkPath !== basePath && currentPath.startsWith(linkPath + '/'));
             }
 
             if (isActive) {
@@ -1355,6 +1326,16 @@ if (wasm.set_signal_142) {
 (function() {
     'use strict';
 
+    // CRITICAL: Prevent re-execution during SPA navigation
+    // ClientRouter extracts and re-executes scripts containing 'TherapyWS' after each navigation.
+    // Without this guard, each navigation creates a NEW scope with its own `let ws = null`,
+    // causing the duplicate connection check (ws.readyState) to fail and create new connections.
+    // This single check fixes the WebSocket connection leak issue.
+    if (window.TherapyWS) {
+        console.log('[WS] Script already executed, skipping re-initialization');
+        return;
+    }
+
     const CONFIG = {
         reconnectDelay: 1000,
         maxReconnectDelay: 30000,
@@ -1365,6 +1346,11 @@ if (wasm.set_signal_142) {
     let reconnectAttempts = 0;
     let connectionId = null;
     let isStaticMode = false;
+
+    // Dev mode: localhost/127.0.0.1 gets exponential backoff reconnection.
+    // Production: non-localhost gets fast static mode detection (1 retry).
+    const isDevMode = (window.location.hostname === 'localhost' ||
+                       window.location.hostname === '127.0.0.1');
 
     // Track signal values for patch application
     let signalValues = {};
@@ -1382,6 +1368,12 @@ if (wasm.set_signal_142) {
      */
     function connect() {
         if (isStaticMode) return;
+
+        // Prevent duplicate connections - check if already connected or connecting
+        // This fixes connection leaks during SPA navigation
+        if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+            return;
+        }
 
         try {
             ws = new WebSocket(getWsUrl());
@@ -1412,7 +1404,6 @@ if (wasm.set_signal_142) {
             };
 
             ws.onclose = function(e) {
-                console.log('[WS] Connection closed, code:', e.code);
                 connectionId = null;
 
                 // Dispatch disconnected event
@@ -1420,33 +1411,36 @@ if (wasm.set_signal_142) {
 
                 // Attempt reconnect unless it was a clean close
                 if (e.code !== 1000) {
-                    scheduleReconnect();
+                    if (isDevMode) {
+                        // Dev server: exponential backoff reconnection
+                        // Handles server restarts, code changes, crashes
+                        scheduleReconnect();
+                    } else if (reconnectAttempts >= 1) {
+                        // Production: two failures → static hosting, stop trying
+                        showStaticModeWarning();
+                    } else {
+                        // Production: first failure → retry once quickly
+                        reconnectAttempts++;
+                        setTimeout(connect, 500);
+                    }
                 }
             };
 
             ws.onerror = function(err) {
-                console.warn('[WS] Connection error - server may not be running');
-
-                // Check if we're on a static site (GitHub Pages, etc.)
-                // Static sites can't accept WebSocket connections
-                if (reconnectAttempts === 0) {
-                    // First failure - might be static mode
-                    setTimeout(function() {
-                        if (!ws || ws.readyState !== WebSocket.OPEN) {
-                            showStaticModeWarning();
-                        }
-                    }, 2000);
+                // Dev mode: log connection errors for debugging
+                if (isDevMode) {
+                    console.warn('[WS] Connection error - server may not be running');
                 }
+                // Production: suppress verbose logs during static mode detection
             };
 
         } catch (e) {
-            console.warn('[WS] Failed to create WebSocket:', e);
             showStaticModeWarning();
         }
     }
 
     /**
-     * Schedule a reconnection attempt with exponential backoff
+     * Schedule a reconnection attempt with exponential backoff (dev mode only)
      */
     function scheduleReconnect() {
         if (isStaticMode) return;
@@ -1919,7 +1913,7 @@ if (wasm.set_signal_142) {
     }
 
     /**
-     * Discover and subscribe to signals from data-server-signal and data-bidirectional-signal attributes
+     * Discover and subscribe to signals from all reactive data attributes
      * Called on connect and after SPA navigation
      */
     function discoverAndSubscribe() {
@@ -1938,6 +1932,45 @@ if (wasm.set_signal_142) {
             if (signalName && !subscribedSignals.has(signalName)) {
                 console.log('[WS] Auto-subscribing to bidirectional:', signalName);
                 subscribe(signalName);
+            }
+        });
+
+        // Subscribe to HTML signal bindings (innerHTML updates for rich content)
+        document.querySelectorAll('[data-signal-html]').forEach(function(el) {
+            var signalName = el.getAttribute('data-signal-html');
+            if (signalName && !subscribedSignals.has(signalName)) {
+                console.log('[WS] Auto-subscribing to html signal:', signalName);
+                subscribe(signalName);
+            }
+        });
+
+        // Subscribe to class match bindings (parse signal names from pattern)
+        // Format: "signalName:value:class;signalName2:value2:class2"
+        document.querySelectorAll('[data-signal-match]').forEach(function(el) {
+            var pattern = el.getAttribute('data-signal-match');
+            if (pattern) {
+                // Extract unique signal names from pattern
+                var parts = pattern.split(';');
+                parts.forEach(function(part) {
+                    var signalName = part.split(':')[0];
+                    if (signalName && !subscribedSignals.has(signalName)) {
+                        console.log('[WS] Auto-subscribing to match signal:', signalName);
+                        subscribe(signalName);
+                    }
+                });
+            }
+        });
+
+        // Subscribe to class toggle bindings
+        // Format: "signalName:class1,class2"
+        document.querySelectorAll('[data-signal-class]').forEach(function(el) {
+            var binding = el.getAttribute('data-signal-class');
+            if (binding) {
+                var signalName = binding.split(':')[0];
+                if (signalName && !subscribedSignals.has(signalName)) {
+                    console.log('[WS] Auto-subscribing to class signal:', signalName);
+                    subscribe(signalName);
+                }
             }
         });
     }
