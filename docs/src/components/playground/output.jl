@@ -606,7 +606,7 @@ function CapabilitiesPanel()
         ),
 
         # Note about MVP
-        Div(:class => "mt-4 p-3 bg-accent-900/30 rounded-lg border border-accent-700/50",
+        Div(:class => "mt-4 p-3 bg-warm-900/30 rounded-lg border border-warm-700/50",
             Div(:class => "flex items-start gap-2",
                 Svg(:class => "w-4 h-4 text-accent-400 mt-0.5 flex-shrink-0", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                     Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",

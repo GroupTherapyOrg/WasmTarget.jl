@@ -2558,12 +2558,12 @@ VectorArithmeticDemo = island(:VectorArithmeticDemo) do
         Div(:class => "text-center",
             Span(:class => () -> operation() == 1 ? "text-sm text-warm-500 dark:text-warm-400 block mb-1" : "hidden", "add_vec(v1, v2)"),
             Span(:class => () -> operation() == 2 ? "text-sm text-warm-500 dark:text-warm-400 block mb-1" : "hidden", "scale_vec(v1, s)"),
-            Div(:class => "p-2 bg-accent-100 dark:bg-accent-900/30 rounded-lg",
-                Span(:class => "text-sm text-accent-700 dark:text-accent-300", "→ Vec2("),
+            Div(:class => "p-2 bg-warm-100 dark:bg-warm-800 rounded-lg",
+                Span(:class => "text-sm text-warm-700 dark:text-warm-400", "→ Vec2("),
                 Span(:class => "font-mono font-bold text-accent-600 dark:text-accent-400", result_x),
-                Span(:class => "text-accent-700 dark:text-accent-300", ", "),
+                Span(:class => "text-warm-700 dark:text-warm-400", ", "),
                 Span(:class => "font-mono font-bold text-accent-600 dark:text-accent-400", result_y),
-                Span(:class => "text-accent-700 dark:text-accent-300", ")")
+                Span(:class => "text-warm-700 dark:text-warm-400", ")")
             )
         ),
 
@@ -2626,8 +2626,8 @@ TypeSpecializationDemo = island(:TypeSpecializationDemo) do
                 Span(:class => () -> input_type() >= 4 ? "text-accent-600 dark:text-accent-400 font-mono" : "hidden", "describe(x::Bool)")
             ),
             # Result - show/hide for result display
-            Div(:class => "text-center p-2 bg-accent-100 dark:bg-accent-900/30 rounded",
-                Span(:class => "text-xs text-accent-700 dark:text-accent-300", "returns: \""),
+            Div(:class => "text-center p-2 bg-warm-100 dark:bg-warm-800 rounded",
+                Span(:class => "text-xs text-warm-700 dark:text-warm-400", "returns: \""),
                 Span(:class => () -> input_type() == 1 ? "text-accent-600 dark:text-accent-400 font-bold" : "hidden", "positive integer"),
                 Span(:class => () -> input_type() == 2 ? "text-accent-600 dark:text-accent-400 font-bold" : "hidden", "negative integer"),
                 Span(:class => () -> input_type() == 3 ? "text-accent-600 dark:text-accent-400 font-bold" : "hidden", "zero"),
@@ -3052,7 +3052,7 @@ FunctionReturnTupleDemo = island(:FunctionReturnTupleDemo) do
         ),
 
         # Result tuple display
-        Div(:class => "p-4 bg-gradient-to-r from-accent-50 to-accent-50 dark:from-accent-900/20 dark:to-accent-900/20 rounded-lg",
+        Div(:class => "p-4 bg-gradient-to-r from-warm-50 to-warm-100 dark:from-warm-900 dark:to-warm-950 rounded-lg",
             Div(:class => "text-center",
                 Span(:class => "text-sm text-warm-500 dark:text-warm-400", "result = "),
                 Span(:class => "text-accent-500 font-mono text-lg", "("),

@@ -100,7 +100,7 @@ function PlaygroundPage()
             ),
 
             # Technical note
-            Div(:class => "mt-6 p-4 bg-accent-50 dark:bg-accent-900/20 border border-accent-200 dark:border-accent-800 rounded-xl",
+            Div(:class => "mt-6 p-4 bg-warm-50 dark:bg-warm-900/20 border border-warm-200 dark:border-warm-700 rounded-xl",
                 Div(:class => "flex items-start gap-3",
                     # Icon
                     Div(:class => "flex-shrink-0 w-8 h-8 bg-accent-500 rounded-full flex items-center justify-center",

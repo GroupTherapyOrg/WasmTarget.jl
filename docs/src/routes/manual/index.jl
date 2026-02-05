@@ -71,7 +71,7 @@ const CHAPTERS = [
 Feature tag badge component.
 """
 function FeatureTag(tag)
-    Span(:class => "inline-block px-2 py-0.5 text-xs rounded-full bg-accent-100 dark:bg-accent-900/30 text-accent-700 dark:text-accent-300",
+    Span(:class => "inline-block px-2 py-0.5 text-xs rounded-full bg-accent-100 dark:bg-accent-900/30 text-warm-700 dark:text-warm-400",
         tag
     )
 end
@@ -125,7 +125,7 @@ function ManualIndex()
                 "Learn Julia through hands-on examples that run real code in your browser via WebAssembly."
             ),
             # Explanation box
-            Div(:class => "max-w-2xl mx-auto p-4 bg-accent-50 dark:bg-accent-900/20 rounded-xl border border-accent-200 dark:border-accent-800",
+            Div(:class => "max-w-2xl mx-auto p-4 bg-warm-50 dark:bg-warm-900/20 rounded-xl border border-warm-200 dark:border-warm-700",
                 Div(:class => "flex items-start gap-3",
                     Svg(:class => "w-5 h-5 text-accent-600 dark:text-accent-400 flex-shrink-0 mt-0.5",
                         :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
@@ -133,7 +133,7 @@ function ManualIndex()
                              :d => "M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z")
                     ),
                     Div(
-                        P(:class => "text-sm text-accent-800 dark:text-accent-200",
+                        P(:class => "text-sm text-warm-800 dark:text-warm-300",
                             "Each chapter includes ",
                             Span(:class => "font-semibold", "live interactive examples"),
                             " powered by WasmTarget.jl. The Julia code is compiled to WebAssembly at build time, so you can experiment with real compiled code directly in your browser."
@@ -181,7 +181,7 @@ function ManualIndex()
             H3(:class => "text-2xl font-bold text-white mb-2",
                 "Ready to dive in?"
             ),
-            P(:class => "text-accent-100 mb-6",
+            P(:class => "text-warm-100 mb-6",
                 "Start with Variables to learn the basics, or jump to any chapter that interests you."
             ),
             A(:href => "./manual/variables/",

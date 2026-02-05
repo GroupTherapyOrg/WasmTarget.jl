@@ -95,7 +95,7 @@ function SidebarItem(id, title, description, is_active)
     # The client-side router's resolveUrl() prepends CONFIG.basePath to ./ paths
     NavLink("./manual/$id/", title;
         class = "block px-3 py-2 rounded-lg text-sm transition-colors text-warm-600 dark:text-warm-400 hover:bg-warm-100 dark:hover:bg-warm-700",
-        active_class = "bg-accent-100 dark:bg-accent-900/30 text-accent-700 dark:text-accent-300 font-medium",
+        active_class = "bg-warm-100 dark:bg-warm-800 text-accent-600 dark:text-accent-400 font-medium",
         exact = true
     )
 end
@@ -202,7 +202,7 @@ function RelatedChapters(chapter_id::String)
         Div(:class => "grid sm:grid-cols-2 lg:grid-cols-3 gap-3",
             [A(:href => "./manual/$(id)/",
                :class => "group flex items-start gap-3 p-3 rounded-lg bg-warm-50 dark:bg-warm-800 border border-warm-200 dark:border-warm-700 hover:border-accent-300 dark:hover:border-accent-700 hover:shadow-sm transition-all",
-                Div(:class => "flex-shrink-0 w-8 h-8 rounded-lg bg-accent-100 dark:bg-accent-900/30 flex items-center justify-center",
+                Div(:class => "flex-shrink-0 w-8 h-8 rounded-lg bg-warm-100 dark:bg-warm-800 flex items-center justify-center",
                     Svg(:class => "w-4 h-4 text-accent-600 dark:text-accent-400",
                         :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                         Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",

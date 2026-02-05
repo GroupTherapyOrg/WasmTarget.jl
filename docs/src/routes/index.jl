@@ -159,7 +159,7 @@ function ManualFeatureSection()
 
         # Feature card
         A(:href => "./manual/",
-          :class => "group block max-w-4xl mx-auto p-8 bg-gradient-to-br from-accent-50 to-accent-50 dark:from-accent-900/20 dark:to-accent-900/20 rounded-2xl border border-accent-200 dark:border-accent-800 hover:border-accent-400 dark:hover:border-accent-600 hover:shadow-xl hover:shadow-accent-500/10 transition-all duration-300",
+          :class => "group block max-w-4xl mx-auto p-8 bg-gradient-to-br from-warm-50 to-warm-100 dark:from-warm-900 dark:to-warm-950 rounded-2xl border border-warm-200 dark:border-warm-700 hover:border-accent-400 dark:hover:border-accent-600 hover:shadow-xl hover:shadow-accent-500/10 transition-all duration-300",
             Div(:class => "flex flex-col md:flex-row items-center gap-8",
                 # Icon
                 Div(:class => "flex-shrink-0 w-20 h-20 bg-gradient-to-br from-accent-400 to-accent-500 rounded-2xl flex items-center justify-center shadow-lg shadow-accent-500/20 group-hover:scale-105 transition-transform duration-300",
@@ -178,11 +178,11 @@ function ManualFeatureSection()
                     ),
                     # Chapter tags
                     Div(:class => "flex flex-wrap justify-center md:justify-start gap-2",
-                        Span(:class => "px-3 py-1 text-xs rounded-full bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300", "Variables"),
-                        Span(:class => "px-3 py-1 text-xs rounded-full bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300", "Functions"),
-                        Span(:class => "px-3 py-1 text-xs rounded-full bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300", "Control Flow"),
-                        Span(:class => "px-3 py-1 text-xs rounded-full bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300", "Types"),
-                        Span(:class => "px-3 py-1 text-xs rounded-full bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300", "Arrays"),
+                        Span(:class => "px-3 py-1 text-xs rounded-full bg-accent-100 dark:bg-accent-900/40 text-warm-700 dark:text-warm-400", "Variables"),
+                        Span(:class => "px-3 py-1 text-xs rounded-full bg-accent-100 dark:bg-accent-900/40 text-warm-700 dark:text-warm-400", "Functions"),
+                        Span(:class => "px-3 py-1 text-xs rounded-full bg-accent-100 dark:bg-accent-900/40 text-warm-700 dark:text-warm-400", "Control Flow"),
+                        Span(:class => "px-3 py-1 text-xs rounded-full bg-accent-100 dark:bg-accent-900/40 text-warm-700 dark:text-warm-400", "Types"),
+                        Span(:class => "px-3 py-1 text-xs rounded-full bg-accent-100 dark:bg-accent-900/40 text-warm-700 dark:text-warm-400", "Arrays"),
                         Span(:class => "px-3 py-1 text-xs rounded-full bg-warm-200 dark:bg-warm-700 text-warm-600 dark:text-warm-400", "+5 more")
                     )
                 ),

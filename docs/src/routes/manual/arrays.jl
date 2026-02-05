@@ -69,7 +69,7 @@ typed_arr = Int32[1, 2, 3, 4, 5]""",
         ),
 
         # Tip about 1-indexing
-        Div(:class => "p-4 bg-accent-50 dark:bg-accent-900/20 rounded-xl border border-accent-200 dark:border-accent-800 my-6",
+        Div(:class => "p-4 bg-warm-50 dark:bg-warm-900/20 rounded-xl border border-warm-200 dark:border-warm-700 my-6",
             Div(:class => "flex items-start gap-3",
                 Svg(:class => "w-5 h-5 text-accent-600 dark:text-accent-400 flex-shrink-0 mt-0.5",
                     :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
@@ -77,8 +77,8 @@ typed_arr = Int32[1, 2, 3, 4, 5]""",
                          :d => "M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z")
                 ),
                 Div(
-                    P(:class => "text-sm text-accent-800 dark:text-accent-200 font-medium", "1-Based Indexing"),
-                    P(:class => "text-sm text-accent-700 dark:text-accent-300 mt-1",
+                    P(:class => "text-sm text-warm-800 dark:text-warm-300 font-medium", "1-Based Indexing"),
+                    P(:class => "text-sm text-warm-700 dark:text-warm-400 mt-1",
                         "Unlike C, Python, or JavaScript, Julia arrays start at index 1, not 0. ",
                         "This matches mathematical notation and is natural for many scientific applications."
                     )
@@ -364,7 +364,7 @@ end"""
         ),
 
         # Next steps
-        Div(:class => "p-6 bg-gradient-to-r from-accent-50 to-accent-50 dark:from-accent-900/20 dark:to-accent-900/20 rounded-xl border border-accent-200 dark:border-accent-800",
+        Div(:class => "p-6 bg-gradient-to-r from-warm-50 to-warm-100 dark:from-warm-900 dark:to-warm-950 rounded-xl border border-warm-200 dark:border-warm-700",
             H3(:class => "text-lg font-semibold text-warm-800 dark:text-warm-100 mb-2",
                 "Next Steps"
             ),
