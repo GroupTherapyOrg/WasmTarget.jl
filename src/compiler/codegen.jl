@@ -14396,6 +14396,138 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
             push!(bytes, Opcode.I64_CONST)
             push!(bytes, 0x00)
             return bytes
+        elseif name === :jl_id_start_char
+            # PURE-316: jl_id_start_char(c::UInt32) -> Int32
+            # Checks if a Unicode codepoint is a valid identifier start character.
+            # For ASCII: letters (A-Z, a-z) and underscore (_).
+            # For non-ASCII (>= 128): return 1 (assume valid, conservative).
+            if length(expr.args) >= 6
+                cp_arg = expr.args[6]  # UInt32 codepoint
+
+                # Stack: [c]
+                # Result: (c - 65) < 26 || (c - 97) < 26 || c == 95
+                #         [A-Z]           [a-z]             [_]
+                # For non-ASCII (c >= 128): return 1
+
+                # Check ASCII vs non-ASCII
+                # NOTE: i32.const takes SIGNED LEB128, so use encode_leb128_signed
+                append!(bytes, compile_value(cp_arg, ctx))  # [c]
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int64(128)))
+                push!(bytes, Opcode.I32_LT_U)  # c < 128?
+
+                push!(bytes, Opcode.IF)
+                push!(bytes, 0x7F)  # result type: i32
+
+                # ASCII path: (c - 65) < 26 || (c - 97) < 26 || c == 95
+                append!(bytes, compile_value(cp_arg, ctx))  # [c]
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int64(65)))
+                push!(bytes, Opcode.I32_SUB)
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int64(26)))
+                push!(bytes, Opcode.I32_LT_U)  # (c - 65) < 26  [A-Z]
+
+                append!(bytes, compile_value(cp_arg, ctx))  # [c]
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int64(97)))
+                push!(bytes, Opcode.I32_SUB)
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int64(26)))
+                push!(bytes, Opcode.I32_LT_U)  # (c - 97) < 26  [a-z]
+
+                push!(bytes, Opcode.I32_OR)
+
+                append!(bytes, compile_value(cp_arg, ctx))  # [c]
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int64(95)))
+                push!(bytes, Opcode.I32_EQ)  # c == 95  [_]
+
+                push!(bytes, Opcode.I32_OR)
+
+                push!(bytes, Opcode.ELSE)
+                # Non-ASCII path: return 1 (assume valid identifier char)
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x01)
+                push!(bytes, Opcode.END)
+            else
+                # No argument — return 0
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+            end
+            return bytes
+        elseif name === :jl_id_char
+            # PURE-316: jl_id_char(c::UInt32) -> Int32
+            # Checks if a Unicode codepoint is a valid identifier continuation character.
+            # For ASCII: letters (A-Z, a-z), digits (0-9), underscore (_), and bang (!).
+            # For non-ASCII (>= 128): return 1 (assume valid, conservative).
+            if length(expr.args) >= 6
+                cp_arg = expr.args[6]  # UInt32 codepoint
+
+                # Check ASCII vs non-ASCII
+                # NOTE: i32.const takes SIGNED LEB128, so use encode_leb128_signed
+                append!(bytes, compile_value(cp_arg, ctx))  # [c]
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int64(128)))
+                push!(bytes, Opcode.I32_LT_U)  # c < 128?
+
+                push!(bytes, Opcode.IF)
+                push!(bytes, 0x7F)  # result type: i32
+
+                # ASCII path: letter || digit || _ || !
+                # (c - 65) < 26 || (c - 97) < 26 || (c - 48) < 10 || c == 95 || c == 33
+                append!(bytes, compile_value(cp_arg, ctx))
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int64(65)))
+                push!(bytes, Opcode.I32_SUB)
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int64(26)))
+                push!(bytes, Opcode.I32_LT_U)  # [A-Z]
+
+                append!(bytes, compile_value(cp_arg, ctx))
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int64(97)))
+                push!(bytes, Opcode.I32_SUB)
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int64(26)))
+                push!(bytes, Opcode.I32_LT_U)  # [a-z]
+
+                push!(bytes, Opcode.I32_OR)
+
+                append!(bytes, compile_value(cp_arg, ctx))
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int64(48)))
+                push!(bytes, Opcode.I32_SUB)
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int64(10)))
+                push!(bytes, Opcode.I32_LT_U)  # [0-9]
+
+                push!(bytes, Opcode.I32_OR)
+
+                append!(bytes, compile_value(cp_arg, ctx))
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int64(95)))
+                push!(bytes, Opcode.I32_EQ)  # _
+
+                push!(bytes, Opcode.I32_OR)
+
+                append!(bytes, compile_value(cp_arg, ctx))
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int64(33)))
+                push!(bytes, Opcode.I32_EQ)  # !
+
+                push!(bytes, Opcode.I32_OR)
+
+                push!(bytes, Opcode.ELSE)
+                # Non-ASCII path: return 1 (assume valid)
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x01)
+                push!(bytes, Opcode.END)
+            else
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+            end
+            return bytes
         end
     end
 

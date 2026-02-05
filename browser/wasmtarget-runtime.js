@@ -53,7 +53,7 @@ class WasmTargetRuntime {
         } else if (source instanceof ArrayBuffer) {
             bytes = source;
         } else if (source instanceof Uint8Array) {
-            bytes = source.buffer;
+            bytes = source.buffer.slice(source.byteOffset, source.byteOffset + source.byteLength);
         } else {
             throw new Error("source must be a URL string, ArrayBuffer, or Uint8Array");
         }
