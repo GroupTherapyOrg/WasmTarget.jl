@@ -9455,7 +9455,8 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
             has_phi = dest_block !== nothing && dest_has_phi_from_edge(dest_block, terminator_idx)
 
             # Compile condition
-            append!(bytes, compile_value(term.cond, ctx))
+            cond_bytes = compile_value(term.cond, ctx)
+            append!(bytes, cond_bytes)
 
             # If condition is TRUE, fall through to next block
             # If condition is FALSE, jump to dest
@@ -13091,12 +13092,29 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                 # PURE-206: Skip for Int128/UInt128 SSAs — their intrinsic code
                 # (sext_int, add_int, etc.) ends with struct_new whose LEB128 type
                 # index byte can be misidentified as a numeric opcode.
+                # PURE-307: Skip for struct construction (:new), Core.tuple, and getfield
+                # on ref-producing statements. These emit GC-prefix instructions
+                # (struct_new, struct_get, array_new) whose LEB128 type index bytes
+                # can match numeric opcode ranges (0x46-0xC4). For example,
+                # struct_new type 74 → bytes [0xFB, 0x00, 0x4A], and 0x4A = i32.ge_s.
                 ssa_is_128bit = false
                 if local_wasm_type isa ConcreteRef
                     ssa_jt_128 = get(ctx.ssa_types, idx, nothing)
                     ssa_is_128bit = (ssa_jt_128 === Int128 || ssa_jt_128 === UInt128)
                 end
-                if !needs_type_safe_default && !ssa_is_128bit && length(stmt_bytes) >= 3 &&
+                # PURE-307: Skip for statements that produce ref values (struct/array ops)
+                # Check if stmt_bytes contains GC_PREFIX (0xFB) — all WasmGC struct/array
+                # operations use this prefix, and their LEB128 operands cause false positives.
+                has_gc_prefix = false
+                if !ssa_is_128bit
+                    for bi in 1:length(stmt_bytes)
+                        if stmt_bytes[bi] == Opcode.GC_PREFIX
+                            has_gc_prefix = true
+                            break
+                        end
+                    end
+                end
+                if !needs_type_safe_default && !ssa_is_128bit && !has_gc_prefix && length(stmt_bytes) >= 3 &&
                    stmt_bytes[1] == 0x20 &&  # starts with local.get
                    (local_wasm_type isa ConcreteRef || local_wasm_type === StructRef ||
                     local_wasm_type === ArrayRef || local_wasm_type === ExternRef || local_wasm_type === AnyRef)
@@ -13157,6 +13175,21 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                     # Scan backward for 0x20 (LOCAL_GET) that could be the trailing value
                     for si in length(stmt_bytes):-1:max(1, length(stmt_bytes) - 5)
                         if stmt_bytes[si] == 0x20 && si < length(stmt_bytes)
+                            # PURE-306: Guard against false positives where 0x20 is actually
+                            # an operand byte (e.g., LEB128 encoding of local index 32),
+                            # not the LOCAL_GET opcode. If the previous byte is an opcode
+                            # that takes a LEB128 operand, this 0x20 might be its operand.
+                            if si > 1
+                                prev_byte = stmt_bytes[si - 1]
+                                if prev_byte == 0x20 || prev_byte == 0x21 || prev_byte == 0x22 ||  # local.get/set/tee
+                                   prev_byte == 0x10 || prev_byte == 0x11 ||                        # call/call_indirect
+                                   prev_byte == 0x23 || prev_byte == 0x24 ||                        # global.get/set
+                                   prev_byte == 0x0C || prev_byte == 0x0D                           # br/br_if
+                                    # This 0x20 could be the start of a LEB128 operand
+                                    # for the previous instruction. Skip this false match.
+                                    continue
+                                end
+                            end
                             # Try to decode LEB128 after it
                             local tlg_idx = 0
                             local tlg_shift = 0
