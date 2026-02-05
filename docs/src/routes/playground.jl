@@ -47,7 +47,7 @@ function PlaygroundPage()
             Div(:class => "mt-8 grid md:grid-cols-3 gap-6",
 
                 # How it works
-                Div(:class => "p-6 bg-warm-100 dark:bg-warm-800 rounded-xl",
+                Div(:class => "p-6 bg-warm-100 dark:bg-warm-900 rounded-xl",
                     H3(:class => "text-lg font-semibold text-warm-800 dark:text-warm-100 mb-3",
                         "How It Works"
                     ),
@@ -57,7 +57,7 @@ function PlaygroundPage()
                 ),
 
                 # Supported Features
-                Div(:class => "p-6 bg-warm-100 dark:bg-warm-800 rounded-xl",
+                Div(:class => "p-6 bg-warm-100 dark:bg-warm-900 rounded-xl",
                     H3(:class => "text-lg font-semibold text-warm-800 dark:text-warm-100 mb-3",
                         "Supported Features"
                     ),
@@ -74,7 +74,7 @@ function PlaygroundPage()
                 ),
 
                 # Keyboard Shortcuts
-                Div(:class => "p-6 bg-warm-100 dark:bg-warm-800 rounded-xl",
+                Div(:class => "p-6 bg-warm-100 dark:bg-warm-900 rounded-xl",
                     H3(:class => "text-lg font-semibold text-warm-800 dark:text-warm-100 mb-3",
                         "Keyboard Shortcuts"
                     ),
@@ -111,7 +111,7 @@ function PlaygroundPage()
                     ),
                     # Content
                     Div(:class => "flex-1",
-                        P(:class => "text-warm-700 dark:text-warm-200 font-medium text-sm",
+                        P(:class => "text-warm-700 dark:text-warm-300 font-medium text-sm",
                             "100% Browser-Based"
                         ),
                         P(:class => "text-warm-500 dark:text-warm-400 text-xs mt-1",

@@ -71,7 +71,7 @@ emoji = "👋"  # (Note: limited WASM support)""")
 
         P(:class => "text-warm-600 dark:text-warm-400 my-4",
             "Use single quotes for individual characters (",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Char"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Char"),
             "), not strings:"
         ),
 
@@ -92,7 +92,7 @@ typeof(s)    # String""")
 
         P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "The ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "length()"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "length()"),
             " function returns the number of characters in a string."
         ),
 
@@ -138,16 +138,16 @@ length(empty)  # 0""",
 
         P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "Strings can be joined together using the ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "*"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "*"),
             " operator or the ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "string()"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "string()"),
             " function."
         ),
 
         # Concatenation operators table
         Div(:class => "my-6 overflow-x-auto",
             Table(:class => "w-full text-sm border-collapse",
-                Thead(:class => "bg-warm-100 dark:bg-warm-800",
+                Thead(:class => "bg-warm-100 dark:bg-warm-900",
                     Tr(
                         Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Method"),
                         Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Example"),
@@ -193,9 +193,9 @@ e = "ha" ^ 3            # "hahaha" """,
 
         P(:class => "text-warm-600 dark:text-warm-400 my-4",
             "Note: Julia uses ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "*"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "*"),
             " for string concatenation (not ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "+"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "+"),
             "). This follows the mathematical convention where * is a non-commutative operator (order matters)."
         ),
 
@@ -211,7 +211,7 @@ e = "ha" ^ 3            # "hahaha" """,
         # Comparison operators table
         Div(:class => "my-6 overflow-x-auto",
             Table(:class => "w-full text-sm border-collapse",
-                Thead(:class => "bg-warm-100 dark:bg-warm-800",
+                Thead(:class => "bg-warm-100 dark:bg-warm-900",
                     Tr(
                         Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Operator"),
                         Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Description"),
@@ -289,7 +289,7 @@ c > a      # true ("cherry" comes after "apple")""",
 
         P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "In standard Julia, string interpolation with ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "\$"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "\$"),
             " is a powerful feature:"
         ),
 
@@ -330,10 +330,10 @@ greeting = "Hello, \$name! You are \$age years old."
         ),
 
         Ul(:class => "list-disc list-inside space-y-2 text-warm-600 dark:text-warm-400 mb-6",
-            Li("Create strings with double quotes: ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "\"Hello\"")),
-            Li("Get length with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "length(s)")),
-            Li("Concatenate with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "*"), " or ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "string()")),
-            Li("Compare with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "=="), ", ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "<"), ", ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", ">"), " (lexicographic)"),
+            Li("Create strings with double quotes: ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "\"Hello\"")),
+            Li("Get length with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "length(s)")),
+            Li("Concatenate with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "*"), " or ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "string()")),
+            Li("Compare with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "=="), ", ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "<"), ", ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", ">"), " (lexicographic)"),
             Li("Strings are immutable - you cannot modify individual characters")
         ),
 

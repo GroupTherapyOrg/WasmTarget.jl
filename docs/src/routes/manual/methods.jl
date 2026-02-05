@@ -95,7 +95,7 @@ greet(Int32(42)) # calls Int32 method → "You are number 42\""""
         P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "Multiple dispatch really shines when working with custom struct types. ",
             "You can define the same function name (like ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "area"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "area"),
             ") for different shapes, and Julia will call the right implementation."
         ),
 
@@ -131,7 +131,7 @@ area(rect)    # calls Rectangle method → 24""",
 
         P(:class => "text-warm-600 dark:text-warm-400 my-4",
             "This pattern is fundamental to Julia programming. Instead of using ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "if/else"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "if/else"),
             " to check types, you define specialized methods and let dispatch handle it."
         ),
 
@@ -143,7 +143,7 @@ area(rect)    # calls Rectangle method → 24""",
         P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "You can extend arithmetic operations to work with your own types. ",
             "In Julia, operators like ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "+"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "+"),
             " are just functions, so you can add methods for them."
         ),
 
@@ -283,7 +283,7 @@ combine(true, Int32(5))        # -5 (negate)"""
         ),
 
         # Section: Method Ambiguity
-        Div(:class => "p-4 bg-warm-100 dark:bg-warm-800 rounded-xl border border-warm-200 dark:border-warm-700 my-6",
+        Div(:class => "p-4 bg-warm-100 dark:bg-warm-900 rounded-xl border border-warm-200 dark:border-warm-700 my-6",
             Div(:class => "flex items-start gap-3",
                 Svg(:class => "w-5 h-5 text-warm-500 dark:text-warm-400 flex-shrink-0 mt-0.5",
                     :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
@@ -309,10 +309,10 @@ combine(true, Int32(5))        # -5 (negate)"""
 
         Ul(:class => "list-disc list-inside space-y-2 text-warm-600 dark:text-warm-400 mb-6",
             Li("A ", Em("function"), " is a name; a ", Em("method"), " is an implementation for specific types"),
-            Li("Define methods by adding type annotations: ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "function f(x::Type)")),
+            Li("Define methods by adding type annotations: ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "function f(x::Type)")),
             Li("Julia dispatches based on the types of ", Em("all"), " arguments (multiple dispatch)"),
             Li("In WasmTarget.jl, dispatch happens at compile time for zero runtime overhead"),
-            Li("Use specialized methods for custom structs like ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "area(c::Circle)"))
+            Li("Use specialized methods for custom structs like ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "area(c::Circle)"))
         ),
 
         # WasmTarget note

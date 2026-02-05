@@ -95,7 +95,7 @@ function SidebarItem(id, title, description, is_active)
     # The client-side router's resolveUrl() prepends CONFIG.basePath to ./ paths
     NavLink("./manual/$id/", title;
         class = "block px-3 py-2 rounded-lg text-sm transition-colors text-warm-600 dark:text-warm-400 hover:bg-warm-100 dark:hover:bg-warm-700",
-        active_class = "bg-warm-100 dark:bg-warm-800 text-accent-600 dark:text-accent-400 font-medium",
+        active_class = "bg-warm-100 dark:bg-warm-900 text-accent-600 dark:text-accent-400 font-medium",
         exact = true
     )
 end
@@ -125,7 +125,7 @@ function Breadcrumb(chapter_title)
                          :d => "M9 5l7 7-7 7")
                 ) : nothing
             ),
-            chapter_title !== nothing ? Li(:class => "text-warm-800 dark:text-warm-200 font-medium",
+            chapter_title !== nothing ? Li(:class => "text-warm-800 dark:text-warm-300 font-medium",
                 chapter_title
             ) : nothing
         )
@@ -187,7 +187,7 @@ function RelatedChapters(chapter_id::String)
         return nothing
     end
 
-    Div(:class => "mt-10 p-5 bg-warm-50 dark:bg-warm-800/50 rounded-xl border border-warm-200 dark:border-warm-700",
+    Div(:class => "mt-10 p-5 bg-warm-50 dark:bg-warm-900/50 rounded-xl border border-warm-200 dark:border-warm-700",
         Div(:class => "flex items-center gap-2 mb-4",
             # Link icon
             Svg(:class => "w-5 h-5 text-accent-500 dark:text-accent-400",
@@ -201,8 +201,8 @@ function RelatedChapters(chapter_id::String)
         ),
         Div(:class => "grid sm:grid-cols-2 lg:grid-cols-3 gap-3",
             [A(:href => "./manual/$(id)/",
-               :class => "group flex items-start gap-3 p-3 rounded-lg bg-warm-50 dark:bg-warm-800 border border-warm-200 dark:border-warm-700 hover:border-accent-300 dark:hover:border-accent-700 hover:shadow-sm transition-all",
-                Div(:class => "flex-shrink-0 w-8 h-8 rounded-lg bg-warm-100 dark:bg-warm-800 flex items-center justify-center",
+               :class => "group flex items-start gap-3 p-3 rounded-lg bg-warm-50 dark:bg-warm-900 border border-warm-200 dark:border-warm-700 hover:border-accent-300 dark:hover:border-accent-700 hover:shadow-sm transition-all",
+                Div(:class => "flex-shrink-0 w-8 h-8 rounded-lg bg-warm-100 dark:bg-warm-900 flex items-center justify-center",
                     Svg(:class => "w-4 h-4 text-accent-600 dark:text-accent-400",
                         :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                         Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
@@ -229,10 +229,10 @@ The sidebar is collapsible on mobile via a toggle button.
 function ManualSidebar(current_chapter_id)
     Aside(:id => "manual-sidebar",
           :class => "hidden lg:block w-64 flex-shrink-0",
-        Div(:class => "sticky top-4 bg-warm-50 dark:bg-warm-800 rounded-xl p-4 shadow-sm border border-warm-200 dark:border-warm-700",
+        Div(:class => "sticky top-4 bg-warm-50 dark:bg-warm-900 rounded-xl p-4 shadow-sm border border-warm-200 dark:border-warm-700",
             # Header
             Div(:class => "flex items-center justify-between mb-4 pb-3 border-b border-warm-200 dark:border-warm-700",
-                H2(:class => "text-sm font-semibold text-warm-800 dark:text-warm-200 uppercase tracking-wider",
+                H2(:class => "text-sm font-semibold text-warm-800 dark:text-warm-300 uppercase tracking-wider",
                     "Julia Manual"
                 ),
                 A(:href => "./manual/", :class => "text-xs text-accent-500 hover:text-accent-600 dark:hover:text-accent-400",
@@ -272,10 +272,10 @@ function MobileSidebarOverlay(current_chapter_id)
         Div(:id => "sidebar-backdrop",
             :class => "absolute inset-0 bg-black/50"),
         # Sidebar panel
-        Div(:class => "absolute left-0 top-0 bottom-0 w-72 bg-warm-50 dark:bg-warm-800 shadow-xl p-4 overflow-y-auto",
+        Div(:class => "absolute left-0 top-0 bottom-0 w-72 bg-warm-50 dark:bg-warm-900 shadow-xl p-4 overflow-y-auto",
             # Close button
             Div(:class => "flex justify-between items-center mb-4",
-                H2(:class => "text-lg font-semibold text-warm-800 dark:text-warm-200",
+                H2(:class => "text-lg font-semibold text-warm-800 dark:text-warm-300",
                     "Julia Manual"
                 ),
                 Button(:id => "sidebar-close",

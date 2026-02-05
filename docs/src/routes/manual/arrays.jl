@@ -43,10 +43,10 @@ function Arrays()
 
         P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "A ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Vector"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Vector"),
             " (also called a 1D array) stores an ordered sequence of elements. ",
             "You can create vectors using square bracket notation or the ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Vector{T}(...)"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Vector{T}(...)"),
             " constructor."
         ),
 
@@ -94,7 +94,7 @@ typed_arr = Int32[1, 2, 3, 4, 5]""",
         P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "Arrays in Julia are mutable by default - you can change individual elements after creation. ",
             "Use indexed assignment to modify elements: ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "arr[i] = new_value"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "arr[i] = new_value"),
             "."
         ),
 
@@ -144,10 +144,10 @@ arr[2] = arr[1] + arr[3]  # arr[2] = 100 + 300 = 400""",
 
         P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "A ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Matrix"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Matrix"),
             " is a 2-dimensional array. Create matrices using spaces to separate columns and semicolons (or newlines) to separate rows. ",
             "Access elements with two indices: ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "matrix[row, col]"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "matrix[row, col]"),
             "."
         ),
 
@@ -182,7 +182,7 @@ size(mat, 2)   # cols: 3""",
 
         P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "Use ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "for"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "for"),
             " loops to iterate over array elements. You can iterate by element or by index."
         ),
 
@@ -278,7 +278,7 @@ compute_avg(arr)  # returns 30""",
         P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "Julia performs bounds checking by default to prevent accessing invalid array indices. ",
             "Attempting to access an index outside the valid range (1 to length) will throw a ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "BoundsError"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "BoundsError"),
             "."
         ),
 
@@ -330,16 +330,16 @@ end"""
         ),
 
         Ul(:class => "list-disc list-inside space-y-2 text-warm-600 dark:text-warm-400 mb-6",
-            Li("Vectors are 1D arrays created with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "[a, b, c]")),
-            Li("Julia arrays are 1-indexed: first element is ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "arr[1]")),
-            Li("Matrices are 2D arrays: access with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "mat[row, col]")),
-            Li("Arrays are mutable: modify with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "arr[i] = value")),
-            Li("Use ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "length(arr)"), " for 1D and ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "size(mat)"), " for dimensions"),
-            Li("Iterate with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "for x in arr"), " or ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "for i in 1:length(arr)"))
+            Li("Vectors are 1D arrays created with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "[a, b, c]")),
+            Li("Julia arrays are 1-indexed: first element is ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "arr[1]")),
+            Li("Matrices are 2D arrays: access with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "mat[row, col]")),
+            Li("Arrays are mutable: modify with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "arr[i] = value")),
+            Li("Use ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "length(arr)"), " for 1D and ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "size(mat)"), " for dimensions"),
+            Li("Iterate with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "for x in arr"), " or ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "for i in 1:length(arr)"))
         ),
 
         # Scope note
-        Div(:class => "p-4 bg-warm-100 dark:bg-warm-800 rounded-xl border border-warm-200 dark:border-warm-700 my-6",
+        Div(:class => "p-4 bg-warm-100 dark:bg-warm-900 rounded-xl border border-warm-200 dark:border-warm-700 my-6",
             Div(:class => "flex items-start gap-3",
                 Svg(:class => "w-5 h-5 text-warm-500 dark:text-warm-400 flex-shrink-0 mt-0.5",
                     :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",

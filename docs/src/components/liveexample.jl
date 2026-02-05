@@ -50,7 +50,7 @@ function LiveExample(;
     Div(:class => "my-8 rounded-xl overflow-hidden border border-warm-200 dark:border-warm-700 shadow-sm",
         # Description header (if provided)
         description != "" ?
-            Div(:class => "px-4 py-3 bg-warm-100 dark:bg-warm-800 border-b border-warm-200 dark:border-warm-700",
+            Div(:class => "px-4 py-3 bg-warm-100 dark:bg-warm-900 border-b border-warm-200 dark:border-warm-700",
                 P(:class => "text-sm text-warm-600 dark:text-warm-400", description)
             ) : nothing,
 
@@ -59,7 +59,7 @@ function LiveExample(;
             # Left: Code display with syntax highlighting
             Div(:class => "relative",
                 # Code header
-                Div(:class => "flex items-center justify-between px-4 py-2 bg-warm-700 dark:bg-warm-800",
+                Div(:class => "flex items-center justify-between px-4 py-2 bg-warm-700 dark:bg-warm-900",
                     Span(:class => "text-warm-300 text-xs font-medium uppercase tracking-wider", "Julia"),
                     # Action buttons container
                     Div(:class => "flex items-center gap-3",
@@ -92,7 +92,7 @@ function LiveExample(;
             ),
 
             # Right: Interactive demo
-            Div(:class => "flex flex-col bg-warm-50 dark:bg-warm-800",
+            Div(:class => "flex flex-col bg-warm-50 dark:bg-warm-900",
                 # Demo header
                 Div(:class => "flex items-center justify-between px-4 py-2 bg-warm-100 dark:bg-warm-700 border-t lg:border-t-0 lg:border-l border-warm-200 dark:border-warm-600",
                     Span(:class => "text-warm-600 dark:text-warm-300 text-xs font-medium uppercase tracking-wider", "Interactive Demo"),
@@ -2558,7 +2558,7 @@ VectorArithmeticDemo = island(:VectorArithmeticDemo) do
         Div(:class => "text-center",
             Span(:class => () -> operation() == 1 ? "text-sm text-warm-500 dark:text-warm-400 block mb-1" : "hidden", "add_vec(v1, v2)"),
             Span(:class => () -> operation() == 2 ? "text-sm text-warm-500 dark:text-warm-400 block mb-1" : "hidden", "scale_vec(v1, s)"),
-            Div(:class => "p-2 bg-warm-100 dark:bg-warm-800 rounded-lg",
+            Div(:class => "p-2 bg-warm-100 dark:bg-warm-900 rounded-lg",
                 Span(:class => "text-sm text-warm-700 dark:text-warm-400", "→ Vec2("),
                 Span(:class => "font-mono font-bold text-accent-600 dark:text-accent-400", result_x),
                 Span(:class => "text-warm-700 dark:text-warm-400", ", "),
@@ -2626,7 +2626,7 @@ TypeSpecializationDemo = island(:TypeSpecializationDemo) do
                 Span(:class => () -> input_type() >= 4 ? "text-accent-600 dark:text-accent-400 font-mono" : "hidden", "describe(x::Bool)")
             ),
             # Result - show/hide for result display
-            Div(:class => "text-center p-2 bg-warm-100 dark:bg-warm-800 rounded",
+            Div(:class => "text-center p-2 bg-warm-100 dark:bg-warm-900 rounded",
                 Span(:class => "text-xs text-warm-700 dark:text-warm-400", "returns: \""),
                 Span(:class => () -> input_type() == 1 ? "text-accent-600 dark:text-accent-400 font-bold" : "hidden", "positive integer"),
                 Span(:class => () -> input_type() == 2 ? "text-accent-600 dark:text-accent-400 font-bold" : "hidden", "negative integer"),

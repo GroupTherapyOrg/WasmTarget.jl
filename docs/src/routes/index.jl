@@ -41,7 +41,7 @@ function JuliaPlayground()
         Div(:class => "grid lg:grid-cols-2 gap-4",
             # Code editor
             Div(:class => "flex flex-col",
-                Div(:class => "flex items-center justify-between px-4 py-2 bg-warm-700 dark:bg-warm-800 rounded-t-xl",
+                Div(:class => "flex items-center justify-between px-4 py-2 bg-warm-700 dark:bg-warm-900 rounded-t-xl",
                     Span(:class => "text-warm-300 text-sm font-medium", "Julia"),
                     Span(:class => "text-warm-500 text-xs", "Edit your code")
                 ),
@@ -55,7 +55,7 @@ function JuliaPlayground()
 
             # Output panel
             Div(:class => "flex flex-col",
-                Div(:class => "flex items-center justify-between px-4 py-2 bg-warm-700 dark:bg-warm-800 rounded-t-xl",
+                Div(:class => "flex items-center justify-between px-4 py-2 bg-warm-700 dark:bg-warm-900 rounded-t-xl",
                     Span(:class => "text-warm-300 text-sm font-medium", "Output"),
                     Span(:id => "status-indicator", :class => "text-amber-400 text-xs", "Ready")
                 ),
@@ -70,13 +70,13 @@ function JuliaPlayground()
         ),
 
         # Footer
-        Div(:class => "mt-6 p-4 bg-warm-100 dark:bg-warm-800 rounded-xl",
+        Div(:class => "mt-6 p-4 bg-warm-100 dark:bg-warm-900 rounded-xl",
             Div(:class => "flex items-start gap-3",
                 Div(:class => "flex-shrink-0 w-8 h-8 bg-accent-500 rounded-full flex items-center justify-center",
                     Span(:class => "text-white text-sm font-bold", "?")
                 ),
                 Div(
-                    P(:class => "text-warm-700 dark:text-warm-200 font-medium text-sm",
+                    P(:class => "text-warm-700 dark:text-warm-300 font-medium text-sm",
                         "How it works"
                     ),
                     P(:class => "text-warm-500 dark:text-warm-400 text-xs mt-1",

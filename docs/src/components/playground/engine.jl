@@ -83,7 +83,7 @@ function PlaygroundEngine(; initial_example::String = "arithmetic")
 
     Div(:class => "flex flex-col h-full",
         # Header bar
-        Div(:class => "flex items-center justify-between px-4 py-2 bg-warm-700 dark:bg-warm-800 rounded-t-xl",
+        Div(:class => "flex items-center justify-between px-4 py-2 bg-warm-700 dark:bg-warm-900 rounded-t-xl",
             Span(:class => "text-warm-300 text-sm font-medium", "Output"),
             # Run status indicator
             Div(:id => "engine-status",

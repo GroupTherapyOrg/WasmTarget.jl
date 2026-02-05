@@ -13,16 +13,20 @@ Uses cyan/teal accent colors with dark mode support.
 Uses NavLink for SPA navigation and active state highlighting.
 """
 function Layout(children...; title="WasmTarget.jl")
-    Div(:class => "min-h-screen bg-warm-50 dark:bg-warm-900 transition-colors duration-200",
+    Div(:class => "min-h-screen bg-warm-50 dark:bg-warm-950 transition-colors duration-200",
         # Navigation
-        Nav(:class => "bg-warm-50 dark:bg-warm-800 border-b border-warm-200 dark:border-warm-700 transition-colors duration-200",
+        Nav(:class => "bg-warm-100 dark:bg-warm-900 border-b border-warm-200 dark:border-warm-700 transition-colors duration-200",
             Div(:class => "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8",
                 Div(:class => "flex justify-between h-16",
                     # Logo
                     Div(:class => "flex items-center",
                         A(:href => "./", :class => "flex items-center",
-                            Span(:class => "text-2xl font-bold text-accent-500 dark:text-accent-400", "WasmTarget"),
-                            Span(:class => "text-2xl font-light", Span(:class => "text-[#4063d8]", "."), Span(:class => "text-[#9558b2]", "j"), Span(:class => "text-[#389826]", "l"))
+                            Span(:class => "text-2xl font-bold text-warm-800 dark:text-warm-300", "WasmTarget"),
+                            Span(:class => "text-2xl font-light",
+                                Span(:class => "text-[#4063d8]/30 dark:text-[#4063d8]/40", "."),
+                                Span(:class => "text-[#9558b2]/30 dark:text-[#9558b2]/40", "j"),
+                                Span(:class => "text-[#389826]/30 dark:text-[#389826]/40", "l")
+                            )
                         )
                     ),
                     # Navigation Links - use ./ prefix for base_path compatibility
@@ -74,7 +78,7 @@ function Layout(children...; title="WasmTarget.jl")
         ),
 
         # Footer
-        Footer(:class => "bg-warm-50 dark:bg-warm-800 border-t border-warm-200 dark:border-warm-700 mt-auto transition-colors duration-200",
+        Footer(:class => "bg-warm-100 dark:bg-warm-900 border-t border-warm-200 dark:border-warm-700 mt-auto transition-colors duration-200",
             Div(:class => "max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8",
                 Div(:class => "flex justify-between items-center",
                     P(:class => "text-warm-500 dark:text-warm-400 text-sm",

@@ -202,7 +202,7 @@ end""",
         # Comparison table
         Div(:class => "overflow-x-auto my-6",
             Table(:class => "w-full text-sm text-left",
-                Thead(:class => "text-xs text-warm-700 dark:text-warm-300 uppercase bg-warm-100 dark:bg-warm-800",
+                Thead(:class => "text-xs text-warm-700 dark:text-warm-300 uppercase bg-warm-100 dark:bg-warm-900",
                     Tr(
                         Th(:class => "px-4 py-3", "Feature"),
                         Th(:class => "px-4 py-3", "Tuple"),
@@ -245,16 +245,16 @@ end""",
         ),
 
         Ul(:class => "list-disc list-inside space-y-2 text-warm-600 dark:text-warm-400 mb-6",
-            Li("Create tuples with parentheses: ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "(a, b, c)")),
-            Li("Access elements with 1-based indexing: ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "t[1]"), ", ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "t[2]")),
+            Li("Create tuples with parentheses: ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "(a, b, c)")),
+            Li("Access elements with 1-based indexing: ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "t[1]"), ", ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "t[2]")),
             Li("Tuples are immutable \u2014 elements cannot be changed after creation"),
             Li("Use tuples to return multiple values from functions"),
-            Li("Destructure with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "a, b = tuple")),
-            Li("Tuples can hold different types: ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "(42, 3.14, true)"))
+            Li("Destructure with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "a, b = tuple")),
+            Li("Tuples can hold different types: ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "(42, 3.14, true)"))
         ),
 
         # Scope note
-        Div(:class => "p-4 bg-warm-100 dark:bg-warm-800 rounded-xl border border-warm-200 dark:border-warm-700 my-6",
+        Div(:class => "p-4 bg-warm-100 dark:bg-warm-900 rounded-xl border border-warm-200 dark:border-warm-700 my-6",
             Div(:class => "flex items-start gap-3",
                 Svg(:class => "w-5 h-5 text-warm-500 dark:text-warm-400 flex-shrink-0 mt-0.5",
                     :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",

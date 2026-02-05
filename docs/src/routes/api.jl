@@ -208,11 +208,11 @@ write("output.wasm", bytes)"""
 
             Div(:class => "overflow-x-auto",
                 Table(:class => "w-full max-w-4xl mx-auto",
-                    Thead(:class => "bg-warm-100 dark:bg-warm-800",
+                    Thead(:class => "bg-warm-100 dark:bg-warm-900",
                         Tr(
-                            Th(:class => "py-3 px-4 text-left font-semibold text-warm-700 dark:text-warm-200", "Julia Type"),
-                            Th(:class => "py-3 px-4 text-left font-semibold text-warm-700 dark:text-warm-200", "Wasm Type"),
-                            Th(:class => "py-3 px-4 text-left font-semibold text-warm-700 dark:text-warm-200", "Notes")
+                            Th(:class => "py-3 px-4 text-left font-semibold text-warm-700 dark:text-warm-300", "Julia Type"),
+                            Th(:class => "py-3 px-4 text-left font-semibold text-warm-700 dark:text-warm-300", "Wasm Type"),
+                            Th(:class => "py-3 px-4 text-left font-semibold text-warm-700 dark:text-warm-300", "Notes")
                         )
                     ),
                     Tbody(:class => "divide-y divide-warm-200 dark:divide-warm-700",
@@ -327,7 +327,7 @@ write("output.wasm", bytes)"""
                   "Interactive Demos"
                 ),
                 A(:href => "https://github.com/GroupTherapyOrg/WasmTarget.jl",
-                  :class => "bg-warm-200 dark:bg-warm-700 text-warm-700 dark:text-warm-200 px-6 py-3 rounded-lg font-medium hover:bg-warm-300 dark:hover:bg-warm-600 transition-colors",
+                  :class => "bg-warm-200 dark:bg-warm-700 text-warm-700 dark:text-warm-300 px-6 py-3 rounded-lg font-medium hover:bg-warm-300 dark:hover:bg-warm-600 transition-colors",
                   :target => "_blank",
                   "View Source"
                 )
@@ -340,7 +340,7 @@ end
 
 function ApiAnchorLink(href, text)
     A(:href => href,
-      :class => "px-4 py-2 bg-warm-100 dark:bg-warm-800 rounded-lg text-sm font-medium text-warm-700 dark:text-warm-200 hover:bg-accent-100 dark:hover:bg-accent-900/30 transition-colors",
+      :class => "px-4 py-2 bg-warm-100 dark:bg-warm-900 rounded-lg text-sm font-medium text-warm-700 dark:text-warm-300 hover:bg-accent-100 dark:hover:bg-accent-900/30 transition-colors",
       text)
 end
 
@@ -349,7 +349,7 @@ function SectionHeader(title)
 end
 
 function ApiFunction(name, signature, description, params, example)
-    Div(:id => lowercase(replace(name, "()" => "")), :class => "mb-12 bg-warm-50 dark:bg-warm-800 rounded-xl p-6 shadow-sm",
+    Div(:id => lowercase(replace(name, "()" => "")), :class => "mb-12 bg-warm-50 dark:bg-warm-900 rounded-xl p-6 shadow-sm",
         # Function name and signature
         H3(:class => "text-xl font-bold text-accent-600 dark:text-accent-400 font-mono mb-2", name * "()"),
         Code(:class => "block bg-warm-100 dark:bg-warm-900 px-4 py-2 rounded-lg text-sm font-mono text-warm-700 dark:text-warm-300 mb-4", signature),
@@ -390,18 +390,18 @@ function TypeMappingRow(julia, wasm, notes)
 end
 
 function TypeBadge(name)
-    Span(:class => "px-4 py-2 bg-warm-100 dark:bg-warm-700 rounded-lg font-mono text-sm text-warm-700 dark:text-warm-200", name)
+    Span(:class => "px-4 py-2 bg-warm-100 dark:bg-warm-700 rounded-lg font-mono text-sm text-warm-700 dark:text-warm-300", name)
 end
 
 function FeatureCategory(title, features)
-    Div(:class => "bg-warm-50 dark:bg-warm-800 rounded-xl p-6 shadow-sm",
+    Div(:class => "bg-warm-50 dark:bg-warm-900 rounded-xl p-6 shadow-sm",
         H3(:class => "font-semibold text-warm-800 dark:text-warm-100 mb-4", title),
         Ul(:class => "space-y-2",
             [Li(:class => "flex items-center gap-2 text-sm",
                 Span(:class => f[2] ? "text-green-500" : "text-warm-400",
                     f[2] ? "✓" : "○"
                 ),
-                Span(:class => f[2] ? "text-warm-700 dark:text-warm-200" : "text-warm-400 dark:text-warm-500",
+                Span(:class => f[2] ? "text-warm-700 dark:text-warm-300" : "text-warm-400 dark:text-warm-500",
                     f[1]
                 )
             ) for f in features]...

@@ -32,7 +32,7 @@ function Types()
             "These ",
             Em("composite types"),
             " (called ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "struct"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "struct"),
             "s) are the foundation for organizing data in Julia programs."
         ),
 
@@ -90,7 +90,7 @@ typeof(flag) # returns Bool""",
 
         P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "A ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "struct"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "struct"),
             " defines a new composite type with named fields. By default, structs are ",
             Em("immutable"),
             " — their fields cannot be changed after creation."
@@ -152,7 +152,7 @@ p.x * p.y  # returns 200""",
 
         P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "When you need to modify fields after creation, use ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "mutable struct"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "mutable struct"),
             ". Mutable structs allow field reassignment, making them useful for objects that change over time."
         ),
 
@@ -193,7 +193,7 @@ c.count = 0""",
         P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "Structs can contain other structs as fields, allowing you to build complex data structures. ",
             "Field access chains like ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "line.start_pt.x"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "line.start_pt.x"),
             " traverse through the nested structure."
         ),
 
@@ -293,15 +293,15 @@ Circle() = Circle(Int32(1))  # Default radius of 1"""
 
         Ul(:class => "list-disc list-inside space-y-2 text-warm-600 dark:text-warm-400 mb-6",
             Li("Primitive types (Int32, Float64, Bool) map directly to WebAssembly types"),
-            Li("Define composite types with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "struct Name ... end")),
+            Li("Define composite types with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "struct Name ... end")),
             Li("Regular structs are immutable — fields cannot be changed after creation"),
-            Li("Use ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "mutable struct"), " when fields need to be modified"),
+            Li("Use ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "mutable struct"), " when fields need to be modified"),
             Li("Structs can contain other structs as fields (nested structs)"),
-            Li("Access fields with dot notation: ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "instance.field_name"))
+            Li("Access fields with dot notation: ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "instance.field_name"))
         ),
 
         # Scope note
-        Div(:class => "p-4 bg-warm-100 dark:bg-warm-800 rounded-xl border border-warm-200 dark:border-warm-700 my-6",
+        Div(:class => "p-4 bg-warm-100 dark:bg-warm-900 rounded-xl border border-warm-200 dark:border-warm-700 my-6",
             Div(:class => "flex items-start gap-3",
                 Svg(:class => "w-5 h-5 text-warm-500 dark:text-warm-400 flex-shrink-0 mt-0.5",
                     :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",

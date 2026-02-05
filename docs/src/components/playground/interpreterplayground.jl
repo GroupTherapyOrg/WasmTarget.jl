@@ -75,7 +75,7 @@ greet("World")
             # Left: Editor
             Div(:class => "flex flex-col min-h-0 border-r border-warm-700",
                 # Editor header
-                Div(:class => "flex items-center justify-between px-4 py-2 bg-warm-700 dark:bg-warm-800",
+                Div(:class => "flex items-center justify-between px-4 py-2 bg-warm-700 dark:bg-warm-900",
                     Span(:class => "text-warm-300 text-sm font-medium", "Code"),
                     Div(:class => "flex items-center gap-2",
                         # Clear button
@@ -105,7 +105,7 @@ greet("World")
             # Right: Output
             Div(:class => "flex flex-col min-h-0",
                 # Output header
-                Div(:class => "flex items-center justify-between px-4 py-2 bg-warm-700 dark:bg-warm-800",
+                Div(:class => "flex items-center justify-between px-4 py-2 bg-warm-700 dark:bg-warm-900",
                     Span(:class => "text-warm-300 text-sm font-medium", "Output"),
                     Button(:id => "clear-output-button",
                         :class => "text-warm-400 hover:text-white text-xs transition-colors",

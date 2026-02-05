@@ -38,9 +38,9 @@ function Functions()
 
         P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "The basic syntax for defining a function uses the ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "function"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "function"),
             " keyword, followed by the function name, arguments in parentheses, and the function body. The function ends with ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "end"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "end"),
             "."
         ),
 
@@ -138,7 +138,7 @@ hypot(5, 12)  # returns 13""",
 
         P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "Functions return a value to the caller. You can use the explicit ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "return"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "return"),
             " keyword, or Julia will implicitly return the value of the last expression in the function body."
         ),
 
@@ -167,7 +167,7 @@ end""",
 
         P(:class => "text-warm-600 dark:text-warm-400 my-4",
             "The explicit ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "return"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "return"),
             " statement is especially useful for early exits from a function, such as when checking error conditions or handling special cases."
         ),
 
@@ -275,9 +275,9 @@ add_offset(5)   # returns 25 (5 + 20)""",
         ),
 
         Ul(:class => "list-disc list-inside space-y-2 text-warm-600 dark:text-warm-400 mb-6",
-            Li("Define functions with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "function name(args) ... end"), " or compact ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "name(args) = expression")),
+            Li("Define functions with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "function name(args) ... end"), " or compact ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "name(args) = expression")),
             Li("Functions can have multiple arguments with optional type annotations"),
-            Li("Use ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "return"), " for explicit returns, or let the last expression be returned implicitly"),
+            Li("Use ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "return"), " for explicit returns, or let the last expression be returned implicitly"),
             Li("Recursive functions call themselves and need a base case to terminate"),
             Li("Closures capture variables from their surrounding scope"),
             Li("WasmTarget.jl supports basic function patterns; varargs/kwargs are not yet available")

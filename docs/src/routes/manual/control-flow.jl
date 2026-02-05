@@ -29,13 +29,13 @@ function ControlFlow()
         # Introduction
         P(:class => "text-lg text-warm-600 dark:text-warm-400 mb-8",
             "Control flow constructs determine the order in which statements execute. Julia provides familiar constructs like ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "if"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "if"),
             "/",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "else"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "else"),
             " for conditional execution, ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "while"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "while"),
             " and ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "for"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "for"),
             " loops for iteration, and short-circuit operators for efficient boolean evaluation."
         ),
 
@@ -46,11 +46,11 @@ function ControlFlow()
 
         P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "The ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "if"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "if"),
             " statement evaluates a condition and executes code based on whether it's true or false. You can chain multiple conditions with ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "elseif"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "elseif"),
             " and provide a fallback with ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "else"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "else"),
             "."
         ),
 
@@ -75,7 +75,7 @@ sign(0)    # returns 0""",
 
         P(:class => "text-warm-600 dark:text-warm-400 my-4",
             "Unlike some languages, Julia's ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "if"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "if"),
             " is an expression that returns a value. The value is the result of the last expression in the branch that executes."
         ),
 
@@ -109,7 +109,7 @@ sign(0)    # returns 0""",
 
         P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "The ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "while"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "while"),
             " loop repeatedly executes a block of code as long as a condition remains true. The condition is checked before each iteration."
         ),
 
@@ -139,9 +139,9 @@ sum_to_n(100) # returns 5050""",
 
         P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "The ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "for"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "for"),
             " loop iterates over a sequence of values. In Julia, you typically iterate over a range like ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "1:n"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "1:n"),
             " or a collection."
         ),
 
@@ -164,9 +164,9 @@ factorial(6)  # returns 720""",
 
         P(:class => "text-warm-600 dark:text-warm-400 my-4",
             "Ranges in Julia are inclusive: ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "1:5"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "1:5"),
             " includes 1, 2, 3, 4, and 5. You can also specify a step: ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "1:2:10"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "1:2:10"),
             " gives 1, 3, 5, 7, 9."
         ),
 
@@ -177,9 +177,9 @@ factorial(6)  # returns 720""",
 
         P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "Julia's ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "&&"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "&&"),
             " (and) and ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "||"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "||"),
             " (or) operators use ",
             Em("short-circuit evaluation"),
             ": they only evaluate the second operand if necessary to determine the result."
@@ -207,8 +207,8 @@ end
         ),
 
         # Info box about short-circuit idioms
-        Div(:class => "p-4 bg-warm-100 dark:bg-warm-800 rounded-xl my-6",
-            H3(:class => "text-sm font-semibold text-warm-800 dark:text-warm-200 mb-3", "Common Short-Circuit Idioms"),
+        Div(:class => "p-4 bg-warm-100 dark:bg-warm-900 rounded-xl my-6",
+            H3(:class => "text-sm font-semibold text-warm-800 dark:text-warm-300 mb-3", "Common Short-Circuit Idioms"),
             Div(:class => "space-y-2 text-sm font-mono",
                 P(:class => "text-warm-600 dark:text-warm-400",
                     Code(:class => "text-accent-600 dark:text-accent-400", "condition && action()"),
@@ -232,11 +232,11 @@ end
 
         P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "Julia uses exceptions to handle errors. You can ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "throw"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "throw"),
             " an exception when an error occurs, and ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "try"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "try"),
             "/",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "catch"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "catch"),
             " to handle it gracefully."
         ),
 
@@ -296,9 +296,9 @@ end""",
 
         P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "Inside loops, ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "break"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "break"),
             " exits the loop immediately, while ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "continue"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "continue"),
             " skips to the next iteration."
         ),
 
@@ -330,12 +330,12 @@ find_divisible()  # returns 21""",
         ),
 
         Ul(:class => "list-disc list-inside space-y-2 text-warm-600 dark:text-warm-400 mb-6",
-            Li(Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "if"), "/", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "elseif"), "/", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "else"), " for conditional execution; ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "if"), " is an expression that returns a value"),
-            Li(Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "while condition ... end"), " repeats while condition is true"),
-            Li(Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "for i in range ... end"), " iterates over a sequence (e.g., ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "1:10"), ")"),
-            Li(Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "&&"), " short-circuits on false; ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "||"), " short-circuits on true"),
-            Li(Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "try"), "/", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "catch"), " handles exceptions; ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "throw"), " raises them"),
-            Li(Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "break"), " exits a loop; ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "continue"), " skips to the next iteration")
+            Li(Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "if"), "/", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "elseif"), "/", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "else"), " for conditional execution; ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "if"), " is an expression that returns a value"),
+            Li(Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "while condition ... end"), " repeats while condition is true"),
+            Li(Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "for i in range ... end"), " iterates over a sequence (e.g., ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "1:10"), ")"),
+            Li(Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "&&"), " short-circuits on false; ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "||"), " short-circuits on true"),
+            Li(Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "try"), "/", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "catch"), " handles exceptions; ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "throw"), " raises them"),
+            Li(Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "break"), " exits a loop; ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "continue"), " skips to the next iteration")
         ),
 
         # Next steps

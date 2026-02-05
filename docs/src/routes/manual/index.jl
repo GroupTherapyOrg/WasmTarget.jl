@@ -81,7 +81,7 @@ Chapter card component for the manual index grid.
 """
 function ChapterCard(id, title, description, tags)
     A(:href => "./manual/$(id)/",
-      :class => "group block p-6 bg-warm-50 dark:bg-warm-800 rounded-xl border border-warm-200 dark:border-warm-700 hover:border-accent-300 dark:hover:border-accent-600 hover:shadow-lg hover:shadow-accent-500/10 transition-all duration-200",
+      :class => "group block p-6 bg-warm-50 dark:bg-warm-900 rounded-xl border border-warm-200 dark:border-warm-700 hover:border-accent-300 dark:hover:border-accent-600 hover:shadow-lg hover:shadow-accent-500/10 transition-all duration-200",
         # Title with arrow
         Div(:class => "flex items-center justify-between mb-3",
             H3(:class => "text-lg font-semibold text-warm-800 dark:text-warm-100 group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors",

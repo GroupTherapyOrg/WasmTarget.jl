@@ -77,7 +77,7 @@ end""",
         ),
 
         # Full feature list
-        Div(:class => "py-16 mt-8 bg-warm-50 dark:bg-warm-800 rounded-2xl",
+        Div(:class => "py-16 mt-8 bg-warm-50 dark:bg-warm-900 rounded-2xl",
             H2(:class => "text-2xl font-bold text-center text-warm-800 dark:text-warm-100 mb-8",
                 "Complete Feature List"
             ),
@@ -119,7 +119,7 @@ end""",
             ),
 
             # Reactive State Pattern (Counter)
-            Div(:class => "max-w-4xl mx-auto bg-warm-50 dark:bg-warm-800 rounded-2xl p-8 mb-8",
+            Div(:class => "max-w-4xl mx-auto bg-warm-50 dark:bg-warm-900 rounded-2xl p-8 mb-8",
                 Div(:class => "flex items-start justify-between mb-4 flex-wrap gap-2",
                     Div(
                         H3(:class => "text-xl font-bold text-warm-800 dark:text-warm-100",
@@ -165,7 +165,7 @@ add_export!(mod, "increment", 0, func_idx)""")
             ),
 
             # Low-level Builder API
-            Div(:class => "max-w-4xl mx-auto bg-warm-50 dark:bg-warm-800 rounded-2xl p-8",
+            Div(:class => "max-w-4xl mx-auto bg-warm-50 dark:bg-warm-900 rounded-2xl p-8",
                 Div(:class => "flex items-start justify-between mb-4 flex-wrap gap-2",
                     Div(
                         H3(:class => "text-xl font-bold text-warm-800 dark:text-warm-100",
@@ -240,7 +240,7 @@ end
 
 function FeatureItem(name, detail, supported)
     Div(:class => "flex items-center gap-3 p-3 rounded-lg " *
-                  (supported ? "bg-warm-50 dark:bg-warm-700" : "bg-warm-100 dark:bg-warm-800 opacity-50"),
+                  (supported ? "bg-warm-50 dark:bg-warm-700" : "bg-warm-100 dark:bg-warm-900 opacity-50"),
         Span(:class => supported ? "text-green-500 text-lg" : "text-warm-400 text-lg",
             supported ? "✓" : "○"
         ),

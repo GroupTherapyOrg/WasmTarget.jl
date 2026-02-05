@@ -37,7 +37,7 @@ function Variables()
 
         P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "Use the ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "="),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "="),
             " operator to assign a value to a variable. The variable name goes on the left, and the value (or expression) goes on the right."
         ),
 
@@ -60,13 +60,13 @@ count = count + 1  # Increment: count is now 1""",
 
         P(:class => "text-warm-600 dark:text-warm-400 my-4",
             "Assignment in Julia is straightforward: the right-hand side is evaluated first, then the result is bound to the variable name on the left. When you write ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "y = x"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "y = x"),
             ", you're copying the ",
             Em("value"),
             " of ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "x"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "x"),
             " to ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "y"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "y"),
             ", not creating a link between them."
         ),
 
@@ -81,7 +81,7 @@ count = count + 1  # Increment: count is now 1""",
 
         # Code example for naming (no interactive demo needed)
         Div(:class => "my-6 rounded-xl overflow-hidden border border-warm-200 dark:border-warm-700 shadow-sm",
-            Div(:class => "px-4 py-2 bg-warm-700 dark:bg-warm-800 flex justify-between items-center",
+            Div(:class => "px-4 py-2 bg-warm-700 dark:bg-warm-900 flex justify-between items-center",
                 Span(:class => "text-warm-300 text-xs font-medium uppercase tracking-wider", "Julia"),
                 Span(:class => "text-warm-500 text-xs", "Naming examples")
             ),
@@ -133,7 +133,7 @@ const MAX_SIZE = 1000""")
 
         P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "While Julia infers types automatically, you can explicitly annotate a variable's type using the ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "::"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "::"),
             " syntax. This is useful for performance and documentation."
         ),
 
@@ -156,15 +156,15 @@ e::Bool = true      # boolean (true/false)""",
 
         P(:class => "text-warm-600 dark:text-warm-400 my-4",
             "In WasmTarget.jl, type annotations are particularly important because they guide the compiler in generating efficient WebAssembly code. The supported primitive types are ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Int32"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Int32"),
             ", ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Int64"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Int64"),
             ", ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Float32"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Float32"),
             ", ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Float64"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Float64"),
             ", and ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Bool"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Bool"),
             "."
         ),
 
@@ -226,11 +226,11 @@ result = a + b""",
         ),
 
         Ul(:class => "list-disc list-inside space-y-2 text-warm-600 dark:text-warm-400 mb-6",
-            Li("Use ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "="), " to assign values to variables"),
+            Li("Use ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "="), " to assign values to variables"),
             Li("Variable names should start with a letter or underscore"),
-            Li("Follow Julia conventions: ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "snake_case"), " for variables, ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "PascalCase"), " for types"),
-            Li("Use ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "::Type"), " for explicit type annotations"),
-            Li("WasmTarget.jl supports ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Int32"), ", ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Int64"), ", ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Float32"), ", ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Float64"), ", and ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Bool"))
+            Li("Follow Julia conventions: ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "snake_case"), " for variables, ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "PascalCase"), " for types"),
+            Li("Use ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "::Type"), " for explicit type annotations"),
+            Li("WasmTarget.jl supports ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Int32"), ", ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Int64"), ", ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Float32"), ", ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Float64"), ", and ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Bool"))
         ),
 
         # Next steps

@@ -43,7 +43,7 @@ function IntegersFloats()
         # Integer types table
         Div(:class => "my-6 overflow-x-auto",
             Table(:class => "w-full text-sm border-collapse",
-                Thead(:class => "bg-warm-100 dark:bg-warm-800",
+                Thead(:class => "bg-warm-100 dark:bg-warm-900",
                     Tr(
                         Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Type"),
                         Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Wasm"),
@@ -82,11 +82,11 @@ function IntegersFloats()
 
         P(:class => "text-warm-600 dark:text-warm-400 my-4",
             "In Julia, the default integer type ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Int"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Int"),
             " is an alias for ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Int64"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Int64"),
             " on 64-bit systems. For WebAssembly, ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Int32"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Int32"),
             " is often more efficient since Wasm has native 32-bit operations."
         ),
 
@@ -141,16 +141,16 @@ b::Int32 = a - 1        # Underflows to 2147483647""",
 
         P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "For numbers with fractional parts, Julia provides single-precision (",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Float32"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Float32"),
             ") and double-precision (",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Float64"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Float64"),
             ") floating-point numbers."
         ),
 
         # Float types table
         Div(:class => "my-6 overflow-x-auto",
             Table(:class => "w-full text-sm border-collapse",
-                Thead(:class => "bg-warm-100 dark:bg-warm-800",
+                Thead(:class => "bg-warm-100 dark:bg-warm-900",
                     Tr(
                         Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Type"),
                         Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Wasm"),
@@ -177,13 +177,13 @@ b::Int32 = a - 1        # Underflows to 2147483647""",
 
         P(:class => "text-warm-600 dark:text-warm-400 my-4",
             "Float literals in Julia are ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Float64"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Float64"),
             " by default. To create a ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Float32"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Float32"),
             ", append ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "f0"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "f0"),
             " to the literal: ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "3.14f0"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "3.14f0"),
             "."
         ),
 
@@ -194,9 +194,9 @@ b::Int32 = a - 1        # Underflows to 2147483647""",
 
         P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "When dividing integers, Julia provides two useful functions: ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "div"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "div"),
             " for integer division (discarding the remainder) and ",
-            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "%"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "%"),
             " for the remainder (modulo)."
         ),
 
@@ -340,12 +340,12 @@ k = 2.5e-3     # Scientific: 0.0025""",
         ),
 
         Ul(:class => "list-disc list-inside space-y-2 text-warm-600 dark:text-warm-400 mb-6",
-            Li(Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Int32"), " and ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Int64"), " for signed integers"),
-            Li(Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Float32"), " and ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Float64"), " for floating-point numbers"),
+            Li(Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Int32"), " and ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Int64"), " for signed integers"),
+            Li(Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Float32"), " and ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Float64"), " for floating-point numbers"),
             Li("Integer overflow wraps around silently - be mindful of value ranges"),
-            Li("Use ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "div(a, b)"), " for integer division, ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "a % b"), " for remainder"),
-            Li("Type constructors like ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Float64(x)"), " convert between types"),
-            Li("Support for decimal, hex (", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "0x"), "), binary (", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "0b"), "), and scientific notation")
+            Li("Use ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "div(a, b)"), " for integer division, ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "a % b"), " for remainder"),
+            Li("Type constructors like ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "Float64(x)"), " convert between types"),
+            Li("Support for decimal, hex (", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "0x"), "), binary (", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "0b"), "), and scientific notation")
         ),
 
         # Next steps

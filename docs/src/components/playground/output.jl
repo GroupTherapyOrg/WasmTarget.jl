@@ -47,7 +47,7 @@ function PlaygroundOutput(;
         :id => "playground-output",
 
         # Header bar with status
-        Div(:class => "flex items-center justify-between px-4 py-2 bg-warm-700 dark:bg-warm-800",
+        Div(:class => "flex items-center justify-between px-4 py-2 bg-warm-700 dark:bg-warm-900",
             # Title and output type indicator
             Div(:class => "flex items-center gap-3",
                 Span(:class => "text-warm-300 text-sm font-medium", "Output"),
