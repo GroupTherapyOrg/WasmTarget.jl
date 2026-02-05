@@ -15480,8 +15480,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             local item_bytes = compile_value(item_arg, ctx)
             # If array element type is externref (elem_type is Any), convert ref→externref
             if elem_type === Any
-                # Check if value is a numeric type — emit ref.null extern instead
-                local is_numeric_item = false
+                # Determine source value's wasm type to decide conversion
+                local push_src_wasm = nothing
                 if length(item_bytes) >= 2 && item_bytes[1] == Opcode.LOCAL_GET
                     local src_idx_i = 0
                     local shift_i = 0
@@ -15493,23 +15493,32 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                         pos_i += 1
                         (b & 0x80) == 0 && break
                     end
-                    if pos_i - 1 == length(item_bytes) && src_idx_i < length(ctx.locals)
-                        src_type_i = ctx.locals[src_idx_i + 1]
-                        if src_type_i === I64 || src_type_i === I32 || src_type_i === F64 || src_type_i === F32
-                            is_numeric_item = true
+                    if pos_i - 1 == length(item_bytes)
+                        # PURE-048: Use correct n_params offset for ctx.locals lookup
+                        if src_idx_i >= ctx.n_params
+                            local arr_idx_i = src_idx_i - ctx.n_params + 1
+                            if arr_idx_i >= 1 && arr_idx_i <= length(ctx.locals)
+                                push_src_wasm = ctx.locals[arr_idx_i]
+                            end
+                        elseif src_idx_i < ctx.n_params && src_idx_i + 1 <= length(ctx.arg_types)
+                            push_src_wasm = get_concrete_wasm_type(ctx.arg_types[src_idx_i + 1], ctx.mod, ctx.type_registry)
                         end
                     end
                 elseif length(item_bytes) >= 1 && (item_bytes[1] == Opcode.I32_CONST || item_bytes[1] == Opcode.I64_CONST || item_bytes[1] == Opcode.F32_CONST || item_bytes[1] == Opcode.F64_CONST)
-                    is_numeric_item = true
+                    push_src_wasm = I32  # treat constants as numeric
                 end
+                local is_numeric_item = push_src_wasm === I64 || push_src_wasm === I32 || push_src_wasm === F64 || push_src_wasm === F32
+                local is_already_externref_item = push_src_wasm === ExternRef
                 if is_numeric_item
                     push!(bytes, Opcode.REF_NULL)
                     push!(bytes, UInt8(ExternRef))
                 else
                     append!(bytes, item_bytes)
-                    # extern.convert_any: (ref null X) → externref
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                    # PURE-048: Skip extern_convert_any if value is already externref
+                    if !is_already_externref_item
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                    end
                 end
             else
                 append!(bytes, item_bytes)
@@ -16058,7 +16067,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         # Abstract types like CallInfo also map to ExternRef
         local wasm_elem_type = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
         if wasm_elem_type === ExternRef
-            local is_numeric_mset = false
+            # Determine source value's wasm type to decide conversion
+            local mset_src_wasm = nothing  # will be set if we can determine it
             if length(mset_val_bytes) >= 2 && mset_val_bytes[1] == Opcode.LOCAL_GET
                 local src_idx_m = 0
                 local shift_m = 0
@@ -16070,22 +16080,33 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     pos_m += 1
                     (b & 0x80) == 0 && break
                 end
-                if pos_m - 1 == length(mset_val_bytes) && src_idx_m < length(ctx.locals)
-                    src_type_m = ctx.locals[src_idx_m + 1]
-                    if src_type_m === I64 || src_type_m === I32 || src_type_m === F64 || src_type_m === F32
-                        is_numeric_mset = true
+                if pos_m - 1 == length(mset_val_bytes)
+                    # PURE-048: Use correct n_params offset for ctx.locals lookup
+                    if src_idx_m >= ctx.n_params
+                        local arr_idx_m = src_idx_m - ctx.n_params + 1
+                        if arr_idx_m >= 1 && arr_idx_m <= length(ctx.locals)
+                            mset_src_wasm = ctx.locals[arr_idx_m]
+                        end
+                    elseif src_idx_m < ctx.n_params && src_idx_m + 1 <= length(ctx.arg_types)
+                        mset_src_wasm = get_concrete_wasm_type(ctx.arg_types[src_idx_m + 1], ctx.mod, ctx.type_registry)
                     end
                 end
             elseif length(mset_val_bytes) >= 1 && (mset_val_bytes[1] == Opcode.I32_CONST || mset_val_bytes[1] == Opcode.I64_CONST || mset_val_bytes[1] == Opcode.F32_CONST || mset_val_bytes[1] == Opcode.F64_CONST)
-                is_numeric_mset = true
+                mset_src_wasm = I32  # treat constants as numeric
             end
+            local is_numeric_mset = mset_src_wasm === I64 || mset_src_wasm === I32 || mset_src_wasm === F64 || mset_src_wasm === F32
+            local is_already_externref_mset = mset_src_wasm === ExternRef
             if is_numeric_mset
                 push!(bytes, Opcode.REF_NULL)
                 push!(bytes, UInt8(ExternRef))
             else
                 append!(bytes, mset_val_bytes)
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                # PURE-048: Skip extern_convert_any if value is already externref.
+                # externref is NOT a subtype of anyref, so extern_convert_any would fail.
+                if !is_already_externref_mset
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                end
             end
         elseif wasm_elem_type isa ConcreteRef
             # PURE-045: Array of concrete ref types (e.g., struct or array refs)
@@ -20645,8 +20666,8 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 local val_bytes = compile_value(args[3], ctx)
                 # PURE-045: If elem_type is Any (externref array), convert ref→externref
                 if elem_type === Any
-                    # Check if value is numeric — emit ref.null extern instead
-                    local is_numeric_val = false
+                    # Determine source value's wasm type to decide conversion
+                    local arrset_src_wasm = nothing
                     if length(val_bytes) >= 2 && val_bytes[1] == Opcode.LOCAL_GET
                         local src_idx_v = 0
                         local shift_v = 0
@@ -20658,23 +20679,32 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                             pos_v += 1
                             (b & 0x80) == 0 && break
                         end
-                        if pos_v - 1 == length(val_bytes) && src_idx_v < length(ctx.locals)
-                            src_type_v = ctx.locals[src_idx_v + 1]
-                            if src_type_v === I64 || src_type_v === I32 || src_type_v === F64 || src_type_v === F32
-                                is_numeric_val = true
+                        if pos_v - 1 == length(val_bytes)
+                            # PURE-048: Use correct n_params offset for ctx.locals lookup
+                            if src_idx_v >= ctx.n_params
+                                local arr_idx_v = src_idx_v - ctx.n_params + 1
+                                if arr_idx_v >= 1 && arr_idx_v <= length(ctx.locals)
+                                    arrset_src_wasm = ctx.locals[arr_idx_v]
+                                end
+                            elseif src_idx_v < ctx.n_params && src_idx_v + 1 <= length(ctx.arg_types)
+                                arrset_src_wasm = get_concrete_wasm_type(ctx.arg_types[src_idx_v + 1], ctx.mod, ctx.type_registry)
                             end
                         end
                     elseif length(val_bytes) >= 1 && (val_bytes[1] == Opcode.I32_CONST || val_bytes[1] == Opcode.I64_CONST || val_bytes[1] == Opcode.F32_CONST || val_bytes[1] == Opcode.F64_CONST)
-                        is_numeric_val = true
+                        arrset_src_wasm = I32  # treat constants as numeric
                     end
+                    local is_numeric_val = arrset_src_wasm === I64 || arrset_src_wasm === I32 || arrset_src_wasm === F64 || arrset_src_wasm === F32
+                    local is_already_externref_val = arrset_src_wasm === ExternRef
                     if is_numeric_val
                         push!(bytes, Opcode.REF_NULL)
                         push!(bytes, UInt8(ExternRef))
                     else
                         append!(bytes, val_bytes)
-                        # extern.convert_any: (ref null X) → externref
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        # PURE-048: Skip extern_convert_any if value is already externref
+                        if !is_already_externref_val
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        end
                     end
                 else
                     append!(bytes, val_bytes)
