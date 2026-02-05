@@ -6787,8 +6787,10 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                     # If-then-else: emit ELSE to start else branch
                     # First, set phi value from then-branch before leaving it
                     # Find the phi at the actual merge point
+                    local _if_else_merge_point = 0
                     for (mp, mt) in pre_loop_block_type
                         if mt == :if_else_end && mp > i
+                            _if_else_merge_point = mp
                             if code[mp] isa Core.PhiNode && haskey(ctx.phi_locals, mp)
                                 phi_stmt = code[mp]::Core.PhiNode
                                 # Find the then-edge (comes from before else_start)
@@ -6801,6 +6803,19 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                                 end
                             end
                             break
+                        end
+                    end
+                    # PURE-314: Also set then-branch edges for consecutive phis after merge point
+                    if _if_else_merge_point > 0
+                        for j in (_if_else_merge_point+1):min(length(code), loop_header - 1)
+                            code[j] isa Core.PhiNode || break
+                            haskey(ctx.phi_locals, j) || continue
+                            succ_phi = code[j]::Core.PhiNode
+                            for (edge_idx, edge) in enumerate(succ_phi.edges)
+                                if edge < i  # then-branch edge
+                                    emit_phi_local_set!(bytes, succ_phi.values[edge_idx], j, ctx)
+                                end
+                            end
                         end
                     end
                     push!(bytes, Opcode.ELSE)
@@ -6824,6 +6839,18 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                         if max_edge_idx > 0
                             val = phi_stmt.values[max_edge_idx]
                             emit_phi_local_set!(bytes, val, i, ctx)
+                        end
+                    end
+                    # PURE-314: Initialize consecutive single-edge phis AFTER the merge point.
+                    # These are phis at i+1, i+2, etc. that only receive values from
+                    # one branch (e.g., else-only). They must be set while still inside
+                    # the if-else block (before END), otherwise they stay at default (0).
+                    for j in (i+1):min(length(code), loop_header - 1)
+                        code[j] isa Core.PhiNode || break
+                        haskey(ctx.phi_locals, j) || continue
+                        succ_phi = code[j]::Core.PhiNode
+                        for (edge_idx, edge) in enumerate(succ_phi.edges)
+                            emit_phi_local_set!(bytes, succ_phi.values[edge_idx], j, ctx)
                         end
                     end
                     push!(bytes, Opcode.END)
@@ -9516,6 +9543,19 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                         push!(bytes, Opcode.BR_IF)
                         append!(bytes, encode_leb128_unsigned(label_depth))
                     end
+                end
+            end
+
+            # PURE-314: GotoIfNot fall-through phi locals
+            # When condition is TRUE, execution falls through to the next block.
+            # The false branch sets phi locals via set_phi_locals_for_edge! above,
+            # but the true (fall-through) path never did. Set phi locals for the
+            # next block on the fall-through path.
+            next_fall_block = block_idx + 1
+            if next_fall_block <= length(blocks)
+                fall_has_phi = dest_has_phi_from_edge(next_fall_block, terminator_idx)
+                if fall_has_phi
+                    set_phi_locals_for_edge!(bytes, next_fall_block, terminator_idx)
                 end
             end
 
