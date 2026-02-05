@@ -11640,6 +11640,37 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
         block_idx, block = conditionals[cond_idx]
         goto_if_not = block.terminator::Core.GotoIfNot
 
+        # PURE-316: Generate intermediate statements between target_idx and this
+        # conditional's block. When the else-branch of a prior conditional falls through
+        # to code before this conditional (e.g., add_int computations between an
+        # if-throw and the next GotoIfNot), those statements must be compiled here.
+        if target_idx > 0 && target_idx < block.start_idx
+            for i in target_idx:(block.start_idx - 1)
+                stmt = code[i]
+                if stmt === nothing || stmt isa Core.GotoNode || stmt isa Core.GotoIfNot || stmt isa Core.PhiNode
+                    # Skip control flow (already handled by structure)
+                else
+                    append!(inner_bytes, compile_statement(stmt, i, ctx))
+
+                    # Drop unused values
+                    if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
+                        stmt_type = get(ctx.ssa_types, i, Any)
+                        if stmt_type !== Nothing && stmt_type !== Union{}
+                            is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
+                            if !is_nothing_union
+                                if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
+                                    use_count = get(ssa_use_count, i, 0)
+                                    if use_count == 0
+                                        push!(inner_bytes, Opcode.DROP)
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
         # Generate statements before condition
         for i in block.start_idx:block.end_idx-1
             append!(inner_bytes, compile_statement(code[i], i, ctx))
