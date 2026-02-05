@@ -14357,11 +14357,62 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
             end
 
             return bytes
+        elseif name === :jl_string_ptr
+            # jl_string_ptr(s) -> Ptr{UInt8}: get pointer to string bytes
+            # In WasmGC, String is array<i32>. We emit i64.const 0 as dummy pointer.
+            # The actual string ref is resolved in the pointerref handler by tracing
+            # back through add_ptr/sub_ptr to find the original string arg.
+            push!(bytes, Opcode.I64_CONST)
+            push!(bytes, 0x00)
+            return bytes
         end
     end
 
     # Unknown foreigncall - return empty bytes (will be skipped)
     return bytes
+end
+
+"""
+Trace a pointerref argument back through add_ptr/sub_ptr to find a jl_string_ptr foreigncall.
+Returns (string_ssa, index_ssa) if found, or nothing if not a string pointer pattern.
+The index_ssa is the offset argument to add_ptr (the 1-based codeunit index).
+"""
+function _trace_string_ptr(ptr_ssa, code)
+    # ptr_ssa should be SSAValue pointing to sub_ptr or add_ptr or jl_string_ptr
+    if !(ptr_ssa isa Core.SSAValue)
+        return nothing
+    end
+    stmt = code[ptr_ssa.id]
+    if !(stmt isa Expr && stmt.head === :call)
+        return nothing
+    end
+    func = stmt.args[1]
+    if !(func isa GlobalRef)
+        return nothing
+    end
+    args = stmt.args[2:end]
+
+    if func.name === :sub_ptr && length(args) >= 2
+        # sub_ptr(ptr, offset) — recurse on ptr
+        return _trace_string_ptr(args[1], code)
+    elseif func.name === :add_ptr && length(args) >= 2
+        # add_ptr(ptr, index) — ptr should be jl_string_ptr, index is codeunit index
+        inner = args[1]
+        if inner isa Core.SSAValue
+            inner_stmt = code[inner.id]
+            if inner_stmt isa Expr && inner_stmt.head === :foreigncall
+                fname = inner_stmt.args[1]
+                fname_val = fname isa QuoteNode ? fname.value : fname
+                if fname_val === :jl_string_ptr && length(inner_stmt.args) >= 6
+                    # Found it! Return (string_arg, index_arg)
+                    return (inner_stmt.args[6], args[2])
+                end
+            end
+        end
+        return nothing
+    else
+        return nothing
+    end
 end
 
 # ============================================================================
@@ -18172,9 +18223,31 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         push!(bytes, Opcode.I64_SUB)
 
     # Base.pointerref - read from pointer
-    # WasmGC has no linear memory — pointer ops are invalid. Trap at runtime.
+    # In WasmGC, raw pointer ops don't exist. But for string byte access
+    # (codeunit), we trace back to jl_string_ptr and emit array.get.
     elseif func isa GlobalRef && func.name === :pointerref
-        push!(bytes, Opcode.UNREACHABLE)
+        # Try to trace pointer arg back to jl_string_ptr
+        ptr_arg = length(args) >= 1 ? args[1] : nothing
+        str_info = ptr_arg !== nothing ? _trace_string_ptr(ptr_arg, ctx.code_info.code) : nothing
+        if str_info !== nothing
+            str_ssa, idx_ssa = str_info
+            # Emit: array.get string_array (index - 1)
+            # String is array<i32> (type 1). Index is 1-based, array.get is 0-based.
+            append!(bytes, compile_value(str_ssa, ctx))
+            append!(bytes, compile_value(idx_ssa, ctx))
+            # Convert i64 index to i32 and subtract 1 for 0-based
+            push!(bytes, Opcode.I32_WRAP_I64)
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x01)
+            push!(bytes, Opcode.I32_SUB)
+            # array.get on string type (array<i32> = type 1)
+            string_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ARRAY_GET)
+            append!(bytes, encode_leb128_unsigned(string_arr_type))
+        else
+            push!(bytes, Opcode.UNREACHABLE)
+        end
 
     # Base.pointerset - write to pointer
     # WasmGC has no linear memory — pointer ops are invalid. Trap at runtime.
