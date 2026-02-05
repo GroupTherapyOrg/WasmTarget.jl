@@ -8136,9 +8136,12 @@ Uses nested blocks with br instructions.
 function generate_complex_flow(ctx::CompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
     bytes = UInt8[]
 
-    # For void return types (like event handlers), use a simpler approach:
-    # just execute all statements in order and return at the end
-    if ctx.return_type === Nothing
+    # For void return types WITHOUT loops (like event handlers), use a simpler approach:
+    # just execute all statements in order and return at the end.
+    # PURE-314: Void functions WITH loops must use generate_stackified_flow because
+    # generate_void_flow doesn't handle pre-loop phi initialization (single-edge phis
+    # after if-then-else merge points stay at default 0, causing array bounds errors).
+    if ctx.return_type === Nothing && isempty(ctx.loop_headers)
         append!(bytes, generate_void_flow(ctx, blocks, code))
         return bytes
     end
