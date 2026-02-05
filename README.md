@@ -1,5 +1,13 @@
 # WasmTarget.jl
 
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="logo/wasm_dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="logo/wasm_light.svg">
+    <img alt="Therapy.jl" src="logo/logo_light.svg" height="60">
+  </picture>
+</div>
+
 A Julia-to-WebAssembly compiler targeting the WasmGC (Garbage Collection) proposal. WasmTarget compiles Julia functions directly to WebAssembly binaries that run in modern browsers and Node.js with WasmGC support.
 
 ## What Works Today (Tier 1)
