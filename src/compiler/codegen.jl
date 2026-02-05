@@ -2495,26 +2495,15 @@ function emit_int128_add(ctx, result_type::Type)::Vector{UInt8}
     append!(bytes, encode_leb128_unsigned(b_hi_local))
     push!(bytes, Opcode.I64_ADD)  # + b_hi
 
-    # Stack now has: [result_lo (from local), result_hi]
-    # Wait, result_lo is in local, not on stack. Let me fix:
     # Stack: [result_hi]
     # Need: [result_lo, result_hi] for struct.new
-
-    # Push result_lo first
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_lo_local))
-
-    # Swap to get [result_lo, result_hi]
-    # Wasm doesn't have swap, so we need another approach
-    # Actually struct.new takes (lo, hi) in order, and we have hi on stack, lo in local
-    # Let me store hi to local, then push in correct order
-
+    # Save result_hi to local, then push lo, then hi
     hi_local = length(ctx.locals) + ctx.n_params
     push!(ctx.locals, I64)
     push!(bytes, Opcode.LOCAL_SET)
     append!(bytes, encode_leb128_unsigned(hi_local))
 
-    # Now push lo, then hi
+    # Stack: [] — push in struct field order: lo first, then hi
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(result_lo_local))
     push!(bytes, Opcode.LOCAL_GET)
@@ -12395,12 +12384,12 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
             # produce a wasm value. Use void block type and emit continuation after END.
             push!(inner_bytes, 0x40)  # void block type
         elseif then_ends_unreachable
-            # Then-branch ends with unreachable.
-            # In WASM, unreachable can "produce" any type, so we CAN use typed result
-            # if the else branch produces a value. Use the return type for the if block.
-            # This allows the else branch to leave a value on the stack that becomes
-            # the if result (and ultimately the return value).
-            append!(inner_bytes, encode_block_type(result_type))
+            # PURE-317: Then-branch throws (unreachable). Use void block type.
+            # The then-branch never produces a value (unreachable is polymorphic),
+            # and the else-branch may contain nested conditionals with returns that
+            # don't leave a value on the stack for the outer IF block. Using void
+            # avoids "expected type but nothing on stack" validation errors.
+            push!(inner_bytes, 0x40)  # void block type
         else
             append!(inner_bytes, encode_block_type(result_type))
         end
@@ -14528,6 +14517,17 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
                 push!(bytes, 0x00)
             end
             return bytes
+        elseif name === :jl_string_to_genericmemory
+            # PURE-316: jl_string_to_genericmemory(s::String) -> Memory{UInt8}
+            # Converts a String's underlying bytes to a Memory{UInt8}.
+            # In WasmGC, both String and Memory{UInt8} are represented as array<i32>,
+            # so this is a no-op: just return the string argument itself.
+            # For ASCII/UTF-8 source code, the codepoint values equal the byte values.
+            if length(expr.args) >= 6
+                str_arg = expr.args[6]
+                append!(bytes, compile_value(str_arg, ctx))
+            end
+            return bytes
         elseif name === :utf8proc_grapheme_break_stateful
             # PURE-316: utf8proc_grapheme_break_stateful(c1::UInt32, c2::UInt32, state::Ref{Int32}) -> Bool
             # Returns true if there's a grapheme cluster break between c1 and c2.
@@ -14540,7 +14540,12 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
         end
     end
 
-    # Unknown foreigncall - return empty bytes (will be skipped)
+    # Unknown foreigncall - emit unreachable.
+    # We cannot execute native C FFI in WebAssembly. Emitting unreachable:
+    # (1) Makes the wasm validator accept any stack type (polymorphic)
+    # (2) Correctly traps if this code path is reached at runtime
+    # (3) Enables then_ends_unreachable detection for IF block typing
+    push!(bytes, Opcode.UNREACHABLE)
     return bytes
 end
 
@@ -18031,26 +18036,16 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, 0x3f)  # 63
             push!(bytes, Opcode.I64_SHR_S)
 
-            # Stack now has [hi]. Need [lo, hi] for struct.new
-            # Load lo from scratch
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(scratch_idx))
-
-            # Swap: need lo on bottom, hi on top
-            # Actually struct.new takes fields in order: field0=lo, field1=hi
-            # Stack order for struct.new is: [lo, hi] (bottom to top)
-            # We have [hi] and need to get [lo, hi]
-            # So: store hi, get lo, get hi
+            # Stack: [hi]. Need [lo, hi] for struct.new
+            # Save hi to scratch, then push lo, then hi
             scratch2_idx = ctx.n_params + length(ctx.locals)
             push!(ctx.locals, I64)
             push!(bytes, Opcode.LOCAL_SET)
             append!(bytes, encode_leb128_unsigned(scratch2_idx))
 
-            # Push lo
+            # Stack: [] — push in struct field order: lo first, then hi
             push!(bytes, Opcode.LOCAL_GET)
             append!(bytes, encode_leb128_unsigned(scratch_idx))
-
-            # Push hi
             push!(bytes, Opcode.LOCAL_GET)
             append!(bytes, encode_leb128_unsigned(scratch2_idx))
 

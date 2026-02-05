@@ -83,18 +83,18 @@ function PlaygroundEngine(; initial_example::String = "arithmetic")
 
     Div(:class => "flex flex-col h-full",
         # Header bar
-        Div(:class => "flex items-center justify-between px-4 py-2 bg-stone-700 dark:bg-stone-800 rounded-t-xl",
-            Span(:class => "text-stone-300 text-sm font-medium", "Output"),
+        Div(:class => "flex items-center justify-between px-4 py-2 bg-warm-700 dark:bg-warm-800 rounded-t-xl",
+            Span(:class => "text-warm-300 text-sm font-medium", "Output"),
             # Run status indicator
             Div(:id => "engine-status",
                 :class => "flex items-center gap-2",
                 Span(:class => "w-2 h-2 rounded-full bg-green-500", ""),
-                Span(:class => "text-stone-400 text-xs", "Ready")
+                Span(:class => "text-warm-400 text-xs", "Ready")
             )
         ),
 
         # Output area - contains all example islands (show/hide based on selection)
-        Div(:class => "flex-1 bg-stone-800 dark:bg-stone-900 p-4 overflow-auto rounded-b-xl min-h-[300px]",
+        Div(:class => "flex-1 bg-warm-800 dark:bg-warm-900 p-4 overflow-auto rounded-b-xl min-h-[300px]",
             :id => "engine-output",
 
             # Arithmetic demo
@@ -125,10 +125,10 @@ function PlaygroundEngine(; initial_example::String = "arithmetic")
             Div(:id => "example-counter",
                 :class => initial_example == "counter" ? "" : "hidden",
                 Div(:class => "text-center p-8",
-                    Div(:class => "text-stone-400 text-sm mb-4",
+                    Div(:class => "text-warm-400 text-sm mb-4",
                         "The Counter example demonstrates Therapy.jl signals."
                     ),
-                    Div(:class => "text-stone-500 text-xs",
+                    Div(:class => "text-warm-500 text-xs",
                         "Interactive counter coming in a future update."
                     )
                 )
@@ -141,7 +141,7 @@ function PlaygroundEngine(; initial_example::String = "arithmetic")
                     Div(:class => "text-amber-500 text-sm mb-2",
                         "Example not available"
                     ),
-                    Div(:class => "text-stone-500 text-xs",
+                    Div(:class => "text-warm-500 text-xs",
                         "This example doesn't have an interactive demo yet."
                     )
                 )
@@ -206,7 +206,7 @@ function PlaygroundEngine(; initial_example::String = "arithmetic")
                             statusDot.className += 'bg-red-500';
                             break;
                         default:
-                            statusDot.className += 'bg-stone-500';
+                            statusDot.className += 'bg-warm-500';
                     }
                 }
 
@@ -254,7 +254,7 @@ function ExampleSelector(;
 )
     Div(:class => "flex flex-wrap items-center gap-4",
         # Label
-        Span(:class => "text-stone-400 text-sm", "Examples:"),
+        Span(:class => "text-warm-400 text-sm", "Examples:"),
 
         # Category tabs (if grouped)
         if show_categories
@@ -263,24 +263,24 @@ function ExampleSelector(;
 
                 # Numeric category
                 Div(:class => "flex items-center",
-                    Span(:class => "text-stone-500 text-xs mr-2", "Numeric"),
+                    Span(:class => "text-warm-500 text-xs mr-2", "Numeric"),
                     Button(:class => initial_example == "arithmetic" ?
-                        "px-3 py-1 rounded-full text-xs bg-cyan-500 text-white" :
-                        "px-3 py-1 rounded-full text-xs bg-stone-700 text-stone-300 hover:bg-stone-600",
+                        "px-3 py-1 rounded-full text-xs bg-accent-500 text-white" :
+                        "px-3 py-1 rounded-full text-xs bg-warm-700 text-warm-300 hover:bg-warm-600",
                         :data_example => "arithmetic",
                         :onclick => "window.dispatchEvent(new CustomEvent('playground-select-example', {detail: {exampleId: 'arithmetic'}}))",
                         "Arithmetic"
                     ),
                     Button(:class => initial_example == "factorial" ?
-                        "px-3 py-1 rounded-full text-xs bg-cyan-500 text-white ml-1" :
-                        "px-3 py-1 rounded-full text-xs bg-stone-700 text-stone-300 hover:bg-stone-600 ml-1",
+                        "px-3 py-1 rounded-full text-xs bg-accent-500 text-white ml-1" :
+                        "px-3 py-1 rounded-full text-xs bg-warm-700 text-warm-300 hover:bg-warm-600 ml-1",
                         :data_example => "factorial",
                         :onclick => "window.dispatchEvent(new CustomEvent('playground-select-example', {detail: {exampleId: 'factorial'}}))",
                         "Factorial"
                     ),
                     Button(:class => initial_example == "sum_to_n" ?
-                        "px-3 py-1 rounded-full text-xs bg-cyan-500 text-white ml-1" :
-                        "px-3 py-1 rounded-full text-xs bg-stone-700 text-stone-300 hover:bg-stone-600 ml-1",
+                        "px-3 py-1 rounded-full text-xs bg-accent-500 text-white ml-1" :
+                        "px-3 py-1 rounded-full text-xs bg-warm-700 text-warm-300 hover:bg-warm-600 ml-1",
                         :data_example => "sum_to_n",
                         :onclick => "window.dispatchEvent(new CustomEvent('playground-select-example', {detail: {exampleId: 'sum_to_n'}}))",
                         "Sum to N"
@@ -288,14 +288,14 @@ function ExampleSelector(;
                 ),
 
                 # Divider
-                Span(:class => "text-stone-600 mx-2", "|"),
+                Span(:class => "text-warm-600 mx-2", "|"),
 
                 # Control Flow category
                 Div(:class => "flex items-center",
-                    Span(:class => "text-stone-500 text-xs mr-2", "Control Flow"),
+                    Span(:class => "text-warm-500 text-xs mr-2", "Control Flow"),
                     Button(:class => initial_example == "sign" ?
-                        "px-3 py-1 rounded-full text-xs bg-cyan-500 text-white" :
-                        "px-3 py-1 rounded-full text-xs bg-stone-700 text-stone-300 hover:bg-stone-600",
+                        "px-3 py-1 rounded-full text-xs bg-accent-500 text-white" :
+                        "px-3 py-1 rounded-full text-xs bg-warm-700 text-warm-300 hover:bg-warm-600",
                         :data_example => "sign",
                         :onclick => "window.dispatchEvent(new CustomEvent('playground-select-example', {detail: {exampleId: 'sign'}}))",
                         "Sign"
@@ -303,14 +303,14 @@ function ExampleSelector(;
                 ),
 
                 # Divider
-                Span(:class => "text-stone-600 mx-2", "|"),
+                Span(:class => "text-warm-600 mx-2", "|"),
 
                 # UI Patterns category
                 Div(:class => "flex items-center",
-                    Span(:class => "text-stone-500 text-xs mr-2", "UI"),
+                    Span(:class => "text-warm-500 text-xs mr-2", "UI"),
                     Button(:class => initial_example == "counter" ?
-                        "px-3 py-1 rounded-full text-xs bg-cyan-500 text-white" :
-                        "px-3 py-1 rounded-full text-xs bg-stone-700 text-stone-300 hover:bg-stone-600",
+                        "px-3 py-1 rounded-full text-xs bg-accent-500 text-white" :
+                        "px-3 py-1 rounded-full text-xs bg-warm-700 text-warm-300 hover:bg-warm-600",
                         :data_example => "counter",
                         :onclick => "window.dispatchEvent(new CustomEvent('playground-select-example', {detail: {exampleId: 'counter'}}))",
                         "Counter"
@@ -319,7 +319,7 @@ function ExampleSelector(;
             )
         else
             # Simple dropdown
-            Select(:class => "bg-stone-700 text-stone-100 rounded px-3 py-1 text-sm",
+            Select(:class => "bg-warm-700 text-warm-100 rounded px-3 py-1 text-sm",
                 :id => "example-dropdown",
                 :onchange => "window.dispatchEvent(new CustomEvent('playground-select-example', {detail: {exampleId: this.value}}))",
                 Option(:value => "arithmetic", :selected => initial_example == "arithmetic", "Arithmetic Operations"),
@@ -343,15 +343,15 @@ function ExampleSelector(;
                         const isActive = btn.dataset.example === e.detail.exampleId;
                         if (isActive) {
                             btn.className = btn.className
-                                .replace('bg-stone-700', 'bg-cyan-500')
-                                .replace('text-stone-300', 'text-white')
-                                .replace('hover:bg-stone-600', '');
+                                .replace('bg-warm-700', 'bg-accent-500')
+                                .replace('text-warm-300', 'text-white')
+                                .replace('hover:bg-warm-600', '');
                         } else {
                             btn.className = btn.className
-                                .replace('bg-cyan-500', 'bg-stone-700')
-                                .replace('text-white', 'text-stone-300');
-                            if (!btn.className.includes('hover:bg-stone-600')) {
-                                btn.className += ' hover:bg-stone-600';
+                                .replace('bg-accent-500', 'bg-warm-700')
+                                .replace('text-white', 'text-warm-300');
+                            if (!btn.className.includes('hover:bg-warm-600')) {
+                                btn.className += ' hover:bg-warm-600';
                             }
                         }
                     });

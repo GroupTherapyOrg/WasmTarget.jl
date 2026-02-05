@@ -22,26 +22,26 @@ Types chapter for the Interactive Julia Manual.
 function Types()
     ManualLayout(chapter_id="types", chapter_title="Types (Structs)",
         # Title
-        H1(:class => "text-3xl font-bold text-stone-800 dark:text-stone-100 mb-4",
+        H1(:class => "text-3xl font-bold text-warm-800 dark:text-warm-100 mb-4",
             "Types (Structs)"
         ),
 
         # Introduction
-        P(:class => "text-lg text-stone-600 dark:text-stone-400 mb-8",
+        P(:class => "text-lg text-warm-600 dark:text-warm-400 mb-8",
             "Julia's type system allows you to define custom data types that group related data together. ",
             "These ",
             Em("composite types"),
             " (called ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "struct"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "struct"),
             "s) are the foundation for organizing data in Julia programs."
         ),
 
         # Section: Primitive Types
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Primitive Types"
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 mb-4",
+        P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "Julia provides several built-in primitive types for representing basic values like numbers and booleans. ",
             "In WasmTarget.jl, these map directly to WebAssembly's native types."
         ),
@@ -66,16 +66,16 @@ typeof(flag) # returns Bool""",
         ),
 
         # Tip about WasmTarget types
-        Div(:class => "p-4 bg-cyan-50 dark:bg-cyan-900/20 rounded-xl border border-cyan-200 dark:border-cyan-800 my-6",
+        Div(:class => "p-4 bg-accent-50 dark:bg-accent-900/20 rounded-xl border border-accent-200 dark:border-accent-800 my-6",
             Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-cyan-600 dark:text-cyan-400 flex-shrink-0 mt-0.5",
+                Svg(:class => "w-5 h-5 text-accent-600 dark:text-accent-400 flex-shrink-0 mt-0.5",
                     :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                     Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
                          :d => "M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z")
                 ),
                 Div(
-                    P(:class => "text-sm text-cyan-800 dark:text-cyan-200 font-medium", "WasmTarget.jl Type Mapping"),
-                    P(:class => "text-sm text-cyan-700 dark:text-cyan-300 mt-1",
+                    P(:class => "text-sm text-accent-800 dark:text-accent-200 font-medium", "WasmTarget.jl Type Mapping"),
+                    P(:class => "text-sm text-accent-700 dark:text-accent-300 mt-1",
                         "Int32 → i32, Int64 → i64, Float32 → f32, Float64 → f64, Bool → i32 (0 or 1). ",
                         "These types compile directly to WebAssembly's native number types for optimal performance."
                     )
@@ -84,13 +84,13 @@ typeof(flag) # returns Bool""",
         ),
 
         # Section: Composite Types (Structs)
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Composite Types (Structs)"
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 mb-4",
+        P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "A ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "struct"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "struct"),
             " defines a new composite type with named fields. By default, structs are ",
             Em("immutable"),
             " — their fields cannot be changed after creation."
@@ -117,7 +117,7 @@ p.x * p.y  # returns 200""",
             example = StructDemo
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 my-4",
+        P(:class => "text-warm-600 dark:text-warm-400 my-4",
             "Structs can have any number of fields, and each field can have a type annotation. ",
             "If no type is specified, the field can hold any value (though explicit types are recommended for WasmTarget.jl)."
         ),
@@ -146,13 +146,13 @@ p.x * p.y  # returns 200""",
         ),
 
         # Section: Mutable Structs
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Mutable Structs"
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 mb-4",
+        P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "When you need to modify fields after creation, use ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "mutable struct"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "mutable struct"),
             ". Mutable structs allow field reassignment, making them useful for objects that change over time."
         ),
 
@@ -180,20 +180,20 @@ c.count = 0""",
             example = MutableStructDemo
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 my-4",
+        P(:class => "text-warm-600 dark:text-warm-400 my-4",
             "Use mutable structs sparingly — immutable structs are generally more efficient and easier to reason about. ",
             "Choose mutable structs when the object genuinely represents changing state."
         ),
 
         # Section: Nested Structs
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Nested Structs"
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 mb-4",
+        P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "Structs can contain other structs as fields, allowing you to build complex data structures. ",
             "Field access chains like ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "line.start_pt.x"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "line.start_pt.x"),
             " traverse through the nested structure."
         ),
 
@@ -229,18 +229,18 @@ len_sq = dx * dx + dy * dy  # 200""",
         ),
 
         # Section: Constructors
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Constructors"
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 mb-4",
+        P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "When you define a struct, Julia automatically creates a ",
             Em("default constructor"),
             " that takes arguments in field order. You can also define custom constructors for more flexibility."
         ),
 
-        Pre(:class => "bg-stone-800 dark:bg-stone-900 p-4 rounded-lg overflow-x-auto text-sm my-4",
-            Code(:class => "language-julia text-stone-100 font-mono",
+        Pre(:class => "bg-warm-800 dark:bg-warm-900 p-4 rounded-lg overflow-x-auto text-sm my-4",
+            Code(:class => "language-julia text-warm-100 font-mono",
 """# Default constructor (automatically created)
 struct Rectangle
     width::Int32
@@ -287,39 +287,39 @@ Circle() = Circle(Int32(1))  # Default radius of 1"""
         ),
 
         # Summary
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Summary"
         ),
 
-        Ul(:class => "list-disc list-inside space-y-2 text-stone-600 dark:text-stone-400 mb-6",
+        Ul(:class => "list-disc list-inside space-y-2 text-warm-600 dark:text-warm-400 mb-6",
             Li("Primitive types (Int32, Float64, Bool) map directly to WebAssembly types"),
-            Li("Define composite types with ", Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "struct Name ... end")),
+            Li("Define composite types with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "struct Name ... end")),
             Li("Regular structs are immutable — fields cannot be changed after creation"),
-            Li("Use ", Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "mutable struct"), " when fields need to be modified"),
+            Li("Use ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "mutable struct"), " when fields need to be modified"),
             Li("Structs can contain other structs as fields (nested structs)"),
-            Li("Access fields with dot notation: ", Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "instance.field_name"))
+            Li("Access fields with dot notation: ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "instance.field_name"))
         ),
 
         # Scope note
-        Div(:class => "p-4 bg-stone-100 dark:bg-stone-800 rounded-xl border border-stone-200 dark:border-stone-700 my-6",
+        Div(:class => "p-4 bg-warm-100 dark:bg-warm-800 rounded-xl border border-warm-200 dark:border-warm-700 my-6",
             Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-stone-500 dark:text-stone-400 flex-shrink-0 mt-0.5",
+                Svg(:class => "w-5 h-5 text-warm-500 dark:text-warm-400 flex-shrink-0 mt-0.5",
                     :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                     Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
                          :d => "M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z")
                 ),
                 Div(
-                    P(:class => "text-sm text-stone-700 dark:text-stone-300 font-medium", "Beyond This Chapter"),
-                    P(:class => "text-sm text-stone-600 dark:text-stone-400 mt-1",
+                    P(:class => "text-sm text-warm-700 dark:text-warm-300 font-medium", "Beyond This Chapter"),
+                    P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-1",
                         "Julia also supports ",
                         Em("abstract types"),
                         " and ",
                         Em("parametric types"),
                         " (like ",
-                        Code(:class => "text-stone-600 dark:text-stone-400", "Vector{T}"),
+                        Code(:class => "text-warm-600 dark:text-warm-400", "Vector{T}"),
                         "). These advanced features have limited support in WasmTarget.jl — see the ",
                         A(:href => "./features/",
-                          :class => "text-cyan-600 dark:text-cyan-400 hover:underline",
+                          :class => "text-accent-600 dark:text-accent-400 hover:underline",
                           "Features page"),
                         " for current support status."
                     )
@@ -328,18 +328,18 @@ Circle() = Circle(Int32(1))  # Default radius of 1"""
         ),
 
         # Next steps
-        Div(:class => "p-6 bg-gradient-to-r from-cyan-50 to-teal-50 dark:from-cyan-900/20 dark:to-teal-900/20 rounded-xl border border-cyan-200 dark:border-cyan-800",
-            H3(:class => "text-lg font-semibold text-stone-800 dark:text-stone-100 mb-2",
+        Div(:class => "p-6 bg-gradient-to-r from-accent-50 to-accent-50 dark:from-accent-900/20 dark:to-accent-900/20 rounded-xl border border-accent-200 dark:border-accent-800",
+            H3(:class => "text-lg font-semibold text-warm-800 dark:text-warm-100 mb-2",
                 "Next Steps"
             ),
-            P(:class => "text-stone-600 dark:text-stone-400",
+            P(:class => "text-warm-600 dark:text-warm-400",
                 "Now that you understand types and structs, continue to ",
                 A(:href => "../methods/",
-                  :class => "text-cyan-600 dark:text-cyan-400 font-medium hover:underline",
+                  :class => "text-accent-600 dark:text-accent-400 font-medium hover:underline",
                   "Methods (Multiple Dispatch)"),
                 " to learn how to define functions that behave differently for different types, or explore ",
                 A(:href => "../arrays/",
-                  :class => "text-cyan-600 dark:text-cyan-400 font-medium hover:underline",
+                  :class => "text-accent-600 dark:text-accent-400 font-medium hover:underline",
                   "Arrays"),
                 " to see how to work with collections of values."
             )

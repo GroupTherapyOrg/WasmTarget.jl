@@ -41,14 +41,14 @@ function PlaygroundEditor(;
 
     Div(:class => "flex flex-col h-full",
         # Header bar
-        Div(:class => "flex items-center justify-between px-4 py-2 bg-stone-700 dark:bg-stone-800 rounded-t-xl",
+        Div(:class => "flex items-center justify-between px-4 py-2 bg-warm-700 dark:bg-warm-800 rounded-t-xl",
             # Language indicator
-            Span(:class => "text-stone-300 text-sm font-medium", "Julia"),
+            Span(:class => "text-warm-300 text-sm font-medium", "Julia"),
             # Action buttons
             Div(:class => "flex items-center gap-3",
                 # Copy button
                 Button(:id => "$(id)-copy-btn",
-                       :class => "text-stone-400 hover:text-white text-xs flex items-center gap-1 transition-colors",
+                       :class => "text-warm-400 hover:text-white text-xs flex items-center gap-1 transition-colors",
                        :title => "Copy code to clipboard",
                     Svg(:class => "w-3.5 h-3.5", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                         Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
@@ -59,7 +59,7 @@ function PlaygroundEditor(;
                 # Clear button (if editable)
                 editable ?
                     Button(:id => "$(id)-clear-btn",
-                           :class => "text-stone-400 hover:text-white text-xs flex items-center gap-1 transition-colors",
+                           :class => "text-warm-400 hover:text-white text-xs flex items-center gap-1 transition-colors",
                            :title => "Clear editor",
                         Svg(:class => "w-3.5 h-3.5", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                             Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
@@ -75,7 +75,7 @@ function PlaygroundEditor(;
             # Textarea for actual input (editable layer)
             editable ?
                 Textarea(:id => editor_id,
-                         :class => "absolute inset-0 w-full h-full bg-transparent text-transparent caret-white p-4 font-mono text-sm resize-none focus:outline-none focus:ring-2 focus:ring-cyan-500/50 z-10",
+                         :class => "absolute inset-0 w-full h-full bg-transparent text-transparent caret-white p-4 font-mono text-sm resize-none focus:outline-none focus:ring-2 focus:ring-accent-500/50 z-10",
                          :spellcheck => "false",
                          :autocomplete => "off",
                          :autocorrect => "off",
@@ -87,9 +87,9 @@ function PlaygroundEditor(;
 
             # Highlighted display layer
             Pre(:id => display_id,
-                :class => "absolute inset-0 w-full h-full bg-stone-800 dark:bg-stone-900 p-4 overflow-auto text-sm pointer-events-none rounded-b-xl",
+                :class => "absolute inset-0 w-full h-full bg-warm-800 dark:bg-warm-900 p-4 overflow-auto text-sm pointer-events-none rounded-b-xl",
                 :aria_hidden => "true",
-                Code(:class => "language-julia text-stone-100 font-mono whitespace-pre-wrap",
+                Code(:class => "language-julia text-warm-100 font-mono whitespace-pre-wrap",
                      initial_code)
             )
         ),
@@ -221,12 +221,12 @@ function CodeDisplay(;
     code::String,
     show_line_numbers::Bool = false
 )
-    Div(:class => "rounded-xl overflow-hidden border border-stone-700",
+    Div(:class => "rounded-xl overflow-hidden border border-warm-700",
         # Header
-        Div(:class => "flex items-center justify-between px-4 py-2 bg-stone-700 dark:bg-stone-800",
-            Span(:class => "text-stone-300 text-xs font-medium uppercase tracking-wider", "Julia"),
+        Div(:class => "flex items-center justify-between px-4 py-2 bg-warm-700 dark:bg-warm-800",
+            Span(:class => "text-warm-300 text-xs font-medium uppercase tracking-wider", "Julia"),
             # Copy button
-            Button(:class => "text-stone-400 hover:text-white text-xs flex items-center gap-1 transition-colors",
+            Button(:class => "text-warm-400 hover:text-white text-xs flex items-center gap-1 transition-colors",
                    :data_code => code,
                    :onclick => "navigator.clipboard.writeText(this.dataset.code).then(() => { this.querySelector('span').textContent = 'Copied!'; setTimeout(() => this.querySelector('span').textContent = 'Copy', 2000); })",
                 Svg(:class => "w-3.5 h-3.5", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
@@ -237,8 +237,8 @@ function CodeDisplay(;
             )
         ),
         # Code with Prism highlighting
-        Pre(:class => "bg-stone-800 dark:bg-stone-900 p-4 overflow-x-auto text-sm",
-            Code(:class => "language-julia text-stone-100 font-mono", code)
+        Pre(:class => "bg-warm-800 dark:bg-warm-900 p-4 overflow-x-auto text-sm",
+            Code(:class => "language-julia text-warm-100 font-mono", code)
         ),
         # Prism initialization
         Script("""

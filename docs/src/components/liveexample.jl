@@ -47,11 +47,11 @@ function LiveExample(;
     # Generate a unique ID for this example (for JS targeting)
     example_id = string(hash(code) % 10000)
 
-    Div(:class => "my-8 rounded-xl overflow-hidden border border-stone-200 dark:border-stone-700 shadow-sm",
+    Div(:class => "my-8 rounded-xl overflow-hidden border border-warm-200 dark:border-warm-700 shadow-sm",
         # Description header (if provided)
         description != "" ?
-            Div(:class => "px-4 py-3 bg-stone-100 dark:bg-stone-800 border-b border-stone-200 dark:border-stone-700",
-                P(:class => "text-sm text-stone-600 dark:text-stone-400", description)
+            Div(:class => "px-4 py-3 bg-warm-100 dark:bg-warm-800 border-b border-warm-200 dark:border-warm-700",
+                P(:class => "text-sm text-warm-600 dark:text-warm-400", description)
             ) : nothing,
 
         # Main content: code + demo side by side on large screens
@@ -59,13 +59,13 @@ function LiveExample(;
             # Left: Code display with syntax highlighting
             Div(:class => "relative",
                 # Code header
-                Div(:class => "flex items-center justify-between px-4 py-2 bg-stone-700 dark:bg-stone-800",
-                    Span(:class => "text-stone-300 text-xs font-medium uppercase tracking-wider", "Julia"),
+                Div(:class => "flex items-center justify-between px-4 py-2 bg-warm-700 dark:bg-warm-800",
+                    Span(:class => "text-warm-300 text-xs font-medium uppercase tracking-wider", "Julia"),
                     # Action buttons container
                     Div(:class => "flex items-center gap-3",
                         # Try in Playground link
                         A(:href => "../",
-                          :class => "text-cyan-400 hover:text-cyan-300 text-xs flex items-center gap-1 transition-colors",
+                          :class => "text-accent-400 hover:text-accent-300 text-xs flex items-center gap-1 transition-colors",
                           :data_code => code,
                           :onclick => "event.preventDefault(); localStorage.setItem('playground-code', this.dataset.code); window.location.href = this.href;",
                           :title => "Open this code in the main playground",
@@ -76,9 +76,9 @@ function LiveExample(;
                             Span("Try in Playground")
                         ),
                         # Separator
-                        Span(:class => "text-stone-500", "|"),
+                        Span(:class => "text-warm-500", "|"),
                         # Copy button
-                        Button(:class => "text-stone-400 hover:text-white text-xs flex items-center gap-1 transition-colors",
+                        Button(:class => "text-warm-400 hover:text-white text-xs flex items-center gap-1 transition-colors",
                                :data_code => code,
                                :onclick => "navigator.clipboard.writeText(this.dataset.code).then(() => { this.textContent = 'Copied!'; setTimeout(() => this.textContent = 'Copy', 2000); })",
                             "Copy"
@@ -86,26 +86,26 @@ function LiveExample(;
                     )
                 ),
                 # Code block with Prism.js highlighting
-                Pre(:class => "bg-stone-800 dark:bg-stone-900 p-4 overflow-x-auto text-sm",
-                    Code(:class => "language-julia text-stone-100 font-mono", code)
+                Pre(:class => "bg-warm-800 dark:bg-warm-900 p-4 overflow-x-auto text-sm",
+                    Code(:class => "language-julia text-warm-100 font-mono", code)
                 )
             ),
 
             # Right: Interactive demo
-            Div(:class => "flex flex-col bg-white dark:bg-stone-800",
+            Div(:class => "flex flex-col bg-warm-50 dark:bg-warm-800",
                 # Demo header
-                Div(:class => "flex items-center justify-between px-4 py-2 bg-stone-100 dark:bg-stone-700 border-t lg:border-t-0 lg:border-l border-stone-200 dark:border-stone-600",
-                    Span(:class => "text-stone-600 dark:text-stone-300 text-xs font-medium uppercase tracking-wider", "Interactive Demo"),
-                    Span(:id => "status-$(example_id)", :class => "text-xs text-emerald-500", "Ready")
+                Div(:class => "flex items-center justify-between px-4 py-2 bg-warm-100 dark:bg-warm-700 border-t lg:border-t-0 lg:border-l border-warm-200 dark:border-warm-600",
+                    Span(:class => "text-warm-600 dark:text-warm-300 text-xs font-medium uppercase tracking-wider", "Interactive Demo"),
+                    Span(:id => "status-$(example_id)", :class => "text-xs text-accent-500", "Ready")
                 ),
                 # Demo content
-                Div(:class => "flex-1 p-4 border-t lg:border-t-0 lg:border-l border-stone-200 dark:border-stone-600",
+                Div(:class => "flex-1 p-4 border-t lg:border-t-0 lg:border-l border-warm-200 dark:border-warm-600",
                     # If example island provided, render it
                     example !== nothing ?
                         Div(:class => "h-full", example) :
                         # Otherwise show fallback
                         Div(:id => "fallback-$(example_id)",
-                            :class => "h-full flex items-center justify-center text-stone-400 dark:text-stone-500 text-sm",
+                            :class => "h-full flex items-center justify-center text-warm-400 dark:text-warm-500 text-sm",
                             initial_output
                         )
                 )
@@ -205,17 +205,17 @@ SimpleValueDemo = island(:SimpleValueDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[150px]",
         # Input controls
         Div(:class => "flex items-center gap-4 mb-4",
-            Button(:class => "w-10 h-10 rounded-full bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-lg font-medium hover:bg-stone-300 dark:hover:bg-stone-500 transition-colors",
+            Button(:class => "w-10 h-10 rounded-full bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-lg font-medium hover:bg-warm-300 dark:hover:bg-warm-500 transition-colors",
                 :on_click => () -> set_value(value() - 1),
                 "-"
             ),
-            Span(:class => "text-3xl font-mono text-cyan-500 w-16 text-center", value),
-            Button(:class => "w-10 h-10 rounded-full bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-lg font-medium hover:bg-stone-300 dark:hover:bg-stone-500 transition-colors",
+            Span(:class => "text-3xl font-mono text-accent-500 w-16 text-center", value),
+            Button(:class => "w-10 h-10 rounded-full bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-lg font-medium hover:bg-warm-300 dark:hover:bg-warm-500 transition-colors",
                 :on_click => () -> set_value(value() + 1),
                 "+"
             )
         ),
-        Span(:class => "text-sm text-stone-500 dark:text-stone-400", "Adjust the value")
+        Span(:class => "text-sm text-warm-500 dark:text-warm-400", "Adjust the value")
     )
 end
 
@@ -227,13 +227,13 @@ CounterDemo = island(:CounterDemo) do
     count, set_count = create_signal(0)
 
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[150px]",
-        Span(:class => "text-5xl font-mono font-bold text-cyan-500 mb-4", count),
+        Span(:class => "text-5xl font-mono font-bold text-accent-500 mb-4", count),
         Div(:class => "flex gap-2",
-            Button(:class => "px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg font-medium transition-colors",
+            Button(:class => "px-4 py-2 bg-accent-500 hover:bg-accent-600 text-white rounded-lg font-medium transition-colors",
                 :on_click => () -> set_count(count() + 1),
                 "Increment"
             ),
-            Button(:class => "px-4 py-2 bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white rounded-lg font-medium hover:bg-stone-300 dark:hover:bg-stone-500 transition-colors",
+            Button(:class => "px-4 py-2 bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white rounded-lg font-medium hover:bg-warm-300 dark:hover:bg-warm-500 transition-colors",
                 :on_click => () -> set_count(0),
                 "Reset"
             )
@@ -255,42 +255,42 @@ ArithmeticExampleDemo = island(:ArithmeticExampleDemo) do
         Div(:class => "flex items-center gap-4",
             # Operand A
             Div(:class => "text-center",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400 block mb-1", "a"),
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400 block mb-1", "a"),
                 Div(:class => "flex items-center gap-1",
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                         :on_click => () -> set_a(a() - 1), "-"),
-                    Span(:class => "w-10 text-center text-xl font-mono text-cyan-500", a),
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+                    Span(:class => "w-10 text-center text-xl font-mono text-accent-500", a),
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                         :on_click => () -> set_a(a() + 1), "+")
                 )
             ),
             # Operand B
             Div(:class => "text-center",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400 block mb-1", "b"),
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400 block mb-1", "b"),
                 Div(:class => "flex items-center gap-1",
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                         :on_click => () -> set_b(b() - 1), "-"),
-                    Span(:class => "w-10 text-center text-xl font-mono text-cyan-500", b),
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+                    Span(:class => "w-10 text-center text-xl font-mono text-accent-500", b),
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                         :on_click => () -> set_b(b() + 1), "+")
                 )
             )
         ),
         # Operation buttons
         Div(:class => "flex gap-2",
-            Button(:class => "px-3 py-1 rounded bg-cyan-500 hover:bg-cyan-600 text-white text-sm font-mono",
+            Button(:class => "px-3 py-1 rounded bg-accent-500 hover:bg-accent-600 text-white text-sm font-mono",
                 :on_click => () -> set_result(a() + b()), "+"),
-            Button(:class => "px-3 py-1 rounded bg-cyan-500 hover:bg-cyan-600 text-white text-sm font-mono",
+            Button(:class => "px-3 py-1 rounded bg-accent-500 hover:bg-accent-600 text-white text-sm font-mono",
                 :on_click => () -> set_result(a() - b()), "-"),
-            Button(:class => "px-3 py-1 rounded bg-cyan-500 hover:bg-cyan-600 text-white text-sm font-mono",
+            Button(:class => "px-3 py-1 rounded bg-accent-500 hover:bg-accent-600 text-white text-sm font-mono",
                 :on_click => () -> set_result(a() * b()), "*"),
-            Button(:class => "px-3 py-1 rounded bg-cyan-500 hover:bg-cyan-600 text-white text-sm font-mono",
+            Button(:class => "px-3 py-1 rounded bg-accent-500 hover:bg-accent-600 text-white text-sm font-mono",
                 :on_click => () -> set_result(div(a(), b())), "/")
         ),
         # Result
-        Div(:class => "text-center p-3 bg-stone-100 dark:bg-stone-700 rounded-lg",
-            Span(:class => "text-stone-500 dark:text-stone-400 text-sm", "Result: "),
-            Span(:class => "text-cyan-500 font-bold text-2xl font-mono", result)
+        Div(:class => "text-center p-3 bg-warm-100 dark:bg-warm-700 rounded-lg",
+            Span(:class => "text-warm-500 dark:text-warm-400 text-sm", "Result: "),
+            Span(:class => "text-accent-500 font-bold text-2xl font-mono", result)
         )
     )
 end
@@ -307,41 +307,41 @@ ComparisonDemo = island(:ComparisonDemo) do
         # Values
         Div(:class => "flex items-center gap-6",
             Div(:class => "text-center",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400 block", "a"),
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400 block", "a"),
                 Div(:class => "flex items-center gap-1",
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> set_a(a() - 1), "-"),
-                    Span(:class => "w-8 text-center text-xl font-mono text-cyan-500", a),
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Span(:class => "w-8 text-center text-xl font-mono text-accent-500", a),
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> set_a(a() + 1), "+")
                 )
             ),
             Div(:class => "text-center",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400 block", "b"),
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400 block", "b"),
                 Div(:class => "flex items-center gap-1",
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> set_b(b() - 1), "-"),
-                    Span(:class => "w-8 text-center text-xl font-mono text-cyan-500", b),
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Span(:class => "w-8 text-center text-xl font-mono text-accent-500", b),
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> set_b(b() + 1), "+")
                 )
             )
         ),
         # Comparison results as a grid
         Div(:class => "grid grid-cols-3 gap-2 text-sm font-mono",
-            Div(:class => "px-2 py-1 bg-stone-100 dark:bg-stone-700 rounded text-center",
-                Span(:class => "text-stone-500", "a < b: "),
-                Span(:class => () -> a() < b() ? "text-emerald-500" : "text-rose-500",
+            Div(:class => "px-2 py-1 bg-warm-100 dark:bg-warm-700 rounded text-center",
+                Span(:class => "text-warm-500", "a < b: "),
+                Span(:class => () -> a() < b() ? "text-accent-500" : "text-rose-500",
                     () -> a() < b() ? "true" : "false")
             ),
-            Div(:class => "px-2 py-1 bg-stone-100 dark:bg-stone-700 rounded text-center",
-                Span(:class => "text-stone-500", "a == b: "),
-                Span(:class => () -> a() == b() ? "text-emerald-500" : "text-rose-500",
+            Div(:class => "px-2 py-1 bg-warm-100 dark:bg-warm-700 rounded text-center",
+                Span(:class => "text-warm-500", "a == b: "),
+                Span(:class => () -> a() == b() ? "text-accent-500" : "text-rose-500",
                     () -> a() == b() ? "true" : "false")
             ),
-            Div(:class => "px-2 py-1 bg-stone-100 dark:bg-stone-700 rounded text-center",
-                Span(:class => "text-stone-500", "a > b: "),
-                Span(:class => () -> a() > b() ? "text-emerald-500" : "text-rose-500",
+            Div(:class => "px-2 py-1 bg-warm-100 dark:bg-warm-700 rounded text-center",
+                Span(:class => "text-warm-500", "a > b: "),
+                Span(:class => () -> a() > b() ? "text-accent-500" : "text-rose-500",
                     () -> a() > b() ? "true" : "false")
             )
         )
@@ -359,20 +359,20 @@ StringConcatDemo = island(:StringConcatDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[150px] gap-4",
         # String selection buttons
         Div(:class => "flex flex-wrap gap-2 justify-center",
-            Button(:class => () -> result_idx() == 1 ? "px-3 py-1 rounded bg-cyan-500 text-white text-sm" : "px-3 py-1 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm hover:bg-stone-300 dark:hover:bg-stone-500",
+            Button(:class => () -> result_idx() == 1 ? "px-3 py-1 rounded bg-accent-500 text-white text-sm" : "px-3 py-1 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm hover:bg-warm-300 dark:hover:bg-warm-500",
                 :on_click => () -> set_result_idx(1), "Hello"),
-            Button(:class => () -> result_idx() == 2 ? "px-3 py-1 rounded bg-cyan-500 text-white text-sm" : "px-3 py-1 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm hover:bg-stone-300 dark:hover:bg-stone-500",
+            Button(:class => () -> result_idx() == 2 ? "px-3 py-1 rounded bg-accent-500 text-white text-sm" : "px-3 py-1 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm hover:bg-warm-300 dark:hover:bg-warm-500",
                 :on_click => () -> set_result_idx(2), "Julia"),
-            Button(:class => () -> result_idx() == 3 ? "px-3 py-1 rounded bg-cyan-500 text-white text-sm" : "px-3 py-1 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm hover:bg-stone-300 dark:hover:bg-stone-500",
+            Button(:class => () -> result_idx() == 3 ? "px-3 py-1 rounded bg-accent-500 text-white text-sm" : "px-3 py-1 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm hover:bg-warm-300 dark:hover:bg-warm-500",
                 :on_click => () -> set_result_idx(3), "World")
         ),
         # Result display - show/hide based on index
-        Div(:class => "text-center p-4 bg-stone-100 dark:bg-stone-700 rounded-lg min-w-[200px]",
-            Span(:class => () -> result_idx() == 1 ? "text-cyan-500 font-mono text-lg" : "hidden", "Hello, World!"),
-            Span(:class => () -> result_idx() == 2 ? "text-cyan-500 font-mono text-lg" : "hidden", "Julia rocks!"),
-            Span(:class => () -> result_idx() == 3 ? "text-cyan-500 font-mono text-lg" : "hidden", "World of WASM")
+        Div(:class => "text-center p-4 bg-warm-100 dark:bg-warm-700 rounded-lg min-w-[200px]",
+            Span(:class => () -> result_idx() == 1 ? "text-accent-500 font-mono text-lg" : "hidden", "Hello, World!"),
+            Span(:class => () -> result_idx() == 2 ? "text-accent-500 font-mono text-lg" : "hidden", "Julia rocks!"),
+            Span(:class => () -> result_idx() == 3 ? "text-accent-500 font-mono text-lg" : "hidden", "World of WASM")
         ),
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400", "Select a word to see concatenation")
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400", "Select a word to see concatenation")
     )
 end
 
@@ -386,30 +386,30 @@ FactorialDemo = island(:FactorialDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[180px] gap-4",
         # N selector
         Div(:class => "flex items-center gap-2",
-            Span(:class => "text-sm text-stone-500 dark:text-stone-400", "n ="),
+            Span(:class => "text-sm text-warm-500 dark:text-warm-400", "n ="),
             Div(:class => "flex gap-1",
-                Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+                Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                     :on_click => () -> begin set_n(0); set_result(1) end, "0"),
-                Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+                Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                     :on_click => () -> begin set_n(1); set_result(1) end, "1"),
-                Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+                Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                     :on_click => () -> begin set_n(2); set_result(2) end, "2"),
-                Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+                Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                     :on_click => () -> begin set_n(3); set_result(6) end, "3"),
-                Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+                Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                     :on_click => () -> begin set_n(4); set_result(24) end, "4"),
-                Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+                Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                     :on_click => () -> begin set_n(5); set_result(120) end, "5"),
-                Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+                Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                     :on_click => () -> begin set_n(6); set_result(720) end, "6")
             )
         ),
         # Result display
-        Div(:class => "text-center p-4 bg-stone-100 dark:bg-stone-700 rounded-lg",
-            Span(:class => "text-stone-500 dark:text-stone-400", "factorial("),
-            Span(:class => "text-cyan-500 font-mono text-xl", n),
-            Span(:class => "text-stone-500 dark:text-stone-400", ") = "),
-            Span(:class => "text-cyan-500 font-bold text-3xl font-mono", result)
+        Div(:class => "text-center p-4 bg-warm-100 dark:bg-warm-700 rounded-lg",
+            Span(:class => "text-warm-500 dark:text-warm-400", "factorial("),
+            Span(:class => "text-accent-500 font-mono text-xl", n),
+            Span(:class => "text-warm-500 dark:text-warm-400", ") = "),
+            Span(:class => "text-accent-500 font-bold text-3xl font-mono", result)
         )
     )
 end
@@ -424,7 +424,7 @@ SumLoopDemo = island(:SumLoopDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[180px] gap-4",
         # N adjuster
         Div(:class => "flex items-center gap-3",
-            Button(:class => "w-8 h-8 rounded-full bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+            Button(:class => "w-8 h-8 rounded-full bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                 :on_click => () -> begin
                     new_n = n() - 5
                     if new_n >= 0
@@ -433,10 +433,10 @@ SumLoopDemo = island(:SumLoopDemo) do
                     end
                 end, "-5"),
             Div(:class => "text-center",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400 block", "n"),
-                Span(:class => "text-2xl font-mono text-cyan-500", n)
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400 block", "n"),
+                Span(:class => "text-2xl font-mono text-accent-500", n)
             ),
-            Button(:class => "w-8 h-8 rounded-full bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+            Button(:class => "w-8 h-8 rounded-full bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                 :on_click => () -> begin
                     new_n = n() + 5
                     set_n(new_n)
@@ -444,13 +444,13 @@ SumLoopDemo = island(:SumLoopDemo) do
                 end, "+5")
         ),
         # Result
-        Div(:class => "text-center p-4 bg-stone-100 dark:bg-stone-700 rounded-lg",
-            Span(:class => "text-stone-500 dark:text-stone-400", "sum(1..", ),
-            Span(:class => "text-cyan-500 font-mono", n),
-            Span(:class => "text-stone-500 dark:text-stone-400", ") = "),
-            Span(:class => "text-cyan-500 font-bold text-2xl font-mono", result)
+        Div(:class => "text-center p-4 bg-warm-100 dark:bg-warm-700 rounded-lg",
+            Span(:class => "text-warm-500 dark:text-warm-400", "sum(1..", ),
+            Span(:class => "text-accent-500 font-mono", n),
+            Span(:class => "text-warm-500 dark:text-warm-400", ") = "),
+            Span(:class => "text-accent-500 font-bold text-2xl font-mono", result)
         ),
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400", "Uses formula: n*(n+1)/2")
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400", "Uses formula: n*(n+1)/2")
     )
 end
 
@@ -465,7 +465,7 @@ SignDemo = island(:SignDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[180px] gap-4",
         # N adjuster
         Div(:class => "flex items-center gap-3",
-            Button(:class => "w-10 h-10 rounded-full bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-lg",
+            Button(:class => "w-10 h-10 rounded-full bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-lg",
                 :on_click => () -> begin
                     new_n = n() - 1
                     set_n(new_n)
@@ -477,8 +477,8 @@ SignDemo = island(:SignDemo) do
                         set_result(0)
                     end
                 end, "-"),
-            Span(:class => "text-3xl font-mono text-cyan-500 w-16 text-center", n),
-            Button(:class => "w-10 h-10 rounded-full bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-lg",
+            Span(:class => "text-3xl font-mono text-accent-500 w-16 text-center", n),
+            Button(:class => "w-10 h-10 rounded-full bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-lg",
                 :on_click => () -> begin
                     new_n = n() + 1
                     set_n(new_n)
@@ -492,15 +492,15 @@ SignDemo = island(:SignDemo) do
                 end, "+")
         ),
         # Result display
-        Div(:class => "text-center p-4 bg-stone-100 dark:bg-stone-700 rounded-lg min-w-[200px]",
-            Span(:class => "text-stone-500 dark:text-stone-400", "sign("),
-            Span(:class => "text-cyan-500 font-mono", n),
-            Span(:class => "text-stone-500 dark:text-stone-400", ") = "),
-            Span(:class => "text-cyan-500 font-bold text-2xl font-mono", result)
+        Div(:class => "text-center p-4 bg-warm-100 dark:bg-warm-700 rounded-lg min-w-[200px]",
+            Span(:class => "text-warm-500 dark:text-warm-400", "sign("),
+            Span(:class => "text-accent-500 font-mono", n),
+            Span(:class => "text-warm-500 dark:text-warm-400", ") = "),
+            Span(:class => "text-accent-500 font-bold text-2xl font-mono", result)
         ),
         # Legend
         Div(:class => "flex gap-4 text-xs",
-            Span(:class => "text-emerald-500", "positive: +1"),
+            Span(:class => "text-accent-500", "positive: +1"),
             Span(:class => "text-amber-500", "zero: 0"),
             Span(:class => "text-rose-500", "negative: -1")
         )
@@ -520,22 +520,22 @@ StructDemo = island(:StructDemo) do
 
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[200px] gap-4",
         # Point struct visualization
-        Div(:class => "p-4 bg-stone-100 dark:bg-stone-700 rounded-lg",
-            Span(:class => "text-stone-500 dark:text-stone-400 text-sm block mb-2", "struct Point"),
+        Div(:class => "p-4 bg-warm-100 dark:bg-warm-700 rounded-lg",
+            Span(:class => "text-warm-500 dark:text-warm-400 text-sm block mb-2", "struct Point"),
             Div(:class => "flex gap-4",
                 # X field
                 Div(:class => "text-center",
-                    Span(:class => "text-xs text-stone-500 dark:text-stone-400 block", "x"),
+                    Span(:class => "text-xs text-warm-500 dark:text-warm-400 block", "x"),
                     Div(:class => "flex items-center gap-1",
-                        Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                        Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                             :on_click => () -> begin
                                 new_x = x() - 1
                                 set_x(new_x)
                                 set_sum(new_x + y())
                                 set_prod(new_x * y())
                             end, "-"),
-                        Span(:class => "w-8 text-center text-xl font-mono text-cyan-500", x),
-                        Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                        Span(:class => "w-8 text-center text-xl font-mono text-accent-500", x),
+                        Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                             :on_click => () -> begin
                                 new_x = x() + 1
                                 set_x(new_x)
@@ -546,17 +546,17 @@ StructDemo = island(:StructDemo) do
                 ),
                 # Y field
                 Div(:class => "text-center",
-                    Span(:class => "text-xs text-stone-500 dark:text-stone-400 block", "y"),
+                    Span(:class => "text-xs text-warm-500 dark:text-warm-400 block", "y"),
                     Div(:class => "flex items-center gap-1",
-                        Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                        Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                             :on_click => () -> begin
                                 new_y = y() - 1
                                 set_y(new_y)
                                 set_sum(x() + new_y)
                                 set_prod(x() * new_y)
                             end, "-"),
-                        Span(:class => "w-8 text-center text-xl font-mono text-cyan-500", y),
-                        Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                        Span(:class => "w-8 text-center text-xl font-mono text-accent-500", y),
+                        Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                             :on_click => () -> begin
                                 new_y = y() + 1
                                 set_y(new_y)
@@ -569,13 +569,13 @@ StructDemo = island(:StructDemo) do
         ),
         # Computed values - use signals directly
         Div(:class => "flex gap-4 text-sm",
-            Div(:class => "px-3 py-2 bg-stone-100 dark:bg-stone-700 rounded",
-                Span(:class => "text-stone-500", "p.x + p.y = "),
-                Span(:class => "text-cyan-500 font-mono", sum_val)
+            Div(:class => "px-3 py-2 bg-warm-100 dark:bg-warm-700 rounded",
+                Span(:class => "text-warm-500", "p.x + p.y = "),
+                Span(:class => "text-accent-500 font-mono", sum_val)
             ),
-            Div(:class => "px-3 py-2 bg-stone-100 dark:bg-stone-700 rounded",
-                Span(:class => "text-stone-500", "p.x * p.y = "),
-                Span(:class => "text-cyan-500 font-mono", prod_val)
+            Div(:class => "px-3 py-2 bg-warm-100 dark:bg-warm-700 rounded",
+                Span(:class => "text-warm-500", "p.x * p.y = "),
+                Span(:class => "text-accent-500 font-mono", prod_val)
             )
         )
     )
@@ -591,26 +591,26 @@ TupleDemo = island(:TupleDemo) do
     # Tuple values (fixed)
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[180px] gap-4",
         # Tuple visualization
-        Div(:class => "p-4 bg-stone-100 dark:bg-stone-700 rounded-lg",
-            Span(:class => "text-stone-500 dark:text-stone-400 text-sm", "t = "),
-            Span(:class => "text-cyan-500 font-mono text-lg", "(42, 3.14, 100)")
+        Div(:class => "p-4 bg-warm-100 dark:bg-warm-700 rounded-lg",
+            Span(:class => "text-warm-500 dark:text-warm-400 text-sm", "t = "),
+            Span(:class => "text-accent-500 font-mono text-lg", "(42, 3.14, 100)")
         ),
         # Index selector
         Div(:class => "flex items-center gap-2",
-            Span(:class => "text-sm text-stone-500 dark:text-stone-400", "t["),
+            Span(:class => "text-sm text-warm-500 dark:text-warm-400", "t["),
             Div(:class => "flex gap-1",
-                Button(:class => () -> idx() == 1 ? "w-8 h-8 rounded bg-cyan-500 text-white" : "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+                Button(:class => () -> idx() == 1 ? "w-8 h-8 rounded bg-accent-500 text-white" : "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                     :on_click => () -> set_idx(1), "1"),
-                Button(:class => () -> idx() == 2 ? "w-8 h-8 rounded bg-cyan-500 text-white" : "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+                Button(:class => () -> idx() == 2 ? "w-8 h-8 rounded bg-accent-500 text-white" : "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                     :on_click => () -> set_idx(2), "2"),
-                Button(:class => () -> idx() == 3 ? "w-8 h-8 rounded bg-cyan-500 text-white" : "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+                Button(:class => () -> idx() == 3 ? "w-8 h-8 rounded bg-accent-500 text-white" : "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                     :on_click => () -> set_idx(3), "3")
             ),
-            Span(:class => "text-sm text-stone-500 dark:text-stone-400", "] = "),
+            Span(:class => "text-sm text-warm-500 dark:text-warm-400", "] = "),
             # Show the appropriate value based on index using show/hide
-            Span(:class => () -> idx() == 1 ? "text-cyan-500 font-bold text-2xl font-mono" : "hidden", "42"),
-            Span(:class => () -> idx() == 2 ? "text-cyan-500 font-bold text-2xl font-mono" : "hidden", "3.14"),
-            Span(:class => () -> idx() == 3 ? "text-cyan-500 font-bold text-2xl font-mono" : "hidden", "100")
+            Span(:class => () -> idx() == 1 ? "text-accent-500 font-bold text-2xl font-mono" : "hidden", "42"),
+            Span(:class => () -> idx() == 2 ? "text-accent-500 font-bold text-2xl font-mono" : "hidden", "3.14"),
+            Span(:class => () -> idx() == 3 ? "text-accent-500 font-bold text-2xl font-mono" : "hidden", "100")
         )
     )
 end
@@ -631,28 +631,28 @@ ArrayDemo = island(:ArrayDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[200px] gap-4",
         # Array visualization
         Div(:class => "flex gap-1",
-            Span(:class => "text-stone-500 dark:text-stone-400", "["),
-            Div(:class => () -> idx() == 1 ? "px-3 py-1 bg-cyan-500 text-white rounded font-mono" : "px-3 py-1 bg-stone-200 dark:bg-stone-600 rounded font-mono",
+            Span(:class => "text-warm-500 dark:text-warm-400", "["),
+            Div(:class => () -> idx() == 1 ? "px-3 py-1 bg-accent-500 text-white rounded font-mono" : "px-3 py-1 bg-warm-200 dark:bg-warm-600 rounded font-mono",
                 :onclick => "event.stopPropagation()",
                 Button(:class => "cursor-pointer", :on_click => () -> begin set_idx(1); set_display_val(val1()) end, val1)
             ),
-            Div(:class => () -> idx() == 2 ? "px-3 py-1 bg-cyan-500 text-white rounded font-mono" : "px-3 py-1 bg-stone-200 dark:bg-stone-600 rounded font-mono",
+            Div(:class => () -> idx() == 2 ? "px-3 py-1 bg-accent-500 text-white rounded font-mono" : "px-3 py-1 bg-warm-200 dark:bg-warm-600 rounded font-mono",
                 Button(:class => "cursor-pointer", :on_click => () -> begin set_idx(2); set_display_val(val2()) end, val2)
             ),
-            Div(:class => () -> idx() == 3 ? "px-3 py-1 bg-cyan-500 text-white rounded font-mono" : "px-3 py-1 bg-stone-200 dark:bg-stone-600 rounded font-mono",
+            Div(:class => () -> idx() == 3 ? "px-3 py-1 bg-accent-500 text-white rounded font-mono" : "px-3 py-1 bg-warm-200 dark:bg-warm-600 rounded font-mono",
                 Button(:class => "cursor-pointer", :on_click => () -> begin set_idx(3); set_display_val(val3()) end, val3)
             ),
-            Div(:class => () -> idx() == 4 ? "px-3 py-1 bg-cyan-500 text-white rounded font-mono" : "px-3 py-1 bg-stone-200 dark:bg-stone-600 rounded font-mono",
+            Div(:class => () -> idx() == 4 ? "px-3 py-1 bg-accent-500 text-white rounded font-mono" : "px-3 py-1 bg-warm-200 dark:bg-warm-600 rounded font-mono",
                 Button(:class => "cursor-pointer", :on_click => () -> begin set_idx(4); set_display_val(val4()) end, val4)
             ),
-            Span(:class => "text-stone-500 dark:text-stone-400", "]")
+            Span(:class => "text-warm-500 dark:text-warm-400", "]")
         ),
         # Selected element modification
         Div(:class => "flex items-center gap-3",
-            Span(:class => "text-sm text-stone-500 dark:text-stone-400", "arr["),
-            Span(:class => "text-cyan-500 font-mono", idx),
-            Span(:class => "text-sm text-stone-500 dark:text-stone-400", "] = "),
-            Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+            Span(:class => "text-sm text-warm-500 dark:text-warm-400", "arr["),
+            Span(:class => "text-accent-500 font-mono", idx),
+            Span(:class => "text-sm text-warm-500 dark:text-warm-400", "] = "),
+            Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                 :on_click => () -> begin
                     i = idx()
                     if i == 1
@@ -674,8 +674,8 @@ ArrayDemo = island(:ArrayDemo) do
                     end
                 end, "-"),
             # Use display_val signal directly instead of computed closure
-            Span(:class => "text-cyan-500 font-bold text-xl font-mono w-12 text-center", display_val),
-            Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+            Span(:class => "text-accent-500 font-bold text-xl font-mono w-12 text-center", display_val),
+            Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                 :on_click => () -> begin
                     i = idx()
                     if i == 1
@@ -697,7 +697,7 @@ ArrayDemo = island(:ArrayDemo) do
                     end
                 end, "+")
         ),
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400", "Click an element to select, then modify")
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400", "Click an element to select, then modify")
     )
 end
 
@@ -711,26 +711,26 @@ IntegerOverflowDemo = island(:IntegerOverflowDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[200px] gap-4",
         # Current value display
         Div(:class => "text-center",
-            Span(:class => "text-xs text-stone-500 dark:text-stone-400 block mb-1", "Int32 value"),
-            Span(:class => "text-3xl font-mono text-cyan-500", value)
+            Span(:class => "text-xs text-warm-500 dark:text-warm-400 block mb-1", "Int32 value"),
+            Span(:class => "text-3xl font-mono text-accent-500", value)
         ),
         # Controls
         Div(:class => "flex gap-2",
-            Button(:class => "px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg font-medium transition-colors",
+            Button(:class => "px-4 py-2 bg-accent-500 hover:bg-accent-600 text-white rounded-lg font-medium transition-colors",
                 :on_click => () -> set_value(value() + 1),
                 "+1"
             ),
-            Button(:class => "px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg font-medium transition-colors",
+            Button(:class => "px-4 py-2 bg-accent-500 hover:bg-accent-600 text-white rounded-lg font-medium transition-colors",
                 :on_click => () -> set_value(value() + 10),
                 "+10"
             ),
-            Button(:class => "px-4 py-2 bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white rounded-lg font-medium hover:bg-stone-300 dark:hover:bg-stone-500 transition-colors",
+            Button(:class => "px-4 py-2 bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white rounded-lg font-medium hover:bg-warm-300 dark:hover:bg-warm-500 transition-colors",
                 :on_click => () -> set_value(2147483640),
                 "Near Max"
             )
         ),
         # Max value reference
-        Div(:class => "text-xs text-stone-500 dark:text-stone-400 text-center",
+        Div(:class => "text-xs text-warm-500 dark:text-warm-400 text-center",
             "Int32 max: 2147483647 (wraps to -2147483648)"
         )
     )
@@ -749,17 +749,17 @@ FloatPrecisionDemo = island(:FloatPrecisionDemo) do
         # Operand display
         Div(:class => "flex items-center gap-4",
             Div(:class => "text-center",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400 block mb-1", "a"),
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400 block mb-1", "a"),
                 Div(:class => "flex items-center gap-1",
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                         :on_click => () -> begin
                             new_a = a() - 1
                             set_a(new_a)
                             set_quotient(div(new_a, b()))
                             set_remainder(new_a % b())
                         end, "-"),
-                    Span(:class => "w-8 text-center text-xl font-mono text-cyan-500", a),
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+                    Span(:class => "w-8 text-center text-xl font-mono text-accent-500", a),
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                         :on_click => () -> begin
                             new_a = a() + 1
                             set_a(new_a)
@@ -768,11 +768,11 @@ FloatPrecisionDemo = island(:FloatPrecisionDemo) do
                         end, "+")
                 )
             ),
-            Span(:class => "text-2xl text-stone-400", "/"),
+            Span(:class => "text-2xl text-warm-400", "/"),
             Div(:class => "text-center",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400 block mb-1", "b"),
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400 block mb-1", "b"),
                 Div(:class => "flex items-center gap-1",
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                         :on_click => () -> begin
                             if b() > 1
                                 new_b = b() - 1
@@ -781,8 +781,8 @@ FloatPrecisionDemo = island(:FloatPrecisionDemo) do
                                 set_remainder(a() % new_b)
                             end
                         end, "-"),
-                    Span(:class => "w-8 text-center text-xl font-mono text-cyan-500", b),
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+                    Span(:class => "w-8 text-center text-xl font-mono text-accent-500", b),
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                         :on_click => () -> begin
                             new_b = b() + 1
                             set_b(new_b)
@@ -793,17 +793,17 @@ FloatPrecisionDemo = island(:FloatPrecisionDemo) do
             )
         ),
         # Result display (integer division)
-        Div(:class => "text-center p-4 bg-stone-100 dark:bg-stone-700 rounded-lg w-full max-w-xs",
+        Div(:class => "text-center p-4 bg-warm-100 dark:bg-warm-700 rounded-lg w-full max-w-xs",
             Div(:class => "mb-2",
-                Span(:class => "text-stone-500 dark:text-stone-400 text-sm", "div(a, b) = "),
-                Span(:class => "text-cyan-500 font-bold text-xl font-mono", quotient)
+                Span(:class => "text-warm-500 dark:text-warm-400 text-sm", "div(a, b) = "),
+                Span(:class => "text-accent-500 font-bold text-xl font-mono", quotient)
             ),
             Div(
-                Span(:class => "text-stone-500 dark:text-stone-400 text-sm", "a % b = "),
-                Span(:class => "text-cyan-500 font-bold text-xl font-mono", remainder)
+                Span(:class => "text-warm-500 dark:text-warm-400 text-sm", "a % b = "),
+                Span(:class => "text-accent-500 font-bold text-xl font-mono", remainder)
             )
         ),
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400", "Adjust values to see integer division and remainder")
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400", "Adjust values to see integer division and remainder")
     )
 end
 
@@ -816,26 +816,26 @@ TypeConversionDemo = island(:TypeConversionDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[200px] gap-4",
         # Integer input
         Div(:class => "flex items-center gap-3",
-            Span(:class => "text-sm text-stone-500 dark:text-stone-400", "Int32:"),
-            Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+            Span(:class => "text-sm text-warm-500 dark:text-warm-400", "Int32:"),
+            Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                 :on_click => () -> set_int_val(int_val() - 10), "-10"),
-            Span(:class => "text-2xl font-mono text-cyan-500 w-16 text-center", int_val),
-            Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+            Span(:class => "text-2xl font-mono text-accent-500 w-16 text-center", int_val),
+            Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                 :on_click => () -> set_int_val(int_val() + 10), "+10")
         ),
         # Conversion results - use direct signal binding
         Div(:class => "grid grid-cols-1 gap-2 w-full max-w-xs",
-            Div(:class => "p-2 bg-stone-100 dark:bg-stone-700 rounded text-center",
-                Span(:class => "text-stone-500 dark:text-stone-400 text-sm", "Float64: "),
-                Span(:class => "text-cyan-500 font-mono", int_val),
-                Span(:class => "text-cyan-500 font-mono", ".0")
+            Div(:class => "p-2 bg-warm-100 dark:bg-warm-700 rounded text-center",
+                Span(:class => "text-warm-500 dark:text-warm-400 text-sm", "Float64: "),
+                Span(:class => "text-accent-500 font-mono", int_val),
+                Span(:class => "text-accent-500 font-mono", ".0")
             ),
-            Div(:class => "p-2 bg-stone-100 dark:bg-stone-700 rounded text-center",
-                Span(:class => "text-stone-500 dark:text-stone-400 text-sm", "Int64: "),
-                Span(:class => "text-cyan-500 font-mono", int_val)
+            Div(:class => "p-2 bg-warm-100 dark:bg-warm-700 rounded text-center",
+                Span(:class => "text-warm-500 dark:text-warm-400 text-sm", "Int64: "),
+                Span(:class => "text-accent-500 font-mono", int_val)
             )
         ),
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400", "Adjust the integer to see type conversions")
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400", "Adjust the integer to see type conversions")
     )
 end
 
@@ -850,39 +850,39 @@ NumericLiteralsDemo = island(:NumericLiteralsDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[200px] gap-4",
         # Literal type selector - simplified buttons
         Div(:class => "flex flex-wrap gap-2 justify-center",
-            Button(:class => () -> format_idx() == 1 ? "px-3 py-1 rounded bg-cyan-500 text-white text-sm" : "px-3 py-1 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm hover:bg-stone-300 dark:hover:bg-stone-500",
+            Button(:class => () -> format_idx() == 1 ? "px-3 py-1 rounded bg-accent-500 text-white text-sm" : "px-3 py-1 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm hover:bg-warm-300 dark:hover:bg-warm-500",
                 :on_click => () -> set_format(1), "Decimal"),
-            Button(:class => () -> format_idx() == 2 ? "px-3 py-1 rounded bg-cyan-500 text-white text-sm" : "px-3 py-1 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm hover:bg-stone-300 dark:hover:bg-stone-500",
+            Button(:class => () -> format_idx() == 2 ? "px-3 py-1 rounded bg-accent-500 text-white text-sm" : "px-3 py-1 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm hover:bg-warm-300 dark:hover:bg-warm-500",
                 :on_click => () -> set_format(2), "Hex"),
-            Button(:class => () -> format_idx() == 3 ? "px-3 py-1 rounded bg-cyan-500 text-white text-sm" : "px-3 py-1 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm hover:bg-stone-300 dark:hover:bg-stone-500",
+            Button(:class => () -> format_idx() == 3 ? "px-3 py-1 rounded bg-accent-500 text-white text-sm" : "px-3 py-1 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm hover:bg-warm-300 dark:hover:bg-warm-500",
                 :on_click => () -> set_format(3), "Binary"),
-            Button(:class => () -> format_idx() == 4 ? "px-3 py-1 rounded bg-cyan-500 text-white text-sm" : "px-3 py-1 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm hover:bg-stone-300 dark:hover:bg-stone-500",
+            Button(:class => () -> format_idx() == 4 ? "px-3 py-1 rounded bg-accent-500 text-white text-sm" : "px-3 py-1 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm hover:bg-warm-300 dark:hover:bg-warm-500",
                 :on_click => () -> set_format(4), "Float")
         ),
         # Display area - show/hide based on format index
-        Div(:class => "p-4 bg-stone-100 dark:bg-stone-700 rounded-lg text-center min-w-[250px]",
+        Div(:class => "p-4 bg-warm-100 dark:bg-warm-700 rounded-lg text-center min-w-[250px]",
             # Decimal (format 1)
             Div(:class => () -> format_idx() == 1 ? "block" : "hidden",
-                Span(:class => "text-stone-500 dark:text-stone-400 text-sm block mb-2", "Decimal (base 10)"),
-                Span(:class => "text-cyan-500 font-mono text-xl block", "255 → 255")
+                Span(:class => "text-warm-500 dark:text-warm-400 text-sm block mb-2", "Decimal (base 10)"),
+                Span(:class => "text-accent-500 font-mono text-xl block", "255 → 255")
             ),
             # Hex (format 2)
             Div(:class => () -> format_idx() == 2 ? "block" : "hidden",
-                Span(:class => "text-stone-500 dark:text-stone-400 text-sm block mb-2", "Hexadecimal (base 16)"),
-                Span(:class => "text-cyan-500 font-mono text-xl block", "0xff → 255")
+                Span(:class => "text-warm-500 dark:text-warm-400 text-sm block mb-2", "Hexadecimal (base 16)"),
+                Span(:class => "text-accent-500 font-mono text-xl block", "0xff → 255")
             ),
             # Binary (format 3)
             Div(:class => () -> format_idx() == 3 ? "block" : "hidden",
-                Span(:class => "text-stone-500 dark:text-stone-400 text-sm block mb-2", "Binary (base 2)"),
-                Span(:class => "text-cyan-500 font-mono text-xl block", "0b11111111 → 255")
+                Span(:class => "text-warm-500 dark:text-warm-400 text-sm block mb-2", "Binary (base 2)"),
+                Span(:class => "text-accent-500 font-mono text-xl block", "0b11111111 → 255")
             ),
             # Float (format 4)
             Div(:class => () -> format_idx() == 4 ? "block" : "hidden",
-                Span(:class => "text-stone-500 dark:text-stone-400 text-sm block mb-2", "Float literal"),
-                Span(:class => "text-cyan-500 font-mono text-xl block", "3.14f0 → Float32")
+                Span(:class => "text-warm-500 dark:text-warm-400 text-sm block mb-2", "Float literal"),
+                Span(:class => "text-accent-500 font-mono text-xl block", "3.14f0 → Float32")
             )
         ),
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400", "Click to see different literal formats")
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400", "Click to see different literal formats")
     )
 end
 
@@ -904,48 +904,48 @@ CalculatorDemo = island(:CalculatorDemo) do
         Div(:class => "flex items-center gap-4",
             # Operand A
             Div(:class => "text-center",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400 block mb-1", "a"),
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400 block mb-1", "a"),
                 Div(:class => "flex items-center gap-1",
-                    Button(:class => "w-7 h-7 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+                    Button(:class => "w-7 h-7 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                         :on_click => () -> set_a(a() - 1), "-"),
-                    Span(:class => "w-12 text-center text-2xl font-mono text-cyan-500", a),
-                    Button(:class => "w-7 h-7 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+                    Span(:class => "w-12 text-center text-2xl font-mono text-accent-500", a),
+                    Button(:class => "w-7 h-7 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                         :on_click => () -> set_a(a() + 1), "+")
                 )
             ),
             # Operand B
             Div(:class => "text-center",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400 block mb-1", "b"),
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400 block mb-1", "b"),
                 Div(:class => "flex items-center gap-1",
-                    Button(:class => "w-7 h-7 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+                    Button(:class => "w-7 h-7 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                         :on_click => () -> begin
                             if b() > 1
                                 set_b(b() - 1)
                             end
                         end, "-"),
-                    Span(:class => "w-12 text-center text-2xl font-mono text-cyan-500", b),
-                    Button(:class => "w-7 h-7 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+                    Span(:class => "w-12 text-center text-2xl font-mono text-accent-500", b),
+                    Button(:class => "w-7 h-7 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                         :on_click => () -> set_b(b() + 1), "+")
                 )
             )
         ),
         # Operation buttons - static classes
         Div(:class => "flex gap-2",
-            Button(:class => "px-4 py-2 rounded bg-cyan-500 hover:bg-cyan-600 text-white font-mono text-lg",
+            Button(:class => "px-4 py-2 rounded bg-accent-500 hover:bg-accent-600 text-white font-mono text-lg",
                 :on_click => () -> set_result(a() + b()), "+"),
-            Button(:class => "px-4 py-2 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white font-mono text-lg hover:bg-stone-300 dark:hover:bg-stone-500",
+            Button(:class => "px-4 py-2 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white font-mono text-lg hover:bg-warm-300 dark:hover:bg-warm-500",
                 :on_click => () -> set_result(a() - b()), "-"),
-            Button(:class => "px-4 py-2 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white font-mono text-lg hover:bg-stone-300 dark:hover:bg-stone-500",
+            Button(:class => "px-4 py-2 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white font-mono text-lg hover:bg-warm-300 dark:hover:bg-warm-500",
                 :on_click => () -> set_result(a() * b()), "*"),
-            Button(:class => "px-4 py-2 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white font-mono text-lg hover:bg-stone-300 dark:hover:bg-stone-500",
+            Button(:class => "px-4 py-2 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white font-mono text-lg hover:bg-warm-300 dark:hover:bg-warm-500",
                 :on_click => () -> set_result(div(a(), b())), "÷"),
-            Button(:class => "px-4 py-2 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white font-mono text-lg hover:bg-stone-300 dark:hover:bg-stone-500",
+            Button(:class => "px-4 py-2 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white font-mono text-lg hover:bg-warm-300 dark:hover:bg-warm-500",
                 :on_click => () -> set_result(a() % b()), "%")
         ),
         # Result display
-        Div(:class => "text-center p-4 bg-stone-100 dark:bg-stone-700 rounded-lg min-w-[200px]",
-            Span(:class => "text-stone-500 dark:text-stone-400 text-sm", "Result = "),
-            Span(:class => "text-cyan-500 font-bold text-3xl font-mono", result)
+        Div(:class => "text-center p-4 bg-warm-100 dark:bg-warm-700 rounded-lg min-w-[200px]",
+            Span(:class => "text-warm-500 dark:text-warm-400 text-sm", "Result = "),
+            Span(:class => "text-accent-500 font-bold text-3xl font-mono", result)
         )
     )
 end
@@ -969,9 +969,9 @@ ComparisonOpsDemo = island(:ComparisonOpsDemo) do
         # Values
         Div(:class => "flex items-center gap-6",
             Div(:class => "text-center",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400 block", "a"),
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400 block", "a"),
                 Div(:class => "flex items-center gap-1",
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> begin
                             new_a = a() - 1
                             set_a(new_a)
@@ -983,8 +983,8 @@ ComparisonOpsDemo = island(:ComparisonOpsDemo) do
                             set_ne(new_a != cur_b ? 1 : 0)
                             set_ge(new_a >= cur_b ? 1 : 0)
                         end, "-"),
-                    Span(:class => "w-10 text-center text-2xl font-mono text-cyan-500", a),
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Span(:class => "w-10 text-center text-2xl font-mono text-accent-500", a),
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> begin
                             new_a = a() + 1
                             set_a(new_a)
@@ -999,9 +999,9 @@ ComparisonOpsDemo = island(:ComparisonOpsDemo) do
                 )
             ),
             Div(:class => "text-center",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400 block", "b"),
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400 block", "b"),
                 Div(:class => "flex items-center gap-1",
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> begin
                             new_b = b() - 1
                             set_b(new_b)
@@ -1013,8 +1013,8 @@ ComparisonOpsDemo = island(:ComparisonOpsDemo) do
                             set_ne(cur_a != new_b ? 1 : 0)
                             set_ge(cur_a >= new_b ? 1 : 0)
                         end, "-"),
-                    Span(:class => "w-10 text-center text-2xl font-mono text-cyan-500", b),
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Span(:class => "w-10 text-center text-2xl font-mono text-accent-500", b),
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> begin
                             new_b = b() + 1
                             set_b(new_b)
@@ -1031,35 +1031,35 @@ ComparisonOpsDemo = island(:ComparisonOpsDemo) do
         ),
         # Comparison results grid - using show/hide for true/false
         Div(:class => "grid grid-cols-3 gap-2 text-sm font-mono",
-            Div(:class => "px-3 py-2 bg-stone-100 dark:bg-stone-700 rounded text-center",
-                Span(:class => "text-stone-500 block", "a < b"),
-                Span(:class => () -> lt_result() == 1 ? "text-cyan-500 font-bold" : "hidden", "true"),
-                Span(:class => () -> lt_result() == 0 ? "text-cyan-500 font-bold" : "hidden", "false")
+            Div(:class => "px-3 py-2 bg-warm-100 dark:bg-warm-700 rounded text-center",
+                Span(:class => "text-warm-500 block", "a < b"),
+                Span(:class => () -> lt_result() == 1 ? "text-accent-500 font-bold" : "hidden", "true"),
+                Span(:class => () -> lt_result() == 0 ? "text-accent-500 font-bold" : "hidden", "false")
             ),
-            Div(:class => "px-3 py-2 bg-stone-100 dark:bg-stone-700 rounded text-center",
-                Span(:class => "text-stone-500 block", "a == b"),
-                Span(:class => () -> eq_result() == 1 ? "text-cyan-500 font-bold" : "hidden", "true"),
-                Span(:class => () -> eq_result() == 0 ? "text-cyan-500 font-bold" : "hidden", "false")
+            Div(:class => "px-3 py-2 bg-warm-100 dark:bg-warm-700 rounded text-center",
+                Span(:class => "text-warm-500 block", "a == b"),
+                Span(:class => () -> eq_result() == 1 ? "text-accent-500 font-bold" : "hidden", "true"),
+                Span(:class => () -> eq_result() == 0 ? "text-accent-500 font-bold" : "hidden", "false")
             ),
-            Div(:class => "px-3 py-2 bg-stone-100 dark:bg-stone-700 rounded text-center",
-                Span(:class => "text-stone-500 block", "a > b"),
-                Span(:class => () -> gt_result() == 1 ? "text-cyan-500 font-bold" : "hidden", "true"),
-                Span(:class => () -> gt_result() == 0 ? "text-cyan-500 font-bold" : "hidden", "false")
+            Div(:class => "px-3 py-2 bg-warm-100 dark:bg-warm-700 rounded text-center",
+                Span(:class => "text-warm-500 block", "a > b"),
+                Span(:class => () -> gt_result() == 1 ? "text-accent-500 font-bold" : "hidden", "true"),
+                Span(:class => () -> gt_result() == 0 ? "text-accent-500 font-bold" : "hidden", "false")
             ),
-            Div(:class => "px-3 py-2 bg-stone-100 dark:bg-stone-700 rounded text-center",
-                Span(:class => "text-stone-500 block", "a <= b"),
-                Span(:class => () -> le_result() == 1 ? "text-cyan-500 font-bold" : "hidden", "true"),
-                Span(:class => () -> le_result() == 0 ? "text-cyan-500 font-bold" : "hidden", "false")
+            Div(:class => "px-3 py-2 bg-warm-100 dark:bg-warm-700 rounded text-center",
+                Span(:class => "text-warm-500 block", "a <= b"),
+                Span(:class => () -> le_result() == 1 ? "text-accent-500 font-bold" : "hidden", "true"),
+                Span(:class => () -> le_result() == 0 ? "text-accent-500 font-bold" : "hidden", "false")
             ),
-            Div(:class => "px-3 py-2 bg-stone-100 dark:bg-stone-700 rounded text-center",
-                Span(:class => "text-stone-500 block", "a != b"),
-                Span(:class => () -> ne_result() == 1 ? "text-cyan-500 font-bold" : "hidden", "true"),
-                Span(:class => () -> ne_result() == 0 ? "text-cyan-500 font-bold" : "hidden", "false")
+            Div(:class => "px-3 py-2 bg-warm-100 dark:bg-warm-700 rounded text-center",
+                Span(:class => "text-warm-500 block", "a != b"),
+                Span(:class => () -> ne_result() == 1 ? "text-accent-500 font-bold" : "hidden", "true"),
+                Span(:class => () -> ne_result() == 0 ? "text-accent-500 font-bold" : "hidden", "false")
             ),
-            Div(:class => "px-3 py-2 bg-stone-100 dark:bg-stone-700 rounded text-center",
-                Span(:class => "text-stone-500 block", "a >= b"),
-                Span(:class => () -> ge_result() == 1 ? "text-cyan-500 font-bold" : "hidden", "true"),
-                Span(:class => () -> ge_result() == 0 ? "text-cyan-500 font-bold" : "hidden", "false")
+            Div(:class => "px-3 py-2 bg-warm-100 dark:bg-warm-700 rounded text-center",
+                Span(:class => "text-warm-500 block", "a >= b"),
+                Span(:class => () -> ge_result() == 1 ? "text-accent-500 font-bold" : "hidden", "true"),
+                Span(:class => () -> ge_result() == 0 ? "text-accent-500 font-bold" : "hidden", "false")
             )
         )
     )
@@ -1076,22 +1076,22 @@ BitwiseDemo = island(:BitwiseDemo) do
 
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[240px] gap-3",
         # Binary representation header
-        Div(:class => "text-xs text-stone-500 dark:text-stone-400 text-center",
+        Div(:class => "text-xs text-warm-500 dark:text-warm-400 text-center",
             "Adjust values and click operation buttons"
         ),
         # Values display
         Div(:class => "flex items-center gap-4",
             Div(:class => "text-center",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400 block", "a"),
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400 block", "a"),
                 Div(:class => "flex items-center gap-1",
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> begin
                             if a() > 0
                                 set_a(a() - 1)
                             end
                         end, "-"),
-                    Span(:class => "w-10 text-center text-xl font-mono text-cyan-500", a),
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Span(:class => "w-10 text-center text-xl font-mono text-accent-500", a),
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> begin
                             if a() < 15
                                 set_a(a() + 1)
@@ -1100,16 +1100,16 @@ BitwiseDemo = island(:BitwiseDemo) do
                 )
             ),
             Div(:class => "text-center",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400 block", "b"),
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400 block", "b"),
                 Div(:class => "flex items-center gap-1",
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> begin
                             if b() > 0
                                 set_b(b() - 1)
                             end
                         end, "-"),
-                    Span(:class => "w-10 text-center text-xl font-mono text-cyan-500", b),
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Span(:class => "w-10 text-center text-xl font-mono text-accent-500", b),
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> begin
                             if b() < 15
                                 set_b(b() + 1)
@@ -1120,24 +1120,24 @@ BitwiseDemo = island(:BitwiseDemo) do
         ),
         # Operation buttons
         Div(:class => "flex gap-1",
-            Button(:class => "px-3 py-1 rounded bg-cyan-500 text-white font-mono text-sm",
+            Button(:class => "px-3 py-1 rounded bg-accent-500 text-white font-mono text-sm",
                 :on_click => () -> set_result(a() & b()), "&"),
-            Button(:class => "px-3 py-1 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white font-mono text-sm",
+            Button(:class => "px-3 py-1 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white font-mono text-sm",
                 :on_click => () -> set_result(a() | b()), "|"),
-            Button(:class => "px-3 py-1 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white font-mono text-sm",
+            Button(:class => "px-3 py-1 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white font-mono text-sm",
                 :on_click => () -> set_result(xor(a(), b())), "xor"),
-            Button(:class => "px-3 py-1 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white font-mono text-sm",
+            Button(:class => "px-3 py-1 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white font-mono text-sm",
                 :on_click => () -> set_result(a() << b()), "<<"),
-            Button(:class => "px-3 py-1 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white font-mono text-sm",
+            Button(:class => "px-3 py-1 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white font-mono text-sm",
                 :on_click => () -> set_result(a() >> b()), ">>")
         ),
         # Result
-        Div(:class => "text-center p-3 bg-stone-100 dark:bg-stone-700 rounded-lg",
-            Span(:class => "text-stone-500 dark:text-stone-400 text-sm", "Result = "),
-            Span(:class => "text-cyan-500 font-bold text-2xl font-mono", result)
+        Div(:class => "text-center p-3 bg-warm-100 dark:bg-warm-700 rounded-lg",
+            Span(:class => "text-warm-500 dark:text-warm-400 text-sm", "Result = "),
+            Span(:class => "text-accent-500 font-bold text-2xl font-mono", result)
         ),
         # Note about binary
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400",
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400",
             "12 = 1100₂, 10 = 1010₂, 8 = 1000₂"
         )
     )
@@ -1156,8 +1156,8 @@ MathFunctionsDemo = island(:MathFunctionsDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[240px] gap-4",
         # Input value
         Div(:class => "flex items-center gap-3",
-            Span(:class => "text-sm text-stone-500 dark:text-stone-400", "x ="),
-            Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+            Span(:class => "text-sm text-warm-500 dark:text-warm-400", "x ="),
+            Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                 :on_click => () -> begin
                     new_v = value() - 10
                     set_value(new_v)
@@ -1169,7 +1169,7 @@ MathFunctionsDemo = island(:MathFunctionsDemo) do
                     set_double(new_v * 2)
                     set_square(new_v * new_v)
                 end, "-10"),
-            Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+            Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                 :on_click => () -> begin
                     new_v = value() - 1
                     set_value(new_v)
@@ -1181,8 +1181,8 @@ MathFunctionsDemo = island(:MathFunctionsDemo) do
                     set_double(new_v * 2)
                     set_square(new_v * new_v)
                 end, "-1"),
-            Span(:class => "text-3xl font-mono text-cyan-500 w-16 text-center", value),
-            Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+            Span(:class => "text-3xl font-mono text-accent-500 w-16 text-center", value),
+            Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                 :on_click => () -> begin
                     new_v = value() + 1
                     set_value(new_v)
@@ -1194,7 +1194,7 @@ MathFunctionsDemo = island(:MathFunctionsDemo) do
                     set_double(new_v * 2)
                     set_square(new_v * new_v)
                 end, "+1"),
-            Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+            Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                 :on_click => () -> begin
                     new_v = value() + 10
                     set_value(new_v)
@@ -1209,28 +1209,28 @@ MathFunctionsDemo = island(:MathFunctionsDemo) do
         ),
         # Quick presets
         Div(:class => "flex gap-2",
-            Button(:class => "px-2 py-1 rounded bg-stone-200 dark:bg-stone-600 text-xs",
+            Button(:class => "px-2 py-1 rounded bg-warm-200 dark:bg-warm-600 text-xs",
                 :on_click => () -> begin
                     set_value(-25)
                     set_abs(25)
                     set_double(-50)
                     set_square(625)
                 end, "-25"),
-            Button(:class => "px-2 py-1 rounded bg-stone-200 dark:bg-stone-600 text-xs",
+            Button(:class => "px-2 py-1 rounded bg-warm-200 dark:bg-warm-600 text-xs",
                 :on_click => () -> begin
                     set_value(0)
                     set_abs(0)
                     set_double(0)
                     set_square(0)
                 end, "0"),
-            Button(:class => "px-2 py-1 rounded bg-stone-200 dark:bg-stone-600 text-xs",
+            Button(:class => "px-2 py-1 rounded bg-warm-200 dark:bg-warm-600 text-xs",
                 :on_click => () -> begin
                     set_value(49)
                     set_abs(49)
                     set_double(98)
                     set_square(2401)
                 end, "49"),
-            Button(:class => "px-2 py-1 rounded bg-stone-200 dark:bg-stone-600 text-xs",
+            Button(:class => "px-2 py-1 rounded bg-warm-200 dark:bg-warm-600 text-xs",
                 :on_click => () -> begin
                     set_value(100)
                     set_abs(100)
@@ -1240,20 +1240,20 @@ MathFunctionsDemo = island(:MathFunctionsDemo) do
         ),
         # Function results grid - using signals directly
         Div(:class => "grid grid-cols-2 gap-2 text-sm font-mono w-full max-w-xs",
-            Div(:class => "p-2 bg-stone-100 dark:bg-stone-700 rounded text-center",
-                Span(:class => "text-stone-500 text-xs block", "abs(x)"),
-                Span(:class => "text-cyan-500 font-bold text-lg", abs_result)
+            Div(:class => "p-2 bg-warm-100 dark:bg-warm-700 rounded text-center",
+                Span(:class => "text-warm-500 text-xs block", "abs(x)"),
+                Span(:class => "text-accent-500 font-bold text-lg", abs_result)
             ),
-            Div(:class => "p-2 bg-stone-100 dark:bg-stone-700 rounded text-center",
-                Span(:class => "text-stone-500 text-xs block", "x * 2"),
-                Span(:class => "text-cyan-500 font-bold text-lg", double_result)
+            Div(:class => "p-2 bg-warm-100 dark:bg-warm-700 rounded text-center",
+                Span(:class => "text-warm-500 text-xs block", "x * 2"),
+                Span(:class => "text-accent-500 font-bold text-lg", double_result)
             ),
-            Div(:class => "p-2 bg-stone-100 dark:bg-stone-700 rounded text-center",
-                Span(:class => "text-stone-500 text-xs block", "x * x"),
-                Span(:class => "text-cyan-500 font-bold text-lg", square_result)
+            Div(:class => "p-2 bg-warm-100 dark:bg-warm-700 rounded text-center",
+                Span(:class => "text-warm-500 text-xs block", "x * x"),
+                Span(:class => "text-accent-500 font-bold text-lg", square_result)
             )
         ),
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400", "Adjust x to see math results")
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400", "Adjust x to see math results")
     )
 end
 
@@ -1268,14 +1268,14 @@ NegationDemo = island(:NegationDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[180px] gap-4",
         # Value adjuster
         Div(:class => "flex items-center gap-3",
-            Button(:class => "w-10 h-10 rounded-full bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-lg",
+            Button(:class => "w-10 h-10 rounded-full bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-lg",
                 :on_click => () -> begin
                     new_val = value() - 5
                     set_value(new_val)
                     set_neg_value(-new_val)
                 end, "-5"),
-            Span(:class => "text-4xl font-mono text-cyan-500 w-20 text-center", value),
-            Button(:class => "w-10 h-10 rounded-full bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-lg",
+            Span(:class => "text-4xl font-mono text-accent-500 w-20 text-center", value),
+            Button(:class => "w-10 h-10 rounded-full bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-lg",
                 :on_click => () -> begin
                     new_val = value() + 5
                     set_value(new_val)
@@ -1284,16 +1284,16 @@ NegationDemo = island(:NegationDemo) do
         ),
         # Results - display both signals directly
         Div(:class => "grid grid-cols-2 gap-3 text-center",
-            Div(:class => "p-3 bg-stone-100 dark:bg-stone-700 rounded-lg",
-                Span(:class => "text-stone-500 dark:text-stone-400 text-sm block", "-x = "),
-                Span(:class => "text-cyan-500 font-bold text-2xl font-mono", neg_value)
+            Div(:class => "p-3 bg-warm-100 dark:bg-warm-700 rounded-lg",
+                Span(:class => "text-warm-500 dark:text-warm-400 text-sm block", "-x = "),
+                Span(:class => "text-accent-500 font-bold text-2xl font-mono", neg_value)
             ),
-            Div(:class => "p-3 bg-stone-100 dark:bg-stone-700 rounded-lg",
-                Span(:class => "text-stone-500 dark:text-stone-400 text-sm block", "0 - x = "),
-                Span(:class => "text-cyan-500 font-bold text-2xl font-mono", neg_value)
+            Div(:class => "p-3 bg-warm-100 dark:bg-warm-700 rounded-lg",
+                Span(:class => "text-warm-500 dark:text-warm-400 text-sm block", "0 - x = "),
+                Span(:class => "text-accent-500 font-bold text-2xl font-mono", neg_value)
             )
         ),
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400", "Negation is the same as subtraction from zero")
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400", "Negation is the same as subtraction from zero")
     )
 end
 
@@ -1313,41 +1313,41 @@ StringLengthDemo = island(:StringLengthDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[180px] gap-4",
         # String selection buttons
         Div(:class => "flex flex-wrap gap-2 justify-center",
-            Button(:class => () -> str_idx() == 1 ? "px-3 py-1 rounded bg-cyan-500 text-white text-sm" : "px-3 py-1 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm hover:bg-stone-300 dark:hover:bg-stone-500",
+            Button(:class => () -> str_idx() == 1 ? "px-3 py-1 rounded bg-accent-500 text-white text-sm" : "px-3 py-1 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm hover:bg-warm-300 dark:hover:bg-warm-500",
                 :on_click => () -> begin
                     set_str_idx(1)
                     set_length(5)
                 end, "\"Hello\""),
-            Button(:class => () -> str_idx() == 2 ? "px-3 py-1 rounded bg-cyan-500 text-white text-sm" : "px-3 py-1 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm hover:bg-stone-300 dark:hover:bg-stone-500",
+            Button(:class => () -> str_idx() == 2 ? "px-3 py-1 rounded bg-accent-500 text-white text-sm" : "px-3 py-1 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm hover:bg-warm-300 dark:hover:bg-warm-500",
                 :on_click => () -> begin
                     set_str_idx(2)
                     set_length(5)
                 end, "\"Julia\""),
-            Button(:class => () -> str_idx() == 3 ? "px-3 py-1 rounded bg-cyan-500 text-white text-sm" : "px-3 py-1 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm hover:bg-stone-300 dark:hover:bg-stone-500",
+            Button(:class => () -> str_idx() == 3 ? "px-3 py-1 rounded bg-accent-500 text-white text-sm" : "px-3 py-1 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm hover:bg-warm-300 dark:hover:bg-warm-500",
                 :on_click => () -> begin
                     set_str_idx(3)
                     set_length(12)
                 end, "\"Hello, World\""),
-            Button(:class => () -> str_idx() == 4 ? "px-3 py-1 rounded bg-cyan-500 text-white text-sm" : "px-3 py-1 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm hover:bg-stone-300 dark:hover:bg-stone-500",
+            Button(:class => () -> str_idx() == 4 ? "px-3 py-1 rounded bg-accent-500 text-white text-sm" : "px-3 py-1 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm hover:bg-warm-300 dark:hover:bg-warm-500",
                 :on_click => () -> begin
                     set_str_idx(4)
                     set_length(0)
                 end, "\"\"")
         ),
         # String display - show/hide based on index
-        Div(:class => "text-center p-4 bg-stone-100 dark:bg-stone-700 rounded-lg min-w-[250px]",
-            Div(:class => "text-cyan-500 font-mono text-lg mb-2",
+        Div(:class => "text-center p-4 bg-warm-100 dark:bg-warm-700 rounded-lg min-w-[250px]",
+            Div(:class => "text-accent-500 font-mono text-lg mb-2",
                 Span(:class => () -> str_idx() == 1 ? "inline" : "hidden", "\"Hello\""),
                 Span(:class => () -> str_idx() == 2 ? "inline" : "hidden", "\"Julia\""),
                 Span(:class => () -> str_idx() == 3 ? "inline" : "hidden", "\"Hello, World\""),
                 Span(:class => () -> str_idx() == 4 ? "inline" : "hidden", "\"\"")
             ),
-            Div(:class => "text-stone-500 dark:text-stone-400 text-sm",
+            Div(:class => "text-warm-500 dark:text-warm-400 text-sm",
                 Span("length = "),
-                Span(:class => "text-cyan-500 font-bold font-mono", length_val)
+                Span(:class => "text-accent-500 font-bold font-mono", length_val)
             )
         ),
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400", "Click a string to see its length")
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400", "Click a string to see its length")
     )
 end
 
@@ -1370,23 +1370,23 @@ StringComparisonDemo = island(:StringComparisonDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[220px] gap-4",
         # String A selection
         Div(:class => "text-center",
-            Span(:class => "text-xs text-stone-500 dark:text-stone-400 block mb-1", "String a"),
+            Span(:class => "text-xs text-warm-500 dark:text-warm-400 block mb-1", "String a"),
             Div(:class => "flex gap-1",
-                Button(:class => () -> str_a_idx() == 1 ? "px-2 py-1 rounded bg-cyan-500 text-white text-xs" : "px-2 py-1 rounded bg-stone-200 dark:bg-stone-600 text-xs",
+                Button(:class => () -> str_a_idx() == 1 ? "px-2 py-1 rounded bg-accent-500 text-white text-xs" : "px-2 py-1 rounded bg-warm-200 dark:bg-warm-600 text-xs",
                     :on_click => () -> begin
                         set_str_a(1)
                         b = str_b_idx()
                         set_eq(b == 1 ? 1 : 0)
                         set_lt(b == 1 ? 0 : 1)
                     end, "\"apple\""),
-                Button(:class => () -> str_a_idx() == 2 ? "px-2 py-1 rounded bg-cyan-500 text-white text-xs" : "px-2 py-1 rounded bg-stone-200 dark:bg-stone-600 text-xs",
+                Button(:class => () -> str_a_idx() == 2 ? "px-2 py-1 rounded bg-accent-500 text-white text-xs" : "px-2 py-1 rounded bg-warm-200 dark:bg-warm-600 text-xs",
                     :on_click => () -> begin
                         set_str_a(2)
                         b = str_b_idx()
                         set_eq(b == 2 ? 1 : 0)
                         set_lt(b == 3 ? 1 : 0)
                     end, "\"banana\""),
-                Button(:class => () -> str_a_idx() == 3 ? "px-2 py-1 rounded bg-cyan-500 text-white text-xs" : "px-2 py-1 rounded bg-stone-200 dark:bg-stone-600 text-xs",
+                Button(:class => () -> str_a_idx() == 3 ? "px-2 py-1 rounded bg-accent-500 text-white text-xs" : "px-2 py-1 rounded bg-warm-200 dark:bg-warm-600 text-xs",
                     :on_click => () -> begin
                         set_str_a(3)
                         b = str_b_idx()
@@ -1397,23 +1397,23 @@ StringComparisonDemo = island(:StringComparisonDemo) do
         ),
         # String B selection
         Div(:class => "text-center",
-            Span(:class => "text-xs text-stone-500 dark:text-stone-400 block mb-1", "String b"),
+            Span(:class => "text-xs text-warm-500 dark:text-warm-400 block mb-1", "String b"),
             Div(:class => "flex gap-1",
-                Button(:class => () -> str_b_idx() == 1 ? "px-2 py-1 rounded bg-cyan-500 text-white text-xs" : "px-2 py-1 rounded bg-stone-200 dark:bg-stone-600 text-xs",
+                Button(:class => () -> str_b_idx() == 1 ? "px-2 py-1 rounded bg-accent-500 text-white text-xs" : "px-2 py-1 rounded bg-warm-200 dark:bg-warm-600 text-xs",
                     :on_click => () -> begin
                         set_str_b(1)
                         a = str_a_idx()
                         set_eq(a == 1 ? 1 : 0)
                         set_lt(0)
                     end, "\"apple\""),
-                Button(:class => () -> str_b_idx() == 2 ? "px-2 py-1 rounded bg-cyan-500 text-white text-xs" : "px-2 py-1 rounded bg-stone-200 dark:bg-stone-600 text-xs",
+                Button(:class => () -> str_b_idx() == 2 ? "px-2 py-1 rounded bg-accent-500 text-white text-xs" : "px-2 py-1 rounded bg-warm-200 dark:bg-warm-600 text-xs",
                     :on_click => () -> begin
                         set_str_b(2)
                         a = str_a_idx()
                         set_eq(a == 2 ? 1 : 0)
                         set_lt(a == 1 ? 1 : 0)
                     end, "\"banana\""),
-                Button(:class => () -> str_b_idx() == 3 ? "px-2 py-1 rounded bg-cyan-500 text-white text-xs" : "px-2 py-1 rounded bg-stone-200 dark:bg-stone-600 text-xs",
+                Button(:class => () -> str_b_idx() == 3 ? "px-2 py-1 rounded bg-accent-500 text-white text-xs" : "px-2 py-1 rounded bg-warm-200 dark:bg-warm-600 text-xs",
                     :on_click => () -> begin
                         set_str_b(3)
                         a = str_a_idx()
@@ -1423,31 +1423,31 @@ StringComparisonDemo = island(:StringComparisonDemo) do
             )
         ),
         # Display selected strings - show/hide based on indices
-        Div(:class => "p-3 bg-stone-100 dark:bg-stone-700 rounded-lg text-center",
+        Div(:class => "p-3 bg-warm-100 dark:bg-warm-700 rounded-lg text-center",
             Div(:class => "flex gap-4 justify-center mb-2",
-                Span(:class => () -> str_a_idx() == 1 ? "text-cyan-500 font-mono" : "hidden", "apple"),
-                Span(:class => () -> str_a_idx() == 2 ? "text-cyan-500 font-mono" : "hidden", "banana"),
-                Span(:class => () -> str_a_idx() == 3 ? "text-cyan-500 font-mono" : "hidden", "cherry"),
-                Span(:class => "text-stone-500", " vs "),
-                Span(:class => () -> str_b_idx() == 1 ? "text-cyan-500 font-mono" : "hidden", "apple"),
-                Span(:class => () -> str_b_idx() == 2 ? "text-cyan-500 font-mono" : "hidden", "banana"),
-                Span(:class => () -> str_b_idx() == 3 ? "text-cyan-500 font-mono" : "hidden", "cherry")
+                Span(:class => () -> str_a_idx() == 1 ? "text-accent-500 font-mono" : "hidden", "apple"),
+                Span(:class => () -> str_a_idx() == 2 ? "text-accent-500 font-mono" : "hidden", "banana"),
+                Span(:class => () -> str_a_idx() == 3 ? "text-accent-500 font-mono" : "hidden", "cherry"),
+                Span(:class => "text-warm-500", " vs "),
+                Span(:class => () -> str_b_idx() == 1 ? "text-accent-500 font-mono" : "hidden", "apple"),
+                Span(:class => () -> str_b_idx() == 2 ? "text-accent-500 font-mono" : "hidden", "banana"),
+                Span(:class => () -> str_b_idx() == 3 ? "text-accent-500 font-mono" : "hidden", "cherry")
             )
         ),
         # Comparison results - show/hide for true/false
         Div(:class => "flex gap-4 text-sm font-mono",
-            Div(:class => "px-3 py-2 bg-stone-100 dark:bg-stone-700 rounded",
-                Span(:class => "text-stone-500", "a == b: "),
-                Span(:class => () -> eq_result() == 1 ? "text-cyan-500 font-bold" : "hidden", "true"),
-                Span(:class => () -> eq_result() == 0 ? "text-cyan-500 font-bold" : "hidden", "false")
+            Div(:class => "px-3 py-2 bg-warm-100 dark:bg-warm-700 rounded",
+                Span(:class => "text-warm-500", "a == b: "),
+                Span(:class => () -> eq_result() == 1 ? "text-accent-500 font-bold" : "hidden", "true"),
+                Span(:class => () -> eq_result() == 0 ? "text-accent-500 font-bold" : "hidden", "false")
             ),
-            Div(:class => "px-3 py-2 bg-stone-100 dark:bg-stone-700 rounded",
-                Span(:class => "text-stone-500", "a < b: "),
-                Span(:class => () -> lt_result() == 1 ? "text-cyan-500 font-bold" : "hidden", "true"),
-                Span(:class => () -> lt_result() == 0 ? "text-cyan-500 font-bold" : "hidden", "false")
+            Div(:class => "px-3 py-2 bg-warm-100 dark:bg-warm-700 rounded",
+                Span(:class => "text-warm-500", "a < b: "),
+                Span(:class => () -> lt_result() == 1 ? "text-accent-500 font-bold" : "hidden", "true"),
+                Span(:class => () -> lt_result() == 0 ? "text-accent-500 font-bold" : "hidden", "false")
             )
         ),
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400", "Strings compare lexicographically (dictionary order)")
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400", "Strings compare lexicographically (dictionary order)")
     )
 end
 
@@ -1465,15 +1465,15 @@ SquareDemo = island(:SquareDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[180px] gap-4",
         # Input with label
         Div(:class => "flex items-center gap-3",
-            Span(:class => "text-sm text-stone-500 dark:text-stone-400", "x ="),
-            Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+            Span(:class => "text-sm text-warm-500 dark:text-warm-400", "x ="),
+            Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                 :on_click => () -> begin
                     new_x = input() - 1
                     set_input(new_x)
                     set_result(new_x * new_x)
                 end, "-"),
-            Span(:class => "text-2xl font-mono text-cyan-500 w-12 text-center", input),
-            Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+            Span(:class => "text-2xl font-mono text-accent-500 w-12 text-center", input),
+            Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                 :on_click => () -> begin
                     new_x = input() + 1
                     set_input(new_x)
@@ -1481,13 +1481,13 @@ SquareDemo = island(:SquareDemo) do
                 end, "+")
         ),
         # Result display
-        Div(:class => "text-center p-4 bg-stone-100 dark:bg-stone-700 rounded-lg",
-            Span(:class => "text-stone-500 dark:text-stone-400", "square("),
-            Span(:class => "text-cyan-500 font-mono", input),
-            Span(:class => "text-stone-500 dark:text-stone-400", ") = "),
-            Span(:class => "text-cyan-500 font-bold text-2xl font-mono", result)
+        Div(:class => "text-center p-4 bg-warm-100 dark:bg-warm-700 rounded-lg",
+            Span(:class => "text-warm-500 dark:text-warm-400", "square("),
+            Span(:class => "text-accent-500 font-mono", input),
+            Span(:class => "text-warm-500 dark:text-warm-400", ") = "),
+            Span(:class => "text-accent-500 font-bold text-2xl font-mono", result)
         ),
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400", "square(x) = x * x")
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400", "square(x) = x * x")
     )
 end
 
@@ -1504,9 +1504,9 @@ MultiArgDemo = island(:MultiArgDemo) do
         Div(:class => "flex items-center gap-6",
             # X input
             Div(:class => "text-center",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400 block mb-1", "x"),
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400 block mb-1", "x"),
                 Div(:class => "flex items-center gap-1",
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> begin
                             new_x = x() - 1
                             set_x(new_x)
@@ -1518,8 +1518,8 @@ MultiArgDemo = island(:MultiArgDemo) do
                             end
                             set_result(r - 1)
                         end, "-"),
-                    Span(:class => "w-8 text-center text-xl font-mono text-cyan-500", x),
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Span(:class => "w-8 text-center text-xl font-mono text-accent-500", x),
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> begin
                             new_x = x() + 1
                             set_x(new_x)
@@ -1534,9 +1534,9 @@ MultiArgDemo = island(:MultiArgDemo) do
             ),
             # Y input
             Div(:class => "text-center",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400 block mb-1", "y"),
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400 block mb-1", "y"),
                 Div(:class => "flex items-center gap-1",
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> begin
                             new_y = y() - 1
                             set_y(new_y)
@@ -1547,8 +1547,8 @@ MultiArgDemo = island(:MultiArgDemo) do
                             end
                             set_result(r - 1)
                         end, "-"),
-                    Span(:class => "w-8 text-center text-xl font-mono text-cyan-500", y),
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Span(:class => "w-8 text-center text-xl font-mono text-accent-500", y),
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> begin
                             new_y = y() + 1
                             set_y(new_y)
@@ -1564,29 +1564,29 @@ MultiArgDemo = island(:MultiArgDemo) do
         ),
         # Quick presets (3,4,5), (5,12,13), (8,15,17)
         Div(:class => "flex gap-2",
-            Button(:class => "px-2 py-1 rounded bg-stone-200 dark:bg-stone-600 text-xs",
+            Button(:class => "px-2 py-1 rounded bg-warm-200 dark:bg-warm-600 text-xs",
                 :on_click => () -> begin
                     set_x(3); set_y(4); set_result(5)
                 end, "3,4"),
-            Button(:class => "px-2 py-1 rounded bg-stone-200 dark:bg-stone-600 text-xs",
+            Button(:class => "px-2 py-1 rounded bg-warm-200 dark:bg-warm-600 text-xs",
                 :on_click => () -> begin
                     set_x(5); set_y(12); set_result(13)
                 end, "5,12"),
-            Button(:class => "px-2 py-1 rounded bg-stone-200 dark:bg-stone-600 text-xs",
+            Button(:class => "px-2 py-1 rounded bg-warm-200 dark:bg-warm-600 text-xs",
                 :on_click => () -> begin
                     set_x(8); set_y(15); set_result(17)
                 end, "8,15")
         ),
         # Result display
-        Div(:class => "text-center p-4 bg-stone-100 dark:bg-stone-700 rounded-lg",
-            Span(:class => "text-stone-500 dark:text-stone-400", "hypot("),
-            Span(:class => "text-cyan-500 font-mono", x),
-            Span(:class => "text-stone-500 dark:text-stone-400", ", "),
-            Span(:class => "text-cyan-500 font-mono", y),
-            Span(:class => "text-stone-500 dark:text-stone-400", ") = "),
-            Span(:class => "text-cyan-500 font-bold text-2xl font-mono", result)
+        Div(:class => "text-center p-4 bg-warm-100 dark:bg-warm-700 rounded-lg",
+            Span(:class => "text-warm-500 dark:text-warm-400", "hypot("),
+            Span(:class => "text-accent-500 font-mono", x),
+            Span(:class => "text-warm-500 dark:text-warm-400", ", "),
+            Span(:class => "text-accent-500 font-mono", y),
+            Span(:class => "text-warm-500 dark:text-warm-400", ") = "),
+            Span(:class => "text-accent-500 font-bold text-2xl font-mono", result)
         ),
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400", "Integer approximation of sqrt(x*x + y*y)")
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400", "Integer approximation of sqrt(x*x + y*y)")
     )
 end
 
@@ -1601,15 +1601,15 @@ ReturnValueDemo = island(:ReturnValueDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[200px] gap-4",
         # Value adjuster
         Div(:class => "flex items-center gap-3",
-            Button(:class => "w-10 h-10 rounded-full bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-lg",
+            Button(:class => "w-10 h-10 rounded-full bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-lg",
                 :on_click => () -> begin
                     new_v = value() - 5
                     set_value(new_v)
                     set_abs(new_v < 0 ? -new_v : new_v)
                     set_sign(new_v > 0 ? 1 : (new_v < 0 ? -1 : 0))
                 end, "-5"),
-            Span(:class => "text-3xl font-mono text-cyan-500 w-16 text-center", value),
-            Button(:class => "w-10 h-10 rounded-full bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-lg",
+            Span(:class => "text-3xl font-mono text-accent-500 w-16 text-center", value),
+            Button(:class => "w-10 h-10 rounded-full bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-lg",
                 :on_click => () -> begin
                     new_v = value() + 5
                     set_value(new_v)
@@ -1619,16 +1619,16 @@ ReturnValueDemo = island(:ReturnValueDemo) do
         ),
         # Results
         Div(:class => "grid grid-cols-2 gap-3",
-            Div(:class => "p-3 bg-stone-100 dark:bg-stone-700 rounded-lg text-center",
-                Span(:class => "text-stone-500 dark:text-stone-400 text-sm block", "my_abs(x)"),
-                Span(:class => "text-cyan-500 font-bold text-xl font-mono", abs_result)
+            Div(:class => "p-3 bg-warm-100 dark:bg-warm-700 rounded-lg text-center",
+                Span(:class => "text-warm-500 dark:text-warm-400 text-sm block", "my_abs(x)"),
+                Span(:class => "text-accent-500 font-bold text-xl font-mono", abs_result)
             ),
-            Div(:class => "p-3 bg-stone-100 dark:bg-stone-700 rounded-lg text-center",
-                Span(:class => "text-stone-500 dark:text-stone-400 text-sm block", "my_sign(x)"),
-                Span(:class => "text-cyan-500 font-bold text-xl font-mono", sign_result)
+            Div(:class => "p-3 bg-warm-100 dark:bg-warm-700 rounded-lg text-center",
+                Span(:class => "text-warm-500 dark:text-warm-400 text-sm block", "my_sign(x)"),
+                Span(:class => "text-accent-500 font-bold text-xl font-mono", sign_result)
             )
         ),
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400", "my_abs uses early return, my_sign uses implicit return")
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400", "my_abs uses early return, my_sign uses implicit return")
     )
 end
 
@@ -1664,15 +1664,15 @@ ClosureDemo = island(:ClosureDemo) do
         ),
         # Input argument
         Div(:class => "flex items-center gap-3",
-            Span(:class => "text-sm text-stone-500 dark:text-stone-400", "x ="),
-            Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+            Span(:class => "text-sm text-warm-500 dark:text-warm-400", "x ="),
+            Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                 :on_click => () -> begin
                     new_x = input() - 1
                     set_input(new_x)
                     set_result(new_x + offset())
                 end, "-"),
-            Span(:class => "text-2xl font-mono text-cyan-500 w-12 text-center", input),
-            Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+            Span(:class => "text-2xl font-mono text-accent-500 w-12 text-center", input),
+            Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                 :on_click => () -> begin
                     new_x = input() + 1
                     set_input(new_x)
@@ -1680,13 +1680,13 @@ ClosureDemo = island(:ClosureDemo) do
                 end, "+")
         ),
         # Result
-        Div(:class => "text-center p-3 bg-stone-100 dark:bg-stone-700 rounded-lg",
-            Span(:class => "text-stone-500 dark:text-stone-400", "add_offset("),
-            Span(:class => "text-cyan-500 font-mono", input),
-            Span(:class => "text-stone-500 dark:text-stone-400", ") = "),
-            Span(:class => "text-cyan-500 font-bold text-xl font-mono", result)
+        Div(:class => "text-center p-3 bg-warm-100 dark:bg-warm-700 rounded-lg",
+            Span(:class => "text-warm-500 dark:text-warm-400", "add_offset("),
+            Span(:class => "text-accent-500 font-mono", input),
+            Span(:class => "text-warm-500 dark:text-warm-400", ") = "),
+            Span(:class => "text-accent-500 font-bold text-xl font-mono", result)
         ),
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400", "Closure captures 'offset' from outer scope")
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400", "Closure captures 'offset' from outer scope")
     )
 end
 
@@ -1703,17 +1703,17 @@ CompactFunctionDemo = island(:CompactFunctionDemo) do
         # Arguments
         Div(:class => "flex items-center gap-4",
             Div(:class => "text-center",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400 block mb-1", "a"),
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400 block mb-1", "a"),
                 Div(:class => "flex items-center gap-1",
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> begin
                             new_a = a() - 1
                             set_a(new_a)
                             set_add(new_a + b())
                             set_mul(new_a * b())
                         end, "-"),
-                    Span(:class => "w-8 text-center text-xl font-mono text-cyan-500", a),
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Span(:class => "w-8 text-center text-xl font-mono text-accent-500", a),
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> begin
                             new_a = a() + 1
                             set_a(new_a)
@@ -1723,17 +1723,17 @@ CompactFunctionDemo = island(:CompactFunctionDemo) do
                 )
             ),
             Div(:class => "text-center",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400 block mb-1", "b"),
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400 block mb-1", "b"),
                 Div(:class => "flex items-center gap-1",
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> begin
                             new_b = b() - 1
                             set_b(new_b)
                             set_add(a() + new_b)
                             set_mul(a() * new_b)
                         end, "-"),
-                    Span(:class => "w-8 text-center text-xl font-mono text-cyan-500", b),
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Span(:class => "w-8 text-center text-xl font-mono text-accent-500", b),
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> begin
                             new_b = b() + 1
                             set_b(new_b)
@@ -1745,16 +1745,16 @@ CompactFunctionDemo = island(:CompactFunctionDemo) do
         ),
         # Results
         Div(:class => "grid grid-cols-2 gap-3 text-sm font-mono",
-            Div(:class => "p-3 bg-stone-100 dark:bg-stone-700 rounded text-center",
-                Span(:class => "text-stone-500 block", "add(a, b)"),
-                Span(:class => "text-cyan-500 font-bold text-xl", add_result)
+            Div(:class => "p-3 bg-warm-100 dark:bg-warm-700 rounded text-center",
+                Span(:class => "text-warm-500 block", "add(a, b)"),
+                Span(:class => "text-accent-500 font-bold text-xl", add_result)
             ),
-            Div(:class => "p-3 bg-stone-100 dark:bg-stone-700 rounded text-center",
-                Span(:class => "text-stone-500 block", "mul(a, b)"),
-                Span(:class => "text-cyan-500 font-bold text-xl", mul_result)
+            Div(:class => "p-3 bg-warm-100 dark:bg-warm-700 rounded text-center",
+                Span(:class => "text-warm-500 block", "mul(a, b)"),
+                Span(:class => "text-accent-500 font-bold text-xl", mul_result)
             )
         ),
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400", "add(a, b) = a + b  |  mul(a, b) = a * b")
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400", "add(a, b) = a + b  |  mul(a, b) = a * b")
     )
 end
 
@@ -1773,8 +1773,8 @@ WhileLoopDemo = island(:WhileLoopDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[200px] gap-4",
         # N adjuster
         Div(:class => "flex items-center gap-3",
-            Span(:class => "text-sm text-stone-500 dark:text-stone-400", "n ="),
-            Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+            Span(:class => "text-sm text-warm-500 dark:text-warm-400", "n ="),
+            Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                 :on_click => () -> begin
                     if n() > 1
                         new_n = n() - 1
@@ -1782,8 +1782,8 @@ WhileLoopDemo = island(:WhileLoopDemo) do
                         set_result(div(new_n * (new_n + 1), 2))
                     end
                 end, "-"),
-            Span(:class => "text-2xl font-mono text-cyan-500 w-12 text-center", n),
-            Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+            Span(:class => "text-2xl font-mono text-accent-500 w-12 text-center", n),
+            Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                 :on_click => () -> begin
                     new_n = n() + 1
                     set_n(new_n)
@@ -1792,21 +1792,21 @@ WhileLoopDemo = island(:WhileLoopDemo) do
         ),
         # Quick presets
         Div(:class => "flex gap-2",
-            Button(:class => "px-3 py-1 rounded bg-cyan-500 hover:bg-cyan-600 text-white text-sm",
+            Button(:class => "px-3 py-1 rounded bg-accent-500 hover:bg-accent-600 text-white text-sm",
                 :on_click => () -> begin set_n(10); set_result(55) end, "n=10"),
-            Button(:class => "px-3 py-1 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm hover:bg-stone-300",
+            Button(:class => "px-3 py-1 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm hover:bg-warm-300",
                 :on_click => () -> begin set_n(50); set_result(1275) end, "n=50"),
-            Button(:class => "px-3 py-1 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm hover:bg-stone-300",
+            Button(:class => "px-3 py-1 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm hover:bg-warm-300",
                 :on_click => () -> begin set_n(100); set_result(5050) end, "n=100")
         ),
         # Result
-        Div(:class => "text-center p-4 bg-stone-100 dark:bg-stone-700 rounded-lg min-w-[200px]",
-            Span(:class => "text-stone-500 dark:text-stone-400", "sum(1.."),
-            Span(:class => "text-cyan-500 font-mono", n),
-            Span(:class => "text-stone-500 dark:text-stone-400", ") = "),
-            Span(:class => "text-cyan-500 font-bold text-2xl font-mono", result)
+        Div(:class => "text-center p-4 bg-warm-100 dark:bg-warm-700 rounded-lg min-w-[200px]",
+            Span(:class => "text-warm-500 dark:text-warm-400", "sum(1.."),
+            Span(:class => "text-accent-500 font-mono", n),
+            Span(:class => "text-warm-500 dark:text-warm-400", ") = "),
+            Span(:class => "text-accent-500 font-bold text-2xl font-mono", result)
         ),
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400", "Formula: n×(n+1)÷2")
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400", "Formula: n×(n+1)÷2")
     )
 end
 
@@ -1821,36 +1821,36 @@ ForLoopDemo = island(:ForLoopDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[200px] gap-4",
         # N selector
         Div(:class => "flex items-center gap-2",
-            Span(:class => "text-sm text-stone-500 dark:text-stone-400", "n ="),
+            Span(:class => "text-sm text-warm-500 dark:text-warm-400", "n ="),
             Div(:class => "flex gap-1",
-                Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+                Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                     :on_click => () -> begin set_n(1); set_result(1) end, "1"),
-                Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+                Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                     :on_click => () -> begin set_n(2); set_result(2) end, "2"),
-                Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+                Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                     :on_click => () -> begin set_n(3); set_result(6) end, "3"),
-                Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+                Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                     :on_click => () -> begin set_n(4); set_result(24) end, "4"),
-                Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+                Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                     :on_click => () -> begin set_n(5); set_result(120) end, "5"),
-                Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+                Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                     :on_click => () -> begin set_n(6); set_result(720) end, "6"),
-                Button(:class => "w-8 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+                Button(:class => "w-8 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                     :on_click => () -> begin set_n(7); set_result(5040) end, "7")
             )
         ),
         # Visual representation of the for loop
-        Div(:class => "text-sm text-stone-500 dark:text-stone-400 font-mono text-center",
+        Div(:class => "text-sm text-warm-500 dark:text-warm-400 font-mono text-center",
             "for i in 2:",
-            Span(:class => "text-cyan-500", n),
+            Span(:class => "text-accent-500", n),
             " → result *= i"
         ),
         # Result display
-        Div(:class => "text-center p-4 bg-stone-100 dark:bg-stone-700 rounded-lg min-w-[220px]",
-            Span(:class => "text-stone-500 dark:text-stone-400", "factorial("),
-            Span(:class => "text-cyan-500 font-mono text-xl", n),
-            Span(:class => "text-stone-500 dark:text-stone-400", ") = "),
-            Span(:class => "text-cyan-500 font-bold text-2xl font-mono", result)
+        Div(:class => "text-center p-4 bg-warm-100 dark:bg-warm-700 rounded-lg min-w-[220px]",
+            Span(:class => "text-warm-500 dark:text-warm-400", "factorial("),
+            Span(:class => "text-accent-500 font-mono text-xl", n),
+            Span(:class => "text-warm-500 dark:text-warm-400", ") = "),
+            Span(:class => "text-accent-500 font-bold text-2xl font-mono", result)
         )
     )
 end
@@ -1869,7 +1869,7 @@ ShortCircuitDemo = island(:ShortCircuitDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[240px] gap-4",
         # Scenario selector
         Div(:class => "grid grid-cols-2 gap-2",
-            Button(:class => () -> scenario() == 1 ? "px-3 py-2 rounded bg-cyan-500 text-white text-sm" : "px-3 py-2 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm hover:bg-stone-300",
+            Button(:class => () -> scenario() == 1 ? "px-3 py-2 rounded bg-accent-500 text-white text-sm" : "px-3 py-2 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm hover:bg-warm-300",
                 :on_click => () -> begin
                     set_scenario(1)
                     set_and(1)
@@ -1877,7 +1877,7 @@ ShortCircuitDemo = island(:ShortCircuitDemo) do
                 end,
                 "a>0, b>0"
             ),
-            Button(:class => () -> scenario() == 2 ? "px-3 py-2 rounded bg-cyan-500 text-white text-sm" : "px-3 py-2 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm hover:bg-stone-300",
+            Button(:class => () -> scenario() == 2 ? "px-3 py-2 rounded bg-accent-500 text-white text-sm" : "px-3 py-2 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm hover:bg-warm-300",
                 :on_click => () -> begin
                     set_scenario(2)
                     set_and(0)
@@ -1885,7 +1885,7 @@ ShortCircuitDemo = island(:ShortCircuitDemo) do
                 end,
                 "a>0, b≤0"
             ),
-            Button(:class => () -> scenario() == 3 ? "px-3 py-2 rounded bg-cyan-500 text-white text-sm" : "px-3 py-2 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm hover:bg-stone-300",
+            Button(:class => () -> scenario() == 3 ? "px-3 py-2 rounded bg-accent-500 text-white text-sm" : "px-3 py-2 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm hover:bg-warm-300",
                 :on_click => () -> begin
                     set_scenario(3)
                     set_and(0)
@@ -1893,7 +1893,7 @@ ShortCircuitDemo = island(:ShortCircuitDemo) do
                 end,
                 "a≤0, b>0"
             ),
-            Button(:class => () -> scenario() == 4 ? "px-3 py-2 rounded bg-cyan-500 text-white text-sm" : "px-3 py-2 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm hover:bg-stone-300",
+            Button(:class => () -> scenario() == 4 ? "px-3 py-2 rounded bg-accent-500 text-white text-sm" : "px-3 py-2 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm hover:bg-warm-300",
                 :on_click => () -> begin
                     set_scenario(4)
                     set_and(0)
@@ -1904,19 +1904,19 @@ ShortCircuitDemo = island(:ShortCircuitDemo) do
         ),
         # Results display - show/hide for true/false
         Div(:class => "grid grid-cols-2 gap-3 w-full max-w-xs",
-            Div(:class => "p-3 bg-stone-100 dark:bg-stone-700 rounded-lg text-center",
-                Span(:class => "text-stone-500 dark:text-stone-400 text-xs block mb-1", "(a>0) && (b>0)"),
-                Span(:class => () -> and_result() == 1 ? "text-cyan-500 font-bold text-xl font-mono" : "hidden", "true"),
-                Span(:class => () -> and_result() == 0 ? "text-cyan-500 font-bold text-xl font-mono" : "hidden", "false")
+            Div(:class => "p-3 bg-warm-100 dark:bg-warm-700 rounded-lg text-center",
+                Span(:class => "text-warm-500 dark:text-warm-400 text-xs block mb-1", "(a>0) && (b>0)"),
+                Span(:class => () -> and_result() == 1 ? "text-accent-500 font-bold text-xl font-mono" : "hidden", "true"),
+                Span(:class => () -> and_result() == 0 ? "text-accent-500 font-bold text-xl font-mono" : "hidden", "false")
             ),
-            Div(:class => "p-3 bg-stone-100 dark:bg-stone-700 rounded-lg text-center",
-                Span(:class => "text-stone-500 dark:text-stone-400 text-xs block mb-1", "(a>0) || (b>0)"),
-                Span(:class => () -> or_result() == 1 ? "text-cyan-500 font-bold text-xl font-mono" : "hidden", "true"),
-                Span(:class => () -> or_result() == 0 ? "text-cyan-500 font-bold text-xl font-mono" : "hidden", "false")
+            Div(:class => "p-3 bg-warm-100 dark:bg-warm-700 rounded-lg text-center",
+                Span(:class => "text-warm-500 dark:text-warm-400 text-xs block mb-1", "(a>0) || (b>0)"),
+                Span(:class => () -> or_result() == 1 ? "text-accent-500 font-bold text-xl font-mono" : "hidden", "true"),
+                Span(:class => () -> or_result() == 0 ? "text-accent-500 font-bold text-xl font-mono" : "hidden", "false")
             )
         ),
         # Explanation - show/hide based on scenario
-        Div(:class => "text-xs text-stone-500 dark:text-stone-400 text-center max-w-xs p-2 bg-stone-100 dark:bg-stone-700 rounded",
+        Div(:class => "text-xs text-warm-500 dark:text-warm-400 text-center max-w-xs p-2 bg-warm-100 dark:bg-warm-700 rounded",
             Span(:class => () -> scenario() == 1 ? "block" : "hidden", "&&: both evaluated. ||: short-circuits on true"),
             Span(:class => () -> scenario() == 2 ? "block" : "hidden", "&&: both evaluated (false). ||: short-circuits on true"),
             Span(:class => () -> scenario() == 3 ? "block" : "hidden", "&&: short-circuits on false. ||: both evaluated"),
@@ -1939,7 +1939,7 @@ TryCatchDemo = island(:TryCatchDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[220px] gap-4",
         # N selector buttons
         Div(:class => "flex items-center gap-2",
-            Span(:class => "text-sm text-stone-500 dark:text-stone-400", "n ="),
+            Span(:class => "text-sm text-warm-500 dark:text-warm-400", "n ="),
             Div(:class => "flex gap-1",
                 Button(:class => () -> status_idx() == 1 ? "w-10 h-8 rounded bg-rose-500 text-white text-sm" : "w-10 h-8 rounded bg-rose-200 dark:bg-rose-700 text-rose-800 dark:text-rose-100 text-sm hover:bg-rose-300",
                     :on_click => () -> begin
@@ -1947,31 +1947,31 @@ TryCatchDemo = island(:TryCatchDemo) do
                         set_result(-1)
                         set_status(1)
                     end, "-9"),
-                Button(:class => () -> status_idx() == 2 ? "w-10 h-8 rounded bg-cyan-500 text-white text-sm" : "w-10 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+                Button(:class => () -> status_idx() == 2 ? "w-10 h-8 rounded bg-accent-500 text-white text-sm" : "w-10 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                     :on_click => () -> begin
                         set_n(0)
                         set_result(0)
                         set_status(2)
                     end, "0"),
-                Button(:class => () -> status_idx() == 3 ? "w-10 h-8 rounded bg-cyan-500 text-white text-sm" : "w-10 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+                Button(:class => () -> status_idx() == 3 ? "w-10 h-8 rounded bg-accent-500 text-white text-sm" : "w-10 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                     :on_click => () -> begin
                         set_n(4)
                         set_result(2)
                         set_status(3)
                     end, "4"),
-                Button(:class => () -> status_idx() == 4 ? "w-10 h-8 rounded bg-cyan-500 text-white text-sm" : "w-10 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+                Button(:class => () -> status_idx() == 4 ? "w-10 h-8 rounded bg-accent-500 text-white text-sm" : "w-10 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                     :on_click => () -> begin
                         set_n(16)
                         set_result(4)
                         set_status(4)
                     end, "16"),
-                Button(:class => () -> status_idx() == 5 ? "w-10 h-8 rounded bg-cyan-500 text-white text-sm" : "w-10 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+                Button(:class => () -> status_idx() == 5 ? "w-10 h-8 rounded bg-accent-500 text-white text-sm" : "w-10 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                     :on_click => () -> begin
                         set_n(25)
                         set_result(5)
                         set_status(5)
                     end, "25"),
-                Button(:class => () -> status_idx() == 6 ? "w-10 h-8 rounded bg-cyan-500 text-white text-sm" : "w-10 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+                Button(:class => () -> status_idx() == 6 ? "w-10 h-8 rounded bg-accent-500 text-white text-sm" : "w-10 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                     :on_click => () -> begin
                         set_n(100)
                         set_result(10)
@@ -1981,15 +1981,15 @@ TryCatchDemo = island(:TryCatchDemo) do
         ),
         # Selected value display
         Div(:class => "text-center",
-            Span(:class => "text-stone-500 dark:text-stone-400 text-sm", "safe_sqrt("),
-            Span(:class => "text-cyan-500 font-mono text-xl", n),
-            Span(:class => "text-stone-500 dark:text-stone-400 text-sm", ")")
+            Span(:class => "text-warm-500 dark:text-warm-400 text-sm", "safe_sqrt("),
+            Span(:class => "text-accent-500 font-mono text-xl", n),
+            Span(:class => "text-warm-500 dark:text-warm-400 text-sm", ")")
         ),
         # Result display
-        Div(:class => "text-center p-4 bg-stone-100 dark:bg-stone-700 rounded-lg min-w-[240px]",
-            Span(:class => "text-stone-500 dark:text-stone-400 text-sm", "Result: "),
-            Span(:class => "text-cyan-500 font-bold text-2xl font-mono", result),
-            Div(:class => "text-sm text-stone-600 dark:text-stone-400 mt-2",
+        Div(:class => "text-center p-4 bg-warm-100 dark:bg-warm-700 rounded-lg min-w-[240px]",
+            Span(:class => "text-warm-500 dark:text-warm-400 text-sm", "Result: "),
+            Span(:class => "text-accent-500 font-bold text-2xl font-mono", result),
+            Div(:class => "text-sm text-warm-600 dark:text-warm-400 mt-2",
                 Span(:class => () -> status_idx() == 1 ? "text-rose-500 block" : "hidden", "Error: n < 0"),
                 Span(:class => () -> status_idx() == 2 ? "block" : "hidden", "√0 = 0 ✓"),
                 Span(:class => () -> status_idx() == 3 ? "block" : "hidden", "√4 = 2 ✓"),
@@ -1999,7 +1999,7 @@ TryCatchDemo = island(:TryCatchDemo) do
             )
         ),
         # Explanation
-        Div(:class => "text-xs text-stone-500 dark:text-stone-400 text-center max-w-xs",
+        Div(:class => "text-xs text-warm-500 dark:text-warm-400 text-center max-w-xs",
             "Click -9 to trigger the error path (n < 0 throws exception)"
         )
     )
@@ -2018,27 +2018,27 @@ BreakContinueDemo = island(:BreakContinueDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[220px] gap-4",
         # Limit selector - pre-computed values for different limits
         Div(:class => "flex items-center gap-2",
-            Span(:class => "text-sm text-stone-500 dark:text-stone-400", "search 1.."),
+            Span(:class => "text-sm text-warm-500 dark:text-warm-400", "search 1.."),
             Div(:class => "flex gap-1",
-                Button(:class => "w-10 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+                Button(:class => "w-10 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                     :on_click => () -> begin
                         set_limit(10)
                         set_result(-1)  # 21 not found in 1..10
                         set_skipped(7)  # 1,2,4,5,7,8,10 not divisible by 3
                     end, "10"),
-                Button(:class => "w-10 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+                Button(:class => "w-10 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                     :on_click => () -> begin
                         set_limit(20)
                         set_result(-1)  # 21 not found in 1..20
                         set_skipped(14) # non-multiples of 3 up to 20
                     end, "20"),
-                Button(:class => "w-10 h-8 rounded bg-cyan-500 hover:bg-cyan-600 text-white text-sm",
+                Button(:class => "w-10 h-8 rounded bg-accent-500 hover:bg-accent-600 text-white text-sm",
                     :on_click => () -> begin
                         set_limit(50)
                         set_result(21)  # Found!
                         set_skipped(14) # 14 non-multiples of 3 before 21
                     end, "50"),
-                Button(:class => "w-10 h-8 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+                Button(:class => "w-10 h-8 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                     :on_click => () -> begin
                         set_limit(100)
                         set_result(21)  # Same result, loop breaks at 21
@@ -2047,16 +2047,16 @@ BreakContinueDemo = island(:BreakContinueDemo) do
             )
         ),
         # Algorithm visualization
-        Div(:class => "text-xs text-stone-500 dark:text-stone-400 text-center max-w-xs font-mono",
+        Div(:class => "text-xs text-warm-500 dark:text-warm-400 text-center max-w-xs font-mono",
             "for i in 1..",
-            Span(:class => "text-cyan-500", limit),
+            Span(:class => "text-accent-500", limit),
             ": skip if i%3≠0; break if i%7==0"
         ),
         # Results
         Div(:class => "grid grid-cols-2 gap-3",
-            Div(:class => "p-3 bg-stone-100 dark:bg-stone-700 rounded-lg text-center",
-                Span(:class => "text-stone-500 dark:text-stone-400 text-xs block", "First (n%3==0 && n%7==0)"),
-                Span(:class => "text-cyan-500 font-bold text-2xl font-mono", result)
+            Div(:class => "p-3 bg-warm-100 dark:bg-warm-700 rounded-lg text-center",
+                Span(:class => "text-warm-500 dark:text-warm-400 text-xs block", "First (n%3==0 && n%7==0)"),
+                Span(:class => "text-accent-500 font-bold text-2xl font-mono", result)
             ),
             Div(:class => "p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg text-center border border-amber-200 dark:border-amber-700",
                 Span(:class => "text-amber-700 dark:text-amber-300 text-xs block", "Skipped (continue)"),
@@ -2064,7 +2064,7 @@ BreakContinueDemo = island(:BreakContinueDemo) do
             )
         ),
         # Explanation
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400 text-center",
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400 text-center",
             "21 = 3×7 is the smallest number divisible by both. Try limit=10 to see \"not found\"."
         )
     )
@@ -2085,26 +2085,26 @@ MutableStructDemo = island(:MutableStructDemo) do
 
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[220px] gap-4",
         # Mutable struct visualization
-        Div(:class => "p-4 bg-stone-100 dark:bg-stone-700 rounded-lg",
-            Span(:class => "text-stone-500 dark:text-stone-400 text-sm block mb-2", "mutable struct Counter"),
+        Div(:class => "p-4 bg-warm-100 dark:bg-warm-700 rounded-lg",
+            Span(:class => "text-warm-500 dark:text-warm-400 text-sm block mb-2", "mutable struct Counter"),
             Div(:class => "flex flex-col gap-2",
                 # count field
                 Div(:class => "flex items-center gap-2",
-                    Span(:class => "text-xs text-stone-500 dark:text-stone-400 w-16", "count:"),
-                    Span(:class => "text-xl font-mono text-cyan-500 w-16 text-center", count_val)
+                    Span(:class => "text-xs text-warm-500 dark:text-warm-400 w-16", "count:"),
+                    Span(:class => "text-xl font-mono text-accent-500 w-16 text-center", count_val)
                 ),
                 # step field
                 Div(:class => "flex items-center gap-2",
-                    Span(:class => "text-xs text-stone-500 dark:text-stone-400 w-16", "step:"),
+                    Span(:class => "text-xs text-warm-500 dark:text-warm-400 w-16", "step:"),
                     Div(:class => "flex items-center gap-1",
-                        Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                        Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                             :on_click => () -> begin
                                 if step_val() > 1
                                     set_step_val(step_val() - 1)
                                 end
                             end, "-"),
-                        Span(:class => "w-8 text-center text-lg font-mono text-cyan-500", step_val),
-                        Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                        Span(:class => "w-8 text-center text-lg font-mono text-accent-500", step_val),
+                        Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                             :on_click => () -> set_step_val(step_val() + 1), "+")
                     )
                 )
@@ -2112,17 +2112,17 @@ MutableStructDemo = island(:MutableStructDemo) do
         ),
         # Mutation buttons
         Div(:class => "flex gap-2",
-            Button(:class => "px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg font-medium transition-colors",
+            Button(:class => "px-4 py-2 bg-accent-500 hover:bg-accent-600 text-white rounded-lg font-medium transition-colors",
                 :on_click => () -> set_count_val(count_val() + step_val()),
                 "c.count += c.step"
             ),
-            Button(:class => "px-4 py-2 bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white rounded-lg font-medium hover:bg-stone-300 dark:hover:bg-stone-500 transition-colors",
+            Button(:class => "px-4 py-2 bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white rounded-lg font-medium hover:bg-warm-300 dark:hover:bg-warm-500 transition-colors",
                 :on_click => () -> set_count_val(0),
                 "c.count = 0"
             )
         ),
         # Explanation
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400 text-center",
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400 text-center",
             "Mutable struct fields can be modified after creation"
         )
     )
@@ -2147,16 +2147,16 @@ NestedStructDemo = island(:NestedStructDemo) do
 
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[280px] gap-4",
         # Nested struct visualization
-        Div(:class => "p-4 bg-stone-100 dark:bg-stone-700 rounded-lg",
-            Span(:class => "text-stone-500 dark:text-stone-400 text-sm block mb-2", "struct Line"),
+        Div(:class => "p-4 bg-warm-100 dark:bg-warm-700 rounded-lg",
+            Span(:class => "text-warm-500 dark:text-warm-400 text-sm block mb-2", "struct Line"),
             # Start point
             Div(:class => "ml-4 mb-2",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400 block", "start_pt: Point"),
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400 block", "start_pt: Point"),
                 Div(:class => "flex gap-3 ml-4",
                     Div(:class => "text-center",
-                        Span(:class => "text-xs text-stone-400", "x"),
+                        Span(:class => "text-xs text-warm-400", "x"),
                         Div(:class => "flex items-center gap-1",
-                            Button(:class => "w-5 h-5 rounded bg-stone-200 dark:bg-stone-600 text-xs",
+                            Button(:class => "w-5 h-5 rounded bg-warm-200 dark:bg-warm-600 text-xs",
                                 :on_click => () -> begin
                                     new_sx = start_x() - 1
                                     set_start_x(new_sx)
@@ -2165,8 +2165,8 @@ NestedStructDemo = island(:NestedStructDemo) do
                                     set_delta_x(dx)
                                     set_len_sq(dx * dx + dy * dy)
                                 end, "-"),
-                            Span(:class => "w-6 text-center font-mono text-cyan-500", start_x),
-                            Button(:class => "w-5 h-5 rounded bg-stone-200 dark:bg-stone-600 text-xs",
+                            Span(:class => "w-6 text-center font-mono text-accent-500", start_x),
+                            Button(:class => "w-5 h-5 rounded bg-warm-200 dark:bg-warm-600 text-xs",
                                 :on_click => () -> begin
                                     new_sx = start_x() + 1
                                     set_start_x(new_sx)
@@ -2178,9 +2178,9 @@ NestedStructDemo = island(:NestedStructDemo) do
                         )
                     ),
                     Div(:class => "text-center",
-                        Span(:class => "text-xs text-stone-400", "y"),
+                        Span(:class => "text-xs text-warm-400", "y"),
                         Div(:class => "flex items-center gap-1",
-                            Button(:class => "w-5 h-5 rounded bg-stone-200 dark:bg-stone-600 text-xs",
+                            Button(:class => "w-5 h-5 rounded bg-warm-200 dark:bg-warm-600 text-xs",
                                 :on_click => () -> begin
                                     new_sy = start_y() - 1
                                     set_start_y(new_sy)
@@ -2189,8 +2189,8 @@ NestedStructDemo = island(:NestedStructDemo) do
                                     set_delta_y(dy)
                                     set_len_sq(dx * dx + dy * dy)
                                 end, "-"),
-                            Span(:class => "w-6 text-center font-mono text-cyan-500", start_y),
-                            Button(:class => "w-5 h-5 rounded bg-stone-200 dark:bg-stone-600 text-xs",
+                            Span(:class => "w-6 text-center font-mono text-accent-500", start_y),
+                            Button(:class => "w-5 h-5 rounded bg-warm-200 dark:bg-warm-600 text-xs",
                                 :on_click => () -> begin
                                     new_sy = start_y() + 1
                                     set_start_y(new_sy)
@@ -2205,12 +2205,12 @@ NestedStructDemo = island(:NestedStructDemo) do
             ),
             # End point
             Div(:class => "ml-4",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400 block", "end_pt: Point"),
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400 block", "end_pt: Point"),
                 Div(:class => "flex gap-3 ml-4",
                     Div(:class => "text-center",
-                        Span(:class => "text-xs text-stone-400", "x"),
+                        Span(:class => "text-xs text-warm-400", "x"),
                         Div(:class => "flex items-center gap-1",
-                            Button(:class => "w-5 h-5 rounded bg-stone-200 dark:bg-stone-600 text-xs",
+                            Button(:class => "w-5 h-5 rounded bg-warm-200 dark:bg-warm-600 text-xs",
                                 :on_click => () -> begin
                                     new_ex = end_x() - 1
                                     set_end_x(new_ex)
@@ -2219,8 +2219,8 @@ NestedStructDemo = island(:NestedStructDemo) do
                                     set_delta_x(dx)
                                     set_len_sq(dx * dx + dy * dy)
                                 end, "-"),
-                            Span(:class => "w-6 text-center font-mono text-cyan-500", end_x),
-                            Button(:class => "w-5 h-5 rounded bg-stone-200 dark:bg-stone-600 text-xs",
+                            Span(:class => "w-6 text-center font-mono text-accent-500", end_x),
+                            Button(:class => "w-5 h-5 rounded bg-warm-200 dark:bg-warm-600 text-xs",
                                 :on_click => () -> begin
                                     new_ex = end_x() + 1
                                     set_end_x(new_ex)
@@ -2232,9 +2232,9 @@ NestedStructDemo = island(:NestedStructDemo) do
                         )
                     ),
                     Div(:class => "text-center",
-                        Span(:class => "text-xs text-stone-400", "y"),
+                        Span(:class => "text-xs text-warm-400", "y"),
                         Div(:class => "flex items-center gap-1",
-                            Button(:class => "w-5 h-5 rounded bg-stone-200 dark:bg-stone-600 text-xs",
+                            Button(:class => "w-5 h-5 rounded bg-warm-200 dark:bg-warm-600 text-xs",
                                 :on_click => () -> begin
                                     new_ey = end_y() - 1
                                     set_end_y(new_ey)
@@ -2243,8 +2243,8 @@ NestedStructDemo = island(:NestedStructDemo) do
                                     set_delta_y(dy)
                                     set_len_sq(dx * dx + dy * dy)
                                 end, "-"),
-                            Span(:class => "w-6 text-center font-mono text-cyan-500", end_y),
-                            Button(:class => "w-5 h-5 rounded bg-stone-200 dark:bg-stone-600 text-xs",
+                            Span(:class => "w-6 text-center font-mono text-accent-500", end_y),
+                            Button(:class => "w-5 h-5 rounded bg-warm-200 dark:bg-warm-600 text-xs",
                                 :on_click => () -> begin
                                     new_ey = end_y() + 1
                                     set_end_y(new_ey)
@@ -2260,21 +2260,21 @@ NestedStructDemo = island(:NestedStructDemo) do
         ),
         # Computed values showing field access chains - use signals directly
         Div(:class => "flex flex-wrap gap-2 text-sm justify-center",
-            Div(:class => "px-3 py-1 bg-stone-100 dark:bg-stone-700 rounded",
-                Span(:class => "text-stone-500", "Δx: "),
-                Span(:class => "text-cyan-500 font-mono", delta_x)
+            Div(:class => "px-3 py-1 bg-warm-100 dark:bg-warm-700 rounded",
+                Span(:class => "text-warm-500", "Δx: "),
+                Span(:class => "text-accent-500 font-mono", delta_x)
             ),
-            Div(:class => "px-3 py-1 bg-stone-100 dark:bg-stone-700 rounded",
-                Span(:class => "text-stone-500", "Δy: "),
-                Span(:class => "text-cyan-500 font-mono", delta_y)
+            Div(:class => "px-3 py-1 bg-warm-100 dark:bg-warm-700 rounded",
+                Span(:class => "text-warm-500", "Δy: "),
+                Span(:class => "text-accent-500 font-mono", delta_y)
             ),
-            Div(:class => "px-3 py-1 bg-stone-100 dark:bg-stone-700 rounded",
-                Span(:class => "text-stone-500", "length²: "),
-                Span(:class => "text-cyan-500 font-mono", len_sq)
+            Div(:class => "px-3 py-1 bg-warm-100 dark:bg-warm-700 rounded",
+                Span(:class => "text-warm-500", "length²: "),
+                Span(:class => "text-accent-500 font-mono", len_sq)
             )
         ),
         # Explanation
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400 text-center",
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400 text-center",
             "line.end_pt.x accesses nested struct fields"
         )
     )
@@ -2291,27 +2291,27 @@ PrimitiveTypesDemo = island(:PrimitiveTypesDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[200px] gap-4",
         # Type selector buttons
         Div(:class => "flex flex-wrap gap-2 justify-center",
-            Button(:class => () -> selected_type() == 1 ? "px-3 py-1 rounded bg-cyan-500 text-white text-sm" : "px-3 py-1 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+            Button(:class => () -> selected_type() == 1 ? "px-3 py-1 rounded bg-accent-500 text-white text-sm" : "px-3 py-1 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                 :on_click => () -> set_selected_type(1), "Int32"),
-            Button(:class => () -> selected_type() == 2 ? "px-3 py-1 rounded bg-cyan-500 text-white text-sm" : "px-3 py-1 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+            Button(:class => () -> selected_type() == 2 ? "px-3 py-1 rounded bg-accent-500 text-white text-sm" : "px-3 py-1 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                 :on_click => () -> set_selected_type(2), "Int64"),
-            Button(:class => () -> selected_type() == 3 ? "px-3 py-1 rounded bg-cyan-500 text-white text-sm" : "px-3 py-1 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+            Button(:class => () -> selected_type() == 3 ? "px-3 py-1 rounded bg-accent-500 text-white text-sm" : "px-3 py-1 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                 :on_click => () -> set_selected_type(3), "Float32"),
-            Button(:class => () -> selected_type() == 4 ? "px-3 py-1 rounded bg-cyan-500 text-white text-sm" : "px-3 py-1 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+            Button(:class => () -> selected_type() == 4 ? "px-3 py-1 rounded bg-accent-500 text-white text-sm" : "px-3 py-1 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                 :on_click => () -> set_selected_type(4), "Float64"),
-            Button(:class => () -> selected_type() == 5 ? "px-3 py-1 rounded bg-cyan-500 text-white text-sm" : "px-3 py-1 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+            Button(:class => () -> selected_type() == 5 ? "px-3 py-1 rounded bg-accent-500 text-white text-sm" : "px-3 py-1 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                 :on_click => () -> set_selected_type(5), "Bool")
         ),
         # Type info display - show/hide based on selection
-        Div(:class => "p-4 bg-stone-100 dark:bg-stone-700 rounded-lg w-full max-w-sm text-center",
+        Div(:class => "p-4 bg-warm-100 dark:bg-warm-700 rounded-lg w-full max-w-sm text-center",
             # Type names
-            Span(:class => () -> selected_type() == 1 ? "text-cyan-500 font-mono text-xl font-bold" : "hidden", "Int32"),
-            Span(:class => () -> selected_type() == 2 ? "text-cyan-500 font-mono text-xl font-bold" : "hidden", "Int64"),
-            Span(:class => () -> selected_type() == 3 ? "text-cyan-500 font-mono text-xl font-bold" : "hidden", "Float32"),
-            Span(:class => () -> selected_type() == 4 ? "text-cyan-500 font-mono text-xl font-bold" : "hidden", "Float64"),
-            Span(:class => () -> selected_type() == 5 ? "text-cyan-500 font-mono text-xl font-bold" : "hidden", "Bool"),
+            Span(:class => () -> selected_type() == 1 ? "text-accent-500 font-mono text-xl font-bold" : "hidden", "Int32"),
+            Span(:class => () -> selected_type() == 2 ? "text-accent-500 font-mono text-xl font-bold" : "hidden", "Int64"),
+            Span(:class => () -> selected_type() == 3 ? "text-accent-500 font-mono text-xl font-bold" : "hidden", "Float32"),
+            Span(:class => () -> selected_type() == 4 ? "text-accent-500 font-mono text-xl font-bold" : "hidden", "Float64"),
+            Span(:class => () -> selected_type() == 5 ? "text-accent-500 font-mono text-xl font-bold" : "hidden", "Bool"),
             # Range descriptions
-            Div(:class => "text-sm text-stone-500 dark:text-stone-400 mt-2",
+            Div(:class => "text-sm text-warm-500 dark:text-warm-400 mt-2",
                 Span(:class => () -> selected_type() == 1 ? "block" : "hidden", "32-bit signed integer: -2³¹ to 2³¹-1"),
                 Span(:class => () -> selected_type() == 2 ? "block" : "hidden", "64-bit signed integer: -2⁶³ to 2⁶³-1"),
                 Span(:class => () -> selected_type() == 3 ? "block" : "hidden", "32-bit floating point (single precision)"),
@@ -2321,12 +2321,12 @@ PrimitiveTypesDemo = island(:PrimitiveTypesDemo) do
         ),
         # Example value - show/hide based on selection
         Div(:class => "text-center",
-            Span(:class => "text-xs text-stone-500 dark:text-stone-400 block", "Example value"),
-            Span(:class => () -> selected_type() == 1 ? "text-2xl font-mono text-cyan-500" : "hidden", "42"),
-            Span(:class => () -> selected_type() == 2 ? "text-2xl font-mono text-cyan-500" : "hidden", "9223372036854775807"),
-            Span(:class => () -> selected_type() == 3 ? "text-2xl font-mono text-cyan-500" : "hidden", "3.14f0"),
-            Span(:class => () -> selected_type() == 4 ? "text-2xl font-mono text-cyan-500" : "hidden", "2.71828"),
-            Span(:class => () -> selected_type() == 5 ? "text-2xl font-mono text-cyan-500" : "hidden", "true")
+            Span(:class => "text-xs text-warm-500 dark:text-warm-400 block", "Example value"),
+            Span(:class => () -> selected_type() == 1 ? "text-2xl font-mono text-accent-500" : "hidden", "42"),
+            Span(:class => () -> selected_type() == 2 ? "text-2xl font-mono text-accent-500" : "hidden", "9223372036854775807"),
+            Span(:class => () -> selected_type() == 3 ? "text-2xl font-mono text-accent-500" : "hidden", "3.14f0"),
+            Span(:class => () -> selected_type() == 4 ? "text-2xl font-mono text-accent-500" : "hidden", "2.71828"),
+            Span(:class => () -> selected_type() == 5 ? "text-2xl font-mono text-accent-500" : "hidden", "true")
         )
     )
 end
@@ -2351,7 +2351,7 @@ ShapeAreaDemo = island(:ShapeAreaDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[250px] gap-4",
         # Shape type selector
         Div(:class => "flex gap-2",
-            Button(:class => () -> shape_type() == 1 ? "px-4 py-2 rounded-lg bg-cyan-500 text-white font-medium" : "px-4 py-2 rounded-lg bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+            Button(:class => () -> shape_type() == 1 ? "px-4 py-2 rounded-lg bg-accent-500 text-white font-medium" : "px-4 py-2 rounded-lg bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                 :on_click => () -> begin
                     set_shape_type(1)
                     set_field_value(5)
@@ -2359,7 +2359,7 @@ ShapeAreaDemo = island(:ShapeAreaDemo) do
                 end,
                 "Circle"
             ),
-            Button(:class => () -> shape_type() == 2 ? "px-4 py-2 rounded-lg bg-cyan-500 text-white font-medium" : "px-4 py-2 rounded-lg bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+            Button(:class => () -> shape_type() == 2 ? "px-4 py-2 rounded-lg bg-accent-500 text-white font-medium" : "px-4 py-2 rounded-lg bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                 :on_click => () -> begin
                     set_shape_type(2)
                     set_field_value(24)
@@ -2370,18 +2370,18 @@ ShapeAreaDemo = island(:ShapeAreaDemo) do
         ),
 
         # Shape visualization - unified display with show/hide for labels
-        Div(:class => "p-4 bg-stone-100 dark:bg-stone-700 rounded-lg min-w-[280px]",
+        Div(:class => "p-4 bg-warm-100 dark:bg-warm-700 rounded-lg min-w-[280px]",
             Div(:class => "text-center",
                 # Shape type label - show/hide
-                Span(:class => () -> shape_type() == 1 ? "text-sm text-stone-500 dark:text-stone-400 block mb-3" : "hidden", "struct Circle"),
-                Span(:class => () -> shape_type() == 2 ? "text-sm text-stone-500 dark:text-stone-400 block mb-3" : "hidden", "struct Rectangle"),
+                Span(:class => () -> shape_type() == 1 ? "text-sm text-warm-500 dark:text-warm-400 block mb-3" : "hidden", "struct Circle"),
+                Span(:class => () -> shape_type() == 2 ? "text-sm text-warm-500 dark:text-warm-400 block mb-3" : "hidden", "struct Rectangle"),
                 # Field display with controls
                 Div(:class => "flex items-center justify-center gap-2",
-                    Span(:class => () -> shape_type() == 1 ? "text-xs text-stone-500 dark:text-stone-400" : "hidden", "radius"),
-                    Span(:class => () -> shape_type() == 2 ? "text-xs text-stone-500 dark:text-stone-400" : "hidden", "width × height"),
-                    Span(:class => "text-stone-400 dark:text-stone-500", " = "),
+                    Span(:class => () -> shape_type() == 1 ? "text-xs text-warm-500 dark:text-warm-400" : "hidden", "radius"),
+                    Span(:class => () -> shape_type() == 2 ? "text-xs text-warm-500 dark:text-warm-400" : "hidden", "width × height"),
+                    Span(:class => "text-warm-400 dark:text-warm-500", " = "),
                     Div(:class => "flex items-center gap-1",
-                        Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                        Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                             :on_click => () -> begin
                                 if field_value() > 1
                                     new_val = field_value() - 1
@@ -2393,8 +2393,8 @@ ShapeAreaDemo = island(:ShapeAreaDemo) do
                                     end
                                 end
                             end, "-"),
-                        Span(:class => "w-12 text-center text-xl font-mono text-cyan-500", field_value),
-                        Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                        Span(:class => "w-12 text-center text-xl font-mono text-accent-500", field_value),
+                        Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                             :on_click => () -> begin
                                 new_val = field_value() + 1
                                 set_field_value(new_val)
@@ -2407,17 +2407,17 @@ ShapeAreaDemo = island(:ShapeAreaDemo) do
                     )
                 ),
                 # Method result - show/hide for method labels
-                Div(:class => "mt-4 p-2 bg-stone-200 dark:bg-stone-600 rounded text-sm",
-                    Span(:class => () -> shape_type() == 1 ? "text-stone-600 dark:text-stone-300" : "hidden", "area(c::Circle)"),
-                    Span(:class => () -> shape_type() == 2 ? "text-stone-600 dark:text-stone-300" : "hidden", "area(r::Rectangle)"),
-                    Span(:class => "text-stone-600 dark:text-stone-300", " = "),
-                    Span(:class => "text-cyan-500 font-mono font-bold", area_result)
+                Div(:class => "mt-4 p-2 bg-warm-200 dark:bg-warm-600 rounded text-sm",
+                    Span(:class => () -> shape_type() == 1 ? "text-warm-600 dark:text-warm-300" : "hidden", "area(c::Circle)"),
+                    Span(:class => () -> shape_type() == 2 ? "text-warm-600 dark:text-warm-300" : "hidden", "area(r::Rectangle)"),
+                    Span(:class => "text-warm-600 dark:text-warm-300", " = "),
+                    Span(:class => "text-accent-500 font-mono font-bold", area_result)
                 )
             )
         ),
 
         # Explanation
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400", "Same function name, different method per type")
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400", "Same function name, different method per type")
     )
 end
 
@@ -2443,14 +2443,14 @@ VectorArithmeticDemo = island(:VectorArithmeticDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[250px] gap-4",
         # Operation selector
         Div(:class => "flex gap-2",
-            Button(:class => () -> operation() == 1 ? "px-3 py-1 rounded bg-cyan-500 text-white text-sm" : "px-3 py-1 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+            Button(:class => () -> operation() == 1 ? "px-3 py-1 rounded bg-accent-500 text-white text-sm" : "px-3 py-1 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                 :on_click => () -> begin
                     set_operation(1)
                     set_result_x(v1_x() + operand_value())
                     set_result_y(v1_y() + operand_value())
                 end, "add_vec"
             ),
-            Button(:class => () -> operation() == 2 ? "px-3 py-1 rounded bg-cyan-500 text-white text-sm" : "px-3 py-1 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+            Button(:class => () -> operation() == 2 ? "px-3 py-1 rounded bg-accent-500 text-white text-sm" : "px-3 py-1 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                 :on_click => () -> begin
                     set_operation(2)
                     set_result_x(v1_x() * operand_value())
@@ -2462,13 +2462,13 @@ VectorArithmeticDemo = island(:VectorArithmeticDemo) do
         # Vectors display
         Div(:class => "flex items-center gap-3",
             # Vector 1
-            Div(:class => "p-3 bg-stone-100 dark:bg-stone-700 rounded-lg text-center",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400 block mb-2", "v1 = Vec2"),
+            Div(:class => "p-3 bg-warm-100 dark:bg-warm-700 rounded-lg text-center",
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400 block mb-2", "v1 = Vec2"),
                 Div(:class => "flex gap-2",
                     Div(:class => "text-center",
-                        Span(:class => "text-xs text-stone-400", "x"),
+                        Span(:class => "text-xs text-warm-400", "x"),
                         Div(:class => "flex items-center gap-0.5",
-                            Button(:class => "w-5 h-5 rounded bg-stone-200 dark:bg-stone-600 text-xs",
+                            Button(:class => "w-5 h-5 rounded bg-warm-200 dark:bg-warm-600 text-xs",
                                 :on_click => () -> begin
                                     new_x = v1_x() - 1
                                     set_v1_x(new_x)
@@ -2478,8 +2478,8 @@ VectorArithmeticDemo = island(:VectorArithmeticDemo) do
                                         set_result_x(new_x * operand_value())
                                     end
                                 end, "-"),
-                            Span(:class => "w-6 text-center font-mono text-cyan-500", v1_x),
-                            Button(:class => "w-5 h-5 rounded bg-stone-200 dark:bg-stone-600 text-xs",
+                            Span(:class => "w-6 text-center font-mono text-accent-500", v1_x),
+                            Button(:class => "w-5 h-5 rounded bg-warm-200 dark:bg-warm-600 text-xs",
                                 :on_click => () -> begin
                                     new_x = v1_x() + 1
                                     set_v1_x(new_x)
@@ -2492,9 +2492,9 @@ VectorArithmeticDemo = island(:VectorArithmeticDemo) do
                         )
                     ),
                     Div(:class => "text-center",
-                        Span(:class => "text-xs text-stone-400", "y"),
+                        Span(:class => "text-xs text-warm-400", "y"),
                         Div(:class => "flex items-center gap-0.5",
-                            Button(:class => "w-5 h-5 rounded bg-stone-200 dark:bg-stone-600 text-xs",
+                            Button(:class => "w-5 h-5 rounded bg-warm-200 dark:bg-warm-600 text-xs",
                                 :on_click => () -> begin
                                     new_y = v1_y() - 1
                                     set_v1_y(new_y)
@@ -2504,8 +2504,8 @@ VectorArithmeticDemo = island(:VectorArithmeticDemo) do
                                         set_result_y(new_y * operand_value())
                                     end
                                 end, "-"),
-                            Span(:class => "w-6 text-center font-mono text-cyan-500", v1_y),
-                            Button(:class => "w-5 h-5 rounded bg-stone-200 dark:bg-stone-600 text-xs",
+                            Span(:class => "w-6 text-center font-mono text-accent-500", v1_y),
+                            Button(:class => "w-5 h-5 rounded bg-warm-200 dark:bg-warm-600 text-xs",
                                 :on_click => () -> begin
                                     new_y = v1_y() + 1
                                     set_v1_y(new_y)
@@ -2521,11 +2521,11 @@ VectorArithmeticDemo = island(:VectorArithmeticDemo) do
             ),
 
             # Second operand (shows as v2 or s based on mode) - use show/hide for labels
-            Div(:class => "p-3 bg-stone-100 dark:bg-stone-700 rounded-lg text-center",
-                Span(:class => () -> operation() == 1 ? "text-xs text-stone-500 dark:text-stone-400 block mb-2" : "hidden", "v2.x = v2.y"),
-                Span(:class => () -> operation() == 2 ? "text-xs text-stone-500 dark:text-stone-400 block mb-2" : "hidden", "scalar s"),
+            Div(:class => "p-3 bg-warm-100 dark:bg-warm-700 rounded-lg text-center",
+                Span(:class => () -> operation() == 1 ? "text-xs text-warm-500 dark:text-warm-400 block mb-2" : "hidden", "v2.x = v2.y"),
+                Span(:class => () -> operation() == 2 ? "text-xs text-warm-500 dark:text-warm-400 block mb-2" : "hidden", "scalar s"),
                 Div(:class => "flex items-center gap-1",
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> begin
                             new_v = operand_value() - 1
                             set_operand_value(new_v)
@@ -2537,8 +2537,8 @@ VectorArithmeticDemo = island(:VectorArithmeticDemo) do
                                 set_result_y(v1_y() * new_v)
                             end
                         end, "-"),
-                    Span(:class => "w-8 text-center text-xl font-mono text-cyan-500", operand_value),
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Span(:class => "w-8 text-center text-xl font-mono text-accent-500", operand_value),
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> begin
                             new_v = operand_value() + 1
                             set_operand_value(new_v)
@@ -2556,19 +2556,19 @@ VectorArithmeticDemo = island(:VectorArithmeticDemo) do
 
         # Method name and result - show/hide for method labels
         Div(:class => "text-center",
-            Span(:class => () -> operation() == 1 ? "text-sm text-stone-500 dark:text-stone-400 block mb-1" : "hidden", "add_vec(v1, v2)"),
-            Span(:class => () -> operation() == 2 ? "text-sm text-stone-500 dark:text-stone-400 block mb-1" : "hidden", "scale_vec(v1, s)"),
-            Div(:class => "p-2 bg-cyan-100 dark:bg-cyan-900/30 rounded-lg",
-                Span(:class => "text-sm text-cyan-700 dark:text-cyan-300", "→ Vec2("),
-                Span(:class => "font-mono font-bold text-cyan-600 dark:text-cyan-400", result_x),
-                Span(:class => "text-cyan-700 dark:text-cyan-300", ", "),
-                Span(:class => "font-mono font-bold text-cyan-600 dark:text-cyan-400", result_y),
-                Span(:class => "text-cyan-700 dark:text-cyan-300", ")")
+            Span(:class => () -> operation() == 1 ? "text-sm text-warm-500 dark:text-warm-400 block mb-1" : "hidden", "add_vec(v1, v2)"),
+            Span(:class => () -> operation() == 2 ? "text-sm text-warm-500 dark:text-warm-400 block mb-1" : "hidden", "scale_vec(v1, s)"),
+            Div(:class => "p-2 bg-accent-100 dark:bg-accent-900/30 rounded-lg",
+                Span(:class => "text-sm text-accent-700 dark:text-accent-300", "→ Vec2("),
+                Span(:class => "font-mono font-bold text-accent-600 dark:text-accent-400", result_x),
+                Span(:class => "text-accent-700 dark:text-accent-300", ", "),
+                Span(:class => "font-mono font-bold text-accent-600 dark:text-accent-400", result_y),
+                Span(:class => "text-accent-700 dark:text-accent-300", ")")
             )
         ),
 
         # Explanation
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400", "Methods defined for Vec2 type")
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400", "Methods defined for Vec2 type")
     )
 end
 
@@ -2583,62 +2583,62 @@ TypeSpecializationDemo = island(:TypeSpecializationDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[250px] gap-4",
         # Type/value selector
         Div(:class => "grid grid-cols-3 gap-2",
-            Button(:class => () -> input_type() == 1 ? "px-3 py-2 rounded bg-cyan-500 text-white text-sm" : "px-3 py-2 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+            Button(:class => () -> input_type() == 1 ? "px-3 py-2 rounded bg-accent-500 text-white text-sm" : "px-3 py-2 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                 :on_click => () -> set_input_type(1), "Int32(42)"
             ),
-            Button(:class => () -> input_type() == 2 ? "px-3 py-2 rounded bg-cyan-500 text-white text-sm" : "px-3 py-2 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+            Button(:class => () -> input_type() == 2 ? "px-3 py-2 rounded bg-accent-500 text-white text-sm" : "px-3 py-2 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                 :on_click => () -> set_input_type(2), "Int32(-5)"
             ),
-            Button(:class => () -> input_type() == 3 ? "px-3 py-2 rounded bg-cyan-500 text-white text-sm" : "px-3 py-2 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+            Button(:class => () -> input_type() == 3 ? "px-3 py-2 rounded bg-accent-500 text-white text-sm" : "px-3 py-2 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                 :on_click => () -> set_input_type(3), "Int32(0)"
             ),
-            Button(:class => () -> input_type() == 4 ? "px-3 py-2 rounded bg-cyan-500 text-white text-sm" : "px-3 py-2 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+            Button(:class => () -> input_type() == 4 ? "px-3 py-2 rounded bg-accent-500 text-white text-sm" : "px-3 py-2 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                 :on_click => () -> set_input_type(4), "true"
             ),
-            Button(:class => () -> input_type() == 5 ? "px-3 py-2 rounded bg-cyan-500 text-white text-sm" : "px-3 py-2 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white text-sm",
+            Button(:class => () -> input_type() == 5 ? "px-3 py-2 rounded bg-accent-500 text-white text-sm" : "px-3 py-2 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white text-sm",
                 :on_click => () -> set_input_type(5), "false"
             )
         ),
 
         # Call visualization
-        Div(:class => "p-4 bg-stone-100 dark:bg-stone-700 rounded-lg min-w-[280px]",
+        Div(:class => "p-4 bg-warm-100 dark:bg-warm-700 rounded-lg min-w-[280px]",
             # Function call - show/hide for input display
             Div(:class => "text-center mb-3",
-                Span(:class => "text-stone-600 dark:text-stone-300 font-mono", "describe("),
-                Span(:class => () -> input_type() == 1 ? "text-cyan-500 font-mono font-bold" : "hidden", "42"),
-                Span(:class => () -> input_type() == 2 ? "text-cyan-500 font-mono font-bold" : "hidden", "-5"),
-                Span(:class => () -> input_type() == 3 ? "text-cyan-500 font-mono font-bold" : "hidden", "0"),
-                Span(:class => () -> input_type() == 4 ? "text-cyan-500 font-mono font-bold" : "hidden", "true"),
-                Span(:class => () -> input_type() == 5 ? "text-cyan-500 font-mono font-bold" : "hidden", "false"),
-                Span(:class => "text-stone-600 dark:text-stone-300 font-mono", ")")
+                Span(:class => "text-warm-600 dark:text-warm-300 font-mono", "describe("),
+                Span(:class => () -> input_type() == 1 ? "text-accent-500 font-mono font-bold" : "hidden", "42"),
+                Span(:class => () -> input_type() == 2 ? "text-accent-500 font-mono font-bold" : "hidden", "-5"),
+                Span(:class => () -> input_type() == 3 ? "text-accent-500 font-mono font-bold" : "hidden", "0"),
+                Span(:class => () -> input_type() == 4 ? "text-accent-500 font-mono font-bold" : "hidden", "true"),
+                Span(:class => () -> input_type() == 5 ? "text-accent-500 font-mono font-bold" : "hidden", "false"),
+                Span(:class => "text-warm-600 dark:text-warm-300 font-mono", ")")
             ),
             # Arrow
             Div(:class => "flex justify-center my-2",
-                Svg(:class => "w-5 h-5 text-stone-400", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
+                Svg(:class => "w-5 h-5 text-warm-400", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                     Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
                          :d => "M19 14l-7 7m0 0l-7-7m7 7V3")
                 )
             ),
             # Method called - show/hide for method display
-            Div(:class => "text-center text-sm text-stone-500 dark:text-stone-400 mb-2",
+            Div(:class => "text-center text-sm text-warm-500 dark:text-warm-400 mb-2",
                 "calls: ",
-                Span(:class => () -> input_type() <= 3 ? "text-cyan-600 dark:text-cyan-400 font-mono" : "hidden", "describe(x::Int32)"),
-                Span(:class => () -> input_type() >= 4 ? "text-cyan-600 dark:text-cyan-400 font-mono" : "hidden", "describe(x::Bool)")
+                Span(:class => () -> input_type() <= 3 ? "text-accent-600 dark:text-accent-400 font-mono" : "hidden", "describe(x::Int32)"),
+                Span(:class => () -> input_type() >= 4 ? "text-accent-600 dark:text-accent-400 font-mono" : "hidden", "describe(x::Bool)")
             ),
             # Result - show/hide for result display
-            Div(:class => "text-center p-2 bg-cyan-100 dark:bg-cyan-900/30 rounded",
-                Span(:class => "text-xs text-cyan-700 dark:text-cyan-300", "returns: \""),
-                Span(:class => () -> input_type() == 1 ? "text-cyan-600 dark:text-cyan-400 font-bold" : "hidden", "positive integer"),
-                Span(:class => () -> input_type() == 2 ? "text-cyan-600 dark:text-cyan-400 font-bold" : "hidden", "negative integer"),
-                Span(:class => () -> input_type() == 3 ? "text-cyan-600 dark:text-cyan-400 font-bold" : "hidden", "zero"),
-                Span(:class => () -> input_type() == 4 ? "text-cyan-600 dark:text-cyan-400 font-bold" : "hidden", "true boolean"),
-                Span(:class => () -> input_type() == 5 ? "text-cyan-600 dark:text-cyan-400 font-bold" : "hidden", "false boolean"),
-                Span(:class => "text-cyan-600 dark:text-cyan-400 font-bold", "\"")
+            Div(:class => "text-center p-2 bg-accent-100 dark:bg-accent-900/30 rounded",
+                Span(:class => "text-xs text-accent-700 dark:text-accent-300", "returns: \""),
+                Span(:class => () -> input_type() == 1 ? "text-accent-600 dark:text-accent-400 font-bold" : "hidden", "positive integer"),
+                Span(:class => () -> input_type() == 2 ? "text-accent-600 dark:text-accent-400 font-bold" : "hidden", "negative integer"),
+                Span(:class => () -> input_type() == 3 ? "text-accent-600 dark:text-accent-400 font-bold" : "hidden", "zero"),
+                Span(:class => () -> input_type() == 4 ? "text-accent-600 dark:text-accent-400 font-bold" : "hidden", "true boolean"),
+                Span(:class => () -> input_type() == 5 ? "text-accent-600 dark:text-accent-400 font-bold" : "hidden", "false boolean"),
+                Span(:class => "text-accent-600 dark:text-accent-400 font-bold", "\"")
             )
         ),
 
         # Explanation
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400", "Julia picks the most specific method for the argument type")
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400", "Julia picks the most specific method for the argument type")
     )
 end
 
@@ -2666,38 +2666,38 @@ VectorMutationDemo = island(:VectorMutationDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[220px] gap-4",
         # Array visualization
         Div(:class => "flex items-center gap-1",
-            Span(:class => "text-stone-500 dark:text-stone-400", "arr = ["),
-            Button(:class => () -> selected() == 1 ? "px-3 py-1 bg-cyan-500 text-white rounded font-mono" : "px-3 py-1 bg-stone-200 dark:bg-stone-600 rounded font-mono text-stone-700 dark:text-white",
+            Span(:class => "text-warm-500 dark:text-warm-400", "arr = ["),
+            Button(:class => () -> selected() == 1 ? "px-3 py-1 bg-accent-500 text-white rounded font-mono" : "px-3 py-1 bg-warm-200 dark:bg-warm-600 rounded font-mono text-warm-700 dark:text-white",
                 :on_click => () -> set_selected(1), v1),
-            Span(:class => "text-stone-400", ", "),
-            Button(:class => () -> selected() == 2 ? "px-3 py-1 bg-cyan-500 text-white rounded font-mono" : "px-3 py-1 bg-stone-200 dark:bg-stone-600 rounded font-mono text-stone-700 dark:text-white",
+            Span(:class => "text-warm-400", ", "),
+            Button(:class => () -> selected() == 2 ? "px-3 py-1 bg-accent-500 text-white rounded font-mono" : "px-3 py-1 bg-warm-200 dark:bg-warm-600 rounded font-mono text-warm-700 dark:text-white",
                 :on_click => () -> set_selected(2), v2),
-            Span(:class => "text-stone-400", ", "),
-            Button(:class => () -> selected() == 3 ? "px-3 py-1 bg-cyan-500 text-white rounded font-mono" : "px-3 py-1 bg-stone-200 dark:bg-stone-600 rounded font-mono text-stone-700 dark:text-white",
+            Span(:class => "text-warm-400", ", "),
+            Button(:class => () -> selected() == 3 ? "px-3 py-1 bg-accent-500 text-white rounded font-mono" : "px-3 py-1 bg-warm-200 dark:bg-warm-600 rounded font-mono text-warm-700 dark:text-white",
                 :on_click => () -> set_selected(3), v3),
-            Span(:class => "text-stone-400", ", "),
-            Button(:class => () -> selected() == 4 ? "px-3 py-1 bg-cyan-500 text-white rounded font-mono" : "px-3 py-1 bg-stone-200 dark:bg-stone-600 rounded font-mono text-stone-700 dark:text-white",
+            Span(:class => "text-warm-400", ", "),
+            Button(:class => () -> selected() == 4 ? "px-3 py-1 bg-accent-500 text-white rounded font-mono" : "px-3 py-1 bg-warm-200 dark:bg-warm-600 rounded font-mono text-warm-700 dark:text-white",
                 :on_click => () -> set_selected(4), v4),
-            Span(:class => "text-stone-400", ", "),
-            Button(:class => () -> selected() == 5 ? "px-3 py-1 bg-cyan-500 text-white rounded font-mono" : "px-3 py-1 bg-stone-200 dark:bg-stone-600 rounded font-mono text-stone-700 dark:text-white",
+            Span(:class => "text-warm-400", ", "),
+            Button(:class => () -> selected() == 5 ? "px-3 py-1 bg-accent-500 text-white rounded font-mono" : "px-3 py-1 bg-warm-200 dark:bg-warm-600 rounded font-mono text-warm-700 dark:text-white",
                 :on_click => () -> set_selected(5), v5),
-            Span(:class => "text-stone-500 dark:text-stone-400", "]")
+            Span(:class => "text-warm-500 dark:text-warm-400", "]")
         ),
 
         # New value input
         Div(:class => "flex items-center gap-3",
-            Span(:class => "text-sm text-stone-600 dark:text-stone-400", "arr["),
-            Span(:class => "text-cyan-500 font-mono font-bold", selected),
-            Span(:class => "text-sm text-stone-600 dark:text-stone-400", "] = "),
-            Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+            Span(:class => "text-sm text-warm-600 dark:text-warm-400", "arr["),
+            Span(:class => "text-accent-500 font-mono font-bold", selected),
+            Span(:class => "text-sm text-warm-600 dark:text-warm-400", "] = "),
+            Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                 :on_click => () -> set_new_val(new_val() - 10), "-"),
-            Span(:class => "text-cyan-500 font-mono font-bold w-12 text-center", new_val),
-            Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white",
+            Span(:class => "text-accent-500 font-mono font-bold w-12 text-center", new_val),
+            Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white",
                 :on_click => () -> set_new_val(new_val() + 10), "+")
         ),
 
         # Set button
-        Button(:class => "px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg font-medium",
+        Button(:class => "px-4 py-2 bg-accent-500 hover:bg-accent-600 text-white rounded-lg font-medium",
             :on_click => () -> begin
                 idx = selected()
                 val = new_val()
@@ -2715,7 +2715,7 @@ VectorMutationDemo = island(:VectorMutationDemo) do
             end, "Set Value"
         ),
 
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400", "Click element to select, adjust value, then Set")
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400", "Click element to select, adjust value, then Set")
     )
 end
 
@@ -2734,39 +2734,39 @@ MatrixDemo = island(:MatrixDemo) do
         # Matrix grid - values are static since matrix doesn't change
         Div(:class => "grid grid-cols-3 gap-1",
             # Row 1
-            Button(:class => () -> sel_row() == 1 && sel_col() == 1 ? "w-12 h-12 bg-cyan-500 text-white rounded font-mono text-lg" : "w-12 h-12 bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white rounded font-mono text-lg hover:bg-stone-300 dark:hover:bg-stone-500",
+            Button(:class => () -> sel_row() == 1 && sel_col() == 1 ? "w-12 h-12 bg-accent-500 text-white rounded font-mono text-lg" : "w-12 h-12 bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white rounded font-mono text-lg hover:bg-warm-300 dark:hover:bg-warm-500",
                 :on_click => () -> begin set_sel_row(1); set_sel_col(1); set_display_val(1) end, "1"),
-            Button(:class => () -> sel_row() == 1 && sel_col() == 2 ? "w-12 h-12 bg-cyan-500 text-white rounded font-mono text-lg" : "w-12 h-12 bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white rounded font-mono text-lg hover:bg-stone-300 dark:hover:bg-stone-500",
+            Button(:class => () -> sel_row() == 1 && sel_col() == 2 ? "w-12 h-12 bg-accent-500 text-white rounded font-mono text-lg" : "w-12 h-12 bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white rounded font-mono text-lg hover:bg-warm-300 dark:hover:bg-warm-500",
                 :on_click => () -> begin set_sel_row(1); set_sel_col(2); set_display_val(2) end, "2"),
-            Button(:class => () -> sel_row() == 1 && sel_col() == 3 ? "w-12 h-12 bg-cyan-500 text-white rounded font-mono text-lg" : "w-12 h-12 bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white rounded font-mono text-lg hover:bg-stone-300 dark:hover:bg-stone-500",
+            Button(:class => () -> sel_row() == 1 && sel_col() == 3 ? "w-12 h-12 bg-accent-500 text-white rounded font-mono text-lg" : "w-12 h-12 bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white rounded font-mono text-lg hover:bg-warm-300 dark:hover:bg-warm-500",
                 :on_click => () -> begin set_sel_row(1); set_sel_col(3); set_display_val(3) end, "3"),
             # Row 2
-            Button(:class => () -> sel_row() == 2 && sel_col() == 1 ? "w-12 h-12 bg-cyan-500 text-white rounded font-mono text-lg" : "w-12 h-12 bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white rounded font-mono text-lg hover:bg-stone-300 dark:hover:bg-stone-500",
+            Button(:class => () -> sel_row() == 2 && sel_col() == 1 ? "w-12 h-12 bg-accent-500 text-white rounded font-mono text-lg" : "w-12 h-12 bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white rounded font-mono text-lg hover:bg-warm-300 dark:hover:bg-warm-500",
                 :on_click => () -> begin set_sel_row(2); set_sel_col(1); set_display_val(4) end, "4"),
-            Button(:class => () -> sel_row() == 2 && sel_col() == 2 ? "w-12 h-12 bg-cyan-500 text-white rounded font-mono text-lg" : "w-12 h-12 bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white rounded font-mono text-lg hover:bg-stone-300 dark:hover:bg-stone-500",
+            Button(:class => () -> sel_row() == 2 && sel_col() == 2 ? "w-12 h-12 bg-accent-500 text-white rounded font-mono text-lg" : "w-12 h-12 bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white rounded font-mono text-lg hover:bg-warm-300 dark:hover:bg-warm-500",
                 :on_click => () -> begin set_sel_row(2); set_sel_col(2); set_display_val(5) end, "5"),
-            Button(:class => () -> sel_row() == 2 && sel_col() == 3 ? "w-12 h-12 bg-cyan-500 text-white rounded font-mono text-lg" : "w-12 h-12 bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white rounded font-mono text-lg hover:bg-stone-300 dark:hover:bg-stone-500",
+            Button(:class => () -> sel_row() == 2 && sel_col() == 3 ? "w-12 h-12 bg-accent-500 text-white rounded font-mono text-lg" : "w-12 h-12 bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white rounded font-mono text-lg hover:bg-warm-300 dark:hover:bg-warm-500",
                 :on_click => () -> begin set_sel_row(2); set_sel_col(3); set_display_val(6) end, "6"),
             # Row 3
-            Button(:class => () -> sel_row() == 3 && sel_col() == 1 ? "w-12 h-12 bg-cyan-500 text-white rounded font-mono text-lg" : "w-12 h-12 bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white rounded font-mono text-lg hover:bg-stone-300 dark:hover:bg-stone-500",
+            Button(:class => () -> sel_row() == 3 && sel_col() == 1 ? "w-12 h-12 bg-accent-500 text-white rounded font-mono text-lg" : "w-12 h-12 bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white rounded font-mono text-lg hover:bg-warm-300 dark:hover:bg-warm-500",
                 :on_click => () -> begin set_sel_row(3); set_sel_col(1); set_display_val(7) end, "7"),
-            Button(:class => () -> sel_row() == 3 && sel_col() == 2 ? "w-12 h-12 bg-cyan-500 text-white rounded font-mono text-lg" : "w-12 h-12 bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white rounded font-mono text-lg hover:bg-stone-300 dark:hover:bg-stone-500",
+            Button(:class => () -> sel_row() == 3 && sel_col() == 2 ? "w-12 h-12 bg-accent-500 text-white rounded font-mono text-lg" : "w-12 h-12 bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white rounded font-mono text-lg hover:bg-warm-300 dark:hover:bg-warm-500",
                 :on_click => () -> begin set_sel_row(3); set_sel_col(2); set_display_val(8) end, "8"),
-            Button(:class => () -> sel_row() == 3 && sel_col() == 3 ? "w-12 h-12 bg-cyan-500 text-white rounded font-mono text-lg" : "w-12 h-12 bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white rounded font-mono text-lg hover:bg-stone-300 dark:hover:bg-stone-500",
+            Button(:class => () -> sel_row() == 3 && sel_col() == 3 ? "w-12 h-12 bg-accent-500 text-white rounded font-mono text-lg" : "w-12 h-12 bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white rounded font-mono text-lg hover:bg-warm-300 dark:hover:bg-warm-500",
                 :on_click => () -> begin set_sel_row(3); set_sel_col(3); set_display_val(9) end, "9")
         ),
 
         # Selected cell info - use display_val signal
-        Div(:class => "p-3 bg-stone-100 dark:bg-stone-700 rounded-lg min-w-[200px] text-center",
-            Span(:class => "text-stone-600 dark:text-stone-300 font-mono", "mat["),
-            Span(:class => "text-cyan-500 font-bold", sel_row),
-            Span(:class => "text-stone-600 dark:text-stone-300 font-mono", ", "),
-            Span(:class => "text-cyan-500 font-bold", sel_col),
-            Span(:class => "text-stone-600 dark:text-stone-300 font-mono", "] = "),
-            Span(:class => "text-cyan-500 font-bold text-xl font-mono", display_val)
+        Div(:class => "p-3 bg-warm-100 dark:bg-warm-700 rounded-lg min-w-[200px] text-center",
+            Span(:class => "text-warm-600 dark:text-warm-300 font-mono", "mat["),
+            Span(:class => "text-accent-500 font-bold", sel_row),
+            Span(:class => "text-warm-600 dark:text-warm-300 font-mono", ", "),
+            Span(:class => "text-accent-500 font-bold", sel_col),
+            Span(:class => "text-warm-600 dark:text-warm-300 font-mono", "] = "),
+            Span(:class => "text-accent-500 font-bold text-xl font-mono", display_val)
         ),
 
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400", "Click a cell to see its [row, col] coordinates")
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400", "Click a cell to see its [row, col] coordinates")
     )
 end
 
@@ -2784,32 +2784,32 @@ ArrayIterationDemo = island(:ArrayIterationDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[220px] gap-4",
         # Array visualization with current position highlighted
         Div(:class => "flex items-center gap-1",
-            Span(:class => "text-stone-500 dark:text-stone-400 font-mono", "arr = ["),
-            Span(:class => () -> idx() == 1 ? "px-2 py-1 bg-cyan-500 text-white rounded font-mono" : "px-2 py-1 bg-stone-200 dark:bg-stone-600 rounded font-mono text-stone-700 dark:text-white", "10"),
-            Span(:class => "text-stone-400", ", "),
-            Span(:class => () -> idx() == 2 ? "px-2 py-1 bg-cyan-500 text-white rounded font-mono" : "px-2 py-1 bg-stone-200 dark:bg-stone-600 rounded font-mono text-stone-700 dark:text-white", "20"),
-            Span(:class => "text-stone-400", ", "),
-            Span(:class => () -> idx() == 3 ? "px-2 py-1 bg-cyan-500 text-white rounded font-mono" : "px-2 py-1 bg-stone-200 dark:bg-stone-600 rounded font-mono text-stone-700 dark:text-white", "30"),
-            Span(:class => "text-stone-400", ", "),
-            Span(:class => () -> idx() == 4 ? "px-2 py-1 bg-cyan-500 text-white rounded font-mono" : "px-2 py-1 bg-stone-200 dark:bg-stone-600 rounded font-mono text-stone-700 dark:text-white", "40"),
-            Span(:class => "text-stone-500 dark:text-stone-400 font-mono", "]")
+            Span(:class => "text-warm-500 dark:text-warm-400 font-mono", "arr = ["),
+            Span(:class => () -> idx() == 1 ? "px-2 py-1 bg-accent-500 text-white rounded font-mono" : "px-2 py-1 bg-warm-200 dark:bg-warm-600 rounded font-mono text-warm-700 dark:text-white", "10"),
+            Span(:class => "text-warm-400", ", "),
+            Span(:class => () -> idx() == 2 ? "px-2 py-1 bg-accent-500 text-white rounded font-mono" : "px-2 py-1 bg-warm-200 dark:bg-warm-600 rounded font-mono text-warm-700 dark:text-white", "20"),
+            Span(:class => "text-warm-400", ", "),
+            Span(:class => () -> idx() == 3 ? "px-2 py-1 bg-accent-500 text-white rounded font-mono" : "px-2 py-1 bg-warm-200 dark:bg-warm-600 rounded font-mono text-warm-700 dark:text-white", "30"),
+            Span(:class => "text-warm-400", ", "),
+            Span(:class => () -> idx() == 4 ? "px-2 py-1 bg-accent-500 text-white rounded font-mono" : "px-2 py-1 bg-warm-200 dark:bg-warm-600 rounded font-mono text-warm-700 dark:text-white", "40"),
+            Span(:class => "text-warm-500 dark:text-warm-400 font-mono", "]")
         ),
 
         # Current index and sum display
         Div(:class => "grid grid-cols-2 gap-3",
-            Div(:class => "p-3 bg-stone-100 dark:bg-stone-700 rounded-lg text-center",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400 block mb-1", "index"),
-                Span(:class => "text-cyan-500 font-bold text-2xl font-mono", idx)
+            Div(:class => "p-3 bg-warm-100 dark:bg-warm-700 rounded-lg text-center",
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400 block mb-1", "index"),
+                Span(:class => "text-accent-500 font-bold text-2xl font-mono", idx)
             ),
-            Div(:class => "p-3 bg-stone-100 dark:bg-stone-700 rounded-lg text-center",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400 block mb-1", "sum"),
-                Span(:class => "text-cyan-500 font-bold text-2xl font-mono", running_sum)
+            Div(:class => "p-3 bg-warm-100 dark:bg-warm-700 rounded-lg text-center",
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400 block mb-1", "sum"),
+                Span(:class => "text-accent-500 font-bold text-2xl font-mono", running_sum)
             )
         ),
 
         # Controls
         Div(:class => "flex gap-2",
-            Button(:class => "px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg font-medium transition-colors",
+            Button(:class => "px-4 py-2 bg-accent-500 hover:bg-accent-600 text-white rounded-lg font-medium transition-colors",
                 :on_click => () -> begin
                     current = idx()
                     if current < 4
@@ -2828,7 +2828,7 @@ ArrayIterationDemo = island(:ArrayIterationDemo) do
                     end
                 end, "Step"
             ),
-            Button(:class => "px-4 py-2 bg-stone-200 dark:bg-stone-600 text-stone-700 dark:text-white rounded-lg font-medium hover:bg-stone-300 dark:hover:bg-stone-500 transition-colors",
+            Button(:class => "px-4 py-2 bg-warm-200 dark:bg-warm-600 text-warm-700 dark:text-white rounded-lg font-medium hover:bg-warm-300 dark:hover:bg-warm-500 transition-colors",
                 :on_click => () -> begin
                     set_idx(0)
                     set_running_sum(0)
@@ -2836,7 +2836,7 @@ ArrayIterationDemo = island(:ArrayIterationDemo) do
             )
         ),
 
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400", "Click Step to iterate, watch sum accumulate (total: 100)")
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400", "Click Step to iterate, watch sum accumulate (total: 100)")
     )
 end
 
@@ -2859,10 +2859,10 @@ ArraySumDemo = island(:ArraySumDemo) do
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[250px] gap-4",
         # Array with adjustable values
         Div(:class => "flex items-center gap-1 flex-wrap justify-center",
-            Span(:class => "text-stone-500 dark:text-stone-400", "["),
+            Span(:class => "text-warm-500 dark:text-warm-400", "["),
             # Element 1
             Div(:class => "flex flex-col items-center",
-                Button(:class => "w-6 h-5 rounded-t bg-stone-200 dark:bg-stone-600 text-xs",
+                Button(:class => "w-6 h-5 rounded-t bg-warm-200 dark:bg-warm-600 text-xs",
                     :on_click => () -> begin
                         nv = v1() + 5
                         set_v1(nv)
@@ -2870,8 +2870,8 @@ ArraySumDemo = island(:ArraySumDemo) do
                         set_sum_val(total)
                         set_avg_val(div(total, 5))
                     end, "+"),
-                Span(:class => "px-2 py-1 bg-cyan-100 dark:bg-cyan-900/30 font-mono text-cyan-600 dark:text-cyan-400 w-10 text-center", v1),
-                Button(:class => "w-6 h-5 rounded-b bg-stone-200 dark:bg-stone-600 text-xs",
+                Span(:class => "px-2 py-1 bg-accent-100 dark:bg-accent-900/30 font-mono text-accent-600 dark:text-accent-400 w-10 text-center", v1),
+                Button(:class => "w-6 h-5 rounded-b bg-warm-200 dark:bg-warm-600 text-xs",
                     :on_click => () -> begin
                         nv = v1() - 5
                         set_v1(nv)
@@ -2880,10 +2880,10 @@ ArraySumDemo = island(:ArraySumDemo) do
                         set_avg_val(div(total, 5))
                     end, "-")
             ),
-            Span(:class => "text-stone-400 mx-1", ","),
+            Span(:class => "text-warm-400 mx-1", ","),
             # Element 2
             Div(:class => "flex flex-col items-center",
-                Button(:class => "w-6 h-5 rounded-t bg-stone-200 dark:bg-stone-600 text-xs",
+                Button(:class => "w-6 h-5 rounded-t bg-warm-200 dark:bg-warm-600 text-xs",
                     :on_click => () -> begin
                         nv = v2() + 5
                         set_v2(nv)
@@ -2891,8 +2891,8 @@ ArraySumDemo = island(:ArraySumDemo) do
                         set_sum_val(total)
                         set_avg_val(div(total, 5))
                     end, "+"),
-                Span(:class => "px-2 py-1 bg-cyan-100 dark:bg-cyan-900/30 font-mono text-cyan-600 dark:text-cyan-400 w-10 text-center", v2),
-                Button(:class => "w-6 h-5 rounded-b bg-stone-200 dark:bg-stone-600 text-xs",
+                Span(:class => "px-2 py-1 bg-accent-100 dark:bg-accent-900/30 font-mono text-accent-600 dark:text-accent-400 w-10 text-center", v2),
+                Button(:class => "w-6 h-5 rounded-b bg-warm-200 dark:bg-warm-600 text-xs",
                     :on_click => () -> begin
                         nv = v2() - 5
                         set_v2(nv)
@@ -2901,10 +2901,10 @@ ArraySumDemo = island(:ArraySumDemo) do
                         set_avg_val(div(total, 5))
                     end, "-")
             ),
-            Span(:class => "text-stone-400 mx-1", ","),
+            Span(:class => "text-warm-400 mx-1", ","),
             # Element 3
             Div(:class => "flex flex-col items-center",
-                Button(:class => "w-6 h-5 rounded-t bg-stone-200 dark:bg-stone-600 text-xs",
+                Button(:class => "w-6 h-5 rounded-t bg-warm-200 dark:bg-warm-600 text-xs",
                     :on_click => () -> begin
                         nv = v3() + 5
                         set_v3(nv)
@@ -2912,8 +2912,8 @@ ArraySumDemo = island(:ArraySumDemo) do
                         set_sum_val(total)
                         set_avg_val(div(total, 5))
                     end, "+"),
-                Span(:class => "px-2 py-1 bg-cyan-100 dark:bg-cyan-900/30 font-mono text-cyan-600 dark:text-cyan-400 w-10 text-center", v3),
-                Button(:class => "w-6 h-5 rounded-b bg-stone-200 dark:bg-stone-600 text-xs",
+                Span(:class => "px-2 py-1 bg-accent-100 dark:bg-accent-900/30 font-mono text-accent-600 dark:text-accent-400 w-10 text-center", v3),
+                Button(:class => "w-6 h-5 rounded-b bg-warm-200 dark:bg-warm-600 text-xs",
                     :on_click => () -> begin
                         nv = v3() - 5
                         set_v3(nv)
@@ -2922,10 +2922,10 @@ ArraySumDemo = island(:ArraySumDemo) do
                         set_avg_val(div(total, 5))
                     end, "-")
             ),
-            Span(:class => "text-stone-400 mx-1", ","),
+            Span(:class => "text-warm-400 mx-1", ","),
             # Element 4
             Div(:class => "flex flex-col items-center",
-                Button(:class => "w-6 h-5 rounded-t bg-stone-200 dark:bg-stone-600 text-xs",
+                Button(:class => "w-6 h-5 rounded-t bg-warm-200 dark:bg-warm-600 text-xs",
                     :on_click => () -> begin
                         nv = v4() + 5
                         set_v4(nv)
@@ -2933,8 +2933,8 @@ ArraySumDemo = island(:ArraySumDemo) do
                         set_sum_val(total)
                         set_avg_val(div(total, 5))
                     end, "+"),
-                Span(:class => "px-2 py-1 bg-cyan-100 dark:bg-cyan-900/30 font-mono text-cyan-600 dark:text-cyan-400 w-10 text-center", v4),
-                Button(:class => "w-6 h-5 rounded-b bg-stone-200 dark:bg-stone-600 text-xs",
+                Span(:class => "px-2 py-1 bg-accent-100 dark:bg-accent-900/30 font-mono text-accent-600 dark:text-accent-400 w-10 text-center", v4),
+                Button(:class => "w-6 h-5 rounded-b bg-warm-200 dark:bg-warm-600 text-xs",
                     :on_click => () -> begin
                         nv = v4() - 5
                         set_v4(nv)
@@ -2943,10 +2943,10 @@ ArraySumDemo = island(:ArraySumDemo) do
                         set_avg_val(div(total, 5))
                     end, "-")
             ),
-            Span(:class => "text-stone-400 mx-1", ","),
+            Span(:class => "text-warm-400 mx-1", ","),
             # Element 5
             Div(:class => "flex flex-col items-center",
-                Button(:class => "w-6 h-5 rounded-t bg-stone-200 dark:bg-stone-600 text-xs",
+                Button(:class => "w-6 h-5 rounded-t bg-warm-200 dark:bg-warm-600 text-xs",
                     :on_click => () -> begin
                         nv = v5() + 5
                         set_v5(nv)
@@ -2954,8 +2954,8 @@ ArraySumDemo = island(:ArraySumDemo) do
                         set_sum_val(total)
                         set_avg_val(div(total, 5))
                     end, "+"),
-                Span(:class => "px-2 py-1 bg-cyan-100 dark:bg-cyan-900/30 font-mono text-cyan-600 dark:text-cyan-400 w-10 text-center", v5),
-                Button(:class => "w-6 h-5 rounded-b bg-stone-200 dark:bg-stone-600 text-xs",
+                Span(:class => "px-2 py-1 bg-accent-100 dark:bg-accent-900/30 font-mono text-accent-600 dark:text-accent-400 w-10 text-center", v5),
+                Button(:class => "w-6 h-5 rounded-b bg-warm-200 dark:bg-warm-600 text-xs",
                     :on_click => () -> begin
                         nv = v5() - 5
                         set_v5(nv)
@@ -2964,22 +2964,22 @@ ArraySumDemo = island(:ArraySumDemo) do
                         set_avg_val(div(total, 5))
                     end, "-")
             ),
-            Span(:class => "text-stone-500 dark:text-stone-400", "]")
+            Span(:class => "text-warm-500 dark:text-warm-400", "]")
         ),
 
         # Sum and average display - use signal getters directly (not closures)
         Div(:class => "grid grid-cols-2 gap-4",
-            Div(:class => "p-3 bg-stone-100 dark:bg-stone-700 rounded-lg text-center",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400 block mb-1", "sum"),
-                Span(:class => "text-cyan-500 font-bold text-2xl font-mono", sum_val)
+            Div(:class => "p-3 bg-warm-100 dark:bg-warm-700 rounded-lg text-center",
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400 block mb-1", "sum"),
+                Span(:class => "text-accent-500 font-bold text-2xl font-mono", sum_val)
             ),
-            Div(:class => "p-3 bg-stone-100 dark:bg-stone-700 rounded-lg text-center",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400 block mb-1", "average"),
-                Span(:class => "text-cyan-500 font-bold text-2xl font-mono", avg_val)
+            Div(:class => "p-3 bg-warm-100 dark:bg-warm-700 rounded-lg text-center",
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400 block mb-1", "average"),
+                Span(:class => "text-accent-500 font-bold text-2xl font-mono", avg_val)
             )
         ),
 
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400", "Adjust array values to see sum and average update")
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400", "Adjust array values to see sum and average update")
     )
 end
 
@@ -3000,18 +3000,18 @@ FunctionReturnTupleDemo = island(:FunctionReturnTupleDemo) do
 
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[220px] gap-4",
         # Function definition display
-        Div(:class => "p-3 bg-stone-100 dark:bg-stone-700 rounded-lg text-sm font-mono text-center",
-            Span(:class => "text-stone-500 dark:text-stone-400", "sum_and_diff(a, b) = "),
-            Span(:class => "text-cyan-500", "(a + b, a - b)")
+        Div(:class => "p-3 bg-warm-100 dark:bg-warm-700 rounded-lg text-sm font-mono text-center",
+            Span(:class => "text-warm-500 dark:text-warm-400", "sum_and_diff(a, b) = "),
+            Span(:class => "text-accent-500", "(a + b, a - b)")
         ),
 
         # Input controls
         Div(:class => "flex items-center gap-4",
             # Input a
             Div(:class => "flex flex-col items-center gap-1",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400", "a"),
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400", "a"),
                 Div(:class => "flex items-center gap-1",
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> begin
                             nv = a() - 1
                             set_a(nv)
@@ -3019,7 +3019,7 @@ FunctionReturnTupleDemo = island(:FunctionReturnTupleDemo) do
                             set_diff(nv - b())
                         end, "-"),
                     Span(:class => "w-10 text-center font-mono text-lg", a),
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> begin
                             nv = a() + 1
                             set_a(nv)
@@ -3030,9 +3030,9 @@ FunctionReturnTupleDemo = island(:FunctionReturnTupleDemo) do
             ),
             # Input b
             Div(:class => "flex flex-col items-center gap-1",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400", "b"),
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400", "b"),
                 Div(:class => "flex items-center gap-1",
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> begin
                             nv = b() - 1
                             set_b(nv)
@@ -3040,7 +3040,7 @@ FunctionReturnTupleDemo = island(:FunctionReturnTupleDemo) do
                             set_diff(a() - nv)
                         end, "-"),
                     Span(:class => "w-10 text-center font-mono text-lg", b),
-                    Button(:class => "w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 text-sm",
+                    Button(:class => "w-6 h-6 rounded bg-warm-200 dark:bg-warm-600 text-sm",
                         :on_click => () -> begin
                             nv = b() + 1
                             set_b(nv)
@@ -3052,16 +3052,16 @@ FunctionReturnTupleDemo = island(:FunctionReturnTupleDemo) do
         ),
 
         # Result tuple display
-        Div(:class => "p-4 bg-gradient-to-r from-cyan-50 to-teal-50 dark:from-cyan-900/20 dark:to-teal-900/20 rounded-lg",
+        Div(:class => "p-4 bg-gradient-to-r from-accent-50 to-accent-50 dark:from-accent-900/20 dark:to-accent-900/20 rounded-lg",
             Div(:class => "text-center",
-                Span(:class => "text-sm text-stone-500 dark:text-stone-400", "result = "),
-                Span(:class => "text-cyan-500 font-mono text-lg", "("),
-                Span(:class => "text-cyan-600 dark:text-cyan-400 font-mono font-bold text-xl", sum_result),
-                Span(:class => "text-cyan-500 font-mono text-lg", ", "),
-                Span(:class => "text-cyan-600 dark:text-cyan-400 font-mono font-bold text-xl", diff_result),
-                Span(:class => "text-cyan-500 font-mono text-lg", ")")
+                Span(:class => "text-sm text-warm-500 dark:text-warm-400", "result = "),
+                Span(:class => "text-accent-500 font-mono text-lg", "("),
+                Span(:class => "text-accent-600 dark:text-accent-400 font-mono font-bold text-xl", sum_result),
+                Span(:class => "text-accent-500 font-mono text-lg", ", "),
+                Span(:class => "text-accent-600 dark:text-accent-400 font-mono font-bold text-xl", diff_result),
+                Span(:class => "text-accent-500 font-mono text-lg", ")")
             ),
-            Div(:class => "flex justify-center gap-6 mt-2 text-xs text-stone-500 dark:text-stone-400",
+            Div(:class => "flex justify-center gap-6 mt-2 text-xs text-warm-500 dark:text-warm-400",
                 Span("result[1] = sum"),
                 Span("result[2] = diff")
             )
@@ -3082,22 +3082,22 @@ MixedTypeTupleDemo = island(:MixedTypeTupleDemo) do
 
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[200px] gap-4",
         # Tuple visualization
-        Div(:class => "p-4 bg-stone-100 dark:bg-stone-700 rounded-lg",
-            Span(:class => "text-stone-500 dark:text-stone-400 text-sm", "mixed = "),
-            Span(:class => "text-cyan-500 font-mono text-lg", "("),
+        Div(:class => "p-4 bg-warm-100 dark:bg-warm-700 rounded-lg",
+            Span(:class => "text-warm-500 dark:text-warm-400 text-sm", "mixed = "),
+            Span(:class => "text-accent-500 font-mono text-lg", "("),
             Span(:class => "text-blue-500 font-mono font-bold", int_val),
-            Span(:class => "text-stone-400", " :: Int32"),
-            Span(:class => "text-cyan-500 font-mono", ", "),
+            Span(:class => "text-warm-400", " :: Int32"),
+            Span(:class => "text-accent-500 font-mono", ", "),
             Span(:class => "text-green-500 font-mono font-bold", "3.14"),
-            Span(:class => "text-stone-400", " :: Float64"),
-            Span(:class => "text-cyan-500 font-mono", ", "),
+            Span(:class => "text-warm-400", " :: Float64"),
+            Span(:class => "text-accent-500 font-mono", ", "),
             Span(:id => "mixed-bool-display", :class => "text-amber-500 font-mono font-bold", "true"),
-            Span(:class => "text-stone-400", " :: Bool"),
-            Span(:class => "text-cyan-500 font-mono text-lg", ")")
+            Span(:class => "text-warm-400", " :: Bool"),
+            Span(:class => "text-accent-500 font-mono text-lg", ")")
         ),
 
         # Type info
-        Div(:class => "text-xs text-stone-500 dark:text-stone-400 text-center",
+        Div(:class => "text-xs text-warm-500 dark:text-warm-400 text-center",
             "typeof(mixed) = Tuple{Int32, Float64, Bool}"
         ),
 
@@ -3105,7 +3105,7 @@ MixedTypeTupleDemo = island(:MixedTypeTupleDemo) do
         Div(:class => "flex items-center gap-6",
             # Integer control
             Div(:class => "flex flex-col items-center gap-1",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400", "mixed[1]"),
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400", "mixed[1]"),
                 Div(:class => "flex items-center gap-1",
                     Button(:class => "w-6 h-6 rounded bg-blue-200 dark:bg-blue-800 text-blue-800 dark:text-blue-200 text-sm",
                         :on_click => () -> set_int(int_val() - 1), "-"),
@@ -3116,7 +3116,7 @@ MixedTypeTupleDemo = island(:MixedTypeTupleDemo) do
             ),
             # Bool toggle - uses JS onclick to update display, signal tracks state for potential future use
             Div(:class => "flex flex-col items-center gap-1",
-                Span(:class => "text-xs text-stone-500 dark:text-stone-400", "mixed[3]"),
+                Span(:class => "text-xs text-warm-500 dark:text-warm-400", "mixed[3]"),
                 Button(:id => "mixed-bool-btn",
                     :class => "px-4 py-1 rounded bg-amber-500 text-white font-mono",
                     :onclick => """
@@ -3125,7 +3125,7 @@ MixedTypeTupleDemo = island(:MixedTypeTupleDemo) do
                         if (display.textContent === 'true') {
                             display.textContent = 'false';
                             btn.textContent = 'false';
-                            btn.className = 'px-4 py-1 rounded bg-stone-300 dark:bg-stone-600 text-stone-600 dark:text-stone-300 font-mono';
+                            btn.className = 'px-4 py-1 rounded bg-warm-300 dark:bg-warm-600 text-warm-600 dark:text-warm-300 font-mono';
                         } else {
                             display.textContent = 'true';
                             btn.textContent = 'true';
@@ -3137,7 +3137,7 @@ MixedTypeTupleDemo = island(:MixedTypeTupleDemo) do
             )
         ),
 
-        Span(:class => "text-xs text-stone-500 dark:text-stone-400 mt-2",
+        Span(:class => "text-xs text-warm-500 dark:text-warm-400 mt-2",
             "Tuples preserve the type of each element")
     )
 end

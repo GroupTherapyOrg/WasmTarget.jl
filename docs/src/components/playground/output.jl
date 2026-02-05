@@ -16,7 +16,7 @@ include("examples.jl")
 Output state enumeration for visual feedback.
 """
 const OUTPUT_STATES = Dict(
-    "idle" => (color = "stone-500", text = "Ready"),
+    "idle" => (color = "warm-500", text = "Ready"),
     "loading" => (color = "yellow-500", text = "Loading..."),
     "running" => (color = "blue-500", text = "Running"),
     "success" => (color = "green-500", text = "Complete"),
@@ -43,17 +43,17 @@ function PlaygroundOutput(;
     initial_example::String = "arithmetic",
     show_console::Bool = false
 )
-    Div(:class => "flex flex-col h-full border border-stone-700 rounded-xl overflow-hidden",
+    Div(:class => "flex flex-col h-full border border-warm-700 rounded-xl overflow-hidden",
         :id => "playground-output",
 
         # Header bar with status
-        Div(:class => "flex items-center justify-between px-4 py-2 bg-stone-700 dark:bg-stone-800",
+        Div(:class => "flex items-center justify-between px-4 py-2 bg-warm-700 dark:bg-warm-800",
             # Title and output type indicator
             Div(:class => "flex items-center gap-3",
-                Span(:class => "text-stone-300 text-sm font-medium", "Output"),
+                Span(:class => "text-warm-300 text-sm font-medium", "Output"),
                 # Output type badge (changes based on what's displayed)
                 Span(:id => "output-type-badge",
-                    :class => "px-2 py-0.5 text-xs rounded-full bg-stone-600 text-stone-300",
+                    :class => "px-2 py-0.5 text-xs rounded-full bg-warm-600 text-warm-300",
                     "Interactive Demo"
                 )
             ),
@@ -61,7 +61,7 @@ function PlaygroundOutput(;
             Div(:class => "flex items-center gap-3",
                 # Execution time display
                 Span(:id => "output-exec-time",
-                    :class => "text-stone-500 text-xs hidden",
+                    :class => "text-warm-500 text-xs hidden",
                     ""
                 ),
                 # Status indicator
@@ -74,13 +74,13 @@ function PlaygroundOutput(;
                     ),
                     # Status text
                     Span(:id => "output-status-text",
-                        :class => "text-stone-400 text-xs",
+                        :class => "text-warm-400 text-xs",
                         "Ready"
                     )
                 ),
                 # Refresh button
                 Button(:id => "output-refresh-btn",
-                    :class => "text-stone-400 hover:text-white p-1 transition-colors",
+                    :class => "text-warm-400 hover:text-white p-1 transition-colors",
                     :title => "Reset output",
                     Svg(:class => "w-4 h-4", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                         Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
@@ -96,16 +96,16 @@ function PlaygroundOutput(;
 
             # Loading overlay (hidden by default)
             Div(:id => "output-loading-overlay",
-                :class => "absolute inset-0 bg-stone-900/80 flex items-center justify-center z-20 hidden",
+                :class => "absolute inset-0 bg-warm-900/80 flex items-center justify-center z-20 hidden",
                 # Spinner
                 Div(:class => "flex flex-col items-center gap-3",
-                    Svg(:class => "w-8 h-8 text-cyan-500 animate-spin", :fill => "none", :viewBox => "0 0 24 24",
+                    Svg(:class => "w-8 h-8 text-accent-500 animate-spin", :fill => "none", :viewBox => "0 0 24 24",
                         Circle(:class => "opacity-25", :cx => "12", :cy => "12", :r => "10",
                                :stroke => "currentColor", :stroke_width => "4"),
                         Path(:class => "opacity-75", :fill => "currentColor",
                              :d => "M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z")
                     ),
-                    Span(:class => "text-stone-300 text-sm", "Loading example...")
+                    Span(:class => "text-warm-300 text-sm", "Loading example...")
                 )
             ),
 
@@ -126,13 +126,13 @@ function PlaygroundOutput(;
                                 "Error"
                             ),
                             Div(:id => "output-error-message",
-                                :class => "text-stone-400 text-xs mt-1 font-mono whitespace-pre-wrap",
+                                :class => "text-warm-400 text-xs mt-1 font-mono whitespace-pre-wrap",
                                 ""
                             )
                         ),
                         # Dismiss button
                         Button(:id => "output-error-dismiss",
-                            :class => "text-stone-500 hover:text-white p-1",
+                            :class => "text-warm-500 hover:text-white p-1",
                             Svg(:class => "w-4 h-4", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                                 Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
                                     :d => "M6 18L18 6M6 6l12 12")
@@ -144,7 +144,7 @@ function PlaygroundOutput(;
 
             # Demo/Island output area
             Div(:id => "output-demo-area",
-                :class => "p-4 bg-stone-800 dark:bg-stone-900 min-h-[250px]",
+                :class => "p-4 bg-warm-800 dark:bg-warm-900 min-h-[250px]",
 
                 # Arithmetic demo
                 Div(:id => "demo-arithmetic",
@@ -173,11 +173,11 @@ function PlaygroundOutput(;
                 # Counter placeholder
                 Div(:id => "demo-counter",
                     :class => initial_example == "counter" ? "" : "hidden",
-                    Div(:class => "text-center p-8 bg-white dark:bg-stone-700 rounded-xl shadow-lg",
-                        Div(:class => "text-stone-400 text-sm mb-4",
+                    Div(:class => "text-center p-8 bg-warm-50 dark:bg-warm-700 rounded-xl shadow-lg",
+                        Div(:class => "text-warm-400 text-sm mb-4",
                             "Reactive Counter Demo"
                         ),
-                        Div(:class => "text-stone-500 text-xs",
+                        Div(:class => "text-warm-500 text-xs",
                             "The counter example demonstrates Therapy.jl signals. ",
                             "Full interactive version coming soon."
                         )
@@ -187,13 +187,13 @@ function PlaygroundOutput(;
                 # Unknown/fallback placeholder
                 Div(:id => "demo-unknown",
                     :class => "hidden",
-                    Div(:class => "text-center p-8 bg-stone-700 rounded-lg",
-                        Svg(:class => "w-12 h-12 mx-auto mb-3 text-stone-500", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
+                    Div(:class => "text-center p-8 bg-warm-700 rounded-lg",
+                        Svg(:class => "w-12 h-12 mx-auto mb-3 text-warm-500", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                             Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
                                 :d => "M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z")
                         ),
-                        Div(:class => "text-stone-400 text-sm mb-2", "Example Not Available"),
-                        Div(:class => "text-stone-500 text-xs",
+                        Div(:class => "text-warm-400 text-sm mb-2", "Example Not Available"),
+                        Div(:class => "text-warm-500 text-xs",
                             "This example doesn't have an interactive demo yet."
                         )
                     )
@@ -203,30 +203,30 @@ function PlaygroundOutput(;
             # Console output area (optional, for Phase 2)
             show_console ?
                 Div(:id => "output-console-area",
-                    :class => "border-t border-stone-700 bg-stone-900 p-4 max-h-[150px] overflow-auto",
+                    :class => "border-t border-warm-700 bg-warm-900 p-4 max-h-[150px] overflow-auto",
                     Div(:class => "flex items-center justify-between mb-2",
-                        Span(:class => "text-stone-500 text-xs uppercase tracking-wider", "Console"),
+                        Span(:class => "text-warm-500 text-xs uppercase tracking-wider", "Console"),
                         Button(:id => "output-console-clear",
-                            :class => "text-stone-500 hover:text-white text-xs",
+                            :class => "text-warm-500 hover:text-white text-xs",
                             "Clear"
                         )
                     ),
                     Pre(:id => "output-console-content",
-                        :class => "text-stone-400 text-xs font-mono",
+                        :class => "text-warm-400 text-xs font-mono",
                         ""
                     )
                 ) : nothing
         ),
 
         # Footer with capabilities hint
-        Div(:class => "px-4 py-2 bg-stone-800 dark:bg-stone-850 border-t border-stone-700",
+        Div(:class => "px-4 py-2 bg-warm-800 dark:bg-warm-850 border-t border-warm-700",
             Div(:class => "flex items-center justify-between",
-                Span(:class => "text-stone-500 text-xs",
+                Span(:class => "text-warm-500 text-xs",
                     "Pre-compiled WebAssembly demos • Real Julia compiled by WasmTarget.jl"
                 ),
                 # Info link
                 A(:href => "#capabilities",
-                    :class => "text-cyan-500 hover:text-cyan-400 text-xs",
+                    :class => "text-accent-500 hover:text-accent-400 text-xs",
                     "What can I run?"
                 )
             )
@@ -261,7 +261,7 @@ function PlaygroundOutput(;
 
                 // State management
                 const states = {
-                    idle: { color: 'bg-stone-500', text: 'Ready' },
+                    idle: { color: 'bg-warm-500', text: 'Ready' },
                     loading: { color: 'bg-yellow-500 animate-pulse', text: 'Loading...' },
                     running: { color: 'bg-blue-500 animate-pulse', text: 'Running' },
                     success: { color: 'bg-green-500', text: 'Complete' },
@@ -361,7 +361,7 @@ function PlaygroundOutput(;
 
                     const line = document.createElement('div');
                     line.className = type === 'error' ? 'text-red-400' :
-                                    type === 'warn' ? 'text-yellow-400' : 'text-stone-400';
+                                    type === 'warn' ? 'text-yellow-400' : 'text-warm-400';
                     line.textContent = '> ' + message;
                     consoleContent.appendChild(line);
                     consoleContent.scrollTop = consoleContent.scrollHeight;
@@ -465,7 +465,7 @@ function ErrorDisplay(;
                 ),
                 # Dismiss button
                 dismissable ?
-                    Button(:class => "text-stone-500 hover:text-white p-1",
+                    Button(:class => "text-warm-500 hover:text-white p-1",
                         :onclick => "this.closest('.rounded-lg').remove()",
                         Svg(:class => "w-4 h-4", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                             Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
@@ -474,7 +474,7 @@ function ErrorDisplay(;
                     ) : nothing
             ),
             # Error message
-            Pre(:class => "text-stone-400 text-xs font-mono whitespace-pre-wrap bg-stone-900/50 p-3 rounded",
+            Pre(:class => "text-warm-400 text-xs font-mono whitespace-pre-wrap bg-warm-900/50 p-3 rounded",
                 message
             )
         )
@@ -493,13 +493,13 @@ function LoadingSpinner(;
     text::String = "Loading..."
 )
     Div(:class => "flex flex-col items-center gap-3",
-        Svg(:class => "$(size) text-cyan-500 animate-spin", :fill => "none", :viewBox => "0 0 24 24",
+        Svg(:class => "$(size) text-accent-500 animate-spin", :fill => "none", :viewBox => "0 0 24 24",
             Circle(:class => "opacity-25", :cx => "12", :cy => "12", :r => "10",
                    :stroke => "currentColor", :stroke_width => "4"),
             Path(:class => "opacity-75", :fill => "currentColor",
                  :d => "M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z")
         ),
-        Span(:class => "text-stone-300 text-sm", text)
+        Span(:class => "text-warm-300 text-sm", text)
     )
 end
 
@@ -528,29 +528,29 @@ function OutputTypeDisplay(; value, type::String = "auto")
         type
     end
 
-    Div(:class => "p-4 bg-stone-800 rounded-lg",
+    Div(:class => "p-4 bg-warm-800 rounded-lg",
         if actual_type == "number"
             # Numeric display - large centered number
             Div(:class => "text-center",
-                Span(:class => "text-cyan-400 font-mono text-4xl font-bold", string(value))
+                Span(:class => "text-accent-400 font-mono text-4xl font-bold", string(value))
             )
         elseif actual_type == "array"
             # Array display - formatted list
             Div(:class => "font-mono text-sm",
-                Pre(:class => "text-stone-300 whitespace-pre-wrap",
+                Pre(:class => "text-warm-300 whitespace-pre-wrap",
                     string(value)
                 )
             )
         elseif actual_type == "struct"
             # Struct display - property list
             Div(:class => "font-mono text-sm space-y-1",
-                Pre(:class => "text-stone-300",
+                Pre(:class => "text-warm-300",
                     string(value)
                 )
             )
         else
             # Default text display
-            Div(:class => "text-stone-300",
+            Div(:class => "text-warm-300",
                 string(value)
             )
         end
@@ -564,15 +564,15 @@ Shown below the output area to help users understand capabilities.
 """
 function CapabilitiesPanel()
     Div(:id => "capabilities",
-        :class => "mt-6 p-6 bg-stone-800 rounded-xl border border-stone-700",
+        :class => "mt-6 p-6 bg-warm-800 rounded-xl border border-warm-700",
 
         # Header
         Div(:class => "flex items-center gap-2 mb-4",
-            Svg(:class => "w-5 h-5 text-cyan-500", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
+            Svg(:class => "w-5 h-5 text-accent-500", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                 Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
                     :d => "M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z")
             ),
-            Span(:class => "text-stone-200 font-medium", "What Can I Run?")
+            Span(:class => "text-warm-200 font-medium", "What Can I Run?")
         ),
 
         # Capabilities grid
@@ -580,7 +580,7 @@ function CapabilitiesPanel()
             # Supported
             Div(:class => "space-y-2",
                 Span(:class => "text-green-400 text-sm font-medium", "Supported Features"),
-                Ul(:class => "text-stone-400 text-sm space-y-1 ml-4",
+                Ul(:class => "text-warm-400 text-sm space-y-1 ml-4",
                     Li("Arithmetic operations (add, subtract, multiply, divide)"),
                     Li("Recursive functions (factorial, fibonacci)"),
                     Li("Loops (while, for)"),
@@ -593,7 +593,7 @@ function CapabilitiesPanel()
             # Not supported
             Div(:class => "space-y-2",
                 Span(:class => "text-red-400 text-sm font-medium", "Current Limitations"),
-                Ul(:class => "text-stone-400 text-sm space-y-1 ml-4",
+                Ul(:class => "text-warm-400 text-sm space-y-1 ml-4",
                     Li("Multiple dispatch (Julia's core feature)"),
                     Li("Dynamic typing / type inference at runtime"),
                     Li("String operations (limited support)"),
@@ -606,13 +606,13 @@ function CapabilitiesPanel()
         ),
 
         # Note about MVP
-        Div(:class => "mt-4 p-3 bg-cyan-900/30 rounded-lg border border-cyan-700/50",
+        Div(:class => "mt-4 p-3 bg-accent-900/30 rounded-lg border border-accent-700/50",
             Div(:class => "flex items-start gap-2",
-                Svg(:class => "w-4 h-4 text-cyan-400 mt-0.5 flex-shrink-0", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
+                Svg(:class => "w-4 h-4 text-accent-400 mt-0.5 flex-shrink-0", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                     Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
                         :d => "M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z")
                 ),
-                Span(:class => "text-stone-300 text-xs",
+                Span(:class => "text-warm-300 text-xs",
                     "This playground shows pre-compiled examples. Custom code execution will be available in a future update with server-side compilation."
                 )
             )

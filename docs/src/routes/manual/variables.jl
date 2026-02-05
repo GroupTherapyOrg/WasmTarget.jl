@@ -21,23 +21,23 @@ Variables chapter for the Interactive Julia Manual.
 function Variables()
     ManualLayout(chapter_id="variables", chapter_title="Variables",
         # Title
-        H1(:class => "text-3xl font-bold text-stone-800 dark:text-stone-100 mb-4",
+        H1(:class => "text-3xl font-bold text-warm-800 dark:text-warm-100 mb-4",
             "Variables"
         ),
 
         # Introduction
-        P(:class => "text-lg text-stone-600 dark:text-stone-400 mb-8",
+        P(:class => "text-lg text-warm-600 dark:text-warm-400 mb-8",
             "A variable is a name that refers to a value. Julia makes it easy to assign values to names and use them throughout your program. This chapter covers how to create, name, and use variables in Julia."
         ),
 
         # Section: Variable Assignment
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Assignment"
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 mb-4",
+        P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "Use the ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "="),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "="),
             " operator to assign a value to a variable. The variable name goes on the left, and the value (or expression) goes on the right."
         ),
 
@@ -58,35 +58,35 @@ count = count + 1  # Increment: count is now 1""",
             example = CounterDemo
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 my-4",
+        P(:class => "text-warm-600 dark:text-warm-400 my-4",
             "Assignment in Julia is straightforward: the right-hand side is evaluated first, then the result is bound to the variable name on the left. When you write ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "y = x"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "y = x"),
             ", you're copying the ",
             Em("value"),
             " of ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "x"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "x"),
             " to ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "y"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "y"),
             ", not creating a link between them."
         ),
 
         # Section: Naming Conventions
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Naming Conventions"
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 mb-4",
+        P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "Julia has flexible naming rules for variables. Names must start with a letter (A-Z or a-z), underscore (_), or a Unicode character above 0x00A0. After the first character, you can also use digits (0-9) and exclamation marks (!)."
         ),
 
         # Code example for naming (no interactive demo needed)
-        Div(:class => "my-6 rounded-xl overflow-hidden border border-stone-200 dark:border-stone-700 shadow-sm",
-            Div(:class => "px-4 py-2 bg-stone-700 dark:bg-stone-800 flex justify-between items-center",
-                Span(:class => "text-stone-300 text-xs font-medium uppercase tracking-wider", "Julia"),
-                Span(:class => "text-stone-500 text-xs", "Naming examples")
+        Div(:class => "my-6 rounded-xl overflow-hidden border border-warm-200 dark:border-warm-700 shadow-sm",
+            Div(:class => "px-4 py-2 bg-warm-700 dark:bg-warm-800 flex justify-between items-center",
+                Span(:class => "text-warm-300 text-xs font-medium uppercase tracking-wider", "Julia"),
+                Span(:class => "text-warm-500 text-xs", "Naming examples")
             ),
-            Pre(:class => "bg-stone-800 dark:bg-stone-900 p-4 overflow-x-auto text-sm",
-                Code(:class => "language-julia text-stone-100 font-mono", """# Valid variable names
+            Pre(:class => "bg-warm-800 dark:bg-warm-900 p-4 overflow-x-auto text-sm",
+                Code(:class => "language-julia text-warm-100 font-mono", """# Valid variable names
 x = 1
 my_variable = 2
 myVariable = 3          # camelCase works
@@ -106,20 +106,20 @@ const MAX_SIZE = 1000""")
             )
         ),
 
-        Div(:class => "p-4 bg-cyan-50 dark:bg-cyan-900/20 rounded-xl border border-cyan-200 dark:border-cyan-800 my-6",
+        Div(:class => "p-4 bg-accent-50 dark:bg-accent-900/20 rounded-xl border border-accent-200 dark:border-accent-800 my-6",
             Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-cyan-600 dark:text-cyan-400 flex-shrink-0 mt-0.5",
+                Svg(:class => "w-5 h-5 text-accent-600 dark:text-accent-400 flex-shrink-0 mt-0.5",
                     :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                     Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
                          :d => "M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z")
                 ),
                 Div(
-                    P(:class => "text-sm text-cyan-800 dark:text-cyan-200 font-medium", "Style Tip"),
-                    P(:class => "text-sm text-cyan-700 dark:text-cyan-300 mt-1",
+                    P(:class => "text-sm text-accent-800 dark:text-accent-200 font-medium", "Style Tip"),
+                    P(:class => "text-sm text-accent-700 dark:text-accent-300 mt-1",
                         "Julia convention uses ",
-                        Code(:class => "text-cyan-600 dark:text-cyan-400", "snake_case"),
+                        Code(:class => "text-accent-600 dark:text-accent-400", "snake_case"),
                         " for variables and functions, and ",
-                        Code(:class => "text-cyan-600 dark:text-cyan-400", "PascalCase"),
+                        Code(:class => "text-accent-600 dark:text-accent-400", "PascalCase"),
                         " for types and modules. Following these conventions makes your code easier for others to read."
                     )
                 )
@@ -127,13 +127,13 @@ const MAX_SIZE = 1000""")
         ),
 
         # Section: Type Annotations
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Type Annotations"
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 mb-4",
+        P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "While Julia infers types automatically, you can explicitly annotate a variable's type using the ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "::"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "::"),
             " syntax. This is useful for performance and documentation."
         ),
 
@@ -154,26 +154,26 @@ e::Bool = true      # boolean (true/false)""",
             example = SimpleValueDemo
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 my-4",
+        P(:class => "text-warm-600 dark:text-warm-400 my-4",
             "In WasmTarget.jl, type annotations are particularly important because they guide the compiler in generating efficient WebAssembly code. The supported primitive types are ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "Int32"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Int32"),
             ", ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "Int64"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Int64"),
             ", ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "Float32"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Float32"),
             ", ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "Float64"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Float64"),
             ", and ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "Bool"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Bool"),
             "."
         ),
 
         # Section: Variables in Expressions
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Variables in Expressions"
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 mb-4",
+        P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "Variables can be used in any expression. When Julia evaluates an expression, it looks up the current value of each variable and uses it in the computation."
         ),
 
@@ -221,31 +221,31 @@ result = a + b""",
         ),
 
         # Summary
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Summary"
         ),
 
-        Ul(:class => "list-disc list-inside space-y-2 text-stone-600 dark:text-stone-400 mb-6",
-            Li("Use ", Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "="), " to assign values to variables"),
+        Ul(:class => "list-disc list-inside space-y-2 text-warm-600 dark:text-warm-400 mb-6",
+            Li("Use ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "="), " to assign values to variables"),
             Li("Variable names should start with a letter or underscore"),
-            Li("Follow Julia conventions: ", Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "snake_case"), " for variables, ", Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "PascalCase"), " for types"),
-            Li("Use ", Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "::Type"), " for explicit type annotations"),
-            Li("WasmTarget.jl supports ", Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "Int32"), ", ", Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "Int64"), ", ", Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "Float32"), ", ", Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "Float64"), ", and ", Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "Bool"))
+            Li("Follow Julia conventions: ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "snake_case"), " for variables, ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "PascalCase"), " for types"),
+            Li("Use ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "::Type"), " for explicit type annotations"),
+            Li("WasmTarget.jl supports ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Int32"), ", ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Int64"), ", ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Float32"), ", ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Float64"), ", and ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Bool"))
         ),
 
         # Next steps
-        Div(:class => "p-6 bg-gradient-to-r from-cyan-50 to-teal-50 dark:from-cyan-900/20 dark:to-teal-900/20 rounded-xl border border-cyan-200 dark:border-cyan-800",
-            H3(:class => "text-lg font-semibold text-stone-800 dark:text-stone-100 mb-2",
+        Div(:class => "p-6 bg-gradient-to-r from-accent-50 to-accent-50 dark:from-accent-900/20 dark:to-accent-900/20 rounded-xl border border-accent-200 dark:border-accent-800",
+            H3(:class => "text-lg font-semibold text-warm-800 dark:text-warm-100 mb-2",
                 "Next Steps"
             ),
-            P(:class => "text-stone-600 dark:text-stone-400",
+            P(:class => "text-warm-600 dark:text-warm-400",
                 "Now that you understand variables, continue to ",
                 A(:href => "../integers-floats/",
-                  :class => "text-cyan-600 dark:text-cyan-400 font-medium hover:underline",
+                  :class => "text-accent-600 dark:text-accent-400 font-medium hover:underline",
                   "Integers & Floating-Point Numbers"),
                 " to learn more about numeric types, or explore ",
                 A(:href => "../math-operations/",
-                  :class => "text-cyan-600 dark:text-cyan-400 font-medium hover:underline",
+                  :class => "text-accent-600 dark:text-accent-400 font-medium hover:underline",
                   "Mathematical Operations"),
                 " to see what you can do with these values."
             )

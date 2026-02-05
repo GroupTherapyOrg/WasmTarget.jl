@@ -22,25 +22,25 @@ Functions chapter for the Interactive Julia Manual.
 function Functions()
     ManualLayout(chapter_id="functions", chapter_title="Functions",
         # Title
-        H1(:class => "text-3xl font-bold text-stone-800 dark:text-stone-100 mb-4",
+        H1(:class => "text-3xl font-bold text-warm-800 dark:text-warm-100 mb-4",
             "Functions"
         ),
 
         # Introduction
-        P(:class => "text-lg text-stone-600 dark:text-stone-400 mb-8",
+        P(:class => "text-lg text-warm-600 dark:text-warm-400 mb-8",
             "Functions are the fundamental building blocks of Julia programs. They take inputs (arguments), perform computations, and return outputs. Julia provides multiple ways to define functions, from compact one-liners to multi-line blocks with explicit returns."
         ),
 
         # Section: Function Definition
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Defining Functions"
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 mb-4",
+        P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "The basic syntax for defining a function uses the ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "function"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "function"),
             " keyword, followed by the function name, arguments in parentheses, and the function body. The function ends with ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "end"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "end"),
             "."
         ),
 
@@ -61,7 +61,7 @@ end""",
             example = SquareDemo
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 my-4",
+        P(:class => "text-warm-600 dark:text-warm-400 my-4",
             "Julia also supports a compact assignment form for simple functions. This is equivalent to the longer form but more concise:"
         ),
 
@@ -82,11 +82,11 @@ product = mul(7, 3)  # product = 21""",
         ),
 
         # Section: Arguments
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Function Arguments"
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 mb-4",
+        P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "Functions can accept multiple arguments separated by commas. Each argument can optionally have a type annotation to specify what types are accepted."
         ),
 
@@ -132,13 +132,13 @@ hypot(5, 12)  # returns 13""",
         ),
 
         # Section: Return Values
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Return Values"
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 mb-4",
+        P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "Functions return a value to the caller. You can use the explicit ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "return"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "return"),
             " keyword, or Julia will implicitly return the value of the last expression in the function body."
         ),
 
@@ -165,18 +165,18 @@ end""",
             example = ReturnValueDemo
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 my-4",
+        P(:class => "text-warm-600 dark:text-warm-400 my-4",
             "The explicit ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "return"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "return"),
             " statement is especially useful for early exits from a function, such as when checking error conditions or handling special cases."
         ),
 
         # Section: Recursion
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Recursion"
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 mb-4",
+        P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "A function can call itself, which is called ",
             Em("recursion"),
             ". This is useful for problems that can be broken down into smaller instances of the same problem."
@@ -199,16 +199,16 @@ factorial(6)  # returns 720""",
             example = FactorialDemo
         ),
 
-        Div(:class => "p-4 bg-cyan-50 dark:bg-cyan-900/20 rounded-xl border border-cyan-200 dark:border-cyan-800 my-6",
+        Div(:class => "p-4 bg-accent-50 dark:bg-accent-900/20 rounded-xl border border-accent-200 dark:border-accent-800 my-6",
             Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-cyan-600 dark:text-cyan-400 flex-shrink-0 mt-0.5",
+                Svg(:class => "w-5 h-5 text-accent-600 dark:text-accent-400 flex-shrink-0 mt-0.5",
                     :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                     Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
                          :d => "M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z")
                 ),
                 Div(
-                    P(:class => "text-sm text-cyan-800 dark:text-cyan-200 font-medium", "Recursion Tips"),
-                    P(:class => "text-sm text-cyan-700 dark:text-cyan-300 mt-1",
+                    P(:class => "text-sm text-accent-800 dark:text-accent-200 font-medium", "Recursion Tips"),
+                    P(:class => "text-sm text-accent-700 dark:text-accent-300 mt-1",
                         "Every recursive function needs: (1) a ",
                         Em("base case"),
                         " that stops the recursion, and (2) a ",
@@ -220,11 +220,11 @@ factorial(6)  # returns 720""",
         ),
 
         # Section: Closures
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Closures"
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 mb-4",
+        P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "A ",
             Em("closure"),
             " is a function that captures variables from its surrounding scope. This allows you to create functions that \"remember\" values from where they were defined."
@@ -248,7 +248,7 @@ add_offset(5)   # returns 25 (5 + 20)""",
             example = ClosureDemo
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 my-4",
+        P(:class => "text-warm-600 dark:text-warm-400 my-4",
             "Closures are commonly used for creating specialized functions, callbacks, and maintaining state. In WasmTarget.jl, closures compile to WebAssembly structs that store the captured variables."
         ),
 
@@ -270,32 +270,32 @@ add_offset(5)   # returns 25 (5 + 20)""",
         ),
 
         # Summary
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Summary"
         ),
 
-        Ul(:class => "list-disc list-inside space-y-2 text-stone-600 dark:text-stone-400 mb-6",
-            Li("Define functions with ", Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "function name(args) ... end"), " or compact ", Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "name(args) = expression")),
+        Ul(:class => "list-disc list-inside space-y-2 text-warm-600 dark:text-warm-400 mb-6",
+            Li("Define functions with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "function name(args) ... end"), " or compact ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "name(args) = expression")),
             Li("Functions can have multiple arguments with optional type annotations"),
-            Li("Use ", Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "return"), " for explicit returns, or let the last expression be returned implicitly"),
+            Li("Use ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "return"), " for explicit returns, or let the last expression be returned implicitly"),
             Li("Recursive functions call themselves and need a base case to terminate"),
             Li("Closures capture variables from their surrounding scope"),
             Li("WasmTarget.jl supports basic function patterns; varargs/kwargs are not yet available")
         ),
 
         # Next steps
-        Div(:class => "p-6 bg-gradient-to-r from-cyan-50 to-teal-50 dark:from-cyan-900/20 dark:to-teal-900/20 rounded-xl border border-cyan-200 dark:border-cyan-800",
-            H3(:class => "text-lg font-semibold text-stone-800 dark:text-stone-100 mb-2",
+        Div(:class => "p-6 bg-gradient-to-r from-accent-50 to-accent-50 dark:from-accent-900/20 dark:to-accent-900/20 rounded-xl border border-accent-200 dark:border-accent-800",
+            H3(:class => "text-lg font-semibold text-warm-800 dark:text-warm-100 mb-2",
                 "Next Steps"
             ),
-            P(:class => "text-stone-600 dark:text-stone-400",
+            P(:class => "text-warm-600 dark:text-warm-400",
                 "Now that you understand functions, continue to ",
                 A(:href => "../control-flow/",
-                  :class => "text-cyan-600 dark:text-cyan-400 font-medium hover:underline",
+                  :class => "text-accent-600 dark:text-accent-400 font-medium hover:underline",
                   "Control Flow"),
                 " to learn about conditional statements and loops, or explore ",
                 A(:href => "../types/",
-                  :class => "text-cyan-600 dark:text-cyan-400 font-medium hover:underline",
+                  :class => "text-accent-600 dark:text-accent-400 font-medium hover:underline",
                   "Types (Structs)"),
                 " to see how to define custom data structures."
             )

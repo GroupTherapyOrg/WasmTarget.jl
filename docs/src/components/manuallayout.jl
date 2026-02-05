@@ -94,8 +94,8 @@ function SidebarItem(id, title, description, is_active)
     # Use ./ prefix for base_path compatibility
     # The client-side router's resolveUrl() prepends CONFIG.basePath to ./ paths
     NavLink("./manual/$id/", title;
-        class = "block px-3 py-2 rounded-lg text-sm transition-colors text-stone-600 dark:text-stone-400 hover:bg-stone-100 dark:hover:bg-stone-700",
-        active_class = "bg-cyan-100 dark:bg-cyan-900/30 text-cyan-700 dark:text-cyan-300 font-medium",
+        class = "block px-3 py-2 rounded-lg text-sm transition-colors text-warm-600 dark:text-warm-400 hover:bg-warm-100 dark:hover:bg-warm-700",
+        active_class = "bg-accent-100 dark:bg-accent-900/30 text-accent-700 dark:text-accent-300 font-medium",
         exact = true
     )
 end
@@ -108,24 +108,24 @@ function Breadcrumb(chapter_title)
     Nav(:class => "text-sm mb-6", :aria_label => "Breadcrumb",
         Ol(:class => "flex items-center space-x-2",
             Li(:class => "flex items-center",
-                A(:href => "./", :class => "text-stone-500 dark:text-stone-400 hover:text-cyan-500 dark:hover:text-cyan-400",
+                A(:href => "./", :class => "text-warm-500 dark:text-warm-400 hover:text-accent-500 dark:hover:text-accent-400",
                     "Home"
                 ),
-                Svg(:class => "w-4 h-4 mx-2 text-stone-400", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
+                Svg(:class => "w-4 h-4 mx-2 text-warm-400", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                     Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
                          :d => "M9 5l7 7-7 7")
                 )
             ),
             Li(:class => "flex items-center",
-                A(:href => "./manual/", :class => "text-stone-500 dark:text-stone-400 hover:text-cyan-500 dark:hover:text-cyan-400",
+                A(:href => "./manual/", :class => "text-warm-500 dark:text-warm-400 hover:text-accent-500 dark:hover:text-accent-400",
                     "Manual"
                 ),
-                chapter_title !== nothing ? Svg(:class => "w-4 h-4 mx-2 text-stone-400", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
+                chapter_title !== nothing ? Svg(:class => "w-4 h-4 mx-2 text-warm-400", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                     Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
                          :d => "M9 5l7 7-7 7")
                 ) : nothing
             ),
-            chapter_title !== nothing ? Li(:class => "text-stone-800 dark:text-stone-200 font-medium",
+            chapter_title !== nothing ? Li(:class => "text-warm-800 dark:text-warm-200 font-medium",
                 chapter_title
             ) : nothing
         )
@@ -139,19 +139,19 @@ Uses ./ prefix paths for base_path compatibility.
 function ChapterNav(chapter_id::String)
     prev_chapter, next_chapter = get_chapter_nav(chapter_id)
 
-    Nav(:class => "mt-12 pt-6 border-t border-stone-200 dark:border-stone-700",
+    Nav(:class => "mt-12 pt-6 border-t border-warm-200 dark:border-warm-700",
         Div(:class => "flex justify-between",
             # Previous
             prev_chapter !== nothing ?
                 A(:href => "./manual/$(prev_chapter[1])/",
-                  :class => "group flex items-center text-stone-600 dark:text-stone-400 hover:text-cyan-500 dark:hover:text-cyan-400",
+                  :class => "group flex items-center text-warm-600 dark:text-warm-400 hover:text-accent-500 dark:hover:text-accent-400",
                     Svg(:class => "w-5 h-5 mr-2 transition-transform group-hover:-translate-x-1",
                         :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                         Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
                              :d => "M15 19l-7-7 7-7")
                     ),
                     Div(
-                        Span(:class => "text-xs text-stone-400 dark:text-stone-500 block", "Previous"),
+                        Span(:class => "text-xs text-warm-400 dark:text-warm-500 block", "Previous"),
                         Span(:class => "font-medium", prev_chapter[2])
                     )
                 ) :
@@ -160,9 +160,9 @@ function ChapterNav(chapter_id::String)
             # Next
             next_chapter !== nothing ?
                 A(:href => "./manual/$(next_chapter[1])/",
-                  :class => "group flex items-center text-right text-stone-600 dark:text-stone-400 hover:text-cyan-500 dark:hover:text-cyan-400",
+                  :class => "group flex items-center text-right text-warm-600 dark:text-warm-400 hover:text-accent-500 dark:hover:text-accent-400",
                     Div(
-                        Span(:class => "text-xs text-stone-400 dark:text-stone-500 block", "Next"),
+                        Span(:class => "text-xs text-warm-400 dark:text-warm-500 block", "Next"),
                         Span(:class => "font-medium", next_chapter[2])
                     ),
                     Svg(:class => "w-5 h-5 ml-2 transition-transform group-hover:translate-x-1",
@@ -187,33 +187,33 @@ function RelatedChapters(chapter_id::String)
         return nothing
     end
 
-    Div(:class => "mt-10 p-5 bg-stone-50 dark:bg-stone-800/50 rounded-xl border border-stone-200 dark:border-stone-700",
+    Div(:class => "mt-10 p-5 bg-warm-50 dark:bg-warm-800/50 rounded-xl border border-warm-200 dark:border-warm-700",
         Div(:class => "flex items-center gap-2 mb-4",
             # Link icon
-            Svg(:class => "w-5 h-5 text-cyan-500 dark:text-cyan-400",
+            Svg(:class => "w-5 h-5 text-accent-500 dark:text-accent-400",
                 :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                 Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
                      :d => "M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1")
             ),
-            H3(:class => "text-lg font-semibold text-stone-800 dark:text-stone-100",
+            H3(:class => "text-lg font-semibold text-warm-800 dark:text-warm-100",
                 "See Also"
             )
         ),
         Div(:class => "grid sm:grid-cols-2 lg:grid-cols-3 gap-3",
             [A(:href => "./manual/$(id)/",
-               :class => "group flex items-start gap-3 p-3 rounded-lg bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 hover:border-cyan-300 dark:hover:border-cyan-700 hover:shadow-sm transition-all",
-                Div(:class => "flex-shrink-0 w-8 h-8 rounded-lg bg-cyan-100 dark:bg-cyan-900/30 flex items-center justify-center",
-                    Svg(:class => "w-4 h-4 text-cyan-600 dark:text-cyan-400",
+               :class => "group flex items-start gap-3 p-3 rounded-lg bg-warm-50 dark:bg-warm-800 border border-warm-200 dark:border-warm-700 hover:border-accent-300 dark:hover:border-accent-700 hover:shadow-sm transition-all",
+                Div(:class => "flex-shrink-0 w-8 h-8 rounded-lg bg-accent-100 dark:bg-accent-900/30 flex items-center justify-center",
+                    Svg(:class => "w-4 h-4 text-accent-600 dark:text-accent-400",
                         :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                         Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
                              :d => "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z")
                     )
                 ),
                 Div(
-                    Span(:class => "font-medium text-stone-800 dark:text-stone-100 group-hover:text-cyan-600 dark:group-hover:text-cyan-400 transition-colors block",
+                    Span(:class => "font-medium text-warm-800 dark:text-warm-100 group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors block",
                         title
                     ),
-                    Span(:class => "text-xs text-stone-500 dark:text-stone-400",
+                    Span(:class => "text-xs text-warm-500 dark:text-warm-400",
                         desc
                     )
                 )
@@ -229,13 +229,13 @@ The sidebar is collapsible on mobile via a toggle button.
 function ManualSidebar(current_chapter_id)
     Aside(:id => "manual-sidebar",
           :class => "hidden lg:block w-64 flex-shrink-0",
-        Div(:class => "sticky top-4 bg-white dark:bg-stone-800 rounded-xl p-4 shadow-sm border border-stone-200 dark:border-stone-700",
+        Div(:class => "sticky top-4 bg-warm-50 dark:bg-warm-800 rounded-xl p-4 shadow-sm border border-warm-200 dark:border-warm-700",
             # Header
-            Div(:class => "flex items-center justify-between mb-4 pb-3 border-b border-stone-200 dark:border-stone-700",
-                H2(:class => "text-sm font-semibold text-stone-800 dark:text-stone-200 uppercase tracking-wider",
+            Div(:class => "flex items-center justify-between mb-4 pb-3 border-b border-warm-200 dark:border-warm-700",
+                H2(:class => "text-sm font-semibold text-warm-800 dark:text-warm-200 uppercase tracking-wider",
                     "Julia Manual"
                 ),
-                A(:href => "./manual/", :class => "text-xs text-cyan-500 hover:text-cyan-600 dark:hover:text-cyan-400",
+                A(:href => "./manual/", :class => "text-xs text-accent-500 hover:text-accent-600 dark:hover:text-accent-400",
                     "Overview"
                 )
             ),
@@ -253,7 +253,7 @@ Mobile sidebar toggle button (shown on small screens).
 """
 function MobileSidebarToggle()
     Button(:id => "sidebar-toggle",
-           :class => "lg:hidden fixed bottom-4 right-4 z-50 bg-cyan-500 hover:bg-cyan-600 text-white p-3 rounded-full shadow-lg transition-colors",
+           :class => "lg:hidden fixed bottom-4 right-4 z-50 bg-accent-500 hover:bg-accent-600 text-white p-3 rounded-full shadow-lg transition-colors",
            :aria_label => "Toggle sidebar",
         Svg(:class => "w-6 h-6", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
             Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
@@ -272,14 +272,14 @@ function MobileSidebarOverlay(current_chapter_id)
         Div(:id => "sidebar-backdrop",
             :class => "absolute inset-0 bg-black/50"),
         # Sidebar panel
-        Div(:class => "absolute left-0 top-0 bottom-0 w-72 bg-white dark:bg-stone-800 shadow-xl p-4 overflow-y-auto",
+        Div(:class => "absolute left-0 top-0 bottom-0 w-72 bg-warm-50 dark:bg-warm-800 shadow-xl p-4 overflow-y-auto",
             # Close button
             Div(:class => "flex justify-between items-center mb-4",
-                H2(:class => "text-lg font-semibold text-stone-800 dark:text-stone-200",
+                H2(:class => "text-lg font-semibold text-warm-800 dark:text-warm-200",
                     "Julia Manual"
                 ),
                 Button(:id => "sidebar-close",
-                       :class => "p-2 text-stone-500 hover:text-stone-700 dark:hover:text-stone-300",
+                       :class => "p-2 text-warm-500 hover:text-warm-700 dark:hover:text-warm-300",
                        :aria_label => "Close sidebar",
                     Svg(:class => "w-5 h-5", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                         Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
@@ -289,7 +289,7 @@ function MobileSidebarOverlay(current_chapter_id)
             ),
             # Chapter list
             Nav(:class => "space-y-1",
-                A(:href => "./manual/", :class => "block px-3 py-2 rounded-lg text-sm text-cyan-600 dark:text-cyan-400 hover:bg-stone-100 dark:hover:bg-stone-700 font-medium mb-2",
+                A(:href => "./manual/", :class => "block px-3 py-2 rounded-lg text-sm text-accent-600 dark:text-accent-400 hover:bg-warm-100 dark:hover:bg-warm-700 font-medium mb-2",
                     "Overview"
                 ),
                 [SidebarItem(id, title, desc, id == current_chapter_id)
@@ -363,7 +363,7 @@ function ManualLayout(children...; chapter_id::String="", chapter_title::Union{S
                 Breadcrumb(chapter_title),
 
                 # Content
-                Article(:class => "prose prose-stone dark:prose-invert prose-cyan max-w-none",
+                Article(:class => "prose prose-warm dark:prose-invert prose-accent max-w-none",
                     children...
                 ),
 

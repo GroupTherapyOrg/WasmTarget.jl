@@ -43,11 +43,11 @@ greet("World")
 
     Div(:class => "flex flex-col h-full min-h-[600px]",
         # Header with Run button
-        Div(:class => "flex items-center justify-between px-4 py-3 bg-stone-800 dark:bg-stone-900 border-b border-stone-700",
+        Div(:class => "flex items-center justify-between px-4 py-3 bg-warm-800 dark:bg-warm-900 border-b border-warm-700",
             # Left: Title
             Div(:class => "flex items-center gap-3",
-                Span(:class => "text-stone-200 font-semibold", "Julia Playground"),
-                Span(:class => "text-stone-500 text-sm", "Powered by WasmTarget.jl")
+                Span(:class => "text-warm-200 font-semibold", "Julia Playground"),
+                Span(:class => "text-warm-500 text-sm", "Powered by WasmTarget.jl")
             ),
             # Right: Run button
             Div(:class => "flex items-center gap-3",
@@ -55,11 +55,11 @@ greet("World")
                 Div(:id => "interpreter-status",
                     :class => "flex items-center gap-2",
                     Span(:id => "status-dot", :class => "w-2 h-2 rounded-full bg-yellow-500"),
-                    Span(:id => "status-text", :class => "text-stone-400 text-xs", "Loading...")
+                    Span(:id => "status-text", :class => "text-warm-400 text-xs", "Loading...")
                 ),
                 # Run button
                 Button(:id => "run-button",
-                    :class => "px-4 py-2 bg-cyan-500 hover:bg-cyan-600 disabled:bg-stone-600 disabled:cursor-not-allowed text-white rounded-lg font-medium flex items-center gap-2 transition-colors",
+                    :class => "px-4 py-2 bg-accent-500 hover:bg-accent-600 disabled:bg-warm-600 disabled:cursor-not-allowed text-white rounded-lg font-medium flex items-center gap-2 transition-colors",
                     :disabled => "true",
                     # Play icon
                     Svg(:class => "w-4 h-4", :fill => "currentColor", :viewBox => "0 0 24 24",
@@ -73,19 +73,19 @@ greet("World")
         # Main content area - two panels
         Div(:class => "flex-1 grid lg:grid-cols-2 gap-0 min-h-0",
             # Left: Editor
-            Div(:class => "flex flex-col min-h-0 border-r border-stone-700",
+            Div(:class => "flex flex-col min-h-0 border-r border-warm-700",
                 # Editor header
-                Div(:class => "flex items-center justify-between px-4 py-2 bg-stone-700 dark:bg-stone-800",
-                    Span(:class => "text-stone-300 text-sm font-medium", "Code"),
+                Div(:class => "flex items-center justify-between px-4 py-2 bg-warm-700 dark:bg-warm-800",
+                    Span(:class => "text-warm-300 text-sm font-medium", "Code"),
                     Div(:class => "flex items-center gap-2",
                         # Clear button
                         Button(:id => "clear-button",
-                            :class => "text-stone-400 hover:text-white text-xs transition-colors",
+                            :class => "text-warm-400 hover:text-white text-xs transition-colors",
                             "Clear"
                         ),
                         # Example selector
                         Select(:id => "example-selector",
-                            :class => "bg-stone-600 text-stone-200 text-xs rounded px-2 py-1",
+                            :class => "bg-warm-600 text-warm-200 text-xs rounded px-2 py-1",
                             Option(:value => "", "Examples..."),
                             Option(:value => "hello", "Hello World"),
                             Option(:value => "arithmetic", "Arithmetic"),
@@ -98,26 +98,26 @@ greet("World")
                 ),
                 # CodeMirror container
                 Div(:id => "editor-container",
-                    :class => "flex-1 overflow-hidden bg-stone-900"
+                    :class => "flex-1 overflow-hidden bg-warm-900"
                 )
             ),
 
             # Right: Output
             Div(:class => "flex flex-col min-h-0",
                 # Output header
-                Div(:class => "flex items-center justify-between px-4 py-2 bg-stone-700 dark:bg-stone-800",
-                    Span(:class => "text-stone-300 text-sm font-medium", "Output"),
+                Div(:class => "flex items-center justify-between px-4 py-2 bg-warm-700 dark:bg-warm-800",
+                    Span(:class => "text-warm-300 text-sm font-medium", "Output"),
                     Button(:id => "clear-output-button",
-                        :class => "text-stone-400 hover:text-white text-xs transition-colors",
+                        :class => "text-warm-400 hover:text-white text-xs transition-colors",
                         "Clear"
                     )
                 ),
                 # Output content
                 Div(:id => "output-container",
-                    :class => "flex-1 overflow-auto bg-stone-900 p-4 font-mono text-sm",
+                    :class => "flex-1 overflow-auto bg-warm-900 p-4 font-mono text-sm",
                     # Initial message
                     Div(:id => "output-content",
-                        :class => "text-stone-400",
+                        :class => "text-warm-400",
                         "Click \"Run\" to execute your code..."
                     )
                 )
@@ -241,13 +241,13 @@ end
                         statusDot.className += 'bg-yellow-500 animate-pulse';
                         break;
                     case 'running':
-                        statusDot.className += 'bg-cyan-500 animate-pulse';
+                        statusDot.className += 'bg-accent-500 animate-pulse';
                         break;
                     case 'error':
                         statusDot.className += 'bg-red-500';
                         break;
                     default:
-                        statusDot.className += 'bg-stone-500';
+                        statusDot.className += 'bg-warm-500';
                 }
             }
         }
@@ -364,7 +364,7 @@ end
             } catch (err) {
                 console.error('Failed to load CodeMirror:', err);
                 // Fallback to textarea
-                editorContainer.innerHTML = '<textarea id="fallback-editor" class="w-full h-full bg-stone-900 text-stone-100 p-4 font-mono text-sm resize-none focus:outline-none" spellcheck="false">' + INITIAL_CODE + '</textarea>';
+                editorContainer.innerHTML = '<textarea id="fallback-editor" class="w-full h-full bg-warm-900 text-warm-100 p-4 font-mono text-sm resize-none focus:outline-none" spellcheck="false">' + INITIAL_CODE + '</textarea>';
             }
         }
 

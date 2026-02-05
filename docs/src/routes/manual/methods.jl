@@ -22,12 +22,12 @@ Methods chapter for the Interactive Julia Manual.
 function Methods()
     ManualLayout(chapter_id="methods", chapter_title="Methods (Multiple Dispatch)",
         # Title
-        H1(:class => "text-3xl font-bold text-stone-800 dark:text-stone-100 mb-4",
+        H1(:class => "text-3xl font-bold text-warm-800 dark:text-warm-100 mb-4",
             "Methods (Multiple Dispatch)"
         ),
 
         # Introduction
-        P(:class => "text-lg text-stone-600 dark:text-stone-400 mb-8",
+        P(:class => "text-lg text-warm-600 dark:text-warm-400 mb-8",
             "Multiple dispatch is one of Julia's most powerful features. It allows you to define ",
             Em("multiple methods"),
             " for the same function name, each specialized for different argument types. ",
@@ -35,11 +35,11 @@ function Methods()
         ),
 
         # Section: What is Multiple Dispatch?
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "What is Multiple Dispatch?"
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 mb-4",
+        P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "In Julia, a ",
             Em("function"),
             " is a named operation, while a ",
@@ -50,8 +50,8 @@ function Methods()
             " arguments to decide which method to run."
         ),
 
-        Pre(:class => "bg-stone-800 dark:bg-stone-900 p-4 rounded-lg overflow-x-auto text-sm my-4",
-            Code(:class => "language-julia text-stone-100 font-mono",
+        Pre(:class => "bg-warm-800 dark:bg-warm-900 p-4 rounded-lg overflow-x-auto text-sm my-4",
+            Code(:class => "language-julia text-warm-100 font-mono",
 """# One function name, multiple methods
 function greet(x::String)
     return "Hello, " * x * "!"
@@ -68,16 +68,16 @@ greet(Int32(42)) # calls Int32 method → "You are number 42\""""
         ),
 
         # Tip about dispatch
-        Div(:class => "p-4 bg-cyan-50 dark:bg-cyan-900/20 rounded-xl border border-cyan-200 dark:border-cyan-800 my-6",
+        Div(:class => "p-4 bg-accent-50 dark:bg-accent-900/20 rounded-xl border border-accent-200 dark:border-accent-800 my-6",
             Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-cyan-600 dark:text-cyan-400 flex-shrink-0 mt-0.5",
+                Svg(:class => "w-5 h-5 text-accent-600 dark:text-accent-400 flex-shrink-0 mt-0.5",
                     :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                     Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
                          :d => "M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z")
                 ),
                 Div(
-                    P(:class => "text-sm text-cyan-800 dark:text-cyan-200 font-medium", "Compile-Time Dispatch"),
-                    P(:class => "text-sm text-cyan-700 dark:text-cyan-300 mt-1",
+                    P(:class => "text-sm text-accent-800 dark:text-accent-200 font-medium", "Compile-Time Dispatch"),
+                    P(:class => "text-sm text-accent-700 dark:text-accent-300 mt-1",
                         "In WasmTarget.jl, dispatch is resolved at ",
                         Em("compile time"),
                         " because all types are known statically. This means there's no runtime overhead — ",
@@ -88,14 +88,14 @@ greet(Int32(42)) # calls Int32 method → "You are number 42\""""
         ),
 
         # Section: Defining Methods for Custom Types
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Methods for Custom Types"
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 mb-4",
+        P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "Multiple dispatch really shines when working with custom struct types. ",
             "You can define the same function name (like ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "area"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "area"),
             ") for different shapes, and Julia will call the right implementation."
         ),
 
@@ -129,21 +129,21 @@ area(rect)    # calls Rectangle method → 24""",
             example = ShapeAreaDemo
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 my-4",
+        P(:class => "text-warm-600 dark:text-warm-400 my-4",
             "This pattern is fundamental to Julia programming. Instead of using ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "if/else"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "if/else"),
             " to check types, you define specialized methods and let dispatch handle it."
         ),
 
         # Section: Arithmetic on Custom Types
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Arithmetic on Custom Types"
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 mb-4",
+        P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "You can extend arithmetic operations to work with your own types. ",
             "In Julia, operators like ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "+"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "+"),
             " are just functions, so you can add methods for them."
         ),
 
@@ -196,11 +196,11 @@ scale_vec(v1, Int32(2)) # Vec2(6, 8)""",
         ),
 
         # Section: Type Specialization
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Type Specialization"
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 mb-4",
+        P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "Methods can be specialized to very specific types. ",
             "Julia will always choose the ",
             Em("most specific"),
@@ -242,18 +242,18 @@ describe(true)        # "true boolean\"""",
         ),
 
         # Section: Methods with Multiple Arguments
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Multi-Argument Dispatch"
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 mb-4",
+        P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "Multiple dispatch considers ",
             Em("all"),
             " argument types, not just the first one. This enables powerful patterns that are difficult to express in single-dispatch languages."
         ),
 
-        Pre(:class => "bg-stone-800 dark:bg-stone-900 p-4 rounded-lg overflow-x-auto text-sm my-4",
-            Code(:class => "language-julia text-stone-100 font-mono",
+        Pre(:class => "bg-warm-800 dark:bg-warm-900 p-4 rounded-lg overflow-x-auto text-sm my-4",
+            Code(:class => "language-julia text-warm-100 font-mono",
 """# Different methods for different combinations
 function combine(a::Int32, b::Int32)::Int32
     return a + b  # Add numbers
@@ -283,16 +283,16 @@ combine(true, Int32(5))        # -5 (negate)"""
         ),
 
         # Section: Method Ambiguity
-        Div(:class => "p-4 bg-stone-100 dark:bg-stone-800 rounded-xl border border-stone-200 dark:border-stone-700 my-6",
+        Div(:class => "p-4 bg-warm-100 dark:bg-warm-800 rounded-xl border border-warm-200 dark:border-warm-700 my-6",
             Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-stone-500 dark:text-stone-400 flex-shrink-0 mt-0.5",
+                Svg(:class => "w-5 h-5 text-warm-500 dark:text-warm-400 flex-shrink-0 mt-0.5",
                     :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                     Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
                          :d => "M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z")
                 ),
                 Div(
-                    P(:class => "text-sm text-stone-700 dark:text-stone-300 font-medium", "About Method Ambiguity"),
-                    P(:class => "text-sm text-stone-600 dark:text-stone-400 mt-1",
+                    P(:class => "text-sm text-warm-700 dark:text-warm-300 font-medium", "About Method Ambiguity"),
+                    P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-1",
                         "If Julia can't determine a single most-specific method (an ",
                         Em("ambiguity"),
                         "), it will raise an error at compile time. This helps catch design issues early. ",
@@ -303,29 +303,29 @@ combine(true, Int32(5))        # -5 (negate)"""
         ),
 
         # Summary
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Summary"
         ),
 
-        Ul(:class => "list-disc list-inside space-y-2 text-stone-600 dark:text-stone-400 mb-6",
+        Ul(:class => "list-disc list-inside space-y-2 text-warm-600 dark:text-warm-400 mb-6",
             Li("A ", Em("function"), " is a name; a ", Em("method"), " is an implementation for specific types"),
-            Li("Define methods by adding type annotations: ", Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "function f(x::Type)")),
+            Li("Define methods by adding type annotations: ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "function f(x::Type)")),
             Li("Julia dispatches based on the types of ", Em("all"), " arguments (multiple dispatch)"),
             Li("In WasmTarget.jl, dispatch happens at compile time for zero runtime overhead"),
-            Li("Use specialized methods for custom structs like ", Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "area(c::Circle)"))
+            Li("Use specialized methods for custom structs like ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "area(c::Circle)"))
         ),
 
         # WasmTarget note
-        Div(:class => "p-4 bg-cyan-50 dark:bg-cyan-900/20 rounded-xl border border-cyan-200 dark:border-cyan-800 my-6",
+        Div(:class => "p-4 bg-accent-50 dark:bg-accent-900/20 rounded-xl border border-accent-200 dark:border-accent-800 my-6",
             Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-cyan-600 dark:text-cyan-400 flex-shrink-0 mt-0.5",
+                Svg(:class => "w-5 h-5 text-accent-600 dark:text-accent-400 flex-shrink-0 mt-0.5",
                     :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                     Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
                          :d => "M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z")
                 ),
                 Div(
-                    P(:class => "text-sm text-cyan-800 dark:text-cyan-200 font-medium", "WasmTarget.jl Dispatch"),
-                    P(:class => "text-sm text-cyan-700 dark:text-cyan-300 mt-1",
+                    P(:class => "text-sm text-accent-800 dark:text-accent-200 font-medium", "WasmTarget.jl Dispatch"),
+                    P(:class => "text-sm text-accent-700 dark:text-accent-300 mt-1",
                         "WasmTarget.jl compiles methods with known concrete types. Dynamic dispatch (where types are unknown until runtime) is not yet supported. ",
                         "For best results, ensure all types are known at compile time."
                     )
@@ -334,18 +334,18 @@ combine(true, Int32(5))        # -5 (negate)"""
         ),
 
         # Next steps
-        Div(:class => "p-6 bg-gradient-to-r from-cyan-50 to-teal-50 dark:from-cyan-900/20 dark:to-teal-900/20 rounded-xl border border-cyan-200 dark:border-cyan-800",
-            H3(:class => "text-lg font-semibold text-stone-800 dark:text-stone-100 mb-2",
+        Div(:class => "p-6 bg-gradient-to-r from-accent-50 to-accent-50 dark:from-accent-900/20 dark:to-accent-900/20 rounded-xl border border-accent-200 dark:border-accent-800",
+            H3(:class => "text-lg font-semibold text-warm-800 dark:text-warm-100 mb-2",
                 "Next Steps"
             ),
-            P(:class => "text-stone-600 dark:text-stone-400",
+            P(:class => "text-warm-600 dark:text-warm-400",
                 "Now that you understand multiple dispatch, continue to ",
                 A(:href => "../arrays/",
-                  :class => "text-cyan-600 dark:text-cyan-400 font-medium hover:underline",
+                  :class => "text-accent-600 dark:text-accent-400 font-medium hover:underline",
                   "Arrays"),
                 " to learn about collections, or revisit ",
                 A(:href => "../types/",
-                  :class => "text-cyan-600 dark:text-cyan-400 font-medium hover:underline",
+                  :class => "text-accent-600 dark:text-accent-400 font-medium hover:underline",
                   "Types (Structs)"),
                 " to create more custom types for your methods to operate on."
             )

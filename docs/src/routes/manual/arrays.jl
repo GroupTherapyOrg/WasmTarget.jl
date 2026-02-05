@@ -22,12 +22,12 @@ Arrays chapter for the Interactive Julia Manual.
 function Arrays()
     ManualLayout(chapter_id="arrays", chapter_title="Arrays",
         # Title
-        H1(:class => "text-3xl font-bold text-stone-800 dark:text-stone-100 mb-4",
+        H1(:class => "text-3xl font-bold text-warm-800 dark:text-warm-100 mb-4",
             "Arrays"
         ),
 
         # Introduction
-        P(:class => "text-lg text-stone-600 dark:text-stone-400 mb-8",
+        P(:class => "text-lg text-warm-600 dark:text-warm-400 mb-8",
             "Arrays are fundamental data structures in Julia for storing collections of values. ",
             "A ",
             Em("Vector"),
@@ -37,16 +37,16 @@ function Arrays()
         ),
 
         # Section: Creating Vectors
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Creating Vectors"
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 mb-4",
+        P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "A ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "Vector"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Vector"),
             " (also called a 1D array) stores an ordered sequence of elements. ",
             "You can create vectors using square bracket notation or the ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "Vector{T}(...)"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Vector{T}(...)"),
             " constructor."
         ),
 
@@ -69,16 +69,16 @@ typed_arr = Int32[1, 2, 3, 4, 5]""",
         ),
 
         # Tip about 1-indexing
-        Div(:class => "p-4 bg-cyan-50 dark:bg-cyan-900/20 rounded-xl border border-cyan-200 dark:border-cyan-800 my-6",
+        Div(:class => "p-4 bg-accent-50 dark:bg-accent-900/20 rounded-xl border border-accent-200 dark:border-accent-800 my-6",
             Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-cyan-600 dark:text-cyan-400 flex-shrink-0 mt-0.5",
+                Svg(:class => "w-5 h-5 text-accent-600 dark:text-accent-400 flex-shrink-0 mt-0.5",
                     :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                     Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
                          :d => "M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z")
                 ),
                 Div(
-                    P(:class => "text-sm text-cyan-800 dark:text-cyan-200 font-medium", "1-Based Indexing"),
-                    P(:class => "text-sm text-cyan-700 dark:text-cyan-300 mt-1",
+                    P(:class => "text-sm text-accent-800 dark:text-accent-200 font-medium", "1-Based Indexing"),
+                    P(:class => "text-sm text-accent-700 dark:text-accent-300 mt-1",
                         "Unlike C, Python, or JavaScript, Julia arrays start at index 1, not 0. ",
                         "This matches mathematical notation and is natural for many scientific applications."
                     )
@@ -87,14 +87,14 @@ typed_arr = Int32[1, 2, 3, 4, 5]""",
         ),
 
         # Section: Vector Mutation
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Vector Mutation"
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 mb-4",
+        P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "Arrays in Julia are mutable by default - you can change individual elements after creation. ",
             "Use indexed assignment to modify elements: ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "arr[i] = new_value"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "arr[i] = new_value"),
             "."
         ),
 
@@ -138,16 +138,16 @@ arr[2] = arr[1] + arr[3]  # arr[2] = 100 + 300 = 400""",
         ),
 
         # Section: Multi-dimensional Arrays (Matrices)
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Multi-dimensional Arrays (Matrices)"
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 mb-4",
+        P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "A ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "Matrix"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "Matrix"),
             " is a 2-dimensional array. Create matrices using spaces to separate columns and semicolons (or newlines) to separate rows. ",
             "Access elements with two indices: ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "matrix[row, col]"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "matrix[row, col]"),
             "."
         ),
 
@@ -170,19 +170,19 @@ size(mat, 2)   # cols: 3""",
             example = MatrixDemo
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 my-4",
+        P(:class => "text-warm-600 dark:text-warm-400 my-4",
             "The first index is always the row, and the second is the column. ",
             "This column-major ordering is important for performance when iterating over arrays."
         ),
 
         # Section: Iterating Over Arrays
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Iterating Over Arrays"
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 mb-4",
+        P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "Use ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "for"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "for"),
             " loops to iterate over array elements. You can iterate by element or by index."
         ),
 
@@ -212,8 +212,8 @@ end""",
             example = ArrayIterationDemo
         ),
 
-        Pre(:class => "bg-stone-800 dark:bg-stone-900 p-4 rounded-lg overflow-x-auto text-sm my-4",
-            Code(:class => "language-julia text-stone-100 font-mono",
+        Pre(:class => "bg-warm-800 dark:bg-warm-900 p-4 rounded-lg overflow-x-auto text-sm my-4",
+            Code(:class => "language-julia text-warm-100 font-mono",
 """# Find the maximum element
 function find_max(arr)
     max_val = arr[1]  # Start with first element
@@ -239,11 +239,11 @@ end"""
         ),
 
         # Section: Computing with Arrays
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Computing with Arrays"
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 mb-4",
+        P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "Arrays are ideal for storing and processing collections of numerical data. ",
             "Common operations include computing sums, averages, and finding min/max values."
         ),
@@ -271,19 +271,19 @@ compute_avg(arr)  # returns 30""",
         ),
 
         # Section: Bounds Checking
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Bounds Checking"
         ),
 
-        P(:class => "text-stone-600 dark:text-stone-400 mb-4",
+        P(:class => "text-warm-600 dark:text-warm-400 mb-4",
             "Julia performs bounds checking by default to prevent accessing invalid array indices. ",
             "Attempting to access an index outside the valid range (1 to length) will throw a ",
-            Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "BoundsError"),
+            Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "BoundsError"),
             "."
         ),
 
-        Pre(:class => "bg-stone-800 dark:bg-stone-900 p-4 rounded-lg overflow-x-auto text-sm my-4",
-            Code(:class => "language-julia text-stone-100 font-mono",
+        Pre(:class => "bg-warm-800 dark:bg-warm-900 p-4 rounded-lg overflow-x-auto text-sm my-4",
+            Code(:class => "language-julia text-warm-100 font-mono",
 """arr = [1, 2, 3, 4, 5]
 
 # Valid indices: 1 to 5
@@ -325,38 +325,38 @@ end"""
         ),
 
         # Summary
-        H2(:class => "text-2xl font-semibold text-stone-800 dark:text-stone-100 mt-10 mb-4",
+        H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
             "Summary"
         ),
 
-        Ul(:class => "list-disc list-inside space-y-2 text-stone-600 dark:text-stone-400 mb-6",
-            Li("Vectors are 1D arrays created with ", Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "[a, b, c]")),
-            Li("Julia arrays are 1-indexed: first element is ", Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "arr[1]")),
-            Li("Matrices are 2D arrays: access with ", Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "mat[row, col]")),
-            Li("Arrays are mutable: modify with ", Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "arr[i] = value")),
-            Li("Use ", Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "length(arr)"), " for 1D and ", Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "size(mat)"), " for dimensions"),
-            Li("Iterate with ", Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "for x in arr"), " or ", Code(:class => "text-cyan-600 dark:text-cyan-400 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded", "for i in 1:length(arr)"))
+        Ul(:class => "list-disc list-inside space-y-2 text-warm-600 dark:text-warm-400 mb-6",
+            Li("Vectors are 1D arrays created with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "[a, b, c]")),
+            Li("Julia arrays are 1-indexed: first element is ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "arr[1]")),
+            Li("Matrices are 2D arrays: access with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "mat[row, col]")),
+            Li("Arrays are mutable: modify with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "arr[i] = value")),
+            Li("Use ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "length(arr)"), " for 1D and ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "size(mat)"), " for dimensions"),
+            Li("Iterate with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "for x in arr"), " or ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-800 px-1.5 py-0.5 rounded", "for i in 1:length(arr)"))
         ),
 
         # Scope note
-        Div(:class => "p-4 bg-stone-100 dark:bg-stone-800 rounded-xl border border-stone-200 dark:border-stone-700 my-6",
+        Div(:class => "p-4 bg-warm-100 dark:bg-warm-800 rounded-xl border border-warm-200 dark:border-warm-700 my-6",
             Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-stone-500 dark:text-stone-400 flex-shrink-0 mt-0.5",
+                Svg(:class => "w-5 h-5 text-warm-500 dark:text-warm-400 flex-shrink-0 mt-0.5",
                     :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
                     Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
                          :d => "M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z")
                 ),
                 Div(
-                    P(:class => "text-sm text-stone-700 dark:text-stone-300 font-medium", "Beyond This Chapter"),
-                    P(:class => "text-sm text-stone-600 dark:text-stone-400 mt-1",
+                    P(:class => "text-sm text-warm-700 dark:text-warm-300 font-medium", "Beyond This Chapter"),
+                    P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-1",
                         "Julia also supports ",
                         Em("comprehensions"),
                         " (like ",
-                        Code(:class => "text-stone-600 dark:text-stone-400", "[x^2 for x in 1:10]"),
+                        Code(:class => "text-warm-600 dark:text-warm-400", "[x^2 for x in 1:10]"),
                         "), ",
                         Em("broadcasting"),
                         " (like ",
-                        Code(:class => "text-stone-600 dark:text-stone-400", "arr .+ 1"),
+                        Code(:class => "text-warm-600 dark:text-warm-400", "arr .+ 1"),
                         "), and resizable arrays. These advanced features have varying support in WasmTarget.jl."
                     )
                 )
@@ -364,18 +364,18 @@ end"""
         ),
 
         # Next steps
-        Div(:class => "p-6 bg-gradient-to-r from-cyan-50 to-teal-50 dark:from-cyan-900/20 dark:to-teal-900/20 rounded-xl border border-cyan-200 dark:border-cyan-800",
-            H3(:class => "text-lg font-semibold text-stone-800 dark:text-stone-100 mb-2",
+        Div(:class => "p-6 bg-gradient-to-r from-accent-50 to-accent-50 dark:from-accent-900/20 dark:to-accent-900/20 rounded-xl border border-accent-200 dark:border-accent-800",
+            H3(:class => "text-lg font-semibold text-warm-800 dark:text-warm-100 mb-2",
                 "Next Steps"
             ),
-            P(:class => "text-stone-600 dark:text-stone-400",
+            P(:class => "text-warm-600 dark:text-warm-400",
                 "Now that you understand arrays, continue to ",
                 A(:href => "../tuples/",
-                  :class => "text-cyan-600 dark:text-cyan-400 font-medium hover:underline",
+                  :class => "text-accent-600 dark:text-accent-400 font-medium hover:underline",
                   "Tuples"),
                 " to learn about fixed-size, heterogeneous collections, or revisit ",
                 A(:href => "../control-flow/",
-                  :class => "text-cyan-600 dark:text-cyan-400 font-medium hover:underline",
+                  :class => "text-accent-600 dark:text-accent-400 font-medium hover:underline",
                   "Control Flow"),
                 " to see more loop patterns for array processing."
             )

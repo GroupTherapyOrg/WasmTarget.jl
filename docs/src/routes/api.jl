@@ -6,10 +6,10 @@ function Api()
     Div(
         # Header
         Div(:class => "py-12 text-center",
-            H1(:class => "text-4xl font-bold text-stone-800 dark:text-stone-100 mb-4",
+            H1(:class => "text-4xl font-bold text-warm-800 dark:text-warm-100 mb-4",
                 "API Reference"
             ),
-            P(:class => "text-xl text-stone-500 dark:text-stone-400 max-w-2xl mx-auto",
+            P(:class => "text-xl text-warm-500 dark:text-warm-400 max-w-2xl mx-auto",
                 "Complete API documentation for WasmTarget.jl"
             )
         ),
@@ -28,7 +28,7 @@ function Api()
         # ========================================
         Div(:class => "py-8",
             SectionHeader("High-Level API"),
-            P(:class => "text-stone-600 dark:text-stone-300 mb-8 max-w-3xl",
+            P(:class => "text-warm-600 dark:text-warm-300 mb-8 max-w-3xl",
                 "The high-level API provides simple functions to compile Julia code directly to WebAssembly bytes. This is the recommended way to use WasmTarget.jl."
             ),
 
@@ -88,9 +88,9 @@ wasm = compile_multi(
         # ========================================
         # Low-Level Builder Section
         # ========================================
-        Div(:id => "builder", :class => "py-8 border-t border-stone-200 dark:border-stone-700",
+        Div(:id => "builder", :class => "py-8 border-t border-warm-200 dark:border-warm-700",
             SectionHeader("Low-Level Builder API"),
-            P(:class => "text-stone-600 dark:text-stone-300 mb-8 max-w-3xl",
+            P(:class => "text-warm-600 dark:text-warm-300 mb-8 max-w-3xl",
                 "For advanced use cases, you can build Wasm modules manually using the builder API. This gives you full control over imports, exports, globals, tables, and memory."
             ),
 
@@ -200,22 +200,22 @@ write("output.wasm", bytes)"""
         # ========================================
         # Type Mappings Section
         # ========================================
-        Div(:id => "types", :class => "py-8 border-t border-stone-200 dark:border-stone-700",
+        Div(:id => "types", :class => "py-8 border-t border-warm-200 dark:border-warm-700",
             SectionHeader("Type Mappings"),
-            P(:class => "text-stone-600 dark:text-stone-300 mb-8 max-w-3xl",
+            P(:class => "text-warm-600 dark:text-warm-300 mb-8 max-w-3xl",
                 "WasmTarget.jl automatically maps Julia types to WebAssembly types. Here's the complete mapping:"
             ),
 
             Div(:class => "overflow-x-auto",
                 Table(:class => "w-full max-w-4xl mx-auto",
-                    Thead(:class => "bg-stone-100 dark:bg-stone-800",
+                    Thead(:class => "bg-warm-100 dark:bg-warm-800",
                         Tr(
-                            Th(:class => "py-3 px-4 text-left font-semibold text-stone-700 dark:text-stone-200", "Julia Type"),
-                            Th(:class => "py-3 px-4 text-left font-semibold text-stone-700 dark:text-stone-200", "Wasm Type"),
-                            Th(:class => "py-3 px-4 text-left font-semibold text-stone-700 dark:text-stone-200", "Notes")
+                            Th(:class => "py-3 px-4 text-left font-semibold text-warm-700 dark:text-warm-200", "Julia Type"),
+                            Th(:class => "py-3 px-4 text-left font-semibold text-warm-700 dark:text-warm-200", "Wasm Type"),
+                            Th(:class => "py-3 px-4 text-left font-semibold text-warm-700 dark:text-warm-200", "Notes")
                         )
                     ),
-                    Tbody(:class => "divide-y divide-stone-200 dark:divide-stone-700",
+                    Tbody(:class => "divide-y divide-warm-200 dark:divide-warm-700",
                         TypeMappingRow("Int32, UInt32", "i32", "Native 32-bit integer"),
                         TypeMappingRow("Int64, UInt64, Int", "i64", "Native 64-bit integer"),
                         TypeMappingRow("Float32", "f32", "32-bit IEEE float"),
@@ -235,8 +235,8 @@ write("output.wasm", bytes)"""
 
             # Type constants
             Div(:class => "mt-12",
-                H3(:class => "text-xl font-semibold text-stone-800 dark:text-stone-100 mb-4", "Type Constants"),
-                P(:class => "text-stone-600 dark:text-stone-300 mb-4",
+                H3(:class => "text-xl font-semibold text-warm-800 dark:text-warm-100 mb-4", "Type Constants"),
+                P(:class => "text-warm-600 dark:text-warm-300 mb-4",
                     "Use these constants when building modules manually:"
                 ),
                 Div(:class => "flex flex-wrap gap-3",
@@ -254,9 +254,9 @@ write("output.wasm", bytes)"""
         # ========================================
         # Supported Features Section
         # ========================================
-        Div(:id => "features", :class => "py-8 border-t border-stone-200 dark:border-stone-700",
+        Div(:id => "features", :class => "py-8 border-t border-warm-200 dark:border-warm-700",
             SectionHeader("Supported Features"),
-            P(:class => "text-stone-600 dark:text-stone-300 mb-8 max-w-3xl",
+            P(:class => "text-warm-600 dark:text-warm-300 mb-8 max-w-3xl",
                 "WasmTarget.jl supports a significant subset of Julia. Here's what works today:"
             ),
 
@@ -314,20 +314,20 @@ write("output.wasm", bytes)"""
         ),
 
         # Footer CTA
-        Div(:class => "py-16 text-center border-t border-stone-200 dark:border-stone-700 mt-12",
-            H2(:class => "text-2xl font-bold text-stone-800 dark:text-stone-100 mb-4",
+        Div(:class => "py-16 text-center border-t border-warm-200 dark:border-warm-700 mt-12",
+            H2(:class => "text-2xl font-bold text-warm-800 dark:text-warm-100 mb-4",
                 "Ready to build?"
             ),
-            P(:class => "text-stone-500 dark:text-stone-400 mb-8",
+            P(:class => "text-warm-500 dark:text-warm-400 mb-8",
                 "Check out the interactive demos or explore the source code on GitHub."
             ),
             Div(:class => "flex justify-center gap-4",
                 A(:href => "./features/",
-                  :class => "bg-cyan-500 hover:bg-cyan-600 text-white px-6 py-3 rounded-lg font-medium transition-colors",
+                  :class => "bg-accent-500 hover:bg-accent-600 text-white px-6 py-3 rounded-lg font-medium transition-colors",
                   "Interactive Demos"
                 ),
                 A(:href => "https://github.com/GroupTherapyOrg/WasmTarget.jl",
-                  :class => "bg-stone-200 dark:bg-stone-700 text-stone-700 dark:text-stone-200 px-6 py-3 rounded-lg font-medium hover:bg-stone-300 dark:hover:bg-stone-600 transition-colors",
+                  :class => "bg-warm-200 dark:bg-warm-700 text-warm-700 dark:text-warm-200 px-6 py-3 rounded-lg font-medium hover:bg-warm-300 dark:hover:bg-warm-600 transition-colors",
                   :target => "_blank",
                   "View Source"
                 )
@@ -340,32 +340,32 @@ end
 
 function ApiAnchorLink(href, text)
     A(:href => href,
-      :class => "px-4 py-2 bg-stone-100 dark:bg-stone-800 rounded-lg text-sm font-medium text-stone-700 dark:text-stone-200 hover:bg-cyan-100 dark:hover:bg-cyan-900/30 transition-colors",
+      :class => "px-4 py-2 bg-warm-100 dark:bg-warm-800 rounded-lg text-sm font-medium text-warm-700 dark:text-warm-200 hover:bg-accent-100 dark:hover:bg-accent-900/30 transition-colors",
       text)
 end
 
 function SectionHeader(title)
-    H2(:class => "text-3xl font-bold text-stone-800 dark:text-stone-100 mb-4", title)
+    H2(:class => "text-3xl font-bold text-warm-800 dark:text-warm-100 mb-4", title)
 end
 
 function ApiFunction(name, signature, description, params, example)
-    Div(:id => lowercase(replace(name, "()" => "")), :class => "mb-12 bg-white dark:bg-stone-800 rounded-xl p-6 shadow-sm",
+    Div(:id => lowercase(replace(name, "()" => "")), :class => "mb-12 bg-warm-50 dark:bg-warm-800 rounded-xl p-6 shadow-sm",
         # Function name and signature
-        H3(:class => "text-xl font-bold text-cyan-600 dark:text-cyan-400 font-mono mb-2", name * "()"),
-        Code(:class => "block bg-stone-100 dark:bg-stone-900 px-4 py-2 rounded-lg text-sm font-mono text-stone-700 dark:text-stone-300 mb-4", signature),
-        P(:class => "text-stone-600 dark:text-stone-300 mb-4", description),
+        H3(:class => "text-xl font-bold text-accent-600 dark:text-accent-400 font-mono mb-2", name * "()"),
+        Code(:class => "block bg-warm-100 dark:bg-warm-900 px-4 py-2 rounded-lg text-sm font-mono text-warm-700 dark:text-warm-300 mb-4", signature),
+        P(:class => "text-warm-600 dark:text-warm-300 mb-4", description),
 
         # Parameters
         if !isempty(params)
             Div(:class => "mb-4",
-                H4(:class => "font-semibold text-stone-800 dark:text-stone-100 mb-2", "Parameters"),
+                H4(:class => "font-semibold text-warm-800 dark:text-warm-100 mb-2", "Parameters"),
                 Ul(:class => "space-y-2",
                     [Li(:class => "text-sm",
-                        Span(:class => "font-mono text-cyan-600 dark:text-cyan-400", p[1]),
-                        Span(:class => "text-stone-400 mx-2", ":"),
-                        Span(:class => "text-stone-500 dark:text-stone-400 italic", p[2]),
-                        Span(:class => "text-stone-400 mx-2", "-"),
-                        Span(:class => "text-stone-600 dark:text-stone-300", p[3])
+                        Span(:class => "font-mono text-accent-600 dark:text-accent-400", p[1]),
+                        Span(:class => "text-warm-400 mx-2", ":"),
+                        Span(:class => "text-warm-500 dark:text-warm-400 italic", p[2]),
+                        Span(:class => "text-warm-400 mx-2", "-"),
+                        Span(:class => "text-warm-600 dark:text-warm-300", p[3])
                     ) for p in params]...
                 )
             )
@@ -373,9 +373,9 @@ function ApiFunction(name, signature, description, params, example)
 
         # Example
         Div(
-            H4(:class => "font-semibold text-stone-800 dark:text-stone-100 mb-2", "Example"),
-            Pre(:class => "bg-stone-900 dark:bg-stone-950 rounded-lg p-4 overflow-x-auto",
-                Code(:class => "text-sm text-stone-100", example)
+            H4(:class => "font-semibold text-warm-800 dark:text-warm-100 mb-2", "Example"),
+            Pre(:class => "bg-warm-900 dark:bg-warm-950 rounded-lg p-4 overflow-x-auto",
+                Code(:class => "text-sm text-warm-100", example)
             )
         )
     )
@@ -383,25 +383,25 @@ end
 
 function TypeMappingRow(julia, wasm, notes)
     Tr(
-        Td(:class => "py-3 px-4 font-mono text-sm text-cyan-600 dark:text-cyan-400", julia),
-        Td(:class => "py-3 px-4 font-mono text-sm text-stone-600 dark:text-stone-300", wasm),
-        Td(:class => "py-3 px-4 text-sm text-stone-500 dark:text-stone-400", notes)
+        Td(:class => "py-3 px-4 font-mono text-sm text-accent-600 dark:text-accent-400", julia),
+        Td(:class => "py-3 px-4 font-mono text-sm text-warm-600 dark:text-warm-300", wasm),
+        Td(:class => "py-3 px-4 text-sm text-warm-500 dark:text-warm-400", notes)
     )
 end
 
 function TypeBadge(name)
-    Span(:class => "px-4 py-2 bg-stone-100 dark:bg-stone-700 rounded-lg font-mono text-sm text-stone-700 dark:text-stone-200", name)
+    Span(:class => "px-4 py-2 bg-warm-100 dark:bg-warm-700 rounded-lg font-mono text-sm text-warm-700 dark:text-warm-200", name)
 end
 
 function FeatureCategory(title, features)
-    Div(:class => "bg-white dark:bg-stone-800 rounded-xl p-6 shadow-sm",
-        H3(:class => "font-semibold text-stone-800 dark:text-stone-100 mb-4", title),
+    Div(:class => "bg-warm-50 dark:bg-warm-800 rounded-xl p-6 shadow-sm",
+        H3(:class => "font-semibold text-warm-800 dark:text-warm-100 mb-4", title),
         Ul(:class => "space-y-2",
             [Li(:class => "flex items-center gap-2 text-sm",
-                Span(:class => f[2] ? "text-green-500" : "text-stone-400",
+                Span(:class => f[2] ? "text-green-500" : "text-warm-400",
                     f[2] ? "✓" : "○"
                 ),
-                Span(:class => f[2] ? "text-stone-700 dark:text-stone-200" : "text-stone-400 dark:text-stone-500",
+                Span(:class => f[2] ? "text-warm-700 dark:text-warm-200" : "text-warm-400 dark:text-warm-500",
                     f[1]
                 )
             ) for f in features]...

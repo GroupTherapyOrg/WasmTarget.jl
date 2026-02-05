@@ -13,47 +13,47 @@ Uses cyan/teal accent colors with dark mode support.
 Uses NavLink for SPA navigation and active state highlighting.
 """
 function Layout(children...; title="WasmTarget.jl")
-    Div(:class => "min-h-screen bg-stone-50 dark:bg-stone-900 transition-colors duration-200",
+    Div(:class => "min-h-screen bg-warm-50 dark:bg-warm-900 transition-colors duration-200",
         # Navigation
-        Nav(:class => "bg-white dark:bg-stone-800 border-b border-stone-200 dark:border-stone-700 transition-colors duration-200",
+        Nav(:class => "bg-warm-50 dark:bg-warm-800 border-b border-warm-200 dark:border-warm-700 transition-colors duration-200",
             Div(:class => "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8",
                 Div(:class => "flex justify-between h-16",
                     # Logo
                     Div(:class => "flex items-center",
                         A(:href => "./", :class => "flex items-center",
-                            Span(:class => "text-2xl font-bold text-cyan-500 dark:text-cyan-400", "WasmTarget"),
-                            Span(:class => "text-2xl font-light text-stone-400 dark:text-stone-500", ".jl")
+                            Span(:class => "text-2xl font-bold text-accent-500 dark:text-accent-400", "WasmTarget"),
+                            Span(:class => "text-2xl font-light", Span(:class => "text-[#4063d8]", "."), Span(:class => "text-[#9558b2]", "j"), Span(:class => "text-[#389826]", "l"))
                         )
                     ),
                     # Navigation Links - use ./ prefix for base_path compatibility
                     # The client-side router's resolveUrl() prepends CONFIG.basePath to ./ paths
                     Div(:class => "hidden sm:flex sm:items-center sm:space-x-6",
                         NavLink("./", "Home";
-                            class = "text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors",
-                            active_class = "text-cyan-600 dark:text-cyan-400 font-semibold",
+                            class = "text-warm-600 dark:text-warm-300 hover:text-warm-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors",
+                            active_class = "text-accent-600 dark:text-accent-400 font-semibold",
                             exact = true
                         ),
                         NavLink("./playground/", "Playground";
-                            class = "text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors",
-                            active_class = "text-cyan-600 dark:text-cyan-400 font-semibold"
+                            class = "text-warm-600 dark:text-warm-300 hover:text-warm-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors",
+                            active_class = "text-accent-600 dark:text-accent-400 font-semibold"
                         ),
                         NavLink("./manual/", "Manual";
-                            class = "text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors",
-                            active_class = "text-cyan-600 dark:text-cyan-400 font-semibold"
+                            class = "text-warm-600 dark:text-warm-300 hover:text-warm-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors",
+                            active_class = "text-accent-600 dark:text-accent-400 font-semibold"
                         ),
                         NavLink("./features/", "Features";
-                            class = "text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors",
-                            active_class = "text-cyan-600 dark:text-cyan-400 font-semibold",
+                            class = "text-warm-600 dark:text-warm-300 hover:text-warm-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors",
+                            active_class = "text-accent-600 dark:text-accent-400 font-semibold",
                             exact = true
                         ),
                         NavLink("./api/", "API";
-                            class = "text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors",
-                            active_class = "text-cyan-600 dark:text-cyan-400 font-semibold",
+                            class = "text-warm-600 dark:text-warm-300 hover:text-warm-900 dark:hover:text-white px-3 py-2 text-sm font-medium transition-colors",
+                            active_class = "text-accent-600 dark:text-accent-400 font-semibold",
                             exact = true
                         ),
                         # GitHub link (external, use regular A tag)
                         A(:href => "https://github.com/GroupTherapyOrg/WasmTarget.jl",
-                          :class => "text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200 transition-colors",
+                          :class => "text-warm-500 hover:text-warm-700 dark:text-warm-400 dark:hover:text-warm-200 transition-colors",
                           :target => "_blank",
                           :title => "View on GitHub",
                             Svg(:class => "h-5 w-5", :fill => "currentColor", :viewBox => "0 0 24 24",
@@ -74,16 +74,16 @@ function Layout(children...; title="WasmTarget.jl")
         ),
 
         # Footer
-        Footer(:class => "bg-white dark:bg-stone-800 border-t border-stone-200 dark:border-stone-700 mt-auto transition-colors duration-200",
+        Footer(:class => "bg-warm-50 dark:bg-warm-800 border-t border-warm-200 dark:border-warm-700 mt-auto transition-colors duration-200",
             Div(:class => "max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8",
                 Div(:class => "flex justify-between items-center",
-                    P(:class => "text-stone-500 dark:text-stone-400 text-sm",
+                    P(:class => "text-warm-500 dark:text-warm-400 text-sm",
                         "Built with ",
-                        A(:href => "https://github.com/GroupTherapyOrg/Therapy.jl", :class => "text-cyan-500 dark:text-cyan-400 hover:text-cyan-600 dark:hover:text-cyan-300", :target => "_blank", "Therapy.jl"),
+                        A(:href => "https://github.com/GroupTherapyOrg/Therapy.jl", :class => "text-accent-500 dark:text-accent-400 hover:text-accent-600 dark:hover:text-accent-300", :target => "_blank", "Therapy.jl"),
                         " - Powered by ",
-                        A(:href => "./", :class => "text-cyan-500 dark:text-cyan-400 hover:text-cyan-600 dark:hover:text-cyan-300", "WasmTarget.jl")
+                        A(:href => "./", :class => "text-accent-500 dark:text-accent-400 hover:text-accent-600 dark:hover:text-accent-300", "WasmTarget.jl")
                     ),
-                    P(:class => "text-stone-400 dark:text-stone-500 text-sm",
+                    P(:class => "text-warm-400 dark:text-warm-500 text-sm",
                         "MIT License"
                     )
                 )
