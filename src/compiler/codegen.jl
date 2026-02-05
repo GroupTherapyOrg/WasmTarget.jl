@@ -1376,9 +1376,10 @@ function is_struct_type(T::Type)::Bool
     T === Nothing && return false
     T === Char && return false
 
-    # Arrays and strings have special handling - not user structs
+    # Arrays, strings, and symbols have special handling - not user structs
     T <: AbstractArray && return false
     T === String && return false
+    T === Symbol && return false
 
     # Internal Julia types that have pointer fields - not user structs
     # MemoryRef and GenericMemoryRef are used for array element access
@@ -1443,7 +1444,7 @@ function register_closure_type!(mod::WasmModule, registry::TypeRegistry, T::Data
             elem_type = eltype(ft)
             array_type_idx = get_array_type!(mod, registry, elem_type)
             wasm_vt = ConcreteRef(array_type_idx, true)
-        elseif ft === String
+        elseif ft === String || ft === Symbol
             str_type_idx = get_string_array_type!(mod, registry)
             wasm_vt = ConcreteRef(str_type_idx, true)
         else
@@ -1494,6 +1495,12 @@ function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataT
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
 
+    # PURE-049: MemoryRef/Memory should NOT be registered as struct types.
+    # They map to array types in WasmGC. Guard against callers that use
+    # Julia's isstructtype() (true for MemoryRef) instead of our is_struct_type().
+    if T isa DataType && T.name.name in (:MemoryRef, :GenericMemoryRef, :Memory, :GenericMemory)
+        return nothing
+    end
 
     # Redirect Tuple types to their specialized registration function
     # Tuples have integer field names (1, 2, ...) not symbols
@@ -1526,7 +1533,7 @@ function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataT
                 push!(temp_fields, FieldType(F32, true))
             elseif ft === Float64
                 push!(temp_fields, FieldType(F64, true))
-            elseif ft <: AbstractVector || ft === String
+            elseif ft <: AbstractVector || ft === String || ft === Symbol
                 push!(temp_fields, FieldType(ArrayRef, true))  # Placeholder
             else
                 push!(temp_fields, FieldType(StructRef, true))  # Placeholder
@@ -1911,8 +1918,8 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
 
         # Use concrete types for fields that need specific WASM types
         # This ensures consistency between struct field types and local variable types
-        wasm_vt = if ft === String
-            # String field needs concrete array type
+        wasm_vt = if ft === String || ft === Symbol
+            # String/Symbol fields need concrete string array type (array<i32>)
             type_idx = get_string_array_type!(mod, registry)
             ConcreteRef(type_idx, true)
         elseif ft isa Type && ft <: Array
@@ -4765,9 +4772,9 @@ function allocate_ssa_locals!(ctx::CompilationContext)
             # Similarly for memoryrefget on arrays with Any elements.
             if stmt isa Expr && stmt.head === :call && length(stmt.args) >= 3
                 sfunc = stmt.args[1]
+                # PURE-049: Match any module for getfield/getproperty
                 is_gf = (sfunc isa GlobalRef &&
-                         sfunc.name in (:getfield, :getproperty) &&
-                         sfunc.mod in (Core, Base))
+                         sfunc.name in (:getfield, :getproperty))
                 if is_gf
                     obj_arg = stmt.args[2]
                     field_ref = stmt.args[3]
@@ -5114,9 +5121,10 @@ function analyze_ssa_types!(ctx::CompilationContext)
         if stmt isa Expr && stmt.head === :call && length(stmt.args) >= 3
             func = stmt.args[1]
             # Check getfield/getproperty on Any-typed struct field
+            # PURE-049: Match any module — getproperty/getfield may appear as
+            # Compiler.getproperty, Base.getfield, etc. depending on the caller's module
             is_gf = (func isa GlobalRef &&
-                     func.name in (:getfield, :getproperty) &&
-                     func.mod in (Core, Base))
+                     func.name in (:getfield, :getproperty))
             if is_gf
                 obj_arg = stmt.args[2]
                 field_ref = stmt.args[3]
@@ -13745,6 +13753,30 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
         return bytes
     end
 
+    # PURE-049: MemoryRef/Memory construction — in WasmGC these are array refs, not structs.
+    # :new(MemoryRef{T}, mem, ptr_or_offset) → just pass through the mem (array ref).
+    # :new(Memory{T}, ...) → emit ref.null of the array type (Memory is backing storage).
+    if struct_type isa DataType && struct_type.name.name in (:MemoryRef, :GenericMemoryRef)
+        # MemoryRef{T} — field_values[1] is the Memory (= our array ref), field_values[2] is offset
+        if length(field_values) >= 1
+            append!(bytes, compile_value(field_values[1], ctx))
+        else
+            elem_type = struct_type.name.name === :GenericMemoryRef ? struct_type.parameters[2] : struct_type.parameters[1]
+            array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
+            push!(bytes, Opcode.REF_NULL)
+            append!(bytes, encode_leb128_signed(Int64(array_type_idx)))
+        end
+        return bytes
+    end
+    if struct_type isa DataType && struct_type.name.name in (:Memory, :GenericMemory)
+        # Memory{T} — emit ref.null of the array type (we can't construct raw memory in Wasm)
+        elem_type = eltype(struct_type)
+        array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
+        push!(bytes, Opcode.REF_NULL)
+        append!(bytes, encode_leb128_signed(Int64(array_type_idx)))
+        return bytes
+    end
+
     # Get the registered struct info
     if !haskey(ctx.type_registry.structs, struct_type)
         # Register it now - use appropriate registration for closures vs regular structs
@@ -14846,6 +14878,15 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_NEW)
         append!(bytes, encode_leb128_unsigned(dict_info.wasm_type_idx))
+
+    elseif typeof(val) isa DataType && typeof(val).name.name in (:MemoryRef, :GenericMemoryRef, :Memory, :GenericMemory)
+        # PURE-049: MemoryRef/Memory constants map to array types, not struct types.
+        # These appear as captured closure fields. Emit ref.null of the array type.
+        T = typeof(val)
+        elem_type = T.name.name in (:GenericMemoryRef, :GenericMemory) ? T.parameters[2] : T.parameters[1]
+        array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
+        push!(bytes, Opcode.REF_NULL)
+        append!(bytes, encode_leb128_signed(Int64(array_type_idx)))
 
     elseif isstructtype(typeof(val)) && !isa(val, Function) && !isa(val, Module)
         # Struct constant - create it with struct.new

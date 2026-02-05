@@ -422,7 +422,7 @@ end
 Add a struct type to the module and return its index.
 """
 function add_struct_type!(mod::WasmModule, fields::Vector{FieldType})::UInt32
-    add_type!(mod, StructType(fields))
+    return add_type!(mod, StructType(fields))
 end
 
 """
