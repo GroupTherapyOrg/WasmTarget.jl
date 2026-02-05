@@ -8119,12 +8119,13 @@ function generate_complex_flow(ctx::CompilationContext, blocks::Vector{BasicBloc
     # Count how many conditional branches we have
     conditionals = [(i, b) for (i, b) in enumerate(blocks) if b.terminator isa Core.GotoIfNot]
 
-    # For functions with 3+ conditionals, use the stackifier algorithm.
+    # For functions with loops or 3+ conditionals, use the stackifier algorithm.
     # The nested conditional generator handles simple if-else well (1 conditional),
-    # but multi-conditional patterns with phi nodes require the stackifier's approach
-    # of explicitly storing to phi locals at each branch.
+    # but loops and multi-conditional patterns with phi nodes require the stackifier's
+    # approach of emitting loop/br for backedges and storing to phi locals at each branch.
     has_phi_nodes = any(stmt isa Core.PhiNode for stmt in code)
-    if length(conditionals) > 2 || (length(conditionals) >= 2 && has_phi_nodes)
+    has_loops = !isempty(ctx.loop_headers)
+    if has_loops || length(conditionals) > 2 || (length(conditionals) >= 2 && has_phi_nodes)
         return generate_stackified_flow(ctx, blocks, code)
     end
 
