@@ -2,15 +2,13 @@
 #
 # This is a Therapy.jl island - an interactive component that gets compiled to Wasm.
 
-"""
-Theme toggle island - compiled to WebAssembly.
-
-- `island()` marks this as an interactive component
-- Signal value controls dark mode (0=light, 1=dark)
-- :dark_mode prop binds signal to document.documentElement.classList
-- Theme persists via localStorage
-"""
-ThemeToggle = island(:ThemeToggle) do
+# Theme toggle island - compiled to WebAssembly.
+#
+# - `island()` marks this as an interactive component
+# - Signal value controls dark mode (0=light, 1=dark)
+# - :dark_mode prop binds signal to document.documentElement.classList
+# - Theme persists via localStorage
+@island function ThemeToggle()
     # Create reactive state - 0 for light mode, 1 for dark mode
     # Use Int32 explicitly to avoid BigInt issues in JavaScript
     dark, set_dark = create_signal(Int32(0))

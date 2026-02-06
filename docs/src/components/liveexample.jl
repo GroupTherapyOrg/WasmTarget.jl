@@ -195,11 +195,9 @@ end
 # Pre-built Example Islands for Common Patterns
 # =============================================================================
 
-"""
-Simple value display island - shows a computed result.
-Useful for demonstrating pure functions.
-"""
-SimpleValueDemo = island(:SimpleValueDemo) do
+# Simple value display island - shows a computed result.
+# Useful for demonstrating pure functions.
+@island function SimpleValueDemo()
     value, set_value = create_signal(0)
 
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[150px]",
@@ -219,11 +217,9 @@ SimpleValueDemo = island(:SimpleValueDemo) do
     )
 end
 
-"""
-Counter demo - basic increment/decrement with result display.
-Used for demonstrating variables and basic operations.
-"""
-CounterDemo = island(:CounterDemo) do
+# Counter demo - basic increment/decrement with result display.
+# Used for demonstrating variables and basic operations.
+@island function CounterDemo()
     count, set_count = create_signal(0)
 
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[150px]",
@@ -241,11 +237,9 @@ CounterDemo = island(:CounterDemo) do
     )
 end
 
-"""
-Arithmetic demo - two operands with operation selection.
-Used for demonstrating math operations.
-"""
-ArithmeticExampleDemo = island(:ArithmeticExampleDemo) do
+# Arithmetic demo - two operands with operation selection.
+# Used for demonstrating math operations.
+@island function ArithmeticExampleDemo()
     a, set_a = create_signal(10)
     b, set_b = create_signal(3)
     result, set_result = create_signal(13)
@@ -295,11 +289,9 @@ ArithmeticExampleDemo = island(:ArithmeticExampleDemo) do
     )
 end
 
-"""
-Boolean/comparison demo - shows comparison results.
-Used for demonstrating comparison operators.
-"""
-ComparisonDemo = island(:ComparisonDemo) do
+# Boolean/comparison demo - shows comparison results.
+# Used for demonstrating comparison operators.
+@island function ComparisonDemo()
     a, set_a = create_signal(5)
     b, set_b = create_signal(3)
 
@@ -348,11 +340,9 @@ ComparisonDemo = island(:ComparisonDemo) do
     )
 end
 
-"""
-String concatenation demo - shows string operations.
-Uses integer index signal with show/hide for string content.
-"""
-StringConcatDemo = island(:StringConcatDemo) do
+# String concatenation demo - shows string operations.
+# Uses integer index signal with show/hide for string content.
+@island function StringConcatDemo()
     # Integer signal for which concatenation result to show (1=Hello, World!, 2=Julia rocks!, 3=World of WASM)
     result_idx, set_result_idx = create_signal(1)
 
@@ -376,10 +366,8 @@ StringConcatDemo = island(:StringConcatDemo) do
     )
 end
 
-"""
-Factorial recursion demo - shows recursive function calls.
-"""
-FactorialDemo = island(:FactorialDemo) do
+# Factorial recursion demo - shows recursive function calls.
+@island function FactorialDemo()
     n, set_n = create_signal(5)
     result, set_result = create_signal(120)
 
@@ -414,10 +402,8 @@ FactorialDemo = island(:FactorialDemo) do
     )
 end
 
-"""
-Loop/sum demo - shows iteration results.
-"""
-SumLoopDemo = island(:SumLoopDemo) do
+# Loop/sum demo - shows iteration results.
+@island function SumLoopDemo()
     n, set_n = create_signal(10)
     result, set_result = create_signal(55)
 
@@ -454,11 +440,9 @@ SumLoopDemo = island(:SumLoopDemo) do
     )
 end
 
-"""
-Control flow demo - sign function with if/elseif/else.
-Uses signal for result to avoid SSR issues with reactive classes.
-"""
-SignDemo = island(:SignDemo) do
+# Control flow demo - sign function with if/elseif/else.
+# Uses signal for result to avoid SSR issues with reactive classes.
+@island function SignDemo()
     n, set_n = create_signal(0)
     result, set_result = create_signal(0)  # -1, 0, or 1
 
@@ -507,11 +491,9 @@ SignDemo = island(:SignDemo) do
     )
 end
 
-"""
-Struct demo - shows struct field access.
-Uses signals for computed values to avoid world-age SSR issues.
-"""
-StructDemo = island(:StructDemo) do
+# Struct demo - shows struct field access.
+# Uses signals for computed values to avoid world-age SSR issues.
+@island function StructDemo()
     x, set_x = create_signal(10)
     y, set_y = create_signal(20)
     # Use signals for computed values
@@ -581,11 +563,9 @@ StructDemo = island(:StructDemo) do
     )
 end
 
-"""
-Tuple demo - shows tuple creation and indexing.
-Uses integer index signal and show/hide for display values to avoid string signals.
-"""
-TupleDemo = island(:TupleDemo) do
+# Tuple demo - shows tuple creation and indexing.
+# Uses integer index signal and show/hide for display values to avoid string signals.
+@island function TupleDemo()
     idx, set_idx = create_signal(1)
 
     # Tuple values (fixed)
@@ -615,11 +595,9 @@ TupleDemo = island(:TupleDemo) do
     )
 end
 
-"""
-Array demo - shows array indexing and mutation.
-Uses a display_val signal updated by handlers to avoid SSR world-age issues.
-"""
-ArrayDemo = island(:ArrayDemo) do
+# Array demo - shows array indexing and mutation.
+# Uses a display_val signal updated by handlers to avoid SSR world-age issues.
+@island function ArrayDemo()
     idx, set_idx = create_signal(1)
     val1, set_val1 = create_signal(10)
     val2, set_val2 = create_signal(20)
@@ -701,11 +679,9 @@ ArrayDemo = island(:ArrayDemo) do
     )
 end
 
-"""
-Integer overflow demo - shows what happens when integers wrap around.
-For Int32, max is 2147483647, min is -2147483648.
-"""
-IntegerOverflowDemo = island(:IntegerOverflowDemo) do
+# Integer overflow demo - shows what happens when integers wrap around.
+# For Int32, max is 2147483647, min is -2147483648.
+@island function IntegerOverflowDemo()
     value, set_value = create_signal(2147483640)
 
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[200px] gap-4",
@@ -736,10 +712,8 @@ IntegerOverflowDemo = island(:IntegerOverflowDemo) do
     )
 end
 
-"""
-Float precision demo - shows integer division and remainder.
-"""
-FloatPrecisionDemo = island(:FloatPrecisionDemo) do
+# Float precision demo - shows integer division and remainder.
+@island function FloatPrecisionDemo()
     a, set_a = create_signal(10)
     b, set_b = create_signal(3)
     quotient, set_quotient = create_signal(3)
@@ -807,10 +781,8 @@ FloatPrecisionDemo = island(:FloatPrecisionDemo) do
     )
 end
 
-"""
-Type conversion demo - convert between integer and float types.
-"""
-TypeConversionDemo = island(:TypeConversionDemo) do
+# Type conversion demo - convert between integer and float types.
+@island function TypeConversionDemo()
     int_val, set_int_val = create_signal(42)
 
     Div(:class => "flex flex-col items-center justify-center h-full min-h-[200px] gap-4",
@@ -839,11 +811,9 @@ TypeConversionDemo = island(:TypeConversionDemo) do
     )
 end
 
-"""
-Numeric literals demo - shows different ways to write numbers.
-Uses integer index signal with show/hide for text content.
-"""
-NumericLiteralsDemo = island(:NumericLiteralsDemo) do
+# Numeric literals demo - shows different ways to write numbers.
+# Uses integer index signal with show/hide for text content.
+@island function NumericLiteralsDemo()
     # Integer signal for which format to show (1=decimal, 2=hex, 3=binary, 4=float)
     format_idx, set_format = create_signal(1)
 
@@ -890,11 +860,9 @@ end
 # Mathematical Operations Demos
 # =============================================================================
 
-"""
-Calculator demo - interactive arithmetic operations with all basic operators.
-Uses signal for result only, avoiding SSR issues with reactive classes.
-"""
-CalculatorDemo = island(:CalculatorDemo) do
+# Calculator demo - interactive arithmetic operations with all basic operators.
+# Uses signal for result only, avoiding SSR issues with reactive classes.
+@island function CalculatorDemo()
     a, set_a = create_signal(24)
     b, set_b = create_signal(7)
     result, set_result = create_signal(31)
@@ -950,11 +918,9 @@ CalculatorDemo = island(:CalculatorDemo) do
     )
 end
 
-"""
-Comparison operators demo - uses integer signals (1=true, 0=false) for results.
-Shows all comparison results with show/hide for true/false display.
-"""
-ComparisonOpsDemo = island(:ComparisonOpsDemo) do
+# Comparison operators demo - uses integer signals (1=true, 0=false) for results.
+# Shows all comparison results with show/hide for true/false display.
+@island function ComparisonOpsDemo()
     a, set_a = create_signal(5)
     b, set_b = create_signal(5)
     # Use integer signals for comparison results (1=true, 0=false)
@@ -1065,11 +1031,9 @@ ComparisonOpsDemo = island(:ComparisonOpsDemo) do
     )
 end
 
-"""
-Bitwise operations demo - shows AND, OR, XOR, and shifts.
-Simplified to use just integer result signals.
-"""
-BitwiseDemo = island(:BitwiseDemo) do
+# Bitwise operations demo - shows AND, OR, XOR, and shifts.
+# Simplified to use just integer result signals.
+@island function BitwiseDemo()
     a, set_a = create_signal(12)  # Binary: 1100
     b, set_b = create_signal(10)  # Binary: 1010
     result, set_result = create_signal(8)  # 12 & 10 = 8
@@ -1143,11 +1107,9 @@ BitwiseDemo = island(:BitwiseDemo) do
     )
 end
 
-"""
-Math functions demo - abs, multiply, and basic math.
-Simplified to avoid helper closures that can't compile to WASM.
-"""
-MathFunctionsDemo = island(:MathFunctionsDemo) do
+# Math functions demo - abs, multiply, and basic math.
+# Simplified to avoid helper closures that can't compile to WASM.
+@island function MathFunctionsDemo()
     value, set_value = create_signal(49)
     abs_result, set_abs = create_signal(49)
     double_result, set_double = create_signal(98)
@@ -1257,11 +1219,9 @@ MathFunctionsDemo = island(:MathFunctionsDemo) do
     )
 end
 
-"""
-Negative number demo - shows how negation and subtraction work.
-Uses two signals to track both the original value and its negation.
-"""
-NegationDemo = island(:NegationDemo) do
+# Negative number demo - shows how negation and subtraction work.
+# Uses two signals to track both the original value and its negation.
+@island function NegationDemo()
     value, set_value = create_signal(10)
     neg_value, set_neg_value = create_signal(-10)
 
@@ -1301,11 +1261,9 @@ end
 # String Demos
 # =============================================================================
 
-"""
-String length demo - shows different strings and their lengths.
-Uses integer index signal with show/hide for string content.
-"""
-StringLengthDemo = island(:StringLengthDemo) do
+# String length demo - shows different strings and their lengths.
+# Uses integer index signal with show/hide for string content.
+@island function StringLengthDemo()
     # Integer signal for which string to show (1=Hello, 2=Julia, 3=Hello, World, 4=empty)
     str_idx, set_str_idx = create_signal(1)
     length_val, set_length = create_signal(5)
@@ -1351,12 +1309,10 @@ StringLengthDemo = island(:StringLengthDemo) do
     )
 end
 
-"""
-String comparison demo - compares two preset strings.
-Shows equality and lexicographic comparison results.
-Uses integer indices for strings and boolean signals for results.
-"""
-StringComparisonDemo = island(:StringComparisonDemo) do
+# String comparison demo - compares two preset strings.
+# Shows equality and lexicographic comparison results.
+# Uses integer indices for strings and boolean signals for results.
+@island function StringComparisonDemo()
     # Integer signals: 1=apple, 2=banana, 3=cherry
     str_a_idx, set_str_a = create_signal(1)
     str_b_idx, set_str_b = create_signal(2)
@@ -1455,10 +1411,8 @@ end
 # Function Demos
 # =============================================================================
 
-"""
-Function definition demo - shows a simple function that squares a number.
-"""
-SquareDemo = island(:SquareDemo) do
+# Function definition demo - shows a simple function that squares a number.
+@island function SquareDemo()
     input, set_input = create_signal(5)
     result, set_result = create_signal(25)
 
@@ -1491,10 +1445,8 @@ SquareDemo = island(:SquareDemo) do
     )
 end
 
-"""
-Multiple arguments demo - shows a function with two arguments (simplified hypot).
-"""
-MultiArgDemo = island(:MultiArgDemo) do
+# Multiple arguments demo - shows a function with two arguments (simplified hypot).
+@island function MultiArgDemo()
     x, set_x = create_signal(3)
     y, set_y = create_signal(4)
     result, set_result = create_signal(5)
@@ -1590,10 +1542,8 @@ MultiArgDemo = island(:MultiArgDemo) do
     )
 end
 
-"""
-Return value demo - shows explicit return vs implicit return.
-"""
-ReturnValueDemo = island(:ReturnValueDemo) do
+# Return value demo - shows explicit return vs implicit return.
+@island function ReturnValueDemo()
     value, set_value = create_signal(10)
     abs_result, set_abs = create_signal(10)
     sign_result, set_sign = create_signal(1)
@@ -1632,10 +1582,8 @@ ReturnValueDemo = island(:ReturnValueDemo) do
     )
 end
 
-"""
-Closure demo - shows a function that captures a variable from outer scope.
-"""
-ClosureDemo = island(:ClosureDemo) do
+# Closure demo - shows a function that captures a variable from outer scope.
+@island function ClosureDemo()
     # Captured variable
     offset, set_offset = create_signal(10)
     input, set_input = create_signal(5)
@@ -1690,10 +1638,8 @@ ClosureDemo = island(:ClosureDemo) do
     )
 end
 
-"""
-Compact function syntax demo - shows one-liner function definition.
-"""
-CompactFunctionDemo = island(:CompactFunctionDemo) do
+# Compact function syntax demo - shows one-liner function definition.
+@island function CompactFunctionDemo()
     a, set_a = create_signal(7)
     b, set_b = create_signal(3)
     add_result, set_add = create_signal(10)
@@ -1762,11 +1708,9 @@ end
 # Control Flow Demos
 # =============================================================================
 
-"""
-While loop demo - sum from 1 to n using while loop.
-Shows the classic sum pattern with iteration.
-"""
-WhileLoopDemo = island(:WhileLoopDemo) do
+# While loop demo - sum from 1 to n using while loop.
+# Shows the classic sum pattern with iteration.
+@island function WhileLoopDemo()
     n, set_n = create_signal(10)
     result, set_result = create_signal(55)  # sum(1:10) = 55
 
@@ -1810,11 +1754,9 @@ WhileLoopDemo = island(:WhileLoopDemo) do
     )
 end
 
-"""
-For loop demo - factorial calculation using for loop.
-Shows iteration over a range.
-"""
-ForLoopDemo = island(:ForLoopDemo) do
+# For loop demo - factorial calculation using for loop.
+# Shows iteration over a range.
+@island function ForLoopDemo()
     n, set_n = create_signal(5)
     result, set_result = create_signal(120)
 
@@ -1855,11 +1797,9 @@ ForLoopDemo = island(:ForLoopDemo) do
     )
 end
 
-"""
-Short-circuit evaluation demo - shows && and || behavior.
-Uses integer index signal for scenario selection with show/hide for text.
-"""
-ShortCircuitDemo = island(:ShortCircuitDemo) do
+# Short-circuit evaluation demo - shows && and || behavior.
+# Uses integer index signal for scenario selection with show/hide for text.
+@island function ShortCircuitDemo()
     # Integer signals for results (1=true, 0=false)
     and_result, set_and = create_signal(1)
     or_result, set_or = create_signal(1)
@@ -1925,12 +1865,10 @@ ShortCircuitDemo = island(:ShortCircuitDemo) do
     )
 end
 
-"""
-Try/catch demo - shows exception handling.
-Integer square root that throws on negative input.
-Uses integer index signal for status selection with show/hide.
-"""
-TryCatchDemo = island(:TryCatchDemo) do
+# Try/catch demo - shows exception handling.
+# Integer square root that throws on negative input.
+# Uses integer index signal for status selection with show/hide.
+@island function TryCatchDemo()
     n, set_n = create_signal(16)
     result, set_result = create_signal(4)
     # Integer signal for status selection (1=-9 error, 2=0, 3=4, 4=16, 5=25, 6=100)
@@ -2005,12 +1943,10 @@ TryCatchDemo = island(:TryCatchDemo) do
     )
 end
 
-"""
-Break/continue demo - shows loop control statements.
-Finds numbers divisible by both 3 and 7.
-Uses pre-computed results to avoid complex loop compilation issues.
-"""
-BreakContinueDemo = island(:BreakContinueDemo) do
+# Break/continue demo - shows loop control statements.
+# Finds numbers divisible by both 3 and 7.
+# Uses pre-computed results to avoid complex loop compilation issues.
+@island function BreakContinueDemo()
     limit, set_limit = create_signal(50)
     result, set_result = create_signal(21)
     skipped, set_skipped = create_signal(14)
@@ -2074,11 +2010,9 @@ end
 # Struct Demos for Types Chapter
 # =============================================================================
 
-"""
-Mutable struct demo - shows mutating fields of a mutable struct.
-Demonstrates: mutable struct definition, field mutation via setfield!
-"""
-MutableStructDemo = island(:MutableStructDemo) do
+# Mutable struct demo - shows mutating fields of a mutable struct.
+# Demonstrates: mutable struct definition, field mutation via setfield!
+@island function MutableStructDemo()
     # Simulate a mutable Counter struct with count field
     count_val, set_count_val = create_signal(0)
     step_val, set_step_val = create_signal(1)
@@ -2128,12 +2062,10 @@ MutableStructDemo = island(:MutableStructDemo) do
     )
 end
 
-"""
-Nested struct demo - shows structs containing other structs.
-Demonstrates: nested struct definition, field access chains.
-Uses signals for computed values to avoid world-age SSR issues.
-"""
-NestedStructDemo = island(:NestedStructDemo) do
+# Nested struct demo - shows structs containing other structs.
+# Demonstrates: nested struct definition, field access chains.
+# Uses signals for computed values to avoid world-age SSR issues.
+@island function NestedStructDemo()
     # Simulate nested structs: Line has two Point fields (start_pt and end_pt)
     # Point has x and y fields
     start_x, set_start_x = create_signal(0)
@@ -2280,11 +2212,9 @@ NestedStructDemo = island(:NestedStructDemo) do
     )
 end
 
-"""
-Primitive types demo - shows different primitive types and their ranges.
-Uses integer index signal with show/hide for type information.
-"""
-PrimitiveTypesDemo = island(:PrimitiveTypesDemo) do
+# Primitive types demo - shows different primitive types and their ranges.
+# Uses integer index signal with show/hide for type information.
+@island function PrimitiveTypesDemo()
     # Integer signal for type selection (1=Int32, 2=Int64, 3=Float32, 4=Float64, 5=Bool)
     selected_type, set_selected_type = create_signal(1)
 
@@ -2335,12 +2265,10 @@ end
 # Multiple Dispatch / Methods Demos
 # =============================================================================
 
-"""
-Shape area demo - demonstrates multiple dispatch with area() function.
-Shows Circle and Rectangle with different area calculations.
-Uses integer signals with show/hide for text content.
-"""
-ShapeAreaDemo = island(:ShapeAreaDemo) do
+# Shape area demo - demonstrates multiple dispatch with area() function.
+# Shows Circle and Rectangle with different area calculations.
+# Uses integer signals with show/hide for text content.
+@island function ShapeAreaDemo()
     # Integer signals for all state
     field_value, set_field_value = create_signal(5)
     area_result, set_area_result = create_signal(75)  # 3 * 5 * 5
@@ -2421,11 +2349,9 @@ ShapeAreaDemo = island(:ShapeAreaDemo) do
     )
 end
 
-"""
-Vector arithmetic demo - shows custom arithmetic operations on Vec2 type.
-Uses integer signals with show/hide for text labels.
-"""
-VectorArithmeticDemo = island(:VectorArithmeticDemo) do
+# Vector arithmetic demo - shows custom arithmetic operations on Vec2 type.
+# Uses integer signals with show/hide for text labels.
+@island function VectorArithmeticDemo()
     # Vector 1
     v1_x, set_v1_x = create_signal(3)
     v1_y, set_v1_y = create_signal(4)
@@ -2572,11 +2498,9 @@ VectorArithmeticDemo = island(:VectorArithmeticDemo) do
     )
 end
 
-"""
-Type specialization demo - shows describe() with different type-specific behaviors.
-Uses integer index signal with show/hide for all text content.
-"""
-TypeSpecializationDemo = island(:TypeSpecializationDemo) do
+# Type specialization demo - shows describe() with different type-specific behaviors.
+# Uses integer index signal with show/hide for all text content.
+@island function TypeSpecializationDemo()
     # Input type: 1 = Int32 positive, 2 = Int32 negative, 3 = Int32 zero, 4 = Bool true, 5 = Bool false
     input_type, set_input_type = create_signal(1)
 
@@ -2646,10 +2570,8 @@ end
 # Array Chapter Demos
 # =============================================================================
 
-"""
-Vector mutation demo - shows how to select an index and modify array elements.
-"""
-VectorMutationDemo = island(:VectorMutationDemo) do
+# Vector mutation demo - shows how to select an index and modify array elements.
+@island function VectorMutationDemo()
     # Array values
     v1, set_v1 = create_signal(1)
     v2, set_v2 = create_signal(2)
@@ -2719,11 +2641,9 @@ VectorMutationDemo = island(:VectorMutationDemo) do
     )
 end
 
-"""
-Matrix demo - 3x3 matrix with cell selection showing row, col coordinates.
-Uses a display_val signal updated by handlers to avoid SSR world-age issues.
-"""
-MatrixDemo = island(:MatrixDemo) do
+# Matrix demo - 3x3 matrix with cell selection showing row, col coordinates.
+# Uses a display_val signal updated by handlers to avoid SSR world-age issues.
+@island function MatrixDemo()
     # Selected cell
     sel_row, set_sel_row = create_signal(2)
     sel_col, set_sel_col = create_signal(2)
@@ -2770,11 +2690,9 @@ MatrixDemo = island(:MatrixDemo) do
     )
 end
 
-"""
-Array iteration demo - step through array elements and accumulate sum.
-Uses simple integer signals with static labels to avoid compilation issues.
-"""
-ArrayIterationDemo = island(:ArrayIterationDemo) do
+# Array iteration demo - step through array elements and accumulate sum.
+# Uses simple integer signals with static labels to avoid compilation issues.
+@island function ArrayIterationDemo()
     # Current index (0 = not started, 1-4 = at element, 5 = done)
     idx, set_idx = create_signal(0)
 
@@ -2840,11 +2758,9 @@ ArrayIterationDemo = island(:ArrayIterationDemo) do
     )
 end
 
-"""
-Array sum demo - adjustable array values with live sum and average.
-Uses explicit signals for sum/average and inlines computations in handlers.
-"""
-ArraySumDemo = island(:ArraySumDemo) do
+# Array sum demo - adjustable array values with live sum and average.
+# Uses explicit signals for sum/average and inlines computations in handlers.
+@island function ArraySumDemo()
     # Array values
     v1, set_v1 = create_signal(10)
     v2, set_v2 = create_signal(20)
@@ -2987,11 +2903,9 @@ end
 # Tuple Demos for Tuples Chapter
 # =============================================================================
 
-"""
-FunctionReturnTupleDemo - demonstrates a function that returns multiple values as a tuple.
-Shows how tuples enable functions to return multiple values.
-"""
-FunctionReturnTupleDemo = island(:FunctionReturnTupleDemo) do
+# FunctionReturnTupleDemo - demonstrates a function that returns multiple values as a tuple.
+# Shows how tuples enable functions to return multiple values.
+@island function FunctionReturnTupleDemo()
     a, set_a = create_signal(10)
     b, set_b = create_signal(3)
     # Pre-computed results to avoid SSR world-age issues
@@ -3069,12 +2983,10 @@ FunctionReturnTupleDemo = island(:FunctionReturnTupleDemo) do
     )
 end
 
-"""
-MixedTypeTupleDemo - demonstrates tuples containing different types.
-Shows that tuples can hold heterogeneous values (Int, Float, Bool).
-Uses integer signal (1/0) for bool to make Wasm compilation work.
-"""
-MixedTypeTupleDemo = island(:MixedTypeTupleDemo) do
+# MixedTypeTupleDemo - demonstrates tuples containing different types.
+# Shows that tuples can hold heterogeneous values (Int, Float, Bool).
+# Uses integer signal (1/0) for bool to make Wasm compilation work.
+@island function MixedTypeTupleDemo()
     # Tuple with mixed types: (Int32, Float32, Bool)
     int_val, set_int = create_signal(42)
     # Use 1 for true, 0 for false to avoid string comparisons in handlers

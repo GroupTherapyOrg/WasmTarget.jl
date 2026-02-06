@@ -3,11 +3,9 @@
 # Now that Any type is supported, we can have proper demos
 # that actually demonstrate the Julia features being compiled to WASM
 
-"""
-Arithmetic demo - shows add/multiply/divide with adjustable inputs.
-Uses multiple signals and computed results.
-"""
-ArithmeticDemo = island(:ArithmeticDemo) do
+# Arithmetic demo - shows add/multiply/divide with adjustable inputs.
+# Uses multiple signals and computed results.
+@island function ArithmeticDemo()
     a, set_a = create_signal(12)
     b, set_b = create_signal(5)
     result, set_result = create_signal(17)
@@ -56,10 +54,8 @@ ArithmeticDemo = island(:ArithmeticDemo) do
     )
 end
 
-"""
-Control flow demo - sign function showing if/elseif/else.
-"""
-ControlFlowDemo = island(:ControlFlowDemo) do
+# Control flow demo - sign function showing if/elseif/else.
+@island function ControlFlowDemo()
     n, set_n = create_signal(0)
     result, set_result = create_signal(0)
 
@@ -97,10 +93,8 @@ ControlFlowDemo = island(:ControlFlowDemo) do
     )
 end
 
-"""
-Recursion demo - factorial showing recursive calls.
-"""
-RecursionDemo = island(:RecursionDemo) do
+# Recursion demo - factorial showing recursive calls.
+@island function RecursionDemo()
     n, set_n = create_signal(5)
     result, set_result = create_signal(120)
 
@@ -134,10 +128,8 @@ RecursionDemo = island(:RecursionDemo) do
     )
 end
 
-"""
-Loop demo - sum_to_n showing while loop.
-"""
-LoopDemo = island(:LoopDemo) do
+# Loop demo - sum_to_n showing while loop.
+@island function LoopDemo()
     n, set_n = create_signal(10)
     result, set_result = create_signal(55)
 
