@@ -1,7 +1,10 @@
 # Home page - Julia REPL Playground
 #
-# True REPL experience with editable textarea
-# Uses client-side JS for UI, WASM for compilation (when runtime ready)
+# Uses Suite.jl components for visual presentation.
+# JuliaPlayground is interactive (JS) — kept as-is.
+# ManualFeatureSection uses Suite.Card + Suite.Badge.
+
+import Suite
 
 const DEFAULT_CODE = """# Write any Julia code here!
 function sum_to_n(n::Int32)::Int32
@@ -69,20 +72,11 @@ function JuliaPlayground()
             )
         ),
 
-        # Footer
-        Div(:class => "mt-6 p-4 bg-warm-100 dark:bg-warm-900 rounded-xl",
-            Div(:class => "flex items-start gap-3",
-                Div(:class => "flex-shrink-0 w-8 h-8 bg-accent-500 rounded-full flex items-center justify-center",
-                    Span(:class => "text-white text-sm font-bold", "?")
-                ),
-                Div(
-                    P(:class => "text-warm-700 dark:text-warm-300 font-medium text-sm",
-                        "How it works"
-                    ),
-                    P(:class => "text-warm-500 dark:text-warm-400 text-xs mt-1",
-                        "When the trimmed Julia runtime loads, your code is parsed by JuliaSyntax, type-inferred, and compiled to WebAssembly by WasmTarget.jl - all client-side. No server required."
-                    )
-                )
+        # How it works
+        Suite.Alert(class="mt-6",
+            Suite.AlertTitle("How it works"),
+            Suite.AlertDescription(
+                "When the trimmed Julia runtime loads, your code is parsed by JuliaSyntax, type-inferred, and compiled to WebAssembly by WasmTarget.jl - all client-side. No server required."
             )
         ),
 
@@ -149,7 +143,7 @@ function ManualFeatureSection()
     Div(:class => "mt-16 mb-8",
         # Section header
         Div(:class => "text-center mb-8",
-            H2(:class => "text-3xl font-bold text-warm-800 dark:text-warm-100",
+            H2(:class => "text-3xl font-serif font-semibold text-warm-800 dark:text-warm-100",
                 "Interactive Julia Manual"
             ),
             P(:class => "text-warm-500 dark:text-warm-400 mt-2 max-w-2xl mx-auto",
@@ -159,39 +153,43 @@ function ManualFeatureSection()
 
         # Feature card
         A(:href => "./manual/",
-          :class => "group block max-w-4xl mx-auto p-8 bg-gradient-to-br from-warm-50 to-warm-100 dark:from-warm-900 dark:to-warm-950 rounded-2xl border border-warm-200 dark:border-warm-700 hover:border-accent-400 dark:hover:border-accent-600 hover:shadow-xl hover:shadow-accent-500/10 transition-all duration-300",
-            Div(:class => "flex flex-col md:flex-row items-center gap-8",
-                # Icon
-                Div(:class => "flex-shrink-0 w-20 h-20 bg-gradient-to-br from-accent-400 to-accent-500 rounded-2xl flex items-center justify-center shadow-lg shadow-accent-500/20 group-hover:scale-105 transition-transform duration-300",
-                    Svg(:class => "w-10 h-10 text-white", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
-                        Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
-                             :d => "M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253")
-                    )
-                ),
-                # Content
-                Div(:class => "flex-1 text-center md:text-left",
-                    H3(:class => "text-2xl font-bold text-warm-800 dark:text-warm-100 group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors",
-                        "10 Interactive Chapters"
-                    ),
-                    P(:class => "text-warm-600 dark:text-warm-400 mt-2 mb-4",
-                        "From variables to multiple dispatch, each chapter features live code examples compiled to WebAssembly. Click, edit, and see results instantly - all running in your browser."
-                    ),
-                    # Chapter tags
-                    Div(:class => "flex flex-wrap justify-center md:justify-start gap-2",
-                        Span(:class => "px-3 py-1 text-xs rounded-full bg-accent-100 dark:bg-accent-900/40 text-warm-700 dark:text-warm-400", "Variables"),
-                        Span(:class => "px-3 py-1 text-xs rounded-full bg-accent-100 dark:bg-accent-900/40 text-warm-700 dark:text-warm-400", "Functions"),
-                        Span(:class => "px-3 py-1 text-xs rounded-full bg-accent-100 dark:bg-accent-900/40 text-warm-700 dark:text-warm-400", "Control Flow"),
-                        Span(:class => "px-3 py-1 text-xs rounded-full bg-accent-100 dark:bg-accent-900/40 text-warm-700 dark:text-warm-400", "Types"),
-                        Span(:class => "px-3 py-1 text-xs rounded-full bg-accent-100 dark:bg-accent-900/40 text-warm-700 dark:text-warm-400", "Arrays"),
-                        Span(:class => "px-3 py-1 text-xs rounded-full bg-warm-200 dark:bg-warm-700 text-warm-600 dark:text-warm-400", "+5 more")
-                    )
-                ),
-                # Arrow
-                Div(:class => "flex-shrink-0 hidden md:block",
-                    Svg(:class => "w-8 h-8 text-accent-400 group-hover:text-accent-500 group-hover:translate-x-2 transition-all duration-300",
-                        :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
-                        Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
-                             :d => "M9 5l7 7-7 7")
+          :class => "group block max-w-4xl mx-auto",
+            Suite.Card(class="bg-gradient-to-br from-warm-50 to-warm-100 dark:from-warm-900 dark:to-warm-950 hover:border-accent-400 dark:hover:border-accent-600 hover:shadow-xl hover:shadow-accent-500/10 transition-all duration-300",
+                Suite.CardContent(class="p-8",
+                    Div(:class => "flex flex-col md:flex-row items-center gap-8",
+                        # Icon
+                        Div(:class => "flex-shrink-0 w-20 h-20 bg-gradient-to-br from-accent-400 to-accent-500 rounded-2xl flex items-center justify-center shadow-lg shadow-accent-500/20 group-hover:scale-105 transition-transform duration-300",
+                            Svg(:class => "w-10 h-10 text-white", :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
+                                Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
+                                     :d => "M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253")
+                            )
+                        ),
+                        # Content
+                        Div(:class => "flex-1 text-center md:text-left",
+                            H3(:class => "text-2xl font-bold text-warm-800 dark:text-warm-100 group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors",
+                                "10 Interactive Chapters"
+                            ),
+                            P(:class => "text-warm-600 dark:text-warm-400 mt-2 mb-4",
+                                "From variables to multiple dispatch, each chapter features live code examples compiled to WebAssembly. Click, edit, and see results instantly - all running in your browser."
+                            ),
+                            # Chapter tags using Suite.Badge
+                            Div(:class => "flex flex-wrap justify-center md:justify-start gap-2",
+                                Suite.Badge(variant="outline", "Variables"),
+                                Suite.Badge(variant="outline", "Functions"),
+                                Suite.Badge(variant="outline", "Control Flow"),
+                                Suite.Badge(variant="outline", "Types"),
+                                Suite.Badge(variant="outline", "Arrays"),
+                                Suite.Badge(variant="secondary", "+5 more")
+                            )
+                        ),
+                        # Arrow
+                        Div(:class => "flex-shrink-0 hidden md:block",
+                            Svg(:class => "w-8 h-8 text-accent-400 group-hover:text-accent-500 group-hover:translate-x-2 transition-all duration-300",
+                                :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
+                                Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
+                                     :d => "M9 5l7 7-7 7")
+                            )
+                        )
                     )
                 )
             )
@@ -211,11 +209,16 @@ function Index()
     Div(:class => "py-8",
             # Header
             Div(:class => "text-center mb-8",
-                H1(:class => "text-4xl font-bold text-warm-800 dark:text-warm-100",
+                H1(:class => "text-4xl font-serif font-semibold text-warm-800 dark:text-warm-100",
                     "Julia → WebAssembly"
                 ),
                 P(:class => "text-warm-500 dark:text-warm-400 mt-2",
                     "Write Julia. Compile to WASM. Run in the browser."
+                ),
+                Div(:class => "mt-4 flex justify-center gap-3",
+                    Suite.Badge("Julia Compiler"),
+                    Suite.Badge("WebAssembly", variant="secondary"),
+                    Suite.Badge("Browser Runtime", variant="outline"),
                 )
             ),
 
