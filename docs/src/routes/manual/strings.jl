@@ -121,31 +121,27 @@ length(empty)  # 0""",
         ),
 
         # Concatenation operators table
-        Div(:class => "my-6 overflow-x-auto",
-            Table(:class => "w-full text-sm border-collapse",
-                Thead(:class => "bg-warm-100 dark:bg-warm-900",
-                    Tr(
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Method"),
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Example"),
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Result")
-                    )
+        Suite.Table(
+            Suite.TableHeader(Suite.TableRow(
+                Suite.TableHead("Method"),
+                Suite.TableHead("Example"),
+                Suite.TableHead("Result")
+            )),
+            Suite.TableBody(
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "*"),
+                    Suite.TableCell(:class => "font-mono", "\"Hello\" * \" World\""),
+                    Suite.TableCell(:class => "font-mono", "\"Hello World\"")
                 ),
-                Tbody(
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "*"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400 font-mono", "\"Hello\" * \" World\""),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400 font-mono", "\"Hello World\"")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "string()"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400 font-mono", "string(\"Hi\", \" \", \"there\")"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400 font-mono", "\"Hi there\"")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "^"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400 font-mono", "\"ha\" ^ 3"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400 font-mono", "\"hahaha\"")
-                    )
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "string()"),
+                    Suite.TableCell(:class => "font-mono", "string(\"Hi\", \" \", \"there\")"),
+                    Suite.TableCell(:class => "font-mono", "\"Hi there\"")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "^"),
+                    Suite.TableCell(:class => "font-mono", "\"ha\" ^ 3"),
+                    Suite.TableCell(:class => "font-mono", "\"hahaha\"")
                 )
             )
         ),
@@ -185,36 +181,32 @@ e = "ha" ^ 3            # "hahaha" """,
         ),
 
         # Comparison operators table
-        Div(:class => "my-6 overflow-x-auto",
-            Table(:class => "w-full text-sm border-collapse",
-                Thead(:class => "bg-warm-100 dark:bg-warm-900",
-                    Tr(
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Operator"),
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Description"),
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Example")
-                    )
+        Suite.Table(
+            Suite.TableHeader(Suite.TableRow(
+                Suite.TableHead("Operator"),
+                Suite.TableHead("Description"),
+                Suite.TableHead("Example")
+            )),
+            Suite.TableBody(
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "=="),
+                    Suite.TableCell("Equal"),
+                    Suite.TableCell(:class => "font-mono", "\"abc\" == \"abc\"  # true")
                 ),
-                Tbody(
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "=="),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "Equal"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400 font-mono", "\"abc\" == \"abc\"  # true")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "!="),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "Not equal"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400 font-mono", "\"abc\" != \"xyz\"  # true")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "<"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "Less than (lexicographic)"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400 font-mono", "\"apple\" < \"banana\"  # true")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", ">"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "Greater than (lexicographic)"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400 font-mono", "\"cherry\" > \"banana\"  # true")
-                    )
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "!="),
+                    Suite.TableCell("Not equal"),
+                    Suite.TableCell(:class => "font-mono", "\"abc\" != \"xyz\"  # true")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "<"),
+                    Suite.TableCell("Less than (lexicographic)"),
+                    Suite.TableCell(:class => "font-mono", "\"apple\" < \"banana\"  # true")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", ">"),
+                    Suite.TableCell("Greater than (lexicographic)"),
+                    Suite.TableCell(:class => "font-mono", "\"cherry\" > \"banana\"  # true")
                 )
             )
         ),

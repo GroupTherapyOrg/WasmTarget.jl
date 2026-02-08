@@ -15,6 +15,8 @@
 # Tuples Chapter Page
 # =============================================================================
 
+import Suite
+
 """
 Tuples chapter for the Interactive Julia Manual.
 """
@@ -63,20 +65,11 @@ length(t)  # returns 3
         ),
 
         # Tip about immutability
-        Div(:class => "p-4 bg-warm-50 dark:bg-warm-900/20 rounded-xl border border-warm-200 dark:border-warm-700 my-6",
-            Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-accent-600 dark:text-accent-400 flex-shrink-0 mt-0.5",
-                    :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
-                    Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
-                         :d => "M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z")
-                ),
-                Div(
-                    P(:class => "text-sm text-warm-800 dark:text-warm-300 font-medium", "Immutability"),
-                    P(:class => "text-sm text-warm-700 dark:text-warm-400 mt-1",
-                        "Tuples are immutable \u2014 once created, you cannot change their elements. ",
-                        "This makes tuples safe to share and efficient to use. If you need a mutable collection, use an array instead."
-                    )
-                )
+        Suite.Alert(class="my-6",
+            Suite.AlertTitle("Immutability"),
+            Suite.AlertDescription(
+                "Tuples are immutable \u2014 once created, you cannot change their elements. ",
+                "This makes tuples safe to share and efficient to use. If you need a mutable collection, use an array instead."
             )
         ),
 
@@ -119,9 +112,7 @@ end""",
         ),
 
         # Code example for destructuring
-        Pre(:class => "bg-warm-800 dark:bg-warm-900 p-4 rounded-lg overflow-x-auto text-sm my-4",
-            Code(:class => "language-julia text-warm-100 font-mono",
-"""# Destructuring examples
+        Suite.CodeBlock("""# Destructuring examples
 t = (1, 2, 3)
 
 # Extract all elements
@@ -134,9 +125,7 @@ x, y = y, x  # Now x = 20, y = 10
 
 # Ignore elements with underscore
 first, _, third = (10, 20, 30)
-# first = 10, third = 30"""
-            )
-        ),
+# first = 10, third = 30""", language="julia"),
 
         # Section: Mixed Types
         H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
@@ -172,20 +161,11 @@ end""",
         ),
 
         # WasmTarget note about tuples
-        Div(:class => "p-4 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200 dark:border-amber-800 my-6",
-            Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5",
-                    :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
-                    Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
-                         :d => "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z")
-                ),
-                Div(
-                    P(:class => "text-sm text-amber-800 dark:text-amber-200 font-medium", "Tuples in WasmTarget.jl"),
-                    P(:class => "text-sm text-amber-700 dark:text-amber-300 mt-1",
-                        "WasmTarget.jl compiles tuples as WasmGC struct types, with each field corresponding to a tuple element. ",
-                        "This provides efficient, type-safe tuple operations in WebAssembly."
-                    )
-                )
+        Suite.Alert(class="my-6",
+            Suite.AlertTitle("Tuples in WasmTarget.jl"),
+            Suite.AlertDescription(
+                "WasmTarget.jl compiles tuples as WasmGC struct types, with each field corresponding to a tuple element. ",
+                "This provides efficient, type-safe tuple operations in WebAssembly."
             )
         ),
 
@@ -200,41 +180,37 @@ end""",
         ),
 
         # Comparison table
-        Div(:class => "overflow-x-auto my-6",
-            Table(:class => "w-full text-sm text-left",
-                Thead(:class => "text-xs text-warm-700 dark:text-warm-300 uppercase bg-warm-100 dark:bg-warm-900",
-                    Tr(
-                        Th(:class => "px-4 py-3", "Feature"),
-                        Th(:class => "px-4 py-3", "Tuple"),
-                        Th(:class => "px-4 py-3", "Array")
-                    )
+        Suite.Table(
+            Suite.TableHeader(Suite.TableRow(
+                Suite.TableHead("Feature"),
+                Suite.TableHead("Tuple"),
+                Suite.TableHead("Array")
+            )),
+            Suite.TableBody(
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-medium", "Size"),
+                    Suite.TableCell("Fixed at creation"),
+                    Suite.TableCell("Can grow/shrink")
                 ),
-                Tbody(
-                    Tr(:class => "border-b border-warm-200 dark:border-warm-700",
-                        Td(:class => "px-4 py-3 font-medium", "Size"),
-                        Td(:class => "px-4 py-3", "Fixed at creation"),
-                        Td(:class => "px-4 py-3", "Can grow/shrink")
-                    ),
-                    Tr(:class => "border-b border-warm-200 dark:border-warm-700",
-                        Td(:class => "px-4 py-3 font-medium", "Element types"),
-                        Td(:class => "px-4 py-3", "Can be different"),
-                        Td(:class => "px-4 py-3", "Usually same type")
-                    ),
-                    Tr(:class => "border-b border-warm-200 dark:border-warm-700",
-                        Td(:class => "px-4 py-3 font-medium", "Mutability"),
-                        Td(:class => "px-4 py-3", "Immutable"),
-                        Td(:class => "px-4 py-3", "Mutable")
-                    ),
-                    Tr(:class => "border-b border-warm-200 dark:border-warm-700",
-                        Td(:class => "px-4 py-3 font-medium", "Syntax"),
-                        Td(:class => "px-4 py-3", Code(:class => "text-accent-600", "(a, b, c)")),
-                        Td(:class => "px-4 py-3", Code(:class => "text-accent-600", "[a, b, c]"))
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-3 font-medium", "Use case"),
-                        Td(:class => "px-4 py-3", "Multiple return values, records"),
-                        Td(:class => "px-4 py-3", "Collections, lists")
-                    )
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-medium", "Element types"),
+                    Suite.TableCell("Can be different"),
+                    Suite.TableCell("Usually same type")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-medium", "Mutability"),
+                    Suite.TableCell("Immutable"),
+                    Suite.TableCell("Mutable")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-medium", "Syntax"),
+                    Suite.TableCell(Code(:class => "text-accent-600 dark:text-accent-400", "(a, b, c)")),
+                    Suite.TableCell(Code(:class => "text-accent-600 dark:text-accent-400", "[a, b, c]"))
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-medium", "Use case"),
+                    Suite.TableCell("Multiple return values, records"),
+                    Suite.TableCell("Collections, lists")
                 )
             )
         ),
@@ -254,23 +230,14 @@ end""",
         ),
 
         # Scope note
-        Div(:class => "p-4 bg-warm-100 dark:bg-warm-900 rounded-xl border border-warm-200 dark:border-warm-700 my-6",
-            Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-warm-500 dark:text-warm-400 flex-shrink-0 mt-0.5",
-                    :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
-                    Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
-                         :d => "M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z")
-                ),
-                Div(
-                    P(:class => "text-sm text-warm-700 dark:text-warm-300 font-medium", "Named Tuples"),
-                    P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-1",
-                        "Julia also supports ",
-                        Em("named tuples"),
-                        " like ",
-                        Code(:class => "text-warm-600 dark:text-warm-400", "(x=1, y=2)"),
-                        ", which allow accessing elements by name. Named tuples have limited support in WasmTarget.jl."
-                    )
-                )
+        Suite.Alert(class="my-6",
+            Suite.AlertTitle("Named Tuples"),
+            Suite.AlertDescription(
+                "Julia also supports ",
+                Em("named tuples"),
+                " like ",
+                Code(:class => "text-accent-600 dark:text-accent-400", "(x=1, y=2)"),
+                ", which allow accessing elements by name. Named tuples have limited support in WasmTarget.jl."
             )
         ),
 

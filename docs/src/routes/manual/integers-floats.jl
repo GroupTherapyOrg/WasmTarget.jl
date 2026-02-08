@@ -43,41 +43,37 @@ function IntegersFloats()
         ),
 
         # Integer types table
-        Div(:class => "my-6 overflow-x-auto",
-            Table(:class => "w-full text-sm border-collapse",
-                Thead(:class => "bg-warm-100 dark:bg-warm-900",
-                    Tr(
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Type"),
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Wasm"),
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Bits"),
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Range")
-                    )
+        Suite.Table(
+            Suite.TableHeader(Suite.TableRow(
+                Suite.TableHead("Type"),
+                Suite.TableHead("Wasm"),
+                Suite.TableHead("Bits"),
+                Suite.TableHead("Range")
+            )),
+            Suite.TableBody(
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "Int32"),
+                    Suite.TableCell(:class => "font-mono", "i32"),
+                    Suite.TableCell("32"),
+                    Suite.TableCell("-2,147,483,648 to 2,147,483,647")
                 ),
-                Tbody(
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "Int32"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-warm-500 dark:text-warm-400", "i32"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "32"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "-2,147,483,648 to 2,147,483,647")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "Int64"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-warm-500 dark:text-warm-400", "i64"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "64"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "-9,223,372,036,854,775,808 to 9,223,372,036,854,775,807")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "UInt32"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-warm-500 dark:text-warm-400", "i32"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "32"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "0 to 4,294,967,295")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "UInt64"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-warm-500 dark:text-warm-400", "i64"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "64"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "0 to 18,446,744,073,709,551,615")
-                    )
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "Int64"),
+                    Suite.TableCell(:class => "font-mono", "i64"),
+                    Suite.TableCell("64"),
+                    Suite.TableCell("-9,223,372,036,854,775,808 to 9,223,372,036,854,775,807")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "UInt32"),
+                    Suite.TableCell(:class => "font-mono", "i32"),
+                    Suite.TableCell("32"),
+                    Suite.TableCell("0 to 4,294,967,295")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "UInt64"),
+                    Suite.TableCell(:class => "font-mono", "i64"),
+                    Suite.TableCell("64"),
+                    Suite.TableCell("0 to 18,446,744,073,709,551,615")
                 )
             )
         ),
@@ -141,29 +137,25 @@ b::Int32 = a - 1        # Underflows to 2147483647""",
         ),
 
         # Float types table
-        Div(:class => "my-6 overflow-x-auto",
-            Table(:class => "w-full text-sm border-collapse",
-                Thead(:class => "bg-warm-100 dark:bg-warm-900",
-                    Tr(
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Type"),
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Wasm"),
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Bits"),
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Precision")
-                    )
+        Suite.Table(
+            Suite.TableHeader(Suite.TableRow(
+                Suite.TableHead("Type"),
+                Suite.TableHead("Wasm"),
+                Suite.TableHead("Bits"),
+                Suite.TableHead("Precision")
+            )),
+            Suite.TableBody(
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "Float32"),
+                    Suite.TableCell(:class => "font-mono", "f32"),
+                    Suite.TableCell("32"),
+                    Suite.TableCell("~7 decimal digits")
                 ),
-                Tbody(
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "Float32"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-warm-500 dark:text-warm-400", "f32"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "32"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "~7 decimal digits")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "Float64"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-warm-500 dark:text-warm-400", "f64"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "64"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "~15-17 decimal digits")
-                    )
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "Float64"),
+                    Suite.TableCell(:class => "font-mono", "f64"),
+                    Suite.TableCell("64"),
+                    Suite.TableCell("~15-17 decimal digits")
                 )
             )
         ),

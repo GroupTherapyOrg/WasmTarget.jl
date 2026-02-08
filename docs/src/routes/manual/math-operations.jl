@@ -42,56 +42,52 @@ function MathOperations()
         ),
 
         # Arithmetic operators table
-        Div(:class => "my-6 overflow-x-auto",
-            Table(:class => "w-full text-sm border-collapse",
-                Thead(:class => "bg-warm-100 dark:bg-warm-900",
-                    Tr(
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Expression"),
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Name"),
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Description")
-                    )
+        Suite.Table(
+            Suite.TableHeader(Suite.TableRow(
+                Suite.TableHead("Expression"),
+                Suite.TableHead("Name"),
+                Suite.TableHead("Description")
+            )),
+            Suite.TableBody(
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "+x"),
+                    Suite.TableCell("unary plus"),
+                    Suite.TableCell("identity operation")
                 ),
-                Tbody(
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "+x"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "unary plus"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "identity operation")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "-x"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "unary minus"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "maps values to their additive inverses")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "x + y"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "addition"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "sum of x and y")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "x - y"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "subtraction"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "difference of x and y")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "x * y"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "multiplication"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "product of x and y")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "x / y"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "division"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "quotient of x and y (returns Float64)")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "div(x, y)"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "integer division"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "quotient truncated to an integer")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "x % y"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "remainder"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "remainder after integer division")
-                    )
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "-x"),
+                    Suite.TableCell("unary minus"),
+                    Suite.TableCell("maps values to their additive inverses")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "x + y"),
+                    Suite.TableCell("addition"),
+                    Suite.TableCell("sum of x and y")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "x - y"),
+                    Suite.TableCell("subtraction"),
+                    Suite.TableCell("difference of x and y")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "x * y"),
+                    Suite.TableCell("multiplication"),
+                    Suite.TableCell("product of x and y")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "x / y"),
+                    Suite.TableCell("division"),
+                    Suite.TableCell("quotient of x and y (returns Float64)")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "div(x, y)"),
+                    Suite.TableCell("integer division"),
+                    Suite.TableCell("quotient truncated to an integer")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "x % y"),
+                    Suite.TableCell("remainder"),
+                    Suite.TableCell("remainder after integer division")
                 )
             )
         ),
@@ -170,46 +166,42 @@ pos_y = -y         # 5""",
         ),
 
         # Comparison operators table
-        Div(:class => "my-6 overflow-x-auto",
-            Table(:class => "w-full text-sm border-collapse",
-                Thead(:class => "bg-warm-100 dark:bg-warm-900",
-                    Tr(
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Operator"),
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Name"),
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Example")
-                    )
+        Suite.Table(
+            Suite.TableHeader(Suite.TableRow(
+                Suite.TableHead("Operator"),
+                Suite.TableHead("Name"),
+                Suite.TableHead("Example")
+            )),
+            Suite.TableBody(
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "=="),
+                    Suite.TableCell("equality"),
+                    Suite.TableCell(:class => "font-mono", "5 == 5 → true")
                 ),
-                Tbody(
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "=="),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "equality"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400 font-mono", "5 == 5 → true")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "!="),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "inequality"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400 font-mono", "5 != 3 → true")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "<"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "less than"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400 font-mono", "3 < 5 → true")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "<="),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "less than or equal"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400 font-mono", "3 <= 3 → true")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", ">"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "greater than"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400 font-mono", "5 > 3 → true")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", ">="),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "greater than or equal"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400 font-mono", "5 >= 5 → true")
-                    )
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "!="),
+                    Suite.TableCell("inequality"),
+                    Suite.TableCell(:class => "font-mono", "5 != 3 → true")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "<"),
+                    Suite.TableCell("less than"),
+                    Suite.TableCell(:class => "font-mono", "3 < 5 → true")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "<="),
+                    Suite.TableCell("less than or equal"),
+                    Suite.TableCell(:class => "font-mono", "3 <= 3 → true")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", ">"),
+                    Suite.TableCell("greater than"),
+                    Suite.TableCell(:class => "font-mono", "5 > 3 → true")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", ">="),
+                    Suite.TableCell("greater than or equal"),
+                    Suite.TableCell(:class => "font-mono", "5 >= 5 → true")
                 )
             )
         ),
@@ -257,46 +249,42 @@ x = 3
         ),
 
         # Bitwise operators table
-        Div(:class => "my-6 overflow-x-auto",
-            Table(:class => "w-full text-sm border-collapse",
-                Thead(:class => "bg-warm-100 dark:bg-warm-900",
-                    Tr(
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Expression"),
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Name"),
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Description")
-                    )
+        Suite.Table(
+            Suite.TableHeader(Suite.TableRow(
+                Suite.TableHead("Expression"),
+                Suite.TableHead("Name"),
+                Suite.TableHead("Description")
+            )),
+            Suite.TableBody(
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "~x"),
+                    Suite.TableCell("bitwise NOT"),
+                    Suite.TableCell("inverts all bits")
                 ),
-                Tbody(
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "~x"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "bitwise NOT"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "inverts all bits")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "x & y"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "bitwise AND"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "1 only if both bits are 1")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "x | y"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "bitwise OR"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "1 if either bit is 1")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "xor(x, y)"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "bitwise XOR"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "1 if bits differ")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "x << n"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "left shift"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "shift bits left by n positions")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "x >> n"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "right shift"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "shift bits right by n positions")
-                    )
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "x & y"),
+                    Suite.TableCell("bitwise AND"),
+                    Suite.TableCell("1 only if both bits are 1")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "x | y"),
+                    Suite.TableCell("bitwise OR"),
+                    Suite.TableCell("1 if either bit is 1")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "xor(x, y)"),
+                    Suite.TableCell("bitwise XOR"),
+                    Suite.TableCell("1 if bits differ")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "x << n"),
+                    Suite.TableCell("left shift"),
+                    Suite.TableCell("shift bits left by n positions")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "x >> n"),
+                    Suite.TableCell("right shift"),
+                    Suite.TableCell("shift bits right by n positions")
                 )
             )
         ),
@@ -350,56 +338,52 @@ a >> 2  # 3  (12 / 4)""",
         ),
 
         # Math functions table
-        Div(:class => "my-6 overflow-x-auto",
-            Table(:class => "w-full text-sm border-collapse",
-                Thead(:class => "bg-warm-100 dark:bg-warm-900",
-                    Tr(
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Function"),
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "Description"),
-                        Th(:class => "text-left px-4 py-2 border border-warm-200 dark:border-warm-700 font-medium text-warm-700 dark:text-warm-300", "WASM Native")
-                    )
+        Suite.Table(
+            Suite.TableHeader(Suite.TableRow(
+                Suite.TableHead("Function"),
+                Suite.TableHead("Description"),
+                Suite.TableHead("WASM Native")
+            )),
+            Suite.TableBody(
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "abs(x)"),
+                    Suite.TableCell("Absolute value"),
+                    Suite.TableCell(:class => "text-accent-600 dark:text-accent-400", "Yes (f32.abs, f64.abs)")
                 ),
-                Tbody(
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "abs(x)"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "Absolute value"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-accent-600 dark:text-accent-400", "Yes (f32.abs, f64.abs)")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "sqrt(x)"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "Square root"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-accent-600 dark:text-accent-400", "Yes (f32.sqrt, f64.sqrt)")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "floor(x)"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "Round down to integer"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-accent-600 dark:text-accent-400", "Yes (f32.floor, f64.floor)")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "ceil(x)"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "Round up to integer"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-accent-600 dark:text-accent-400", "Yes (f32.ceil, f64.ceil)")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "round(x)"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "Round to nearest integer"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-accent-600 dark:text-accent-400", "Yes (f32.nearest, f64.nearest)")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "trunc(x)"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "Truncate toward zero"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-accent-600 dark:text-accent-400", "Yes (f32.trunc, f64.trunc)")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "min(x, y)"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "Minimum of two values"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-accent-600 dark:text-accent-400", "Yes (f32.min, f64.min)")
-                    ),
-                    Tr(
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 font-mono text-accent-600 dark:text-accent-400", "max(x, y)"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-warm-600 dark:text-warm-400", "Maximum of two values"),
-                        Td(:class => "px-4 py-2 border border-warm-200 dark:border-warm-700 text-accent-600 dark:text-accent-400", "Yes (f32.max, f64.max)")
-                    )
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "sqrt(x)"),
+                    Suite.TableCell("Square root"),
+                    Suite.TableCell(:class => "text-accent-600 dark:text-accent-400", "Yes (f32.sqrt, f64.sqrt)")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "floor(x)"),
+                    Suite.TableCell("Round down to integer"),
+                    Suite.TableCell(:class => "text-accent-600 dark:text-accent-400", "Yes (f32.floor, f64.floor)")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "ceil(x)"),
+                    Suite.TableCell("Round up to integer"),
+                    Suite.TableCell(:class => "text-accent-600 dark:text-accent-400", "Yes (f32.ceil, f64.ceil)")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "round(x)"),
+                    Suite.TableCell("Round to nearest integer"),
+                    Suite.TableCell(:class => "text-accent-600 dark:text-accent-400", "Yes (f32.nearest, f64.nearest)")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "trunc(x)"),
+                    Suite.TableCell("Truncate toward zero"),
+                    Suite.TableCell(:class => "text-accent-600 dark:text-accent-400", "Yes (f32.trunc, f64.trunc)")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "min(x, y)"),
+                    Suite.TableCell("Minimum of two values"),
+                    Suite.TableCell(:class => "text-accent-600 dark:text-accent-400", "Yes (f32.min, f64.min)")
+                ),
+                Suite.TableRow(
+                    Suite.TableCell(:class => "font-mono text-accent-600 dark:text-accent-400", "max(x, y)"),
+                    Suite.TableCell("Maximum of two values"),
+                    Suite.TableCell(:class => "text-accent-600 dark:text-accent-400", "Yes (f32.max, f64.max)")
                 )
             )
         ),
