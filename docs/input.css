@@ -1,11 +1,11 @@
 @import "tailwindcss";
 
-/* Configure content sources for Tailwind v4 */
-@source "./src/routes/**/*.jl";
-@source "./src/components/**/*.jl";
+/* Configure content sources for v4 */
+@source "./src/**/*.jl";
+@source "../../Suite.jl/src/**/*.jl";
+@source "../../Suite.jl/src/theme_classes.jl";
 
 /* Enable class-based dark mode (toggle via .dark class on <html>) */
-/* Without this, dark: variants only respond to prefers-color-scheme media query */
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* Theme customizations */
@@ -14,7 +14,7 @@
   --font-serif: 'EB Garamond', 'Palatino Linotype', 'Book Antiqua', Georgia, serif;
   --font-mono: 'JuliaMono', 'Fira Code', 'JetBrains Mono', monospace;
 
-  /* Warm neutral palette (matches logo/README.md Neutral Palette) */
+  /* Warm neutral palette (shared across GroupTherapyOrg ecosystem) */
   --color-warm-50: #f8f7f4;
   --color-warm-100: #f0ece4;
   --color-warm-200: #e8e3d9;
@@ -27,34 +27,37 @@
   --color-warm-900: #1a1918;
   --color-warm-950: #111110;
 
-  /* Accent palette — Julia Blue #4063d8 (WasmTarget.jl primary accent) */
-  --color-accent-50: #eef2fc;
-  --color-accent-100: #d5def7;
-  --color-accent-200: #aabdef;
-  --color-accent-300: #7f9ce6;
-  --color-accent-400: #597edf;
-  --color-accent-500: #4063d8;
-  --color-accent-600: #3350b0;
-  --color-accent-700: #283e88;
-  --color-accent-800: #1e2f64;
-  --color-accent-900: #141f42;
-  --color-accent-950: #0c1329;
+  /* Accent palette — Julia Purple #9558b2 (WasmTarget.jl primary accent) */
+  --color-accent-50: #f5f0f9;
+  --color-accent-100: #e8d9f1;
+  --color-accent-200: #d1b3e3;
+  --color-accent-300: #b98dd4;
+  --color-accent-400: #a770c3;
+  --color-accent-500: #9558b2;
+  --color-accent-600: #7a4892;
+  --color-accent-700: #5f3872;
+  --color-accent-800: #462a54;
+  --color-accent-900: #2e1b38;
+  --color-accent-950: #1a1022;
 
-  /* Accent-secondary palette — Julia Purple #9558b2 (WasmTarget.jl secondary accent) */
-  --color-accent-secondary-50: #f5f0f9;
-  --color-accent-secondary-100: #e8d9f1;
-  --color-accent-secondary-200: #d1b3e3;
-  --color-accent-secondary-300: #b98dd4;
-  --color-accent-secondary-400: #a770c3;
-  --color-accent-secondary-500: #9558b2;
-  --color-accent-secondary-600: #7a4892;
-  --color-accent-secondary-700: #5f3872;
-  --color-accent-secondary-800: #462a54;
-  --color-accent-secondary-900: #2e1b38;
-  --color-accent-secondary-950: #1a1022;
+  /* Accent-secondary palette — Julia Red #cb3c33 (WasmTarget.jl secondary accent) */
+  --color-accent-secondary-50: #fef2f1;
+  --color-accent-secondary-100: #fce0de;
+  --color-accent-secondary-200: #f9bbb7;
+  --color-accent-secondary-300: #f08f88;
+  --color-accent-secondary-400: #e4645b;
+  --color-accent-secondary-500: #cb3c33;
+  --color-accent-secondary-600: #a83029;
+  --color-accent-secondary-700: #832520;
+  --color-accent-secondary-800: #611c18;
+  --color-accent-secondary-900: #421311;
+  --color-accent-secondary-950: #280b0a;
+
+  /* Border radius tokens (shadcn compatibility) */
+  --radius: 0.5rem;
 }
 
-/* Design System CSS custom properties (from logo/README.md) */
+/* Design System CSS custom properties */
 @layer base {
   :root {
     /* Shared neutrals */
@@ -72,12 +75,18 @@
     --julia-green: #389826;
 
     /* WasmTarget.jl accent overrides */
-    --accent: var(--julia-blue);
-    --accent-secondary: var(--julia-purple);
+    --accent: var(--julia-purple);
+    --accent-secondary: var(--julia-red);
+
+    /* .jl wordmark tri-colors (exclude Purple — the active accent) */
+    --jl-dot: #4063d8;  /* Blue */
+    --jl-j: #389826;    /* Green */
+    --jl-l: #cb3c33;    /* Red */
   }
 
   html {
     scroll-behavior: smooth;
+    background-color: var(--bg-primary);
   }
 
   pre code {
@@ -95,4 +104,171 @@
     --text-secondary: #8a8680;
     --text-tertiary: #5a5855;
   }
+}
+
+/* Theme switcher — override accent palette + visual dimensions via data-theme on <html> */
+@layer base {
+  /* Ocean theme — Blue accent, Rose secondary, larger radius, deeper shadows */
+  [data-theme="ocean"] {
+    --color-accent-50: #eff6ff;
+    --color-accent-100: #dbeafe;
+    --color-accent-200: #bfdbfe;
+    --color-accent-300: #93c5fd;
+    --color-accent-400: #60a5fa;
+    --color-accent-500: #3b82f6;
+    --color-accent-600: #2563eb;
+    --color-accent-700: #1d4ed8;
+    --color-accent-800: #1e40af;
+    --color-accent-900: #1e3a8a;
+    --color-accent-950: #172554;
+    --color-accent-secondary-50: #fff1f2;
+    --color-accent-secondary-100: #ffe4e6;
+    --color-accent-secondary-200: #fecdd3;
+    --color-accent-secondary-300: #fda4af;
+    --color-accent-secondary-400: #fb7185;
+    --color-accent-secondary-500: #f43f5e;
+    --color-accent-secondary-600: #e11d48;
+    --color-accent-secondary-700: #be123c;
+    --color-accent-secondary-800: #9f1239;
+    --color-accent-secondary-900: #881337;
+    --color-accent-secondary-950: #4c0519;
+    --radius-sm: 0.375rem;
+    --radius-md: 0.5rem;
+    --radius-lg: 0.75rem;
+    --radius-xl: 1rem;
+    --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.15), 0 2px 4px -2px rgb(0 0 0 / 0.15);
+    --jl-dot: #9558b2;
+    --jl-j: #389826;
+    --jl-l: #cb3c33;
+  }
+
+  /* Minimal theme — Zinc accent, Red secondary, no radius, no shadows, slate neutrals */
+  [data-theme="minimal"] {
+    --color-accent-50: #fafafa;
+    --color-accent-100: #f4f4f5;
+    --color-accent-200: #e4e4e7;
+    --color-accent-300: #d4d4d8;
+    --color-accent-400: #a1a1aa;
+    --color-accent-500: #71717a;
+    --color-accent-600: #52525b;
+    --color-accent-700: #3f3f46;
+    --color-accent-800: #27272a;
+    --color-accent-900: #18181b;
+    --color-accent-950: #09090b;
+    --color-accent-secondary-50: #fef2f2;
+    --color-accent-secondary-100: #fee2e2;
+    --color-accent-secondary-200: #fecaca;
+    --color-accent-secondary-300: #fca5a5;
+    --color-accent-secondary-400: #f87171;
+    --color-accent-secondary-500: #ef4444;
+    --color-accent-secondary-600: #dc2626;
+    --color-accent-secondary-700: #b91c1c;
+    --color-accent-secondary-800: #991b1b;
+    --color-accent-secondary-900: #7f1d1d;
+    --color-accent-secondary-950: #450a0a;
+    --radius-sm: 0;
+    --radius-md: 0;
+    --radius-lg: 0;
+    --radius-xl: 0;
+    --shadow-sm: 0 0 #0000;
+    --shadow-md: 0 0 #0000;
+    --color-warm-50: #f8fafc;
+    --color-warm-100: #f1f5f9;
+    --color-warm-200: #e2e8f0;
+    --color-warm-300: #cbd5e1;
+    --color-warm-400: #94a3b8;
+    --color-warm-500: #64748b;
+    --color-warm-600: #475569;
+    --color-warm-700: #334155;
+    --color-warm-800: #1e293b;
+    --color-warm-900: #0f172a;
+    --color-warm-950: #020617;
+    --bg-primary: #f8fafc;
+    --bg-secondary: #f1f5f9;
+    --bg-tertiary: #e2e8f0;
+    --text-primary: #1e293b;
+    --text-secondary: #475569;
+    --text-tertiary: #94a3b8;
+  }
+  .dark[data-theme="minimal"] {
+    --bg-primary: #020617;
+    --bg-secondary: #0f172a;
+    --bg-tertiary: #1e293b;
+    --text-primary: #cbd5e1;
+    --text-secondary: #64748b;
+    --text-tertiary: #475569;
+  }
+
+  /* Nature theme — Emerald accent, Amber secondary, generous radius, stone neutrals */
+  [data-theme="nature"] {
+    --color-accent-50: #ecfdf5;
+    --color-accent-100: #d1fae5;
+    --color-accent-200: #a7f3d0;
+    --color-accent-300: #6ee7b7;
+    --color-accent-400: #34d399;
+    --color-accent-500: #10b981;
+    --color-accent-600: #059669;
+    --color-accent-700: #047857;
+    --color-accent-800: #065f46;
+    --color-accent-900: #064e3b;
+    --color-accent-950: #022c22;
+    --color-accent-secondary-50: #fffbeb;
+    --color-accent-secondary-100: #fef3c7;
+    --color-accent-secondary-200: #fde68a;
+    --color-accent-secondary-300: #fcd34d;
+    --color-accent-secondary-400: #fbbf24;
+    --color-accent-secondary-500: #f59e0b;
+    --color-accent-secondary-600: #d97706;
+    --color-accent-secondary-700: #b45309;
+    --color-accent-secondary-800: #92400e;
+    --color-accent-secondary-900: #78350f;
+    --color-accent-secondary-950: #451a03;
+    --radius-sm: 0.375rem;
+    --radius-md: 0.75rem;
+    --radius-lg: 1rem;
+    --radius-xl: 1.5rem;
+    --jl-dot: #4063d8;
+    --jl-j: #9558b2;
+    --jl-l: #cb3c33;
+    --color-warm-50: #fafaf9;
+    --color-warm-100: #f5f5f4;
+    --color-warm-200: #e7e5e4;
+    --color-warm-300: #d6d3d1;
+    --color-warm-400: #a8a29e;
+    --color-warm-500: #78716c;
+    --color-warm-600: #57534e;
+    --color-warm-700: #44403c;
+    --color-warm-800: #292524;
+    --color-warm-900: #1c1917;
+    --color-warm-950: #0c0a09;
+    --bg-primary: #fafaf9;
+    --bg-secondary: #f5f5f4;
+    --bg-tertiary: #e7e5e4;
+    --text-primary: #292524;
+    --text-secondary: #57534e;
+    --text-tertiary: #a8a29e;
+  }
+  .dark[data-theme="nature"] {
+    --bg-primary: #0c0a09;
+    --bg-secondary: #1c1917;
+    --bg-tertiary: #292524;
+    --text-primary: #d6d3d1;
+    --text-secondary: #78716c;
+    --text-tertiary: #57534e;
+  }
+}
+
+/* Julia syntax highlighting for CodeBlock */
+@layer components {
+  .suite-hl-keyword { color: #c792ea; }
+  .suite-hl-string  { color: #c3e88d; }
+  .suite-hl-comment { color: #6b6560; font-style: italic; }
+  .suite-hl-number  { color: #f78c6c; }
+  .suite-hl-funcall { color: #82aaff; }
+  .suite-hl-type    { color: #ffcb6b; }
+  .suite-hl-symbol  { color: #ff5370; }
+  .suite-hl-macro   { color: #c792ea; font-weight: 600; }
+  .suite-hl-special { color: #f78c6c; font-style: italic; }
+  .suite-hl-operator { color: #89ddff; }
 }
