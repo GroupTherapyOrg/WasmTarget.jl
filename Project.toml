@@ -7,6 +7,12 @@ authors = ["Dale Black"]
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 JuliaLowering = "f3c80556-a63f-4383-b822-37d64f81a311"
 JuliaSyntax = "70703baa-626e-46a2-a12c-08ffd08c73b4"
+Suite = "bb23b221-5e4e-46a9-beb2-ac0d644636d2"
+Therapy = "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+
+[sources]
+Suite = {path = "../Suite.jl"}
+Therapy = {path = "../Therapy.jl"}
 
 [compat]
 JSON = "0.21"
