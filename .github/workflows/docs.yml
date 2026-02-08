@@ -28,12 +28,14 @@ jobs:
         with:
           repository: GroupTherapyOrg/Therapy.jl
           path: Therapy.jl
+          token: ${{ secrets.ORG_PAT }}
 
       - name: Checkout Suite.jl
         uses: actions/checkout@v4
         with:
           repository: GroupTherapyOrg/Suite.jl
           path: Suite.jl
+          token: ${{ secrets.ORG_PAT }}
 
       - name: Setup Julia
         uses: julia-actions/setup-julia@v2
