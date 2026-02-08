@@ -29,6 +29,12 @@ jobs:
           repository: GroupTherapyOrg/Therapy.jl
           path: Therapy.jl
 
+      - name: Checkout Suite.jl
+        uses: actions/checkout@v4
+        with:
+          repository: GroupTherapyOrg/Suite.jl
+          path: Suite.jl
+
       - name: Setup Julia
         uses: julia-actions/setup-julia@v2
         with:
