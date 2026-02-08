@@ -1,12 +1,15 @@
 # API Reference page - Complete documentation for WasmTarget.jl
 #
+# Uses Suite.jl components: Card, CodeBlock, Badge, Table, Separator, Button.
 # Organized into sections: High-Level API, Low-Level Builder, Types, Opcodes
+
+import Suite
 
 function Api()
     Div(
         # Header
         Div(:class => "py-12 text-center",
-            H1(:class => "text-4xl font-bold text-warm-800 dark:text-warm-100 mb-4",
+            H1(:class => "text-4xl font-serif font-semibold text-warm-800 dark:text-warm-100 mb-4",
                 "API Reference"
             ),
             P(:class => "text-xl text-warm-500 dark:text-warm-400 max-w-2xl mx-auto",
@@ -16,24 +19,24 @@ function Api()
 
         # Navigation (in-page anchor links)
         Div(:class => "flex flex-wrap justify-center gap-3 mb-12",
-            ApiAnchorLink("#compile", "compile()"),
-            ApiAnchorLink("#compile-multi", "compile_multi()"),
-            ApiAnchorLink("#builder", "Low-Level Builder"),
-            ApiAnchorLink("#types", "Type Mappings"),
-            ApiAnchorLink("#features", "Supported Features")
+            _ApiAnchorLink("#compile", "compile()"),
+            _ApiAnchorLink("#compile-multi", "compile_multi()"),
+            _ApiAnchorLink("#builder", "Low-Level Builder"),
+            _ApiAnchorLink("#types", "Type Mappings"),
+            _ApiAnchorLink("#features", "Supported Features")
         ),
 
         # ========================================
         # High-Level API Section
         # ========================================
         Div(:class => "py-8",
-            SectionHeader("High-Level API"),
+            _SectionHeader("High-Level API"),
             P(:class => "text-warm-600 dark:text-warm-300 mb-8 max-w-3xl",
                 "The high-level API provides simple functions to compile Julia code directly to WebAssembly bytes. This is the recommended way to use WasmTarget.jl."
             ),
 
             # compile()
-            ApiFunction(
+            _ApiFunction(
                 "compile",
                 "compile(f, arg_types; export_name=nothing) -> Vector{UInt8}",
                 "Compile a single Julia function to WebAssembly bytes.",
@@ -57,7 +60,7 @@ write("add.wasm", wasm)
             ),
 
             # compile_multi()
-            ApiFunction(
+            _ApiFunction(
                 "compile_multi",
                 "compile_multi(functions; imports=[], globals=[]) -> Vector{UInt8}",
                 "Compile multiple Julia functions into a single Wasm module. Functions can call each other.",
@@ -85,17 +88,19 @@ wasm = compile_multi(
             )
         ),
 
+        Suite.Separator(),
+
         # ========================================
         # Low-Level Builder Section
         # ========================================
-        Div(:id => "builder", :class => "py-8 border-t border-warm-200 dark:border-warm-700",
-            SectionHeader("Low-Level Builder API"),
+        Div(:id => "builder", :class => "py-8",
+            _SectionHeader("Low-Level Builder API"),
             P(:class => "text-warm-600 dark:text-warm-300 mb-8 max-w-3xl",
                 "For advanced use cases, you can build Wasm modules manually using the builder API. This gives you full control over imports, exports, globals, tables, and memory."
             ),
 
             # WasmModule
-            ApiFunction(
+            _ApiFunction(
                 "WasmModule",
                 "WasmModule() -> WasmModule",
                 "Create an empty Wasm module for manual construction.",
@@ -108,7 +113,7 @@ bytes = to_bytes(mod)"""
             ),
 
             # add_function!
-            ApiFunction(
+            _ApiFunction(
                 "add_function!",
                 "add_function!(mod, param_types, result_types, locals, body) -> UInt32",
                 "Add a function to the module. Returns the function index.",
@@ -136,7 +141,7 @@ add_export!(mod, "add", 0x00, func_idx)"""
             ),
 
             # add_import!
-            ApiFunction(
+            _ApiFunction(
                 "add_import!",
                 "add_import!(mod, module_name, func_name, param_types, result_types) -> UInt32",
                 "Import a function from JavaScript. Returns the import index.",
@@ -157,7 +162,7 @@ log_idx = add_import!(mod, "console", "log", [I32], [])
             ),
 
             # add_export!
-            ApiFunction(
+            _ApiFunction(
                 "add_export!",
                 "add_export!(mod, name, kind, idx)",
                 "Export a function, global, table, or memory.",
@@ -172,7 +177,7 @@ add_export!(mod, "counter", 0x03, global_idx)  # Export global"""
             ),
 
             # add_global!
-            ApiFunction(
+            _ApiFunction(
                 "add_global!",
                 "add_global!(mod, valtype, mutable, init_value) -> UInt32",
                 "Add a global variable. Returns the global index.",
@@ -187,7 +192,7 @@ constant_idx = add_global!(mod, F64, false, 3.14)  # Immutable f64"""
             ),
 
             # to_bytes
-            ApiFunction(
+            _ApiFunction(
                 "to_bytes",
                 "to_bytes(mod) -> Vector{UInt8}",
                 "Serialize a WasmModule to binary .wasm format.",
@@ -197,39 +202,39 @@ write("output.wasm", bytes)"""
             )
         ),
 
+        Suite.Separator(),
+
         # ========================================
         # Type Mappings Section
         # ========================================
-        Div(:id => "types", :class => "py-8 border-t border-warm-200 dark:border-warm-700",
-            SectionHeader("Type Mappings"),
+        Div(:id => "types", :class => "py-8",
+            _SectionHeader("Type Mappings"),
             P(:class => "text-warm-600 dark:text-warm-300 mb-8 max-w-3xl",
                 "WasmTarget.jl automatically maps Julia types to WebAssembly types. Here's the complete mapping:"
             ),
 
-            Div(:class => "overflow-x-auto",
-                Table(:class => "w-full max-w-4xl mx-auto",
-                    Thead(:class => "bg-warm-100 dark:bg-warm-900",
-                        Tr(
-                            Th(:class => "py-3 px-4 text-left font-semibold text-warm-700 dark:text-warm-300", "Julia Type"),
-                            Th(:class => "py-3 px-4 text-left font-semibold text-warm-700 dark:text-warm-300", "Wasm Type"),
-                            Th(:class => "py-3 px-4 text-left font-semibold text-warm-700 dark:text-warm-300", "Notes")
-                        )
-                    ),
-                    Tbody(:class => "divide-y divide-warm-200 dark:divide-warm-700",
-                        TypeMappingRow("Int32, UInt32", "i32", "Native 32-bit integer"),
-                        TypeMappingRow("Int64, UInt64, Int", "i64", "Native 64-bit integer"),
-                        TypeMappingRow("Float32", "f32", "32-bit IEEE float"),
-                        TypeMappingRow("Float64", "f64", "64-bit IEEE float"),
-                        TypeMappingRow("Bool", "i32", "0 or 1"),
-                        TypeMappingRow("Char", "i32", "Unicode codepoint"),
-                        TypeMappingRow("String", "WasmGC array (i32)", "Immutable, supports ==, length, *"),
-                        TypeMappingRow("Vector{T}", "WasmGC array", "Mutable, T must be concrete"),
-                        TypeMappingRow("struct Foo ... end", "WasmGC struct", "User-defined structs"),
-                        TypeMappingRow("Tuple{A,B,...}", "WasmGC struct", "Immutable"),
-                        TypeMappingRow("Union{Nothing,T}", "Tagged union", "Supports isa operator"),
-                        TypeMappingRow("JSValue", "externref", "JavaScript object reference"),
-                        TypeMappingRow("WasmGlobal{T,IDX}", "global", "Compile-time global access")
+            Suite.Table(
+                Suite.TableHeader(
+                    Suite.TableRow(
+                        Suite.TableHead("Julia Type"),
+                        Suite.TableHead("Wasm Type"),
+                        Suite.TableHead("Notes")
                     )
+                ),
+                Suite.TableBody(
+                    _TypeRow("Int32, UInt32", "i32", "Native 32-bit integer"),
+                    _TypeRow("Int64, UInt64, Int", "i64", "Native 64-bit integer"),
+                    _TypeRow("Float32", "f32", "32-bit IEEE float"),
+                    _TypeRow("Float64", "f64", "64-bit IEEE float"),
+                    _TypeRow("Bool", "i32", "0 or 1"),
+                    _TypeRow("Char", "i32", "Unicode codepoint"),
+                    _TypeRow("String", "WasmGC array (i32)", "Immutable, supports ==, length, *"),
+                    _TypeRow("Vector{T}", "WasmGC array", "Mutable, T must be concrete"),
+                    _TypeRow("struct Foo ... end", "WasmGC struct", "User-defined structs"),
+                    _TypeRow("Tuple{A,B,...}", "WasmGC struct", "Immutable"),
+                    _TypeRow("Union{Nothing,T}", "Tagged union", "Supports isa operator"),
+                    _TypeRow("JSValue", "externref", "JavaScript object reference"),
+                    _TypeRow("WasmGlobal{T,IDX}", "global", "Compile-time global access")
                 )
             ),
 
@@ -240,28 +245,30 @@ write("output.wasm", bytes)"""
                     "Use these constants when building modules manually:"
                 ),
                 Div(:class => "flex flex-wrap gap-3",
-                    TypeBadge("I32"),
-                    TypeBadge("I64"),
-                    TypeBadge("F32"),
-                    TypeBadge("F64"),
-                    TypeBadge("ExternRef"),
-                    TypeBadge("FuncRef"),
-                    TypeBadge("AnyRef")
+                    Suite.Badge(variant="secondary", "I32"),
+                    Suite.Badge(variant="secondary", "I64"),
+                    Suite.Badge(variant="secondary", "F32"),
+                    Suite.Badge(variant="secondary", "F64"),
+                    Suite.Badge(variant="secondary", "ExternRef"),
+                    Suite.Badge(variant="secondary", "FuncRef"),
+                    Suite.Badge(variant="secondary", "AnyRef")
                 )
             )
         ),
 
+        Suite.Separator(),
+
         # ========================================
         # Supported Features Section
         # ========================================
-        Div(:id => "features", :class => "py-8 border-t border-warm-200 dark:border-warm-700",
-            SectionHeader("Supported Features"),
+        Div(:id => "features", :class => "py-8",
+            _SectionHeader("Supported Features"),
             P(:class => "text-warm-600 dark:text-warm-300 mb-8 max-w-3xl",
                 "WasmTarget.jl supports a significant subset of Julia. Here's what works today:"
             ),
 
             Div(:class => "grid md:grid-cols-2 lg:grid-cols-3 gap-6",
-                FeatureCategory("Control Flow", [
+                _FeatureCategory("Control Flow", [
                     ("if/elseif/else", true),
                     ("while loops", true),
                     ("for loops (ranges)", true),
@@ -270,7 +277,7 @@ write("output.wasm", bytes)"""
                     ("Recursion", true),
                     ("@goto/@label", false)
                 ]),
-                FeatureCategory("Functions", [
+                _FeatureCategory("Functions", [
                     ("Regular functions", true),
                     ("Multiple functions", true),
                     ("Closures", true),
@@ -278,14 +285,14 @@ write("output.wasm", bytes)"""
                     ("Varargs", false),
                     ("Keyword args", false)
                 ]),
-                FeatureCategory("Operators", [
+                _FeatureCategory("Operators", [
                     ("Arithmetic (+, -, *, /, %)", true),
                     ("Comparison (==, <, >, etc)", true),
                     ("Logical (&&, ||, !)", true),
                     ("Bitwise (&, |, xor, <<, >>)", true),
                     ("Power (^)", true)
                 ]),
-                FeatureCategory("Data Structures", [
+                _FeatureCategory("Data Structures", [
                     ("Structs", true),
                     ("Tuples", true),
                     ("Vector{T}", true),
@@ -294,7 +301,7 @@ write("output.wasm", bytes)"""
                     ("SimpleDict/StringDict", true),
                     ("Full Dict", false)
                 ]),
-                FeatureCategory("JS Interop", [
+                _FeatureCategory("JS Interop", [
                     ("externref (JSValue)", true),
                     ("Import JS functions", true),
                     ("Export Wasm functions", true),
@@ -302,7 +309,7 @@ write("output.wasm", bytes)"""
                     ("Tables (funcref)", true),
                     ("Linear memory", true)
                 ]),
-                FeatureCategory("Advanced", [
+                _FeatureCategory("Advanced", [
                     ("Union{Nothing,T}", true),
                     ("Type inference", true),
                     ("Exception handling", true),
@@ -313,9 +320,11 @@ write("output.wasm", bytes)"""
             )
         ),
 
+        Suite.Separator(),
+
         # Footer CTA
-        Div(:class => "py-16 text-center border-t border-warm-200 dark:border-warm-700 mt-12",
-            H2(:class => "text-2xl font-bold text-warm-800 dark:text-warm-100 mb-4",
+        Div(:class => "py-16 text-center",
+            H2(:class => "text-2xl font-serif font-semibold text-warm-800 dark:text-warm-100 mb-4",
                 "Ready to build?"
             ),
             P(:class => "text-warm-500 dark:text-warm-400 mb-8",
@@ -323,88 +332,88 @@ write("output.wasm", bytes)"""
             ),
             Div(:class => "flex justify-center gap-4",
                 A(:href => "./features/",
-                  :class => "bg-accent-500 hover:bg-accent-600 text-white px-6 py-3 rounded-lg font-medium transition-colors",
-                  "Interactive Demos"
+                    Suite.Button("Interactive Demos")
                 ),
                 A(:href => "https://github.com/GroupTherapyOrg/WasmTarget.jl",
-                  :class => "bg-warm-200 dark:bg-warm-700 text-warm-700 dark:text-warm-300 px-6 py-3 rounded-lg font-medium hover:bg-warm-300 dark:hover:bg-warm-600 transition-colors",
                   :target => "_blank",
-                  "View Source"
+                    Suite.Button(variant="outline", "View Source")
                 )
             )
         )
     )
 end
 
-# Helper Components
-
-function ApiAnchorLink(href, text)
+# --- Helper: API anchor link ---
+function _ApiAnchorLink(href, text)
     A(:href => href,
-      :class => "px-4 py-2 bg-warm-100 dark:bg-warm-900 rounded-lg text-sm font-medium text-warm-700 dark:text-warm-300 hover:bg-accent-100 dark:hover:bg-accent-900/30 transition-colors",
-      text)
+        Suite.Button(variant="outline", size="sm", text)
+    )
 end
 
-function SectionHeader(title)
-    H2(:class => "text-3xl font-bold text-warm-800 dark:text-warm-100 mb-4", title)
+# --- Helper: Section header ---
+function _SectionHeader(title)
+    H2(:class => "text-3xl font-serif font-semibold text-warm-800 dark:text-warm-100 mb-4", title)
 end
 
-function ApiFunction(name, signature, description, params, example)
-    Div(:id => lowercase(replace(name, "()" => "")), :class => "mb-12 bg-warm-50 dark:bg-warm-900 rounded-xl p-6 shadow-sm",
-        # Function name and signature
-        H3(:class => "text-xl font-bold text-accent-600 dark:text-accent-400 font-mono mb-2", name * "()"),
-        Code(:class => "block bg-warm-100 dark:bg-warm-900 px-4 py-2 rounded-lg text-sm font-mono text-warm-700 dark:text-warm-300 mb-4", signature),
-        P(:class => "text-warm-600 dark:text-warm-300 mb-4", description),
+# --- Helper: API function card with Suite.Card + Suite.CodeBlock ---
+function _ApiFunction(name, signature, description, params, example)
+    Suite.Card(id=lowercase(replace(name, "()" => "")), class="mb-12",
+        Suite.CardHeader(
+            Suite.CardTitle(class="font-mono text-accent-600 dark:text-accent-400", name * "()"),
+            Suite.CardDescription(class="font-mono text-sm", signature)
+        ),
+        Suite.CardContent(
+            P(:class => "text-warm-600 dark:text-warm-300 mb-4", description),
 
-        # Parameters
-        if !isempty(params)
-            Div(:class => "mb-4",
-                H4(:class => "font-semibold text-warm-800 dark:text-warm-100 mb-2", "Parameters"),
-                Ul(:class => "space-y-2",
-                    [Li(:class => "text-sm",
-                        Span(:class => "font-mono text-accent-600 dark:text-accent-400", p[1]),
-                        Span(:class => "text-warm-400 mx-2", ":"),
-                        Span(:class => "text-warm-500 dark:text-warm-400 italic", p[2]),
-                        Span(:class => "text-warm-400 mx-2", "-"),
-                        Span(:class => "text-warm-600 dark:text-warm-300", p[3])
-                    ) for p in params]...
+            # Parameters
+            if !isempty(params)
+                Div(:class => "mb-4",
+                    H4(:class => "font-semibold text-warm-800 dark:text-warm-100 mb-2", "Parameters"),
+                    Ul(:class => "space-y-2",
+                        [Li(:class => "text-sm",
+                            Span(:class => "font-mono text-accent-600 dark:text-accent-400", p[1]),
+                            Span(:class => "text-warm-400 mx-2", ":"),
+                            Span(:class => "text-warm-500 dark:text-warm-400 italic", p[2]),
+                            Span(:class => "text-warm-400 mx-2", "-"),
+                            Span(:class => "text-warm-600 dark:text-warm-300", p[3])
+                        ) for p in params]...
+                    )
                 )
-            )
-        end,
+            end,
 
-        # Example
-        Div(
-            H4(:class => "font-semibold text-warm-800 dark:text-warm-100 mb-2", "Example"),
-            Pre(:class => "bg-warm-900 dark:bg-warm-950 rounded-lg p-4 overflow-x-auto",
-                Code(:class => "text-sm text-warm-100", example)
+            # Example
+            Div(
+                H4(:class => "font-semibold text-warm-800 dark:text-warm-100 mb-2", "Example"),
+                Suite.CodeBlock(example, language="julia")
             )
         )
     )
 end
 
-function TypeMappingRow(julia, wasm, notes)
-    Tr(
-        Td(:class => "py-3 px-4 font-mono text-sm text-accent-600 dark:text-accent-400", julia),
-        Td(:class => "py-3 px-4 font-mono text-sm text-warm-600 dark:text-warm-300", wasm),
-        Td(:class => "py-3 px-4 text-sm text-warm-500 dark:text-warm-400", notes)
+# --- Helper: Type mapping table row ---
+function _TypeRow(julia, wasm, notes)
+    Suite.TableRow(
+        Suite.TableCell(class="font-mono text-sm text-accent-600 dark:text-accent-400", julia),
+        Suite.TableCell(class="font-mono text-sm", wasm),
+        Suite.TableCell(notes)
     )
 end
 
-function TypeBadge(name)
-    Span(:class => "px-4 py-2 bg-warm-100 dark:bg-warm-700 rounded-lg font-mono text-sm text-warm-700 dark:text-warm-300", name)
-end
-
-function FeatureCategory(title, features)
-    Div(:class => "bg-warm-50 dark:bg-warm-900 rounded-xl p-6 shadow-sm",
-        H3(:class => "font-semibold text-warm-800 dark:text-warm-100 mb-4", title),
-        Ul(:class => "space-y-2",
-            [Li(:class => "flex items-center gap-2 text-sm",
-                Span(:class => f[2] ? "text-green-500" : "text-warm-400",
-                    f[2] ? "✓" : "○"
-                ),
-                Span(:class => f[2] ? "text-warm-700 dark:text-warm-300" : "text-warm-400 dark:text-warm-500",
-                    f[1]
-                )
-            ) for f in features]...
+# --- Helper: Feature category card ---
+function _FeatureCategory(title, features)
+    Suite.Card(
+        Suite.CardHeader(Suite.CardTitle(title)),
+        Suite.CardContent(
+            Ul(:class => "space-y-2",
+                [Li(:class => "flex items-center gap-2 text-sm",
+                    Span(:class => f[2] ? "text-green-500" : "text-warm-400",
+                        f[2] ? "✓" : "○"
+                    ),
+                    Span(:class => f[2] ? "text-warm-700 dark:text-warm-300" : "text-warm-400 dark:text-warm-500",
+                        f[1]
+                    )
+                ) for f in features]...
+            )
         )
     )
 end
