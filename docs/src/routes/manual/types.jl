@@ -1,16 +1,10 @@
 # Manual Chapter: Types (Structs)
 #
-# Interactive manual page covering Julia types - primitive types,
+# Manual page covering Julia types - primitive types,
 # composite types (struct), mutable structs, and field access.
 # Based on docs.julialang.org/en/v1/manual/types/
 #
 # Route: /manual/types
-
-# =============================================================================
-# NOTE: This file uses pre-built islands from LiveExample.jl
-# PrimitiveTypesDemo, StructDemo, MutableStructDemo, and NestedStructDemo
-# are already defined there and work correctly with SSR.
-# =============================================================================
 
 # =============================================================================
 # Types Chapter Page
@@ -48,8 +42,7 @@ function Types()
             "In WasmTarget.jl, these map directly to WebAssembly's native types."
         ),
 
-        LiveExample(
-            code = """# Integer types
+        Suite.CodeBlock("""# Integer types
 x::Int32 = 42        # 32-bit signed integer
 y::Int64 = 1000000   # 64-bit signed integer (default Int)
 
@@ -62,9 +55,10 @@ flag::Bool = true    # true or false
 
 # Type checking
 typeof(x)    # returns Int32
-typeof(flag) # returns Bool""",
-            description = "Julia's primitive types map directly to WebAssembly types. Click a type to see its range and example value.",
-            example = PrimitiveTypesDemo
+typeof(flag) # returns Bool""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Julia's primitive types map directly to WebAssembly types. Click a type to see its range and example value."
         ),
 
         # Tip about WasmTarget types
@@ -89,8 +83,7 @@ typeof(flag) # returns Bool""",
             " — their fields cannot be changed after creation."
         ),
 
-        LiveExample(
-            code = """# Define an immutable struct
+        Suite.CodeBlock("""# Define an immutable struct
 struct Point
     x::Int32
     y::Int32
@@ -105,9 +98,10 @@ p.y  # returns 20
 
 # Compute with fields
 p.x + p.y  # returns 30
-p.x * p.y  # returns 200""",
-            description = "A 2D Point struct with x and y coordinates. Adjust the field values to see computed results.",
-            example = StructDemo
+p.x * p.y  # returns 200""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "A 2D Point struct with x and y coordinates. Adjust the field values to see computed results."
         ),
 
         P(:class => "text-warm-600 dark:text-warm-400 my-4",
@@ -140,8 +134,7 @@ p.x * p.y  # returns 200""",
             ". Mutable structs allow field reassignment, making them useful for objects that change over time."
         ),
 
-        LiveExample(
-            code = """# Define a mutable struct
+        Suite.CodeBlock("""# Define a mutable struct
 mutable struct Counter
     count::Int32
     step::Int32
@@ -159,9 +152,10 @@ c.count = c.count + c.step
 c.count  # now returns 1
 
 # Reset the counter
-c.count = 0""",
-            description = "A mutable Counter struct. Click buttons to increment the count or reset it.",
-            example = MutableStructDemo
+c.count = 0""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "A mutable Counter struct. Click buttons to increment the count or reset it."
         ),
 
         P(:class => "text-warm-600 dark:text-warm-400 my-4",
@@ -181,8 +175,7 @@ c.count = 0""",
             " traverse through the nested structure."
         ),
 
-        LiveExample(
-            code = """# Define nested structs
+        Suite.CodeBlock("""# Define nested structs
 struct Point
     x::Int32
     y::Int32
@@ -207,9 +200,10 @@ dx = line.end_pt.x - line.start_pt.x  # 10
 dy = line.end_pt.y - line.start_pt.y  # 10
 
 # Length squared (avoids sqrt)
-len_sq = dx * dx + dy * dy  # 200""",
-            description = "A Line struct containing two Point structs. Adjust the endpoints to see the computed delta and length².",
-            example = NestedStructDemo
+len_sq = dx * dx + dy * dy  # 200""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "A Line struct containing two Point structs. Adjust the endpoints to see the computed delta and length²."
         ),
 
         # Section: Constructors

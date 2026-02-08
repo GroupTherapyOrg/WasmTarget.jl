@@ -1,15 +1,10 @@
 # Manual Chapter: Variables
 #
-# Interactive manual page covering Julia variables - naming, assignment, types.
+# Manual page covering Julia variables - naming, assignment, types.
 # Based on docs.julialang.org/en/v1/manual/variables/
+# Interactive demos have been removed and replaced with static code examples.
 #
 # Route: /manual/variables
-
-# =============================================================================
-# NOTE: This file uses pre-built islands from LiveExample.jl
-# CounterDemo, SimpleValueDemo, and ArithmeticExampleDemo are already defined
-# there and work correctly with SSR.
-# =============================================================================
 
 import Suite
 
@@ -43,8 +38,7 @@ function Variables()
             " operator to assign a value to a variable. The variable name goes on the left, and the value (or expression) goes on the right."
         ),
 
-        LiveExample(
-            code = """# Assign a value to a variable
+        Suite.CodeBlock("""# Assign a value to a variable
 x = 10
 
 # Use the variable
@@ -55,9 +49,10 @@ x = x + 1  # x is now 11
 
 # Variables can hold any value
 count = 0
-count = count + 1  # Increment: count is now 1""",
-            description = "Variables can be assigned, reassigned, and used in expressions. Click Increment to update the count variable.",
-            example = CounterDemo
+count = count + 1  # Increment: count is now 1""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Variables can be assigned, reassigned, and used in expressions. Click Increment to update the count variable."
         ),
 
         P(:class => "text-warm-600 dark:text-warm-400 my-4",
@@ -122,8 +117,7 @@ const MAX_SIZE = 1000""", language="julia"),
             " syntax. This is useful for performance and documentation."
         ),
 
-        LiveExample(
-            code = """# Explicit type annotation
+        Suite.CodeBlock("""# Explicit type annotation
 x::Int32 = 100
 
 # Type is enforced - value must be convertible
@@ -134,9 +128,10 @@ a::Int32 = 42       # 32-bit signed integer
 b::Int64 = 100      # 64-bit signed integer
 c::Float32 = 3.14f0 # 32-bit float
 d::Float64 = 3.14   # 64-bit float
-e::Bool = true      # boolean (true/false)""",
-            description = "Type annotations declare what kind of value a variable holds. Use the buttons to adjust the value.",
-            example = SimpleValueDemo
+e::Bool = true      # boolean (true/false)""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Type annotations declare what kind of value a variable holds. Use the buttons to adjust the value."
         ),
 
         P(:class => "text-warm-600 dark:text-warm-400 my-4",
@@ -162,8 +157,7 @@ e::Bool = true      # boolean (true/false)""",
             "Variables can be used in any expression. When Julia evaluates an expression, it looks up the current value of each variable and uses it in the computation."
         ),
 
-        LiveExample(
-            code = """# Define two variables
+        Suite.CodeBlock("""# Define two variables
 a = 10
 b = 3
 
@@ -175,9 +169,10 @@ quotient = a / b     # 3 (integer division)
 
 # The result of an expression can be
 # assigned to a new variable
-result = a + b""",
-            description = "Variables a and b can be used in arithmetic expressions. Click the operation buttons to compute different results.",
-            example = ArithmeticExampleDemo
+result = a + b""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Variables a and b can be used in arithmetic expressions. Click the operation buttons to compute different results."
         ),
 
         # WasmTarget.jl note

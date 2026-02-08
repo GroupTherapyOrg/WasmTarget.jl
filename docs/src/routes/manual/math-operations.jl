@@ -1,15 +1,10 @@
 # Manual Chapter: Mathematical Operations
 #
-# Interactive manual page covering arithmetic, comparison, and bitwise operators.
+# Manual page covering arithmetic, comparison, and bitwise operators.
 # Based on docs.julialang.org/en/v1/manual/mathematical-operations/
+# Interactive demos have been removed and replaced with static code examples.
 #
 # Route: /manual/math-operations
-
-# =============================================================================
-# NOTE: This file uses pre-built islands from LiveExample.jl
-# CalculatorDemo, ComparisonOpsDemo, BitwiseDemo, MathFunctionsDemo, NegationDemo
-# are defined there and work correctly with SSR.
-# =============================================================================
 
 import Suite
 
@@ -92,8 +87,7 @@ function MathOperations()
             )
         ),
 
-        LiveExample(
-            code = """# Arithmetic operations
+        Suite.CodeBlock("""# Arithmetic operations
 a = 24
 b = 7
 
@@ -114,9 +108,10 @@ int_quot = div(a, b)  # 3
 rem = a % b        # 3
 
 # Relationship: a == div(a,b) * b + a % b
-# 24 == 3 * 7 + 3  ✓""",
-            description = "Click the operation buttons to compute different arithmetic results. Adjust a and b to experiment.",
-            example = CalculatorDemo
+# 24 == 3 * 7 + 3  ✓""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Click the operation buttons to compute different arithmetic results. Adjust a and b to experiment."
         ),
 
         # Section: Negation
@@ -134,8 +129,7 @@ rem = a % b        # 3
             "."
         ),
 
-        LiveExample(
-            code = """# Negation
+        Suite.CodeBlock("""# Negation
 x = 10
 neg_x = -x         # -10
 
@@ -147,9 +141,10 @@ double_neg = -(-x) # 10
 
 # Negating negative numbers
 y = -5
-pos_y = -y         # 5""",
-            description = "Adjust the value to see how negation works with positive and negative numbers.",
-            example = NegationDemo
+pos_y = -y         # 5""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Adjust the value to see how negation works with positive and negative numbers."
         ),
 
         # Section: Comparison Operators
@@ -206,8 +201,7 @@ pos_y = -y         # 5""",
             )
         ),
 
-        LiveExample(
-            code = """# Comparison operators
+        Suite.CodeBlock("""# Comparison operators
 a = 5
 b = 5
 
@@ -223,9 +217,10 @@ a >= b    # true
 
 # Comparisons can be chained
 x = 3
-1 < x < 5  # true (x is between 1 and 5)""",
-            description = "Adjust the values of a and b to see how all comparison operators respond.",
-            example = ComparisonOpsDemo
+1 < x < 5  # true (x is between 1 and 5)""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Adjust the values of a and b to see how all comparison operators respond."
         ),
 
         Suite.Alert(class="my-6",
@@ -289,8 +284,7 @@ x = 3
             )
         ),
 
-        LiveExample(
-            code = """# Bitwise operations
+        Suite.CodeBlock("""# Bitwise operations
 # Using small numbers for clarity
 a = 12  # binary: 1100
 b = 10  # binary: 1010
@@ -310,9 +304,10 @@ a << 2  # 48 (12 * 4)
 
 # Right shift (integer divide by 2^n)
 a >> 1  # 6  (12 / 2)
-a >> 2  # 3  (12 / 4)""",
-            description = "Experiment with bitwise operators. Values shown in both decimal and binary representation.",
-            example = BitwiseDemo
+a >> 2  # 3  (12 / 4)""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Experiment with bitwise operators. Values shown in both decimal and binary representation."
         ),
 
         Suite.Alert(class="my-6",
@@ -388,8 +383,7 @@ a >> 2  # 3  (12 / 4)""",
             )
         ),
 
-        LiveExample(
-            code = """# Math functions
+        Suite.CodeBlock("""# Math functions
 x = 49
 
 # Absolute value (works on negative too)
@@ -406,9 +400,10 @@ sqrt(2.0)   # 1.4142...
 
 # Min and max
 min(5, 3)   # 3
-max(5, 3)   # 5""",
-            description = "Experiment with different values to see absolute value and multiplication results.",
-            example = MathFunctionsDemo
+max(5, 3)   # 5""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Experiment with different values to see absolute value and multiplication results."
         ),
 
         # WasmTarget.jl note

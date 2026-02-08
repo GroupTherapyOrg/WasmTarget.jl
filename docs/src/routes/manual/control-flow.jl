@@ -1,16 +1,10 @@
 # Manual Chapter: Control Flow
 #
-# Interactive manual page covering Julia control flow - if/else, while loops,
+# Manual page covering Julia control flow - if/else, while loops,
 # for loops, short-circuit operators (&&/||), and try/catch/throw.
 # Based on docs.julialang.org/en/v1/manual/control-flow/
 #
 # Route: /manual/control-flow
-
-# =============================================================================
-# NOTE: This file uses pre-built islands from LiveExample.jl
-# SignDemo, WhileLoopDemo, ForLoopDemo, ShortCircuitDemo, and TryCatchDemo
-# are defined there and work correctly with SSR.
-# =============================================================================
 
 # =============================================================================
 # Control Flow Chapter Page
@@ -56,8 +50,7 @@ function ControlFlow()
             "."
         ),
 
-        LiveExample(
-            code = """# The sign function - classic if/elseif/else example
+        Suite.CodeBlock("""# The sign function - classic if/elseif/else example
 function sign(x::Int32)::Int32
     if x > Int32(0)
         return Int32(1)    # positive
@@ -70,9 +63,10 @@ end
 
 sign(5)    # returns 1
 sign(-3)   # returns -1
-sign(0)    # returns 0""",
-            description = "The sign function returns +1 for positive numbers, -1 for negative, and 0 for zero. Adjust the value to see the branch taken.",
-            example = SignDemo
+sign(0)    # returns 0""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "The sign function returns +1 for positive numbers, -1 for negative, and 0 for zero. Adjust the value to see the branch taken."
         ),
 
         P(:class => "text-warm-600 dark:text-warm-400 my-4",
@@ -106,8 +100,7 @@ sign(0)    # returns 0""",
             " loop repeatedly executes a block of code as long as a condition remains true. The condition is checked before each iteration."
         ),
 
-        LiveExample(
-            code = """# Sum integers from 1 to n using a while loop
+        Suite.CodeBlock("""# Sum integers from 1 to n using a while loop
 function sum_to_n(n::Int32)::Int32
     sum = Int32(0)
     i = Int32(1)
@@ -120,9 +113,10 @@ end
 
 # sum_to_n(10) = 1+2+3+...+10 = 55
 sum_to_n(10)  # returns 55
-sum_to_n(100) # returns 5050""",
-            description = "A while loop that sums integers from 1 to n. Adjust n to see the sum change. Uses Gauss's formula: n*(n+1)/2.",
-            example = WhileLoopDemo
+sum_to_n(100) # returns 5050""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "A while loop that sums integers from 1 to n. Adjust n to see the sum change. Uses Gauss's formula: n*(n+1)/2."
         ),
 
         # Section: For Loops
@@ -138,8 +132,7 @@ sum_to_n(100) # returns 5050""",
             " or a collection."
         ),
 
-        LiveExample(
-            code = """# Calculate factorial using a for loop
+        Suite.CodeBlock("""# Calculate factorial using a for loop
 function factorial(n::Int32)::Int32
     result = Int32(1)
     for i in Int32(2):n
@@ -150,9 +143,10 @@ end
 
 # factorial(5) = 1*2*3*4*5 = 120
 factorial(5)  # returns 120
-factorial(6)  # returns 720""",
-            description = "Factorial computed with a for loop. The range 2:n iterates from 2 up to n (inclusive).",
-            example = ForLoopDemo
+factorial(6)  # returns 720""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Factorial computed with a for loop. The range 2:n iterates from 2 up to n (inclusive)."
         ),
 
         P(:class => "text-warm-600 dark:text-warm-400 my-4",
@@ -178,8 +172,7 @@ factorial(6)  # returns 720""",
             ": they only evaluate the second operand if necessary to determine the result."
         ),
 
-        LiveExample(
-            code = """# Short-circuit && (AND)
+        Suite.CodeBlock("""# Short-circuit && (AND)
 # Second part only runs if first is true
 function safe_divide(a::Int32, b::Int32)::Int32
     # Only divide if b != 0
@@ -194,9 +187,10 @@ function default_value(x::Int32, default::Int32)::Int32
 end
 
 # a && b: if a is false, return false without evaluating b
-# a || b: if a is true, return true without evaluating b""",
-            description = "Short-circuit operators avoid evaluating the second operand when unnecessary. && stops on false, || stops on true.",
-            example = ShortCircuitDemo
+# a || b: if a is true, return true without evaluating b""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Short-circuit operators avoid evaluating the second operand when unnecessary. && stops on false, || stops on true."
         ),
 
         # Info box about short-circuit idioms
@@ -235,8 +229,7 @@ end
             " to handle it gracefully."
         ),
 
-        LiveExample(
-            code = """# Safe integer square root with exception handling
+        Suite.CodeBlock("""# Safe integer square root with exception handling
 function safe_sqrt(n::Int32)::Int32
     if n < Int32(0)
         throw(DomainError(n, "sqrt requires non-negative input"))
@@ -256,9 +249,10 @@ function compute_sqrt(n::Int32)::Int32
     catch
         return Int32(-1)  # Return -1 on error
     end
-end""",
-            description = "Exception handling with try/catch. Try a negative number to see the error path.",
-            example = TryCatchDemo
+end""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Exception handling with try/catch. Try a negative number to see the error path."
         ),
 
         # Warning about exception limitations
@@ -288,8 +282,7 @@ end""",
             " skips to the next iteration."
         ),
 
-        LiveExample(
-            code = """# Find first value divisible by both 3 and 7
+        Suite.CodeBlock("""# Find first value divisible by both 3 and 7
 function find_divisible()::Int32
     for i in Int32(1):Int32(100)
         # Skip if not divisible by 3
@@ -305,9 +298,10 @@ function find_divisible()::Int32
 end
 
 # First number divisible by both 3 and 7 is 21
-find_divisible()  # returns 21""",
-            description = "Using continue to skip iterations. The loop finds the first number divisible by both 3 and 7.",
-            example = BreakContinueDemo
+find_divisible()  # returns 21""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Using continue to skip iterations. The loop finds the first number divisible by both 3 and 7."
         ),
 
         # Summary

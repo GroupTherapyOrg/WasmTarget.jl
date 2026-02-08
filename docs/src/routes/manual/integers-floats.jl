@@ -1,16 +1,11 @@
 # Manual Chapter: Integers and Floating-Point Numbers
 #
-# Interactive manual page covering numeric types - Int32, Int64, Float32, Float64,
+# Manual page covering numeric types - Int32, Int64, Float32, Float64,
 # literals, overflow behavior.
 # Based on docs.julialang.org/en/v1/manual/integers-and-floating-point-numbers/
+# Interactive demos have been removed and replaced with static code examples.
 #
 # Route: /manual/integers-floats
-
-# =============================================================================
-# NOTE: This file uses pre-built islands from LiveExample.jl
-# IntegerOverflowDemo, FloatPrecisionDemo, TypeConversionDemo, NumericLiteralsDemo
-# are defined there and work correctly with SSR.
-# =============================================================================
 
 import Suite
 
@@ -99,8 +94,7 @@ function IntegersFloats()
             " and can lead to unexpected results if not handled carefully."
         ),
 
-        LiveExample(
-            code = """# Integer overflow demo
+        Suite.CodeBlock("""# Integer overflow demo
 x::Int32 = 2147483647   # Maximum Int32 value
 y::Int32 = x + 1        # Overflows!
 
@@ -109,9 +103,10 @@ y::Int32 = x + 1        # Overflows!
 
 # The same happens in reverse:
 a::Int32 = -2147483648  # Minimum Int32
-b::Int32 = a - 1        # Underflows to 2147483647""",
-            description = "Watch what happens when you increment past the maximum Int32 value. The value wraps around to the minimum.",
-            example = IntegerOverflowDemo
+b::Int32 = a - 1        # Underflows to 2147483647""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Watch what happens when you increment past the maximum Int32 value. The value wraps around to the minimum."
         ),
 
         Suite.Alert(class="my-6",
@@ -185,8 +180,7 @@ b::Int32 = a - 1        # Underflows to 2147483647""",
             " for the remainder (modulo)."
         ),
 
-        LiveExample(
-            code = """# Integer division and remainder
+        Suite.CodeBlock("""# Integer division and remainder
 a = 10
 b = 3
 
@@ -200,9 +194,10 @@ remainder = a % b     # 1
 # 10 == 3 * 3 + 1  ✓
 
 # Regular division produces a float:
-result = a / b        # 3.333...""",
-            description = "Experiment with integer division and remainder. The quotient is always an integer.",
-            example = FloatPrecisionDemo
+result = a / b        # 3.333...""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Experiment with integer division and remainder. The quotient is always an integer."
         ),
 
         # Section: Type Conversion
@@ -214,8 +209,7 @@ result = a / b        # 3.333...""",
             "You can convert between numeric types using type constructors or conversion functions."
         ),
 
-        LiveExample(
-            code = """# Type conversions
+        Suite.CodeBlock("""# Type conversions
 x::Int32 = 42
 
 # Convert to Float64
@@ -229,9 +223,10 @@ f = 3.7
 i = Int32(f)             # 3 (not 4!)
 
 # For rounding:
-rounded = round(Int32, f) # 4""",
-            description = "Adjust the integer value and see how it converts to different types.",
-            example = TypeConversionDemo
+rounded = round(Int32, f) # 4""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Adjust the integer value and see how it converts to different types."
         ),
 
         Suite.Alert(class="my-6",
@@ -256,8 +251,7 @@ rounded = round(Int32, f) # 4""",
             "Julia supports several formats for writing numeric literals in your code."
         ),
 
-        LiveExample(
-            code = """# Decimal literals (base 10)
+        Suite.CodeBlock("""# Decimal literals (base 10)
 a = 255        # Standard integer
 b = 1_000_000  # Underscores for readability
 
@@ -276,9 +270,10 @@ g = 0o377      # = 255
 h = 3.14       # Float64 (double)
 i = 3.14f0     # Float32 (single)
 j = 1e6        # Scientific: 1000000.0
-k = 2.5e-3     # Scientific: 0.0025""",
-            description = "Click the buttons to see different literal formats and their decimal equivalents.",
-            example = NumericLiteralsDemo
+k = 2.5e-3     # Scientific: 0.0025""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Click the buttons to see different literal formats and their decimal equivalents."
         ),
 
         # WasmTarget.jl note

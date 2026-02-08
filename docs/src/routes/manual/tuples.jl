@@ -1,21 +1,17 @@
 # Manual Chapter: Tuples
 #
-# Interactive manual page covering Julia tuples - creation, indexing,
+# Manual page covering Julia tuples - creation, indexing,
 # destructuring, and using tuples for multiple return values.
 # Based on docs.julialang.org/en/v1/manual/functions/#Tuples
+# Interactive demos have been removed and replaced with static code examples.
 #
 # Route: /manual/tuples
 
-# =============================================================================
-# NOTE: This file uses pre-built islands from LiveExample.jl
-# TupleDemo, FunctionReturnTupleDemo, and MixedTypeTupleDemo are defined there.
-# =============================================================================
+import Suite
 
 # =============================================================================
 # Tuples Chapter Page
 # =============================================================================
-
-import Suite
 
 """
 Tuples chapter for the Interactive Julia Manual.
@@ -46,8 +42,7 @@ function Tuples()
             "Remember: Julia uses 1-based indexing, so the first element is at index 1."
         ),
 
-        LiveExample(
-            code = """# Create a tuple with parentheses
+        Suite.CodeBlock("""# Create a tuple with parentheses
 t = (42, 3.14, 100)
 
 # Access elements by index (1-based)
@@ -59,16 +54,17 @@ t[3]   # returns 100
 length(t)  # returns 3
 
 # Tuples are immutable - this would error:
-# t[1] = 99  # ERROR!""",
-            description = "Click on index buttons to access different tuple elements.",
-            example = TupleDemo
+# t[1] = 99  # ERROR!""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Click on index buttons to access different tuple elements."
         ),
 
         # Tip about immutability
         Suite.Alert(class="my-6",
             Suite.AlertTitle("Immutability"),
             Suite.AlertDescription(
-                "Tuples are immutable \u2014 once created, you cannot change their elements. ",
+                "Tuples are immutable — once created, you cannot change their elements. ",
                 "This makes tuples safe to share and efficient to use. If you need a mutable collection, use an array instead."
             )
         ),
@@ -83,8 +79,7 @@ length(t)  # returns 3
             "Julia makes this natural: just return values separated by commas, and they're automatically wrapped in a tuple."
         ),
 
-        LiveExample(
-            code = """# Function returning multiple values
+        Suite.CodeBlock("""# Function returning multiple values
 function sum_and_diff(a, b)
     return (a + b, a - b)
 end
@@ -101,9 +96,10 @@ sum, diff = sum_and_diff(10, 3)
 # Parentheses are optional in return
 function minmax(a, b)
     return a < b ? (a, b) : (b, a)
-end""",
-            description = "Adjust a and b to see how the function returns both sum and difference as a tuple.",
-            example = FunctionReturnTupleDemo
+end""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Adjust a and b to see how the function returns both sum and difference as a tuple."
         ),
 
         P(:class => "text-warm-600 dark:text-warm-400 my-4",
@@ -137,8 +133,7 @@ first, _, third = (10, 20, 30)
             "Julia's type system tracks the type of each element individually."
         ),
 
-        LiveExample(
-            code = """# Tuple with mixed types
+        Suite.CodeBlock("""# Tuple with mixed types
 mixed = (42, 3.14, true)
 
 # Julia infers the type
@@ -155,9 +150,10 @@ function safe_divide(a, b)
         return (0, false)  # (result, success)
     end
     return (a / b, true)
-end""",
-            description = "Tuples preserve the type of each element. Toggle the boolean and adjust the integer to see different values.",
-            example = MixedTypeTupleDemo
+end""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Tuples preserve the type of each element. Toggle the boolean and adjust the integer to see different values."
         ),
 
         # WasmTarget note about tuples
@@ -223,7 +219,7 @@ end""",
         Ul(:class => "list-disc list-inside space-y-2 text-warm-600 dark:text-warm-400 mb-6",
             Li("Create tuples with parentheses: ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "(a, b, c)")),
             Li("Access elements with 1-based indexing: ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "t[1]"), ", ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "t[2]")),
-            Li("Tuples are immutable \u2014 elements cannot be changed after creation"),
+            Li("Tuples are immutable — elements cannot be changed after creation"),
             Li("Use tuples to return multiple values from functions"),
             Li("Destructure with ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "a, b = tuple")),
             Li("Tuples can hold different types: ", Code(:class => "text-accent-600 dark:text-accent-400 bg-warm-100 dark:bg-warm-900 px-1.5 py-0.5 rounded", "(42, 3.14, true)"))

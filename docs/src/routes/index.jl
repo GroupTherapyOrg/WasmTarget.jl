@@ -1,12 +1,45 @@
-# Home page - Julia REPL Playground
+# Home page - Clean static docs landing page
 #
 # Uses Suite.jl components for visual presentation.
-# JuliaPlayground is interactive (JS) — kept as-is.
-# ManualFeatureSection uses Suite.Card + Suite.Badge.
+# JuliaPlayground REMOVED (W4 cleanup) — replaced with static intro.
 
 import Suite
 
-const DEFAULT_CODE = """# Write any Julia code here!
+function Index()
+    Div(:class => "py-8",
+        # Hero
+        Div(:class => "text-center mb-12",
+            H1(:class => "text-4xl font-serif font-semibold text-warm-800 dark:text-warm-100",
+                "Julia → WebAssembly"
+            ),
+            P(:class => "text-xl text-warm-500 dark:text-warm-400 mt-3 max-w-2xl mx-auto",
+                "Write Julia. Compile to WASM. Run in the browser."
+            ),
+            Div(:class => "mt-4 flex justify-center gap-3",
+                Suite.Badge("Julia Compiler"),
+                Suite.Badge("WebAssembly", variant="secondary"),
+                Suite.Badge("Browser Runtime", variant="outline"),
+            ),
+            # CTAs
+            Div(:class => "mt-8 flex justify-center gap-4 flex-wrap",
+                A(:href => "./manual/",
+                    Suite.Button(size="lg", "Get Started")
+                ),
+                A(:href => "https://github.com/GroupTherapyOrg/WasmTarget.jl", :target => "_blank",
+                    Suite.Button(variant="outline", size="lg", "View Source")
+                )
+            )
+        ),
+
+        # Quick example
+        Div(:class => "max-w-4xl mx-auto mb-16",
+            Suite.Card(
+                Suite.CardHeader(
+                    Suite.CardTitle("Quick Example"),
+                    Suite.CardDescription("Julia functions compile directly to WebAssembly instructions")
+                ),
+                Suite.CardContent(
+                    Suite.CodeBlock("""# Define a Julia function with typed arguments
 function sum_to_n(n::Int32)::Int32
     result = Int32(0)
     i = Int32(1)
@@ -17,137 +50,75 @@ function sum_to_n(n::Int32)::Int32
     return result
 end
 
-# Try: sum_to_n(100)
-"""
-
-"""
-Julia Playground - Full REPL experience.
-Regular component (not island) with client-side JS for textarea.
-"""
-function JuliaPlayground()
-    Div(:class => "max-w-6xl mx-auto",
-        # Top bar
-        Div(:class => "flex items-center justify-between mb-4 flex-wrap gap-2",
-            Span(:class => "text-warm-600 dark:text-warm-400 text-sm font-medium",
-                "Julia Playground"
-            ),
-            Button(:id => "run-btn",
-                   :class => "flex items-center gap-2 bg-accent-500 hover:bg-accent-600 text-white px-6 py-2 rounded-lg font-semibold transition-colors shadow-lg shadow-accent-500/20",
-                Svg(:class => "w-4 h-4", :fill => "currentColor", :viewBox => "0 0 24 24",
-                    Path(:d => "M8 5v14l11-7z")
-                ),
-                "Run"
-            )
-        ),
-
-        # Editor + Output
-        Div(:class => "grid lg:grid-cols-2 gap-4",
-            # Code editor
-            Div(:class => "flex flex-col",
-                Div(:class => "flex items-center justify-between px-4 py-2 bg-warm-700 dark:bg-warm-900 rounded-t-xl",
-                    Span(:class => "text-warm-300 text-sm font-medium", "Julia"),
-                    Span(:class => "text-warm-500 text-xs", "Edit your code")
-                ),
-                Textarea(:id => "code-editor",
-                         :class => "bg-warm-800 dark:bg-warm-900 p-4 rounded-b-xl text-sm text-warm-100 font-mono min-h-[400px] w-full resize-y focus:outline-none focus:ring-2 focus:ring-accent-500 border-0",
-                         :spellcheck => "false",
-                         :placeholder => "Write Julia code here...",
-                         DEFAULT_CODE
-                )
-            ),
-
-            # Output panel
-            Div(:class => "flex flex-col",
-                Div(:class => "flex items-center justify-between px-4 py-2 bg-warm-700 dark:bg-warm-900 rounded-t-xl",
-                    Span(:class => "text-warm-300 text-sm font-medium", "Output"),
-                    Span(:id => "status-indicator", :class => "text-amber-400 text-xs", "Ready")
-                ),
-                Div(:id => "output-panel",
-                    :class => "bg-warm-900 dark:bg-black p-4 rounded-b-xl flex-1 min-h-[400px] font-mono overflow-auto",
-                    Pre(:id => "output-content",
-                        :class => "text-sm text-warm-400 whitespace-pre-wrap",
-                        "Click 'Run' to compile and execute your Julia code.\n\nThe trimmed Julia compiler will run entirely in your browser."
-                    )
+# Compiles to WASM:
+#   local.get \$n     ;; load argument
+#   i32.const 0      ;; initialize result
+#   loop              ;; while loop → WASM loop/br
+#     i32.add         ;; result + i
+#   end
+# sum_to_n(100) → 5050""", language="julia")
                 )
             )
         ),
 
-        # How it works
-        Suite.Alert(class="mt-6",
-            Suite.AlertTitle("How it works"),
-            Suite.AlertDescription(
-                "When the trimmed Julia runtime loads, your code is parsed by JuliaSyntax, type-inferred, and compiled to WebAssembly by WasmTarget.jl - all client-side. No server required."
+        # Feature grid
+        Div(:class => "max-w-5xl mx-auto mb-16",
+            H2(:class => "text-2xl font-serif font-semibold text-center text-warm-800 dark:text-warm-100 mb-8",
+                "Key Features"
+            ),
+            Div(:class => "grid md:grid-cols-2 lg:grid-cols-3 gap-6",
+                _FeatureCard(
+                    "Native Types",
+                    "Int32, Int64, Float32, Float64 compile to WASM i32, i64, f32, f64 — zero overhead."
+                ),
+                _FeatureCard(
+                    "Control Flow",
+                    "if/else, while, for loops compile to native WASM branch and loop instructions."
+                ),
+                _FeatureCard(
+                    "Recursion",
+                    "Recursive functions compile to WASM call instructions with proper stack management."
+                ),
+                _FeatureCard(
+                    "Structs & Tuples",
+                    "Julia structs compile to WasmGC struct types. Tuples are immutable value types."
+                ),
+                _FeatureCard(
+                    "Closures",
+                    "Closures with captured variables compile to WasmGC objects with function references."
+                ),
+                _FeatureCard(
+                    "JS Interop",
+                    "Import JavaScript functions, export WASM functions. Use externref for JS object handles."
+                )
             )
         ),
 
-        # Client-side JS (singleton guard prevents re-execution during SPA navigation)
-        Script(raw"""
-            (function() {
-                if (window.__PlaygroundInit) return;
-                window.__PlaygroundInit = true;
-                const editor = document.getElementById('code-editor');
-                const runBtn = document.getElementById('run-btn');
-                const output = document.getElementById('output-content');
-                const status = document.getElementById('status-indicator');
-
-                // Check for code passed from manual "Try in Playground" links
-                const playgroundCode = localStorage.getItem('playground-code');
-                if (playgroundCode && editor) {
-                    editor.value = playgroundCode;
-                    localStorage.removeItem('playground-code');
-                    // Update output to show loaded code
-                    output.innerHTML = '<span class="text-accent-400">Code loaded from manual!</span>\n\nClick "Run" to compile and execute.';
-                }
-
-                runBtn.addEventListener('click', function() {
-                    const code = editor.value;
-                    status.textContent = 'Compiling...';
-                    status.className = 'text-accent-400 text-xs';
-                    output.innerHTML = '<span class="text-accent-400">Compiling...</span>\n\n';
-                    output.innerHTML += '<span class="text-warm-500">// Your code:</span>\n';
-                    output.innerHTML += '<span class="text-warm-300">' + escapeHtml(code.substring(0, 500)) + '</span>\n\n';
-                    setTimeout(function() {
-                        output.innerHTML += '<span class="text-amber-400">Trimmed Julia runtime loading...</span>\n';
-                        output.innerHTML += '<span class="text-warm-500">The browser-based compiler requires Julia 1.12 trimming.</span>\n\n';
-                        output.innerHTML += '<span class="text-warm-500">Status: In development</span>\n';
-                        output.innerHTML += '<span class="text-warm-500">See: github.com/GroupTherapyOrg/WasmTarget.jl</span>';
-                        status.textContent = 'Runtime loading...';
-                        status.className = 'text-amber-400 text-xs';
-                    }, 500);
-                });
-
-                function escapeHtml(text) {
-                    const div = document.createElement('div');
-                    div.textContent = text;
-                    return div.innerHTML;
-                }
-
-                editor.addEventListener('keydown', function(e) {
-                    if (e.key === 'Tab') {
-                        e.preventDefault();
-                        const start = this.selectionStart;
-                        const end = this.selectionEnd;
-                        this.value = this.value.substring(0, start) + '    ' + this.value.substring(end);
-                        this.selectionStart = this.selectionEnd = start + 4;
-                    }
-                });
-            })();
-        """)
+        # Interactive Julia Manual Section
+        _ManualFeatureSection()
     )
 end
 
-"""
-Interactive Julia Manual feature card for the home page.
-"""
-function ManualFeatureSection()
-    Div(:class => "mt-16 mb-8",
+# --- Helper: static feature card ---
+function _FeatureCard(title, description)
+    Suite.Card(
+        Suite.CardContent(class="p-5",
+            H3(:class => "font-semibold text-warm-800 dark:text-warm-100 mb-2", title),
+            P(:class => "text-sm text-warm-600 dark:text-warm-400", description)
+        )
+    )
+end
+
+# --- Manual section linking to the tutorial ---
+function _ManualFeatureSection()
+    Div(:class => "mt-8 mb-8",
         # Section header
         Div(:class => "text-center mb-8",
             H2(:class => "text-3xl font-serif font-semibold text-warm-800 dark:text-warm-100",
-                "Interactive Julia Manual"
+                "Julia Manual"
             ),
             P(:class => "text-warm-500 dark:text-warm-400 mt-2 max-w-2xl mx-auto",
-                "Learn Julia through hands-on examples that run real compiled code in your browser."
+                "Learn Julia through code examples that demonstrate features compiled to WebAssembly."
             )
         ),
 
@@ -167,10 +138,10 @@ function ManualFeatureSection()
                         # Content
                         Div(:class => "flex-1 text-center md:text-left",
                             H3(:class => "text-2xl font-bold text-warm-800 dark:text-warm-100 group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors",
-                                "10 Interactive Chapters"
+                                "10 Chapters"
                             ),
                             P(:class => "text-warm-600 dark:text-warm-400 mt-2 mb-4",
-                                "From variables to multiple dispatch, each chapter features live code examples compiled to WebAssembly. Click, edit, and see results instantly - all running in your browser."
+                                "From variables to multiple dispatch, each chapter features code examples showing Julia compiled to WebAssembly."
                             ),
                             # Chapter tags using Suite.Badge
                             Div(:class => "flex flex-wrap justify-center md:justify-start gap-2",
@@ -195,38 +166,12 @@ function ManualFeatureSection()
             )
         ),
 
-        # WasmTarget.jl note
+        # Link to features
         Div(:class => "max-w-4xl mx-auto mt-4 text-center",
             P(:class => "text-sm text-warm-500 dark:text-warm-500",
-                "Examples run real Julia code compiled to WebAssembly by WasmTarget.jl. ",
                 A(:href => "./features/", :class => "text-accent-500 hover:text-accent-600 dark:text-accent-400 dark:hover:text-accent-300 underline", "See supported features →")
             )
         )
-    )
-end
-
-function Index()
-    Div(:class => "py-8",
-            # Header
-            Div(:class => "text-center mb-8",
-                H1(:class => "text-4xl font-serif font-semibold text-warm-800 dark:text-warm-100",
-                    "Julia → WebAssembly"
-                ),
-                P(:class => "text-warm-500 dark:text-warm-400 mt-2",
-                    "Write Julia. Compile to WASM. Run in the browser."
-                ),
-                Div(:class => "mt-4 flex justify-center gap-3",
-                    Suite.Badge("Julia Compiler"),
-                    Suite.Badge("WebAssembly", variant="secondary"),
-                    Suite.Badge("Browser Runtime", variant="outline"),
-                )
-            ),
-
-            # Main Playground
-            JuliaPlayground(),
-
-            # Interactive Julia Manual Section
-            ManualFeatureSection()
     )
 end
 

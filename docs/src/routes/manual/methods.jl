@@ -1,16 +1,10 @@
 # Manual Chapter: Methods (Multiple Dispatch)
 #
-# Interactive manual page covering Julia's multiple dispatch system -
+# Manual page covering Julia's multiple dispatch system -
 # defining methods with the same function name but different type signatures.
 # Based on docs.julialang.org/en/v1/manual/methods/
 #
 # Route: /manual/methods
-
-# =============================================================================
-# NOTE: This file uses pre-built islands from LiveExample.jl
-# ShapeAreaDemo, ArithmeticDispatchDemo, and MethodSpecializationDemo
-# are defined there and work correctly with SSR.
-# =============================================================================
 
 # =============================================================================
 # Methods Chapter Page
@@ -88,8 +82,7 @@ greet(Int32(42)) # calls Int32 method → "You are number 42\"""", language="jul
             ") for different shapes, and Julia will call the right implementation."
         ),
 
-        LiveExample(
-            code = """# Define shape types
+        Suite.CodeBlock("""# Define shape types
 struct Circle
     radius::Int32
 end
@@ -113,9 +106,10 @@ circle = Circle(Int32(5))
 rect = Rectangle(Int32(4), Int32(6))
 
 area(circle)  # calls Circle method → 75
-area(rect)    # calls Rectangle method → 24""",
-            description = "Click different shapes to calculate their area using multiple dispatch.",
-            example = ShapeAreaDemo
+area(rect)    # calls Rectangle method → 24""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Click different shapes to calculate their area using multiple dispatch."
         ),
 
         P(:class => "text-warm-600 dark:text-warm-400 my-4",
@@ -136,8 +130,7 @@ area(rect)    # calls Rectangle method → 24""",
             " are just functions, so you can add methods for them."
         ),
 
-        LiveExample(
-            code = """# A 2D vector type
+        Suite.CodeBlock("""# A 2D vector type
 struct Vec2
     x::Int32
     y::Int32
@@ -158,9 +151,10 @@ v1 = Vec2(Int32(3), Int32(4))
 v2 = Vec2(Int32(1), Int32(2))
 
 add_vec(v1, v2)       # Vec2(4, 6)
-scale_vec(v1, Int32(2)) # Vec2(6, 8)""",
-            description = "Perform vector arithmetic using methods specialized for Vec2.",
-            example = VectorArithmeticDemo
+scale_vec(v1, Int32(2)) # Vec2(6, 8)""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Perform vector arithmetic using methods specialized for Vec2."
         ),
 
         # Note about operators
@@ -187,8 +181,7 @@ scale_vec(v1, Int32(2)) # Vec2(6, 8)""",
             " method that matches the argument types."
         ),
 
-        LiveExample(
-            code = """# Generic method (fallback)
+        Suite.CodeBlock("""# Generic method (fallback)
 function describe(x)
     return "some value"
 end
@@ -216,9 +209,10 @@ end
 # Julia picks the most specific method
 describe(Int32(42))   # "positive integer"
 describe(Int32(-5))   # "negative integer"
-describe(true)        # "true boolean\"""",
-            description = "Enter different types of values to see which method gets called.",
-            example = TypeSpecializationDemo
+describe(true)        # "true boolean\"""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Enter different types of values to see which method gets called."
         ),
 
         # Section: Methods with Multiple Arguments

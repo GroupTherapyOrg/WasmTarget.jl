@@ -1,15 +1,10 @@
 # Manual Chapter: Strings
 #
-# Interactive manual page covering string basics - literals, concatenation,
+# Manual page covering string basics - literals, concatenation,
 # length, and comparison. Scoped to WasmTarget.jl string support.
+# Interactive demos have been removed and replaced with static code examples.
 #
 # Route: /manual/strings
-
-# =============================================================================
-# NOTE: This file uses pre-built islands from LiveExample.jl
-# StringConcatDemo, StringLengthDemo, StringComparisonDemo
-# are defined there and work correctly with SSR.
-# =============================================================================
 
 import Suite
 
@@ -81,8 +76,7 @@ typeof(s)    # String""", language="julia"),
             " function returns the number of characters in a string."
         ),
 
-        LiveExample(
-            code = """# String length
+        Suite.CodeBlock("""# String length
 s1 = "Hello"
 length(s1)  # 5
 
@@ -90,9 +84,10 @@ s2 = "Hello, World"
 length(s2)  # 12
 
 empty = ""
-length(empty)  # 0""",
-            description = "Click different strings to see their lengths. Note that length counts characters, not bytes.",
-            example = StringLengthDemo
+length(empty)  # 0""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Click different strings to see their lengths. Note that length counts characters, not bytes."
         ),
 
         # Important note about length
@@ -146,8 +141,7 @@ length(empty)  # 0""",
             )
         ),
 
-        LiveExample(
-            code = """# String concatenation
+        Suite.CodeBlock("""# String concatenation
 a = "Hello"
 b = "World"
 
@@ -158,9 +152,10 @@ c = a * ", " * b * "!"  # "Hello, World!"
 d = string(a, " ", b)   # "Hello World"
 
 # Repeat with ^
-e = "ha" ^ 3            # "hahaha" """,
-            description = "Click different words to see string concatenation in action.",
-            example = StringConcatDemo
+e = "ha" ^ 3            # "hahaha" """, language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Click different words to see string concatenation in action."
         ),
 
         P(:class => "text-warm-600 dark:text-warm-400 my-4",
@@ -211,8 +206,7 @@ e = "ha" ^ 3            # "hahaha" """,
             )
         ),
 
-        LiveExample(
-            code = """# String comparison
+        Suite.CodeBlock("""# String comparison
 a = "apple"
 b = "banana"
 c = "cherry"
@@ -224,9 +218,10 @@ a == a     # true
 # Lexicographic ordering
 a < b      # true ("apple" comes before "banana")
 b < c      # true ("banana" comes before "cherry")
-c > a      # true ("cherry" comes after "apple")""",
-            description = "Select different strings for a and b to see comparison results. Strings compare in dictionary order.",
-            example = StringComparisonDemo
+c > a      # true ("cherry" comes after "apple")""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Select different strings for a and b to see comparison results. Strings compare in dictionary order."
         ),
 
         # Note about lexicographic comparison

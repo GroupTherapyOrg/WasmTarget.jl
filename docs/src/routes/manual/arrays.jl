@@ -1,16 +1,10 @@
 # Manual Chapter: Arrays
 #
-# Interactive manual page covering Julia arrays - vectors (1D arrays),
+# Manual page covering Julia arrays - vectors (1D arrays),
 # multi-dimensional arrays (matrices), indexing, and iteration.
 # Based on docs.julialang.org/en/v1/manual/arrays/
 #
 # Route: /manual/arrays
-
-# =============================================================================
-# NOTE: This file uses pre-built islands from LiveExample.jl
-# ArrayDemo, MatrixDemo, ArrayIterationDemo, ArraySumDemo, and VectorMutationDemo
-# are defined there and work correctly with SSR.
-# =============================================================================
 
 # =============================================================================
 # Arrays Chapter Page
@@ -52,8 +46,7 @@ function Arrays()
             " constructor."
         ),
 
-        LiveExample(
-            code = """# Create a vector using brackets
+        Suite.CodeBlock("""# Create a vector using brackets
 arr = [10, 20, 30, 40]
 
 # Access elements (1-indexed!)
@@ -65,9 +58,10 @@ arr[4]    # returns 40 (last element)
 length(arr)  # returns 4
 
 # Create with explicit type
-typed_arr = Int32[1, 2, 3, 4, 5]""",
-            description = "Click on array elements to select them. Adjust the selected element's value with +/- buttons.",
-            example = ArrayDemo
+typed_arr = Int32[1, 2, 3, 4, 5]""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Click on array elements to select them. Adjust the selected element's value with +/- buttons."
         ),
 
         # Tip about 1-indexing
@@ -91,8 +85,7 @@ typed_arr = Int32[1, 2, 3, 4, 5]""",
             "."
         ),
 
-        LiveExample(
-            code = """# Create a mutable vector
+        Suite.CodeBlock("""# Create a mutable vector
 arr = [1, 2, 3, 4, 5]
 
 # Modify elements by index
@@ -104,9 +97,10 @@ arr[1]   # returns 100
 arr[3]   # returns 300
 
 # You can also modify based on computation
-arr[2] = arr[1] + arr[3]  # arr[2] = 100 + 300 = 400""",
-            description = "Click an index button to select a position, then use Set to modify the value at that position.",
-            example = VectorMutationDemo
+arr[2] = arr[1] + arr[3]  # arr[2] = 100 + 300 = 400""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Click an index button to select a position, then use Set to modify the value at that position."
         ),
 
         # WasmTarget note about arrays
@@ -135,8 +129,7 @@ arr[2] = arr[1] + arr[3]  # arr[2] = 100 + 300 = 400""",
             "."
         ),
 
-        LiveExample(
-            code = """# Create a 3x3 matrix
+        Suite.CodeBlock("""# Create a 3x3 matrix
 # Spaces separate columns, semicolons separate rows
 mat = [1 2 3; 4 5 6; 7 8 9]
 
@@ -149,9 +142,10 @@ mat[3, 1]  # bottom-left: 7
 # Get dimensions
 size(mat)      # returns (3, 3)
 size(mat, 1)   # rows: 3
-size(mat, 2)   # cols: 3""",
-            description = "Click on matrix cells to see their row,col coordinates and value.",
-            example = MatrixDemo
+size(mat, 2)   # cols: 3""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Click on matrix cells to see their row,col coordinates and value."
         ),
 
         P(:class => "text-warm-600 dark:text-warm-400 my-4",
@@ -170,8 +164,7 @@ size(mat, 2)   # cols: 3""",
             " loops to iterate over array elements. You can iterate by element or by index."
         ),
 
-        LiveExample(
-            code = """# Iterate by element
+        Suite.CodeBlock("""# Iterate by element
 arr = [10, 20, 30, 40]
 sum = 0
 for x in arr
@@ -191,9 +184,10 @@ function sum_array(arr)
         total = total + x
     end
     return total
-end""",
-            description = "Click Step to iterate through the array one element at a time, watching the sum accumulate.",
-            example = ArrayIterationDemo
+end""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Click Step to iterate through the array one element at a time, watching the sum accumulate."
         ),
 
         Suite.CodeBlock("""# Find the maximum element
@@ -228,8 +222,7 @@ end""", language="julia"),
             "Common operations include computing sums, averages, and finding min/max values."
         ),
 
-        LiveExample(
-            code = """# Compute sum and average
+        Suite.CodeBlock("""# Compute sum and average
 arr = [10, 20, 30, 40, 50]
 
 function compute_sum(arr)
@@ -245,9 +238,10 @@ function compute_avg(arr)
 end
 
 compute_sum(arr)  # returns 150
-compute_avg(arr)  # returns 30""",
-            description = "Adjust array values to see the sum and average update in real-time.",
-            example = ArraySumDemo
+compute_avg(arr)  # returns 30""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Adjust array values to see the sum and average update in real-time."
         ),
 
         # Section: Bounds Checking

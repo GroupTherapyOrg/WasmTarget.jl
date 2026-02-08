@@ -1,8 +1,7 @@
-# Features page - Supported Julia features with live WASM demos
+# Features page - Supported Julia features with static code examples
 #
 # Uses Suite.jl components for visual presentation.
-# Demo components (ArithmeticDemo, ControlFlowDemo, RecursionDemo, LoopDemo)
-# are interactive @island WASM demos defined in components/demos.jl — PRESERVED.
+# All 4 WASM demos REMOVED (W4 cleanup) — replaced with static Suite.CodeBlock.
 
 import Suite
 
@@ -14,11 +13,11 @@ function Features()
                 "Supported Features"
             ),
             P(:class => "text-xl text-warm-500 dark:text-warm-400 max-w-2xl mx-auto",
-                "Pre-compiled WASM demos showing what Julia features compile to WebAssembly"
+                "Julia features that compile to WebAssembly with WasmTarget.jl"
             )
         ),
 
-        # Feature demos
+        # Feature demos (static)
         Div(:class => "space-y-16",
             # Arithmetic
             _FeatureSection(
@@ -27,7 +26,12 @@ function Features()
                 """add(a::Int32, b::Int32)::Int32 = a + b
 multiply(a::Int32, b::Int32)::Int32 = a * b
 divide(a::Int32, b::Int32)::Int32 = div(a, b)""",
-                ArithmeticDemo()
+                """# Example results:
+# add(12, 5)      → 17
+# multiply(12, 5) → 60
+# divide(12, 5)   → 2
+
+# Compiles to WASM i32.add, i32.mul, i32.div_s instructions"""
             ),
 
             # Control Flow
@@ -43,7 +47,12 @@ divide(a::Int32, b::Int32)::Int32 = div(a, b)""",
         return Int32(0)
     end
 end""",
-                ControlFlowDemo()
+                """# Example results:
+# sign(5)  → 1
+# sign(-3) → -1
+# sign(0)  → 0
+
+# Compiles to nested WASM if/else blocks with i32.gt_s, i32.lt_s"""
             ),
 
             # Recursion
@@ -56,7 +65,13 @@ end""",
     end
     return n * factorial(n - Int32(1))
 end""",
-                RecursionDemo()
+                """# Example results:
+# factorial(0) → 1
+# factorial(1) → 1
+# factorial(5) → 120
+# factorial(6) → 720
+
+# Compiles to WASM call instruction (self-reference)"""
             ),
 
             # Loops
@@ -72,7 +87,11 @@ end""",
     end
     return result
 end""",
-                LoopDemo()
+                """# Example results:
+# sum_to_n(10)  → 55
+# sum_to_n(100) → 5050
+
+# Compiles to WASM loop + br_if for the while condition"""
             )
         ),
 
@@ -205,15 +224,15 @@ add_element_segment!(mod, table_idx, 0, [func_double, func_triple])
 
         # CTA
         Div(:class => "py-12 text-center",
-            A(:href => "./playground/",
-                Suite.Button(size="lg", "Try the Playground")
+            A(:href => "./manual/",
+                Suite.Button(size="lg", "Read the Manual")
             )
         )
     )
 end
 
-# --- Helper: Feature demo section with Suite.Card + Suite.CodeBlock ---
-function _FeatureSection(title, subtitle, code, demo)
+# --- Helper: Feature section with static code + output ---
+function _FeatureSection(title, subtitle, code, output)
     Suite.Card(class="max-w-5xl mx-auto",
         Suite.CardHeader(
             Suite.CardTitle(title),
@@ -221,8 +240,14 @@ function _FeatureSection(title, subtitle, code, demo)
         ),
         Suite.CardContent(
             Div(:class => "grid lg:grid-cols-2 gap-6",
-                Suite.CodeBlock(code, language="julia"),
-                Div(:class => "flex items-center justify-center", demo)
+                Div(
+                    P(:class => "text-xs font-medium text-warm-500 dark:text-warm-400 mb-2", "Julia Code"),
+                    Suite.CodeBlock(code, language="julia")
+                ),
+                Div(
+                    P(:class => "text-xs font-medium text-warm-500 dark:text-warm-400 mb-2", "Output"),
+                    Suite.CodeBlock(output, language="julia")
+                )
             )
         )
     )

@@ -1,16 +1,10 @@
 # Manual Chapter: Functions
 #
-# Interactive manual page covering Julia functions - definition, calling,
+# Manual page covering Julia functions - definition, calling,
 # return values, recursion, and closures.
 # Based on docs.julialang.org/en/v1/manual/functions/
 #
 # Route: /manual/functions
-
-# =============================================================================
-# NOTE: This file uses pre-built islands from LiveExample.jl
-# SquareDemo, MultiArgDemo, ReturnValueDemo, ClosureDemo, CompactFunctionDemo,
-# and FactorialDemo are already defined there and work correctly with SSR.
-# =============================================================================
 
 import Suite
 
@@ -46,8 +40,7 @@ function Functions()
             "."
         ),
 
-        LiveExample(
-            code = """# Standard function definition
+        Suite.CodeBlock("""# Standard function definition
 function square(x)
     return x * x
 end
@@ -58,17 +51,17 @@ result = square(5)  # result = 25
 # Functions can have type annotations
 function square_int(x::Int32)::Int32
     return x * x
-end""",
-            description = "A basic function that squares its input. Adjust the value of x to see the result change.",
-            example = SquareDemo
+end""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "A basic function that squares its input. Adjust the value of x to see the result change."
         ),
 
         P(:class => "text-warm-600 dark:text-warm-400 my-4",
             "Julia also supports a compact assignment form for simple functions. This is equivalent to the longer form but more concise:"
         ),
 
-        LiveExample(
-            code = """# Compact (assignment) form
+        Suite.CodeBlock("""# Compact (assignment) form
 add(a, b) = a + b
 mul(a, b) = a * b
 
@@ -78,9 +71,10 @@ mul(a, b) = a * b
 # end
 
 result = add(7, 3)   # result = 10
-product = mul(7, 3)  # product = 21""",
-            description = "Compact function definitions using assignment syntax. Try different values for a and b.",
-            example = CompactFunctionDemo
+product = mul(7, 3)  # product = 21""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Compact function definitions using assignment syntax. Try different values for a and b."
         ),
 
         # Section: Arguments
@@ -92,8 +86,7 @@ product = mul(7, 3)  # product = 21""",
             "Functions can accept multiple arguments separated by commas. Each argument can optionally have a type annotation to specify what types are accepted."
         ),
 
-        LiveExample(
-            code = """# Function with multiple arguments
+        Suite.CodeBlock("""# Function with multiple arguments
 function hypot(x::Int32, y::Int32)::Int32
     # Calculate integer approximation of sqrt(x^2 + y^2)
     sum_sq = x * x + y * y
@@ -107,9 +100,10 @@ end
 
 # Pythagorean triples work perfectly
 hypot(3, 4)   # returns 5
-hypot(5, 12)  # returns 13""",
-            description = "A function taking two arguments. Try the preset Pythagorean triples or adjust x and y manually.",
-            example = MultiArgDemo
+hypot(5, 12)  # returns 13""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "A function taking two arguments. Try the preset Pythagorean triples or adjust x and y manually."
         ),
 
         # Warning about varargs/kwargs
@@ -135,8 +129,7 @@ hypot(5, 12)  # returns 13""",
             " keyword, or Julia will implicitly return the value of the last expression in the function body."
         ),
 
-        LiveExample(
-            code = """# Explicit return (useful for early exit)
+        Suite.CodeBlock("""# Explicit return (useful for early exit)
 function my_abs(x::Int32)::Int32
     if x < Int32(0)
         return -x  # Early return for negative
@@ -153,9 +146,10 @@ function my_sign(x::Int32)::Int32
     else
         Int32(0)
     end  # Last expression is returned
-end""",
-            description = "Two functions showing explicit vs implicit return. Adjust the value to see both behaviors.",
-            example = ReturnValueDemo
+end""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "Two functions showing explicit vs implicit return. Adjust the value to see both behaviors."
         ),
 
         P(:class => "text-warm-600 dark:text-warm-400 my-4",
@@ -175,8 +169,7 @@ end""",
             ". This is useful for problems that can be broken down into smaller instances of the same problem."
         ),
 
-        LiveExample(
-            code = """# Recursive factorial function
+        Suite.CodeBlock("""# Recursive factorial function
 function factorial(n::Int32)::Int32
     if n <= Int32(1)
         return Int32(1)  # Base case
@@ -187,9 +180,10 @@ end
 
 # factorial(5) = 5 * 4 * 3 * 2 * 1 = 120
 factorial(5)  # returns 120
-factorial(6)  # returns 720""",
-            description = "The classic recursive factorial function. Click different values of n to see the computed factorial.",
-            example = FactorialDemo
+factorial(6)  # returns 720""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "The classic recursive factorial function. Click different values of n to see the computed factorial."
         ),
 
         Suite.Alert(class="my-6",
@@ -214,8 +208,7 @@ factorial(6)  # returns 720""",
             " is a function that captures variables from its surrounding scope. This allows you to create functions that \"remember\" values from where they were defined."
         ),
 
-        LiveExample(
-            code = """# Create a closure that captures 'offset'
+        Suite.CodeBlock("""# Create a closure that captures 'offset'
 offset = 10
 
 # This function captures 'offset' from outer scope
@@ -227,9 +220,10 @@ add_offset(5)   # returns 15 (5 + 10)
 
 # Change offset and the closure sees the new value
 offset = 20
-add_offset(5)   # returns 25 (5 + 20)""",
-            description = "A closure captures the 'offset' variable. Change offset to see how it affects the function's behavior.",
-            example = ClosureDemo
+add_offset(5)   # returns 25 (5 + 20)""", language="julia"),
+
+        P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-3",
+            "A closure captures the 'offset' variable. Change offset to see how it affects the function's behavior."
         ),
 
         P(:class => "text-warm-600 dark:text-warm-400 my-4",
