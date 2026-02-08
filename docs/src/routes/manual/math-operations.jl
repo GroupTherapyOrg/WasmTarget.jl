@@ -11,6 +11,8 @@
 # are defined there and work correctly with SSR.
 # =============================================================================
 
+import Suite
+
 # =============================================================================
 # Mathematical Operations Chapter Page
 # =============================================================================
@@ -234,23 +236,14 @@ x = 3
             example = ComparisonOpsDemo
         ),
 
-        Div(:class => "p-4 bg-warm-50 dark:bg-warm-900/20 rounded-xl border border-warm-200 dark:border-warm-700 my-6",
-            Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-accent-600 dark:text-accent-400 flex-shrink-0 mt-0.5",
-                    :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
-                    Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
-                         :d => "M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z")
-                ),
-                Div(
-                    P(:class => "text-sm text-warm-800 dark:text-warm-300 font-medium", "Tip"),
-                    P(:class => "text-sm text-warm-700 dark:text-warm-400 mt-1",
-                        "In Julia, comparison operators can be chained: ",
-                        Code(:class => "text-accent-600 dark:text-accent-400", "1 < x < 10"),
-                        " is equivalent to ",
-                        Code(:class => "text-accent-600 dark:text-accent-400", "1 < x && x < 10"),
-                        ". This is useful for range checks."
-                    )
-                )
+        Suite.Alert(class="my-6",
+            Suite.AlertTitle("Tip"),
+            Suite.AlertDescription(
+                "In Julia, comparison operators can be chained: ",
+                Code(:class => "text-accent-600 dark:text-accent-400", "1 < x < 10"),
+                " is equivalent to ",
+                Code(:class => "text-accent-600 dark:text-accent-400", "1 < x && x < 10"),
+                ". This is useful for range checks."
             )
         ),
 
@@ -334,25 +327,16 @@ a >> 2  # 3  (12 / 4)""",
             example = BitwiseDemo
         ),
 
-        Div(:class => "p-4 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200 dark:border-amber-800 my-6",
-            Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5",
-                    :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
-                    Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
-                         :d => "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z")
-                ),
-                Div(
-                    P(:class => "text-sm text-amber-800 dark:text-amber-200 font-medium", "Performance Tip"),
-                    P(:class => "text-sm text-amber-700 dark:text-amber-300 mt-1",
-                        "Left shift by ",
-                        Code(:class => "text-amber-800 dark:text-amber-200", "n"),
-                        " is equivalent to multiplying by ",
-                        Code(:class => "text-amber-800 dark:text-amber-200", "2^n"),
-                        ", and right shift is equivalent to integer division by ",
-                        Code(:class => "text-amber-800 dark:text-amber-200", "2^n"),
-                        ". These operations are extremely fast at the hardware level."
-                    )
-                )
+        Suite.Alert(class="my-6",
+            Suite.AlertTitle("Performance Tip"),
+            Suite.AlertDescription(
+                "Left shift by ",
+                Code(:class => "text-accent-600 dark:text-accent-400", "n"),
+                " is equivalent to multiplying by ",
+                Code(:class => "text-accent-600 dark:text-accent-400", "2^n"),
+                ", and right shift is equivalent to integer division by ",
+                Code(:class => "text-accent-600 dark:text-accent-400", "2^n"),
+                ". These operations are extremely fast at the hardware level."
             )
         ),
 
@@ -444,25 +428,16 @@ max(5, 3)   # 5""",
         ),
 
         # WasmTarget.jl note
-        Div(:class => "p-4 bg-warm-50 dark:bg-warm-900/20 rounded-xl border border-warm-200 dark:border-warm-700 my-6",
-            Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-accent-600 dark:text-accent-400 flex-shrink-0 mt-0.5",
-                    :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
-                    Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
-                         :d => "M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z")
-                ),
-                Div(
-                    P(:class => "text-sm text-warm-800 dark:text-warm-300 font-medium", "WasmTarget.jl Note"),
-                    P(:class => "text-sm text-warm-700 dark:text-warm-400 mt-1",
-                        "Functions marked as \"WASM Native\" compile directly to single WebAssembly instructions, making them extremely fast. Other math functions like ",
-                        Code(:class => "text-accent-600 dark:text-accent-400", "sin"),
-                        ", ",
-                        Code(:class => "text-accent-600 dark:text-accent-400", "cos"),
-                        ", and ",
-                        Code(:class => "text-accent-600 dark:text-accent-400", "exp"),
-                        " require more complex implementations."
-                    )
-                )
+        Suite.Alert(class="my-6",
+            Suite.AlertTitle("WasmTarget.jl Note"),
+            Suite.AlertDescription(
+                "Functions marked as \"WASM Native\" compile directly to single WebAssembly instructions, making them extremely fast. Other math functions like ",
+                Code(:class => "text-accent-600 dark:text-accent-400", "sin"),
+                ", ",
+                Code(:class => "text-accent-600 dark:text-accent-400", "cos"),
+                ", and ",
+                Code(:class => "text-accent-600 dark:text-accent-400", "exp"),
+                " require more complex implementations."
             )
         ),
 

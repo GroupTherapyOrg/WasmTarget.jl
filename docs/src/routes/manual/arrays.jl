@@ -16,6 +16,8 @@
 # Arrays Chapter Page
 # =============================================================================
 
+import Suite
+
 """
 Arrays chapter for the Interactive Julia Manual.
 """
@@ -69,20 +71,11 @@ typed_arr = Int32[1, 2, 3, 4, 5]""",
         ),
 
         # Tip about 1-indexing
-        Div(:class => "p-4 bg-warm-50 dark:bg-warm-900/20 rounded-xl border border-warm-200 dark:border-warm-700 my-6",
-            Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-accent-600 dark:text-accent-400 flex-shrink-0 mt-0.5",
-                    :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
-                    Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
-                         :d => "M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z")
-                ),
-                Div(
-                    P(:class => "text-sm text-warm-800 dark:text-warm-300 font-medium", "1-Based Indexing"),
-                    P(:class => "text-sm text-warm-700 dark:text-warm-400 mt-1",
-                        "Unlike C, Python, or JavaScript, Julia arrays start at index 1, not 0. ",
-                        "This matches mathematical notation and is natural for many scientific applications."
-                    )
-                )
+        Suite.Alert(class="my-6",
+            Suite.AlertTitle("1-Based Indexing"),
+            Suite.AlertDescription(
+                "Unlike C, Python, or JavaScript, Julia arrays start at index 1, not 0. ",
+                "This matches mathematical notation and is natural for many scientific applications."
             )
         ),
 
@@ -117,23 +110,14 @@ arr[2] = arr[1] + arr[3]  # arr[2] = 100 + 300 = 400""",
         ),
 
         # WasmTarget note about arrays
-        Div(:class => "p-4 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200 dark:border-amber-800 my-6",
-            Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5",
-                    :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
-                    Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
-                         :d => "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z")
-                ),
-                Div(
-                    P(:class => "text-sm text-amber-800 dark:text-amber-200 font-medium", "Fixed-Size Arrays in WasmTarget.jl"),
-                    P(:class => "text-sm text-amber-700 dark:text-amber-300 mt-1",
-                        "WasmTarget.jl currently supports fixed-size arrays. Dynamic operations like ",
-                        Code(:class => "text-amber-800 dark:text-amber-200", "push!"),
-                        " and ",
-                        Code(:class => "text-amber-800 dark:text-amber-200", "pop!"),
-                        " are not yet supported. Create arrays with the size you need upfront."
-                    )
-                )
+        Suite.Alert(class="my-6",
+            Suite.AlertTitle("Fixed-Size Arrays in WasmTarget.jl"),
+            Suite.AlertDescription(
+                "WasmTarget.jl currently supports fixed-size arrays. Dynamic operations like ",
+                Code(:class => "text-amber-800 dark:text-amber-200", "push!"),
+                " and ",
+                Code(:class => "text-amber-800 dark:text-amber-200", "pop!"),
+                " are not yet supported. Create arrays with the size you need upfront."
             )
         ),
 
@@ -212,9 +196,7 @@ end""",
             example = ArrayIterationDemo
         ),
 
-        Pre(:class => "bg-warm-800 dark:bg-warm-900 p-4 rounded-lg overflow-x-auto text-sm my-4",
-            Code(:class => "language-julia text-warm-100 font-mono",
-"""# Find the maximum element
+        Suite.CodeBlock("""# Find the maximum element
 function find_max(arr)
     max_val = arr[1]  # Start with first element
     for i in 2:length(arr)
@@ -234,9 +216,7 @@ function count_value(arr, target)
         end
     end
     return count
-end"""
-            )
-        ),
+end""", language="julia"),
 
         # Section: Computing with Arrays
         H2(:class => "text-2xl font-semibold text-warm-800 dark:text-warm-100 mt-10 mb-4",
@@ -282,9 +262,7 @@ compute_avg(arr)  # returns 30""",
             "."
         ),
 
-        Pre(:class => "bg-warm-800 dark:bg-warm-900 p-4 rounded-lg overflow-x-auto text-sm my-4",
-            Code(:class => "language-julia text-warm-100 font-mono",
-"""arr = [1, 2, 3, 4, 5]
+        Suite.CodeBlock("""arr = [1, 2, 3, 4, 5]
 
 # Valid indices: 1 to 5
 arr[1]  # OK: first element
@@ -301,26 +279,15 @@ function fast_sum(arr)
         @inbounds total = total + arr[i]
     end
     return total
-end"""
-            )
-        ),
+end""", language="julia"),
 
-        Div(:class => "p-4 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200 dark:border-amber-800 my-6",
-            Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5",
-                    :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
-                    Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
-                         :d => "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z")
-                ),
-                Div(
-                    P(:class => "text-sm text-amber-800 dark:text-amber-200 font-medium", "Use @inbounds with Care"),
-                    P(:class => "text-sm text-amber-700 dark:text-amber-300 mt-1",
-                        "The ",
-                        Code(:class => "text-amber-800 dark:text-amber-200", "@inbounds"),
-                        " macro disables bounds checking for performance. Only use it when you're absolutely certain your indices are valid, ",
-                        "as out-of-bounds access with @inbounds causes undefined behavior."
-                    )
-                )
+        Suite.Alert(class="my-6",
+            Suite.AlertTitle("Use @inbounds with Care"),
+            Suite.AlertDescription(
+                "The ",
+                Code(:class => "text-amber-800 dark:text-amber-200", "@inbounds"),
+                " macro disables bounds checking for performance. Only use it when you're absolutely certain your indices are valid, ",
+                "as out-of-bounds access with @inbounds causes undefined behavior."
             )
         ),
 

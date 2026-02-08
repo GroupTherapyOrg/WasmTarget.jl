@@ -16,6 +16,8 @@
 # Types Chapter Page
 # =============================================================================
 
+import Suite
+
 """
 Types chapter for the Interactive Julia Manual.
 """
@@ -66,20 +68,11 @@ typeof(flag) # returns Bool""",
         ),
 
         # Tip about WasmTarget types
-        Div(:class => "p-4 bg-warm-50 dark:bg-warm-900/20 rounded-xl border border-warm-200 dark:border-warm-700 my-6",
-            Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-accent-600 dark:text-accent-400 flex-shrink-0 mt-0.5",
-                    :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
-                    Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
-                         :d => "M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z")
-                ),
-                Div(
-                    P(:class => "text-sm text-warm-800 dark:text-warm-300 font-medium", "WasmTarget.jl Type Mapping"),
-                    P(:class => "text-sm text-warm-700 dark:text-warm-400 mt-1",
-                        "Int32 → i32, Int64 → i64, Float32 → f32, Float64 → f64, Bool → i32 (0 or 1). ",
-                        "These types compile directly to WebAssembly's native number types for optimal performance."
-                    )
-                )
+        Suite.Alert(class="my-6",
+            Suite.AlertTitle("WasmTarget.jl Type Mapping"),
+            Suite.AlertDescription(
+                "Int32 → i32, Int64 → i64, Float32 → f32, Float64 → f64, Bool → i32 (0 or 1). ",
+                "These types compile directly to WebAssembly's native number types for optimal performance."
             )
         ),
 
@@ -123,25 +116,16 @@ p.x * p.y  # returns 200""",
         ),
 
         # Immutability note
-        Div(:class => "p-4 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200 dark:border-amber-800 my-6",
-            Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5",
-                    :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
-                    Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
-                         :d => "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z")
-                ),
-                Div(
-                    P(:class => "text-sm text-amber-800 dark:text-amber-200 font-medium", "Immutable by Default"),
-                    P(:class => "text-sm text-amber-700 dark:text-amber-300 mt-1",
-                        "Regular ",
-                        Code(:class => "text-amber-800 dark:text-amber-200", "struct"),
-                        "s are immutable. Attempting to modify a field like ",
-                        Code(:class => "text-amber-800 dark:text-amber-200", "p.x = 5"),
-                        " will result in an error. Use ",
-                        Code(:class => "text-amber-800 dark:text-amber-200", "mutable struct"),
-                        " if you need to modify fields."
-                    )
-                )
+        Suite.Alert(class="my-6",
+            Suite.AlertTitle("Immutable by Default"),
+            Suite.AlertDescription(
+                "Regular ",
+                Code(:class => "text-amber-800 dark:text-amber-200", "struct"),
+                "s are immutable. Attempting to modify a field like ",
+                Code(:class => "text-amber-800 dark:text-amber-200", "p.x = 5"),
+                " will result in an error. Use ",
+                Code(:class => "text-amber-800 dark:text-amber-200", "mutable struct"),
+                " if you need to modify fields."
             )
         ),
 
@@ -239,9 +223,7 @@ len_sq = dx * dx + dy * dy  # 200""",
             " that takes arguments in field order. You can also define custom constructors for more flexibility."
         ),
 
-        Pre(:class => "bg-warm-800 dark:bg-warm-900 p-4 rounded-lg overflow-x-auto text-sm my-4",
-            Code(:class => "language-julia text-warm-100 font-mono",
-"""# Default constructor (automatically created)
+        Suite.CodeBlock("""# Default constructor (automatically created)
 struct Rectangle
     width::Int32
     height::Int32
@@ -257,32 +239,21 @@ struct Circle
     # Custom constructor with validation
     function Circle(r::Int32)
         if r <= Int32(0)
-            throw(ArgumentError(\"radius must be positive\"))
+            throw(ArgumentError("radius must be positive"))
         end
         new(r)
     end
 end
 
 # Outer constructor (convenience)
-Circle() = Circle(Int32(1))  # Default radius of 1"""
-            )
-        ),
+Circle() = Circle(Int32(1))  # Default radius of 1""", language="julia"),
 
         # WasmTarget note about constructors
-        Div(:class => "p-4 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200 dark:border-amber-800 my-6",
-            Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5",
-                    :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
-                    Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
-                         :d => "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z")
-                ),
-                Div(
-                    P(:class => "text-sm text-amber-800 dark:text-amber-200 font-medium", "WasmTarget.jl Constructor Note"),
-                    P(:class => "text-sm text-amber-700 dark:text-amber-300 mt-1",
-                        "WasmTarget.jl supports basic constructors. Complex inner constructors with validation may have limitations. ",
-                        "For best results, use the default constructor with explicit field types."
-                    )
-                )
+        Suite.Alert(class="my-6",
+            Suite.AlertTitle("WasmTarget.jl Constructor Note"),
+            Suite.AlertDescription(
+                "WasmTarget.jl supports basic constructors. Complex inner constructors with validation may have limitations. ",
+                "For best results, use the default constructor with explicit field types."
             )
         ),
 
@@ -301,29 +272,20 @@ Circle() = Circle(Int32(1))  # Default radius of 1"""
         ),
 
         # Scope note
-        Div(:class => "p-4 bg-warm-100 dark:bg-warm-900 rounded-xl border border-warm-200 dark:border-warm-700 my-6",
-            Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-warm-500 dark:text-warm-400 flex-shrink-0 mt-0.5",
-                    :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
-                    Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
-                         :d => "M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z")
-                ),
-                Div(
-                    P(:class => "text-sm text-warm-700 dark:text-warm-300 font-medium", "Beyond This Chapter"),
-                    P(:class => "text-sm text-warm-600 dark:text-warm-400 mt-1",
-                        "Julia also supports ",
-                        Em("abstract types"),
-                        " and ",
-                        Em("parametric types"),
-                        " (like ",
-                        Code(:class => "text-warm-600 dark:text-warm-400", "Vector{T}"),
-                        "). These advanced features have limited support in WasmTarget.jl — see the ",
-                        A(:href => "./features/",
-                          :class => "text-accent-600 dark:text-accent-400 hover:underline",
-                          "Features page"),
-                        " for current support status."
-                    )
-                )
+        Suite.Alert(class="my-6",
+            Suite.AlertTitle("Beyond This Chapter"),
+            Suite.AlertDescription(
+                "Julia also supports ",
+                Em("abstract types"),
+                " and ",
+                Em("parametric types"),
+                " (like ",
+                Code(:class => "text-warm-600 dark:text-warm-400", "Vector{T}"),
+                "). These advanced features have limited support in WasmTarget.jl — see the ",
+                A(:href => "./features/",
+                  :class => "text-accent-600 dark:text-accent-400 hover:underline",
+                  "Features page"),
+                " for current support status."
             )
         ),
 

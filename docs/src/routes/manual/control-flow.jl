@@ -16,6 +16,8 @@
 # Control Flow Chapter Page
 # =============================================================================
 
+import Suite
+
 """
 Control Flow chapter for the Interactive Julia Manual.
 """
@@ -80,25 +82,16 @@ sign(0)    # returns 0""",
         ),
 
         # Info box about if as expression
-        Div(:class => "p-4 bg-warm-50 dark:bg-warm-900/20 rounded-xl border border-warm-200 dark:border-warm-700 my-6",
-            Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-accent-600 dark:text-accent-400 flex-shrink-0 mt-0.5",
-                    :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
-                    Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
-                         :d => "M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z")
-                ),
-                Div(
-                    P(:class => "text-sm text-warm-800 dark:text-warm-300 font-medium", "if as an Expression"),
-                    P(:class => "text-sm text-warm-700 dark:text-warm-400 mt-1",
-                        "In Julia, ",
-                        Code(:class => "text-warm-800 dark:text-warm-300", "if"),
-                        " returns a value: ",
-                        Code(:class => "text-warm-800 dark:text-warm-300", "result = if x > 0 \"pos\" else \"non-pos\" end"),
-                        ". This is equivalent to the ternary operator: ",
-                        Code(:class => "text-warm-800 dark:text-warm-300", "x > 0 ? \"pos\" : \"non-pos\""),
-                        "."
-                    )
-                )
+        Suite.Alert(class="my-6",
+            Suite.AlertTitle("if as an Expression"),
+            Suite.AlertDescription(
+                "In Julia, ",
+                Code(:class => "text-warm-800 dark:text-warm-300", "if"),
+                " returns a value: ",
+                Code(:class => "text-warm-800 dark:text-warm-300", "result = if x > 0 \"pos\" else \"non-pos\" end"),
+                ". This is equivalent to the ternary operator: ",
+                Code(:class => "text-warm-800 dark:text-warm-300", "x > 0 ? \"pos\" : \"non-pos\""),
+                "."
             )
         ),
 
@@ -207,20 +200,22 @@ end
         ),
 
         # Info box about short-circuit idioms
-        Div(:class => "p-4 bg-warm-100 dark:bg-warm-900 rounded-xl my-6",
-            H3(:class => "text-sm font-semibold text-warm-800 dark:text-warm-300 mb-3", "Common Short-Circuit Idioms"),
-            Div(:class => "space-y-2 text-sm font-mono",
-                P(:class => "text-warm-600 dark:text-warm-400",
-                    Code(:class => "text-accent-600 dark:text-accent-400", "condition && action()"),
-                    Span(:class => "text-warm-500 ml-2", "# execute action only if condition is true")
-                ),
-                P(:class => "text-warm-600 dark:text-warm-400",
-                    Code(:class => "text-accent-600 dark:text-accent-400", "condition || action()"),
-                    Span(:class => "text-warm-500 ml-2", "# execute action only if condition is false")
-                ),
-                P(:class => "text-warm-600 dark:text-warm-400",
-                    Code(:class => "text-accent-600 dark:text-accent-400", "x != 0 && do_something(x)"),
-                    Span(:class => "text-warm-500 ml-2", "# guard against zero")
+        Suite.Alert(class="my-6",
+            Suite.AlertTitle("Common Short-Circuit Idioms"),
+            Suite.AlertDescription(
+                Div(:class => "space-y-2 text-sm font-mono",
+                    P(:class => "text-warm-600 dark:text-warm-400",
+                        Code(:class => "text-accent-600 dark:text-accent-400", "condition && action()"),
+                        Span(:class => "text-warm-500 ml-2", "# execute action only if condition is true")
+                    ),
+                    P(:class => "text-warm-600 dark:text-warm-400",
+                        Code(:class => "text-accent-600 dark:text-accent-400", "condition || action()"),
+                        Span(:class => "text-warm-500 ml-2", "# execute action only if condition is false")
+                    ),
+                    P(:class => "text-warm-600 dark:text-warm-400",
+                        Code(:class => "text-accent-600 dark:text-accent-400", "x != 0 && do_something(x)"),
+                        Span(:class => "text-warm-500 ml-2", "# guard against zero")
+                    )
                 )
             )
         ),
@@ -267,25 +262,16 @@ end""",
         ),
 
         # Warning about exception limitations
-        Div(:class => "p-4 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200 dark:border-amber-800 my-6",
-            Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5",
-                    :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
-                    Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
-                         :d => "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z")
-                ),
-                Div(
-                    P(:class => "text-sm text-amber-800 dark:text-amber-200 font-medium", "WasmTarget.jl Note"),
-                    P(:class => "text-sm text-amber-700 dark:text-amber-300 mt-1",
-                        "WasmTarget.jl compiles try/catch to WebAssembly's ",
-                        Code(:class => "text-amber-800 dark:text-amber-200", "try_table"),
-                        " with ",
-                        Code(:class => "text-amber-800 dark:text-amber-200", "catch_all"),
-                        ". Basic exception handling works, but complex exception types and ",
-                        Code(:class => "text-amber-800 dark:text-amber-200", "finally"),
-                        " blocks have limitations."
-                    )
-                )
+        Suite.Alert(class="my-6",
+            Suite.AlertTitle("WasmTarget.jl Note"),
+            Suite.AlertDescription(
+                "WasmTarget.jl compiles try/catch to WebAssembly's ",
+                Code(:class => "text-amber-800 dark:text-amber-200", "try_table"),
+                " with ",
+                Code(:class => "text-amber-800 dark:text-amber-200", "catch_all"),
+                ". Basic exception handling works, but complex exception types and ",
+                Code(:class => "text-amber-800 dark:text-amber-200", "finally"),
+                " blocks have limitations."
             )
         ),
 

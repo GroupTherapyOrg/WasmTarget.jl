@@ -11,6 +11,8 @@
 # there and work correctly with SSR.
 # =============================================================================
 
+import Suite
+
 # =============================================================================
 # Variables Chapter Page
 # =============================================================================
@@ -80,13 +82,7 @@ count = count + 1  # Increment: count is now 1""",
         ),
 
         # Code example for naming (no interactive demo needed)
-        Div(:class => "my-6 rounded-xl overflow-hidden border border-warm-200 dark:border-warm-700 shadow-sm",
-            Div(:class => "px-4 py-2 bg-warm-700 dark:bg-warm-900 flex justify-between items-center",
-                Span(:class => "text-warm-300 text-xs font-medium uppercase tracking-wider", "Julia"),
-                Span(:class => "text-warm-500 text-xs", "Naming examples")
-            ),
-            Pre(:class => "bg-warm-800 dark:bg-warm-900 p-4 overflow-x-auto text-sm",
-                Code(:class => "language-julia text-warm-100 font-mono", """# Valid variable names
+        Suite.CodeBlock("""# Valid variable names
 x = 1
 my_variable = 2
 myVariable = 3          # camelCase works
@@ -102,27 +98,16 @@ user_name = "Alice"
 
 # Convention: UPPERCASE for constants
 const PI_APPROX = 314
-const MAX_SIZE = 1000""")
-            )
-        ),
+const MAX_SIZE = 1000""", language="julia"),
 
-        Div(:class => "p-4 bg-warm-50 dark:bg-warm-900/20 rounded-xl border border-warm-200 dark:border-warm-700 my-6",
-            Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-accent-600 dark:text-accent-400 flex-shrink-0 mt-0.5",
-                    :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
-                    Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
-                         :d => "M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z")
-                ),
-                Div(
-                    P(:class => "text-sm text-warm-800 dark:text-warm-300 font-medium", "Style Tip"),
-                    P(:class => "text-sm text-warm-700 dark:text-warm-400 mt-1",
-                        "Julia convention uses ",
-                        Code(:class => "text-accent-600 dark:text-accent-400", "snake_case"),
-                        " for variables and functions, and ",
-                        Code(:class => "text-accent-600 dark:text-accent-400", "PascalCase"),
-                        " for types and modules. Following these conventions makes your code easier for others to read."
-                    )
-                )
+        Suite.Alert(class="my-6",
+            Suite.AlertTitle("Style Tip"),
+            Suite.AlertDescription(
+                "Julia convention uses ",
+                Code(:class => "text-accent-600 dark:text-accent-400", "snake_case"),
+                " for variables and functions, and ",
+                Code(:class => "text-accent-600 dark:text-accent-400", "PascalCase"),
+                " for types and modules. Following these conventions makes your code easier for others to read."
             )
         ),
 
@@ -196,27 +181,18 @@ result = a + b""",
         ),
 
         # WasmTarget.jl note
-        Div(:class => "p-4 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200 dark:border-amber-800 my-6",
-            Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5",
-                    :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
-                    Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
-                         :d => "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z")
-                ),
-                Div(
-                    P(:class => "text-sm text-amber-800 dark:text-amber-200 font-medium", "WasmTarget.jl Note"),
-                    P(:class => "text-sm text-amber-700 dark:text-amber-300 mt-1",
-                        "WasmTarget.jl compiles Julia to WebAssembly, which has direct support for ",
-                        Code(:class => "text-amber-800 dark:text-amber-200", "i32"),
-                        ", ",
-                        Code(:class => "text-amber-800 dark:text-amber-200", "i64"),
-                        ", ",
-                        Code(:class => "text-amber-800 dark:text-amber-200", "f32"),
-                        ", and ",
-                        Code(:class => "text-amber-800 dark:text-amber-200", "f64"),
-                        " types. Using explicit type annotations helps the compiler generate optimal code."
-                    )
-                )
+        Suite.Alert(class="my-6",
+            Suite.AlertTitle("WasmTarget.jl Note"),
+            Suite.AlertDescription(
+                "WasmTarget.jl compiles Julia to WebAssembly, which has direct support for ",
+                Code(:class => "text-accent-600 dark:text-accent-400", "i32"),
+                ", ",
+                Code(:class => "text-accent-600 dark:text-accent-400", "i64"),
+                ", ",
+                Code(:class => "text-accent-600 dark:text-accent-400", "f32"),
+                ", and ",
+                Code(:class => "text-accent-600 dark:text-accent-400", "f64"),
+                " types. Using explicit type annotations helps the compiler generate optimal code."
             )
         ),
 

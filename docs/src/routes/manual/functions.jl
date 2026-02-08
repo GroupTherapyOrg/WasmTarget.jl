@@ -12,6 +12,8 @@
 # and FactorialDemo are already defined there and work correctly with SSR.
 # =============================================================================
 
+import Suite
+
 # =============================================================================
 # Functions Chapter Page
 # =============================================================================
@@ -111,23 +113,14 @@ hypot(5, 12)  # returns 13""",
         ),
 
         # Warning about varargs/kwargs
-        Div(:class => "p-4 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200 dark:border-amber-800 my-6",
-            Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5",
-                    :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
-                    Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
-                         :d => "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z")
-                ),
-                Div(
-                    P(:class => "text-sm text-amber-800 dark:text-amber-200 font-medium", "WasmTarget.jl Limitation"),
-                    P(:class => "text-sm text-amber-700 dark:text-amber-300 mt-1",
-                        "Variadic arguments (",
-                        Code(:class => "text-amber-800 dark:text-amber-200", "args..."),
-                        ") and keyword arguments (",
-                        Code(:class => "text-amber-800 dark:text-amber-200", "foo(; kwarg=value)"),
-                        ") are not yet supported in WasmTarget.jl. Use positional arguments with explicit types for best compatibility."
-                    )
-                )
+        Suite.Alert(class="my-6",
+            Suite.AlertTitle("WasmTarget.jl Limitation"),
+            Suite.AlertDescription(
+                "Variadic arguments (",
+                Code(:class => "text-accent-600 dark:text-accent-400", "args..."),
+                ") and keyword arguments (",
+                Code(:class => "text-accent-600 dark:text-accent-400", "foo(; kwarg=value)"),
+                ") are not yet supported in WasmTarget.jl. Use positional arguments with explicit types for best compatibility."
             )
         ),
 
@@ -199,23 +192,14 @@ factorial(6)  # returns 720""",
             example = FactorialDemo
         ),
 
-        Div(:class => "p-4 bg-warm-50 dark:bg-warm-900/20 rounded-xl border border-warm-200 dark:border-warm-700 my-6",
-            Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-accent-600 dark:text-accent-400 flex-shrink-0 mt-0.5",
-                    :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
-                    Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
-                         :d => "M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z")
-                ),
-                Div(
-                    P(:class => "text-sm text-warm-800 dark:text-warm-300 font-medium", "Recursion Tips"),
-                    P(:class => "text-sm text-warm-700 dark:text-warm-400 mt-1",
-                        "Every recursive function needs: (1) a ",
-                        Em("base case"),
-                        " that stops the recursion, and (2) a ",
-                        Em("recursive case"),
-                        " that moves toward the base case. Without a proper base case, the function will recurse infinitely!"
-                    )
-                )
+        Suite.Alert(class="my-6",
+            Suite.AlertTitle("Recursion Tips"),
+            Suite.AlertDescription(
+                "Every recursive function needs: (1) a ",
+                Em("base case"),
+                " that stops the recursion, and (2) a ",
+                Em("recursive case"),
+                " that moves toward the base case. Without a proper base case, the function will recurse infinitely!"
             )
         ),
 
@@ -253,19 +237,10 @@ add_offset(5)   # returns 25 (5 + 20)""",
         ),
 
         # WasmTarget.jl note
-        Div(:class => "p-4 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200 dark:border-amber-800 my-6",
-            Div(:class => "flex items-start gap-3",
-                Svg(:class => "w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5",
-                    :fill => "none", :stroke => "currentColor", :viewBox => "0 0 24 24",
-                    Path(:stroke_linecap => "round", :stroke_linejoin => "round", :stroke_width => "2",
-                         :d => "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z")
-                ),
-                Div(
-                    P(:class => "text-sm text-amber-800 dark:text-amber-200 font-medium", "WasmTarget.jl Note"),
-                    P(:class => "text-sm text-amber-700 dark:text-amber-300 mt-1",
-                        "WasmTarget.jl compiles closures to WasmGC structs where captured variables become struct fields. This matches how Julia handles closures internally, but complex closure patterns may have limitations."
-                    )
-                )
+        Suite.Alert(class="my-6",
+            Suite.AlertTitle("WasmTarget.jl Note"),
+            Suite.AlertDescription(
+                "WasmTarget.jl compiles closures to WasmGC structs where captured variables become struct fields. This matches how Julia handles closures internally, but complex closure patterns may have limitations."
             )
         ),
 
