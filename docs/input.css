@@ -136,6 +136,7 @@
     --radius-md: 0.5rem;
     --radius-lg: 0.75rem;
     --radius-xl: 1rem;
+    --radius-2xl: 1.5rem;
     --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
     --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.15), 0 2px 4px -2px rgb(0 0 0 / 0.15);
     --jl-dot: #9558b2;
@@ -171,6 +172,7 @@
     --radius-md: 0;
     --radius-lg: 0;
     --radius-xl: 0;
+    --radius-2xl: 0;
     --shadow-sm: 0 0 #0000;
     --shadow-md: 0 0 #0000;
     --color-warm-50: #f8fafc;
@@ -228,6 +230,7 @@
     --radius-md: 0.75rem;
     --radius-lg: 1rem;
     --radius-xl: 1.5rem;
+    --radius-2xl: 2rem;
     --jl-dot: #4063d8;
     --jl-j: #9558b2;
     --jl-l: #cb3c33;
