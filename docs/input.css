@@ -82,6 +82,9 @@
     --jl-dot: #4063d8;  /* Blue */
     --jl-j: #389826;    /* Green */
     --jl-l: #cb3c33;    /* Red */
+
+    /* Brand name color — matches theme accent */
+    --brand-name: #9558b2;  /* Purple (default) */
   }
 
   html {
@@ -142,6 +145,7 @@
     --jl-dot: #9558b2;
     --jl-j: #389826;
     --jl-l: #cb3c33;
+    --brand-name: #2563eb;  /* Blue */
   }
 
   /* Minimal theme — Zinc accent, Red secondary, no radius, no shadows, slate neutrals */
@@ -168,6 +172,7 @@
     --color-accent-secondary-800: #991b1b;
     --color-accent-secondary-900: #7f1d1d;
     --color-accent-secondary-950: #450a0a;
+    --brand-name: var(--color-accent-700);  /* Theme accent */
     --radius-sm: 0;
     --radius-md: 0;
     --radius-lg: 0;
@@ -234,6 +239,7 @@
     --jl-dot: #4063d8;
     --jl-j: #9558b2;
     --jl-l: #cb3c33;
+    --brand-name: #059669;  /* Emerald */
     --color-warm-50: #fafaf9;
     --color-warm-100: #f5f5f4;
     --color-warm-200: #e7e5e4;

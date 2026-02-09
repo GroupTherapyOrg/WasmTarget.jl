@@ -9,7 +9,7 @@ import Suite
 
 function WasmTargetLogo()
     A(:href => "./", :class => "flex items-center",
-        Span(:class => "text-2xl font-bold text-warm-800 dark:text-warm-300", "WasmTarget"),
+        Span(:class => "text-2xl font-bold", :style => "color: var(--brand-name)", "WasmTarget"),
         Span(:class => "text-2xl font-light",
             Span(:style => "color: var(--jl-dot)", "."),
             Span(:style => "color: var(--jl-j)", "j"),
