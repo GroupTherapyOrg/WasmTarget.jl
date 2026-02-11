@@ -144,6 +144,7 @@
     --color-accent-secondary-800: #611c18;
     --color-accent-secondary-900: #421311;
     --color-accent-secondary-950: #280b0a;
+    --radius: 0.5rem;
     --radius-sm: 0.25rem;
     --radius-md: 0.375rem;
     --radius-lg: 0.5rem;
@@ -203,6 +204,7 @@
     --color-accent-secondary-800: #9f1239;
     --color-accent-secondary-900: #881337;
     --color-accent-secondary-950: #4c0519;
+    --radius: 0.5rem;
     --radius-sm: 0.375rem;
     --radius-md: 0.5rem;
     --radius-lg: 0.75rem;
@@ -265,11 +267,14 @@
     --color-accent-secondary-800: #92400e;
     --color-accent-secondary-900: #78350f;
     --color-accent-secondary-950: #451a03;
+    --radius: 0.5rem;
     --radius-sm: 0.375rem;
     --radius-md: 0.75rem;
     --radius-lg: 1rem;
     --radius-xl: 1.5rem;
     --radius-2xl: 2rem;
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
     --jl-dot: #4063d8;
     --jl-j: #9558b2;
     --jl-l: #cb3c33;
