@@ -8,65 +8,65 @@
 /* Enable class-based dark mode (toggle via .dark class on <html>) */
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* Theme customizations */
+/* Theme customizations — Default is Minimal (Zinc/Slate, sharp corners, no shadows) */
 @theme {
   --font-sans: 'Optima', 'Palatino Linotype', 'Book Antiqua', 'EB Garamond', serif;
   --font-serif: 'EB Garamond', 'Palatino Linotype', 'Book Antiqua', Georgia, serif;
   --font-mono: 'JuliaMono', 'Fira Code', 'JetBrains Mono', monospace;
 
-  /* Warm neutral palette (shared across GroupTherapyOrg ecosystem) */
-  --color-warm-50: #f8f7f4;
-  --color-warm-100: #f0ece4;
-  --color-warm-200: #e8e3d9;
-  --color-warm-300: #d4d0c8;
-  --color-warm-400: #9a9590;
-  --color-warm-500: #8a8680;
-  --color-warm-600: #6b6560;
-  --color-warm-700: #5a5855;
-  --color-warm-800: #2a2520;
-  --color-warm-900: #1a1918;
-  --color-warm-950: #111110;
+  /* Slate neutral palette (Minimal default for WasmTarget.jl) */
+  --color-warm-50: #f8fafc;
+  --color-warm-100: #f1f5f9;
+  --color-warm-200: #e2e8f0;
+  --color-warm-300: #cbd5e1;
+  --color-warm-400: #94a3b8;
+  --color-warm-500: #64748b;
+  --color-warm-600: #475569;
+  --color-warm-700: #334155;
+  --color-warm-800: #1e293b;
+  --color-warm-900: #0f172a;
+  --color-warm-950: #020617;
 
-  /* Accent palette — Julia Purple #9558b2 (WasmTarget.jl primary accent) */
-  --color-accent-50: #f5f0f9;
-  --color-accent-100: #e8d9f1;
-  --color-accent-200: #d1b3e3;
-  --color-accent-300: #b98dd4;
-  --color-accent-400: #a770c3;
-  --color-accent-500: #9558b2;
-  --color-accent-600: #7a4892;
-  --color-accent-700: #5f3872;
-  --color-accent-800: #462a54;
-  --color-accent-900: #2e1b38;
-  --color-accent-950: #1a1022;
+  /* Accent palette — Zinc (Minimal default) */
+  --color-accent-50: #fafafa;
+  --color-accent-100: #f4f4f5;
+  --color-accent-200: #e4e4e7;
+  --color-accent-300: #d4d4d8;
+  --color-accent-400: #a1a1aa;
+  --color-accent-500: #71717a;
+  --color-accent-600: #52525b;
+  --color-accent-700: #3f3f46;
+  --color-accent-800: #27272a;
+  --color-accent-900: #18181b;
+  --color-accent-950: #09090b;
 
-  /* Accent-secondary palette — Julia Red #cb3c33 (WasmTarget.jl secondary accent) */
-  --color-accent-secondary-50: #fef2f1;
-  --color-accent-secondary-100: #fce0de;
-  --color-accent-secondary-200: #f9bbb7;
-  --color-accent-secondary-300: #f08f88;
-  --color-accent-secondary-400: #e4645b;
-  --color-accent-secondary-500: #cb3c33;
-  --color-accent-secondary-600: #a83029;
-  --color-accent-secondary-700: #832520;
-  --color-accent-secondary-800: #611c18;
-  --color-accent-secondary-900: #421311;
-  --color-accent-secondary-950: #280b0a;
+  /* Accent-secondary palette — Red (Minimal default) */
+  --color-accent-secondary-50: #fef2f2;
+  --color-accent-secondary-100: #fee2e2;
+  --color-accent-secondary-200: #fecaca;
+  --color-accent-secondary-300: #fca5a5;
+  --color-accent-secondary-400: #f87171;
+  --color-accent-secondary-500: #ef4444;
+  --color-accent-secondary-600: #dc2626;
+  --color-accent-secondary-700: #b91c1c;
+  --color-accent-secondary-800: #991b1b;
+  --color-accent-secondary-900: #7f1d1d;
+  --color-accent-secondary-950: #450a0a;
 
-  /* Border radius tokens (shadcn compatibility) */
-  --radius: 0.5rem;
+  /* Border radius tokens — zero for Minimal default */
+  --radius: 0;
 }
 
 /* Design System CSS custom properties */
 @layer base {
   :root {
-    /* Shared neutrals */
-    --bg-primary: #f8f7f4;
-    --bg-secondary: #f0ece4;
-    --bg-tertiary: #e8e3d9;
-    --text-primary: #2a2520;
-    --text-secondary: #6b6560;
-    --text-tertiary: #9a9590;
+    /* Slate neutrals (Minimal default) */
+    --bg-primary: #f8fafc;
+    --bg-secondary: #f1f5f9;
+    --bg-tertiary: #e2e8f0;
+    --text-primary: #1e293b;
+    --text-secondary: #475569;
+    --text-tertiary: #94a3b8;
 
     /* Julia palette */
     --julia-red: #cb3c33;
@@ -75,16 +75,20 @@
     --julia-green: #389826;
 
     /* WasmTarget.jl accent overrides */
-    --accent: var(--julia-purple);
+    --accent: var(--color-accent-700);
     --accent-secondary: var(--julia-red);
 
-    /* .jl wordmark tri-colors (exclude Purple — the active accent) */
+    /* .jl wordmark tri-colors */
     --jl-dot: #4063d8;  /* Blue */
     --jl-j: #389826;    /* Green */
     --jl-l: #cb3c33;    /* Red */
 
-    /* Brand name color — matches theme accent */
-    --brand-name: #9558b2;  /* Purple (default) */
+    /* Brand name color — Zinc accent for Minimal default */
+    --brand-name: var(--color-accent-700);
+
+    /* No shadows for Minimal default */
+    --shadow-sm: 0 0 #0000;
+    --shadow-md: 0 0 #0000;
   }
 
   html {
@@ -100,6 +104,68 @@
 /* Dark mode custom properties */
 @layer base {
   .dark {
+    --bg-primary: #020617;
+    --bg-secondary: #0f172a;
+    --bg-tertiary: #1e293b;
+    --text-primary: #cbd5e1;
+    --text-secondary: #64748b;
+    --text-tertiary: #475569;
+  }
+}
+
+/* Theme switcher — override accent palette + visual dimensions via data-theme on <html> */
+@layer base {
+  /* Classic theme — Purple accent, Red secondary, warm neutrals, standard radius */
+  [data-theme="classic"] {
+    --color-accent-50: #f5f0f9;
+    --color-accent-100: #e8d9f1;
+    --color-accent-200: #d1b3e3;
+    --color-accent-300: #b98dd4;
+    --color-accent-400: #a770c3;
+    --color-accent-500: #9558b2;
+    --color-accent-600: #7a4892;
+    --color-accent-700: #5f3872;
+    --color-accent-800: #462a54;
+    --color-accent-900: #2e1b38;
+    --color-accent-950: #1a1022;
+    --color-accent-secondary-50: #fef2f1;
+    --color-accent-secondary-100: #fce0de;
+    --color-accent-secondary-200: #f9bbb7;
+    --color-accent-secondary-300: #f08f88;
+    --color-accent-secondary-400: #e4645b;
+    --color-accent-secondary-500: #cb3c33;
+    --color-accent-secondary-600: #a83029;
+    --color-accent-secondary-700: #832520;
+    --color-accent-secondary-800: #611c18;
+    --color-accent-secondary-900: #421311;
+    --color-accent-secondary-950: #280b0a;
+    --radius-sm: 0.25rem;
+    --radius-md: 0.375rem;
+    --radius-lg: 0.5rem;
+    --radius-xl: 0.75rem;
+    --radius-2xl: 1rem;
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+    --brand-name: #9558b2;  /* Purple */
+    --color-warm-50: #f8f7f4;
+    --color-warm-100: #f0ece4;
+    --color-warm-200: #e8e3d9;
+    --color-warm-300: #d4d0c8;
+    --color-warm-400: #9a9590;
+    --color-warm-500: #8a8680;
+    --color-warm-600: #6b6560;
+    --color-warm-700: #5a5855;
+    --color-warm-800: #2a2520;
+    --color-warm-900: #1a1918;
+    --color-warm-950: #111110;
+    --bg-primary: #f8f7f4;
+    --bg-secondary: #f0ece4;
+    --bg-tertiary: #e8e3d9;
+    --text-primary: #2a2520;
+    --text-secondary: #6b6560;
+    --text-tertiary: #9a9590;
+  }
+  .dark[data-theme="classic"] {
     --bg-primary: #111110;
     --bg-secondary: #1a1918;
     --bg-tertiary: #252422;
@@ -107,10 +173,7 @@
     --text-secondary: #8a8680;
     --text-tertiary: #5a5855;
   }
-}
 
-/* Theme switcher — override accent palette + visual dimensions via data-theme on <html> */
-@layer base {
   /* Ocean theme — Blue accent, Rose secondary, larger radius, deeper shadows */
   [data-theme="ocean"] {
     --color-accent-50: #eff6ff;
@@ -146,65 +209,31 @@
     --jl-j: #389826;
     --jl-l: #cb3c33;
     --brand-name: #2563eb;  /* Blue */
+    --color-warm-50: #f8f7f4;
+    --color-warm-100: #f0ece4;
+    --color-warm-200: #e8e3d9;
+    --color-warm-300: #d4d0c8;
+    --color-warm-400: #9a9590;
+    --color-warm-500: #8a8680;
+    --color-warm-600: #6b6560;
+    --color-warm-700: #5a5855;
+    --color-warm-800: #2a2520;
+    --color-warm-900: #1a1918;
+    --color-warm-950: #111110;
+    --bg-primary: #f8f7f4;
+    --bg-secondary: #f0ece4;
+    --bg-tertiary: #e8e3d9;
+    --text-primary: #2a2520;
+    --text-secondary: #6b6560;
+    --text-tertiary: #9a9590;
   }
-
-  /* Minimal theme — Zinc accent, Red secondary, no radius, no shadows, slate neutrals */
-  [data-theme="minimal"] {
-    --color-accent-50: #fafafa;
-    --color-accent-100: #f4f4f5;
-    --color-accent-200: #e4e4e7;
-    --color-accent-300: #d4d4d8;
-    --color-accent-400: #a1a1aa;
-    --color-accent-500: #71717a;
-    --color-accent-600: #52525b;
-    --color-accent-700: #3f3f46;
-    --color-accent-800: #27272a;
-    --color-accent-900: #18181b;
-    --color-accent-950: #09090b;
-    --color-accent-secondary-50: #fef2f2;
-    --color-accent-secondary-100: #fee2e2;
-    --color-accent-secondary-200: #fecaca;
-    --color-accent-secondary-300: #fca5a5;
-    --color-accent-secondary-400: #f87171;
-    --color-accent-secondary-500: #ef4444;
-    --color-accent-secondary-600: #dc2626;
-    --color-accent-secondary-700: #b91c1c;
-    --color-accent-secondary-800: #991b1b;
-    --color-accent-secondary-900: #7f1d1d;
-    --color-accent-secondary-950: #450a0a;
-    --brand-name: var(--color-accent-700);  /* Theme accent */
-    --radius-sm: 0;
-    --radius-md: 0;
-    --radius-lg: 0;
-    --radius-xl: 0;
-    --radius-2xl: 0;
-    --shadow-sm: 0 0 #0000;
-    --shadow-md: 0 0 #0000;
-    --color-warm-50: #f8fafc;
-    --color-warm-100: #f1f5f9;
-    --color-warm-200: #e2e8f0;
-    --color-warm-300: #cbd5e1;
-    --color-warm-400: #94a3b8;
-    --color-warm-500: #64748b;
-    --color-warm-600: #475569;
-    --color-warm-700: #334155;
-    --color-warm-800: #1e293b;
-    --color-warm-900: #0f172a;
-    --color-warm-950: #020617;
-    --bg-primary: #f8fafc;
-    --bg-secondary: #f1f5f9;
-    --bg-tertiary: #e2e8f0;
-    --text-primary: #1e293b;
-    --text-secondary: #475569;
-    --text-tertiary: #94a3b8;
-  }
-  .dark[data-theme="minimal"] {
-    --bg-primary: #020617;
-    --bg-secondary: #0f172a;
-    --bg-tertiary: #1e293b;
-    --text-primary: #cbd5e1;
-    --text-secondary: #64748b;
-    --text-tertiary: #475569;
+  .dark[data-theme="ocean"] {
+    --bg-primary: #111110;
+    --bg-secondary: #1a1918;
+    --bg-tertiary: #252422;
+    --text-primary: #d4d0c8;
+    --text-secondary: #8a8680;
+    --text-tertiary: #5a5855;
   }
 
   /* Nature theme — Emerald accent, Amber secondary, generous radius, stone neutrals */

@@ -51,6 +51,14 @@ const _WASMTARGET_MOBILE_SECTIONS = [
 
 const _WASMTARGET_GITHUB = "https://github.com/GroupTherapyOrg/WasmTarget.jl"
 
+# Custom theme options — Minimal is the default for WasmTarget.jl
+const _WASMTARGET_THEMES = [
+    (name="Minimal", key="default", description="Zinc — sharp and clean", swatch="#71717a"),
+    (name="Classic", key="classic", description="Purple — warm scholarly tones", swatch="#9558b2"),
+    (name="Ocean", key="ocean", description="Blue — professional and confident", swatch="#2563eb"),
+    (name="Nature", key="nature", description="Emerald — organic and earthy", swatch="#059669"),
+]
+
 # --- Main Layout ---
 
 """
@@ -64,7 +72,8 @@ function Layout(children...; title="WasmTarget.jl")
             _WASMTARGET_NAV_LINKS,
             _WASMTARGET_GITHUB;
             mobile_title="WasmTarget.jl",
-            mobile_sections=_WASMTARGET_MOBILE_SECTIONS
+            mobile_sections=_WASMTARGET_MOBILE_SECTIONS,
+            themes=_WASMTARGET_THEMES
         ),
 
         # Main Content — SPA navigation swaps this area
