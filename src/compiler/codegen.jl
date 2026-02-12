@@ -5471,6 +5471,11 @@ Skips unknown multi-byte sequences silently — later passes will add more cover
 function validate_emitted_bytes!(ctx::CompilationContext, bytes::Vector{UInt8}, stmt_idx::Int)
     ctx.validator.enabled || return
     v = ctx.validator
+    # Reset stack for each statement in the minimal first pass.
+    # We don't track all opcodes yet, so inter-statement stack state
+    # would produce false positives. Each statement is validated independently.
+    empty!(v.stack)
+    has_unknown = false  # Track if we hit opcodes we don't validate
     i = 1
     while i <= length(bytes)
         op = bytes[i]
@@ -5549,8 +5554,14 @@ function validate_emitted_bytes!(ctx::CompilationContext, bytes::Vector{UInt8}, 
             # Unknown/multi-byte opcode — skip without validating
             # This includes control flow (block/loop/if/end/br), calls, GC prefix, etc.
             # These will be added in future passes
+            has_unknown = true
             i += 1
         end
+    end
+    # If we hit unrecognized opcodes, filter out underflow errors (false positives)
+    # since we can't fully track stack state without complete opcode coverage
+    if has_unknown
+        filter!(e -> !contains(e, "stack underflow"), v.errors)
     end
 end
 
