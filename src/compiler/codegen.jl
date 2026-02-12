@@ -16456,7 +16456,21 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     end
                 end
             elseif length(mset_val_bytes) >= 1 && (mset_val_bytes[1] == Opcode.I32_CONST || mset_val_bytes[1] == Opcode.I64_CONST || mset_val_bytes[1] == Opcode.F32_CONST || mset_val_bytes[1] == Opcode.F64_CONST)
-                mset_src_wasm = I32  # treat constants as numeric
+                # PURE-318: Check for GC_PREFIX — struct/array constants start with i32.const
+                # but end with struct.new/array.new_fixed, producing a ref not a numeric.
+                local has_gc_ref_op_e = false
+                for gi_e in 1:(length(mset_val_bytes)-1)
+                    if mset_val_bytes[gi_e] == 0xFB  # GC_PREFIX
+                        gc_op_e = mset_val_bytes[gi_e + 1]
+                        if gc_op_e == 0x00 || gc_op_e == 0x1A || gc_op_e == 0x1B
+                            has_gc_ref_op_e = true
+                            break
+                        end
+                    end
+                end
+                if !has_gc_ref_op_e
+                    mset_src_wasm = I32  # treat constants as numeric
+                end
             end
             local is_numeric_mset = mset_src_wasm === I64 || mset_src_wasm === I32 || mset_src_wasm === F64 || mset_src_wasm === F32
             local is_already_externref_mset = mset_src_wasm === ExternRef
@@ -16477,7 +16491,19 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             # If value is numeric (nothing represented as i32_const 0), emit ref.null instead
             local is_numeric_for_ref = false
             if length(mset_val_bytes) >= 1 && (mset_val_bytes[1] == Opcode.I32_CONST || mset_val_bytes[1] == Opcode.I64_CONST || mset_val_bytes[1] == Opcode.F32_CONST || mset_val_bytes[1] == Opcode.F64_CONST)
-                is_numeric_for_ref = true
+                # PURE-318: Check for GC_PREFIX — struct/array constants start with i32.const
+                # (field values) but end with struct.new or array.new_fixed, producing a ref.
+                local has_gc_ref_op = false
+                for gi in 1:(length(mset_val_bytes)-1)
+                    if mset_val_bytes[gi] == 0xFB  # GC_PREFIX
+                        gc_op = mset_val_bytes[gi + 1]
+                        if gc_op == 0x00 || gc_op == 0x1A || gc_op == 0x1B  # struct.new, array.new_fixed, array.new_default
+                            has_gc_ref_op = true
+                            break
+                        end
+                    end
+                end
+                is_numeric_for_ref = !has_gc_ref_op
             elseif length(mset_val_bytes) >= 2 && mset_val_bytes[1] == Opcode.LOCAL_GET
                 local src_idx_r = 0
                 local shift_r = 0
