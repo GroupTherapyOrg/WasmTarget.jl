@@ -13100,7 +13100,9 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                     # Numeric constant being stored into a ref-typed local
                     # PURE-204: Skip for invoke/call results — their stmt_bytes start with
                     # i32.const for the first argument but contain a CALL that returns a ref type.
-                    is_call_result = stmt isa Expr && (stmt.head === :invoke || stmt.head === :call)
+                    # PURE-317: Also skip for :new (struct construction) — first field may be
+                    # numeric but the result is always a struct ref (via struct_new at the end).
+                    is_call_result = stmt isa Expr && (stmt.head === :invoke || stmt.head === :call || stmt.head === :new || stmt.head === :foreigncall)
                     if !is_call_result &&
                        (local_wasm_type isa ConcreteRef || local_wasm_type === StructRef ||
                         local_wasm_type === ArrayRef || local_wasm_type === ExternRef || local_wasm_type === AnyRef)
