@@ -13292,7 +13292,11 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
 
                 # Check if stmt_bytes ENDS with a local.get of incompatible type
                 # (handles non-pure cases like memoryrefset! which returns value after array_set)
-                if !needs_type_safe_default && length(stmt_bytes) >= 2
+                # PURE-323: Skip when has_gc_prefix — WasmGC struct.get/array.get LEB128
+                # operands (type index, field index) can have byte 0x20 which matches
+                # LOCAL_GET opcode. E.g. struct.get type_32 field_0 = [0xFB, 0x02, 0x20, 0x00]
+                # where 0x20 is LEB128(32), not LOCAL_GET.
+                if !needs_type_safe_default && !has_gc_prefix && length(stmt_bytes) >= 2
                     # Find the last local_get at the end of stmt_bytes
                     local end_lg_pos = 0
                     # Scan backward for 0x20 (LOCAL_GET) that could be the trailing value
@@ -13481,6 +13485,43 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                         # struct_get produced abstract ref or call returned externref,
                         # need to downcast to concrete type.
                         # PURE-036bj: if source is externref, first convert to anyref
+                        # PURE-323: Also check if stmt_bytes ends with local.get of an
+                        # externref local. The SSA type check may have set needs_ref_cast_local
+                        # based on Julia type (e.g. ArrayRef) without detecting that the actual
+                        # wasm local is externref. This happens when has_gc_prefix=true skips
+                        # the trailing local.get check at line 13299.
+                        if !needs_any_convert_extern && length(stmt_bytes) >= 2
+                            for si in length(stmt_bytes):-1:max(1, length(stmt_bytes) - 5)
+                                if stmt_bytes[si] == 0x20 && si < length(stmt_bytes)  # LOCAL_GET
+                                    tlg_idx_rc = 0
+                                    tlg_shift_rc = 0
+                                    tlg_end_rc = 0
+                                    for bi in (si + 1):length(stmt_bytes)
+                                        b = stmt_bytes[bi]
+                                        tlg_idx_rc |= (Int(b & 0x7f) << tlg_shift_rc)
+                                        tlg_shift_rc += 7
+                                        if (b & 0x80) == 0
+                                            tlg_end_rc = bi
+                                            break
+                                        end
+                                    end
+                                    if tlg_end_rc == length(stmt_bytes)
+                                        tlg_arr_rc = tlg_idx_rc - ctx.n_params + 1
+                                        if tlg_arr_rc >= 1 && tlg_arr_rc <= length(ctx.locals) && ctx.locals[tlg_arr_rc] === ExternRef
+                                            needs_any_convert_extern = true
+                                        elseif tlg_idx_rc < ctx.n_params
+                                            # Parameter — check its wasm type
+                                            param_jt = ctx.arg_types[tlg_idx_rc + 1]
+                                            param_wt = get_concrete_wasm_type(param_jt, ctx.mod, ctx.type_registry)
+                                            if param_wt === ExternRef
+                                                needs_any_convert_extern = true
+                                            end
+                                        end
+                                    end
+                                    break
+                                end
+                            end
+                        end
                         if needs_any_convert_extern
                             append!(stmt_bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
                         end
