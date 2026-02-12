@@ -5,7 +5,30 @@
 # so one validation run catches multiple issues.
 
 export WasmStackValidator, validate_push!, validate_pop!, validate_pop_any!,
-       stack_height, has_errors, reset_validator!, validate_instruction!
+       stack_height, has_errors, reset_validator!, validate_instruction!,
+       ValidatorLabel, validate_block_start!, validate_block_end!,
+       validate_br!, validate_br_if!, validate_if_start!, validate_else!
+
+"""
+    ValidatorLabel
+
+Label stack entry for control flow validation, mirroring dart2wasm's Label class.
+Tracks block kind, stack height at entry, result types, and reachability.
+
+Key insight from dart2wasm:
+- Loop.targetTypes = inputs (br restarts loop with its input types)
+- Block/If.targetTypes = outputs (br exits with block's result types)
+"""
+struct ValidatorLabel
+    kind::Symbol                        # :block, :loop, :if
+    stack_height_at_entry::Int          # Stack height when block was entered
+    result_types::Vector{WasmValType}   # Block's result types (outputs)
+    reachable_at_entry::Bool            # Was block entry reachable?
+    has_else::Bool                      # For :if labels — has else branch been seen?
+end
+
+ValidatorLabel(kind::Symbol, stack_height::Int, result_types::Vector{WasmValType}, reachable::Bool) =
+    ValidatorLabel(kind, stack_height, result_types, reachable, false)
 
 """
     WasmStackValidator
@@ -20,10 +43,12 @@ mutable struct WasmStackValidator
     errors::Vector{String}              # Collected errors (don't throw, collect)
     enabled::Bool                       # Can disable for debugging
     func_name::String                   # For error messages
+    labels::Vector{ValidatorLabel}      # Label stack for control flow (PURE-412)
+    reachable::Bool                     # Whether current code is reachable (PURE-412)
 end
 
 WasmStackValidator(; enabled=true, func_name="") =
-    WasmStackValidator(WasmValType[], String[], enabled, func_name)
+    WasmStackValidator(WasmValType[], String[], enabled, func_name, ValidatorLabel[], true)
 
 """
     validate_push!(v, typ)
@@ -93,6 +118,8 @@ Clear the stack and errors for reuse (e.g., between functions).
 function reset_validator!(v::WasmStackValidator)
     empty!(v.stack)
     empty!(v.errors)
+    empty!(v.labels)
+    v.reachable = true
 end
 
 # ============================================================================
@@ -346,4 +373,208 @@ function validate_instruction!(v::WasmStackValidator, opcode::UInt8, type_info=n
 
     # Unknown opcode — skip silently (GC prefix instructions handled by validate_gc_instruction!)
     end
+end
+
+# ============================================================================
+# Control Flow Validation (PURE-412)
+# Mirrors dart2wasm's _labelStack / Label hierarchy
+# ============================================================================
+
+"""
+    validate_block_start!(v, kind, result_types)
+
+Push a label onto the label stack for a block/loop. Records the current stack
+height so we can validate that the block produces exactly `result_types` when
+it ends. Mirrors dart2wasm's `_pushLabel(Block(...))` / `_pushLabel(Loop(...))`.
+
+For loops, `br` targets the loop start (no values consumed/produced by br).
+For blocks, `br` targets the block end (must have result_types on stack).
+"""
+function validate_block_start!(v::WasmStackValidator, kind::Symbol, result_types::Vector{WasmValType}=WasmValType[])
+    v.enabled || return
+    label = ValidatorLabel(kind, length(v.stack), result_types, v.reachable)
+    push!(v.labels, label)
+end
+
+"""
+    validate_block_end!(v)
+
+End the current block: pop the top label, verify the stack contains exactly
+the block's result types above the entry height, then reset the stack to
+entry_height + result_types. Mirrors dart2wasm's `end()` + `_verifyEndOfBlock`.
+
+Reachability is restored from the label's `reachable_at_entry` — if the block
+entry was reachable, code after the block is reachable (even if the block body
+ended with an unconditional br).
+"""
+function validate_block_end!(v::WasmStackValidator)
+    v.enabled || return
+    if isempty(v.labels)
+        push!(v.errors, "$(v.func_name): end without matching block/loop/if")
+        return
+    end
+    label = pop!(v.labels)
+
+    # Validate stack height and types if code is reachable
+    if v.reachable
+        expected_height = label.stack_height_at_entry + length(label.result_types)
+        actual_height = length(v.stack)
+        if actual_height != expected_height
+            push!(v.errors, "$(v.func_name): block end stack height mismatch — expected $(expected_height), got $(actual_height)")
+        end
+        # Check result types match
+        for (i, expected) in enumerate(label.result_types)
+            idx = label.stack_height_at_entry + i
+            if idx <= length(v.stack)
+                actual = v.stack[idx]
+                if !wasm_types_assignable(actual, expected)
+                    push!(v.errors, "$(v.func_name): block result type mismatch at position $i — expected $(expected), found $(actual)")
+                end
+            end
+        end
+    end
+
+    # Reset stack to entry height + result types (dart2wasm: _stackTypes.length = baseStackHeight; addAll(outputs))
+    resize!(v.stack, label.stack_height_at_entry)
+    append!(v.stack, label.result_types)
+
+    # Restore reachability: code after block is reachable if block entry was reachable
+    v.reachable = label.reachable_at_entry
+end
+
+"""
+    validate_br!(v, label_depth)
+
+Validate an unconditional branch. Checks that:
+1. The target label exists at the given depth
+2. The stack has the correct types for the target (result_types for block/if, empty for loop)
+
+After br, code is unreachable. Mirrors dart2wasm's `br(label)`.
+"""
+function validate_br!(v::WasmStackValidator, label_depth::Int)
+    v.enabled || return
+    if !v.reachable
+        return  # Skip validation in unreachable code
+    end
+    if label_depth < 0 || label_depth >= length(v.labels)
+        push!(v.errors, "$(v.func_name): br label depth $(label_depth) out of range ($(length(v.labels)) labels)")
+        v.reachable = false
+        return
+    end
+    # Label at depth 0 = top of stack, depth N = N from top
+    label = v.labels[end - label_depth]
+
+    # For loops, br targets the loop start (no values needed — loop consumes nothing on restart)
+    # For blocks/if, br targets the end (need result_types on stack)
+    target_types = label.kind === :loop ? WasmValType[] : label.result_types
+
+    # Check stack has enough values above the label's base
+    needed = length(target_types)
+    available = length(v.stack) - label.stack_height_at_entry
+    if available < needed
+        push!(v.errors, "$(v.func_name): br to $(label.kind) needs $(needed) values, only $(available) available above block base")
+    else
+        # Check types of top-of-stack values
+        for (i, expected) in enumerate(target_types)
+            actual = v.stack[end - needed + i]
+            if !wasm_types_assignable(actual, expected)
+                push!(v.errors, "$(v.func_name): br type mismatch at position $i — expected $(expected), found $(actual)")
+            end
+        end
+    end
+
+    v.reachable = false
+end
+
+"""
+    validate_br_if!(v, label_depth)
+
+Validate a conditional branch: pop i32 condition, then verify the target
+label like br. Unlike br, code after br_if remains reachable.
+Mirrors dart2wasm's `br_if(label)`.
+"""
+function validate_br_if!(v::WasmStackValidator, label_depth::Int)
+    v.enabled || return
+    if !v.reachable
+        return
+    end
+    # Pop i32 condition
+    validate_pop!(v, I32)
+
+    # Validate target label (same as br, but don't mark unreachable)
+    if label_depth < 0 || label_depth >= length(v.labels)
+        push!(v.errors, "$(v.func_name): br_if label depth $(label_depth) out of range ($(length(v.labels)) labels)")
+        return
+    end
+    label = v.labels[end - label_depth]
+    target_types = label.kind === :loop ? WasmValType[] : label.result_types
+
+    needed = length(target_types)
+    available = length(v.stack) - label.stack_height_at_entry
+    if available < needed
+        push!(v.errors, "$(v.func_name): br_if to $(label.kind) needs $(needed) values, only $(available) available above block base")
+    else
+        for (i, expected) in enumerate(target_types)
+            actual = v.stack[end - needed + i]
+            if !wasm_types_assignable(actual, expected)
+                push!(v.errors, "$(v.func_name): br_if type mismatch at position $i — expected $(expected), found $(actual)")
+            end
+        end
+    end
+    # Reachability stays true — conditional branch
+end
+
+"""
+    validate_if_start!(v, result_types)
+
+Validate an if instruction: pop i32 condition, push label for the then-branch.
+Mirrors dart2wasm's `if_()` which calls `_verifyTypes([i32], [])` then `_pushLabel(If(...))`.
+"""
+function validate_if_start!(v::WasmStackValidator, result_types::Vector{WasmValType}=WasmValType[])
+    v.enabled || return
+    validate_pop!(v, I32)  # condition
+    label = ValidatorLabel(:if, length(v.stack), result_types, v.reachable, false)
+    push!(v.labels, label)
+end
+
+"""
+    validate_else!(v)
+
+Validate an else instruction: verify the then-branch stack, reset stack to
+block entry height for the else-branch, restore reachability.
+Mirrors dart2wasm's `else_()`.
+"""
+function validate_else!(v::WasmStackValidator)
+    v.enabled || return
+    if isempty(v.labels)
+        push!(v.errors, "$(v.func_name): else without matching if")
+        return
+    end
+    label = v.labels[end]
+    if label.kind !== :if
+        push!(v.errors, "$(v.func_name): else in non-if block ($(label.kind))")
+        return
+    end
+    if label.has_else
+        push!(v.errors, "$(v.func_name): duplicate else in if block")
+        return
+    end
+
+    # Validate then-branch stack: should have result_types above entry height
+    if v.reachable
+        expected_height = label.stack_height_at_entry + length(label.result_types)
+        if length(v.stack) != expected_height
+            push!(v.errors, "$(v.func_name): if then-branch stack height mismatch — expected $(expected_height), got $(length(v.stack))")
+        end
+    end
+
+    # Replace label with has_else=true
+    v.labels[end] = ValidatorLabel(label.kind, label.stack_height_at_entry,
+                                   label.result_types, label.reachable_at_entry, true)
+
+    # Reset stack to entry height for else-branch (dart2wasm: _stackTypes.length = baseStackHeight)
+    resize!(v.stack, label.stack_height_at_entry)
+
+    # Restore reachability from block entry
+    v.reachable = label.reachable_at_entry
 end
