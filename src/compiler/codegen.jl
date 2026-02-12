@@ -6360,6 +6360,20 @@ function get_phi_edge_wasm_type(val, ctx::CompilationContext)::Union{WasmValType
         # PURE-036ba: Symbol and String compile to array<i32> (string array type)
         str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
         return ConcreteRef(str_type_idx, false)  # non-nullable since array.new_fixed produces non-nullable ref
+    elseif val isa GlobalRef
+        # PURE-317: Resolve GlobalRef to actual value to determine Wasm type
+        if val.name === :nothing
+            return I32
+        end
+        try
+            actual_val = getfield(val.mod, val.name)
+            return get_phi_edge_wasm_type(actual_val, ctx)
+        catch
+            return nothing
+        end
+    elseif val isa Char
+        # PURE-317: Char is a 4-byte primitive, compiled as I32
+        return I32
     end
     return nothing
 end
@@ -8921,6 +8935,24 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
         elseif val isa QuoteNode
             # PURE-036bg: QuoteNode wraps a value - recursively determine its Wasm type
             return get_phi_edge_wasm_type(val.value)
+        elseif val isa GlobalRef
+            # PURE-317: Resolve GlobalRef to its actual value and determine its Wasm type.
+            # Without this, GlobalRef falls to the else branch where typeof(val) is GlobalRef
+            # and isstructtype(GlobalRef) is true, causing a false type mismatch that replaces
+            # the actual value with i32.const 0 (e.g., EOF_CHAR = Char(0xFFFFFFFF) → i32(-1)
+            # gets replaced with i32(0), breaking the JuliaSyntax Lexer).
+            if val.name === :nothing
+                return I32
+            end
+            try
+                actual_val = getfield(val.mod, val.name)
+                return get_phi_edge_wasm_type(actual_val)
+            catch
+                return nothing
+            end
+        elseif val isa Char
+            # PURE-317: Char is a 4-byte primitive type, compiled as I32
+            return I32
         else
             # For any other value, try to get its Julia type and convert to Wasm type
             julia_type = typeof(val)
@@ -14378,6 +14410,26 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
                 append!(bytes, compile_value(str_arg, ctx))
             end
 
+            return bytes
+        elseif name === :jl_alloc_string
+            # PURE-317: jl_alloc_string(n::UInt64) -> String
+            # Allocates a new String of n bytes. In WasmGC, String is array<i32>.
+            # Create a zero-filled array of the requested size.
+            str_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
+            if length(expr.args) >= 6
+                size_arg = expr.args[6]
+                append!(bytes, compile_value(size_arg, ctx))
+                size_type = infer_value_type(size_arg, ctx)
+                if size_type === Int64 || size_type === Int || size_type === UInt64
+                    push!(bytes, Opcode.I32_WRAP_I64)
+                end
+            else
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+            end
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
+            append!(bytes, encode_leb128_unsigned(str_arr_type))
             return bytes
         elseif name === :jl_string_ptr
             # jl_string_ptr(s) -> Ptr{UInt8}: get pointer to string bytes
