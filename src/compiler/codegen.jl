@@ -3833,6 +3833,9 @@ mutable struct CompilationContext
     # MemoryRef offset tracking: maps SSA id -> index SSA/value for memoryrefnew(ref, index, bc)
     # Used by memoryrefoffset to get the offset. Fresh refs (not in this map) have offset 1.
     memoryref_offsets::Dict{Int, Any}
+    # Stack validator: tracks value stack types during bytecode emission (PURE-414)
+    # Advisory only — warns on type mismatches but doesn't prevent compilation
+    validator::WasmStackValidator
 end
 
 function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
@@ -3868,7 +3871,8 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         dom_bindings,           # DOM bindings for Therapy.jl
         module_globals,         # Module-level globals (const mutable structs)
         nothing,                # scratch_locals (set by allocate_scratch_locals!)
-        Dict{Int, Any}()        # memoryref_offsets (populated during compilation)
+        Dict{Int, Any}(),       # memoryref_offsets (populated during compilation)
+        WasmStackValidator(enabled=true, func_name="func_$(func_idx)")  # PURE-414: stack validator
     )
     # Analyze SSA types and allocate locals for multi-use SSAs
     analyze_ssa_types!(ctx)
@@ -5456,6 +5460,131 @@ end
 # ============================================================================
 
 """
+    validate_emitted_bytes!(ctx, bytes, stmt_idx)
+
+PURE-414: Scan emitted bytecode and validate stack effects for recognized opcodes.
+This is a MINIMAL first pass — validates constants, locals, drops, and GC ops.
+Runs in parallel with bytecode emission (doesn't modify bytes, just tracks stack state).
+
+Skips unknown multi-byte sequences silently — later passes will add more coverage.
+"""
+function validate_emitted_bytes!(ctx::CompilationContext, bytes::Vector{UInt8}, stmt_idx::Int)
+    ctx.validator.enabled || return
+    v = ctx.validator
+    i = 1
+    while i <= length(bytes)
+        op = bytes[i]
+        if op == Opcode.I32_CONST
+            validate_instruction!(v, op)
+            i += 1
+            # Skip LEB128 immediate
+            while i <= length(bytes) && (bytes[i] & 0x80) != 0; i += 1; end
+            i <= length(bytes) && (i += 1)  # skip final byte of LEB128
+        elseif op == Opcode.I64_CONST
+            validate_instruction!(v, op)
+            i += 1
+            while i <= length(bytes) && (bytes[i] & 0x80) != 0; i += 1; end
+            i <= length(bytes) && (i += 1)
+        elseif op == Opcode.F32_CONST
+            validate_instruction!(v, op)
+            i += 1 + 4  # 4 bytes for f32
+        elseif op == Opcode.F64_CONST
+            validate_instruction!(v, op)
+            i += 1 + 8  # 8 bytes for f64
+        elseif op == Opcode.LOCAL_GET
+            # local.get pushes a value — determine type from ctx.locals
+            i += 1
+            local_idx_start = i
+            while i <= length(bytes) && (bytes[i] & 0x80) != 0; i += 1; end
+            if i <= length(bytes)
+                # Decode LEB128 local index
+                local_idx = 0
+                shift = 0
+                for j in local_idx_start:i
+                    local_idx |= (Int(bytes[j] & 0x7f) << shift)
+                    shift += 7
+                end
+                i += 1
+                # Determine type: params first, then locals
+                local_type = _get_local_type(ctx, local_idx)
+                if local_type !== nothing
+                    validate_push!(v, local_type)
+                end
+            end
+        elseif op == Opcode.LOCAL_SET
+            # local.set pops a value
+            i += 1
+            local_idx_start = i
+            while i <= length(bytes) && (bytes[i] & 0x80) != 0; i += 1; end
+            if i <= length(bytes)
+                local_idx = 0
+                shift = 0
+                for j in local_idx_start:i
+                    local_idx |= (Int(bytes[j] & 0x7f) << shift)
+                    shift += 7
+                end
+                i += 1
+                local_type = _get_local_type(ctx, local_idx)
+                if local_type !== nothing
+                    validate_pop!(v, local_type)
+                end
+            end
+        elseif op == Opcode.LOCAL_TEE
+            # local.tee pops then pushes (net effect: type stays, but validates)
+            i += 1
+            while i <= length(bytes) && (bytes[i] & 0x80) != 0; i += 1; end
+            i <= length(bytes) && (i += 1)
+        elseif op == Opcode.DROP
+            validate_instruction!(v, op)
+            i += 1
+        elseif op == Opcode.RETURN
+            # Return clears the stack — reset validator stack for this scope
+            empty!(v.stack)
+            i += 1
+        elseif op == Opcode.UNREACHABLE
+            empty!(v.stack)
+            v.reachable = false
+            i += 1
+        else
+            # Unknown/multi-byte opcode — skip without validating
+            # This includes control flow (block/loop/if/end/br), calls, GC prefix, etc.
+            # These will be added in future passes
+            i += 1
+        end
+    end
+end
+
+"""
+    _get_local_type(ctx, local_idx) -> Union{WasmValType, Nothing}
+
+Get the Wasm type of a local variable by its index. Parameters come first,
+then additional locals from ctx.locals.
+"""
+function _get_local_type(ctx::CompilationContext, local_idx::Int)::Union{WasmValType, Nothing}
+    if local_idx < ctx.n_params
+        # It's a parameter — get type from arg_types (skip WasmGlobal args)
+        param_count = 0
+        for (i, T) in enumerate(ctx.arg_types)
+            if i in ctx.global_args
+                continue
+            end
+            if param_count == local_idx
+                return get_concrete_wasm_type(T, ctx.mod, ctx.type_registry)
+            end
+            param_count += 1
+        end
+        return nothing
+    else
+        # It's an additional local
+        local_offset = local_idx - ctx.n_params
+        if local_offset >= 0 && local_offset < length(ctx.locals)
+            return ctx.locals[local_offset + 1]  # 1-indexed
+        end
+        return nothing
+    end
+end
+
+"""
 Generate Wasm bytecode from Julia CodeInfo.
 Uses a block-based translation for control flow.
 """
@@ -5473,6 +5602,11 @@ function generate_body(ctx::CompilationContext)::Vector{UInt8}
     # Pattern: [local.get N, struct.new M, select] without a condition is broken.
     # Fix by removing the struct.new and select, keeping only local.get.
     bytes = fix_broken_select_instructions(bytes)
+
+    # PURE-414: Check validator for errors after function body generation
+    if has_errors(ctx.validator)
+        @warn "Stack validator found $(length(ctx.validator.errors)) issue(s) in $(ctx.validator.func_name)" errors=ctx.validator.errors
+    end
 
     return bytes
 end
@@ -12799,7 +12933,10 @@ function generate_block_code(ctx::CompilationContext, block::BasicBlock)::Vector
     code = ctx.code_info.code
 
     for i in block.start_idx:block.end_idx
-        append!(bytes, compile_statement(code[i], i, ctx))
+        stmt_bytes = compile_statement(code[i], i, ctx)
+        # PURE-414: Validate emitted bytes for stack type tracking
+        validate_emitted_bytes!(ctx, stmt_bytes, i)
+        append!(bytes, stmt_bytes)
     end
 
     return bytes
