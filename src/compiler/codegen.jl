@@ -21699,17 +21699,77 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 push!(bytes, Opcode.UNREACHABLE)
 
             # ================================================================
-            # SubString - string view type
-            # In WasmGC, we handle this by using str_substr
+            # PURE-322: SubString — create proper SubString struct
+            # SubString(str, start, stop) does UTF-8 thisind validation that
+            # uses jl_string_ptr/pointerref (unsupported in WasmGC). Since
+            # WasmGC strings are array<i32> (char arrays, not byte arrays),
+            # every index is valid. Create struct: {string, offset, ncodeunits}
             # ================================================================
             elseif name === :SubString
-                # SubString(str, start, stop) or SubString(str)
-                # For now, just return the string as-is (view = copy semantics)
-                # A proper implementation would track offset/length
-                bytes = UInt8[]  # Clear any pushed args
-                if !isempty(args)
+                bytes = UInt8[]  # Clear accumulated arg bytes
+                if length(args) >= 3
+                    str_arg = args[1]
+                    start_arg = args[2]
+                    stop_arg = args[3]
+                    # Field 0: string (ref null array<i32>)
+                    append!(bytes, compile_value(str_arg, ctx))
+                    # Field 1: offset = start - 1
+                    append!(bytes, compile_value(start_arg, ctx))
+                    push!(bytes, Opcode.I64_CONST, 0x01)
+                    push!(bytes, Opcode.I64_SUB)
+                    # Field 2: ncodeunits = stop - start + 1
+                    append!(bytes, compile_value(stop_arg, ctx))
+                    append!(bytes, compile_value(start_arg, ctx))
+                    push!(bytes, Opcode.I64_SUB)
+                    push!(bytes, Opcode.I64_CONST, 0x01)
+                    push!(bytes, Opcode.I64_ADD)
+                    # Emit struct.new for SubString type
+                    substr_wasm = get_concrete_wasm_type(SubString{String}, ctx.mod, ctx.type_registry)
+                    if substr_wasm isa ConcreteRef
+                        push!(bytes, Opcode.GC_PREFIX, Opcode.STRUCT_NEW)
+                        append!(bytes, encode_leb128_unsigned(substr_wasm.type_idx))
+                    end
+                elseif length(args) >= 1
+                    # SubString(str) — view of entire string
+                    str_arg = args[1]
+                    append!(bytes, compile_value(str_arg, ctx))
+                    push!(bytes, Opcode.I64_CONST, 0x00)  # offset = 0
+                    # ncodeunits = array.len(str)
+                    append!(bytes, compile_value(str_arg, ctx))
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.ARRAY_LEN)
+                    push!(bytes, Opcode.I64_EXTEND_I32_S)
+                    # Emit struct.new
+                    substr_wasm = get_concrete_wasm_type(SubString{String}, ctx.mod, ctx.type_registry)
+                    if substr_wasm isa ConcreteRef
+                        push!(bytes, Opcode.GC_PREFIX, Opcode.STRUCT_NEW)
+                        append!(bytes, encode_leb128_unsigned(substr_wasm.type_idx))
+                    end
+                end
+
+            # ================================================================
+            # PURE-322: _thisind_continued / _nextind_continued — identity
+            # In WasmGC, strings are array<i32> (char codes), so every
+            # character index is valid (no multi-byte encoding).
+            # ================================================================
+            elseif (name === :_thisind_continued || name === Symbol("#_thisind_continued#_thisind_str##0")) && length(args) >= 2
+                bytes = UInt8[]
+                # Closure form: (closure, string, index, len) → return index
+                if length(args) >= 3
+                    append!(bytes, compile_value(args[2], ctx))
+                else
                     append!(bytes, compile_value(args[1], ctx))
                 end
+
+            elseif (name === :_nextind_continued || name === Symbol("#_nextind_continued#_nextind_str##0")) && length(args) >= 2
+                bytes = UInt8[]
+                # nextind(s, i) = i + 1 in WasmGC
+                if length(args) >= 3
+                    append!(bytes, compile_value(args[2], ctx))
+                else
+                    append!(bytes, compile_value(args[1], ctx))
+                end
+                push!(bytes, Opcode.I64_CONST, 0x01)
+                push!(bytes, Opcode.I64_ADD)
 
             # ================================================================
             # PURE-004: Base.string dispatch for Float32/Float64
