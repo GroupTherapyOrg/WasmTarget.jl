@@ -435,9 +435,10 @@ function compare_julia_wasm(f, args...)
     arg_types = Tuple(map(typeof, args))
     bytes = WasmTarget.compile(f, arg_types)
 
-    # 3. Run in Node.js to get actual result
+    # 3. Run in Node.js to get actual result (with standard Math imports)
     func_name = string(nameof(f))
-    actual = run_wasm(bytes, func_name, args...)
+    imports = Dict("Math" => Dict("pow" => "Math.pow"))
+    actual = run_wasm_with_imports(bytes, func_name, imports, args...)
 
     # 4. Compare (skip if Node.js unavailable)
     if actual === nothing && NODE_CMD === nothing
