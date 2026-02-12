@@ -12881,8 +12881,16 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                     end
                 end
                 if is_multi_value_src || (pi_local_type !== nothing && val_wasm_type !== nothing && !wasm_types_compatible(pi_local_type, val_wasm_type))
-                    # Type mismatch or multi-value source: emit type-safe default for the local's type
-                    if pi_local_type isa ConcreteRef
+                    # PURE-321: PiNode narrowing from ExternRef → ConcreteRef means the value
+                    # IS available as externref and just needs conversion (not ref.null).
+                    # Example: PiNode(%198, String) narrows Any (externref) → String (array<i32>).
+                    if !is_multi_value_src && val_wasm_type === ExternRef && pi_local_type isa ConcreteRef
+                        val_bytes = compile_value(stmt.val, ctx)
+                        append!(bytes, val_bytes)
+                        append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                        append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.REF_CAST_NULL])
+                        append!(bytes, encode_leb128_signed(Int64(pi_local_type.type_idx)))
+                    elseif pi_local_type isa ConcreteRef
                         push!(bytes, Opcode.REF_NULL)
                         append!(bytes, encode_leb128_signed(Int64(pi_local_type.type_idx)))
                     elseif pi_local_type === StructRef
