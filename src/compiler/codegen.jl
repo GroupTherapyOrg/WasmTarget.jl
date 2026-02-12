@@ -16565,10 +16565,22 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     pos_r += 1
                     (b & 0x80) == 0 && break
                 end
-                if pos_r - 1 == length(mset_val_bytes) && src_idx_r < length(ctx.locals)
-                    src_type_r = ctx.locals[src_idx_r + 1]
-                    if src_type_r === I64 || src_type_r === I32 || src_type_r === F64 || src_type_r === F32
-                        is_numeric_for_ref = true
+                if pos_r - 1 == length(mset_val_bytes)
+                    # PURE-320: Use correct n_params offset for ctx.locals lookup
+                    # (same fix as PURE-048 applied to the externref branch above)
+                    if src_idx_r >= ctx.n_params
+                        local arr_idx_r = src_idx_r - ctx.n_params + 1
+                        if arr_idx_r >= 1 && arr_idx_r <= length(ctx.locals)
+                            src_type_r = ctx.locals[arr_idx_r]
+                            if src_type_r === I64 || src_type_r === I32 || src_type_r === F64 || src_type_r === F32
+                                is_numeric_for_ref = true
+                            end
+                        end
+                    elseif src_idx_r < ctx.n_params && src_idx_r + 1 <= length(ctx.arg_types)
+                        local src_wasm_r = get_concrete_wasm_type(ctx.arg_types[src_idx_r + 1], ctx.mod, ctx.type_registry)
+                        if src_wasm_r === I64 || src_wasm_r === I32 || src_wasm_r === F64 || src_wasm_r === F32
+                            is_numeric_for_ref = true
+                        end
                     end
                 end
             end
@@ -18638,6 +18650,14 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             # Infer argument types BEFORE pushing (need for type checking)
             call_arg_types = tuple([infer_value_type(arg, ctx) for arg in args]...)
             target_info = get_function(ctx.func_registry, called_func, call_arg_types)
+
+            # PURE-320: Closure functions are registered with the closure type prepended
+            # to arg_types (e.g., (typeof(#SourceFile#40), Pairs, Type, PS)), but invoke
+            # args don't include the closure self-reference. Retry with closure type.
+            if target_info === nothing && is_closure_type(typeof(called_func))
+                closure_arg_types = (typeof(called_func), call_arg_types...)
+                target_info = get_function(ctx.func_registry, called_func, closure_arg_types)
+            end
 
             if target_info !== nothing
                 # Push arguments with type checking
@@ -21788,6 +21808,16 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 # These parse strings to numeric values; simplified to return 0
                 push!(bytes, Opcode.I32_CONST)
                 push!(bytes, 0x00)
+
+            # Handle unalias — identity in WasmGC (arrays never alias)
+            # unalias(dest, src) checks if dest and src share backing memory
+            # and copies src if they do. In WasmGC, every array.new creates a
+            # distinct GC object, so aliasing is impossible. Just return src.
+            elseif name === :unalias
+                # Discard accumulated argument bytes and re-compile just src (arg 2)
+                bytes = UInt8[]
+                src_arg = expr.args[4]  # args: [mi, func_ref, dest, src]
+                append!(bytes, compile_value(src_arg, ctx))
 
             # Handle push!/pop! growth closures from Base (_growend!)
             # These are generated when Julia inlines push! and need to resize the array
