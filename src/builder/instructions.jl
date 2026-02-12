@@ -1,7 +1,7 @@
 # WebAssembly Instructions and Opcodes
 # Reference: https://webassembly.github.io/spec/core/binary/instructions.html
 
-export Opcode, WasmModule, WasmImport, WasmTable, WasmMemory, WasmDataSegment, WasmTag, add_function!, add_import!, add_export!, add_struct_type!, add_array_type!, add_rec_group!, add_table!, add_table_export!, add_elem_segment!, add_memory!, add_memory_export!, add_data_segment!, add_tag!, add_global_ref!, to_bytes
+export Opcode, WasmModule, WasmImport, WasmTable, WasmMemory, WasmDataSegment, WasmTag, add_function!, add_import!, add_export!, add_struct_type!, add_array_type!, add_rec_group!, add_table!, add_table_export!, add_elem_segment!, add_memory!, add_memory_export!, add_data_segment!, add_tag!, add_start_function!, add_global_ref!, to_bytes
 
 # ============================================================================
 # Opcodes (Section 5.4)
@@ -373,9 +373,10 @@ mutable struct WasmModule
     elem_segments::Vector{WasmElemSegment}  # Element segments for table init
     data_segments::Vector{WasmDataSegment}  # Data segments for memory init
     tags::Vector{WasmTag}         # Exception tags for exception handling
+    start_function::Union{Nothing, UInt32}  # Optional start function index
 end
 
-WasmModule() = WasmModule(CompositeType[], Vector{UInt32}[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobalDef[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[])
+WasmModule() = WasmModule(CompositeType[], Vector{UInt32}[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobalDef[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[], nothing)
 
 # ============================================================================
 # Module Building API
@@ -671,6 +672,17 @@ function add_tag!(mod::WasmModule, type_idx::Integer)::UInt32
     return UInt32(length(mod.tags) - 1)
 end
 
+"""
+    add_start_function!(mod, func_idx)
+
+Set the start function for the module. This function is called automatically
+on module instantiation. The function must take no parameters and return nothing.
+"""
+function add_start_function!(mod::WasmModule, func_idx::Integer)
+    mod.start_function = UInt32(func_idx)
+    return mod
+end
+
 # ============================================================================
 # Binary Serialization
 # ============================================================================
@@ -689,6 +701,8 @@ const SECTION_EXPORT = 0x07
 const SECTION_ELEMENT = 0x09
 const SECTION_CODE = 0x0A
 const SECTION_DATA = 0x0B
+const SECTION_START = 0x08    # Start function (section 8)
+const SECTION_DATACOUNT = 0x0C  # Data count (section 12)
 const SECTION_TAG = 0x0D      # Exception tags (section 13)
 
 """
@@ -850,6 +864,13 @@ function to_bytes(mod::WasmModule)::Vector{UInt8}
         end
     end
 
+    # Start section
+    if mod.start_function !== nothing
+        write_section!(w, SECTION_START) do section
+            write_u32!(section, mod.start_function)
+        end
+    end
+
     # Element section
     if !isempty(mod.elem_segments)
         write_section!(w, SECTION_ELEMENT) do section
@@ -868,6 +889,13 @@ function to_bytes(mod::WasmModule)::Vector{UInt8}
                     write_u32!(section, func_idx)
                 end
             end
+        end
+    end
+
+    # Data count section (required by some runtimes when bulk memory ops are used)
+    if !isempty(mod.data_segments)
+        write_section!(w, SECTION_DATACOUNT) do section
+            write_u32!(section, length(mod.data_segments))
         end
     end
 
