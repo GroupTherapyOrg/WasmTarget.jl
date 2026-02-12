@@ -10,7 +10,7 @@
 #
 # Usage: julia +1.12 --project=WasmTarget.jl scripts/audit_ir_patterns.jl
 
-using JSON, JuliaSyntax, Logging
+using JSON, JuliaSyntax, Logging, WasmTarget
 
 # ============================================================================
 # Pattern Counters
@@ -156,8 +156,11 @@ end
 
 function audit_statement!(stmt::Core.PhiNode, idx, ci, ssavaluetypes)
     types = []
-    for val in stmt.values
-        push!(types, infer_value_type(val, ci, ssavaluetypes))
+    vals = stmt.values
+    for i in 1:length(vals)
+        if isassigned(vals, i)
+            push!(types, infer_value_type(vals[i], ci, ssavaluetypes))
+        end
     end
     !isempty(types) && record_phi(types)
 end
@@ -297,11 +300,8 @@ function detect_stubs!()
 
     with_logger(logger) do
         try
-            # Import WasmTarget here (already in project)
-            wt = Base.require(Base.PkgId(Base.UUID("a8144c13-643e-4788-89b1-b57d7e9b71d8"), "WasmTarget"))
-            compile_fn = getfield(wt, :compile)
             parse_expr_string_for_stubs(s::String) = parsestmt(Expr, s)
-            bytes = compile_fn(parse_expr_string_for_stubs, (String,))
+            bytes = WasmTarget.compile(parse_expr_string_for_stubs, (String,))
             println("Compiled parsestmt: $(length(bytes)) bytes")
         catch e
             println("Compilation note: $e")
