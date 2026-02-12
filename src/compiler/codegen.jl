@@ -18100,6 +18100,80 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
     elseif is_func(func, :cttz_int)
         push!(bytes, is_32bit ? Opcode.I32_CTZ : Opcode.I64_CTZ)
 
+    # Byte swap (used in Char ↔ codepoint conversion)
+    # WebAssembly has no native bswap — implement with bit manipulation
+    elseif is_func(func, :bswap_int)
+        # Allocate a scratch local to hold the input value (need it 4 times)
+        scratch_local = length(ctx.locals) + ctx.n_params
+        push!(ctx.locals, is_32bit ? I32 : I64)
+        # Store input value
+        push!(bytes, Opcode.LOCAL_SET)
+        append!(bytes, encode_leb128_unsigned(scratch_local))
+        if is_32bit
+            # i32 bswap: reverse 4 bytes
+            # ((x >> 24) & 0xFF) | ((x >> 8) & 0xFF00) | ((x << 8) & 0xFF0000) | (x << 24)
+            # Part 1: (x >> 24) & 0xFF — top byte to bottom
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(scratch_local))
+            push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(24)))
+            push!(bytes, Opcode.I32_SHR_U)
+            push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(0xFF)))
+            push!(bytes, Opcode.I32_AND)
+            # Part 2: (x >> 8) & 0xFF00
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(scratch_local))
+            push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(8)))
+            push!(bytes, Opcode.I32_SHR_U)
+            push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(0xFF00)))
+            push!(bytes, Opcode.I32_AND)
+            push!(bytes, Opcode.I32_OR)
+            # Part 3: (x << 8) & 0xFF0000
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(scratch_local))
+            push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(8)))
+            push!(bytes, Opcode.I32_SHL)
+            push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(0xFF0000)))
+            push!(bytes, Opcode.I32_AND)
+            push!(bytes, Opcode.I32_OR)
+            # Part 4: x << 24 — bottom byte to top
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(scratch_local))
+            push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(24)))
+            push!(bytes, Opcode.I32_SHL)
+            push!(bytes, Opcode.I32_OR)
+        else
+            # i64 bswap: reverse 8 bytes
+            # Same pattern but with 8 byte positions
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(scratch_local))
+            push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(56)))
+            push!(bytes, Opcode.I64_SHR_U)
+            push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(0xFF)))
+            push!(bytes, Opcode.I64_AND)
+            for (shift, mask) in [(40, 0xFF00), (24, 0xFF0000), (8, 0xFF000000),
+                                   (-8, 0xFF00000000), (-24, 0xFF0000000000),
+                                   (-40, 0xFF000000000000)]
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(scratch_local))
+                if shift > 0
+                    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(shift)))
+                    push!(bytes, Opcode.I64_SHR_U)
+                else
+                    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(-shift)))
+                    push!(bytes, Opcode.I64_SHL)
+                end
+                push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(mask)))
+                push!(bytes, Opcode.I64_AND)
+                push!(bytes, Opcode.I64_OR)
+            end
+            # Last part: x << 56 (no mask needed)
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(scratch_local))
+            push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(56)))
+            push!(bytes, Opcode.I64_SHL)
+            push!(bytes, Opcode.I64_OR)
+        end
+
     # Float operations
     elseif is_func(func, :add_float)
         push!(bytes, arg_type === Float32 ? Opcode.F32_ADD : Opcode.F64_ADD)
