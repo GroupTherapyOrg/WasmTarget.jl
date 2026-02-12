@@ -409,6 +409,72 @@ validate();
 end
 
 # ============================================================================
+# Comparison Harness — Automated Julia vs Wasm Verification
+# ============================================================================
+
+"""
+    compare_julia_wasm(f, args...) -> NamedTuple
+
+Run function `f` natively in Julia and compiled to Wasm, then compare results.
+Returns `(pass=Bool, expected=Any, actual=Any)`.
+
+This is the correctness oracle for M_PATTERNS: if Julia says `f(x) = 42`,
+the Wasm must return 42. No approximate results, no simplified implementations.
+
+# Example
+```julia
+r = compare_julia_wasm(x -> x + Int32(1), Int32(5))
+@assert r.pass "Expected \$(r.expected), got \$(r.actual)"
+```
+"""
+function compare_julia_wasm(f, args...)
+    # 1. Run natively in Julia to get expected result
+    expected = f(args...)
+
+    # 2. Compile to Wasm
+    arg_types = Tuple(map(typeof, args))
+    bytes = WasmTarget.compile(f, arg_types)
+
+    # 3. Run in Node.js to get actual result
+    func_name = string(nameof(f))
+    actual = run_wasm(bytes, func_name, args...)
+
+    # 4. Compare (skip if Node.js unavailable)
+    if actual === nothing && NODE_CMD === nothing
+        return (pass=true, expected=expected, actual=nothing, skipped=true)
+    end
+
+    return (pass=(expected == actual), expected=expected, actual=actual, skipped=false)
+end
+
+"""
+    compare_batch(f, test_cases::Vector) -> Vector{NamedTuple}
+
+Run `compare_julia_wasm` for multiple inputs. Each element of `test_cases`
+is a tuple of arguments to pass to `f`.
+
+# Example
+```julia
+results = compare_batch(x -> x + Int32(1), [
+    (Int32(0),),
+    (Int32(5),),
+    (Int32(-1),),
+])
+for r in results
+    @assert r.pass "Args \$(r.args): expected \$(r.expected), got \$(r.actual)"
+end
+```
+"""
+function compare_batch(f, test_cases::Vector)
+    results = NamedTuple[]
+    for args in test_cases
+        r = compare_julia_wasm(f, args...)
+        push!(results, (args=args, expected=r.expected, actual=r.actual, pass=r.pass, skipped=r.skipped))
+    end
+    return results
+end
+
+# ============================================================================
 # Debug Utilities
 # ============================================================================
 

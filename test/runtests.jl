@@ -4088,4 +4088,93 @@ end
         end
     end
 
+    # ========================================================================
+    # Phase 30: Comparison Harness Tests (PURE-502)
+    # Verify compare_julia_wasm and compare_batch work on known-good functions
+    # ========================================================================
+    @testset "Phase 30: Comparison Harness" begin
+
+        @testset "compare_julia_wasm — Int32 add" begin
+            add_one(x::Int32) = x + Int32(1)
+            r = compare_julia_wasm(add_one, Int32(5))
+            if !r.skipped
+                @test r.pass
+                @test r.expected == Int32(6)
+                @test r.actual == 6
+            end
+        end
+
+        @testset "compare_julia_wasm — Int32 multiply" begin
+            mul_two(x::Int32) = x * Int32(2)
+            r = compare_julia_wasm(mul_two, Int32(7))
+            if !r.skipped
+                @test r.pass
+                @test r.expected == Int32(14)
+                @test r.actual == 14
+            end
+        end
+
+        @testset "compare_julia_wasm — Int32 two args" begin
+            my_add(a::Int32, b::Int32) = a + b
+            r = compare_julia_wasm(my_add, Int32(3), Int32(4))
+            if !r.skipped
+                @test r.pass
+                @test r.expected == Int32(7)
+                @test r.actual == 7
+            end
+        end
+
+        @testset "compare_julia_wasm — negative numbers" begin
+            negate(x::Int32) = -x
+            r = compare_julia_wasm(negate, Int32(42))
+            if !r.skipped
+                @test r.pass
+                @test r.expected == Int32(-42)
+                @test r.actual == -42
+            end
+        end
+
+        @testset "compare_julia_wasm — zero" begin
+            identity_fn(x::Int32) = x
+            r = compare_julia_wasm(identity_fn, Int32(0))
+            if !r.skipped
+                @test r.pass
+                @test r.expected == Int32(0)
+                @test r.actual == 0
+            end
+        end
+
+        @testset "compare_batch — multiple inputs" begin
+            add_one(x::Int32) = x + Int32(1)
+            results = compare_batch(add_one, [
+                (Int32(0),),
+                (Int32(5),),
+                (Int32(-1),),
+                (Int32(100),),
+            ])
+            @test length(results) == 4
+            for r in results
+                if !r.skipped
+                    @test r.pass
+                end
+            end
+        end
+
+        @testset "compare_batch — two-arg function" begin
+            my_sub(a::Int32, b::Int32) = a - b
+            results = compare_batch(my_sub, [
+                (Int32(10), Int32(3)),
+                (Int32(0), Int32(0)),
+                (Int32(5), Int32(10)),
+            ])
+            @test length(results) == 3
+            for r in results
+                if !r.skipped
+                    @test r.pass
+                end
+            end
+        end
+
+    end
+
 end
