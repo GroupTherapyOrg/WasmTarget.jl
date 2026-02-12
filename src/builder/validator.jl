@@ -7,7 +7,8 @@
 export WasmStackValidator, validate_push!, validate_pop!, validate_pop_any!,
        stack_height, has_errors, reset_validator!, validate_instruction!,
        ValidatorLabel, validate_block_start!, validate_block_end!,
-       validate_br!, validate_br_if!, validate_if_start!, validate_else!
+       validate_br!, validate_br_if!, validate_if_start!, validate_else!,
+       validate_gc_instruction!
 
 """
     ValidatorLabel
@@ -344,6 +345,11 @@ function validate_instruction!(v::WasmStackValidator, opcode::UInt8, type_info=n
         validate_pop!(v, I64); validate_push!(v, F64)
 
     # --- Reference instructions (non-GC-prefix) ---
+    elseif opcode == Opcode.REF_NULL
+        # ref.null $t: push null ref of given type (type_info = the ref type)
+        if type_info !== nothing
+            validate_push!(v, type_info)
+        end
     elseif opcode == Opcode.REF_IS_NULL
         validate_pop_any!(v); validate_push!(v, I32)
     elseif opcode == Opcode.REF_EQ
@@ -577,4 +583,138 @@ function validate_else!(v::WasmStackValidator)
 
     # Restore reachability from block entry
     v.reachable = label.reachable_at_entry
+end
+
+# ============================================================================
+# WasmGC Instruction Validation (PURE-413)
+# Mirrors dart2wasm's InstructionsBuilder GC instruction assertions.
+# These are the operations where PURE-317 through PURE-323 bugs lived.
+# ============================================================================
+
+"""
+    validate_gc_instruction!(v, gc_opcode, type_info)
+
+Validate a GC-prefixed (0xFB) instruction's stack effect. `gc_opcode` is the
+byte AFTER the GC prefix (e.g., Opcode.STRUCT_NEW = 0x00). `type_info` provides
+type context needed for validation (type index, field types, element types).
+
+Mirrors dart2wasm's InstructionsBuilder assertion checks for GC instructions.
+"""
+function validate_gc_instruction!(v::WasmStackValidator, gc_opcode::UInt8, type_info=nothing)
+    v.enabled || return
+
+    if gc_opcode == Opcode.STRUCT_NEW
+        # struct.new $t: pop N field values (in reverse order), push (ref $t)
+        type_idx, field_types = type_info
+        for ft in reverse(field_types)
+            validate_pop!(v, ft)
+        end
+        validate_push!(v, ConcreteRef(UInt32(type_idx), false))
+
+    elseif gc_opcode == Opcode.STRUCT_NEW_DEFAULT
+        # struct.new_default $t: no pops (all fields get defaults), push (ref $t)
+        type_idx = type_info isa Tuple ? type_info[1] : type_info
+        validate_push!(v, ConcreteRef(UInt32(type_idx), false))
+
+    elseif gc_opcode == Opcode.STRUCT_GET || gc_opcode == Opcode.STRUCT_GET_S || gc_opcode == Opcode.STRUCT_GET_U
+        # struct.get $t $i: pop (ref null $t), push field_type
+        type_idx, field_type = type_info
+        validate_pop!(v, ConcreteRef(UInt32(type_idx), true))
+        validate_push!(v, field_type)
+
+    elseif gc_opcode == Opcode.STRUCT_SET
+        # struct.set $t $i: pop value, pop (ref null $t)
+        type_idx, field_type = type_info
+        validate_pop!(v, field_type)
+        validate_pop!(v, ConcreteRef(UInt32(type_idx), true))
+
+    elseif gc_opcode == Opcode.ARRAY_NEW
+        # array.new $t: pop init_value, pop i32 length, push (ref $t)
+        type_idx, elem_type = type_info
+        validate_pop!(v, I32)       # length
+        validate_pop!(v, elem_type) # init value
+        validate_push!(v, ConcreteRef(UInt32(type_idx), false))
+
+    elseif gc_opcode == Opcode.ARRAY_NEW_DEFAULT
+        # array.new_default $t: pop i32 length, push (ref $t)
+        type_idx = type_info isa Tuple ? type_info[1] : type_info
+        validate_pop!(v, I32)  # length
+        validate_push!(v, ConcreteRef(UInt32(type_idx), false))
+
+    elseif gc_opcode == Opcode.ARRAY_NEW_FIXED
+        # array.new_fixed $t $n: pop n elem values, push (ref $t)
+        type_idx, elem_type, n = type_info
+        for _ in 1:n
+            validate_pop!(v, elem_type)
+        end
+        validate_push!(v, ConcreteRef(UInt32(type_idx), false))
+
+    elseif gc_opcode == Opcode.ARRAY_NEW_DATA
+        # array.new_data $t $d: pop i32 length, pop i32 offset, push (ref $t)
+        type_idx = type_info isa Tuple ? type_info[1] : type_info
+        validate_pop!(v, I32)  # length
+        validate_pop!(v, I32)  # offset
+        validate_push!(v, ConcreteRef(UInt32(type_idx), false))
+
+    elseif gc_opcode == Opcode.ARRAY_GET || gc_opcode == Opcode.ARRAY_GET_S || gc_opcode == Opcode.ARRAY_GET_U
+        # array.get $t: pop i32 index, pop (ref null $t), push elem_type
+        type_idx, elem_type = type_info
+        validate_pop!(v, I32)  # index
+        validate_pop!(v, ConcreteRef(UInt32(type_idx), true))  # array ref
+        validate_push!(v, elem_type)
+
+    elseif gc_opcode == Opcode.ARRAY_SET
+        # array.set $t: pop value, pop i32 index, pop (ref null $t)
+        type_idx, elem_type = type_info
+        validate_pop!(v, elem_type)  # value
+        validate_pop!(v, I32)        # index
+        validate_pop!(v, ConcreteRef(UInt32(type_idx), true))  # array ref
+
+    elseif gc_opcode == Opcode.ARRAY_LEN
+        # array.len: pop any array ref, push i32
+        validate_pop_any!(v)
+        validate_push!(v, I32)
+
+    elseif gc_opcode == Opcode.ARRAY_FILL
+        # array.fill $t: pop i32 size, pop value, pop i32 offset, pop (ref null $t)
+        type_idx, elem_type = type_info
+        validate_pop!(v, I32)        # size
+        validate_pop!(v, elem_type)  # fill value
+        validate_pop!(v, I32)        # offset
+        validate_pop!(v, ConcreteRef(UInt32(type_idx), true))  # array ref
+
+    elseif gc_opcode == Opcode.ARRAY_COPY
+        # array.copy $t1 $t2: pop i32 len, pop i32 src_offset, pop (ref null $t2),
+        #                      pop i32 dst_offset, pop (ref null $t1)
+        dst_type_idx, src_type_idx = type_info
+        validate_pop!(v, I32)  # length
+        validate_pop!(v, I32)  # src offset
+        validate_pop!(v, ConcreteRef(UInt32(src_type_idx), true))  # src array
+        validate_pop!(v, I32)  # dst offset
+        validate_pop!(v, ConcreteRef(UInt32(dst_type_idx), true))  # dst array
+
+    elseif gc_opcode == Opcode.REF_CAST
+        # ref.cast (ref $t): pop ref, push (ref $t) non-nullable
+        target_type = type_info
+        validate_pop_any!(v)
+        validate_push!(v, target_type)
+
+    elseif gc_opcode == Opcode.REF_CAST_NULL
+        # ref.cast null (ref null $t): pop ref, push (ref null $t) nullable
+        target_type = type_info
+        validate_pop_any!(v)
+        validate_push!(v, target_type)
+
+    elseif gc_opcode == Opcode.ANY_CONVERT_EXTERN
+        # any.convert_extern: pop externref, push anyref
+        validate_pop!(v, ExternRef)
+        validate_push!(v, AnyRef)
+
+    elseif gc_opcode == Opcode.EXTERN_CONVERT_ANY
+        # extern.convert_any: pop anyref, push externref
+        validate_pop_any!(v)  # any anyref subtype
+        validate_push!(v, ExternRef)
+
+    # Unknown GC opcode — skip silently
+    end
 end
