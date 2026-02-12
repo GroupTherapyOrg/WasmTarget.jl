@@ -12934,7 +12934,17 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                         if !isempty(val_bytes)
                             first_op = val_bytes[1]
                             if first_op == Opcode.I32_CONST || first_op == Opcode.I64_CONST || first_op == Opcode.F32_CONST || first_op == Opcode.F64_CONST
-                                is_numeric_val = true
+                                # PURE-318: Check for GC_PREFIX — struct/array constants produce refs, not numerics
+                                local has_gc_pi = false
+                                for gi_p in 1:(length(val_bytes)-1)
+                                    if val_bytes[gi_p] == 0xFB
+                                        gc_op_p = val_bytes[gi_p + 1]
+                                        if gc_op_p == 0x00 || gc_op_p == 0x1A || gc_op_p == 0x1B
+                                            has_gc_pi = true; break
+                                        end
+                                    end
+                                end
+                                is_numeric_val = !has_gc_pi
                             elseif first_op == 0x20  # LOCAL_GET
                                 # Decode local index, check type
                                 src_idx = 0; shift = 0; leb_end = 0
@@ -15869,7 +15879,19 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                         end
                     end
                 elseif length(item_bytes) >= 1 && (item_bytes[1] == Opcode.I32_CONST || item_bytes[1] == Opcode.I64_CONST || item_bytes[1] == Opcode.F32_CONST || item_bytes[1] == Opcode.F64_CONST)
-                    push_src_wasm = I32  # treat constants as numeric
+                    # PURE-318: Check for GC_PREFIX — struct/array constants produce refs, not numerics
+                    local has_gc_push = false
+                    for gi_pu in 1:(length(item_bytes)-1)
+                        if item_bytes[gi_pu] == 0xFB
+                            gc_op_pu = item_bytes[gi_pu + 1]
+                            if gc_op_pu == 0x00 || gc_op_pu == 0x1A || gc_op_pu == 0x1B
+                                has_gc_push = true; break
+                            end
+                        end
+                    end
+                    if !has_gc_push
+                        push_src_wasm = I32  # treat constants as numeric
+                    end
                 end
                 local is_numeric_item = push_src_wasm === I64 || push_src_wasm === I32 || push_src_wasm === F64 || push_src_wasm === F32
                 local is_already_externref_item = push_src_wasm === ExternRef
@@ -21093,7 +21115,19 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                             end
                         end
                     elseif length(val_bytes) >= 1 && (val_bytes[1] == Opcode.I32_CONST || val_bytes[1] == Opcode.I64_CONST || val_bytes[1] == Opcode.F32_CONST || val_bytes[1] == Opcode.F64_CONST)
-                        arrset_src_wasm = I32  # treat constants as numeric
+                        # PURE-318: Check for GC_PREFIX — struct/array constants produce refs, not numerics
+                        local has_gc_as = false
+                        for gi_as in 1:(length(val_bytes)-1)
+                            if val_bytes[gi_as] == 0xFB
+                                gc_op_as = val_bytes[gi_as + 1]
+                                if gc_op_as == 0x00 || gc_op_as == 0x1A || gc_op_as == 0x1B
+                                    has_gc_as = true; break
+                                end
+                            end
+                        end
+                        if !has_gc_as
+                            arrset_src_wasm = I32  # treat constants as numeric
+                        end
                     end
                     local is_numeric_val = arrset_src_wasm === I64 || arrset_src_wasm === I32 || arrset_src_wasm === F64 || arrset_src_wasm === F32
                     local is_already_externref_val = arrset_src_wasm === ExternRef
