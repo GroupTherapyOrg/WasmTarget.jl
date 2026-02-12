@@ -258,6 +258,19 @@ module Opcode
     # any/extern conversions (0xFB prefix)
     const ANY_CONVERT_EXTERN = 0x1A  # any.convert_extern
     const EXTERN_CONVERT_ANY = 0x1B  # extern.convert_any
+
+    # Bulk memory operations (0xFC prefix)
+    const FC_PREFIX = 0xFC
+    const MEMORY_INIT = 0x08    # memory.init seg_idx mem_idx
+    const DATA_DROP = 0x09      # data.drop seg_idx
+    const MEMORY_COPY = 0x0A    # memory.copy dst_mem src_mem
+    const MEMORY_FILL = 0x0B    # memory.fill mem_idx
+    const TABLE_INIT = 0x0C     # table.init seg_idx table_idx
+    const ELEM_DROP = 0x0D      # elem.drop seg_idx
+    const TABLE_COPY = 0x0E     # table.copy dst_table src_table
+    const TABLE_GROW = 0x0F     # table.grow table_idx
+    const TABLE_SIZE = 0x10     # table.size table_idx
+    const TABLE_FILL = 0x11     # table.fill table_idx
 end
 
 # ============================================================================
