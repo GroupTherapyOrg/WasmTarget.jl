@@ -68,33 +68,20 @@ end
 
 # === Binaryen Optimization (if wasm-opt is available) ===
 println("\n=== Binaryen Optimization ===")
-wasm_opt_available = try
-    run(pipeline(`wasm-opt --version`, stdout=devnull, stderr=devnull))
-    true
-catch
-    false
-end
-
-if wasm_opt_available
-    for f in ["parser.wasm", "evaluator.wasm"]
-        path = joinpath(OUTPUT_DIR, f)
-        opt_path = joinpath(OUTPUT_DIR, replace(f, ".wasm" => ".opt.wasm"))
-        naive_size = filesize(path)
+if Sys.which("wasm-opt") !== nothing
+    for (name, raw_bytes) in [("parser.wasm", parser_bytes), ("evaluator.wasm", eval_bytes)]
         try
-            run(`wasm-opt -O2 --enable-gc --enable-reference-types $path -o $opt_path`)
-            opt_size = filesize(opt_path)
-            saved_pct = round((1 - opt_size / naive_size) * 100, digits=1)
-            println("  $f: $naive_size → $opt_size bytes (-$(saved_pct)%)")
-            # Validate optimized output
-            run(pipeline(`wasm-tools validate $opt_path`, stderr=devnull))
-            println("    optimized output validates ✓")
+            opt_bytes = WasmTarget.optimize(raw_bytes)
+            opt_path = joinpath(OUTPUT_DIR, replace(name, ".wasm" => ".opt.wasm"))
+            write(opt_path, opt_bytes)
+            saved_pct = round((1 - length(opt_bytes) / length(raw_bytes)) * 100, digits=1)
+            println("  $name: $(length(raw_bytes)) → $(length(opt_bytes)) bytes (-$(saved_pct)%)")
         catch e
-            println("  $f: wasm-opt failed ($(e))")
-            println("    (Binaryen optimization will happen in browser instead)")
+            println("  $name: optimization failed ($(e))")
         end
     end
 else
-    println("  wasm-opt not found — optimization will happen in browser via binaryen.js")
+    println("  wasm-opt not found — install with: brew install binaryen")
 end
 
 println("\nDone! Files written to $OUTPUT_DIR")
