@@ -103,12 +103,30 @@ function get_function(registry::FunctionRegistry, func_ref, arg_types::Tuple)::U
         end
     end
 
-    # Try to find a compatible signature (subtype matching)
+    # Try to find a compatible signature (subtype matching: actual <: registered)
     for info in infos
         if length(info.arg_types) == length(arg_types)
             match = true
             for (expected, actual) in zip(info.arg_types, arg_types)
                 if !(actual <: expected)
+                    match = false
+                    break
+                end
+            end
+            if match
+                return info
+            end
+        end
+    end
+
+    # PURE-320: Try reverse subtype match (registered <: actual).
+    # This handles cases where infer_value_type returns abstract types (e.g., Type)
+    # but the function was registered with concrete types (e.g., Type{SourceFile}).
+    for info in infos
+        if length(info.arg_types) == length(arg_types)
+            match = true
+            for (expected, actual) in zip(info.arg_types, arg_types)
+                if !(actual <: expected) && !(expected <: actual)
                     match = false
                     break
                 end
@@ -18651,10 +18669,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             call_arg_types = tuple([infer_value_type(arg, ctx) for arg in args]...)
             target_info = get_function(ctx.func_registry, called_func, call_arg_types)
 
-            # PURE-320: Closure functions are registered with the closure type prepended
-            # to arg_types (e.g., (typeof(#SourceFile#40), Pairs, Type, PS)), but invoke
-            # args don't include the closure self-reference. Retry with closure type.
-            if target_info === nothing && is_closure_type(typeof(called_func))
+            # PURE-320: Closure/kwarg functions are registered with self-type prepended
+            if target_info === nothing && typeof(called_func) <: Function && isconcretetype(typeof(called_func))
                 closure_arg_types = (typeof(called_func), call_arg_types...)
                 target_info = get_function(ctx.func_registry, called_func, closure_arg_types)
             end
@@ -19033,6 +19049,11 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
         if called_func_early !== nothing
             call_arg_types_early = tuple([infer_value_type(arg, ctx) for arg in args]...)
             target_info_early = get_function(ctx.func_registry, called_func_early, call_arg_types_early)
+            # PURE-320: Closure/kwarg functions are registered with self-type prepended
+            if target_info_early === nothing && typeof(called_func_early) <: Function && isconcretetype(typeof(called_func_early))
+                closure_arg_types_early = (typeof(called_func_early), call_arg_types_early...)
+                target_info_early = get_function(ctx.func_registry, called_func_early, closure_arg_types_early)
+            end
         end
     end
 
@@ -19361,6 +19382,13 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                     # Infer argument types for dispatch
                     call_arg_types = tuple([infer_value_type(arg, ctx) for arg in args]...)
                     target_info = get_function(ctx.func_registry, called_func, call_arg_types)
+
+                    # PURE-320: Closure/kwarg functions are registered with self-type prepended
+                    # (e.g., typeof(#SourceFile#40) prepended to arg_types). Retry with self-type.
+                    if target_info === nothing && typeof(called_func) <: Function && isconcretetype(typeof(called_func))
+                        closure_arg_types = (typeof(called_func), call_arg_types...)
+                        target_info = get_function(ctx.func_registry, called_func, closure_arg_types)
+                    end
 
                     if target_info !== nothing
                         # PURE-036z: Check if any arg needs extern.convert_any insertion
