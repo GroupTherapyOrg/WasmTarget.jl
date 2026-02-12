@@ -6001,7 +6001,6 @@ For simple if-then-else patterns, we use the `if` instruction.
 function generate_structured(ctx::CompilationContext, blocks::Vector{BasicBlock})::Vector{UInt8}
     bytes = UInt8[]
     code = ctx.code_info.code
-
     # Check for try/catch first
     if has_try_catch(code)
         append!(bytes, generate_try_catch(ctx, blocks, code))
@@ -7564,7 +7563,6 @@ Handles both return-based patterns and phi node patterns (ternary expressions).
 """
 function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
     bytes = UInt8[]
-
     # For void return types (like event handlers), delegate to generate_void_flow
     # which properly handles if blocks with void block type (0x40) instead of trying
     # to produce a value
@@ -11765,7 +11763,15 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
         if found_phi_pattern !== nothing
             phi_idx, goto_idx = found_phi_pattern
             phi_node = code[phi_idx]::Core.PhiNode
-            phi_type = get(ctx.ssa_types, phi_idx, Bool)
+            # PURE-303: Use ssavaluetypes fallback instead of Bool default.
+            # analyze_ssa_types! may skip Any-typed SSAs, so ctx.ssa_types may not
+            # have this phi. Defaulting to Bool incorrectly treats Any-typed phis
+            # as boolean && patterns, generating if (result i32) instead of externref.
+            phi_type = get(ctx.ssa_types, phi_idx, nothing)
+            if phi_type === nothing
+                ssatypes = ctx.code_info.ssavaluetypes
+                phi_type = (ssatypes isa Vector && phi_idx <= length(ssatypes)) ? ssatypes[phi_idx] : Bool
+            end
 
             # Check if this is a boolean && pattern or a ternary with computed values
             is_boolean_phi = phi_type === Bool
@@ -12263,6 +12269,9 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                     if phi_wasm_type isa ConcreteRef
                         push!(inner_bytes, Opcode.REF_NULL)
                         append!(inner_bytes, encode_leb128_signed(Int64(phi_wasm_type.type_idx)))
+                    elseif phi_wasm_type === ExternRef
+                        push!(inner_bytes, Opcode.REF_NULL)
+                        push!(inner_bytes, UInt8(ExternRef))
                     end
                     # For non-ref types, nothing produces no value (shouldn't happen for valid code)
                 elseif then_value !== nothing
@@ -12273,6 +12282,14 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                         append!(inner_bytes, encode_leb128_signed(Int64(phi_wasm_type.type_idx)))
                     else
                         append!(inner_bytes, value_bytes)
+                        # PURE-303: Convert concrete/any ref to externref when phi expects externref
+                        if phi_wasm_type === ExternRef
+                            val_wasm = infer_value_wasm_type(then_value, ctx)
+                            if val_wasm !== ExternRef && (val_wasm isa ConcreteRef || val_wasm === StructRef || val_wasm === ArrayRef || val_wasm === AnyRef)
+                                push!(inner_bytes, Opcode.GC_PREFIX)
+                                push!(inner_bytes, Opcode.EXTERN_CONVERT_ANY)
+                            end
+                        end
                     end
                 end
 
@@ -12310,6 +12327,9 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                         if phi_wasm_type isa ConcreteRef
                             push!(inner_bytes, Opcode.REF_NULL)
                             append!(inner_bytes, encode_leb128_signed(Int64(phi_wasm_type.type_idx)))
+                        elseif phi_wasm_type === ExternRef
+                            push!(inner_bytes, Opcode.REF_NULL)
+                            push!(inner_bytes, UInt8(ExternRef))
                         end
                     elseif else_value !== nothing
                         value_bytes = compile_value(else_value, ctx)
@@ -12319,6 +12339,14 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                             append!(inner_bytes, encode_leb128_signed(Int64(phi_wasm_type.type_idx)))
                         else
                             append!(inner_bytes, value_bytes)
+                            # PURE-303: Convert concrete/any ref to externref when phi expects externref
+                            if phi_wasm_type === ExternRef
+                                val_wasm = infer_value_wasm_type(else_value, ctx)
+                                if val_wasm !== ExternRef && (val_wasm isa ConcreteRef || val_wasm === StructRef || val_wasm === ArrayRef || val_wasm === AnyRef)
+                                    push!(inner_bytes, Opcode.GC_PREFIX)
+                                    push!(inner_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                end
+                            end
                         end
                     end
                 end
