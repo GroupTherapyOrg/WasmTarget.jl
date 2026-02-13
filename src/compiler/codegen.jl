@@ -4235,20 +4235,6 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
             # Union{Nothing, T} -> use T's concrete type (nullable reference)
             return julia_to_wasm_type_concrete(inner_type, ctx)
         elseif needs_tagged_union(T)
-            # PURE-324: Check if all non-Nothing types are numeric — if so, use widest
-            # numeric type instead of tagged union. Tagged union (ConcreteRef struct) can't
-            # store/load raw numeric values correctly in phi nodes.
-            # Handles Union{Int64, UInt32}, Union{Int32, Int64}, etc.
-            types = Base.uniontypes(T)
-            non_nothing = filter(t -> t !== Nothing, types)
-            all_numeric = all(non_nothing) do t
-                wt = julia_to_wasm_type(t)
-                wt === I32 || wt === I64 || wt === F32 || wt === F64
-            end
-            if all_numeric && !isempty(non_nothing)
-                # Delegate to resolve_union_type which already handles numeric widening
-                return resolve_union_type(T)
-            end
             # Multi-variant union -> use tagged union struct
             info = get_union_type!(ctx.mod, ctx.type_registry, T)
             return ConcreteRef(info.wasm_type_idx, true)
@@ -4351,6 +4337,22 @@ function analyze_control_flow!(ctx::CompilationContext)
                 end
             end
             phi_wasm_type = julia_to_wasm_type_concrete(phi_julia_type, ctx)
+
+            # PURE-324: For phi nodes with all-numeric Union types (e.g., Union{Int64, UInt32}),
+            # use the widest numeric type instead of tagged union. Tagged union (ConcreteRef)
+            # can't store/load raw numeric values — the phi edges emit numeric constants
+            # but the ConcreteRef local expects a struct reference, causing ref.null defaults.
+            if phi_wasm_type isa ConcreteRef && phi_julia_type isa Union
+                types = Base.uniontypes(phi_julia_type)
+                non_nothing = filter(t -> t !== Nothing, types)
+                all_numeric = all(non_nothing) do t
+                    wt = julia_to_wasm_type(t)
+                    wt === I32 || wt === I64 || wt === F32 || wt === F64
+                end
+                if all_numeric && !isempty(non_nothing)
+                    phi_wasm_type = resolve_union_type(phi_julia_type)
+                end
+            end
 
             # Phi locals always use the type derived from the phi's Julia type.
             # Edge type incompatibility is handled downstream by
@@ -4742,15 +4744,29 @@ function allocate_ssa_locals!(ctx::CompilationContext)
                 elseif !(narrowed_wasm isa ConcreteRef) && narrowed_wasm !== StructRef && narrowed_wasm !== ArrayRef && narrowed_wasm !== AnyRef
                     # Numeric PiNode — use the value's type for the local since
                     # the Wasm representation is the same (i32/i64/f32/f64)
-                    if stmt.val isa Core.SSAValue
-                        val_type = get(ctx.ssa_types, stmt.val.id, nothing)
-                        if val_type !== nothing
-                            effective_type = val_type
+                    # PURE-324: If the source is a phi local whose Julia type is a Union
+                    # but whose Wasm type was widened to numeric (e.g., Union{Int64,UInt32} → I64),
+                    # don't override effective_type with the Union — that would produce ConcreteRef.
+                    # Keep the PiNode's narrowed type so the local stays numeric.
+                    src_is_widened_numeric_phi = false
+                    if stmt.val isa Core.SSAValue && haskey(ctx.phi_locals, stmt.val.id)
+                        src_julia = get(ctx.ssa_types, stmt.val.id, nothing)
+                        if src_julia isa Union && src_wasm_type !== nothing &&
+                           (src_wasm_type === I32 || src_wasm_type === I64 || src_wasm_type === F32 || src_wasm_type === F64)
+                            src_is_widened_numeric_phi = true
                         end
-                    elseif stmt.val isa Core.Argument
-                        arg_idx = stmt.val.n
-                        if arg_idx <= length(ctx.code_info.slottypes)
-                            effective_type = ctx.code_info.slottypes[arg_idx]
+                    end
+                    if !src_is_widened_numeric_phi
+                        if stmt.val isa Core.SSAValue
+                            val_type = get(ctx.ssa_types, stmt.val.id, nothing)
+                            if val_type !== nothing
+                                effective_type = val_type
+                            end
+                        elseif stmt.val isa Core.Argument
+                            arg_idx = stmt.val.n
+                            if arg_idx <= length(ctx.code_info.slottypes)
+                                effective_type = ctx.code_info.slottypes[arg_idx]
+                            end
                         end
                     end
                 end
