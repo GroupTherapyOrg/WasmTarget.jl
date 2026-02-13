@@ -15222,6 +15222,17 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
         end
     end
 
+    if name === :jl_symbol_n
+        # jl_symbol_n(ptr::Ptr{UInt8}, len::Int64) -> Ref{Symbol}
+        # In WasmGC, Symbol is represented as a string byte array (same as String).
+        # The GC root argument (expr.args[8]) is the original String — just return it.
+        if length(expr.args) >= 8
+            gc_root = expr.args[8]
+            append!(bytes, compile_value(gc_root, ctx))
+            return bytes
+        end
+    end
+
     # Unknown foreigncall - emit unreachable.
     # We cannot execute native C FFI in WebAssembly. Emitting unreachable:
     # (1) Makes the wasm validator accept any stack type (polymorphic)
@@ -23091,6 +23102,12 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                     # Fallback: can't determine vector type — emit unreachable
                     push!(bytes, Opcode.UNREACHABLE)
                 end
+
+            elseif name === :Symbol && length(args) == 1
+                # Symbol(s::String) — in WasmGC, Symbol IS String (both are byte arrays).
+                # The argument String is already on the stack from arg compilation above.
+                # Just pass it through — no conversion needed.
+                # (args were already compiled and pushed to `bytes` above)
 
             else
                 # Unknown method — emit unreachable (will trap at runtime)
