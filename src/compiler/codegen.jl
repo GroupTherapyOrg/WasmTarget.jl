@@ -13103,10 +13103,21 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                     end
                 end
                 if is_multi_value_src || (pi_local_type !== nothing && val_wasm_type !== nothing && !wasm_types_compatible(pi_local_type, val_wasm_type))
+                    # PURE-324: PiNode narrowing I64 → I32 (e.g., PiNode(Union{Int64,UInt32} phi, UInt32))
+                    # The phi was widened to I64, so wrap to I32 instead of emitting i32.const 0.
+                    if !is_multi_value_src && val_wasm_type === I64 && pi_local_type === I32
+                        val_bytes = compile_value(stmt.val, ctx)
+                        append!(bytes, val_bytes)
+                        push!(bytes, Opcode.I32_WRAP_I64)
+                    # PURE-324: PiNode pass-through I64 → I64 when source is I32 widened phi
+                    elseif !is_multi_value_src && val_wasm_type === I32 && pi_local_type === I64
+                        val_bytes = compile_value(stmt.val, ctx)
+                        append!(bytes, val_bytes)
+                        push!(bytes, Opcode.I64_EXTEND_I32_S)
                     # PURE-321: PiNode narrowing from ExternRef → ConcreteRef means the value
                     # IS available as externref and just needs conversion (not ref.null).
                     # Example: PiNode(%198, String) narrows Any (externref) → String (array<i32>).
-                    if !is_multi_value_src && val_wasm_type === ExternRef && pi_local_type isa ConcreteRef
+                    elseif !is_multi_value_src && val_wasm_type === ExternRef && pi_local_type isa ConcreteRef
                         val_bytes = compile_value(stmt.val, ctx)
                         append!(bytes, val_bytes)
                         append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
