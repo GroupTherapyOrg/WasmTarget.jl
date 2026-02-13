@@ -656,7 +656,7 @@ to WasmGC rather than intercepting with workarounds.
 const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     :setindex!, :getindex, :ht_keyindex, :ht_keyindex2_shorthash!, :rehash!,
     # PURE-325: String replace operations needed by parse_int_literal
-    :_replace_, :_replace_init, :_replace_finish, :take!,
+    :_replace_, :_replace_init, :_replace_finish, :take!, :findnext, :unsafe_write,
     # PURE-325: Integer parsing needed by parse_int_literal
     :tryparse_internal, :parseint_preamble,
     :iterate_continued, Symbol("#_thisind_continued#_thisind_str##0"),
