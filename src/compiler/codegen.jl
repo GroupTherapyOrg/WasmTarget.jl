@@ -18910,6 +18910,15 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                         isa_val_wasm = ctx.locals[local_offset + 1]
                     end
                 end
+            elseif value_arg isa Core.Argument
+                # PURE-324: Handle Core.Argument — function params aren't in ctx.ssa_locals
+                local arg_idx_n = value_arg.n
+                if !ctx.is_compiled_closure
+                    arg_idx_n = arg_idx_n - 1
+                end
+                if arg_idx_n >= 1 && arg_idx_n <= length(ctx.arg_types)
+                    isa_val_wasm = julia_to_wasm_type_concrete(ctx.arg_types[arg_idx_n], ctx)
+                end
             end
             if isa_val_wasm !== nothing && (isa_val_wasm === I64 || isa_val_wasm === I32 || isa_val_wasm === F64 || isa_val_wasm === F32)
                 # Numeric value on stack — can never be Nothing. Drop + push false.
@@ -18931,6 +18940,15 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     if local_offset >= 0 && local_offset < length(ctx.locals)
                         isa2_val_wasm = ctx.locals[local_offset + 1]
                     end
+                end
+            elseif value_arg isa Core.Argument
+                # PURE-324: Handle Core.Argument — function params aren't in ctx.ssa_locals
+                local arg_idx = value_arg.n
+                if !ctx.is_compiled_closure
+                    arg_idx = arg_idx - 1
+                end
+                if arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
+                    isa2_val_wasm = julia_to_wasm_type_concrete(ctx.arg_types[arg_idx], ctx)
                 end
             end
             if isa2_val_wasm !== nothing && (isa2_val_wasm === I64 || isa2_val_wasm === I32 || isa2_val_wasm === F64 || isa2_val_wasm === F32)
