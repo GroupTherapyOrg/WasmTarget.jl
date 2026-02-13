@@ -4744,29 +4744,15 @@ function allocate_ssa_locals!(ctx::CompilationContext)
                 elseif !(narrowed_wasm isa ConcreteRef) && narrowed_wasm !== StructRef && narrowed_wasm !== ArrayRef && narrowed_wasm !== AnyRef
                     # Numeric PiNode — use the value's type for the local since
                     # the Wasm representation is the same (i32/i64/f32/f64)
-                    # PURE-324: If the source is a phi local whose Julia type is a Union
-                    # but whose Wasm type was widened to numeric (e.g., Union{Int64,UInt32} → I64),
-                    # don't override effective_type with the Union — that would produce ConcreteRef.
-                    # Keep the PiNode's narrowed type so the local stays numeric.
-                    src_is_widened_numeric_phi = false
-                    if stmt.val isa Core.SSAValue && haskey(ctx.phi_locals, stmt.val.id)
-                        src_julia = get(ctx.ssa_types, stmt.val.id, nothing)
-                        if src_julia isa Union && src_wasm_type !== nothing &&
-                           (src_wasm_type === I32 || src_wasm_type === I64 || src_wasm_type === F32 || src_wasm_type === F64)
-                            src_is_widened_numeric_phi = true
+                    if stmt.val isa Core.SSAValue
+                        val_type = get(ctx.ssa_types, stmt.val.id, nothing)
+                        if val_type !== nothing
+                            effective_type = val_type
                         end
-                    end
-                    if !src_is_widened_numeric_phi
-                        if stmt.val isa Core.SSAValue
-                            val_type = get(ctx.ssa_types, stmt.val.id, nothing)
-                            if val_type !== nothing
-                                effective_type = val_type
-                            end
-                        elseif stmt.val isa Core.Argument
-                            arg_idx = stmt.val.n
-                            if arg_idx <= length(ctx.code_info.slottypes)
-                                effective_type = ctx.code_info.slottypes[arg_idx]
-                            end
+                    elseif stmt.val isa Core.Argument
+                        arg_idx = stmt.val.n
+                        if arg_idx <= length(ctx.code_info.slottypes)
+                            effective_type = ctx.code_info.slottypes[arg_idx]
                         end
                     end
                 end
@@ -5093,9 +5079,6 @@ function count_ssa_uses!(stmt, uses::Dict{Int, Int})
                 count_ssa_uses!(stmt.values[i], uses)
             end
         end
-    elseif stmt isa Core.PiNode
-        # PURE-324: PiNodes reference their source SSA value
-        count_ssa_uses!(stmt.val, uses)
     end
 end
 
@@ -6637,13 +6620,8 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::C
     edge_val_type = get_phi_edge_wasm_type(val, ctx)
 
     if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type)
-        # PURE-324: Allow i32→i64 widening — the extend instruction is emitted below.
-        # This handles phi nodes for Union{Int64, UInt32} where the phi local is I64
-        # but one edge value is I32 (UInt32/Int32/Bool).
-        if !(phi_local_type === I64 && edge_val_type === I32)
-            # Type mismatch: skip this store (unreachable path for Union types)
-            return false
-        end
+        # Type mismatch: skip this store (unreachable path for Union types)
+        return false
     end
 
     # When edge_val_type is nothing (Any/Union SSA type), check the actual local's Wasm type
@@ -9004,15 +8982,8 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 local_array_idx = local_idx - ctx.n_params + 1
                 ssa_local_type = local_array_idx >= 1 && local_array_idx <= length(ctx.locals) ? ctx.locals[local_array_idx] : nothing
                 if phi_local_wasm_type !== nothing && ssa_local_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_local_type)
-                    # PURE-324: Allow i32→i64 widening for numeric union phis
-                    if phi_local_wasm_type === I64 && ssa_local_type === I32
-                        push!(result, Opcode.LOCAL_GET)
-                        append!(result, encode_leb128_unsigned(local_idx))
-                        push!(result, Opcode.I64_EXTEND_I32_S)
-                    else
-                        # Type mismatch: emit type-safe default for the phi local's type
-                        append!(result, emit_phi_type_default(phi_local_wasm_type))
-                    end
+                    # Type mismatch: emit type-safe default for the phi local's type
+                    append!(result, emit_phi_type_default(phi_local_wasm_type))
                 else
                     push!(result, Opcode.LOCAL_GET)
                     append!(result, encode_leb128_unsigned(local_idx))
@@ -9022,14 +8993,7 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 # Check type compatibility for phi-to-phi
                 src_local_type = ctx.locals[local_idx - ctx.n_params + 1]
                 if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, src_local_type)
-                    # PURE-324: Allow i32→i64 widening for numeric union phis
-                    if phi_local_wasm_type === I64 && src_local_type === I32
-                        push!(result, Opcode.LOCAL_GET)
-                        append!(result, encode_leb128_unsigned(local_idx))
-                        push!(result, Opcode.I64_EXTEND_I32_S)
-                    else
-                        append!(result, emit_phi_type_default(phi_local_wasm_type))
-                    end
+                    append!(result, emit_phi_type_default(phi_local_wasm_type))
                 else
                     push!(result, Opcode.LOCAL_GET)
                     append!(result, encode_leb128_unsigned(local_idx))
@@ -9043,18 +9007,8 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 ssa_julia_type = get(ctx.ssa_types, val.id, Any)
                 ssa_wasm_type = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
                 if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_wasm_type)
-                    # PURE-324: Allow i32→i64 widening for numeric union phis
-                    if phi_local_wasm_type === I64 && ssa_wasm_type === I32
-                        if stmt !== nothing && !(stmt isa Core.PhiNode)
-                            append!(result, compile_statement(stmt, val.id, ctx))
-                        else
-                            append!(result, compile_value(val, ctx))
-                        end
-                        push!(result, Opcode.I64_EXTEND_I32_S)
-                    else
-                        # Type mismatch: emit type-safe default instead of recomputing
-                        append!(result, emit_phi_type_default(phi_local_wasm_type))
-                    end
+                    # Type mismatch: emit type-safe default instead of recomputing
+                    append!(result, emit_phi_type_default(phi_local_wasm_type))
                 elseif stmt !== nothing && !(stmt isa Core.PhiNode)
                     append!(result, compile_statement(stmt, val.id, ctx))
                 else
@@ -9111,12 +9065,6 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 phi_local_type = ctx.locals[phi_local_idx - ctx.n_params + 1]
                 edge_val_type = get_phi_edge_wasm_type(val)
                 if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type)
-                    # PURE-324: Allow i32→i64 widening for numeric union phis
-                    if phi_local_type === I64 && edge_val_type === I32
-                        append!(result, compile_value(val, ctx))
-                        push!(result, Opcode.I64_EXTEND_I32_S)
-                        return result
-                    end
                     # Type mismatch: emit type-safe default instead
                     append!(result, emit_phi_type_default(phi_local_type))
                     return result
@@ -9270,19 +9218,6 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                 edge_val_type = get_phi_edge_wasm_type(val)
 
                                 if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type)
-                                    # PURE-324: Allow i32→i64 widening for numeric union phis
-                                    # compile_phi_value handles the extend internally
-                                    if phi_local_type === I64 && edge_val_type === I32
-                                        phi_value_bytes_w = compile_phi_value(val, i)
-                                        if !isempty(phi_value_bytes_w)
-                                            append!(bytes, phi_value_bytes_w)
-                                            push!(bytes, Opcode.LOCAL_SET)
-                                            append!(bytes, encode_leb128_unsigned(local_idx))
-                                            phi_count += 1
-                                            found_edge = true
-                                            break
-                                        end
-                                    end
                                     # Type mismatch: emit type-safe default for the local's declared type.
                                     # This happens when Julia Union types have mixed primitive/ref variants.
                                     if phi_local_type isa ConcreteRef
@@ -13119,21 +13054,10 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                     end
                 end
                 if is_multi_value_src || (pi_local_type !== nothing && val_wasm_type !== nothing && !wasm_types_compatible(pi_local_type, val_wasm_type))
-                    # PURE-324: PiNode narrowing I64 → I32 (e.g., PiNode(Union{Int64,UInt32} phi, UInt32))
-                    # The phi was widened to I64, so wrap to I32 instead of emitting i32.const 0.
-                    if !is_multi_value_src && val_wasm_type === I64 && pi_local_type === I32
-                        val_bytes = compile_value(stmt.val, ctx)
-                        append!(bytes, val_bytes)
-                        push!(bytes, Opcode.I32_WRAP_I64)
-                    # PURE-324: PiNode pass-through I64 → I64 when source is I32 widened phi
-                    elseif !is_multi_value_src && val_wasm_type === I32 && pi_local_type === I64
-                        val_bytes = compile_value(stmt.val, ctx)
-                        append!(bytes, val_bytes)
-                        push!(bytes, Opcode.I64_EXTEND_I32_S)
                     # PURE-321: PiNode narrowing from ExternRef → ConcreteRef means the value
                     # IS available as externref and just needs conversion (not ref.null).
                     # Example: PiNode(%198, String) narrows Any (externref) → String (array<i32>).
-                    elseif !is_multi_value_src && val_wasm_type === ExternRef && pi_local_type isa ConcreteRef
+                    if !is_multi_value_src && val_wasm_type === ExternRef && pi_local_type isa ConcreteRef
                         val_bytes = compile_value(stmt.val, ctx)
                         append!(bytes, val_bytes)
                         append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
@@ -15672,57 +15596,13 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         append!(bytes, encode_leb128_unsigned(dict_info.wasm_type_idx))
 
     elseif typeof(val) isa DataType && typeof(val).name.name in (:MemoryRef, :GenericMemoryRef, :Memory, :GenericMemory)
-        # PURE-324: MemoryRef/Memory constants — materialize array data for const globals.
+        # PURE-049: MemoryRef/Memory constants map to array types, not struct types.
+        # These appear as captured closure fields. Emit ref.null of the array type.
         T = typeof(val)
-        is_ref = T.name.name in (:MemoryRef, :GenericMemoryRef)
-        elem_type = is_ref ? T.parameters[2] : (T.name.name === :GenericMemory ? T.parameters[2] : T.parameters[1])
+        elem_type = T.name.name in (:GenericMemoryRef, :GenericMemory) ? T.parameters[2] : T.parameters[1]
         array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-        # Check if the array's Wasm element type is externref (e.g., for Any-typed fields)
-        array_wasm_elem_is_extern = false
-        if array_type_idx + 1 <= length(ctx.mod.types)
-            at = ctx.mod.types[array_type_idx + 1]
-            if at isa ArrayType && at.elem.valtype === ExternRef
-                array_wasm_elem_is_extern = true
-            end
-        end
-        # Get the underlying Memory data
-        mem = is_ref ? getfield(val, :mem) : val
-        n = length(mem)
-        if n == 0
-            # Empty array — emit ref.null
-            push!(bytes, Opcode.REF_NULL)
-            append!(bytes, encode_leb128_signed(Int64(array_type_idx)))
-        else
-            wasm_et = julia_to_wasm_type(elem_type)
-            for i in 1:n
-                el = mem[i]
-                if wasm_et === I32
-                    push!(bytes, Opcode.I32_CONST)
-                    append!(bytes, encode_leb128_signed(Int32(el)))
-                elseif wasm_et === I64
-                    push!(bytes, Opcode.I64_CONST)
-                    append!(bytes, encode_leb128_signed(Int64(el)))
-                elseif wasm_et === F32
-                    push!(bytes, Opcode.F32_CONST)
-                    append!(bytes, reinterpret(UInt8, [Float32(el)]))
-                elseif wasm_et === F64
-                    push!(bytes, Opcode.F64_CONST)
-                    append!(bytes, reinterpret(UInt8, [Float64(el)]))
-                else
-                    # Ref-typed element — compile recursively
-                    append!(bytes, compile_value(el, ctx))
-                    # If array expects externref but element is a concrete GC ref, convert
-                    if array_wasm_elem_is_extern
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
-                    end
-                end
-            end
-            push!(bytes, Opcode.GC_PREFIX)
-            push!(bytes, Opcode.ARRAY_NEW_FIXED)
-            append!(bytes, encode_leb128_unsigned(array_type_idx))
-            append!(bytes, encode_leb128_unsigned(n))
-        end
+        push!(bytes, Opcode.REF_NULL)
+        append!(bytes, encode_leb128_signed(Int64(array_type_idx)))
 
     elseif isstructtype(typeof(val)) && !isa(val, Function) && !isa(val, Module)
         # Struct constant - create it with struct.new
@@ -15749,13 +15629,11 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
             field_val_bytes = compile_value(field_val, ctx)
             # Check field type compatibility
             replaced = false
-            needs_extern_convert = false
             if struct_type_def isa StructType && fi <= length(struct_type_def.fields)
                 expected_wasm = struct_type_def.fields[fi].valtype
                 if expected_wasm isa ConcreteRef || expected_wasm === StructRef || expected_wasm === ArrayRef || expected_wasm === AnyRef || expected_wasm === ExternRef
                     # Field expects a ref type — check if field_val_bytes produces something incompatible
                     need_replace = false
-                    ends_with_ref_producing_gc = false
                     if length(field_val_bytes) >= 3
                         # Check if ends with struct_new of incompatible type
                         for scan_pos in (length(field_val_bytes)-2):-1:1
@@ -15790,8 +15668,8 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
                         for scan_i in 1:(length(field_val_bytes)-1)
                             if field_val_bytes[scan_i] == 0xFB  # GC_PREFIX
                                 gc_op = field_val_bytes[scan_i + 1]
-                                # 0x00 = struct.new, 0x08 = array.new_fixed, 0x07 = array.new_default
-                                if gc_op == 0x00 || gc_op == 0x08 || gc_op == 0x07
+                                # 0x00 = struct.new, 0x1A = array.new_fixed, 0x1B = array.new_default
+                                if gc_op == 0x00 || gc_op == 0x1A || gc_op == 0x1B
                                     ends_with_ref_producing_gc = true
                                 end
                             end
@@ -15831,18 +15709,10 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
                         end
                         field_val_bytes = UInt8[]
                         replaced = true
-                    elseif ends_with_ref_producing_gc && expected_wasm === ExternRef
-                        # PURE-324: Field produced a concrete GC ref (array/struct) but
-                        # struct field expects externref — need extern.convert_any after
-                        needs_extern_convert = true
                     end
                 end
             end
             append!(bytes, field_val_bytes)
-            if needs_extern_convert
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
-            end
         end
 
         # Create the struct
@@ -18744,15 +18614,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             target_type_ref
         end
         if target_type === Int64 || target_type === UInt64
-            # Extending to 64-bit - only emit extend if source is i32
-            # PURE-324: Source may already be i64 if from a widened phi local (Union{Int64, UInt32})
-            source_wasm_s = nothing
-            if length(args) >= 2
-                source_wasm_s = get_phi_edge_wasm_type(args[2], ctx)
-            end
-            if source_wasm_s !== I64
-                push!(bytes, Opcode.I64_EXTEND_I32_S)
-            end
+            # Extending to 64-bit - emit extend instruction
+            push!(bytes, Opcode.I64_EXTEND_I32_S)
         elseif target_type === Int128 || target_type === UInt128
             # Sign-extending to 128-bit - create struct with (lo=value, hi=sign_extension)
             # The value is already on the stack (i64)
@@ -18813,15 +18676,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             target_type_ref
         end
         if target_type === Int64 || target_type === UInt64
-            # Extending to 64-bit - only emit extend if source is i32
-            # PURE-324: Source may already be i64 if from a widened phi local (Union{Int64, UInt32})
-            source_wasm = nothing
-            if length(args) >= 2
-                source_wasm = get_phi_edge_wasm_type(args[2], ctx)
-            end
-            if source_wasm !== I64
-                push!(bytes, Opcode.I64_EXTEND_I32_U)
-            end
+            # Extending to 64-bit - emit extend instruction
+            push!(bytes, Opcode.I64_EXTEND_I32_U)
         elseif target_type === Int128 || target_type === UInt128
             # Extending to 128-bit - create struct with (lo=value, hi=0)
             # The value is already on the stack (i64), need to create 128-bit struct
@@ -19070,15 +18926,6 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                         isa_val_wasm = ctx.locals[local_offset + 1]
                     end
                 end
-            elseif value_arg isa Core.Argument
-                # PURE-324: Handle Core.Argument — function params aren't in ctx.ssa_locals
-                local arg_idx_n = value_arg.n
-                if !ctx.is_compiled_closure
-                    arg_idx_n = arg_idx_n - 1
-                end
-                if arg_idx_n >= 1 && arg_idx_n <= length(ctx.arg_types)
-                    isa_val_wasm = julia_to_wasm_type_concrete(ctx.arg_types[arg_idx_n], ctx)
-                end
             end
             if isa_val_wasm !== nothing && (isa_val_wasm === I64 || isa_val_wasm === I32 || isa_val_wasm === F64 || isa_val_wasm === F32)
                 # Numeric value on stack — can never be Nothing. Drop + push false.
@@ -19100,15 +18947,6 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     if local_offset >= 0 && local_offset < length(ctx.locals)
                         isa2_val_wasm = ctx.locals[local_offset + 1]
                     end
-                end
-            elseif value_arg isa Core.Argument
-                # PURE-324: Handle Core.Argument — function params aren't in ctx.ssa_locals
-                local arg_idx = value_arg.n
-                if !ctx.is_compiled_closure
-                    arg_idx = arg_idx - 1
-                end
-                if arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
-                    isa2_val_wasm = julia_to_wasm_type_concrete(ctx.arg_types[arg_idx], ctx)
                 end
             end
             if isa2_val_wasm !== nothing && (isa2_val_wasm === I64 || isa2_val_wasm === I32 || isa2_val_wasm === F64 || isa2_val_wasm === F32)
