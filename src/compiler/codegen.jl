@@ -15580,13 +15580,44 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         append!(bytes, encode_leb128_unsigned(dict_info.wasm_type_idx))
 
     elseif typeof(val) isa DataType && typeof(val).name.name in (:MemoryRef, :GenericMemoryRef, :Memory, :GenericMemory)
-        # PURE-049: MemoryRef/Memory constants map to array types, not struct types.
-        # These appear as captured closure fields. Emit ref.null of the array type.
+        # PURE-324: MemoryRef/Memory constants — materialize array data for const globals.
         T = typeof(val)
-        elem_type = T.name.name in (:GenericMemoryRef, :GenericMemory) ? T.parameters[2] : T.parameters[1]
+        is_ref = T.name.name in (:MemoryRef, :GenericMemoryRef)
+        elem_type = is_ref ? T.parameters[2] : (T.name.name === :GenericMemory ? T.parameters[2] : T.parameters[1])
         array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-        push!(bytes, Opcode.REF_NULL)
-        append!(bytes, encode_leb128_signed(Int64(array_type_idx)))
+        # Get the underlying Memory data
+        mem = is_ref ? getfield(val, :mem) : val
+        n = length(mem)
+        if n == 0
+            # Empty array — emit ref.null
+            push!(bytes, Opcode.REF_NULL)
+            append!(bytes, encode_leb128_signed(Int64(array_type_idx)))
+        else
+            wasm_et = julia_to_wasm_type(elem_type)
+            for i in 1:n
+                el = mem[i]
+                if wasm_et === I32
+                    push!(bytes, Opcode.I32_CONST)
+                    append!(bytes, encode_leb128_signed(Int32(el)))
+                elseif wasm_et === I64
+                    push!(bytes, Opcode.I64_CONST)
+                    append!(bytes, encode_leb128_signed(Int64(el)))
+                elseif wasm_et === F32
+                    push!(bytes, Opcode.F32_CONST)
+                    append!(bytes, reinterpret(UInt8, [Float32(el)]))
+                elseif wasm_et === F64
+                    push!(bytes, Opcode.F64_CONST)
+                    append!(bytes, reinterpret(UInt8, [Float64(el)]))
+                else
+                    # Ref-typed element — compile recursively
+                    append!(bytes, compile_value(el, ctx))
+                end
+            end
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ARRAY_NEW_FIXED)
+            append!(bytes, encode_leb128_unsigned(array_type_idx))
+            append!(bytes, encode_leb128_unsigned(n))
+        end
 
     elseif isstructtype(typeof(val)) && !isa(val, Function) && !isa(val, Module)
         # Struct constant - create it with struct.new
