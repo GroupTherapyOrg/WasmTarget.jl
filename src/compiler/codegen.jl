@@ -4343,8 +4343,8 @@ function analyze_control_flow!(ctx::CompilationContext)
             # can't store/load raw numeric values — the phi edges emit numeric constants
             # but the ConcreteRef local expects a struct reference, causing ref.null defaults.
             if phi_wasm_type isa ConcreteRef && phi_julia_type isa Union
-                types = Base.uniontypes(phi_julia_type)
-                non_nothing = filter(t -> t !== Nothing, types)
+                types_u = Base.uniontypes(phi_julia_type)
+                non_nothing = filter(t -> t !== Nothing, types_u)
                 all_numeric = all(non_nothing) do t
                     wt = julia_to_wasm_type(t)
                     wt === I32 || wt === I64 || wt === F32 || wt === F64
@@ -4759,6 +4759,20 @@ function allocate_ssa_locals!(ctx::CompilationContext)
             end
 
             wasm_type = julia_to_wasm_type_concrete(effective_type, ctx)
+
+            # PURE-324: For SSA locals with all-numeric Union types (e.g., Union{Int64, UInt32}),
+            # use the widest numeric type instead of tagged union. Same fix as phi allocation.
+            if wasm_type isa ConcreteRef && effective_type isa Union
+                ssa_types_u = Base.uniontypes(effective_type)
+                ssa_non_nothing = filter(t -> t !== Nothing, ssa_types_u)
+                ssa_all_numeric = all(ssa_non_nothing) do t
+                    wt = julia_to_wasm_type(t)
+                    wt === I32 || wt === I64 || wt === F32 || wt === F64
+                end
+                if ssa_all_numeric && !isempty(ssa_non_nothing)
+                    wasm_type = resolve_union_type(effective_type)
+                end
+            end
 
             # For PiNodes where source local has a different NUMERIC type,
             # use the source's actual Wasm type to avoid local.get → local.set mismatches.
