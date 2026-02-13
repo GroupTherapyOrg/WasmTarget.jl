@@ -14093,7 +14093,24 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
         # emit ref.null of the correct array type instead of the wrong-typed local.get.
         # This happens with non-Array AbstractVector types (UnitRange, StepRange) whose
         # fields are i64 but get registered with Vector's ref-based layout.
+        # PURE-325: Check if field0 is a multi-arg memoryrefnew that produces [array_ref, i32_index].
+        # Vector only needs the array_ref — drop the extra i32 index.
+        is_multi_arg_memref = false
+        if field_values[1] isa Core.SSAValue
+            src_stmt = ctx.code_info.code[field_values[1].id]
+            if src_stmt isa Expr && src_stmt.head === :call
+                src_func = src_stmt.args[1]
+                is_multi_arg_memref = (src_func isa GlobalRef &&
+                                      (src_func.mod === Core || src_func.mod === Base) &&
+                                      src_func.name === :memoryrefnew &&
+                                      length(src_stmt.args) >= 4)
+            end
+        end
         field0_bytes = compile_value(field_values[1], ctx)
+        if is_multi_arg_memref
+            # Multi-arg memoryrefnew pushed [array_ref, i32_index] — drop the i32 index
+            push!(field0_bytes, Opcode.DROP)
+        end
         if length(field0_bytes) >= 2 && field0_bytes[1] == 0x20  # LOCAL_GET = 0x20
             src_idx = 0; shift = 0
             for bi in 2:length(field0_bytes)
