@@ -1,7 +1,7 @@
 # Test Utilities - Node.js Wasm Execution Harness
 # This is the "Ground Truth" verification engine for TDD
 
-using Test
+using Test, Dates
 import JSON
 
 # ============================================================================
@@ -567,6 +567,110 @@ numeric results from complex operations.
 """
 function compare_julia_wasm_wrapper(wrapper_f, args...)
     return compare_julia_wasm(wrapper_f, args...)
+end
+
+# ============================================================================
+# Ground Truth Snapshots — Native Julia Reference Values
+# ============================================================================
+
+const GROUND_TRUTH_DIR = joinpath(@__DIR__, "ground_truth")
+
+"""
+    generate_ground_truth(name::String, f, inputs::Vector; overwrite=false) -> String
+
+Run `f` natively in Julia for each input tuple, save results to a JSON snapshot
+file in `test/ground_truth/`. Returns the path to the snapshot file.
+
+Each input must be a tuple of marshalable arguments (Int32, Int64, Float64).
+The function `f` must return a marshalable type.
+
+# Example
+```julia
+generate_ground_truth("add_one", x -> x + Int32(1), [
+    (Int32(0),),
+    (Int32(5),),
+    (Int32(-1),),
+])
+```
+"""
+function generate_ground_truth(name::String, f, inputs::Vector; overwrite::Bool=false)
+    mkpath(GROUND_TRUTH_DIR)
+    path = joinpath(GROUND_TRUTH_DIR, "$name.json")
+    if isfile(path) && !overwrite
+        @info "Ground truth '$name' already exists. Use overwrite=true to regenerate."
+        return path
+    end
+
+    entries = []
+    for args in inputs
+        result = f(args...)
+        push!(entries, Dict(
+            "args" => collect(args),
+            "expected" => result
+        ))
+    end
+
+    snapshot = Dict(
+        "name" => name,
+        "generated" => string(Dates.now()),
+        "julia_version" => string(VERSION),
+        "entries" => entries
+    )
+
+    open(path, "w") do io
+        JSON.print(io, snapshot, 2)
+    end
+    @info "Generated ground truth '$name' with $(length(entries)) entries at $path"
+    return path
+end
+
+"""
+    load_ground_truth(name::String) -> Dict
+
+Load a ground truth snapshot by name from `test/ground_truth/`.
+"""
+function load_ground_truth(name::String)
+    path = joinpath(GROUND_TRUTH_DIR, "$name.json")
+    if !isfile(path)
+        error("Ground truth '$name' not found at $path. Run generate_ground_truth first.")
+    end
+    return JSON.parsefile(path)
+end
+
+"""
+    compare_against_ground_truth(name::String, f) -> Vector{NamedTuple}
+
+Compile `f` to Wasm and compare its output against saved ground truth snapshots.
+Returns a vector of `(args, expected, actual, pass, skipped)` named tuples.
+
+The ground truth must have been generated with `generate_ground_truth` first.
+
+# Example
+```julia
+generate_ground_truth("add_one", x -> x + Int32(1), [(Int32(0),), (Int32(5),)])
+results = compare_against_ground_truth("add_one", x -> x + Int32(1))
+for r in results
+    @assert r.pass "Args \$(r.args): expected \$(r.expected), got \$(r.actual)"
+end
+```
+"""
+function compare_against_ground_truth(name::String, f)
+    snapshot = load_ground_truth(name)
+    entries = snapshot["entries"]
+
+    results = NamedTuple[]
+    for entry in entries
+        args_raw = entry["args"]
+        expected = entry["expected"]
+
+        # Convert JSON arrays back to typed tuples
+        # JSON stores numbers as Int64/Float64, so convert to match original types
+        args = Tuple(Int32(a) for a in args_raw)
+
+        r = compare_julia_wasm_manual(f, args, expected isa Integer ? Int32(expected) : expected)
+        push!(results, (args=args, expected=expected, actual=r.actual, pass=r.pass, skipped=r.skipped))
+    end
+    return results
 end
 
 # ============================================================================

@@ -4267,6 +4267,64 @@ end
             end
         end
 
+        # Ground truth snapshot tests
+        @testset "generate_ground_truth — creates snapshot file" begin
+            path = generate_ground_truth("gt_add_one", x -> x + Int32(1), [
+                (Int32(0),), (Int32(5),), (Int32(-1),),
+            ]; overwrite=true)
+            @test isfile(path)
+            snapshot = load_ground_truth("gt_add_one")
+            @test snapshot["name"] == "gt_add_one"
+            @test length(snapshot["entries"]) == 3
+            @test snapshot["entries"][1]["expected"] == 1
+            @test snapshot["entries"][2]["expected"] == 6
+            @test snapshot["entries"][3]["expected"] == 0
+        end
+
+        @testset "compare_against_ground_truth — all pass" begin
+            generate_ground_truth("gt_double", x -> x * Int32(2), [
+                (Int32(3),), (Int32(0),), (Int32(-4),),
+            ]; overwrite=true)
+            results = compare_against_ground_truth("gt_double", x -> x * Int32(2))
+            @test length(results) == 3
+            for r in results
+                if !r.skipped
+                    @test r.pass
+                end
+            end
+        end
+
+        @testset "compare_against_ground_truth — detects mismatch" begin
+            generate_ground_truth("gt_negate", x -> -x, [
+                (Int32(5),), (Int32(-3),),
+            ]; overwrite=true)
+            # Intentionally use wrong function to get mismatch
+            results = compare_against_ground_truth("gt_negate", x -> x + Int32(1))
+            @test length(results) == 2
+            if !results[1].skipped
+                @test !results[1].pass  # -5 != 6
+            end
+        end
+
+        @testset "load_ground_truth — error on missing" begin
+            @test_throws ErrorException load_ground_truth("nonexistent_snapshot_xyz")
+        end
+
+        @testset "generate_ground_truth — skip if exists" begin
+            path = generate_ground_truth("gt_skip_test", x -> x, [
+                (Int32(1),),
+            ]; overwrite=true)
+            @test isfile(path)
+            # Second call without overwrite should not error
+            path2 = generate_ground_truth("gt_skip_test", x -> x, [
+                (Int32(999),),
+            ])
+            @test path == path2
+            # Original data should be preserved
+            snapshot = load_ground_truth("gt_skip_test")
+            @test snapshot["entries"][1]["expected"] == 1  # not 999
+        end
+
     end
 
 end
