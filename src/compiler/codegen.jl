@@ -15644,11 +15644,13 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
             field_val_bytes = compile_value(field_val, ctx)
             # Check field type compatibility
             replaced = false
+            needs_extern_convert = false
             if struct_type_def isa StructType && fi <= length(struct_type_def.fields)
                 expected_wasm = struct_type_def.fields[fi].valtype
                 if expected_wasm isa ConcreteRef || expected_wasm === StructRef || expected_wasm === ArrayRef || expected_wasm === AnyRef || expected_wasm === ExternRef
                     # Field expects a ref type — check if field_val_bytes produces something incompatible
                     need_replace = false
+                    ends_with_ref_producing_gc = false
                     if length(field_val_bytes) >= 3
                         # Check if ends with struct_new of incompatible type
                         for scan_pos in (length(field_val_bytes)-2):-1:1
@@ -15724,10 +15726,18 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
                         end
                         field_val_bytes = UInt8[]
                         replaced = true
+                    elseif ends_with_ref_producing_gc && expected_wasm === ExternRef
+                        # PURE-324: Field produced a concrete GC ref (array/struct) but
+                        # struct field expects externref — need extern.convert_any after
+                        needs_extern_convert = true
                     end
                 end
             end
             append!(bytes, field_val_bytes)
+            if needs_extern_convert
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+            end
         end
 
         # Create the struct
