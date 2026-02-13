@@ -14789,11 +14789,13 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
             return bytes
         elseif name === :jl_string_ptr
             # jl_string_ptr(s) -> Ptr{UInt8}: get pointer to string bytes
-            # In WasmGC, String is array<i32>. We emit i64.const 0 as dummy pointer.
-            # The actual string ref is resolved in the pointerref handler by tracing
-            # back through add_ptr/sub_ptr to find the original string arg.
+            # In WasmGC, String is array<i32>. We emit i64.const 1 as base pointer.
+            # Base=1 avoids ambiguity with memchr returning 0 for "not found" vs
+            # finding at position 0. The pointerref handler traces back to find the
+            # original string arg, so the base value doesn't affect it.
+            # The memchr handler uses base=1 arithmetic: array_index = ptr - 1.
             push!(bytes, Opcode.I64_CONST)
-            push!(bytes, 0x00)
+            push!(bytes, 0x01)
             return bytes
         elseif name === :jl_id_start_char
             # PURE-316: jl_id_start_char(c::UInt32) -> Int32
@@ -14998,6 +15000,133 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
                     return bytes
                 end
             end
+        end
+    end
+
+    # PURE-325: memchr(ptr, byte, count) — scan string array for a byte value.
+    # Used by Base._search for findnext/findfirst on strings.
+    # In WasmGC, we scan the array<i32> representation directly.
+    # With jl_string_ptr base=1: ptr = 1+i-1 = i (1-based start position).
+    # memchr returns the 1-based "pointer" (base + array_index) if found, or 0 (C_NULL) if not.
+    if name === :memchr && length(expr.args) >= 8
+        ptr_arg = expr.args[6]   # Ptr{UInt8} — traces back to string + offset
+        byte_arg = expr.args[7]  # Int32 — the byte to search for
+        count_arg = expr.args[8] # UInt64 — number of bytes to search
+
+        # Trace the pointer back to find the string array ref
+        str_info = ptr_arg isa Core.SSAValue ? _trace_string_ptr(ptr_arg, ctx.code_info.code) : nothing
+        if str_info !== nothing
+            str_ssa, _idx_ssa = str_info
+            str_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
+
+            # Allocate locals for the loop (same pattern as scratch_local allocation)
+            str_local = length(ctx.locals) + ctx.n_params
+            push!(ctx.locals, ConcreteRef(str_arr_type))
+            current_local = length(ctx.locals) + ctx.n_params
+            push!(ctx.locals, I64)
+            end_local = length(ctx.locals) + ctx.n_params
+            push!(ctx.locals, I64)
+            result_local = length(ctx.locals) + ctx.n_params
+            push!(ctx.locals, I64)
+            byte_local = length(ctx.locals) + ctx.n_params
+            push!(ctx.locals, I32)
+
+            # Store string ref
+            append!(bytes, compile_value(str_ssa, ctx))
+            push!(bytes, Opcode.LOCAL_SET)
+            append!(bytes, encode_leb128_unsigned(str_local))
+
+            # Store start_ptr (the ptr argument to memchr = 1-based position)
+            append!(bytes, compile_value(ptr_arg, ctx))
+            push!(bytes, Opcode.LOCAL_SET)
+            append!(bytes, encode_leb128_unsigned(current_local))
+
+            # Store byte
+            append!(bytes, compile_value(byte_arg, ctx))
+            push!(bytes, Opcode.LOCAL_SET)
+            append!(bytes, encode_leb128_unsigned(byte_local))
+
+            # Compute end = start + count
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(current_local))
+            append!(bytes, compile_value(count_arg, ctx))
+            push!(bytes, Opcode.I64_ADD)
+            push!(bytes, Opcode.LOCAL_SET)
+            append!(bytes, encode_leb128_unsigned(end_local))
+
+            # result = 0 (not found)
+            push!(bytes, Opcode.I64_CONST)
+            push!(bytes, 0x00)
+            push!(bytes, Opcode.LOCAL_SET)
+            append!(bytes, encode_leb128_unsigned(result_local))
+
+            # block $done
+            push!(bytes, Opcode.BLOCK)
+            push!(bytes, 0x40)  # void
+
+            #   loop $scan
+            push!(bytes, Opcode.LOOP)
+            push!(bytes, 0x40)  # void
+
+            #     if current >= end, break
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(current_local))
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(end_local))
+            push!(bytes, Opcode.I64_GE_U)
+            push!(bytes, Opcode.BR_IF)
+            push!(bytes, 0x01)  # br to block (depth 1 = $done)
+
+            #     array_index = current - 1 (base=1, so ptr=1 means index=0)
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(str_local))
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(current_local))
+            push!(bytes, Opcode.I32_WRAP_I64)
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x01)
+            push!(bytes, Opcode.I32_SUB)  # 0-based index
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ARRAY_GET)
+            append!(bytes, encode_leb128_unsigned(str_arr_type))
+
+            #     if array[idx] == byte, found!
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(byte_local))
+            push!(bytes, Opcode.I32_EQ)
+            push!(bytes, Opcode.IF)
+            push!(bytes, 0x40)  # void
+            #       result = current
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(current_local))
+            push!(bytes, Opcode.LOCAL_SET)
+            append!(bytes, encode_leb128_unsigned(result_local))
+            push!(bytes, Opcode.BR)
+            push!(bytes, 0x02)  # br to block (depth 2 = $done)
+            push!(bytes, Opcode.END)  # end if
+
+            #     current += 1
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(current_local))
+            push!(bytes, Opcode.I64_CONST)
+            push!(bytes, 0x01)
+            push!(bytes, Opcode.I64_ADD)
+            push!(bytes, Opcode.LOCAL_SET)
+            append!(bytes, encode_leb128_unsigned(current_local))
+
+            #     br $scan (continue loop)
+            push!(bytes, Opcode.BR)
+            push!(bytes, 0x00)  # br to loop (depth 0 = $scan)
+
+            #   end loop
+            push!(bytes, Opcode.END)
+            # end block
+            push!(bytes, Opcode.END)
+
+            # Push result (the "pointer" or 0)
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(result_local))
+            return bytes
         end
     end
 
