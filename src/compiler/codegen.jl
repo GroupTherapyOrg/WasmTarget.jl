@@ -15585,6 +15585,14 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         is_ref = T.name.name in (:MemoryRef, :GenericMemoryRef)
         elem_type = is_ref ? T.parameters[2] : (T.name.name === :GenericMemory ? T.parameters[2] : T.parameters[1])
         array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
+        # Check if the array's Wasm element type is externref (e.g., for Any-typed fields)
+        array_wasm_elem_is_extern = false
+        if array_type_idx + 1 <= length(ctx.mod.types)
+            at = ctx.mod.types[array_type_idx + 1]
+            if at isa ArrayType && at.elem.valtype === ExternRef
+                array_wasm_elem_is_extern = true
+            end
+        end
         # Get the underlying Memory data
         mem = is_ref ? getfield(val, :mem) : val
         n = length(mem)
@@ -15611,6 +15619,11 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
                 else
                     # Ref-typed element — compile recursively
                     append!(bytes, compile_value(el, ctx))
+                    # If array expects externref but element is a concrete GC ref, convert
+                    if array_wasm_elem_is_extern
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                    end
                 end
             end
             push!(bytes, Opcode.GC_PREFIX)
