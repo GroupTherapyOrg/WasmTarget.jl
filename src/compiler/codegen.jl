@@ -4804,7 +4804,12 @@ function allocate_ssa_locals!(ctx::CompilationContext)
                             nn = filter(t -> t !== Nothing, ut)
                             !isempty(nn) && all(t -> let wt = julia_to_wasm_type(t); wt === I32 || wt === I64 || wt === F32 || wt === F64 end, nn)
                         end
-                    if is_numeric_src && (is_numeric_tgt || is_numeric_union_tgt)
+                    # PURE-324: Don't widen I32 → I64 for PiNodes. The PiNode's
+                    # compile_statement handler emits i32_wrap_i64 to convert the
+                    # I64 phi value to I32, so the PiNode local should stay I32.
+                    # Widening breaks downstream i32 operations (i32_sub, etc).
+                    is_narrowing = src_local_wasm === I64 && wasm_type === I32
+                    if is_numeric_src && (is_numeric_tgt || is_numeric_union_tgt) && !is_narrowing
                         wasm_type = src_local_wasm
                     end
                 end
