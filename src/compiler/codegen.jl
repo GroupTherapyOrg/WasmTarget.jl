@@ -15698,8 +15698,8 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
                         for scan_i in 1:(length(field_val_bytes)-1)
                             if field_val_bytes[scan_i] == 0xFB  # GC_PREFIX
                                 gc_op = field_val_bytes[scan_i + 1]
-                                # 0x00 = struct.new, 0x1A = array.new_fixed, 0x1B = array.new_default
-                                if gc_op == 0x00 || gc_op == 0x1A || gc_op == 0x1B
+                                # 0x00 = struct.new, 0x08 = array.new_fixed, 0x07 = array.new_default
+                                if gc_op == 0x00 || gc_op == 0x08 || gc_op == 0x07
                                     ends_with_ref_producing_gc = true
                                 end
                             end
