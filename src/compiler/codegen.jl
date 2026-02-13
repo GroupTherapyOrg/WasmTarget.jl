@@ -14942,6 +14942,33 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
                 append!(bytes, compile_value(str_arg, ctx))
             end
             return bytes
+        elseif name === :jl_genericmemory_to_string
+            # PURE-325: jl_genericmemory_to_string(memory, n) -> String
+            # Converts a Memory{UInt8} to a String. In WasmGC, both Memory and String
+            # are represented as array<i32>, so this is essentially a no-op.
+            # The memory argument IS the string array.
+            if length(expr.args) >= 6
+                mem_arg = expr.args[6]
+                append!(bytes, compile_value(mem_arg, ctx))
+            end
+            return bytes
+        elseif name === :jl_pchar_to_string
+            # PURE-325: jl_pchar_to_string(ptr, n) -> String
+            # Creates a String from a char pointer and length. In WasmGC, we trace
+            # the pointer back to the underlying array. If tracing fails, fall through
+            # to create a new array.
+            if length(expr.args) >= 6
+                ptr_arg = expr.args[6]
+                # Try to trace back to the underlying data array
+                data_ssa = _trace_ptr_to_data(ptr_arg, ctx)
+                if data_ssa !== nothing
+                    append!(bytes, compile_value(data_ssa, ctx))
+                    return bytes
+                end
+                # Fallback: the pointer might be directly compilable as a ref
+                append!(bytes, compile_value(ptr_arg, ctx))
+            end
+            return bytes
         elseif name === :utf8proc_grapheme_break_stateful
             # PURE-316: utf8proc_grapheme_break_stateful(c1::UInt32, c2::UInt32, state::Ref{Int32}) -> Bool
             # Returns true if there's a grapheme cluster break between c1 and c2.
