@@ -17298,6 +17298,40 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         return bytes
     end
 
+    # PURE-324: Handle pointer arithmetic intrinsics BEFORE the generic arg pre-push.
+    # add_ptr, sub_ptr, and pointerref push their own args (or trace back to string ref),
+    # so they must NOT have args pre-pushed by the generic loop below.
+    if func isa GlobalRef && func.name === :add_ptr
+        append!(bytes, compile_value(args[1], ctx))
+        append!(bytes, compile_value(args[2], ctx))
+        push!(bytes, Opcode.I64_ADD)
+        return bytes
+    elseif func isa GlobalRef && func.name === :sub_ptr
+        append!(bytes, compile_value(args[1], ctx))
+        append!(bytes, compile_value(args[2], ctx))
+        push!(bytes, Opcode.I64_SUB)
+        return bytes
+    elseif func isa GlobalRef && func.name === :pointerref
+        ptr_arg = length(args) >= 1 ? args[1] : nothing
+        str_info = ptr_arg !== nothing ? _trace_string_ptr(ptr_arg, ctx.code_info.code) : nothing
+        if str_info !== nothing
+            str_ssa, idx_ssa = str_info
+            append!(bytes, compile_value(str_ssa, ctx))
+            append!(bytes, compile_value(idx_ssa, ctx))
+            push!(bytes, Opcode.I32_WRAP_I64)
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x01)
+            push!(bytes, Opcode.I32_SUB)
+            string_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ARRAY_GET)
+            append!(bytes, encode_leb128_unsigned(string_arr_type))
+        else
+            push!(bytes, Opcode.UNREACHABLE)
+        end
+        return bytes
+    end
+
     # Push arguments onto the stack (normal case)
     # Skip Type arguments (e.g., first arg of sext_int, zext_int, trunc_int, bitcast)
     # These are compile-time type parameters, not runtime values
