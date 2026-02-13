@@ -4234,27 +4234,13 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
         if inner_type !== nothing
             # Union{Nothing, T} -> use T's concrete type (nullable reference)
             return julia_to_wasm_type_concrete(inner_type, ctx)
+        elseif needs_tagged_union(T)
+            # Multi-variant union -> use tagged union struct
+            info = get_union_type!(ctx.mod, ctx.type_registry, T)
+            return ConcreteRef(info.wasm_type_idx, true)
         else
-            # PURE-324: Check for all-numeric unions BEFORE needs_tagged_union.
-            # Union{Int64, UInt32} should map to I64, not a tagged union struct.
-            # Tagged unions can't store/load raw numeric values — phi edges and
-            # PiNodes emit numeric constants but ConcreteRef expects struct refs.
-            types_u = Base.uniontypes(T)
-            non_nothing = filter(t -> t !== Nothing, types_u)
-            all_numeric = !isempty(non_nothing) && all(non_nothing) do t
-                wt = julia_to_wasm_type(t)
-                wt === I32 || wt === I64 || wt === F32 || wt === F64
-            end
-            if all_numeric
-                return resolve_union_type(T)
-            elseif needs_tagged_union(T)
-                # Multi-variant union -> use tagged union struct
-                info = get_union_type!(ctx.mod, ctx.type_registry, T)
-                return ConcreteRef(info.wasm_type_idx, true)
-            else
-                # Fall back to standard resolution
-                return julia_to_wasm_type(T)
-            end
+            # Fall back to standard resolution
+            return julia_to_wasm_type(T)
         end
     else
         # Use the standard conversion for non-struct types
