@@ -476,6 +476,100 @@ function compare_batch(f, test_cases::Vector)
 end
 
 # ============================================================================
+# Manual Comparison — Pre-computed Expected Values
+# ============================================================================
+
+"""
+    compare_julia_wasm_manual(f, args::Tuple, expected) -> NamedTuple
+
+Compare Wasm output against a pre-computed expected value from native Julia.
+Use this when compare_julia_wasm can't handle the argument or return types
+(e.g., String args, struct returns) but you've already run the function
+natively and know the expected numeric result.
+
+The function `f` must return a type that the JS bridge can marshal (Int32, Int64, Float64, Bool).
+The `args` tuple must contain types the JS bridge can marshal.
+
+# Example
+```julia
+# Pre-compute in native Julia: length("hello") = 5
+r = compare_julia_wasm_manual(s -> Int32(length(s)), (Int32(5),), Int32(5))
+@assert r.pass
+```
+"""
+function compare_julia_wasm_manual(f, args::Tuple, expected)
+    # 1. Compile to Wasm
+    arg_types = Tuple(map(typeof, args))
+    bytes = WasmTarget.compile(f, arg_types)
+
+    # 2. Run in Node.js (with standard Math imports)
+    func_name = string(nameof(f))
+    imports = Dict("Math" => Dict("pow" => "Math.pow"))
+    actual = run_wasm_with_imports(bytes, func_name, imports, args...)
+
+    # 3. Compare against pre-computed expected value
+    if actual === nothing && NODE_CMD === nothing
+        return (pass=true, expected=expected, actual=nothing, skipped=true)
+    end
+
+    return (pass=(expected == actual), expected=expected, actual=actual, skipped=false)
+end
+
+"""
+    compare_batch_manual(f, test_cases::Vector) -> Vector{NamedTuple}
+
+Batch version of compare_julia_wasm_manual. Each element of `test_cases`
+is `(args_tuple, expected_value)`.
+
+# Example
+```julia
+results = compare_batch_manual(x -> x * Int32(2), [
+    ((Int32(3),), Int32(6)),
+    ((Int32(0),), Int32(0)),
+    ((Int32(-1),), Int32(-2)),
+])
+for r in results
+    @assert r.pass "Args \$(r.args): expected \$(r.expected), got \$(r.actual)"
+end
+```
+"""
+function compare_batch_manual(f, test_cases::Vector)
+    results = NamedTuple[]
+    for (args, expected) in test_cases
+        r = compare_julia_wasm_manual(f, args, expected)
+        push!(results, (args=args, expected=expected, actual=r.actual, pass=r.pass, skipped=r.skipped))
+    end
+    return results
+end
+
+"""
+    compare_julia_wasm_wrapper(wrapper_f, args...) -> NamedTuple
+
+Like compare_julia_wasm but for functions whose args/return types aren't
+directly marshalable by the JS bridge. The `wrapper_f` must accept
+marshalable args and return a marshalable type (Int32, Int64, Float64, Bool).
+
+The wrapper extracts a numeric summary from a complex computation.
+Run both natively and in Wasm, compare the numeric results.
+
+# Example
+```julia
+# Instead of testing parse!(ParseStream(s)) directly (returns struct),
+# test a wrapper that returns a numeric summary:
+parse_output_len(n::Int32) = Int32(n + 1)  # simplified example
+r = compare_julia_wasm_wrapper(parse_output_len, Int32(5))
+@assert r.pass
+```
+
+Note: This is identical to compare_julia_wasm in implementation — it exists
+as a semantic alias to document that the function is a wrapper extracting
+numeric results from complex operations.
+"""
+function compare_julia_wasm_wrapper(wrapper_f, args...)
+    return compare_julia_wasm(wrapper_f, args...)
+end
+
+# ============================================================================
 # Debug Utilities
 # ============================================================================
 
