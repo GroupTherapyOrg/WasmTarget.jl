@@ -6810,7 +6810,8 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::C
 
     append!(bytes, value_bytes)
     # Widen i32 to i64 if needed
-    if edge_val_type !== nothing && phi_local_type === I64 && edge_val_type === I32
+    # PURE-324: Skip extend if value bytes are already i64 (e.g., i64_const default)
+    if edge_val_type !== nothing && phi_local_type === I64 && edge_val_type === I32 && (isempty(value_bytes) || value_bytes[1] != Opcode.I64_CONST)
         push!(bytes, Opcode.I64_EXTEND_I32_S)
     end
     push!(bytes, Opcode.LOCAL_SET)
@@ -8679,7 +8680,9 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                         append!(block_bytes, emit_phi_type_default(phi_local_type))
                                     elseif actual_val_type !== nothing && phi_local_type === I64 && actual_val_type === I32
                                         append!(block_bytes, phi_value_bytes)
-                                        push!(block_bytes, Opcode.I64_EXTEND_I32_S)
+                                        if isempty(phi_value_bytes) || phi_value_bytes[1] != Opcode.I64_CONST
+                                            push!(block_bytes, Opcode.I64_EXTEND_I32_S)
+                                        end
                                     else
                                         append!(block_bytes, phi_value_bytes)
                                     end
@@ -9316,8 +9319,12 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                         append!(bytes, emit_phi_type_default(phi_local_type))
                                     elseif actual_val_type !== nothing && phi_local_type === I64 && actual_val_type === I32
                                         # Numeric widening: i32 value into i64 local
+                                        # PURE-324: Skip extend if compiled bytes are already i64
+                                        # (happens when compile_phi_value emitted an i64 default)
                                         append!(bytes, phi_value_bytes)
-                                        push!(bytes, Opcode.I64_EXTEND_I32_S)
+                                        if isempty(phi_value_bytes) || phi_value_bytes[1] != Opcode.I64_CONST
+                                            push!(bytes, Opcode.I64_EXTEND_I32_S)
+                                        end
                                     else
                                         append!(bytes, phi_value_bytes)
                                     end
@@ -9526,7 +9533,9 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                         append!(block_bytes, emit_phi_type_default(phi_local_type))
                                     elseif actual_val_type !== nothing && phi_local_type === I64 && actual_val_type === I32
                                         append!(block_bytes, phi_value_bytes)
-                                        push!(block_bytes, Opcode.I64_EXTEND_I32_S)
+                                        if isempty(phi_value_bytes) || phi_value_bytes[1] != Opcode.I64_CONST
+                                            push!(block_bytes, Opcode.I64_EXTEND_I32_S)
+                                        end
                                     else
                                         append!(block_bytes, phi_value_bytes)
                                     end
