@@ -15492,8 +15492,14 @@ function infer_value_wasm_type(val, ctx::CompilationContext)::WasmValType
         ssa_type = get(ctx.ssa_types, val.id, Any)
         return julia_to_wasm_type_concrete(ssa_type, ctx)
     elseif val isa Core.Argument
-        arg_idx = val.n
-        if arg_idx <= length(ctx.arg_types)
+        # PURE-325: Match compile_value's offset — for regular functions, _1 is the
+        # function object, so actual args start at _2 → arg_types[1].
+        if ctx.is_compiled_closure
+            arg_idx = val.n
+        else
+            arg_idx = val.n - 1
+        end
+        if arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
             return julia_to_wasm_type_concrete(ctx.arg_types[arg_idx], ctx)
         end
         return I32
