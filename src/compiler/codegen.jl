@@ -17653,6 +17653,61 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, is_32bit ? Opcode.I32_MUL : Opcode.I64_MUL)
         end
 
+    # PURE-325: checked_smul_int(a, b) -> Tuple{Int64, Bool} (result, overflow_flag)
+    # In Wasm we just do the mul and return (result, false) — no overflow detection.
+    elseif is_func(func, :checked_smul_int) || is_func(func, :checked_umul_int)
+        push!(bytes, is_32bit ? Opcode.I32_MUL : Opcode.I64_MUL)
+        # Convert result to i64 if i32
+        if is_32bit
+            push!(bytes, Opcode.I64_EXTEND_I32_S)
+        end
+        # Push false (0) as overflow flag (i64 since Bool is stored as i64 in tuple struct)
+        push!(bytes, Opcode.I64_CONST)
+        push!(bytes, 0x00)
+        # Create Tuple{Int64, Bool} struct
+        tuple_type = Tuple{Int64, Bool}
+        if !haskey(ctx.type_registry.structs, tuple_type)
+            register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
+        end
+        tuple_info = ctx.type_registry.structs[tuple_type]
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.STRUCT_NEW)
+        append!(bytes, encode_leb128_unsigned(tuple_info.wasm_type_idx))
+
+    # PURE-325: checked_sadd_int(a, b) -> Tuple{Int64, Bool} (result, overflow_flag)
+    elseif is_func(func, :checked_sadd_int) || is_func(func, :checked_uadd_int)
+        push!(bytes, is_32bit ? Opcode.I32_ADD : Opcode.I64_ADD)
+        if is_32bit
+            push!(bytes, Opcode.I64_EXTEND_I32_S)
+        end
+        push!(bytes, Opcode.I64_CONST)
+        push!(bytes, 0x00)
+        tuple_type = Tuple{Int64, Bool}
+        if !haskey(ctx.type_registry.structs, tuple_type)
+            register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
+        end
+        tuple_info = ctx.type_registry.structs[tuple_type]
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.STRUCT_NEW)
+        append!(bytes, encode_leb128_unsigned(tuple_info.wasm_type_idx))
+
+    # PURE-325: checked_ssub_int(a, b) -> Tuple{Int64, Bool} (result, overflow_flag)
+    elseif is_func(func, :checked_ssub_int) || is_func(func, :checked_usub_int)
+        push!(bytes, is_32bit ? Opcode.I32_SUB : Opcode.I64_SUB)
+        if is_32bit
+            push!(bytes, Opcode.I64_EXTEND_I32_S)
+        end
+        push!(bytes, Opcode.I64_CONST)
+        push!(bytes, 0x00)
+        tuple_type = Tuple{Int64, Bool}
+        if !haskey(ctx.type_registry.structs, tuple_type)
+            register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
+        end
+        tuple_info = ctx.type_registry.structs[tuple_type]
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.STRUCT_NEW)
+        append!(bytes, encode_leb128_unsigned(tuple_info.wasm_type_idx))
+
     elseif is_func(func, :sdiv_int) || is_func(func, :checked_sdiv_int)
         push!(bytes, is_32bit ? Opcode.I32_DIV_S : Opcode.I64_DIV_S)
 
