@@ -18629,7 +18629,11 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         end
         if target_type === Int64 || target_type === UInt64
             # Extending to 64-bit - emit extend instruction
-            push!(bytes, Opcode.I64_EXTEND_I32_S)
+            # PURE-324: Skip extend if source is already i64 (e.g., from widened phi local)
+            src_wasm = length(args) >= 2 ? get_phi_edge_wasm_type(args[2], ctx) : nothing
+            if src_wasm !== I64
+                push!(bytes, Opcode.I64_EXTEND_I32_S)
+            end
         elseif target_type === Int128 || target_type === UInt128
             # Sign-extending to 128-bit - create struct with (lo=value, hi=sign_extension)
             # The value is already on the stack (i64)
@@ -18691,7 +18695,11 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         end
         if target_type === Int64 || target_type === UInt64
             # Extending to 64-bit - emit extend instruction
-            push!(bytes, Opcode.I64_EXTEND_I32_U)
+            # PURE-324: Skip extend if source is already i64 (e.g., from widened phi local)
+            src_wasm_z = length(args) >= 2 ? get_phi_edge_wasm_type(args[2], ctx) : nothing
+            if src_wasm_z !== I64
+                push!(bytes, Opcode.I64_EXTEND_I32_U)
+            end
         elseif target_type === Int128 || target_type === UInt128
             # Extending to 128-bit - create struct with (lo=value, hi=0)
             # The value is already on the stack (i64), need to create 128-bit struct
@@ -18731,7 +18739,15 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
 
         # Determine source and target WASM bit widths
+        # PURE-324: Also check actual Wasm type — widened phi locals may be I64
+        # even though Julia type says UInt32
         source_is_64bit = source_type === Int64 || source_type === UInt64 || source_type === Int
+        if !source_is_64bit && length(args) >= 2
+            src_wasm_t = get_phi_edge_wasm_type(args[2], ctx)
+            if src_wasm_t === I64
+                source_is_64bit = true
+            end
+        end
         target_is_32bit = target_type === Int32 || target_type === UInt32 ||
                           target_type === Int16 || target_type === UInt16 ||
                           target_type === Int8 || target_type === UInt8 ||
