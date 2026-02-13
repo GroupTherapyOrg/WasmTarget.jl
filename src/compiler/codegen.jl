@@ -15001,49 +15001,6 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
         end
     end
 
-        # PURE-325: Handle memmove/memcpy — translate to array.copy for UInt8 arrays
-        # Pattern: memmove(dest_ptr, src_ptr, len) where ptrs come from
-        #   getfield(memoryref, :ptr_or_offset)
-        # In WasmGC, we trace the ptr args back through getfield(:ptr_or_offset)
-        # to find the MemoryRef SSAs, then use their array refs with array.copy
-        if name === :memmove || name === :memcpy
-            # foreigncall args: (name, rettype, argtypes, nreq, cc, dest, src, len, ...)
-            if length(expr.args) >= 8
-                dest_arg = expr.args[6]   # dest ptr (from getfield(memref, :ptr_or_offset))
-                src_arg = expr.args[7]    # src ptr
-                len_arg = expr.args[8]    # byte count (UInt64)
-
-                # Trace ptr args back to their MemoryRef sources
-                dest_memref = _trace_ptr_to_memoryref(dest_arg, ctx)
-                src_memref = _trace_ptr_to_memoryref(src_arg, ctx)
-
-                if dest_memref !== nothing && src_memref !== nothing
-                    # Get array type for UInt8 (byte arrays)
-                    arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
-
-                    # array.copy expects: [dest_array, dest_offset, src_array, src_offset, len]
-                    # compile_value of a memoryrefnew pushes [array_ref, i32_offset]
-                    # which is exactly [array, offset] — the pair array.copy needs
-                    append!(bytes, compile_value(dest_memref, ctx))  # [dest_array, dest_offset]
-                    append!(bytes, compile_value(src_memref, ctx))   # [src_array, src_offset]
-                    # Length (UInt64 → i32)
-                    append!(bytes, compile_value(len_arg, ctx))
-                    push!(bytes, Opcode.I32_WRAP_I64)
-
-                    # array.copy dst_type src_type
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.ARRAY_COPY)
-                    append!(bytes, encode_leb128_unsigned(arr_type_idx))
-                    append!(bytes, encode_leb128_unsigned(arr_type_idx))
-
-                    # memmove returns dest ptr — push i64 0 as placeholder
-                    push!(bytes, Opcode.I64_CONST, 0x00)
-                    return bytes
-                end
-            end
-        end
-    end
-
     # Unknown foreigncall - emit unreachable.
     # We cannot execute native C FFI in WebAssembly. Emitting unreachable:
     # (1) Makes the wasm validator accept any stack type (polymorphic)
@@ -15156,31 +15113,6 @@ function _trace_ptr_to_data(ptr_val, ctx::CompilationContext)
             end
         end
         return nothing
-    end
-    return nothing
-end
-
-"""
-PURE-325: Trace a ptr_or_offset SSA back to its MemoryRef source.
-Pattern: getfield(memref, :ptr_or_offset) → memref SSA
-Used by memmove handler to find the source arrays for array.copy.
-"""
-function _trace_ptr_to_memoryref(ptr_val, ctx::CompilationContext)
-    code = ctx.code_info.code
-    if !(ptr_val isa Core.SSAValue)
-        return nothing
-    end
-    stmt = code[ptr_val.id]
-    if stmt isa Expr && stmt.head === :call
-        func = stmt.args[1]
-        if func isa GlobalRef && func.name === :getfield && length(stmt.args) >= 3
-            field_ref = stmt.args[3]
-            field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
-            if field_sym === :ptr_or_offset
-                # Return the MemoryRef object (args[2])
-                return stmt.args[2]
-            end
-        end
     end
     return nothing
 end
