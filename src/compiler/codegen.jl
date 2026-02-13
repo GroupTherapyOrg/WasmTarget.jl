@@ -4235,28 +4235,6 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
             # Union{Nothing, T} -> use T's concrete type (nullable reference)
             return julia_to_wasm_type_concrete(inner_type, ctx)
         elseif needs_tagged_union(T)
-            # PURE-324: Check if all non-Nothing types are numeric — if so, use widest
-            # numeric type instead of tagged union. Tagged union (ref struct) can't
-            # store/load raw numeric values correctly in phi nodes.
-            # Handles Union{Int64, UInt32}, Union{Int32, Int64}, etc.
-            types = Base.uniontypes(T)
-            non_nothing = filter(t -> t !== Nothing, types)
-            all_numeric = all(non_nothing) do t
-                wt = julia_to_wasm_type(t)
-                wt === I32 || wt === I64 || wt === F32 || wt === F64
-            end
-            if all_numeric && !isempty(non_nothing)
-                wasm_types = [julia_to_wasm_type(t) for t in non_nothing]
-                if F64 in wasm_types
-                    return F64
-                elseif I64 in wasm_types
-                    return I64
-                elseif F32 in wasm_types
-                    return F32
-                else
-                    return I32
-                end
-            end
             # Multi-variant union -> use tagged union struct
             info = get_union_type!(ctx.mod, ctx.type_registry, T)
             return ConcreteRef(info.wasm_type_idx, true)
