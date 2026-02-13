@@ -419,7 +419,9 @@ function find_common_wasm_type(types::Vector)::WasmValType
     end
 
     # Check if all are reference types (structs, tuples, etc.)
-    if all(t -> (isconcretetype(t) && isstructtype(t)) || t <: Tuple, types)
+    # Exclude String/Symbol which are WasmGC arrays, not structs
+    is_wasm_struct = t -> ((isconcretetype(t) && isstructtype(t)) || t <: Tuple) && t !== String && t !== Symbol
+    if all(is_wasm_struct, types)
         return StructRef
     end
 
