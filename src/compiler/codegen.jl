@@ -4760,20 +4760,6 @@ function allocate_ssa_locals!(ctx::CompilationContext)
 
             wasm_type = julia_to_wasm_type_concrete(effective_type, ctx)
 
-            # PURE-324: For SSA locals with all-numeric Union types (e.g., Union{Int64, UInt32}),
-            # use the widest numeric type instead of tagged union. Same fix as phi allocation.
-            if wasm_type isa ConcreteRef && effective_type isa Union
-                ssa_types_u = Base.uniontypes(effective_type)
-                ssa_non_nothing = filter(t -> t !== Nothing, ssa_types_u)
-                ssa_all_numeric = all(ssa_non_nothing) do t
-                    wt = julia_to_wasm_type(t)
-                    wt === I32 || wt === I64 || wt === F32 || wt === F64
-                end
-                if ssa_all_numeric && !isempty(ssa_non_nothing)
-                    wasm_type = resolve_union_type(effective_type)
-                end
-            end
-
             # For PiNodes where source local has a different NUMERIC type,
             # use the source's actual Wasm type to avoid local.get → local.set mismatches.
             # For ref types, DON'T widen — the compile_statement safety check handles
@@ -6634,8 +6620,13 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::C
     edge_val_type = get_phi_edge_wasm_type(val, ctx)
 
     if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type)
-        # Type mismatch: skip this store (unreachable path for Union types)
-        return false
+        # PURE-324: Allow I32→I64 widening — handled by I64_EXTEND_I32_S below.
+        # This is needed for phi nodes with Union{Int64, UInt32} where the phi local
+        # is widened to I64 but one edge provides an I32 (UInt32) value.
+        if !(phi_local_type === I64 && edge_val_type === I32)
+            # Type mismatch: skip this store (unreachable path for Union types)
+            return false
+        end
     end
 
     # When edge_val_type is nothing (Any/Union SSA type), check the actual local's Wasm type
@@ -6776,41 +6767,44 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::C
             actual_val_type = get_concrete_wasm_type(param_julia_type, ctx.mod, ctx.type_registry)
         end
         if actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type)
-                # Incompatible actual type: emit type-safe default
-                if phi_local_type isa ConcreteRef
-                    push!(bytes, Opcode.REF_NULL)
-                    append!(bytes, encode_leb128_signed(Int64(phi_local_type.type_idx)))
-                elseif phi_local_type === ExternRef
-                    push!(bytes, Opcode.REF_NULL)
-                    push!(bytes, UInt8(ExternRef))
-                elseif phi_local_type === StructRef
-                    push!(bytes, Opcode.REF_NULL)
-                    push!(bytes, UInt8(StructRef))
-                elseif phi_local_type === ArrayRef
-                    push!(bytes, Opcode.REF_NULL)
-                    push!(bytes, UInt8(ArrayRef))
-                elseif phi_local_type === AnyRef
-                    push!(bytes, Opcode.REF_NULL)
-                    push!(bytes, UInt8(AnyRef))
-                elseif phi_local_type === I64
-                    push!(bytes, Opcode.I64_CONST)
-                    push!(bytes, 0x00)
-                elseif phi_local_type === I32
-                    push!(bytes, Opcode.I32_CONST)
-                    push!(bytes, 0x00)
-                elseif phi_local_type === F64
-                    push!(bytes, Opcode.F64_CONST)
-                    append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-                elseif phi_local_type === F32
-                    push!(bytes, Opcode.F32_CONST)
-                    append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
-                else
-                    push!(bytes, Opcode.I32_CONST)
-                    push!(bytes, 0x00)
+                # PURE-324: Allow I32→I64 — will be extended at line below
+                if !(phi_local_type === I64 && actual_val_type === I32)
+                    # Incompatible actual type: emit type-safe default
+                    if phi_local_type isa ConcreteRef
+                        push!(bytes, Opcode.REF_NULL)
+                        append!(bytes, encode_leb128_signed(Int64(phi_local_type.type_idx)))
+                    elseif phi_local_type === ExternRef
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(ExternRef))
+                    elseif phi_local_type === StructRef
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(StructRef))
+                    elseif phi_local_type === ArrayRef
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(ArrayRef))
+                    elseif phi_local_type === AnyRef
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(AnyRef))
+                    elseif phi_local_type === I64
+                        push!(bytes, Opcode.I64_CONST)
+                        push!(bytes, 0x00)
+                    elseif phi_local_type === I32
+                        push!(bytes, Opcode.I32_CONST)
+                        push!(bytes, 0x00)
+                    elseif phi_local_type === F64
+                        push!(bytes, Opcode.F64_CONST)
+                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                    elseif phi_local_type === F32
+                        push!(bytes, Opcode.F32_CONST)
+                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+                    else
+                        push!(bytes, Opcode.I32_CONST)
+                        push!(bytes, 0x00)
+                    end
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(local_idx))
+                    return true
                 end
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(local_idx))
-                return true
         end
     end
 
@@ -8605,7 +8599,7 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                 local_idx = ctx.phi_locals[i]
                                 phi_local_type = ctx.locals[local_idx - ctx.n_params + 1]
                                 edge_val_type = get_phi_edge_wasm_type(val)
-                                if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type)
+                                if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type) && !(phi_local_type === I64 && edge_val_type === I32)
                                     # Type mismatch: emit type-safe default for the local's declared type.
                                     if phi_local_type isa ConcreteRef
                                         push!(block_bytes, Opcode.REF_NULL)
@@ -8681,7 +8675,7 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                         end
                                     end
 
-                                    if actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type)
+                                    if actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type) && !(phi_local_type === I64 && actual_val_type === I32)
                                         append!(block_bytes, emit_phi_type_default(phi_local_type))
                                     elseif actual_val_type !== nothing && phi_local_type === I64 && actual_val_type === I32
                                         append!(block_bytes, phi_value_bytes)
@@ -9078,7 +9072,7 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 phi_local_idx = ctx.phi_locals[phi_idx]
                 phi_local_type = ctx.locals[phi_local_idx - ctx.n_params + 1]
                 edge_val_type = get_phi_edge_wasm_type(val)
-                if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type)
+                if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type) && !(phi_local_type === I64 && edge_val_type === I32)
                     # Type mismatch: emit type-safe default instead
                     append!(result, emit_phi_type_default(phi_local_type))
                     return result
@@ -9231,7 +9225,7 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                 phi_local_type = ctx.locals[local_idx - ctx.n_params + 1]
                                 edge_val_type = get_phi_edge_wasm_type(val)
 
-                                if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type)
+                                if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type) && !(phi_local_type === I64 && edge_val_type === I32)
                                     # Type mismatch: emit type-safe default for the local's declared type.
                                     # This happens when Julia Union types have mixed primitive/ref variants.
                                     if phi_local_type isa ConcreteRef
@@ -9317,7 +9311,7 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                         end
                                     end
 
-                                    if actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type)
+                                    if actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type) && !(phi_local_type === I64 && actual_val_type === I32)
                                         # Type mismatch detected at emit point: replace with default
                                         append!(bytes, emit_phi_type_default(phi_local_type))
                                     elseif actual_val_type !== nothing && phi_local_type === I64 && actual_val_type === I32
@@ -9451,7 +9445,7 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                 local_idx = ctx.phi_locals[i]
                                 phi_local_type = ctx.locals[local_idx - ctx.n_params + 1]
                                 edge_val_type = get_phi_edge_wasm_type(val)
-                                if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type)
+                                if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type) && !(phi_local_type === I64 && edge_val_type === I32)
                                     # Type mismatch: emit type-safe default for the local's declared type.
                                     if phi_local_type isa ConcreteRef
                                         push!(block_bytes, Opcode.REF_NULL)
@@ -9528,7 +9522,7 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                         end
                                     end
 
-                                    if actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type)
+                                    if actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type) && !(phi_local_type === I64 && actual_val_type === I32)
                                         append!(block_bytes, emit_phi_type_default(phi_local_type))
                                     elseif actual_val_type !== nothing && phi_local_type === I64 && actual_val_type === I32
                                         append!(block_bytes, phi_value_bytes)
@@ -13068,10 +13062,16 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                     end
                 end
                 if is_multi_value_src || (pi_local_type !== nothing && val_wasm_type !== nothing && !wasm_types_compatible(pi_local_type, val_wasm_type))
+                    # PURE-324: I64→I32 narrowing — PiNode narrows a widened phi (I64) to a
+                    # smaller numeric type (I32). Emit the actual value with i32_wrap_i64.
+                    if !is_multi_value_src && val_wasm_type === I64 && pi_local_type === I32
+                        val_bytes = compile_value(stmt.val, ctx)
+                        append!(bytes, val_bytes)
+                        push!(bytes, Opcode.I32_WRAP_I64)
                     # PURE-321: PiNode narrowing from ExternRef → ConcreteRef means the value
                     # IS available as externref and just needs conversion (not ref.null).
                     # Example: PiNode(%198, String) narrows Any (externref) → String (array<i32>).
-                    if !is_multi_value_src && val_wasm_type === ExternRef && pi_local_type isa ConcreteRef
+                    elseif !is_multi_value_src && val_wasm_type === ExternRef && pi_local_type isa ConcreteRef
                         val_bytes = compile_value(stmt.val, ctx)
                         append!(bytes, val_bytes)
                         append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
