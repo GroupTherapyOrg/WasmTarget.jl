@@ -17544,6 +17544,16 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         return bytes
     end
 
+    # PURE-325: Int128 checked/div/rem arithmetic can't be compiled (struct args on
+    # stack would mismatch i64 ops). Emit unreachable BEFORE pushing args.
+    if (arg_type === Int128 || arg_type === UInt128) && func isa GlobalRef && func.name in
+            (:checked_smul_int, :checked_umul_int, :checked_sadd_int, :checked_uadd_int,
+             :checked_ssub_int, :checked_usub_int, :checked_sdiv_int, :checked_udiv_int,
+             :sdiv_int, :udiv_int, :srem_int, :urem_int)
+        push!(bytes, Opcode.UNREACHABLE)
+        return bytes
+    end
+
     # Push arguments onto the stack (normal case)
     # Skip Type arguments (e.g., first arg of sext_int, zext_int, trunc_int, bitcast)
     # These are compile-time type parameters, not runtime values
