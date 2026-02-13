@@ -18104,9 +18104,73 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 end
             end
             if arg1_wasm_is_ref && arg2_wasm_is_ref
-                # ref.eq requires eqref operands. externref is NOT eqref.
-                # Convert externref → anyref → eqref before ref.eq
-                if arg1_is_externref && arg2_is_externref
+                # PURE-324: For immutable structs, === means VALUE equality (field-by-field),
+                # not identity. WasmGC ref.eq is identity comparison, so we must emit
+                # struct.get for each field and compare with the appropriate opcode.
+                local _do_struct_egal = false
+                local _egal_struct_info = nothing
+                if !arg1_is_externref && !arg2_is_externref &&
+                   arg_type isa DataType && arg_type === arg2_type &&
+                   is_struct_type(arg_type) && !ismutabletype(arg_type) &&
+                   haskey(ctx.type_registry.structs, arg_type)
+                    _egal_struct_info = ctx.type_registry.structs[arg_type]
+                    _do_struct_egal = true
+                end
+                if _do_struct_egal
+                    # Immutable struct === : field-by-field value comparison
+                    local egal_info = _egal_struct_info
+                    local egal_type_idx = egal_info.wasm_type_idx
+                    local egal_wasm_type = ConcreteRef(egal_type_idx, true)
+                    # Save both args to locals (arg2 is on top, arg1 below)
+                    local egal_local2 = allocate_local!(ctx, egal_wasm_type)
+                    local egal_local1 = allocate_local!(ctx, egal_wasm_type)
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(egal_local2))
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(egal_local1))
+                    local n_fields = length(egal_info.field_types)
+                    for fi in 1:n_fields
+                        local egal_ft = egal_info.field_types[fi]
+                        local egal_wt = julia_to_wasm_type(egal_ft)
+                        # Get field fi-1 (0-indexed) from both structs
+                        push!(bytes, Opcode.LOCAL_GET)
+                        append!(bytes, encode_leb128_unsigned(egal_local1))
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.STRUCT_GET)
+                        append!(bytes, encode_leb128_unsigned(egal_type_idx))
+                        append!(bytes, encode_leb128_unsigned(fi - 1))
+                        push!(bytes, Opcode.LOCAL_GET)
+                        append!(bytes, encode_leb128_unsigned(egal_local2))
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.STRUCT_GET)
+                        append!(bytes, encode_leb128_unsigned(egal_type_idx))
+                        append!(bytes, encode_leb128_unsigned(fi - 1))
+                        # Compare with type-appropriate opcode
+                        if egal_wt === I32
+                            push!(bytes, Opcode.I32_EQ)
+                        elseif egal_wt === I64
+                            push!(bytes, Opcode.I64_EQ)
+                        elseif egal_wt === F32
+                            push!(bytes, Opcode.F32_EQ)
+                        elseif egal_wt === F64
+                            push!(bytes, Opcode.F64_EQ)
+                        else
+                            # Ref-typed field (nested struct, string, etc.): use ref.eq
+                            push!(bytes, Opcode.REF_EQ)
+                        end
+                        # AND with previous field results (skip for first field)
+                        if fi > 1
+                            push!(bytes, Opcode.I32_AND)
+                        end
+                    end
+                    # Handle zero-field structs (singleton types): always equal
+                    if n_fields == 0
+                        push!(bytes, Opcode.I32_CONST)
+                        push!(bytes, 0x01)
+                    end
+                elseif arg1_is_externref && arg2_is_externref
+                    # ref.eq requires eqref operands. externref is NOT eqref.
+                    # Convert externref → anyref → eqref before ref.eq
                     # Both externref: convert arg2 (top), save, convert arg1, restore
                     local tmp_eq = allocate_local!(ctx, EqRef)
                     push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
@@ -18118,6 +18182,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
                     push!(bytes, Opcode.LOCAL_GET)
                     append!(bytes, encode_leb128_unsigned(tmp_eq))
+                    push!(bytes, Opcode.REF_EQ)
                 elseif arg1_is_externref
                     # arg1 is externref (under arg2 on stack): save arg2, convert arg1, restore arg2
                     local tmp_eq2 = allocate_local!(ctx, EqRef)
@@ -18127,13 +18192,16 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
                     push!(bytes, Opcode.LOCAL_GET)
                     append!(bytes, encode_leb128_unsigned(tmp_eq2))
+                    push!(bytes, Opcode.REF_EQ)
                 elseif arg2_is_externref
                     # arg2 is externref (top of stack): just convert it
                     push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
                     push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                    push!(bytes, Opcode.REF_EQ)
+                else
+                    # Both are non-externref refs (mutable structs, arrays, etc.): identity comparison
+                    push!(bytes, Opcode.REF_EQ)
                 end
-                # ref.eq is a standalone opcode (0xD3), not under GC_PREFIX
-                push!(bytes, Opcode.REF_EQ)
             elseif arg1_wasm_is_ref && !arg2_wasm_is_ref
                 # Comparing ref with non-ref: type mismatch, drop both and push false
                 push!(bytes, Opcode.DROP)
