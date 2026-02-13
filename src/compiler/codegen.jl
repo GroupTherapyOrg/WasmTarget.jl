@@ -17550,6 +17550,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             (:checked_smul_int, :checked_umul_int, :checked_sadd_int, :checked_uadd_int,
              :checked_ssub_int, :checked_usub_int, :checked_sdiv_int, :checked_udiv_int,
              :sdiv_int, :udiv_int, :srem_int, :urem_int)
+        println("DEBUG_128: Early return for $(func.name) with arg_type=$arg_type")
         push!(bytes, Opcode.UNREACHABLE)
         return bytes
     end
