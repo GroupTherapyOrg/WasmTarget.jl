@@ -4242,12 +4242,10 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
         if inner_type !== nothing
             # Union{Nothing, T} -> use T's concrete type (nullable reference)
             return julia_to_wasm_type_concrete(inner_type, ctx)
-        elseif needs_tagged_union(T)
-            # Multi-variant union -> use tagged union struct
-            info = get_union_type!(ctx.mod, ctx.type_registry, T)
-            return ConcreteRef(info.wasm_type_idx, true)
         else
-            # Fall back to standard resolution
+            # PURE-325: Use julia_to_wasm_type for consistency with function signatures.
+            # This ensures the caller's local type matches the called function's return type.
+            # resolve_union_type handles Int128/BigInt/UInt128 unions correctly.
             return julia_to_wasm_type(T)
         end
     else

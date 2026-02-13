@@ -376,6 +376,13 @@ function resolve_union_type(T::Union)::WasmValType
         # Union{Nothing, T} -> T
         return julia_to_wasm_type(non_nothing[1])
     else
+        # PURE-325: Check if any types in the union have non-numeric Wasm representations
+        # (Int128, UInt128, BigInt are structs in WasmGC, not i64)
+        has_non_wasm_numeric = any(t -> t === Int128 || t === UInt128 || t === BigInt, non_nothing)
+        if has_non_wasm_numeric
+            # Can't use common numeric type — these are structs in Wasm
+            return ExternRef
+        end
         # Multiple non-Nothing types - find common numeric type
         return find_common_wasm_type(non_nothing)
     end
