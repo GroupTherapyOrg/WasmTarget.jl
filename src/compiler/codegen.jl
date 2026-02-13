@@ -15132,6 +15132,71 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
         end
     end
 
+    # PURE-325: memmove(dest_ptr, src_ptr, n_bytes) — copy between Memory arrays.
+    # Used by take!(IOBuffer) to copy data from IOBuffer's backing Memory to a new String.
+    # In WasmGC, we emit array.copy between the underlying array<i32> representations.
+    # Trace: memmove args come from getfield(memoryref, :ptr_or_offset) which is i64.const 0.
+    # The real arrays are found by tracing back through memoryrefnew to the backing Memory.
+    if name === :memmove && length(expr.args) >= 8
+        dest_ptr_arg = expr.args[6]   # Ptr{Nothing} — traces to dest MemoryRef
+        src_ptr_arg = expr.args[7]    # Ptr{Nothing} — traces to src MemoryRef
+        nbytes_arg = expr.args[8]     # UInt64 — byte count
+
+        code = ctx.code_info.code
+        dest_info = _trace_memmove_array(dest_ptr_arg, code, ctx)
+        src_info = _trace_memmove_array(src_ptr_arg, code, ctx)
+
+        if dest_info !== nothing && src_info !== nothing
+            dest_arr_ssa, dest_offset_ssa = dest_info
+            src_arr_ssa, src_offset_ssa = src_info
+            str_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
+
+            # array.copy: dest_arr, dest_offset, src_arr, src_offset, count
+            # dest array
+            append!(bytes, compile_value(dest_arr_ssa, ctx))
+            # dest offset (0-based: memoryrefnew offset is 1-based, subtract 1)
+            if dest_offset_ssa === nothing
+                push!(bytes, Opcode.I32_CONST, 0x00)
+            else
+                append!(bytes, compile_value(dest_offset_ssa, ctx))
+                dest_offset_type = infer_value_type(dest_offset_ssa, ctx)
+                if dest_offset_type === Int64 || dest_offset_type === Int
+                    push!(bytes, Opcode.I32_WRAP_I64)
+                end
+                push!(bytes, Opcode.I32_CONST, 0x01)
+                push!(bytes, Opcode.I32_SUB)
+            end
+            # src array
+            append!(bytes, compile_value(src_arr_ssa, ctx))
+            # src offset (0-based)
+            if src_offset_ssa === nothing
+                push!(bytes, Opcode.I32_CONST, 0x00)
+            else
+                append!(bytes, compile_value(src_offset_ssa, ctx))
+                src_offset_type = infer_value_type(src_offset_ssa, ctx)
+                if src_offset_type === Int64 || src_offset_type === Int
+                    push!(bytes, Opcode.I32_WRAP_I64)
+                end
+                push!(bytes, Opcode.I32_CONST, 0x01)
+                push!(bytes, Opcode.I32_SUB)
+            end
+            # count (convert from bytes to elements — for UInt8/i32 arrays, count = n_bytes)
+            append!(bytes, compile_value(nbytes_arg, ctx))
+            nbytes_type = infer_value_type(nbytes_arg, ctx)
+            if nbytes_type === Int64 || nbytes_type === Int || nbytes_type === UInt64
+                push!(bytes, Opcode.I32_WRAP_I64)
+            end
+            # emit array.copy
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ARRAY_COPY)
+            append!(bytes, encode_leb128_unsigned(str_arr_type))  # dest type
+            append!(bytes, encode_leb128_unsigned(str_arr_type))  # src type
+            # memmove returns dest ptr — push i64.const 0 as the result
+            push!(bytes, Opcode.I64_CONST, 0x00)
+            return bytes
+        end
+    end
+
     # Unknown foreigncall - emit unreachable.
     # We cannot execute native C FFI in WebAssembly. Emitting unreachable:
     # (1) Makes the wasm validator accept any stack type (polymorphic)
@@ -15244,6 +15309,111 @@ function _trace_ptr_to_data(ptr_val, ctx::CompilationContext)
             end
         end
         return nothing
+    end
+    return nothing
+end
+
+"""
+Trace a memmove pointer argument back through getfield(:ptr_or_offset) → memoryrefnew
+to find the underlying array SSA and offset SSA.
+Returns (array_ssa, offset_ssa) or nothing if trace fails.
+offset_ssa may be nothing if the memoryrefnew has no offset (starts at beginning).
+
+IR pattern:
+  %142 = getfield(%69, :ref)          — Vector's ref field (a MemoryRef = array in WasmGC)
+  %144 = memoryrefnew(%142, 1, ...)   — MemoryRef at offset 1
+  %159 = getfield(%144, :ptr_or_offset)  — i64.const 0 in WasmGC
+  memmove(%159, ...)
+"""
+function _trace_memmove_array(ptr_ssa, code, ctx::CompilationContext)
+    if !(ptr_ssa isa Core.SSAValue)
+        return nothing
+    end
+    stmt = code[ptr_ssa.id]
+    # Should be getfield(memoryref, :ptr_or_offset)
+    if !(stmt isa Expr && stmt.head === :call)
+        return nothing
+    end
+    func = stmt.args[1]
+    if !(func isa GlobalRef && func.name === :getfield && length(stmt.args) >= 3)
+        return nothing
+    end
+    field_ref = stmt.args[3]
+    field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
+    if field_sym !== :ptr_or_offset
+        return nothing
+    end
+    # The object is a MemoryRef SSA
+    memref_ssa = stmt.args[2]
+    if !(memref_ssa isa Core.SSAValue)
+        return nothing
+    end
+    memref_stmt = code[memref_ssa.id]
+
+    # Should be memoryrefnew(base) or memoryrefnew(base, offset, boundscheck)
+    if memref_stmt isa Expr && memref_stmt.head === :call
+        fn = memref_stmt.args[1]
+        if fn isa GlobalRef && fn.name === :memoryrefnew
+            if length(memref_stmt.args) >= 4
+                # memoryrefnew(base, offset, boundscheck)
+                base_ssa = memref_stmt.args[2]
+                offset_ssa = memref_stmt.args[3]
+                # base could be another memoryrefnew or a Memory/array directly
+                arr_ssa = _resolve_memref_to_array(base_ssa, code)
+                return (arr_ssa !== nothing ? arr_ssa : base_ssa, offset_ssa)
+            elseif length(memref_stmt.args) >= 2
+                # memoryrefnew(memory) — no offset
+                base_ssa = memref_stmt.args[2]
+                arr_ssa = _resolve_memref_to_array(base_ssa, code)
+                return (arr_ssa !== nothing ? arr_ssa : base_ssa, nothing)
+            end
+        end
+    end
+    return nothing
+end
+
+"""
+Resolve a MemoryRef base SSA to the actual array.
+For memmove, we need the WasmGC array reference that backs the data.
+In WasmGC:
+  - Vector field :ref → struct_get field 0 → array ref (use the SSA of getfield)
+  - IOBuffer field :data → the Memory which IS the array (use the SSA of getfield)
+  - jl_string_to_genericmemory → returns the String which IS the array
+  - memoryrefnew(base) → the base IS the array
+Returns the SSA whose compile_value produces the array ref, or nothing.
+"""
+function _resolve_memref_to_array(ssa, code)
+    if !(ssa isa Core.SSAValue)
+        return nothing
+    end
+    stmt = code[ssa.id]
+    if !(stmt isa Expr)
+        return nothing
+    end
+    if stmt.head === :call
+        func = stmt.args[1]
+        if func isa GlobalRef
+            if func.name === :memoryrefnew && length(stmt.args) >= 2
+                # Another memoryrefnew — recurse on its base
+                return _resolve_memref_to_array(stmt.args[2], code)
+            elseif func.name === :getfield && length(stmt.args) >= 3
+                field_ref = stmt.args[3]
+                field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
+                if field_sym === :ref || field_sym === :data
+                    # getfield(vector, :ref) or getfield(iobuf, :data)
+                    # The RESULT of this getfield is the array in WasmGC
+                    # So return the SSA of the getfield itself
+                    return ssa
+                end
+            end
+        end
+    elseif stmt.head === :foreigncall
+        name_arg = stmt.args[1]
+        fname = name_arg isa QuoteNode ? name_arg.value : name_arg
+        if fname === :jl_string_to_genericmemory && length(stmt.args) >= 6
+            # In WasmGC, jl_string_to_genericmemory returns the String which IS the array
+            return stmt.args[6]
+        end
     end
     return nothing
 end
