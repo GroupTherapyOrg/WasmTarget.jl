@@ -4795,7 +4795,16 @@ function allocate_ssa_locals!(ctx::CompilationContext)
                                      src_local_wasm === F32 || src_local_wasm === F64
                     is_numeric_tgt = wasm_type === I32 || wasm_type === I64 ||
                                      wasm_type === F32 || wasm_type === F64
-                    if is_numeric_src && is_numeric_tgt
+                    # PURE-324: Also allow widening when source is numeric but target is
+                    # ConcreteRef from an all-numeric Union (e.g., Union{Int64, UInt32}).
+                    # The phi was widened to I64, but the PiNode SSA got ConcreteRef from
+                    # julia_to_wasm_type_concrete. Use the source's numeric type.
+                    is_numeric_union_tgt = wasm_type isa ConcreteRef && effective_type isa Union &&
+                        let ut = Base.uniontypes(effective_type),
+                            nn = filter(t -> t !== Nothing, ut)
+                            !isempty(nn) && all(t -> let wt = julia_to_wasm_type(t); wt === I32 || wt === I64 || wt === F32 || wt === F64 end, nn)
+                        end
+                    if is_numeric_src && (is_numeric_tgt || is_numeric_union_tgt)
                         wasm_type = src_local_wasm
                     end
                 end
