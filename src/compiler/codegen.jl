@@ -4351,12 +4351,7 @@ function analyze_control_flow!(ctx::CompilationContext)
                 end
                 if all_numeric && !isempty(non_nothing)
                     phi_wasm_type = resolve_union_type(phi_julia_type)
-                    @warn "PURE-324 DEBUG: Widened phi SSA $i from ConcreteRef to $phi_wasm_type (julia=$phi_julia_type)"
-                else
-                    @warn "PURE-324 DEBUG: NOT widening phi SSA $i: ConcreteRef but not all_numeric (julia=$phi_julia_type, non_nothing=$non_nothing)"
                 end
-            elseif phi_wasm_type isa ConcreteRef
-                @warn "PURE-324 DEBUG: ConcreteRef phi SSA $i NOT Union type (julia=$phi_julia_type, wasm=$phi_wasm_type)"
             end
 
             # Phi locals always use the type derived from the phi's Julia type.
@@ -4431,9 +4426,6 @@ function analyze_control_flow!(ctx::CompilationContext)
             local_idx = ctx.n_params + length(ctx.locals)
             push!(ctx.locals, phi_wasm_type)
             ctx.phi_locals[i] = local_idx
-            if phi_wasm_type isa ConcreteRef || phi_wasm_type === I64
-                @warn "PURE-324 DEBUG: Allocated phi SSA $i → local $local_idx as $phi_wasm_type (julia=$phi_julia_type)"
-            end
         end
     end
 end
