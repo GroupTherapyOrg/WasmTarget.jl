@@ -17692,22 +17692,32 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             if field_sym === :ref && haskey(ctx.type_registry.structs, obj_type)
                 # PURE-325: setfield!(vector, :ref, new_memref) — update data array
                 # :ref is field index 0 in the Vector struct
-                info = ctx.type_registry.structs[obj_type]
-                value_type = infer_value_type(value_arg, ctx)
-                temp_local = allocate_local!(ctx, value_type)
-                append!(bytes, compile_value(value_arg, ctx))
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(temp_local))
-                append!(bytes, compile_value(obj_arg, ctx))
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(temp_local))
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.STRUCT_SET)
-                append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
-                append!(bytes, encode_leb128_unsigned(0))  # Field 0 = data array ref
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(temp_local))
-                return bytes
+                # Guard: only handle if value_arg has a local (skip multi-arg memoryrefnew)
+                value_has_local = false
+                if value_arg isa Core.SSAValue && haskey(ctx.ssa_locals, value_arg.id)
+                    value_has_local = true
+                elseif value_arg isa Core.Argument
+                    value_has_local = true
+                end
+                if value_has_local
+                    info = ctx.type_registry.structs[obj_type]
+                    value_type = infer_value_type(value_arg, ctx)
+                    temp_local = allocate_local!(ctx, value_type)
+                    append!(bytes, compile_value(value_arg, ctx))
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(temp_local))
+                    append!(bytes, compile_value(obj_arg, ctx))
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(temp_local))
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.STRUCT_SET)
+                    append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
+                    append!(bytes, encode_leb128_unsigned(0))  # Field 0 = data array ref
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(temp_local))
+                    return bytes
+                end
+                # Fall through to generic handling for multi-arg memoryrefnew values
             elseif field_sym === :size && haskey(ctx.type_registry.structs, obj_type)
                 info = ctx.type_registry.structs[obj_type]
                 # :size is field index 2 (1-indexed), so 1 in 0-indexed
