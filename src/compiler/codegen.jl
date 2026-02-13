@@ -16578,6 +16578,26 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 end
                 return bytes
             end
+
+            # PURE-325: AbstractArray subtypes that are pure structs (e.g., UnitRange)
+            # have named fields like :start, :stop — handle via struct_get
+            if isconcretetype(obj_type) && isstructtype(obj_type)
+                if !haskey(ctx.type_registry.structs, obj_type)
+                    register_struct_type!(ctx.mod, ctx.type_registry, obj_type)
+                end
+                if haskey(ctx.type_registry.structs, obj_type)
+                    info = ctx.type_registry.structs[obj_type]
+                    field_idx = findfirst(==(field_sym), info.field_names)
+                    if field_idx !== nothing
+                        append!(bytes, compile_value(obj_arg, ctx))
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.STRUCT_GET)
+                        append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
+                        append!(bytes, encode_leb128_unsigned(field_idx - 1))
+                        return bytes
+                    end
+                end
+            end
         end
 
         # Handle MemoryRef field access (:mem, :ptr_or_offset)
@@ -17311,40 +17331,38 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         # Vector{T} is now a struct with (ref, size) where size is mutable
         if obj_type <: AbstractArray
             field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
-            if field_sym === :size && haskey(ctx.type_registry.structs, obj_type)
+            # PURE-325: Handle both :ref (field 0) and :size (field 1) on Vector/Array
+            if (field_sym === :size || field_sym === :ref) && haskey(ctx.type_registry.structs, obj_type)
                 info = ctx.type_registry.structs[obj_type]
-                # :size is field index 2 (1-indexed), so 1 in 0-indexed
-                # struct.set expects: [ref, value]
+                field_idx = findfirst(==(field_sym), info.field_names)
+                if field_idx !== nothing
+                    # struct.set expects: [ref, value]
+                    value_type = infer_value_type(value_arg, ctx)
+                    temp_local = allocate_local!(ctx, value_type)
 
-                # IMPORTANT: The value_arg might be an SSA that was just computed and
-                # is on top of the stack. If we compile obj_arg first, we'd push it
-                # AFTER the value, giving wrong order [value, ref] instead of [ref, value].
-                # Solution: compile value first, store in temp local, then compile ref.
-                value_type = infer_value_type(value_arg, ctx)
-                temp_local = allocate_local!(ctx, value_type)
+                    # Compile value and store in local
+                    append!(bytes, compile_value(value_arg, ctx))
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(temp_local))
 
-                # Compile value and store in local (value may already be on stack from prev stmt)
-                append!(bytes, compile_value(value_arg, ctx))
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(temp_local))
+                    # Now compile obj (struct ref)
+                    append!(bytes, compile_value(obj_arg, ctx))
 
-                # Now compile obj (struct ref)
-                append!(bytes, compile_value(obj_arg, ctx))
+                    # Load value from local
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(temp_local))
 
-                # Load value from local
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(temp_local))
+                    # struct.set
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.STRUCT_SET)
+                    append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
+                    append!(bytes, encode_leb128_unsigned(field_idx - 1))
 
-                # struct.set
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.STRUCT_SET)
-                append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
-                append!(bytes, encode_leb128_unsigned(1))  # Field 1 = size tuple
-
-                # setfield! returns the value, so push it again
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(temp_local))
-                return bytes
+                    # setfield! returns the value, so push it again
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(temp_local))
+                    return bytes
+                end
             end
         end
 
