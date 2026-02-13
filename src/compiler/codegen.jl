@@ -14210,6 +14210,15 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
         return bytes
     end
 
+    # PURE-325: Error constructors — these are always followed by throw() which is unreachable.
+    # Emit unreachable instead of trying to compile the struct construction, because
+    # error types like ArgumentError have AbstractString fields that can receive LazyString
+    # (a struct ref) where ArrayRef is expected, causing type mismatches.
+    if struct_type <: Exception
+        push!(bytes, Opcode.UNREACHABLE)
+        return bytes
+    end
+
     # Get the registered struct info
     if !haskey(ctx.type_registry.structs, struct_type)
         # Register it now - use appropriate registration for closures vs regular structs

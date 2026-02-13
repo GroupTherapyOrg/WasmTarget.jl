@@ -301,16 +301,11 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
     elseif T === JSValue
         # JS values are held as externref
         return ExternRef
-    elseif T === String || T === Symbol
+    elseif T === String || T === Symbol || T <: AbstractString
         # Strings and Symbols are represented as WasmGC byte arrays
         # Symbol is stored as its name string
+        # AbstractString maps to String representation (concrete in WasmGC)
         return ArrayRef
-    elseif T <: AbstractString
-        # Non-String AbstractString subtypes (LazyString, SubString, etc.) are structs,
-        # not arrays. AbstractString itself is abstract, so use ExternRef.
-        # PURE-325: AbstractString was ArrayRef which broke when LazyString (a struct)
-        # was stored in an AbstractString-typed field (e.g., ArgumentError.msg).
-        return ExternRef
     elseif T <: Tuple
         # Tuples map to WasmGC structs
         return StructRef
