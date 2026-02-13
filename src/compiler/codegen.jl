@@ -15553,6 +15553,30 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         push!(bytes, Opcode.STRUCT_NEW)
         append!(bytes, encode_leb128_unsigned(type_idx))
 
+    elseif val isa Function && isstructtype(typeof(val)) && fieldcount(typeof(val)) > 0
+        # PURE-325: Function closure with captured fields (e.g., Fix2{typeof(isequal), Char})
+        # These are structs that happen to be Functions — compile like regular structs
+        T = typeof(val)
+        info = register_struct_type!(ctx.mod, ctx.type_registry, T)
+        type_idx = info.wasm_type_idx
+
+        has_undefined = any(!isdefined(val, fn) for fn in fieldnames(T))
+        if has_undefined
+            push!(bytes, Opcode.REF_NULL)
+            append!(bytes, encode_leb128_signed(Int64(type_idx)))
+            return bytes
+        end
+
+        struct_type_def = ctx.mod.types[type_idx + 1]
+        for (fi, field_name) in enumerate(fieldnames(T))
+            field_val = getfield(val, field_name)
+            append!(bytes, compile_value(field_val, ctx))
+        end
+
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.STRUCT_NEW)
+        append!(bytes, encode_leb128_unsigned(type_idx))
+
     elseif typeof(val) <: Dict
         # Dict constant with pre-populated data — materialize Memory fields as arrays
         T = typeof(val)
