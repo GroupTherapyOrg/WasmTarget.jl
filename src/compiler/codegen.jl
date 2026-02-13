@@ -4235,6 +4235,28 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
             # Union{Nothing, T} -> use T's concrete type (nullable reference)
             return julia_to_wasm_type_concrete(inner_type, ctx)
         elseif needs_tagged_union(T)
+            # PURE-324: Check if all non-Nothing types are numeric — if so, use widest
+            # numeric type instead of tagged union. Tagged union (ref struct) can't
+            # store/load raw numeric values correctly in phi nodes.
+            # Handles Union{Int64, UInt32}, Union{Int32, Int64}, etc.
+            types = Base.uniontypes(T)
+            non_nothing = filter(t -> t !== Nothing, types)
+            all_numeric = all(non_nothing) do t
+                wt = julia_to_wasm_type(t)
+                wt === I32 || wt === I64 || wt === F32 || wt === F64
+            end
+            if all_numeric && !isempty(non_nothing)
+                wasm_types = [julia_to_wasm_type(t) for t in non_nothing]
+                if F64 in wasm_types
+                    return F64
+                elseif I64 in wasm_types
+                    return I64
+                elseif F32 in wasm_types
+                    return F32
+                else
+                    return I32
+                end
+            end
             # Multi-variant union -> use tagged union struct
             info = get_union_type!(ctx.mod, ctx.type_registry, T)
             return ConcreteRef(info.wasm_type_idx, true)
@@ -5063,6 +5085,9 @@ function count_ssa_uses!(stmt, uses::Dict{Int, Int})
                 count_ssa_uses!(stmt.values[i], uses)
             end
         end
+    elseif stmt isa Core.PiNode
+        # PURE-324: PiNodes reference their source SSA value
+        count_ssa_uses!(stmt.val, uses)
     end
 end
 
@@ -6604,8 +6629,13 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::C
     edge_val_type = get_phi_edge_wasm_type(val, ctx)
 
     if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type)
-        # Type mismatch: skip this store (unreachable path for Union types)
-        return false
+        # PURE-324: Allow i32→i64 widening — the extend instruction is emitted below.
+        # This handles phi nodes for Union{Int64, UInt32} where the phi local is I64
+        # but one edge value is I32 (UInt32/Int32/Bool).
+        if !(phi_local_type === I64 && edge_val_type === I32)
+            # Type mismatch: skip this store (unreachable path for Union types)
+            return false
+        end
     end
 
     # When edge_val_type is nothing (Any/Union SSA type), check the actual local's Wasm type
@@ -8966,8 +8996,15 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 local_array_idx = local_idx - ctx.n_params + 1
                 ssa_local_type = local_array_idx >= 1 && local_array_idx <= length(ctx.locals) ? ctx.locals[local_array_idx] : nothing
                 if phi_local_wasm_type !== nothing && ssa_local_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_local_type)
-                    # Type mismatch: emit type-safe default for the phi local's type
-                    append!(result, emit_phi_type_default(phi_local_wasm_type))
+                    # PURE-324: Allow i32→i64 widening for numeric union phis
+                    if phi_local_wasm_type === I64 && ssa_local_type === I32
+                        push!(result, Opcode.LOCAL_GET)
+                        append!(result, encode_leb128_unsigned(local_idx))
+                        push!(result, Opcode.I64_EXTEND_I32_S)
+                    else
+                        # Type mismatch: emit type-safe default for the phi local's type
+                        append!(result, emit_phi_type_default(phi_local_wasm_type))
+                    end
                 else
                     push!(result, Opcode.LOCAL_GET)
                     append!(result, encode_leb128_unsigned(local_idx))
@@ -8977,7 +9014,14 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 # Check type compatibility for phi-to-phi
                 src_local_type = ctx.locals[local_idx - ctx.n_params + 1]
                 if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, src_local_type)
-                    append!(result, emit_phi_type_default(phi_local_wasm_type))
+                    # PURE-324: Allow i32→i64 widening for numeric union phis
+                    if phi_local_wasm_type === I64 && src_local_type === I32
+                        push!(result, Opcode.LOCAL_GET)
+                        append!(result, encode_leb128_unsigned(local_idx))
+                        push!(result, Opcode.I64_EXTEND_I32_S)
+                    else
+                        append!(result, emit_phi_type_default(phi_local_wasm_type))
+                    end
                 else
                     push!(result, Opcode.LOCAL_GET)
                     append!(result, encode_leb128_unsigned(local_idx))
@@ -8991,8 +9035,18 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 ssa_julia_type = get(ctx.ssa_types, val.id, Any)
                 ssa_wasm_type = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
                 if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_wasm_type)
-                    # Type mismatch: emit type-safe default instead of recomputing
-                    append!(result, emit_phi_type_default(phi_local_wasm_type))
+                    # PURE-324: Allow i32→i64 widening for numeric union phis
+                    if phi_local_wasm_type === I64 && ssa_wasm_type === I32
+                        if stmt !== nothing && !(stmt isa Core.PhiNode)
+                            append!(result, compile_statement(stmt, val.id, ctx))
+                        else
+                            append!(result, compile_value(val, ctx))
+                        end
+                        push!(result, Opcode.I64_EXTEND_I32_S)
+                    else
+                        # Type mismatch: emit type-safe default instead of recomputing
+                        append!(result, emit_phi_type_default(phi_local_wasm_type))
+                    end
                 elseif stmt !== nothing && !(stmt isa Core.PhiNode)
                     append!(result, compile_statement(stmt, val.id, ctx))
                 else
@@ -9049,6 +9103,12 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 phi_local_type = ctx.locals[phi_local_idx - ctx.n_params + 1]
                 edge_val_type = get_phi_edge_wasm_type(val)
                 if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type)
+                    # PURE-324: Allow i32→i64 widening for numeric union phis
+                    if phi_local_type === I64 && edge_val_type === I32
+                        append!(result, compile_value(val, ctx))
+                        push!(result, Opcode.I64_EXTEND_I32_S)
+                        return result
+                    end
                     # Type mismatch: emit type-safe default instead
                     append!(result, emit_phi_type_default(phi_local_type))
                     return result
@@ -9202,6 +9262,19 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                 edge_val_type = get_phi_edge_wasm_type(val)
 
                                 if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type)
+                                    # PURE-324: Allow i32→i64 widening for numeric union phis
+                                    # compile_phi_value handles the extend internally
+                                    if phi_local_type === I64 && edge_val_type === I32
+                                        phi_value_bytes_w = compile_phi_value(val, i)
+                                        if !isempty(phi_value_bytes_w)
+                                            append!(bytes, phi_value_bytes_w)
+                                            push!(bytes, Opcode.LOCAL_SET)
+                                            append!(bytes, encode_leb128_unsigned(local_idx))
+                                            phi_count += 1
+                                            found_edge = true
+                                            break
+                                        end
+                                    end
                                     # Type mismatch: emit type-safe default for the local's declared type.
                                     # This happens when Julia Union types have mixed primitive/ref variants.
                                     if phi_local_type isa ConcreteRef
@@ -18652,8 +18725,15 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             target_type_ref
         end
         if target_type === Int64 || target_type === UInt64
-            # Extending to 64-bit - emit extend instruction
-            push!(bytes, Opcode.I64_EXTEND_I32_S)
+            # Extending to 64-bit - only emit extend if source is i32
+            # PURE-324: Source may already be i64 if from a widened phi local (Union{Int64, UInt32})
+            source_wasm_s = nothing
+            if length(args) >= 2
+                source_wasm_s = get_phi_edge_wasm_type(args[2], ctx)
+            end
+            if source_wasm_s !== I64
+                push!(bytes, Opcode.I64_EXTEND_I32_S)
+            end
         elseif target_type === Int128 || target_type === UInt128
             # Sign-extending to 128-bit - create struct with (lo=value, hi=sign_extension)
             # The value is already on the stack (i64)
@@ -18714,8 +18794,15 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             target_type_ref
         end
         if target_type === Int64 || target_type === UInt64
-            # Extending to 64-bit - emit extend instruction
-            push!(bytes, Opcode.I64_EXTEND_I32_U)
+            # Extending to 64-bit - only emit extend if source is i32
+            # PURE-324: Source may already be i64 if from a widened phi local (Union{Int64, UInt32})
+            source_wasm = nothing
+            if length(args) >= 2
+                source_wasm = get_phi_edge_wasm_type(args[2], ctx)
+            end
+            if source_wasm !== I64
+                push!(bytes, Opcode.I64_EXTEND_I32_U)
+            end
         elseif target_type === Int128 || target_type === UInt128
             # Extending to 128-bit - create struct with (lo=value, hi=0)
             # The value is already on the stack (i64), need to create 128-bit struct
