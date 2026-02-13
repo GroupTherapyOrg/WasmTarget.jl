@@ -5110,6 +5110,10 @@ function count_ssa_uses!(stmt, uses::Dict{Int, Int})
                 count_ssa_uses!(stmt.values[i], uses)
             end
         end
+    elseif stmt isa Core.PiNode
+        # PURE-324: PiNode references a source value — count it so phi nodes
+        # that are only referenced by PiNodes get their ssa_locals mapping
+        count_ssa_uses!(stmt.val, uses)
     end
 end
 
