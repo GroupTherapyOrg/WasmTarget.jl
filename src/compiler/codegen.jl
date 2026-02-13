@@ -1158,6 +1158,7 @@ function compile_module(functions::Vector)::WasmModule
     # Second pass: compile function bodies
     for (i, (f, arg_types, name, code_info, return_type, global_args, is_closure)) in enumerate(function_data)
         func_idx = UInt32(n_imports + i - 1)
+        println("DEBUG_FUNCMAP: func_$(func_idx) = $(name) :: $(arg_types) -> $(return_type)")
 
         # Check if this is an intrinsic function that needs special code generation
         intrinsic_body = is_intrinsic_function(f) ? generate_intrinsic_body(f, arg_types, mod, type_registry) : nothing
@@ -4396,15 +4397,15 @@ function analyze_control_flow!(ctx::CompilationContext)
             # PURE-036bg: If phi type is a ref type but used in boolean context (i32_eqz,
             # not_int, eq_int, etc), override to I32. This handles dead code paths where
             # ref-typed phi values are tested with boolean operations.
-            # PURE-325: Skip this override for concrete struct types (Int128, UInt128, Tuple, etc.)
-            # These are legitimately ref types that happen to be used in comparison ops.
-            # The boolean ops receive extracted fields (via struct_get), not the struct itself.
+            # PURE-325: Skip this override for Int128/UInt128 phi types.
+            # These are primitive in Julia but map to struct{i64,i64} in Wasm.
+            # They're used in comparison ops (sle_int, eq_int) but the phi local must
+            # stay as ConcreteRef — the boolean ops receive extracted fields via struct_get.
             is_phi_any_ref = phi_wasm_type isa ConcreteRef || phi_wasm_type === StructRef ||
                              phi_wasm_type === ArrayRef || phi_wasm_type === AnyRef ||
                              phi_wasm_type === ExternRef
-            is_concrete_struct = phi_julia_type isa DataType && isstructtype(phi_julia_type) &&
-                                 isconcretetype(phi_julia_type) && phi_julia_type !== Bool
-            if is_phi_any_ref && !is_concrete_struct
+            is_wasm_struct_numeric = phi_julia_type in (Int128, UInt128)
+            if is_phi_any_ref && !is_wasm_struct_numeric
                 phi_ssa_val = Core.SSAValue(i)
                 for use_stmt in code
                     # Check if used as GotoIfNot condition
