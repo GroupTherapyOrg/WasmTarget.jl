@@ -18849,7 +18849,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
 
             # If source is 32-bit, sign-extend to 64-bit first
-            if source_type === Int32 || source_type === UInt32 || source_type === Int16 || source_type === Int8
+            # PURE-325: Bool also maps to i32
+            if source_type === Int32 || source_type === UInt32 || source_type === Int16 || source_type === Int8 || source_type === Bool
                 push!(bytes, Opcode.I64_EXTEND_I32_S)
             end
 
@@ -18915,7 +18916,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : UInt64
 
             # If source is 32-bit, extend to 64-bit first
-            if source_type === Int32 || source_type === UInt32
+            # PURE-325: Bool also maps to i32, so include it here
+            if source_type === Int32 || source_type === UInt32 || source_type === Bool
                 push!(bytes, Opcode.I64_EXTEND_I32_U)
             end
 
