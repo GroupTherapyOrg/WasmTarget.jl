@@ -4177,4 +4177,96 @@ end
 
     end
 
+    # ========================================================================
+    # Phase 31: Manual Comparison Harness Tests (PURE-503)
+    # Verify compare_julia_wasm_manual, compare_batch_manual, and
+    # compare_julia_wasm_wrapper for complex-type ground truth verification
+    # ========================================================================
+    @testset "Phase 31: Manual Comparison Harness" begin
+
+        @testset "compare_julia_wasm_manual — correct expected" begin
+            r = compare_julia_wasm_manual(x -> x + Int32(1), (Int32(5),), Int32(6))
+            if !r.skipped
+                @test r.pass
+                @test r.expected == Int32(6)
+                @test r.actual == 6
+            end
+        end
+
+        @testset "compare_julia_wasm_manual — wrong expected detects mismatch" begin
+            r = compare_julia_wasm_manual(x -> x + Int32(1), (Int32(5),), Int32(99))
+            if !r.skipped
+                @test !r.pass
+                @test r.expected == Int32(99)
+                @test r.actual == 6
+            end
+        end
+
+        @testset "compare_julia_wasm_manual — multiply" begin
+            r = compare_julia_wasm_manual(x -> x * Int32(3), (Int32(4),), Int32(12))
+            if !r.skipped
+                @test r.pass
+            end
+        end
+
+        @testset "compare_julia_wasm_manual — two args" begin
+            my_sub(a::Int32, b::Int32) = a - b
+            r = compare_julia_wasm_manual(my_sub, (Int32(10), Int32(3)), Int32(7))
+            if !r.skipped
+                @test r.pass
+            end
+        end
+
+        @testset "compare_julia_wasm_manual — zero" begin
+            r = compare_julia_wasm_manual(x -> x, (Int32(0),), Int32(0))
+            if !r.skipped
+                @test r.pass
+            end
+        end
+
+        @testset "compare_julia_wasm_manual — negative" begin
+            r = compare_julia_wasm_manual(x -> -x, (Int32(42),), Int32(-42))
+            if !r.skipped
+                @test r.pass
+            end
+        end
+
+        @testset "compare_batch_manual — multiple inputs" begin
+            results = compare_batch_manual(x -> x * Int32(2), [
+                ((Int32(3),), Int32(6)),
+                ((Int32(0),), Int32(0)),
+                ((Int32(-1),), Int32(-2)),
+                ((Int32(100),), Int32(200)),
+            ])
+            @test length(results) == 4
+            for r in results
+                if !r.skipped
+                    @test r.pass
+                end
+            end
+        end
+
+        @testset "compare_batch_manual — detects mismatches" begin
+            results = compare_batch_manual(x -> x + Int32(1), [
+                ((Int32(5),), Int32(6)),    # correct
+                ((Int32(5),), Int32(99)),   # wrong
+            ])
+            @test length(results) == 2
+            if !results[1].skipped
+                @test results[1].pass
+                @test !results[2].pass
+            end
+        end
+
+        @testset "compare_julia_wasm_wrapper — basic" begin
+            r = compare_julia_wasm_wrapper(x -> x + Int32(10), Int32(5))
+            if !r.skipped
+                @test r.pass
+                @test r.expected == Int32(15)
+                @test r.actual == 15
+            end
+        end
+
+    end
+
 end
