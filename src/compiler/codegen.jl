@@ -5242,6 +5242,11 @@ function infer_value_type(val, ctx::CompilationContext)
         end
         if idx >= 1 && idx <= length(ctx.arg_types)
             return ctx.arg_types[idx]
+        elseif idx < 1 && ctx.func_ref !== nothing
+            # PURE-324: Core.Argument(1) in a non-closure is the function reference itself.
+            # This occurs in kwarg wrapper methods that pass `self` to the inner #method#N.
+            # Return typeof(func_ref) so cross-function lookup can match the registered signature.
+            return typeof(ctx.func_ref)
         end
     elseif val isa Core.SSAValue
         return get(ctx.ssa_types, val.id, Any)
@@ -5289,6 +5294,10 @@ function infer_value_type(val, ctx::CompilationContext)
     elseif val isa Type
         # Type{T} references - return Type{T}
         return Type{val}
+    elseif val isa Function
+        # PURE-324: Function values passed as arguments (e.g., kwarg wrappers pass `self` to inner method)
+        # Return typeof(f) so cross-function lookup can match the registered signature
+        return typeof(val)
     elseif isprimitivetype(typeof(val))
         # Custom primitive type (e.g., JuliaSyntax.Kind) - return actual type
         return typeof(val)
@@ -22295,6 +22304,51 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 # This allows compilation to succeed for code paths that
                 # don't actually reach these methods.
                 @warn "Stubbing unsupported method: $name (will trap at runtime)" maxlog=1
+                # DEBUG: Trace stub root cause
+                if contains(string(name), "parse") && contains(string(name), "#73")
+                    println("DEBUG_STUB: name=$name is_self_call=$is_self_call cross_call_handled=$cross_call_handled")
+                    println("DEBUG_STUB: compiling_func=$(ctx.func_ref) compiling_func_idx=$(ctx.func_idx)")
+                    println("DEBUG_STUB: func_ref=$(expr.args[2]) ($(typeof(expr.args[2])))")
+                    println("DEBUG_STUB: actual_func_ref=$actual_func_ref ($(typeof(actual_func_ref)))")
+                    println("DEBUG_STUB: args=$(args)")
+                    for (ai, a) in enumerate(args)
+                        println("DEBUG_STUB: arg[$ai] = $a ($(typeof(a))) -> infer=$(infer_value_type(a, ctx))")
+                    end
+                    if ctx.func_registry !== nothing
+                        called = nothing
+                        if actual_func_ref isa GlobalRef
+                            called = try getfield(actual_func_ref.mod, actual_func_ref.name) catch; nothing end
+                        end
+                        println("DEBUG_STUB: called_func=$called ($(typeof(called)))")
+                        if called !== nothing
+                            cat = tuple([infer_value_type(a, ctx) for a in args]...)
+                            println("DEBUG_STUB: call_arg_types=$cat")
+                            ti = get_function(ctx.func_registry, called, cat)
+                            println("DEBUG_STUB: target_info=$ti")
+                            # Check with closure retry
+                            if ti === nothing && typeof(called) <: Function && isconcretetype(typeof(called))
+                                cat2 = (typeof(called), cat...)
+                                ti2 = get_function(ctx.func_registry, called, cat2)
+                                println("DEBUG_STUB: closure_retry_arg_types=$cat2 target_info2=$ti2")
+                            end
+                            # Check by_ref
+                            infos = get(ctx.func_registry.by_ref, called, nothing)
+                            if infos !== nothing
+                                println("DEBUG_STUB: by_ref has $(length(infos)) entries for this func:")
+                                for info in infos
+                                    println("DEBUG_STUB:   registered_arg_types=$(info.arg_types) name=$(info.name)")
+                                end
+                            else
+                                println("DEBUG_STUB: NOT in by_ref dict! Trying objectid check...")
+                                for (k, entries) in ctx.func_registry.by_ref
+                                    if typeof(k) == typeof(called)
+                                        println("DEBUG_STUB:   same type key: objectid(k)=$(objectid(k)) objectid(called)=$(objectid(called))")
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
                 push!(bytes, Opcode.UNREACHABLE)
             end
         end
