@@ -18920,8 +18920,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 push!(bytes, Opcode.REF_IS_NULL)
             end
         elseif check_type !== nothing && isconcretetype(check_type)
-            # isa(x, ConcreteType) -> check if reference is non-null
-            # For Union{Nothing, T}, checking isa(x, T) is equivalent to !isnull
+            # isa(x, ConcreteType) -> type check
             # Value is already on stack — check if it's actually a ref type
             local isa2_val_wasm = nothing
             if value_arg isa Core.SSAValue
@@ -18939,7 +18938,24 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 push!(bytes, Opcode.DROP)
                 push!(bytes, Opcode.I32_CONST)
                 push!(bytes, 0x01)
+            elseif isa2_val_wasm === ExternRef
+                # PURE-324: Value is externref (Any-typed field). Need proper type check,
+                # not just null check. Use any.convert_extern + ref.test to check actual type.
+                # Example: isa(stream.text_root, String) where text_root::Any could be
+                # IOBuffer, String, or SubString — must distinguish at runtime.
+                local target_wasm = get_concrete_wasm_type(check_type, ctx.mod, ctx.type_registry)
+                if target_wasm isa ConcreteRef
+                    append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.REF_TEST_NULL)
+                    append!(bytes, encode_leb128_signed(Int64(target_wasm.type_idx)))
+                else
+                    # Fallback: non-null check for non-concrete wasm types
+                    push!(bytes, Opcode.REF_IS_NULL)
+                    push!(bytes, Opcode.I32_EQZ)
+                end
             else
+                # For Union{Nothing, T}, checking isa(x, T) is equivalent to !isnull
                 push!(bytes, Opcode.REF_IS_NULL)
                 push!(bytes, Opcode.I32_EQZ)  # negate: 1->0, 0->1
             end
