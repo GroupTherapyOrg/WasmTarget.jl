@@ -14853,6 +14853,57 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
             push!(bytes, Opcode.I32_CONST)
             push!(bytes, 0x01)  # true = always a grapheme break
             return bytes
+        elseif name === :jl_ptr_to_array_1d
+            # PURE-324: jl_ptr_to_array_1d(type, ptr, len, own) -> Vector{T}
+            # Creates a Vector from a raw pointer. In WasmGC, raw pointers don't exist.
+            # The pointer arg traces back through bitcast/getfield(:ptr) to a Memory
+            # (= array in WasmGC). We trace the IR to find the original data array,
+            # then wrap it in a Vector struct (data_array_ref, size_tuple).
+            ret_type = length(expr.args) >= 2 ? expr.args[2] : nothing
+            ptr_arg = length(expr.args) >= 7 ? expr.args[7] : nothing
+            len_arg = length(expr.args) >= 8 ? expr.args[8] : nothing
+
+            if ret_type !== nothing && ret_type <: AbstractVector
+                # Trace ptr back through bitcast/getfield(:ptr) to find the data source
+                data_source = _trace_ptr_to_data(ptr_arg, ctx)
+                if data_source !== nothing
+                    # Get or register Vector type
+                    vec_info = register_vector_type!(ctx.mod, ctx.type_registry, ret_type)
+                    vec_type_idx = vec_info.wasm_type_idx
+                    # Get size tuple type
+                    size_tuple_type = Tuple{Int64}
+                    if !haskey(ctx.type_registry.structs, size_tuple_type)
+                        register_tuple_type!(ctx.mod, ctx.type_registry, size_tuple_type)
+                    end
+                    size_info = ctx.type_registry.structs[size_tuple_type]
+
+                    # Stack: [data_array_ref, size_tuple_ref] for struct.new Vector
+                    # 1. Push data array ref
+                    append!(bytes, compile_value(data_source, ctx))
+                    # 2. Push length as i64 for size tuple, then struct.new Tuple{Int64}
+                    if len_arg !== nothing
+                        append!(bytes, compile_value(len_arg, ctx))
+                        len_type = infer_value_type(len_arg, ctx)
+                        if len_type === UInt64
+                            # UInt64 → i64 is already i64, but need signed interpretation
+                            # For Wasm purposes, UInt64 and Int64 are both i64
+                        elseif len_type === Int32 || len_type === UInt32
+                            push!(bytes, Opcode.I64_EXTEND_I32_S)
+                        end
+                    else
+                        push!(bytes, Opcode.I64_CONST)
+                        push!(bytes, 0x00)
+                    end
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.STRUCT_NEW)
+                    append!(bytes, encode_leb128_unsigned(size_info.wasm_type_idx))
+                    # 3. struct.new Vector(data_ref, size_tuple_ref)
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.STRUCT_NEW)
+                    append!(bytes, encode_leb128_unsigned(vec_type_idx))
+                    return bytes
+                end
+            end
         end
     end
 
@@ -14906,6 +14957,70 @@ function _trace_string_ptr(ptr_ssa, code)
     else
         return nothing
     end
+end
+
+"""
+Trace a pointer SSA back through bitcast/getfield(:ptr) to find the original data source.
+Used by jl_ptr_to_array_1d to find the underlying Memory/array reference.
+Returns the SSA value that produces the data array, or nothing if trace fails.
+
+The typical IR pattern is:
+  %data = getfield(%iobuf, :data)      -> Memory{T} (= array in WasmGC)
+  %ptr  = getfield(%data, :ptr)        -> Ptr{Nothing} (= i64 0 in WasmGC)
+  %ptr2 = bitcast(Ptr{UInt8}, %ptr)    -> Ptr{UInt8} (= i64 0)
+  ...
+  %vec  = jl_ptr_to_array_1d(Vector{T}, %ptr2, %len, ...)
+
+We trace from %ptr2 back to %data (the Memory reference).
+"""
+function _trace_ptr_to_data(ptr_val, ctx::CompilationContext)
+    code = ctx.code_info.code
+    # Walk backwards through SSA values
+    current = ptr_val
+    for _ in 1:10  # max depth to prevent infinite loops
+        if !(current isa Core.SSAValue)
+            return nothing
+        end
+        stmt = code[current.id]
+        if stmt isa Expr
+            if stmt.head === :call
+                func = stmt.args[1]
+                if func isa GlobalRef
+                    fname = func.name
+                    if fname === :bitcast && length(stmt.args) >= 3
+                        # bitcast(TargetType, source) — continue tracing source
+                        current = stmt.args[3]
+                        continue
+                    elseif fname === :getfield && length(stmt.args) >= 3
+                        field_ref = stmt.args[3]
+                        field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
+                        if field_sym === :ptr
+                            # getfield(memory, :ptr) — the source is the memory obj
+                            # The memory IS the data array in WasmGC
+                            obj = stmt.args[2]
+                            return obj
+                        elseif field_sym === :data
+                            # getfield(iobuf, :data) — this IS the data array
+                            return current
+                        else
+                            return nothing
+                        end
+                    end
+                end
+            elseif stmt.head === :foreigncall
+                # May be jl_string_ptr or similar — check
+                name_arg = stmt.args[1]
+                fname = name_arg isa QuoteNode ? name_arg.value : name_arg
+                if fname === :jl_string_ptr && length(stmt.args) >= 6
+                    # jl_string_ptr(s) — the string IS the data in WasmGC
+                    return stmt.args[6]
+                end
+                return nothing
+            end
+        end
+        return nothing
+    end
+    return nothing
 end
 
 # ============================================================================
