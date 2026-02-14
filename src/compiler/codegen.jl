@@ -14950,10 +14950,53 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
             return bytes
         elseif name === :jl_genericmemory_to_string
             # PURE-325: jl_genericmemory_to_string(memory, n) -> String
-            # Converts a Memory{UInt8} to a String. In WasmGC, both Memory and String
-            # are represented as array<i32>, so this is essentially a no-op.
-            # The memory argument IS the string array.
-            if length(expr.args) >= 6
+            # Creates a String of exactly n bytes from a Memory{UInt8}.
+            # The underlying WasmGC array may have more capacity than n
+            # (Julia allocates Memory with minimum size 16), so we must
+            # create a new array of exactly n elements and copy.
+            if length(expr.args) >= 7
+                mem_arg = expr.args[6]
+                len_arg = expr.args[7]
+                str_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
+
+                # Allocate locals for dest array and length
+                dest_local = length(ctx.locals) + ctx.n_params
+                push!(ctx.locals, ConcreteRef(str_arr_type))
+                len_local = length(ctx.locals) + ctx.n_params
+                push!(ctx.locals, I32)
+
+                # Compile n and convert to i32
+                append!(bytes, compile_value(len_arg, ctx))
+                len_type = infer_value_type(len_arg, ctx)
+                if len_type === Int64 || len_type === Int || len_type === UInt64
+                    push!(bytes, Opcode.I32_WRAP_I64)
+                end
+                push!(bytes, Opcode.LOCAL_TEE)
+                append!(bytes, encode_leb128_unsigned(len_local))
+
+                # Create new array of exactly n elements
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
+                append!(bytes, encode_leb128_unsigned(str_arr_type))
+                push!(bytes, Opcode.LOCAL_TEE)
+                append!(bytes, encode_leb128_unsigned(dest_local))
+
+                # array.copy: dest, dest_offset=0, src, src_offset=0, count=n
+                push!(bytes, Opcode.I32_CONST, 0x00)  # dest offset
+                append!(bytes, compile_value(mem_arg, ctx))  # src array
+                push!(bytes, Opcode.I32_CONST, 0x00)  # src offset
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(len_local))  # count
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ARRAY_COPY)
+                append!(bytes, encode_leb128_unsigned(str_arr_type))  # dest type
+                append!(bytes, encode_leb128_unsigned(str_arr_type))  # src type
+
+                # Return the new array
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(dest_local))
+            elseif length(expr.args) >= 6
+                # Fallback: no length arg, just pass through
                 mem_arg = expr.args[6]
                 append!(bytes, compile_value(mem_arg, ctx))
             end
@@ -14961,17 +15004,56 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
         elseif name === :jl_pchar_to_string
             # PURE-325: jl_pchar_to_string(ptr, n) -> String
             # Creates a String from a char pointer and length. In WasmGC, we trace
-            # the pointer back to the underlying array. If tracing fails, fall through
-            # to create a new array.
-            if length(expr.args) >= 6
+            # the pointer back to the underlying array, then copy exactly n bytes.
+            if length(expr.args) >= 7
                 ptr_arg = expr.args[6]
-                # Try to trace back to the underlying data array
+                len_arg = expr.args[7]
                 data_ssa = _trace_ptr_to_data(ptr_arg, ctx)
                 if data_ssa !== nothing
-                    append!(bytes, compile_value(data_ssa, ctx))
+                    str_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
+
+                    # Allocate locals for dest array and length
+                    dest_local = length(ctx.locals) + ctx.n_params
+                    push!(ctx.locals, ConcreteRef(str_arr_type))
+                    len_local = length(ctx.locals) + ctx.n_params
+                    push!(ctx.locals, I32)
+
+                    # Compile n and convert to i32
+                    append!(bytes, compile_value(len_arg, ctx))
+                    len_type = infer_value_type(len_arg, ctx)
+                    if len_type === Int64 || len_type === Int || len_type === UInt64
+                        push!(bytes, Opcode.I32_WRAP_I64)
+                    end
+                    push!(bytes, Opcode.LOCAL_TEE)
+                    append!(bytes, encode_leb128_unsigned(len_local))
+
+                    # Create new array of exactly n elements
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
+                    append!(bytes, encode_leb128_unsigned(str_arr_type))
+                    push!(bytes, Opcode.LOCAL_TEE)
+                    append!(bytes, encode_leb128_unsigned(dest_local))
+
+                    # array.copy: dest, dest_offset=0, src, src_offset=0, count=n
+                    push!(bytes, Opcode.I32_CONST, 0x00)  # dest offset
+                    append!(bytes, compile_value(data_ssa, ctx))  # src array
+                    push!(bytes, Opcode.I32_CONST, 0x00)  # src offset
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(len_local))  # count
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.ARRAY_COPY)
+                    append!(bytes, encode_leb128_unsigned(str_arr_type))  # dest type
+                    append!(bytes, encode_leb128_unsigned(str_arr_type))  # src type
+
+                    # Return the new array
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(dest_local))
                     return bytes
                 end
                 # Fallback: the pointer might be directly compilable as a ref
+                append!(bytes, compile_value(ptr_arg, ctx))
+            elseif length(expr.args) >= 6
+                ptr_arg = expr.args[6]
                 append!(bytes, compile_value(ptr_arg, ctx))
             end
             return bytes
