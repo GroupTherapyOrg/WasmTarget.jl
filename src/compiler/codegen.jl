@@ -12288,10 +12288,42 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                     end
                 end
 
-                # Else-branch: push false (0)
+                # Else-branch: compute else-path value (PURE-505)
+                # For &&: else is short-circuit false (no stmts, value=false)
+                # For ||: else computes second condition (stmts from dest to phi, value=%6)
                 push!(inner_bytes, Opcode.ELSE)
-                push!(inner_bytes, Opcode.I32_CONST)
-                append!(inner_bytes, encode_leb128_signed(0))
+
+                # Find the else phi edge (the one NOT matching goto_idx)
+                else_edge_val = nothing
+                for (edge_idx, edge) in enumerate(phi_node.edges)
+                    if edge != goto_idx
+                        else_edge_val = phi_node.values[edge_idx]
+                        break
+                    end
+                end
+
+                # Compile else-path statements (from goto dest to phi_idx-1)
+                else_start = goto_if_not.dest
+                for i in else_start:(phi_idx - 1)
+                    stmt = code[i]
+                    if stmt !== nothing && !(stmt isa Core.PhiNode) && !(stmt isa Core.GotoIfNot) && !(stmt isa Core.GotoNode)
+                        append!(inner_bytes, compile_statement(stmt, i, ctx))
+                    end
+                end
+
+                # Push the else phi value
+                if else_edge_val === false
+                    push!(inner_bytes, Opcode.I32_CONST)
+                    append!(inner_bytes, encode_leb128_signed(0))
+                elseif else_edge_val === true
+                    push!(inner_bytes, Opcode.I32_CONST)
+                    append!(inner_bytes, encode_leb128_signed(1))
+                elseif else_edge_val !== nothing
+                    append!(inner_bytes, compile_value(else_edge_val, ctx))
+                else
+                    push!(inner_bytes, Opcode.I32_CONST)
+                    append!(inner_bytes, encode_leb128_signed(0))
+                end
 
                 push!(inner_bytes, Opcode.END)
 
