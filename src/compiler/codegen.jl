@@ -19775,6 +19775,13 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                         isa2_val_wasm = ctx.locals[local_offset + 1]
                     end
                 end
+            elseif value_arg isa Core.Argument
+                # PURE-325: Also handle function parameters (not just SSA values)
+                # Core.Argument(n) is 1-indexed; arg_types is also 1-indexed
+                local arg_n = value_arg.n
+                if arg_n >= 1 && arg_n <= length(ctx.arg_types)
+                    isa2_val_wasm = get_concrete_wasm_type(ctx.arg_types[arg_n], ctx.mod, ctx.type_registry)
+                end
             end
             if isa2_val_wasm !== nothing && (isa2_val_wasm === I64 || isa2_val_wasm === I32 || isa2_val_wasm === F64 || isa2_val_wasm === F32)
                 # Numeric value on stack — can never be Nothing, so isa(x, T) is true. Drop + push true.
