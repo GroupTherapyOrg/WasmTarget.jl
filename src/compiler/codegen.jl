@@ -8472,7 +8472,6 @@ function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::
         return
     end
     # Box: compile value → struct_new(box_type) → extern_convert_any
-    println("PURE-325-BOX: Boxing $(val_wasm) val=$val for externref return in $(ctx.func_name)")
     append!(target_bytes, compile_value(val, ctx))
     box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
     push!(target_bytes, Opcode.GC_PREFIX)
