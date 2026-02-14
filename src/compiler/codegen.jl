@@ -12278,6 +12278,16 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                     end
                 end
 
+                # Push the phi's then-value onto the stack (PURE-505)
+                # The if (result i32) block needs a value at the end of each branch.
+                # Find which phi edge corresponds to goto_idx and compile that value.
+                for (edge_idx, edge) in enumerate(phi_node.edges)
+                    if edge == goto_idx
+                        append!(inner_bytes, compile_value(phi_node.values[edge_idx], ctx))
+                        break
+                    end
+                end
+
                 # Else-branch: push false (0)
                 push!(inner_bytes, Opcode.ELSE)
                 push!(inner_bytes, Opcode.I32_CONST)
@@ -12292,12 +12302,29 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                     append!(inner_bytes, encode_leb128_unsigned(local_idx))
                 end
 
-                # Continue with conditionals after the phi
+                # Continue with conditionals after the phi, or compile tail statements
+                found_next_cond = false
                 for (j, (_, b)) in enumerate(conditionals)
                     goto_if_not = b.terminator::Core.GotoIfNot
                     if goto_if_not.cond isa Core.SSAValue && goto_if_not.cond.id == phi_idx
                         append!(inner_bytes, gen_conditional(j; target_idx=0))
+                        found_next_cond = true
                         break
+                    end
+                end
+
+                # PURE-505: Compile tail statements after the phi (e.g., zext_int, and_int, return)
+                if !found_next_cond
+                    for i in (phi_idx + 1):length(code)
+                        stmt = code[i]
+                        if stmt isa Core.ReturnNode
+                            if isdefined(stmt, :val)
+                                append!(inner_bytes, compile_value(stmt.val, ctx))
+                            end
+                            push!(inner_bytes, Opcode.RETURN)
+                        elseif stmt !== nothing
+                            append!(inner_bytes, compile_statement(stmt, i, ctx))
+                        end
                     end
                 end
 
