@@ -12036,6 +12036,11 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
     # Track which statements have been compiled to avoid duplicating code
     compiled_stmts = Set{Int}()
 
+    # PURE-506: Track whether gen_conditional used a typed IF block (vs void 0x40).
+    # When typed, the IF block leaves a value on the stack; when void, branches use
+    # explicit RETURN and the post-IF code is unreachable.
+    used_typed_if = Ref(false)
+
     # Build a recursive if-else structure
     # target_idx tracks where to generate code when no more conditionals
     function gen_conditional(cond_idx::Int; target_idx::Int=0)::Vector{UInt8}
@@ -12996,6 +13001,7 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
             push!(inner_bytes, 0x40)  # void block type
         else
             append!(inner_bytes, encode_block_type(result_type))
+            used_typed_if[] = true  # PURE-506: mark that IF block has typed result
         end
 
         if found_forward_goto !== nothing
@@ -13291,21 +13297,22 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
     # The gen_conditional function uses typed blocks when there's a phi merge
     # or when branches don't use explicit RETURN
     #
-    # PURE-506: Check typed result FIRST, before return_blocks.
-    # When gen_conditional uses typed IF blocks (result_type is I32/I64/F32/F64/ConcreteRef),
-    # each branch produces a value and the IF block leaves it on the stack.
-    # The function's END opcode will implicitly return this value — no explicit
-    # RETURN or UNREACHABLE needed. This must be checked BEFORE return_blocks >= 2,
-    # because nested ternaries (e.g. clamp) have return_blocks >= 2 but use typed
-    # IF blocks where the value is on the stack, not void blocks with explicit RETURNs.
-    if result_type isa ConcreteRef || result_type === I32 || result_type === I64 ||
-       result_type === F32 || result_type === F64
-        # Typed result - IF produces value, fall through with value on stack
-        # The function's END will return it
+    # PURE-506: Use `used_typed_if[]` to determine whether gen_conditional
+    # created a typed IF block (value on stack) or void IF block (branches RETURN).
+    # The function's result_type alone is insufficient — both clamp_i64 (typed IF)
+    # and or_bool (void IF) have I64 result_type, but only clamp leaves a value.
+    if used_typed_if[]
+        # Typed IF block: value is on the stack from the IF block result.
+        # The function's END will implicitly return it — no RETURN/UNREACHABLE needed.
     elseif return_blocks >= 2
         # Void IF blocks: all code paths return inside the conditionals via explicit RETURN,
         # so this point is truly unreachable
         push!(bytes, Opcode.UNREACHABLE)
+    elseif result_type isa ConcreteRef || result_type === I32 || result_type === I64 ||
+       result_type === F32 || result_type === F64
+        # Typed result but void IF blocks — fall through needs a value
+        # This shouldn't normally happen, but as a safety net:
+        push!(bytes, Opcode.RETURN)
     elseif result_type === ExternRef
         # ExternRef result - IF produces void, need ref.null extern before RETURN
         push!(bytes, Opcode.REF_NULL, UInt8(ExternRef))
