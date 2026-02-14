@@ -1,0 +1,31 @@
+{
+  "name": "gt_clamp_i64",
+  "julia_version": "1.12.4",
+  "entries": [
+    {
+      "expected": 5,
+      "args": [
+        5,
+        0,
+        10
+      ]
+    },
+    {
+      "expected": 0,
+      "args": [
+        -1,
+        0,
+        10
+      ]
+    },
+    {
+      "expected": 10,
+      "args": [
+        15,
+        0,
+        10
+      ]
+    }
+  ],
+  "generated": "2026-02-14T14:02:14.206"
+}

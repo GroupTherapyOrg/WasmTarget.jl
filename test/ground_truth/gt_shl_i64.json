@@ -1,0 +1,21 @@
+{
+  "name": "gt_shl_i64",
+  "julia_version": "1.12.4",
+  "entries": [
+    {
+      "expected": 16,
+      "args": [
+        1,
+        4
+      ]
+    },
+    {
+      "expected": 65280,
+      "args": [
+        255,
+        8
+      ]
+    }
+  ],
+  "generated": "2026-02-14T14:08:04.658"
+}

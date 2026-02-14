@@ -1,0 +1,28 @@
+{
+  "name": "gt_or_bool",
+  "julia_version": "1.12.4",
+  "entries": [
+    {
+      "expected": 1,
+      "args": [
+        1,
+        1
+      ]
+    },
+    {
+      "expected": 1,
+      "args": [
+        1,
+        0
+      ]
+    },
+    {
+      "expected": 0,
+      "args": [
+        0,
+        0
+      ]
+    }
+  ],
+  "generated": "2026-02-14T14:02:14.075"
+}

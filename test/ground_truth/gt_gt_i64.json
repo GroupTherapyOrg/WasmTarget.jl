@@ -1,0 +1,21 @@
+{
+  "name": "gt_gt_i64",
+  "julia_version": "1.12.4",
+  "entries": [
+    {
+      "expected": 0,
+      "args": [
+        1,
+        2
+      ]
+    },
+    {
+      "expected": 1,
+      "args": [
+        2,
+        1
+      ]
+    }
+  ],
+  "generated": "2026-02-14T14:08:04.593"
+}

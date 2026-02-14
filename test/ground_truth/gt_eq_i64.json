@@ -1,0 +1,28 @@
+{
+  "name": "gt_eq_i64",
+  "julia_version": "1.12.4",
+  "entries": [
+    {
+      "expected": 1,
+      "args": [
+        1,
+        1
+      ]
+    },
+    {
+      "expected": 0,
+      "args": [
+        1,
+        2
+      ]
+    },
+    {
+      "expected": 1,
+      "args": [
+        0,
+        0
+      ]
+    }
+  ],
+  "generated": "2026-02-14T14:08:04.526"
+}

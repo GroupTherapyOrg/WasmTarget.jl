@@ -1,0 +1,183 @@
+{
+  "summary": {
+    "executes": 0,
+    "parsestmt_funcs": 541,
+    "correct": 17,
+    "parse_inputs_correct": 5,
+    "stubbed_funcs": 30,
+    "dependency_graph_funcs": 365,
+    "ground_truth_snapshots": 25,
+    "individual_functions_tested": 20,
+    "compile_fails": 3,
+    "fails": 0
+  },
+  "julia_version": "1.12.4",
+  "individual_results": [
+    {
+      "name": "add_i64",
+      "level": "CORRECT",
+      "inputs": 4
+    },
+    {
+      "name": "sub_i64",
+      "level": "CORRECT",
+      "inputs": 3
+    },
+    {
+      "name": "mul_i64",
+      "level": "CORRECT",
+      "inputs": 3
+    },
+    {
+      "name": "add_i32",
+      "level": "CORRECT",
+      "inputs": 3
+    },
+    {
+      "name": "eq_i64",
+      "level": "CORRECT",
+      "inputs": 3
+    },
+    {
+      "name": "lt_i64",
+      "level": "CORRECT",
+      "inputs": 3
+    },
+    {
+      "name": "le_i64",
+      "level": "CORRECT",
+      "inputs": 3
+    },
+    {
+      "name": "gt_i64",
+      "level": "CORRECT",
+      "inputs": 2
+    },
+    {
+      "name": "band_i64",
+      "level": "CORRECT",
+      "inputs": 2
+    },
+    {
+      "name": "bor_i64",
+      "level": "CORRECT",
+      "inputs": 2
+    },
+    {
+      "name": "shl_i64",
+      "level": "CORRECT",
+      "inputs": 2
+    },
+    {
+      "name": "shr_i64",
+      "level": "CORRECT",
+      "inputs": 2
+    },
+    {
+      "name": "eq_i32",
+      "level": "CORRECT",
+      "inputs": 2
+    },
+    {
+      "name": "lt_i32",
+      "level": "CORRECT",
+      "inputs": 2
+    },
+    {
+      "name": "and_bool",
+      "level": "FAILS",
+      "inputs": 3
+    },
+    {
+      "name": "or_bool",
+      "level": "FAILS",
+      "inputs": 3
+    },
+    {
+      "name": "abs_i64",
+      "level": "CORRECT",
+      "inputs": 3
+    },
+    {
+      "name": "max_i64",
+      "level": "CORRECT",
+      "inputs": 3
+    },
+    {
+      "name": "min_i64",
+      "level": "CORRECT",
+      "inputs": 2
+    },
+    {
+      "name": "clamp_i64",
+      "level": "FAILS",
+      "inputs": 3
+    }
+  ],
+  "parse_verification": [
+    {
+      "note": "Verified in PURE-324",
+      "output_len": 3,
+      "input": "1",
+      "level": "CORRECT"
+    },
+    {
+      "note": "Verified in PURE-324",
+      "output_len": 3,
+      "input": "a",
+      "level": "CORRECT"
+    },
+    {
+      "note": "Verified in PURE-324",
+      "output_len": 6,
+      "input": "1+1",
+      "level": "CORRECT"
+    },
+    {
+      "note": "Verified in PURE-324",
+      "output_len": 3,
+      "input": "x",
+      "level": "CORRECT"
+    },
+    {
+      "note": "Verified in PURE-324",
+      "output_len": 2,
+      "input": "",
+      "level": "CORRECT"
+    }
+  ],
+  "stubs": {
+    "overflow_case": "unsupported method",
+    "_string": "unsupported method",
+    "reverse!": "unsupported method",
+    "#recover#60": "unsupported method",
+    "reduce_empty": "unsupported method",
+    "ndigits0zpb": "unsupported method",
+    "atomic_pointerset": "unsupported call",
+    "parseint_preamble": "unsupported method",
+    "#lex_digit##0": "unsupported method",
+    "resize!": "unsupported method",
+    "throw_code_point_err": "unsupported method",
+    "unsafe_write": "unsupported method",
+    "==": "unsupported method",
+    "_assert_tostring": "unsupported method",
+    "_growat!": "unsupported method",
+    "parse_Nary": "unsupported method",
+    "throw_invalid_char": "unsupported method",
+    "isascii": "unsupported method",
+    "prevind": "unsupported method",
+    "Symbol": "unsupported method",
+    "take!": "unsupported method",
+    "parse_brackets": "unsupported method",
+    "tryparse_internal": "unsupported method",
+    "parse_comma_separated": "unsupported method",
+    "write": "unsupported method",
+    "#bump_trivia#30": "unsupported method",
+    "ensureroom_slowpath": "unsupported method",
+    "findnext": "unsupported method",
+    "_replace_": "unsupported method",
+    "ensureroom_reallocate": "unsupported method"
+  },
+  "audit_date": "2026-02-14T14:08:04.857",
+  "story": "PURE-504"
+}

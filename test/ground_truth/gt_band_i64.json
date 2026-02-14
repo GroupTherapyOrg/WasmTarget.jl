@@ -1,0 +1,21 @@
+{
+  "name": "gt_band_i64",
+  "julia_version": "1.12.4",
+  "entries": [
+    {
+      "expected": 15,
+      "args": [
+        255,
+        15
+      ]
+    },
+    {
+      "expected": 0,
+      "args": [
+        0,
+        255
+      ]
+    }
+  ],
+  "generated": "2026-02-14T14:08:04.614"
+}

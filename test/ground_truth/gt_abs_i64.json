@@ -1,0 +1,25 @@
+{
+  "name": "gt_abs_i64",
+  "julia_version": "1.12.4",
+  "entries": [
+    {
+      "expected": 5,
+      "args": [
+        5
+      ]
+    },
+    {
+      "expected": 3,
+      "args": [
+        -3
+      ]
+    },
+    {
+      "expected": 0,
+      "args": [
+        0
+      ]
+    }
+  ],
+  "generated": "2026-02-14T14:08:04.771"
+}
