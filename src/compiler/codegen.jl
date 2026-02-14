@@ -8478,6 +8478,7 @@ function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::
         return
     end
     # Box: compile value → struct_new(box_type) → extern_convert_any
+    println("PURE-325-BOX: Boxing $(val_wasm) val=$val for externref return in $(ctx.func_name)")
     append!(target_bytes, compile_value(val, ctx))
     box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
     push!(target_bytes, Opcode.GC_PREFIX)
@@ -8676,10 +8677,9 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                     is_numeric_val = val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
                     is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
                     if is_numeric_val && is_ref_ret
-                        # Numeric value (e.g. nothing→i32) returning as ref type → ref.null
+                        # PURE-325: Box numeric value for ref return type
                         if func_ret_wasm === ExternRef
-                            push!(block_bytes, Opcode.REF_NULL)
-                            push!(block_bytes, UInt8(ExternRef))
+                            emit_numeric_to_externref!(block_bytes, stmt.val, val_wasm_type, ctx)
                         elseif func_ret_wasm isa ConcreteRef
                             push!(block_bytes, Opcode.REF_NULL)
                             append!(block_bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
@@ -9579,9 +9579,9 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                     is_numeric_val = val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
                     is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
                     if is_numeric_val && is_ref_ret
+                        # PURE-325: Box numeric value for ref return type
                         if func_ret_wasm === ExternRef
-                            push!(block_bytes, Opcode.REF_NULL)
-                            push!(block_bytes, UInt8(ExternRef))
+                            emit_numeric_to_externref!(block_bytes, stmt.val, val_wasm_type, ctx)
                         elseif func_ret_wasm isa ConcreteRef
                             push!(block_bytes, Opcode.REF_NULL)
                             append!(block_bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
