@@ -7475,6 +7475,19 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                         break
                     end
                 end
+                # PURE-313: Also set then-values for consecutive phis after merge point
+                for j in (i+1):min(length(code), back_edge_idx)
+                    code[j] isa Core.PhiNode || break
+                    haskey(ctx.phi_locals, j) || continue
+                    succ_phi = code[j]::Core.PhiNode
+                    for (edge_idx, edge) in enumerate(succ_phi.edges)
+                        edge_stmt = get(code, edge, nothing)
+                        if edge_stmt !== nothing && !(edge_stmt isa Core.GotoIfNot)
+                            emit_phi_local_set!(bytes, succ_phi.values[edge_idx], j, ctx)
+                            break
+                        end
+                    end
+                end
             end
             push!(bytes, Opcode.END)
             open_blocks[i] = false
@@ -7535,6 +7548,18 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                             break
                         end
                     end
+                    # PURE-313: Also set else-values for consecutive phis after merge point
+                    for j in (merge_phi+1):min(length(code), back_edge_idx)
+                        code[j] isa Core.PhiNode || break
+                        haskey(ctx.phi_locals, j) || continue
+                        succ_phi = code[j]::Core.PhiNode
+                        for (edge_idx, edge) in enumerate(succ_phi.edges)
+                            if edge == i
+                                emit_phi_local_set!(bytes, succ_phi.values[edge_idx], j, ctx)
+                                break
+                            end
+                        end
+                    end
                 end
 
                 # Open a block for the then-branch
@@ -7590,6 +7615,18 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                                 val = phi_stmt.values[edge_idx]
                                 emit_phi_local_set!(bytes, val, stmt.label, ctx)
                                 break
+                            end
+                        end
+                        # PURE-313: Also set edges for consecutive phis after target
+                        for j in (stmt.label+1):min(length(code), back_edge_idx)
+                            code[j] isa Core.PhiNode || break
+                            haskey(ctx.phi_locals, j) || continue
+                            succ_phi = code[j]::Core.PhiNode
+                            for (edge_idx, edge) in enumerate(succ_phi.edges)
+                                if edge == i
+                                    emit_phi_local_set!(bytes, succ_phi.values[edge_idx], j, ctx)
+                                    break
+                                end
                             end
                         end
                     end
@@ -7827,6 +7864,18 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                         edge_val = phi_stmt.values[edge_idx]
                         emit_phi_local_set!(bytes, edge_val, stmt.label, ctx)
                         break
+                    end
+                end
+                # PURE-313: Also set edges for consecutive phis after target
+                for j in (stmt.label+1):min(length(code), length(code))
+                    code[j] isa Core.PhiNode || break
+                    haskey(ctx.phi_locals, j) || continue
+                    succ_phi = code[j]::Core.PhiNode
+                    for (edge_idx, edge) in enumerate(succ_phi.edges)
+                        if edge == i
+                            emit_phi_local_set!(bytes, succ_phi.values[edge_idx], j, ctx)
+                            break
+                        end
                     end
                 end
             end
