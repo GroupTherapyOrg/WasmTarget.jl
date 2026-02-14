@@ -37,9 +37,10 @@ mutable struct TypeRegistry
     arrays::Dict{Type, UInt32}  # Element type -> array type index
     string_array_idx::Union{Nothing, UInt32}  # Index of i8 array type for strings
     unions::Dict{Union, UnionInfo}  # Union type -> tagged union info
+    numeric_boxes::Dict{WasmValType, UInt32}  # PURE-325: box types for numeric→externref returns
 end
 
-TypeRegistry() = TypeRegistry(Dict{Type, StructInfo}(), Dict{Type, UInt32}(), nothing, Dict{Union, UnionInfo}())
+TypeRegistry() = TypeRegistry(Dict{Type, StructInfo}(), Dict{Type, UInt32}(), nothing, Dict{Union, UnionInfo}(), Dict{WasmValType, UInt32}())
 
 # ============================================================================
 # Function Registry - for multi-function modules
@@ -240,6 +241,22 @@ function get_string_array_type!(mod::WasmModule, registry::TypeRegistry)::UInt32
         registry.string_array_idx = add_array_type!(mod, I32, true)
     end
     return registry.string_array_idx
+end
+
+"""
+PURE-325: Get or create a box struct type for a numeric Wasm type.
+Used when a function returning ExternRef needs to return a numeric value.
+The box struct has a single field of the numeric type, allowing the value
+to be wrapped as a GC reference and converted to externref.
+"""
+function get_numeric_box_type!(mod::WasmModule, registry::TypeRegistry, wasm_type::WasmValType)::UInt32
+    if haskey(registry.numeric_boxes, wasm_type)
+        return registry.numeric_boxes[wasm_type]
+    end
+    fields = [FieldType(wasm_type, false)]  # immutable single field
+    type_idx = add_struct_type!(mod, fields)
+    registry.numeric_boxes[wasm_type] = type_idx
+    return type_idx
 end
 
 """
@@ -13050,11 +13067,20 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
             val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
             is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
 
-            if func_ret_wasm === ExternRef && is_numeric_val
-                # PURE-036af: Can't convert numeric to externref - return ref.null extern instead
-                # Don't compile the numeric value at all, just push null
+            if func_ret_wasm === ExternRef && is_numeric_val && is_nothing_value(stmt.val, ctx)
+                # PURE-036af: return nothing from ExternRef function - push ref.null extern
                 push!(bytes, Opcode.REF_NULL)
                 push!(bytes, UInt8(ExternRef))
+            elseif func_ret_wasm === ExternRef && is_numeric_val
+                # PURE-325: Return a real numeric value from ExternRef function.
+                # Box the numeric value in a WasmGC struct so it can be externref.
+                append!(bytes, compile_value(stmt.val, ctx))
+                box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.STRUCT_NEW)
+                append!(bytes, encode_leb128_unsigned(box_type))
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
             elseif func_ret_wasm isa ConcreteRef && is_numeric_val
                 # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
                 push!(bytes, Opcode.REF_NULL)
@@ -13114,6 +13140,21 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                         val_bytes = compile_value(stmt.val, ctx)
                         append!(bytes, val_bytes)
                         push!(bytes, Opcode.I32_WRAP_I64)
+                    # PURE-325: PiNode narrowing from ExternRef → numeric (I64/I32/F64/F32).
+                    # The externref holds a boxed numeric value. Unbox via any_convert_extern +
+                    # ref_cast to box type + struct_get field 0.
+                    elseif !is_multi_value_src && val_wasm_type === ExternRef && (pi_local_type === I64 || pi_local_type === I32 || pi_local_type === F64 || pi_local_type === F32) && haskey(ctx.type_registry.numeric_boxes, pi_local_type)
+                        val_bytes = compile_value(stmt.val, ctx)
+                        append!(bytes, val_bytes)
+                        local box_type_idx = ctx.type_registry.numeric_boxes[pi_local_type]
+                        append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.REF_CAST_NULL)
+                        append!(bytes, encode_leb128_signed(Int64(box_type_idx)))
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.STRUCT_GET)
+                        append!(bytes, encode_leb128_unsigned(box_type_idx))
+                        append!(bytes, encode_leb128_unsigned(UInt32(0)))  # field 0
                     # PURE-321: PiNode narrowing from ExternRef → ConcreteRef means the value
                     # IS available as externref and just needs conversion (not ref.null).
                     # Example: PiNode(%198, String) narrows Any (externref) → String (array<i32>).
@@ -19718,6 +19759,14 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     push!(bytes, Opcode.GC_PREFIX)
                     push!(bytes, Opcode.REF_TEST_NULL)
                     append!(bytes, encode_leb128_signed(Int64(target_wasm.type_idx)))
+                elseif haskey(ctx.type_registry.numeric_boxes, target_wasm)
+                    # PURE-325: Check for boxed numeric type (e.g., isa(externref, Int64)
+                    # where Int64 was boxed via get_numeric_box_type!)
+                    local box_type_idx = ctx.type_registry.numeric_boxes[target_wasm]
+                    append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.REF_TEST_NULL)
+                    append!(bytes, encode_leb128_signed(Int64(box_type_idx)))
                 else
                     # Fallback: non-null check for non-concrete wasm types
                     push!(bytes, Opcode.REF_IS_NULL)
