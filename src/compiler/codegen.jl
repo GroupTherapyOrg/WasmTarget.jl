@@ -16299,6 +16299,56 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         push!(bytes, Opcode.STRUCT_NEW)
         append!(bytes, encode_leb128_unsigned(dict_info.wasm_type_idx))
 
+    elseif typeof(val) <: AbstractVector && typeof(val) <: Vector
+        # PURE-325: Constant Vector{T} — emit as struct{data_array, size_tuple}
+        # This handles global constant vectors like ascii_is_identifier_char :: Vector{Bool}
+        # The data array must contain the actual values, not ref.null.
+        T = typeof(val)
+        elem_type = eltype(T)
+
+        # Register the Vector struct type
+        if !haskey(ctx.type_registry.structs, T)
+            register_vector_type!(ctx.mod, ctx.type_registry, T)
+        end
+        vec_info = ctx.type_registry.structs[T]
+
+        # Get the array type for elements
+        array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
+
+        # Field 0: data array — emit array.new_fixed with actual element values
+        # Check if the array element type is externref — if so, each element needs
+        # extern_convert_any because compile_value produces concrete refs for structs/strings
+        wasm_elem_type = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
+        needs_extern_convert = (wasm_elem_type === ExternRef)
+        for i in 1:length(val)
+            append!(bytes, compile_value(val[i], ctx))
+            if needs_extern_convert
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+            end
+        end
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_NEW_FIXED)
+        append!(bytes, encode_leb128_unsigned(array_type_idx))
+        append!(bytes, encode_leb128_unsigned(length(val)))
+
+        # Field 1: size tuple — Tuple{Int64} with the length
+        size_tuple_type = Tuple{Int64}
+        if !haskey(ctx.type_registry.structs, size_tuple_type)
+            register_tuple_type!(ctx.mod, ctx.type_registry, size_tuple_type)
+        end
+        size_info = ctx.type_registry.structs[size_tuple_type]
+        push!(bytes, Opcode.I64_CONST)
+        append!(bytes, encode_leb128_signed(Int64(length(val))))
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.STRUCT_NEW)
+        append!(bytes, encode_leb128_unsigned(size_info.wasm_type_idx))
+
+        # struct.new for Vector{T}
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.STRUCT_NEW)
+        append!(bytes, encode_leb128_unsigned(vec_info.wasm_type_idx))
+
     elseif typeof(val) isa DataType && typeof(val).name.name in (:MemoryRef, :GenericMemoryRef, :Memory, :GenericMemory)
         # PURE-049: MemoryRef/Memory constants map to array types, not struct types.
         # These appear as captured closure fields. Emit ref.null of the array type.
