@@ -6677,7 +6677,27 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::C
         # PURE-324: Allow I32→I64 widening — handled by I64_EXTEND_I32_S below.
         # This is needed for phi nodes with Union{Int64, UInt32} where the phi local
         # is widened to I64 but one edge provides an I32 (UInt32) value.
-        if !(phi_local_type === I64 && edge_val_type === I32)
+        if phi_local_type === I64 && edge_val_type === I32
+            # Handled below by I64_EXTEND_I32_S
+        elseif phi_local_type === ExternRef && (edge_val_type === I32 || edge_val_type === I64 || edge_val_type === F32 || edge_val_type === F64)
+            # PURE-325: Box numeric value for ExternRef phi local (Union return).
+            # When a function with Union return type is inlined, the return becomes
+            # a phi node assignment. Numeric values must be boxed to externref.
+            value_bytes = compile_value(val, ctx)
+            if !isempty(value_bytes)
+                append!(bytes, value_bytes)
+                box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.STRUCT_NEW)
+                append!(bytes, encode_leb128_unsigned(box_type))
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(local_idx))
+                return true
+            end
+            return false
+        else
             # Type mismatch: skip this store (unreachable path for Union types)
             return false
         end
@@ -6696,6 +6716,22 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::C
             if val_local_array_idx >= 1 && val_local_array_idx <= length(ctx.locals)
                 val_local_type = ctx.locals[val_local_array_idx]
                 if !wasm_types_compatible(phi_local_type, val_local_type)
+                    if phi_local_type === ExternRef && (val_local_type === I32 || val_local_type === I64 || val_local_type === F32 || val_local_type === F64)
+                        # PURE-325: Box numeric SSA local for ExternRef phi local
+                        vb = compile_value(val, ctx)
+                        if !isempty(vb)
+                            append!(bytes, vb)
+                            box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_local_type)
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.STRUCT_NEW)
+                            append!(bytes, encode_leb128_unsigned(box_type))
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                            push!(bytes, Opcode.LOCAL_SET)
+                            append!(bytes, encode_leb128_unsigned(local_idx))
+                            return true
+                        end
+                    end
                     # Incompatible: emit type-safe default for phi local type
                     if phi_local_type isa ConcreteRef
                         push!(bytes, Opcode.REF_NULL)
@@ -6822,7 +6858,21 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::C
         end
         if actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type)
                 # PURE-324: Allow I32→I64 — will be extended at line below
-                if !(phi_local_type === I64 && actual_val_type === I32)
+                if phi_local_type === I64 && actual_val_type === I32
+                    # Handled below by I64_EXTEND_I32_S
+                elseif phi_local_type === ExternRef && (actual_val_type === I32 || actual_val_type === I64 || actual_val_type === F32 || actual_val_type === F64)
+                    # PURE-325: Box numeric local.get for ExternRef phi local
+                    append!(bytes, value_bytes)
+                    box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, actual_val_type)
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.STRUCT_NEW)
+                    append!(bytes, encode_leb128_unsigned(box_type))
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(local_idx))
+                    return true
+                else
                     # Incompatible actual type: emit type-safe default
                     if phi_local_type isa ConcreteRef
                         push!(bytes, Opcode.REF_NULL)
