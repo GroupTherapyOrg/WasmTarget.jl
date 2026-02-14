@@ -21056,6 +21056,112 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                     end
                 end
 
+            # PURE-325: isascii(s) — check all bytes < 0x80
+            # Called from normalize_identifier via isascii(codeunits(s)).
+            # The argument is CodeUnits{UInt8,String} (a struct wrapping String).
+            # Extract the String (field 0) from the struct, then iterate bytes.
+            elseif name === :isascii && length(args) == 1
+                str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+                arg_type = infer_value_type(args[1], ctx)
+
+                # If the argument is a CodeUnits struct, extract the String field.
+                if arg_type !== String && arg_type !== Symbol
+                    if haskey(ctx.type_registry.structs, arg_type)
+                        cu_info = ctx.type_registry.structs[arg_type]
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.STRUCT_GET)
+                        append!(bytes, encode_leb128_unsigned(cu_info.wasm_type_idx))
+                        append!(bytes, encode_leb128_unsigned(0))  # field 0 = :s (String)
+                    end
+                end
+
+                # Allocate locals: str, len, accum, i
+                str_arr_type = ConcreteRef(str_type_idx, true)
+                str_local = allocate_local!(ctx, str_arr_type)
+                len_local = allocate_local!(ctx, I32)
+                accum_local = allocate_local!(ctx, I32)
+                i_local = allocate_local!(ctx, I32)
+
+                # Store string
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(str_local))
+
+                # len = array.len(str)
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(str_local))
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ARRAY_LEN)
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(len_local))
+
+                # accum = 0
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(accum_local))
+
+                # i = 0
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(i_local))
+
+                # block $exit
+                push!(bytes, Opcode.BLOCK)
+                push!(bytes, 0x40)  # void
+                #   loop $loop
+                push!(bytes, Opcode.LOOP)
+                push!(bytes, 0x40)  # void
+
+                #     br_if $exit (i >= len)
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(i_local))
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(len_local))
+                push!(bytes, Opcode.I32_GE_S)
+                push!(bytes, Opcode.BR_IF)
+                push!(bytes, 0x01)  # break to outer block
+
+                #     accum |= array.get(str, i)
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(accum_local))
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(str_local))
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(i_local))
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ARRAY_GET)
+                append!(bytes, encode_leb128_unsigned(str_type_idx))
+                push!(bytes, Opcode.I32_OR)
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(accum_local))
+
+                #     i++
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(i_local))
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x01)
+                push!(bytes, Opcode.I32_ADD)
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(i_local))
+
+                #     br $loop
+                push!(bytes, Opcode.BR)
+                push!(bytes, 0x00)  # continue loop
+
+                #   end loop
+                push!(bytes, Opcode.END)
+                # end block
+                push!(bytes, Opcode.END)
+
+                # result = (accum < 0x80) ? 1 : 0
+                # accum < 128 means all bytes are ASCII
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(accum_local))
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(0x80))
+                push!(bytes, Opcode.I32_LT_U)  # unsigned comparison: accum < 0x80
+
             # String equality comparison
             elseif name === :(==) && length(args) == 2 &&
                    infer_value_type(args[1], ctx) === String &&
