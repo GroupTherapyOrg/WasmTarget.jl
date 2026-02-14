@@ -19806,6 +19806,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             else
                 # No matching signature - likely dead code from Union type branches
                 # Emit unreachable instead of error (the branch won't be taken at runtime)
+                @warn "CROSS-CALL UNREACHABLE: $(func) with arg types $(call_arg_types) (in $(ctx.func_name))"
                 push!(bytes, Opcode.UNREACHABLE)
             end
         else
