@@ -8083,9 +8083,7 @@ function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBloc
                         is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                         # PURE-036ag/PURE-045: Handle numeric-to-ref case
                         if func_ret_wasm === ExternRef && is_numeric_val
-                            # Can't convert numeric to externref - return ref.null extern instead
-                            push!(bytes, Opcode.REF_NULL)
-                            push!(bytes, UInt8(ExternRef))
+                            emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
                         elseif func_ret_wasm isa ConcreteRef && is_numeric_val
                             # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
                             push!(bytes, Opcode.REF_NULL)
@@ -8132,8 +8130,7 @@ function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBloc
                     val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                     is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                     if func_ret_wasm === ExternRef && is_numeric_val
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ExternRef))
+                        emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
                     elseif func_ret_wasm isa ConcreteRef && is_numeric_val
                         # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
                         push!(bytes, Opcode.REF_NULL)
@@ -8194,8 +8191,7 @@ function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBloc
                     val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                     is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                     if func_ret_wasm === ExternRef && is_numeric_val
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ExternRef))
+                        emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
                     elseif func_ret_wasm isa ConcreteRef && is_numeric_val
                         # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
                         push!(bytes, Opcode.REF_NULL)
@@ -8293,8 +8289,7 @@ function compile_nested_if_else(ctx::CompilationContext, code, goto_idx::Int, co
                 val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                 is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                 if func_ret_wasm === ExternRef && is_numeric_val
-                    push!(bytes, Opcode.REF_NULL)
-                    push!(bytes, UInt8(ExternRef))
+                    emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
                 elseif func_ret_wasm isa ConcreteRef && is_numeric_val
                     # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
                     push!(bytes, Opcode.REF_NULL)
@@ -8356,8 +8351,7 @@ function compile_nested_if_else(ctx::CompilationContext, code, goto_idx::Int, co
                 val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                 is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                 if func_ret_wasm === ExternRef && is_numeric_val
-                    push!(bytes, Opcode.REF_NULL)
-                    push!(bytes, UInt8(ExternRef))
+                    emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
                 elseif func_ret_wasm isa ConcreteRef && is_numeric_val
                     # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
                     push!(bytes, Opcode.REF_NULL)
@@ -10194,9 +10188,7 @@ function generate_void_flow(ctx::CompilationContext, blocks::Vector{BasicBlock},
                 is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
 
                 if func_ret_wasm === ExternRef && is_numeric_val
-                    # Can't convert numeric to externref - return ref.null extern instead
-                    push!(bytes, Opcode.REF_NULL)
-                    push!(bytes, UInt8(ExternRef))
+                    emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
                 elseif func_ret_wasm isa ConcreteRef && is_numeric_val
                     # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
                     push!(bytes, Opcode.REF_NULL)
@@ -10283,9 +10275,7 @@ function generate_void_flow(ctx::CompilationContext, blocks::Vector{BasicBlock},
                         is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
 
                         if func_ret_wasm === ExternRef && is_numeric_val
-                            # Can't convert numeric to externref - return ref.null extern
-                            push!(bytes, Opcode.REF_NULL)
-                            push!(bytes, UInt8(ExternRef))
+                            emit_numeric_to_externref!(bytes, inner.val, val_wasm, ctx)
                         else
                             append!(bytes, compile_value(inner.val, ctx))
                             if func_ret_wasm === ExternRef && val_wasm !== ExternRef
@@ -10413,8 +10403,7 @@ function generate_void_flow(ctx::CompilationContext, blocks::Vector{BasicBlock},
                                 is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
 
                                 if func_ret_wasm === ExternRef && is_numeric_val
-                                    push!(bytes, Opcode.REF_NULL)
-                                    push!(bytes, UInt8(ExternRef))
+                                    emit_numeric_to_externref!(bytes, inner.val, val_wasm, ctx)
                                 else
                                     append!(bytes, compile_value(inner.val, ctx))
                                     if func_ret_wasm === ExternRef && val_wasm !== ExternRef
@@ -10609,8 +10598,7 @@ function compile_void_nested_conditional(ctx::CompilationContext, code, start_id
                     is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
 
                     if func_ret_wasm === ExternRef && is_numeric_val
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ExternRef))
+                        emit_numeric_to_externref!(bytes, inner.val, val_wasm, ctx)
                     else
                         append!(bytes, compile_value(inner.val, ctx))
                         if func_ret_wasm === ExternRef && val_wasm !== ExternRef
@@ -10971,8 +10959,7 @@ function generate_and_pattern(ctx::CompilationContext, blocks, code, conditional
                 is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
 
                 if func_ret_wasm === ExternRef && is_numeric_val
-                    push!(bytes, Opcode.REF_NULL)
-                    push!(bytes, UInt8(ExternRef))
+                    emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
                 else
                     append!(bytes, compile_value(stmt.val, ctx))
                     if func_ret_wasm === ExternRef && val_wasm !== ExternRef
@@ -11025,8 +11012,7 @@ function generate_and_pattern(ctx::CompilationContext, blocks, code, conditional
                 val_wasm = get_phi_edge_wasm_type(val, ctx)
                 is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                 if func_ret_wasm === ExternRef && is_numeric_val
-                    push!(bytes, Opcode.REF_NULL)
-                    push!(bytes, UInt8(ExternRef))
+                    emit_numeric_to_externref!(bytes, val, val_wasm, ctx)
                 else
                     append!(bytes, compile_value(val, ctx))
                     if func_ret_wasm === ExternRef && val_wasm !== ExternRef && val_wasm !== nothing
@@ -11063,8 +11049,7 @@ function generate_and_pattern(ctx::CompilationContext, blocks, code, conditional
                 val_wasm = get_phi_edge_wasm_type(val, ctx)
                 is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                 if func_ret_wasm === ExternRef && is_numeric_val
-                    push!(bytes, Opcode.REF_NULL)
-                    push!(bytes, UInt8(ExternRef))
+                    emit_numeric_to_externref!(bytes, val, val_wasm, ctx)
                 else
                     append!(bytes, compile_value(val, ctx))
                     if func_ret_wasm === ExternRef && val_wasm !== ExternRef && val_wasm !== nothing
@@ -11085,8 +11070,7 @@ function generate_and_pattern(ctx::CompilationContext, blocks, code, conditional
                     val_wasm = get_phi_edge_wasm_type(val, ctx)
                     is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                     if func_ret_wasm === ExternRef && is_numeric_val
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ExternRef))
+                        emit_numeric_to_externref!(bytes, val, val_wasm, ctx)
                     else
                         append!(bytes, compile_value(val, ctx))
                         if func_ret_wasm === ExternRef && val_wasm !== ExternRef && val_wasm !== nothing
@@ -11110,8 +11094,7 @@ function generate_and_pattern(ctx::CompilationContext, blocks, code, conditional
                     is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
 
                     if func_ret_wasm === ExternRef && is_numeric_val
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ExternRef))
+                        emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
                     else
                         append!(bytes, compile_value(stmt.val, ctx))
                         if func_ret_wasm === ExternRef && val_wasm !== ExternRef
@@ -11317,8 +11300,7 @@ function generate_switch_pattern(ctx::CompilationContext, blocks, code, conditio
                         val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                         is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                         if func_ret_wasm === ExternRef && is_numeric_val
-                            push!(inner_bytes, Opcode.REF_NULL)
-                            push!(inner_bytes, UInt8(ExternRef))
+                            emit_numeric_to_externref!(inner_bytes, stmt.val, val_wasm, ctx)
                         else
                             append!(inner_bytes, compile_value(stmt.val, ctx))
                             if func_ret_wasm === ExternRef && val_wasm !== ExternRef
@@ -11397,8 +11379,7 @@ function generate_switch_pattern(ctx::CompilationContext, blocks, code, conditio
                     val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                     is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                     if func_ret_wasm === ExternRef && is_numeric_val
-                        push!(inner_bytes, Opcode.REF_NULL)
-                        push!(inner_bytes, UInt8(ExternRef))
+                        emit_numeric_to_externref!(inner_bytes, stmt.val, val_wasm, ctx)
                     else
                         append!(inner_bytes, compile_value(stmt.val, ctx))
                         if func_ret_wasm === ExternRef && val_wasm !== ExternRef
@@ -11680,8 +11661,7 @@ function generate_remaining_conditionals(ctx::CompilationContext, blocks, code, 
                 val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                 is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                 if func_ret_wasm === ExternRef && is_numeric_val
-                    push!(bytes, Opcode.REF_NULL)
-                    push!(bytes, UInt8(ExternRef))
+                    emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
                 else
                     append!(bytes, compile_value(stmt.val, ctx))
                     if func_ret_wasm === ExternRef && val_wasm !== ExternRef
@@ -11717,8 +11697,7 @@ function generate_remaining_conditionals(ctx::CompilationContext, blocks, code, 
                     val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                     is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                     if func_ret_wasm === ExternRef && is_numeric_val
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ExternRef))
+                        emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
                     else
                         append!(bytes, compile_value(stmt.val, ctx))
                         if func_ret_wasm === ExternRef && val_wasm !== ExternRef
@@ -11829,9 +11808,7 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                     val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                     is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                     if func_ret_wasm === ExternRef && is_numeric_val
-                        # Can't convert numeric to externref - return ref.null extern instead
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ExternRef))
+                        emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
                     elseif func_ret_wasm isa ConcreteRef && is_numeric_val
                         # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
                         push!(bytes, Opcode.REF_NULL)
@@ -11944,8 +11921,7 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                             val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                             is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                             if func_ret_wasm === ExternRef && is_numeric_val
-                                push!(inner_bytes, Opcode.REF_NULL)
-                                push!(inner_bytes, UInt8(ExternRef))
+                                emit_numeric_to_externref!(inner_bytes, stmt.val, val_wasm, ctx)
                             elseif func_ret_wasm isa ConcreteRef && is_numeric_val
                                 # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
                                 push!(inner_bytes, Opcode.REF_NULL)
@@ -12003,9 +11979,7 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                                 val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                                 is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                                 if func_ret_wasm === ExternRef && is_numeric_val
-                                    # Can't convert numeric to externref - return ref.null extern instead
-                                    push!(inner_bytes, Opcode.REF_NULL)
-                                    push!(inner_bytes, UInt8(ExternRef))
+                                    emit_numeric_to_externref!(inner_bytes, stmt.val, val_wasm, ctx)
                                 elseif func_ret_wasm isa ConcreteRef && is_numeric_val
                                     # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
                                     push!(inner_bytes, Opcode.REF_NULL)
@@ -12573,9 +12547,7 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                                     val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                                     is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                                     if func_ret_wasm === ExternRef && is_numeric_val
-                                        # Can't convert numeric to externref - return ref.null extern instead
-                                        push!(inner_bytes, Opcode.REF_NULL)
-                                        push!(inner_bytes, UInt8(ExternRef))
+                                        emit_numeric_to_externref!(inner_bytes, stmt.val, val_wasm, ctx)
                                     elseif func_ret_wasm isa ConcreteRef && is_numeric_val
                                         # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
                                         push!(inner_bytes, Opcode.REF_NULL)
@@ -12747,8 +12719,7 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                             val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                             is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                             if func_ret_wasm === ExternRef && is_numeric_val
-                                push!(inner_bytes, Opcode.REF_NULL)
-                                push!(inner_bytes, UInt8(ExternRef))
+                                emit_numeric_to_externref!(inner_bytes, stmt.val, val_wasm, ctx)
                             else
                                 append!(inner_bytes, compile_value(stmt.val, ctx))
                                 if func_ret_wasm === ExternRef && val_wasm !== ExternRef
@@ -12866,9 +12837,7 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                         val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                         is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                         if func_ret_wasm === ExternRef && is_numeric_val
-                            # Can't convert numeric to externref - return ref.null extern instead
-                            push!(inner_bytes, Opcode.REF_NULL)
-                            push!(inner_bytes, UInt8(ExternRef))
+                            emit_numeric_to_externref!(inner_bytes, stmt.val, val_wasm, ctx)
                         elseif func_ret_wasm isa ConcreteRef && is_numeric_val
                             # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
                             push!(inner_bytes, Opcode.REF_NULL)
@@ -12925,8 +12894,7 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                         val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                         is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                         if func_ret_wasm === ExternRef && is_numeric_val
-                            push!(inner_bytes, Opcode.REF_NULL)
-                            push!(inner_bytes, UInt8(ExternRef))
+                            emit_numeric_to_externref!(inner_bytes, stmt.val, val_wasm, ctx)
                         else
                             append!(inner_bytes, compile_value(stmt.val, ctx))
                             if func_ret_wasm === ExternRef && val_wasm !== ExternRef
@@ -13038,8 +13006,7 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                         val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                         is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                         if func_ret_wasm === ExternRef && is_numeric_val
-                            push!(inner_bytes, Opcode.REF_NULL)
-                            push!(inner_bytes, UInt8(ExternRef))
+                            emit_numeric_to_externref!(inner_bytes, stmt.val, val_wasm, ctx)
                         else
                             append!(inner_bytes, compile_value(stmt.val, ctx))
                             if func_ret_wasm === ExternRef && val_wasm !== ExternRef
@@ -13185,23 +13152,9 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
             val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
             is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
 
-            # PURE-325 DEBUG: trace ALL ReturnNode decisions
-            println("PURE-325-DEBUG ReturnNode idx=$idx val=$(stmt.val) val_wasm=$val_wasm func_ret=$func_ret_wasm numeric=$is_numeric_val ret_type=$(ctx.return_type)")
-
-            if func_ret_wasm === ExternRef && is_numeric_val && is_nothing_value(stmt.val, ctx)
-                # PURE-036af: return nothing from ExternRef function - push ref.null extern
-                push!(bytes, Opcode.REF_NULL)
-                push!(bytes, UInt8(ExternRef))
-            elseif func_ret_wasm === ExternRef && is_numeric_val
-                # PURE-325: Return a real numeric value from ExternRef function.
-                # Box the numeric value in a WasmGC struct so it can be externref.
-                append!(bytes, compile_value(stmt.val, ctx))
-                box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.STRUCT_NEW)
-                append!(bytes, encode_leb128_unsigned(box_type))
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+            if func_ret_wasm === ExternRef && is_numeric_val
+                # PURE-325: Box numeric value for ExternRef return (handles nothing too)
+                emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
             elseif func_ret_wasm isa ConcreteRef && is_numeric_val
                 # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
                 push!(bytes, Opcode.REF_NULL)
