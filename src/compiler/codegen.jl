@@ -8465,6 +8465,35 @@ Converts Julia IR CFG to WASM structured control flow by:
 Based on LLVM's WebAssembly backend stackifier and Cheerp's enhancements.
 Reference: https://labs.leaningtech.com/blog/control-flow
 """
+
+"""
+PURE-325: Emit boxing bytecode for a numeric value that needs to be returned as ExternRef.
+Handles the common pattern where a function returns ExternRef (Union type) but the actual
+value is numeric (I32/I64/F32/F64). Boxes the value in a WasmGC struct + extern_convert_any.
+
+If `val` is nothing (literal nothing), emits ref.null extern instead of boxing.
+If `val` is a non-nothing numeric value, compiles + boxes it.
+
+`target_bytes` is the byte vector to append to (may be `bytes` or `inner_bytes`).
+"""
+function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::WasmValType, ctx::CompilationContext)
+    if is_nothing_value(val, ctx)
+        # return nothing → ref.null extern
+        push!(target_bytes, Opcode.REF_NULL)
+        push!(target_bytes, UInt8(ExternRef))
+        return
+    end
+    # Box: compile value → struct_new(box_type) → extern_convert_any
+    append!(target_bytes, compile_value(val, ctx))
+    box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
+    push!(target_bytes, Opcode.GC_PREFIX)
+    push!(target_bytes, Opcode.STRUCT_NEW)
+    append!(target_bytes, encode_leb128_unsigned(box_type))
+    push!(target_bytes, Opcode.GC_PREFIX)
+    push!(target_bytes, Opcode.EXTERN_CONVERT_ANY)
+    return
+end
+
 function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
     # ========================================================================
     # STEP 0: BOUNDSCHECK PATTERN DETECTION
