@@ -19777,10 +19777,11 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 end
             elseif value_arg isa Core.Argument
                 # PURE-325: Also handle function parameters (not just SSA values)
-                # Core.Argument(n) is 1-indexed; arg_types is also 1-indexed
-                local arg_n = value_arg.n
-                if arg_n >= 1 && arg_n <= length(ctx.arg_types)
-                    isa2_val_wasm = get_concrete_wasm_type(ctx.arg_types[arg_n], ctx.mod, ctx.type_registry)
+                # Core.Argument(1) is the function object for non-closures, so
+                # actual args start at Argument(2) → arg_types[1].
+                local arg_idx_isa = ctx.is_compiled_closure ? value_arg.n : value_arg.n - 1
+                if arg_idx_isa >= 1 && arg_idx_isa <= length(ctx.arg_types)
+                    isa2_val_wasm = get_concrete_wasm_type(ctx.arg_types[arg_idx_isa], ctx.mod, ctx.type_registry)
                 end
             end
             if isa2_val_wasm !== nothing && (isa2_val_wasm === I64 || isa2_val_wasm === I32 || isa2_val_wasm === F64 || isa2_val_wasm === F32)
