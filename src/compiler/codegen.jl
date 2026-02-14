@@ -9281,6 +9281,7 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                         # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion.
                         # PiNode narrows Any→Expr (ExternRef→ConcreteRef). Compile the value
                         # and wrap with extern_convert_any to get back to ExternRef.
+                        @warn "PURE-325 FIX HIT: phi=$phi_idx val=$(val.id) ssa_wasm=$ssa_wasm_type phi_wasm=$phi_local_wasm_type stmt=$(typeof(stmt))"
                         if stmt !== nothing && !(stmt isa Core.PhiNode)
                             append!(result, compile_statement(stmt, val.id, ctx))
                         else
@@ -9290,6 +9291,7 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                         push!(result, Opcode.EXTERN_CONVERT_ANY)
                     else
                         # Type mismatch: emit type-safe default instead of recomputing
+                        @warn "PURE-325 NULL DEFAULT: phi=$phi_idx val=$(val.id) ssa_wasm=$ssa_wasm_type phi_wasm=$phi_local_wasm_type"
                         append!(result, emit_phi_type_default(phi_local_wasm_type))
                     end
                 elseif stmt !== nothing && !(stmt isa Core.PhiNode)
@@ -9533,6 +9535,23 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                             break
                                         end
                                     end
+                                    if phi_local_type === ExternRef && (edge_val_type isa ConcreteRef || edge_val_type === StructRef || edge_val_type === ArrayRef || edge_val_type === AnyRef)
+                                        # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion
+                                        _pvb3 = compile_phi_value(val, i)
+                                        if !isempty(_pvb3)
+                                            _pvb3_has_ecv = length(_pvb3) >= 2 && _pvb3[end-1] == Opcode.GC_PREFIX && _pvb3[end] == Opcode.EXTERN_CONVERT_ANY
+                                            append!(bytes, _pvb3)
+                                            if !_pvb3_has_ecv
+                                                push!(bytes, Opcode.GC_PREFIX)
+                                                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                            end
+                                            push!(bytes, Opcode.LOCAL_SET)
+                                            append!(bytes, encode_leb128_unsigned(local_idx))
+                                            phi_count += 1
+                                            found_edge = true
+                                            break
+                                        end
+                                    end
                                     # Type mismatch: emit type-safe default
                                     append!(bytes, emit_phi_type_default(phi_local_type))
                                     push!(bytes, Opcode.LOCAL_SET)
@@ -9592,8 +9611,16 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                     if _already_boxed2
                                         append!(bytes, phi_value_bytes)
                                     elseif actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type) && !(phi_local_type === I64 && actual_val_type === I32)
-                                        # Type mismatch detected at emit point: replace with default
-                                        append!(bytes, emit_phi_type_default(phi_local_type))
+                                        # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef:
+                                        # wrap with extern_convert_any instead of null default
+                                        if phi_local_type === ExternRef && (actual_val_type isa ConcreteRef || actual_val_type === StructRef || actual_val_type === ArrayRef || actual_val_type === AnyRef)
+                                            append!(bytes, phi_value_bytes)
+                                            push!(bytes, Opcode.GC_PREFIX)
+                                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                        else
+                                            # Type mismatch detected at emit point: replace with default
+                                            append!(bytes, emit_phi_type_default(phi_local_type))
+                                        end
                                     elseif actual_val_type !== nothing && phi_local_type === I64 && actual_val_type === I32
                                         # Numeric widening: i32 value into i64 local
                                         # PURE-324: Skip extend if compiled bytes are already i64
@@ -9800,7 +9827,15 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                     if _already_boxed3
                                         append!(block_bytes, phi_value_bytes)
                                     elseif actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type) && !(phi_local_type === I64 && actual_val_type === I32)
-                                        append!(block_bytes, emit_phi_type_default(phi_local_type))
+                                        # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef:
+                                        # wrap with extern_convert_any instead of null default
+                                        if phi_local_type === ExternRef && (actual_val_type isa ConcreteRef || actual_val_type === StructRef || actual_val_type === ArrayRef || actual_val_type === AnyRef)
+                                            append!(block_bytes, phi_value_bytes)
+                                            push!(block_bytes, Opcode.GC_PREFIX)
+                                            push!(block_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                        else
+                                            append!(block_bytes, emit_phi_type_default(phi_local_type))
+                                        end
                                     elseif actual_val_type !== nothing && phi_local_type === I64 && actual_val_type === I32
                                         append!(block_bytes, phi_value_bytes)
                                         if isempty(phi_value_bytes) || phi_value_bytes[1] != Opcode.I64_CONST
