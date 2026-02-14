@@ -8705,38 +8705,24 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                 phi_local_type = ctx.locals[local_idx - ctx.n_params + 1]
                                 edge_val_type = get_phi_edge_wasm_type(val)
                                 if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type) && !(phi_local_type === I64 && edge_val_type === I32)
-                                    # Type mismatch: emit type-safe default for the local's declared type.
-                                    if phi_local_type isa ConcreteRef
-                                        push!(block_bytes, Opcode.REF_NULL)
-                                        append!(block_bytes, encode_leb128_signed(Int64(phi_local_type.type_idx)))
-                                    elseif phi_local_type === StructRef
-                                        push!(block_bytes, Opcode.REF_NULL)
-                                        push!(block_bytes, UInt8(StructRef))
-                                    elseif phi_local_type === ArrayRef
-                                        push!(block_bytes, Opcode.REF_NULL)
-                                        push!(block_bytes, UInt8(ArrayRef))
-                                    elseif phi_local_type === ExternRef
-                                        push!(block_bytes, Opcode.REF_NULL)
-                                        push!(block_bytes, UInt8(ExternRef))
-                                    elseif phi_local_type === AnyRef
-                                        push!(block_bytes, Opcode.REF_NULL)
-                                        push!(block_bytes, UInt8(AnyRef))
-                                    elseif phi_local_type === I64
-                                        push!(block_bytes, Opcode.I64_CONST)
-                                        push!(block_bytes, 0x00)
-                                    elseif phi_local_type === I32
-                                        push!(block_bytes, Opcode.I32_CONST)
-                                        push!(block_bytes, 0x00)
-                                    elseif phi_local_type === F64
-                                        push!(block_bytes, Opcode.F64_CONST)
-                                        append!(block_bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-                                    elseif phi_local_type === F32
-                                        push!(block_bytes, Opcode.F32_CONST)
-                                        append!(block_bytes, UInt8[0x00, 0x00, 0x00, 0x00])
-                                    else
-                                        push!(block_bytes, Opcode.I32_CONST)
-                                        push!(block_bytes, 0x00)
+                                    if phi_local_type === ExternRef && (edge_val_type === I32 || edge_val_type === I64 || edge_val_type === F32 || edge_val_type === F64)
+                                        # PURE-325: Box numeric phi edge for ExternRef local
+                                        _pvb = compile_phi_value(val, i)
+                                        if !isempty(_pvb)
+                                            append!(block_bytes, _pvb)
+                                            _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
+                                            push!(block_bytes, Opcode.GC_PREFIX)
+                                            push!(block_bytes, Opcode.STRUCT_NEW)
+                                            append!(block_bytes, encode_leb128_unsigned(_box_t))
+                                            push!(block_bytes, Opcode.GC_PREFIX)
+                                            push!(block_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                            push!(block_bytes, Opcode.LOCAL_SET)
+                                            append!(block_bytes, encode_leb128_unsigned(local_idx))
+                                            break
+                                        end
                                     end
+                                    # Type mismatch: emit type-safe default for the local's declared type.
+                                    append!(block_bytes, emit_phi_type_default(phi_local_type))
                                     push!(block_bytes, Opcode.LOCAL_SET)
                                     append!(block_bytes, encode_leb128_unsigned(local_idx))
                                     break
@@ -8757,9 +8743,12 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                 end
                                 # Only emit local_set if we actually have a value on the stack
                                 if !isempty(phi_value_bytes)
+                                    # PURE-325: If compile_phi_value already boxed (contains GC_PREFIX),
+                                    # skip the safety check — it would undo the boxing
+                                    _already_boxed = Opcode.GC_PREFIX in phi_value_bytes
                                     # Safety check: verify actual local.get type matches phi local
                                     actual_val_type = edge_val_type
-                                    if length(phi_value_bytes) >= 2 && phi_value_bytes[1] == Opcode.LOCAL_GET
+                                    if !_already_boxed && length(phi_value_bytes) >= 2 && phi_value_bytes[1] == Opcode.LOCAL_GET
                                         got_local_idx = 0
                                         shift = 0
                                         for bi in 2:length(phi_value_bytes)
@@ -8780,7 +8769,9 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                         end
                                     end
 
-                                    if actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type) && !(phi_local_type === I64 && actual_val_type === I32)
+                                    if _already_boxed
+                                        append!(block_bytes, phi_value_bytes)
+                                    elseif actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type) && !(phi_local_type === I64 && actual_val_type === I32)
                                         append!(block_bytes, emit_phi_type_default(phi_local_type))
                                     elseif actual_val_type !== nothing && phi_local_type === I64 && actual_val_type === I32
                                         append!(block_bytes, phi_value_bytes)
@@ -9105,8 +9096,20 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 local_array_idx = local_idx - ctx.n_params + 1
                 ssa_local_type = local_array_idx >= 1 && local_array_idx <= length(ctx.locals) ? ctx.locals[local_array_idx] : nothing
                 if phi_local_wasm_type !== nothing && ssa_local_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_local_type)
-                    # Type mismatch: emit type-safe default for the phi local's type
-                    append!(result, emit_phi_type_default(phi_local_wasm_type))
+                    if phi_local_wasm_type === ExternRef && (ssa_local_type === I32 || ssa_local_type === I64 || ssa_local_type === F32 || ssa_local_type === F64)
+                        # PURE-325: Box numeric local for ExternRef phi
+                        push!(result, Opcode.LOCAL_GET)
+                        append!(result, encode_leb128_unsigned(local_idx))
+                        _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, ssa_local_type)
+                        push!(result, Opcode.GC_PREFIX)
+                        push!(result, Opcode.STRUCT_NEW)
+                        append!(result, encode_leb128_unsigned(_box_t))
+                        push!(result, Opcode.GC_PREFIX)
+                        push!(result, Opcode.EXTERN_CONVERT_ANY)
+                    else
+                        # Type mismatch: emit type-safe default for the phi local's type
+                        append!(result, emit_phi_type_default(phi_local_wasm_type))
+                    end
                 else
                     push!(result, Opcode.LOCAL_GET)
                     append!(result, encode_leb128_unsigned(local_idx))
@@ -9116,7 +9119,19 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 # Check type compatibility for phi-to-phi
                 src_local_type = ctx.locals[local_idx - ctx.n_params + 1]
                 if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, src_local_type)
-                    append!(result, emit_phi_type_default(phi_local_wasm_type))
+                    if phi_local_wasm_type === ExternRef && (src_local_type === I32 || src_local_type === I64 || src_local_type === F32 || src_local_type === F64)
+                        # PURE-325: Box numeric phi-to-phi for ExternRef
+                        push!(result, Opcode.LOCAL_GET)
+                        append!(result, encode_leb128_unsigned(local_idx))
+                        _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, src_local_type)
+                        push!(result, Opcode.GC_PREFIX)
+                        push!(result, Opcode.STRUCT_NEW)
+                        append!(result, encode_leb128_unsigned(_box_t))
+                        push!(result, Opcode.GC_PREFIX)
+                        push!(result, Opcode.EXTERN_CONVERT_ANY)
+                    else
+                        append!(result, emit_phi_type_default(phi_local_wasm_type))
+                    end
                 else
                     push!(result, Opcode.LOCAL_GET)
                     append!(result, encode_leb128_unsigned(local_idx))
@@ -9130,8 +9145,23 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 ssa_julia_type = get(ctx.ssa_types, val.id, Any)
                 ssa_wasm_type = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
                 if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_wasm_type)
-                    # Type mismatch: emit type-safe default instead of recomputing
-                    append!(result, emit_phi_type_default(phi_local_wasm_type))
+                    if phi_local_wasm_type === ExternRef && (ssa_wasm_type === I32 || ssa_wasm_type === I64 || ssa_wasm_type === F32 || ssa_wasm_type === F64)
+                        # PURE-325: Box recomputed numeric SSA for ExternRef phi
+                        if stmt !== nothing && !(stmt isa Core.PhiNode)
+                            append!(result, compile_statement(stmt, val.id, ctx))
+                        else
+                            append!(result, compile_value(val, ctx))
+                        end
+                        _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, ssa_wasm_type)
+                        push!(result, Opcode.GC_PREFIX)
+                        push!(result, Opcode.STRUCT_NEW)
+                        append!(result, encode_leb128_unsigned(_box_t))
+                        push!(result, Opcode.GC_PREFIX)
+                        push!(result, Opcode.EXTERN_CONVERT_ANY)
+                    else
+                        # Type mismatch: emit type-safe default instead of recomputing
+                        append!(result, emit_phi_type_default(phi_local_wasm_type))
+                    end
                 elseif stmt !== nothing && !(stmt isa Core.PhiNode)
                     append!(result, compile_statement(stmt, val.id, ctx))
                 else
@@ -9188,6 +9218,17 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 phi_local_type = ctx.locals[phi_local_idx - ctx.n_params + 1]
                 edge_val_type = get_phi_edge_wasm_type(val)
                 if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type) && !(phi_local_type === I64 && edge_val_type === I32)
+                    if phi_local_type === ExternRef && (edge_val_type === I32 || edge_val_type === I64 || edge_val_type === F32 || edge_val_type === F64)
+                        # PURE-325: Box numeric non-SSA value for ExternRef phi
+                        append!(result, compile_value(val, ctx))
+                        _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
+                        push!(result, Opcode.GC_PREFIX)
+                        push!(result, Opcode.STRUCT_NEW)
+                        append!(result, encode_leb128_unsigned(_box_t))
+                        push!(result, Opcode.GC_PREFIX)
+                        push!(result, Opcode.EXTERN_CONVERT_ANY)
+                        return result
+                    end
                     # Type mismatch: emit type-safe default instead
                     append!(result, emit_phi_type_default(phi_local_type))
                     return result
@@ -9341,39 +9382,26 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                 edge_val_type = get_phi_edge_wasm_type(val)
 
                                 if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type) && !(phi_local_type === I64 && edge_val_type === I32)
-                                    # Type mismatch: emit type-safe default for the local's declared type.
-                                    # This happens when Julia Union types have mixed primitive/ref variants.
-                                    if phi_local_type isa ConcreteRef
-                                        push!(bytes, Opcode.REF_NULL)
-                                        append!(bytes, encode_leb128_signed(Int64(phi_local_type.type_idx)))
-                                    elseif phi_local_type === StructRef
-                                        push!(bytes, Opcode.REF_NULL)
-                                        push!(bytes, UInt8(StructRef))
-                                    elseif phi_local_type === ArrayRef
-                                        push!(bytes, Opcode.REF_NULL)
-                                        push!(bytes, UInt8(ArrayRef))
-                                    elseif phi_local_type === ExternRef
-                                        push!(bytes, Opcode.REF_NULL)
-                                        push!(bytes, UInt8(ExternRef))
-                                    elseif phi_local_type === AnyRef
-                                        push!(bytes, Opcode.REF_NULL)
-                                        push!(bytes, UInt8(AnyRef))
-                                    elseif phi_local_type === I64
-                                        push!(bytes, Opcode.I64_CONST)
-                                        push!(bytes, 0x00)
-                                    elseif phi_local_type === I32
-                                        push!(bytes, Opcode.I32_CONST)
-                                        push!(bytes, 0x00)
-                                    elseif phi_local_type === F64
-                                        push!(bytes, Opcode.F64_CONST)
-                                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-                                    elseif phi_local_type === F32
-                                        push!(bytes, Opcode.F32_CONST)
-                                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
-                                    else
-                                        push!(bytes, Opcode.I32_CONST)
-                                        push!(bytes, 0x00)
+                                    if phi_local_type === ExternRef && (edge_val_type === I32 || edge_val_type === I64 || edge_val_type === F32 || edge_val_type === F64)
+                                        # PURE-325: Box numeric phi edge for ExternRef local
+                                        _pvb2 = compile_phi_value(val, i)
+                                        if !isempty(_pvb2)
+                                            append!(bytes, _pvb2)
+                                            _box_t2 = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
+                                            push!(bytes, Opcode.GC_PREFIX)
+                                            push!(bytes, Opcode.STRUCT_NEW)
+                                            append!(bytes, encode_leb128_unsigned(_box_t2))
+                                            push!(bytes, Opcode.GC_PREFIX)
+                                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                            push!(bytes, Opcode.LOCAL_SET)
+                                            append!(bytes, encode_leb128_unsigned(local_idx))
+                                            phi_count += 1
+                                            found_edge = true
+                                            break
+                                        end
                                     end
+                                    # Type mismatch: emit type-safe default
+                                    append!(bytes, emit_phi_type_default(phi_local_type))
                                     push!(bytes, Opcode.LOCAL_SET)
                                     append!(bytes, encode_leb128_unsigned(local_idx))
                                     phi_count += 1
@@ -9403,8 +9431,10 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                     # This catches cases where get_phi_edge_wasm_type reports compatible
                                     # (from Julia type inference) but the actual local has a different type
                                     # (e.g., externref from Any-typed struct field overrides).
+                                    # PURE-325: If compile_phi_value already boxed, skip safety check
+                                    _already_boxed2 = Opcode.GC_PREFIX in phi_value_bytes
                                     actual_val_type = edge_val_type
-                                    if length(phi_value_bytes) >= 2 && phi_value_bytes[1] == Opcode.LOCAL_GET
+                                    if !_already_boxed2 && length(phi_value_bytes) >= 2 && phi_value_bytes[1] == Opcode.LOCAL_GET
                                         # Decode the local index from unsigned LEB128
                                         got_local_idx = 0
                                         shift = 0
@@ -9426,7 +9456,9 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                         end
                                     end
 
-                                    if actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type) && !(phi_local_type === I64 && actual_val_type === I32)
+                                    if _already_boxed2
+                                        append!(bytes, phi_value_bytes)
+                                    elseif actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type) && !(phi_local_type === I64 && actual_val_type === I32)
                                         # Type mismatch detected at emit point: replace with default
                                         append!(bytes, emit_phi_type_default(phi_local_type))
                                     elseif actual_val_type !== nothing && phi_local_type === I64 && actual_val_type === I32
@@ -9565,38 +9597,24 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                 phi_local_type = ctx.locals[local_idx - ctx.n_params + 1]
                                 edge_val_type = get_phi_edge_wasm_type(val)
                                 if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type) && !(phi_local_type === I64 && edge_val_type === I32)
-                                    # Type mismatch: emit type-safe default for the local's declared type.
-                                    if phi_local_type isa ConcreteRef
-                                        push!(block_bytes, Opcode.REF_NULL)
-                                        append!(block_bytes, encode_leb128_signed(Int64(phi_local_type.type_idx)))
-                                    elseif phi_local_type === StructRef
-                                        push!(block_bytes, Opcode.REF_NULL)
-                                        push!(block_bytes, UInt8(StructRef))
-                                    elseif phi_local_type === ArrayRef
-                                        push!(block_bytes, Opcode.REF_NULL)
-                                        push!(block_bytes, UInt8(ArrayRef))
-                                    elseif phi_local_type === ExternRef
-                                        push!(block_bytes, Opcode.REF_NULL)
-                                        push!(block_bytes, UInt8(ExternRef))
-                                    elseif phi_local_type === AnyRef
-                                        push!(block_bytes, Opcode.REF_NULL)
-                                        push!(block_bytes, UInt8(AnyRef))
-                                    elseif phi_local_type === I64
-                                        push!(block_bytes, Opcode.I64_CONST)
-                                        push!(block_bytes, 0x00)
-                                    elseif phi_local_type === I32
-                                        push!(block_bytes, Opcode.I32_CONST)
-                                        push!(block_bytes, 0x00)
-                                    elseif phi_local_type === F64
-                                        push!(block_bytes, Opcode.F64_CONST)
-                                        append!(block_bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-                                    elseif phi_local_type === F32
-                                        push!(block_bytes, Opcode.F32_CONST)
-                                        append!(block_bytes, UInt8[0x00, 0x00, 0x00, 0x00])
-                                    else
-                                        push!(block_bytes, Opcode.I32_CONST)
-                                        push!(block_bytes, 0x00)
+                                    if phi_local_type === ExternRef && (edge_val_type === I32 || edge_val_type === I64 || edge_val_type === F32 || edge_val_type === F64)
+                                        # PURE-325: Box numeric phi edge for ExternRef local
+                                        _pvb3 = compile_phi_value(val, i)
+                                        if !isempty(_pvb3)
+                                            append!(block_bytes, _pvb3)
+                                            _box_t3 = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
+                                            push!(block_bytes, Opcode.GC_PREFIX)
+                                            push!(block_bytes, Opcode.STRUCT_NEW)
+                                            append!(block_bytes, encode_leb128_unsigned(_box_t3))
+                                            push!(block_bytes, Opcode.GC_PREFIX)
+                                            push!(block_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                            push!(block_bytes, Opcode.LOCAL_SET)
+                                            append!(block_bytes, encode_leb128_unsigned(local_idx))
+                                            break
+                                        end
                                     end
+                                    # Type mismatch: emit type-safe default
+                                    append!(block_bytes, emit_phi_type_default(phi_local_type))
                                     push!(block_bytes, Opcode.LOCAL_SET)
                                     append!(block_bytes, encode_leb128_unsigned(local_idx))
                                     break
@@ -9618,9 +9636,11 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                     end
                                 end
                                 if !isempty(phi_value_bytes)
+                                    # PURE-325: If compile_phi_value already boxed, skip safety check
+                                    _already_boxed3 = Opcode.GC_PREFIX in phi_value_bytes
                                     # Safety check: verify actual local.get type matches phi local
                                     actual_val_type = edge_val_type
-                                    if length(phi_value_bytes) >= 2 && phi_value_bytes[1] == Opcode.LOCAL_GET
+                                    if !_already_boxed3 && length(phi_value_bytes) >= 2 && phi_value_bytes[1] == Opcode.LOCAL_GET
                                         got_local_idx = 0
                                         shift = 0
                                         for bi in 2:length(phi_value_bytes)
@@ -9641,7 +9661,9 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                         end
                                     end
 
-                                    if actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type) && !(phi_local_type === I64 && actual_val_type === I32)
+                                    if _already_boxed3
+                                        append!(block_bytes, phi_value_bytes)
+                                    elseif actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type) && !(phi_local_type === I64 && actual_val_type === I32)
                                         append!(block_bytes, emit_phi_type_default(phi_local_type))
                                     elseif actual_val_type !== nothing && phi_local_type === I64 && actual_val_type === I32
                                         append!(block_bytes, phi_value_bytes)
