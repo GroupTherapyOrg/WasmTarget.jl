@@ -19817,7 +19817,11 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 if target_wasm isa ConcreteRef
                     append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
                     push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.REF_TEST_NULL)
+                    # PURE-325: Use REF_TEST (non-nullable) instead of REF_TEST_NULL.
+                    # ref.test null returns true for null refs, but isa(nothing, T) should
+                    # return false for concrete types. null externref in Vector{Any} was
+                    # passing isa(x, Expr) check and crashing on struct_get.
+                    push!(bytes, Opcode.REF_TEST)
                     append!(bytes, encode_leb128_signed(Int64(target_wasm.type_idx)))
                 elseif haskey(ctx.type_registry.numeric_boxes, target_wasm)
                     # PURE-325: Check for boxed numeric type (e.g., isa(externref, Int64)
@@ -19825,7 +19829,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     local box_type_idx = ctx.type_registry.numeric_boxes[target_wasm]
                     append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
                     push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.REF_TEST_NULL)
+                    push!(bytes, Opcode.REF_TEST)
                     append!(bytes, encode_leb128_signed(Int64(box_type_idx)))
                 else
                     # Fallback: non-null check for non-concrete wasm types
