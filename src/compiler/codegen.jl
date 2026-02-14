@@ -5318,12 +5318,25 @@ function infer_call_type(expr::Expr, ctx::CompilationContext)
         end
     end
 
-    # For arithmetic, infer from first argument
+    # PURE-325: Infer return type from first argument for most intrinsics.
+    # For calls where the first arg is Type{T} (constructor/conversion), return Any
+    # since the return type is T, not Type{T}. Same for known non-identity functions.
     if length(args) > 0
-        return infer_value_type(args[1], ctx)
+        arg1_type = infer_value_type(args[1], ctx)
+        # Type{T} as first arg means this is a constructor — return type is T, not Type{T}
+        if arg1_type isa DataType && arg1_type <: Type
+            return Any  # Safe default for constructors
+        end
+        # Known functions where return type != first arg type
+        if func isa GlobalRef && func.name in (:push!, :pushfirst!, :pop!, :popfirst!,
+                                                 :setindex!, :insert!, :deleteat!,
+                                                 :write, :print, :println, :show)
+            return Any
+        end
+        return arg1_type
     end
 
-    return Int64  # Default
+    return Any  # Safe default — maps to ExternRef
 end
 
 function infer_value_type(val, ctx::CompilationContext)
