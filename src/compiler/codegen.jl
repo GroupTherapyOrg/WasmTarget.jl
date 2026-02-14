@@ -8455,6 +8455,45 @@ Reference: https://labs.leaningtech.com/blog/control-flow
 """
 
 """
+PURE-325: Check if compiled bytecode contains a GC instruction that produces a ref value.
+Scans `val_bytes` for GC_PREFIX (0xFB) followed by a ref-producing sub-opcode.
+Properly skips LEB128 immediates of the first instruction to avoid false positives from
+i32.const/i64.const values that coincidentally contain 0xFB bytes in their LEB128 encoding.
+
+GC sub-opcodes recognized: 0x00 (struct.new), 0x06 (array.new), 0x07 (array.new_default),
+0x08 (array.new_fixed), 0x1A (any.convert_extern), 0x1B (extern.convert_any).
+"""
+function has_ref_producing_gc_op(val_bytes::Vector{UInt8})::Bool
+    isempty(val_bytes) && return false
+    # Determine scan start: skip past the first instruction's LEB128 immediate to avoid
+    # false positives from constants like i32.const 251 which encodes as 0x41 0xFB 0x01.
+    scan_start = 1
+    first_op = val_bytes[1]
+    if first_op == 0x41 || first_op == 0x42 || first_op == 0x20 || first_op == 0x21 || first_op == 0x22 || first_op == 0x23 || first_op == 0x24  # i32.const, i64.const, local.get/set/tee, global.get/set
+        # Skip LEB128 immediate
+        for bi in 2:length(val_bytes)
+            if (val_bytes[bi] & 0x80) == 0
+                scan_start = bi + 1
+                break
+            end
+        end
+    elseif first_op == 0x43  # f32.const: 4-byte immediate
+        scan_start = 6
+    elseif first_op == 0x44  # f64.const: 8-byte immediate
+        scan_start = 10
+    end
+    for scan_i in scan_start:(length(val_bytes)-1)
+        if val_bytes[scan_i] == 0xFB
+            gc_op = val_bytes[scan_i + 1]
+            if gc_op == 0x00 || gc_op == 0x08 || gc_op == 0x1A || gc_op == 0x1B
+                return true
+            end
+        end
+    end
+    return false
+end
+
+"""
 PURE-325: Emit boxing bytecode for a numeric value that needs to be returned as ExternRef.
 Handles the common pattern where a function returns ExternRef (Union type) but the actual
 value is numeric (I32/I64/F32/F64). Boxes the value in a WasmGC struct + extern_convert_any.
@@ -13327,17 +13366,8 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                         if !isempty(val_bytes)
                             first_op = val_bytes[1]
                             if first_op == Opcode.I32_CONST || first_op == Opcode.I64_CONST || first_op == Opcode.F32_CONST || first_op == Opcode.F64_CONST
-                                # PURE-318: Check for GC_PREFIX — struct/array constants produce refs, not numerics
-                                local has_gc_pi = false
-                                for gi_p in 1:(length(val_bytes)-1)
-                                    if val_bytes[gi_p] == 0xFB
-                                        gc_op_p = val_bytes[gi_p + 1]
-                                        if gc_op_p <= 0x01 || (gc_op_p >= 0x06 && gc_op_p <= 0x0A) || gc_op_p == 0x1A || gc_op_p == 0x1B
-                                            has_gc_pi = true; break
-                                        end
-                                    end
-                                end
-                                is_numeric_val = !has_gc_pi
+                                # PURE-318/PURE-325: Check for GC_PREFIX — struct/array ops produce refs, not numerics
+                                is_numeric_val = !has_ref_producing_gc_op(val_bytes)
                             elseif first_op == 0x20  # LOCAL_GET
                                 # Decode local index, check type
                                 src_idx = 0; shift = 0; leb_end = 0
@@ -14502,18 +14532,8 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
             # extern_convert_any will fail because it requires anyref input.
             # Emit ref.null extern instead.
             is_numeric_local = false
-            # PURE-044: Also check for i32.const/i64.const (happens with dead code paths)
-            # PURE-220: But NOT if bytes contain GC instructions (struct.new, array.new_fixed)
-            # which indicate a complex ref value (String, Symbol), not a simple numeric.
-            ends_with_ref_producing_gc = false
-            for scan_i in 1:(length(val_bytes)-1)
-                if val_bytes[scan_i] == 0xFB  # GC_PREFIX
-                    gc_op = val_bytes[scan_i + 1]
-                    if gc_op <= 0x01 || (gc_op >= 0x06 && gc_op <= 0x0A) || gc_op == 0x1A || gc_op == 0x1B
-                        ends_with_ref_producing_gc = true
-                    end
-                end
-            end
+            # PURE-044/PURE-325: Check for i32.const/i64.const, but skip if GC ops present
+            ends_with_ref_producing_gc = has_ref_producing_gc_op(val_bytes)
             if length(val_bytes) >= 1 && (val_bytes[1] == 0x41 || val_bytes[1] == 0x42) && !ends_with_ref_producing_gc  # I32_CONST or I64_CONST
                 is_numeric_local = true
             elseif length(val_bytes) >= 2 && val_bytes[1] == 0x20
@@ -16303,16 +16323,7 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
                         # which indicates a complex ref value (String, Symbol, struct), not a simple numeric.
                         # String constants start with i32.const (char 1) but end with array.new_fixed.
                         first_byte = field_val_bytes[1]
-                        ends_with_ref_producing_gc = false
-                        for scan_i in 1:(length(field_val_bytes)-1)
-                            if field_val_bytes[scan_i] == 0xFB  # GC_PREFIX
-                                gc_op = field_val_bytes[scan_i + 1]
-                                # struct.new variants (0x00-0x01), array.new variants (0x06-0x0A), extern/any convert (0x1A-0x1B)
-                                if gc_op <= 0x01 || (gc_op >= 0x06 && gc_op <= 0x0A) || gc_op == 0x1A || gc_op == 0x1B
-                                    ends_with_ref_producing_gc = true
-                                end
-                            end
-                        end
+                        ends_with_ref_producing_gc = has_ref_producing_gc_op(field_val_bytes)
                         if (first_byte == 0x41 || first_byte == 0x42) && !ends_with_ref_producing_gc  # I32_CONST or I64_CONST
                             need_replace = true
                         elseif first_byte == 0x20  # LOCAL_GET
@@ -16902,22 +16913,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                         end
                     end
                 elseif length(item_bytes) >= 1 && (item_bytes[1] == Opcode.I32_CONST || item_bytes[1] == Opcode.I64_CONST || item_bytes[1] == Opcode.F32_CONST || item_bytes[1] == Opcode.F64_CONST)
-                    # PURE-318/PURE-325: Check for GC_PREFIX — struct/array operations produce refs, not numerics.
-                    # Any GC sub-opcode that creates a ref (struct.new, struct.new_default,
-                    # array.new, array.new_default, array.new_fixed, array.new_data, array.new_elem,
-                    # extern.convert_any, any.convert_extern) means the final stack value is a ref.
-                    local has_gc_push = false
-                    for gi_pu in 1:(length(item_bytes)-1)
-                        if item_bytes[gi_pu] == 0xFB
-                            gc_op_pu = item_bytes[gi_pu + 1]
-                            # 0x00-0x01: struct.new variants, 0x06-0x0A: array.new variants,
-                            # 0x1A: extern.convert_any, 0x1B: any.convert_extern
-                            if gc_op_pu <= 0x01 || (gc_op_pu >= 0x06 && gc_op_pu <= 0x0A) || gc_op_pu == 0x1A || gc_op_pu == 0x1B
-                                has_gc_push = true; break
-                            end
-                        end
-                    end
-                    if !has_gc_push
+                    # PURE-318/PURE-325: Check for GC_PREFIX (LEB128-safe scan)
+                    if !has_ref_producing_gc_op(item_bytes)
                         push_src_wasm = I32  # treat constants as numeric
                     end
                 end
@@ -17525,19 +17522,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     end
                 end
             elseif length(mset_val_bytes) >= 1 && (mset_val_bytes[1] == Opcode.I32_CONST || mset_val_bytes[1] == Opcode.I64_CONST || mset_val_bytes[1] == Opcode.F32_CONST || mset_val_bytes[1] == Opcode.F64_CONST)
-                # PURE-318: Check for GC_PREFIX — struct/array constants start with i32.const
-                # but end with struct.new/array.new_fixed, producing a ref not a numeric.
-                local has_gc_ref_op_e = false
-                for gi_e in 1:(length(mset_val_bytes)-1)
-                    if mset_val_bytes[gi_e] == 0xFB  # GC_PREFIX
-                        gc_op_e = mset_val_bytes[gi_e + 1]
-                        if gc_op_e <= 0x01 || (gc_op_e >= 0x06 && gc_op_e <= 0x0A) || gc_op_e == 0x1A || gc_op_e == 0x1B
-                            has_gc_ref_op_e = true
-                            break
-                        end
-                    end
-                end
-                if !has_gc_ref_op_e
+                # PURE-318/PURE-325: Check for GC_PREFIX (LEB128-safe scan)
+                if !has_ref_producing_gc_op(mset_val_bytes)
                     mset_src_wasm = I32  # treat constants as numeric
                 end
             end
@@ -17559,19 +17545,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             # If value is numeric (nothing represented as i32_const 0), emit ref.null instead
             local is_numeric_for_ref = false
             if length(mset_val_bytes) >= 1 && (mset_val_bytes[1] == Opcode.I32_CONST || mset_val_bytes[1] == Opcode.I64_CONST || mset_val_bytes[1] == Opcode.F32_CONST || mset_val_bytes[1] == Opcode.F64_CONST)
-                # PURE-318: Check for GC_PREFIX — struct/array constants start with i32.const
-                # (field values) but end with struct.new or array.new_fixed, producing a ref.
-                local has_gc_ref_op = false
-                for gi in 1:(length(mset_val_bytes)-1)
-                    if mset_val_bytes[gi] == 0xFB  # GC_PREFIX
-                        gc_op = mset_val_bytes[gi + 1]
-                        if gc_op <= 0x01 || (gc_op >= 0x06 && gc_op <= 0x0A) || gc_op == 0x1A || gc_op == 0x1B
-                            has_gc_ref_op = true
-                            break
-                        end
-                    end
-                end
-                is_numeric_for_ref = !has_gc_ref_op
+                # PURE-318/PURE-325: Check for GC_PREFIX (LEB128-safe scan)
+                is_numeric_for_ref = !has_ref_producing_gc_op(mset_val_bytes)
             elseif length(mset_val_bytes) >= 2 && mset_val_bytes[1] == Opcode.LOCAL_GET
                 local src_idx_r = 0
                 local shift_r = 0
@@ -17764,15 +17739,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     # PURE-220: But NOT if bytes contain GC instructions (struct.new, array.new_fixed)
                     # which indicate a complex ref value (String, Symbol), not a simple numeric.
                     is_numeric_arg = false
-                    ends_with_ref_producing_gc = false
-                    for scan_i in 1:(length(arg_bytes)-1)
-                        if arg_bytes[scan_i] == 0xFB  # GC_PREFIX
-                            gc_op = arg_bytes[scan_i + 1]
-                            if gc_op <= 0x01 || (gc_op >= 0x06 && gc_op <= 0x0A) || gc_op == 0x1A || gc_op == 0x1B
-                                ends_with_ref_producing_gc = true
-                            end
-                        end
-                    end
+                    ends_with_ref_producing_gc = has_ref_producing_gc_op(arg_bytes)
                     if length(arg_bytes) >= 1 && (arg_bytes[1] == 0x41 || arg_bytes[1] == 0x42) && !ends_with_ref_producing_gc
                         is_numeric_arg = true
                     elseif length(arg_bytes) >= 2 && arg_bytes[1] == 0x20
@@ -22775,16 +22742,8 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                         end
                     elseif length(val_bytes) >= 1 && (val_bytes[1] == Opcode.I32_CONST || val_bytes[1] == Opcode.I64_CONST || val_bytes[1] == Opcode.F32_CONST || val_bytes[1] == Opcode.F64_CONST)
                         # PURE-318: Check for GC_PREFIX — struct/array constants produce refs, not numerics
-                        local has_gc_as = false
-                        for gi_as in 1:(length(val_bytes)-1)
-                            if val_bytes[gi_as] == 0xFB
-                                gc_op_as = val_bytes[gi_as + 1]
-                                if gc_op_as <= 0x01 || (gc_op_as >= 0x06 && gc_op_as <= 0x0A) || gc_op_as == 0x1A || gc_op_as == 0x1B
-                                    has_gc_as = true; break
-                                end
-                            end
-                        end
-                        if !has_gc_as
+                        # PURE-325: LEB128-safe GC detection
+                        if !has_ref_producing_gc_op(val_bytes)
                             arrset_src_wasm = I32  # treat constants as numeric
                         end
                     end
