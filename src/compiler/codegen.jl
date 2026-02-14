@@ -5209,7 +5209,11 @@ function analyze_ssa_types!(ctx::CompilationContext)
                 field_ref = stmt.args[3]
                 obj_type = infer_value_type(obj_arg, ctx)
                 # Check the Julia field type directly (no registry lookup needed)
-                if obj_type isa DataType && isstructtype(obj_type) && !isprimitivetype(obj_type) && isconcretetype(obj_type)
+                # PURE-325: Also allow non-concrete Tuple types (e.g., Tuple{Any, Int64})
+                # isconcretetype(Tuple{Any, Int64}) = false because Any is abstract, but
+                # fieldtype/fieldcount still work correctly on Tuple DataTypes.
+                is_concrete_enough = isconcretetype(obj_type) || (obj_type <: Tuple && obj_type isa DataType)
+                if obj_type isa DataType && isstructtype(obj_type) && !isprimitivetype(obj_type) && is_concrete_enough
                     field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
                     julia_field_type = nothing
                     if field_sym isa Symbol && hasfield(obj_type, field_sym)
@@ -5294,6 +5298,24 @@ function infer_call_type(expr::Expr, ctx::CompilationContext)
     # Comparison operations return Bool
     if is_comparison(func)
         return Bool
+    end
+
+    # PURE-325: getfield returns the field type, not the object type
+    if func isa GlobalRef && func.name in (:getfield, :getproperty) && length(args) >= 2
+        obj_type = infer_value_type(args[1], ctx)
+        field_ref = args[2]
+        if obj_type isa DataType && isstructtype(obj_type) && !isabstracttype(obj_type)
+            field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
+            try
+                if field_sym isa Symbol && hasfield(obj_type, field_sym)
+                    return fieldtype(obj_type, field_sym)
+                elseif field_sym isa Integer && 1 <= field_sym <= fieldcount(obj_type)
+                    return fieldtype(obj_type, Int(field_sym))
+                end
+            catch
+                # fieldcount may fail for types without definite field count
+            end
+        end
     end
 
     # For arithmetic, infer from first argument
