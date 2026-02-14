@@ -6374,8 +6374,7 @@ function generate_branched_loops(ctx::CompilationContext, first_header::Int, fir
                 is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
                 if is_numeric_val && is_ref_ret
                     if func_ret_wasm === ExternRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ExternRef))
+                        emit_numeric_to_externref!(bytes, stmt.val, val_wasm_type, ctx)
                     elseif func_ret_wasm isa ConcreteRef
                         push!(bytes, Opcode.REF_NULL)
                         append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
@@ -6463,8 +6462,7 @@ function generate_branched_loops(ctx::CompilationContext, first_header::Int, fir
                 is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
                 if is_numeric_val && is_ref_ret
                     if func_ret_wasm === ExternRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ExternRef))
+                        emit_numeric_to_externref!(bytes, stmt.val, val_wasm_type, ctx)
                     elseif func_ret_wasm isa ConcreteRef
                         push!(bytes, Opcode.REF_NULL)
                         append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
@@ -7327,8 +7325,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                     is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
                     if is_numeric_val && is_ref_ret
                         if func_ret_wasm === ExternRef
-                            push!(bytes, Opcode.REF_NULL)
-                            push!(bytes, UInt8(ExternRef))
+                            emit_numeric_to_externref!(bytes, stmt.val, val_wasm_type, ctx)
                         elseif func_ret_wasm isa ConcreteRef
                             push!(bytes, Opcode.REF_NULL)
                             append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
@@ -7574,8 +7571,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                 is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
                 if is_numeric_val && is_ref_ret
                     if func_ret_wasm === ExternRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ExternRef))
+                        emit_numeric_to_externref!(bytes, stmt.val, val_wasm_type, ctx)
                     elseif func_ret_wasm isa ConcreteRef
                         push!(bytes, Opcode.REF_NULL)
                         append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
@@ -7719,8 +7715,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                 is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
                 if is_numeric_val && is_ref_ret
                     if func_ret_wasm === ExternRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ExternRef))
+                        emit_numeric_to_externref!(bytes, stmt.val, val_wasm_type, ctx)
                     elseif func_ret_wasm isa ConcreteRef
                         push!(bytes, Opcode.REF_NULL)
                         append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
@@ -7998,8 +7993,7 @@ function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBloc
                     is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
                     if is_numeric_val && is_ref_ret
                         if func_ret_wasm === ExternRef
-                            push!(bytes, Opcode.REF_NULL)
-                            push!(bytes, UInt8(ExternRef))
+                            emit_numeric_to_externref!(bytes, stmt.val, val_wasm_type, ctx)
                         elseif func_ret_wasm isa ConcreteRef
                             push!(bytes, Opcode.REF_NULL)
                             append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
@@ -9772,8 +9766,7 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
                 if is_numeric_val && is_ref_ret
                     if func_ret_wasm === ExternRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ExternRef))
+                        emit_numeric_to_externref!(bytes, stmt.val, val_wasm_type, ctx)
                     elseif func_ret_wasm isa ConcreteRef
                         push!(bytes, Opcode.REF_NULL)
                         append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
@@ -10037,8 +10030,7 @@ function generate_linear_flow(ctx::CompilationContext, blocks::Vector{BasicBlock
                     is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
                     if is_numeric_val && is_ref_ret
                         if func_ret_wasm === ExternRef
-                            push!(range_bytes, Opcode.REF_NULL)
-                            push!(range_bytes, UInt8(ExternRef))
+                            emit_numeric_to_externref!(range_bytes, stmt.val, val_wasm_type, ctx)
                         elseif func_ret_wasm isa ConcreteRef
                             push!(range_bytes, Opcode.REF_NULL)
                             append!(range_bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
@@ -13379,8 +13371,7 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                                 push!(bytes, Opcode.REF_NULL)
                                 push!(bytes, UInt8(ArrayRef))
                             elseif pi_local_type === ExternRef
-                                push!(bytes, Opcode.REF_NULL)
-                                push!(bytes, UInt8(ExternRef))
+                                emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
                             elseif pi_local_type === AnyRef
                                 push!(bytes, Opcode.REF_NULL)
                                 push!(bytes, UInt8(AnyRef))
@@ -14672,8 +14663,7 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
                         push!(bytes, Opcode.REF_NULL)
                         push!(bytes, UInt8(ArrayRef))
                     elseif actual_field_wasm === ExternRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ExternRef))
+                        emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
                     else
                         push!(bytes, Opcode.REF_NULL)
                         push!(bytes, UInt8(StructRef))
@@ -16930,8 +16920,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 local is_numeric_item = push_src_wasm === I64 || push_src_wasm === I32 || push_src_wasm === F64 || push_src_wasm === F32
                 local is_already_externref_item = push_src_wasm === ExternRef
                 if is_numeric_item
-                    push!(bytes, Opcode.REF_NULL)
-                    push!(bytes, UInt8(ExternRef))
+                    emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
                 else
                     append!(bytes, item_bytes)
                     # PURE-048: Skip extern_convert_any if value is already externref
@@ -17551,8 +17540,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             local is_numeric_mset = mset_src_wasm === I64 || mset_src_wasm === I32 || mset_src_wasm === F64 || mset_src_wasm === F32
             local is_already_externref_mset = mset_src_wasm === ExternRef
             if is_numeric_mset
-                push!(bytes, Opcode.REF_NULL)
-                push!(bytes, UInt8(ExternRef))
+                emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
             else
                 append!(bytes, mset_val_bytes)
                 # PURE-048: Skip extern_convert_any if value is already externref.
@@ -22799,8 +22787,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                     local is_numeric_val = arrset_src_wasm === I64 || arrset_src_wasm === I32 || arrset_src_wasm === F64 || arrset_src_wasm === F32
                     local is_already_externref_val = arrset_src_wasm === ExternRef
                     if is_numeric_val
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ExternRef))
+                        emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
                     else
                         append!(bytes, val_bytes)
                         # PURE-048: Skip extern_convert_any if value is already externref
