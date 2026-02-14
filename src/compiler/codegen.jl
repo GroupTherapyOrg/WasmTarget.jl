@@ -13075,6 +13075,9 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
             val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
             is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
 
+            # PURE-325 DEBUG: trace ALL ReturnNode decisions
+            println("PURE-325-DEBUG ReturnNode idx=$idx val=$(stmt.val) val_wasm=$val_wasm func_ret=$func_ret_wasm numeric=$is_numeric_val ret_type=$(ctx.return_type)")
+
             if func_ret_wasm === ExternRef && is_numeric_val && is_nothing_value(stmt.val, ctx)
                 # PURE-036af: return nothing from ExternRef function - push ref.null extern
                 push!(bytes, Opcode.REF_NULL)
