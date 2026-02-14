@@ -17594,10 +17594,28 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         append!(bytes, encode_leb128_unsigned(array_type_idx))
 
         # Julia's memoryrefset! returns the stored value, so push it again
-        # This is needed because compile_statement may add LOCAL_SET after this
-        # Return the original value (not externref-converted) — compile_statement
-        # safety check handles any type mismatch with the target SSA local
-        append!(bytes, compile_value(value_arg, ctx))
+        # This is needed because compile_statement may add LOCAL_SET after this.
+        # PURE-325: Only push return value if the SSA has a local that needs it.
+        # When the SSA local type is ConcreteRef (shared with another SSA), the
+        # externref return value would be incorrectly ref_cast'd to the concrete type.
+        # In that case, push a type-safe default instead.
+        if haskey(ctx.ssa_locals, idx)
+            local mset_local_idx = ctx.ssa_locals[idx]
+            local mset_local_arr = mset_local_idx - ctx.n_params + 1
+            local mset_local_type = (mset_local_arr >= 1 && mset_local_arr <= length(ctx.locals)) ? ctx.locals[mset_local_arr] : nothing
+            if mset_local_type isa ConcreteRef
+                # SSA local is a concrete ref type (shared with another SSA).
+                # memoryrefset! returns Any (externref), which can't be cast to ConcreteRef.
+                # Push ref.null of the concrete type instead (value is unused anyway).
+                push!(bytes, Opcode.REF_NULL)
+                append!(bytes, encode_leb128_signed(Int64(mset_local_type.type_idx)))
+            else
+                append!(bytes, compile_value(value_arg, ctx))
+            end
+        else
+            # No SSA local — push value anyway for stack balance
+            append!(bytes, compile_value(value_arg, ctx))
+        end
         return bytes
     end
 
