@@ -17610,7 +17610,13 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         # This is needed because compile_statement may add LOCAL_SET after this
         # Return the original value (not externref-converted) — compile_statement
         # safety check handles any type mismatch with the target SSA local
-        append!(bytes, compile_value(value_arg, ctx))
+        # PURE-325: Only push return value if this SSA has a local (i.e., result is used).
+        # For void memoryrefset! calls (e.g., pushfirst! inlined), the result is unused
+        # and pushing it would leave an extra value on the stack that gets incorrectly
+        # cast to a phi local's type (e.g., array type instead of element type).
+        if haskey(ctx.ssa_locals, idx)
+            append!(bytes, compile_value(value_arg, ctx))
+        end
         return bytes
     end
 
