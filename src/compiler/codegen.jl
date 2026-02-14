@@ -1185,8 +1185,6 @@ function compile_module(functions::Vector)::WasmModule
     # Second pass: compile function bodies
     for (i, (f, arg_types, name, code_info, return_type, global_args, is_closure)) in enumerate(function_data)
         func_idx = UInt32(n_imports + i - 1)
-        println("DEBUG_FUNCMAP: func_$(func_idx) = $(name) :: $(arg_types) -> $(return_type)")
-
         # Check if this is an intrinsic function that needs special code generation
         intrinsic_body = is_intrinsic_function(f) ? generate_intrinsic_body(f, arg_types, mod, type_registry) : nothing
 
@@ -5247,6 +5245,14 @@ function analyze_ssa_types!(ctx::CompilationContext)
     for (i, stmt) in enumerate(ctx.code_info.code)
         if !haskey(ctx.ssa_types, i)
             if stmt isa Expr && stmt.head === :call
+                # PURE-325: Skip memoryrefset! — its return type is the stored element (Any),
+                # NOT the MemoryRef first argument. infer_call_type would incorrectly infer
+                # MemoryRef{T}, causing the SSA local to be allocated as ConcreteRef (array type)
+                # instead of ExternRef. This leads to illegal ref.cast at runtime.
+                _func_arg = stmt.args[1]
+                if _func_arg isa GlobalRef && _func_arg.name === :memoryrefset!
+                    continue
+                end
                 ctx.ssa_types[i] = infer_call_type(stmt, ctx)
             elseif stmt isa Expr && stmt.head === :invoke
                 # For invoke expressions with Any type, get the actual method return type
@@ -17610,13 +17616,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         # This is needed because compile_statement may add LOCAL_SET after this
         # Return the original value (not externref-converted) — compile_statement
         # safety check handles any type mismatch with the target SSA local
-        # PURE-325: Only push return value if this SSA has a local (i.e., result is used).
-        # For void memoryrefset! calls (e.g., pushfirst! inlined), the result is unused
-        # and pushing it would leave an extra value on the stack that gets incorrectly
-        # cast to a phi local's type (e.g., array type instead of element type).
-        if haskey(ctx.ssa_locals, idx)
-            append!(bytes, compile_value(value_arg, ctx))
-        end
+        append!(bytes, compile_value(value_arg, ctx))
         return bytes
     end
 
