@@ -8871,7 +8871,15 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                     if _already_boxed
                                         append!(block_bytes, phi_value_bytes)
                                     elseif actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type) && !(phi_local_type === I64 && actual_val_type === I32)
-                                        append!(block_bytes, emit_phi_type_default(phi_local_type))
+                                        # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef:
+                                        # wrap with extern_convert_any instead of emitting null default
+                                        if phi_local_type === ExternRef && (actual_val_type isa ConcreteRef || actual_val_type === StructRef || actual_val_type === ArrayRef || actual_val_type === AnyRef)
+                                            append!(block_bytes, phi_value_bytes)
+                                            push!(block_bytes, Opcode.GC_PREFIX)
+                                            push!(block_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                        else
+                                            append!(block_bytes, emit_phi_type_default(phi_local_type))
+                                        end
                                     elseif actual_val_type !== nothing && phi_local_type === I64 && actual_val_type === I32
                                         append!(block_bytes, phi_value_bytes)
                                         if isempty(phi_value_bytes) || phi_value_bytes[1] != Opcode.I64_CONST
@@ -9205,6 +9213,12 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                         append!(result, encode_leb128_unsigned(_box_t))
                         push!(result, Opcode.GC_PREFIX)
                         push!(result, Opcode.EXTERN_CONVERT_ANY)
+                    elseif phi_local_wasm_type === ExternRef && (ssa_local_type isa ConcreteRef || ssa_local_type === StructRef || ssa_local_type === ArrayRef || ssa_local_type === AnyRef)
+                        # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion
+                        push!(result, Opcode.LOCAL_GET)
+                        append!(result, encode_leb128_unsigned(local_idx))
+                        push!(result, Opcode.GC_PREFIX)
+                        push!(result, Opcode.EXTERN_CONVERT_ANY)
                     else
                         # Type mismatch: emit type-safe default for the phi local's type
                         append!(result, emit_phi_type_default(phi_local_wasm_type))
@@ -9226,6 +9240,12 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                         push!(result, Opcode.GC_PREFIX)
                         push!(result, Opcode.STRUCT_NEW)
                         append!(result, encode_leb128_unsigned(_box_t))
+                        push!(result, Opcode.GC_PREFIX)
+                        push!(result, Opcode.EXTERN_CONVERT_ANY)
+                    elseif phi_local_wasm_type === ExternRef && (src_local_type isa ConcreteRef || src_local_type === StructRef || src_local_type === ArrayRef || src_local_type === AnyRef)
+                        # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion (phi-to-phi)
+                        push!(result, Opcode.LOCAL_GET)
+                        append!(result, encode_leb128_unsigned(local_idx))
                         push!(result, Opcode.GC_PREFIX)
                         push!(result, Opcode.EXTERN_CONVERT_ANY)
                     else
@@ -9255,6 +9275,17 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                         push!(result, Opcode.GC_PREFIX)
                         push!(result, Opcode.STRUCT_NEW)
                         append!(result, encode_leb128_unsigned(_box_t))
+                        push!(result, Opcode.GC_PREFIX)
+                        push!(result, Opcode.EXTERN_CONVERT_ANY)
+                    elseif phi_local_wasm_type === ExternRef && (ssa_wasm_type isa ConcreteRef || ssa_wasm_type === StructRef || ssa_wasm_type === ArrayRef || ssa_wasm_type === AnyRef)
+                        # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion.
+                        # PiNode narrows Any→Expr (ExternRef→ConcreteRef). Compile the value
+                        # and wrap with extern_convert_any to get back to ExternRef.
+                        if stmt !== nothing && !(stmt isa Core.PhiNode)
+                            append!(result, compile_statement(stmt, val.id, ctx))
+                        else
+                            append!(result, compile_value(val, ctx))
+                        end
                         push!(result, Opcode.GC_PREFIX)
                         push!(result, Opcode.EXTERN_CONVERT_ANY)
                     else
