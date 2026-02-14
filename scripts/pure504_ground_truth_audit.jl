@@ -147,7 +147,7 @@ function run_audit()
                 end
             catch e
                 emsg = sprint(showerror, e)
-                print("ERR ")
+                print("ERR($emsg) ")
                 compile_fail = true
                 all_pass = false
                 break
