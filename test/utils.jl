@@ -21,7 +21,7 @@ function detect_node()
         # Parse version (format: v20.x.x)
         m = match(r"v(\d+)\.", version_str)
         if m !== nothing
-            major_version = parse(Int, m.captures[1])
+            major_version = Base.parse(Int, m.captures[1])
             if major_version >= 23
                 # WasmGC is stable in v23+
                 return (`node`, false)
