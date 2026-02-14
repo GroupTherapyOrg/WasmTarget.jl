@@ -13332,7 +13332,7 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                                 for gi_p in 1:(length(val_bytes)-1)
                                     if val_bytes[gi_p] == 0xFB
                                         gc_op_p = val_bytes[gi_p + 1]
-                                        if gc_op_p == 0x00 || gc_op_p == 0x1A || gc_op_p == 0x1B
+                                        if gc_op_p <= 0x01 || (gc_op_p >= 0x06 && gc_op_p <= 0x0A) || gc_op_p == 0x1A || gc_op_p == 0x1B
                                             has_gc_pi = true; break
                                         end
                                     end
@@ -14509,7 +14509,7 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
             for scan_i in 1:(length(val_bytes)-1)
                 if val_bytes[scan_i] == 0xFB  # GC_PREFIX
                     gc_op = val_bytes[scan_i + 1]
-                    if gc_op == 0x00 || gc_op == 0x1A || gc_op == 0x1B  # struct.new, array.new_fixed, array.new_default
+                    if gc_op <= 0x01 || (gc_op >= 0x06 && gc_op <= 0x0A) || gc_op == 0x1A || gc_op == 0x1B
                         ends_with_ref_producing_gc = true
                     end
                 end
@@ -16307,8 +16307,8 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
                         for scan_i in 1:(length(field_val_bytes)-1)
                             if field_val_bytes[scan_i] == 0xFB  # GC_PREFIX
                                 gc_op = field_val_bytes[scan_i + 1]
-                                # 0x00 = struct.new, 0x1A = array.new_fixed, 0x1B = array.new_default
-                                if gc_op == 0x00 || gc_op == 0x1A || gc_op == 0x1B
+                                # struct.new variants (0x00-0x01), array.new variants (0x06-0x0A), extern/any convert (0x1A-0x1B)
+                                if gc_op <= 0x01 || (gc_op >= 0x06 && gc_op <= 0x0A) || gc_op == 0x1A || gc_op == 0x1B
                                     ends_with_ref_producing_gc = true
                                 end
                             end
@@ -16902,12 +16902,17 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                         end
                     end
                 elseif length(item_bytes) >= 1 && (item_bytes[1] == Opcode.I32_CONST || item_bytes[1] == Opcode.I64_CONST || item_bytes[1] == Opcode.F32_CONST || item_bytes[1] == Opcode.F64_CONST)
-                    # PURE-318: Check for GC_PREFIX — struct/array constants produce refs, not numerics
+                    # PURE-318/PURE-325: Check for GC_PREFIX — struct/array operations produce refs, not numerics.
+                    # Any GC sub-opcode that creates a ref (struct.new, struct.new_default,
+                    # array.new, array.new_default, array.new_fixed, array.new_data, array.new_elem,
+                    # extern.convert_any, any.convert_extern) means the final stack value is a ref.
                     local has_gc_push = false
                     for gi_pu in 1:(length(item_bytes)-1)
                         if item_bytes[gi_pu] == 0xFB
                             gc_op_pu = item_bytes[gi_pu + 1]
-                            if gc_op_pu == 0x00 || gc_op_pu == 0x1A || gc_op_pu == 0x1B
+                            # 0x00-0x01: struct.new variants, 0x06-0x0A: array.new variants,
+                            # 0x1A: extern.convert_any, 0x1B: any.convert_extern
+                            if gc_op_pu <= 0x01 || (gc_op_pu >= 0x06 && gc_op_pu <= 0x0A) || gc_op_pu == 0x1A || gc_op_pu == 0x1B
                                 has_gc_push = true; break
                             end
                         end
@@ -17526,7 +17531,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 for gi_e in 1:(length(mset_val_bytes)-1)
                     if mset_val_bytes[gi_e] == 0xFB  # GC_PREFIX
                         gc_op_e = mset_val_bytes[gi_e + 1]
-                        if gc_op_e == 0x00 || gc_op_e == 0x1A || gc_op_e == 0x1B
+                        if gc_op_e <= 0x01 || (gc_op_e >= 0x06 && gc_op_e <= 0x0A) || gc_op_e == 0x1A || gc_op_e == 0x1B
                             has_gc_ref_op_e = true
                             break
                         end
@@ -17560,7 +17565,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 for gi in 1:(length(mset_val_bytes)-1)
                     if mset_val_bytes[gi] == 0xFB  # GC_PREFIX
                         gc_op = mset_val_bytes[gi + 1]
-                        if gc_op == 0x00 || gc_op == 0x1A || gc_op == 0x1B  # struct.new, array.new_fixed, array.new_default
+                        if gc_op <= 0x01 || (gc_op >= 0x06 && gc_op <= 0x0A) || gc_op == 0x1A || gc_op == 0x1B
                             has_gc_ref_op = true
                             break
                         end
@@ -17763,7 +17768,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     for scan_i in 1:(length(arg_bytes)-1)
                         if arg_bytes[scan_i] == 0xFB  # GC_PREFIX
                             gc_op = arg_bytes[scan_i + 1]
-                            if gc_op == 0x00 || gc_op == 0x1A || gc_op == 0x1B
+                            if gc_op <= 0x01 || (gc_op >= 0x06 && gc_op <= 0x0A) || gc_op == 0x1A || gc_op == 0x1B
                                 ends_with_ref_producing_gc = true
                             end
                         end
@@ -22774,7 +22779,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                         for gi_as in 1:(length(val_bytes)-1)
                             if val_bytes[gi_as] == 0xFB
                                 gc_op_as = val_bytes[gi_as + 1]
-                                if gc_op_as == 0x00 || gc_op_as == 0x1A || gc_op_as == 0x1B
+                                if gc_op_as <= 0x01 || (gc_op_as >= 0x06 && gc_op_as <= 0x0A) || gc_op_as == 0x1A || gc_op_as == 0x1B
                                     has_gc_as = true; break
                                 end
                             end
