@@ -4559,13 +4559,7 @@ function allocate_ssa_locals!(ctx::CompilationContext)
             # If the NEXT statement is control flow (not intermediate), this SSA needs a local
             # This handles cases where we create a value and immediately enter control flow
             if next_stmt isa Core.GotoNode || next_stmt isa Core.GotoIfNot
-                # PURE-325: Only add if this SSA is actually referenced somewhere.
-                # Unused SSAs (like memoryrefset! return values) don't need locals.
-                # Allocating a local for them can cause type mismatches when the local
-                # is shared with another SSA of a different type.
-                if haskey(ssa_uses, i)
-                    push!(needs_local_set, i)
-                end
+                push!(needs_local_set, i)
             end
         end
         # PiNodes used across control flow boundaries need locals.
@@ -13812,10 +13806,23 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                             # (compound numeric expressions like i32_wrap + i32_sub)
                             needs_type_safe_default = true
                         elseif ssa_wasm_type === ExternRef && local_wasm_type isa ConcreteRef
-                            # SSA produces externref but local expects concrete ref
-                            # Insert: any_convert_extern (externref→anyref) + ref.cast null <type>
-                            needs_ref_cast_local = local_wasm_type
-                            append!(stmt_bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                            # SSA produces externref but local expects concrete ref.
+                            # PURE-325: For memoryrefset! calls, the return value is the
+                            # stored element (Any/externref), NOT the array. Casting it to
+                            # the local's ConcreteRef type would crash at runtime. Use
+                            # type-safe default instead (drop value, push ref.null).
+                            local is_memrefset_call = (stmt isa Expr && stmt.head === :call &&
+                                length(stmt.args) >= 1 &&
+                                stmt.args[1] isa GlobalRef &&
+                                (stmt.args[1].mod === Base || stmt.args[1].mod === Core) &&
+                                stmt.args[1].name === :memoryrefset!)
+                            if is_memrefset_call
+                                needs_type_safe_default = true
+                            else
+                                # Insert: any_convert_extern (externref→anyref) + ref.cast null <type>
+                                needs_ref_cast_local = local_wasm_type
+                                append!(stmt_bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                            end
                         elseif (ssa_wasm_type === StructRef || ssa_wasm_type === ArrayRef) && local_wasm_type isa ConcreteRef
                             # SSA produces abstract structref/arrayref, local expects concrete ref
                             needs_ref_cast_local = local_wasm_type
@@ -17600,13 +17607,10 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         append!(bytes, encode_leb128_unsigned(array_type_idx))
 
         # Julia's memoryrefset! returns the stored value, so push it again
-        # This is needed because compile_statement may add LOCAL_SET after this.
-        # PURE-325: Only push return value if the SSA has a local. Without a local,
-        # the value would be orphaned on the stack, causing validation errors at
-        # block boundaries (e.g., when followed by a goto).
-        if haskey(ctx.ssa_locals, idx)
-            append!(bytes, compile_value(value_arg, ctx))
-        end
+        # This is needed because compile_statement may add LOCAL_SET after this
+        # Return the original value (not externref-converted) — compile_statement
+        # safety check handles any type mismatch with the target SSA local
+        append!(bytes, compile_value(value_arg, ctx))
         return bytes
     end
 
