@@ -8709,13 +8709,16 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                         # PURE-325: Box numeric phi edge for ExternRef local
                                         _pvb = compile_phi_value(val, i)
                                         if !isempty(_pvb)
+                                            _pvb_boxed = length(_pvb) >= 2 && _pvb[end-1] == Opcode.GC_PREFIX && _pvb[end] == Opcode.EXTERN_CONVERT_ANY
                                             append!(block_bytes, _pvb)
-                                            _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
-                                            push!(block_bytes, Opcode.GC_PREFIX)
-                                            push!(block_bytes, Opcode.STRUCT_NEW)
-                                            append!(block_bytes, encode_leb128_unsigned(_box_t))
-                                            push!(block_bytes, Opcode.GC_PREFIX)
-                                            push!(block_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                            if !_pvb_boxed
+                                                _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
+                                                push!(block_bytes, Opcode.GC_PREFIX)
+                                                push!(block_bytes, Opcode.STRUCT_NEW)
+                                                append!(block_bytes, encode_leb128_unsigned(_box_t))
+                                                push!(block_bytes, Opcode.GC_PREFIX)
+                                                push!(block_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                            end
                                             push!(block_bytes, Opcode.LOCAL_SET)
                                             append!(block_bytes, encode_leb128_unsigned(local_idx))
                                             break
@@ -8745,7 +8748,7 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                 if !isempty(phi_value_bytes)
                                     # PURE-325: If compile_phi_value already boxed (contains GC_PREFIX),
                                     # skip the safety check — it would undo the boxing
-                                    _already_boxed = Opcode.GC_PREFIX in phi_value_bytes
+                                    _already_boxed = length(phi_value_bytes) >= 2 && phi_value_bytes[end-1] == Opcode.GC_PREFIX && phi_value_bytes[end] == Opcode.EXTERN_CONVERT_ANY
                                     # Safety check: verify actual local.get type matches phi local
                                     actual_val_type = edge_val_type
                                     if !_already_boxed && length(phi_value_bytes) >= 2 && phi_value_bytes[1] == Opcode.LOCAL_GET
@@ -9386,13 +9389,16 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                         # PURE-325: Box numeric phi edge for ExternRef local
                                         _pvb2 = compile_phi_value(val, i)
                                         if !isempty(_pvb2)
+                                            _pvb2_boxed = length(_pvb2) >= 2 && _pvb2[end-1] == Opcode.GC_PREFIX && _pvb2[end] == Opcode.EXTERN_CONVERT_ANY
                                             append!(bytes, _pvb2)
-                                            _box_t2 = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
-                                            push!(bytes, Opcode.GC_PREFIX)
-                                            push!(bytes, Opcode.STRUCT_NEW)
-                                            append!(bytes, encode_leb128_unsigned(_box_t2))
-                                            push!(bytes, Opcode.GC_PREFIX)
-                                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                            if !_pvb2_boxed
+                                                _box_t2 = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
+                                                push!(bytes, Opcode.GC_PREFIX)
+                                                push!(bytes, Opcode.STRUCT_NEW)
+                                                append!(bytes, encode_leb128_unsigned(_box_t2))
+                                                push!(bytes, Opcode.GC_PREFIX)
+                                                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                            end
                                             push!(bytes, Opcode.LOCAL_SET)
                                             append!(bytes, encode_leb128_unsigned(local_idx))
                                             phi_count += 1
@@ -9432,7 +9438,7 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                     # (from Julia type inference) but the actual local has a different type
                                     # (e.g., externref from Any-typed struct field overrides).
                                     # PURE-325: If compile_phi_value already boxed, skip safety check
-                                    _already_boxed2 = Opcode.GC_PREFIX in phi_value_bytes
+                                    _already_boxed2 = length(phi_value_bytes) >= 2 && phi_value_bytes[end-1] == Opcode.GC_PREFIX && phi_value_bytes[end] == Opcode.EXTERN_CONVERT_ANY
                                     actual_val_type = edge_val_type
                                     if !_already_boxed2 && length(phi_value_bytes) >= 2 && phi_value_bytes[1] == Opcode.LOCAL_GET
                                         # Decode the local index from unsigned LEB128
@@ -9601,13 +9607,16 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                         # PURE-325: Box numeric phi edge for ExternRef local
                                         _pvb3 = compile_phi_value(val, i)
                                         if !isempty(_pvb3)
+                                            _pvb3_boxed = length(_pvb3) >= 2 && _pvb3[end-1] == Opcode.GC_PREFIX && _pvb3[end] == Opcode.EXTERN_CONVERT_ANY
                                             append!(block_bytes, _pvb3)
-                                            _box_t3 = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
-                                            push!(block_bytes, Opcode.GC_PREFIX)
-                                            push!(block_bytes, Opcode.STRUCT_NEW)
-                                            append!(block_bytes, encode_leb128_unsigned(_box_t3))
-                                            push!(block_bytes, Opcode.GC_PREFIX)
-                                            push!(block_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                            if !_pvb3_boxed
+                                                _box_t3 = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
+                                                push!(block_bytes, Opcode.GC_PREFIX)
+                                                push!(block_bytes, Opcode.STRUCT_NEW)
+                                                append!(block_bytes, encode_leb128_unsigned(_box_t3))
+                                                push!(block_bytes, Opcode.GC_PREFIX)
+                                                push!(block_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                            end
                                             push!(block_bytes, Opcode.LOCAL_SET)
                                             append!(block_bytes, encode_leb128_unsigned(local_idx))
                                             break
@@ -9637,7 +9646,7 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                 end
                                 if !isempty(phi_value_bytes)
                                     # PURE-325: If compile_phi_value already boxed, skip safety check
-                                    _already_boxed3 = Opcode.GC_PREFIX in phi_value_bytes
+                                    _already_boxed3 = length(phi_value_bytes) >= 2 && phi_value_bytes[end-1] == Opcode.GC_PREFIX && phi_value_bytes[end] == Opcode.EXTERN_CONVERT_ANY
                                     # Safety check: verify actual local.get type matches phi local
                                     actual_val_type = edge_val_type
                                     if !_already_boxed3 && length(phi_value_bytes) >= 2 && phi_value_bytes[1] == Opcode.LOCAL_GET
