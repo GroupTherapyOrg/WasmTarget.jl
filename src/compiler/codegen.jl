@@ -13291,23 +13291,21 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
     # The gen_conditional function uses typed blocks when there's a phi merge
     # or when branches don't use explicit RETURN
     #
-    # PURE-506: Check if the IF block was typed or void.
+    # PURE-506: Check typed result FIRST, before return_blocks.
     # When gen_conditional uses typed IF blocks (result_type is I32/I64/F32/F64/ConcreteRef),
     # each branch produces a value and the IF block leaves it on the stack.
-    # In that case, even when return_blocks >= 2, we need RETURN (not UNREACHABLE)
-    # because the value IS on the stack and just needs to be returned.
-    #
-    # When gen_conditional uses void IF blocks (0x40), branches use explicit RETURN
-    # inside the block, and code after the IF is truly unreachable.
-    is_typed_result = result_type isa ConcreteRef || result_type === I32 || result_type === I64 ||
-        result_type === F32 || result_type === F64
-    if return_blocks >= 2 && !is_typed_result
+    # The function's END opcode will implicitly return this value — no explicit
+    # RETURN or UNREACHABLE needed. This must be checked BEFORE return_blocks >= 2,
+    # because nested ternaries (e.g. clamp) have return_blocks >= 2 but use typed
+    # IF blocks where the value is on the stack, not void blocks with explicit RETURNs.
+    if result_type isa ConcreteRef || result_type === I32 || result_type === I64 ||
+       result_type === F32 || result_type === F64
+        # Typed result - IF produces value, fall through with value on stack
+        # The function's END will return it
+    elseif return_blocks >= 2
         # Void IF blocks: all code paths return inside the conditionals via explicit RETURN,
         # so this point is truly unreachable
         push!(bytes, Opcode.UNREACHABLE)
-    elseif is_typed_result
-        # Typed IF block: value is on the stack, return it
-        push!(bytes, Opcode.RETURN)
     elseif result_type === ExternRef
         # ExternRef result - IF produces void, need ref.null extern before RETURN
         push!(bytes, Opcode.REF_NULL, UInt8(ExternRef))
