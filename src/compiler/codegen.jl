@@ -8471,14 +8471,46 @@ function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::
         push!(target_bytes, UInt8(ExternRef))
         return
     end
-    # Box: compile value → struct_new(box_type) → extern_convert_any
-    append!(target_bytes, compile_value(val, ctx))
-    box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-    push!(target_bytes, Opcode.GC_PREFIX)
-    push!(target_bytes, Opcode.STRUCT_NEW)
-    append!(target_bytes, encode_leb128_unsigned(box_type))
-    push!(target_bytes, Opcode.GC_PREFIX)
-    push!(target_bytes, Opcode.EXTERN_CONVERT_ANY)
+    # Compile value first, then check if it actually produces numeric bytes
+    val_bytes = compile_value(val, ctx)
+    # Check if compiled bytes actually produce a ref type (struct.get, array.get, etc.)
+    # If so, skip boxing and just convert to externref directly
+    is_actually_ref = false
+    if !isempty(val_bytes)
+        # Check for GC_PREFIX operations that produce ref types
+        for bi in 1:(length(val_bytes)-1)
+            if val_bytes[bi] == 0xFB  # GC_PREFIX
+                gc_op = val_bytes[bi + 1]
+                # struct.new (0x00), struct.get (0x02/0x03), array.new (0x06),
+                # array.get (0x0B), array.new_fixed (0x08), ref.cast (0x17/0x18),
+                # any_convert_extern (0x1A), extern_convert_any (0x1B)
+                if gc_op == 0x00 || gc_op == 0x02 || gc_op == 0x03 || gc_op == 0x06 ||
+                   gc_op == 0x0B || gc_op == 0x08 || gc_op == 0x17 || gc_op == 0x18 ||
+                   gc_op == 0x1A || gc_op == 0x1B
+                    is_actually_ref = true
+                    break
+                end
+            end
+        end
+        # Also check for ref.null (0xD0)
+        if val_bytes[end] == 0xD0 || (length(val_bytes) >= 2 && val_bytes[end-1] == 0xD0)
+            is_actually_ref = true
+        end
+    end
+    append!(target_bytes, val_bytes)
+    if is_actually_ref
+        # Value is already a ref — just convert to externref (no boxing needed)
+        push!(target_bytes, Opcode.GC_PREFIX)
+        push!(target_bytes, Opcode.EXTERN_CONVERT_ANY)
+    else
+        # Value is truly numeric — box it in a struct then convert
+        box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
+        push!(target_bytes, Opcode.GC_PREFIX)
+        push!(target_bytes, Opcode.STRUCT_NEW)
+        append!(target_bytes, encode_leb128_unsigned(box_type))
+        push!(target_bytes, Opcode.GC_PREFIX)
+        push!(target_bytes, Opcode.EXTERN_CONVERT_ANY)
+    end
     return
 end
 
@@ -9765,7 +9797,7 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
                 if is_numeric_val && is_ref_ret
                     if func_ret_wasm === ExternRef
-                        emit_numeric_to_externref!(bytes, stmt.val, val_wasm_type, ctx)
+                        emit_numeric_to_externref!(bytes, term.val, val_wasm_type, ctx)
                     elseif func_ret_wasm isa ConcreteRef
                         push!(bytes, Opcode.REF_NULL)
                         append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
@@ -14662,7 +14694,7 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
                         push!(bytes, Opcode.REF_NULL)
                         push!(bytes, UInt8(ArrayRef))
                     elseif actual_field_wasm === ExternRef
-                        emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
+                        emit_numeric_to_externref!(bytes, val, src_type, ctx)
                     else
                         push!(bytes, Opcode.REF_NULL)
                         push!(bytes, UInt8(StructRef))
@@ -16919,7 +16951,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 local is_numeric_item = push_src_wasm === I64 || push_src_wasm === I32 || push_src_wasm === F64 || push_src_wasm === F32
                 local is_already_externref_item = push_src_wasm === ExternRef
                 if is_numeric_item
-                    emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
+                    emit_numeric_to_externref!(bytes, item_arg, push_src_wasm, ctx)
                 else
                     append!(bytes, item_bytes)
                     # PURE-048: Skip extern_convert_any if value is already externref
@@ -17539,7 +17571,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             local is_numeric_mset = mset_src_wasm === I64 || mset_src_wasm === I32 || mset_src_wasm === F64 || mset_src_wasm === F32
             local is_already_externref_mset = mset_src_wasm === ExternRef
             if is_numeric_mset
-                emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
+                emit_numeric_to_externref!(bytes, value_arg, mset_src_wasm, ctx)
             else
                 append!(bytes, mset_val_bytes)
                 # PURE-048: Skip extern_convert_any if value is already externref.
@@ -20006,7 +20038,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             else
                 # No matching signature - likely dead code from Union type branches
                 # Emit unreachable instead of error (the branch won't be taken at runtime)
-                @warn "CROSS-CALL UNREACHABLE: $(func) with arg types $(call_arg_types) (in $(ctx.func_name))"
+                @warn "CROSS-CALL UNREACHABLE: $(func) with arg types $(call_arg_types) (in func_$(ctx.func_idx))"
                 push!(bytes, Opcode.UNREACHABLE)
             end
         else
@@ -22786,7 +22818,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                     local is_numeric_val = arrset_src_wasm === I64 || arrset_src_wasm === I32 || arrset_src_wasm === F64 || arrset_src_wasm === F32
                     local is_already_externref_val = arrset_src_wasm === ExternRef
                     if is_numeric_val
-                        emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
+                        emit_numeric_to_externref!(bytes, args[3], arrset_src_wasm, ctx)
                     else
                         append!(bytes, val_bytes)
                         # PURE-048: Skip extern_convert_any if value is already externref
