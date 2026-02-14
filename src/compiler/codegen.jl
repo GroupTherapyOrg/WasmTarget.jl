@@ -19706,7 +19706,10 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         push!(bytes, Opcode.UNREACHABLE)
 
     # Cross-function call via GlobalRef (dynamic dispatch when Julia can't specialize)
-    elseif func isa GlobalRef && ctx.func_registry !== nothing
+    # PURE-325: Skip cross-call lookup for Core._expr — it's a builtin that has a
+    # special handler below (line ~19900). Without this guard, get_function returns
+    # nothing (builtins aren't in the function registry) and emits unreachable.
+    elseif func isa GlobalRef && ctx.func_registry !== nothing && !is_func(func, :_expr)
         # Try to find this function in our registry
         called_func = try
             getfield(func.mod, func.name)
