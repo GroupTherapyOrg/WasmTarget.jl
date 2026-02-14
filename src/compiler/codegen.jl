@@ -16181,6 +16181,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
     func = expr.args[1]
     args = expr.args[2:end]
 
+
     # Special case for signal read: getfield(Signal, :value) -> global.get
     # This is detected by analyze_signal_captures! and stored in signal_ssa_getters
     # ONLY applies to actual getfield/getproperty(Signal, :value) calls (WasmGlobal pattern)
@@ -17982,8 +17983,13 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
     # These are compile-time type parameters, not runtime values
     # EXCEPTION: For === and !== comparisons, Type values ARE runtime values
     # (they get compiled to i32 type tags and compared)
+    # PURE-325: Skip arg-pushing for Core._expr — its handler manages its own args
+    is_expr_call = is_func(func, :_expr)
     is_equality_comparison = is_func(func, :(===)) || is_func(func, :(!==))
     for arg in args
+        if is_expr_call
+            continue
+        end
         # Check if this argument is a type reference
         is_type_arg = false
         if arg isa Type
@@ -19941,7 +19947,11 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 for ea in expr_args
                     ea_bytes = compile_value(ea, ctx)
                     is_numeric = false
-                    if length(ea_bytes) >= 1 && (ea_bytes[1] == Opcode.I32_CONST || ea_bytes[1] == Opcode.I64_CONST)
+                    # Check if ea_bytes contains GC_PREFIX — if so, it's a GC op
+                    # (string/struct/array), NOT a numeric value. This prevents false
+                    # positives for Symbols whose compilation starts with i32.const (char bytes).
+                    has_gc_prefix_ea = any(b == Opcode.GC_PREFIX for b in ea_bytes)
+                    if !has_gc_prefix_ea && length(ea_bytes) >= 1 && (ea_bytes[1] == Opcode.I32_CONST || ea_bytes[1] == Opcode.I64_CONST)
                         is_numeric = true
                     elseif length(ea_bytes) >= 2 && ea_bytes[1] == Opcode.LOCAL_GET
                         src_idx = 0; shift = 0
