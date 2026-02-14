@@ -14292,11 +14292,37 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
             if arr_idx >= 1 && arr_idx <= length(ctx.locals)
                 src_type = ctx.locals[arr_idx]
                 if src_type === I64 || src_type === I32
-                    # Emit ref.null for the data array type instead
-                    data_array_idx = get_array_type!(ctx.mod, ctx.type_registry, eltype(struct_type))
-                    push!(bytes, Opcode.REF_NULL)
-                    append!(bytes, encode_leb128_signed(Int64(data_array_idx)))
-                    field0_bytes = UInt8[]  # Don't append original
+                    # PURE-325: The local has numeric type but Vector field 0 needs an array ref.
+                    # Before falling back to ref.null, check if the source SSA is a memoryrefnew
+                    # or memorynew result — if so, recompile the source to get the actual array ref.
+                    recompiled = false
+                    if field_values[1] isa Core.SSAValue
+                        src_stmt_f0 = ctx.code_info.code[field_values[1].id]
+                        if src_stmt_f0 isa Expr && src_stmt_f0.head === :call
+                            sf0 = src_stmt_f0.args[1]
+                            is_memref = sf0 isa GlobalRef &&
+                                        (sf0.mod === Core || sf0.mod === Base) &&
+                                        sf0.name in (:memoryrefnew, :memoryref, :memorynew)
+                            if is_memref
+                                # Recompile the source statement to get the actual array ref
+                                field0_bytes = compile_call(src_stmt_f0, field_values[1].id, ctx)
+                                recompiled = true
+                            end
+                        end
+                        # Also check if source is a PiNode wrapping a memoryrefnew
+                        if !recompiled && src_stmt_f0 isa Core.PiNode
+                            append!(bytes, compile_value(src_stmt_f0.val, ctx))
+                            field0_bytes = UInt8[]
+                            recompiled = true
+                        end
+                    end
+                    if !recompiled
+                        # Non-Array AbstractVector (UnitRange, StepRange) — use ref.null
+                        data_array_idx = get_array_type!(ctx.mod, ctx.type_registry, eltype(struct_type))
+                        push!(bytes, Opcode.REF_NULL)
+                        append!(bytes, encode_leb128_signed(Int64(data_array_idx)))
+                        field0_bytes = UInt8[]  # Don't append original
+                    end
                 end
             end
         end
