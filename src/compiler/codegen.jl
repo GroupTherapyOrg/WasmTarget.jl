@@ -1022,6 +1022,14 @@ function compile_module(functions::Vector)::WasmModule
     # This enables x^y for Float32/Float64 types
     add_import!(mod, "Math", "pow", NumType[F64, F64], NumType[F64])
 
+    # PURE-325: Pre-register numeric box types for all common numeric Wasm types.
+    # These are needed when functions with ExternRef return types (heterogeneous Unions)
+    # need to return numeric values. Pre-registering avoids compilation order issues
+    # where the caller's isa() check is compiled before the callee's box type exists.
+    for nt in (I32, I64, F32, F64)
+        get_numeric_box_type!(mod, type_registry, nt)
+    end
+
     # Normalize input: ensure each entry is (func, arg_types, name)
     normalized = []
     for entry in functions
