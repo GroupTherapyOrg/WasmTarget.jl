@@ -19888,6 +19888,145 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             error("NamedTuple constructor requires exactly one tuple argument, got $(length(args)) args")
         end
 
+    # Special case for Core._expr — creates an Expr(head::Symbol, args::Vector{Any})
+    # IR pattern: Core._expr(:head, arg1, arg2, ...) with 1+ args
+    # head is the first arg (Symbol), remaining args become the Expr.args Vector{Any}
+    elseif is_func(func, :_expr)
+        # Register Expr type if not already registered
+        if !haskey(ctx.type_registry.structs, Expr)
+            register_struct_type!(ctx.mod, ctx.type_registry, Expr)
+        end
+
+        if haskey(ctx.type_registry.structs, Expr)
+            expr_info = ctx.type_registry.structs[Expr]
+
+            # Ensure Vector{Any} is registered (for the args field)
+            if !haskey(ctx.type_registry.structs, Vector{Any})
+                register_vector_type!(ctx.mod, ctx.type_registry, Vector{Any})
+            end
+            vec_any_info = ctx.type_registry.structs[Vector{Any}]
+
+            # Ensure Tuple{Int64} is registered (for Vector size field)
+            if !haskey(ctx.type_registry.structs, Tuple{Int64})
+                register_tuple_type!(ctx.mod, ctx.type_registry, Tuple{Int64})
+            end
+            size_tuple_info = ctx.type_registry.structs[Tuple{Int64}]
+
+            # Get array type for Any (externref array)
+            any_array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, Any)
+            str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+
+            # args[1] is the head (Symbol), args[2:end] are the Expr.args elements
+            head_arg = args[1]
+            expr_args = args[2:end]
+            n_expr_args = length(expr_args)
+
+            # Locals-first approach: compile each piece into a local, then assemble.
+
+            # Step 1: Compile head (Symbol = array<i32>) → local
+            append!(bytes, compile_value(head_arg, ctx))
+            head_local = allocate_local!(ctx, ConcreteRef(str_type_idx, true))
+            push!(bytes, Opcode.LOCAL_SET)
+            append!(bytes, encode_leb128_unsigned(head_local))
+
+            # Step 2: Create data array (array<externref>) → local
+            if n_expr_args == 0
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
+                append!(bytes, encode_leb128_unsigned(any_array_type_idx))
+            else
+                # Push each arg as externref, then array_new_fixed
+                for ea in expr_args
+                    ea_bytes = compile_value(ea, ctx)
+                    is_numeric = false
+                    if length(ea_bytes) >= 1 && (ea_bytes[1] == Opcode.I32_CONST || ea_bytes[1] == Opcode.I64_CONST)
+                        is_numeric = true
+                    elseif length(ea_bytes) >= 2 && ea_bytes[1] == Opcode.LOCAL_GET
+                        src_idx = 0; shift = 0
+                        for bi in 2:length(ea_bytes)
+                            b = ea_bytes[bi]
+                            src_idx |= (Int(b & 0x7f) << shift)
+                            shift += 7
+                            (b & 0x80) == 0 && break
+                        end
+                        arr_idx_check = src_idx - ctx.n_params + 1
+                        if arr_idx_check >= 1 && arr_idx_check <= length(ctx.locals)
+                            src_type = ctx.locals[arr_idx_check]
+                            if src_type === I32 || src_type === I64 || src_type === F32 || src_type === F64
+                                is_numeric = true
+                            end
+                        elseif src_idx < ctx.n_params && src_idx < length(ctx.arg_types)
+                            if ctx.arg_types[src_idx + 1] in (I32, I64, F32, F64)
+                                is_numeric = true
+                            end
+                        end
+                    end
+                    if is_numeric
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(ExternRef))
+                    else
+                        append!(bytes, ea_bytes)
+                        is_extern = false
+                        if length(ea_bytes) >= 2 && ea_bytes[1] == Opcode.LOCAL_GET
+                            src_idx2 = 0; shift2 = 0
+                            for bi in 2:length(ea_bytes)
+                                b = ea_bytes[bi]
+                                src_idx2 |= (Int(b & 0x7f) << shift2)
+                                shift2 += 7
+                                (b & 0x80) == 0 && break
+                            end
+                            arr_idx2 = src_idx2 - ctx.n_params + 1
+                            if arr_idx2 >= 1 && arr_idx2 <= length(ctx.locals)
+                                is_extern = (ctx.locals[arr_idx2] === ExternRef)
+                            end
+                        end
+                        if !is_extern
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        end
+                    end
+                end
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ARRAY_NEW_FIXED)
+                append!(bytes, encode_leb128_unsigned(any_array_type_idx))
+                append!(bytes, encode_leb128_unsigned(n_expr_args))
+            end
+            data_arr_local = allocate_local!(ctx, ConcreteRef(any_array_type_idx, true))
+            push!(bytes, Opcode.LOCAL_SET)
+            append!(bytes, encode_leb128_unsigned(data_arr_local))
+
+            # Step 3: Create Tuple{Int64} for size → local
+            push!(bytes, Opcode.I64_CONST)
+            append!(bytes, encode_leb128_signed(Int64(n_expr_args)))
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.STRUCT_NEW)
+            append!(bytes, encode_leb128_unsigned(size_tuple_info.wasm_type_idx))
+            size_local = allocate_local!(ctx, ConcreteRef(size_tuple_info.wasm_type_idx, true))
+            push!(bytes, Opcode.LOCAL_SET)
+            append!(bytes, encode_leb128_unsigned(size_local))
+
+            # Step 4: Assemble Expr struct
+            # Push head (Expr field 0)
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(head_local))
+            # Create Vector{Any} inline (Expr field 1): push data_array, size_tuple, struct.new
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(data_arr_local))
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(size_local))
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.STRUCT_NEW)
+            append!(bytes, encode_leb128_unsigned(vec_any_info.wasm_type_idx))
+            # struct.new Expr with (head, vector)
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.STRUCT_NEW)
+            append!(bytes, encode_leb128_unsigned(expr_info.wasm_type_idx))
+
+            return bytes
+        end
+
     else
         # Unknown function call — emit unreachable (will trap at runtime)
         @warn "Stubbing unsupported call: $func (will trap at runtime)" maxlog=1
