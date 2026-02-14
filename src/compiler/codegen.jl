@@ -14662,7 +14662,7 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
                         push!(bytes, Opcode.REF_NULL)
                         push!(bytes, UInt8(ArrayRef))
                     elseif actual_field_wasm === ExternRef
-                        emit_numeric_to_externref!(bytes, val, src_type, ctx)
+                        emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
                     else
                         push!(bytes, Opcode.REF_NULL)
                         push!(bytes, UInt8(StructRef))
@@ -16919,7 +16919,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 local is_numeric_item = push_src_wasm === I64 || push_src_wasm === I32 || push_src_wasm === F64 || push_src_wasm === F32
                 local is_already_externref_item = push_src_wasm === ExternRef
                 if is_numeric_item
-                    emit_numeric_to_externref!(bytes, item_arg, push_src_wasm, ctx)
+                    emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
                 else
                     append!(bytes, item_bytes)
                     # PURE-048: Skip extern_convert_any if value is already externref
@@ -22786,7 +22786,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                     local is_numeric_val = arrset_src_wasm === I64 || arrset_src_wasm === I32 || arrset_src_wasm === F64 || arrset_src_wasm === F32
                     local is_already_externref_val = arrset_src_wasm === ExternRef
                     if is_numeric_val
-                        emit_numeric_to_externref!(bytes, args[3], arrset_src_wasm, ctx)
+                        emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
                     else
                         append!(bytes, val_bytes)
                         # PURE-048: Skip extern_convert_any if value is already externref
