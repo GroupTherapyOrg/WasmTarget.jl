@@ -19168,6 +19168,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 local ssa_type = ctx.ssa_types[arg1_ssa.id]
                 if ssa_type === Any
                     @info "PURE-046: Emitting UNREACHABLE for externref in numeric intrinsic (SSA type is Any)"
+                    # PURE-908: Clear pre-pushed args
+                    bytes = UInt8[]
                     push!(bytes, Opcode.UNREACHABLE)
                     ctx.last_stmt_was_stub = true  # PURE-908
                     return bytes
@@ -19190,6 +19192,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             if offset_chk2 >= 0 && offset_chk2 < length(ctx.locals)
                 local lt_chk2 = ctx.locals[offset_chk2 + 1]
                 if lt_chk2 === ExternRef
+                    # PURE-908: Clear pre-pushed args
+                    bytes = UInt8[]
                     push!(bytes, Opcode.UNREACHABLE)
                     ctx.last_stmt_was_stub = true  # PURE-908
                     return bytes
@@ -19230,6 +19234,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
     elseif is_func(func, :checked_smul_int) || is_func(func, :checked_umul_int)
         if is_128bit
             # 128-bit checked mul: not supported, emit unreachable
+            # PURE-908: Clear pre-pushed args
+            bytes = UInt8[]
             push!(bytes, Opcode.UNREACHABLE)
             ctx.last_stmt_was_stub = true  # PURE-908
         else
@@ -19253,6 +19259,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
     # PURE-325: checked_sadd_int(a, b) -> Tuple{T, Bool} (result, overflow_flag)
     elseif is_func(func, :checked_sadd_int) || is_func(func, :checked_uadd_int)
         if is_128bit
+            # PURE-908: Clear pre-pushed args
+            bytes = UInt8[]
             push!(bytes, Opcode.UNREACHABLE)
             ctx.last_stmt_was_stub = true  # PURE-908
         else
@@ -19275,6 +19283,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
     # PURE-325: checked_ssub_int(a, b) -> Tuple{T, Bool} (result, overflow_flag)
     elseif is_func(func, :checked_ssub_int) || is_func(func, :checked_usub_int)
         if is_128bit
+            # PURE-908: Clear pre-pushed args
+            bytes = UInt8[]
             push!(bytes, Opcode.UNREACHABLE)
             ctx.last_stmt_was_stub = true  # PURE-908
         else
@@ -20857,6 +20867,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, Opcode.ARRAY_GET)
             append!(bytes, encode_leb128_unsigned(string_arr_type))
         else
+            # PURE-908: Clear pre-pushed args
+            bytes = UInt8[]
             push!(bytes, Opcode.UNREACHABLE)
             ctx.last_stmt_was_stub = true  # PURE-908
         end
@@ -20864,18 +20876,24 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
     # Base.pointerset - write to pointer
     # WasmGC has no linear memory — pointer ops are invalid. Trap at runtime.
     elseif func isa GlobalRef && func.name === :pointerset
+        # PURE-908: Clear pre-pushed args
+        bytes = UInt8[]
         push!(bytes, Opcode.UNREACHABLE)
         ctx.last_stmt_was_stub = true  # PURE-908
 
     # PURE-604: Core error builtins — these are error/throw paths that should trap silently
     # (no CROSS-CALL UNREACHABLE warning since they're legitimately unreachable at runtime)
     elseif func isa GlobalRef && func.name in (:throw_methoderror, :svec, :_apply_iterate)
+        # PURE-908: Clear pre-pushed args
+        bytes = UInt8[]
         push!(bytes, Opcode.UNREACHABLE)
         ctx.last_stmt_was_stub = true  # PURE-908
 
     # PURE-604/605: Core builtins re-exported through Base (isdefined, getfield, setfield!).
     # These are dead code paths from dynamic dispatch — trap silently in WasmGC.
     elseif func isa GlobalRef && func.name in (:isdefined, :getfield, :setfield!) && func.mod in (Core, Base)
+        # PURE-908: Clear pre-pushed args
+        bytes = UInt8[]
         push!(bytes, Opcode.UNREACHABLE)
         ctx.last_stmt_was_stub = true  # PURE-908
 
@@ -21062,6 +21080,12 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 if !_has_abstract
                     @warn "CROSS-CALL UNREACHABLE: $(func) with arg types $(call_arg_types) (in func_$(ctx.func_idx))"
                 end
+                # PURE-908: Clear pre-pushed args before emitting UNREACHABLE.
+                # The generic arg pre-push loop (line ~19103) pushes args when
+                # get_function returns nothing (no matching signature). Those args
+                # are now on the stack inside typed blocks, causing "values remaining
+                # on stack" validation errors.
+                bytes = UInt8[]
                 push!(bytes, Opcode.UNREACHABLE)
                 ctx.last_stmt_was_stub = true  # PURE-908
             end
@@ -21300,6 +21324,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
     else
         # Unknown function call — emit unreachable (will trap at runtime)
         @warn "Stubbing unsupported call: $func (will trap at runtime)" maxlog=1
+        # PURE-908: Clear pre-pushed args before UNREACHABLE
+        bytes = UInt8[]
         push!(bytes, Opcode.UNREACHABLE)
         ctx.last_stmt_was_stub = true  # PURE-908
     end
