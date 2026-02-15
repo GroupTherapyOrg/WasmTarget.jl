@@ -15201,11 +15201,22 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
                     end
                 end
                 if leb_end == length(val_bytes)  # Pure local.get (no trailing instructions)
-                    arr_idx = src_idx - ctx.n_params + 1
-                    if arr_idx >= 1 && arr_idx <= length(ctx.locals)
-                        src_type = ctx.locals[arr_idx]
-                        if src_type === I32 || src_type === I64 || src_type === F32 || src_type === F64
-                            is_numeric_local = true
+                    if src_idx < ctx.n_params
+                        # PURE-906: Check if PARAMETER is numeric (i64/i32/f32/f64).
+                        # Parameters can't be extern_convert_any'd either.
+                        if src_idx + 1 <= length(ctx.arg_types)
+                            param_wasm = julia_to_wasm_type(ctx.arg_types[src_idx + 1])
+                            if param_wasm === I32 || param_wasm === I64 || param_wasm === F32 || param_wasm === F64
+                                is_numeric_local = true
+                            end
+                        end
+                    else
+                        arr_idx = src_idx - ctx.n_params + 1
+                        if arr_idx >= 1 && arr_idx <= length(ctx.locals)
+                            src_type = ctx.locals[arr_idx]
+                            if src_type === I32 || src_type === I64 || src_type === F32 || src_type === F64
+                                is_numeric_local = true
+                            end
                         end
                     end
                 end
