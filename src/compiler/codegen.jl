@@ -7459,10 +7459,6 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
     while i <= back_edge_idx
         # Check if we need to close any blocks at this merge point
         if haskey(open_blocks, i) && open_blocks[i]
-            # DEBUG PURE-313: log block close
-            if haskey(ENV, "PURE313_DEBUG") && (code[i] isa Core.PhiNode || (i > 1 && code[i-1] isa Core.PhiNode))
-                @warn "BLOCK CLOSE at line $i, code=$(code[i]), has_phi=$(code[i] isa Core.PhiNode && haskey(ctx.phi_locals, i))"
-            end
             # Before closing the block, set the then-value for any phi at this merge point
             # The then-branch ends here, so we need to store the value
             if code[i] isa Core.PhiNode && haskey(ctx.phi_locals, i)
@@ -7510,11 +7506,6 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
             # Phi nodes in loops are handled via locals
             # For inner conditional phi nodes, we need to handle the merge
             if haskey(ctx.phi_locals, i)
-                # DEBUG PURE-313
-                if haskey(ENV, "PURE313_DEBUG")
-                    phi_curr = code[i]::Core.PhiNode
-                    @warn "PHI at line $i: edges=$(phi_curr.edges), type=$(ctx.code_info.ssavaluetypes[i]), has_open_block=$(haskey(open_blocks, i) && open_blocks[i])"
-                end
                 # PURE-313: If we reached this phi by fallthrough (previous stmt is NOT a
                 # GotoNode/GotoIfNot that branches away), set the fallthrough edge value.
                 # This handles the else-branch of inner conditionals where the else-path
@@ -7566,11 +7557,6 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                 # This is an INNER CONDITIONAL
                 # dart2wasm pattern: block + br_if to skip then-branch
                 merge_point = inner_conditionals[i]
-
-                # DEBUG PURE-313
-                if haskey(ENV, "PURE313_DEBUG") && (i >= 70 && i <= 110)
-                    @warn "INNER COND at line $i → merge_point=$merge_point, code[mp]=$(code[merge_point])"
-                end
 
                 # Check if there's a phi node at the merge point
                 merge_phi = nothing
@@ -7655,10 +7641,6 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
             elseif stmt.label > i && stmt.label <= back_edge_idx
                 # Forward jump within loop - branch to that point
                 # This handles the then-branch jumping to merge point
-                # DEBUG PURE-313
-                if haskey(ENV, "PURE313_DEBUG") && (i >= 70 && i <= 110)
-                    @warn "GOTO at line $i → $(stmt.label), open_block=$(haskey(open_blocks, stmt.label) && get(open_blocks, stmt.label, false))"
-                end
                 if haskey(open_blocks, stmt.label) && open_blocks[stmt.label]
                     # Jump to merge point - handle phi update if needed
                     if code[stmt.label] isa Core.PhiNode && haskey(ctx.phi_locals, stmt.label)
