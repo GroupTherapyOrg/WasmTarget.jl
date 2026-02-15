@@ -6461,6 +6461,20 @@ WASM structure:
   )
   ;; code after try/catch
 """
+"""
+    ensure_exception_tag!(mod::WasmModule)
+
+Ensure the module has an exception tag (tag 0) for Julia exceptions.
+Called from throw sites and try/catch generation. Idempotent.
+"""
+function ensure_exception_tag!(mod::WasmModule)
+    if isempty(mod.tags)
+        void_ft = FuncType(WasmValType[], WasmValType[])
+        void_type_idx = add_type!(mod, void_ft)
+        add_tag!(mod, void_type_idx)
+    end
+end
+
 function generate_try_catch(ctx::CompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
     bytes = UInt8[]
     regions = find_try_regions(code)
@@ -6471,13 +6485,7 @@ function generate_try_catch(ctx::CompilationContext, blocks::Vector{BasicBlock},
     end
 
     # Ensure module has an exception tag for Julia exceptions
-    # Tag 0 is a void function type (no parameters, no results) for simple exceptions
-    if isempty(ctx.mod.tags)
-        # Add a void function type for the exception tag using add_type!
-        void_ft = FuncType(WasmValType[], WasmValType[])
-        void_type_idx = add_type!(ctx.mod, void_ft)
-        add_tag!(ctx.mod, void_type_idx)
-    end
+    ensure_exception_tag!(ctx.mod)
 
     # For now, handle single try/catch region
     region = regions[1]
@@ -21183,14 +21191,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
 
     # throw() - compile to WASM throw instruction
     elseif func isa GlobalRef && func.name === :throw
-        # Ensure module has an exception tag (tag 0)
-        if isempty(ctx.mod.tags)
-            void_ft = FuncType(WasmValType[], WasmValType[])
-            void_type_idx = add_type!(ctx.mod, void_ft)
-            add_tag!(ctx.mod, void_type_idx)
-        end
-        # Emit throw instruction with tag 0 (our Julia exception tag)
-        # For now, we're not passing the exception value - just throwing
+        # PURE-1102: Emit throw instruction with tag 0 (our Julia exception tag)
+        ensure_exception_tag!(ctx.mod)
         push!(bytes, Opcode.THROW)
         append!(bytes, encode_leb128_unsigned(0))  # tag index 0
 
@@ -21247,9 +21249,16 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         push!(bytes, Opcode.UNREACHABLE)
         ctx.last_stmt_was_stub = true  # PURE-908
 
-    # PURE-604: Core error builtins — these are error/throw paths that should trap silently
-    # (no CROSS-CALL UNREACHABLE warning since they're legitimately unreachable at runtime)
-    elseif func isa GlobalRef && func.name in (:throw_methoderror, :svec, :_apply_iterate)
+    # PURE-1102: throw_methoderror — emit throw (catchable) instead of unreachable
+    elseif func isa GlobalRef && func.name === :throw_methoderror
+        bytes = UInt8[]
+        ensure_exception_tag!(ctx.mod)
+        push!(bytes, Opcode.THROW)
+        append!(bytes, encode_leb128_unsigned(0))  # tag index 0
+        ctx.last_stmt_was_stub = true  # PURE-908
+
+    # PURE-604: Core builtins (svec, _apply_iterate) — genuinely unsupported, trap
+    elseif func isa GlobalRef && func.name in (:svec, :_apply_iterate)
         # PURE-908: Clear pre-pushed args
         bytes = UInt8[]
         push!(bytes, Opcode.UNREACHABLE)
@@ -22411,10 +22420,12 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
             elseif name === :* || name === :mul_int
                 push!(bytes, is_32bit ? Opcode.I32_MUL : Opcode.I64_MUL)
             elseif name === :throw_boundserror || name === :throw || name === :throw_inexacterror
-                # Error throwing functions - emit unreachable
+                # PURE-1102: Error throwing functions - emit throw (catchable) instead of unreachable (trap)
                 # Clear the stack first (arguments were pushed but not needed)
                 bytes = UInt8[]  # Reset - don't need the pushed args
-                push!(bytes, Opcode.UNREACHABLE)
+                ensure_exception_tag!(ctx.mod)
+                push!(bytes, Opcode.THROW)
+                append!(bytes, encode_leb128_unsigned(0))  # tag index 0
                 ctx.last_stmt_was_stub = true  # PURE-908
 
             # Power operator: x ^ y for floats
@@ -24818,13 +24829,14 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                           "Supported types: Float32, Float64, Int32, Int64, UInt32, UInt64, Int16, UInt16, Int8, UInt8")
                 end
 
-            # Handle error-throwing functions from Base (used by pop!, resize!, etc.)
-            # These functions are on error paths that should not be reached in normal execution
-            # In WasmGC, we emit unreachable for these
+            # PURE-1102: Error-throwing functions from Base (used by pop!, resize!, etc.)
+            # Emit throw (catchable) instead of unreachable (trap)
             elseif name === :_throw_argerror || name === :throw_boundserror ||
                    name === :throw || name === :rethrow ||
                    name === :_throw_not_readable || name === :_throw_not_writable
-                push!(bytes, Opcode.UNREACHABLE)
+                ensure_exception_tag!(ctx.mod)
+                push!(bytes, Opcode.THROW)
+                append!(bytes, encode_leb128_unsigned(0))  # tag index 0
                 ctx.last_stmt_was_stub = true  # PURE-908
 
             # Handle truncate (IOBuffer resize) — no-op in WasmGC
@@ -24859,12 +24871,14 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 append!(bytes, encode_leb128_unsigned(type_idx))
                 append!(bytes, encode_leb128_unsigned(0))  # 0 elements
 
-            # Handle error/throw functions — these never return
+            # PURE-1102: Error/throw functions — emit throw (catchable) instead of unreachable (trap)
             elseif name === :error || name === :throw || name === :throw_boundserror ||
                    name === :ArgumentError || name === :AssertionError ||
                    name === :KeyError || name === :ErrorException ||
                    name === :BoundsError || name === :MethodError
-                push!(bytes, Opcode.UNREACHABLE)
+                ensure_exception_tag!(ctx.mod)
+                push!(bytes, Opcode.THROW)
+                append!(bytes, encode_leb128_unsigned(0))  # tag index 0
                 ctx.last_stmt_was_stub = true  # PURE-908
 
             # Handle JuliaSyntax internal functions that have complex implementations
