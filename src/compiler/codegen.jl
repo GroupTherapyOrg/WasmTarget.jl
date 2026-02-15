@@ -757,9 +757,13 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
 
     # PURE-605: Skip kwarg wrapper methods whose arg types contain function singletons
     # (e.g., #untokenize#44 has typeof(untokenize) as a positional arg)
-    for t in arg_types
-        if t isa DataType && t <: Function && isconcretetype(t)
-            return
+    # PURE-800: But DON'T skip kwarg wrappers for the module being compiled (e.g., WasmTarget
+    # #compile#84 needs to be compiled for M4 self-hosting)
+    if !(mod === WasmTarget)
+        for t in arg_types
+            if t isa DataType && t <: Function && isconcretetype(t)
+                return
+            end
         end
     end
 
@@ -14543,11 +14547,22 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
 
 
 
-    # Resolve the struct type if it's a GlobalRef
+    # Resolve the struct type if it's a GlobalRef, DataType, or SSAValue
     struct_type = if struct_type_ref isa GlobalRef
         getfield(struct_type_ref.mod, struct_type_ref.name)
     elseif struct_type_ref isa DataType
         struct_type_ref
+    elseif struct_type_ref isa Core.SSAValue
+        # PURE-801: Handle Core.apply_type results (e.g., NamedTuple from keyword args)
+        # ssavaluetypes[ssa.id] gives Type{ConcreteType} — extract the parameter
+        ssa_type = ctx.code_info.ssavaluetypes[struct_type_ref.id]
+        if ssa_type isa DataType && ssa_type <: Type && length(ssa_type.parameters) >= 1
+            ssa_type.parameters[1]
+        else
+            @warn "Stubbing :new with dynamic SSAValue type: $struct_type_ref ($ssa_type)"
+            push!(bytes, Opcode.UNREACHABLE)
+            return bytes
+        end
     else
         error("Unknown struct type reference: $struct_type_ref")
     end
