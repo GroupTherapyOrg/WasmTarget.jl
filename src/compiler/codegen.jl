@@ -15361,6 +15361,51 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
                     field_bytes = UInt8[]  # Already appended
                 end
             end
+            # PURE-906: Check if field expects numeric but source is ref-typed (externref/anyref).
+            # This happens when Julia's convert(Bool, x)::Any SSA is typed ExternRef
+            # but the struct field is Bool (i32). Emit zero default for the numeric field.
+            if actual_field_wasm !== nothing && (actual_field_wasm === I32 || actual_field_wasm === I64 || actual_field_wasm === F32 || actual_field_wasm === F64) && !isempty(field_bytes) && length(field_bytes) >= 2 && field_bytes[1] == 0x20
+                # Decode source local index
+                src_idx_906 = 0; shift_906 = 0; leb_end_906 = 0
+                for bi in 2:length(field_bytes)
+                    b = field_bytes[bi]
+                    src_idx_906 |= (Int(b & 0x7f) << shift_906)
+                    shift_906 += 7
+                    if (b & 0x80) == 0
+                        leb_end_906 = bi
+                        break
+                    end
+                end
+                if leb_end_906 == length(field_bytes)  # Pure local.get
+                    src_type_906 = nothing
+                    arr_idx_906 = src_idx_906 - ctx.n_params + 1
+                    if arr_idx_906 >= 1 && arr_idx_906 <= length(ctx.locals)
+                        src_type_906 = ctx.locals[arr_idx_906]
+                    elseif src_idx_906 < ctx.n_params
+                        param_idx_906 = src_idx_906 + 1
+                        if param_idx_906 >= 1 && param_idx_906 <= length(ctx.arg_types)
+                            src_type_906 = get_concrete_wasm_type(ctx.arg_types[param_idx_906], ctx.mod, ctx.type_registry)
+                        end
+                    end
+                    if src_type_906 !== nothing && (src_type_906 === ExternRef || src_type_906 === AnyRef || src_type_906 isa ConcreteRef || src_type_906 === StructRef)
+                        # Source is ref-typed but field expects numeric — emit zero default
+                        if actual_field_wasm === I32
+                            push!(bytes, Opcode.I32_CONST)
+                            push!(bytes, 0x00)
+                        elseif actual_field_wasm === I64
+                            push!(bytes, Opcode.I64_CONST)
+                            push!(bytes, 0x00)
+                        elseif actual_field_wasm === F32
+                            push!(bytes, Opcode.F32_CONST)
+                            append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+                        elseif actual_field_wasm === F64
+                            push!(bytes, Opcode.F64_CONST)
+                            append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                        end
+                        field_bytes = UInt8[]  # Don't append original
+                    end
+                end
+            end
             append!(bytes, field_bytes)
         end
     end
