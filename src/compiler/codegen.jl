@@ -8312,6 +8312,7 @@ function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBloc
 
         # Then-branch: generate all statements in the then-branch, then push the then-value
         # Note: compile_statement already stores to local if SSA has one (via LOCAL_SET)
+        then_hit_unreachable = false
         for i in then_start:else_start-1
             stmt = code[i]
             if stmt isa Core.GotoNode
@@ -8319,12 +8320,22 @@ function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBloc
             elseif stmt === nothing
                 # Skip nothing statements
             else
-                append!(bytes, compile_statement(stmt, i, ctx))
+                stmt_bytes = compile_statement(stmt, i, ctx)
+                append!(bytes, stmt_bytes)
+                # PURE-907: If statement emitted unreachable (stub call), stop emitting
+                # code in this branch. unreachable makes the stack polymorphic, which
+                # satisfies the typed block's result type. Emitting more values after
+                # unreachable causes "values remaining on stack" validation errors.
+                if !isempty(stmt_bytes) && stmt_bytes[end] == Opcode.UNREACHABLE
+                    then_hit_unreachable = true
+                    break
+                end
             end
         end
         # Now push the then-value for the phi result
         # compile_value will do LOCAL_GET if the value has a local
-        if then_value !== nothing
+        # Skip if we hit unreachable - stack is already polymorphic
+        if !then_hit_unreachable && then_value !== nothing
             append!(bytes, compile_value(then_value, ctx))
         end
 
@@ -8332,6 +8343,7 @@ function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBloc
         push!(bytes, Opcode.ELSE)
 
         # Else-branch: generate all statements in the else-branch, then push the else-value
+        else_hit_unreachable = false
         for i in else_start:phi_idx-1
             stmt = code[i]
             if stmt isa Core.GotoNode
@@ -8339,11 +8351,18 @@ function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBloc
             elseif stmt === nothing
                 # Skip nothing statements
             else
-                append!(bytes, compile_statement(stmt, i, ctx))
+                stmt_bytes = compile_statement(stmt, i, ctx)
+                append!(bytes, stmt_bytes)
+                # PURE-907: Same unreachable detection as then-branch
+                if !isempty(stmt_bytes) && stmt_bytes[end] == Opcode.UNREACHABLE
+                    else_hit_unreachable = true
+                    break
+                end
             end
         end
         # Now push the else-value for the phi result
-        if else_value !== nothing
+        # Skip if we hit unreachable - stack is already polymorphic
+        if !else_hit_unreachable && else_value !== nothing
             append!(bytes, compile_value(else_value, ctx))
         end
 
