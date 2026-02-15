@@ -14306,6 +14306,29 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                             if (sig_wasm_type === StructRef || sig_wasm_type === ArrayRef)
                                 # Function signature returns abstract ref, local expects concrete
                                 needs_ref_cast_local = local_wasm_type
+                                # PURE-900: For invoke/call stmts, the callee's ACTUAL Wasm return
+                                # type may be externref (e.g. getindex returning Any). In that case,
+                                # we need any_convert_extern before ref_cast.
+                                if stmt isa Expr && (stmt.head === :invoke || stmt.head === :call)
+                                    # Check callee's return type via func_registry
+                                    callee_ret_is_extern = false
+                                    if stmt.head === :invoke && length(stmt.args) >= 1
+                                        mi = stmt.args[1]
+                                        if mi isa Core.MethodInstance
+                                            callee_ret_wt = julia_to_wasm_type(mi.rettype)
+                                            if callee_ret_wt === ExternRef
+                                                callee_ret_is_extern = true
+                                            end
+                                        end
+                                    elseif stmt.head === :call && length(stmt.args) >= 1
+                                        # :call with GlobalRef — cross-module dynamic call
+                                        # These typically return externref
+                                        callee_ret_is_extern = true
+                                    end
+                                    if callee_ret_is_extern
+                                        needs_any_convert_extern = true
+                                    end
+                                end
                             end
                         end
                     end
@@ -14365,6 +14388,45 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                                             param_wt = get_concrete_wasm_type(param_jt, ctx.mod, ctx.type_registry)
                                             if param_wt === ExternRef
                                                 needs_any_convert_extern = true
+                                            end
+                                        end
+                                    end
+                                    break
+                                elseif stmt_bytes[si] == 0x10 && si < length(stmt_bytes)  # CALL
+                                    # PURE-900: Check if call returns externref
+                                    # Functions might not be in mod.functions yet during compilation,
+                                    # so use func_registry which was pre-populated.
+                                    call_idx_rc = 0
+                                    call_shift_rc = 0
+                                    call_end_rc = 0
+                                    for bi in (si + 1):length(stmt_bytes)
+                                        b = stmt_bytes[bi]
+                                        call_idx_rc |= (Int(b & 0x7f) << call_shift_rc)
+                                        call_shift_rc += 7
+                                        if (b & 0x80) == 0
+                                            call_end_rc = bi
+                                            break
+                                        end
+                                    end
+                                    if call_end_rc == length(stmt_bytes)
+                                        n_imports = length(ctx.mod.imports)
+                                        if call_idx_rc < n_imports
+                                            # Imported function — check import's type
+                                            imp = ctx.mod.imports[call_idx_rc + 1]
+                                            imp_type = ctx.mod.types[imp.type_idx + 1]
+                                            if imp_type isa FuncType && !isempty(imp_type.results) && imp_type.results[1] === ExternRef
+                                                needs_any_convert_extern = true
+                                            end
+                                        elseif ctx.func_registry !== nothing
+                                            # Look up via func_registry (pre-populated before compilation)
+                                            for (_, finfo) in ctx.func_registry.functions
+                                                if finfo.wasm_idx == UInt32(call_idx_rc)
+                                                    ret_wt = get_concrete_wasm_type(finfo.return_type, ctx.mod, ctx.type_registry)
+                                                    if ret_wt === ExternRef
+                                                        needs_any_convert_extern = true
+                                                    end
+                                                    break
+                                                end
                                             end
                                         end
                                     end
