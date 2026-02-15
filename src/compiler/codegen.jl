@@ -9203,7 +9203,11 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 local_array_idx = local_idx - ctx.n_params + 1
                 ssa_local_type = local_array_idx >= 1 && local_array_idx <= length(ctx.locals) ? ctx.locals[local_array_idx] : nothing
                 if phi_local_wasm_type !== nothing && ssa_local_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_local_type)
-                    if phi_local_wasm_type === ExternRef && (ssa_local_type === I32 || ssa_local_type === I64 || ssa_local_type === F32 || ssa_local_type === F64)
+                    if phi_local_wasm_type === I64 && ssa_local_type === I32
+                        # PURE-313: Return i32 local.get — caller handles i64 widening
+                        push!(result, Opcode.LOCAL_GET)
+                        append!(result, encode_leb128_unsigned(local_idx))
+                    elseif phi_local_wasm_type === ExternRef && (ssa_local_type === I32 || ssa_local_type === I64 || ssa_local_type === F32 || ssa_local_type === F64)
                         # PURE-325: Box numeric local for ExternRef phi
                         push!(result, Opcode.LOCAL_GET)
                         append!(result, encode_leb128_unsigned(local_idx))

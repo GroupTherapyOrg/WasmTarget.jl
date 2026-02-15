@@ -14,8 +14,8 @@
  *   parse_expr_string("1")   -> 1 (Int64, not Expr, -1 args)
  *   parse_expr_string("x")   -> :x (Symbol, not Expr, -1 args)
  *
- * Known limitation: inputs with space before operator ("1 + 1", "1 +1")
- * trap in _bump_until_n due to whitespace token handling bug.
+ * PURE-313 fix: inputs with space before operator ("1 + 1", "1 +1")
+ * now work correctly after I32→I64 phi widening fix in codegen.
  * "1+1" and "1 + 1" produce identical results in native Julia.
  *
  * Run: node test-wrapper-node.mjs
@@ -142,21 +142,22 @@ if (counter) {
 }
 
 // ============================================================
-// Phase 5: Whitespace limitation (informational)
+// Phase 5: Whitespace inputs (PURE-313 fix verified)
 // ============================================================
-console.log("\n--- Phase 5: Whitespace Limitation (known) ---\n");
+console.log("\n--- Phase 5: Whitespace Inputs (PURE-313) ---\n");
 
 const whitespaceInputs = ["1 + 1", "1 +1", "a + b"];
+let wsExecuteCount = 0;
 for (const input of whitespaceInputs) {
     const wasmStr = await rt.jsToWasmString(input);
     try {
         parser.exports.parse_expr_string(wasmStr);
-        console.log(`  "${input}" -> EXECUTE (whitespace bug may be fixed!)`);
+        wsExecuteCount++;
     } catch (e) {
-        console.log(`  "${input}" -> trap (known whitespace bug in _bump_until_n)`);
+        console.log(`  INFO: "${input}" traps: ${e.message}`);
     }
 }
-console.log("  Note: whitespace-before-operator bug tracked separately");
+assert(wsExecuteCount === whitespaceInputs.length, `${wsExecuteCount}/${whitespaceInputs.length} whitespace inputs EXECUTE (PURE-313)`);
 
 // ============================================================
 // Summary
@@ -171,7 +172,7 @@ if (failed === 0) {
     console.log("- String bridge converts JS strings to WasmGC arrays");
     console.log("- parse_expr_string EXECUTES for 7 inputs");
     console.log("- AST structure CORRECT (level 3): args count matches native Julia");
-    console.log("- Known: whitespace before operator causes trap (follow-up story)");
+    console.log("- PURE-313: whitespace before operator now works (I32→I64 phi fix)");
 }
 
 process.exit(failed > 0 ? 1 : 0);
