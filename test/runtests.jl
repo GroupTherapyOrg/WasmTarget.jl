@@ -3141,7 +3141,23 @@ end
     # Phase 25: Interpreter Tokenizer (BROWSER-020)
     # Tests for the Julia interpreter tokenizer that will be compiled to WASM
     # ========================================================================
+    # Phase 25-27: Interpreter was deleted by CLEANUP-001 (2026-01-28).
+    # Skip these tests — the files no longer exist.
+
     @testset "Phase 25: Interpreter Tokenizer" begin
+        @test_broken false  # Interpreter deleted
+    end
+
+    @testset "Phase 26: Interpreter Parser and AST" begin
+        @test_broken false  # Interpreter deleted
+    end
+
+    @testset "Phase 27: Interpreter Evaluator" begin
+        @test_broken false  # Interpreter deleted
+    end
+
+    if false  # BEGIN DISABLED — Interpreter tests
+    @testset "Phase 25: Interpreter Tokenizer [DISABLED]" begin
 
         # Include the tokenizer module
         include("../src/Interpreter/Tokenizer.jl")
@@ -3821,6 +3837,7 @@ end
         end
 
     end
+    end  # END DISABLED — Interpreter tests
 
     # ========================================================================
     # Phase 28: Binaryen Optimization
