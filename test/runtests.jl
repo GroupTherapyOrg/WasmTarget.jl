@@ -4765,8 +4765,8 @@ end
             @test compare_julia_wasm(f_union_ret, Int64(0)).pass
         end
 
-        # Known failures — try/catch with actual throw
-        @testset "try/catch with throw — KNOWN BUG" begin
+        # PURE-1102: try/catch with actual throw — NOW WORKING
+        @testset "try/catch with throw" begin
             f_throw(x::Int64) = begin
                 try
                     if x < Int64(0)
@@ -4779,12 +4779,8 @@ end
             end
             # Happy path works
             @test compare_julia_wasm(f_throw, Int64(5)).pass
-            # Error path traps (error() is stub → unreachable)
-            @test_broken try
-                compare_julia_wasm(f_throw, Int64(-3)).pass
-            catch
-                false
-            end
+            # Error path: error() now emits throw (catchable by try_table + catch_all)
+            @test compare_julia_wasm(f_throw, Int64(-3)).pass
         end
 
     end
