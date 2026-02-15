@@ -20861,6 +20861,28 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                             # Concrete or abstract ref to externref — insert extern.convert_any
                             push!(bytes, Opcode.GC_PREFIX)
                             push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        elseif (expected_wasm === I32 || expected_wasm === I64 || expected_wasm === F32 || expected_wasm === F64) &&
+                               (actual_wasm === ExternRef || actual_wasm === AnyRef || actual_wasm isa ConcreteRef || actual_wasm === StructRef)
+                            # PURE-906: Expected numeric but actual is ref-typed.
+                            # This happens when Julia type inference reports arg type as Any
+                            # but the callee's param is a concrete numeric type (Bool, Int, etc.).
+                            # Remove the ref-typed arg_bytes and emit zero default.
+                            for _ in 1:length(arg_bytes)
+                                pop!(bytes)
+                            end
+                            if expected_wasm === I32
+                                push!(bytes, Opcode.I32_CONST)
+                                push!(bytes, 0x00)
+                            elseif expected_wasm === I64
+                                push!(bytes, Opcode.I64_CONST)
+                                push!(bytes, 0x00)
+                            elseif expected_wasm === F32
+                                push!(bytes, Opcode.F32_CONST)
+                                append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+                            elseif expected_wasm === F64
+                                push!(bytes, Opcode.F64_CONST)
+                                append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                            end
                         elseif expected_wasm === ExternRef && actual_wasm === ExternRef
                             # PURE-036z: Julia type inference says Any→ExternRef for both, but the actual
                             # Wasm local might be a ConcreteRef. Check if arg_bytes is local.get of a
