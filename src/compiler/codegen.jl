@@ -591,9 +591,10 @@ function discover_dependencies(functions::Vector)::Vector
         end
 
         # Scan IR for GlobalRef calls to WasmTarget runtime functions
-        for stmt in code_info.stmts.stmt
+        # Also pass IR + arg_types for :call expression method resolution (PURE-605)
+        for (stmt_idx, stmt) in enumerate(code_info.stmts.stmt)
             if stmt isa Expr
-                scan_expr_for_deps!(stmt, seen_funcs, to_add, to_scan)
+                scan_expr_for_deps!(stmt, seen_funcs, to_add, to_scan, code_info, stmt_idx, arg_types)
             end
         end
     end
@@ -606,8 +607,10 @@ end
 
 """
 Scan an expression for WasmTarget runtime function calls and external method invocations.
+IR context (ir, stmt_idx, func_arg_types) enables :call GlobalRef method resolution (PURE-605).
 """
-function scan_expr_for_deps!(expr::Expr, seen_funcs::Set, to_add::Vector, to_scan::Vector)
+function scan_expr_for_deps!(expr::Expr, seen_funcs::Set, to_add::Vector, to_scan::Vector,
+                             ir=nothing, stmt_idx::Int=0, func_arg_types::Tuple=())
     # Check if this is an invoke expression
     if expr.head === :invoke && length(expr.args) >= 2
         # Check for MethodInstance in args[1] - this enables auto-discovery of external methods
@@ -633,6 +636,11 @@ function scan_expr_for_deps!(expr::Expr, seen_funcs::Set, to_add::Vector, to_sca
         func_ref = expr.args[1]
         if func_ref isa GlobalRef
             check_and_add_runtime_func!(func_ref, seen_funcs, to_add, to_scan)
+            # PURE-605: Try to resolve :call GlobalRef to a method for external modules
+            if ir !== nothing
+                try_resolve_call_method!(func_ref, expr.args[2:end], ir, func_arg_types,
+                                        seen_funcs, to_add, to_scan)
+            end
         end
     end
 
@@ -798,6 +806,129 @@ function check_and_add_runtime_func!(ref::GlobalRef, seen_funcs::Set, to_add::Ve
         entry = (func, arg_types, name)
         push!(to_add, entry)
         push!(to_scan, entry)  # Also scan this function for its deps
+    end
+end
+
+"""
+    PURE-605: Set of modules whose :call GlobalRef expressions should be resolved
+    to methods and auto-discovered. Unlike :invoke (which has MethodInstance),
+    :call expressions need arg types extracted from IR ssavaluetypes.
+"""
+const CALL_AUTODISCOVER_MODULES = Set([:JuliaLowering, :JuliaSyntax])
+
+"""
+    PURE-605: Whitelisted Base method names for :call auto-discovery.
+    These are methods that appear as :call (not :invoke) in lowering IR
+    and need to be compiled rather than handled as builtins.
+"""
+const CALL_AUTODISCOVER_BASE_METHODS = Set([
+    :getindex, :setindex!,
+])
+
+"""
+    try_resolve_call_method!(func_ref, call_args, ir, func_arg_types, seen_funcs, to_add, to_scan)
+
+PURE-605: For :call GlobalRef expressions, try to resolve the method by extracting
+argument types from the IR's ssavaluetypes and using `which()` to find the Method.
+This handles dynamic calls where Julia couldn't specialize (no MethodInstance in IR).
+"""
+function try_resolve_call_method!(func_ref::GlobalRef, call_args, ir, func_arg_types::Tuple,
+                                  seen_funcs::Set, to_add::Vector, to_scan::Vector)
+    mod_name = nameof(func_ref.mod)
+
+    # Only resolve for target modules or whitelisted Base methods
+    is_target = mod_name in CALL_AUTODISCOVER_MODULES
+    is_base_whitelist = (func_ref.mod === Base && func_ref.name in CALL_AUTODISCOVER_BASE_METHODS)
+    (is_target || is_base_whitelist) || return
+
+    # Skip builtins that are handled inline in compile_call
+    func_ref.name in (:getfield, :isdefined, :convert, :throw_methoderror,
+                       :svec, :_apply_iterate, :Symbol, :typeassert) && return
+
+    # Get the function object
+    called_func = try
+        getfield(func_ref.mod, func_ref.name)
+    catch
+        return
+    end
+
+    # Extract argument types from IR ssavaluetypes
+    call_types = Any[]
+    for arg in call_args
+        if arg isa Core.SSAValue
+            push!(call_types, ir.stmts.type[arg.id])
+        elseif arg isa Core.Argument
+            if arg.n >= 1 && arg.n <= length(func_arg_types)
+                push!(call_types, func_arg_types[arg.n])
+            else
+                push!(call_types, Any)
+            end
+        elseif arg isa GlobalRef
+            push!(call_types, try typeof(getfield(arg.mod, arg.name)) catch; Any end)
+        else
+            push!(call_types, typeof(arg))
+        end
+    end
+
+    # Try to find a matching method
+    arg_tuple = Tuple{call_types...}
+    mi = try
+        m = which(called_func, arg_tuple)
+        # Get specialized MethodInstance via code_typed
+        ct_result = Base.code_typed(called_func, Tuple{call_types...})
+        if !isempty(ct_result)
+            ci = ct_result[1][1]
+            # Extract the MethodInstance from parent if available
+            if hasfield(typeof(ci), :parent) && ci.parent isa Core.MethodInstance
+                ci.parent
+            else
+                nothing
+            end
+        else
+            nothing
+        end
+    catch
+        nothing
+    end
+
+    if mi !== nothing
+        check_and_add_external_method!(mi, seen_funcs, to_add, to_scan)
+    else
+        # Fallback: try to add the function directly with inferred arg types
+        # Concretize abstract types where possible (e.g., Vector{T} where T → Vector{Any})
+        concrete_types = Any[]
+        for t in call_types
+            if t === Any || t isa TypeVar
+                push!(concrete_types, Any)
+            elseif t isa UnionAll
+                # Try to concretize: Vector{T} where T → Vector{Any}
+                push!(concrete_types, try Base.unwrap_unionall(t) catch; t end)
+            else
+                push!(concrete_types, t)
+            end
+        end
+
+        concrete_tuple = Tuple(concrete_types)
+        key = (called_func, concrete_tuple)
+        if key in seen_funcs
+            return
+        end
+
+        # Verify we can actually get code_typed for this
+        can_compile = try
+            ct = Base.code_typed(called_func, Tuple{concrete_types...})
+            !isempty(ct)
+        catch
+            false
+        end
+
+        if can_compile
+            push!(seen_funcs, key)
+            name = string(func_ref.name)
+            entry = (called_func, concrete_tuple, name)
+            push!(to_add, entry)
+            push!(to_scan, entry)
+        end
     end
 end
 
