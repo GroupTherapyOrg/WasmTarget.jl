@@ -7475,19 +7475,6 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                         break
                     end
                 end
-                # PURE-313: Also set then-values for consecutive phis after merge point
-                for j in (i+1):min(length(code), back_edge_idx)
-                    code[j] isa Core.PhiNode || break
-                    haskey(ctx.phi_locals, j) || continue
-                    succ_phi = code[j]::Core.PhiNode
-                    for (edge_idx, edge) in enumerate(succ_phi.edges)
-                        edge_stmt = get(code, edge, nothing)
-                        if edge_stmt !== nothing && !(edge_stmt isa Core.GotoIfNot)
-                            emit_phi_local_set!(bytes, succ_phi.values[edge_idx], j, ctx)
-                            break
-                        end
-                    end
-                end
             end
             push!(bytes, Opcode.END)
             open_blocks[i] = false
@@ -7506,36 +7493,8 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
             # Phi nodes in loops are handled via locals
             # For inner conditional phi nodes, we need to handle the merge
             if haskey(ctx.phi_locals, i)
-                # PURE-313: If we reached this phi by fallthrough (previous stmt is NOT a
-                # GotoNode/GotoIfNot that branches away), set the fallthrough edge value.
-                # This handles the else-branch of inner conditionals where the else-path
-                # is just normal code flow (not wrapped in a block).
-                prev_stmt = i > 1 ? get(code, i - 1, nothing) : nothing
-                prev_is_fallthrough = prev_stmt !== nothing && !(prev_stmt isa Core.GotoNode) && !(prev_stmt isa Core.ReturnNode)
-                if prev_is_fallthrough
-                    # Find the edge from the fallthrough path (edge >= some_earlier_point, edge < i)
-                    # The fallthrough edge is the one from the last statement before this phi
-                    phi_stmt_curr = code[i]::Core.PhiNode
-                    for (edge_idx, edge) in enumerate(phi_stmt_curr.edges)
-                        # Fallthrough edge: last stmt before phi on the else-path
-                        if edge == i - 1 || (edge < i && !(get(code, edge, nothing) isa Core.GotoNode))
-                            emit_phi_local_set!(bytes, phi_stmt_curr.values[edge_idx], i, ctx)
-                            break
-                        end
-                    end
-                    # Also handle consecutive phis
-                    for j in (i+1):min(length(code), back_edge_idx)
-                        code[j] isa Core.PhiNode || break
-                        haskey(ctx.phi_locals, j) || continue
-                        succ_phi = code[j]::Core.PhiNode
-                        for (edge_idx, edge) in enumerate(succ_phi.edges)
-                            if edge == i - 1 || (edge < i && !(get(code, edge, nothing) isa Core.GotoNode))
-                                emit_phi_local_set!(bytes, succ_phi.values[edge_idx], j, ctx)
-                                break
-                            end
-                        end
-                    end
-                end
+                # The phi local should already have the correct value
+                # (set by either branch)
             end
             i += 1
             continue
@@ -7567,32 +7526,13 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                 # If this conditional has a phi node, we need to set the else-value
                 # before the branch (it gets set if we skip the then-branch)
                 if merge_phi !== nothing && haskey(ctx.phi_locals, merge_phi)
-                    # PURE-313: Find else-edge by checking for edges from the else-branch
-                    # (range [target, merge_point-1]) or from the GotoIfNot itself (i).
-                    # Julia IR phi edges reference the LAST statement on each path,
-                    # not the branch instruction, so edge != i for multi-statement else-branches.
-                    _find_else_edge(phi, gotoifnot_line, else_dest, merge_pt) = begin
-                        for (eidx, e) in enumerate(phi.edges)
-                            if e == gotoifnot_line || (e >= else_dest && e < merge_pt)
-                                return eidx
-                            end
-                        end
-                        return 0
-                    end
-
                     phi_stmt = code[merge_phi]::Core.PhiNode
-                    else_idx = _find_else_edge(phi_stmt, i, target, merge_point)
-                    if else_idx > 0
-                        emit_phi_local_set!(bytes, phi_stmt.values[else_idx], merge_phi, ctx)
-                    end
-                    # PURE-313: Also set else-values for consecutive phis after merge point
-                    for j in (merge_phi+1):min(length(code), back_edge_idx)
-                        code[j] isa Core.PhiNode || break
-                        haskey(ctx.phi_locals, j) || continue
-                        succ_phi = code[j]::Core.PhiNode
-                        succ_else_idx = _find_else_edge(succ_phi, i, target, merge_point)
-                        if succ_else_idx > 0
-                            emit_phi_local_set!(bytes, succ_phi.values[succ_else_idx], j, ctx)
+                    # Find the value for the else branch (edge from this GotoIfNot)
+                    for (edge_idx, edge) in enumerate(phi_stmt.edges)
+                        if edge == i
+                            val = phi_stmt.values[edge_idx]
+                            emit_phi_local_set!(bytes, val, merge_phi, ctx)
+                            break
                         end
                     end
                 end
@@ -7650,18 +7590,6 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                                 val = phi_stmt.values[edge_idx]
                                 emit_phi_local_set!(bytes, val, stmt.label, ctx)
                                 break
-                            end
-                        end
-                        # PURE-313: Also set edges for consecutive phis after target
-                        for j in (stmt.label+1):min(length(code), back_edge_idx)
-                            code[j] isa Core.PhiNode || break
-                            haskey(ctx.phi_locals, j) || continue
-                            succ_phi = code[j]::Core.PhiNode
-                            for (edge_idx, edge) in enumerate(succ_phi.edges)
-                                if edge == i
-                                    emit_phi_local_set!(bytes, succ_phi.values[edge_idx], j, ctx)
-                                    break
-                                end
                             end
                         end
                     end
@@ -7899,18 +7827,6 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                         edge_val = phi_stmt.values[edge_idx]
                         emit_phi_local_set!(bytes, edge_val, stmt.label, ctx)
                         break
-                    end
-                end
-                # PURE-313: Also set edges for consecutive phis after target
-                for j in (stmt.label+1):min(length(code), length(code))
-                    code[j] isa Core.PhiNode || break
-                    haskey(ctx.phi_locals, j) || continue
-                    succ_phi = code[j]::Core.PhiNode
-                    for (edge_idx, edge) in enumerate(succ_phi.edges)
-                        if edge == i
-                            emit_phi_local_set!(bytes, succ_phi.values[edge_idx], j, ctx)
-                            break
-                        end
                     end
                 end
             end
@@ -9347,7 +9263,7 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 # The compiled statement may produce a type incompatible with the phi local
                 ssa_julia_type = get(ctx.ssa_types, val.id, Any)
                 ssa_wasm_type = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
-                if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_wasm_type)
+                if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_wasm_type) && !(phi_local_wasm_type === I64 && ssa_wasm_type === I32)
                     if phi_local_wasm_type === ExternRef && (ssa_wasm_type === I32 || ssa_wasm_type === I64 || ssa_wasm_type === F32 || ssa_wasm_type === F64)
                         # PURE-325: Box recomputed numeric SSA for ExternRef phi
                         if stmt !== nothing && !(stmt isa Core.PhiNode)
@@ -9378,6 +9294,11 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                         @warn "PURE-325 NULL DEFAULT: phi=$phi_idx val=$(val.id) ssa_wasm=$ssa_wasm_type phi_wasm=$phi_local_wasm_type"
                         append!(result, emit_phi_type_default(phi_local_wasm_type))
                     end
+                elseif phi_local_wasm_type !== nothing && phi_local_wasm_type === I64 && ssa_wasm_type === I32
+                    # PURE-313: i32 → i64 widening for recomputed SSA without local.
+                    # Compile the value as i32 and let the caller (set_phi_locals_for_edge!)
+                    # handle the i64.extend_i32_s widening.
+                    append!(result, compile_value(val, ctx))
                 elseif stmt !== nothing && !(stmt isa Core.PhiNode)
                     append!(result, compile_statement(stmt, val.id, ctx))
                 else
