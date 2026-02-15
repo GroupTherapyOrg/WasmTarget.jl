@@ -1972,10 +1972,10 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
             type_idx = get_string_array_type!(mod, registry)
             ConcreteRef(type_idx, true)
         elseif ft isa Type && ft <: Array
-            # Array field needs concrete array type (NOT AbstractVector — UnitRange, SubArray etc are structs)
-            elem_type = eltype(ft)
-            type_idx = get_array_type!(mod, registry, elem_type)
-            ConcreteRef(type_idx, true)
+            # Vector/Array fields are wrapper structs with (data, size) layout
+            # Use register_vector_type! to match how get_concrete_wasm_type maps Arrays
+            info = register_vector_type!(mod, registry, ft)
+            ConcreteRef(info.wasm_type_idx, true)
         elseif ft isa DataType && (ft.name.name === :MemoryRef || ft.name.name === :GenericMemoryRef)
             # MemoryRef{T} / GenericMemoryRef maps to array type for element T
             elem_type = ft.name.name === :GenericMemoryRef ? ft.parameters[2] : ft.parameters[1]
@@ -8809,8 +8809,11 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                         _pvb = compile_phi_value(val, i)
                                         if !isempty(_pvb)
                                             _pvb_boxed = length(_pvb) >= 2 && _pvb[end-1] == Opcode.GC_PREFIX && _pvb[end] == Opcode.EXTERN_CONVERT_ANY
+                                            # PURE-602: compile_phi_value may return ref.null extern for nothing values
+                                            # (already externref — don't try to box it as numeric)
+                                            _pvb_is_ref_null = length(_pvb) >= 1 && _pvb[1] == Opcode.REF_NULL
                                             append!(block_bytes, _pvb)
-                                            if !_pvb_boxed
+                                            if !_pvb_boxed && !_pvb_is_ref_null
                                                 _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
                                                 push!(block_bytes, Opcode.GC_PREFIX)
                                                 push!(block_bytes, Opcode.STRUCT_NEW)
@@ -9531,8 +9534,10 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                         _pvb2 = compile_phi_value(val, i)
                                         if !isempty(_pvb2)
                                             _pvb2_boxed = length(_pvb2) >= 2 && _pvb2[end-1] == Opcode.GC_PREFIX && _pvb2[end] == Opcode.EXTERN_CONVERT_ANY
+                                            # PURE-602: compile_phi_value may return ref.null extern for nothing values
+                                            _pvb2_is_ref_null = length(_pvb2) >= 1 && _pvb2[1] == Opcode.REF_NULL
                                             append!(bytes, _pvb2)
-                                            if !_pvb2_boxed
+                                            if !_pvb2_boxed && !_pvb2_is_ref_null
                                                 _box_t2 = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
                                                 push!(bytes, Opcode.GC_PREFIX)
                                                 push!(bytes, Opcode.STRUCT_NEW)
@@ -9774,8 +9779,10 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                         _pvb3 = compile_phi_value(val, i)
                                         if !isempty(_pvb3)
                                             _pvb3_boxed = length(_pvb3) >= 2 && _pvb3[end-1] == Opcode.GC_PREFIX && _pvb3[end] == Opcode.EXTERN_CONVERT_ANY
+                                            # PURE-602: compile_phi_value may return ref.null extern for nothing values
+                                            _pvb3_is_ref_null = length(_pvb3) >= 1 && _pvb3[1] == Opcode.REF_NULL
                                             append!(block_bytes, _pvb3)
-                                            if !_pvb3_boxed
+                                            if !_pvb3_boxed && !_pvb3_is_ref_null
                                                 _box_t3 = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
                                                 push!(block_bytes, Opcode.GC_PREFIX)
                                                 push!(block_bytes, Opcode.STRUCT_NEW)
