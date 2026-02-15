@@ -5594,7 +5594,8 @@ function infer_call_type(expr::Expr, ctx::CompilationContext)
         # Known functions where return type != first arg type
         if func isa GlobalRef && func.name in (:push!, :pushfirst!, :pop!, :popfirst!,
                                                  :setindex!, :insert!, :deleteat!,
-                                                 :write, :print, :println, :show)
+                                                 :write, :print, :println, :show,
+                                                 :compilerbarrier)
             return Any
         end
         return arg1_type
@@ -14104,6 +14105,7 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
         ssa_type_mismatch = false
         needs_ref_cast_local = nothing  # Set to ConcreteRef target type when ref.cast is needed
         needs_any_convert_extern = false  # PURE-036bj: externref→anyref before ref.cast
+        needs_extern_convert_any = false  # PURE-913: ref→externref for Any-typed locals
         # PURE-908: Skip safety checks for stub stmts — no value on stack to check
         if !_stmt_ends_unreachable && haskey(ctx.ssa_locals, idx) && length(stmt_bytes) >= 2
             local_idx = ctx.ssa_locals[idx]
@@ -14141,6 +14143,9 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                                 # PURE-036bj: externref local → concrete ref requires any_convert_extern first
                                 needs_any_convert_extern = true
                                 needs_ref_cast_local = local_wasm_type
+                            elseif (src_wasm_type isa ConcreteRef || src_wasm_type === StructRef || src_wasm_type === ArrayRef || src_wasm_type === AnyRef) && local_wasm_type === ExternRef
+                                # PURE-913: concrete/abstract ref → externref requires extern_convert_any
+                                needs_extern_convert_any = true
                             else
                                 needs_type_safe_default = true
                             end
@@ -14157,6 +14162,9 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                                 # PURE-036bj: externref param → concrete ref requires any_convert_extern first
                                 needs_any_convert_extern = true
                                 needs_ref_cast_local = local_wasm_type
+                            elseif (src_wasm_type isa ConcreteRef || src_wasm_type === StructRef || src_wasm_type === ArrayRef || src_wasm_type === AnyRef) && local_wasm_type === ExternRef
+                                # PURE-913: concrete/abstract ref param → externref requires extern_convert_any
+                                needs_extern_convert_any = true
                             else
                                 needs_type_safe_default = true
                             end
@@ -14267,7 +14275,10 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                 # operands (type index, field index) can have byte 0x20 which matches
                 # LOCAL_GET opcode. E.g. struct.get type_32 field_0 = [0xFB, 0x02, 0x20, 0x00]
                 # where 0x20 is LEB128(32), not LOCAL_GET.
-                if !needs_type_safe_default && !has_gc_prefix && length(stmt_bytes) >= 2
+                # PURE-913: Skip trailing check when the pure local.get check already
+                # handled the conversion (any flag was set: ref_cast, any_convert, extern_convert)
+                pure_check_handled = needs_ref_cast_local !== nothing || needs_any_convert_extern || needs_extern_convert_any
+                if !needs_type_safe_default && !has_gc_prefix && !pure_check_handled && length(stmt_bytes) >= 2
                     # Find the last local_get at the end of stmt_bytes
                     local end_lg_pos = 0
                     # Scan backward for 0x20 (LOCAL_GET) that could be the trailing value
@@ -14570,6 +14581,11 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                         append!(stmt_bytes, UInt8[Opcode.GC_PREFIX, Opcode.REF_CAST_NULL])
                         append!(stmt_bytes, encode_leb128_signed(Int64(needs_ref_cast_local.type_idx)))
                     end
+                end
+
+                # PURE-913: ref → externref conversion (e.g., compilerbarrier returning struct into Any local)
+                if needs_extern_convert_any
+                    append!(stmt_bytes, UInt8[Opcode.GC_PREFIX, Opcode.EXTERN_CONVERT_ANY])
                 end
 
                 if needs_type_safe_default
