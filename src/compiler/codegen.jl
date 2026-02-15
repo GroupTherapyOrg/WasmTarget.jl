@@ -952,7 +952,9 @@ function try_resolve_call_method!(func_ref::GlobalRef, call_args, ir, func_arg_t
         name = string(func_ref.name)
         entry = (called_func, Tuple(call_types), name)
         push!(to_add, entry)
-        push!(to_scan, entry)
+        # NOTE: Do NOT push to to_scan — :call-discovered functions should not
+        # transitively discover more deps. This prevents explosion of the
+        # dependency graph into complex JuliaSyntax internals.
     end
 end
 
@@ -17729,7 +17731,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 if field_idx === :dynamic
                     # Dynamic tuple indexing - only supported for homogeneous tuples (NTuple)
                     # Check if all elements have the same type
-                    elem_types = fieldtypes(obj_type)
+                    # PURE-605: Guard against types without definite field count (e.g., Vararg tuples)
+                    elem_types = try fieldtypes(obj_type) catch; () end
                     if length(elem_types) > 0 && all(t -> t === elem_types[1], elem_types)
                         # Homogeneous tuple - we can treat it as an array
                         elem_type = elem_types[1]
