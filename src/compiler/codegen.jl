@@ -5671,8 +5671,8 @@ function emit_ref_cast_if_structref!(bytes::Vector{UInt8}, val, target_type_idx:
             end
         end
     end
-    if local_wasm_type === StructRef
-        # Value on stack is structref, but struct_get needs (ref null $target_type_idx)
+    if local_wasm_type === StructRef || local_wasm_type === AnyRef
+        # Value on stack is structref/anyref, but struct_get/array_get needs (ref null $target_type_idx)
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.REF_CAST_NULL)
         append!(bytes, encode_leb128_signed(Int64(target_type_idx)))
