@@ -676,6 +676,8 @@ const SKIP_AUTODISCOVER_METHODS = Set([
     :_throw_argerror, :throw_boundserror,
     :_throw_not_readable, :_throw_not_writable,
     :throw_inexacterror,
+    # PURE-605: Builtins that return Method from code_typed, not CodeInfo
+    :(===), :isa, :typeof, :ifelse, :throw_boundserror,
 ])
 
 """
@@ -766,6 +768,15 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
     if key in seen_funcs
         return
     end
+
+    # PURE-605: Verify the function can actually be compiled before adding
+    can_compile = try
+        ct = Base.code_typed(func, Tuple{arg_types...})
+        !isempty(ct) && ct[1][1] isa Core.CodeInfo
+    catch
+        false
+    end
+    can_compile || return
 
     # Add to seen and to_add
     push!(seen_funcs, key)
@@ -878,19 +889,25 @@ function try_resolve_call_method!(func_ref::GlobalRef, call_args, ir, func_arg_t
     is_base_whitelist = (func_ref.mod === Base && func_ref.name in CALL_AUTODISCOVER_BASE_METHODS)
     (is_target || is_base_whitelist) || return
 
-    # Skip builtins that are handled inline in compile_call
-    func_ref.name in (:getfield, :isdefined, :convert, :throw_methoderror,
-                       :svec, :_apply_iterate, :Symbol, :typeassert,
-                       :typeof, :isa, :throw, :fieldtype, :nfields,
-                       :arrayref, :arrayset, :arraysize, :arraylen,
-                       :pointerref, :pointerset, :_expr) && return
-
     # Get the function object
     called_func = try
         getfield(func_ref.mod, func_ref.name)
     catch
         return
     end
+
+    # Skip Core/Base builtins re-exported through JuliaLowering/JuliaSyntax
+    # (e.g., JuliaLowering.=== is actually Core.===)
+    actual_mod = try parentmodule(called_func) catch; nothing end
+    if actual_mod === Core || actual_mod === Base
+        # Only allow whitelisted Base methods that should actually be compiled
+        if !(actual_mod === Base && func_ref.name in CALL_AUTODISCOVER_BASE_METHODS)
+            return
+        end
+    end
+
+    # Skip builtins/intrinsics that can't be compiled
+    (typeof(called_func) <: Core.Builtin || typeof(called_func) <: Core.IntrinsicFunction) && return
 
     # Extract argument types from IR ssavaluetypes
     # Must sanitize compiler-internal types (PartialStruct, Conditional, etc.) to real Types
