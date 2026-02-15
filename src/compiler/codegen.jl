@@ -14309,24 +14309,13 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                                 # PURE-900: For invoke/call stmts, the callee's ACTUAL Wasm return
                                 # type may be externref (e.g. getindex returning Any). In that case,
                                 # we need any_convert_extern before ref_cast.
-                                if stmt isa Expr && (stmt.head === :invoke || stmt.head === :call)
-                                    # Check callee's return type via func_registry
-                                    callee_ret_is_extern = false
-                                    if stmt.head === :invoke && length(stmt.args) >= 1
-                                        mi = stmt.args[1]
-                                        if mi isa Core.MethodInstance
-                                            callee_ret_wt = julia_to_wasm_type(mi.rettype)
-                                            if callee_ret_wt === ExternRef
-                                                callee_ret_is_extern = true
-                                            end
+                                if stmt isa Expr && stmt.head === :invoke && length(stmt.args) >= 1
+                                    mi = stmt.args[1]
+                                    if mi isa Core.MethodInstance
+                                        callee_ret_wt = julia_to_wasm_type(mi.rettype)
+                                        if callee_ret_wt === ExternRef
+                                            needs_any_convert_extern = true
                                         end
-                                    elseif stmt.head === :call && length(stmt.args) >= 1
-                                        # :call with GlobalRef — cross-module dynamic call
-                                        # These typically return externref
-                                        callee_ret_is_extern = true
-                                    end
-                                    if callee_ret_is_extern
-                                        needs_any_convert_extern = true
                                     end
                                 end
                             end
@@ -20647,10 +20636,50 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                             end
                         end
                     end
+                    # PURE-900: Handle Nothing→ref type conversion.
+                    # compile_value(nothing) emits i32_const 0, but ref-typed params
+                    # need ref.null. Replace i32_const 0 with appropriate ref.null.
+                    if actual_julia_type === Nothing && (expected_wasm isa ConcreteRef || expected_wasm === ExternRef || expected_wasm === StructRef || expected_wasm === AnyRef)
+                        # Check if arg_bytes is i32_const 0 (2 bytes: 0x41 0x00)
+                        if length(arg_bytes) == 2 && arg_bytes[1] == Opcode.I32_CONST && arg_bytes[2] == 0x00
+                            # Remove the i32_const 0 we just appended
+                            for _ in 1:2
+                                pop!(bytes)
+                            end
+                            # Emit ref.null with the expected type
+                            push!(bytes, Opcode.REF_NULL)
+                            if expected_wasm isa ConcreteRef
+                                append!(bytes, encode_leb128_signed(Int64(expected_wasm.type_idx)))
+                            else
+                                push!(bytes, UInt8(expected_wasm))
+                            end
+                        end
+                    end
                 end
                 # Cross-function call - emit call instruction with target index
                 push!(bytes, Opcode.CALL)
                 append!(bytes, encode_leb128_unsigned(target_info.wasm_idx))
+                # PURE-900: Bridge type gap between function's Wasm return type
+                # and the caller's SSA local type. Handles both directions:
+                # 1. externref → ConcreteRef: any_convert_extern + ref.cast
+                # 2. ConcreteRef → externref: extern_convert_any
+                if haskey(ctx.ssa_locals, idx)
+                    local_idx_val = ctx.ssa_locals[idx]
+                    local_arr_idx = local_idx_val - ctx.n_params + 1
+                    if local_arr_idx >= 1 && local_arr_idx <= length(ctx.locals)
+                        target_local_type = ctx.locals[local_arr_idx]
+                        ret_wasm = julia_to_wasm_type(target_info.return_type)
+                        if target_local_type isa ConcreteRef && ret_wasm === ExternRef
+                            # Function returns externref, local expects concrete ref
+                            append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                            append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.REF_CAST_NULL])
+                            append!(bytes, encode_leb128_signed(Int64(target_local_type.type_idx)))
+                        elseif target_local_type === ExternRef && ret_wasm !== ExternRef && ret_wasm !== nothing
+                            # Function returns concrete/struct/array ref, local expects externref
+                            append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.EXTERN_CONVERT_ANY])
+                        end
+                    end
+                end
             else
                 # No matching signature - likely dead code from Union type branches
                 # Emit unreachable instead of error (the branch won't be taken at runtime)
