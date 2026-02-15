@@ -9922,6 +9922,52 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
         # If target_stmt is specified, start from there; otherwise start from block start
         dest_start = target_stmt > 0 ? target_stmt : blocks[dest_block].start_idx
         dest_end = blocks[dest_block].end_idx
+
+        # PURE-1001: Detect circular phi references (simultaneous assignment)
+        # When phi A's value reads phi B's local and both are being set on the same edge,
+        # we must save old values to temps first to avoid read-after-write corruption.
+        # Example: a, b = b, a+b → %17=phi(edge→%19), %18=phi(edge→%17)
+        # Without temps, setting %17 first corrupts the value %18 reads.
+        phi_locals_being_set = Set{Int}()  # phi local indices being updated on this edge
+        phi_values_reading = Dict{Int,Int}()  # phi_stmt_idx → phi_local it reads from (if any)
+        for i in dest_start:dest_end
+            stmt = code[i]
+            if stmt isa Core.PhiNode && haskey(ctx.phi_locals, i)
+                for (edge_idx, edge) in enumerate(stmt.edges)
+                    if edge == terminator_idx && isassigned(stmt.values, edge_idx)
+                        push!(phi_locals_being_set, ctx.phi_locals[i])
+                        val = stmt.values[edge_idx]
+                        # Check if val references another phi local
+                        if val isa Core.SSAValue && haskey(ctx.phi_locals, val.id)
+                            phi_values_reading[i] = ctx.phi_locals[val.id]
+                        end
+                        break
+                    end
+                end
+            elseif !(stmt isa Core.PhiNode)
+                break
+            end
+        end
+
+        # If any phi reads from another phi local that is ALSO being set, use temps
+        needs_temp = Dict{Int,Int}()  # original phi_local → temp local index
+        for (phi_idx, read_local) in phi_values_reading
+            if read_local in phi_locals_being_set && read_local != ctx.phi_locals[phi_idx]
+                # read_local is being set on this edge AND read by another phi → need temp
+                if !haskey(needs_temp, read_local)
+                    phi_local_array_idx = read_local - ctx.n_params + 1
+                    local_type = phi_local_array_idx >= 1 && phi_local_array_idx <= length(ctx.locals) ? ctx.locals[phi_local_array_idx] : I64
+                    temp_local = allocate_local!(ctx, local_type)
+                    needs_temp[read_local] = temp_local
+                    # Save old value: local.get $orig → local.set $temp
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(read_local))
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(temp_local))
+                end
+            end
+        end
+
         phi_count = 0
         for i in dest_start:dest_end
             stmt = code[i]
@@ -9991,6 +10037,20 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                 end
 
                                 phi_value_bytes = compile_phi_value(val, i)
+                                # PURE-1001: If phi value reads from a remapped phi local, use temp
+                                if !isempty(needs_temp) && length(phi_value_bytes) >= 2 && phi_value_bytes[1] == Opcode.LOCAL_GET
+                                    _got_idx = 0; _shift = 0
+                                    for bi in 2:length(phi_value_bytes)
+                                        b = phi_value_bytes[bi]
+                                        _got_idx |= (Int(b & 0x7f) << _shift)
+                                        _shift += 7
+                                        if (b & 0x80) == 0; break; end
+                                    end
+                                    if haskey(needs_temp, _got_idx)
+                                        phi_value_bytes = UInt8[Opcode.LOCAL_GET]
+                                        append!(phi_value_bytes, encode_leb128_unsigned(needs_temp[_got_idx]))
+                                    end
+                                end
                                 # Detect multi-value bytes (all local_gets, N>=2).
                                 # local_set only consumes 1, so N-1 would be orphaned.
                                 if length(phi_value_bytes) >= 4
