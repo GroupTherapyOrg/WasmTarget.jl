@@ -7459,6 +7459,10 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
     while i <= back_edge_idx
         # Check if we need to close any blocks at this merge point
         if haskey(open_blocks, i) && open_blocks[i]
+            # DEBUG PURE-313: log block close
+            if haskey(ENV, "PURE313_DEBUG") && (code[i] isa Core.PhiNode || (i > 1 && code[i-1] isa Core.PhiNode))
+                @warn "BLOCK CLOSE at line $i, code=$(code[i]), has_phi=$(code[i] isa Core.PhiNode && haskey(ctx.phi_locals, i))"
+            end
             # Before closing the block, set the then-value for any phi at this merge point
             # The then-branch ends here, so we need to store the value
             if code[i] isa Core.PhiNode && haskey(ctx.phi_locals, i)
@@ -7506,8 +7510,41 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
             # Phi nodes in loops are handled via locals
             # For inner conditional phi nodes, we need to handle the merge
             if haskey(ctx.phi_locals, i)
-                # The phi local should already have the correct value
-                # (set by either branch)
+                # DEBUG PURE-313
+                if haskey(ENV, "PURE313_DEBUG")
+                    phi_curr = code[i]::Core.PhiNode
+                    @warn "PHI at line $i: edges=$(phi_curr.edges), type=$(ctx.code_info.ssavaluetypes[i]), has_open_block=$(haskey(open_blocks, i) && open_blocks[i])"
+                end
+                # PURE-313: If we reached this phi by fallthrough (previous stmt is NOT a
+                # GotoNode/GotoIfNot that branches away), set the fallthrough edge value.
+                # This handles the else-branch of inner conditionals where the else-path
+                # is just normal code flow (not wrapped in a block).
+                prev_stmt = i > 1 ? get(code, i - 1, nothing) : nothing
+                prev_is_fallthrough = prev_stmt !== nothing && !(prev_stmt isa Core.GotoNode) && !(prev_stmt isa Core.ReturnNode)
+                if prev_is_fallthrough
+                    # Find the edge from the fallthrough path (edge >= some_earlier_point, edge < i)
+                    # The fallthrough edge is the one from the last statement before this phi
+                    phi_stmt_curr = code[i]::Core.PhiNode
+                    for (edge_idx, edge) in enumerate(phi_stmt_curr.edges)
+                        # Fallthrough edge: last stmt before phi on the else-path
+                        if edge == i - 1 || (edge < i && !(get(code, edge, nothing) isa Core.GotoNode))
+                            emit_phi_local_set!(bytes, phi_stmt_curr.values[edge_idx], i, ctx)
+                            break
+                        end
+                    end
+                    # Also handle consecutive phis
+                    for j in (i+1):min(length(code), back_edge_idx)
+                        code[j] isa Core.PhiNode || break
+                        haskey(ctx.phi_locals, j) || continue
+                        succ_phi = code[j]::Core.PhiNode
+                        for (edge_idx, edge) in enumerate(succ_phi.edges)
+                            if edge == i - 1 || (edge < i && !(get(code, edge, nothing) isa Core.GotoNode))
+                                emit_phi_local_set!(bytes, succ_phi.values[edge_idx], j, ctx)
+                                break
+                            end
+                        end
+                    end
+                end
             end
             i += 1
             continue
@@ -7530,6 +7567,11 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                 # dart2wasm pattern: block + br_if to skip then-branch
                 merge_point = inner_conditionals[i]
 
+                # DEBUG PURE-313
+                if haskey(ENV, "PURE313_DEBUG") && (i >= 70 && i <= 110)
+                    @warn "INNER COND at line $i → merge_point=$merge_point, code[mp]=$(code[merge_point])"
+                end
+
                 # Check if there's a phi node at the merge point
                 merge_phi = nothing
                 if code[merge_point] isa Core.PhiNode
@@ -7539,25 +7581,32 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                 # If this conditional has a phi node, we need to set the else-value
                 # before the branch (it gets set if we skip the then-branch)
                 if merge_phi !== nothing && haskey(ctx.phi_locals, merge_phi)
-                    phi_stmt = code[merge_phi]::Core.PhiNode
-                    # Find the value for the else branch (edge from this GotoIfNot)
-                    for (edge_idx, edge) in enumerate(phi_stmt.edges)
-                        if edge == i
-                            val = phi_stmt.values[edge_idx]
-                            emit_phi_local_set!(bytes, val, merge_phi, ctx)
-                            break
+                    # PURE-313: Find else-edge by checking for edges from the else-branch
+                    # (range [target, merge_point-1]) or from the GotoIfNot itself (i).
+                    # Julia IR phi edges reference the LAST statement on each path,
+                    # not the branch instruction, so edge != i for multi-statement else-branches.
+                    _find_else_edge(phi, gotoifnot_line, else_dest, merge_pt) = begin
+                        for (eidx, e) in enumerate(phi.edges)
+                            if e == gotoifnot_line || (e >= else_dest && e < merge_pt)
+                                return eidx
+                            end
                         end
+                        return 0
+                    end
+
+                    phi_stmt = code[merge_phi]::Core.PhiNode
+                    else_idx = _find_else_edge(phi_stmt, i, target, merge_point)
+                    if else_idx > 0
+                        emit_phi_local_set!(bytes, phi_stmt.values[else_idx], merge_phi, ctx)
                     end
                     # PURE-313: Also set else-values for consecutive phis after merge point
                     for j in (merge_phi+1):min(length(code), back_edge_idx)
                         code[j] isa Core.PhiNode || break
                         haskey(ctx.phi_locals, j) || continue
                         succ_phi = code[j]::Core.PhiNode
-                        for (edge_idx, edge) in enumerate(succ_phi.edges)
-                            if edge == i
-                                emit_phi_local_set!(bytes, succ_phi.values[edge_idx], j, ctx)
-                                break
-                            end
+                        succ_else_idx = _find_else_edge(succ_phi, i, target, merge_point)
+                        if succ_else_idx > 0
+                            emit_phi_local_set!(bytes, succ_phi.values[succ_else_idx], j, ctx)
                         end
                     end
                 end
@@ -7606,6 +7655,10 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
             elseif stmt.label > i && stmt.label <= back_edge_idx
                 # Forward jump within loop - branch to that point
                 # This handles the then-branch jumping to merge point
+                # DEBUG PURE-313
+                if haskey(ENV, "PURE313_DEBUG") && (i >= 70 && i <= 110)
+                    @warn "GOTO at line $i → $(stmt.label), open_block=$(haskey(open_blocks, stmt.label) && get(open_blocks, stmt.label, false))"
+                end
                 if haskey(open_blocks, stmt.label) && open_blocks[stmt.label]
                     # Jump to merge point - handle phi update if needed
                     if code[stmt.label] isa Core.PhiNode && haskey(ctx.phi_locals, stmt.label)
