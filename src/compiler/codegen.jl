@@ -9071,8 +9071,12 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                         # wrap with extern_convert_any instead of emitting null default
                                         if phi_local_type === ExternRef && (actual_val_type isa ConcreteRef || actual_val_type === StructRef || actual_val_type === ArrayRef || actual_val_type === AnyRef)
                                             append!(block_bytes, phi_value_bytes)
-                                            push!(block_bytes, Opcode.GC_PREFIX)
-                                            push!(block_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                            # PURE-803: ref.null extern is already externref — don't wrap with extern_convert_any
+                                            _is_ref_null = length(phi_value_bytes) >= 1 && phi_value_bytes[1] == Opcode.REF_NULL
+                                            if !_is_ref_null
+                                                push!(block_bytes, Opcode.GC_PREFIX)
+                                                push!(block_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                            end
                                         else
                                             append!(block_bytes, emit_phi_type_default(phi_local_type))
                                         end
@@ -9747,8 +9751,11 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                         _pvb3 = compile_phi_value(val, i)
                                         if !isempty(_pvb3)
                                             _pvb3_has_ecv = length(_pvb3) >= 2 && _pvb3[end-1] == Opcode.GC_PREFIX && _pvb3[end] == Opcode.EXTERN_CONVERT_ANY
+                                            # PURE-803: compile_phi_value may return ref.null extern for type-mismatch fallback
+                                            # ref.null extern is already externref — extern_convert_any expects anyref input
+                                            _pvb3_is_ref_null = length(_pvb3) >= 1 && _pvb3[1] == Opcode.REF_NULL
                                             append!(bytes, _pvb3)
-                                            if !_pvb3_has_ecv
+                                            if !_pvb3_has_ecv && !_pvb3_is_ref_null
                                                 push!(bytes, Opcode.GC_PREFIX)
                                                 push!(bytes, Opcode.EXTERN_CONVERT_ANY)
                                             end
@@ -9822,8 +9829,12 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                         # wrap with extern_convert_any instead of null default
                                         if phi_local_type === ExternRef && (actual_val_type isa ConcreteRef || actual_val_type === StructRef || actual_val_type === ArrayRef || actual_val_type === AnyRef)
                                             append!(bytes, phi_value_bytes)
-                                            push!(bytes, Opcode.GC_PREFIX)
-                                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                            # PURE-803: ref.null extern is already externref — don't wrap with extern_convert_any
+                                            _is_ref_null2 = length(phi_value_bytes) >= 1 && phi_value_bytes[1] == Opcode.REF_NULL
+                                            if !_is_ref_null2
+                                                push!(bytes, Opcode.GC_PREFIX)
+                                                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                            end
                                         else
                                             # Type mismatch detected at emit point: replace with default
                                             append!(bytes, emit_phi_type_default(phi_local_type))
@@ -10040,8 +10051,12 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                         # wrap with extern_convert_any instead of null default
                                         if phi_local_type === ExternRef && (actual_val_type isa ConcreteRef || actual_val_type === StructRef || actual_val_type === ArrayRef || actual_val_type === AnyRef)
                                             append!(block_bytes, phi_value_bytes)
-                                            push!(block_bytes, Opcode.GC_PREFIX)
-                                            push!(block_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                            # PURE-803: ref.null extern is already externref — don't wrap with extern_convert_any
+                                            _is_ref_null3 = length(phi_value_bytes) >= 1 && phi_value_bytes[1] == Opcode.REF_NULL
+                                            if !_is_ref_null3
+                                                push!(block_bytes, Opcode.GC_PREFIX)
+                                                push!(block_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                            end
                                         else
                                             append!(block_bytes, emit_phi_type_default(phi_local_type))
                                         end
