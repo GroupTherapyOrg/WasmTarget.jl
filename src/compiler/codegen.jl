@@ -21893,7 +21893,13 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
 
             # Check for cross-function call within the module first
             cross_call_handled = false
-            if ctx.func_registry !== nothing && !is_self_call
+            # PURE-913: Skip cross-call for runtime intrinsics with proper inline handlers.
+            # str_substr's generate_intrinsic_body is a stub (returns source string unchanged).
+            # str_trim calls str_substr internally, so also broken when compiled standalone.
+            # The inline handlers below (str_substr at line ~22446, str_trim at ~23572)
+            # properly implement these using WasmGC array operations with caller scratch locals.
+            _skip_cross_call = name in (:str_substr, :str_trim)
+            if ctx.func_registry !== nothing && !is_self_call && !_skip_cross_call
                 # Try to find this function in our registry
                 called_func = nothing
                 if actual_func_ref isa GlobalRef
@@ -23603,8 +23609,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 push!(bytes, 0x00)
                 push!(bytes, Opcode.I32_EQ)
                 push!(bytes, Opcode.IF)
-                push!(bytes, ConcreteRef(str_type_idx).code)  # returns string ref
-                append!(bytes, encode_leb128_unsigned(str_type_idx))
+                append!(bytes, encode_block_type(ConcreteRef(str_type_idx)))
 
                 # Return empty string (the original s)
                 push!(bytes, Opcode.LOCAL_GET)
@@ -23706,8 +23711,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 append!(bytes, encode_leb128_unsigned(len_local))
                 push!(bytes, Opcode.I32_GE_S)
                 push!(bytes, Opcode.IF)
-                push!(bytes, ConcreteRef(str_type_idx).code)
-                append!(bytes, encode_leb128_unsigned(str_type_idx))
+                append!(bytes, encode_block_type(ConcreteRef(str_type_idx)))
 
                 # Return empty string
                 push!(bytes, Opcode.I32_CONST)
