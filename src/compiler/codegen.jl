@@ -20174,6 +20174,21 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
     elseif func isa GlobalRef && func.name === :pointerset
         push!(bytes, Opcode.UNREACHABLE)
 
+    # PURE-604: Core error builtins — these are error/throw paths that should trap silently
+    # (no CROSS-CALL UNREACHABLE warning since they're legitimately unreachable at runtime)
+    elseif func isa GlobalRef && func.name in (:throw_methoderror, :svec, :_apply_iterate)
+        push!(bytes, Opcode.UNREACHABLE)
+
+    # PURE-604: Core.isdefined on Core types (e.g. EnterNode) — error path check
+    elseif func isa GlobalRef && func.name === :isdefined && func.mod === Core
+        push!(bytes, Opcode.UNREACHABLE)
+
+    # PURE-604: Symbol(x) — in WasmGC, Symbol IS String (both are byte arrays).
+    # The argument is already compiled as a string array — just pass through.
+    elseif is_func(func, :Symbol) && func isa GlobalRef && length(args) == 1
+        # Compile the argument — it's already a string array in WasmGC
+        append!(bytes, compile_value(args[1], ctx))
+
     # Cross-function call via GlobalRef (dynamic dispatch when Julia can't specialize)
     # PURE-325: Skip cross-call lookup for Core._expr — it's a builtin that has a
     # special handler below (line ~19900). Without this guard, get_function returns
