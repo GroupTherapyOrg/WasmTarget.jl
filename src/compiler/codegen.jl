@@ -590,6 +590,11 @@ function discover_dependencies(functions::Vector)::Vector
             continue  # Skip if we can't get IR
         end
 
+        # Verify we got IRCode (not Method or other types)
+        if !hasproperty(code_info, :stmts) || !hasproperty(code_info.stmts, :stmt)
+            continue
+        end
+
         # Scan IR for GlobalRef calls to WasmTarget runtime functions
         # Also pass IR + arg_types for :call expression method resolution (PURE-605)
         for (stmt_idx, stmt) in enumerate(code_info.stmts.stmt)
@@ -748,6 +753,14 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
         return
     end
 
+    # PURE-605: Skip kwarg wrapper methods whose arg types contain function singletons
+    # (e.g., #untokenize#44 has typeof(untokenize) as a positional arg)
+    for t in arg_types
+        if t isa DataType && t <: Function && isconcretetype(t)
+            return
+        end
+    end
+
     # Create a unique key for this function+types combination
     key = (func, arg_types)
     if key in seen_funcs
@@ -826,6 +839,30 @@ const CALL_AUTODISCOVER_BASE_METHODS = Set([
 ])
 
 """
+    _sanitize_ssa_type(t) -> Type
+
+Convert compiler-internal SSA types (PartialStruct, Conditional, MustAlias, etc.)
+to concrete DataTypes suitable for `which()` / `Tuple{...}` construction.
+"""
+function _sanitize_ssa_type(t)
+    # Regular types pass through
+    t isa Type && return t
+    # PartialStruct → use its typ field (the concrete DataType)
+    if hasproperty(t, :typ)
+        return t.typ
+    end
+    # Conditional → Bool
+    if hasproperty(t, :thentype) && hasproperty(t, :elsetype)
+        return Bool
+    end
+    # Const → typeof the value
+    if hasproperty(t, :val)
+        return typeof(t.val)
+    end
+    return Any
+end
+
+"""
     try_resolve_call_method!(func_ref, call_args, ir, func_arg_types, seen_funcs, to_add, to_scan)
 
 PURE-605: For :call GlobalRef expressions, try to resolve the method by extracting
@@ -843,7 +880,10 @@ function try_resolve_call_method!(func_ref::GlobalRef, call_args, ir, func_arg_t
 
     # Skip builtins that are handled inline in compile_call
     func_ref.name in (:getfield, :isdefined, :convert, :throw_methoderror,
-                       :svec, :_apply_iterate, :Symbol, :typeassert) && return
+                       :svec, :_apply_iterate, :Symbol, :typeassert,
+                       :typeof, :isa, :throw, :fieldtype, :nfields,
+                       :arrayref, :arrayset, :arraysize, :arraylen,
+                       :pointerref, :pointerset, :_expr) && return
 
     # Get the function object
     called_func = try
@@ -853,82 +893,49 @@ function try_resolve_call_method!(func_ref::GlobalRef, call_args, ir, func_arg_t
     end
 
     # Extract argument types from IR ssavaluetypes
+    # Must sanitize compiler-internal types (PartialStruct, Conditional, etc.) to real Types
     call_types = Any[]
     for arg in call_args
-        if arg isa Core.SSAValue
-            push!(call_types, ir.stmts.type[arg.id])
+        t = if arg isa Core.SSAValue
+            ir.stmts.type[arg.id]
         elseif arg isa Core.Argument
-            if arg.n >= 1 && arg.n <= length(func_arg_types)
-                push!(call_types, func_arg_types[arg.n])
-            else
-                push!(call_types, Any)
-            end
+            arg.n >= 1 && arg.n <= length(func_arg_types) ? func_arg_types[arg.n] : Any
         elseif arg isa GlobalRef
-            push!(call_types, try typeof(getfield(arg.mod, arg.name)) catch; Any end)
+            try typeof(getfield(arg.mod, arg.name)) catch; Any end
         else
-            push!(call_types, typeof(arg))
+            typeof(arg)
         end
+        # Sanitize compiler-internal types to concrete DataTypes
+        push!(call_types, _sanitize_ssa_type(t))
+    end
+
+    # Skip if any arg type is a function singleton (kwarg wrapper pattern)
+    for t in call_types
+        (t isa DataType && t <: Function) && return
     end
 
     # Try to find a matching method
-    arg_tuple = Tuple{call_types...}
-    mi = try
-        m = which(called_func, arg_tuple)
-        # Get specialized MethodInstance via code_typed
-        ct_result = Base.code_typed(called_func, Tuple{call_types...})
-        if !isempty(ct_result)
-            ci = ct_result[1][1]
-            # Extract the MethodInstance from parent if available
-            if hasfield(typeof(ci), :parent) && ci.parent isa Core.MethodInstance
-                ci.parent
-            else
-                nothing
-            end
-        else
-            nothing
-        end
-    catch
-        nothing
+    arg_tuple = try Tuple{call_types...} catch; return end
+    # Try to add the function directly with the inferred arg types
+    # Verify it compiles via code_typed first (guards against invalid type combos)
+    key = (called_func, Tuple(call_types))
+    if key in seen_funcs
+        return
     end
 
-    if mi !== nothing
-        check_and_add_external_method!(mi, seen_funcs, to_add, to_scan)
-    else
-        # Fallback: try to add the function directly with inferred arg types
-        # Concretize abstract types where possible (e.g., Vector{T} where T → Vector{Any})
-        concrete_types = Any[]
-        for t in call_types
-            if t === Any || t isa TypeVar
-                push!(concrete_types, Any)
-            elseif t isa UnionAll
-                # Try to concretize: Vector{T} where T → Vector{Any}
-                push!(concrete_types, try Base.unwrap_unionall(t) catch; t end)
-            else
-                push!(concrete_types, t)
-            end
-        end
+    can_compile = try
+        ct = Base.code_typed(called_func, arg_tuple)
+        !isempty(ct)
+    catch
+        false
+    end
 
-        concrete_tuple = Tuple(concrete_types)
-        key = (called_func, concrete_tuple)
-        if key in seen_funcs
-            return
-        end
-
-        # Verify we can actually get code_typed for this
-        can_compile = try
-            ct = Base.code_typed(called_func, Tuple{concrete_types...})
-            !isempty(ct)
-        catch
-            false
-        end
-
-        if can_compile
-            push!(seen_funcs, key)
-            name = string(func_ref.name)
-            entry = (called_func, concrete_tuple, name)
-            push!(to_add, entry)
-            push!(to_scan, entry)
-        end
+    if can_compile
+        push!(seen_funcs, key)
+        name = string(func_ref.name)
+        entry = (called_func, Tuple(call_types), name)
+        push!(to_add, entry)
+        push!(to_scan, entry)
     end
 end
 
