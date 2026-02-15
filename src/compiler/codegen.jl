@@ -5878,7 +5878,32 @@ function statement_produces_wasm_value(stmt::Expr, idx::Int, ctx::CompilationCon
                 end
             end
         end
-        # For Any type that's not a known Nothing invoke, assume no value produced
+        # PURE-905: Also check :call statements against func_registry.
+        # Cross-call handler emits CALL to functions that return values,
+        # but the Julia SSA type may be Any. Check if the target function
+        # in the registry has a non-Nothing return type.
+        if stmt.head === :call && length(stmt.args) >= 1 && ctx.func_registry !== nothing
+            func_ref = stmt.args[1]
+            if func_ref isa GlobalRef
+                called_func = try
+                    getfield(func_ref.mod, func_ref.name)
+                catch
+                    nothing
+                end
+                if called_func !== nothing && haskey(ctx.func_registry.by_ref, called_func)
+                    # Look up the specific method to check return type
+                    call_arg_types = tuple([infer_value_type(arg, ctx) for arg in stmt.args[2:end]]...)
+                    target_info = get_function(ctx.func_registry, called_func, call_arg_types)
+                    if target_info === nothing && typeof(called_func) <: Function && isconcretetype(typeof(called_func))
+                        target_info = get_function(ctx.func_registry, called_func, (typeof(called_func), call_arg_types...))
+                    end
+                    if target_info !== nothing && target_info.return_type !== Nothing
+                        return true
+                    end
+                end
+            end
+        end
+        # For Any type that's not a known Nothing invoke/call, assume no value produced
         return false
     end
 
@@ -17102,7 +17127,6 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
     func = expr.args[1]
     args = expr.args[2:end]
 
-
     # Special case for signal read: getfield(Signal, :value) -> global.get
     # This is detected by analyze_signal_captures! and stored in signal_ssa_getters
     # ONLY applies to actual getfield/getproperty(Signal, :value) calls (WasmGlobal pattern)
@@ -18904,10 +18928,28 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
     # EXCEPTION: For === and !== comparisons, Type values ARE runtime values
     # (they get compiled to i32 type tags and compared)
     # PURE-325: Skip arg-pushing for Core._expr — its handler manages its own args
+    # PURE-905: Skip arg-pushing for cross-call candidates — the cross-call handler
+    # at line ~20714 pushes args with type bridging. Pre-pushing here causes duplicate
+    # args on the stack (e.g., setindex! gets 6 args instead of 3).
+    # Cross-call candidates are GlobalRef functions found in the func_registry that
+    # aren't handled by a specific earlier handler (intrinsics, ===, _expr, etc.).
     is_expr_call = is_func(func, :_expr)
     is_equality_comparison = is_func(func, :(===)) || is_func(func, :(!==))
+    _skip_arg_prepush = is_expr_call
+    if !_skip_arg_prepush && func isa GlobalRef && ctx.func_registry !== nothing &&
+            !is_numeric_intrinsic && !is_equality_comparison
+        _called_func = try getfield(func.mod, func.name) catch; nothing end
+        if _called_func !== nothing
+            _call_arg_types = tuple([infer_value_type(a, ctx) for a in args]...)
+            _target = get_function(ctx.func_registry, _called_func, _call_arg_types)
+            if _target === nothing && typeof(_called_func) <: Function && isconcretetype(typeof(_called_func))
+                _target = get_function(ctx.func_registry, _called_func, (typeof(_called_func), _call_arg_types...))
+            end
+            _skip_arg_prepush = _target !== nothing
+        end
+    end
     for arg in args
-        if is_expr_call
+        if _skip_arg_prepush
             continue
         end
         # Check if this argument is a type reference
