@@ -761,7 +761,10 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
     # PURE-800: Exempt WasmTarget (M4 self-hosting needs #compile#84)
     # PURE-804: Exempt JuliaSyntax (parsestmt needs #_parse#75)
     # PURE-914: Exempt whitelisted Base methods (findnext takes Fix2{typeof(isequal),Char})
-    _exempt_mod = mod === WasmTarget || nameof(mod) === :JuliaSyntax ||
+    # Also exempt JuliaSyntax submodules (e.g., Tokenize for accept_number with isdigit)
+    _is_julias = nameof(mod) === :JuliaSyntax ||
+                 (isdefined(mod, :parentmodule) && try nameof(parentmodule(mod)) === :JuliaSyntax catch; false end)
+    _exempt_mod = mod === WasmTarget || _is_julias ||
                   (mod === Base && meth_name in AUTODISCOVER_BASE_METHODS)
     if !_exempt_mod
         for t in arg_types
