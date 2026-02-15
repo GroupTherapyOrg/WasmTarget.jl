@@ -13203,10 +13203,17 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                 append!(inner_bytes, encode_block_type(phi_wasm_type))
 
                 # Then-branch: compile any statements, then push the value
+                then_hit_unreachable = false
                 for i in then_start:goto_idx-1
                     stmt = code[i]
                     if stmt !== nothing && !(stmt isa Core.GotoIfNot) && !(stmt isa Core.GotoNode) && !(stmt isa Core.PhiNode)
-                        append!(inner_bytes, compile_statement(stmt, i, ctx))
+                        _then_stmt_bytes = compile_statement(stmt, i, ctx)
+                        append!(inner_bytes, _then_stmt_bytes)
+                        # PURE-908: If statement emitted unreachable, skip phi value
+                        if !isempty(_then_stmt_bytes) && _then_stmt_bytes[end] == Opcode.UNREACHABLE
+                            then_hit_unreachable = true
+                            break
+                        end
                     end
                 end
                 # Push then-branch result value
@@ -13214,7 +13221,10 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                 # 1. then_value is nothing (Julia's nothing) - need ref.null if ref type expected
                 # 2. then_value compiles to nothing (SSA with Nothing type) - need ref.null
                 # 3. then_value compiles to actual value - use that
-                if then_value === nothing
+                # PURE-908: Skip if we hit unreachable — stack is polymorphic
+                if then_hit_unreachable
+                    # unreachable makes stack polymorphic — no phi value needed
+                elseif then_value === nothing
                     # Phi value is Julia's nothing - emit ref.null if ref type expected
                     if phi_wasm_type isa ConcreteRef
                         push!(inner_bytes, Opcode.REF_NULL)
@@ -13264,7 +13274,14 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                         elseif stmt isa Core.ReturnNode
                             continue
                         else
-                            append!(inner_bytes, compile_statement(stmt, i, ctx))
+                            _else_stmt_bytes = compile_statement(stmt, i, ctx)
+                            append!(inner_bytes, _else_stmt_bytes)
+                            # PURE-908: If statement emitted unreachable (stub call),
+                            # mark else as unreachable and stop emitting dead code.
+                            if !isempty(_else_stmt_bytes) && _else_stmt_bytes[end] == Opcode.UNREACHABLE
+                                is_else_unreachable = true
+                                break
+                            end
                         end
                     end
                 end
