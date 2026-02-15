@@ -5681,6 +5681,38 @@ function emit_ref_cast_if_structref!(bytes::Vector{UInt8}, val, target_type_idx:
 end
 
 """
+    _narrow_generic_local!(bytes, local_idx, ssa_id, ctx)
+
+PURE-901: When a local has generic type (anyref/structref) but the SSA's Julia type
+maps to a concrete Wasm type, emit `ref.cast null \$concrete_type` to narrow the value
+on the stack. This ensures downstream struct_get/array_get see the correct type.
+
+This is safe because ref.cast null on the correct type is a no-op at runtime,
+and on the wrong type it traps (which indicates a real codegen bug).
+"""
+function _narrow_generic_local!(bytes::Vector{UInt8}, local_idx::Integer, ssa_id::Integer, ctx::CompilationContext)
+    arr_idx = local_idx - ctx.n_params + 1
+    if arr_idx < 1 || arr_idx > length(ctx.locals)
+        return
+    end
+    local_wasm_type = ctx.locals[arr_idx]
+    if !(local_wasm_type === AnyRef || local_wasm_type === StructRef)
+        return  # Local is already concrete — no narrowing needed
+    end
+    # Look up the SSA's Julia type to find a concrete Wasm type
+    ssa_julia_type = get(ctx.ssa_types, ssa_id, Any)
+    if ssa_julia_type === Any || ssa_julia_type === Union{}
+        return  # Can't narrow — don't know the concrete type
+    end
+    concrete_wasm = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
+    if concrete_wasm isa ConcreteRef
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.REF_CAST_NULL)
+        append!(bytes, encode_leb128_signed(Int64(concrete_wasm.type_idx)))
+    end
+end
+
+"""
 Extract the global index from a WasmGlobal type.
 The index is stored as a type parameter, so we extract it from the type.
 """
@@ -16371,6 +16403,10 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
             local_idx = ctx.ssa_locals[val.id]
             push!(bytes, Opcode.LOCAL_GET)
             append!(bytes, encode_leb128_unsigned(local_idx))
+            # PURE-901: Narrow generic locals (anyref/structref) to concrete type.
+            # When SSA type is concrete but local was allocated as generic (due to Union/Any),
+            # ref.cast ensures downstream struct_get/array_get see the correct type.
+            _narrow_generic_local!(bytes, local_idx, val.id, ctx)
         elseif haskey(ctx.phi_locals, val.id)
             # Phi node - load from phi local
             local_idx = ctx.phi_locals[val.id]
