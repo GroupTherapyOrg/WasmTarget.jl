@@ -5017,6 +5017,9 @@ function allocate_ssa_locals!(ctx::CompilationContext)
                         if arg_idx <= length(ctx.arg_types)
                             inner_type = ctx.arg_types[arg_idx]
                         end
+                    else
+                        # Literal value — infer type from the value itself
+                        inner_type = typeof(inner_val)
                     end
                     if inner_type !== nothing && inner_type !== Any && inner_type !== Union{}
                         ssa_type = inner_type
