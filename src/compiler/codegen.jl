@@ -1730,6 +1730,51 @@ function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataT
         # For self-referential types with Vector{T} fields, we use rec groups
         # to allow concrete type references between struct and array types.
 
+        # Step 0: Pre-register non-self-referential field types BEFORE allocating
+        # the reserved struct index. This ensures they get lower type indices,
+        # so the struct's references to them are backward-looking (valid in Wasm).
+        # Without this, fields like Vector{OtherType} or SyntaxData get allocated
+        # AFTER the struct, creating forward references outside the rec group.
+        _registering_types[T] = -1  # Mark as being registered to prevent recursion
+        for i in 1:fieldcount(T)
+            ft = fieldtype(T, i)
+            # Skip self-referential fields (handled by rec group)
+            if ft === T || (ft <: AbstractVector && eltype(ft) === T)
+                continue
+            end
+            # Handle Union fields: pre-register the inner type
+            if ft isa Union
+                inner = get_nullable_inner_type(ft)
+                if inner !== nothing
+                    if inner === T || (inner <: AbstractVector && eltype(inner) === T)
+                        continue  # Self-referential
+                    end
+                    if inner <: AbstractVector && inner isa DataType
+                        elem = eltype(inner)
+                        if elem !== T && isconcretetype(elem) && isstructtype(elem) && !haskey(registry.structs, elem) && !haskey(_registering_types, elem)
+                            register_struct_type!(mod, registry, elem)
+                        end
+                        if !haskey(registry.vectors, inner)
+                            register_vector_type!(mod, registry, inner)
+                        end
+                    elseif isconcretetype(inner) && isstructtype(inner) && !haskey(registry.structs, inner) && !haskey(_registering_types, inner)
+                        register_struct_type!(mod, registry, inner)
+                    end
+                end
+            elseif ft <: AbstractVector && ft isa DataType
+                elem = eltype(ft)
+                if elem !== T && isconcretetype(elem) && isstructtype(elem) && !haskey(registry.structs, elem) && !haskey(_registering_types, elem)
+                    register_struct_type!(mod, registry, elem)
+                end
+                if !haskey(registry.vectors, ft)
+                    register_vector_type!(mod, registry, ft)
+                end
+            elseif isconcretetype(ft) && isstructtype(ft) && !haskey(registry.structs, ft) && !haskey(_registering_types, ft)
+                register_struct_type!(mod, registry, ft)
+            end
+        end
+        delete!(_registering_types, T)
+
         # Step 1: Add struct placeholder first (with placeholder fields)
         # We need the struct index before creating array types that reference it
         temp_fields = FieldType[]
@@ -1755,31 +1800,53 @@ function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataT
 
         # Step 2: Create array types for Vector{T} fields with concrete element type
         # Now that we have reserved_idx, array types can reference it
+        # Also create Vector wrapper structs and include them in the rec group.
         array_type_indices = Dict{Int, UInt32}()
+        vector_wrapper_indices = UInt32[]
         for i in 1:fieldcount(T)
             ft = fieldtype(T, i)
+            vec_type = nothing  # The Vector type to create a wrapper for
             if ft <: AbstractVector && eltype(ft) === T
-                # Use concrete reference to the reserved struct index
-                arr_idx = add_array_type!(mod, ConcreteRef(reserved_idx, true), true)
-                array_type_indices[i] = arr_idx
-                registry.arrays[T] = arr_idx
+                vec_type = ft
             elseif ft isa Union
                 inner = get_nullable_inner_type(ft)
                 if inner !== nothing && inner <: AbstractVector && eltype(inner) === T
-                    arr_idx = add_array_type!(mod, ConcreteRef(reserved_idx, true), true)
-                    array_type_indices[i] = arr_idx
-                    registry.arrays[T] = arr_idx
+                    vec_type = inner
+                end
+            end
+            if vec_type !== nothing
+                # Create array type with concrete element reference
+                arr_idx = add_array_type!(mod, ConcreteRef(reserved_idx, true), true)
+                array_type_indices[i] = arr_idx
+                registry.arrays[T] = arr_idx
+                # Also create the Vector wrapper struct now (within rec group scope)
+                # so it gets a type index adjacent to the array type
+                if vec_type isa DataType && !haskey(registry.structs, vec_type)
+                    size_tuple_type = Tuple{Int64}
+                    if !haskey(registry.structs, size_tuple_type)
+                        register_tuple_type!(mod, registry, size_tuple_type)
+                    end
+                    size_struct_info = registry.structs[size_tuple_type]
+                    vec_fields = [
+                        FieldType(ConcreteRef(arr_idx, true), true),
+                        FieldType(ConcreteRef(size_struct_info.wasm_type_idx, true), true)
+                    ]
+                    vec_type_idx = add_struct_type!(mod, vec_fields)
+                    vec_info = StructInfo(vec_type, vec_type_idx, [:ref, :size], DataType[Array{T, 1}, size_tuple_type])
+                    registry.structs[vec_type] = vec_info
+                    push!(vector_wrapper_indices, vec_type_idx)
                 end
             end
         end
 
-        # Step 3: Add rec group for the struct and its array types
-        if !isempty(array_type_indices)
-            rec_group = UInt32[reserved_idx]
-            for arr_idx in values(array_type_indices)
-                push!(rec_group, arr_idx)
-            end
-            add_rec_group!(mod, rec_group)
+        # Step 3: Add rec group for the struct, its array types, and Vector wrappers
+        rec_group_types = UInt32[reserved_idx]
+        for arr_idx in values(array_type_indices)
+            push!(rec_group_types, arr_idx)
+        end
+        append!(rec_group_types, vector_wrapper_indices)
+        if length(rec_group_types) > 1
+            add_rec_group!(mod, rec_group_types)
         end
 
         try
