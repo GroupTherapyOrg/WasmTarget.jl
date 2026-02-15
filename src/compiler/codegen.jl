@@ -20337,8 +20337,9 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
     elseif func isa GlobalRef && func.name in (:throw_methoderror, :svec, :_apply_iterate)
         push!(bytes, Opcode.UNREACHABLE)
 
-    # PURE-604: Core.isdefined on Core types (e.g. EnterNode) — error path check
-    elseif func isa GlobalRef && func.name === :isdefined && func.mod === Core
+    # PURE-604/605: Core builtins re-exported through Base (isdefined, getfield, setfield!).
+    # These are dead code paths from dynamic dispatch — trap silently in WasmGC.
+    elseif func isa GlobalRef && func.name in (:isdefined, :getfield, :setfield!) && func.mod in (Core, Base)
         push!(bytes, Opcode.UNREACHABLE)
 
     # PURE-604: Symbol(x) — in WasmGC, Symbol IS String (both are byte arrays).
@@ -20448,7 +20449,13 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             else
                 # No matching signature - likely dead code from Union type branches
                 # Emit unreachable instead of error (the branch won't be taken at runtime)
-                @warn "CROSS-CALL UNREACHABLE: $(func) with arg types $(call_arg_types) (in func_$(ctx.func_idx))"
+                # PURE-605: Suppress warning for known-safe dynamic dispatch paths where
+                # Julia couldn't specialize (arg types contain Any/abstract types).
+                # These are dead code branches in WasmGC context (we compile with concrete types).
+                _has_abstract = any(t -> t === Any || !isconcretetype(t), call_arg_types)
+                if !_has_abstract
+                    @warn "CROSS-CALL UNREACHABLE: $(func) with arg types $(call_arg_types) (in func_$(ctx.func_idx))"
+                end
                 push!(bytes, Opcode.UNREACHABLE)
             end
         else
