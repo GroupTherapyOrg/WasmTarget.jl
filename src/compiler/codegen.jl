@@ -4096,6 +4096,9 @@ mutable struct CompilationContext
     # Stack validator: tracks value stack types during bytecode emission (PURE-414)
     # Advisory only — warns on type mismatches but doesn't prevent compilation
     validator::WasmStackValidator
+    # PURE-908: Set true by compile_call/compile_invoke when a stub emits UNREACHABLE.
+    # compile_statement reads and resets this to skip LOCAL_SET in dead code.
+    last_stmt_was_stub::Bool
 end
 
 function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
@@ -4132,7 +4135,8 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         module_globals,         # Module-level globals (const mutable structs)
         nothing,                # scratch_locals (set by allocate_scratch_locals!)
         Dict{Int, Any}(),       # memoryref_offsets (populated during compilation)
-        WasmStackValidator(enabled=true, func_name="func_$(func_idx)")  # PURE-414: stack validator
+        WasmStackValidator(enabled=true, func_name="func_$(func_idx)"),  # PURE-414: stack validator
+        false                   # last_stmt_was_stub (PURE-908)
     )
     # Analyze SSA types and allocate locals for multi-use SSAs
     analyze_ssa_types!(ctx)
@@ -8322,7 +8326,7 @@ function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBloc
             else
                 stmt_bytes = compile_statement(stmt, i, ctx)
                 append!(bytes, stmt_bytes)
-                # PURE-907: If statement emitted unreachable (stub call), stop emitting
+                # PURE-907/908: If statement emitted unreachable (stub call), stop emitting
                 # code in this branch. unreachable makes the stack polymorphic, which
                 # satisfies the typed block's result type. Emitting more values after
                 # unreachable causes "values remaining on stack" validation errors.
@@ -14033,6 +14037,7 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
 
     elseif stmt isa Expr
         stmt_bytes = UInt8[]
+        ctx.last_stmt_was_stub = false  # PURE-908: reset before dispatch
         if stmt.head === :call
             stmt_bytes = compile_call(stmt, idx, ctx)
         elseif stmt.head === :invoke
@@ -14058,6 +14063,12 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
             # TODO: Implement proper exception value handling
         end
 
+        # PURE-908: Check if compile_call/compile_invoke emitted a stub UNREACHABLE.
+        # Byte-level detection of 0x00 is unreliable (LEB128 zeros are common).
+        # Instead, compile_call/compile_invoke set ctx.last_stmt_was_stub = true.
+        _stmt_ends_unreachable = ctx.last_stmt_was_stub
+        ctx.last_stmt_was_stub = false  # Reset for next statement
+
         # Safety check: if stmt_bytes produces a value incompatible with the SSA local type,
         # replace with type-safe default. Catches:
         # (1) Pure local.get of incompatible type
@@ -14066,7 +14077,8 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
         ssa_type_mismatch = false
         needs_ref_cast_local = nothing  # Set to ConcreteRef target type when ref.cast is needed
         needs_any_convert_extern = false  # PURE-036bj: externref→anyref before ref.cast
-        if haskey(ctx.ssa_locals, idx) && length(stmt_bytes) >= 2
+        # PURE-908: Skip safety checks for stub stmts — no value on stack to check
+        if !_stmt_ends_unreachable && haskey(ctx.ssa_locals, idx) && length(stmt_bytes) >= 2
             local_idx = ctx.ssa_locals[idx]
             local_array_idx = local_idx - ctx.n_params + 1
             local_wasm_type = local_array_idx >= 1 && local_array_idx <= length(ctx.locals) ? ctx.locals[local_array_idx] : nothing
@@ -14718,9 +14730,10 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
         if haskey(ctx.ssa_locals, idx) && !ssa_type_mismatch
             stmt_type = get(ctx.ssa_types, idx, Any)
             is_unreachable_type = stmt_type === Union{}
-            is_unreachable_bytecode = length(stmt_bytes) >= 2 &&
+            is_unreachable_bytecode = (length(stmt_bytes) >= 2 &&
                                        stmt_bytes[end] == Opcode.UNREACHABLE &&
-                                       stmt_bytes[end-1] == Opcode.DROP
+                                       stmt_bytes[end-1] == Opcode.DROP) ||
+                                      _stmt_ends_unreachable  # PURE-908: catch stub UNREACHABLE
             is_unreachable = is_unreachable_type || is_unreachable_bytecode
             should_store = (!isempty(stmt_bytes) || is_passthrough_statement(stmt, ctx)) && !is_unreachable
             if should_store
@@ -14796,6 +14809,7 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
         else
             @warn "Stubbing :new with dynamic SSAValue type: $struct_type_ref ($ssa_type)"
             push!(bytes, Opcode.UNREACHABLE)
+            ctx.last_stmt_was_stub = true  # PURE-908
             return bytes
         end
     else
@@ -16180,6 +16194,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
     # (2) Correctly traps if this code path is reached at runtime
     # (3) Enables then_ends_unreachable detection for IF block typing
     push!(bytes, Opcode.UNREACHABLE)
+    ctx.last_stmt_was_stub = true  # PURE-908
     return bytes
 end
 
@@ -20776,22 +20791,26 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             append!(bytes, encode_leb128_unsigned(string_arr_type))
         else
             push!(bytes, Opcode.UNREACHABLE)
+            ctx.last_stmt_was_stub = true  # PURE-908
         end
 
     # Base.pointerset - write to pointer
     # WasmGC has no linear memory — pointer ops are invalid. Trap at runtime.
     elseif func isa GlobalRef && func.name === :pointerset
         push!(bytes, Opcode.UNREACHABLE)
+        ctx.last_stmt_was_stub = true  # PURE-908
 
     # PURE-604: Core error builtins — these are error/throw paths that should trap silently
     # (no CROSS-CALL UNREACHABLE warning since they're legitimately unreachable at runtime)
     elseif func isa GlobalRef && func.name in (:throw_methoderror, :svec, :_apply_iterate)
         push!(bytes, Opcode.UNREACHABLE)
+        ctx.last_stmt_was_stub = true  # PURE-908
 
     # PURE-604/605: Core builtins re-exported through Base (isdefined, getfield, setfield!).
     # These are dead code paths from dynamic dispatch — trap silently in WasmGC.
     elseif func isa GlobalRef && func.name in (:isdefined, :getfield, :setfield!) && func.mod in (Core, Base)
         push!(bytes, Opcode.UNREACHABLE)
+        ctx.last_stmt_was_stub = true  # PURE-908
 
     # PURE-604: Symbol(x) — in WasmGC, Symbol IS String (both are byte arrays).
     # The argument is already compiled as a string array — just pass through.
@@ -20974,6 +20993,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     @warn "CROSS-CALL UNREACHABLE: $(func) with arg types $(call_arg_types) (in func_$(ctx.func_idx))"
                 end
                 push!(bytes, Opcode.UNREACHABLE)
+                ctx.last_stmt_was_stub = true  # PURE-908
             end
         else
             error("Unsupported function call: $func (type: $(typeof(func)))")
@@ -21211,8 +21231,15 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         # Unknown function call — emit unreachable (will trap at runtime)
         @warn "Stubbing unsupported call: $func (will trap at runtime)" maxlog=1
         push!(bytes, Opcode.UNREACHABLE)
+        ctx.last_stmt_was_stub = true  # PURE-908
     end
 
+    # PURE-908: Catch-all — any path in compile_call that ends with UNREACHABLE is a stub.
+    # In compile_call, bytes[end] == 0x00 is always UNREACHABLE (no call 0 path here;
+    # Math.pow is in compile_invoke, and cross-call func indices are >= 1).
+    if !isempty(bytes) && bytes[end] == Opcode.UNREACHABLE
+        ctx.last_stmt_was_stub = true
+    end
     return bytes
 end
 
@@ -24531,10 +24558,17 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 # don't actually reach these methods.
                 @warn "Stubbing unsupported method: $name (will trap at runtime)" maxlog=1
                 push!(bytes, Opcode.UNREACHABLE)
+                ctx.last_stmt_was_stub = true  # PURE-908
             end
         end
     end
 
+    # PURE-908: Catch-all — detect stub UNREACHABLE at end of compile_invoke.
+    # Exclude call N (func calls) which end with LEB128 func index that could be 0x00.
+    if !isempty(bytes) && bytes[end] == Opcode.UNREACHABLE &&
+       !(length(bytes) >= 2 && bytes[end-1] == Opcode.CALL)
+        ctx.last_stmt_was_stub = true
+    end
     return bytes
 end
 
