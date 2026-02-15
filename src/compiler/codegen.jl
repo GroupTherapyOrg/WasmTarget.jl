@@ -6461,12 +6461,7 @@ WASM structure:
   )
   ;; code after try/catch
 """
-"""
-    ensure_exception_tag!(mod::WasmModule)
-
-Ensure the module has an exception tag (tag 0) for Julia exceptions.
-Called from throw sites and try/catch generation. Idempotent.
-"""
+# PURE-1102: Ensure module has exception tag 0 for Julia exceptions (idempotent)
 function ensure_exception_tag!(mod::WasmModule)
     if isempty(mod.tags)
         void_ft = FuncType(WasmValType[], WasmValType[])
