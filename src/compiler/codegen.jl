@@ -757,9 +757,10 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
 
     # PURE-605: Skip kwarg wrapper methods whose arg types contain function singletons
     # (e.g., #untokenize#44 has typeof(untokenize) as a positional arg)
-    # PURE-800: But DON'T skip kwarg wrappers for the module being compiled (e.g., WasmTarget
-    # #compile#84 needs to be compiled for M4 self-hosting)
-    if !(mod === WasmTarget)
+    # These cause cascading discovery of methods that may not compile cleanly.
+    # PURE-800: Exempt WasmTarget (M4 self-hosting needs #compile#84)
+    # PURE-804: Exempt JuliaSyntax (parsestmt needs #_parse#75)
+    if !(mod === WasmTarget || nameof(mod) === :JuliaSyntax)
         for t in arg_types
             if t isa DataType && t <: Function && isconcretetype(t)
                 return
