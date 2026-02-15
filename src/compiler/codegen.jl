@@ -4370,7 +4370,8 @@ end
 
 function allocate_local!(ctx::CompilationContext, wasm_type::WasmValType)::Int
     local_idx = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, wasm_type)
+    # PURE-908: normalize AnyRef → ExternRef to avoid type hierarchy mismatches
+    push!(ctx.locals, wasm_type === AnyRef ? ExternRef : wasm_type)
     return local_idx
 end
 
@@ -4379,9 +4380,12 @@ Convert a Julia type to a WasmValType, using concrete references for struct/arra
 This is like `julia_to_wasm_type` but returns `ConcreteRef` for registered types.
 """
 function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
-    # Vararg is a type modifier, not a proper type — treat as anyref
+    # Vararg is a type modifier, not a proper type
+    # PURE-908: Use ExternRef instead of AnyRef for locals to avoid externref↔anyref
+    # mismatches. In WasmGC, anyref and externref are separate type hierarchies.
+    # Since Any→ExternRef and cross-calls return ExternRef, locals must be ExternRef.
     if T isa Core.TypeofVararg
-        return AnyRef
+        return ExternRef
     end
     # Union{} (TypeofBottom) is the bottom type — no values exist of this type.
     # Used for unreachable code paths. Map to I32 as placeholder.
@@ -4520,11 +4524,15 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
             # PURE-325: Use julia_to_wasm_type for consistency with function signatures.
             # This ensures the caller's local type matches the called function's return type.
             # resolve_union_type handles Int128/BigInt/UInt128 unions correctly.
-            return julia_to_wasm_type(T)
+            result = julia_to_wasm_type(T)
+            # PURE-908: Never return AnyRef for locals — use ExternRef instead
+            return result === AnyRef ? ExternRef : result
         end
     else
         # Use the standard conversion for non-struct types
-        return julia_to_wasm_type(T)
+        result = julia_to_wasm_type(T)
+        # PURE-908: Never return AnyRef for locals — use ExternRef instead
+        return result === AnyRef ? ExternRef : result
     end
 end
 
@@ -4709,7 +4717,8 @@ function analyze_control_flow!(ctx::CompilationContext)
             end
 
             local_idx = ctx.n_params + length(ctx.locals)
-            push!(ctx.locals, phi_wasm_type)
+            # PURE-908: normalize AnyRef → ExternRef for phi locals
+            push!(ctx.locals, phi_wasm_type === AnyRef ? ExternRef : phi_wasm_type)
             ctx.phi_locals[i] = local_idx
         end
     end
@@ -5182,7 +5191,8 @@ function allocate_ssa_locals!(ctx::CompilationContext)
             end
 
             local_idx = ctx.n_params + length(ctx.locals)
-            push!(ctx.locals, wasm_type)
+            # PURE-908: normalize AnyRef → ExternRef for SSA locals
+            push!(ctx.locals, wasm_type === AnyRef ? ExternRef : wasm_type)
             ctx.ssa_locals[ssa_id] = local_idx
         end
     end
@@ -6497,7 +6507,7 @@ function generate_try_catch(ctx::CompilationContext, blocks::Vector{BasicBlock},
             else_target = goto_if_not.dest
 
             # Compile the condition value
-            append!(bytes, compile_value(goto_if_not.cond, ctx))
+            append!(bytes, compile_condition_to_i32(goto_if_not.cond, ctx))
 
             # Check if then-branch has a return or throw (void if) vs needs else
             then_start = i + 1
@@ -6726,7 +6736,7 @@ function generate_branched_loops(ctx::CompilationContext, first_header::Int, fir
 
     # Get the condition and compile it
     cond_stmt = code[cond_idx]::Core.GotoIfNot
-    append!(bytes, compile_value(cond_stmt.cond, ctx))
+    append!(bytes, compile_condition_to_i32(cond_stmt.cond, ctx))
 
     # Create if/else structure
     # When condition is TRUE: first branch
@@ -6786,7 +6796,7 @@ function generate_branched_loops(ctx::CompilationContext, first_header::Int, fir
             #          if condition is FALSE, skip (which matches GotoIfNot semantics)
             # Since the dead code is already skipped via dead_regions,
             # we just need to consume the condition value
-            append!(bytes, compile_value(stmt.cond, ctx))
+            append!(bytes, compile_condition_to_i32(stmt.cond, ctx))
             push!(bytes, Opcode.IF)
             push!(bytes, 0x40)  # void
             push!(bytes, Opcode.END)  # Empty then-branch
@@ -6869,7 +6879,7 @@ function generate_branched_loops(ctx::CompilationContext, first_header::Int, fir
             end
         elseif stmt isa Core.GotoIfNot
             # Inner conditional - use IF to consume condition
-            append!(bytes, compile_value(stmt.cond, ctx))
+            append!(bytes, compile_condition_to_i32(stmt.cond, ctx))
             push!(bytes, Opcode.IF)
             push!(bytes, 0x40)  # void
             push!(bytes, Opcode.END)  # Empty then-branch
@@ -7562,7 +7572,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
 
                     # Use IF structure: if condition is TRUE, fall through to if-body
                     # The ELSE branch (implicit) skips to post-loop
-                    append!(bytes, compile_value(stmt.cond, ctx))
+                    append!(bytes, compile_condition_to_i32(stmt.cond, ctx))
                     push!(bytes, Opcode.IF)
                     push!(bytes, 0x40)  # void block type
                     # This IF will be closed after the loop completes
@@ -7584,7 +7594,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                     pre_loop_depth += 1
 
                     # Branch past the block if condition is FALSE (skip then-branch)
-                    append!(bytes, compile_value(stmt.cond, ctx))
+                    append!(bytes, compile_condition_to_i32(stmt.cond, ctx))
                     push!(bytes, Opcode.I32_EQZ)
                     push!(bytes, Opcode.BR_IF)
                     push!(bytes, 0x00)
@@ -7609,7 +7619,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                         else_start = target
 
                         # Compile condition BEFORE any control structure
-                        append!(bytes, compile_value(stmt.cond, ctx))
+                        append!(bytes, compile_condition_to_i32(stmt.cond, ctx))
 
                         # Use IF/ELSE structure
                         push!(bytes, Opcode.IF)
@@ -7645,7 +7655,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                         end
 
                         # Compile condition BEFORE any control structure
-                        append!(bytes, compile_value(stmt.cond, ctx))
+                        append!(bytes, compile_condition_to_i32(stmt.cond, ctx))
 
                         # Use if-then structure: if condition is TRUE, execute then-branch
                         push!(bytes, Opcode.IF)
@@ -7848,7 +7858,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                 continue
             elseif target > back_edge_idx
                 # This is the LOOP EXIT condition
-                append!(bytes, compile_value(stmt.cond, ctx))
+                append!(bytes, compile_condition_to_i32(stmt.cond, ctx))
                 push!(bytes, Opcode.I32_EQZ)  # Invert: if NOT condition
                 push!(bytes, Opcode.BR_IF)
                 push!(bytes, UInt8(1 + current_depth))  # Break to exit block
@@ -7884,7 +7894,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                 current_depth += 1
 
                 # Branch to merge point if condition is FALSE
-                append!(bytes, compile_value(stmt.cond, ctx))
+                append!(bytes, compile_condition_to_i32(stmt.cond, ctx))
                 push!(bytes, Opcode.I32_EQZ)  # Invert condition
                 push!(bytes, Opcode.BR_IF)
                 push!(bytes, 0x00)  # Branch to the block we just opened (depth 0)
@@ -7894,7 +7904,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                 push!(bytes, 0x40)
                 open_blocks[target] = true
                 current_depth += 1
-                append!(bytes, compile_value(stmt.cond, ctx))
+                append!(bytes, compile_condition_to_i32(stmt.cond, ctx))
                 push!(bytes, Opcode.I32_EQZ)
                 push!(bytes, Opcode.BR_IF)
                 push!(bytes, 0x00)
@@ -8143,7 +8153,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
             end
 
             # Branch if condition is FALSE (skip then-branch)
-            append!(bytes, compile_value(stmt.cond, ctx))
+            append!(bytes, compile_condition_to_i32(stmt.cond, ctx))
             push!(bytes, Opcode.I32_EQZ)
             push!(bytes, Opcode.BR_IF)
             push!(bytes, 0x00)
@@ -8265,7 +8275,7 @@ function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBloc
 
     # The condition value should be on the stack (it's an SSA reference)
     # We need to push it
-    append!(bytes, compile_value(goto_if_not.cond, ctx))
+    append!(bytes, compile_condition_to_i32(goto_if_not.cond, ctx))
 
     # Find the then-branch and else-branch boundaries
     then_start = first_block.end_idx + 1
@@ -8658,7 +8668,7 @@ function compile_nested_if_else(ctx::CompilationContext, code, goto_idx::Int, co
 
     # The condition is already computed (it's an SSA reference)
     # Push it
-    append!(bytes, compile_value(goto_if_not.cond, ctx))
+    append!(bytes, compile_condition_to_i32(goto_if_not.cond, ctx))
     push!(compiled, goto_idx)
 
     # Determine result type - should match the enclosing function's return type
@@ -10368,7 +10378,7 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
             has_phi = dest_block !== nothing && dest_has_phi_from_edge(dest_block, terminator_idx)
 
             # Compile condition
-            cond_bytes = compile_value(term.cond, ctx)
+            cond_bytes = compile_condition_to_i32(term.cond, ctx)
             append!(bytes, cond_bytes)
 
             # If condition is TRUE, fall through to next block
@@ -10594,7 +10604,7 @@ function generate_linear_flow(ctx::CompilationContext, blocks::Vector{BasicBlock
             elseif stmt isa Core.GotoIfNot
                 push!(compiled, i)
                 # Compile condition
-                append!(range_bytes, compile_value(stmt.cond, ctx))
+                append!(range_bytes, compile_condition_to_i32(stmt.cond, ctx))
 
                 # Check if then branch has a return
                 then_end = stmt.dest - 1
@@ -10776,7 +10786,7 @@ function generate_void_flow(ctx::CompilationContext, blocks::Vector{BasicBlock},
             end
 
             # Push condition
-            append!(bytes, compile_value(goto_if_not.cond, ctx))
+            append!(bytes, compile_condition_to_i32(goto_if_not.cond, ctx))
             push!(compiled, i)
 
             # Start void if block
@@ -11095,7 +11105,7 @@ function compile_void_nested_conditional(ctx::CompilationContext, code, start_id
     end_target = goto_if_not.dest
 
     # Push condition
-    append!(bytes, compile_value(goto_if_not.cond, ctx))
+    append!(bytes, compile_condition_to_i32(goto_if_not.cond, ctx))
     push!(compiled, start_idx)
 
     # Start void if block
@@ -11260,7 +11270,7 @@ function compile_ternary_for_phi(ctx::CompilationContext, code, cond_idx::Int, c
     wasm_type = julia_to_wasm_type_concrete(phi_type, ctx)
 
     # Push condition
-    append!(bytes, compile_value(goto_if_not.cond, ctx))
+    append!(bytes, compile_condition_to_i32(goto_if_not.cond, ctx))
     push!(compiled, cond_idx)
 
     # Start if block with result type
@@ -11467,7 +11477,7 @@ function generate_and_pattern(ctx::CompilationContext, blocks, code, conditional
         end
 
         # Push condition and test for false (invert condition)
-        append!(bytes, compile_value(goto_if_not.cond, ctx))
+        append!(bytes, compile_condition_to_i32(goto_if_not.cond, ctx))
         push!(bytes, Opcode.I32_EQZ)  # invert: GotoIfNot jumps when false, so we br when !cond
         push!(bytes, Opcode.BR_IF)
         append!(bytes, encode_leb128_unsigned(0))  # br to inner block (else)
@@ -11890,7 +11900,7 @@ function generate_switch_pattern(ctx::CompilationContext, blocks, code, conditio
         end
 
         # Compile the condition
-        append!(inner_bytes, compile_value(gin.cond, ctx))
+        append!(inner_bytes, compile_condition_to_i32(gin.cond, ctx))
 
         # IF with result type (since each case returns a value)
         push!(inner_bytes, Opcode.IF)
@@ -12111,7 +12121,7 @@ function generate_or_pattern(ctx::CompilationContext, blocks, code, conditionals
         end
 
         # Push condition (will load from local if multi-use, or assume on stack if single-use)
-        append!(inner_bytes, compile_value(goto_if_not.cond, ctx))
+        append!(inner_bytes, compile_condition_to_i32(goto_if_not.cond, ctx))
 
         # IF with i32 result (for the phi value)
         push!(inner_bytes, Opcode.IF)
@@ -12169,7 +12179,7 @@ function generate_remaining_conditionals(ctx::CompilationContext, blocks, code, 
     goto_if_not = block.terminator::Core.GotoIfNot
 
     # Push condition (which might be a phi local)
-    append!(bytes, compile_value(goto_if_not.cond, ctx))
+    append!(bytes, compile_condition_to_i32(goto_if_not.cond, ctx))
 
     # Generate IF
     push!(bytes, Opcode.IF)
@@ -12661,7 +12671,7 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
 
             if is_boolean_phi
                 # Boolean && pattern: generates IF with i32 result, else = 0
-                append!(inner_bytes, compile_value(goto_if_not.cond, ctx))
+                append!(inner_bytes, compile_condition_to_i32(goto_if_not.cond, ctx))
                 push!(inner_bytes, Opcode.IF)
                 push!(inner_bytes, 0x7f)  # i32 result type
 
@@ -12767,7 +12777,7 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                     # We need to recurse and let each branch store to the phi local
 
                     # Compile then-branch statements and store value to phi local
-                    append!(inner_bytes, compile_value(goto_if_not.cond, ctx))
+                    append!(inner_bytes, compile_condition_to_i32(goto_if_not.cond, ctx))
                     push!(inner_bytes, Opcode.IF)
                     push!(inner_bytes, 0x40)  # void - we'll use locals
 
@@ -13186,7 +13196,7 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                 end
 
                 # Push condition
-                append!(inner_bytes, compile_value(goto_if_not.cond, ctx))
+                append!(inner_bytes, compile_condition_to_i32(goto_if_not.cond, ctx))
 
                 # IF block with phi's result type
                 push!(inner_bytes, Opcode.IF)
@@ -13332,7 +13342,7 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
         end
 
         # Push condition for normal pattern
-        append!(inner_bytes, compile_value(goto_if_not.cond, ctx))
+        append!(inner_bytes, compile_condition_to_i32(goto_if_not.cond, ctx))
 
         # Check if both branches terminate (then: return, else: unreachable or return)
         # If so, use void result type for IF block
@@ -14747,6 +14757,14 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                 # DROP the value and emit a type-safe default instead of causing validation error.
                 value_wasm_type = get_concrete_wasm_type(stmt_type, ctx.mod, ctx.type_registry)
                 if local_type !== nothing && !wasm_types_compatible(local_type, value_wasm_type)
+                    # PURE-908: externref↔anyref conversion instead of drop+default
+                    if value_wasm_type === ExternRef && local_type === AnyRef
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.ANY_CONVERT_EXTERN)
+                    elseif value_wasm_type === AnyRef && local_type === ExternRef
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                    else
                     # Type mismatch: drop the value and emit type-safe default
                     push!(bytes, Opcode.DROP)
                     if local_type isa ConcreteRef
@@ -14773,6 +14791,7 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                     else
                         push!(bytes, Opcode.I32_CONST, 0x00)
                     end
+                    end  # close else from PURE-908 externref↔anyref check
                 end
                 push!(bytes, Opcode.LOCAL_SET)
                 append!(bytes, encode_leb128_unsigned(local_idx))
@@ -16521,6 +16540,46 @@ function return_type_compatible(value_type::WasmValType, return_type::WasmValTyp
         return true
     end
     return false
+end
+
+"""
+PURE-908: Compile a GotoIfNot condition to i32.
+When the condition SSA value has an anyref/externref local (because Julia typed it as Any),
+the raw compile_value would push anyref, but i32.eqz needs i32. This helper unboxes via
+ref.cast + struct.get when needed.
+"""
+function compile_condition_to_i32(cond, ctx::CompilationContext)::Vector{UInt8}
+    bytes = compile_value(cond, ctx)
+    # Check if the condition value is in a non-i32 local
+    if cond isa Core.SSAValue
+        local_idx = get(ctx.ssa_locals, cond.id, nothing)
+        if local_idx === nothing
+            local_idx = get(ctx.phi_locals, cond.id, nothing)
+        end
+        if local_idx !== nothing
+            local_offset = local_idx - ctx.n_params
+            if local_offset >= 0 && local_offset < length(ctx.locals)
+                local_type = ctx.locals[local_offset + 1]
+                if local_type === AnyRef || local_type === ExternRef
+                    # Value is anyref/externref but should be i32 (Bool).
+                    # Unbox: ref.cast (ref null $i32_box) → struct.get $i32_box 0
+                    if local_type === ExternRef
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.ANY_CONVERT_EXTERN)
+                    end
+                    box_type_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, I32)
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.REF_CAST_NULL)
+                    append!(bytes, encode_leb128_signed(Int64(box_type_idx)))
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.STRUCT_GET)
+                    append!(bytes, encode_leb128_unsigned(box_type_idx))
+                    append!(bytes, encode_leb128_unsigned(0))  # field 0
+                end
+            end
+        end
+    end
+    return bytes
 end
 
 """
@@ -18964,6 +19023,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         # Type-confused code path - externref used as numeric
         # Emit unreachable since we can't do numeric ops on externref
         push!(bytes, Opcode.UNREACHABLE)
+        ctx.last_stmt_was_stub = true  # PURE-908
         return bytes
     end
 
@@ -18997,6 +19057,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             append!(bytes, encode_leb128_unsigned(string_arr_type))
         else
             push!(bytes, Opcode.UNREACHABLE)
+            ctx.last_stmt_was_stub = true  # PURE-908
         end
         return bytes
     end
@@ -19009,6 +19070,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
              :sdiv_int, :udiv_int, :srem_int, :urem_int)
         println("DEBUG_128: Early return for $(func.name) with arg_type=$arg_type")
         push!(bytes, Opcode.UNREACHABLE)
+        ctx.last_stmt_was_stub = true  # PURE-908
         return bytes
     end
 
@@ -19107,6 +19169,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 if ssa_type === Any
                     @info "PURE-046: Emitting UNREACHABLE for externref in numeric intrinsic (SSA type is Any)"
                     push!(bytes, Opcode.UNREACHABLE)
+                    ctx.last_stmt_was_stub = true  # PURE-908
                     return bytes
                 end
             end
@@ -19128,6 +19191,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 local lt_chk2 = ctx.locals[offset_chk2 + 1]
                 if lt_chk2 === ExternRef
                     push!(bytes, Opcode.UNREACHABLE)
+                    ctx.last_stmt_was_stub = true  # PURE-908
                     return bytes
                 end
             end
@@ -19167,6 +19231,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         if is_128bit
             # 128-bit checked mul: not supported, emit unreachable
             push!(bytes, Opcode.UNREACHABLE)
+            ctx.last_stmt_was_stub = true  # PURE-908
         else
             push!(bytes, is_32bit ? Opcode.I32_MUL : Opcode.I64_MUL)
             if is_32bit
@@ -19189,6 +19254,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
     elseif is_func(func, :checked_sadd_int) || is_func(func, :checked_uadd_int)
         if is_128bit
             push!(bytes, Opcode.UNREACHABLE)
+            ctx.last_stmt_was_stub = true  # PURE-908
         else
             push!(bytes, is_32bit ? Opcode.I32_ADD : Opcode.I64_ADD)
             if is_32bit
@@ -19210,6 +19276,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
     elseif is_func(func, :checked_ssub_int) || is_func(func, :checked_usub_int)
         if is_128bit
             push!(bytes, Opcode.UNREACHABLE)
+            ctx.last_stmt_was_stub = true  # PURE-908
         else
             push!(bytes, is_32bit ? Opcode.I32_SUB : Opcode.I64_SUB)
             if is_32bit
@@ -20976,6 +21043,9 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                             append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
                             append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.REF_CAST_NULL])
                             append!(bytes, encode_leb128_signed(Int64(target_local_type.type_idx)))
+                        elseif target_local_type === AnyRef && ret_wasm === ExternRef
+                            # PURE-908: Function returns externref, local expects anyref
+                            append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
                         elseif target_local_type === ExternRef && ret_wasm !== ExternRef && ret_wasm !== nothing
                             # Function returns concrete/struct/array ref, local expects externref
                             append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.EXTERN_CONVERT_ANY])
@@ -21234,12 +21304,6 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         ctx.last_stmt_was_stub = true  # PURE-908
     end
 
-    # PURE-908: Catch-all — any path in compile_call that ends with UNREACHABLE is a stub.
-    # In compile_call, bytes[end] == 0x00 is always UNREACHABLE (no call 0 path here;
-    # Math.pow is in compile_invoke, and cross-call func indices are >= 1).
-    if !isempty(bytes) && bytes[end] == Opcode.UNREACHABLE
-        ctx.last_stmt_was_stub = true
-    end
     return bytes
 end
 
@@ -21897,6 +21961,12 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                                         append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.REF_CAST_NULL])
                                         append!(bytes, encode_leb128_signed(Int64(target_local_type.type_idx)))
                                     end
+                                elseif target_local_type === AnyRef
+                                    ret_wasm = julia_to_wasm_type(target_info.return_type)
+                                    if ret_wasm === ExternRef
+                                        # PURE-908: Function returns externref, local expects anyref
+                                        append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                                    end
                                 elseif target_local_type === ExternRef && func_ref isa Core.Argument
                                     # PURE-220: Higher-order call returns concrete ref but local expects externref
                                     # (SSA type is Any because the function parameter is generic)
@@ -21912,6 +21982,27 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 # Self-recursive call - emit call instruction
                 push!(bytes, Opcode.CALL)
                 append!(bytes, encode_leb128_unsigned(ctx.func_idx))
+                # PURE-908: Bridge return type for self-calls (externref→anyref)
+                if haskey(ctx.ssa_locals, idx)
+                    local_idx_val = ctx.ssa_locals[idx]
+                    local_arr_idx = local_idx_val - ctx.n_params + 1
+                    if local_arr_idx >= 1 && local_arr_idx <= length(ctx.locals)
+                        target_local_type = ctx.locals[local_arr_idx]
+                        if target_local_type === AnyRef && ctx.return_type !== nothing
+                            ret_wasm = julia_to_wasm_type(ctx.return_type)
+                            if ret_wasm === ExternRef
+                                append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                            end
+                        elseif target_local_type isa ConcreteRef && ctx.return_type !== nothing
+                            ret_wasm = julia_to_wasm_type(ctx.return_type)
+                            if ret_wasm === ExternRef
+                                append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                                append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.REF_CAST_NULL])
+                                append!(bytes, encode_leb128_signed(Int64(target_local_type.type_idx)))
+                            end
+                        end
+                    end
+                end
             elseif cross_call_handled
                 # Already handled above
 
@@ -21926,6 +22017,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 # Clear the stack first (arguments were pushed but not needed)
                 bytes = UInt8[]  # Reset - don't need the pushed args
                 push!(bytes, Opcode.UNREACHABLE)
+                ctx.last_stmt_was_stub = true  # PURE-908
 
             # Power operator: x ^ y for floats
             # WASM doesn't have a native pow instruction, so we need to handle this
@@ -24177,6 +24269,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 # Error constructors - emit unreachable
                 bytes = UInt8[]  # Clear any pushed args
                 push!(bytes, Opcode.UNREACHABLE)
+                ctx.last_stmt_was_stub = true  # PURE-908
 
             # ================================================================
             # PURE-322: SubString — create proper SubString struct
@@ -24336,6 +24429,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                    name === :throw || name === :rethrow ||
                    name === :_throw_not_readable || name === :_throw_not_writable
                 push!(bytes, Opcode.UNREACHABLE)
+                ctx.last_stmt_was_stub = true  # PURE-908
 
             # Handle truncate (IOBuffer resize) — no-op in WasmGC
             # Returns the IOBuffer itself
@@ -24375,6 +24469,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                    name === :KeyError || name === :ErrorException ||
                    name === :BoundsError || name === :MethodError
                 push!(bytes, Opcode.UNREACHABLE)
+                ctx.last_stmt_was_stub = true  # PURE-908
 
             # Handle JuliaSyntax internal functions that have complex implementations
             # These are intercepted and compiled as simplified stubs
@@ -24544,6 +24639,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 else
                     # Fallback: can't determine vector type — emit unreachable
                     push!(bytes, Opcode.UNREACHABLE)
+                    ctx.last_stmt_was_stub = true  # PURE-908
                 end
 
             elseif name === :Symbol && length(args) == 1
@@ -24563,12 +24659,6 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
         end
     end
 
-    # PURE-908: Catch-all — detect stub UNREACHABLE at end of compile_invoke.
-    # Exclude call N (func calls) which end with LEB128 func index that could be 0x00.
-    if !isempty(bytes) && bytes[end] == Opcode.UNREACHABLE &&
-       !(length(bytes) >= 2 && bytes[end-1] == Opcode.CALL)
-        ctx.last_stmt_was_stub = true
-    end
     return bytes
 end
 

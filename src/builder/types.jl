@@ -323,8 +323,8 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
         return StructRef
     elseif T isa UnionAll && isstructtype(T)
         # Parametric struct type without concrete parameters (e.g., SyntaxGraph)
-        # Use AnyRef since we can't know the specific type parameter
-        return AnyRef
+        # PURE-908: Use ExternRef (not AnyRef) to avoid externref↔anyref type hierarchy mismatches
+        return ExternRef
     elseif T <: Function
         # Abstract Function types (non-closure) map to externref
         return ExternRef
