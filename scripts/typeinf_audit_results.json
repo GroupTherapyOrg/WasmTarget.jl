@@ -1,0 +1,815 @@
+{
+  "entry_point": "Core.Compiler.typeinf(NativeInterpreter, InferenceState)",
+  "total_functions": 10,
+  "total_statements": 818,
+  "patterns": {
+    "calls": [
+      {
+        "status": "unknown",
+        "count": 37,
+        "arg_types": [
+          "Tuple{Int64}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 19,
+        "arg_types": [
+          "Vector{Compiler.CurrentState}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 19,
+        "arg_types": [
+          "Vector{Union{Compiler.IRInterpretationState",
+          "Compiler.InferenceState}}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 12,
+        "arg_types": [
+          "Vector{Any}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 6,
+        "arg_types": [
+          "Vector{UInt64}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 4,
+        "arg_types": [
+          "BitSet",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 4,
+        "arg_types": [
+          "MemoryRef{Compiler.CurrentState}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Memory{Compiler.CurrentState}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 33,
+        "arg_types": [
+          "Int64",
+          "Int64"
+        ],
+        "func": "Base.sub_int"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "UInt64",
+          "UInt64"
+        ],
+        "func": "Base.sub_int"
+      },
+      {
+        "status": "unknown",
+        "count": 28,
+        "arg_types": [
+          "Compiler.InferenceState",
+          "Symbol"
+        ],
+        "func": "Compiler.getproperty"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Union{Compiler.IRInterpretationState",
+          "Compiler.InferenceState}",
+          "Symbol"
+        ],
+        "func": "Compiler.getproperty"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Compiler.InferenceResult",
+          "Symbol"
+        ],
+        "func": "Compiler.getproperty"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Core.MethodInstance",
+          "Symbol"
+        ],
+        "func": "Compiler.getproperty"
+      },
+      {
+        "status": "unknown",
+        "count": 32,
+        "arg_types": [
+          "DataType",
+          "Int64"
+        ],
+        "func": "Base.bitcast"
+      },
+      {
+        "status": "unknown",
+        "count": 19,
+        "arg_types": [
+          "Int64"
+        ],
+        "func": "Core.tuple"
+      },
+      {
+        "status": "unknown",
+        "count": 16,
+        "arg_types": [
+          "Int64",
+          "Int64"
+        ],
+        "func": "Base.add_int"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "UInt64",
+          "UInt64"
+        ],
+        "func": "Base.add_int"
+      },
+      {
+        "status": "unknown",
+        "count": 14,
+        "arg_types": [
+          "Int64",
+          "Int64"
+        ],
+        "func": "Base.==="
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "UInt64",
+          "UInt64"
+        ],
+        "func": "Base.==="
+      },
+      {
+        "status": "unknown",
+        "count": 5,
+        "arg_types": [
+          "MemoryRef{Compiler.CurrentState}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Base.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 5,
+        "arg_types": [
+          "MemoryRef{Union{Compiler.IRInterpretationState",
+          "Compiler.InferenceState}}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Base.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 4,
+        "arg_types": [
+          "MemoryRef{Any}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Base.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "MemoryRef{UInt64}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Base.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 16,
+        "arg_types": [
+          "UInt64",
+          "UInt64"
+        ],
+        "func": "Base.ult_int"
+      },
+      {
+        "status": "unknown",
+        "count": 16,
+        "arg_types": [
+          "Bool"
+        ],
+        "func": "Base.not_int"
+      },
+      {
+        "status": "unknown",
+        "count": 14,
+        "arg_types": [
+          "Int64",
+          "Int64"
+        ],
+        "func": "Base.sle_int"
+      },
+      {
+        "status": "unknown",
+        "count": 5,
+        "arg_types": [
+          "MemoryRef{Union{Compiler.IRInterpretationState",
+          "Compiler.InferenceState}}",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefget"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "MemoryRef{Compiler.CurrentState}",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefget"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "MemoryRef{UInt64}",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefget"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "MemoryRef{Any}",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefget"
+      },
+      {
+        "status": "unknown",
+        "count": 11,
+        "arg_types": [
+          "Int64",
+          "Int64"
+        ],
+        "func": "Base.slt_int"
+      },
+      {
+        "status": "unknown",
+        "count": 6,
+        "arg_types": [
+          "BoundsError"
+        ],
+        "func": "Base.throw"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "ArgumentError"
+        ],
+        "func": "Base.throw"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "AssertionError"
+        ],
+        "func": "Base.throw"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "MemoryRef{Any}",
+          "Any",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefset!"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "MemoryRef{Compiler.CurrentState}",
+          "Compiler.CurrentState",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefset!"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "Union{Compiler.IRInterpretationState",
+          "Compiler.InferenceState}",
+          "DataType"
+        ],
+        "func": "Core.typeassert"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Any",
+          "DataType"
+        ],
+        "func": "Core.typeassert"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "Vector{Compiler.CurrentState}",
+          "Symbol",
+          "Tuple{Int64}"
+        ],
+        "func": "Base.setfield!"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "Compiler.InferenceState",
+          "Symbol",
+          "UInt64"
+        ],
+        "func": "Compiler.setproperty!"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "MemoryRef{Compiler.CurrentState}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Core.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Memory{Compiler.CurrentState}"
+        ],
+        "func": "Core.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Bool"
+        ],
+        "func": "Compiler.not_int"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "MemoryRef{Compiler.CurrentState}"
+        ],
+        "func": "Base.memoryrefoffset"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Compiler.CurrentState",
+          "Symbol"
+        ],
+        "func": "Compiler.isdefined"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "String"
+        ],
+        "func": "Core.sizeof"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Union{Method",
+          "Module}",
+          "DataType"
+        ],
+        "func": "Compiler.isa"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Core.CoreSTDERR"
+        ],
+        "func": "Core.svec"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Compiler.AbstractInterpreter",
+          "Compiler.InferenceState",
+          "Compiler.CurrentState"
+        ],
+        "func": "Compiler.typeinf_local"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Bool"
+        ],
+        "func": "Core.Intrinsics.not_int"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "DataType",
+          "Int64"
+        ],
+        "func": "Core.memorynew"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Int64",
+          "Int64"
+        ],
+        "func": "Base.mul_int"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "typeof(Core.iterate)",
+          "typeof(Core.print)",
+          "Core.SimpleVector",
+          "Tuple{Any",
+          "Vararg{Any}}"
+        ],
+        "func": "Core._apply_iterate"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Symbol",
+          "typeof(Base.__assert_tostring)"
+        ],
+        "func": "compilerbarrier"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Int64",
+          "UInt8"
+        ],
+        "func": "Base.lshr_int"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Any"
+        ],
+        "func": "%1"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Compiler.AbstractInterpreter",
+          "Compiler.InferenceState"
+        ],
+        "func": "Compiler.doworkloop"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Any"
+        ],
+        "func": "Base.AssertionError"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Any",
+          "DataType"
+        ],
+        "func": "isa"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Tuple{Core.CoreSTDERR}",
+          "Int64"
+        ],
+        "func": "Core.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Compiler.AbstractInterpreter",
+          "Compiler.InferenceState",
+          "UInt64"
+        ],
+        "func": "Compiler.finish_nocycle"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Core.Const(Core.CoreSTDERR())",
+          "Any"
+        ],
+        "func": "Core.print"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "DataType",
+          "Ptr{Nothing}"
+        ],
+        "func": "Core.bitcast"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Any",
+          "Nothing"
+        ],
+        "func": "Core.==="
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Compiler.AbstractInterpreter",
+          "Vector{Union{Compiler.IRInterpretationState",
+          "Compiler.InferenceState}}",
+          "Int64",
+          "UInt64"
+        ],
+        "func": "Compiler.finish_cycle"
+      }
+    ],
+    "phi_patterns": [
+      {
+        "types": [
+          "Int64"
+        ],
+        "count": 43
+      },
+      {
+        "types": [
+          "Bool"
+        ],
+        "count": 16
+      },
+      {
+        "types": [
+          "UInt64"
+        ],
+        "count": 2
+      },
+      {
+        "types": [
+          "Compiler.InferenceState"
+        ],
+        "count": 2
+      },
+      {
+        "types": [
+          "Core.MethodInstance"
+        ],
+        "count": 1
+      }
+    ],
+    "new_types": [
+      {
+        "name": "Base.var\"#_growend!##0#_growend!##1\"{Vector{Compiler.CurrentState}, Int64, Int64, Int64, Int64, Int64, Memory{Compiler.CurrentState}, MemoryRef{Compiler.CurrentState}}",
+        "count": 2
+      },
+      {
+        "name": "Vector{Compiler.CurrentState}",
+        "count": 1
+      },
+      {
+        "name": "Compiler.CurrentState",
+        "count": 1
+      },
+      {
+        "name": "ArgumentError",
+        "count": 1
+      }
+    ],
+    "foreigncalls": [
+      {
+        "name": ":jl_hrtime",
+        "count": 4
+      },
+      {
+        "name": ":jl_string_ptr",
+        "count": 2
+      },
+      {
+        "name": ":jl_uv_puts",
+        "count": 2
+      }
+    ],
+    "invokes": [
+      {
+        "name": "throw_boundserror",
+        "spec_types": "Tuple{typeof(Base.throw_boundserror), Vector{Compiler.CurrentState}, Tuple{Int64}}",
+        "status": "unknown",
+        "count": 5
+      },
+      {
+        "name": "throw_boundserror",
+        "spec_types": "Tuple{typeof(Base.throw_boundserror), Vector{Union{Compiler.IRInterpretationState, Compiler.InferenceState}}, Tuple{Int64}}",
+        "status": "unknown",
+        "count": 5
+      },
+      {
+        "name": "throw_boundserror",
+        "spec_types": "Tuple{typeof(Base.throw_boundserror), Vector{Any}, Tuple{Int64}}",
+        "status": "unknown",
+        "count": 4
+      },
+      {
+        "name": "throw_boundserror",
+        "spec_types": "Tuple{typeof(Base.throw_boundserror), Vector{UInt64}, Tuple{Int64}}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "BoundsError",
+        "spec_types": "Tuple{Type{BoundsError}, Any, Tuple{Int64}}",
+        "status": "unknown",
+        "count": 4
+      },
+      {
+        "name": "BoundsError",
+        "spec_types": "Tuple{Type{BoundsError}, Any, Int64}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "resize!",
+        "spec_types": "Tuple{typeof(resize!), Vector{Compiler.CurrentState}, Int64}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "#_growend!##0",
+        "spec_types": "Tuple{Base.var\"#_growend!##0#_growend!##1\"{Vector{Compiler.CurrentState}, Int64, Int64, Int64, Int64, Int64, Memory{Compiler.CurrentState}, MemoryRef{Compiler.CurrentState}}}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "ArgumentError",
+        "spec_types": "Tuple{Type{ArgumentError}, String}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "reverse!",
+        "spec_types": "Tuple{typeof(reverse!), Vector{Any}, Int64, Int64}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "print",
+        "spec_types": "Tuple{typeof(Core.print), Core.CoreSTDERR, Any, Any, Vararg{Any}}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "_throw_argerror",
+        "spec_types": "Tuple{typeof(Base._throw_argerror), String}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "_assert_tostring",
+        "spec_types": "Tuple{typeof(Base._assert_tostring), Any}",
+        "status": "unknown",
+        "count": 1
+      }
+    ],
+    "stubs": [
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "Compiler.isdefined"
+      },
+      {
+        "count": 1,
+        "reason": "unsupported method",
+        "func": "_assert_tostring"
+      },
+      {
+        "count": 1,
+        "reason": "unsupported call",
+        "func": "cglobal"
+      },
+      {
+        "count": 1,
+        "reason": "unsupported call",
+        "func": "pointerref"
+      },
+      {
+        "count": 1,
+        "reason": "unsupported method",
+        "func": "print"
+      },
+      {
+        "count": 1,
+        "reason": "unsupported method",
+        "func": "resize!"
+      },
+      {
+        "count": 1,
+        "reason": "unsupported method",
+        "func": "reverse!"
+      }
+    ],
+    "intrinsics": [
+      {
+        "name": "cglobal",
+        "count": 2
+      },
+      {
+        "name": "pointerref",
+        "count": 2
+      },
+      {
+        "name": "atomic_pointerset",
+        "count": 1
+      }
+    ]
+  }
+}

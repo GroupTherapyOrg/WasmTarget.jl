@@ -314,8 +314,9 @@ function detect_stubs!()
 
             # Count functions
             try
-                nfuncs = read(pipeline(`wasm-tools print $tmpf`, `grep -c (func`), String)
-                println("typeinf.wasm: $(strip(nfuncs)) funcs")
+                wat = read(`wasm-tools print $tmpf`, String)
+                nfuncs = count("(func ", wat)
+                println("typeinf.wasm: $nfuncs funcs")
             catch; end
         catch e
             println("Compilation failed: $e")
