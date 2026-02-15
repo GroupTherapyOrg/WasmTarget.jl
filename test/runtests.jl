@@ -4751,9 +4751,8 @@ end
                                      Int64(5),Int64(6),Int64(7),Int64(8)).pass
         end
 
-        # Known failures — Union{Int64, Float64} phi type mismatch
-        # These are BROKEN tests (expected to fail until PURE-1101 is fixed)
-        @testset "Union{Int64, Float64} — KNOWN BUG" begin
+        # PURE-1101: Union{Int64, Float64} — FIXED (numeric widening at return/phi edges)
+        @testset "Union{Int64, Float64}" begin
             f_union_ret(x::Int64) = begin
                 if x > Int64(0)
                     x
@@ -4761,11 +4760,9 @@ end
                     Float64(x)
                 end
             end
-            @test_broken try
-                compare_julia_wasm(f_union_ret, Int64(5)).pass
-            catch
-                false
-            end
+            @test compare_julia_wasm(f_union_ret, Int64(5)).pass
+            @test compare_julia_wasm(f_union_ret, Int64(-3)).pass
+            @test compare_julia_wasm(f_union_ret, Int64(0)).pass
         end
 
         # Known failures — try/catch with actual throw
