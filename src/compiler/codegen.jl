@@ -879,41 +879,6 @@ function _sanitize_ssa_type(t)
 end
 
 """
-    _is_externref_value(val, ctx) -> Bool
-
-PURE-904: Check if a value (Argument or SSAValue) produces externref on the Wasm stack.
-Used by numeric intrinsic handlers to detect when unboxing is needed.
-"""
-function _is_externref_value(val, ctx::CompilationContext)::Bool
-    if val isa Core.Argument
-        arg_idx = ctx.is_compiled_closure ? val.n : val.n - 1
-        if arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
-            return julia_to_wasm_type(ctx.arg_types[arg_idx]) === ExternRef
-        end
-    elseif val isa Core.SSAValue
-        if haskey(ctx.ssa_locals, val.id)
-            local_idx = ctx.ssa_locals[val.id]
-            local_arr_idx = local_idx - ctx.n_params + 1
-            if local_arr_idx >= 1 && local_arr_idx <= length(ctx.locals)
-                return ctx.locals[local_arr_idx] === ExternRef
-            elseif local_idx < ctx.n_params
-                # It's a param slot
-                if local_idx + 1 <= length(ctx.arg_types)
-                    return julia_to_wasm_type(ctx.arg_types[local_idx + 1]) === ExternRef
-                end
-            end
-        elseif haskey(ctx.phi_locals, val.id)
-            local_idx = ctx.phi_locals[val.id]
-            local_arr_idx = local_idx - ctx.n_params + 1
-            if local_arr_idx >= 1 && local_arr_idx <= length(ctx.locals)
-                return ctx.locals[local_arr_idx] === ExternRef
-            end
-        end
-    end
-    return false
-end
-
-"""
     try_resolve_call_method!(func_ref, call_args, ir, func_arg_types, seen_funcs, to_add, to_scan)
 
 PURE-605: For :call GlobalRef expressions, try to resolve the method by extracting
@@ -14063,6 +14028,7 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
             local_wasm_type = local_array_idx >= 1 && local_array_idx <= length(ctx.locals) ? ctx.locals[local_array_idx] : nothing
             if local_wasm_type !== nothing
                 needs_type_safe_default = false
+                struct_get_type_ok = false  # PURE-904: Track when struct_get already produces compatible type
 
                 if stmt_bytes[1] == 0x20  # LOCAL_GET
                     # Decode the source local.get index and verify it consumes ALL bytes
@@ -14323,7 +14289,13 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                             mod_type = ctx.mod.types[sg_type_idx + 1]
                             if mod_type isa StructType && sg_field_idx + 1 <= length(mod_type.fields)
                                 field_result_type = mod_type.fields[sg_field_idx + 1].valtype
-                                if field_result_type isa ConcreteRef && !wasm_types_compatible(local_wasm_type, field_result_type)
+                                if field_result_type isa ConcreteRef && wasm_types_compatible(local_wasm_type, field_result_type)
+                                    # PURE-904: struct_get already produces compatible concrete type.
+                                    # Skip SSA type check — it would see Julia Any→ExternRef and
+                                    # incorrectly emit any_convert_extern.
+                                    struct_get_type_ok = true
+                                elseif field_result_type isa ConcreteRef
+                                    # Incompatible concrete ref types
                                     needs_type_safe_default = true
                                 elseif (field_result_type === I32 || field_result_type === I64 ||
                                         field_result_type === F32 || field_result_type === F64)
@@ -14350,7 +14322,7 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                 # that produce numeric/externref/abstract ref but get stored in a ref-typed local.
                 local_is_ref = local_wasm_type isa ConcreteRef || local_wasm_type === StructRef ||
                                local_wasm_type === ArrayRef || local_wasm_type === ExternRef || local_wasm_type === AnyRef
-                if !needs_type_safe_default && needs_ref_cast_local === nothing && local_is_ref
+                if !needs_type_safe_default && needs_ref_cast_local === nothing && !struct_get_type_ok && local_is_ref
                     ssa_julia_type = get(ctx.ssa_types, idx, nothing)
                     if ssa_julia_type !== nothing
                         ssa_wasm_type = julia_to_wasm_type_concrete(ssa_julia_type, ctx)
@@ -17086,6 +17058,41 @@ end
 # ============================================================================
 # Call Compilation
 # ============================================================================
+
+"""
+    _is_externref_value(val, ctx) -> Bool
+
+PURE-904: Check if a value (Argument or SSAValue) produces externref on the Wasm stack.
+Used by numeric intrinsic handlers to detect when unboxing is needed.
+"""
+function _is_externref_value(val, ctx::CompilationContext)::Bool
+    if val isa Core.Argument
+        arg_idx = ctx.is_compiled_closure ? val.n : val.n - 1
+        if arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
+            return julia_to_wasm_type(ctx.arg_types[arg_idx]) === ExternRef
+        end
+    elseif val isa Core.SSAValue
+        if haskey(ctx.ssa_locals, val.id)
+            local_idx = ctx.ssa_locals[val.id]
+            local_arr_idx = local_idx - ctx.n_params + 1
+            if local_arr_idx >= 1 && local_arr_idx <= length(ctx.locals)
+                return ctx.locals[local_arr_idx] === ExternRef
+            elseif local_idx < ctx.n_params
+                # It's a param slot
+                if local_idx + 1 <= length(ctx.arg_types)
+                    return julia_to_wasm_type(ctx.arg_types[local_idx + 1]) === ExternRef
+                end
+            end
+        elseif haskey(ctx.phi_locals, val.id)
+            local_idx = ctx.phi_locals[val.id]
+            local_arr_idx = local_idx - ctx.n_params + 1
+            if local_arr_idx >= 1 && local_arr_idx <= length(ctx.locals)
+                return ctx.locals[local_arr_idx] === ExternRef
+            end
+        end
+    end
+    return false
+end
 
 """
 Compile a function call expression.
