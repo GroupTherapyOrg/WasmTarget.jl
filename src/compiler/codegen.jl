@@ -18278,6 +18278,13 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                             arr_idx2 = src_idx2 - ctx.n_params + 1
                             if arr_idx2 >= 1 && arr_idx2 <= length(ctx.locals)
                                 is_already_extern = (ctx.locals[arr_idx2] === ExternRef)
+                            elseif src_idx2 < ctx.n_params
+                                # PURE-803: Check param type — Function/Any params are already externref
+                                param_idx2 = src_idx2 + 1
+                                if param_idx2 >= 1 && param_idx2 <= length(ctx.arg_types)
+                                    param_wasm = get_concrete_wasm_type(ctx.arg_types[param_idx2], ctx.mod, ctx.type_registry)
+                                    is_already_extern = (param_wasm === ExternRef)
+                                end
                             end
                         end
                         if !is_already_extern
