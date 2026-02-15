@@ -6822,6 +6822,16 @@ function generate_branched_loops(ctx::CompilationContext, first_header::Int, fir
                         push!(bytes, Opcode.EXTERN_CONVERT_ANY)
                     elseif val_wasm_type === I32 && func_ret_wasm === I64
                         push!(bytes, Opcode.I64_EXTEND_I32_S)
+                    elseif val_wasm_type === I64 && func_ret_wasm === F64
+                        push!(bytes, Opcode.F64_CONVERT_I64_S)
+                    elseif val_wasm_type === I32 && func_ret_wasm === F64
+                        push!(bytes, Opcode.F64_CONVERT_I32_S)
+                    elseif val_wasm_type === F32 && func_ret_wasm === F64
+                        push!(bytes, Opcode.F64_PROMOTE_F32)
+                    elseif val_wasm_type === I64 && func_ret_wasm === F32
+                        push!(bytes, Opcode.F32_CONVERT_I64_S)
+                    elseif val_wasm_type === I32 && func_ret_wasm === F32
+                        push!(bytes, Opcode.F32_CONVERT_I32_S)
                     end
                     push!(bytes, Opcode.RETURN)
                 end
@@ -6910,6 +6920,16 @@ function generate_branched_loops(ctx::CompilationContext, first_header::Int, fir
                         push!(bytes, Opcode.EXTERN_CONVERT_ANY)
                     elseif val_wasm_type === I32 && func_ret_wasm === I64
                         push!(bytes, Opcode.I64_EXTEND_I32_S)
+                    elseif val_wasm_type === I64 && func_ret_wasm === F64
+                        push!(bytes, Opcode.F64_CONVERT_I64_S)
+                    elseif val_wasm_type === I32 && func_ret_wasm === F64
+                        push!(bytes, Opcode.F64_CONVERT_I32_S)
+                    elseif val_wasm_type === F32 && func_ret_wasm === F64
+                        push!(bytes, Opcode.F64_PROMOTE_F32)
+                    elseif val_wasm_type === I64 && func_ret_wasm === F32
+                        push!(bytes, Opcode.F32_CONVERT_I64_S)
+                    elseif val_wasm_type === I32 && func_ret_wasm === F32
+                        push!(bytes, Opcode.F32_CONVERT_I32_S)
                     end
                     push!(bytes, Opcode.RETURN)
                 end
@@ -7103,10 +7123,13 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::C
 
     if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type)
         # PURE-324: Allow I32→I64 widening — handled by I64_EXTEND_I32_S below.
-        # This is needed for phi nodes with Union{Int64, UInt32} where the phi local
-        # is widened to I64 but one edge provides an I32 (UInt32) value.
+        # PURE-1101: Allow numeric widening to F64/F32 (Union{Int64,Float64} etc.)
         if phi_local_type === I64 && edge_val_type === I32
             # Handled below by I64_EXTEND_I32_S
+        elseif phi_local_type === F64 && (edge_val_type === I64 || edge_val_type === I32 || edge_val_type === F32)
+            # Handled below by F64_CONVERT_I64_S / F64_CONVERT_I32_S / F64_PROMOTE_F32
+        elseif phi_local_type === F32 && (edge_val_type === I64 || edge_val_type === I32)
+            # Handled below by F32_CONVERT_I64_S / F32_CONVERT_I32_S
         elseif phi_local_type === ExternRef && (edge_val_type === I32 || edge_val_type === I64 || edge_val_type === F32 || edge_val_type === F64)
             # PURE-325: Box numeric value for ExternRef phi local (Union return).
             # When a function with Union return type is inlined, the return becomes
@@ -7286,8 +7309,13 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::C
         end
         if actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type)
                 # PURE-324: Allow I32→I64 — will be extended at line below
+                # PURE-1101: Allow numeric widening to F64/F32
                 if phi_local_type === I64 && actual_val_type === I32
                     # Handled below by I64_EXTEND_I32_S
+                elseif phi_local_type === F64 && (actual_val_type === I64 || actual_val_type === I32 || actual_val_type === F32)
+                    # Handled below by F64_CONVERT_I64_S / F64_CONVERT_I32_S / F64_PROMOTE_F32
+                elseif phi_local_type === F32 && (actual_val_type === I64 || actual_val_type === I32)
+                    # Handled below by F32_CONVERT_I64_S / F32_CONVERT_I32_S
                 elseif phi_local_type === ExternRef && (actual_val_type === I32 || actual_val_type === I64 || actual_val_type === F32 || actual_val_type === F64)
                     # PURE-325: Box numeric local.get for ExternRef phi local
                     append!(bytes, value_bytes)
@@ -7341,10 +7369,20 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::C
     end
 
     append!(bytes, value_bytes)
-    # Widen i32 to i64 if needed
-    # PURE-324: Skip extend if value bytes are already i64 (e.g., i64_const default)
+    # Widen numeric types if needed
+    # PURE-324: Skip extend if value bytes are already the target type (e.g., i64_const default)
     if edge_val_type !== nothing && phi_local_type === I64 && edge_val_type === I32 && (isempty(value_bytes) || value_bytes[1] != Opcode.I64_CONST)
         push!(bytes, Opcode.I64_EXTEND_I32_S)
+    elseif edge_val_type !== nothing && phi_local_type === F64 && edge_val_type === I64
+        push!(bytes, Opcode.F64_CONVERT_I64_S)
+    elseif edge_val_type !== nothing && phi_local_type === F64 && edge_val_type === I32
+        push!(bytes, Opcode.F64_CONVERT_I32_S)
+    elseif edge_val_type !== nothing && phi_local_type === F64 && edge_val_type === F32
+        push!(bytes, Opcode.F64_PROMOTE_F32)
+    elseif edge_val_type !== nothing && phi_local_type === F32 && edge_val_type === I64
+        push!(bytes, Opcode.F32_CONVERT_I64_S)
+    elseif edge_val_type !== nothing && phi_local_type === F32 && edge_val_type === I32
+        push!(bytes, Opcode.F32_CONVERT_I32_S)
     end
     push!(bytes, Opcode.LOCAL_SET)
     append!(bytes, encode_leb128_unsigned(local_idx))
@@ -7773,6 +7811,16 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                             push!(bytes, Opcode.EXTERN_CONVERT_ANY)
                         elseif val_wasm_type === I32 && func_ret_wasm === I64
                             push!(bytes, Opcode.I64_EXTEND_I32_S)
+                        elseif val_wasm_type === I64 && func_ret_wasm === F64
+                            push!(bytes, Opcode.F64_CONVERT_I64_S)
+                        elseif val_wasm_type === I32 && func_ret_wasm === F64
+                            push!(bytes, Opcode.F64_CONVERT_I32_S)
+                        elseif val_wasm_type === F32 && func_ret_wasm === F64
+                            push!(bytes, Opcode.F64_PROMOTE_F32)
+                        elseif val_wasm_type === I64 && func_ret_wasm === F32
+                            push!(bytes, Opcode.F32_CONVERT_I64_S)
+                        elseif val_wasm_type === I32 && func_ret_wasm === F32
+                            push!(bytes, Opcode.F32_CONVERT_I32_S)
                         end
                         push!(bytes, Opcode.RETURN)
                     end
@@ -8019,6 +8067,16 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                         push!(bytes, Opcode.EXTERN_CONVERT_ANY)
                     elseif val_wasm_type === I32 && func_ret_wasm === I64
                         push!(bytes, Opcode.I64_EXTEND_I32_S)
+                    elseif val_wasm_type === I64 && func_ret_wasm === F64
+                        push!(bytes, Opcode.F64_CONVERT_I64_S)
+                    elseif val_wasm_type === I32 && func_ret_wasm === F64
+                        push!(bytes, Opcode.F64_CONVERT_I32_S)
+                    elseif val_wasm_type === F32 && func_ret_wasm === F64
+                        push!(bytes, Opcode.F64_PROMOTE_F32)
+                    elseif val_wasm_type === I64 && func_ret_wasm === F32
+                        push!(bytes, Opcode.F32_CONVERT_I64_S)
+                    elseif val_wasm_type === I32 && func_ret_wasm === F32
+                        push!(bytes, Opcode.F32_CONVERT_I32_S)
                     end
                     push!(bytes, Opcode.RETURN)
                 end
@@ -8163,6 +8221,16 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                         push!(bytes, Opcode.EXTERN_CONVERT_ANY)
                     elseif val_wasm_type === I32 && func_ret_wasm === I64
                         push!(bytes, Opcode.I64_EXTEND_I32_S)
+                    elseif val_wasm_type === I64 && func_ret_wasm === F64
+                        push!(bytes, Opcode.F64_CONVERT_I64_S)
+                    elseif val_wasm_type === I32 && func_ret_wasm === F64
+                        push!(bytes, Opcode.F64_CONVERT_I32_S)
+                    elseif val_wasm_type === F32 && func_ret_wasm === F64
+                        push!(bytes, Opcode.F64_PROMOTE_F32)
+                    elseif val_wasm_type === I64 && func_ret_wasm === F32
+                        push!(bytes, Opcode.F32_CONVERT_I64_S)
+                    elseif val_wasm_type === I32 && func_ret_wasm === F32
+                        push!(bytes, Opcode.F32_CONVERT_I32_S)
                     end
                     push!(bytes, Opcode.RETURN)
                 end
@@ -8460,6 +8528,16 @@ function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBloc
                             push!(bytes, Opcode.EXTERN_CONVERT_ANY)
                         elseif val_wasm_type === I32 && func_ret_wasm === I64
                             push!(bytes, Opcode.I64_EXTEND_I32_S)
+                        elseif val_wasm_type === I64 && func_ret_wasm === F64
+                            push!(bytes, Opcode.F64_CONVERT_I64_S)
+                        elseif val_wasm_type === I32 && func_ret_wasm === F64
+                            push!(bytes, Opcode.F64_CONVERT_I32_S)
+                        elseif val_wasm_type === F32 && func_ret_wasm === F64
+                            push!(bytes, Opcode.F64_PROMOTE_F32)
+                        elseif val_wasm_type === I64 && func_ret_wasm === F32
+                            push!(bytes, Opcode.F32_CONVERT_I64_S)
+                        elseif val_wasm_type === I32 && func_ret_wasm === F32
+                            push!(bytes, Opcode.F32_CONVERT_I32_S)
                         end
                         push!(bytes, Opcode.RETURN)
                     end
@@ -9178,6 +9256,16 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                             push!(block_bytes, Opcode.EXTERN_CONVERT_ANY)
                         elseif val_wasm_type === I32 && func_ret_wasm === I64
                             push!(block_bytes, Opcode.I64_EXTEND_I32_S)
+                        elseif val_wasm_type === I64 && func_ret_wasm === F64
+                            push!(block_bytes, Opcode.F64_CONVERT_I64_S)
+                        elseif val_wasm_type === I32 && func_ret_wasm === F64
+                            push!(block_bytes, Opcode.F64_CONVERT_I32_S)
+                        elseif val_wasm_type === F32 && func_ret_wasm === F64
+                            push!(block_bytes, Opcode.F64_PROMOTE_F32)
+                        elseif val_wasm_type === I64 && func_ret_wasm === F32
+                            push!(block_bytes, Opcode.F32_CONVERT_I64_S)
+                        elseif val_wasm_type === I32 && func_ret_wasm === F32
+                            push!(block_bytes, Opcode.F32_CONVERT_I32_S)
                         end
                         push!(block_bytes, Opcode.RETURN)
                     end
@@ -9281,7 +9369,7 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
 
                                     if _already_boxed
                                         append!(block_bytes, phi_value_bytes)
-                                    elseif actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type) && !(phi_local_type === I64 && actual_val_type === I32)
+                                    elseif actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type) && !(phi_local_type === I64 && actual_val_type === I32) && !(phi_local_type === F64 && (actual_val_type === I64 || actual_val_type === I32 || actual_val_type === F32)) && !(phi_local_type === F32 && (actual_val_type === I64 || actual_val_type === I32))
                                         # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef:
                                         # wrap with extern_convert_any instead of emitting null default
                                         if phi_local_type === ExternRef && (actual_val_type isa ConcreteRef || actual_val_type === StructRef || actual_val_type === ArrayRef || actual_val_type === AnyRef)
@@ -9300,6 +9388,18 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                         if isempty(phi_value_bytes) || phi_value_bytes[1] != Opcode.I64_CONST
                                             push!(block_bytes, Opcode.I64_EXTEND_I32_S)
                                         end
+                                    elseif actual_val_type !== nothing && phi_local_type === F64 && actual_val_type === I64
+                                        append!(block_bytes, phi_value_bytes)
+                                        push!(block_bytes, Opcode.F64_CONVERT_I64_S)
+                                    elseif actual_val_type !== nothing && phi_local_type === F64 && actual_val_type === I32
+                                        append!(block_bytes, phi_value_bytes)
+                                        push!(block_bytes, Opcode.F64_CONVERT_I32_S)
+                                    elseif actual_val_type !== nothing && phi_local_type === F64 && actual_val_type === F32
+                                        append!(block_bytes, phi_value_bytes)
+                                        push!(block_bytes, Opcode.F64_PROMOTE_F32)
+                                    elseif actual_val_type !== nothing && phi_local_type === F32 && (actual_val_type === I64 || actual_val_type === I32)
+                                        append!(block_bytes, phi_value_bytes)
+                                        push!(block_bytes, actual_val_type === I64 ? Opcode.F32_CONVERT_I64_S : Opcode.F32_CONVERT_I32_S)
                                     else
                                         append!(block_bytes, phi_value_bytes)
                                     end
@@ -10099,7 +10199,7 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
 
                                     if _already_boxed2
                                         append!(bytes, phi_value_bytes)
-                                    elseif actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type) && !(phi_local_type === I64 && actual_val_type === I32)
+                                    elseif actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type) && !(phi_local_type === I64 && actual_val_type === I32) && !(phi_local_type === F64 && (actual_val_type === I64 || actual_val_type === I32 || actual_val_type === F32)) && !(phi_local_type === F32 && (actual_val_type === I64 || actual_val_type === I32))
                                         # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef:
                                         # wrap with extern_convert_any instead of null default
                                         if phi_local_type === ExternRef && (actual_val_type isa ConcreteRef || actual_val_type === StructRef || actual_val_type === ArrayRef || actual_val_type === AnyRef)
@@ -10122,6 +10222,18 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                         if isempty(phi_value_bytes) || phi_value_bytes[1] != Opcode.I64_CONST
                                             push!(bytes, Opcode.I64_EXTEND_I32_S)
                                         end
+                                    elseif actual_val_type !== nothing && phi_local_type === F64 && actual_val_type === I64
+                                        append!(bytes, phi_value_bytes)
+                                        push!(bytes, Opcode.F64_CONVERT_I64_S)
+                                    elseif actual_val_type !== nothing && phi_local_type === F64 && actual_val_type === I32
+                                        append!(bytes, phi_value_bytes)
+                                        push!(bytes, Opcode.F64_CONVERT_I32_S)
+                                    elseif actual_val_type !== nothing && phi_local_type === F64 && actual_val_type === F32
+                                        append!(bytes, phi_value_bytes)
+                                        push!(bytes, Opcode.F64_PROMOTE_F32)
+                                    elseif actual_val_type !== nothing && phi_local_type === F32 && (actual_val_type === I64 || actual_val_type === I32)
+                                        append!(bytes, phi_value_bytes)
+                                        push!(bytes, actual_val_type === I64 ? Opcode.F32_CONVERT_I64_S : Opcode.F32_CONVERT_I32_S)
                                     else
                                         append!(bytes, phi_value_bytes)
                                     end
@@ -10223,6 +10335,16 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                             push!(block_bytes, Opcode.EXTERN_CONVERT_ANY)
                         elseif val_wasm_type === I32 && func_ret_wasm === I64
                             push!(block_bytes, Opcode.I64_EXTEND_I32_S)
+                        elseif val_wasm_type === I64 && func_ret_wasm === F64
+                            push!(block_bytes, Opcode.F64_CONVERT_I64_S)
+                        elseif val_wasm_type === I32 && func_ret_wasm === F64
+                            push!(block_bytes, Opcode.F64_CONVERT_I32_S)
+                        elseif val_wasm_type === F32 && func_ret_wasm === F64
+                            push!(block_bytes, Opcode.F64_PROMOTE_F32)
+                        elseif val_wasm_type === I64 && func_ret_wasm === F32
+                            push!(block_bytes, Opcode.F32_CONVERT_I64_S)
+                        elseif val_wasm_type === I32 && func_ret_wasm === F32
+                            push!(block_bytes, Opcode.F32_CONVERT_I32_S)
                         end
                         push!(block_bytes, Opcode.RETURN)
                     end
@@ -10321,7 +10443,7 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
 
                                     if _already_boxed3
                                         append!(block_bytes, phi_value_bytes)
-                                    elseif actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type) && !(phi_local_type === I64 && actual_val_type === I32)
+                                    elseif actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type) && !(phi_local_type === I64 && actual_val_type === I32) && !(phi_local_type === F64 && (actual_val_type === I64 || actual_val_type === I32 || actual_val_type === F32)) && !(phi_local_type === F32 && (actual_val_type === I64 || actual_val_type === I32))
                                         # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef:
                                         # wrap with extern_convert_any instead of null default
                                         if phi_local_type === ExternRef && (actual_val_type isa ConcreteRef || actual_val_type === StructRef || actual_val_type === ArrayRef || actual_val_type === AnyRef)
@@ -10340,6 +10462,18 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                         if isempty(phi_value_bytes) || phi_value_bytes[1] != Opcode.I64_CONST
                                             push!(block_bytes, Opcode.I64_EXTEND_I32_S)
                                         end
+                                    elseif actual_val_type !== nothing && phi_local_type === F64 && actual_val_type === I64
+                                        append!(block_bytes, phi_value_bytes)
+                                        push!(block_bytes, Opcode.F64_CONVERT_I64_S)
+                                    elseif actual_val_type !== nothing && phi_local_type === F64 && actual_val_type === I32
+                                        append!(block_bytes, phi_value_bytes)
+                                        push!(block_bytes, Opcode.F64_CONVERT_I32_S)
+                                    elseif actual_val_type !== nothing && phi_local_type === F64 && actual_val_type === F32
+                                        append!(block_bytes, phi_value_bytes)
+                                        push!(block_bytes, Opcode.F64_PROMOTE_F32)
+                                    elseif actual_val_type !== nothing && phi_local_type === F32 && (actual_val_type === I64 || actual_val_type === I32)
+                                        append!(block_bytes, phi_value_bytes)
+                                        push!(block_bytes, actual_val_type === I64 ? Opcode.F32_CONVERT_I64_S : Opcode.F32_CONVERT_I32_S)
                                     else
                                         append!(block_bytes, phi_value_bytes)
                                     end
@@ -10458,6 +10592,16 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                         end
                     elseif val_wasm_type === I32 && func_ret_wasm === I64
                         push!(bytes, Opcode.I64_EXTEND_I32_S)
+                    elseif val_wasm_type === I64 && func_ret_wasm === F64
+                        push!(bytes, Opcode.F64_CONVERT_I64_S)
+                    elseif val_wasm_type === I32 && func_ret_wasm === F64
+                        push!(bytes, Opcode.F64_CONVERT_I32_S)
+                    elseif val_wasm_type === F32 && func_ret_wasm === F64
+                        push!(bytes, Opcode.F64_PROMOTE_F32)
+                    elseif val_wasm_type === I64 && func_ret_wasm === F32
+                        push!(bytes, Opcode.F32_CONVERT_I64_S)
+                    elseif val_wasm_type === I32 && func_ret_wasm === F32
+                        push!(bytes, Opcode.F32_CONVERT_I32_S)
                     end
                     push!(bytes, Opcode.RETURN)
                 end
@@ -10692,6 +10836,16 @@ function generate_linear_flow(ctx::CompilationContext, blocks::Vector{BasicBlock
                             push!(range_bytes, Opcode.EXTERN_CONVERT_ANY)
                         elseif val_wasm_type === I32 && func_ret_wasm === I64
                             push!(range_bytes, Opcode.I64_EXTEND_I32_S)
+                        elseif val_wasm_type === I64 && func_ret_wasm === F64
+                            push!(range_bytes, Opcode.F64_CONVERT_I64_S)
+                        elseif val_wasm_type === I32 && func_ret_wasm === F64
+                            push!(range_bytes, Opcode.F64_CONVERT_I32_S)
+                        elseif val_wasm_type === F32 && func_ret_wasm === F64
+                            push!(range_bytes, Opcode.F64_PROMOTE_F32)
+                        elseif val_wasm_type === I64 && func_ret_wasm === F32
+                            push!(range_bytes, Opcode.F32_CONVERT_I64_S)
+                        elseif val_wasm_type === I32 && func_ret_wasm === F32
+                            push!(range_bytes, Opcode.F32_CONVERT_I32_S)
                         end
                         push!(range_bytes, Opcode.RETURN)
                     end

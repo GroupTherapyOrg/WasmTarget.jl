@@ -191,6 +191,10 @@ module Opcode
     const F64_CONVERT_I64_S = 0xB9
     const F64_CONVERT_I64_U = 0xBA
 
+    # Float-to-float conversions
+    const F32_DEMOTE_F64 = 0xB6
+    const F64_PROMOTE_F32 = 0xBB
+
     # Float to int conversions
     const I32_TRUNC_F32_S = 0xA8
     const I32_TRUNC_F32_U = 0xA9
