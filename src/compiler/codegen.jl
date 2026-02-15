@@ -5580,6 +5580,35 @@ function infer_value_type(val, ctx::CompilationContext)
 end
 
 """
+    emit_ref_cast_if_structref(bytes, val, target_type_idx, ctx) -> bytes
+
+Check if `val` will produce `structref` on the Wasm stack (due to union-typed local),
+and if so, append `ref.cast null \$target_type_idx` to narrow it for struct_get.
+"""
+function emit_ref_cast_if_structref!(bytes::Vector{UInt8}, val, target_type_idx::Integer, ctx::CompilationContext)
+    local_wasm_type = nothing
+    if val isa Core.SSAValue
+        local_idx = get(ctx.ssa_locals, val.id, nothing)
+        if local_idx === nothing
+            local_idx = get(ctx.phi_locals, val.id, nothing)
+        end
+        if local_idx !== nothing
+            arr_idx = local_idx - ctx.n_params + 1
+            if arr_idx >= 1 && arr_idx <= length(ctx.locals)
+                local_wasm_type = ctx.locals[arr_idx]
+            end
+        end
+    end
+    if local_wasm_type === StructRef
+        # Value on stack is structref, but struct_get needs (ref null $target_type_idx)
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.REF_CAST_NULL)
+        append!(bytes, encode_leb128_signed(Int64(target_type_idx)))
+    end
+    return bytes
+end
+
+"""
 Extract the global index from a WasmGlobal type.
 The index is stored as a type parameter, so we extract it from the type.
 """
@@ -17695,15 +17724,13 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             field_idx = findfirst(==(field_sym), info.field_names)
             if field_idx !== nothing
                 append!(bytes, compile_value(obj_arg, ctx))
+                # PURE-701: If obj_arg's local is structref (union of struct types),
+                # insert ref.cast null to narrow before struct_get
+                emit_ref_cast_if_structref!(bytes, obj_arg, info.wasm_type_idx, ctx)
                 push!(bytes, Opcode.GC_PREFIX)
                 push!(bytes, Opcode.STRUCT_GET)
                 append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
                 append!(bytes, encode_leb128_unsigned(field_idx - 1))
-
-                # Note: if the field is typed as Any (externref in Wasm), struct.get returns
-                # externref. The local for this SSA is also typed as externref (fixed in
-                # analyze_ssa_types! which overrides the SSA type for Any-field access).
-                # No cast is needed here — usage sites that need concrete ref will cast.
                 return bytes
             end
         end
@@ -18324,6 +18351,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     push!(bytes, Opcode.LOCAL_SET)
                     append!(bytes, encode_leb128_unsigned(temp_local))
                     append!(bytes, compile_value(obj_arg, ctx))
+                    # PURE-701: If obj_arg's local is structref, insert ref.cast null before struct_set
+                    emit_ref_cast_if_structref!(bytes, obj_arg, info.wasm_type_idx, ctx)
                     push!(bytes, Opcode.LOCAL_GET)
                     append!(bytes, encode_leb128_unsigned(temp_local))
                     push!(bytes, Opcode.GC_PREFIX)
@@ -18354,6 +18383,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
 
                 # Now compile obj (struct ref)
                 append!(bytes, compile_value(obj_arg, ctx))
+                # PURE-701: If obj_arg's local is structref, insert ref.cast null before struct_set
+                emit_ref_cast_if_structref!(bytes, obj_arg, info.wasm_type_idx, ctx)
 
                 # Load value from local
                 push!(bytes, Opcode.LOCAL_GET)
@@ -18385,6 +18416,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
 
                     # struct.set expects: [ref, value]
                     append!(bytes, compile_value(obj_arg, ctx))
+                    # PURE-701: If obj_arg's local is structref, insert ref.cast null before struct_set
+                    emit_ref_cast_if_structref!(bytes, obj_arg, info.wasm_type_idx, ctx)
                     append!(bytes, compile_value(value_arg, ctx))
 
                     # PURE-045: If field type is Any (externref), convert concrete ref to externref
@@ -20168,6 +20201,11 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
 
             if expected_tag >= 0
                 # Value is already on stack (tagged union struct)
+                # PURE-701: Value may be structref if from a union-typed local.
+                # Insert ref.cast null to narrow before struct_get.
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.REF_CAST_NULL)
+                append!(bytes, encode_leb128_signed(Int64(union_info.wasm_type_idx)))
                 # Get the tag field (field 0)
                 push!(bytes, Opcode.GC_PREFIX)
                 push!(bytes, Opcode.STRUCT_GET)
