@@ -71,7 +71,7 @@ async function compileAndGetGroundTruth(funcDef, funcName, argTypes, testCases, 
         return `
     args_${i} = ${tc.args}
     expected_${i} = ${funcName}(args_${i}...)
-    println("GT:$i:", expected_${i})`;
+    println("GT:${i}:", expected_${i})`;
     }).join("\n");
 
     const juliaScript = `
