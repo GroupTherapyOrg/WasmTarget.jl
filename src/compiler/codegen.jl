@@ -4392,6 +4392,16 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
         elem_type = T.name.name === :GenericMemoryRef ? T.parameters[2] : T.parameters[1]
         type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
         return ConcreteRef(type_idx, true)
+    elseif T isa UnionAll && T <: Base.GenericMemoryRef
+        # PURE-902: Bare MemoryRef or constrained MemoryRef{T} where T<:X (UnionAll)
+        # This happens when cross-function calls use Vector (no eltype).
+        # Try to extract element type from the type variable bound, else use Any.
+        local memref_elem_type = Any
+        if T isa UnionAll && T.var isa TypeVar && T.var.ub !== Any
+            memref_elem_type = T.var.ub
+        end
+        type_idx = get_array_type!(ctx.mod, ctx.type_registry, memref_elem_type)
+        return ConcreteRef(type_idx, true)
     elseif T isa DataType && (T.name.name === :Memory || T.name.name === :GenericMemory)
         # Memory{T} maps to array type for element T
         elem_type = T.parameters[2]
@@ -4440,6 +4450,14 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
             type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
             return ConcreteRef(type_idx, true)
         end
+    elseif T isa UnionAll && T <: Base.GenericMemoryRef
+        # PURE-902: Bare MemoryRef or constrained MemoryRef{T} where T<:X (UnionAll)
+        local memref_elem_type2 = Any
+        if T isa UnionAll && T.var isa TypeVar && T.var.ub !== Any
+            memref_elem_type2 = T.var.ub
+        end
+        type_idx = get_array_type!(ctx.mod, ctx.type_registry, memref_elem_type2)
+        return ConcreteRef(type_idx, true)
     elseif T isa DataType && (T.name.name === :Memory || T.name.name === :GenericMemory)
         # GenericMemory/Memory is the backing storage for Vector (Julia 1.11+)
         # IMPORTANT: Check this BEFORE AbstractArray since Memory <: AbstractArray
@@ -18068,6 +18086,22 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             end
         end
 
+        # PURE-902: Handle UnionAll MemoryRef types (bare MemoryRef without parameters)
+        # When cross-function calls use abstract arg types (e.g., Vector instead of
+        # Vector{Any}), code_typed returns bare MemoryRef (UnionAll) instead of
+        # MemoryRef{Any} (DataType). The elem_type stays as default Int32.
+        # Fix: use the memoryrefget result's own SSA type as the element type.
+        if elem_type === Int32 && !(ref_type isa DataType)
+            ssa_result_type = get(ctx.ssa_types, idx, Any)
+            # If the SSA result type is itself a MemoryRef/array type (UnionAll),
+            # the element type is unknown — default to Any
+            if ssa_result_type isa UnionAll || ssa_result_type === Any
+                elem_type = Any
+            elseif ssa_result_type !== Int32
+                elem_type = ssa_result_type
+            end
+        end
+
         # Get or create array type for this element type
         array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
 
@@ -18135,6 +18169,18 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             elseif ref_type.name.name === :GenericMemory && length(ref_type.parameters) >= 2
                 # GenericMemory{atomicity, T, addrspace} - element type is second parameter
                 elem_type = ref_type.parameters[2]
+            end
+        end
+
+        # PURE-902: Handle UnionAll MemoryRef types (bare MemoryRef without parameters)
+        # Same logic as memoryrefget: when ref_type is a bare UnionAll MemoryRef,
+        # infer element type from SSA result type or default to Any.
+        if elem_type === Int32 && !(ref_type isa DataType)
+            ssa_result_type = get(ctx.ssa_types, idx, Any)
+            if ssa_result_type isa UnionAll || ssa_result_type === Any
+                elem_type = Any
+            elseif ssa_result_type !== Int32
+                elem_type = ssa_result_type
             end
         end
 
