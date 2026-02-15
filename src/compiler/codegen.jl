@@ -760,7 +760,10 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
     # These cause cascading discovery of methods that may not compile cleanly.
     # PURE-800: Exempt WasmTarget (M4 self-hosting needs #compile#84)
     # PURE-804: Exempt JuliaSyntax (parsestmt needs #_parse#75)
-    if !(mod === WasmTarget || nameof(mod) === :JuliaSyntax)
+    # PURE-914: Exempt whitelisted Base methods (findnext takes Fix2{typeof(isequal),Char})
+    _exempt_mod = mod === WasmTarget || nameof(mod) === :JuliaSyntax ||
+                  (mod === Base && meth_name in AUTODISCOVER_BASE_METHODS)
+    if !_exempt_mod
         for t in arg_types
             if t isa DataType && t <: Function && isconcretetype(t)
                 return
