@@ -4996,6 +4996,35 @@ function allocate_ssa_locals!(ctx::CompilationContext)
                 end
             end
 
+            # PURE-913: compilerbarrier(:type, value)::Any — use inner value's type
+            # Runtime intrinsics use @noinline + inferencebarrier, which inserts
+            # compilerbarrier(:type, value)::Any. The SSA type is Any → ExternRef,
+            # but the actual value is the inner arg's type (e.g., Int32 → I32).
+            # If we allocate ExternRef, the safety check replaces the i32 with ref.null.
+            # Also update ctx.ssa_types so compile_statement safety check uses the real type.
+            if stmt isa Expr && stmt.head === :call
+                func = stmt.args[1]
+                is_compilerbarrier = (func isa GlobalRef &&
+                    (func.mod === Core || func.mod === Base) &&
+                    func.name === :compilerbarrier)
+                if is_compilerbarrier && length(stmt.args) >= 3
+                    inner_val = stmt.args[3]  # args = [func, kind, value]
+                    inner_type = nothing
+                    if inner_val isa Core.SSAValue
+                        inner_type = get(ctx.ssa_types, inner_val.id, nothing)
+                    elseif inner_val isa Core.Argument
+                        arg_idx = inner_val.n
+                        if arg_idx <= length(ctx.arg_types)
+                            inner_type = ctx.arg_types[arg_idx]
+                        end
+                    end
+                    if inner_type !== nothing && inner_type !== Any && inner_type !== Union{}
+                        ssa_type = inner_type
+                        ctx.ssa_types[ssa_id] = inner_type  # Update for safety check
+                    end
+                end
+            end
+
             # Skip Nothing type - nothing is compiled as ref.null, not i32
             # Trying to store it in an i32 local causes type errors
             if ssa_type === Nothing
