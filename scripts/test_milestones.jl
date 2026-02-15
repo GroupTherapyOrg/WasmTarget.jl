@@ -18,7 +18,7 @@ println("M1b VALIDATES: $(nfuncs_m1b) funcs, $(length(bytes_m1b)) bytes")
 # M2: lowering
 println("\n=== M2: lowering ===")
 using JuliaLowering
-bytes_m2 = compile(JuliaLowering._to_lowered_expr, (JuliaLowering.JuliaSyntax.SyntaxTree{JuliaLowering.JuliaSyntax.SyntaxGraph}, Int64))
+bytes_m2 = compile(JuliaLowering.to_lowered_expr, (JuliaLowering.SyntaxTree,))
 write("/tmp/lowering_check.wasm", bytes_m2)
 run(`wasm-tools validate --features=gc /tmp/lowering_check.wasm`)
 nfuncs_m2 = count_funcs("/tmp/lowering_check.wasm")

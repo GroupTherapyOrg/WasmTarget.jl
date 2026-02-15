@@ -27,7 +27,7 @@ Julia compiles code through a 4-stage pipeline: parsing, lowering, type inferenc
    ↓
 JuliaSyntax.parsestmt            ← PARSING: string → AST (Expr)
    ↓
-JuliaLowering._to_lowered_expr   ← LOWERING: Expr → lowered IR
+JuliaLowering.to_lowered_expr    ← LOWERING: Expr → lowered IR
    ↓
 Core.Compiler.typeinf            ← TYPE INFERENCE: IR → fully typed CodeInfo
    ↓
@@ -277,7 +277,7 @@ Julia Source Code
      ↓
 JuliaSyntax.parsestmt        → AST (Expr)
      ↓
-JuliaLowering._to_lowered_expr → Lowered IR
+JuliaLowering.to_lowered_expr  → Lowered IR
      ↓
 Core.Compiler.typeinf        → Typed CodeInfo (fully type-inferred)
      ↓
