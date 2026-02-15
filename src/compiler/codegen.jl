@@ -5218,8 +5218,11 @@ function analyze_ssa_types!(ctx::CompilationContext)
                     julia_field_type = nothing
                     if field_sym isa Symbol && hasfield(obj_type, field_sym)
                         julia_field_type = fieldtype(obj_type, field_sym)
-                    elseif field_sym isa Integer && 1 <= field_sym <= fieldcount(obj_type)
-                        julia_field_type = fieldtype(obj_type, Int(field_sym))
+                    elseif field_sym isa Integer
+                        fc = try fieldcount(obj_type) catch; -1 end
+                        if fc >= 0 && 1 <= field_sym <= fc
+                            julia_field_type = fieldtype(obj_type, Int(field_sym))
+                        end
                     end
                     if julia_field_type === Any
                         ctx.ssa_types[i] = Any  # Force ExternRef local to match struct.get output

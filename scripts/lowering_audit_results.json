@@ -1,0 +1,4353 @@
+{
+  "entry_point": "JuliaLowering.to_lowered_expr(::SyntaxTree)",
+  "total_functions": 79,
+  "total_statements": 10068,
+  "patterns": {
+    "calls": [
+      {
+        "status": "unknown",
+        "count": 216,
+        "arg_types": [
+          "Tuple{Int64}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 191,
+        "arg_types": [
+          "UnitRange{Int64}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 111,
+        "arg_types": [
+          "Vector{Int64}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 90,
+        "arg_types": [
+          "IOBuffer",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 76,
+        "arg_types": [
+          "Vector{Any}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 74,
+        "arg_types": [
+          "Vector{UnitRange{Int64}}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 63,
+        "arg_types": [
+          "SubArray{Int64",
+          "1",
+          "Vector{Int64}",
+          "Tuple{UnitRange{Int64}}",
+          "true}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 43,
+        "arg_types": [
+          "Vector{Tuple{String",
+          "Vector{Any}",
+          "Vector{Int32}}}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 42,
+        "arg_types": [
+          "Dict{String",
+          "Int64}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 33,
+        "arg_types": [
+          "Memory{UInt8}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 22,
+        "arg_types": [
+          "JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol",
+          "Any}}",
+          "Vector{Int64}}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 21,
+        "arg_types": [
+          "MemoryRef{UInt8}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 21,
+        "arg_types": [
+          "Base.ImmutableDict{Symbol",
+          "Any}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 17,
+        "arg_types": [
+          "Vector{JuliaLowering.Slot}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 17,
+        "arg_types": [
+          "Expr",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 14,
+        "arg_types": [
+          "Dict{Symbol",
+          "Any}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 14,
+        "arg_types": [
+          "Vector{Int32}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 11,
+        "arg_types": [
+          "Base.EffectsOverride",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 10,
+        "arg_types": [
+          "Vector{UInt8}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 8,
+        "arg_types": [
+          "JuliaLowering.Slot",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 8,
+        "arg_types": [
+          "JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol",
+          "Any}}",
+          "SubArray{Int64",
+          "1",
+          "Vector{Int64}",
+          "Tuple{UnitRange{Int64}}",
+          "true}}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 7,
+        "arg_types": [
+          "Dict{UInt16",
+          "String}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 7,
+        "arg_types": [
+          "Base.OneTo{Int64}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 6,
+        "arg_types": [
+          "Vector{T} where T<:Tuple{String",
+          "Any}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 6,
+        "arg_types": [
+          "Memory{Any}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 6,
+        "arg_types": [
+          "Tuple{String",
+          "Vector{Any}",
+          "Vector{Int32}}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 6,
+        "arg_types": [
+          "Tuple{String",
+          "Vector{Any}",
+          "Vector{Int32}}",
+          "Int64"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 6,
+        "arg_types": [
+          "QuoteNode",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 6,
+        "arg_types": [
+          "MemoryRef{Any}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 4,
+        "arg_types": [
+          "JuliaSyntax.SyntaxHead",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 4,
+        "arg_types": [
+          "Vector{Core.DebugInfo}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 4,
+        "arg_types": [
+          "Tuple{String",
+          "JuliaSyntax.Kind}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 4,
+        "arg_types": [
+          "Vector{UInt16}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 4,
+        "arg_types": [
+          "Vector{UInt64}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 4,
+        "arg_types": [
+          "Memory{String}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 4,
+        "arg_types": [
+          "Tuple{String",
+          "String",
+          "Int64}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 4,
+        "arg_types": [
+          "Tuple{String",
+          "Any}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "Vector{UInt32}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "MemoryRef{Tuple{String",
+          "Vector{Any}",
+          "Vector{Int32}}}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "Memory{Int32}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "Base.Generator{JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol",
+          "Any}}",
+          "SubArray{Int64",
+          "1",
+          "Vector{Int64}",
+          "Tuple{UnitRange{Int64}}",
+          "true}}",
+          "JuliaLowering.var\"#_to_lowered_expr##0#_to_lowered_expr##1\"{Int64}}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "MemoryRef{Int32}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "Base.Generator{JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol",
+          "Any}}",
+          "SubArray{Int64",
+          "1",
+          "Vector{Int64}",
+          "Tuple{UnitRange{Int64}}",
+          "true}}",
+          "JuliaLowering.var\"#_to_lowered_expr##2#_to_lowered_expr##3\"{Int64}}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "Base.Generator{Vector{Any}",
+          "typeof(JuliaLowering._compress_debuginfo)}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Base.Iterators.Enumerate{I} where I<:(Vector{T} where T<:Tuple{String",
+          "Any})",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Tuple{JuliaSyntax.SyntaxHead",
+          "Any}",
+          "Int64"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Tuple{String",
+          "Any}",
+          "Int64"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Tuple{Any",
+          "Vector{UInt8}}",
+          "Int64"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Memory{Symbol}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Vector{Symbol}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Base.Generator{JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol",
+          "Any}}",
+          "Vector{Int64}}",
+          "JuliaLowering.var\"#add_ir_debug_info!##0#add_ir_debug_info!##1\"}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Tuple{Int64",
+          "UInt8}",
+          "Int64"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Vector",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Tuple{Any",
+          "Int64}",
+          "Int64"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Tuple",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Memory{Tuple{String",
+          "Vector{Any}",
+          "Vector{Int32}}}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Memory{UInt16}",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "SourceFile",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "LineNumberNode",
+          "Symbol"
+        ],
+        "func": "Base.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 421,
+        "arg_types": [
+          "DataType",
+          "Int64"
+        ],
+        "func": "Base.bitcast"
+      },
+      {
+        "status": "unknown",
+        "count": 35,
+        "arg_types": [
+          "DataType",
+          "UInt64"
+        ],
+        "func": "Base.bitcast"
+      },
+      {
+        "status": "unknown",
+        "count": 13,
+        "arg_types": [
+          "DataType",
+          "JuliaSyntax.Kind"
+        ],
+        "func": "Base.bitcast"
+      },
+      {
+        "status": "unknown",
+        "count": 4,
+        "arg_types": [
+          "DataType",
+          "Ptr{Nothing}"
+        ],
+        "func": "Base.bitcast"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "DataType",
+          "Ptr{UInt8}"
+        ],
+        "func": "Base.bitcast"
+      },
+      {
+        "status": "unknown",
+        "count": 369,
+        "arg_types": [
+          "Int64",
+          "Int64"
+        ],
+        "func": "Base.sub_int"
+      },
+      {
+        "status": "unknown",
+        "count": 6,
+        "arg_types": [
+          "UInt64",
+          "UInt64"
+        ],
+        "func": "Base.sub_int"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "UInt32",
+          "UInt32"
+        ],
+        "func": "Base.sub_int"
+      },
+      {
+        "status": "unknown",
+        "count": 234,
+        "arg_types": [
+          "Int64",
+          "Int64"
+        ],
+        "func": "Base.add_int"
+      },
+      {
+        "status": "unknown",
+        "count": 16,
+        "arg_types": [
+          "UInt64",
+          "UInt64"
+        ],
+        "func": "Base.add_int"
+      },
+      {
+        "status": "unknown",
+        "count": 8,
+        "arg_types": [
+          "Int128",
+          "Int128"
+        ],
+        "func": "Base.add_int"
+      },
+      {
+        "status": "unknown",
+        "count": 7,
+        "arg_types": [
+          "UInt8",
+          "UInt8"
+        ],
+        "func": "Base.add_int"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "UInt32",
+          "UInt32"
+        ],
+        "func": "Base.add_int"
+      },
+      {
+        "status": "unknown",
+        "count": 95,
+        "arg_types": [
+          "JuliaSyntax.Kind",
+          "JuliaSyntax.Kind"
+        ],
+        "func": "Base.==="
+      },
+      {
+        "status": "unknown",
+        "count": 84,
+        "arg_types": [
+          "Int64",
+          "Int64"
+        ],
+        "func": "Base.==="
+      },
+      {
+        "status": "unknown",
+        "count": 19,
+        "arg_types": [
+          "Symbol",
+          "Symbol"
+        ],
+        "func": "Base.==="
+      },
+      {
+        "status": "unknown",
+        "count": 15,
+        "arg_types": [
+          "UInt64",
+          "UInt64"
+        ],
+        "func": "Base.==="
+      },
+      {
+        "status": "unknown",
+        "count": 12,
+        "arg_types": [
+          "UInt8",
+          "UInt8"
+        ],
+        "func": "Base.==="
+      },
+      {
+        "status": "unknown",
+        "count": 7,
+        "arg_types": [
+          "String",
+          "String"
+        ],
+        "func": "Base.==="
+      },
+      {
+        "status": "unknown",
+        "count": 4,
+        "arg_types": [
+          "Any",
+          "Nothing"
+        ],
+        "func": "Base.==="
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "Bool",
+          "Bool"
+        ],
+        "func": "Base.==="
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "UInt16",
+          "UInt16"
+        ],
+        "func": "Base.==="
+      },
+      {
+        "status": "unknown",
+        "count": 52,
+        "arg_types": [
+          "MemoryRef{Int64}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Base.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 50,
+        "arg_types": [
+          "MemoryRef{UInt8}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Base.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 37,
+        "arg_types": [
+          "MemoryRef{UnitRange{Int64}}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Base.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 29,
+        "arg_types": [
+          "MemoryRef{Any}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Base.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 16,
+        "arg_types": [
+          "Memory{UInt8}"
+        ],
+        "func": "Base.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 13,
+        "arg_types": [
+          "MemoryRef{Tuple{String",
+          "Vector{Any}",
+          "Vector{Int32}}}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Base.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 7,
+        "arg_types": [
+          "MemoryRef{String}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Base.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 5,
+        "arg_types": [
+          "MemoryRef{JuliaLowering.Slot}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Base.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 4,
+        "arg_types": [
+          "Memory{String}"
+        ],
+        "func": "Base.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "MemoryRef{Int32}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Base.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "MemoryRef{Symbol}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Base.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "MemoryRef{UInt16}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Base.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Memory{Int64}"
+        ],
+        "func": "Base.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Memory{Any}"
+        ],
+        "func": "Base.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "MemoryRef{UInt64}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Base.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "MemoryRef{Core.DebugInfo}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Base.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Memory{Symbol}"
+        ],
+        "func": "Base.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "MemoryRef{UInt32}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Base.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Memory{UInt16}"
+        ],
+        "func": "Base.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 178,
+        "arg_types": [
+          "Int64"
+        ],
+        "func": "Core.tuple"
+      },
+      {
+        "status": "unknown",
+        "count": 22,
+        "arg_types": [
+          "UnitRange{Int64}"
+        ],
+        "func": "Core.tuple"
+      },
+      {
+        "status": "unknown",
+        "count": 5,
+        "arg_types": [
+          "Int64",
+          "UInt8"
+        ],
+        "func": "Core.tuple"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "Base.OneTo{Int64}",
+          "Int64"
+        ],
+        "func": "Core.tuple"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "Base.OneTo{Int64}"
+        ],
+        "func": "Core.tuple"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "String",
+          "Vector{Any}",
+          "Vector{Int32}"
+        ],
+        "func": "Core.tuple"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "String",
+          "Any"
+        ],
+        "func": "Core.tuple"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "String",
+          "Int64",
+          "String",
+          "Tuple{Int64}",
+          "String",
+          "Int64",
+          "String",
+          "Int64",
+          "String"
+        ],
+        "func": "Core.tuple"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Tuple{String",
+          "Vector{Any}",
+          "Vector{Int32}}",
+          "Int64"
+        ],
+        "func": "Core.tuple"
+      },
+      {
+        "status": "unknown",
+        "count": 119,
+        "arg_types": [
+          "JuliaLowering.SyntaxTree{JuliaLowering.SyntaxGraph{Dict{Symbol",
+          "Any}}}",
+          "Symbol"
+        ],
+        "func": "JuliaLowering.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 83,
+        "arg_types": [
+          "JuliaLowering.SyntaxGraph{Dict{Symbol",
+          "Any}}",
+          "Symbol"
+        ],
+        "func": "JuliaLowering.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 192,
+        "arg_types": [
+          "UInt64",
+          "UInt64"
+        ],
+        "func": "Base.ult_int"
+      },
+      {
+        "status": "unknown",
+        "count": 6,
+        "arg_types": [
+          "UInt16",
+          "UInt16"
+        ],
+        "func": "Base.ult_int"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "UInt8",
+          "UInt8"
+        ],
+        "func": "Base.ult_int"
+      },
+      {
+        "status": "unknown",
+        "count": 179,
+        "arg_types": [
+          "Int64",
+          "Int64"
+        ],
+        "func": "Base.slt_int"
+      },
+      {
+        "status": "unknown",
+        "count": 8,
+        "arg_types": [
+          "Int128",
+          "Int128"
+        ],
+        "func": "Base.slt_int"
+      },
+      {
+        "status": "unknown",
+        "count": 45,
+        "arg_types": [
+          "MemoryRef{Int64}",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefget"
+      },
+      {
+        "status": "unknown",
+        "count": 37,
+        "arg_types": [
+          "MemoryRef{UnitRange{Int64}}",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefget"
+      },
+      {
+        "status": "unknown",
+        "count": 20,
+        "arg_types": [
+          "MemoryRef{UInt8}",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefget"
+      },
+      {
+        "status": "unknown",
+        "count": 12,
+        "arg_types": [
+          "MemoryRef{Any}",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefget"
+      },
+      {
+        "status": "unknown",
+        "count": 11,
+        "arg_types": [
+          "MemoryRef{Tuple{String",
+          "Vector{Any}",
+          "Vector{Int32}}}",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefget"
+      },
+      {
+        "status": "unknown",
+        "count": 5,
+        "arg_types": [
+          "MemoryRef{JuliaLowering.Slot}",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefget"
+      },
+      {
+        "status": "unknown",
+        "count": 4,
+        "arg_types": [
+          "MemoryRef{String}",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefget"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "MemoryRef{UInt16}",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefget"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "MemoryRef{UInt64}",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefget"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "MemoryRef{Symbol}",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefget"
+      },
+      {
+        "status": "unknown",
+        "count": 99,
+        "arg_types": [
+          "Int64",
+          "Int64"
+        ],
+        "func": "Base.sle_int"
+      },
+      {
+        "status": "unknown",
+        "count": 42,
+        "arg_types": [
+          "Memory{UInt8}"
+        ],
+        "func": "Core.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 15,
+        "arg_types": [
+          "MemoryRef{UInt8}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Core.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 9,
+        "arg_types": [
+          "Memory{Any}"
+        ],
+        "func": "Core.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 5,
+        "arg_types": [
+          "Memory{Int64}"
+        ],
+        "func": "Core.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "Memory{String}"
+        ],
+        "func": "Core.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Memory{Core.DebugInfo}"
+        ],
+        "func": "Core.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "MemoryRef{Tuple{String",
+          "Vector{Any}",
+          "Vector{Int32}}}",
+          "Int64",
+          "Bool"
+        ],
+        "func": "Core.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Memory{Int32}"
+        ],
+        "func": "Core.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Memory{Tuple{String",
+          "Vector{Any}",
+          "Vector{Int32}}}"
+        ],
+        "func": "Core.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Memory{UInt32}"
+        ],
+        "func": "Core.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Memory{Symbol}"
+        ],
+        "func": "Core.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Memory{Tuple{String",
+          "Any}}"
+        ],
+        "func": "Core.memoryrefnew"
+      },
+      {
+        "status": "unknown",
+        "count": 80,
+        "arg_types": [
+          "Bool"
+        ],
+        "func": "Base.not_int"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "UInt64"
+        ],
+        "func": "Base.not_int"
+      },
+      {
+        "status": "unknown",
+        "count": 30,
+        "arg_types": [
+          "MemoryRef{UInt8}",
+          "UInt8",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefset!"
+      },
+      {
+        "status": "unknown",
+        "count": 11,
+        "arg_types": [
+          "MemoryRef{Any}",
+          "Any",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefset!"
+      },
+      {
+        "status": "unknown",
+        "count": 7,
+        "arg_types": [
+          "MemoryRef{Int64}",
+          "Int64",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefset!"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "MemoryRef{String}",
+          "String",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefset!"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "MemoryRef{Int32}",
+          "Int32",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefset!"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "MemoryRef{Any}",
+          "Expr",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefset!"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "MemoryRef{Tuple{String",
+          "Vector{Any}",
+          "Vector{Int32}}}",
+          "Tuple{String",
+          "Vector{Any}",
+          "Vector{Int32}}",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefset!"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "MemoryRef{Any}",
+          "QuoteNode",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefset!"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "MemoryRef{Any}",
+          "Tuple{String",
+          "Vector{Any}",
+          "Vector{Int32}}",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefset!"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "MemoryRef{Core.DebugInfo}",
+          "Core.DebugInfo",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefset!"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "MemoryRef{Symbol}",
+          "Symbol",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefset!"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "MemoryRef{UInt32}",
+          "UInt32",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.memoryrefset!"
+      },
+      {
+        "status": "unknown",
+        "count": 29,
+        "arg_types": [
+          "Bool",
+          "Bool"
+        ],
+        "func": "Base.and_int"
+      },
+      {
+        "status": "unknown",
+        "count": 15,
+        "arg_types": [
+          "Int64",
+          "Int64"
+        ],
+        "func": "Base.and_int"
+      },
+      {
+        "status": "unknown",
+        "count": 6,
+        "arg_types": [
+          "UInt8",
+          "UInt8"
+        ],
+        "func": "Base.and_int"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "UInt16",
+          "UInt16"
+        ],
+        "func": "Base.and_int"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "UInt32",
+          "UInt32"
+        ],
+        "func": "Base.and_int"
+      },
+      {
+        "status": "unknown",
+        "count": 49,
+        "arg_types": [
+          "Bool",
+          "Int64",
+          "Int64"
+        ],
+        "func": "ifelse"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "Bool",
+          "UInt8",
+          "UInt8"
+        ],
+        "func": "ifelse"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Bool",
+          "UInt64",
+          "UInt64"
+        ],
+        "func": "ifelse"
+      },
+      {
+        "status": "unknown",
+        "count": 15,
+        "arg_types": [
+          "IOBuffer",
+          "Symbol",
+          "Int64"
+        ],
+        "func": "Base.setfield!"
+      },
+      {
+        "status": "unknown",
+        "count": 10,
+        "arg_types": [
+          "Dict{String",
+          "Int64}",
+          "Symbol",
+          "Int64"
+        ],
+        "func": "Base.setfield!"
+      },
+      {
+        "status": "unknown",
+        "count": 6,
+        "arg_types": [
+          "Vector{Any}",
+          "Symbol",
+          "Tuple{Int64}"
+        ],
+        "func": "Base.setfield!"
+      },
+      {
+        "status": "unknown",
+        "count": 4,
+        "arg_types": [
+          "Dict{String",
+          "Int64}",
+          "Symbol",
+          "UInt64"
+        ],
+        "func": "Base.setfield!"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "Vector{Int32}",
+          "Symbol",
+          "Tuple{Int64}"
+        ],
+        "func": "Base.setfield!"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Dict{String",
+          "Int64}",
+          "Symbol",
+          "Memory{String}"
+        ],
+        "func": "Base.setfield!"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Dict{String",
+          "Int64}",
+          "Symbol",
+          "Memory{Int64}"
+        ],
+        "func": "Base.setfield!"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Vector{Tuple{String",
+          "Vector{Any}",
+          "Vector{Int32}}}",
+          "Symbol",
+          "Tuple{Int64}"
+        ],
+        "func": "Base.setfield!"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "IOBuffer",
+          "Symbol",
+          "Memory{UInt8}"
+        ],
+        "func": "Base.setfield!"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Dict{String",
+          "Int64}",
+          "Symbol",
+          "Memory{UInt8}"
+        ],
+        "func": "Base.setfield!"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "IOBuffer",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "Base.setfield!"
+      },
+      {
+        "status": "unknown",
+        "count": 24,
+        "arg_types": [
+          "Bool",
+          "Bool"
+        ],
+        "func": "Base.or_int"
+      },
+      {
+        "status": "unknown",
+        "count": 10,
+        "arg_types": [
+          "UInt16",
+          "UInt16"
+        ],
+        "func": "Base.or_int"
+      },
+      {
+        "status": "unknown",
+        "count": 6,
+        "arg_types": [
+          "UInt8",
+          "UInt8"
+        ],
+        "func": "Base.or_int"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "Int64",
+          "Int64"
+        ],
+        "func": "Base.or_int"
+      },
+      {
+        "status": "unknown",
+        "count": 33,
+        "arg_types": [
+          "Any",
+          "DataType"
+        ],
+        "func": "isa"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Vector",
+          "DataType"
+        ],
+        "func": "isa"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Union{Int64",
+          "String}",
+          "DataType"
+        ],
+        "func": "isa"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Union{JuliaSyntax.Kind",
+          "String}",
+          "DataType"
+        ],
+        "func": "isa"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Union{Nothing",
+          "Symbol}",
+          "DataType"
+        ],
+        "func": "isa"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Union{Nothing",
+          "String}",
+          "DataType"
+        ],
+        "func": "isa"
+      },
+      {
+        "status": "unknown",
+        "count": 31,
+        "arg_types": [
+          "Tuple{UnitRange{Int64}}",
+          "Int64"
+        ],
+        "func": "Core.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 8,
+        "arg_types": [
+          "Tuple{Symbol}",
+          "Int64"
+        ],
+        "func": "Core.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Tuple{Int64}",
+          "Int64"
+        ],
+        "func": "Core.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "JuliaLowering.var\"#_to_lowered_expr##2#_to_lowered_expr##3\"{Int64}",
+          "Symbol"
+        ],
+        "func": "Core.getfield"
+      },
+      {
+        "status": "unknown",
+        "count": 14,
+        "arg_types": [
+          "BoundsError"
+        ],
+        "func": "Base.throw"
+      },
+      {
+        "status": "unknown",
+        "count": 13,
+        "arg_types": [
+          "AssertionError"
+        ],
+        "func": "Base.throw"
+      },
+      {
+        "status": "unknown",
+        "count": 6,
+        "arg_types": [
+          "DomainError"
+        ],
+        "func": "Base.throw"
+      },
+      {
+        "status": "unknown",
+        "count": 4,
+        "arg_types": [
+          "ArgumentError"
+        ],
+        "func": "Base.throw"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "KeyError"
+        ],
+        "func": "Base.throw"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "DimensionMismatch"
+        ],
+        "func": "Base.throw"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "ErrorException"
+        ],
+        "func": "Base.throw"
+      },
+      {
+        "status": "unknown",
+        "count": 30,
+        "arg_types": [
+          "DataType",
+          "Bool"
+        ],
+        "func": "Core.zext_int"
+      },
+      {
+        "status": "unknown",
+        "count": 5,
+        "arg_types": [
+          "DataType",
+          "UInt8"
+        ],
+        "func": "Core.zext_int"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "DataType",
+          "UInt16"
+        ],
+        "func": "Core.zext_int"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "DataType",
+          "UInt32"
+        ],
+        "func": "Core.zext_int"
+      },
+      {
+        "status": "unknown",
+        "count": 32,
+        "arg_types": [
+          "DataType",
+          "Int64"
+        ],
+        "func": "Core.memorynew"
+      },
+      {
+        "status": "unknown",
+        "count": 25,
+        "arg_types": [
+          "Int64",
+          "Int64"
+        ],
+        "func": "Base.mul_int"
+      },
+      {
+        "status": "unknown",
+        "count": 5,
+        "arg_types": [
+          "UInt64",
+          "UInt64"
+        ],
+        "func": "Base.mul_int"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "UInt32",
+          "UInt32"
+        ],
+        "func": "Base.mul_int"
+      },
+      {
+        "status": "unknown",
+        "count": 28,
+        "arg_types": [
+          "Int64",
+          "Int64"
+        ],
+        "func": "Core.and_int"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "UInt64",
+          "UInt64"
+        ],
+        "func": "Core.and_int"
+      },
+      {
+        "status": "unknown",
+        "count": 18,
+        "arg_types": [
+          "DataType",
+          "Int64"
+        ],
+        "func": "Core.bitcast"
+      },
+      {
+        "status": "unknown",
+        "count": 7,
+        "arg_types": [
+          "DataType",
+          "Ptr{Nothing}"
+        ],
+        "func": "Core.bitcast"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "DataType",
+          "UInt64"
+        ],
+        "func": "Core.bitcast"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "DataType",
+          "Ptr{UInt8}"
+        ],
+        "func": "Core.bitcast"
+      },
+      {
+        "status": "unknown",
+        "count": 21,
+        "arg_types": [
+          "DataType",
+          "Int64"
+        ],
+        "func": "Core.trunc_int"
+      },
+      {
+        "status": "unknown",
+        "count": 4,
+        "arg_types": [
+          "DataType",
+          "Int128"
+        ],
+        "func": "Core.trunc_int"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "DataType",
+          "UInt64"
+        ],
+        "func": "Core.trunc_int"
+      },
+      {
+        "status": "unknown",
+        "count": 20,
+        "arg_types": [
+          "UInt8",
+          "UInt8"
+        ],
+        "func": "Core.eq_int"
+      },
+      {
+        "status": "unknown",
+        "count": 4,
+        "arg_types": [
+          "Int128",
+          "Int128"
+        ],
+        "func": "Core.eq_int"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "Int64",
+          "Int64"
+        ],
+        "func": "Core.eq_int"
+      },
+      {
+        "status": "unknown",
+        "count": 26,
+        "arg_types": [
+          "Int64",
+          "Int64"
+        ],
+        "func": "Base.flipsign_int"
+      },
+      {
+        "status": "unknown",
+        "count": 25,
+        "arg_types": [
+          "Int64"
+        ],
+        "func": "Base.neg_int"
+      },
+      {
+        "status": "unknown",
+        "count": 10,
+        "arg_types": [
+          "DataType",
+          "Any"
+        ],
+        "func": "Core.throw_methoderror"
+      },
+      {
+        "status": "unknown",
+        "count": 6,
+        "arg_types": [
+          "DataType",
+          "Any",
+          "Any"
+        ],
+        "func": "Core.throw_methoderror"
+      },
+      {
+        "status": "unknown",
+        "count": 4,
+        "arg_types": [
+          "DataType",
+          "Module",
+          "Any"
+        ],
+        "func": "Core.throw_methoderror"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "typeof(JuliaLowering.to_code_info)",
+          "JuliaLowering.SyntaxTree{JuliaLowering.SyntaxGraph{Dict{Symbol",
+          "Any}}}",
+          "Any",
+          "Any"
+        ],
+        "func": "Core.throw_methoderror"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "typeof(Base.encode_effects_override)",
+          "Any"
+        ],
+        "func": "Core.throw_methoderror"
+      },
+      {
+        "status": "unknown",
+        "count": 9,
+        "arg_types": [
+          "UInt64",
+          "UInt64"
+        ],
+        "func": "Base.lshr_int"
+      },
+      {
+        "status": "unknown",
+        "count": 5,
+        "arg_types": [
+          "UInt32",
+          "UInt8"
+        ],
+        "func": "Base.lshr_int"
+      },
+      {
+        "status": "unknown",
+        "count": 4,
+        "arg_types": [
+          "UInt64",
+          "UInt8"
+        ],
+        "func": "Base.lshr_int"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "UInt16",
+          "UInt8"
+        ],
+        "func": "Base.lshr_int"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Int64",
+          "UInt64"
+        ],
+        "func": "Base.lshr_int"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "UInt8",
+          "UInt8"
+        ],
+        "func": "Base.lshr_int"
+      },
+      {
+        "status": "unknown",
+        "count": 13,
+        "arg_types": [
+          "DataType",
+          "UInt64"
+        ],
+        "func": "Base.trunc_int"
+      },
+      {
+        "status": "unknown",
+        "count": 5,
+        "arg_types": [
+          "DataType",
+          "UInt32"
+        ],
+        "func": "Base.trunc_int"
+      },
+      {
+        "status": "unknown",
+        "count": 4,
+        "arg_types": [
+          "DataType",
+          "UInt16"
+        ],
+        "func": "Base.trunc_int"
+      },
+      {
+        "status": "unknown",
+        "count": 18,
+        "arg_types": [
+          "Int64",
+          "Int64"
+        ],
+        "func": "Core.lshr_int"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "UInt64",
+          "Int64"
+        ],
+        "func": "Core.lshr_int"
+      },
+      {
+        "status": "unknown",
+        "count": 12,
+        "arg_types": [
+          "Int64",
+          "UInt64"
+        ],
+        "func": "Base.shl_int"
+      },
+      {
+        "status": "unknown",
+        "count": 6,
+        "arg_types": [
+          "UInt64",
+          "UInt64"
+        ],
+        "func": "Base.shl_int"
+      },
+      {
+        "status": "unknown",
+        "count": 12,
+        "arg_types": [
+          "DataType",
+          "Int64"
+        ],
+        "func": "Core.sext_int"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "DataType",
+          "Int32"
+        ],
+        "func": "Core.sext_int"
+      },
+      {
+        "status": "unknown",
+        "count": 14,
+        "arg_types": [
+          "Int64",
+          "Int64"
+        ],
+        "func": "Base.checked_sdiv_int"
+      },
+      {
+        "status": "unknown",
+        "count": 13,
+        "arg_types": [
+          "UInt64"
+        ],
+        "func": "Base.ctlz_int"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Int64"
+        ],
+        "func": "Base.ctlz_int"
+      },
+      {
+        "status": "unknown",
+        "count": 6,
+        "arg_types": [
+          "MemoryRef{Any}"
+        ],
+        "func": "Base.memoryrefoffset"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "MemoryRef{UInt8}"
+        ],
+        "func": "Base.memoryrefoffset"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "MemoryRef{Int32}"
+        ],
+        "func": "Base.memoryrefoffset"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "MemoryRef{Tuple{String",
+          "Vector{Any}",
+          "Vector{Int32}}}"
+        ],
+        "func": "Base.memoryrefoffset"
+      },
+      {
+        "status": "unknown",
+        "count": 6,
+        "arg_types": [
+          "Vector{T} where T<:Tuple{String",
+          "Any}",
+          "Int64"
+        ],
+        "func": "Base.getindex"
+      },
+      {
+        "status": "unknown",
+        "count": 4,
+        "arg_types": [
+          "Vector",
+          "Int64"
+        ],
+        "func": "Base.getindex"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Vector",
+          "UnitRange{Int64}"
+        ],
+        "func": "Base.getindex"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Any",
+          "Int64"
+        ],
+        "func": "Base.getindex"
+      },
+      {
+        "status": "unknown",
+        "count": 7,
+        "arg_types": [
+          "typeof(iterate)",
+          "DataType",
+          "Core.SimpleVector",
+          "Vector{Any}"
+        ],
+        "func": "Core._apply_iterate"
+      },
+      {
+        "status": "unknown",
+        "count": 4,
+        "arg_types": [
+          "typeof(iterate)",
+          "DataType",
+          "Core.SimpleVector",
+          "Vector"
+        ],
+        "func": "Core._apply_iterate"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "typeof(iterate)",
+          "typeof(Core.svec)",
+          "Vector{Core.DebugInfo}"
+        ],
+        "func": "Core._apply_iterate"
+      },
+      {
+        "status": "unknown",
+        "count": 5,
+        "arg_types": [
+          "Symbol",
+          "Symbol"
+        ],
+        "func": "JuliaLowering.==="
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "Vector{Int64}",
+          "Vector{Int64}"
+        ],
+        "func": "JuliaLowering.==="
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "Int64",
+          "Int64"
+        ],
+        "func": "JuliaLowering.==="
+      },
+      {
+        "status": "unknown",
+        "count": 9,
+        "arg_types": [
+          "Symbol"
+        ],
+        "func": "Core.svec"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Symbol",
+          "Any"
+        ],
+        "func": "Core.svec"
+      },
+      {
+        "status": "unknown",
+        "count": 11,
+        "arg_types": [
+          "String"
+        ],
+        "func": "sizeof"
+      },
+      {
+        "status": "unknown",
+        "count": 9,
+        "arg_types": [
+          "UInt64",
+          "UInt64"
+        ],
+        "func": "Base.checked_udiv_int"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "UInt32",
+          "UInt32"
+        ],
+        "func": "Base.checked_udiv_int"
+      },
+      {
+        "status": "unknown",
+        "count": 10,
+        "arg_types": [
+          "Any"
+        ],
+        "func": "JuliaLowering.Symbol"
+      },
+      {
+        "status": "unknown",
+        "count": 8,
+        "arg_types": [
+          "Any",
+          "DataType"
+        ],
+        "func": "JuliaLowering.isa"
+      },
+      {
+        "status": "unknown",
+        "count": 6,
+        "arg_types": [
+          "Any",
+          "DataType"
+        ],
+        "func": "Core.typeassert"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Union{Nothing",
+          "Tuple{Tuple{String",
+          "Vector{Any}",
+          "Vector{Int32}}",
+          "Int64}}",
+          "DataType"
+        ],
+        "func": "Core.typeassert"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Vector",
+          "Type{AbstractVector{<:Tuple{String",
+          "Any}}}"
+        ],
+        "func": "Core.typeassert"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "Symbol",
+          "Any"
+        ],
+        "func": "Core._expr"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Symbol",
+          "Core.CodeInfo"
+        ],
+        "func": "Core._expr"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Symbol"
+        ],
+        "func": "Core._expr"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Symbol",
+          "Symbol",
+          "Core.SlotNumber"
+        ],
+        "func": "Core._expr"
+      },
+      {
+        "status": "unknown",
+        "count": 8,
+        "arg_types": [
+          "Int64",
+          "UInt64"
+        ],
+        "func": "Base.ashr_int"
+      },
+      {
+        "status": "unknown",
+        "count": 7,
+        "arg_types": [
+          "Any",
+          "DataType"
+        ],
+        "func": "JuliaSyntax.isa"
+      },
+      {
+        "status": "unknown",
+        "count": 7,
+        "arg_types": [
+          "Base.ImmutableDict{Symbol",
+          "Any}",
+          "Symbol"
+        ],
+        "func": "Base.isdefined"
+      },
+      {
+        "status": "unknown",
+        "count": 6,
+        "arg_types": [
+          "Any",
+          "Int64"
+        ],
+        "func": "JuliaLowering.+"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "UInt64",
+          "UInt64"
+        ],
+        "func": "Base.xor_int"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Int64",
+          "Int64"
+        ],
+        "func": "Base.xor_int"
+      },
+      {
+        "status": "unknown",
+        "count": 5,
+        "arg_types": [
+          "UInt64",
+          "UInt64"
+        ],
+        "func": "Base.ule_int"
+      },
+      {
+        "status": "unknown",
+        "count": 4,
+        "arg_types": [
+          "Any",
+          "String"
+        ],
+        "func": "JuliaLowering.=="
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "UInt64",
+          "UInt64"
+        ],
+        "func": "Base.checked_urem_int"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "UInt32",
+          "UInt32"
+        ],
+        "func": "Base.checked_urem_int"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Any"
+        ],
+        "func": "Base.typeof"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Tuple{String",
+          "Any}"
+        ],
+        "func": "Base.typeof"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Vector{<:Tuple{String",
+          "Any}}",
+          "Tuple{String",
+          "Any}",
+          "Base.Generator{JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol",
+          "Any}}",
+          "Vector{Int64}}",
+          "JuliaLowering.var\"#add_ir_debug_info!##0#add_ir_debug_info!##1\"}",
+          "Tuple{Base.OneTo{Int64}",
+          "Int64}"
+        ],
+        "func": "Base.collect_to_with_first!"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Vector",
+          "Any",
+          "Base.Generator{JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol",
+          "Any}}",
+          "SubArray{Int64",
+          "1",
+          "Vector{Int64}",
+          "Tuple{UnitRange{Int64}}",
+          "true}}",
+          "JuliaLowering.var\"#_to_lowered_expr##2#_to_lowered_expr##3\"{Int64}}",
+          "Tuple{Base.OneTo{Int64}",
+          "Int64}"
+        ],
+        "func": "Base.collect_to_with_first!"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Vector",
+          "Any",
+          "Base.Generator{JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol",
+          "Any}}",
+          "SubArray{Int64",
+          "1",
+          "Vector{Int64}",
+          "Tuple{UnitRange{Int64}}",
+          "true}}",
+          "JuliaLowering.var\"#_to_lowered_expr##0#_to_lowered_expr##1\"{Int64}}",
+          "Tuple{Base.OneTo{Int64}",
+          "Int64}"
+        ],
+        "func": "Base.collect_to_with_first!"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Vector",
+          "Any",
+          "Int64"
+        ],
+        "func": "Base.setindex!"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Vector{T} where T<:Tuple{String",
+          "Any}",
+          "Tuple{String",
+          "Any}",
+          "Int64"
+        ],
+        "func": "Base.setindex!"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "JuliaLowering.var\"#9#10\"{JuliaLowering.SyntaxTree{JuliaLowering.SyntaxGraph{Dict{Symbol",
+          "Any}}}",
+          "Symbol",
+          "Int64}",
+          "Any",
+          "Int64"
+        ],
+        "func": "JuliaLowering.get"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Any",
+          "Symbol",
+          "Bool"
+        ],
+        "func": "JuliaLowering.get"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Any",
+          "Int64",
+          "Core.Const(nothing)"
+        ],
+        "func": "JuliaLowering.get"
+      },
+      {
+        "status": "unknown",
+        "count": 3,
+        "arg_types": [
+          "InexactError"
+        ],
+        "func": "Core.throw"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "DataType",
+          "Any",
+          "Any"
+        ],
+        "func": "JuliaSyntax.source_location"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Any",
+          "Any"
+        ],
+        "func": "JuliaSyntax.source_location"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Int64"
+        ],
+        "func": "Base.cttz_int"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Ptr{Ptr{Nothing}}",
+          "UInt64"
+        ],
+        "func": "Base.add_ptr"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Ptr{UInt8}",
+          "UInt64"
+        ],
+        "func": "Base.add_ptr"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Core.EnterNode",
+          "Symbol"
+        ],
+        "func": "Core.isdefined"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "JuliaLowering.LoweringError"
+        ],
+        "func": "JuliaLowering.throw"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Any"
+        ],
+        "func": "_compress_debuginfo"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Core.EnterNode",
+          "Symbol"
+        ],
+        "func": "Core.getproperty"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol",
+          "Any}}",
+          "SubArray{Int64",
+          "1",
+          "Vector{Int64}",
+          "Tuple{UnitRange{Int64}}",
+          "true}}",
+          "DataType",
+          "Base.Generator{JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol",
+          "Any}}",
+          "SubArray{Int64",
+          "1",
+          "Vector{Int64}",
+          "Tuple{UnitRange{Int64}}",
+          "true}}",
+          "JuliaLowering.var\"#_to_lowered_expr##2#_to_lowered_expr##3\"{Int64}}",
+          "Core.Const(Base.HasShape{1}())",
+          "Tuple{Base.OneTo{Int64}}"
+        ],
+        "func": "Base._similar_for"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol",
+          "Any}}",
+          "SubArray{Int64",
+          "1",
+          "Vector{Int64}",
+          "Tuple{UnitRange{Int64}}",
+          "true}}",
+          "DataType",
+          "Base.Generator{JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol",
+          "Any}}",
+          "SubArray{Int64",
+          "1",
+          "Vector{Int64}",
+          "Tuple{UnitRange{Int64}}",
+          "true}}",
+          "JuliaLowering.var\"#_to_lowered_expr##0#_to_lowered_expr##1\"{Int64}}",
+          "Core.Const(Base.HasShape{1}())",
+          "Tuple{Base.OneTo{Int64}}"
+        ],
+        "func": "Base._similar_for"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "ArgumentError"
+        ],
+        "func": "Base.Iterators.throw"
+      },
+      {
+        "status": "unknown",
+        "count": 2,
+        "arg_types": [
+          "Int64"
+        ],
+        "func": "Base.ctpop_int"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Ptr{Ptr{Nothing}}",
+          "UInt64"
+        ],
+        "func": "Base.sub_ptr"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Any"
+        ],
+        "func": "JuliaSyntax._unsafe_wrap_substring"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Bool"
+        ],
+        "func": "Core.Intrinsics.not_int"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Any"
+        ],
+        "func": "JuliaSyntax.UInt32"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Vector{T} where T<:Tuple{String",
+          "Any}"
+        ],
+        "func": "JuliaLowering.enumerate"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Any"
+        ],
+        "func": "JuliaLowering.byte_range"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Any",
+          "DataType"
+        ],
+        "func": "Base.isa"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Any"
+        ],
+        "func": "JuliaSyntax.filename"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Any"
+        ],
+        "func": "JuliaSyntax.first"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "JuliaLowering.SyntaxTree{JuliaLowering.SyntaxGraph{Dict{Symbol",
+          "Any}}}",
+          "Any",
+          "Vector{UInt8}",
+          "Any"
+        ],
+        "func": "JuliaSyntax.node_to_expr"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Any"
+        ],
+        "func": "JuliaLowering.sourcefile"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Any",
+          "Int64"
+        ],
+        "func": "JuliaLowering._sourceref"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Type{<:Tuple{String",
+          "Any}}",
+          "Base.HasShape{1}",
+          "Tuple{Base.OneTo{Int64}}"
+        ],
+        "func": "Base._array_for_inner"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Vector{Any}",
+          "Core.DebugInfo",
+          "Int64",
+          "Vector{UInt32}",
+          "Vector{Symbol}",
+          "Vector{UInt8}",
+          "Nothing",
+          "DataType",
+          "Nothing",
+          "Nothing",
+          "UInt64",
+          "UInt64",
+          "Nothing",
+          "Int64",
+          "Any",
+          "Bool",
+          "Bool",
+          "Any",
+          "Bool",
+          "UInt8",
+          "UInt8",
+          "UInt16",
+          "UInt16"
+        ],
+        "func": "JuliaLowering._CodeInfo"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Int64",
+          "Int64"
+        ],
+        "func": "Base.checked_srem_int"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Ptr{UInt8}",
+          "Int64",
+          "Int64"
+        ],
+        "func": "Base.pointerref"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Symbol",
+          "Core.TypeofBottom",
+          "DataType"
+        ],
+        "func": "Core._typevar"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Function",
+          "Vector{Any}",
+          "Function"
+        ],
+        "func": "Base._any"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "UnionAll",
+          "TypeVar",
+          "Int64"
+        ],
+        "func": "Core.apply_type"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "DataType",
+          "Any"
+        ],
+        "func": "Base.convert"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "Any"
+        ],
+        "func": "JuliaSyntax.sourcetext"
+      },
+      {
+        "status": "unknown",
+        "count": 1,
+        "arg_types": [
+          "JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol",
+          "Any}}",
+          "Vector{Int64}}",
+          "JuliaLowering.SyntaxGraph{Dict{Symbol",
+          "Any}}",
+          "Any",
+          "Int64"
+        ],
+        "func": "JuliaLowering._flattened_provenance"
+      }
+    ],
+    "phi_patterns": [
+      {
+        "types": [
+          "Int64"
+        ],
+        "count": 239
+      },
+      {
+        "types": [
+          "Bool"
+        ],
+        "count": 168
+      },
+      {
+        "types": [
+          "Base.OneTo{Int64}"
+        ],
+        "count": 42
+      },
+      {
+        "types": [
+          "JuliaLowering.SyntaxTree{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}}"
+        ],
+        "count": 24
+      },
+      {
+        "types": [
+          "Symbol",
+          "Union{Nothing, Symbol}"
+        ],
+        "count": 24
+      },
+      {
+        "types": [
+          "String"
+        ],
+        "count": 18
+      },
+      {
+        "types": [
+          "UInt64"
+        ],
+        "count": 17
+      },
+      {
+        "types": [
+          "UInt16"
+        ],
+        "count": 12
+      },
+      {
+        "types": [
+          "JuliaLowering.Slot"
+        ],
+        "count": 9
+      },
+      {
+        "types": [
+          "Base.ImmutableDict{Symbol, Any}"
+        ],
+        "count": 7
+      },
+      {
+        "types": [
+          "Any"
+        ],
+        "count": 7
+      },
+      {
+        "types": [
+          "Any",
+          "Bool"
+        ],
+        "count": 6
+      },
+      {
+        "types": [
+          "Tuple{String, Any}"
+        ],
+        "count": 6
+      },
+      {
+        "types": [
+          "Core.EnterNode"
+        ],
+        "count": 4
+      },
+      {
+        "types": [
+          "UInt8"
+        ],
+        "count": 4
+      },
+      {
+        "types": [
+          "MemoryRef{UInt8}"
+        ],
+        "count": 3
+      },
+      {
+        "types": [
+          "Tuple{Base.OneTo{Int64}, Int64}"
+        ],
+        "count": 3
+      },
+      {
+        "types": [
+          "Vector{UInt8}"
+        ],
+        "count": 2
+      },
+      {
+        "types": [
+          "Nothing",
+          "Symbol"
+        ],
+        "count": 2
+      },
+      {
+        "types": [
+          "Core.DebugInfo"
+        ],
+        "count": 2
+      },
+      {
+        "types": [
+          "Union{JuliaSyntax.Kind, String}"
+        ],
+        "count": 2
+      },
+      {
+        "types": [
+          "Union{Int64, String}"
+        ],
+        "count": 2
+      },
+      {
+        "types": [
+          "Any",
+          "Expr"
+        ],
+        "count": 2
+      },
+      {
+        "types": [
+          "String",
+          "Union{Int64, String}"
+        ],
+        "count": 2
+      },
+      {
+        "types": [
+          "String",
+          "Union{JuliaSyntax.Kind, String}"
+        ],
+        "count": 2
+      },
+      {
+        "types": [
+          "Any",
+          "Dict{Symbol, Any}",
+          "Vector{Int64}",
+          "Vector{UnitRange{Int64}}"
+        ],
+        "count": 1
+      },
+      {
+        "types": [
+          "Any",
+          "Expr",
+          "Union{Expr, Symbol}"
+        ],
+        "count": 1
+      },
+      {
+        "types": [
+          "Expr",
+          "Symbol"
+        ],
+        "count": 1
+      },
+      {
+        "types": [
+          "UInt32"
+        ],
+        "count": 1
+      },
+      {
+        "types": [
+          "Tuple{String, Vector{Any}, Vector{Int32}}"
+        ],
+        "count": 1
+      },
+      {
+        "types": [
+          "Nothing",
+          "Tuple{Tuple{String, Vector{Any}, Vector{Int32}}, Int64}"
+        ],
+        "count": 1
+      },
+      {
+        "types": [
+          "Any",
+          "Nothing"
+        ],
+        "count": 1
+      },
+      {
+        "types": [
+          "Int64",
+          "UInt64"
+        ],
+        "count": 1
+      },
+      {
+        "types": [
+          "Int32"
+        ],
+        "count": 1
+      }
+    ],
+    "new_types": [
+      {
+        "name": "JuliaLowering.SyntaxTree{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}}",
+        "count": 40
+      },
+      {
+        "name": "Base.OneTo{Int64}",
+        "count": 13
+      },
+      {
+        "name": "SubArray{Int64, 1, Vector{Int64}, Tuple{UnitRange{Int64}}, true}",
+        "count": 11
+      },
+      {
+        "name": "Vector{Any}",
+        "count": 9
+      },
+      {
+        "name": "QuoteNode",
+        "count": 8
+      },
+      {
+        "name": "Core.EnterNode",
+        "count": 8
+      },
+      {
+        "name": "Base.var\"#_growend!##0#_growend!##1\"{Vector{Any}, Int64, Int64, Int64, Int64, Int64, Memory{Any}, MemoryRef{Any}}",
+        "count": 6
+      },
+      {
+        "name": "JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}, SubArray{Int64, 1, Vector{Int64}, Tuple{UnitRange{Int64}}, true}}",
+        "count": 4
+      },
+      {
+        "name": "Base.var\"#_growend!##0#_growend!##1\"{Vector{Int32}, Int64, Int64, Int64, Int64, Int64, Memory{Int32}, MemoryRef{Int32}}",
+        "count": 3
+      },
+      {
+        "name": "IOBuffer",
+        "count": 3
+      },
+      {
+        "name": "Core.SlotNumber",
+        "count": 3
+      },
+      {
+        "name": "JuliaLowering.var\"#_to_lowered_expr##0#_to_lowered_expr##1\"{Int64}",
+        "count": 2
+      },
+      {
+        "name": "Base.Generator{JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}, SubArray{Int64, 1, Vector{Int64}, Tuple{UnitRange{Int64}}, true}}, JuliaLowering.var\"#_to_lowered_expr##0#_to_lowered_expr##1\"{Int64}}",
+        "count": 2
+      },
+      {
+        "name": "UnitRange{Int64}",
+        "count": 2
+      },
+      {
+        "name": "Core.NewvarNode",
+        "count": 2
+      },
+      {
+        "name": "Core.GotoIfNot",
+        "count": 2
+      },
+      {
+        "name": "JuliaLowering.LoweringError",
+        "count": 2
+      },
+      {
+        "name": "Vector{Core.DebugInfo}",
+        "count": 2
+      },
+      {
+        "name": "Core.GotoNode",
+        "count": 2
+      },
+      {
+        "name": "JuliaLowering.var\"#_to_lowered_expr##2#_to_lowered_expr##3\"{Int64}",
+        "count": 2
+      },
+      {
+        "name": "Core.ReturnNode",
+        "count": 2
+      },
+      {
+        "name": "JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}, Vector{Int64}}",
+        "count": 2
+      },
+      {
+        "name": "Core.SSAValue",
+        "count": 2
+      },
+      {
+        "name": "Vector{Int64}",
+        "count": 2
+      },
+      {
+        "name": "Base.Generator{JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}, SubArray{Int64, 1, Vector{Int64}, Tuple{UnitRange{Int64}}, true}}, JuliaLowering.var\"#_to_lowered_expr##2#_to_lowered_expr##3\"{Int64}}",
+        "count": 2
+      },
+      {
+        "name": "Vector{Int32}",
+        "count": 2
+      },
+      {
+        "name": "JuliaLowering.var\"#9#10\"{JuliaLowering.SyntaxTree{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}}, Symbol, Int64}",
+        "count": 1
+      },
+      {
+        "name": "Vector{UInt8}",
+        "count": 1
+      },
+      {
+        "name": "Vector{UInt32}",
+        "count": 1
+      },
+      {
+        "name": "Base.Generator{Vector{Any}, typeof(JuliaLowering._compress_debuginfo)}",
+        "count": 1
+      },
+      {
+        "name": "Vector{Tuple{String, Vector{Any}, Vector{Int32}}}",
+        "count": 1
+      },
+      {
+        "name": "Vector{Tuple{String, Any}}",
+        "count": 1
+      },
+      {
+        "name": "Core.DebugInfo",
+        "count": 1
+      },
+      {
+        "name": "LazyString",
+        "count": 1
+      },
+      {
+        "name": "Vector{Symbol}",
+        "count": 1
+      },
+      {
+        "name": "Base.Generator{JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}, Vector{Int64}}, JuliaLowering.var\"#add_ir_debug_info!##0#add_ir_debug_info!##1\"}",
+        "count": 1
+      },
+      {
+        "name": "DimensionMismatch",
+        "count": 1
+      },
+      {
+        "name": "ArgumentError",
+        "count": 1
+      },
+      {
+        "name": "Base.var\"#_growend!##0#_growend!##1\"{Vector{Tuple{String, Vector{Any}, Vector{Int32}}}, Int64, Int64, Int64, Int64, Int64, Memory{Tuple{String, Vector{Any}, Vector{Int32}}}, MemoryRef{Tuple{String, Vector{Any}, Vector{Int32}}}}",
+        "count": 1
+      },
+      {
+        "name": "KeyError",
+        "count": 1
+      },
+      {
+        "name": "Dict{String, Int64}",
+        "count": 1
+      },
+      {
+        "name": "ErrorException",
+        "count": 1
+      }
+    ],
+    "foreigncalls": [
+      {
+        "name": ":jl_string_to_genericmemory",
+        "count": 11
+      },
+      {
+        "name": ":jl_alloc_string",
+        "count": 11
+      },
+      {
+        "name": ":jl_genericmemory_to_string",
+        "count": 9
+      },
+      {
+        "name": ":jl_string_ptr",
+        "count": 9
+      },
+      {
+        "name": ":jl_module_globalref",
+        "count": 8
+      },
+      {
+        "name": "Base.memhash",
+        "count": 4
+      },
+      {
+        "name": ":memmove",
+        "count": 4
+      },
+      {
+        "name": ":memset",
+        "count": 3
+      },
+      {
+        "name": ":jl_pchar_to_string",
+        "count": 3
+      },
+      {
+        "name": ":jl_object_id",
+        "count": 2
+      },
+      {
+        "name": ":jl_compress_codelocs",
+        "count": 1
+      },
+      {
+        "name": ":jl_symbol_name",
+        "count": 1
+      },
+      {
+        "name": ":jl_type_unionall",
+        "count": 1
+      },
+      {
+        "name": ":jl_rethrow",
+        "count": 1
+      },
+      {
+        "name": ":jl_cstr_to_string",
+        "count": 1
+      }
+    ],
+    "invokes": [
+      {
+        "name": "throw_boundserror",
+        "spec_types": "Tuple{typeof(Base.throw_boundserror), Vector{Int64}, Tuple{Int64}}",
+        "status": "unknown",
+        "count": 47
+      },
+      {
+        "name": "throw_boundserror",
+        "spec_types": "Tuple{typeof(Base.throw_boundserror), Vector{UnitRange{Int64}}, Tuple{Int64}}",
+        "status": "unknown",
+        "count": 37
+      },
+      {
+        "name": "throw_boundserror",
+        "spec_types": "Tuple{typeof(Base.throw_boundserror), UnitRange{Int64}, Int64}",
+        "status": "unknown",
+        "count": 22
+      },
+      {
+        "name": "throw_boundserror",
+        "spec_types": "Tuple{typeof(Base.throw_boundserror), Vector{Any}, Tuple{Int64}}",
+        "status": "unknown",
+        "count": 21
+      },
+      {
+        "name": "throw_boundserror",
+        "spec_types": "Tuple{typeof(Base.throw_boundserror), SubArray{Int64, 1, Vector{Int64}, Tuple{UnitRange{Int64}}, true}, Tuple{Int64}}",
+        "status": "unknown",
+        "count": 16
+      },
+      {
+        "name": "throw_boundserror",
+        "spec_types": "Tuple{typeof(Base.throw_boundserror), Vector{Tuple{String, Vector{Any}, Vector{Int32}}}, Tuple{Int64}}",
+        "status": "unknown",
+        "count": 12
+      },
+      {
+        "name": "throw_boundserror",
+        "spec_types": "Tuple{typeof(Base.throw_boundserror), Vector{Int64}, Tuple{UnitRange{Int64}}}",
+        "status": "unknown",
+        "count": 11
+      },
+      {
+        "name": "throw_boundserror",
+        "spec_types": "Tuple{typeof(Base.throw_boundserror), Vector{UInt8}, Tuple{Int64}}",
+        "status": "unknown",
+        "count": 5
+      },
+      {
+        "name": "throw_boundserror",
+        "spec_types": "Tuple{typeof(Base.throw_boundserror), Vector{JuliaLowering.Slot}, Tuple{Int64}}",
+        "status": "unknown",
+        "count": 5
+      },
+      {
+        "name": "throw_boundserror",
+        "spec_types": "Tuple{typeof(Base.throw_boundserror), Vector{Core.DebugInfo}, Tuple{Int64}}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "throw_boundserror",
+        "spec_types": "Tuple{typeof(Base.throw_boundserror), Vector{UInt64}, Tuple{Int64}}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "throw_boundserror",
+        "spec_types": "Tuple{typeof(Base.throw_boundserror), Vector{UInt16}, Tuple{Int64}}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "throw_boundserror",
+        "spec_types": "Tuple{typeof(Base.throw_boundserror), Vector{Symbol}, Tuple{Int64}}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "throw_boundserror",
+        "spec_types": "Tuple{typeof(Base.throw_boundserror), Vector{UInt32}, Tuple{Int64}}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "getproperty",
+        "spec_types": "Tuple{typeof(getproperty), JuliaLowering.SyntaxTree{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}}, Symbol}",
+        "status": "unknown",
+        "count": 38
+      },
+      {
+        "name": "throw_inexacterror",
+        "spec_types": "Tuple{typeof(Core.throw_inexacterror), Symbol, Type, Int64}",
+        "status": "unknown",
+        "count": 21
+      },
+      {
+        "name": "throw_inexacterror",
+        "spec_types": "Tuple{typeof(Core.throw_inexacterror), Symbol, Type, Int128}",
+        "status": "unknown",
+        "count": 4
+      },
+      {
+        "name": "throw_inexacterror",
+        "spec_types": "Tuple{typeof(Core.throw_inexacterror), Symbol, Type, UInt64}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "_to_lowered_expr",
+        "spec_types": "Tuple{typeof(JuliaLowering._to_lowered_expr), JuliaLowering.SyntaxTree{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}}, Int64}",
+        "status": "unknown",
+        "count": 18
+      },
+      {
+        "name": "BoundsError",
+        "spec_types": "Tuple{Type{BoundsError}, Any, Tuple{Int64}}",
+        "status": "unknown",
+        "count": 12
+      },
+      {
+        "name": "BoundsError",
+        "spec_types": "Tuple{Type{BoundsError}, Any, Tuple{UnitRange{Int64}}}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "BoundsError",
+        "spec_types": "Tuple{Type{BoundsError}, Any, Int64}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "AssertionError",
+        "spec_types": "Tuple{Type{AssertionError}, String}",
+        "status": "unknown",
+        "count": 13
+      },
+      {
+        "name": "#_growend!##0",
+        "spec_types": "Tuple{Base.var\"#_growend!##0#_growend!##1\"{Vector{Any}, Int64, Int64, Int64, Int64, Int64, Memory{Any}, MemoryRef{Any}}}",
+        "status": "unknown",
+        "count": 6
+      },
+      {
+        "name": "#_growend!##0",
+        "spec_types": "Tuple{Base.var\"#_growend!##0#_growend!##1\"{Vector{Int32}, Int64, Int64, Int64, Int64, Int64, Memory{Int32}, MemoryRef{Int32}}}",
+        "status": "unknown",
+        "count": 3
+      },
+      {
+        "name": "#_growend!##0",
+        "spec_types": "Tuple{Base.var\"#_growend!##0#_growend!##1\"{Vector{Tuple{String, Vector{Any}, Vector{Int32}}}, Int64, Int64, Int64, Int64, Int64, Memory{Tuple{String, Vector{Any}, Vector{Int32}}}, MemoryRef{Tuple{String, Vector{Any}, Vector{Int32}}}}}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "DomainError",
+        "spec_types": "Tuple{Type{DomainError}, Any, Any}",
+        "status": "unknown",
+        "count": 6
+      },
+      {
+        "name": "_throw_argerror",
+        "spec_types": "Tuple{typeof(Base._throw_argerror), String}",
+        "status": "unknown",
+        "count": 5
+      },
+      {
+        "name": "ArgumentError",
+        "spec_types": "Tuple{Type{ArgumentError}, String}",
+        "status": "unknown",
+        "count": 5
+      },
+      {
+        "name": "unsafe_write",
+        "spec_types": "Tuple{typeof(unsafe_write), IOBuffer, Ptr{UInt8}, UInt64}",
+        "status": "unknown",
+        "count": 5
+      },
+      {
+        "name": "print_to_string",
+        "spec_types": "Tuple{typeof(Base.print_to_string), String, JuliaSyntax.Kind}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "print_to_string",
+        "spec_types": "Tuple{typeof(Base.print_to_string), String, String, Int64}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "print_to_string",
+        "spec_types": "Tuple{typeof(Base.print_to_string), Nothing}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "_collect",
+        "spec_types": "Tuple{typeof(Base._collect), JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}, SubArray{Int64, 1, Vector{Int64}, Tuple{UnitRange{Int64}}, true}}, Base.Generator{JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}, SubArray{Int64, 1, Vector{Int64}, Tuple{UnitRange{Int64}}, true}}, JuliaLowering.var\"#_to_lowered_expr##2#_to_lowered_expr##3\"{Int64}}, Base.EltypeUnknown, Base.HasShape{1}}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "_collect",
+        "spec_types": "Tuple{typeof(Base._collect), JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}, SubArray{Int64, 1, Vector{Int64}, Tuple{UnitRange{Int64}}, true}}, Base.Generator{JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}, SubArray{Int64, 1, Vector{Int64}, Tuple{UnitRange{Int64}}, true}}, JuliaLowering.var\"#_to_lowered_expr##0#_to_lowered_expr##1\"{Int64}}, Base.EltypeUnknown, Base.HasShape{1}}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "_collect",
+        "spec_types": "Tuple{typeof(Base._collect), Vector{Any}, Base.Generator{Vector{Any}, typeof(JuliaLowering._compress_debuginfo)}, Base.EltypeUnknown, Base.HasShape{1}}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "sourcefile",
+        "spec_types": "Tuple{typeof(JuliaSyntax.sourcefile), JuliaLowering.SyntaxTree{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}}}",
+        "status": "unknown",
+        "count": 4
+      },
+      {
+        "name": "ndigits0zpb",
+        "spec_types": "Tuple{typeof(Base.ndigits0zpb), UInt64, Int64}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "ndigits0zpb",
+        "spec_types": "Tuple{typeof(Base.ndigits0zpb), Int64, Int64}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "source_location",
+        "spec_types": "Tuple{typeof(JuliaSyntax.source_location), Type{LineNumberNode}, JuliaLowering.SyntaxTree{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}}}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "source_location",
+        "spec_types": "Tuple{typeof(JuliaSyntax.source_location), JuliaLowering.SyntaxTree{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}}}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "getindex",
+        "spec_types": "Tuple{typeof(getindex), Dict{Symbol, Any}, Symbol}",
+        "status": "unknown",
+        "count": 3
+      },
+      {
+        "name": "Symbol",
+        "spec_types": "Tuple{Type{Symbol}, String}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "Symbol",
+        "spec_types": "Tuple{Type{Symbol}, String, Vararg{Any}}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "print",
+        "spec_types": "Tuple{typeof(print), IOBuffer, JuliaSyntax.Kind}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "print",
+        "spec_types": "Tuple{typeof(print), IOBuffer, Nothing}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "print",
+        "spec_types": "Tuple{typeof(print), IOBuffer, Int64}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "error",
+        "spec_types": "Tuple{typeof(error), String}",
+        "status": "unknown",
+        "count": 3
+      },
+      {
+        "name": "get",
+        "spec_types": "Tuple{typeof(get), JuliaLowering.SyntaxTree{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}}, Symbol, Nothing}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "get",
+        "spec_types": "Tuple{typeof(get), Dict{String, Int64}, String, Int64}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "get",
+        "spec_types": "Tuple{typeof(get), Dict{Symbol, Any}, Symbol, Nothing}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "rehash!",
+        "spec_types": "Tuple{typeof(Base.rehash!), Dict{String, Int64}, Int64}",
+        "status": "unknown",
+        "count": 3
+      },
+      {
+        "name": "invalid_wrap_err",
+        "spec_types": "Tuple{typeof(Base.invalid_wrap_err), Int64, Tuple{Int64}, Int64}",
+        "status": "unknown",
+        "count": 3
+      },
+      {
+        "name": "InexactError",
+        "spec_types": "Tuple{Type{InexactError}, Symbol, Any, Vararg{Any}}",
+        "status": "unknown",
+        "count": 3
+      },
+      {
+        "name": "_resize!",
+        "spec_types": "Tuple{typeof(Base._resize!), IOBuffer, Int64, Bool}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "collect_similar",
+        "spec_types": "Tuple{typeof(Base.collect_similar), JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}, SubArray{Int64, 1, Vector{Int64}, Tuple{UnitRange{Int64}}, true}}, Base.Generator{JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}, SubArray{Int64, 1, Vector{Int64}, Tuple{UnitRange{Int64}}, true}}, JuliaLowering.var\"#_to_lowered_expr##0#_to_lowered_expr##1\"{Int64}}}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "getmeta",
+        "spec_types": "Tuple{typeof(JuliaLowering.getmeta), JuliaLowering.SyntaxTree{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}}, Symbol, Bool}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "to_expr",
+        "spec_types": "Tuple{typeof(JuliaSyntax.to_expr), JuliaLowering.SyntaxTree{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}}}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "add_ir_debug_info!",
+        "spec_types": "Tuple{typeof(JuliaLowering.add_ir_debug_info!), Vector{Tuple{String, Vector{Any}, Vector{Int32}}}, JuliaLowering.SyntaxTree{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}}}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "filename",
+        "spec_types": "Tuple{typeof(JuliaSyntax.filename), JuliaLowering.SyntaxTree{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}}}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "ndigits0z",
+        "spec_types": "Tuple{typeof(Base.ndigits0z), Int64, Int64}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "sourceref",
+        "spec_types": "Tuple{typeof(JuliaLowering.sourceref), JuliaLowering.SyntaxTree{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}}}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "first_byte",
+        "spec_types": "Tuple{typeof(JuliaSyntax.first_byte), JuliaLowering.SyntaxTree{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}}}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "_base",
+        "spec_types": "Tuple{typeof(Base._base), Int64, Int64, Int64, Bool}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "_base",
+        "spec_types": "Tuple{typeof(Base._base), Int64, UInt64, Int64, Bool}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "_deleteend!",
+        "spec_types": "Tuple{typeof(Base._deleteend!), Vector{Tuple{String, Vector{Any}, Vector{Int32}}}, Int64}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "ht_keyindex2_shorthash!",
+        "spec_types": "Tuple{typeof(Base.ht_keyindex2_shorthash!), Dict{String, Int64}, String}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "rethrow",
+        "spec_types": "Tuple{typeof(rethrow)}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "flattened_provenance",
+        "spec_types": "Tuple{typeof(JuliaLowering.flattened_provenance), JuliaLowering.SyntaxTree{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}}}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "to_code_info",
+        "spec_types": "Tuple{typeof(JuliaLowering.to_code_info), JuliaLowering.SyntaxTree{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}}, Vector{JuliaLowering.Slot}, Base.ImmutableDict{Symbol, Any}}",
+        "status": "unknown",
+        "count": 2
+      },
+      {
+        "name": "fixup_Expr_child",
+        "spec_types": "Tuple{typeof(JuliaSyntax.fixup_Expr_child), JuliaSyntax.SyntaxHead, Any, Bool}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "ndigits0znb",
+        "spec_types": "Tuple{typeof(Base.ndigits0znb), UInt64, Int64}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "#add_ir_debug_info!##0",
+        "spec_types": "Tuple{JuliaLowering.var\"#add_ir_debug_info!##0#add_ir_debug_info!##1\", JuliaLowering.SyntaxTree{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}}}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "hex",
+        "spec_types": "Tuple{typeof(Base.hex), UInt64, Int64, Bool}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "oct",
+        "spec_types": "Tuple{typeof(Base.oct), UInt64, Int64, Bool}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "collect",
+        "spec_types": "Tuple{typeof(collect), Base.Generator{JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}, Vector{Int64}}, JuliaLowering.var\"#add_ir_debug_info!##0#add_ir_debug_info!##1\"}}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "dec",
+        "spec_types": "Tuple{typeof(Base.dec), UInt64, Int64, Bool}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "byte_range",
+        "spec_types": "Tuple{typeof(JuliaSyntax.byte_range), JuliaLowering.SyntaxTree{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}}}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "append_c_digits_fast",
+        "spec_types": "Tuple{typeof(Base.append_c_digits_fast), Int64, UInt64, Memory{UInt8}, Int64}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "setindex!",
+        "spec_types": "Tuple{typeof(setindex!), Dict{String, Int64}, Int64, String}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "reverse",
+        "spec_types": "Tuple{typeof(reverse), JuliaLowering.SyntaxList{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}, Vector{Int64}}, Int64, Int64}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "append_nine_digits",
+        "spec_types": "Tuple{typeof(Base.append_nine_digits), UInt32, Memory{UInt8}, Int64}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "#_to_lowered_expr##0",
+        "spec_types": "Tuple{JuliaLowering.var\"#_to_lowered_expr##0#_to_lowered_expr##1\"{Int64}, JuliaLowering.SyntaxTree{JuliaLowering.SyntaxGraph{Dict{Symbol, Any}}}}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "bin",
+        "spec_types": "Tuple{typeof(Base.bin), UInt64, Int64, Bool}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "ensureroom_slowpath",
+        "spec_types": "Tuple{typeof(Base.ensureroom_slowpath), IOBuffer, UInt64, Int64}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "append_c_digits",
+        "spec_types": "Tuple{typeof(Base.append_c_digits), Int64, UInt64, Memory{UInt8}, Int64}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "#any#756",
+        "spec_types": "Tuple{Base.var\"##any#756\", Function, typeof(any), Function, Vector{Any}}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "finish_ir_debug_info!",
+        "spec_types": "Tuple{typeof(JuliaLowering.finish_ir_debug_info!), Vector{Tuple{String, Vector{Any}, Vector{Int32}}}}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "#string#403",
+        "spec_types": "Tuple{Base.var\"##string#403\", Int64, Int64, typeof(string), Int64}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "collect_to!",
+        "spec_types": "Tuple{typeof(Base.collect_to!), Vector{Core.DebugInfo}, Base.Generator{Vector{Any}, typeof(JuliaLowering._compress_debuginfo)}, Int64, Int64}",
+        "status": "unknown",
+        "count": 1
+      },
+      {
+        "name": "ensureroom_reallocate",
+        "spec_types": "Tuple{typeof(Base.ensureroom_reallocate), IOBuffer, UInt64}",
+        "status": "unknown",
+        "count": 1
+      }
+    ],
+    "stubs": [
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "Base.convert"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "Base.getfield"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "Base.getindex"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "Base.getproperty"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "Base.isdefined"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "Base.iterate"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "Base.setindex!"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "Core._apply_iterate"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "Core.isdefined"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "Core.svec"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "Core.throw_methoderror"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "JuliaLowering.:(==)"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "JuliaLowering.Expr"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "JuliaLowering.Symbol"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "JuliaLowering._CodeInfo"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "JuliaLowering._flattened_provenance"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "JuliaLowering._sourceref"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "JuliaLowering.children"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "JuliaLowering.enumerate"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "JuliaLowering.get"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "JuliaLowering.getmeta"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "JuliaLowering.kind"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "JuliaLowering.map"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "JuliaLowering.numchildren"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "JuliaLowering.source_location"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "JuliaLowering.to_code_info"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "JuliaSyntax.UInt32"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "JuliaSyntax._unsafe_wrap_substring"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "JuliaSyntax.first"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "JuliaSyntax.node_to_expr"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "JuliaSyntax.source_location"
+      },
+      {
+        "count": 1,
+        "reason": "cross-call unreachable",
+        "func": "JuliaSyntax.sourcetext"
+      },
+      {
+        "count": 1,
+        "reason": "unsupported method",
+        "func": "Symbol"
+      },
+      {
+        "count": 1,
+        "reason": "unsupported method",
+        "func": "_collect"
+      },
+      {
+        "count": 1,
+        "reason": "unsupported method",
+        "func": "_deleteend!"
+      },
+      {
+        "count": 1,
+        "reason": "unsupported method",
+        "func": "collect"
+      },
+      {
+        "count": 1,
+        "reason": "unsupported method",
+        "func": "collect_similar"
+      },
+      {
+        "count": 1,
+        "reason": "unsupported method",
+        "func": "get"
+      },
+      {
+        "count": 1,
+        "reason": "unsupported method",
+        "func": "reverse"
+      }
+    ],
+    "intrinsics": [
+      {
+        "name": "and_int",
+        "count": 6
+      },
+      {
+        "name": "ctlz_int",
+        "count": 1
+      },
+      {
+        "name": "atomic_pointerset",
+        "count": 1
+      }
+    ]
+  }
+}
