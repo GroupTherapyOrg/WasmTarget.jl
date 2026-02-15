@@ -879,6 +879,41 @@ function _sanitize_ssa_type(t)
 end
 
 """
+    _is_externref_value(val, ctx) -> Bool
+
+PURE-904: Check if a value (Argument or SSAValue) produces externref on the Wasm stack.
+Used by numeric intrinsic handlers to detect when unboxing is needed.
+"""
+function _is_externref_value(val, ctx::CompilationContext)::Bool
+    if val isa Core.Argument
+        arg_idx = ctx.is_compiled_closure ? val.n : val.n - 1
+        if arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
+            return julia_to_wasm_type(ctx.arg_types[arg_idx]) === ExternRef
+        end
+    elseif val isa Core.SSAValue
+        if haskey(ctx.ssa_locals, val.id)
+            local_idx = ctx.ssa_locals[val.id]
+            local_arr_idx = local_idx - ctx.n_params + 1
+            if local_arr_idx >= 1 && local_arr_idx <= length(ctx.locals)
+                return ctx.locals[local_arr_idx] === ExternRef
+            elseif local_idx < ctx.n_params
+                # It's a param slot
+                if local_idx + 1 <= length(ctx.arg_types)
+                    return julia_to_wasm_type(ctx.arg_types[local_idx + 1]) === ExternRef
+                end
+            end
+        elseif haskey(ctx.phi_locals, val.id)
+            local_idx = ctx.phi_locals[val.id]
+            local_arr_idx = local_idx - ctx.n_params + 1
+            if local_arr_idx >= 1 && local_arr_idx <= length(ctx.locals)
+                return ctx.locals[local_arr_idx] === ExternRef
+            end
+        end
+    end
+    return false
+end
+
+"""
     try_resolve_call_method!(func_ref, call_args, ir, func_arg_types, seen_funcs, to_add, to_scan)
 
 PURE-605: For :call GlobalRef expressions, try to resolve the method by extracting
@@ -18888,6 +18923,22 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             continue
         end
         append!(bytes, compile_value(arg, ctx))
+        # PURE-904: Unbox externref args for numeric intrinsics.
+        # When a param/SSA has Wasm type externref but Julia IR uses it as
+        # numeric (UInt32, Int64, etc.), unbox: any_convert_extern → ref.cast → struct.get
+        if is_numeric_intrinsic && _is_externref_value(arg, ctx)
+            target_wasm = is_32bit ? I32 : I64
+            box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, target_wasm)
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ANY_CONVERT_EXTERN)
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.REF_CAST_NULL)
+            append!(bytes, encode_leb128_signed(Int64(box_type)))
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.STRUCT_GET)
+            append!(bytes, encode_leb128_unsigned(box_type))
+            append!(bytes, encode_leb128_unsigned(UInt32(0)))
+        end
     end
 
     # PURE-046: For numeric intrinsics, verify the compiled args don't contain externref
