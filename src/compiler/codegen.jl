@@ -20577,6 +20577,29 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                         actual_julia_type = call_arg_types[arg_idx]
                         actual_wasm = get_concrete_wasm_type(actual_julia_type, ctx.mod, ctx.type_registry)
 
+                        # PURE-901: Handle Nothing/Type{T}→ref conversion BEFORE type bridging.
+                        # compile_value emits i32_const 0 for phantom types (Nothing, Type{T}),
+                        # but ref-typed params need ref.null. Must fix BEFORE bridging runs,
+                        # otherwise bridging tries any_convert_extern on an i32 value.
+                        _is_phantom = actual_julia_type === Nothing || actual_julia_type <: Type
+                        if _is_phantom && (expected_wasm isa ConcreteRef || expected_wasm === ExternRef || expected_wasm === StructRef || expected_wasm === AnyRef)
+                            if length(arg_bytes) == 2 && arg_bytes[1] == Opcode.I32_CONST && arg_bytes[2] == 0x00
+                                # Remove the i32_const 0 we just appended
+                                for _ in 1:2
+                                    pop!(bytes)
+                                end
+                                # Emit ref.null with the expected type
+                                push!(bytes, Opcode.REF_NULL)
+                                if expected_wasm isa ConcreteRef
+                                    append!(bytes, encode_leb128_signed(Int64(expected_wasm.type_idx)))
+                                else
+                                    push!(bytes, UInt8(expected_wasm))
+                                end
+                                # Update actual_wasm so bridging logic below is a no-op
+                                actual_wasm = expected_wasm
+                            end
+                        end
+
                         if expected_wasm isa ConcreteRef && actual_wasm isa ConcreteRef
                             if expected_wasm.type_idx != actual_wasm.type_idx
                                 # Different ref types — insert ref.cast null to expected type
@@ -20633,25 +20656,6 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                                         end
                                     end
                                 end
-                            end
-                        end
-                    end
-                    # PURE-900: Handle Nothing→ref type conversion.
-                    # compile_value(nothing) emits i32_const 0, but ref-typed params
-                    # need ref.null. Replace i32_const 0 with appropriate ref.null.
-                    if actual_julia_type === Nothing && (expected_wasm isa ConcreteRef || expected_wasm === ExternRef || expected_wasm === StructRef || expected_wasm === AnyRef)
-                        # Check if arg_bytes is i32_const 0 (2 bytes: 0x41 0x00)
-                        if length(arg_bytes) == 2 && arg_bytes[1] == Opcode.I32_CONST && arg_bytes[2] == 0x00
-                            # Remove the i32_const 0 we just appended
-                            for _ in 1:2
-                                pop!(bytes)
-                            end
-                            # Emit ref.null with the expected type
-                            push!(bytes, Opcode.REF_NULL)
-                            if expected_wasm isa ConcreteRef
-                                append!(bytes, encode_leb128_signed(Int64(expected_wasm.type_idx)))
-                            else
-                                push!(bytes, UInt8(expected_wasm))
                             end
                         end
                     end
