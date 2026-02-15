@@ -85,7 +85,8 @@ const bytes = fs.readFileSync('$(escape_string(wasm_path))');
 
 async function run() {
     try {
-        const wasmModule = await WebAssembly.instantiate(bytes, {});
+        const importObject = { Math: { pow: Math.pow } };
+        const wasmModule = await WebAssembly.instantiate(bytes, importObject);
         const func = wasmModule.instance.exports['$func_name'];
 
         if (typeof func !== 'function') {
@@ -382,7 +383,8 @@ const bytes = fs.readFileSync('$(escape_string(wasm_path))');
 
 async function validate() {
     try {
-        const wasmModule = await WebAssembly.instantiate(bytes, {});
+        const importObject = { Math: { pow: Math.pow } };
+        const wasmModule = await WebAssembly.instantiate(bytes, importObject);
         console.log("VALID");
         process.exit(0);
     } catch (e) {
