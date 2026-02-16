@@ -314,10 +314,22 @@ end
 
 function build_wasm_interpreter(signatures::Vector; world::UInt64=Base.get_world_counter(),
                                  transitive::Bool=true)
+    # Convert (f, argtypes) tuples to Type signatures if needed
+    type_sigs = Any[]
+    for sig in signatures
+        if sig isa Type
+            push!(type_sigs, sig)
+        elseif sig isa Tuple && length(sig) == 2
+            f, argtypes = sig
+            push!(type_sigs, Tuple{typeof(f), argtypes...})
+        else
+            push!(type_sigs, sig)
+        end
+    end
     table = if transitive
-        populate_transitive(signatures; world=world)
+        populate_transitive(type_sigs; world=world)
     else
-        populate_method_table(signatures; world=world)
+        populate_method_table(type_sigs; world=world)
     end
     interp = WasmInterpreter(world, table)
     predecompress_methods!(interp.code_info_cache, table; world=world)
