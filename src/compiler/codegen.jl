@@ -19206,8 +19206,12 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     if field_type === Any
                         # Value is likely a concrete ref (struct, array, etc.) that needs conversion
                         # extern.convert_any converts anyref (which includes all concrete refs) to externref
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        # PURE-3112: Skip if value is already externref (Any-typed values compile to externref)
+                        val_julia_type = infer_value_type(value_arg, ctx)
+                        if val_julia_type !== Any
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        end
                     end
 
                     push!(bytes, Opcode.GC_PREFIX)
@@ -19346,7 +19350,9 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                            is_func(func, :slt_int) || is_func(func, :sle_int) ||
                            is_func(func, :ult_int) || is_func(func, :ule_int) ||
                            is_func(func, :add_int) || is_func(func, :sub_int) ||
-                           is_func(func, :mul_int)
+                           is_func(func, :mul_int) ||
+                           is_func(func, :not_int) || is_func(func, :or_int) ||
+                           is_func(func, :xor_int) || is_func(func, :and_int)
     if is_numeric_intrinsic && (arg_type === Any ||
                                  (!isprimitivetype(arg_type) && !is_128bit && !(arg_type <: Integer)))
         # Type-confused code path - externref used as numeric
