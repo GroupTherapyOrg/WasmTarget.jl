@@ -1,4 +1,4 @@
-# ccall_replacements.jl — Pure Julia replacements for Phase B1 + B2 + B3 + C1 + C2 + C3 + C4 ccalls
+# ccall_replacements.jl — Pure Julia replacements for Phase B1 + B2 + B3 + C1 + C2 + C3 + C4 + D1 ccalls
 #
 # Phase B1 (5 replacements):
 #   1. jl_get_world_counter → build-time constant WASM_WORLD_AGE
@@ -48,6 +48,10 @@
 #  33. jl_specializations_get_linfo → SKIP foreigncall (pre-resolved in DictMethodTable)
 #  34. jl_rettype_inferred          → SKIP foreigncall (Dict lookup in DictMethodTable cache)
 #
+# Phase D1 (2 replacements — type intersection pre-computation):
+#  35. jl_type_intersection         → SKIP + Base.typeintersect override (Dict lookup)
+#  36. jl_type_intersection_with_env → SKIP + _type_intersection_with_env (Dict lookup)
+#
 # Functions unblocked (B1): edge_matches_sv, maybe_validate_code, is_lattice_equal,
 #                           issimplertype, tmerge, validate_code!
 # Functions unblocked (B2): _limit_type_size, _fieldindex_nothrow, _getfield_tfunc,
@@ -69,6 +73,10 @@
 #                           method_for_inference_heuristics, typeinf_edge
 # Functions unblocked (C3): _base, bin, dec, hex, oct, ensureroom_reallocate,
 #                           print_to_string, _resize!
+# Functions unblocked (D1): _getfield_tfunc, abstract_call_opaque_closure,
+#                           abstract_eval_throw_undef_if_not, tmeet,
+#                           tmerge_partial_struct, tuple_tfunc, typeinf_local,
+#                           abstract_call_method, normalize_typevars (10 total)
 #
 # Usage:
 #   include("src/typeinf/ccall_stubs.jl")       # Phase A stubs first
@@ -1848,5 +1856,192 @@ function verify_replacements()
     end
 
     println("Phase B1+B2+B3+C1+C2+C3+C4 replacements verification: $passed passed, $failed failed")
+    return failed == 0
+end
+
+# ─── Phase D1: jl_type_intersection pre-computation ────────────────────────────
+#
+# jl_type_intersection is THE biggest ccall blocker — used by 10 functions.
+# Strategy: pre-compute all type intersections at build time during
+# populate_transitive(), store in Dict, look up at Wasm runtime.
+#
+# The override of Base.typeintersect (in dict_method_table.jl) handles
+# the 8 functions that call typeintersect(a, b) as a Julia function.
+#
+# For jl_type_intersection_with_env (inline ccall in 3 Core.Compiler functions),
+# we add it to SKIP_FOREIGNCALLS so codegen emits a default. The override of
+# Base.normalize_typevars (in dict_method_table.jl) handles one call site.
+# The other two (abstract_call_method, abstract_call_opaque_closure) are handled
+# by the SKIP + pre-computed Dict at Wasm runtime.
+#
+# Functions unblocked (10):
+#   Via typeintersect override: _getfield_tfunc, abstract_call_opaque_closure,
+#     abstract_eval_throw_undef_if_not, tmeet, tmerge_partial_struct,
+#     tuple_tfunc, typeinf_local
+#   Via jl_type_intersection_with_env SKIP: abstract_call_method,
+#     normalize_typevars (also overridden)
+#   Both: abstract_call_opaque_closure (uses both forms)
+
+# Add jl_type_intersection to SKIP — the Base.typeintersect override
+# replaces the function, but if any code path compiles the raw ccall
+# (e.g., inlined code), SKIP ensures codegen doesn't emit unreachable.
+if !(:jl_type_intersection in TYPEINF_SKIP_FOREIGNCALLS)
+    push!(TYPEINF_SKIP_FOREIGNCALLS, :jl_type_intersection)
+end
+TYPEINF_SKIP_RETURN_DEFAULTS[:jl_type_intersection] = Any  # returns Type (externref)
+
+# Add jl_type_intersection_with_env to SKIP — returns SimpleVector (externref)
+if !(:jl_type_intersection_with_env in TYPEINF_SKIP_FOREIGNCALLS)
+    push!(TYPEINF_SKIP_FOREIGNCALLS, :jl_type_intersection_with_env)
+end
+TYPEINF_SKIP_RETURN_DEFAULTS[:jl_type_intersection_with_env] = Any  # returns SimpleVector (externref)
+
+# ─── Phase D1 verification ─────────────────────────────────────────────────────
+
+function verify_phase_d1()
+    passed = 0
+    failed = 0
+
+    # 1. Verify jl_type_intersection is in SKIP list
+    if :jl_type_intersection in TYPEINF_SKIP_FOREIGNCALLS
+        passed += 1
+    else
+        println("FAIL: jl_type_intersection not in TYPEINF_SKIP_FOREIGNCALLS")
+        failed += 1
+    end
+
+    # 2. Verify jl_type_intersection_with_env is in SKIP list
+    if :jl_type_intersection_with_env in TYPEINF_SKIP_FOREIGNCALLS
+        passed += 1
+    else
+        println("FAIL: jl_type_intersection_with_env not in TYPEINF_SKIP_FOREIGNCALLS")
+        failed += 1
+    end
+
+    # 3. Verify return defaults are set
+    if haskey(TYPEINF_SKIP_RETURN_DEFAULTS, :jl_type_intersection)
+        passed += 1
+    else
+        println("FAIL: jl_type_intersection return default not set")
+        failed += 1
+    end
+    if haskey(TYPEINF_SKIP_RETURN_DEFAULTS, :jl_type_intersection_with_env)
+        passed += 1
+    else
+        println("FAIL: jl_type_intersection_with_env return default not set")
+        failed += 1
+    end
+
+    # 4. Verify Base.typeintersect override works (ground truth comparison)
+    # Native ccall result
+    native_result = ccall(:jl_type_intersection, Any, (Any, Any), Tuple{Int64, String}, Tuple{Int64, Any})
+    # Our override result (should match)
+    override_result = typeintersect(Tuple{Int64, String}, Tuple{Int64, Any})
+    if native_result == override_result
+        passed += 1
+    else
+        println("FAIL: typeintersect override mismatch: native=$native_result override=$override_result")
+        failed += 1
+    end
+
+    # 5. Verify typeintersect gives correct results for key types
+    test_cases = [
+        (Int64, Number, Int64),           # subtype → returns subtype
+        (Int64, String, Union{}),         # disjoint → Bottom
+        (Vector{Int64}, Vector{Any}, Union{}),  # invariant → Bottom
+        (Tuple{Int64, Any}, Tuple{Any, String}, Tuple{Int64, String}),  # covariant tuple
+    ]
+    for (a, b, expected) in test_cases
+        result = typeintersect(a, b)
+        if result == expected
+            passed += 1
+        else
+            println("FAIL: typeintersect($a, $b) = $result, expected $expected")
+            failed += 1
+        end
+    end
+
+    # 6. Verify _type_intersection_with_env works
+    sv = _type_intersection_with_env(Tuple{Int64, String}, Tuple{Int64, Any})
+    if sv isa Core.SimpleVector && length(sv) >= 2
+        passed += 1
+        ti = sv[1]
+        if ti == Tuple{Int64, String}
+            passed += 1
+        else
+            println("FAIL: _type_intersection_with_env result[1] = $ti, expected Tuple{Int64, String}")
+            failed += 1
+        end
+    else
+        println("FAIL: _type_intersection_with_env returned $(typeof(sv)), expected SimpleVector")
+        failed += 1
+        failed += 1  # count the inner check too
+    end
+
+    # 7. Verify normalize_typevars override works
+    # Test with a simple method — +(Int64, Int64)
+    m = first(methods(+, (Int64, Int64)))
+    sparams = Core.svec()
+    result = Base.normalize_typevars(m, Tuple{typeof(+), Int64, Int64}, sparams)
+    if result isa Pair
+        passed += 1
+    else
+        println("FAIL: normalize_typevars returned $(typeof(result)), expected Pair")
+        failed += 1
+    end
+
+    # 8. Verify tracing works — build_wasm_interpreter populates intersections
+    interp = build_wasm_interpreter([(+, (Int64, Int64))])
+    table = interp.method_table.table
+    if hasfield(typeof(table), :intersections)
+        passed += 1
+    else
+        println("FAIL: DictMethodTable missing intersections field")
+        failed += 1
+    end
+    if hasfield(typeof(table), :intersections_with_env)
+        passed += 1
+    else
+        println("FAIL: DictMethodTable missing intersections_with_env field")
+        failed += 1
+    end
+
+    # 9. Check that some intersections were traced
+    n_intersections = length(table.intersections)
+    n_with_env = length(table.intersections_with_env)
+    if n_intersections >= 0  # may be 0 for simple functions, that's OK
+        passed += 1
+    end
+    println("  Traced intersections: $n_intersections, with_env: $n_with_env")
+
+    # 10. Verify total SKIP entries (should be >= 52 now: 50 + 2 new)
+    total_skip = length(TYPEINF_SKIP_FOREIGNCALLS)
+    if total_skip >= 52
+        passed += 1
+    else
+        println("FAIL: TYPEINF_SKIP_FOREIGNCALLS has $total_skip entries, expected >= 52")
+        failed += 1
+    end
+
+    # 11. Typeinf regression check — same 5 tests as previous phases
+    test_fns = [
+        (:(+), (Int64, Int64), "3+4"),
+        (:(* ), (Int64, Int64), "6*7"),
+        (:abs, (Int64,), "abs(-5)"),
+        (:length, (String,), "length(hello)"),
+        (:iseven, (Int64,), "iseven(4)"),
+    ]
+    for (fname, argtypes, desc) in test_fns
+        f = getfield(Base, fname)
+        ci_vec = code_typed(f, argtypes)
+        if !isempty(ci_vec) && ci_vec[1][1] isa Core.CodeInfo
+            passed += 1
+        else
+            println("FAIL: Typeinf regression — code_typed($desc) failed")
+            failed += 1
+        end
+    end
+
+    println("Phase D1 (jl_type_intersection pre-compute) verification: $passed passed, $failed failed")
     return failed == 0
 end

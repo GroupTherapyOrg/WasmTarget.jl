@@ -25,9 +25,15 @@ using Core.Compiler: AbstractInterpreter, MethodTableView, MethodLookupResult,
 struct DictMethodTable <: MethodTableView
     methods::Dict{Any, MethodLookupResult}
     world::UInt64
+    intersections::Dict{Tuple{Any,Any}, Any}           # (a, b) → typeintersect(a, b)
+    intersections_with_env::Dict{Tuple{Any,Any}, Any}   # (a, b) → SimpleVector[result, env]
 end
 
-DictMethodTable(world::UInt64) = DictMethodTable(Dict{Any, MethodLookupResult}(), world)
+function DictMethodTable(world::UInt64)
+    DictMethodTable(Dict{Any, MethodLookupResult}(), world,
+                    Dict{Tuple{Any,Any}, Any}(),
+                    Dict{Tuple{Any,Any}, Any}())
+end
 
 function Core.Compiler.findall(sig::Type, table::DictMethodTable; limit::Int=Int(typemax(Int32)))
     return get(table.methods, sig, nothing)
@@ -133,6 +139,8 @@ end
 struct _TracingTable <: MethodTableView
     inner::Core.Compiler.InternalMethodTable
     lookups::Dict{Any, MethodLookupResult}
+    intersections::Dict{Tuple{Any,Any}, Any}           # traced typeintersect calls
+    intersections_with_env::Dict{Tuple{Any,Any}, Any}   # traced intersection_with_env calls
 end
 
 function Core.Compiler.findall(sig::Type, table::_TracingTable; limit::Int=Int(typemax(Int32)))
@@ -163,13 +171,101 @@ Core.Compiler.may_optimize(interp::_TracingInterpreter) = false
 Core.Compiler.may_compress(interp::_TracingInterpreter) = false
 Core.Compiler.may_discard_trees(interp::_TracingInterpreter) = false
 
+# ─── Intersection tracing globals ─────────────────────────────────────────────
+# When non-nothing, typeintersect calls are recorded into these Dicts.
+# Activated during populate_transitive(), deactivated after.
+
+const _TRACING_INTERSECTIONS = Ref{Union{Nothing, Dict{Tuple{Any,Any}, Any}}}(nothing)
+const _TRACING_INTERSECTIONS_WITH_ENV = Ref{Union{Nothing, Dict{Tuple{Any,Any}, Any}}}(nothing)
+
+# ─── Pre-computed intersection lookup ─────────────────────────────────────────
+# At Wasm runtime, typeintersect does a Dict lookup instead of ccall.
+# At tracing time, it calls the real ccall AND records the result.
+# At normal native time (tracing off, no WASM_INTERSECTIONS), it uses the ccall.
+
+const _WASM_INTERSECTIONS = Ref{Union{Nothing, Dict{Tuple{Any,Any}, Any}}}(nothing)
+const _WASM_INTERSECTIONS_WITH_ENV = Ref{Union{Nothing, Dict{Tuple{Any,Any}, Any}}}(nothing)
+
+# Override typeintersect to trace and/or use pre-computed results
+function Base.typeintersect(@nospecialize(a::Type), @nospecialize(b::Type))
+    # Check pre-computed Dict first (Wasm runtime path)
+    wasm_dict = _WASM_INTERSECTIONS[]
+    if wasm_dict !== nothing
+        key = (a, b)
+        result = get(wasm_dict, key, nothing)
+        if result !== nothing
+            return result
+        end
+        # Also try (b, a) since intersection is commutative
+        result = get(wasm_dict, (b, a), nothing)
+        if result !== nothing
+            return result
+        end
+        # Fallback: compute natively (shouldn't happen if Dict is complete)
+    end
+
+    # Compute using real ccall
+    result = ccall(:jl_type_intersection, Any, (Any, Any), a, b)
+
+    # If tracing, record the result
+    tracing = _TRACING_INTERSECTIONS[]
+    if tracing !== nothing
+        tracing[(a, b)] = result
+    end
+
+    return result
+end
+
+# Pure Julia replacement for ccall(:jl_type_intersection_with_env, ...)
+# Returns a SimpleVector [intersection_result, type_env_bindings]
+# Used inline in abstract_call_method, abstract_call_opaque_closure, normalize_typevars
+function _type_intersection_with_env(@nospecialize(a::Type), @nospecialize(b::Type))
+    # Check pre-computed Dict first (Wasm runtime path)
+    wasm_dict = _WASM_INTERSECTIONS_WITH_ENV[]
+    if wasm_dict !== nothing
+        key = (a, b)
+        result = get(wasm_dict, key, nothing)
+        if result !== nothing
+            return result
+        end
+    end
+
+    # Compute using real ccall
+    result = ccall(:jl_type_intersection_with_env, Any, (Any, Any), a, b)::Core.SimpleVector
+
+    # If tracing, record the result
+    tracing = _TRACING_INTERSECTIONS_WITH_ENV[]
+    if tracing !== nothing
+        tracing[(a, b)] = result
+    end
+
+    return result
+end
+
+# Override normalize_typevars to use pure Julia intersection_with_env
+function Base.normalize_typevars(method::Method, @nospecialize(atype), sparams::Core.SimpleVector)
+    at2 = Base.subst_trivial_bounds(atype)
+    if at2 !== atype && at2 == atype
+        atype = at2
+        sp_ = _type_intersection_with_env(at2, method.sig)
+        sparams = sp_[2]::Core.SimpleVector
+    end
+    return Pair{Any,Core.SimpleVector}(atype, sparams)
+end
+
 function populate_transitive(signatures::Vector; world::UInt64=Base.get_world_counter())
     native_mt = Core.Compiler.InternalMethodTable(world)
-    tracing = _TracingTable(native_mt, Dict{Any, MethodLookupResult}())
+    tracing = _TracingTable(native_mt, Dict{Any, MethodLookupResult}(),
+                            Dict{Tuple{Any,Any}, Any}(),
+                            Dict{Tuple{Any,Any}, Any}())
     cached = CachedMethodTable(tracing)
     interp = _TracingInterpreter(world, cached,
         Vector{InferenceResult}(), InferenceParams(),
         OptimizationParams(; inlining=false))
+
+    # Enable intersection tracing during typeinf pass
+    _TRACING_INTERSECTIONS[] = tracing.intersections
+    _TRACING_INTERSECTIONS_WITH_ENV[] = tracing.intersections_with_env
 
     for sig in signatures
         lookup = Core.Compiler.findall(sig, native_mt; limit=3)
@@ -186,6 +282,10 @@ function populate_transitive(signatures::Vector; world::UInt64=Base.get_world_co
         end
     end
 
+    # Disable intersection tracing
+    _TRACING_INTERSECTIONS[] = nothing
+    _TRACING_INTERSECTIONS_WITH_ENV[] = nothing
+
     # Build DictMethodTable from traced lookups + original signatures
     table = DictMethodTable(world)
     for (sig, result) in tracing.lookups
@@ -199,6 +299,13 @@ function populate_transitive(signatures::Vector; world::UInt64=Base.get_world_co
                 table.methods[sig] = result
             end
         end
+    end
+    # Copy traced intersections to the DictMethodTable
+    for (key, val) in tracing.intersections
+        table.intersections[key] = val
+    end
+    for (key, val) in tracing.intersections_with_env
+        table.intersections_with_env[key] = val
     end
     return table
 end
