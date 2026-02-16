@@ -186,6 +186,63 @@ const _TRACING_INTERSECTIONS_WITH_ENV = Ref{Union{Nothing, Dict{Tuple{Any,Any}, 
 const _WASM_INTERSECTIONS = Ref{Union{Nothing, Dict{Tuple{Any,Any}, Any}}}(nothing)
 const _WASM_INTERSECTIONS_WITH_ENV = Ref{Union{Nothing, Dict{Tuple{Any,Any}, Any}}}(nothing)
 
+# ─── Method table + code cache globals (Phase D2) ────────────────────────────
+# At Wasm runtime, _methods_by_ftype does a Dict lookup instead of ccall.
+# At tracing time, it uses the tracing table (records lookups).
+# At normal native time (both nothing), it uses the ccall.
+
+const _WASM_METHOD_TABLE = Ref{Union{Nothing, DictMethodTable}}(nothing)
+const _WASM_CODE_CACHE = Ref{Union{Nothing, PreDecompressedCodeInfo}}(nothing)
+
+# Override _methods_by_ftype to use DictMethodTable in Wasm mode.
+# This replaces ccall(:jl_matching_methods) for may_invoke_generator and other direct callers.
+function Base._methods_by_ftype(@nospecialize(t), mt::Union{Core.MethodTable, Nothing},
+                                 lim::Int, world::UInt, ambig::Bool,
+                                 min::Ref{UInt}, max::Ref{UInt}, has_ambig::Ref{Int32})
+    # Wasm mode: use DictMethodTable
+    wasm_mt = _WASM_METHOD_TABLE[]
+    if wasm_mt !== nothing
+        result = Core.Compiler.findall(t, wasm_mt; limit=lim)
+        if result === nothing
+            return nothing
+        end
+        # Set world range from DictMethodTable
+        min[] = result.valid_worlds.min_world
+        max[] = result.valid_worlds.max_world
+        has_ambig[] = result.ambig ? Int32(1) : Int32(0)
+        return result.matches
+    end
+
+    # Normal mode: use real ccall
+    return ccall(:jl_matching_methods, Any,
+        (Any, Any, Cint, Cint, UInt, Ptr{UInt}, Ptr{UInt}, Ptr{Int32}),
+        t, mt, lim, ambig, world, min, max, has_ambig)::Union{Vector{Any},Nothing}
+end
+
+# Override get_staged to use PreDecompressedCodeInfo in Wasm mode.
+# In Wasm, @generated function bodies are pre-expanded at build time.
+function Core.Compiler.get_staged(mi::Core.MethodInstance, world::UInt)
+    code_cache = _WASM_CODE_CACHE[]
+    if code_cache !== nothing
+        # Look up pre-expanded CodeInfo from the cache
+        cached = get(code_cache.cache, mi, nothing)
+        if cached !== nothing
+            return copy(cached)
+        end
+        # Not in cache — fall through to may_invoke_generator check
+    end
+
+    # Normal path: check may_invoke_generator then call ccall
+    may_invoke_generator(mi) || return nothing
+    cache_ci = (mi.def::Method).generator isa Core.CachedGenerator ?
+        Base.RefValue{Core.CodeInstance}() : nothing
+    try
+        return Core.Compiler.call_get_staged(mi, world, cache_ci)
+    catch
+        return nothing
+    end
+end
+
 # Override typeintersect to trace and/or use pre-computed results
 function Base.typeintersect(@nospecialize(a::Type), @nospecialize(b::Type))
     # Check pre-computed Dict first (Wasm runtime path)
@@ -333,7 +390,36 @@ function build_wasm_interpreter(signatures::Vector; world::UInt64=Base.get_world
     end
     interp = WasmInterpreter(world, table)
     predecompress_methods!(interp.code_info_cache, table; world=world)
+    # Pre-expand @generated function bodies into the code cache
+    preexpand_generated!(interp.code_info_cache, table; world=world)
     return interp
+end
+
+# Pre-expand @generated function bodies at build time.
+# For each method in the table that has a generator, call get_staged natively
+# to get the generated CodeInfo and store it in PreDecompressedCodeInfo.
+function preexpand_generated!(code_cache::PreDecompressedCodeInfo,
+                               table::DictMethodTable;
+                               world::UInt64=table.world)
+    for (sig, result) in table.methods
+        for match in result.matches
+            method = match.method
+            if Base.hasgenerator(method)
+                mi = Core.Compiler.specialize_method(match)
+                if !haskey(code_cache.cache, mi)
+                    # Use native get_staged (the ccall path) at build time
+                    try
+                        src = ccall(:jl_code_for_staged, Ref{Core.CodeInfo},
+                                    (Any, UInt, Ptr{Cvoid}), mi, world, C_NULL)
+                        code_cache.cache[mi] = src
+                    catch
+                        # Generator may fail for incomplete type info — skip
+                    end
+                end
+            end
+        end
+    end
+    return code_cache
 end
 
 # ─── Verification: compare Dict typeinf vs native typeinf ───────────────────────
@@ -361,15 +447,32 @@ function verify_typeinf(f, argtypes::Tuple;
     interp = build_wasm_interpreter([sig]; world=world)
 
     # Step 3: Run typeinf with WasmInterpreter
+    # Activate Wasm mode globals so overrides (_methods_by_ftype, get_staged) use Dict
+    table = interp.method_table.table
+    _WASM_METHOD_TABLE[] = table
+    _WASM_CODE_CACHE[] = interp.code_info_cache
+    _WASM_INTERSECTIONS[] = table.intersections
+    _WASM_INTERSECTIONS_WITH_ENV[] = table.intersections_with_env
+
     # Use the same MethodInstance that code_typed used, to ensure we're comparing the same method
     mi = native_ci.parent
     src = Core.Compiler.retrieve_code_info(mi, world)
     if src === nothing
+        _WASM_METHOD_TABLE[] = nothing
+        _WASM_CODE_CACHE[] = nothing
+        _WASM_INTERSECTIONS[] = nothing
+        _WASM_INTERSECTIONS_WITH_ENV[] = nothing
         return (pass=false, reason="retrieve_code_info returned nothing for $mi")
     end
     result = Core.Compiler.InferenceResult(mi)
     frame = InferenceState(result, src, #=cache_mode=# :no, interp)
     Core.Compiler.typeinf(interp, frame)
+
+    # Deactivate Wasm mode globals
+    _WASM_METHOD_TABLE[] = nothing
+    _WASM_CODE_CACHE[] = nothing
+    _WASM_INTERSECTIONS[] = nothing
+    _WASM_INTERSECTIONS_WITH_ENV[] = nothing
 
     # Step 4: Compare return types
     dict_rettype = result.result

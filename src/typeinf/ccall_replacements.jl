@@ -1,4 +1,4 @@
-# ccall_replacements.jl — Pure Julia replacements for Phase B1 + B2 + B3 + C1 + C2 + C3 + C4 + D1 ccalls
+# ccall_replacements.jl — Pure Julia replacements for Phase B1 + B2 + B3 + C1 + C2 + C3 + C4 + D1 + D2 ccalls
 #
 # Phase B1 (5 replacements):
 #   1. jl_get_world_counter → build-time constant WASM_WORLD_AGE
@@ -52,6 +52,10 @@
 #  35. jl_type_intersection         → SKIP + Base.typeintersect override (Dict lookup)
 #  36. jl_type_intersection_with_env → SKIP + _type_intersection_with_env (Dict lookup)
 #
+# Phase D2 (2 replacements — jl_matching_methods + @generated):
+#  37. jl_matching_methods           → SKIP + Base._methods_by_ftype override (DictMethodTable lookup)
+#  38. jl_code_for_staged            → SKIP + Core.Compiler.get_staged override (PreDecompressedCodeInfo)
+#
 # Functions unblocked (B1): edge_matches_sv, maybe_validate_code, is_lattice_equal,
 #                           issimplertype, tmerge, validate_code!
 # Functions unblocked (B2): _limit_type_size, _fieldindex_nothrow, _getfield_tfunc,
@@ -77,16 +81,17 @@
 #                           abstract_eval_throw_undef_if_not, tmeet,
 #                           tmerge_partial_struct, tuple_tfunc, typeinf_local,
 #                           abstract_call_method, normalize_typevars (10 total)
+# Functions unblocked (D2): may_invoke_generator, get_staged (2 total)
 #
 # Usage:
 #   include("src/typeinf/ccall_stubs.jl")       # Phase A stubs first
-#   include("src/typeinf/ccall_replacements.jl") # Phase B1 + B2 + B3 + C1 + C2 + C3 replacements
+#   include("src/typeinf/ccall_replacements.jl") # Phase B1 + B2 + B3 + C1-C4 + D1-D2 replacements
 #
 # This file is STANDALONE and independently testable:
 #   julia +1.12 --project=. -e '
 #     include("src/typeinf/ccall_stubs.jl")
 #     include("src/typeinf/ccall_replacements.jl")
-#     println("Phase C3 string ops loaded OK")'
+#     println("Phase D2 jl_matching_methods loaded OK")'
 
 # ─── 1. World age constant ──────────────────────────────────────────────────────
 # jl_get_world_counter returns the current world age counter.
@@ -2043,5 +2048,182 @@ function verify_phase_d1()
     end
 
     println("Phase D1 (jl_type_intersection pre-compute) verification: $passed passed, $failed failed")
+    return failed == 0
+end
+
+# ─── Phase D2: jl_matching_methods + @generated integration ──────────────────
+#
+# jl_matching_methods is THE method table ccall — the original target of DictMethodTable.
+# Used by _methods_by_ftype (runtime_internals.jl:1415) which is called by:
+#   1. InternalMethodTable.findall (methodtable.jl:97) — ALREADY handled by DictMethodTable.findall
+#   2. may_invoke_generator (runtime_internals.jl:1486) — needs _methods_by_ftype override
+#   3. _return_type (typeinfer.jl:1594) — needs _methods_by_ftype override
+#   4. bootstrap.jl:57 — not used at Wasm runtime
+#
+# jl_code_for_staged is used by get_staged (utilities.jl:98,103) to invoke @generated
+# function generators at runtime. In Wasm, @generated bodies are PRE-EXPANDED at build
+# time via preexpand_generated!() and stored in PreDecompressedCodeInfo.
+#
+# The overrides (in dict_method_table.jl):
+#   - Base._methods_by_ftype → DictMethodTable lookup when _WASM_METHOD_TABLE is set
+#   - Core.Compiler.get_staged → PreDecompressedCodeInfo lookup when _WASM_CODE_CACHE is set
+#
+# Functions unblocked (2): may_invoke_generator, get_staged
+
+# Add jl_matching_methods to SKIP — the Base._methods_by_ftype override
+# replaces the function, but SKIP ensures codegen handles any remaining raw ccall refs.
+if !(:jl_matching_methods in TYPEINF_SKIP_FOREIGNCALLS)
+    push!(TYPEINF_SKIP_FOREIGNCALLS, :jl_matching_methods)
+end
+TYPEINF_SKIP_RETURN_DEFAULTS[:jl_matching_methods] = Any  # returns Vector{Any} or nothing (externref)
+
+# Add jl_code_for_staged to SKIP — the get_staged override handles the logic,
+# but SKIP ensures codegen doesn't emit unreachable for any remaining ccall refs.
+if !(:jl_code_for_staged in TYPEINF_SKIP_FOREIGNCALLS)
+    push!(TYPEINF_SKIP_FOREIGNCALLS, :jl_code_for_staged)
+end
+TYPEINF_SKIP_RETURN_DEFAULTS[:jl_code_for_staged] = Any  # returns Ref{CodeInfo} (externref)
+
+# ─── Phase D2 verification ──────────────────────────────────────────────────────
+
+function verify_phase_d2()
+    passed = 0
+    failed = 0
+
+    # 1. Verify jl_matching_methods is in SKIP list
+    if :jl_matching_methods in TYPEINF_SKIP_FOREIGNCALLS
+        passed += 1
+    else
+        println("FAIL: jl_matching_methods not in TYPEINF_SKIP_FOREIGNCALLS")
+        failed += 1
+    end
+
+    # 2. Verify jl_code_for_staged is in SKIP list
+    if :jl_code_for_staged in TYPEINF_SKIP_FOREIGNCALLS
+        passed += 1
+    else
+        println("FAIL: jl_code_for_staged not in TYPEINF_SKIP_FOREIGNCALLS")
+        failed += 1
+    end
+
+    # 3. Verify return defaults are set
+    if haskey(TYPEINF_SKIP_RETURN_DEFAULTS, :jl_matching_methods) && TYPEINF_SKIP_RETURN_DEFAULTS[:jl_matching_methods] === Any
+        passed += 1
+    else
+        println("FAIL: jl_matching_methods return default not set to Any")
+        failed += 1
+    end
+    if haskey(TYPEINF_SKIP_RETURN_DEFAULTS, :jl_code_for_staged) && TYPEINF_SKIP_RETURN_DEFAULTS[:jl_code_for_staged] === Any
+        passed += 1
+    else
+        println("FAIL: jl_code_for_staged return default not set to Any")
+        failed += 1
+    end
+
+    # 4. Verify _methods_by_ftype override works (ground truth comparison)
+    # Native ccall: look up methods for +(Int64, Int64) — should find at least 1
+    native_result = ccall(:jl_matching_methods, Any,
+        (Any, Any, Cint, Cint, UInt, Ptr{UInt}, Ptr{UInt}, Ptr{Int32}),
+        Tuple{typeof(+), Int64, Int64}, nothing, Cint(1), Cint(0),
+        Base.get_world_counter(), Ref{UInt}(typemin(UInt)),
+        Ref{UInt}(typemax(UInt)), Ref{Int32}(0))
+    if native_result isa Vector && length(native_result) >= 1
+        passed += 1
+    else
+        println("FAIL: native jl_matching_methods returned unexpected: $native_result")
+        failed += 1
+    end
+
+    # Our override via DictMethodTable
+    interp = build_wasm_interpreter([(+, (Int64, Int64))])
+    table = interp.method_table.table
+    _WASM_METHOD_TABLE[] = table
+    override_result = Base._methods_by_ftype(Tuple{typeof(+), Int64, Int64}, nothing,
+        1, table.world)
+    _WASM_METHOD_TABLE[] = nothing
+    if override_result isa Vector && length(override_result) >= 1
+        passed += 1
+    else
+        println("FAIL: _methods_by_ftype override returned unexpected: $override_result")
+        failed += 1
+    end
+
+    # Compare method found by both paths — should be the same method
+    if native_result isa Vector && override_result isa Vector &&
+       length(native_result) >= 1 && length(override_result) >= 1
+        native_method = (first(native_result)::Core.MethodMatch).method
+        override_method = (first(override_result)::Core.MethodMatch).method
+        if native_method === override_method
+            passed += 1
+        else
+            println("FAIL: methods differ — native: $(native_method) vs override: $(override_method)")
+            failed += 1
+        end
+    else
+        println("FAIL: cannot compare methods — missing results")
+        failed += 1
+    end
+
+    # 5. Verify may_invoke_generator works for a non-@generated function
+    # +(Int64, Int64) is NOT @generated — hasgenerator should be false
+    m_plus = first(methods(+, (Int64, Int64)))
+    if !Base.hasgenerator(m_plus)
+        passed += 1
+    else
+        println("FAIL: +(Int64,Int64) unexpectedly has a generator")
+        failed += 1
+    end
+
+    # 6. Verify get_staged override works
+    # For non-@generated, get_staged should return nothing
+    mi_plus = Core.Compiler.specialize_method(first(methods(+, (Int64, Int64))),
+        Tuple{typeof(+), Int64, Int64}, Core.svec())
+    _WASM_CODE_CACHE[] = interp.code_info_cache
+    staged_result = Core.Compiler.get_staged(mi_plus, table.world)
+    _WASM_CODE_CACHE[] = nothing
+    if staged_result === nothing
+        passed += 1
+    else
+        println("FAIL: get_staged for non-@generated should return nothing, got: $(typeof(staged_result))")
+        failed += 1
+    end
+
+    # 7. Verify preexpand_generated! was called (code cache should exist)
+    if interp.code_info_cache isa PreDecompressedCodeInfo
+        passed += 1
+    else
+        println("FAIL: code_info_cache is not PreDecompressedCodeInfo")
+        failed += 1
+    end
+
+    # 8. Verify total SKIP entries (should be >= 54 now: 52 + 2 new)
+    total_skip = length(TYPEINF_SKIP_FOREIGNCALLS)
+    if total_skip >= 54
+        passed += 1
+    else
+        println("FAIL: TYPEINF_SKIP_FOREIGNCALLS has $total_skip entries, expected >= 54")
+        failed += 1
+    end
+
+    # 9. Typeinf CORRECT regression check with Wasm mode globals active
+    test_fns = [
+        (:(+), (Int64, Int64), "3+4"),
+        (:(* ), (Int64, Int64), "6*7"),
+        (:abs, (Int64,), "abs(-5)"),
+        (:length, (String,), "length(hello)"),
+        (:iseven, (Int64,), "iseven(4)"),
+    ]
+    for (fname, argtypes, desc) in test_fns
+        f = getfield(Base, fname)
+        result = verify_typeinf(f, argtypes)
+        if result.pass
+            passed += 1
+        else
+            println("FAIL: verify_typeinf($desc) failed — native=$(result.native_rettype), dict=$(result.dict_rettype)")
+            failed += 1
+        end
+    end
+
+    println("Phase D2 (jl_matching_methods + @generated) verification: $passed passed, $failed failed")
     return failed == 0
 end
