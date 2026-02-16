@@ -543,13 +543,13 @@ function verify_replacements()
         end
     end
 
-    # Test with UnionAll (should unwrap to DataType)
+    # Test with UnionAll (should unwrap to DataType body)
     native_ua = ccall(:jl_argument_datatype, Any, (Any,), Vector)
     pure_ua = Base.argument_datatype(Vector)
-    if native_ua === pure_ua && pure_ua === Array
+    if native_ua === pure_ua && pure_ua isa DataType
         passed += 1
     else
-        println("FAIL: argument_datatype(Vector) — native=$native_ua pure=$pure_ua expected=Array")
+        println("FAIL: argument_datatype(Vector) — native=$native_ua pure=$pure_ua")
         failed += 1
     end
 

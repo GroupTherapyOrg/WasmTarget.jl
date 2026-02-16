@@ -145,11 +145,11 @@ function verify_stubs()
         failed += 1
     end
 
-    # Test TYPEINF_SKIP_FOREIGNCALLS has the right count
-    if length(TYPEINF_SKIP_FOREIGNCALLS) == 15
+    # Test TYPEINF_SKIP_FOREIGNCALLS has at least the Phase A entries (15 base, more after B1/B2)
+    if length(TYPEINF_SKIP_FOREIGNCALLS) >= 15
         passed += 1
     else
-        println("FAIL: TYPEINF_SKIP_FOREIGNCALLS has $(length(TYPEINF_SKIP_FOREIGNCALLS)) entries, expected 15")
+        println("FAIL: TYPEINF_SKIP_FOREIGNCALLS has $(length(TYPEINF_SKIP_FOREIGNCALLS)) entries, expected >= 15")
         failed += 1
     end
 
