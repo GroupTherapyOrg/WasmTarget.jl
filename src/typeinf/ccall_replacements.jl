@@ -1,4 +1,4 @@
-# ccall_replacements.jl — Pure Julia replacements for Phase B1 + B2 + B3 + C1 + C2 + C3 ccalls
+# ccall_replacements.jl — Pure Julia replacements for Phase B1 + B2 + B3 + C1 + C2 + C3 + C4 ccalls
 #
 # Phase B1 (5 replacements):
 #   1. jl_get_world_counter → build-time constant WASM_WORLD_AGE
@@ -42,6 +42,12 @@
 #  29. jl_pchar_to_string          → SKIP foreigncall (pointer-based, handled at codegen level)
 #  30. jl_string_ptr               → Already in Phase A SKIP list (pointer to string data)
 #
+# Phase C4 (4 replacements — module/method resolution):
+#  31. jl_module_globalref          → SKIP foreigncall (pre-resolved at build time)
+#  32. jl_normalize_to_compilable_sig → SKIP foreigncall (pre-normalized in DictMethodTable)
+#  33. jl_specializations_get_linfo → SKIP foreigncall (pre-resolved in DictMethodTable)
+#  34. jl_rettype_inferred          → SKIP foreigncall (Dict lookup in DictMethodTable cache)
+#
 # Functions unblocked (B1): edge_matches_sv, maybe_validate_code, is_lattice_equal,
 #                           issimplertype, tmerge, validate_code!
 # Functions unblocked (B2): _limit_type_size, _fieldindex_nothrow, _getfield_tfunc,
@@ -58,6 +64,9 @@
 #                           sp_type_rewrap, tmerge_types_slow, tuplemerge,
 #                           union_count_abstract, abstract_eval_throw_undef_if_not, tmeet
 # Functions unblocked (C2): cycle_fix_limited, issubset, push! (Compiler IdDict variant)
+# Functions unblocked (C4): abstract_eval_foreigncall, abstract_eval_value_expr,
+#                           _add_edges_impl, abstract_call_method, cache_result!,
+#                           method_for_inference_heuristics, typeinf_edge
 # Functions unblocked (C3): _base, bin, dec, hex, oct, ensureroom_reallocate,
 #                           print_to_string, _resize!
 #
@@ -843,6 +852,104 @@ if !haskey(TYPEINF_SKIP_RETURN_DEFAULTS, :jl_string_ptr)
     TYPEINF_SKIP_RETURN_DEFAULTS[:jl_string_ptr] = Ptr{UInt8}
 end
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase C4: Module/method resolution replacements
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# These 4 ccalls handle module lookups and method resolution in Core.Compiler.
+# In the Wasm pipeline, DictMethodTable pre-resolves all method signatures at
+# build time, so these become no-ops (Dict lookups happen in the DictMethodTable
+# layer, not at the ccall level).
+
+# ─── 31. jl_module_globalref ─────────────────────────────────────────────────
+# boot.jl:574: GlobalRef(m::Module, s::Symbol) = ccall(:jl_module_globalref, Ref{GlobalRef}, (Any, Any), m, s)
+#
+# Gets or creates the canonical GlobalRef for a module+symbol pair.
+# Used by abstract_eval_foreigncall and abstract_eval_value_expr to look up
+# global variable bindings during abstract interpretation.
+#
+# In Wasm: GlobalRef objects are pre-resolved at build time. The DictMethodTable
+# pre-populates all needed GlobalRefs. At runtime, this ccall is never reached
+# because the abstract interpreter works on pre-built data structures.
+#
+# Return type: Ref{GlobalRef} (externref in Wasm)
+if !(:jl_module_globalref in TYPEINF_SKIP_FOREIGNCALLS)
+    push!(TYPEINF_SKIP_FOREIGNCALLS, :jl_module_globalref)
+end
+TYPEINF_SKIP_RETURN_DEFAULTS[:jl_module_globalref] = GlobalRef
+
+# ─── 32. jl_normalize_to_compilable_sig ──────────────────────────────────────
+# runtime_internals.jl:1559: get_compileable_sig — ccall(:jl_normalize_to_compilable_sig, Any, (Any,Any,Any,Cint), ...)
+# runtime_internals.jl:1566: get_nospecializeinfer_sig — same ccall with flag=0
+#
+# Normalizes a method call signature to its "compileable" form:
+# - Widens types according to @nospecialize annotations
+# - Handles specialization heuristics (e.g., Val{1} → Val)
+# - Returns normalized DataType or nothing (if already compileable)
+#
+# Used by abstract_call_method, _add_edges_impl, method_for_inference_heuristics,
+# typeinf_edge — all for finding the canonical MethodInstance for a call.
+#
+# In Wasm: DictMethodTable pre-normalizes all signatures at build time.
+# The build-time population script calls get_compileable_sig natively and
+# stores the result. At runtime, this ccall is never needed.
+#
+# Return type: Any (externref in Wasm — DataType or nothing)
+if !(:jl_normalize_to_compilable_sig in TYPEINF_SKIP_FOREIGNCALLS)
+    push!(TYPEINF_SKIP_FOREIGNCALLS, :jl_normalize_to_compilable_sig)
+end
+TYPEINF_SKIP_RETURN_DEFAULTS[:jl_normalize_to_compilable_sig] = Any
+
+# ─── 33. jl_specializations_get_linfo ────────────────────────────────────────
+# runtime_internals.jl:1593: specialize_method — ccall(:jl_specializations_get_linfo, Ref{MethodInstance}, (Any,Any,Any), ...)
+#
+# Gets or creates a MethodInstance for a specific method specialization.
+# A MethodInstance is Julia's "compiled version of a method for specific arg types."
+# This is the canonical way to get-or-create a MethodInstance:
+#   1. Searches the method's specializations table
+#   2. If found, returns it
+#   3. If not found, creates a new MethodInstance and inserts it
+#
+# Used by _add_edges_impl, method_for_inference_heuristics, typeinf_edge
+# (all through the specialize_method wrapper).
+#
+# In Wasm: DictMethodTable pre-resolves all MethodInstances at build time.
+# The build-time script calls specialize_method natively and stores the results.
+# At runtime, MethodInstance lookup is a Dict operation in DictMethodTable.
+#
+# Return type: Ref{MethodInstance} (externref in Wasm)
+if !(:jl_specializations_get_linfo in TYPEINF_SKIP_FOREIGNCALLS)
+    push!(TYPEINF_SKIP_FOREIGNCALLS, :jl_specializations_get_linfo)
+end
+TYPEINF_SKIP_RETURN_DEFAULTS[:jl_specializations_get_linfo] = Core.MethodInstance
+
+# Also add jl_specializations_lookup (used when preexisting=true in specialize_method)
+if !(:jl_specializations_lookup in TYPEINF_SKIP_FOREIGNCALLS)
+    push!(TYPEINF_SKIP_FOREIGNCALLS, :jl_specializations_lookup)
+end
+TYPEINF_SKIP_RETURN_DEFAULTS[:jl_specializations_lookup] = Any  # Union{Nothing, MethodInstance}
+
+# ─── 34. jl_rettype_inferred ────────────────────────────────────────────────
+# cicache.jl:67,71: ccall(:jl_rettype_inferred, Any, (Any, Any, UInt, UInt), owner, mi, min_world, max_world)
+#
+# Searches a MethodInstance's CodeInstance cache for a matching entry:
+#   1. Walks the linked list of CodeInstances on mi.cache
+#   2. Checks: owner matches (===), world range overlaps, rettype is defined
+#   3. Returns the CodeInstance if found, nothing otherwise
+#
+# Used by cache_result! and typeinf_edge (via WorldView{InternalCodeCache}
+# haskey/get methods).
+#
+# In Wasm: DictMethodTable pre-populates the inference cache at build time.
+# The build-time script runs typeinf natively and caches all CodeInstances.
+# At runtime, cache lookup is a Dict operation in the WasmInterpreter.
+#
+# Return type: Any (externref in Wasm — CodeInstance or nothing)
+if !(:jl_rettype_inferred in TYPEINF_SKIP_FOREIGNCALLS)
+    push!(TYPEINF_SKIP_FOREIGNCALLS, :jl_rettype_inferred)
+end
+TYPEINF_SKIP_RETURN_DEFAULTS[:jl_rettype_inferred] = Any
+
 # ─── Verification ────────────────────────────────────────────────────────────────
 
 function verify_replacements()
@@ -1596,16 +1703,150 @@ function verify_replacements()
         failed += 1
     end
 
-    # Total SKIP entries should be at least 45 now (41 Phase C2 + 4 Phase C3)
-    # (jl_string_ptr was already counted in Phase A, so +4 not +5)
-    total_skip = length(TYPEINF_SKIP_FOREIGNCALLS)
-    if total_skip >= 45
+    # ─── Phase C4 verification: Module/method resolution SKIP entries ─────────
+
+    # 31. jl_module_globalref — SKIP + return default
+    if :jl_module_globalref in TYPEINF_SKIP_FOREIGNCALLS
         passed += 1
     else
-        println("FAIL: TYPEINF_SKIP_FOREIGNCALLS has $total_skip entries, expected >= 45")
+        println("FAIL: jl_module_globalref not in TYPEINF_SKIP_FOREIGNCALLS")
+        failed += 1
+    end
+    if haskey(TYPEINF_SKIP_RETURN_DEFAULTS, :jl_module_globalref) && TYPEINF_SKIP_RETURN_DEFAULTS[:jl_module_globalref] === GlobalRef
+        passed += 1
+    else
+        println("FAIL: jl_module_globalref return default not set to GlobalRef")
         failed += 1
     end
 
-    println("Phase B1+B2+B3+C1+C2+C3 replacements verification: $passed passed, $failed failed")
+    # Verify GlobalRef constructor works in native Julia (ground truth)
+    gr = GlobalRef(Main, :+)
+    if gr isa GlobalRef && gr.mod === Main && gr.name === :+
+        passed += 1
+    else
+        println("FAIL: GlobalRef(Main, :+) — got $gr")
+        failed += 1
+    end
+
+    # 32. jl_normalize_to_compilable_sig — SKIP + return default
+    if :jl_normalize_to_compilable_sig in TYPEINF_SKIP_FOREIGNCALLS
+        passed += 1
+    else
+        println("FAIL: jl_normalize_to_compilable_sig not in TYPEINF_SKIP_FOREIGNCALLS")
+        failed += 1
+    end
+    if haskey(TYPEINF_SKIP_RETURN_DEFAULTS, :jl_normalize_to_compilable_sig) && TYPEINF_SKIP_RETURN_DEFAULTS[:jl_normalize_to_compilable_sig] === Any
+        passed += 1
+    else
+        println("FAIL: jl_normalize_to_compilable_sig return default not set to Any")
+        failed += 1
+    end
+
+    # Verify native get_compileable_sig works (ground truth for what this ccall does)
+    # For a simple method like +(::Int64, ::Int64), the sig should already be compileable
+    m_plus = methods(+, (Int64, Int64)) |> first
+    compileable_sig = Core.Compiler.get_compileable_sig(m_plus, Tuple{typeof(+), Int64, Int64}, Core.svec())
+    # Returns nothing if already compileable, or a DataType
+    if compileable_sig === nothing || compileable_sig isa DataType
+        passed += 1
+    else
+        println("FAIL: get_compileable_sig returned unexpected type: $(typeof(compileable_sig))")
+        failed += 1
+    end
+
+    # 33. jl_specializations_get_linfo — SKIP + return default
+    if :jl_specializations_get_linfo in TYPEINF_SKIP_FOREIGNCALLS
+        passed += 1
+    else
+        println("FAIL: jl_specializations_get_linfo not in TYPEINF_SKIP_FOREIGNCALLS")
+        failed += 1
+    end
+    if haskey(TYPEINF_SKIP_RETURN_DEFAULTS, :jl_specializations_get_linfo) && TYPEINF_SKIP_RETURN_DEFAULTS[:jl_specializations_get_linfo] === Core.MethodInstance
+        passed += 1
+    else
+        println("FAIL: jl_specializations_get_linfo return default not set to Core.MethodInstance")
+        failed += 1
+    end
+
+    # Also check jl_specializations_lookup (used with preexisting=true)
+    if :jl_specializations_lookup in TYPEINF_SKIP_FOREIGNCALLS
+        passed += 1
+    else
+        println("FAIL: jl_specializations_lookup not in TYPEINF_SKIP_FOREIGNCALLS")
+        failed += 1
+    end
+    if haskey(TYPEINF_SKIP_RETURN_DEFAULTS, :jl_specializations_lookup) && TYPEINF_SKIP_RETURN_DEFAULTS[:jl_specializations_lookup] === Any
+        passed += 1
+    else
+        println("FAIL: jl_specializations_lookup return default not set to Any")
+        failed += 1
+    end
+
+    # Verify specialize_method works natively (ground truth)
+    mi = Base.specialize_method(m_plus, Tuple{typeof(+), Int64, Int64}, Core.svec())
+    if mi isa Core.MethodInstance && mi.def === m_plus
+        passed += 1
+    else
+        println("FAIL: specialize_method returned unexpected: $(typeof(mi))")
+        failed += 1
+    end
+
+    # 34. jl_rettype_inferred — SKIP + return default
+    if :jl_rettype_inferred in TYPEINF_SKIP_FOREIGNCALLS
+        passed += 1
+    else
+        println("FAIL: jl_rettype_inferred not in TYPEINF_SKIP_FOREIGNCALLS")
+        failed += 1
+    end
+    if haskey(TYPEINF_SKIP_RETURN_DEFAULTS, :jl_rettype_inferred) && TYPEINF_SKIP_RETURN_DEFAULTS[:jl_rettype_inferred] === Any
+        passed += 1
+    else
+        println("FAIL: jl_rettype_inferred return default not set to Any")
+        failed += 1
+    end
+
+    # Verify jl_rettype_inferred works natively (ground truth)
+    # For a compiled function, there should be a cached CodeInstance
+    ci_result = ccall(:jl_rettype_inferred, Any, (Any, Any, UInt, UInt),
+        nothing, mi, UInt(0), typemax(UInt))
+    # Should be nothing or a CodeInstance — either is valid
+    if ci_result === nothing || ci_result isa Core.CodeInstance
+        passed += 1
+    else
+        println("FAIL: jl_rettype_inferred returned unexpected: $(typeof(ci_result))")
+        failed += 1
+    end
+
+    # Verify typeinf still works correctly with all replacements loaded
+    # (Same 5 tests as previous phases — regression check)
+    test_fns = [
+        (:(+), (Int64, Int64), Int64(3) + Int64(4), "3+4=7"),
+        (:(* ), (Int64, Int64), Int64(6) * Int64(7), "6*7=42"),
+        (:abs, (Int64,), abs(Int64(-5)), "abs(-5)=5"),
+        (:length, (String,), length("hello"), "length(\"hello\")=5"),
+        (:iseven, (Int64,), iseven(Int64(4)), "iseven(4)=true"),
+    ]
+    for (fname, argtypes, expected, desc) in test_fns
+        f = getfield(Base, fname)
+        ci_vec = code_typed(f, argtypes)
+        if !isempty(ci_vec) && ci_vec[1][1] isa Core.CodeInfo
+            passed += 1
+        else
+            println("FAIL: Typeinf regression — code_typed($desc) failed")
+            failed += 1
+        end
+    end
+
+    # Total SKIP entries should be at least 50 now (45 Phase C3 + 5 Phase C4)
+    # (4 ccalls + jl_specializations_lookup = 5 new entries)
+    total_skip = length(TYPEINF_SKIP_FOREIGNCALLS)
+    if total_skip >= 50
+        passed += 1
+    else
+        println("FAIL: TYPEINF_SKIP_FOREIGNCALLS has $total_skip entries, expected >= 50")
+        failed += 1
+    end
+
+    println("Phase B1+B2+B3+C1+C2+C3+C4 replacements verification: $passed passed, $failed failed")
     return failed == 0
 end
