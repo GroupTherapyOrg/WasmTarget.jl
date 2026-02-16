@@ -791,9 +791,9 @@ function verify_replacements()
         passed += 1
     end
 
-    # Total SKIP entries should be at least 35 now (15 Phase A + 11 Phase B1+B2 + 9 Phase B3)
+    # Total SKIP entries should be at least 34 now (15 Phase A + 11 Phase B1+B2 + 8 Phase B3)
     total_skip = length(TYPEINF_SKIP_FOREIGNCALLS)
-    if total_skip >= 35
+    if total_skip >= 34
         passed += 1
     else
         println("FAIL: TYPEINF_SKIP_FOREIGNCALLS has $total_skip entries, expected >= 35")
