@@ -33,6 +33,9 @@ function Core.Compiler.findall(sig::Type, table::DictMethodTable; limit::Int=Int
     return get(table.methods, sig, nothing)
 end
 
+# Required MethodTableView interface — DictMethodTable is NOT an overlay
+Core.Compiler.isoverlayed(::DictMethodTable) = false
+
 # ─── PreDecompressedCodeInfo ────────────────────────────────────────────────────
 # Replaces ccall(:jl_uncompress_ir) — stores pre-decompressed CodeInfo at build time.
 
@@ -113,10 +116,91 @@ function predecompress_methods!(code_cache::PreDecompressedCodeInfo,
     return code_cache
 end
 
+# ─── Transitive population ──────────────────────────────────────────────────────
+# Discovers ALL method lookups that typeinf makes by tracing a first pass
+# with InternalMethodTable, then populating DictMethodTable with the results.
+
+struct _TracingTable <: MethodTableView
+    inner::Core.Compiler.InternalMethodTable
+    lookups::Dict{Any, MethodLookupResult}
+end
+
+function Core.Compiler.findall(sig::Type, table::_TracingTable; limit::Int=Int(typemax(Int32)))
+    result = Core.Compiler.findall(sig, table.inner; limit=limit)
+    if result !== nothing
+        table.lookups[sig] = result
+    end
+    return result
+end
+Core.Compiler.isoverlayed(::_TracingTable) = false
+
+struct _TracingInterpreter <: AbstractInterpreter
+    world::UInt64
+    method_table::CachedMethodTable{_TracingTable}
+    inf_cache::Vector{InferenceResult}
+    inf_params::InferenceParams
+    opt_params::OptimizationParams
+end
+
+Core.Compiler.method_table(interp::_TracingInterpreter) = interp.method_table
+Core.Compiler.cache_owner(interp::_TracingInterpreter) = nothing
+Core.Compiler.get_inference_world(interp::_TracingInterpreter) = interp.world
+Core.Compiler.get_inference_cache(interp::_TracingInterpreter) = interp.inf_cache
+Core.Compiler.InferenceParams(interp::_TracingInterpreter) = interp.inf_params
+Core.Compiler.OptimizationParams(interp::_TracingInterpreter) = interp.opt_params
+Core.Compiler.may_optimize(interp::_TracingInterpreter) = false
+Core.Compiler.may_compress(interp::_TracingInterpreter) = false
+Core.Compiler.may_discard_trees(interp::_TracingInterpreter) = false
+
+function populate_transitive(signatures::Vector; world::UInt64=Base.get_world_counter())
+    native_mt = Core.Compiler.InternalMethodTable(world)
+    tracing = _TracingTable(native_mt, Dict{Any, MethodLookupResult}())
+    cached = CachedMethodTable(tracing)
+    interp = _TracingInterpreter(world, cached,
+        Vector{InferenceResult}(), InferenceParams(),
+        OptimizationParams(; inlining=false))
+
+    for sig in signatures
+        lookup = Core.Compiler.findall(sig, native_mt; limit=3)
+        lookup === nothing && continue
+        mi = Core.Compiler.specialize_method(first(lookup.matches))
+        src = Core.Compiler.retrieve_code_info(mi, world)
+        src === nothing && continue
+        result = InferenceResult(mi)
+        frame = InferenceState(result, src, :no, interp)
+        try
+            Core.Compiler.typeinf(interp, frame)
+        catch
+            # Some methods may fail — that's OK, we still collect partial lookups
+        end
+    end
+
+    # Build DictMethodTable from traced lookups + original signatures
+    table = DictMethodTable(world)
+    for (sig, result) in tracing.lookups
+        table.methods[sig] = result
+    end
+    # Ensure the original signatures are also included
+    for sig in signatures
+        if !haskey(table.methods, sig)
+            result = Core.Compiler.findall(sig, native_mt; limit=3)
+            if result !== nothing
+                table.methods[sig] = result
+            end
+        end
+    end
+    return table
+end
+
 # ─── Convenience: build a complete WasmInterpreter for given signatures ─────────
 
-function build_wasm_interpreter(signatures::Vector; world::UInt64=Base.get_world_counter())
-    table = populate_method_table(signatures; world=world)
+function build_wasm_interpreter(signatures::Vector; world::UInt64=Base.get_world_counter(),
+                                 transitive::Bool=true)
+    table = if transitive
+        populate_transitive(signatures; world=world)
+    else
+        populate_method_table(signatures; world=world)
+    end
     interp = WasmInterpreter(world, table)
     predecompress_methods!(interp.code_info_cache, table; world=world)
     return interp
