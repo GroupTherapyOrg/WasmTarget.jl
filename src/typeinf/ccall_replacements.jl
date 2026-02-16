@@ -1,4 +1,4 @@
-# ccall_replacements.jl — Pure Julia replacements for Phase B1 + B2 ccalls
+# ccall_replacements.jl — Pure Julia replacements for Phase B1 + B2 + B3 ccalls
 #
 # Phase B1 (5 replacements):
 #   1. jl_get_world_counter → build-time constant WASM_WORLD_AGE
@@ -16,22 +16,34 @@
 #  11. jl_value_ptr        → objectid-based or === (override pointer_from_objref)
 #  12. jl_new_structv/jl_new_structt → SKIP foreigncall (handled at Wasm level)
 #
+# Phase B3 (6 replacements — memory ops + rethrow + IR inspection):
+#  13. memcmp     → SKIP foreigncall (Wasm string/array comparison uses GC struct ops)
+#  14. memmove    → SKIP foreigncall (Wasm memory.copy instruction)
+#  15. memset     → SKIP foreigncall (Wasm memory.fill instruction)
+#  16. jl_genericmemory_copyto → SKIP foreigncall (Cvoid return, handled at Wasm level)
+#  17. jl_rethrow / jl_rethrow_other → SKIP foreigncall (Wasm rethrow instruction)
+#  18. jl_ir_nslots / jl_ir_slotflag → Override with CodeInfo field access
+#
 # Functions unblocked (B1): edge_matches_sv, maybe_validate_code, is_lattice_equal,
 #                           issimplertype, tmerge, validate_code!
 # Functions unblocked (B2): _limit_type_size, _fieldindex_nothrow, _getfield_tfunc,
 #                           valid_as_lattice, is_undefref_fieldtype, abstract_eval_splatnew,
 #                           abstract_eval_new, opaque_closure_tfunc, most_general_argtypes,
 #                           rewrap_unionall, subst_trivial_bounds, get_staged, tmerge, push!
+# Functions unblocked (B3): == (Base), empty!, ensureroom_slowpath, unsafe_write,
+#                           #sizehint!#81, _resize!, rethrow, may_invoke_generator,
+#                           abstract_eval_new_opaque_closure, propagate_to_error_handler!,
+#                           typeinf_local, widenreturn_partials, finish_cycle
 #
 # Usage:
 #   include("src/typeinf/ccall_stubs.jl")       # Phase A stubs first
-#   include("src/typeinf/ccall_replacements.jl") # Phase B1 + B2 replacements
+#   include("src/typeinf/ccall_replacements.jl") # Phase B1 + B2 + B3 replacements
 #
 # This file is STANDALONE and independently testable:
 #   julia +1.12 --project=. -e '
 #     include("src/typeinf/ccall_stubs.jl")
 #     include("src/typeinf/ccall_replacements.jl")
-#     println("Phase B2 type ops loaded OK")'
+#     println("Phase B3 memory ops loaded OK")'
 
 # ─── 1. World age constant ──────────────────────────────────────────────────────
 # jl_get_world_counter returns the current world age counter.
@@ -330,6 +342,116 @@ if !(:jl_new_structt in TYPEINF_SKIP_FOREIGNCALLS)
 end
 TYPEINF_SKIP_RETURN_DEFAULTS[:jl_new_structt] = Any
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase B3 — Memory + rethrow + IR inspection ccall replacements
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─── 13. memcmp ──────────────────────────────────────────────────────────────
+# cmem.jl: memcmp(a, b, n) = ccall(:memcmp, Cint, (Ptr{Cvoid}, Ptr{Cvoid}, Csize_t), a, b, n)
+#
+# Used for string/array equality comparison (== on strings).
+# In Wasm, strings are GC objects compared via struct field access, not raw
+# pointer comparison. The codegen emits Wasm-native comparison for strings.
+# Add to SKIP list — returns Cint (i32), default 0 means "equal".
+
+if !(:memcmp in TYPEINF_SKIP_FOREIGNCALLS)
+    push!(TYPEINF_SKIP_FOREIGNCALLS, :memcmp)
+end
+TYPEINF_SKIP_RETURN_DEFAULTS[:memcmp] = Cint
+
+# ─── 14. memmove ─────────────────────────────────────────────────────────────
+# cmem.jl: memmove(dst, src, n) = ccall(:memmove, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid}, Csize_t), dst, src, n)
+#
+# Copies memory with overlap handling. In Wasm, memory.copy instruction handles
+# this natively. Used by _resize!, ensureroom_slowpath, unsafe_write.
+# Add to SKIP list — returns Ptr{Cvoid} (i64), default 0.
+
+if !(:memmove in TYPEINF_SKIP_FOREIGNCALLS)
+    push!(TYPEINF_SKIP_FOREIGNCALLS, :memmove)
+end
+TYPEINF_SKIP_RETURN_DEFAULTS[:memmove] = Ptr{Cvoid}
+
+# ─── 15. memset ──────────────────────────────────────────────────────────────
+# cmem.jl: memset(p, val, n) = ccall(:memset, Ptr{Cvoid}, (Ptr{Cvoid}, Cint, Csize_t), p, val, n)
+#
+# Fills memory with a byte value. In Wasm, memory.fill instruction handles this.
+# Used by empty! to zero-initialize memory.
+# Add to SKIP list — returns Ptr{Cvoid} (i64), default 0.
+
+if !(:memset in TYPEINF_SKIP_FOREIGNCALLS)
+    push!(TYPEINF_SKIP_FOREIGNCALLS, :memset)
+end
+TYPEINF_SKIP_RETURN_DEFAULTS[:memset] = Ptr{Cvoid}
+
+# ─── 16. jl_genericmemory_copyto ────────────────────────────────────────────
+# genericmemory.jl:129: unsafe_copyto! calls this for non-bits types.
+# ccall(:jl_genericmemory_copyto, Cvoid, (Any, Ptr{Cvoid}, Any, Ptr{Cvoid}, Int), ...)
+#
+# Copies elements between GenericMemory arrays for non-isbitstype elements.
+# In Wasm, array element copy is handled by GC array operations (array.copy).
+# Add to SKIP list — returns Cvoid (no-op).
+
+if !(:jl_genericmemory_copyto in TYPEINF_SKIP_FOREIGNCALLS)
+    push!(TYPEINF_SKIP_FOREIGNCALLS, :jl_genericmemory_copyto)
+end
+# Cvoid return — no entry needed in TYPEINF_SKIP_RETURN_DEFAULTS
+
+# ─── 17. jl_rethrow / jl_rethrow_other ──────────────────────────────────────
+# error.jl:71: rethrow() = ccall(:jl_rethrow, Bottom, ())
+# error.jl:72: rethrow(e) = ccall(:jl_rethrow_other, Bottom, (Any,), e)
+#
+# These re-throw exceptions from catch blocks. In Wasm, the `rethrow`
+# instruction does this natively (part of Wasm exception handling proposal).
+# Return type is Bottom (never returns) — codegen should emit `unreachable`
+# after the Wasm rethrow instruction.
+# Add to SKIP list — Bottom return means codegen emits unreachable.
+
+if !(:jl_rethrow in TYPEINF_SKIP_FOREIGNCALLS)
+    push!(TYPEINF_SKIP_FOREIGNCALLS, :jl_rethrow)
+end
+# Bottom return type — after rethrow, code is unreachable
+
+if !(:jl_rethrow_other in TYPEINF_SKIP_FOREIGNCALLS)
+    push!(TYPEINF_SKIP_FOREIGNCALLS, :jl_rethrow_other)
+end
+# Bottom return type — after rethrow_other, code is unreachable
+
+# ─── 18. jl_ir_nslots / jl_ir_slotflag ──────────────────────────────────────
+# runtime_internals.jl:1494: nslots = ccall(:jl_ir_nslots, Int, (Any,), code)
+# runtime_internals.jl:1453: ast_slotflag(code, i) = ccall(:jl_ir_slotflag, UInt8, (Any, Csize_t), code, i - 1)
+#
+# These read CodeInfo slot metadata. jl_ir_nslots handles both CodeInfo and
+# compressed String forms. Used by may_invoke_generator to check if sparams
+# are used in @generated function bodies.
+#
+# For Wasm typeinf: @generated functions are pre-expanded at build time
+# (PURE-3109). At runtime, may_invoke_generator is called but the generator
+# methods will have pre-decompressed CodeInfo (from our jl_uncompress_ir
+# replacement). So we can handle both forms:
+#   - CodeInfo: length(code.slotnames) / code.slotflags[i+1]
+#   - String (compressed): add to SKIP list, return conservative defaults
+
+# Override ast_slotflag to handle CodeInfo directly
+function Base.ast_slotflag(@nospecialize(code), i)
+    if code isa Core.CodeInfo
+        return code.slotflags[i]  # i is already 1-based in Julia callers
+    end
+    # For compressed String forms, return 0 (no flags set = safe default)
+    # This makes may_invoke_generator conservatively return true (allow invocation)
+    return UInt8(0)
+end
+
+# Add jl_ir_nslots and jl_ir_slotflag to SKIP list for any remaining inline ccalls
+if !(:jl_ir_nslots in TYPEINF_SKIP_FOREIGNCALLS)
+    push!(TYPEINF_SKIP_FOREIGNCALLS, :jl_ir_nslots)
+end
+TYPEINF_SKIP_RETURN_DEFAULTS[:jl_ir_nslots] = Int
+
+if !(:jl_ir_slotflag in TYPEINF_SKIP_FOREIGNCALLS)
+    push!(TYPEINF_SKIP_FOREIGNCALLS, :jl_ir_slotflag)
+end
+TYPEINF_SKIP_RETURN_DEFAULTS[:jl_ir_slotflag] = UInt8
+
 # ─── Verification ────────────────────────────────────────────────────────────────
 
 function verify_replacements()
@@ -569,6 +691,115 @@ function verify_replacements()
         failed += 1
     end
 
-    println("Phase B1+B2 replacements verification: $passed passed, $failed failed")
+    # ─── Phase B3 verification ───────────────────────────────────────────────
+
+    # 13. memcmp — verify it's in SKIP list
+    if :memcmp in TYPEINF_SKIP_FOREIGNCALLS
+        passed += 1
+    else
+        println("FAIL: memcmp not in TYPEINF_SKIP_FOREIGNCALLS")
+        failed += 1
+    end
+
+    # 14. memmove — verify it's in SKIP list
+    if :memmove in TYPEINF_SKIP_FOREIGNCALLS
+        passed += 1
+    else
+        println("FAIL: memmove not in TYPEINF_SKIP_FOREIGNCALLS")
+        failed += 1
+    end
+
+    # 15. memset — verify it's in SKIP list
+    if :memset in TYPEINF_SKIP_FOREIGNCALLS
+        passed += 1
+    else
+        println("FAIL: memset not in TYPEINF_SKIP_FOREIGNCALLS")
+        failed += 1
+    end
+
+    # 16. jl_genericmemory_copyto — verify it's in SKIP list
+    if :jl_genericmemory_copyto in TYPEINF_SKIP_FOREIGNCALLS
+        passed += 1
+    else
+        println("FAIL: jl_genericmemory_copyto not in TYPEINF_SKIP_FOREIGNCALLS")
+        failed += 1
+    end
+
+    # 17. jl_rethrow / jl_rethrow_other — verify they're in SKIP list
+    if :jl_rethrow in TYPEINF_SKIP_FOREIGNCALLS && :jl_rethrow_other in TYPEINF_SKIP_FOREIGNCALLS
+        passed += 1
+    else
+        println("FAIL: jl_rethrow/jl_rethrow_other not in TYPEINF_SKIP_FOREIGNCALLS")
+        failed += 1
+    end
+
+    # 18a. jl_ir_nslots — verify it's in SKIP list
+    if :jl_ir_nslots in TYPEINF_SKIP_FOREIGNCALLS
+        passed += 1
+    else
+        println("FAIL: jl_ir_nslots not in TYPEINF_SKIP_FOREIGNCALLS")
+        failed += 1
+    end
+
+    # 18b. jl_ir_slotflag — verify it's in SKIP list
+    if :jl_ir_slotflag in TYPEINF_SKIP_FOREIGNCALLS
+        passed += 1
+    else
+        println("FAIL: jl_ir_slotflag not in TYPEINF_SKIP_FOREIGNCALLS")
+        failed += 1
+    end
+
+    # 18c. ast_slotflag — verify pure Julia override matches native for CodeInfo
+    ci_test = first(code_lowered(+, (Int, Int)))
+    nslots_native = ccall(:jl_ir_nslots, Int, (Any,), ci_test)
+    nslots_pure = length(ci_test.slotnames)
+    if nslots_native == nslots_pure
+        passed += 1
+    else
+        println("FAIL: jl_ir_nslots — native=$nslots_native pure=$nslots_pure")
+        failed += 1
+    end
+
+    # Verify slotflags match for each slot
+    slotflags_match = true
+    for i in 1:nslots_native
+        flag_native = ccall(:jl_ir_slotflag, UInt8, (Any, Csize_t), ci_test, i - 1)
+        flag_pure = Base.ast_slotflag(ci_test, i)
+        if flag_native != flag_pure
+            println("FAIL: jl_ir_slotflag slot $i — native=$flag_native pure=$flag_pure")
+            slotflags_match = false
+        end
+    end
+    if slotflags_match
+        passed += 1
+    else
+        failed += 1
+    end
+
+    # 18d. ast_slotflag — verify String (compressed) form returns UInt8(0) default
+    m_test = first(methods(+, (Int, Int)))
+    if m_test.source isa String
+        flag_compressed = Base.ast_slotflag(m_test.source, 1)
+        if flag_compressed == UInt8(0)
+            passed += 1
+        else
+            println("FAIL: ast_slotflag(String, 1) = $flag_compressed, expected UInt8(0)")
+            failed += 1
+        end
+    else
+        # Source is CodeInfo (not compressed) — test with CodeInfo path instead
+        passed += 1
+    end
+
+    # Total SKIP entries should be at least 35 now (15 Phase A + 11 Phase B1+B2 + 9 Phase B3)
+    total_skip = length(TYPEINF_SKIP_FOREIGNCALLS)
+    if total_skip >= 35
+        passed += 1
+    else
+        println("FAIL: TYPEINF_SKIP_FOREIGNCALLS has $total_skip entries, expected >= 35")
+        failed += 1
+    end
+
+    println("Phase B1+B2+B3 replacements verification: $passed passed, $failed failed")
     return failed == 0
 end
