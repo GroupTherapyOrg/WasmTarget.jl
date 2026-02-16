@@ -1113,16 +1113,17 @@ function verify_replacements()
         failed += 1
     end
 
-    # Identity (no free vars to substitute)
-    sig_concrete = Vector{Int64} where {T_tv}
-    vals_id = Any[Float64]
-    native_inst3 = GC.@preserve vals_id ccall(:jl_instantiate_type_in_env, Any, (Any, Any, Ptr{Any}),
-        sig_concrete.body, sig_concrete, pointer(vals_id))
-    pure_inst3 = instantiate_type_in_env_pure(sig_concrete.body, sig_concrete, vals_id)
-    if native_inst3 === pure_inst3
+    # Tuple type substitution: Tuple{T} where T → T=Int64
+    R_tv = TypeVar(:R_test21)
+    sig_tuple = Tuple{R_tv} where R_tv
+    vals_tup = Any[Int64]
+    native_inst3 = GC.@preserve vals_tup ccall(:jl_instantiate_type_in_env, Any, (Any, Any, Ptr{Any}),
+        sig_tuple.body, sig_tuple, pointer(vals_tup))
+    pure_inst3 = instantiate_type_in_env_pure(sig_tuple.body, sig_tuple, vals_tup)
+    if native_inst3 === pure_inst3 && pure_inst3 === Tuple{Int64}
         passed += 1
     else
-        println("FAIL: instantiate_type_in_env(Vector{Int64}, [Float64]) — native=$native_inst3 pure=$pure_inst3")
+        println("FAIL: instantiate_type_in_env(Tuple{T}, [Int64]) — native=$native_inst3 pure=$pure_inst3")
         failed += 1
     end
 
