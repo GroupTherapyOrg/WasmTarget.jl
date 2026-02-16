@@ -9982,6 +9982,14 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
 
     # Helper: determine the Wasm type that a phi edge value will produce on the stack
     function get_phi_edge_wasm_type(val)::Union{WasmValType, Nothing}
+        # PURE-3111: Handle literal nothing — compile_value(nothing) emits i32_const 0
+        if val === nothing
+            return I32
+        end
+        # PURE-3111: Handle GlobalRef to nothing (e.g., Core.nothing)
+        if val isa GlobalRef && val.name === :nothing
+            return I32
+        end
         if val isa Core.SSAValue
             # If the SSA has a local allocated, return the local's actual Wasm type.
             # This is what local.get will actually push on the stack, which may differ
@@ -13153,41 +13161,19 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                                         param_julia_type = ctx.arg_types[got_local_idx + 1]
                                         actual_val_type = get_concrete_wasm_type(param_julia_type, ctx.mod, ctx.type_registry)
                                         if !wasm_types_compatible(phi_local_type, actual_val_type)
-                                            # Emit type-safe default instead
-                                            if phi_local_type isa ConcreteRef
-                                                push!(inner_bytes, Opcode.REF_NULL)
-                                                append!(inner_bytes, encode_leb128_signed(Int64(phi_local_type.type_idx)))
-                                            elseif phi_local_type === ExternRef
-                                                push!(inner_bytes, Opcode.REF_NULL)
-                                                push!(inner_bytes, UInt8(ExternRef))
-                                            elseif phi_local_type === StructRef
-                                                push!(inner_bytes, Opcode.REF_NULL)
-                                                push!(inner_bytes, UInt8(StructRef))
-                                            elseif phi_local_type === ArrayRef
-                                                push!(inner_bytes, Opcode.REF_NULL)
-                                                push!(inner_bytes, UInt8(ArrayRef))
-                                            elseif phi_local_type === AnyRef
-                                                push!(inner_bytes, Opcode.REF_NULL)
-                                                push!(inner_bytes, UInt8(AnyRef))
-                                            elseif phi_local_type === I64
-                                                push!(inner_bytes, Opcode.I64_CONST)
-                                                push!(inner_bytes, 0x00)
-                                            elseif phi_local_type === I32
-                                                push!(inner_bytes, Opcode.I32_CONST)
-                                                push!(inner_bytes, 0x00)
-                                            elseif phi_local_type === F64
-                                                push!(inner_bytes, Opcode.F64_CONST)
-                                                append!(inner_bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-                                            elseif phi_local_type === F32
-                                                push!(inner_bytes, Opcode.F32_CONST)
-                                                append!(inner_bytes, UInt8[0x00, 0x00, 0x00, 0x00])
-                                            else
-                                                push!(inner_bytes, Opcode.I32_CONST)
-                                                push!(inner_bytes, 0x00)
-                                            end
+                                            append!(inner_bytes, emit_phi_type_default(phi_local_type))
                                             type_mismatch_handled = true
                                         end
                                     end
+                                end
+                                # PURE-3111: Check if val_bytes is a numeric constant stored into a ref-typed local
+                                if !type_mismatch_handled && phi_local_type !== nothing &&
+                                   (phi_local_type isa ConcreteRef || phi_local_type === StructRef || phi_local_type === ArrayRef || phi_local_type === ExternRef || phi_local_type === AnyRef) &&
+                                   length(val_bytes) >= 1 &&
+                                   (val_bytes[1] == Opcode.I32_CONST || val_bytes[1] == Opcode.I64_CONST || val_bytes[1] == Opcode.F32_CONST || val_bytes[1] == Opcode.F64_CONST) &&
+                                   !has_ref_producing_gc_op(val_bytes)
+                                    append!(inner_bytes, emit_phi_type_default(phi_local_type))
+                                    type_mismatch_handled = true
                                 end
                                 if !type_mismatch_handled
                                     append!(inner_bytes, val_bytes)
@@ -13230,41 +13216,19 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                                                 param_julia_type = ctx.arg_types[got_local_idx + 1]
                                                 actual_val_type = get_concrete_wasm_type(param_julia_type, ctx.mod, ctx.type_registry)
                                                 if !wasm_types_compatible(phi_local_type, actual_val_type)
-                                                    # Emit type-safe default instead
-                                                    if phi_local_type isa ConcreteRef
-                                                        push!(inner_bytes, Opcode.REF_NULL)
-                                                        append!(inner_bytes, encode_leb128_signed(Int64(phi_local_type.type_idx)))
-                                                    elseif phi_local_type === ExternRef
-                                                        push!(inner_bytes, Opcode.REF_NULL)
-                                                        push!(inner_bytes, UInt8(ExternRef))
-                                                    elseif phi_local_type === StructRef
-                                                        push!(inner_bytes, Opcode.REF_NULL)
-                                                        push!(inner_bytes, UInt8(StructRef))
-                                                    elseif phi_local_type === ArrayRef
-                                                        push!(inner_bytes, Opcode.REF_NULL)
-                                                        push!(inner_bytes, UInt8(ArrayRef))
-                                                    elseif phi_local_type === AnyRef
-                                                        push!(inner_bytes, Opcode.REF_NULL)
-                                                        push!(inner_bytes, UInt8(AnyRef))
-                                                    elseif phi_local_type === I64
-                                                        push!(inner_bytes, Opcode.I64_CONST)
-                                                        push!(inner_bytes, 0x00)
-                                                    elseif phi_local_type === I32
-                                                        push!(inner_bytes, Opcode.I32_CONST)
-                                                        push!(inner_bytes, 0x00)
-                                                    elseif phi_local_type === F64
-                                                        push!(inner_bytes, Opcode.F64_CONST)
-                                                        append!(inner_bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-                                                    elseif phi_local_type === F32
-                                                        push!(inner_bytes, Opcode.F32_CONST)
-                                                        append!(inner_bytes, UInt8[0x00, 0x00, 0x00, 0x00])
-                                                    else
-                                                        push!(inner_bytes, Opcode.I32_CONST)
-                                                        push!(inner_bytes, 0x00)
-                                                    end
+                                                    append!(inner_bytes, emit_phi_type_default(phi_local_type))
                                                     type_mismatch_handled = true
                                                 end
                                             end
+                                        end
+                                        # PURE-3111: Check if val_bytes is a numeric constant stored into a ref-typed local
+                                        if !type_mismatch_handled && phi_local_type !== nothing &&
+                                           (phi_local_type isa ConcreteRef || phi_local_type === StructRef || phi_local_type === ArrayRef || phi_local_type === ExternRef || phi_local_type === AnyRef) &&
+                                           length(val_bytes) >= 1 &&
+                                           (val_bytes[1] == Opcode.I32_CONST || val_bytes[1] == Opcode.I64_CONST || val_bytes[1] == Opcode.F32_CONST || val_bytes[1] == Opcode.F64_CONST) &&
+                                           !has_ref_producing_gc_op(val_bytes)
+                                            append!(inner_bytes, emit_phi_type_default(phi_local_type))
+                                            type_mismatch_handled = true
                                         end
                                         if !type_mismatch_handled
                                             append!(inner_bytes, val_bytes)
