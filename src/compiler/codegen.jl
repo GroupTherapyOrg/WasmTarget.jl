@@ -13701,16 +13701,26 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
 
         # Check if both branches terminate (then: return, else: unreachable or return)
         # If so, use void result type for IF block
+        # PURE-3111: Enhanced check — also detects nested conditionals where all paths return,
+        # including paths via GotoNode jumps to return blocks.
         else_terminates = false
-        for i in goto_if_not.dest:length(code)
-            stmt = code[i]
-            if stmt isa Core.ReturnNode
-                else_terminates = true
-                break
-            elseif stmt isa Core.GotoIfNot || stmt isa Core.GotoNode
-                break  # Hit another control flow
+        _visited = Set{Int}()
+        function _all_paths_return(from_idx::Int)::Bool
+            from_idx in _visited && return false  # avoid infinite loops
+            push!(_visited, from_idx)
+            for i in from_idx:length(code)
+                s = code[i]
+                if s isa Core.ReturnNode
+                    return true
+                elseif s isa Core.GotoNode
+                    return _all_paths_return(s.label)
+                elseif s isa Core.GotoIfNot
+                    return _all_paths_return(i + 1) && _all_paths_return(s.dest)
+                end
             end
+            return false
         end
+        else_terminates = _all_paths_return(goto_if_not.dest)
 
         # Check if then-branch ends with unreachable (Union{} typed call/invoke)
         # This happens with Base closures that we emit UNREACHABLE for
@@ -14023,6 +14033,14 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
         else
             # No conditional at dest - generate the code at dest directly
             append!(inner_bytes, gen_conditional(length(conditionals) + 1; target_idx=goto_if_not.dest))
+        end
+
+        # PURE-3111: If the outer IF has a typed result but the else branch only
+        # returns (all paths have explicit RETURN), the else branch doesn't produce
+        # a value for the IF block. Emit unreachable to satisfy the typed result —
+        # unreachable is polymorphic and satisfies any expected type.
+        if used_typed_if[] && else_terminates
+            push!(inner_bytes, Opcode.UNREACHABLE)
         end
 
         push!(inner_bytes, Opcode.END)
