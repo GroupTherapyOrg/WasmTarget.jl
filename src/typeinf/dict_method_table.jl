@@ -1,0 +1,163 @@
+# DictMethodTable + WasmInterpreter — Pure Julia method table replacement
+#
+# This file replaces the C runtime method table (ccall(:jl_matching_methods))
+# with a pure Julia Dict-based lookup, enabling Core.Compiler.typeinf to run
+# entirely in Wasm without any C calls.
+#
+# Architecture:
+#   Build time: populate_method_table() uses Julia's native method lookup
+#               to fill a Dict{Type, MethodLookupResult} with all needed signatures.
+#   Runtime:    DictMethodTable.findall() does a pure Dict lookup.
+#               WasmInterpreter routes typeinf through this Dict instead of C.
+#
+# This file is STANDALONE and independently testable:
+#   julia +1.12 --project=. -e 'include("src/typeinf/dict_method_table.jl"); println("OK")'
+
+using Core.Compiler: AbstractInterpreter, MethodTableView, MethodLookupResult,
+                     InferenceParams, OptimizationParams, InferenceResult,
+                     CachedMethodTable, WorldRange, InferenceState,
+                     NativeInterpreter
+
+# ─── DictMethodTable ────────────────────────────────────────────────────────────
+# Pure Julia replacement for InternalMethodTable.
+# Instead of ccall(:jl_matching_methods), does a Dict lookup.
+
+struct DictMethodTable <: MethodTableView
+    methods::Dict{Any, MethodLookupResult}
+    world::UInt64
+end
+
+DictMethodTable(world::UInt64) = DictMethodTable(Dict{Any, MethodLookupResult}(), world)
+
+function Core.Compiler.findall(sig::Type, table::DictMethodTable; limit::Int=Int(typemax(Int32)))
+    return get(table.methods, sig, nothing)
+end
+
+# ─── PreDecompressedCodeInfo ────────────────────────────────────────────────────
+# Replaces ccall(:jl_uncompress_ir) — stores pre-decompressed CodeInfo at build time.
+
+struct PreDecompressedCodeInfo
+    cache::Dict{Core.MethodInstance, Core.CodeInfo}
+end
+
+PreDecompressedCodeInfo() = PreDecompressedCodeInfo(Dict{Core.MethodInstance, Core.CodeInfo}())
+
+function get_code_info(pd::PreDecompressedCodeInfo, mi::Core.MethodInstance)
+    return get(pd.cache, mi, nothing)
+end
+
+# ─── WasmInterpreter ───────────────────────────────────────────────────────────
+# Custom AbstractInterpreter that uses DictMethodTable instead of C method tables.
+# Disables optimization (Binaryen handles that).
+
+struct WasmInterpreter <: AbstractInterpreter
+    world::UInt64
+    method_table::CachedMethodTable{DictMethodTable}
+    inf_cache::Vector{InferenceResult}
+    inf_params::InferenceParams
+    opt_params::OptimizationParams
+    code_info_cache::PreDecompressedCodeInfo
+end
+
+function WasmInterpreter(world::UInt64, dict_table::DictMethodTable;
+                         inf_params::InferenceParams=InferenceParams(),
+                         opt_params::OptimizationParams=OptimizationParams(; inlining=false))
+    cached_table = CachedMethodTable(dict_table)
+    inf_cache = Vector{InferenceResult}()
+    code_cache = PreDecompressedCodeInfo()
+    return WasmInterpreter(world, cached_table, inf_cache, inf_params, opt_params, code_cache)
+end
+
+# ─── AbstractInterpreter interface overrides ────────────────────────────────────
+
+Core.Compiler.method_table(interp::WasmInterpreter) = interp.method_table
+Core.Compiler.cache_owner(interp::WasmInterpreter) = nothing
+Core.Compiler.get_inference_world(interp::WasmInterpreter) = interp.world
+Core.Compiler.get_inference_cache(interp::WasmInterpreter) = interp.inf_cache
+Core.Compiler.InferenceParams(interp::WasmInterpreter) = interp.inf_params
+Core.Compiler.OptimizationParams(interp::WasmInterpreter) = interp.opt_params
+
+# Disable optimization — Binaryen.js handles that on the Wasm side
+Core.Compiler.may_optimize(interp::WasmInterpreter) = false
+Core.Compiler.may_compress(interp::WasmInterpreter) = false
+Core.Compiler.may_discard_trees(interp::WasmInterpreter) = false
+
+# ─── Build-time population ──────────────────────────────────────────────────────
+# These functions run at BUILD TIME (native Julia) to populate the DictMethodTable
+# with all method signatures needed for the playground.
+
+function populate_method_table(signatures::Vector; world::UInt64=Base.get_world_counter())
+    table = DictMethodTable(world)
+    native_mt = Core.Compiler.InternalMethodTable(world)
+    for sig in signatures
+        result = Core.Compiler.findall(sig, native_mt; limit=3)
+        if result !== nothing
+            table.methods[sig] = result
+        end
+    end
+    return table
+end
+
+function predecompress_methods!(code_cache::PreDecompressedCodeInfo,
+                                table::DictMethodTable;
+                                world::UInt64=table.world)
+    for (sig, result) in table.methods
+        for match in result.matches
+            mi = Core.Compiler.specialize_method(match)
+            ci = Core.Compiler.retrieve_code_info(mi, world)
+            if ci !== nothing
+                code_cache.cache[mi] = ci
+            end
+        end
+    end
+    return code_cache
+end
+
+# ─── Convenience: build a complete WasmInterpreter for given signatures ─────────
+
+function build_wasm_interpreter(signatures::Vector; world::UInt64=Base.get_world_counter())
+    table = populate_method_table(signatures; world=world)
+    interp = WasmInterpreter(world, table)
+    predecompress_methods!(interp.code_info_cache, table; world=world)
+    return interp
+end
+
+# ─── Verification: compare Dict typeinf vs native typeinf ───────────────────────
+
+function verify_typeinf(f, argtypes::Tuple;
+                        world::UInt64=Base.get_world_counter(),
+                        verbose::Bool=false)
+    # Step 1: Get native result via code_typed
+    native_results = Base.code_typed(f, argtypes; optimize=false)
+    if isempty(native_results)
+        return (pass=false, reason="code_typed returned empty for $f$argtypes")
+    end
+    native_ci, native_rettype = first(native_results)
+
+    # Step 2: Build WasmInterpreter with the method signature
+    sig = Tuple{typeof(f), argtypes...}
+    interp = build_wasm_interpreter([sig]; world=world)
+
+    # Step 3: Run typeinf with WasmInterpreter
+    mi = Core.Compiler.specialize_method(
+        first(Core.Compiler.findall(sig, Core.Compiler.InternalMethodTable(world)).matches))
+    src = Core.Compiler.retrieve_code_info(mi, world)
+    if src === nothing
+        return (pass=false, reason="retrieve_code_info returned nothing for $mi")
+    end
+    result = Core.Compiler.InferenceResult(mi)
+    frame = InferenceState(result, src, #=cache_mode=# :no, interp)
+    Core.Compiler.typeinf(interp, frame)
+
+    # Step 4: Compare return types
+    dict_rettype = result.result
+    if verbose
+        println("Native rettype: $native_rettype")
+        println("Dict rettype:   $dict_rettype")
+        println("Native CI stmts: $(length(native_ci.code))")
+    end
+
+    types_match = native_rettype == dict_rettype
+    return (pass=types_match, native_rettype=native_rettype, dict_rettype=dict_rettype,
+            native_ci=native_ci, dict_result=result)
+end
