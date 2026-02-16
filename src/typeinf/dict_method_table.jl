@@ -74,7 +74,11 @@ end
 # ─── AbstractInterpreter interface overrides ────────────────────────────────────
 
 Core.Compiler.method_table(interp::WasmInterpreter) = interp.method_table
-Core.Compiler.cache_owner(interp::WasmInterpreter) = nothing
+# Use a unique symbol as cache owner to avoid polluting the global native cache.
+# When cache_owner returns `nothing`, CodeInstances are stored in the global cache
+# and can interfere with other interpreters (e.g., _TracingInterpreter sees stale
+# results from a previous WasmInterpreter run).
+Core.Compiler.cache_owner(interp::WasmInterpreter) = :WasmInterpreter
 Core.Compiler.get_inference_world(interp::WasmInterpreter) = interp.world
 Core.Compiler.get_inference_cache(interp::WasmInterpreter) = interp.inf_cache
 Core.Compiler.InferenceParams(interp::WasmInterpreter) = interp.inf_params
@@ -143,7 +147,7 @@ struct _TracingInterpreter <: AbstractInterpreter
 end
 
 Core.Compiler.method_table(interp::_TracingInterpreter) = interp.method_table
-Core.Compiler.cache_owner(interp::_TracingInterpreter) = nothing
+Core.Compiler.cache_owner(interp::_TracingInterpreter) = :_TracingInterpreter
 Core.Compiler.get_inference_world(interp::_TracingInterpreter) = interp.world
 Core.Compiler.get_inference_cache(interp::_TracingInterpreter) = interp.inf_cache
 Core.Compiler.InferenceParams(interp::_TracingInterpreter) = interp.inf_params
@@ -241,7 +245,16 @@ function verify_typeinf(f, argtypes::Tuple;
         println("Native CI stmts: $(length(native_ci.code))")
     end
 
+    # Exact match
     types_match = native_rettype == dict_rettype
+    # Also accept Core.Const refinements: Const(0) is more precise than Int64
+    if !types_match && dict_rettype isa Core.Compiler.Const
+        types_match = Core.Compiler.widenconst(dict_rettype) == native_rettype
+    end
+    # And accept InterConditional as refinement of Bool (common for ! operator)
+    if !types_match && dict_rettype isa Core.Compiler.InterConditional
+        types_match = native_rettype === Bool
+    end
     return (pass=types_match, native_rettype=native_rettype, dict_rettype=dict_rettype,
             native_ci=native_ci, dict_result=result)
 end

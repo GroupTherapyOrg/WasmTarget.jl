@@ -174,13 +174,13 @@ n_error = 0
         end
 
         status = if hasproperty(result, :reason)
-            n_error += 1
+            global n_error += 1
             "ERROR"
         elseif result.pass
-            n_pass += 1
+            global n_pass += 1
             "MATCH"
         else
-            n_fail += 1
+            global n_fail += 1
             "MISMATCH"
         end
 
