@@ -1,0 +1,1905 @@
+{
+  "C_DEPENDENT": [
+    {
+      "name": "#sizehint!#81",
+      "line": 1528,
+      "signature": "Tuple{Bool, Bool, typeof(sizehint!), Vector{Any}, Int64}",
+      "module": "Base",
+      "file": "array.jl",
+      "from_audit": true,
+      "n_statements": 110,
+      "ccalls": [
+        "jl_genericmemory_copyto"
+      ]
+    },
+    {
+      "name": "==",
+      "line": 3029,
+      "signature": "Tuple{Type, Any} | Tuple{Any, GlobalRef} | Tuple{Any, Any} | Tuple{Vector{Any}, Vector{Any}}",
+      "module": "Base",
+      "file": "abstractarray.jl",
+      "from_audit": true,
+      "n_statements": 211,
+      "ccalls": [
+        "memcmp"
+      ]
+    },
+    {
+      "name": ">",
+      "line": 994,
+      "signature": "Tuple{Any, Any}",
+      "module": "Base.MPFR",
+      "file": "mpfr.jl",
+      "from_audit": true,
+      "n_statements": 43,
+      "ccalls": [
+        "Core.tuple(:mpfr_greater_p, Base.MPFR.libmpfr)"
+      ]
+    },
+    {
+      "name": "_add_edges_impl",
+      "line": 48,
+      "signature": "Tuple{Vector{Any}, Compiler.MethodMatchInfo, Bool} | Tuple{Vector{Any}, Compiler.InvokeCallInfo, Bool}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/stmtinfo.jl",
+      "from_audit": true,
+      "n_statements": 820,
+      "ccalls": [
+        "jl_normalize_to_compilable_sig",
+        "jl_specializations_get_linfo"
+      ]
+    },
+    {
+      "name": "_base",
+      "line": 948,
+      "signature": "Tuple{Int64, Int64, Int64, Bool} | Tuple{Int64, UInt64, Int64, Bool}",
+      "module": "Base",
+      "file": "intfuncs.jl",
+      "from_audit": true,
+      "n_statements": 181,
+      "ccalls": [
+        "jl_alloc_string",
+        "jl_genericmemory_to_string",
+        "jl_string_to_genericmemory"
+      ]
+    },
+    {
+      "name": "_fieldindex_nothrow",
+      "line": 1099,
+      "signature": "Tuple{DataType, Symbol}",
+      "module": "Base",
+      "file": "runtime_internals.jl",
+      "from_audit": true,
+      "n_statements": 4,
+      "ccalls": [
+        "jl_field_index"
+      ]
+    },
+    {
+      "name": "_getfield_tfunc",
+      "line": 1211,
+      "signature": "Tuple{Compiler.ConstsLattice, Any, Any, Bool} | Tuple{Compiler.JLTypeLattice, Any, Any, Bool} | Tuple{Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any, Bool}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/tfuncs.jl",
+      "from_audit": true,
+      "n_statements": 855,
+      "ccalls": [
+        "jl_field_index",
+        "jl_get_fieldtypes",
+        "jl_type_unionall",
+        "jl_type_intersection"
+      ]
+    },
+    {
+      "name": "_limit_type_size",
+      "line": 86,
+      "signature": "Tuple{Any, Any, Core.SimpleVector, Int64, Int64}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typelimits.jl",
+      "from_audit": true,
+      "n_statements": 495,
+      "ccalls": [
+        "jl_type_unionall"
+      ]
+    },
+    {
+      "name": "_resize!",
+      "line": 535,
+      "signature": "Tuple{IOBuffer, Int64, Bool}",
+      "module": "Base",
+      "file": "iobuffer.jl",
+      "from_audit": true,
+      "n_statements": 183,
+      "ccalls": [
+        "jl_alloc_string",
+        "jl_string_to_genericmemory",
+        "memmove"
+      ]
+    },
+    {
+      "name": "abstract_call_method",
+      "line": 600,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Method, Type, Core.SimpleVector, Bool, Compiler.StmtInfo, Compiler.InferenceState}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "from_audit": true,
+      "n_statements": 398,
+      "ccalls": [
+        "jl_normalize_to_compilable_sig",
+        "jl_types_equal",
+        "jl_type_intersection_with_env"
+      ]
+    },
+    {
+      "name": "abstract_call_opaque_closure",
+      "line": 2786,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Core.PartialOpaque, Compiler.ArgInfo, Compiler.StmtInfo, Compiler.InferenceState, Bool}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "from_audit": true,
+      "n_statements": 111,
+      "ccalls": [
+        "jl_type_unionall",
+        "jl_type_intersection",
+        "jl_has_free_typevars"
+      ]
+    },
+    {
+      "name": "abstract_eval_foreigncall",
+      "line": 3494,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Expr, Compiler.StatementState, Compiler.InferenceState}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "from_audit": true,
+      "n_statements": 282,
+      "ccalls": [
+        "jl_module_globalref"
+      ]
+    },
+    {
+      "name": "abstract_eval_new",
+      "line": 3069,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Expr, Compiler.StatementState, Compiler.InferenceState}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "from_audit": true,
+      "n_statements": 802,
+      "ccalls": [
+        "jl_has_free_typevars",
+        "jl_new_structv"
+      ]
+    },
+    {
+      "name": "abstract_eval_new_opaque_closure",
+      "line": 3171,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Expr, Compiler.StatementState, Compiler.InferenceState}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "from_audit": true,
+      "n_statements": 427,
+      "ccalls": [
+        "jl_genericmemory_copyto"
+      ]
+    },
+    {
+      "name": "abstract_eval_splatnew",
+      "line": 3141,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Expr, Compiler.StatementState, Compiler.InferenceState}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "from_audit": true,
+      "n_statements": 499,
+      "ccalls": [
+        "jl_has_free_typevars",
+        "jl_new_structt"
+      ]
+    },
+    {
+      "name": "abstract_eval_throw_undef_if_not",
+      "line": 3337,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Expr, Compiler.StatementState, Compiler.InferenceState}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "from_audit": true,
+      "n_statements": 117,
+      "ccalls": [
+        "jl_type_intersection"
+      ]
+    },
+    {
+      "name": "abstract_eval_value_expr",
+      "line": 2986,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Expr, Compiler.InferenceState}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "from_audit": true,
+      "n_statements": 153,
+      "ccalls": [
+        "jl_module_globalref"
+      ]
+    },
+    {
+      "name": "argument_datatype",
+      "line": 1114,
+      "signature": "Tuple{Any}",
+      "module": "Base",
+      "file": "runtime_internals.jl",
+      "from_audit": true,
+      "n_statements": 4,
+      "ccalls": [
+        "jl_argument_datatype"
+      ]
+    },
+    {
+      "name": "bin",
+      "line": 813,
+      "signature": "Tuple{UInt64, Int64, Bool}",
+      "module": "Base",
+      "file": "intfuncs.jl",
+      "from_audit": true,
+      "n_statements": 101,
+      "ccalls": [
+        "jl_alloc_string",
+        "jl_string_to_genericmemory",
+        "jl_genericmemory_to_string"
+      ]
+    },
+    {
+      "name": "cache_result!",
+      "line": 322,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Compiler.InferenceResult, Core.CodeInstance}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typeinfer.jl",
+      "from_audit": true,
+      "n_statements": 46,
+      "ccalls": [
+        "jl_rettype_inferred"
+      ]
+    },
+    {
+      "name": "cycle_fix_limited",
+      "line": 338,
+      "signature": "Tuple{Any, Compiler.InferenceState, Int64}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typeinfer.jl",
+      "from_audit": true,
+      "n_statements": 153,
+      "ccalls": [
+        "jl_idset_peek_bp",
+        "jl_idset_pop"
+      ]
+    },
+    {
+      "name": "dec",
+      "line": 916,
+      "signature": "Tuple{UInt64, Int64, Bool}",
+      "module": "Base",
+      "file": "intfuncs.jl",
+      "from_audit": true,
+      "n_statements": 37,
+      "ccalls": [
+        "jl_alloc_string",
+        "jl_string_to_genericmemory",
+        "jl_genericmemory_to_string"
+      ]
+    },
+    {
+      "name": "doworkloop",
+      "line": 1199,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Compiler.InferenceState}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/inferencestate.jl",
+      "from_audit": true,
+      "n_statements": 219,
+      "ccalls": [
+        "Core.tuple(:mpfr_greater_p, Base.MPFR.libmpfr)"
+      ]
+    },
+    {
+      "name": "edge_matches_sv",
+      "line": 738,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Union{Compiler.IRInterpretationState, Compiler.InferenceState}, Method, Type, Core.SimpleVector, Bool, Compiler.InferenceState}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "from_audit": true,
+      "n_statements": 438,
+      "ccalls": [
+        "jl_get_world_counter"
+      ]
+    },
+    {
+      "name": "empty!",
+      "line": 107,
+      "signature": "Tuple{IdSet{Compiler.InferenceState}}",
+      "module": "Base",
+      "file": "idset.jl",
+      "from_audit": true,
+      "n_statements": 82,
+      "ccalls": [
+        "memset"
+      ]
+    },
+    {
+      "name": "ensureroom_reallocate",
+      "line": 617,
+      "signature": "Tuple{IOBuffer, UInt64}",
+      "module": "Base",
+      "file": "iobuffer.jl",
+      "from_audit": true,
+      "n_statements": 35,
+      "ccalls": [
+        "jl_alloc_string",
+        "jl_string_to_genericmemory"
+      ]
+    },
+    {
+      "name": "ensureroom_slowpath",
+      "line": 626,
+      "signature": "Tuple{IOBuffer, UInt64, Int64}",
+      "module": "Base",
+      "file": "iobuffer.jl",
+      "from_audit": true,
+      "n_statements": 393,
+      "ccalls": [
+        "memmove"
+      ]
+    },
+    {
+      "name": "finish_cycle",
+      "line": 220,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Vector{Union{Compiler.IRInterpretationState, Compiler.InferenceState}}, Int64, UInt64}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typeinfer.jl",
+      "from_audit": true,
+      "n_statements": 634,
+      "ccalls": [
+        "jl_hrtime",
+        "jl_get_world_counter",
+        "jl_promote_cis_to_current"
+      ]
+    },
+    {
+      "name": "finish_nocycle",
+      "line": 198,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Compiler.InferenceState, UInt64}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typeinfer.jl",
+      "from_audit": true,
+      "n_statements": 160,
+      "ccalls": [
+        "jl_get_world_counter",
+        "jl_promote_ci_to_current"
+      ]
+    },
+    {
+      "name": "finishinfer!",
+      "line": 467,
+      "signature": "Tuple{Compiler.InferenceState, Compiler.AbstractInterpreter, Int64}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typeinfer.jl",
+      "from_audit": true,
+      "n_statements": 513,
+      "ccalls": [
+        "jl_fill_codeinst"
+      ]
+    },
+    {
+      "name": "get_staged",
+      "line": 83,
+      "signature": "Tuple{Core.MethodInstance, UInt64}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/utilities.jl",
+      "from_audit": true,
+      "n_statements": 36,
+      "ccalls": [
+        "jl_code_for_staged",
+        "jl_value_ptr"
+      ]
+    },
+    {
+      "name": "hex",
+      "line": 924,
+      "signature": "Tuple{UInt64, Int64, Bool}",
+      "module": "Base",
+      "file": "intfuncs.jl",
+      "from_audit": true,
+      "n_statements": 87,
+      "ccalls": [
+        "jl_alloc_string",
+        "jl_string_to_genericmemory",
+        "jl_genericmemory_to_string"
+      ]
+    },
+    {
+      "name": "is_derived_type",
+      "line": 37,
+      "signature": "Tuple{Any, Any, Int64}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typelimits.jl",
+      "from_audit": true,
+      "n_statements": 109,
+      "ccalls": [
+        "jl_has_free_typevars"
+      ]
+    },
+    {
+      "name": "is_lattice_equal",
+      "line": 549,
+      "signature": "Tuple{Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Any} | Tuple{Compiler.JLTypeLattice, Any, Any} | Tuple{Compiler.InterConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}, Any, Any} | Tuple{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}, Any, Any}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typelattice.jl",
+      "from_audit": true,
+      "n_statements": 277,
+      "ccalls": [
+        "jl_types_equal"
+      ]
+    },
+    {
+      "name": "is_undefref_fieldtype",
+      "line": 1323,
+      "signature": "Tuple{Any}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/tfuncs.jl",
+      "from_audit": true,
+      "n_statements": 16,
+      "ccalls": [
+        "jl_has_free_typevars",
+        "jl_stored_inline"
+      ]
+    },
+    {
+      "name": "issimpleenoughtype",
+      "line": 312,
+      "signature": "Tuple{Any}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typelimits.jl",
+      "from_audit": true,
+      "n_statements": 109,
+      "ccalls": [
+        "jl_has_free_typevars"
+      ]
+    },
+    {
+      "name": "issimplertype",
+      "line": 331,
+      "signature": "Tuple{Compiler.InferenceLattice{Compiler.InterConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any} | Tuple{Compiler.JLTypeLattice, Any, Any} | Tuple{Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any} | Tuple{Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Any}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typelimits.jl",
+      "from_audit": true,
+      "n_statements": 503,
+      "ccalls": [
+        "jl_types_equal"
+      ]
+    },
+    {
+      "name": "issubset",
+      "line": 329,
+      "signature": "Tuple{IdSet{Compiler.InferenceState}, IdSet{Compiler.InferenceState}}",
+      "module": "Base",
+      "file": "abstractset.jl",
+      "from_audit": true,
+      "n_statements": 99,
+      "ccalls": [
+        "jl_idset_peek_bp"
+      ]
+    },
+    {
+      "name": "may_invoke_generator",
+      "line": 1473,
+      "signature": "Tuple{Method, Any, Core.SimpleVector}",
+      "module": "Base",
+      "file": "runtime_internals.jl",
+      "from_audit": true,
+      "n_statements": 382,
+      "ccalls": [
+        "jl_value_ptr",
+        "jl_matching_methods",
+        "jl_ir_nslots",
+        "jl_ir_slotflag",
+        "jl_has_free_typevars"
+      ]
+    },
+    {
+      "name": "maybe_validate_code",
+      "line": 69,
+      "signature": "Tuple{Core.MethodInstance, Core.CodeInfo, String}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/validation.jl",
+      "from_audit": true,
+      "n_statements": 115,
+      "ccalls": [
+        "jl_is_assertsbuild"
+      ]
+    },
+    {
+      "name": "method_for_inference_heuristics",
+      "line": 784,
+      "signature": "Tuple{Method, Any, Core.SimpleVector, UInt64}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "from_audit": true,
+      "n_statements": 48,
+      "ccalls": [
+        "jl_normalize_to_compilable_sig",
+        "jl_specializations_get_linfo"
+      ]
+    },
+    {
+      "name": "most_general_argtypes",
+      "line": 127,
+      "signature": "Tuple{Method, Any} | Tuple{Nothing, Any}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/inferenceresult.jl",
+      "from_audit": true,
+      "n_statements": 409,
+      "ccalls": [
+        "jl_has_free_typevars",
+        "jl_type_unionall"
+      ]
+    },
+    {
+      "name": "normalize_typevars",
+      "line": 1556,
+      "signature": "Tuple{Method, Any, Core.SimpleVector}",
+      "module": "Base",
+      "file": "runtime_internals.jl",
+      "from_audit": true,
+      "n_statements": 17,
+      "ccalls": [
+        "jl_type_intersection_with_env"
+      ]
+    },
+    {
+      "name": "oct",
+      "line": 840,
+      "signature": "Tuple{UInt64, Int64, Bool}",
+      "module": "Base",
+      "file": "intfuncs.jl",
+      "from_audit": true,
+      "n_statements": 58,
+      "ccalls": [
+        "jl_alloc_string",
+        "jl_string_to_genericmemory",
+        "jl_genericmemory_to_string"
+      ]
+    },
+    {
+      "name": "opaque_closure_tfunc",
+      "line": 2181,
+      "signature": "Tuple{Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any, Any, Any, Vector{Any}, Core.MethodInstance}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/tfuncs.jl",
+      "from_audit": true,
+      "n_statements": 58,
+      "ccalls": [
+        "jl_type_unionall"
+      ]
+    },
+    {
+      "name": "print",
+      "line": 32,
+      "signature": "Tuple{IOBuffer, Int64}",
+      "module": "Base",
+      "file": "strings/io.jl",
+      "from_audit": true,
+      "n_statements": 14,
+      "ccalls": [
+        "jl_string_ptr"
+      ]
+    },
+    {
+      "name": "print",
+      "line": 769,
+      "signature": "Tuple{Core.CoreSTDERR, Any, Any, Vararg{Any}}",
+      "module": "Core",
+      "file": "boot.jl",
+      "from_audit": true,
+      "n_statements": 15,
+      "ccalls": [
+        "jl_string_ptr",
+        "jl_uv_puts"
+      ]
+    },
+    {
+      "name": "print_to_string",
+      "line": 140,
+      "signature": "Tuple{String, Int64, String, Int64}",
+      "module": "Base",
+      "file": "strings/io.jl",
+      "from_audit": true,
+      "n_statements": 167,
+      "ccalls": [
+        "jl_alloc_string",
+        "jl_string_to_genericmemory",
+        "jl_string_ptr",
+        "jl_genericmemory_to_string",
+        "jl_pchar_to_string"
+      ]
+    },
+    {
+      "name": "println",
+      "line": 771,
+      "signature": "Tuple{Core.CoreSTDERR, Any, Vararg{Any}}",
+      "module": "Core",
+      "file": "boot.jl",
+      "from_audit": true,
+      "n_statements": 7,
+      "ccalls": [
+        "jl_uv_putb"
+      ]
+    },
+    {
+      "name": "propagate_to_error_handler!",
+      "line": 4136,
+      "signature": "Tuple{Vector{Compiler.VarState}, Bool, Compiler.InferenceState, Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "from_audit": true,
+      "n_statements": 491,
+      "ccalls": [
+        "jl_genericmemory_copyto"
+      ]
+    },
+    {
+      "name": "push!",
+      "line": 48,
+      "signature": "Tuple{IdSet{Compiler.InferenceState}, Any}",
+      "module": "Base",
+      "file": "idset.jl",
+      "from_audit": true,
+      "n_statements": 93,
+      "ccalls": [
+        "jl_idset_peek_bp",
+        "jl_value_ptr",
+        "jl_idset_put_key",
+        "jl_idset_put_idx"
+      ]
+    },
+    {
+      "name": "rethrow",
+      "line": 71,
+      "signature": "Tuple{}",
+      "module": "Base",
+      "file": "error.jl",
+      "from_audit": true,
+      "n_statements": 2,
+      "ccalls": [
+        "jl_rethrow"
+      ]
+    },
+    {
+      "name": "rewrap_unionall",
+      "line": 541,
+      "signature": "Tuple{Core.TypeofVararg, Any} | Tuple{Any, Any}",
+      "module": "Base",
+      "file": "essentials.jl",
+      "from_audit": true,
+      "n_statements": 75,
+      "ccalls": [
+        "jl_type_unionall"
+      ]
+    },
+    {
+      "name": "setindex!",
+      "line": 14,
+      "signature": "Tuple{Compiler.InternalCodeCache, Core.CodeInstance, Core.MethodInstance}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/cicache.jl",
+      "from_audit": true,
+      "n_statements": 16,
+      "ccalls": [
+        "jl_push_newly_inferred",
+        "jl_mi_cache_insert"
+      ]
+    },
+    {
+      "name": "sp_type_rewrap",
+      "line": 2893,
+      "signature": "Tuple{Any, Core.MethodInstance, Bool}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "from_audit": true,
+      "n_statements": 334,
+      "ccalls": [
+        "jl_instantiate_type_in_env",
+        "jl_type_unionall",
+        "jl_has_free_typevars",
+        "jl_find_free_typevars"
+      ]
+    },
+    {
+      "name": "subst_trivial_bounds",
+      "line": 1533,
+      "signature": "Tuple{Any}",
+      "module": "Base",
+      "file": "runtime_internals.jl",
+      "from_audit": true,
+      "n_statements": 48,
+      "ccalls": [
+        "jl_type_unionall"
+      ]
+    },
+    {
+      "name": "tmeet",
+      "line": 597,
+      "signature": "Tuple{Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Type} | Tuple{Compiler.ConstsLattice, Any, Type} | Tuple{Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Type}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typelattice.jl",
+      "from_audit": true,
+      "n_statements": 166,
+      "ccalls": [
+        "jl_has_free_typevars",
+        "jl_type_intersection"
+      ]
+    },
+    {
+      "name": "tmerge",
+      "line": 485,
+      "signature": "Tuple{Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Any} | Tuple{Compiler.ConstsLattice, Any, Any} | Tuple{Compiler.InferenceLattice{Compiler.InterConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any} | Tuple{Compiler.JLTypeLattice, Type, Type} | Tuple{Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any} | Tuple{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}, Any, Any}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typelimits.jl",
+      "from_audit": true,
+      "n_statements": 181,
+      "ccalls": [
+        "jl_value_ptr",
+        "jl_types_equal"
+      ]
+    },
+    {
+      "name": "tmerge_partial_struct",
+      "line": 587,
+      "signature": "Tuple{Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Any}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typelimits.jl",
+      "from_audit": true,
+      "n_statements": 599,
+      "ccalls": [
+        "jl_type_intersection"
+      ]
+    },
+    {
+      "name": "tmerge_types_slow",
+      "line": 747,
+      "signature": "Tuple{Type, Type}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typelimits.jl",
+      "from_audit": true,
+      "n_statements": 1557,
+      "ccalls": [
+        "jl_type_unionall",
+        "jl_has_free_typevars"
+      ]
+    },
+    {
+      "name": "tuple_tfunc",
+      "line": 1992,
+      "signature": "Tuple{Compiler.PartialsLattice{Compiler.ConstsLattice}, Vector{Any}} | Tuple{Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Vector{Any}}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/tfuncs.jl",
+      "from_audit": true,
+      "n_statements": 806,
+      "ccalls": [
+        "jl_type_intersection"
+      ]
+    },
+    {
+      "name": "tuplemerge",
+      "line": 864,
+      "signature": "Tuple{DataType, DataType}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typelimits.jl",
+      "from_audit": true,
+      "n_statements": 314,
+      "ccalls": [
+        "jl_has_free_typevars"
+      ]
+    },
+    {
+      "name": "typeinf",
+      "line": 4465,
+      "signature": "Tuple{Compiler.NativeInterpreter, Compiler.InferenceState}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "from_audit": true,
+      "n_statements": 531,
+      "ccalls": [
+        "jl_hrtime",
+        "jl_string_ptr",
+        "jl_uv_puts"
+      ]
+    },
+    {
+      "name": "typeinf_edge",
+      "line": 895,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Method, Any, Core.SimpleVector, Compiler.InferenceState, Bool, Bool}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typeinfer.jl",
+      "from_audit": true,
+      "n_statements": 1308,
+      "ccalls": [
+        "jl_normalize_to_compilable_sig",
+        "jl_specializations_get_linfo",
+        "jl_rettype_inferred",
+        "jl_get_module_infer",
+        "jl_hrtime",
+        "jl_engine_reserve",
+        "jl_engine_fulfill"
+      ]
+    },
+    {
+      "name": "typeinf_local",
+      "line": 4169,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Compiler.InferenceState, Compiler.CurrentState}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "from_audit": true,
+      "n_statements": 4844,
+      "ccalls": [
+        "jl_genericmemory_copyto",
+        "jl_type_intersection"
+      ]
+    },
+    {
+      "name": "union_count_abstract",
+      "line": 309,
+      "signature": "Tuple{Union}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typelimits.jl",
+      "from_audit": true,
+      "n_statements": 163,
+      "ccalls": [
+        "jl_has_free_typevars"
+      ]
+    },
+    {
+      "name": "unsafe_write",
+      "line": 822,
+      "signature": "Tuple{IOBuffer, Ptr{UInt8}, UInt64}",
+      "module": "Base",
+      "file": "iobuffer.jl",
+      "from_audit": true,
+      "n_statements": 135,
+      "ccalls": [
+        "memmove"
+      ]
+    },
+    {
+      "name": "valid_as_lattice",
+      "line": 103,
+      "signature": "Tuple{Any, Bool}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typeutils.jl",
+      "from_audit": true,
+      "n_statements": 65,
+      "ccalls": [
+        "jl_get_fieldtypes"
+      ]
+    },
+    {
+      "name": "validate_code!",
+      "line": 115,
+      "signature": "Tuple{Vector{Compiler.InvalidCodeError}, Core.CodeInfo, Bool} | Tuple{Vector{Compiler.InvalidCodeError}, Core.MethodInstance, Core.CodeInfo}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/validation.jl",
+      "from_audit": true,
+      "n_statements": 1386,
+      "ccalls": [
+        "jl_eqtable_get"
+      ]
+    },
+    {
+      "name": "widenreturn_partials",
+      "line": 3996,
+      "signature": "Tuple{Compiler.PartialsLattice, Any, Compiler.BestguessInfo}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "from_audit": true,
+      "n_statements": 268,
+      "ccalls": [
+        "jl_genericmemory_copyto"
+      ]
+    }
+  ],
+  "COMPILE_ERROR": [
+    {
+      "name": "#argtypes_to_type##0",
+      "line": 52,
+      "signature": "Tuple{Any}",
+      "status": "cannot_resolve",
+      "error": "Function not found in module",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typeutils.jl",
+      "n_statements": 6
+    },
+    {
+      "name": "InliningState",
+      "line": 147,
+      "signature": "Tuple{Vector{Any}, UInt64, Compiler.AbstractInterpreter} | Tuple{Compiler.InferenceState, Compiler.AbstractInterpreter}",
+      "status": "cannot_parse_sig",
+      "error": "Cannot parse signature: Tuple{Vector{Any}, UInt64, Compiler.AbstractInterpreter} | Tuple{Compiler.InferenceState, Compiler.AbstractInterpreter}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/optimize.jl",
+      "n_statements": 5
+    },
+    {
+      "name": "_",
+      "line": 39,
+      "signature": "Tuple{Bool, Type{Compiler.Conditional}, Int64, Any, Any}",
+      "status": "cannot_resolve",
+      "error": "Function not found in module",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typelattice.jl",
+      "n_statements": 63
+    },
+    {
+      "name": "__limit_type_size",
+      "line": 192,
+      "signature": "Tuple{Any, Any, Core.SimpleVector, Int64, Int64}",
+      "status": "compile_error",
+      "error": "UndefVarError: `T` not defined in static parameter matching\nSuggestion: run Test.detect_unbound_args to detect method arguments that do not fully constrain a type parameter.",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typelimits.jl",
+      "n_statements": 77
+    },
+    {
+      "name": "_issubconditional",
+      "line": 264,
+      "signature": "Tuple{Compiler.InterConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}, Core.InterConditional, Core.InterConditional, Bool} | Tuple{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}, Compiler.Conditional, Compiler.Conditional, Bool}",
+      "status": "cannot_parse_sig",
+      "error": "Cannot parse signature: Tuple{Compiler.InterConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}, Core.InterConditional, Core.InterConditional, Bool} | Tuple{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}, Compiler.Conditional, Compiler.Conditional, Bool}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typelattice.jl",
+      "n_statements": 228
+    },
+    {
+      "name": "_typename",
+      "line": 217,
+      "signature": "Tuple{Any} | Tuple{Type}",
+      "status": "cannot_parse_sig",
+      "error": "Cannot parse signature: Tuple{Any} | Tuple{Type}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typeutils.jl",
+      "n_statements": 3
+    },
+    {
+      "name": "abstract_call",
+      "line": 3037,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Compiler.ArgInfo, Compiler.StatementState, Compiler.InferenceState} | Tuple{Compiler.AbstractInterpreter, Compiler.ArgInfo, Compiler.StmtInfo, Compiler.InferenceState}",
+      "status": "cannot_parse_sig",
+      "error": "Cannot parse signature: Tuple{Compiler.AbstractInterpreter, Compiler.ArgInfo, Compiler.StatementState, Compiler.InferenceState} | Tuple{Compiler.AbstractInterpreter, Compiler.ArgInfo, Compiler.StmtInfo, Compiler.InferenceState}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "n_statements": 161
+    },
+    {
+      "name": "add_invoke_edge!",
+      "line": 322,
+      "signature": "Tuple{Vector{Any}, Any, Union{Method, Core.MethodInstance}} | Tuple{Vector{Any}, Any, Core.CodeInstance}",
+      "status": "cannot_parse_sig",
+      "error": "Cannot parse signature: Tuple{Vector{Any}, Any, Union{Method, Core.MethodInstance}} | Tuple{Vector{Any}, Any, Core.CodeInstance}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/stmtinfo.jl",
+      "n_statements": 175
+    },
+    {
+      "name": "apply_refinement!",
+      "line": 4416,
+      "signature": "Tuple{Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Core.SlotNumber, Any, Vector{Compiler.VarState}, Compiler.StateUpdate} | Tuple{Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Core.SlotNumber, Any, Vector{Compiler.VarState}, Nothing}",
+      "status": "cannot_parse_sig",
+      "error": "Cannot parse signature: Tuple{Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Core.SlotNumber, Any, Vector{Compiler.VarState}, Compiler.StateUpdate} | Tuple{Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Core.SlotNumber, Any, Vector{Compiler.VarState}, Nothing}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "n_statements": 168
+    },
+    {
+      "name": "assign_parentchild!",
+      "line": 934,
+      "signature": "Tuple{Compiler.InferenceState, Compiler.InferenceState} | Tuple{Compiler.IRInterpretationState, Compiler.InferenceState}",
+      "status": "cannot_parse_sig",
+      "error": "Cannot parse signature: Tuple{Compiler.InferenceState, Compiler.InferenceState} | Tuple{Compiler.IRInterpretationState, Compiler.InferenceState}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/inferencestate.jl",
+      "n_statements": 56
+    },
+    {
+      "name": "getfield_tfunc",
+      "line": 1125,
+      "signature": "Tuple{Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Any} | Tuple{Compiler.InferenceLattice{Compiler.InterConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any} | Tuple{Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any}",
+      "status": "cannot_parse_sig",
+      "error": "Cannot parse signature: Tuple{Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Any} | Tuple{Compiler.InferenceLattice{Compiler.InterConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any} | Tuple{Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/tfuncs.jl",
+      "n_statements": 97
+    },
+    {
+      "name": "instanceof_tfunc",
+      "line": 104,
+      "signature": "Tuple{Any, Bool} | Tuple{Any}",
+      "status": "cannot_parse_sig",
+      "error": "Cannot parse signature: Tuple{Any, Bool} | Tuple{Any}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/tfuncs.jl",
+      "n_statements": 2
+    },
+    {
+      "name": "issubconditional",
+      "line": 262,
+      "signature": "Tuple{Compiler.InterConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}, Core.InterConditional, Core.InterConditional} | Tuple{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}, Compiler.Conditional, Compiler.Conditional}",
+      "status": "cannot_parse_sig",
+      "error": "Cannot parse signature: Tuple{Compiler.InterConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}, Core.InterConditional, Core.InterConditional} | Tuple{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}, Compiler.Conditional, Compiler.Conditional}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typelattice.jl",
+      "n_statements": 2
+    },
+    {
+      "name": "limit_type_size",
+      "line": 17,
+      "signature": "Tuple{Any, Any, Any, Int64, Int64}",
+      "status": "compile_error",
+      "error": "UndefVarError: `T` not defined in static parameter matching\nSuggestion: run Test.detect_unbound_args to detect method arguments that do not fully constrain a type parameter.",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typelimits.jl",
+      "n_statements": 36
+    },
+    {
+      "name": "ndigits0zpb",
+      "line": 702,
+      "signature": "Tuple{UInt64, Int64} | Tuple{Int64, Int64}",
+      "status": "cannot_parse_sig",
+      "error": "Cannot parse signature: Tuple{UInt64, Int64} | Tuple{Int64, Int64}",
+      "module": "Base",
+      "file": "intfuncs.jl",
+      "n_statements": 122
+    },
+    {
+      "name": "overflow_case",
+      "line": 364,
+      "signature": "Tuple{Int64, Int64}",
+      "status": "cannot_resolve",
+      "error": "Function not found in module",
+      "module": "Base",
+      "file": "range.jl",
+      "n_statements": 16
+    },
+    {
+      "name": "resize!",
+      "line": 1478,
+      "signature": "Tuple{Vector{Compiler.CurrentState}, Int64} | Tuple{Vector{Union{Compiler.IRInterpretationState, Compiler.InferenceState}}, Int64} | Tuple{Vector{Any}, Int64}",
+      "status": "cannot_parse_sig",
+      "error": "Cannot parse signature: Tuple{Vector{Compiler.CurrentState}, Int64} | Tuple{Vector{Union{Compiler.IRInterpretationState, Compiler.InferenceState}}, Int64} | Tuple{Vector{Any}, Int64}",
+      "module": "Base",
+      "file": "array.jl",
+      "n_statements": 117
+    },
+    {
+      "name": "return_cached_result",
+      "line": 827,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Method, Core.CodeInstance, Compiler.InferenceState, Bool, Bool} | Tuple{Compiler.NativeInterpreter, Method, Core.CodeInstance, Compiler.InferenceState, Bool, Bool}",
+      "status": "cannot_parse_sig",
+      "error": "Cannot parse signature: Tuple{Compiler.AbstractInterpreter, Method, Core.CodeInstance, Compiler.InferenceState, Bool, Bool} | Tuple{Compiler.NativeInterpreter, Method, Core.CodeInstance, Compiler.InferenceState, Bool, Bool}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typeinfer.jl",
+      "n_statements": 263
+    },
+    {
+      "name": "throw_boundserror",
+      "line": 15,
+      "signature": "Tuple{Vector{Core.TypeName}, Tuple{Int64}} | Tuple{Vector{Tuple{Int64, Int64}}, Tuple{Int64}} | Tuple{BitVector, Tuple{Int64}} | Tuple{Vector{Compiler.TryCatchFrame}, Tuple{Int64}} | Tuple{Vector{Union{Compiler.IRInterpretationState, Compiler.InferenceState}}, Tuple{Int64}} | Tuple{Vector{Compiler.VarState}, Tuple{Int64}} | Tuple{Vector{Compiler.CurrentState}, Tuple{Int64}} | Tuple{Vector{BitSet}, Tuple{Int64}} | Tuple{Vector{Compiler.InvalidCodeError}, Tuple{Int64}} | Tuple{Vector{Compiler.MethodMatchInfo}, Tuple{Int64}} | Tuple{Vector{Any}, Tuple{Int64}} | Tuple{Vector{Union{Nothing, Vector{Compiler.VarState}}}, Tuple{Int64}} | Tuple{Vector{UInt8}, Tuple{Int64}} | Tuple{Vector{Union{Nothing, Core.CodeInstance}}, Tuple{Int64}} | Tuple{Vector{Bool}, Tuple{Int64}} | Tuple{Vector{UInt16}, Tuple{Int64}} | Tuple{Vector{Any}, Tuple{UnitRange{Int64}}} | Tuple{Vector{Int64}, Tuple{Int64}} | Tuple{Vector{Tuple{Compiler.InferenceState, Int64}}, Tuple{Int64}} | Tuple{UnitRange{Int64}, Int64} | Tuple{Vector{UInt32}, Tuple{Int64}} | Tuple{Vector{UInt64}, Tuple{Int64}} | Tuple{Vector{Compiler.CallInfo}, Tuple{Int64}} | Tuple{Vector{Compiler.BasicBlock}, Tuple{Int64}}",
+      "status": "cannot_parse_sig",
+      "error": "Cannot parse signature: Tuple{Vector{Core.TypeName}, Tuple{Int64}} | Tuple{Vector{Tuple{Int64, Int64}}, Tuple{Int64}} | Tuple{BitVector, Tuple{Int64}} | Tuple{Vector{Compiler.TryCatchFrame}, Tuple{Int64}} | Tuple{Vector{Union{Compiler.IRInterpretationState, Compiler.InferenceState}}, Tuple{Int64}} | Tuple{Vector{Compiler.VarState}, Tuple{Int64}} | Tuple{Vector{Compiler.CurrentState}, Tuple{Int64}} | Tuple{Vector{BitSet}, Tuple{Int64}} | Tuple{Vector{Compiler.InvalidCodeError}, Tuple{Int64}} | Tuple{Vector{Compiler.MethodMatchInfo}, Tuple{Int64}} | Tuple{Vector{Any}, Tuple{Int64}} | Tuple{Vector{Union{Nothing, Vector{Compiler.VarState}}}, Tuple{Int64}} | Tuple{Vector{UInt8}, Tuple{Int64}} | Tuple{Vector{Union{Nothing, Core.CodeInstance}}, Tuple{Int64}} | Tuple{Vector{Bool}, Tuple{Int64}} | Tuple{Vector{UInt16}, Tuple{Int64}} | Tuple{Vector{Any}, Tuple{UnitRange{Int64}}} | Tuple{Vector{Int64}, Tuple{Int64}} | Tuple{Vector{Tuple{Compiler.InferenceState, Int64}}, Tuple{Int64}} | Tuple{UnitRange{Int64}, Int64} | Tuple{Vector{UInt32}, Tuple{Int64}} | Tuple{Vector{UInt64}, Tuple{Int64}} | Tuple{Vector{Compiler.CallInfo}, Tuple{Int64}} | Tuple{Vector{Compiler.BasicBlock}, Tuple{Int64}}",
+      "module": "Base",
+      "file": "essentials.jl",
+      "n_statements": 3
+    },
+    {
+      "name": "throw_inexacterror",
+      "line": 815,
+      "signature": "Tuple{Symbol, Type, UInt64} | Tuple{Symbol, Type, Int128} | Tuple{Symbol, Type, UInt32} | Tuple{Symbol, Type, Int64}",
+      "status": "cannot_parse_sig",
+      "error": "Cannot parse signature: Tuple{Symbol, Type, UInt64} | Tuple{Symbol, Type, Int128} | Tuple{Symbol, Type, UInt32} | Tuple{Symbol, Type, Int64}",
+      "module": "Core",
+      "file": "boot.jl",
+      "n_statements": 3
+    },
+    {
+      "name": "tmerge_limited",
+      "line": 434,
+      "signature": "Tuple{Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any} | Tuple{Compiler.InferenceLattice{Compiler.InterConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any}",
+      "status": "cannot_parse_sig",
+      "error": "Cannot parse signature: Tuple{Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any} | Tuple{Compiler.InferenceLattice{Compiler.InterConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typelimits.jl",
+      "n_statements": 325
+    },
+    {
+      "name": "update_cycle_worklists!",
+      "line": 4149,
+      "signature": "Tuple{Compiler.var\"#update_exc_bestguess!##0#update_exc_bestguess!##1\", Compiler.InferenceState} | Tuple{Compiler.var\"#typeinf_local##0#typeinf_local##1\", Compiler.InferenceState}",
+      "status": "cannot_parse_sig",
+      "error": "Cannot parse signature: Tuple{Compiler.var\"#update_exc_bestguess!##0#update_exc_bestguess!##1\", Compiler.InferenceState} | Tuple{Compiler.var\"#typeinf_local##0#typeinf_local##1\", Compiler.InferenceState}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "n_statements": 431
+    },
+    {
+      "name": "update_exc_bestguess!",
+      "line": 4113,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Any, Compiler.InferenceState} | Tuple{Compiler.AbstractInterpreter, DataType, Compiler.InferenceState}",
+      "status": "cannot_parse_sig",
+      "error": "Cannot parse signature: Tuple{Compiler.AbstractInterpreter, Any, Compiler.InferenceState} | Tuple{Compiler.AbstractInterpreter, DataType, Compiler.InferenceState}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "n_statements": 391
+    },
+    {
+      "name": "widenconst",
+      "line": 695,
+      "signature": "Tuple{Compiler.LimitedAccuracy} | Tuple{Any}",
+      "status": "cannot_parse_sig",
+      "error": "Cannot parse signature: Tuple{Compiler.LimitedAccuracy} | Tuple{Any}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typelattice.jl",
+      "n_statements": 2
+    },
+    {
+      "name": "widenreturn",
+      "line": 3913,
+      "signature": "Tuple{Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Compiler.BestguessInfo} | Tuple{Compiler.AbstractLattice, Any, Compiler.BestguessInfo} | Tuple{Any, Compiler.BestguessInfo} | Tuple{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}, Any, Compiler.BestguessInfo} | Tuple{Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Compiler.BestguessInfo}",
+      "status": "cannot_parse_sig",
+      "error": "Cannot parse signature: Tuple{Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Compiler.BestguessInfo} | Tuple{Compiler.AbstractLattice, Any, Compiler.BestguessInfo} | Tuple{Any, Compiler.BestguessInfo} | Tuple{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}, Any, Compiler.BestguessInfo} | Tuple{Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Compiler.BestguessInfo}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "n_statements": 697
+    },
+    {
+      "name": "widenreturn_noslotwrapper",
+      "line": 3993,
+      "signature": "Tuple{Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Compiler.BestguessInfo} | Tuple{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}, Any, Compiler.BestguessInfo} | Tuple{Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Compiler.BestguessInfo}",
+      "status": "cannot_parse_sig",
+      "error": "Cannot parse signature: Tuple{Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Compiler.BestguessInfo} | Tuple{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}, Any, Compiler.BestguessInfo} | Tuple{Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Compiler.BestguessInfo}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "n_statements": 2
+    },
+    {
+      "name": "⊑",
+      "line": 432,
+      "signature": "Tuple{Compiler.InferenceLattice{Compiler.InterConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any} | Tuple{Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Any} | Tuple{Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any} | Tuple{Compiler.ConstsLattice, Any, Any}",
+      "status": "cannot_parse_sig",
+      "error": "Cannot parse signature: Tuple{Compiler.InferenceLattice{Compiler.InterConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any} | Tuple{Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Any} | Tuple{Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any} | Tuple{Compiler.ConstsLattice, Any, Any}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typelattice.jl",
+      "n_statements": 452
+    }
+  ],
+  "NEEDS_PATTERN": [
+    {
+      "name": "<=",
+      "line": 161,
+      "signature": "Tuple{Any, Any}",
+      "error": "compiles but validation fails",
+      "module": "Base",
+      "file": "bool.jl",
+      "n_statements": 3
+    },
+    {
+      "name": "abstract_eval_basic_statement",
+      "line": 3790,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Any, Compiler.StatementState, Compiler.InferenceState, Nothing}",
+      "error": "compiles but validation fails",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "n_statements": 496
+    },
+    {
+      "name": "abstract_eval_cfunction",
+      "line": 2935,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Expr, Compiler.StatementState, Compiler.InferenceState}",
+      "error": "compiles but validation fails",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "n_statements": 156
+    },
+    {
+      "name": "abstract_eval_nonlinearized_foreigncall_name",
+      "line": 3452,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Any, Compiler.StatementState, Compiler.InferenceState}",
+      "error": "compiles but validation fails",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "n_statements": 80
+    },
+    {
+      "name": "abstract_eval_phi",
+      "line": 3523,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Core.PhiNode, Compiler.StatementState, Compiler.InferenceState}",
+      "error": "compiles but validation fails",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "n_statements": 92
+    },
+    {
+      "name": "isready",
+      "line": 1151,
+      "signature": "Tuple{Compiler.Future{Compiler.RTEffects}}",
+      "error": "compiles but validation fails",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/inferencestate.jl",
+      "n_statements": 13
+    },
+    {
+      "name": "record_slot_assign!",
+      "line": 661,
+      "signature": "Tuple{Compiler.InferenceState}",
+      "error": "compiles but validation fails",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typeinfer.jl",
+      "n_statements": 222
+    },
+    {
+      "name": "record_ssa_assign!",
+      "line": 789,
+      "signature": "Tuple{Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Int64, Any, Compiler.InferenceState}",
+      "error": "compiles but validation fails",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/inferencestate.jl",
+      "n_statements": 532
+    },
+    {
+      "name": "stupdate!",
+      "line": 722,
+      "signature": "Tuple{Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Vector{Compiler.VarState}, Vector{Compiler.VarState}}",
+      "error": "compiles but validation fails",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typelattice.jl",
+      "n_statements": 139
+    },
+    {
+      "name": "tuple_tail_elem",
+      "line": 219,
+      "signature": "Tuple{Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Vector{Any}}",
+      "error": "compiles but validation fails",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typeutils.jl",
+      "n_statements": 106
+    },
+    {
+      "name": "type_annotate!",
+      "line": 712,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Compiler.InferenceState}",
+      "error": "compiles but validation fails",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typeinfer.jl",
+      "n_statements": 845
+    },
+    {
+      "name": "update_bestguess!",
+      "line": 4070,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Compiler.InferenceState, Vector{Compiler.VarState}, Any}",
+      "error": "compiles but validation fails",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "n_statements": 196
+    }
+  ],
+  "OPTIMIZER_SKIP": [
+    {
+      "name": "finish!",
+      "line": 94,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Compiler.InferenceState, UInt64, UInt64}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typeinfer.jl",
+      "n_statements": 323
+    },
+    {
+      "name": "optimize",
+      "line": 1001,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Compiler.OptimizationState, Compiler.InferenceResult}",
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/optimize.jl",
+      "n_statements": 5
+    }
+  ],
+  "COMPILES_NOW": [
+    {
+      "name": "#string#403",
+      "line": 990,
+      "signature": "Tuple{Int64, Int64, typeof(string), Int64}",
+      "bytes": 625,
+      "func_count": 5,
+      "module": "Base",
+      "file": "intfuncs.jl",
+      "n_statements": 53
+    },
+    {
+      "name": "BestguessInfo",
+      "line": 3884,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Any, Int64, Vector{Any}, Vector{Compiler.VarState}}",
+      "bytes": 167,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "n_statements": 16
+    },
+    {
+      "name": "OptimizationState",
+      "line": 171,
+      "signature": "Tuple{Compiler.InferenceState, Compiler.AbstractInterpreter}",
+      "bytes": 934,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/optimize.jl",
+      "n_statements": 16
+    },
+    {
+      "name": "PartialStruct",
+      "line": 759,
+      "signature": "Tuple{Compiler.PartialsLattice, Any, Vector{Any}}",
+      "bytes": 880,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typelattice.jl",
+      "n_statements": 77
+    },
+    {
+      "name": "_all",
+      "line": 193,
+      "signature": "Tuple{typeof(Compiler.hasuniquerep), Core.SimpleVector, Colon}",
+      "bytes": 752,
+      "func_count": 5,
+      "module": "Base",
+      "file": "anyall.jl",
+      "n_statements": 80
+    },
+    {
+      "name": "_assert_tostring",
+      "line": 247,
+      "signature": "Tuple{Any}",
+      "bytes": 123,
+      "func_count": 5,
+      "module": "Base",
+      "file": "error.jl",
+      "n_statements": 3
+    },
+    {
+      "name": "_throw_argerror",
+      "line": 317,
+      "signature": "Tuple{String}",
+      "bytes": 127,
+      "func_count": 5,
+      "module": "Base",
+      "file": "array.jl",
+      "n_statements": 3
+    },
+    {
+      "name": "_unioncomplexity",
+      "line": 296,
+      "signature": "Tuple{Any}",
+      "bytes": 798,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typeutils.jl",
+      "n_statements": 76
+    },
+    {
+      "name": "_uniontypes",
+      "line": 1392,
+      "signature": "Tuple{Any, Vector{Any}}",
+      "bytes": 1225,
+      "func_count": 5,
+      "module": "Base",
+      "file": "runtime_internals.jl",
+      "n_statements": 100
+    },
+    {
+      "name": "_validate_val!",
+      "line": 87,
+      "signature": "Tuple{Any, Vector{Compiler.InvalidCodeError}, BitSet}",
+      "bytes": 5060,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/validation.jl",
+      "n_statements": 551
+    },
+    {
+      "name": "abstract_eval_call",
+      "line": 3053,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Expr, Compiler.StatementState, Compiler.InferenceState}",
+      "bytes": 1000,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "n_statements": 10
+    },
+    {
+      "name": "abstract_eval_copyast",
+      "line": 3207,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Expr, Compiler.StatementState, Compiler.InferenceState}",
+      "bytes": 1125,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "n_statements": 31
+    },
+    {
+      "name": "abstract_eval_globalref",
+      "line": 3722,
+      "signature": "Tuple{Compiler.AbstractInterpreter, GlobalRef, Bool, Compiler.InferenceState}",
+      "bytes": 1358,
+      "func_count": 8,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "n_statements": 28
+    },
+    {
+      "name": "abstract_eval_isdefined_expr",
+      "line": 3218,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Expr, Compiler.StatementState, Compiler.InferenceState}",
+      "bytes": 4298,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "n_statements": 357
+    },
+    {
+      "name": "abstract_eval_special_value",
+      "line": 2955,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Any, Compiler.StatementState, Compiler.InferenceState}",
+      "bytes": 2045,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "n_statements": 150
+    },
+    {
+      "name": "abstract_eval_statement_expr",
+      "line": 3386,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Expr, Compiler.StatementState, Compiler.InferenceState}",
+      "bytes": 5827,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "n_statements": 252
+    },
+    {
+      "name": "abstract_eval_value",
+      "line": 3000,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Any, Compiler.StatementState, Compiler.InferenceState}",
+      "bytes": 1664,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "n_statements": 109
+    },
+    {
+      "name": "add_edges!",
+      "line": 507,
+      "signature": "Tuple{Vector{Any}, Compiler.CallInfo}",
+      "bytes": 142,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/types.jl",
+      "n_statements": 5
+    },
+    {
+      "name": "add_edges_impl",
+      "line": 482,
+      "signature": "Tuple{Vector{Any}, Compiler.CallInfo}",
+      "bytes": 10812,
+      "func_count": 17,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/stmtinfo.jl",
+      "n_statements": 90
+    },
+    {
+      "name": "adjust_effects",
+      "line": 400,
+      "signature": "Tuple{Compiler.InferenceState}",
+      "bytes": 5446,
+      "func_count": 13,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typeinfer.jl",
+      "n_statements": 384
+    },
+    {
+      "name": "all",
+      "line": 188,
+      "signature": "Tuple{Function, Core.SimpleVector}",
+      "bytes": 91,
+      "func_count": 5,
+      "module": "Base",
+      "file": "anyall.jl",
+      "n_statements": 2
+    },
+    {
+      "name": "append!",
+      "line": 1352,
+      "signature": "Tuple{Vector{Any}, Any}",
+      "bytes": 537,
+      "func_count": 5,
+      "module": "Base",
+      "file": "array.jl",
+      "n_statements": 39
+    },
+    {
+      "name": "append_c_digits",
+      "line": 870,
+      "signature": "Tuple{Int64, UInt64, Memory{UInt8}, Int64}",
+      "bytes": 866,
+      "func_count": 5,
+      "module": "Base",
+      "file": "intfuncs.jl",
+      "n_statements": 59
+    },
+    {
+      "name": "append_c_digits_fast",
+      "line": 898,
+      "signature": "Tuple{Int64, UInt64, Memory{UInt8}, Int64}",
+      "bytes": 250,
+      "func_count": 5,
+      "module": "Base",
+      "file": "intfuncs.jl",
+      "n_statements": 19
+    },
+    {
+      "name": "append_nine_digits",
+      "line": 887,
+      "signature": "Tuple{UInt32, Memory{UInt8}, Int64}",
+      "bytes": 1031,
+      "func_count": 5,
+      "module": "Base",
+      "file": "intfuncs.jl",
+      "n_statements": 84
+    },
+    {
+      "name": "argtypes_to_type",
+      "line": 51,
+      "signature": "Tuple{Vector{Any}}",
+      "bytes": 1593,
+      "func_count": 8,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typeutils.jl",
+      "n_statements": 170
+    },
+    {
+      "name": "bool_rt_to_conditional",
+      "line": 3950,
+      "signature": "Tuple{Any, Compiler.BestguessInfo}",
+      "bytes": 11214,
+      "func_count": 20,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "n_statements": 350
+    },
+    {
+      "name": "code_cache",
+      "line": 495,
+      "signature": "Tuple{Compiler.AbstractInterpreter}",
+      "bytes": 491,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/types.jl",
+      "n_statements": 9
+    },
+    {
+      "name": "collect_argtypes",
+      "line": 3010,
+      "signature": "Tuple{Compiler.AbstractInterpreter, Vector{Any}, Compiler.StatementState, Compiler.InferenceState}",
+      "bytes": 1203,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "n_statements": 77
+    },
+    {
+      "name": "collect_const_args",
+      "line": 989,
+      "signature": "Tuple{Vector{Any}, Int64}",
+      "bytes": 2099,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "n_statements": 241
+    },
+    {
+      "name": "compute_edges!",
+      "line": 649,
+      "signature": "Tuple{Compiler.InferenceState}",
+      "bytes": 1228,
+      "func_count": 8,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typeinfer.jl",
+      "n_statements": 64
+    },
+    {
+      "name": "convert",
+      "line": 455,
+      "signature": "Tuple{Type{Interp} where Interp<:Compiler.AbstractInterpreter, Compiler.AbstractInterpreter}",
+      "bytes": 112,
+      "func_count": 5,
+      "module": "Base",
+      "file": "essentials.jl",
+      "n_statements": 3
+    },
+    {
+      "name": "count_const_size",
+      "line": 32,
+      "signature": "Tuple{Any, Bool}",
+      "bytes": 2515,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/utilities.jl",
+      "n_statements": 328
+    },
+    {
+      "name": "datatype_fieldcount",
+      "line": 1120,
+      "signature": "Tuple{DataType}",
+      "bytes": 870,
+      "func_count": 5,
+      "module": "Base",
+      "file": "runtime_internals.jl",
+      "n_statements": 98
+    },
+    {
+      "name": "decode_effects",
+      "line": 351,
+      "signature": "Tuple{UInt32}",
+      "bytes": 812,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/effects.jl",
+      "n_statements": 121
+    },
+    {
+      "name": "error",
+      "line": 44,
+      "signature": "Tuple{String}",
+      "bytes": 117,
+      "func_count": 5,
+      "module": "Base",
+      "file": "error.jl",
+      "n_statements": 3
+    },
+    {
+      "name": "fill!",
+      "line": 372,
+      "signature": "Tuple{BitVector, Bool}",
+      "bytes": 825,
+      "func_count": 5,
+      "module": "Base",
+      "file": "bitarray.jl",
+      "n_statements": 153
+    },
+    {
+      "name": "filter!",
+      "line": 2978,
+      "signature": "Tuple{Compiler.var\"#argtypes_to_type##2#argtypes_to_type##3\", Vector{Any}}",
+      "bytes": 1334,
+      "func_count": 8,
+      "module": "Base",
+      "file": "array.jl",
+      "n_statements": 120
+    },
+    {
+      "name": "intersect",
+      "line": 37,
+      "signature": "Tuple{Compiler.WorldRange, Compiler.WorldRange}",
+      "bytes": 271,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/cicache.jl",
+      "n_statements": 18
+    },
+    {
+      "name": "invalid_wrap_err",
+      "line": 3158,
+      "signature": "Tuple{Int64, Tuple{Int64}, Int64}",
+      "bytes": 750,
+      "func_count": 5,
+      "module": "Base",
+      "file": "array.jl",
+      "n_statements": 5
+    },
+    {
+      "name": "is_all_const_arg",
+      "line": 975,
+      "signature": "Tuple{Vector{Any}, Int64}",
+      "bytes": 2165,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "n_statements": 251
+    },
+    {
+      "name": "is_identity_free_argtype",
+      "line": 348,
+      "signature": "Tuple{Any}",
+      "bytes": 542,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typeutils.jl",
+      "n_statements": 38
+    },
+    {
+      "name": "is_mutation_free_argtype",
+      "line": 379,
+      "signature": "Tuple{Any}",
+      "bytes": 542,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typeutils.jl",
+      "n_statements": 38
+    },
+    {
+      "name": "is_same_frame",
+      "line": 783,
+      "signature": "Tuple{Compiler.NativeInterpreter, Core.MethodInstance, Compiler.InferenceState}",
+      "bytes": 988,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typeinfer.jl",
+      "n_statements": 11
+    },
+    {
+      "name": "isidentityfree",
+      "line": 900,
+      "signature": "Tuple{Any}",
+      "bytes": 866,
+      "func_count": 5,
+      "module": "Base",
+      "file": "runtime_internals.jl",
+      "n_statements": 79
+    },
+    {
+      "name": "ismutationfree",
+      "line": 880,
+      "signature": "Tuple{Any}",
+      "bytes": 866,
+      "func_count": 5,
+      "module": "Base",
+      "file": "runtime_internals.jl",
+      "n_statements": 79
+    },
+    {
+      "name": "length",
+      "line": 10,
+      "signature": "Tuple{Any}",
+      "bytes": 229,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/methodtable.jl",
+      "n_statements": 5
+    },
+    {
+      "name": "merge_call_chain!",
+      "line": 763,
+      "signature": "Tuple{Compiler.NativeInterpreter, Compiler.InferenceState, Compiler.InferenceState}",
+      "bytes": 1660,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typeinfer.jl",
+      "n_statements": 126
+    },
+    {
+      "name": "ndigits0z",
+      "line": 766,
+      "signature": "Tuple{Int64, Int64}",
+      "bytes": 303,
+      "func_count": 5,
+      "module": "Base",
+      "file": "intfuncs.jl",
+      "n_statements": 30
+    },
+    {
+      "name": "ndigits0znb",
+      "line": 684,
+      "signature": "Tuple{UInt64, Int64}",
+      "bytes": 437,
+      "func_count": 5,
+      "module": "Base",
+      "file": "intfuncs.jl",
+      "n_statements": 45
+    },
+    {
+      "name": "resolve_call_cycle!",
+      "line": 798,
+      "signature": "Tuple{Compiler.NativeInterpreter, Core.MethodInstance, Compiler.InferenceState}",
+      "bytes": 2478,
+      "func_count": 11,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typeinfer.jl",
+      "n_statements": 123
+    },
+    {
+      "name": "reverse!",
+      "line": 2230,
+      "signature": "Tuple{Vector{Any}, Int64, Int64}",
+      "bytes": 710,
+      "func_count": 5,
+      "module": "Base",
+      "file": "array.jl",
+      "n_statements": 137
+    },
+    {
+      "name": "scan_leaf_partitions",
+      "line": 3706,
+      "signature": "Tuple{typeof(Compiler.abstract_eval_partition_load), Compiler.AbstractInterpreter, GlobalRef, Compiler.WorldWithRange}",
+      "bytes": 242,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "n_statements": 2
+    },
+    {
+      "name": "ssa_def_slot",
+      "line": 1420,
+      "signature": "Tuple{Any, Compiler.InferenceState}",
+      "bytes": 2270,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/abstractinterpretation.jl",
+      "n_statements": 228
+    },
+    {
+      "name": "sym_in",
+      "line": 673,
+      "signature": "Tuple{Symbol, NTuple{12, Symbol}}",
+      "bytes": 501,
+      "func_count": 5,
+      "module": "Base",
+      "file": "tuple.jl",
+      "n_statements": 30
+    },
+    {
+      "name": "tname_intersect",
+      "line": 720,
+      "signature": "Tuple{Core.TypeName, Core.TypeName}",
+      "bytes": 1041,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typelimits.jl",
+      "n_statements": 107
+    },
+    {
+      "name": "type_more_complex",
+      "line": 223,
+      "signature": "Tuple{Any, Any, Core.SimpleVector, Int64, Int64, Int64}",
+      "bytes": 3542,
+      "func_count": 8,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typelimits.jl",
+      "n_statements": 305
+    },
+    {
+      "name": "union!",
+      "line": 103,
+      "signature": "Tuple{IdSet{Compiler.InferenceState}, IdSet{Compiler.InferenceState}}",
+      "bytes": 1275,
+      "func_count": 5,
+      "module": "Base",
+      "file": "abstractset.jl",
+      "n_statements": 88
+    },
+    {
+      "name": "unionlen",
+      "line": 1390,
+      "signature": "Tuple{Any}",
+      "bytes": 339,
+      "func_count": 5,
+      "module": "Base",
+      "file": "runtime_internals.jl",
+      "n_statements": 30
+    },
+    {
+      "name": "widenwrappedslotwrapper",
+      "line": 227,
+      "signature": "Tuple{Any}",
+      "bytes": 2154,
+      "func_count": 5,
+      "module": "Compiler",
+      "file": "../usr/share/julia/Compiler/src/typelattice.jl",
+      "n_statements": 183
+    }
+  ]
+}
