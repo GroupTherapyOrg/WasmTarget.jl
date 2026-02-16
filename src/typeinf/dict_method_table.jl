@@ -206,10 +206,16 @@ function Base._methods_by_ftype(@nospecialize(t), mt::Union{Core.MethodTable, No
         if result === nothing
             return nothing
         end
-        # Set world range from DictMethodTable
-        min[] = result.valid_worlds.min_world
-        max[] = result.valid_worlds.max_world
-        has_ambig[] = result.ambig ? Int32(1) : Int32(0)
+        # Set world range from DictMethodTable (only if non-null Ref)
+        if min isa Base.RefValue
+            min[] = result.valid_worlds.min_world
+        end
+        if max isa Base.RefValue
+            max[] = result.valid_worlds.max_world
+        end
+        if has_ambig isa Base.RefValue
+            has_ambig[] = result.ambig ? Int32(1) : Int32(0)
+        end
         return result.matches
     end
 
@@ -224,16 +230,20 @@ end
 function Core.Compiler.get_staged(mi::Core.MethodInstance, world::UInt)
     code_cache = _WASM_CODE_CACHE[]
     if code_cache !== nothing
-        # Look up pre-expanded CodeInfo from the cache
-        cached = get(code_cache.cache, mi, nothing)
-        if cached !== nothing
-            return copy(cached)
+        # Only check cache for @generated methods — the cache also has
+        # non-generated CodeInfo from predecompress_methods!
+        def = mi.def
+        if isa(def, Method) && Base.hasgenerator(def)
+            cached = get(code_cache.cache, mi, nothing)
+            if cached !== nothing
+                return copy(cached)
+            end
         end
-        # Not in cache — fall through to may_invoke_generator check
+        # Not @generated or not in cache — fall through
     end
 
     # Normal path: check may_invoke_generator then call ccall
-    may_invoke_generator(mi) || return nothing
+    Base.may_invoke_generator(mi) || return nothing
     cache_ci = (mi.def::Method).generator isa Core.CachedGenerator ?
         Base.RefValue{Core.CodeInstance}() : nothing
     try

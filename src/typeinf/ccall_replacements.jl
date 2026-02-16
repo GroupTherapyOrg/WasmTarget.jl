@@ -2139,7 +2139,8 @@ function verify_phase_d2()
     table = interp.method_table.table
     _WASM_METHOD_TABLE[] = table
     override_result = Base._methods_by_ftype(Tuple{typeof(+), Int64, Int64}, nothing,
-        1, table.world)
+        1, table.world, false,
+        Ref{UInt}(typemin(UInt)), Ref{UInt}(typemax(UInt)), Ref{Int32}(0))
     _WASM_METHOD_TABLE[] = nothing
     if override_result isa Vector && length(override_result) >= 1
         passed += 1
@@ -2174,17 +2175,19 @@ function verify_phase_d2()
         failed += 1
     end
 
-    # 6. Verify get_staged override works
-    # For non-@generated, get_staged should return nothing
+    # 6. Verify retrieve_code_info works in Wasm mode
+    # For non-@generated, retrieve_code_info should return CodeInfo via def.source
     mi_plus = Core.Compiler.specialize_method(first(methods(+, (Int64, Int64))),
         Tuple{typeof(+), Int64, Int64}, Core.svec())
+    _WASM_METHOD_TABLE[] = table
     _WASM_CODE_CACHE[] = interp.code_info_cache
-    staged_result = Core.Compiler.get_staged(mi_plus, table.world)
+    ci = Core.Compiler.retrieve_code_info(mi_plus, table.world)
+    _WASM_METHOD_TABLE[] = nothing
     _WASM_CODE_CACHE[] = nothing
-    if staged_result === nothing
+    if ci isa Core.CodeInfo
         passed += 1
     else
-        println("FAIL: get_staged for non-@generated should return nothing, got: $(typeof(staged_result))")
+        println("FAIL: retrieve_code_info returned $(typeof(ci)), expected CodeInfo")
         failed += 1
     end
 
