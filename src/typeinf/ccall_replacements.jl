@@ -1,4 +1,4 @@
-# ccall_replacements.jl — Pure Julia replacements for Phase B1 + B2 + B3 ccalls
+# ccall_replacements.jl — Pure Julia replacements for Phase B1 + B2 + B3 + C1 ccalls
 #
 # Phase B1 (5 replacements):
 #   1. jl_get_world_counter → build-time constant WASM_WORLD_AGE
@@ -24,6 +24,11 @@
 #  17. jl_rethrow / jl_rethrow_other → SKIP foreigncall (Wasm rethrow instruction)
 #  18. jl_ir_nslots / jl_ir_slotflag → Override with CodeInfo field access
 #
+# Phase C1 (3 replacements — type variable helpers):
+#  19. jl_has_free_typevars    → Recursive type walk checking for unbound TypeVars
+#  20. jl_find_free_typevars   → Collect all unbound TypeVars from type tree
+#  21. jl_instantiate_type_in_env → Type substitution using UnionAll env bindings
+#
 # Functions unblocked (B1): edge_matches_sv, maybe_validate_code, is_lattice_equal,
 #                           issimplertype, tmerge, validate_code!
 # Functions unblocked (B2): _limit_type_size, _fieldindex_nothrow, _getfield_tfunc,
@@ -34,6 +39,11 @@
 #                           #sizehint!#81, _resize!, rethrow, may_invoke_generator,
 #                           abstract_eval_new_opaque_closure, propagate_to_error_handler!,
 #                           typeinf_local, widenreturn_partials, finish_cycle
+# Functions unblocked (C1): abstract_call_opaque_closure, abstract_eval_new,
+#                           abstract_eval_splatnew, is_derived_type, is_undefref_fieldtype,
+#                           issimpleenoughtype, may_invoke_generator, most_general_argtypes,
+#                           sp_type_rewrap, tmerge_types_slow, tuplemerge,
+#                           union_count_abstract, abstract_eval_throw_undef_if_not, tmeet
 #
 # Usage:
 #   include("src/typeinf/ccall_stubs.jl")       # Phase A stubs first
@@ -452,6 +462,156 @@ if !(:jl_ir_slotflag in TYPEINF_SKIP_FOREIGNCALLS)
 end
 TYPEINF_SKIP_RETURN_DEFAULTS[:jl_ir_slotflag] = UInt8
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase C1 — Type variable helpers (pure Julia replacements for 3 ccalls)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─── 19. jl_has_free_typevars ─────────────────────────────────────────────────
+# reflection.jl:798: has_free_typevars(t) = ccall(:jl_has_free_typevars, Cint, (Any,), t) != 0
+#
+# A TypeVar is "free" if it's not bound by an enclosing UnionAll in the type.
+# UnionAll(T, body) binds T within body. Walk the type tree tracking bound vars.
+
+function has_free_typevars_pure(@nospecialize(t), bound::Set{TypeVar}=Set{TypeVar}())
+    if t isa TypeVar
+        return !(t in bound)
+    end
+    if t isa UnionAll
+        push!(bound, t.var)
+        result = has_free_typevars_pure(t.body, bound)
+        delete!(bound, t.var)
+        return result
+    end
+    if t isa Union
+        return has_free_typevars_pure(t.a, bound) || has_free_typevars_pure(t.b, bound)
+    end
+    if t isa DataType
+        for p in t.parameters
+            has_free_typevars_pure(p, bound) && return true
+        end
+        return false
+    end
+    return false
+end
+
+# Override Base.has_free_typevars to avoid the ccall
+Base.has_free_typevars(@nospecialize(t)) = (@Base._total_meta; has_free_typevars_pure(t))
+
+# Add to SKIP list for any remaining inline ccalls
+if !(:jl_has_free_typevars in TYPEINF_SKIP_FOREIGNCALLS)
+    push!(TYPEINF_SKIP_FOREIGNCALLS, :jl_has_free_typevars)
+end
+TYPEINF_SKIP_RETURN_DEFAULTS[:jl_has_free_typevars] = Cint
+
+# ─── 20. jl_find_free_typevars ────────────────────────────────────────────────
+# abstractinterpretation.jl:2314: ccall(:jl_find_free_typevars, Vector{Any}, (Any,), T)
+#
+# Collect all TypeVars that are NOT bound by an enclosing UnionAll.
+# Returns Vector{Any} of free TypeVar objects.
+
+function find_free_typevars_pure(@nospecialize(t), bound::Set{TypeVar}=Set{TypeVar}(), found::Vector{Any}=Any[])
+    if t isa TypeVar
+        if !(t in bound) && !(t in found)
+            push!(found, t)
+        end
+        return found
+    end
+    if t isa UnionAll
+        push!(bound, t.var)
+        find_free_typevars_pure(t.body, bound, found)
+        delete!(bound, t.var)
+        return found
+    end
+    if t isa Union
+        find_free_typevars_pure(t.a, bound, found)
+        find_free_typevars_pure(t.b, bound, found)
+        return found
+    end
+    if t isa DataType
+        for p in t.parameters
+            find_free_typevars_pure(p, bound, found)
+        end
+        return found
+    end
+    return found
+end
+
+# Add to SKIP list
+if !(:jl_find_free_typevars in TYPEINF_SKIP_FOREIGNCALLS)
+    push!(TYPEINF_SKIP_FOREIGNCALLS, :jl_find_free_typevars)
+end
+TYPEINF_SKIP_RETURN_DEFAULTS[:jl_find_free_typevars] = Vector{Any}
+
+# ─── 21. jl_instantiate_type_in_env ──────────────────────────────────────────
+# abstractinterpretation.jl:2306:
+#   ccall(:jl_instantiate_type_in_env, Any, (Any, Any, Ptr{Any}), T, spsig, sparam_vals)
+#
+# Substitutes TypeVars in `body` using values from the environment.
+# The environment is built from the UnionAll chain of `spsig`:
+#   spsig = T1 where T1 → env[T1] = vals[1]
+#   spsig = (T2 where T2) where T1 → env[T1] = vals[1], env[T2] = vals[2]
+#
+# Walk the UnionAll chain to build a Dict{TypeVar, Any}, then recursively
+# substitute in `body`.
+
+function instantiate_type_in_env_pure(@nospecialize(body), @nospecialize(spsig), sparam_vals::Vector{Any})
+    # Build environment from UnionAll chain
+    env = Dict{TypeVar, Any}()
+    sig = spsig
+    idx = 1
+    while sig isa UnionAll && idx <= length(sparam_vals)
+        env[sig.var] = sparam_vals[idx]
+        sig = sig.body
+        idx += 1
+    end
+    return _substitute_typevars(body, env)
+end
+
+function _substitute_typevars(@nospecialize(t), env::Dict{TypeVar, Any})
+    if t isa TypeVar
+        return get(env, t, t)
+    end
+    if t isa UnionAll
+        # Don't substitute the bound variable itself, but DO substitute in the body
+        # (the bound variable shadows any outer binding)
+        new_body = _substitute_typevars(t.body, env)
+        if new_body === t.body
+            return t
+        end
+        return UnionAll(t.var, new_body)
+    end
+    if t isa Union
+        new_a = _substitute_typevars(t.a, env)
+        new_b = _substitute_typevars(t.b, env)
+        if new_a === t.a && new_b === t.b
+            return t
+        end
+        return Union{new_a, new_b}
+    end
+    if t isa DataType && !isempty(t.parameters)
+        changed = false
+        new_params = Any[]
+        for p in t.parameters
+            new_p = _substitute_typevars(p, env)
+            push!(new_params, new_p)
+            if new_p !== p
+                changed = true
+            end
+        end
+        if !changed
+            return t
+        end
+        return t.name.wrapper{new_params...}
+    end
+    return t
+end
+
+# Add to SKIP list
+if !(:jl_instantiate_type_in_env in TYPEINF_SKIP_FOREIGNCALLS)
+    push!(TYPEINF_SKIP_FOREIGNCALLS, :jl_instantiate_type_in_env)
+end
+TYPEINF_SKIP_RETURN_DEFAULTS[:jl_instantiate_type_in_env] = Any
+
 # ─── Verification ────────────────────────────────────────────────────────────────
 
 function verify_replacements()
@@ -791,15 +951,200 @@ function verify_replacements()
         passed += 1
     end
 
-    # Total SKIP entries should be at least 34 now (15 Phase A + 11 Phase B1+B2 + 8 Phase B3)
-    total_skip = length(TYPEINF_SKIP_FOREIGNCALLS)
-    if total_skip >= 34
+    # ─── Phase C1 verification ───────────────────────────────────────────────
+
+    # 19. jl_has_free_typevars — compare pure Julia vs native ccall
+    T_tv = TypeVar(:T_test19)
+    S_tv = TypeVar(:S_test19)
+
+    # Simple concrete types — no free typevars
+    for (T, expected) in [(Int64, false), (Float64, false), (Vector{Int64}, false),
+                          (Tuple{Int,Float64}, false), (Union{Int,Float64}, false)]
+        native = ccall(:jl_has_free_typevars, Cint, (Any,), T) != 0
+        pure = has_free_typevars_pure(T)
+        if native == pure && pure == expected
+            passed += 1
+        else
+            println("FAIL: has_free_typevars($T) — native=$native pure=$pure expected=$expected")
+            failed += 1
+        end
+    end
+
+    # Bare TypeVar — free
+    native_tv = ccall(:jl_has_free_typevars, Cint, (Any,), T_tv) != 0
+    pure_tv = has_free_typevars_pure(T_tv)
+    if native_tv == pure_tv && pure_tv == true
         passed += 1
     else
-        println("FAIL: TYPEINF_SKIP_FOREIGNCALLS has $total_skip entries, expected >= 35")
+        println("FAIL: has_free_typevars(TypeVar) — native=$native_tv pure=$pure_tv")
         failed += 1
     end
 
-    println("Phase B1+B2+B3 replacements verification: $passed passed, $failed failed")
+    # DataType with free TypeVar in parameters
+    dt_free = Array{T_tv, 1}
+    native_dtf = ccall(:jl_has_free_typevars, Cint, (Any,), dt_free) != 0
+    pure_dtf = has_free_typevars_pure(dt_free)
+    if native_dtf == pure_dtf && pure_dtf == true
+        passed += 1
+    else
+        println("FAIL: has_free_typevars(Array{T,1}) — native=$native_dtf pure=$pure_dtf")
+        failed += 1
+    end
+
+    # UnionAll binding the TypeVar — not free
+    ua_bound = UnionAll(T_tv, Array{T_tv, 1})
+    native_uab = ccall(:jl_has_free_typevars, Cint, (Any,), ua_bound) != 0
+    pure_uab = has_free_typevars_pure(ua_bound)
+    if native_uab == pure_uab && pure_uab == false
+        passed += 1
+    else
+        println("FAIL: has_free_typevars(UnionAll(T,Array{T,1})) — native=$native_uab pure=$pure_uab")
+        failed += 1
+    end
+
+    # Partially bound — S still free
+    dt_two = Dict{T_tv, S_tv}
+    ua_partial = UnionAll(T_tv, dt_two)
+    native_part = ccall(:jl_has_free_typevars, Cint, (Any,), ua_partial) != 0
+    pure_part = has_free_typevars_pure(ua_partial)
+    if native_part == pure_part && pure_part == true
+        passed += 1
+    else
+        println("FAIL: has_free_typevars(UnionAll(T,Dict{T,S})) — native=$native_part pure=$pure_part")
+        failed += 1
+    end
+
+    # Fully bound
+    ua_full = UnionAll(S_tv, UnionAll(T_tv, dt_two))
+    native_full = ccall(:jl_has_free_typevars, Cint, (Any,), ua_full) != 0
+    pure_full = has_free_typevars_pure(ua_full)
+    if native_full == pure_full && pure_full == false
+        passed += 1
+    else
+        println("FAIL: has_free_typevars(UnionAll(S,UnionAll(T,Dict{T,S}))) — native=$native_full pure=$pure_full")
+        failed += 1
+    end
+
+    # Vector (where T is bound) — NOT free
+    native_vec = ccall(:jl_has_free_typevars, Cint, (Any,), Vector) != 0
+    pure_vec = has_free_typevars_pure(Vector)
+    if native_vec == pure_vec && pure_vec == false
+        passed += 1
+    else
+        println("FAIL: has_free_typevars(Vector) — native=$native_vec pure=$pure_vec")
+        failed += 1
+    end
+
+    # Also verify the Base.has_free_typevars override works
+    if Base.has_free_typevars(Int64) == false && Base.has_free_typevars(T_tv) == true
+        passed += 1
+    else
+        println("FAIL: Base.has_free_typevars override mismatch")
+        failed += 1
+    end
+
+    # 20. jl_find_free_typevars — compare pure Julia vs native ccall
+    # Single free TypeVar
+    fv1_native = ccall(:jl_find_free_typevars, Vector{Any}, (Any,), dt_free)
+    fv1_pure = find_free_typevars_pure(dt_free)
+    if length(fv1_native) == length(fv1_pure) && length(fv1_pure) == 1 && fv1_pure[1] === T_tv
+        passed += 1
+    else
+        println("FAIL: find_free_typevars(Array{T,1}) — native=$fv1_native pure=$fv1_pure")
+        failed += 1
+    end
+
+    # Two free TypeVars
+    fv2_native = ccall(:jl_find_free_typevars, Vector{Any}, (Any,), dt_two)
+    fv2_pure = find_free_typevars_pure(dt_two)
+    if length(fv2_native) == length(fv2_pure) && length(fv2_pure) == 2
+        passed += 1
+    else
+        println("FAIL: find_free_typevars(Dict{T,S}) — native len=$(length(fv2_native)) pure len=$(length(fv2_pure))")
+        failed += 1
+    end
+
+    # Partially bound — only S free
+    fv3_native = ccall(:jl_find_free_typevars, Vector{Any}, (Any,), ua_partial)
+    fv3_pure = find_free_typevars_pure(ua_partial)
+    if length(fv3_native) == length(fv3_pure) && length(fv3_pure) == 1 && fv3_pure[1] === S_tv
+        passed += 1
+    else
+        println("FAIL: find_free_typevars(UnionAll(T,Dict{T,S})) — native=$fv3_native pure=$fv3_pure")
+        failed += 1
+    end
+
+    # No free TypeVars
+    fv4_native = ccall(:jl_find_free_typevars, Vector{Any}, (Any,), Int64)
+    fv4_pure = find_free_typevars_pure(Int64)
+    if length(fv4_native) == length(fv4_pure) && isempty(fv4_pure)
+        passed += 1
+    else
+        println("FAIL: find_free_typevars(Int64) — native len=$(length(fv4_native)) pure len=$(length(fv4_pure))")
+        failed += 1
+    end
+
+    # 21. jl_instantiate_type_in_env — compare pure Julia vs native ccall
+    # Simple: Array{T,1} where T → substitute T=Int64
+    sig_arr = Array{T_tv, 1} where T_tv
+    vals_arr = Any[Int64]
+    native_inst1 = GC.@preserve vals_arr ccall(:jl_instantiate_type_in_env, Any, (Any, Any, Ptr{Any}),
+        sig_arr.body, sig_arr, pointer(vals_arr))
+    pure_inst1 = instantiate_type_in_env_pure(sig_arr.body, sig_arr, vals_arr)
+    if native_inst1 === pure_inst1 && pure_inst1 === Vector{Int64}
+        passed += 1
+    else
+        println("FAIL: instantiate_type_in_env(Array{T,1}, [Int64]) — native=$native_inst1 pure=$pure_inst1")
+        failed += 1
+    end
+
+    # Two parameters: Dict{K,V} where V where K → substitute K=Int64, V=String
+    K_tv = TypeVar(:K_test21)
+    V_tv = TypeVar(:V_test21)
+    sig_dict = Dict{K_tv, V_tv} where V_tv where K_tv
+    vals_dict = Any[Int64, String]
+    native_inst2 = GC.@preserve vals_dict ccall(:jl_instantiate_type_in_env, Any, (Any, Any, Ptr{Any}),
+        sig_dict.body.body, sig_dict, pointer(vals_dict))
+    pure_inst2 = instantiate_type_in_env_pure(sig_dict.body.body, sig_dict, vals_dict)
+    if native_inst2 === pure_inst2 && pure_inst2 === Dict{Int64, String}
+        passed += 1
+    else
+        println("FAIL: instantiate_type_in_env(Dict{K,V}, [Int64,String]) — native=$native_inst2 pure=$pure_inst2")
+        failed += 1
+    end
+
+    # Identity (no free vars to substitute)
+    sig_concrete = Vector{Int64} where {T_tv}
+    vals_id = Any[Float64]
+    native_inst3 = GC.@preserve vals_id ccall(:jl_instantiate_type_in_env, Any, (Any, Any, Ptr{Any}),
+        sig_concrete.body, sig_concrete, pointer(vals_id))
+    pure_inst3 = instantiate_type_in_env_pure(sig_concrete.body, sig_concrete, vals_id)
+    if native_inst3 === pure_inst3
+        passed += 1
+    else
+        println("FAIL: instantiate_type_in_env(Vector{Int64}, [Float64]) — native=$native_inst3 pure=$pure_inst3")
+        failed += 1
+    end
+
+    # SKIP list verification
+    for sym in [:jl_has_free_typevars, :jl_find_free_typevars, :jl_instantiate_type_in_env]
+        if sym in TYPEINF_SKIP_FOREIGNCALLS
+            passed += 1
+        else
+            println("FAIL: $sym not in TYPEINF_SKIP_FOREIGNCALLS")
+            failed += 1
+        end
+    end
+
+    # Total SKIP entries should be at least 37 now (34 Phase A+B + 3 Phase C1)
+    total_skip = length(TYPEINF_SKIP_FOREIGNCALLS)
+    if total_skip >= 37
+        passed += 1
+    else
+        println("FAIL: TYPEINF_SKIP_FOREIGNCALLS has $total_skip entries, expected >= 37")
+        failed += 1
+    end
+
+    println("Phase B1+B2+B3+C1 replacements verification: $passed passed, $failed failed")
     return failed == 0
 end
