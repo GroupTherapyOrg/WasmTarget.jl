@@ -1,7 +1,10 @@
-# PURE-3003: Comprehensive DictMethodTable native Julia verification
+# PURE-3003 + PURE-3110: DictMethodTable native Julia verification
 #
 # Tests that DictMethodTable typeinf produces the SAME CodeInfo as standard typeinf
-# for 50+ representative (f, argtypes) pairs covering all playground operations.
+# for 77 representative (f, argtypes) pairs covering all playground operations.
+#
+# PURE-3003: Original 67 test functions
+# PURE-3110: 10 NEW test functions (string concat, Dict, Array comprehension, etc.)
 #
 # Usage:
 #   julia +1.12 --project=WasmTarget.jl -e 'include("WasmTarget.jl/src/typeinf/dict_method_table.jl"); include("WasmTarget.jl/test/test_dict_typeinf.jl")'
@@ -55,6 +58,58 @@ end
 function my_factorial(n::Int64)
     n <= 1 && return 1
     return n * my_factorial(n - 1)
+end
+
+# ─── NEW Phase D verification functions (PURE-3110) ─────────────────────────
+
+# String concatenation
+function my_string_concat(a::String, b::String)
+    return a * b
+end
+
+# Dict construction and lookup
+function my_dict_get(d::Dict{String, Int64}, key::String)
+    return get(d, key, 0)
+end
+
+# Array comprehension result type
+function my_squares(n::Int64)
+    return [i^2 for i in 1:n]
+end
+
+# Tuple construction
+function my_make_tuple(a::Int64, b::Float64)
+    return (a, b)
+end
+
+# Multiple dispatch — two methods, same name
+my_double(x::Int64) = 2x
+my_double(x::Float64) = 2.0 * x
+
+# Higher-order function: map
+function my_map_inc(v::Vector{Int64})
+    return map(x -> x + 1, v)
+end
+
+# String repeat
+function my_repeat_str(s::String, n::Int64)
+    return repeat(s, n)
+end
+
+# Convert between numeric types
+function my_convert_float(x::Int64)
+    return convert(Float64, x)
+end
+
+# Pair construction
+function my_make_pair(a::Int64, b::String)
+    return Pair(a, b)
+end
+
+# push! on vector (mutating)
+function my_push_vec(v::Vector{Int64}, x::Int64)
+    push!(v, x)
+    return length(v)
 end
 
 # ─── Test runner ─────────────────────────────────────────────────────────────
@@ -150,6 +205,18 @@ const TEST_CASES = [
     ("max(Int64,Int64)",     max,      (Int64, Int64)),
     ("clamp(Int64,Int64,Int64)", clamp, (Int64, Int64, Int64)),
     ("sign(Int64)",          sign,     (Int64,)),
+
+    # ── NEW: Phase D verification (PURE-3110) ──
+    ("my_string_concat(String,String)", my_string_concat, (String, String)),
+    ("my_dict_get(Dict{String,Int64},String)", my_dict_get, (Dict{String,Int64}, String)),
+    ("my_squares(Int64)",    my_squares, (Int64,)),
+    ("my_make_tuple(Int64,Float64)", my_make_tuple, (Int64, Float64)),
+    ("my_double(Int64)",     my_double,  (Int64,)),
+    ("my_map_inc(Vector{Int64})", my_map_inc, (Vector{Int64},)),
+    ("my_repeat_str(String,Int64)", my_repeat_str, (String, Int64)),
+    ("my_convert_float(Int64)", my_convert_float, (Int64,)),
+    ("my_make_pair(Int64,String)", my_make_pair, (Int64, String)),
+    ("my_push_vec(Vector{Int64},Int64)", my_push_vec, (Vector{Int64}, Int64)),
 ]
 
 println("=" ^ 80)
