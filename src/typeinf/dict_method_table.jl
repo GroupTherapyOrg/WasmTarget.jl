@@ -36,6 +36,12 @@ end
 # Required MethodTableView interface — DictMethodTable is NOT an overlay
 Core.Compiler.isoverlayed(::DictMethodTable) = false
 
+# findsup: find the unique most-specific method covering sig (used for invoke dispatch).
+# Falls back to native lookup since the Dict is populated from native method tables.
+function Core.Compiler.findsup(sig::Type, table::DictMethodTable)
+    return Core.Compiler._findsup(sig, nothing, table.world)
+end
+
 # ─── PreDecompressedCodeInfo ────────────────────────────────────────────────────
 # Replaces ccall(:jl_uncompress_ir) — stores pre-decompressed CodeInfo at build time.
 
@@ -137,6 +143,7 @@ function Core.Compiler.findall(sig::Type, table::_TracingTable; limit::Int=Int(t
     return result
 end
 Core.Compiler.isoverlayed(::_TracingTable) = false
+Core.Compiler.findsup(sig::Type, table::_TracingTable) = Core.Compiler.findsup(sig, table.inner)
 
 struct _TracingInterpreter <: AbstractInterpreter
     world::UInt64
@@ -223,12 +230,20 @@ function verify_typeinf(f, argtypes::Tuple;
     native_ci, native_rettype = first(native_results)
 
     # Step 2: Build WasmInterpreter with the method signature
-    sig = Tuple{typeof(f), argtypes...}
+    # For Type constructors (e.g., Int64(Bool)), typeof(Int64) == DataType, but the
+    # correct signature is Tuple{Type{Int64}, Bool}. Use the native result's MI to
+    # get the exact signature that code_typed matched.
+    native_mi = native_ci.parent
+    if native_mi !== nothing
+        sig = native_mi.specTypes
+    else
+        sig = Tuple{typeof(f), argtypes...}
+    end
     interp = build_wasm_interpreter([sig]; world=world)
 
     # Step 3: Run typeinf with WasmInterpreter
-    mi = Core.Compiler.specialize_method(
-        first(Core.Compiler.findall(sig, Core.Compiler.InternalMethodTable(world)).matches))
+    # Use the same MethodInstance that code_typed used, to ensure we're comparing the same method
+    mi = native_ci.parent
     src = Core.Compiler.retrieve_code_info(mi, world)
     if src === nothing
         return (pass=false, reason="retrieve_code_info returned nothing for $mi")
