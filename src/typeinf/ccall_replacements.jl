@@ -1,4 +1,4 @@
-# ccall_replacements.jl — Pure Julia replacements for Phase B1 + B2 + B3 + C1 ccalls
+# ccall_replacements.jl — Pure Julia replacements for Phase B1 + B2 + B3 + C1 + C2 ccalls
 #
 # Phase B1 (5 replacements):
 #   1. jl_get_world_counter → build-time constant WASM_WORLD_AGE
@@ -29,6 +29,12 @@
 #  20. jl_find_free_typevars   → Collect all unbound TypeVars from type tree
 #  21. jl_instantiate_type_in_env → Type substitution using UnionAll env bindings
 #
+# Phase C2 (4 replacements — IdSet identity set operations):
+#  22. jl_idset_peek_bp  → Linear scan on list using === (override haskey)
+#  23. jl_idset_pop      → Find+remove by === + rebuild idxs (override _pop!)
+#  24. jl_idset_put_key  → Find empty slot or grow list (override push!)
+#  25. jl_idset_put_idx  → Rebuild idxs hash table (override push!)
+#
 # Functions unblocked (B1): edge_matches_sv, maybe_validate_code, is_lattice_equal,
 #                           issimplertype, tmerge, validate_code!
 # Functions unblocked (B2): _limit_type_size, _fieldindex_nothrow, _getfield_tfunc,
@@ -44,6 +50,7 @@
 #                           issimpleenoughtype, may_invoke_generator, most_general_argtypes,
 #                           sp_type_rewrap, tmerge_types_slow, tuplemerge,
 #                           union_count_abstract, abstract_eval_throw_undef_if_not, tmeet
+# Functions unblocked (C2): cycle_fix_limited, issubset, push! (Compiler IdDict variant)
 #
 # Usage:
 #   include("src/typeinf/ccall_stubs.jl")       # Phase A stubs first
@@ -612,6 +619,144 @@ if !(:jl_instantiate_type_in_env in TYPEINF_SKIP_FOREIGNCALLS)
 end
 TYPEINF_SKIP_RETURN_DEFAULTS[:jl_instantiate_type_in_env] = Any
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase C2 — IdDict/IdSet equivalents (jl_idset_* ccalls)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# The IdSet struct uses 4 ccalls for identity-based set operations:
+#   jl_idset_peek_bp  — find key by === in hash table → returns index or -1
+#   jl_idset_pop      — remove key by === from hash table → returns index or -1
+#   jl_idset_put_key  — insert key into list, return (possibly grown) list
+#   jl_idset_put_idx  — rebuild/update idxs hash table after insert
+#
+# IdSet has:
+#   list::Memory{Any}  — elements stored at positions 1..max
+#   idxs::Union{Memory{UInt8}, Memory{UInt16}, Memory{UInt32}} — hash table
+#     Maps objectid(key) % length(idxs) → 1-based index in list (0=empty, maxval=deleted)
+#   count::Int — number of elements
+#   max::Int   — highest assigned index in list
+#
+# Pure Julia approach: override haskey, push!, _pop! directly.
+# For small sets (typeinf sets are <100 elements), linear scan is fast enough.
+# The idxs hash table is rebuilt after mutations using objectid-based linear probing.
+
+# ─── 22. jl_idset_peek_bp — identity lookup ─────────────────────────────────
+# Returns 0-based index into list if found, -1 if not found
+
+function _idset_peek_bp(list::Memory{Any}, @nospecialize(key), max::Int)
+    for i in 1:max
+        if isassigned(list, i) && list[i] === key
+            return i - 1  # 0-based
+        end
+    end
+    return -1
+end
+
+function Base.haskey(s::IdSet, @nospecialize(key))
+    _idset_peek_bp(s.list, key, s.max) != -1
+end
+
+# Also override `in` for IdSet (delegates to haskey)
+Base.in(@nospecialize(x), s::IdSet) = haskey(s, x)
+
+# ─── 23. Rebuild idxs hash table ───────────────────────────────────────────
+# Reconstruct the idxs hash table from scratch given the current list.
+# Uses objectid-based hashing with linear probing, matching the C implementation.
+
+function _idset_rebuild_idxs(list::Memory{Any}, max::Int)
+    # Determine size: next power of 2 >= 4*max, minimum 32
+    # (matches jl_idset_put_idx growth policy)
+    needed = max < 8 ? 32 : nextpow(2, 4 * max)
+    T = needed <= 256 ? UInt8 : (needed <= 65536 ? UInt16 : UInt32)
+    idxs = Memory{T}(undef, needed)
+    fill!(idxs, zero(T))
+    mask = needed - 1  # power-of-2 mask for modular arithmetic
+    for i in 1:max
+        if isassigned(list, i)
+            # Hash using objectid, linear probe to find empty slot
+            h = objectid(list[i]) % UInt
+            slot = (h & mask) + 1  # 1-based slot
+            while idxs[slot] != zero(T)
+                slot = (slot & mask) + 1  # wrap around
+            end
+            idxs[slot] = T(i)  # store 1-based index
+        end
+    end
+    return idxs
+end
+
+# ─── 24. jl_idset_pop — remove by identity ─────────────────────────────────
+
+function Base._pop!(s::IdSet, @nospecialize(x))
+    idx = _idset_peek_bp(s.list, x, s.max)
+    if idx == -1
+        return -1
+    end
+    # Unassign the slot (1-based)
+    Base._unsetindex!(s.list, idx + 1)
+    s.count -= 1
+    # Update max
+    while s.max > 0 && !isassigned(s.list, s.max)
+        s.max -= 1
+    end
+    # Rebuild idxs
+    setfield!(s, :idxs, _idset_rebuild_idxs(s.list, s.max))
+    return idx
+end
+
+# ─── 25. jl_idset_put_key + jl_idset_put_idx — insert by identity ──────────
+
+function Base.push!(s::IdSet, @nospecialize(x))
+    # Check if already present
+    idx = _idset_peek_bp(s.list, x, s.max)
+    if idx >= 0
+        # Already exists — update in place
+        s.list[idx + 1] = x
+        return s
+    end
+    # Find an empty slot in list, or grow
+    inserted = false
+    for i in 1:length(s.list)
+        if !isassigned(s.list, i)
+            s.list[i] = x
+            if i > s.max
+                s.max = i
+            end
+            inserted = true
+            break
+        end
+    end
+    if !inserted
+        # Need to grow list
+        old_len = length(s.list)
+        new_len = old_len < 4 ? 4 : old_len * 2
+        new_list = Memory{Any}(undef, new_len)
+        for i in 1:old_len
+            if isassigned(s.list, i)
+                new_list[i] = s.list[i]
+            end
+        end
+        new_list[old_len + 1] = x
+        s.max = old_len + 1
+        setfield!(s, :list, new_list)
+    end
+    s.count += 1
+    # Rebuild idxs hash table
+    setfield!(s, :idxs, _idset_rebuild_idxs(s.list, s.max))
+    return s
+end
+
+# Add all 4 ccalls to SKIP list
+for sym in (:jl_idset_peek_bp, :jl_idset_pop, :jl_idset_put_key, :jl_idset_put_idx)
+    if !(sym in TYPEINF_SKIP_FOREIGNCALLS)
+        push!(TYPEINF_SKIP_FOREIGNCALLS, sym)
+    end
+end
+TYPEINF_SKIP_RETURN_DEFAULTS[:jl_idset_peek_bp] = Int
+TYPEINF_SKIP_RETURN_DEFAULTS[:jl_idset_pop] = Int
+TYPEINF_SKIP_RETURN_DEFAULTS[:jl_idset_put_key] = Any
+TYPEINF_SKIP_RETURN_DEFAULTS[:jl_idset_put_idx] = Any
+
 # ─── Verification ────────────────────────────────────────────────────────────────
 
 function verify_replacements()
@@ -1137,15 +1282,141 @@ function verify_replacements()
         end
     end
 
-    # Total SKIP entries should be at least 37 now (34 Phase A+B + 3 Phase C1)
-    total_skip = length(TYPEINF_SKIP_FOREIGNCALLS)
-    if total_skip >= 37
+    # ─── Phase C2 verification — IdSet operations ─────────────────────────
+
+    # 22. haskey — test identity-based lookup
+    s = IdSet{Any}()
+    push!(s, 42)
+    push!(s, "hello")
+    push!(s, :sym)
+
+    if haskey(s, 42) && haskey(s, "hello") && haskey(s, :sym) && !haskey(s, 99)
         passed += 1
     else
-        println("FAIL: TYPEINF_SKIP_FOREIGNCALLS has $total_skip entries, expected >= 37")
+        println("FAIL: IdSet haskey basic test")
         failed += 1
     end
 
-    println("Phase B1+B2+B3+C1 replacements verification: $passed passed, $failed failed")
+    # Identity semantics: different objects with same value
+    a = [1, 2, 3]
+    b = [1, 2, 3]
+    s2 = IdSet{Any}()
+    push!(s2, a)
+    if haskey(s2, a) && !haskey(s2, b)
+        passed += 1
+    else
+        println("FAIL: IdSet identity semantics — a in s2=$(haskey(s2, a)), b in s2=$(haskey(s2, b))")
+        failed += 1
+    end
+
+    # 23. push! — test insertion + count tracking
+    s3 = IdSet{Int}()
+    push!(s3, 10)
+    push!(s3, 20)
+    push!(s3, 30)
+    if length(s3) == 3 && 10 in s3 && 20 in s3 && 30 in s3
+        passed += 1
+    else
+        println("FAIL: IdSet push! basic — count=$(length(s3)), has 10=$(10 in s3)")
+        failed += 1
+    end
+
+    # push! duplicate — no change in count
+    push!(s3, 20)
+    if length(s3) == 3
+        passed += 1
+    else
+        println("FAIL: IdSet push! duplicate — count=$(length(s3)), expected 3")
+        failed += 1
+    end
+
+    # 24. _pop! / delete! — test removal
+    delete!(s3, 20)
+    if length(s3) == 2 && !(20 in s3) && 10 in s3 && 30 in s3
+        passed += 1
+    else
+        println("FAIL: IdSet delete! — count=$(length(s3)), has 20=$(20 in s3)")
+        failed += 1
+    end
+
+    # pop! with missing key should throw
+    try
+        pop!(s3, 999)
+        println("FAIL: IdSet pop! should throw KeyError for missing key")
+        failed += 1
+    catch e
+        if e isa KeyError
+            passed += 1
+        else
+            println("FAIL: IdSet pop! threw $e, expected KeyError")
+            failed += 1
+        end
+    end
+
+    # pop! with default
+    result = pop!(s3, 999, :default)
+    if result === :default
+        passed += 1
+    else
+        println("FAIL: IdSet pop! with default returned $result, expected :default")
+        failed += 1
+    end
+
+    # 25. Iteration still works after mutations
+    s4 = IdSet{Symbol}()
+    push!(s4, :a)
+    push!(s4, :b)
+    push!(s4, :c)
+    delete!(s4, :b)
+    collected = collect(s4)
+    if length(collected) == 2 && :a in collected && :c in collected
+        passed += 1
+    else
+        println("FAIL: IdSet iteration after delete — collected=$collected")
+        failed += 1
+    end
+
+    # 26. Larger set — stress test with 50 elements
+    s5 = IdSet{Int}()
+    for i in 1:50
+        push!(s5, i)
+    end
+    if length(s5) == 50 && all(i -> i in s5, 1:50)
+        passed += 1
+    else
+        println("FAIL: IdSet 50-element stress test — count=$(length(s5))")
+        failed += 1
+    end
+    # Remove odd numbers
+    for i in 1:2:50
+        delete!(s5, i)
+    end
+    if length(s5) == 25 && all(i -> i in s5, 2:2:50) && !any(i -> i in s5, 1:2:50)
+        passed += 1
+    else
+        println("FAIL: IdSet 50-element delete odds — count=$(length(s5))")
+        failed += 1
+    end
+
+    # SKIP list verification for C2
+    for sym in [:jl_idset_peek_bp, :jl_idset_pop, :jl_idset_put_key, :jl_idset_put_idx]
+        if sym in TYPEINF_SKIP_FOREIGNCALLS
+            passed += 1
+        else
+            println("FAIL: $sym not in TYPEINF_SKIP_FOREIGNCALLS")
+            failed += 1
+        end
+    end
+
+    # Total SKIP entries should be at least 41 now (37 Phase A+B+C1 + 4 Phase C2)
+    total_skip = length(TYPEINF_SKIP_FOREIGNCALLS)
+    if total_skip >= 41
+        passed += 1
+    else
+        println("FAIL: TYPEINF_SKIP_FOREIGNCALLS has $total_skip entries, expected >= 41")
+        failed += 1
+    end
+
+    println("Phase B1+B2+B3+C1+C2 replacements verification: $passed passed, $failed failed")
     return failed == 0
 end
