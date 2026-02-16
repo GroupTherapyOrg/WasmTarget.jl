@@ -7066,6 +7066,11 @@ function get_phi_edge_wasm_type(val, ctx::CompilationContext)::Union{WasmValType
     elseif val isa Char
         # PURE-317: Char is a 4-byte primitive, compiled as I32
         return I32
+    elseif val isa Type
+        # PURE-3111: Type{T} literals are compiled as i32_const 0 by compile_value,
+        # but typeof(val) is DataType (a struct). Must return I32 to match
+        # the actual bytecode, otherwise phi mismatch detection fails.
+        return I32
     end
     return nothing
 end
@@ -10051,6 +10056,11 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
             end
         elseif val isa Char
             # PURE-317: Char is a 4-byte primitive type, compiled as I32
+            return I32
+        elseif val isa Type
+            # PURE-3111: Type{T} literals are compiled as i32_const 0 by compile_value,
+            # but typeof(val) is DataType (a struct). Must return I32 to match
+            # the actual bytecode, otherwise phi mismatch detection fails.
             return I32
         else
             # For any other value, try to get its Julia type and convert to Wasm type
@@ -14861,6 +14871,17 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                 # PURE-913: ref → externref conversion (e.g., compilerbarrier returning struct into Any local)
                 if needs_extern_convert_any
                     append!(stmt_bytes, UInt8[Opcode.GC_PREFIX, Opcode.EXTERN_CONVERT_ANY])
+                end
+
+                # PURE-3111: Final catch-all for phantom type returns (Nothing/Type{T}).
+                # compile_value emits i32_const 0 for these, but SSA type detection may
+                # think the value is a ref (e.g., memoryrefset! returns the stored value,
+                # which could be Type → SSA type is DataType → ConcreteRef). If stmt_bytes
+                # ends with i32_const 0 and the local is ref-typed, override to type_safe_default.
+                if !needs_type_safe_default && needs_ref_cast_local === nothing && local_is_ref && length(stmt_bytes) >= 2
+                    if stmt_bytes[end-1] == Opcode.I32_CONST && stmt_bytes[end] == 0x00
+                        needs_type_safe_default = true
+                    end
                 end
 
                 if needs_type_safe_default
