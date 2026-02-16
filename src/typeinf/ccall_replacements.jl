@@ -1,4 +1,4 @@
-# ccall_replacements.jl — Pure Julia replacements for Phase B1 + B2 + B3 + C1 + C2 ccalls
+# ccall_replacements.jl — Pure Julia replacements for Phase B1 + B2 + B3 + C1 + C2 + C3 ccalls
 #
 # Phase B1 (5 replacements):
 #   1. jl_get_world_counter → build-time constant WASM_WORLD_AGE
@@ -35,6 +35,13 @@
 #  24. jl_idset_put_key  → Find empty slot or grow list (override push!)
 #  25. jl_idset_put_idx  → Rebuild idxs hash table (override push!)
 #
+# Phase C3 (5 replacements — string operations):
+#  26. jl_alloc_string             → SKIP foreigncall (Wasm strings are GC objects)
+#  27. jl_string_to_genericmemory  → SKIP foreigncall (Wasm Memory handled at codegen level)
+#  28. jl_genericmemory_to_string  → SKIP foreigncall (Wasm string construction at codegen level)
+#  29. jl_pchar_to_string          → SKIP foreigncall (pointer-based, handled at codegen level)
+#  30. jl_string_ptr               → Already in Phase A SKIP list (pointer to string data)
+#
 # Functions unblocked (B1): edge_matches_sv, maybe_validate_code, is_lattice_equal,
 #                           issimplertype, tmerge, validate_code!
 # Functions unblocked (B2): _limit_type_size, _fieldindex_nothrow, _getfield_tfunc,
@@ -51,16 +58,18 @@
 #                           sp_type_rewrap, tmerge_types_slow, tuplemerge,
 #                           union_count_abstract, abstract_eval_throw_undef_if_not, tmeet
 # Functions unblocked (C2): cycle_fix_limited, issubset, push! (Compiler IdDict variant)
+# Functions unblocked (C3): _base, bin, dec, hex, oct, ensureroom_reallocate,
+#                           print_to_string, _resize!
 #
 # Usage:
 #   include("src/typeinf/ccall_stubs.jl")       # Phase A stubs first
-#   include("src/typeinf/ccall_replacements.jl") # Phase B1 + B2 + B3 replacements
+#   include("src/typeinf/ccall_replacements.jl") # Phase B1 + B2 + B3 + C1 + C2 + C3 replacements
 #
 # This file is STANDALONE and independently testable:
 #   julia +1.12 --project=. -e '
 #     include("src/typeinf/ccall_stubs.jl")
 #     include("src/typeinf/ccall_replacements.jl")
-#     println("Phase B3 memory ops loaded OK")'
+#     println("Phase C3 string ops loaded OK")'
 
 # ─── 1. World age constant ──────────────────────────────────────────────────────
 # jl_get_world_counter returns the current world age counter.
@@ -757,6 +766,83 @@ TYPEINF_SKIP_RETURN_DEFAULTS[:jl_idset_pop] = Int
 TYPEINF_SKIP_RETURN_DEFAULTS[:jl_idset_put_key] = Any
 TYPEINF_SKIP_RETURN_DEFAULTS[:jl_idset_put_idx] = Any
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase C3 — String operation ccall replacements
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# In Wasm GC, strings are managed as GC struct objects (not raw byte buffers).
+# All 5 string ccalls deal with pointer-level operations (allocating raw memory,
+# copying bytes to/from pointers, getting raw pointers to string data) that
+# don't apply in Wasm GC. The codegen handles string operations natively via
+# struct_new/struct_get for WasmGC string types.
+#
+# These functions are used by number-to-string formatting (_base, bin, dec, hex, oct)
+# and IOBuffer operations (ensureroom_reallocate, print_to_string, _resize!).
+# In single-shot typeinf they may not be exercised, but they need to compile.
+
+# ─── 26. jl_alloc_string ─────────────────────────────────────────────────────
+# strings/string.jl:109: _string_n(n) = foreigncall(:jl_alloc_string, Ref{String}, (Csize_t,), n)
+# Base_compiler.jl:171: ccall(:jl_alloc_string, Ref{String}, (Int,), n)
+#
+# Allocates an empty String of n bytes. In Wasm GC, strings are created via
+# struct_new with a Wasm array of bytes — no raw allocation needed.
+# Add to SKIP list — returns Ref{String} (externref).
+
+if !(:jl_alloc_string in TYPEINF_SKIP_FOREIGNCALLS)
+    push!(TYPEINF_SKIP_FOREIGNCALLS, :jl_alloc_string)
+end
+TYPEINF_SKIP_RETURN_DEFAULTS[:jl_alloc_string] = String
+
+# ─── 27. jl_string_to_genericmemory ──────────────────────────────────────────
+# strings/string.jl:120: unsafe_wrap(Memory{UInt8}, s::String) = ccall(...)
+# Base.jl:81: @ccall jl_string_to_genericmemory(str::Any)::Memory{UInt8}
+#
+# Gets the backing Memory{UInt8} from a String. In Wasm GC, this would be
+# a struct_get to extract the byte array from the string struct.
+# Add to SKIP list — returns Memory{UInt8} (externref).
+
+if !(:jl_string_to_genericmemory in TYPEINF_SKIP_FOREIGNCALLS)
+    push!(TYPEINF_SKIP_FOREIGNCALLS, :jl_string_to_genericmemory)
+end
+TYPEINF_SKIP_RETURN_DEFAULTS[:jl_string_to_genericmemory] = Any  # Memory{UInt8}
+
+# ─── 28. jl_genericmemory_to_string ──────────────────────────────────────────
+# strings/string.jl:71: ccall(:jl_genericmemory_to_string, Ref{String}, (Any, Int), mem, len)
+# strings/string.jl:84: ccall(:jl_genericmemory_to_string, Ref{String}, (Any, Int), m, length(m))
+#
+# Converts a Memory{UInt8} buffer into a String (zero-copy when possible).
+# In Wasm GC, this constructs a string struct from a byte array.
+# Add to SKIP list — returns Ref{String} (externref).
+
+if !(:jl_genericmemory_to_string in TYPEINF_SKIP_FOREIGNCALLS)
+    push!(TYPEINF_SKIP_FOREIGNCALLS, :jl_genericmemory_to_string)
+end
+TYPEINF_SKIP_RETURN_DEFAULTS[:jl_genericmemory_to_string] = String
+
+# ─── 29. jl_pchar_to_string ──────────────────────────────────────────────────
+# strings/string.jl:73: ccall(:jl_pchar_to_string, Ref{String}, (Ptr{UInt8}, Int), ref, len)
+# strings/string.jl:99: unsafe_string(p, len) = ccall(:jl_pchar_to_string, ...)
+#
+# Copies bytes from a raw pointer into a new String. Pointer-based, not
+# applicable in Wasm GC. The codegen handles string construction natively.
+# Add to SKIP list — returns Ref{String} (externref).
+
+if !(:jl_pchar_to_string in TYPEINF_SKIP_FOREIGNCALLS)
+    push!(TYPEINF_SKIP_FOREIGNCALLS, :jl_pchar_to_string)
+end
+TYPEINF_SKIP_RETURN_DEFAULTS[:jl_pchar_to_string] = String
+
+# ─── 30. jl_string_ptr ───────────────────────────────────────────────────────
+# Already in Phase A SKIP list (ccall_stubs.jl line 38).
+# boot.jl:690,761: ccall(:jl_string_ptr, Ptr{UInt8}, (Any,), s)
+# essentials.jl:693-694: unsafe_convert(Ptr{UInt8}, s::String) = ccall(...)
+#
+# Gets a raw Ptr{UInt8} to the string's data. Not applicable in Wasm GC.
+# Already added to SKIP in Phase A — just verify return default is set.
+if !haskey(TYPEINF_SKIP_RETURN_DEFAULTS, :jl_string_ptr)
+    TYPEINF_SKIP_RETURN_DEFAULTS[:jl_string_ptr] = Ptr{UInt8}
+end
+
 # ─── Verification ────────────────────────────────────────────────────────────────
 
 function verify_replacements()
@@ -1409,14 +1495,117 @@ function verify_replacements()
     end
 
     # Total SKIP entries should be at least 41 now (37 Phase A+B+C1 + 4 Phase C2)
-    total_skip = length(TYPEINF_SKIP_FOREIGNCALLS)
-    if total_skip >= 41
+    total_skip_c2 = length(TYPEINF_SKIP_FOREIGNCALLS)
+    if total_skip_c2 >= 41
         passed += 1
     else
-        println("FAIL: TYPEINF_SKIP_FOREIGNCALLS has $total_skip entries, expected >= 41")
+        println("FAIL: TYPEINF_SKIP_FOREIGNCALLS has $total_skip_c2 entries, expected >= 41 (after C2)")
         failed += 1
     end
 
-    println("Phase B1+B2+B3+C1+C2 replacements verification: $passed passed, $failed failed")
+    # ─── Phase C3 verification — String operation SKIP entries ───────────
+
+    # 26. jl_alloc_string — verify it's in SKIP list with correct return type
+    if :jl_alloc_string in TYPEINF_SKIP_FOREIGNCALLS
+        passed += 1
+    else
+        println("FAIL: jl_alloc_string not in TYPEINF_SKIP_FOREIGNCALLS")
+        failed += 1
+    end
+    if haskey(TYPEINF_SKIP_RETURN_DEFAULTS, :jl_alloc_string)
+        passed += 1
+    else
+        println("FAIL: jl_alloc_string not in TYPEINF_SKIP_RETURN_DEFAULTS")
+        failed += 1
+    end
+
+    # 27. jl_string_to_genericmemory — verify it's in SKIP list
+    if :jl_string_to_genericmemory in TYPEINF_SKIP_FOREIGNCALLS
+        passed += 1
+    else
+        println("FAIL: jl_string_to_genericmemory not in TYPEINF_SKIP_FOREIGNCALLS")
+        failed += 1
+    end
+    if haskey(TYPEINF_SKIP_RETURN_DEFAULTS, :jl_string_to_genericmemory)
+        passed += 1
+    else
+        println("FAIL: jl_string_to_genericmemory not in TYPEINF_SKIP_RETURN_DEFAULTS")
+        failed += 1
+    end
+
+    # 28. jl_genericmemory_to_string — verify it's in SKIP list
+    if :jl_genericmemory_to_string in TYPEINF_SKIP_FOREIGNCALLS
+        passed += 1
+    else
+        println("FAIL: jl_genericmemory_to_string not in TYPEINF_SKIP_FOREIGNCALLS")
+        failed += 1
+    end
+    if haskey(TYPEINF_SKIP_RETURN_DEFAULTS, :jl_genericmemory_to_string)
+        passed += 1
+    else
+        println("FAIL: jl_genericmemory_to_string not in TYPEINF_SKIP_RETURN_DEFAULTS")
+        failed += 1
+    end
+
+    # 29. jl_pchar_to_string — verify it's in SKIP list
+    if :jl_pchar_to_string in TYPEINF_SKIP_FOREIGNCALLS
+        passed += 1
+    else
+        println("FAIL: jl_pchar_to_string not in TYPEINF_SKIP_FOREIGNCALLS")
+        failed += 1
+    end
+    if haskey(TYPEINF_SKIP_RETURN_DEFAULTS, :jl_pchar_to_string)
+        passed += 1
+    else
+        println("FAIL: jl_pchar_to_string not in TYPEINF_SKIP_RETURN_DEFAULTS")
+        failed += 1
+    end
+
+    # 30. jl_string_ptr — verify it's still in SKIP list (was Phase A) + has return default
+    if :jl_string_ptr in TYPEINF_SKIP_FOREIGNCALLS
+        passed += 1
+    else
+        println("FAIL: jl_string_ptr not in TYPEINF_SKIP_FOREIGNCALLS")
+        failed += 1
+    end
+    if haskey(TYPEINF_SKIP_RETURN_DEFAULTS, :jl_string_ptr)
+        passed += 1
+    else
+        println("FAIL: jl_string_ptr not in TYPEINF_SKIP_RETURN_DEFAULTS")
+        failed += 1
+    end
+
+    # Verify String roundtrip works in native Julia (ground truth)
+    # String(Vector{UInt8}("hello")) should roundtrip correctly
+    orig = "hello"
+    bytes_vec = Vector{UInt8}(orig)
+    roundtrip = String(bytes_vec)
+    if roundtrip == orig
+        passed += 1
+    else
+        println("FAIL: String roundtrip — orig=$orig roundtrip=$roundtrip")
+        failed += 1
+    end
+
+    # Verify codeunits gives correct byte representation
+    cu = codeunits("hello")
+    if length(cu) == 5 && cu[1] == UInt8('h') && cu[5] == UInt8('o')
+        passed += 1
+    else
+        println("FAIL: codeunits(\"hello\") — length=$(length(cu))")
+        failed += 1
+    end
+
+    # Total SKIP entries should be at least 45 now (41 Phase C2 + 4 Phase C3)
+    # (jl_string_ptr was already counted in Phase A, so +4 not +5)
+    total_skip = length(TYPEINF_SKIP_FOREIGNCALLS)
+    if total_skip >= 45
+        passed += 1
+    else
+        println("FAIL: TYPEINF_SKIP_FOREIGNCALLS has $total_skip entries, expected >= 45")
+        failed += 1
+    end
+
+    println("Phase B1+B2+B3+C1+C2+C3 replacements verification: $passed passed, $failed failed")
     return failed == 0
 end
