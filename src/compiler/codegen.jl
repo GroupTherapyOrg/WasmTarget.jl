@@ -21416,11 +21416,17 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 # Cross-function call - emit call instruction with target index
                 push!(bytes, Opcode.CALL)
                 append!(bytes, encode_leb128_unsigned(target_info.wasm_idx))
+                # PURE-3111: If the callee returns Union{} (Bottom), it always throws.
+                # The Wasm func type has no result, so code after is unreachable.
+                # Skip type bridge and emit unreachable to prevent stack underflow.
+                if target_info.return_type === Union{}
+                    push!(bytes, Opcode.UNREACHABLE)
+                    ctx.last_stmt_was_stub = true
                 # PURE-900: Bridge type gap between function's Wasm return type
                 # and the caller's SSA local type. Handles both directions:
                 # 1. externref → ConcreteRef: any_convert_extern + ref.cast
                 # 2. ConcreteRef → externref: extern_convert_any
-                if haskey(ctx.ssa_locals, idx)
+                elseif haskey(ctx.ssa_locals, idx)
                     local_idx_val = ctx.ssa_locals[idx]
                     local_arr_idx = local_idx_val - ctx.n_params + 1
                     if local_arr_idx >= 1 && local_arr_idx <= length(ctx.locals)
