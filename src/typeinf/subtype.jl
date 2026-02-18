@@ -1580,8 +1580,15 @@ function _intersect_invariant_env(@nospecialize(x), @nospecialize(y), env::Inter
     env.invdepth -= 1
 
     if ii === Union{}
-        # Check if either side is actually Bottom
-        if (x isa Type) && !(wasm_subtype(x, Union{}))
+        # Check if either side is actually Bottom-typed
+        # If x or y is a TypeVar or Type that is NOT <: Union{}, then the
+        # intersection being empty means the invariant constraint is unsatisfiable
+        x_is_type = (x isa Type) || (x isa TypeVar)
+        y_is_type = (y isa Type) || (y isa TypeVar)
+        if x_is_type && !wasm_subtype(x isa TypeVar ? x.ub : x, Union{})
+            return nothing  # inconsistent, not empty
+        end
+        if y_is_type && !wasm_subtype(y isa TypeVar ? y.ub : y, Union{})
             return nothing  # inconsistent, not empty
         end
         return Union{}
