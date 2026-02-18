@@ -37,17 +37,25 @@ function PlaygroundPage()
                 )
             ),
             Suite.CardContent(
-                # Code input — Suite.Textarea with monospace font
-                Div(:class => "mb-4",
-                    Suite.Textarea(
-                        id="pg-editor",
-                        rows="5",
-                        placeholder="Type Julia code here...",
-                        spellcheck="false",
-                        autocomplete="off",
-                        autocorrect="off",
-                        autocapitalize="off",
-                        class="font-mono text-sm resize-y"
+                # Code input — CodeBlock-styled editable area
+                Div(:class => "mb-4 group relative overflow-hidden rounded-lg border border-warm-200 dark:border-warm-700 bg-warm-950 focus-within:ring-2 focus-within:ring-accent-600/50 focus-within:border-accent-600 transition-colors",
+                    # Language badge header (matches Suite.CodeBlock)
+                    Div(:class => "flex items-center gap-2 border-b border-warm-800 px-4 py-2",
+                        Span(:class => "text-[11px] font-mono uppercase tracking-wider text-warm-400 dark:text-warm-500 select-none",
+                            "julia"
+                        )
+                    ),
+                    # Editable textarea styled to match CodeBlock code area
+                    Textarea(
+                        :id => "pg-editor",
+                        :rows => "5",
+                        :placeholder => "Type Julia code here...",
+                        :spellcheck => "false",
+                        :autocomplete => "off",
+                        :autocorrect => "off",
+                        :autocapitalize => "off",
+                        :class => "w-full bg-transparent border-none outline-none resize-y p-4 font-mono text-sm leading-6 text-warm-200 placeholder:text-warm-600",
+                        "1 + 1"
                     )
                 ),
 
@@ -140,9 +148,6 @@ function _playground_script()
       var runBtn = document.getElementById('pg-run');
       var output = document.getElementById('pg-output');
       var status = document.getElementById('pg-status');
-
-      // Set default value (Textarea renders empty, we set via JS)
-      if (editor && !editor.value) editor.value = '1 + 1';
 
       // Load WASM
       var wasmPaths = [
