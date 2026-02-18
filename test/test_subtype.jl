@@ -291,10 +291,8 @@ check_subtype(Tuple{Int64}, Union{Tuple{Int64},Tuple{Float64}})         # true
 check_subtype(Tuple{String}, Union{Tuple{Int64},Tuple{Float64}})        # false
 check_subtype(Tuple{Int64,Int64}, Union{Tuple{Int64,Int64},Tuple{Float64,Float64}}) # true
 
-# Union{} in Tuple
-check_subtype(Tuple{Union{}}, Tuple{Int64})                             # true (Union{} <: Int64)
-check_subtype(Tuple{Union{}}, Tuple{Any})                               # true
-check_subtype(Tuple{Union{},Int64}, Tuple{Number,Number})               # true
+# Union{} in Tuple — note: Tuple{Union{}} is INVALID in Julia ("Tuple field type cannot be Union{}")
+# So we skip those pairs. Union{} as a standalone type is already tested in Section 4.
 
 # Tuple with Vararg + Union
 check_subtype(Tuple{Union{Int64,Float64},Union{Int64,Float64}}, Tuple{Vararg{Number}})  # true
