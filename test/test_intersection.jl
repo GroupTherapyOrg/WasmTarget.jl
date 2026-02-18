@@ -330,8 +330,6 @@ check_intersection(Pair{Int64,Float64}, Pair{<:Integer,<:AbstractFloat})
 # Section 24: Diagonal dispatch patterns (where T ... ::T, ::T)
 # ============================================================
 # Tuple{T,T} where T — diagonal constraint
-check_intersection(Tuple{Int64,Int64}, (@NamedTuple{a::T,b::T} where T).types[1].body)  # Can't directly make Tuple{T,T} where T easily
-# Use a simpler approach — intersect with Tuple types that exercise diagonal
 let T = TypeVar(:T)
     diag_tt = UnionAll(T, Tuple{T,T})
     check_intersection(Tuple{Int64,Int64}, diag_tt)

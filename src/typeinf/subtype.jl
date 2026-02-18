@@ -1675,16 +1675,21 @@ function _intersect_invariant_env(@nospecialize(x), @nospecialize(y), env::Inter
     env.invdepth -= 1
 
     if ii === Union{}
-        # Check if either side is actually Bottom-typed
-        # If x or y is a TypeVar or Type that is NOT <: Union{}, then the
-        # intersection being empty means the invariant constraint is unsatisfiable
-        x_is_type = (x isa Type) || (x isa TypeVar)
-        y_is_type = (y isa Type) || (y isa TypeVar)
-        if x_is_type && !wasm_subtype(x isa TypeVar ? x.ub : x, Union{})
-            return nothing  # inconsistent, not empty
+        # For TypeVars, check if Union{} is a valid binding.
+        # Union{} is valid if lb <: Union{} (i.e., lb === Union{}) for each TypeVar.
+        # Example: Vector{<:Integer} ∩ Vector{<:AbstractFloat} = Vector{Union{}}
+        #   because both have lb=Union{}, so Union{} is valid.
+        # Counter-example: Vector{T>:Integer} ∩ Vector{Int64} = Union{}
+        #   because T has lb=Integer, and Union{} is NOT >: Integer.
+        x_allows_bottom = (x isa TypeVar) ? (x.lb === Union{}) : (x isa Type && wasm_subtype(x, Union{}))
+        y_allows_bottom = (y isa TypeVar) ? (y.lb === Union{}) : (y isa Type && wasm_subtype(y, Union{}))
+        if x_allows_bottom && y_allows_bottom
+            return Union{}
         end
-        if y_is_type && !wasm_subtype(y isa TypeVar ? y.ub : y, Union{})
-            return nothing  # inconsistent, not empty
+        # At least one side doesn't allow Union{} — invariant is unsatisfiable
+        # (for concrete non-bottom types, this means they disagree)
+        if (x isa Type || x isa TypeVar) && (y isa Type || y isa TypeVar)
+            return nothing
         end
         return Union{}
     end
