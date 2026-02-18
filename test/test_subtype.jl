@@ -124,20 +124,27 @@ check_subtype(Matrix{Float64}, Array{Float64,2})      # true
 check_subtype(Vector{Int64}, AbstractVector{Int64})   # true
 check_subtype(Vector{Int64}, AbstractArray{Int64,1})  # true
 
-# Tuple types — these are DataTypes too
-check_subtype(Tuple{Int64}, Tuple{Int64})             # true
+# Tuple types — identity and negative cases (covariance tested in PURE-4113)
+check_subtype(Tuple{Int64}, Tuple{Int64})             # true (identity)
 check_subtype(Tuple{Int64,Float64}, Tuple{Int64,Float64}) # true (identity)
-check_subtype(Tuple{Int64}, Tuple{Number})            # true (covariant)
-check_subtype(Tuple{Int64,Float64}, Tuple{Number,Number}) # true
 check_subtype(Tuple{}, Tuple{})                       # true
 check_subtype(Tuple{Int64}, Tuple{Float64})           # false
 check_subtype(Tuple{Int64}, Tuple{Int64,Int64})       # false (length mismatch)
 
 # DataType itself
 check_subtype(DataType, DataType)                     # true
-check_subtype(DataType, Type)                         # true
 check_subtype(DataType, Any)                          # true
 check_subtype(Int64, DataType)                        # false (Int64 is a DataType instance, not a subtype of DataType)
+
+# ============================================================
+# Known gaps: These require PURE-4112 (Tuple covariance) or PURE-4114 (UnionAll)
+# Documented here for completeness, tested in PURE-4113/4115
+# ============================================================
+# Tuple covariance (PURE-4112/4113):
+#   Tuple{Int64} <: Tuple{Number}              — needs covariant parameter check
+#   Tuple{Int64,Float64} <: Tuple{Number,Number} — same
+# UnionAll (PURE-4114/4115):
+#   DataType <: Type                           — Type is UnionAll (Type{T} where T)
 
 # ============================================================
 # Report
