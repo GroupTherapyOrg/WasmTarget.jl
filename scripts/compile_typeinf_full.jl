@@ -3,12 +3,10 @@
 #
 # Strategy:
 # 1. Load all typeinf infrastructure (stubs, reimpl, DictMethodTable, WasmInterpreter)
-# 2. compile_multi with:
-#    - Core.Compiler.typeinf(WasmInterpreter, InferenceState) as entry point
-#    - All 30 reimplementation functions (subtype + intersection + matching)
-#    - Test wrapper functions (for Node.js CORRECT verification in PURE-4153)
-# 3. Validate with wasm-tools
-# 4. Report function count and module size
+# 2. Phase 1: Compile typeinf alone (baseline)
+# 3. Phase 2: compile_multi with reimpl functions + typeinf (31 explicit)
+# 4. Phase 3: Add key Compiler functions from COMPILES_NOW classification
+# 5. Validate each phase with wasm-tools
 
 using WasmTarget
 
@@ -21,12 +19,18 @@ println("=" ^ 80)
 println("PURE-4152: Full typeinf.wasm compilation")
 println("=" ^ 80)
 
-# ─── Phase 1: Try basic compile of typeinf with WasmInterpreter ───
-println("\n--- Phase 1: Single compile of typeinf(WasmInterpreter, InferenceState) ---")
-
-try
-    bytes = compile(Core.Compiler.typeinf, (WasmInterpreter, InferenceState))
-    println("  compile SUCCESS: $(length(bytes)) bytes")
+# Helper: compile, validate, report
+function compile_and_report(label, func_list)
+    println("\n--- $label ---")
+    println("  Total explicit functions: $(length(func_list))")
+    local bytes
+    try
+        bytes = compile_multi(func_list)
+    catch e
+        println("  COMPILE_ERROR: $(first(sprint(showerror, e), 300))")
+        return nothing
+    end
+    println("  compile_multi SUCCESS: $(length(bytes)) bytes")
     tmpf = tempname() * ".wasm"
     write(tmpf, bytes)
     nfuncs = try
@@ -41,15 +45,11 @@ try
         println("  VALIDATE_ERROR: $(first(valerr, 300))")
     end
     rm(tmpf, force=true)
-catch e
-    println("  COMPILE_ERROR: $(first(sprint(showerror, e), 300))")
+    return bytes
 end
 
-# ─── Phase 2: compile_multi with reimpl functions + typeinf entry point ───
-println("\n--- Phase 2: compile_multi with all functions ---")
-
-# All reimplementation functions (from compile_reimpl.jl / test_reimpl_node.jl)
-subtype_functions = [
+# ─── All reimplementation functions ───
+reimpl_functions = [
     (wasm_subtype, (Any, Any)),
     (_subtype, (Any, Any, SubtypeEnv, Int)),
     (lookup, (SubtypeEnv, TypeVar)),
@@ -70,9 +70,6 @@ subtype_functions = [
     (_datatype_subtype, (DataType, DataType)),
     (_tuple_subtype, (DataType, DataType)),
     (_subtype_param, (Any, Any)),
-]
-
-intersection_functions = [
     (wasm_type_intersection, (Any, Any)),
     (_no_free_typevars, (Any,)),
     (_intersect, (Any, Any, Int)),
@@ -82,47 +79,93 @@ intersection_functions = [
     (_intersect_same_name, (DataType, DataType, Int)),
     (_intersect_invariant, (Any, Any)),
     (_intersect_different_names, (DataType, DataType, Int)),
-]
-
-matching_functions = [
     (wasm_matching_methods, (Any,)),
 ]
 
-# Core.Compiler.typeinf entry point with WasmInterpreter
+# ─── Core.Compiler.typeinf entry point ───
 typeinf_entry = [
     (Core.Compiler.typeinf, (WasmInterpreter, InferenceState)),
 ]
 
-all_functions = vcat(subtype_functions, intersection_functions, matching_functions, typeinf_entry)
+# ─── Phase 2: Reimpl + typeinf ───
+phase2_funcs = vcat(reimpl_functions, typeinf_entry)
+bytes2 = compile_and_report("Phase 2: reimpl + typeinf (31 funcs)", phase2_funcs)
 
-println("  Total explicit functions: $(length(all_functions))")
+# ─── Phase 3: Add key Core.Compiler functions ───
+# These are the COMPILES_NOW functions from PURE-3001 classification
+# that the typeinf module depends on.
+const CC = Core.Compiler
+compiler_functions = Tuple{Any, Tuple}[]
 
-try
-    bytes = compile_multi(all_functions)
-    println("  compile_multi SUCCESS: $(length(bytes)) bytes")
-    tmpf = tempname() * ".wasm"
-    write(tmpf, bytes)
-    nfuncs = try
-        parse(Int, readchomp(`bash -c "wasm-tools print $tmpf 2>/dev/null | grep -c '(func (;'"` ))
-    catch; 0 end
-    println("  Functions: $nfuncs")
-    try
-        run(`wasm-tools validate --features=gc $tmpf`)
-        println("  VALIDATES ✓")
-    catch
-        valerr = try readchomp(`bash -c "wasm-tools validate --features=gc $tmpf 2>&1 || true"`) catch; "" end
-        println("  VALIDATE_ERROR: $(first(valerr, 300))")
-    end
+# Type system operations (key for typeinf)
+push!(compiler_functions, (CC._unioncomplexity, (Any,)))
+push!(compiler_functions, (CC.widenconst, (Any,)))
+push!(compiler_functions, (CC._typename, (Any,)))
+push!(compiler_functions, (CC.instanceof_tfunc, (Any,)))
 
-    # Save for analysis
+# Inference state management
+push!(compiler_functions, (CC.is_same_frame, (CC.InferenceState, CC.MethodInstance)))
+push!(compiler_functions, (CC.add_edges!, (CC.InferenceState,)))
+
+# Type lattice and effects
+push!(compiler_functions, (CC.decode_effects, (UInt32,)))
+push!(compiler_functions, (CC.tname_intersect, (DataType, DataType)))
+push!(compiler_functions, (CC.type_more_complex, (Any, Any, Core.SimpleVector, Int, Int, Int)))
+
+# Abstract evaluation helpers
+push!(compiler_functions, (CC.count_const_size, (Any, Int)))
+
+# Codegen/optimization (disabled but compiled)
+push!(compiler_functions, (CC.code_cache, (CC.AbstractInterpreter,)))
+
+# Base functions used by typeinf
+push!(compiler_functions, (Base._uniontypes, (Any, Vector{Any})))
+push!(compiler_functions, (Base.unionlen, (Any,)))
+push!(compiler_functions, (Base.datatype_fieldcount, (DataType,)))
+
+# Build combined list
+phase3_funcs = vcat(reimpl_functions, typeinf_entry, compiler_functions)
+bytes3 = compile_and_report("Phase 3: reimpl + typeinf + Compiler functions ($(length(phase3_funcs)) funcs)", phase3_funcs)
+
+# ─── Phase 4: Test wrapper functions for PURE-4153 ───
+# These call wasm_subtype/wasm_type_intersection with hardcoded types
+# and return Int32 for easy Node.js comparison
+test_sub_1() = Int32(wasm_subtype(Int64, Number))
+test_sub_2() = Int32(wasm_subtype(Int64, String))
+test_sub_3() = Int32(wasm_subtype(Float64, Real))
+test_sub_4() = Int32(wasm_subtype(String, Any))
+test_sub_5() = Int32(wasm_subtype(Any, Int64))
+test_isect_1() = Int32(wasm_type_intersection(Int64, Number) === Int64)
+test_isect_2() = Int32(wasm_type_intersection(Int64, String) === Union{})
+test_isect_3() = Int32(wasm_type_intersection(Number, Real) === Real)
+
+wrapper_functions = [
+    (test_sub_1, ()),
+    (test_sub_2, ()),
+    (test_sub_3, ()),
+    (test_sub_4, ()),
+    (test_sub_5, ()),
+    (test_isect_1, ()),
+    (test_isect_2, ()),
+    (test_isect_3, ()),
+]
+
+phase4_funcs = vcat(phase3_funcs, wrapper_functions)
+bytes4 = compile_and_report("Phase 4: FULL module + test wrappers ($(length(phase4_funcs)) funcs)", phase4_funcs)
+
+# ─── Save final module ───
+if bytes4 !== nothing
     outpath = joinpath(@__DIR__, "typeinf_full.wasm")
-    write(outpath, bytes)
-    println("  Saved to scripts/typeinf_full.wasm")
-    rm(tmpf, force=true)
-catch e
-    println("  COMPILE_ERROR: $(first(sprint(showerror, e), 300))")
-    bt = catch_backtrace()
-    println("  Backtrace: $(first(sprint(showerror, e, bt), 500))")
+    write(outpath, bytes4)
+    println("\n  FINAL: Saved to scripts/typeinf_full.wasm ($(length(bytes4)) bytes)")
+elseif bytes3 !== nothing
+    outpath = joinpath(@__DIR__, "typeinf_full.wasm")
+    write(outpath, bytes3)
+    println("\n  FINAL: Saved Phase 3 to scripts/typeinf_full.wasm ($(length(bytes3)) bytes)")
+elseif bytes2 !== nothing
+    outpath = joinpath(@__DIR__, "typeinf_full.wasm")
+    write(outpath, bytes2)
+    println("\n  FINAL: Saved Phase 2 to scripts/typeinf_full.wasm ($(length(bytes2)) bytes)")
 end
 
 println("\nDone.")
