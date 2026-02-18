@@ -2538,6 +2538,11 @@ function is_ref_type_or_union(T::Type)::Bool
     if T isa UnionAll
         return true
     end
+    # PURE-4151: Type{T} singleton types (e.g., Type{Int64}, Type{Any})
+    # Now represented as unique Wasm global struct refs (not i32.const 0)
+    if T isa DataType && T <: Type
+        return true
+    end
     return false
 end
 
