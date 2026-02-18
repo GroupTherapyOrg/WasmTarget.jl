@@ -224,6 +224,12 @@ function _var_gt(vb::VarBinding, @nospecialize(a), env::SubtypeEnv, param::Int):
         if a !== Union{}
             if vb.lb === Union{}
                 vb.lb = a
+            elseif vb.lb === a
+                # Same value/type, no change needed
+            elseif !(vb.lb isa Type) || !(a isa Type)
+                # Non-type values (e.g., integer parameters in Tuple{1,2})
+                # Can't form Union of non-types. Use Any as join (will fail diagonal check).
+                vb.lb = Any
             elseif !_subtype(vb.lb, a, env, 0)
                 if _subtype(a, vb.lb, env, 0)
                     # a is narrower than current lb, keep current lb
@@ -318,9 +324,12 @@ function _subtype_inner(@nospecialize(t), @nospecialize(body), env::SubtypeEnv, 
     end
 end
 
-"""Check if a type is a concrete/leaf bound (for diagonal rule)."""
+"""Check if a type is a concrete/leaf bound (for diagonal rule).
+Handles both Type values (DataType) and non-type values (e.g., integer 1 in Tuple{1,1})."""
 function _is_leaf_bound(@nospecialize(v))::Bool
     v isa DataType && return isconcretetype(v)
+    # Non-type values (e.g., integers in value-parameterized types) are always concrete
+    !(v isa Type) && !(v isa TypeVar) && return true
     return false
 end
 
