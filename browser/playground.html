@@ -206,10 +206,16 @@
   <div class="examples">
     Try:
     <code data-expr="1 + 1">1 + 1</code>
-    <code data-expr="10 + 20">10 + 20</code>
+    <code data-expr="10 - 3">10 - 3</code>
     <code data-expr="2 * 3">2 * 3</code>
-    <code data-expr="7 * 8">7 * 8</code>
-    <code data-expr="sin(0.0)">sin(0.0)</code>
+    <code data-expr="10 / 3">10 / 3</code>
+    <code data-expr="10 % 3">10 % 3</code>
+    <code data-expr="2.5 + 3.5">2.5 + 3.5</code>
+    <code data-expr="10.0 / 4.0">10.0 / 4.0</code>
+    <code data-expr="sin(1.0)">sin(1.0)</code>
+    <code data-expr="cos(0.0)">cos(0.0)</code>
+    <code data-expr="sqrt(4.0)">sqrt(4.0)</code>
+    <code data-expr="abs(-7)">abs(-7)</code>
   </div>
 
   <div class="output-section">
@@ -276,36 +282,68 @@ function evaluate(code) {
   const e = wasmInstance.exports;
   const trimmed = code.trim();
 
-  // Match simple binary expressions: <number> <op> <number>
-  const binMatch = trimmed.match(/^(-?\d+(?:\.\d+)?)\s*([+\-*])\s*(-?\d+(?:\.\d+)?)$/);
+  // Match unary math functions: func(number)
+  const unaryMatch = trimmed.match(/^(sin|cos|sqrt|abs)\((-?\d+(?:\.\d+)?)\)$/);
+  if (unaryMatch) {
+    const fname = unaryMatch[1];
+    const x = Number(unaryMatch[2]);
+    const isFloat = unaryMatch[2].includes(".");
+    if (fname === "sin") return String(e.pipeline_sin(x));
+    if (fname === "cos") return String(e.pipeline_cos(x));
+    if (fname === "sqrt") return String(e.pipeline_sqrt(x));
+    if (fname === "abs" && isFloat) return String(e.pipeline_abs_f(x));
+    if (fname === "abs" && !isFloat) return String(e.pipeline_abs_i(BigInt(Math.trunc(x))));
+  }
+
+  // Match unary negation: -number
+  const negMatch = trimmed.match(/^-(\d+)$/);
+  if (negMatch) {
+    return String(e.pipeline_neg(BigInt(negMatch[1])));
+  }
+
+  // Match binary expressions: <number> <op> <number>
+  const binMatch = trimmed.match(/^(-?\d+(?:\.\d+)?)\s*([+\-*/%])\s*(-?\d+(?:\.\d+)?)$/);
   if (binMatch) {
     const a = Number(binMatch[1]);
     const b = Number(binMatch[3]);
     const op = binMatch[2];
     const isFloat = binMatch[1].includes(".") || binMatch[3].includes(".");
 
-    if (!isFloat) {
+    if (isFloat) {
+      // Float path
+      if (op === "+") return String(e.pipeline_fadd(a, b));
+      if (op === "-") return String(e.pipeline_fsub(a, b));
+      if (op === "*") return String(e.pipeline_fmul(a, b));
+      if (op === "/") return String(e.pipeline_fdiv(a, b));
+    } else {
       // Integer path — use BigInt exports
       const ai = BigInt(Math.trunc(a));
       const bi = BigInt(Math.trunc(b));
       if (op === "+") return String(e.pipeline_add(ai, bi));
-      if (op === "-") return String(e.pipeline_add(ai, -bi));
+      if (op === "-") return String(e.pipeline_sub(ai, bi));
       if (op === "*") return String(e.pipeline_mul(ai, bi));
+      if (op === "/") return String(e.pipeline_div(ai, bi));
+      if (op === "%") return String(e.pipeline_mod(ai, bi));
     }
-    // Float fallback for float literals (no float add/mul exports yet)
-    throw new Error(`Float arithmetic not yet supported in Wasm pipeline. Use integer expressions like "1 + 1".`);
   }
 
-  // Match sin(x)
-  const sinMatch = trimmed.match(/^sin\((-?\d+(?:\.\d+)?)\)$/);
-  if (sinMatch) {
-    const x = Number(sinMatch[1]);
-    const result = e.pipeline_sin(x);
-    return String(result);
+  // Match div(a, b) and mod(a, b)
+  const divModMatch = trimmed.match(/^(div|mod)\((-?\d+),\s*(-?\d+)\)$/);
+  if (divModMatch) {
+    const fname = divModMatch[1];
+    const ai = BigInt(divModMatch[2]);
+    const bi = BigInt(divModMatch[3]);
+    if (fname === "div") return String(e.pipeline_div(ai, bi));
+    if (fname === "mod") return String(e.pipeline_mod(ai, bi));
   }
 
   throw new Error(
-    `Expression not yet supported.\n\nCurrently supported:\n  Integer arithmetic: 1 + 1, 2 * 3, 10 + 20\n  Math functions: sin(0.0)\n\nFull Julia compilation coming in a future update.`
+    `Expression not yet supported.\n\nCurrently supported:\n` +
+    `  Integer: 1 + 1, 10 - 3, 2 * 3, 10 / 3, 10 % 3\n` +
+    `  Float:   2.5 + 3.5, 10.0 - 3.5, 2.5 * 4.0, 10.0 / 4.0\n` +
+    `  Math:    sin(1.0), cos(0.0), sqrt(4.0), abs(-7)\n` +
+    `  Integer: div(10, 3), mod(10, 3)\n` +
+    `\nFull Julia compilation coming in a future update.`
   );
 }
 

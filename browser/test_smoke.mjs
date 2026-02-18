@@ -22,9 +22,28 @@ function evaluate(wasmExports, code) {
     const e = wasmExports;
     const trimmed = code.trim();
 
-    // Match simple binary expressions: <number> <op> <number>
+    // Match unary math functions: func(number)
+    const unaryMatch = trimmed.match(/^(sin|cos|sqrt|abs)\((-?\d+(?:\.\d+)?)\)$/);
+    if (unaryMatch) {
+        const fname = unaryMatch[1];
+        const x = Number(unaryMatch[2]);
+        const isFloat = unaryMatch[2].includes(".");
+        if (fname === "sin") return String(e.pipeline_sin(x));
+        if (fname === "cos") return String(e.pipeline_cos(x));
+        if (fname === "sqrt") return String(e.pipeline_sqrt(x));
+        if (fname === "abs" && isFloat) return String(e.pipeline_abs_f(x));
+        if (fname === "abs" && !isFloat) return String(e.pipeline_abs_i(BigInt(Math.trunc(x))));
+    }
+
+    // Match unary negation: -number
+    const negMatch = trimmed.match(/^-(\d+)$/);
+    if (negMatch) {
+        return String(e.pipeline_neg(BigInt(negMatch[1])));
+    }
+
+    // Match binary expressions: <number> <op> <number>
     const binMatch = trimmed.match(
-        /^(-?\d+(?:\.\d+)?)\s*([+\-*])\s*(-?\d+(?:\.\d+)?)$/
+        /^(-?\d+(?:\.\d+)?)\s*([+\-*/%])\s*(-?\d+(?:\.\d+)?)$/
     );
     if (binMatch) {
         const a = Number(binMatch[1]);
@@ -32,25 +51,30 @@ function evaluate(wasmExports, code) {
         const op = binMatch[2];
         const isFloat = binMatch[1].includes(".") || binMatch[3].includes(".");
 
-        if (!isFloat) {
-            // Integer path — use BigInt exports
+        if (isFloat) {
+            if (op === "+") return String(e.pipeline_fadd(a, b));
+            if (op === "-") return String(e.pipeline_fsub(a, b));
+            if (op === "*") return String(e.pipeline_fmul(a, b));
+            if (op === "/") return String(e.pipeline_fdiv(a, b));
+        } else {
             const ai = BigInt(Math.trunc(a));
             const bi = BigInt(Math.trunc(b));
             if (op === "+") return String(e.pipeline_add(ai, bi));
-            if (op === "-") return String(e.pipeline_add(ai, -bi));
+            if (op === "-") return String(e.pipeline_sub(ai, bi));
             if (op === "*") return String(e.pipeline_mul(ai, bi));
+            if (op === "/") return String(e.pipeline_div(ai, bi));
+            if (op === "%") return String(e.pipeline_mod(ai, bi));
         }
-        throw new Error(
-            `Float arithmetic not yet supported in Wasm pipeline.`
-        );
     }
 
-    // Match sin(x)
-    const sinMatch = trimmed.match(/^sin\((-?\d+(?:\.\d+)?)\)$/);
-    if (sinMatch) {
-        const x = Number(sinMatch[1]);
-        const result = e.pipeline_sin(x);
-        return String(result);
+    // Match div(a, b) and mod(a, b)
+    const divModMatch = trimmed.match(/^(div|mod)\((-?\d+),\s*(-?\d+)\)$/);
+    if (divModMatch) {
+        const fname = divModMatch[1];
+        const ai = BigInt(divModMatch[2]);
+        const bi = BigInt(divModMatch[3]);
+        if (fname === "div") return String(e.pipeline_div(ai, bi));
+        if (fname === "mod") return String(e.pipeline_mod(ai, bi));
     }
 
     throw new Error(`Expression not yet supported.`);
@@ -152,11 +176,34 @@ function check(expr, expected) {
     }
 }
 
+// Original expressions
 check("1 + 1", "2");
 check("10 + 20", "30");
 check("2 * 3", "6");
 check("7 * 8", "56");
 check("sin(0.0)", "0");
+
+// PURE-4165: New integer operations
+check("10 - 3", "7");
+check("1 - 5", "-4");
+check("10 / 3", "3");
+check("10 % 3", "1");
+check("abs(-7)", "7");
+
+// PURE-4165: Float operations
+check("2.5 + 3.5", "6");
+check("10.0 - 3.5", "6.5");
+check("2.5 * 4.0", "10");
+check("10.0 / 4.0", "2.5");
+check("abs(-2.5)", "2.5");
+
+// PURE-4165: Math functions
+check("cos(0.0)", "1");
+check("sqrt(4.0)", "2");
+
+// PURE-4165: Julia-style div/mod
+check("div(10, 3)", "3");
+check("mod(7, 2)", "1");
 
 console.log(`   Result: ${pass}/${pass + fail} CORRECT\n`);
 
