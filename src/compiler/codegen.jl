@@ -8354,9 +8354,8 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                 # Skip nothing statements
             else
                 # Regular statement
-                _preloop_stmt_bytes = compile_statement(stmt, i, ctx)
-                append!(bytes, _preloop_stmt_bytes)
-                    end
+                append!(bytes, compile_statement(stmt, i, ctx))
+            end
         end
 
         # Close any remaining pre-loop blocks
@@ -8823,19 +8822,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
         elseif stmt === nothing
             # Skip nothing statements
         else
-            _postloop_stmt_bytes = compile_statement(stmt, i, ctx)
-            append!(bytes, _postloop_stmt_bytes)
-            # DEBUG PURE-6005: detect orphan getfield values in post-loop
-            if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke) && length(stmt.args) >= 1
-                _f2 = stmt.args[1]
-                if _f2 isa GlobalRef && _f2.name in (:getfield, :getproperty) && length(stmt.args) >= 3
-                    if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
-                        _st2 = get(ctx.ssa_types, i, Any)
-                        _dropped2 = !isempty(_postloop_stmt_bytes) && _postloop_stmt_bytes[end] == Opcode.DROP
-                        println("DEBUG_ORPHAN_POSTLOOP: SSA $i type=$(_st2) dropped=$(_dropped2) func=$(ctx.func_name) stmt=$stmt")
-                    end
-                end
-            end
+            append!(bytes, compile_statement(stmt, i, ctx))
         end
     end
 
