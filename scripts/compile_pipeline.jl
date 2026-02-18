@@ -165,12 +165,21 @@ test_sub_2() = Int32(wasm_subtype(Int64, String))        # false
 test_isect_1() = Int32(wasm_type_intersection(Int64, Number) === Int64)  # true
 test_isect_2() = Int32(wasm_type_intersection(Int64, String) === Union{})  # true (disjoint)
 
+# PURE-4161: Pipeline test wrappers — runtime arguments, NOT constant-folded
+# These exercise the REAL compiled code path at Wasm runtime
+pipeline_add(a::Int64, b::Int64)::Int64 = a + b          # 1+1 → 2
+pipeline_mul(a::Int64, b::Int64)::Int64 = a * b          # 2*3 → 6
+pipeline_sin(x::Float64)::Float64 = sin(x)               # sin(1.0) → 0.8414709848078965
+
 test_wrappers = [
     (test_add_1_1, ()),
     (test_sub_1, ()),
     (test_sub_2, ()),
     (test_isect_1, ()),
     (test_isect_2, ()),
+    (pipeline_add, (Int64, Int64)),
+    (pipeline_mul, (Int64, Int64)),
+    (pipeline_sin, (Float64,)),
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -252,7 +261,7 @@ end
 if best !== nothing
     include(joinpath(@__DIR__, "..", "test", "utils.jl"))
     if NODE_CMD !== nothing
-        println("\n--- Node.js verification ---")
+        println("\n--- Node.js verification (no-arg tests) ---")
         test_cases = [
             ("test_add_1_1: 1+1=2", "test_add_1_1", Int32(2)),
             ("test_sub_1: Int64<:Number", "test_sub_1", Int32(1)),
@@ -276,6 +285,45 @@ if best !== nothing
                 println("ERROR: $(first(sprint(showerror, e), 80))")
             end
         end
+
+        # PURE-4161: Pipeline tests with runtime arguments
+        println("\n--- Node.js verification (pipeline tests — runtime args) ---")
+        pipeline_cases = [
+            ("pipeline_add: 1+1=2", "pipeline_add", (Int64(1), Int64(1)), Int64(2)),
+            ("pipeline_mul: 2*3=6", "pipeline_mul", (Int64(2), Int64(3)), Int64(6)),
+        ]
+        for (label, fname, args, expected) in pipeline_cases
+            print("  $label → ")
+            try
+                actual = run_wasm(best, fname, args...)
+                if actual == expected
+                    println("CORRECT ✓")
+                    pass_count += 1
+                else
+                    println("MISMATCH ✗ (got $actual, expected $expected)")
+                end
+            catch e
+                println("ERROR: $(first(sprint(showerror, e), 80))")
+            end
+            total_count += 1
+        end
+
+        # Float64 test: sin(1.0)
+        print("  pipeline_sin: sin(1.0)=0.8414709848078965 → ")
+        try
+            actual = run_wasm(best, "pipeline_sin", 1.0)
+            expected_sin = 0.8414709848078965
+            if actual isa Number && abs(actual - expected_sin) < 1e-15
+                println("CORRECT ✓")
+                pass_count += 1
+            else
+                println("MISMATCH ✗ (got $actual, expected $expected_sin)")
+            end
+        catch e
+            println("ERROR: $(first(sprint(showerror, e), 80))")
+        end
+        total_count += 1
+
         println("\nResults: $pass_count/$total_count CORRECT")
         if pass_count == total_count
             println("ALL CORRECT (level 3) ✓")
