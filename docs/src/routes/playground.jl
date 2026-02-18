@@ -141,39 +141,33 @@ end
 
 # --- The playground JavaScript ---
 function _playground_script()
+    # The script uses window._pgWasm to cache the WASM instance across SPA navigations.
+    # It registers a therapy:router:loaded listener so it re-inits after SPA content swap.
+    # On hard refresh, the IIFE runs directly. On SPA nav, the event listener fires.
     """
     (function() {
-      var wasmInstance = null;
-      var editor = document.getElementById('pg-editor');
-      var runBtn = document.getElementById('pg-run');
-      var output = document.getElementById('pg-output');
-      var status = document.getElementById('pg-status');
-
-      // Load WASM
+      // --- Global WASM cache (persists across SPA navigations) ---
+      // window._pgWasm holds the loaded instance so we don't re-fetch on every nav
       var wasmPaths = [
         window.location.pathname.replace(/\\/playground\\/.*/, '/playground/pipeline-optimized.wasm'),
         './pipeline-optimized.wasm',
         '/WasmTarget.jl/playground/pipeline-optimized.wasm'
       ];
 
-      async function loadWasm() {
+      async function ensureWasm() {
+        if (window._pgWasm) return window._pgWasm;
         for (var i = 0; i < wasmPaths.length; i++) {
           try {
             var resp = await fetch(wasmPaths[i]);
             if (!resp.ok) continue;
             var bytes = await resp.arrayBuffer();
-            var importObject = { Math: { pow: Math.pow } };
-            var result = await WebAssembly.instantiate(bytes, importObject);
-            wasmInstance = result.instance;
-            var size = (bytes.byteLength / 1024).toFixed(0);
-            status.textContent = 'Ready (' + size + ' KB)';
-            status.className = 'text-xs text-accent-600 dark:text-accent-400 font-medium';
-            runBtn.disabled = false;
-            return;
+            var result = await WebAssembly.instantiate(bytes, { Math: { pow: Math.pow } });
+            window._pgWasm = result.instance;
+            window._pgWasmSize = (bytes.byteLength / 1024).toFixed(0);
+            return window._pgWasm;
           } catch(e) { /* try next */ }
         }
-        status.textContent = 'Failed to load WASM';
-        status.className = 'text-xs text-red-500';
+        return null;
       }
 
       function escapeHtml(s) {
@@ -181,10 +175,9 @@ function _playground_script()
       }
 
       function evaluate(code) {
-        var e = wasmInstance.exports;
+        var e = window._pgWasm.exports;
         var trimmed = code.trim();
 
-        // Unary math: func(number)
         var um = trimmed.match(/^(sin|cos|sqrt|abs|sign|sum_to|factorial|fib|isprime)\\((-?\\d+(?:\\.\\d+)?)\\)\$/);
         if (um) {
           var fn = um[1], x = Number(um[2]), isF = um[2].includes('.');
@@ -200,11 +193,9 @@ function _playground_script()
           if (fn==='isprime') return String(e.pipeline_isprime(BigInt(Math.trunc(x))));
         }
 
-        // Negation: -number
         var neg = trimmed.match(/^-(\\d+)\$/);
         if (neg) return String(e.pipeline_neg(BigInt(neg[1])));
 
-        // Binary: number op number
         var bin = trimmed.match(/^(-?\\d+(?:\\.\\d+)?)\\s*([+\\-*\\/%])\\s*(-?\\d+(?:\\.\\d+)?)\$/);
         if (bin) {
           var a = Number(bin[1]), b = Number(bin[3]), op = bin[2];
@@ -224,13 +215,11 @@ function _playground_script()
           }
         }
 
-        // Comparison: number == number
         var eq = trimmed.match(/^(-?\\d+)\\s*==\\s*(-?\\d+)\$/);
         if (eq) {
           return String(e.pipeline_eq(BigInt(eq[1]), BigInt(eq[2]))) === '1' ? 'true' : 'false';
         }
 
-        // Two-arg: func(a, b)
         var ta = trimmed.match(/^(max|min|div|mod|gcd|pow)\\((-?\\d+(?:\\.\\d+)?),\\s*(-?\\d+(?:\\.\\d+)?)\\)\$/);
         if (ta) {
           var fn2 = ta[1], isF2 = ta[2].includes('.') || ta[3].includes('.');
@@ -248,7 +237,6 @@ function _playground_script()
           if (fn2==='pow') return String(e.pipeline_pow(ai2,bi2));
         }
 
-        // Three-arg: clamp(x, lo, hi)
         var cl = trimmed.match(/^clamp\\((-?\\d+),\\s*(-?\\d+),\\s*(-?\\d+)\\)\$/);
         if (cl) {
           return String(e.pipeline_clamp(BigInt(cl[1]), BigInt(cl[2]), BigInt(cl[3])));
@@ -263,33 +251,70 @@ function _playground_script()
         );
       }
 
-      function run() {
-        var code = editor.value;
-        try {
-          var result = evaluate(code);
-          output.innerHTML = '<span class=\"text-green-400\">' + escapeHtml(result) + '</span>';
-        } catch(err) {
-          output.innerHTML = '<span class=\"text-red-400\">' + escapeHtml(err.message) + '</span>';
+      // --- Init: wire up DOM elements and load WASM ---
+      // Called on page load AND after SPA navigation
+      async function initPlayground() {
+        var editor = document.getElementById('pg-editor');
+        var runBtn = document.getElementById('pg-run');
+        var output = document.getElementById('pg-output');
+        var status = document.getElementById('pg-status');
+
+        // Bail if playground DOM isn't on this page
+        if (!editor || !runBtn || !output || !status) return;
+
+        // Load WASM (cached after first load)
+        var inst = await ensureWasm();
+        if (inst) {
+          status.textContent = 'Ready (' + (window._pgWasmSize || '?') + ' KB)';
+          status.className = 'text-xs text-accent-600 dark:text-accent-400 font-medium';
+          runBtn.disabled = false;
+        } else {
+          status.textContent = 'Failed to load WASM';
+          status.className = 'text-xs text-red-500';
+          return;
         }
+
+        function run() {
+          try {
+            var result = evaluate(editor.value);
+            output.innerHTML = '<span class=\"text-green-400\">' + escapeHtml(result) + '</span>';
+          } catch(err) {
+            output.innerHTML = '<span class=\"text-red-400\">' + escapeHtml(err.message) + '</span>';
+          }
+        }
+
+        // Wire up Run button (clone+replace to remove old listeners from previous SPA nav)
+        var fresh = runBtn.cloneNode(true);
+        fresh.disabled = false;
+        runBtn.parentNode.replaceChild(fresh, runBtn);
+        fresh.addEventListener('click', run);
+
+        // Ctrl/Cmd+Enter
+        // Use a named handler on window so we can avoid duplicates
+        if (window._pgKeyHandler) document.removeEventListener('keydown', window._pgKeyHandler);
+        window._pgKeyHandler = function(ev) {
+          if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter' && document.getElementById('pg-editor')) {
+            ev.preventDefault();
+            run();
+          }
+        };
+        document.addEventListener('keydown', window._pgKeyHandler);
+
+        // Example chips
+        document.querySelectorAll('.pg-example').forEach(function(el) {
+          el.addEventListener('click', function() {
+            document.getElementById('pg-editor').value = el.textContent.trim();
+          });
+        });
       }
 
-      runBtn.addEventListener('click', run);
+      // Run now (covers hard refresh / initial page load)
+      initPlayground();
 
-      document.addEventListener('keydown', function(ev) {
-        if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter' && !runBtn.disabled) {
-          ev.preventDefault();
-          run();
-        }
+      // Re-run after SPA navigation (covers clicking Playground in the nav)
+      window.addEventListener('therapy:router:loaded', function(ev) {
+        initPlayground();
       });
-
-      // Example chips
-      document.querySelectorAll('.pg-example').forEach(function(el) {
-        el.addEventListener('click', function() {
-          editor.value = el.textContent.trim();
-        });
-      });
-
-      loadWasm();
     })();
     """
 end
