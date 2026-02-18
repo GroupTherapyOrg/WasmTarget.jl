@@ -19335,25 +19335,53 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     append!(bytes, compile_value(obj_arg, ctx))
                     # PURE-701: If obj_arg's local is structref, insert ref.cast null before struct_set
                     emit_ref_cast_if_structref!(bytes, obj_arg, info.wasm_type_idx, ctx)
-                    append!(bytes, compile_value(value_arg, ctx))
 
-                    # PURE-045: If field type is Any (externref), convert concrete ref to externref
+                    # PURE-4150: Track if value is a Type reference (used for both struct_set and return value)
+                    is_type_value = false
+
+                    # PURE-045: If field type is Any (externref), convert value to externref
                     if field_type === Any
-                        # Value is likely a concrete ref (struct, array, etc.) that needs conversion
-                        # extern.convert_any converts anyref (which includes all concrete refs) to externref
-                        # PURE-3112: Skip if value is already externref (Any-typed values compile to externref)
-                        val_julia_type = infer_value_type(value_arg, ctx)
-                        if val_julia_type !== Any
-                            push!(bytes, Opcode.GC_PREFIX)
-                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        # PURE-4150: Check if value is a Type reference (GlobalRef → Type value)
+                        # compile_value(Type) emits i32.const 0, but field expects externref.
+                        # Emit ref.null extern as placeholder (type objects can't be constructed in WasmGC).
+                        if value_arg isa GlobalRef
+                            try
+                                actual_sf_val = getfield(value_arg.mod, value_arg.name)
+                                is_type_value = actual_sf_val isa Type
+                            catch; end
+                        elseif value_arg isa Type
+                            is_type_value = true
                         end
+
+                        if is_type_value
+                            # Type objects → ref.null extern (placeholder for WasmGC)
+                            push!(bytes, Opcode.REF_NULL)
+                            push!(bytes, UInt8(ExternRef))
+                        else
+                            val_julia_type = infer_value_type(value_arg, ctx)
+                            val_wasm_type = julia_to_wasm_type(val_julia_type)
+                            if val_julia_type === Any || val_wasm_type === ExternRef
+                                # PURE-3112/PURE-4150: Already externref — no conversion needed
+                                append!(bytes, compile_value(value_arg, ctx))
+                            elseif val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
+                                # PURE-4150: Numeric type → box then convert
+                                emit_numeric_to_externref!(bytes, value_arg, val_wasm_type, ctx)
+                            else
+                                # Concrete/abstract ref → extern_convert_any
+                                append!(bytes, compile_value(value_arg, ctx))
+                                push!(bytes, Opcode.GC_PREFIX)
+                                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                            end
+                        end
+                    else
+                        append!(bytes, compile_value(value_arg, ctx))
                     end
 
                     push!(bytes, Opcode.GC_PREFIX)
                     push!(bytes, Opcode.STRUCT_SET)
                     append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
                     append!(bytes, encode_leb128_unsigned(field_idx - 1))  # 0-indexed
-                    # setfield! returns the value, so push it again
+                    # setfield! returns the value — use compile_value to match SSA return type
                     append!(bytes, compile_value(value_arg, ctx))
                     return bytes
                 end
