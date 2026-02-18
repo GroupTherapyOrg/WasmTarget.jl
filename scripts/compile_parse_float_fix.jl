@@ -60,14 +60,13 @@ end
 
 println("\n--- Compile ---")
 funcs = [(f, ()) for (_, f) in tests]
-local bytes
-try
-    bytes = compile_multi(funcs)
-    println("Compiled: $(length(bytes)) bytes")
+bytes = try
+    compile_multi(funcs)
 catch e
     println("COMPILE ERROR: $(sprint(showerror, e))")
     exit(1)
 end
+println("Compiled: $(length(bytes)) bytes")
 
 tmpf = tempname() * ".wasm"
 write(tmpf, bytes)
