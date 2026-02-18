@@ -88,7 +88,7 @@ end
 # dart2wasm's production flags for WasmGC optimization
 const WASM_OPT_GC_FLAGS = [
     "--enable-gc", "--enable-reference-types", "--enable-multivalue",
-    "--enable-bulk-memory", "--enable-sign-ext",
+    "--enable-bulk-memory", "--enable-sign-ext", "--enable-exception-handling",
 ]
 
 const WASM_OPT_PRODUCTION_FLAGS = [
