@@ -106,11 +106,22 @@ function _get_all_methods(@nospecialize(sig))::Vector{Method}
     ft = unw.parameters[1]
     ft isa DataType || return Method[]
 
-    # Get the function instance from the type
-    isdefined(ft, :instance) || return Method[]
-    f = ft.instance
+    # Case 1: Singleton function type (typeof(f) has an instance)
+    if isdefined(ft, :instance)
+        f = ft.instance
+        return methods(f).ms
+    end
 
-    return methods(f).ms
+    # Case 2: Type constructor — e.g., Type{Float64}
+    # ft is like Type{Float64}, and we need methods(Float64)
+    if ft <: Type && length(ft.parameters) >= 1
+        T = ft.parameters[1]
+        if T isa DataType || T isa UnionAll
+            return methods(T).ms
+        end
+    end
+
+    return Method[]
 end
 
 # ─── Specificity sorting ───
@@ -204,6 +215,12 @@ function wasm_matching_methods(@nospecialize(sig); limit::Int=-1)::Union{MethodL
     all_meths = _get_all_methods(sig)
     isempty(all_meths) && return MethodLookupResult(Any[], WorldRange(UInt(1), typemax(UInt)), false)
 
+    # For dispatch tuples (concrete call signatures), the C code only includes
+    # methods where the call type is a subtype of the method signature.
+    # Non-subtype intersections are skipped (an important optimization from gf.c).
+    unw = Base.unwrap_unionall(sig)
+    is_dispatch = unw isa DataType && Base.isdispatchtuple(sig)
+
     # Phase 1: Collect all matching methods
     matches = Any[]
     for method in all_meths
@@ -213,6 +230,11 @@ function wasm_matching_methods(@nospecialize(sig); limit::Int=-1)::Union{MethodL
             issubty = wasm_subtype(sig, method.sig)
         catch
             # Complex type patterns may trigger edge cases in subtype
+        end
+
+        # For dispatch tuples, skip non-subtype methods (matches C behavior)
+        if is_dispatch && !issubty
+            continue
         end
 
         # Check intersection (only needed if not a subtype)
