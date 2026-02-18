@@ -38,9 +38,12 @@ mutable struct TypeRegistry
     string_array_idx::Union{Nothing, UInt32}  # Index of i8 array type for strings
     unions::Dict{Union, UnionInfo}  # Union type -> tagged union info
     numeric_boxes::Dict{WasmValType, UInt32}  # PURE-325: box types for numeric→externref returns
+    # PURE-4151: Type constant globals — each unique Type value gets a unique Wasm global
+    # so that ref.eq distinguishes different Types (e.g., Int64 !== String)
+    type_constant_globals::Dict{Type, UInt32}  # Type value -> Wasm global index
 end
 
-TypeRegistry() = TypeRegistry(Dict{Type, StructInfo}(), Dict{Type, UInt32}(), nothing, Dict{Union, UnionInfo}(), Dict{WasmValType, UInt32}())
+TypeRegistry() = TypeRegistry(Dict{Type, StructInfo}(), Dict{Type, UInt32}(), nothing, Dict{Union, UnionInfo}(), Dict{WasmValType, UInt32}(), Dict{Type, UInt32}())
 
 # ============================================================================
 # Function Registry - for multi-function modules
@@ -257,6 +260,48 @@ function get_numeric_box_type!(mod::WasmModule, registry::TypeRegistry, wasm_typ
     type_idx = add_struct_type!(mod, fields)
     registry.numeric_boxes[wasm_type] = type_idx
     return type_idx
+end
+
+"""
+PURE-4151: Get or create a Wasm global for a Type constant value.
+
+Each unique Julia Type (e.g., Int64, String, Number) gets a unique Wasm global
+holding a non-null struct instance. This ensures that `ref.eq` correctly
+distinguishes different Type objects at runtime.
+
+Without this, all Type values compile to `i32.const 0` and become `ref.null`
+when stored in ref-typed locals — making `Int64 === String` return true.
+
+The struct type used is DataType's registered Wasm struct type, so the global
+is compatible with function parameters typed as `(ref null \$datatype_struct)`.
+Each `struct.new_default` creates a unique allocation → `ref.eq` returns false
+for different Types.
+"""
+function get_type_constant_global!(mod::WasmModule, registry::TypeRegistry, @nospecialize(type_val::Type))::UInt32
+    # Return cached global if this Type was already seen
+    if haskey(registry.type_constant_globals, type_val)
+        return registry.type_constant_globals[type_val]
+    end
+
+    # Use DataType's registered struct type so the global is compatible
+    # with function parameters that expect (ref null $datatype_struct)
+    info = register_struct_type!(mod, registry, DataType)
+    dt_type_idx = info.wasm_type_idx
+
+    # Create init expression: struct.new_default $dt_type_idx
+    # Each struct.new_default creates a unique allocation with all fields zeroed.
+    # ref.eq compares pointer identity, so different allocations are distinguishable.
+    init_bytes = UInt8[]
+    push!(init_bytes, Opcode.GC_PREFIX)
+    push!(init_bytes, Opcode.STRUCT_NEW_DEFAULT)
+    append!(init_bytes, encode_leb128_unsigned(dt_type_idx))
+
+    # Create the global (immutable ref to the DataType struct)
+    global_idx = add_global_ref!(mod, dt_type_idx, false, init_bytes; nullable=false)
+
+    # Cache and return
+    registry.type_constant_globals[type_val] = global_idx
+    return global_idx
 end
 
 """
@@ -17321,9 +17366,12 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         append!(bytes, encode_leb128_unsigned(type_idx))
 
     elseif val isa Type
-        # Type{T} singleton - represented as i32 constant (type tag for dispatch)
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x00)
+        # PURE-4151: Type constant — each unique Type gets a unique Wasm global
+        # so that ref.eq can distinguish different Type objects at runtime.
+        # Previous behavior (i32.const 0) made all Types indistinguishable.
+        global_idx = get_type_constant_global!(ctx.mod, ctx.type_registry, val)
+        push!(bytes, Opcode.GLOBAL_GET)
+        append!(bytes, encode_leb128_unsigned(global_idx))
 
     elseif val isa Module
         # Module constant — empty struct (fieldcount=0), like Function singletons.
