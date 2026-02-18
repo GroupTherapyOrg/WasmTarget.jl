@@ -178,35 +178,58 @@ Core.Compiler.may_discard_trees(interp::_TracingInterpreter) = false
 const _TRACING_INTERSECTIONS = Ref{Union{Nothing, Dict{Tuple{Any,Any}, Any}}}(nothing)
 const _TRACING_INTERSECTIONS_WITH_ENV = Ref{Union{Nothing, Dict{Tuple{Any,Any}, Any}}}(nothing)
 
-# ─── Pre-computed intersection lookup ─────────────────────────────────────────
-# At Wasm runtime, typeintersect does a Dict lookup instead of ccall.
-# At tracing time, it calls the real ccall AND records the result.
-# At normal native time (tracing off, no WASM_INTERSECTIONS), it uses the ccall.
+# ─── Reimplementation mode flag (Phase 2d) ───────────────────────────────────
+# When true, overrides use Julia reimplementations (wasm_type_intersection,
+# wasm_matching_methods) instead of ccall or pre-computed Dict lookups.
+# This is the REAL path — works for ANY types including user-defined at runtime.
+
+const _WASM_USE_REIMPL = Ref{Bool}(false)
+
+# ─── Pre-computed intersection lookup (LEGACY — Phase 2b) ────────────────────
+# These are kept for backward compatibility with tracing infrastructure.
+# When _WASM_USE_REIMPL is true, these are NOT used (reimplementations are used instead).
 
 const _WASM_INTERSECTIONS = Ref{Union{Nothing, Dict{Tuple{Any,Any}, Any}}}(nothing)
 const _WASM_INTERSECTIONS_WITH_ENV = Ref{Union{Nothing, Dict{Tuple{Any,Any}, Any}}}(nothing)
 
-# ─── Method table + code cache globals (Phase D2) ────────────────────────────
-# At Wasm runtime, _methods_by_ftype does a Dict lookup instead of ccall.
-# At tracing time, it uses the tracing table (records lookups).
-# At normal native time (both nothing), it uses the ccall.
+# ─── Method table + code cache globals ───────────────────────────────────────
+# _WASM_METHOD_TABLE: LEGACY (Phase 2b Dict lookup) — NOT used when _WASM_USE_REIMPL is true
+# _WASM_CODE_CACHE: Still needed for @generated function pre-expansion (data access, not algorithm)
 
 const _WASM_METHOD_TABLE = Ref{Union{Nothing, DictMethodTable}}(nothing)
 const _WASM_CODE_CACHE = Ref{Union{Nothing, PreDecompressedCodeInfo}}(nothing)
 
-# Override _methods_by_ftype to use DictMethodTable in Wasm mode.
+# Override _methods_by_ftype to use reimplementations or DictMethodTable in Wasm mode.
 # This replaces ccall(:jl_matching_methods) for may_invoke_generator and other direct callers.
 function Base._methods_by_ftype(@nospecialize(t), mt::Union{Core.MethodTable, Nothing},
                                  lim::Int, world::UInt, ambig::Bool,
                                  min::Ref{UInt}, max::Ref{UInt}, has_ambig::Ref{Int32})
-    # Wasm mode: use DictMethodTable
+    # Reimplementation mode (Phase 2d): use wasm_matching_methods
+    if _WASM_USE_REIMPL[]
+        result = wasm_matching_methods(t; limit=lim)
+        if result === nothing
+            return nothing
+        end
+        # Set world range
+        if min isa Base.RefValue
+            min[] = result.valid_worlds.min_world
+        end
+        if max isa Base.RefValue
+            max[] = result.valid_worlds.max_world
+        end
+        if has_ambig isa Base.RefValue
+            has_ambig[] = result.ambig ? Int32(1) : Int32(0)
+        end
+        return result.matches
+    end
+
+    # Legacy Dict mode (Phase 2b): use DictMethodTable
     wasm_mt = _WASM_METHOD_TABLE[]
     if wasm_mt !== nothing
         result = Core.Compiler.findall(t, wasm_mt; limit=lim)
         if result === nothing
             return nothing
         end
-        # Set world range from DictMethodTable (only if non-null Ref)
         if min isa Base.RefValue
             min[] = result.valid_worlds.min_world
         end
@@ -253,9 +276,14 @@ function Core.Compiler.get_staged(mi::Core.MethodInstance, world::UInt)
     end
 end
 
-# Override typeintersect to trace and/or use pre-computed results
+# Override typeintersect to use reimplementations, pre-computed results, or native ccall
 function Base.typeintersect(@nospecialize(a::Type), @nospecialize(b::Type))
-    # Check pre-computed Dict first (Wasm runtime path)
+    # Reimplementation mode (Phase 2d): use wasm_type_intersection
+    if _WASM_USE_REIMPL[]
+        return wasm_type_intersection(a, b)
+    end
+
+    # Legacy Dict mode (Phase 2b): check pre-computed Dict
     wasm_dict = _WASM_INTERSECTIONS[]
     if wasm_dict !== nothing
         key = (a, b)
@@ -268,7 +296,6 @@ function Base.typeintersect(@nospecialize(a::Type), @nospecialize(b::Type))
         if result !== nothing
             return result
         end
-        # Fallback: compute natively (shouldn't happen if Dict is complete)
     end
 
     # Compute using real ccall
@@ -287,7 +314,14 @@ end
 # Returns a SimpleVector [intersection_result, type_env_bindings]
 # Used inline in abstract_call_method, abstract_call_opaque_closure, normalize_typevars
 function _type_intersection_with_env(@nospecialize(a::Type), @nospecialize(b::Type))
-    # Check pre-computed Dict first (Wasm runtime path)
+    # Reimplementation mode (Phase 2d): compute using Julia reimplementations
+    if _WASM_USE_REIMPL[]
+        ti = wasm_type_intersection(a, b)
+        env = _extract_sparams(a, b)
+        return Core.svec(ti, env)
+    end
+
+    # Legacy Dict mode (Phase 2b): check pre-computed Dict
     wasm_dict = _WASM_INTERSECTIONS_WITH_ENV[]
     if wasm_dict !== nothing
         key = (a, b)
@@ -457,32 +491,25 @@ function verify_typeinf(f, argtypes::Tuple;
     interp = build_wasm_interpreter([sig]; world=world)
 
     # Step 3: Run typeinf with WasmInterpreter
-    # Activate Wasm mode globals so overrides (_methods_by_ftype, get_staged) use Dict
-    table = interp.method_table.table
-    _WASM_METHOD_TABLE[] = table
+    # Activate reimplementation mode — use Julia reimplementations for intersection + matching
+    _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
-    _WASM_INTERSECTIONS[] = table.intersections
-    _WASM_INTERSECTIONS_WITH_ENV[] = table.intersections_with_env
 
     # Use the same MethodInstance that code_typed used, to ensure we're comparing the same method
     mi = native_ci.parent
     src = Core.Compiler.retrieve_code_info(mi, world)
     if src === nothing
-        _WASM_METHOD_TABLE[] = nothing
+        _WASM_USE_REIMPL[] = false
         _WASM_CODE_CACHE[] = nothing
-        _WASM_INTERSECTIONS[] = nothing
-        _WASM_INTERSECTIONS_WITH_ENV[] = nothing
         return (pass=false, reason="retrieve_code_info returned nothing for $mi")
     end
     result = Core.Compiler.InferenceResult(mi)
     frame = InferenceState(result, src, #=cache_mode=# :no, interp)
     Core.Compiler.typeinf(interp, frame)
 
-    # Deactivate Wasm mode globals
-    _WASM_METHOD_TABLE[] = nothing
+    # Deactivate reimplementation mode
+    _WASM_USE_REIMPL[] = false
     _WASM_CODE_CACHE[] = nothing
-    _WASM_INTERSECTIONS[] = nothing
-    _WASM_INTERSECTIONS_WITH_ENV[] = nothing
 
     # Step 4: Compare return types
     dict_rettype = result.result
