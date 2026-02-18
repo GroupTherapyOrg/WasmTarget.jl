@@ -462,6 +462,7 @@ function populate_type_constant_globals!(mod::WasmModule, registry::TypeRegistry
                     push!(body, Opcode.GLOBAL_GET)
                     append!(body, encode_leb128_unsigned(p_global_idx))
                     # Convert concrete ref to externref for the externref array
+                    push!(body, Opcode.GC_PREFIX)
                     push!(body, Opcode.EXTERN_CONVERT_ANY)
                 else
                     # Non-DataType parameter (e.g., Int literal for array dims) → null
@@ -490,6 +491,7 @@ function populate_type_constant_globals!(mod::WasmModule, registry::TypeRegistry
             push!(body, Opcode.GLOBAL_GET)
             append!(body, encode_leb128_unsigned(wrapper_global_idx))
             # TypeName.wrapper field is ExternRef, DataType ref needs extern_convert_any
+            push!(body, Opcode.GC_PREFIX)
             push!(body, Opcode.EXTERN_CONVERT_ANY)
             push!(body, Opcode.GC_PREFIX)
             push!(body, Opcode.STRUCT_SET)
@@ -499,6 +501,9 @@ function populate_type_constant_globals!(mod::WasmModule, registry::TypeRegistry
     end
 
     isempty(body) && return
+
+    # Add END opcode to terminate the function body
+    push!(body, Opcode.END)
 
     # Create the init function (no params, no returns, no locals)
     func_idx = add_function!(mod, WasmValType[], WasmValType[], WasmValType[], body)
