@@ -1755,7 +1755,7 @@ function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataT
                     if inner === T || (inner <: AbstractVector && eltype(inner) === T)
                         continue  # Self-referential
                     end
-                    if inner <: AbstractVector && inner isa DataType
+                    if inner <: Array && inner isa DataType
                         elem = eltype(inner)
                         if elem !== T && isconcretetype(elem) && isstructtype(elem) && !haskey(registry.structs, elem) && !haskey(_registering_types, elem)
                             register_struct_type!(mod, registry, elem)
@@ -1767,13 +1767,18 @@ function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataT
                         register_struct_type!(mod, registry, inner)
                     end
                 end
-            elseif ft <: AbstractVector && ft isa DataType
+            elseif ft <: Array && ft isa DataType
                 elem = eltype(ft)
                 if elem !== T && isconcretetype(elem) && isstructtype(elem) && !haskey(registry.structs, elem) && !haskey(_registering_types, elem)
                     register_struct_type!(mod, registry, elem)
                 end
                 if !haskey(registry.vectors, ft)
                     register_vector_type!(mod, registry, ft)
+                end
+            elseif ft <: AbstractVector && ft isa DataType && !(ft <: Array)
+                # Non-Array AbstractVector types (BitVector, etc.) - register as regular struct
+                if !haskey(registry.structs, ft) && !haskey(_registering_types, ft)
+                    register_struct_type!(mod, registry, ft)
                 end
             elseif isconcretetype(ft) && isstructtype(ft) && !haskey(registry.structs, ft) && !haskey(_registering_types, ft)
                 register_struct_type!(mod, registry, ft)
@@ -1900,14 +1905,22 @@ function _register_struct_type_impl_with_reserved!(mod::WasmModule, registry::Ty
             # Vector{String} is a struct with (array-of-string-refs, size tuple)
             info = register_vector_type!(mod, registry, ft)
             wasm_vt = ConcreteRef(info.wasm_type_idx, true)
-        elseif ft <: AbstractVector && ft isa DataType
-            # Vector{T} is a struct with (ref, size) fields
+        elseif ft <: Array && ft isa DataType
+            # Array{T}/Vector{T} is a struct with (ref, size) fields
             elem_type = eltype(ft)
             if !haskey(_registering_types, elem_type) && isconcretetype(elem_type) && isstructtype(elem_type)
                 register_struct_type!(mod, registry, elem_type)
             end
             info = register_vector_type!(mod, registry, ft)
             wasm_vt = ConcreteRef(info.wasm_type_idx, true)
+        elseif ft <: AbstractVector && ft isa DataType
+            # Non-Array AbstractVector types (BitVector, etc.) — register as regular struct
+            info = register_struct_type!(mod, registry, ft)
+            if info !== nothing
+                wasm_vt = ConcreteRef(info.wasm_type_idx, true)
+            else
+                wasm_vt = ExternRef  # fallback
+            end
         elseif ft <: AbstractVector
             # Generic AbstractVector - use raw array
             elem_type = eltype(ft)
@@ -1940,7 +1953,7 @@ function _register_struct_type_impl_with_reserved!(mod::WasmModule, registry::Ty
         elseif ft isa Union
             inner_type = get_nullable_inner_type(ft)
             if inner_type !== nothing
-                if inner_type <: AbstractVector && inner_type isa DataType
+                if inner_type <: Array && inner_type isa DataType
                     # Union{Nothing, Vector{T}} - use Vector struct type
                     elem_type = eltype(inner_type)
                     if !haskey(_registering_types, elem_type) && isconcretetype(elem_type) && isstructtype(elem_type)
@@ -1948,6 +1961,14 @@ function _register_struct_type_impl_with_reserved!(mod::WasmModule, registry::Ty
                     end
                     info = register_vector_type!(mod, registry, inner_type)
                     wasm_vt = ConcreteRef(info.wasm_type_idx, true)
+                elseif inner_type <: AbstractVector && inner_type isa DataType
+                    # Non-Array AbstractVector (BitVector, etc.) — register as struct
+                    info_av = register_struct_type!(mod, registry, inner_type)
+                    if info_av !== nothing
+                        wasm_vt = ConcreteRef(info_av.wasm_type_idx, true)
+                    else
+                        wasm_vt = ExternRef
+                    end
                 elseif inner_type <: AbstractVector
                     # Generic AbstractVector - use raw array
                     elem_type = eltype(inner_type)
@@ -2044,11 +2065,19 @@ function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T:
             # Register as Vector struct type
             info = register_vector_type!(mod, registry, ft)
             wasm_vt = ConcreteRef(info.wasm_type_idx, true)
-        elseif ft <: AbstractVector && ft isa DataType
-            # Vector{T} is now a struct with (ref, size) fields
+        elseif ft <: Array && ft isa DataType
+            # Array{T}/Vector{T} is a struct with (ref, size) fields
             # Register it as a Vector struct type, not a raw array
             info = register_vector_type!(mod, registry, ft)
             wasm_vt = ConcreteRef(info.wasm_type_idx, true)
+        elseif ft <: AbstractVector && ft isa DataType
+            # Non-Array AbstractVector types (BitVector, etc.) — register as regular struct
+            info_av = register_struct_type!(mod, registry, ft)
+            if info_av !== nothing
+                wasm_vt = ConcreteRef(info_av.wasm_type_idx, true)
+            else
+                wasm_vt = ExternRef  # fallback
+            end
         elseif ft <: AbstractVector && !(ft isa Union)
             # Generic AbstractVector without concrete type - use raw array
             # PURE-046: Check !(ft isa Union) because Union{Memory{UInt8}, Memory{UInt16}, ...}
@@ -2092,7 +2121,7 @@ function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T:
             inner_type = get_nullable_inner_type(ft)
             if inner_type !== nothing
                 # Union{Nothing, T} as nullable reference to T
-                if inner_type <: AbstractVector && inner_type isa DataType
+                if inner_type <: Array && inner_type isa DataType
                     # Union{Nothing, Vector{T}} - use Vector struct type
                     elem_type = eltype(inner_type)
                     # For non-recursive types, register the element type first
@@ -2101,6 +2130,14 @@ function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T:
                     end
                     info = register_vector_type!(mod, registry, inner_type)
                     wasm_vt = ConcreteRef(info.wasm_type_idx, true)  # nullable
+                elseif inner_type <: AbstractVector && inner_type isa DataType
+                    # Non-Array AbstractVector (BitVector, etc.) — register as struct
+                    info_av = register_struct_type!(mod, registry, inner_type)
+                    if info_av !== nothing
+                        wasm_vt = ConcreteRef(info_av.wasm_type_idx, true)  # nullable
+                    else
+                        wasm_vt = ExternRef
+                    end
                 elseif inner_type <: AbstractVector
                     # Union{Nothing, generic AbstractVector} - use raw array
                     elem_type = eltype(inner_type)
@@ -7156,6 +7193,23 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::C
                 return true
             end
             return false
+        elseif phi_local_type === ExternRef && (edge_val_type isa ConcreteRef || edge_val_type === StructRef || edge_val_type === ArrayRef || edge_val_type === AnyRef)
+            # PURE-3113: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion
+            # Mirrors the handling in set_phi_locals_for_edge! (line 10213) and compile_phi_value (line 9825)
+            @warn "PURE-3113 FIX A: phi=$phi_ssa_idx edge_val_type=$edge_val_type phi_local_type=$phi_local_type"
+            value_bytes = compile_value(val, ctx)
+            if !isempty(value_bytes)
+                append!(bytes, value_bytes)
+                # ref.null is already externref — don't wrap
+                if !(value_bytes[1] == Opcode.REF_NULL)
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                end
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(local_idx))
+                return true
+            end
+            return false
         else
             # Type mismatch: skip this store (unreachable path for Union types)
             return false
@@ -7336,6 +7390,16 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::C
                     push!(bytes, Opcode.LOCAL_SET)
                     append!(bytes, encode_leb128_unsigned(local_idx))
                     return true
+                elseif phi_local_type === ExternRef && (actual_val_type isa ConcreteRef || actual_val_type === StructRef || actual_val_type === ArrayRef || actual_val_type === AnyRef)
+                    # PURE-3113: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion
+                    append!(bytes, value_bytes)
+                    if !(value_bytes[1] == Opcode.REF_NULL)
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                    end
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(local_idx))
+                    return true
                 else
                     # Incompatible actual type: emit type-safe default
                     if phi_local_type isa ConcreteRef
@@ -7373,6 +7437,36 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::C
                     append!(bytes, encode_leb128_unsigned(local_idx))
                     return true
                 end
+        end
+    end
+
+    # PURE-3113: Final safety net — if we're about to store a ConcreteRef-typed local.get into an ExternRef phi,
+    # add extern_convert_any. This catches cases where edge_val_type/actual_val_type reported ExternRef
+    # but the underlying Wasm local was allocated as a ConcreteRef.
+    if phi_local_type === ExternRef && length(value_bytes) >= 2 && value_bytes[1] == 0x20  # LOCAL_GET
+        _final_got_idx = 0; _final_shift = 0; _final_leb_end = 0
+        for bi in 2:length(value_bytes)
+            b = value_bytes[bi]
+            _final_got_idx |= (Int(b & 0x7f) << _final_shift)
+            _final_shift += 7
+            if (b & 0x80) == 0
+                _final_leb_end = bi
+                break
+            end
+        end
+        if _final_leb_end == length(value_bytes)  # Pure local.get (no trailing ops)
+            _final_arr_idx = _final_got_idx - ctx.n_params + 1
+            if _final_arr_idx >= 1 && _final_arr_idx <= length(ctx.locals)
+                _final_src_type = ctx.locals[_final_arr_idx]
+                if _final_src_type isa ConcreteRef || _final_src_type === StructRef || _final_src_type === ArrayRef || _final_src_type === AnyRef
+                    append!(bytes, value_bytes)
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(local_idx))
+                    return true
+                end
+            end
         end
     end
 
@@ -14731,6 +14825,11 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                         elseif (ssa_wasm_type === StructRef || ssa_wasm_type === ArrayRef) && local_wasm_type isa ConcreteRef
                             # SSA produces abstract structref/arrayref, local expects concrete ref
                             needs_ref_cast_local = local_wasm_type
+                        elseif (ssa_wasm_type isa ConcreteRef || ssa_wasm_type === StructRef || ssa_wasm_type === ArrayRef || ssa_wasm_type === AnyRef) && local_wasm_type === ExternRef
+                            # PURE-3113: SSA produces concrete/abstract ref, local expects externref.
+                            # This happens with memoryrefset! return values when has_gc_prefix
+                            # skips the trailing local.get check. Convert via extern_convert_any.
+                            needs_extern_convert_any = true
                         end
                         # PURE-036ae: Also check signature-level type mapping.
                         # When a cross-function call returns a struct type, the function's Wasm
@@ -18840,9 +18939,45 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
 
         # Julia's memoryrefset! returns the stored value, so push it again
         # This is needed because compile_statement may add LOCAL_SET after this
-        # Return the original value (not externref-converted) — compile_statement
-        # safety check handles any type mismatch with the target SSA local
-        append!(bytes, compile_value(value_arg, ctx))
+        local ret_val_bytes = compile_value(value_arg, ctx)
+        append!(bytes, ret_val_bytes)
+        # PURE-3113: If the SSA local is externref but the return value is a concrete ref,
+        # emit extern_convert_any. The compile_statement safety check can't catch this
+        # because has_gc_prefix=true (from array_set above) skips the trailing local_get
+        # check, and the SSA type check sees Julia type (Any→ExternRef) matching the local.
+        if haskey(ctx.ssa_locals, idx)
+            local mset_ret_local = ctx.ssa_locals[idx]
+            local mset_ret_arr_idx = mset_ret_local - ctx.n_params + 1
+            if mset_ret_arr_idx >= 1 && mset_ret_arr_idx <= length(ctx.locals)
+                local mset_ret_local_type = ctx.locals[mset_ret_arr_idx]
+                if mset_ret_local_type === ExternRef
+                    # Check if return value is a concrete ref (not already externref)
+                    local mset_ret_src_wasm = nothing
+                    if length(ret_val_bytes) >= 2 && ret_val_bytes[1] == Opcode.LOCAL_GET
+                        local mset_src_idx = 0
+                        local mset_shift = 0
+                        local mset_pos = 2
+                        while mset_pos <= length(ret_val_bytes)
+                            b = ret_val_bytes[mset_pos]
+                            mset_src_idx |= (Int(b & 0x7f) << mset_shift)
+                            mset_shift += 7
+                            mset_pos += 1
+                            (b & 0x80) == 0 && break
+                        end
+                        if mset_pos - 1 == length(ret_val_bytes) && mset_src_idx >= ctx.n_params
+                            local mset_src_arr = mset_src_idx - ctx.n_params + 1
+                            if mset_src_arr >= 1 && mset_src_arr <= length(ctx.locals)
+                                mset_ret_src_wasm = ctx.locals[mset_src_arr]
+                            end
+                        end
+                    end
+                    if mset_ret_src_wasm isa ConcreteRef || mset_ret_src_wasm === StructRef || mset_ret_src_wasm === ArrayRef || mset_ret_src_wasm === AnyRef
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                    end
+                end
+            end
+        end
         return bytes
     end
 
