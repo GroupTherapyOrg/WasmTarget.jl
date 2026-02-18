@@ -14065,6 +14065,13 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
             # don't leave a value on the stack for the outer IF block. Using void
             # avoids "expected type but nothing on stack" validation errors.
             push!(inner_bytes, 0x40)  # void block type
+        elseif then_has_return_stmt
+            # PURE-325: Then-branch has explicit return. Use void block type so the
+            # then-branch can emit RETURN directly. The else-branch (which recurses
+            # into gen_conditional) will also use RETURN in its branches. With all
+            # branches using RETURN, the IF block is void and code after END is
+            # unreachable (UNREACHABLE at function end is correct).
+            push!(inner_bytes, 0x40)  # void block type
         else
             append!(inner_bytes, encode_block_type(result_type))
             used_typed_if[] = true  # PURE-506: mark that IF block has typed result
@@ -14171,6 +14178,9 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                             end
                         end
                     end
+                    # PURE-325: Emit explicit RETURN so the then-branch is self-contained.
+                    # The IF block is void (0x40) when then_has_return_stmt is true.
+                    push!(inner_bytes, Opcode.RETURN)
                     found_return = true
                     break
                 elseif stmt === nothing
