@@ -1,57 +1,22 @@
 #!/usr/bin/env julia
-using Pkg
-Pkg.activate(dirname(@__DIR__))
-
+# Debug: Print the IR for test_egal_return to understand the === comparison
 using WasmTarget
-using InteractiveUtils: @code_typed
+include(joinpath(@__DIR__, "..", "src", "typeinf", "subtype.jl"))
+include(joinpath(@__DIR__, "..", "src", "typeinf", "matching.jl"))
 
-# Get the typed IR for token_list_new
-println("=== IR for token_list_new ===\n")
-code = @code_typed WasmTarget.token_list_new(Int32(10))
-println(code[1])
-
-println("\n=== Looking for foreigncalls ===")
-for (i, stmt) in enumerate(code[1].code)
-    if stmt isa Expr && stmt.head === :foreigncall
-        println("\nStatement $i: $stmt")
-        println("  args[1] (name): $(stmt.args[1])")
-        if length(stmt.args) >= 2
-            println("  args[2] (ret_type): $(stmt.args[2])")
-        end
-        if length(stmt.args) >= 7
-            println("  args[7] (mem_type): $(stmt.args[7])")
-            mem_type = stmt.args[7]
-            if mem_type isa DataType
-                println("    name: $(mem_type.name.name)")
-                println("    parameters: $(mem_type.parameters)")
-                if length(mem_type.parameters) >= 2
-                    println("    elem_type (params[2]): $(mem_type.parameters[2])")
-                end
-            end
-        end
-    end
+test_egal_return() = begin
+    x = wasm_type_intersection(Int64, Number)
+    return Int32(x === Int64)
 end
 
-println("\n=== MemoryRef types ===")
-for (i, stmt) in enumerate(code[1].code)
-    if stmt isa Expr && stmt.head === :call
-        func = stmt.args[1]
-        func_name = if func isa GlobalRef
-            func.name
-        elseif func isa Symbol
-            func
-        else
-            nothing
-        end
-        if func_name in (:memoryrefnew, Symbol("memoryrefnew"), :memoryrefset!, Symbol("memoryrefset!"))
-            println("\nStatement $i: $func_name")
-            for (j, arg) in enumerate(stmt.args[2:end])
-                arg_type = code[1].ssavaluetypes[arg.id] 
-                println("  arg $j: $(typeof(arg)) = $arg, type = $arg_type")
-                if arg_type isa DataType
-                    println("    name: $(arg_type.name.name)")
-                end
-            end
-        end
-    end
-end
+test_isect_1() = Int32(wasm_type_intersection(Int64, Number) === Int64)
+
+println("=== IR for test_egal_return ===")
+ir1 = code_typed(test_egal_return, ())[1]
+println(ir1[1])
+println("\nReturn type: ", ir1[2])
+
+println("\n=== IR for test_isect_1 ===")
+ir2 = code_typed(test_isect_1, ())[1]
+println(ir2[1])
+println("\nReturn type: ", ir2[2])
