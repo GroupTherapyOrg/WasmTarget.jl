@@ -542,6 +542,11 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
         # For now, use i64 as a placeholder (this type won't actually be used)
         return I64
     end
+    # PURE-4155: Type{X} values are represented as DataType struct refs (global.get)
+    if T <: Type && !(T isa UnionAll)
+        info = register_struct_type!(mod, registry, DataType)
+        return ConcreteRef(info.wasm_type_idx, true)
+    end
     if T === String || T === Symbol
         # Strings and Symbols are WasmGC arrays of bytes
         # Symbol is represented as its name string (byte array)
@@ -4707,6 +4712,11 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
     if T isa Core.TypeofVararg
         return ExternRef
     end
+    # PURE-4155: Type{X} values are represented as DataType struct refs (global.get)
+    if T isa DataType && T <: Type && !(T isa UnionAll)
+        info = register_struct_type!(ctx.mod, ctx.type_registry, DataType)
+        return ConcreteRef(info.wasm_type_idx, true)
+    end
     # Union{} (TypeofBottom) is the bottom type — no values exist of this type.
     # Used for unreachable code paths. Map to I32 as placeholder.
     if T === Union{}
@@ -7381,10 +7391,10 @@ function get_phi_edge_wasm_type(val, ctx::CompilationContext)::Union{WasmValType
         # PURE-317: Char is a 4-byte primitive, compiled as I32
         return I32
     elseif val isa Type
-        # PURE-3111: Type{T} literals are compiled as i32_const 0 by compile_value,
-        # but typeof(val) is DataType (a struct). Must return I32 to match
-        # the actual bytecode, otherwise phi mismatch detection fails.
-        return I32
+        # PURE-4155: Type{T} values are now represented as DataType struct refs (global.get).
+        # Return the ConcreteRef for the DataType struct type.
+        info = register_struct_type!(ctx.mod, ctx.type_registry, DataType)
+        return ConcreteRef(info.wasm_type_idx, true)
     end
     return nothing
 end
@@ -10429,10 +10439,9 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
             # PURE-317: Char is a 4-byte primitive type, compiled as I32
             return I32
         elseif val isa Type
-            # PURE-3111: Type{T} literals are compiled as i32_const 0 by compile_value,
-            # but typeof(val) is DataType (a struct). Must return I32 to match
-            # the actual bytecode, otherwise phi mismatch detection fails.
-            return I32
+            # PURE-4155: Type{T} values are now represented as DataType struct refs (global.get).
+            info = register_struct_type!(ctx.mod, ctx.type_registry, DataType)
+            return ConcreteRef(info.wasm_type_idx, true)
         else
             # For any other value, try to get its Julia type and convert to Wasm type
             julia_type = typeof(val)
@@ -17220,9 +17229,10 @@ function infer_value_wasm_type(val, ctx::CompilationContext)::WasmValType
             str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
             return ConcreteRef(str_type_idx, false)
         elseif val isa Type
-            # PURE-043: Type values (like Bool, Int64) compile to i32.const 0 (type tag)
+            # PURE-4155: Type values (like Bool, Int64) compile to global.get (DataType struct ref).
             # Must check BEFORE isstructtype since typeof(Type) is DataType (a struct)
-            return I32
+            info = register_struct_type!(ctx.mod, ctx.type_registry, DataType)
+            return ConcreteRef(info.wasm_type_idx, true)
         elseif isstructtype(typeof(val))
             # PURE-043: Struct values compile to struct_new (ConcreteRef)
             return get_concrete_wasm_type(typeof(val), ctx.mod, ctx.type_registry)
@@ -21849,11 +21859,12 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                         actual_julia_type = call_arg_types[arg_idx]
                         actual_wasm = get_concrete_wasm_type(actual_julia_type, ctx.mod, ctx.type_registry)
 
-                        # PURE-901: Handle Nothing/Type{T}→ref conversion BEFORE type bridging.
-                        # compile_value emits i32_const 0 for phantom types (Nothing, Type{T}),
+                        # PURE-901/4155: Handle Nothing→ref conversion BEFORE type bridging.
+                        # compile_value emits i32_const 0 for Nothing,
                         # but ref-typed params need ref.null. Must fix BEFORE bridging runs,
                         # otherwise bridging tries any_convert_extern on an i32 value.
-                        _is_phantom = actual_julia_type === Nothing || actual_julia_type <: Type
+                        # NOTE: Type{T} no longer needs this — it now emits global.get (DataType ref).
+                        _is_phantom = actual_julia_type === Nothing
                         if _is_phantom && (expected_wasm isa ConcreteRef || expected_wasm === ExternRef || expected_wasm === StructRef || expected_wasm === AnyRef)
                             if length(arg_bytes) == 2 && arg_bytes[1] == Opcode.I32_CONST && arg_bytes[2] == 0x00
                                 # Remove the i32_const 0 we just appended
@@ -22532,11 +22543,12 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                     actual_julia_type = infer_value_type(arg, ctx)
                     actual_wasm = get_concrete_wasm_type(actual_julia_type, ctx.mod, ctx.type_registry)
 
-                    # PURE-3111: Handle Nothing/Type{T}→ref conversion.
-                    # compile_value emits i32_const 0 for phantom types (Nothing, Type{T}),
+                    # PURE-3111/4155: Handle Nothing→ref conversion.
+                    # compile_value emits i32_const 0 for Nothing,
                     # but ref-typed params need ref.null. Must fix BEFORE bridging runs,
                     # otherwise bridging tries conversions on an i32 value.
-                    _is_phantom = actual_julia_type === Nothing || actual_julia_type <: Type
+                    # NOTE: Type{T} no longer needs this — it now emits global.get (DataType ref).
+                    _is_phantom = actual_julia_type === Nothing
                     if _is_phantom && (expected_wasm isa ConcreteRef || expected_wasm === ExternRef || expected_wasm === StructRef || expected_wasm === AnyRef)
                         if length(arg_bytes) == 2 && arg_bytes[1] == Opcode.I32_CONST && arg_bytes[2] == 0x00
                             # Remove the i32_const 0 we just appended
