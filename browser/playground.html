@@ -208,14 +208,20 @@
     <code data-expr="1 + 1">1 + 1</code>
     <code data-expr="10 - 3">10 - 3</code>
     <code data-expr="2 * 3">2 * 3</code>
-    <code data-expr="10 / 3">10 / 3</code>
     <code data-expr="10 % 3">10 % 3</code>
     <code data-expr="2.5 + 3.5">2.5 + 3.5</code>
-    <code data-expr="10.0 / 4.0">10.0 / 4.0</code>
     <code data-expr="sin(1.0)">sin(1.0)</code>
-    <code data-expr="cos(0.0)">cos(0.0)</code>
     <code data-expr="sqrt(4.0)">sqrt(4.0)</code>
     <code data-expr="abs(-7)">abs(-7)</code>
+    <code data-expr="max(3, 7)">max(3, 7)</code>
+    <code data-expr="factorial(10)">factorial(10)</code>
+    <code data-expr="fib(20)">fib(20)</code>
+    <code data-expr="gcd(100, 75)">gcd(100, 75)</code>
+    <code data-expr="isprime(97)">isprime(97)</code>
+    <code data-expr="pow(2, 10)">pow(2, 10)</code>
+    <code data-expr="sum_to(100)">sum_to(100)</code>
+    <code data-expr="sign(-5)">sign(-5)</code>
+    <code data-expr="clamp(15, 1, 10)">clamp(15, 1, 10)</code>
   </div>
 
   <div class="output-section">
@@ -283,7 +289,7 @@ function evaluate(code) {
   const trimmed = code.trim();
 
   // Match unary math functions: func(number)
-  const unaryMatch = trimmed.match(/^(sin|cos|sqrt|abs)\((-?\d+(?:\.\d+)?)\)$/);
+  const unaryMatch = trimmed.match(/^(sin|cos|sqrt|abs|sign|sum_to|factorial|fib|isprime)\((-?\d+(?:\.\d+)?)\)$/);
   if (unaryMatch) {
     const fname = unaryMatch[1];
     const x = Number(unaryMatch[2]);
@@ -293,6 +299,12 @@ function evaluate(code) {
     if (fname === "sqrt") return String(e.pipeline_sqrt(x));
     if (fname === "abs" && isFloat) return String(e.pipeline_abs_f(x));
     if (fname === "abs" && !isFloat) return String(e.pipeline_abs_i(BigInt(Math.trunc(x))));
+    // Phase 2: control flow + loops
+    if (fname === "sign") return String(e.pipeline_sign(BigInt(Math.trunc(x))));
+    if (fname === "sum_to") return String(e.pipeline_sum_to(BigInt(Math.trunc(x))));
+    if (fname === "factorial") return String(e.pipeline_factorial(BigInt(Math.trunc(x))));
+    if (fname === "fib") return String(e.pipeline_fib(BigInt(Math.trunc(x))));
+    if (fname === "isprime") return String(e.pipeline_isprime(BigInt(Math.trunc(x))));
   }
 
   // Match unary negation: -number
@@ -327,22 +339,53 @@ function evaluate(code) {
     }
   }
 
-  // Match div(a, b) and mod(a, b)
-  const divModMatch = trimmed.match(/^(div|mod)\((-?\d+),\s*(-?\d+)\)$/);
-  if (divModMatch) {
-    const fname = divModMatch[1];
-    const ai = BigInt(divModMatch[2]);
-    const bi = BigInt(divModMatch[3]);
+  // Match comparison: <number> == <number>
+  const eqMatch = trimmed.match(/^(-?\d+)\s*==\s*(-?\d+)$/);
+  if (eqMatch) {
+    const ai = BigInt(eqMatch[1]);
+    const bi = BigInt(eqMatch[2]);
+    return String(e.pipeline_eq(ai, bi)) === "1" ? "true" : "false";
+  }
+
+  // Match two-arg integer functions: func(a, b)
+  const twoArgMatch = trimmed.match(/^(max|min|div|mod|gcd|pow)\((-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\)$/);
+  if (twoArgMatch) {
+    const fname = twoArgMatch[1];
+    const isFloat = twoArgMatch[2].includes(".") || twoArgMatch[3].includes(".");
+    if (isFloat) {
+      const a = Number(twoArgMatch[2]);
+      const b = Number(twoArgMatch[3]);
+      if (fname === "max") return String(e.pipeline_fmax(a, b));
+      if (fname === "min") return String(e.pipeline_fmin(a, b));
+    }
+    const ai = BigInt(twoArgMatch[2]);
+    const bi = BigInt(twoArgMatch[3]);
+    if (fname === "max") return String(e.pipeline_max(ai, bi));
+    if (fname === "min") return String(e.pipeline_min(ai, bi));
     if (fname === "div") return String(e.pipeline_div(ai, bi));
     if (fname === "mod") return String(e.pipeline_mod(ai, bi));
+    if (fname === "gcd") return String(e.pipeline_gcd(ai, bi));
+    if (fname === "pow") return String(e.pipeline_pow(ai, bi));
+  }
+
+  // Match three-arg: clamp(x, lo, hi)
+  const threeArgMatch = trimmed.match(/^clamp\((-?\d+),\s*(-?\d+),\s*(-?\d+)\)$/);
+  if (threeArgMatch) {
+    const x = BigInt(threeArgMatch[1]);
+    const lo = BigInt(threeArgMatch[2]);
+    const hi = BigInt(threeArgMatch[3]);
+    return String(e.pipeline_clamp(x, lo, hi));
   }
 
   throw new Error(
     `Expression not yet supported.\n\nCurrently supported:\n` +
-    `  Integer: 1 + 1, 10 - 3, 2 * 3, 10 / 3, 10 % 3\n` +
-    `  Float:   2.5 + 3.5, 10.0 - 3.5, 2.5 * 4.0, 10.0 / 4.0\n` +
-    `  Math:    sin(1.0), cos(0.0), sqrt(4.0), abs(-7)\n` +
-    `  Integer: div(10, 3), mod(10, 3)\n` +
+    `  Arithmetic: 1 + 1, 10 - 3, 2 * 3, 10 / 3, 10 % 3\n` +
+    `  Float:      2.5 + 3.5, 2.5 * 4.0, 10.0 / 4.0\n` +
+    `  Math:       sin(1.0), cos(0.0), sqrt(4.0), abs(-7)\n` +
+    `  Control:    max(3, 7), min(3, 7), sign(-5), clamp(15, 1, 10)\n` +
+    `  Compare:    3 == 3\n` +
+    `  Loops:      sum_to(100), factorial(10), fib(20), pow(2, 10)\n` +
+    `  Algorithms: gcd(100, 75), isprime(97)\n` +
     `\nFull Julia compilation coming in a future update.`
   );
 }

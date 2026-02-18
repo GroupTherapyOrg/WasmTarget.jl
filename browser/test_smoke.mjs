@@ -23,7 +23,7 @@ function evaluate(wasmExports, code) {
     const trimmed = code.trim();
 
     // Match unary math functions: func(number)
-    const unaryMatch = trimmed.match(/^(sin|cos|sqrt|abs)\((-?\d+(?:\.\d+)?)\)$/);
+    const unaryMatch = trimmed.match(/^(sin|cos|sqrt|abs|sign|sum_to|factorial|fib|isprime)\((-?\d+(?:\.\d+)?)\)$/);
     if (unaryMatch) {
         const fname = unaryMatch[1];
         const x = Number(unaryMatch[2]);
@@ -33,6 +33,12 @@ function evaluate(wasmExports, code) {
         if (fname === "sqrt") return String(e.pipeline_sqrt(x));
         if (fname === "abs" && isFloat) return String(e.pipeline_abs_f(x));
         if (fname === "abs" && !isFloat) return String(e.pipeline_abs_i(BigInt(Math.trunc(x))));
+        // Phase 2: control flow + loops
+        if (fname === "sign") return String(e.pipeline_sign(BigInt(Math.trunc(x))));
+        if (fname === "sum_to") return String(e.pipeline_sum_to(BigInt(Math.trunc(x))));
+        if (fname === "factorial") return String(e.pipeline_factorial(BigInt(Math.trunc(x))));
+        if (fname === "fib") return String(e.pipeline_fib(BigInt(Math.trunc(x))));
+        if (fname === "isprime") return String(e.pipeline_isprime(BigInt(Math.trunc(x))));
     }
 
     // Match unary negation: -number
@@ -67,14 +73,42 @@ function evaluate(wasmExports, code) {
         }
     }
 
-    // Match div(a, b) and mod(a, b)
-    const divModMatch = trimmed.match(/^(div|mod)\((-?\d+),\s*(-?\d+)\)$/);
-    if (divModMatch) {
-        const fname = divModMatch[1];
-        const ai = BigInt(divModMatch[2]);
-        const bi = BigInt(divModMatch[3]);
+    // Match comparison: <number> == <number>
+    const eqMatch = trimmed.match(/^(-?\d+)\s*==\s*(-?\d+)$/);
+    if (eqMatch) {
+        const ai = BigInt(eqMatch[1]);
+        const bi = BigInt(eqMatch[2]);
+        return String(e.pipeline_eq(ai, bi)) === "1" ? "true" : "false";
+    }
+
+    // Match two-arg functions: func(a, b)
+    const twoArgMatch = trimmed.match(/^(max|min|div|mod|gcd|pow)\((-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\)$/);
+    if (twoArgMatch) {
+        const fname = twoArgMatch[1];
+        const isFloat = twoArgMatch[2].includes(".") || twoArgMatch[3].includes(".");
+        if (isFloat) {
+            const a = Number(twoArgMatch[2]);
+            const b = Number(twoArgMatch[3]);
+            if (fname === "max") return String(e.pipeline_fmax(a, b));
+            if (fname === "min") return String(e.pipeline_fmin(a, b));
+        }
+        const ai = BigInt(twoArgMatch[2]);
+        const bi = BigInt(twoArgMatch[3]);
+        if (fname === "max") return String(e.pipeline_max(ai, bi));
+        if (fname === "min") return String(e.pipeline_min(ai, bi));
         if (fname === "div") return String(e.pipeline_div(ai, bi));
         if (fname === "mod") return String(e.pipeline_mod(ai, bi));
+        if (fname === "gcd") return String(e.pipeline_gcd(ai, bi));
+        if (fname === "pow") return String(e.pipeline_pow(ai, bi));
+    }
+
+    // Match three-arg: clamp(x, lo, hi)
+    const threeArgMatch = trimmed.match(/^clamp\((-?\d+),\s*(-?\d+),\s*(-?\d+)\)$/);
+    if (threeArgMatch) {
+        const x = BigInt(threeArgMatch[1]);
+        const lo = BigInt(threeArgMatch[2]);
+        const hi = BigInt(threeArgMatch[3]);
+        return String(e.pipeline_clamp(x, lo, hi));
     }
 
     throw new Error(`Expression not yet supported.`);
@@ -204,6 +238,40 @@ check("sqrt(4.0)", "2");
 // PURE-4165: Julia-style div/mod
 check("div(10, 3)", "3");
 check("mod(7, 2)", "1");
+
+// PURE-4166: Control flow (if/else, ternary)
+check("max(3, 7)", "7");
+check("max(10, 2)", "10");
+check("min(3, 7)", "3");
+check("min(10, 2)", "2");
+check("sign(5)", "1");
+check("sign(-3)", "-1");
+check("sign(0)", "0");
+check("clamp(5, 1, 10)", "5");
+check("clamp(-1, 1, 10)", "1");
+check("clamp(15, 1, 10)", "10");
+check("3 == 3", "true");
+check("3 == 4", "false");
+
+// PURE-4166: Float control flow
+check("max(3.5, 2.1)", "3.5");
+check("min(3.5, 2.1)", "2.1");
+
+// PURE-4166: Loops (while, for)
+check("sum_to(10)", "55");
+check("sum_to(100)", "5050");
+check("factorial(5)", "120");
+check("factorial(10)", "3628800");
+check("pow(2, 10)", "1024");
+check("fib(10)", "55");
+check("fib(20)", "6765");
+
+// PURE-4166: Algorithms (gcd, isprime)
+check("gcd(12, 8)", "4");
+check("gcd(100, 75)", "25");
+check("isprime(7)", "1");
+check("isprime(10)", "0");
+check("isprime(97)", "1");
 
 console.log(`   Result: ${pass}/${pass + fail} CORRECT\n`);
 
