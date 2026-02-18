@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WasmTarget.jl Playground</title>
+<style>
+  :root {
+    --bg: #fafaf9;
+    --fg: #1c1917;
+    --border: #d6d3d1;
+    --accent: #16a34a;
+    --accent-hover: #15803d;
+    --editor-bg: #ffffff;
+    --output-bg: #f5f5f4;
+    --error: #dc2626;
+    --muted: #78716c;
+    --header-bg: #292524;
+    --header-fg: #fafaf9;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1c1917;
+      --fg: #fafaf9;
+      --border: #44403c;
+      --editor-bg: #292524;
+      --output-bg: #292524;
+      --header-bg: #0c0a09;
+      --header-fg: #fafaf9;
+      --muted: #a8a29e;
+    }
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  header {
+    background: var(--header-bg);
+    color: var(--header-fg);
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  header h1 {
+    font-size: 18px;
+    font-weight: 600;
+  }
+
+  header .tag {
+    font-size: 11px;
+    background: var(--accent);
+    color: white;
+    padding: 2px 8px;
+    border-radius: 9999px;
+    font-weight: 500;
+  }
+
+  header .subtitle {
+    font-size: 13px;
+    color: var(--muted);
+    margin-left: auto;
+  }
+
+  .container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    max-width: 960px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 24px;
+    gap: 16px;
+  }
+
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  #run-btn {
+    background: var(--accent);
+    color: white;
+    border: none;
+    padding: 8px 20px;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  #run-btn:hover { background: var(--accent-hover); }
+  #run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .status {
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .status.error { color: var(--error); }
+  .status.ready { color: var(--accent); }
+
+  .editor-wrapper {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--editor-bg);
+  }
+
+  .editor-wrapper .cm-editor {
+    font-size: 14px;
+    min-height: 120px;
+  }
+
+  .editor-wrapper .cm-editor .cm-content {
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+  }
+
+  .editor-wrapper .cm-editor .cm-gutters {
+    background: var(--output-bg);
+    border-right: 1px solid var(--border);
+  }
+
+  .output-section label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 6px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  #output {
+    background: var(--output-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 14px;
+    min-height: 80px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.6;
+  }
+
+  #output .result { color: var(--fg); }
+  #output .error { color: var(--error); }
+  #output .info { color: var(--muted); font-style: italic; }
+
+  .examples {
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .examples code {
+    background: var(--output-bg);
+    border: 1px solid var(--border);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .examples code:hover {
+    border-color: var(--accent);
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>WasmTarget<span style="color:#e74d3c">.</span><span style="color:#9558b2">j</span><span style="color:#389826">l</span></h1>
+  <span class="tag">Playground</span>
+  <span class="subtitle">Julia compiled to WebAssembly &mdash; running in your browser</span>
+</header>
+
+<div class="container">
+  <div class="toolbar">
+    <button id="run-btn" disabled>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+      Run
+    </button>
+    <span id="status" class="status">Loading WebAssembly module...</span>
+  </div>
+
+  <div class="editor-wrapper">
+    <div id="editor"></div>
+  </div>
+
+  <div class="examples">
+    Try:
+    <code data-expr="1 + 1">1 + 1</code>
+    <code data-expr="10 + 20">10 + 20</code>
+    <code data-expr="2 * 3">2 * 3</code>
+    <code data-expr="7 * 8">7 * 8</code>
+    <code data-expr="sin(0.0)">sin(0.0)</code>
+  </div>
+
+  <div class="output-section">
+    <label>Output</label>
+    <div id="output"><span class="info">Click Run to evaluate Julia code.</span></div>
+  </div>
+</div>
+
+<!-- CodeMirror 6 from CDN -->
+<script type="module">
+import {EditorView, basicSetup} from "https://esm.sh/@codemirror/basic-setup@0.20.0";
+import {EditorState} from "https://esm.sh/@codemirror/state@6.5.2";
+
+// ── State ──
+let wasmInstance = null;
+const runBtn = document.getElementById("run-btn");
+const statusEl = document.getElementById("status");
+const outputEl = document.getElementById("output");
+
+// ── CodeMirror editor ──
+const editor = new EditorView({
+  state: EditorState.create({
+    doc: "1 + 1",
+    extensions: [basicSetup],
+  }),
+  parent: document.getElementById("editor"),
+});
+
+// ── Load Wasm module ──
+async function loadWasm() {
+  // Try multiple paths for the pipeline wasm
+  const paths = [
+    "pipeline-optimized.wasm",
+    "../scripts/pipeline-optimized.wasm",
+    "pipeline.wasm",
+    "../scripts/pipeline.wasm",
+  ];
+
+  for (const path of paths) {
+    try {
+      const resp = await fetch(path);
+      if (!resp.ok) continue;
+      const bytes = await resp.arrayBuffer();
+      const importObject = { Math: { pow: Math.pow } };
+      const { instance } = await WebAssembly.instantiate(bytes, importObject);
+      wasmInstance = instance;
+      const size = (bytes.byteLength / 1024).toFixed(0);
+      statusEl.textContent = `Ready (${size} KB loaded)`;
+      statusEl.className = "status ready";
+      runBtn.disabled = false;
+      return;
+    } catch (e) {
+      // Try next path
+    }
+  }
+
+  statusEl.textContent = "Failed to load .wasm module. See console.";
+  statusEl.className = "status error";
+  console.error("Could not load pipeline wasm from any path.");
+}
+
+// ── Parse + evaluate ──
+function evaluate(code) {
+  const e = wasmInstance.exports;
+  const trimmed = code.trim();
+
+  // Match simple binary expressions: <number> <op> <number>
+  const binMatch = trimmed.match(/^(-?\d+(?:\.\d+)?)\s*([+\-*])\s*(-?\d+(?:\.\d+)?)$/);
+  if (binMatch) {
+    const a = Number(binMatch[1]);
+    const b = Number(binMatch[3]);
+    const op = binMatch[2];
+    const isFloat = binMatch[1].includes(".") || binMatch[3].includes(".");
+
+    if (!isFloat) {
+      // Integer path — use BigInt exports
+      const ai = BigInt(Math.trunc(a));
+      const bi = BigInt(Math.trunc(b));
+      if (op === "+") return String(e.pipeline_add(ai, bi));
+      if (op === "-") return String(e.pipeline_add(ai, -bi));
+      if (op === "*") return String(e.pipeline_mul(ai, bi));
+    }
+    // Float fallback for float literals (no float add/mul exports yet)
+    throw new Error(`Float arithmetic not yet supported in Wasm pipeline. Use integer expressions like "1 + 1".`);
+  }
+
+  // Match sin(x)
+  const sinMatch = trimmed.match(/^sin\((-?\d+(?:\.\d+)?)\)$/);
+  if (sinMatch) {
+    const x = Number(sinMatch[1]);
+    const result = e.pipeline_sin(x);
+    return String(result);
+  }
+
+  throw new Error(
+    `Expression not yet supported.\n\nCurrently supported:\n  Integer arithmetic: 1 + 1, 2 * 3, 10 + 20\n  Math functions: sin(0.0)\n\nFull Julia compilation coming in a future update.`
+  );
+}
+
+// ── Run button ──
+function run() {
+  const code = editor.state.doc.toString();
+  outputEl.innerHTML = "";
+
+  try {
+    const result = evaluate(code);
+    outputEl.innerHTML = `<span class="result">${escapeHtml(result)}</span>`;
+  } catch (err) {
+    outputEl.innerHTML = `<span class="error">${escapeHtml(err.message)}</span>`;
+  }
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+runBtn.addEventListener("click", run);
+
+// Ctrl/Cmd+Enter to run
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && !runBtn.disabled) {
+    e.preventDefault();
+    run();
+  }
+});
+
+// Example snippets
+document.querySelectorAll(".examples code[data-expr]").forEach((el) => {
+  el.addEventListener("click", () => {
+    const expr = el.getAttribute("data-expr");
+    editor.dispatch({
+      changes: { from: 0, to: editor.state.doc.length, insert: expr },
+    });
+  });
+});
+
+// ── Init ──
+loadWasm();
+</script>
+
+</body>
+</html>
