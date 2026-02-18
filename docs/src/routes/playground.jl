@@ -1,18 +1,12 @@
-# Playground page - Embeds the working Julia-to-WASM playground
+# Playground page — overwritten by post-build step in app.jl
 #
-# The standalone playground (browser/playground.html) is copied to dist/playground/
-# during build as app.html. This route wraps it in the docs layout via an iframe.
+# The standalone playground (browser/playground.html) replaces this route's
+# generated index.html during build. This file exists only so the route is
+# discovered and a dist/playground/ directory is created.
 
 function PlaygroundPage()
-    Div(:class => "w-full -mx-4 sm:-mx-6 lg:-mx-8 -mb-8",
-        :style => "min-height: calc(100vh - 120px);",
-
-        Iframe(
-            :src => "app.html",
-            :style => "width: 100%; height: calc(100vh - 120px); border: none;",
-            :title => "WasmTarget.jl Playground",
-            :loading => "eager"
-        )
+    Div(:class => "w-full max-w-4xl mx-auto py-8 text-center",
+        P("Loading playground...")
     )
 end
 

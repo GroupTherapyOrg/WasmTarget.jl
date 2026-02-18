@@ -61,11 +61,12 @@ if length(ARGS) >= 1 && ARGS[1] == "build"
     playground_dist = joinpath("dist", "playground")
     browser_dir = joinpath(dirname(@__DIR__), "browser")
 
-    # Copy standalone playground HTML as app.html (iframe src)
+    # Overwrite the route-generated index.html with the standalone playground
+    # This replaces the docs layout wrapper entirely — the playground has its own UI
     src_html = joinpath(browser_dir, "playground.html")
     if isfile(src_html)
-        cp(src_html, joinpath(playground_dist, "app.html"); force=true)
-        println("  Copied: playground/app.html")
+        cp(src_html, joinpath(playground_dist, "index.html"); force=true)
+        println("  Replaced: playground/index.html (standalone playground)")
     end
 
     # Copy pipeline wasm (the playground loads it from relative path)
