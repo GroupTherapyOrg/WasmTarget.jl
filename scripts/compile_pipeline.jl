@@ -248,6 +248,22 @@ if best !== nothing
     println("\n" * "=" ^ 80)
     println("SAVED: $best_label → scripts/pipeline.wasm ($(length(best)) bytes)")
     println("=" ^ 80)
+
+    # PURE-4162: Optimize with Binaryen wasm-opt (production flags, 91% reduction)
+    println("\n--- Binaryen optimization (production flags) ---")
+    try
+        opt_bytes = WasmTarget.optimize(best; level=:size, validate=true)
+        opt_outpath = joinpath(@__DIR__, "pipeline-optimized.wasm")
+        write(opt_outpath, opt_bytes)
+        reduction = (1.0 - length(opt_bytes) / length(best)) * 100
+        println("  Original:  $(length(best)) bytes ($(round(length(best)/1024, digits=1)) KB)")
+        println("  Optimized: $(length(opt_bytes)) bytes ($(round(length(opt_bytes)/1024, digits=1)) KB)")
+        println("  Reduction: $(round(reduction, digits=1))%")
+        println("  SAVED: scripts/pipeline-optimized.wasm")
+    catch e
+        println("  OPTIMIZE_ERROR: $(first(sprint(showerror, e), 400))")
+        println("  Falling back to unoptimized pipeline.wasm")
+    end
 else
     println("\n" * "=" ^ 80)
     println("ALL PHASES FAILED — no module saved")
