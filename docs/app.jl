@@ -52,3 +52,26 @@ app = App(
 # =============================================================================
 
 Therapy.run(app)
+
+# =============================================================================
+# Post-build: Copy playground assets to dist/playground/
+# =============================================================================
+
+if length(ARGS) >= 1 && ARGS[1] == "build"
+    playground_dist = joinpath("dist", "playground")
+    browser_dir = joinpath(dirname(@__DIR__), "browser")
+
+    # Copy standalone playground HTML as app.html (iframe src)
+    src_html = joinpath(browser_dir, "playground.html")
+    if isfile(src_html)
+        cp(src_html, joinpath(playground_dist, "app.html"); force=true)
+        println("  Copied: playground/app.html")
+    end
+
+    # Copy pipeline wasm (the playground loads it from relative path)
+    src_wasm = joinpath(browser_dir, "pipeline-optimized.wasm")
+    if isfile(src_wasm)
+        cp(src_wasm, joinpath(playground_dist, "pipeline-optimized.wasm"); force=true)
+        println("  Copied: playground/pipeline-optimized.wasm")
+    end
+end
