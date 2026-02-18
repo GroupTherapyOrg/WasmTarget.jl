@@ -13,8 +13,10 @@
 #
 # Verified against: Core.Compiler.findall with InternalMethodTable (PURE-4131)
 
-# Re-use the subtype.jl structures (VarBinding, SubtypeEnv, etc.)
-# These are assumed to be loaded before this file.
+# Load subtype.jl if not already loaded (for standalone inclusion)
+if !@isdefined(SubtypeEnv)
+    include(joinpath(@__DIR__, "subtype.jl"))
+end
 
 using Core.Compiler: MethodMatch, MethodLookupResult, WorldRange
 
