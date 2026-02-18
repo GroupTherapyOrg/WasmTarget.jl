@@ -412,11 +412,17 @@ function _subtype_datatypes(x::DataType, y::DataType, env::SubtypeEnv, param::In
     if xname === Type.body.name  # x is Type{T}
         if yname !== Type.body.name  # y is NOT Type{_}
             # Type{Int} <: DataType → typeof(Int) == DataType
+            # Avoid typeof() and <: cross-calls — handle manually for Wasm compilation
             xp = x.parameters
             if length(xp) > 0
                 T = xp[1]
                 if !(T isa TypeVar)
-                    return typeof(T) <: y  # use native for this simple check
+                    # typeof(T) for type values: DataType for concrete/abstract types
+                    if T isa DataType
+                        return _datatype_subtype(DataType, y)
+                    end
+                    # Union, UnionAll type objects: Type{Union{...}} is not <: DataType/Number/etc.
+                    return false
                 end
             end
             return false

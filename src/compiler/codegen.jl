@@ -21784,7 +21784,9 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
 
     # PURE-4149: Core._svec_len(sv) — SimpleVector is an externref array in WasmGC.
     # _svec_len returns Int64 = array.len (converted from i32 to i64).
-    elseif func isa GlobalRef && func.name === :_svec_len && func.mod === Core && length(args) == 1
+    # Match both GlobalRef(Core, :_svec_len) and the direct builtin function object.
+    # Julia's type inference may resolve length(::SimpleVector) to the builtin directly.
+    elseif ((func isa GlobalRef && func.name === :_svec_len && func.mod === Core) || func === Core._svec_len) && length(args) == 1
         append!(bytes, compile_value(args[1], ctx))
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.ARRAY_LEN)
@@ -21793,7 +21795,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
 
     # PURE-4149: Core._svec_ref(sv, i) — get element from SimpleVector (externref array).
     # _svec_ref is 1-indexed in Julia, 0-indexed in Wasm → subtract 1.
-    elseif func isa GlobalRef && func.name === :_svec_ref && func.mod === Core && length(args) == 2
+    # Match both GlobalRef and direct builtin function object (same as _svec_len above).
+    elseif ((func isa GlobalRef && func.name === :_svec_ref && func.mod === Core) || func === Core._svec_ref) && length(args) == 2
         append!(bytes, compile_value(args[1], ctx))
         append!(bytes, compile_value(args[2], ctx))
         # Convert i64 Julia index to i32 Wasm index and subtract 1 for 0-indexing
@@ -21807,6 +21810,9 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.ARRAY_GET)
         append!(bytes, encode_leb128_unsigned(svec_arr_idx))
+        # array.get returns externref but downstream ref.cast expects anyref
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ANY_CONVERT_EXTERN)
 
     # PURE-604: Core builtins (svec, _apply_iterate) — genuinely unsupported, trap
     elseif func isa GlobalRef && func.name in (:svec, :_apply_iterate)
