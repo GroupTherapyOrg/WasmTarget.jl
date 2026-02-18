@@ -661,12 +661,19 @@ function wasm_type_intersection(@nospecialize(a), @nospecialize(b))
     return _intersect(a, b, 0)
 end
 
-"""Check whether a type has no free TypeVars (safe for fast-path subtype checks)."""
+"""Check whether a type has no free TypeVars (safe for fast-path subtype checks).
+Recursively checks DataType parameters for TypeVars."""
 function _no_free_typevars(@nospecialize(t))::Bool
     t isa TypeVar && return false
     t isa UnionAll && return false  # has bound vars, body may have free refs
     t isa Union && return _no_free_typevars(t.a) && _no_free_typevars(t.b)
-    return true  # DataType, concrete types
+    t isa DataType && begin
+        for p in t.parameters
+            _no_free_typevars(p) || return false
+        end
+        return true
+    end
+    return true  # non-type values (Int, Symbol, etc.)
 end
 
 # ─── Core recursive intersection ───
@@ -697,16 +704,11 @@ function _intersect(@nospecialize(x), @nospecialize(y), param::Int)
         return _intersect_union(y, x, param)
     end
 
-    # === UNIONALL HANDLING (deferred to PURE-4122) ===
+    # === UNIONALL HANDLING (PURE-4122) ===
     if x isa UnionAll || y isa UnionAll
-        # For now, use subtype-based approximation
-        if _no_free_typevars(x) && _no_free_typevars(y)
-            wasm_subtype(x, y) && return x
-            wasm_subtype(y, x) && return y
-        end
-        # Fall through to native for UnionAll (temporary)
-        # This will be replaced by proper UnionAll intersection in PURE-4122
-        return _intersect_unionall_fallback(x, y)
+        # Use env-aware intersection for UnionAll types
+        ienv = IntersectEnv()
+        return _intersect_env(x, y, ienv, param)
     end
 
     # === DATATYPE × DATATYPE ===
@@ -1051,17 +1053,594 @@ function _intersect_different_names(x::DataType, y::DataType, param::Int)
     return Union{}
 end
 
-# ─── UnionAll fallback (temporary — replaced by PURE-4122) ───
+# ═══════════════════════════════════════════════════════════════════════
+# UnionAll intersection (PURE-4122) — the hardest part
+#
+# Implements intersect_unionall and finish_unionall from subtype.c.
+# Uses SubtypeEnv for variable binding tracking (same env as subtype).
+# ═══════════════════════════════════════════════════════════════════════
 
 """
-    _intersect_unionall_fallback(x, y) → Type
+    IntersectBinding
 
-Temporary fallback for UnionAll intersection.
-Uses native typeintersect. Will be replaced by pure Julia implementation in PURE-4122.
+Per-variable state during intersection. Extends VarBinding with intersection-specific fields.
 """
-function _intersect_unionall_fallback(@nospecialize(x), @nospecialize(y))
-    # Use native typeintersect as temporary oracle
-    return typeintersect(x, y)
+mutable struct IntersectBinding
+    var::TypeVar          # the type variable
+    lb::Any               # lower bound (updated during intersection)
+    ub::Any               # upper bound (updated during intersection)
+    right::Bool           # true if var came from right side
+    occurs_inv::Int       # invariant occurrences
+    occurs_cov::Int       # covariant occurrences
+    concrete::Bool        # forced concrete by diagonal rule
+end
+
+IntersectBinding(var::TypeVar, right::Bool) = IntersectBinding(var, var.lb, var.ub, right, 0, 0, false)
+
+"""
+    IntersectEnv
+
+Environment for the intersection algorithm. Tracks variable bindings and intersection state.
+"""
+mutable struct IntersectEnv
+    vars::Vector{IntersectBinding}
+    invdepth::Int
+end
+
+IntersectEnv() = IntersectEnv(IntersectBinding[], 0)
+
+"""Look up a TypeVar in the intersection environment."""
+function _ilookup(env::IntersectEnv, @nospecialize(v::TypeVar))::Union{IntersectBinding, Nothing}
+    for i in length(env.vars):-1:1
+        if env.vars[i].var === v
+            return env.vars[i]
+        end
+    end
+    return nothing
+end
+
+"""Record variable occurrence in covariant or invariant position."""
+function _irecord_occurrence(ib::IntersectBinding, env::IntersectEnv, param::Int)
+    if param == 2 || env.invdepth > 0
+        ib.occurs_inv = min(ib.occurs_inv + 1, 2)
+    else
+        ib.occurs_cov = min(ib.occurs_cov + 1, 2)
+    end
+end
+
+# ─── Core env-aware intersection ───
+
+"""
+    _intersect_env(x, y, env, param) → Type
+
+Environment-aware intersection core. Handles TypeVar bindings from UnionAll.
+"""
+function _intersect_env(@nospecialize(x), @nospecialize(y), env::IntersectEnv, param::Int)
+    x === y && return x
+    x === Union{} && return Union{}
+    y === Union{} && return Union{}
+    x === Any && return y
+    y === Any && return x
+
+    # === TYPEVAR HANDLING (intersection mode) ===
+    if x isa TypeVar
+        xb = _ilookup(env, x)
+        if xb !== nothing
+            _irecord_occurrence(xb, env, param)
+            return _intersect_ivar(x, xb, y, env, param)
+        end
+        # Free TypeVar: intersect y with x's upper bound
+        return _intersect_env(x.ub, y, env, param)
+    end
+    if y isa TypeVar
+        yb = _ilookup(env, y)
+        if yb !== nothing
+            _irecord_occurrence(yb, env, param)
+            return _intersect_ivar(y, yb, x, env, param)
+        end
+        # Free TypeVar: intersect x with y's upper bound
+        return _intersect_env(x, y.ub, env, param)
+    end
+
+    # === UNION HANDLING ===
+    if x isa Union
+        return _intersect_union_env(x, y, env, param)
+    end
+    if y isa Union
+        return _intersect_union_env(y, x, env, param)
+    end
+
+    # === UNIONALL HANDLING ===
+    if x isa UnionAll && y isa UnionAll
+        # Try both orderings and pick the more specific result
+        a = _intersect_unionall_inner(y, x, env, false, param)
+        b = _intersect_unionall_inner(x, y, env, true, param)
+        if a === Union{}
+            return b
+        end
+        if b === Union{}
+            return a
+        end
+        # Pick the more specific, or join
+        if wasm_subtype(a, b)
+            return a
+        end
+        if wasm_subtype(b, a)
+            return b
+        end
+        return _simple_join(a, b)
+    end
+    if x isa UnionAll
+        return _intersect_unionall_inner(y, x, env, false, param)
+    end
+    if y isa UnionAll
+        return _intersect_unionall_inner(x, y, env, true, param)
+    end
+
+    # === DATATYPE × DATATYPE ===
+    if x isa DataType && y isa DataType
+        return _intersect_datatypes_env(x, y, env, param)
+    end
+
+    # Subtype fast paths
+    if _no_free_typevars(x) && _no_free_typevars(y)
+        wasm_subtype(x, y) && return x
+        wasm_subtype(y, x) && return y
+    end
+
+    return Union{}
+end
+
+"""Distribute intersection over union with env."""
+function _intersect_union_env(u::Union, @nospecialize(t), env::IntersectEnv, param::Int)
+    a = _intersect_env(u.a, t, env, param)
+    b = _intersect_env(u.b, t, env, param)
+    return _simple_join(a, b)
+end
+
+# ─── Intersect TypeVar with a type (intersect_var from subtype.c) ───
+
+"""
+    _intersect_ivar(var, vb, a, env, param) → Type
+
+Intersect a bound TypeVar `var` (with binding `vb`) with type `a`.
+In invariant position (param=2): narrows bounds, checks consistency.
+In covariant position: intersects with upper bound.
+"""
+function _intersect_ivar(@nospecialize(var::TypeVar), vb::IntersectBinding, @nospecialize(a), env::IntersectEnv, param::Int)
+    # If a is the same var, return it
+    a === var && return var
+
+    # If a is another bound TypeVar, delegate to var-var intersection
+    if a isa TypeVar
+        ab = _ilookup(env, a)
+        if ab !== nothing
+            _irecord_occurrence(ab, env, param)
+            # In invariant position: intersect both bounds
+            if param == 2
+                # Intersect upper bounds
+                ub = _intersect_aside(vb.ub, ab.ub, env)
+                if ub === Union{}
+                    return Union{}
+                end
+                # Narrow both vars' upper bounds
+                vb.ub = ub
+                ab.ub = ub
+                # Widen both lower bounds
+                if vb.lb !== Union{} || ab.lb !== Union{}
+                    lb = _simple_join(vb.lb, ab.lb)
+                    vb.lb = lb
+                    ab.lb = lb
+                end
+                return var  # return the variable
+            end
+            # Covariant: intersect with upper bound of a
+            return _intersect_aside(vb.ub, a, env)
+        end
+    end
+
+    if param == 2  # INVARIANT position
+        # Check consistency: vb.lb <: a <: vb.ub
+        if _no_free_typevars(a)
+            if !(wasm_subtype(vb.lb, a) && wasm_subtype(a, vb.ub))
+                return Union{}
+            end
+            # Pin: narrow ub to a, widen lb to a
+            vb.ub = a
+            vb.lb = a
+            return a
+        end
+        # a has free vars: intersect a with vb.ub
+        ub = _intersect_aside(a, vb.ub, env)
+        if ub === Union{}
+            return Union{}
+        end
+        vb.ub = ub
+        return ub
+    end
+
+    # COVARIANT position
+    ub = _intersect_aside(a, vb.ub, env)
+    if ub === Union{}
+        return Union{}
+    end
+    # Narrow upper bound
+    vb.ub = ub
+    return var  # return the variable in covariant position
+end
+
+"""
+    _intersect_aside(x, y, env) → Type
+
+Run intersection in a "side" context — used for nested intersections
+within variable binding without disturbing the main state.
+"""
+function _intersect_aside(@nospecialize(x), @nospecialize(y), env::IntersectEnv)
+    x === Any && return y
+    y === Any && return x
+    x === y && return x
+    x === Union{} && return Union{}
+    y === Union{} && return Union{}
+
+    # For concrete types, use the non-env intersection
+    if _no_free_typevars(x) && _no_free_typevars(y)
+        wasm_subtype(x, y) && return x
+        wasm_subtype(y, x) && return y
+    end
+
+    # Use env-aware intersection
+    return _intersect_env(x, y, env, 0)
+end
+
+# ─── UnionAll intersection (intersect_unionall from subtype.c) ───
+
+"""
+    _intersect_unionall_inner(t, u::UnionAll, env, R, param) → Type
+
+Handle intersection of type `t` with `u::UnionAll`.
+R=true: u is on the right side (u.var is existential for intersection)
+R=false: u is on the left side
+"""
+function _intersect_unionall_inner(@nospecialize(t), u::UnionAll, env::IntersectEnv, R::Bool, param::Int)
+    # Create a new binding for this UnionAll's variable
+    vb = IntersectBinding(u.var, R)
+
+    # Push binding onto environment
+    push!(env.vars, vb)
+
+    # Do the intersection: if R, intersect t with u.body; else u.body with t
+    if R
+        result = _intersect_env(t, u.body, env, param)
+    else
+        result = _intersect_env(u.body, t, env, param)
+    end
+
+    # Pop binding
+    pop!(env.vars)
+
+    # Diagonal dispatch check
+    if result !== Union{} && vb.occurs_cov > 1 && vb.occurs_inv == 0
+        # Variable occurred 2+ times covariantly: must be concrete (diagonal rule)
+        vb.concrete = true
+        if vb.lb !== Union{} && !_is_leaf_bound(vb.lb)
+            result = Union{}
+        end
+    end
+
+    # Post-intersection checks
+    if result !== Union{}
+        # Check for circular constraints
+        if _type_contains_var(vb.lb, u.var)
+            result = Union{}
+        end
+    end
+
+    if result !== Union{}
+        # Bound consistency: lb must be <: ub
+        if !(vb.lb === Union{} || vb.ub === Any || _subtype_check(vb.lb, vb.ub))
+            result = Union{}
+        end
+    end
+
+    # Finish: determine if var can be eliminated or needs re-wrapping
+    if result !== Union{}
+        result = _finish_unionall(result, vb, u)
+    end
+
+    return result
+end
+
+"""
+    _finish_unionall(res, vb, u) → Type
+
+Determine what to do with the UnionAll variable after intersection:
+1. If lb === ub, substitute the variable with that value (pinned)
+2. If ub is a concrete leaf type in covariant context, substitute with ub
+3. Otherwise, re-wrap in UnionAll with narrowed bounds
+"""
+function _finish_unionall(@nospecialize(res), vb::IntersectBinding, u::UnionAll)
+    varval = nothing  # the value to substitute, if any
+
+    # === Step 1: Try to reduce var to a single value ===
+    if vb.lb === vb.ub && vb.lb !== Union{}
+        # Pinned: lb == ub, substitute
+        varval = vb.lb
+    elseif vb.lb === Union{} && vb.ub === Any
+        # Unconstrained: keep as UnionAll
+    elseif vb.occurs_cov > 0 && vb.occurs_inv == 0 && _is_leaf_bound(vb.ub) && _no_free_typevars_val(vb.ub)
+        # Covariant with leaf ub: substitute with ub
+        varval = vb.ub
+    elseif vb.lb !== Union{} && vb.lb === vb.ub
+        varval = vb.lb
+    end
+
+    # === Step 2: Substitute or re-wrap ===
+    if varval !== nothing
+        # Substitute all occurrences of var in result
+        res = _substitute_type(res, vb.var, varval)
+        # Simplify chains: UnionAll where lb === ub
+        while res isa UnionAll
+            inner_var = res.var
+            if inner_var.lb === inner_var.ub
+                res = _substitute_type(res.body, inner_var, inner_var.lb)
+            else
+                break
+            end
+        end
+    else
+        # Re-wrap with potentially narrowed bounds
+        if _type_contains_var(res, vb.var)
+            if vb.lb !== u.var.lb || vb.ub !== u.var.ub
+                # Bounds changed: create new TypeVar
+                newvar = TypeVar(u.var.name, vb.lb, vb.ub)
+                res = _substitute_type(res, vb.var, newvar)
+                res = UnionAll(newvar, res)
+            else
+                # Bounds unchanged: re-wrap with original var
+                res = UnionAll(u.var, res)
+            end
+        end
+        # If var doesn't appear in result, it was eliminated (no wrapping needed)
+    end
+
+    return res
+end
+
+"""Check if a value (not necessarily a Type) has no free type variables."""
+function _no_free_typevars_val(@nospecialize(t))::Bool
+    t isa TypeVar && return false
+    t isa UnionAll && return false
+    t isa Union && return _no_free_typevars_val(t.a) && _no_free_typevars_val(t.b)
+    t isa DataType && begin
+        for p in t.parameters
+            _no_free_typevars_val(p) || return false
+        end
+        return true
+    end
+    return true  # non-type values (Int, Symbol, etc.)
+end
+
+"""
+    _substitute_type(t, var, val) → Type
+
+Substitute all occurrences of `var` in type `t` with `val`.
+"""
+function _substitute_type(@nospecialize(t), var::TypeVar, @nospecialize(val))
+    t === var && return val
+    t isa TypeVar && return t
+    t isa Union && begin
+        a = _substitute_type(t.a, var, val)
+        b = _substitute_type(t.b, var, val)
+        a === t.a && b === t.b && return t
+        return Union{a, b}
+    end
+    t isa UnionAll && begin
+        # Don't substitute inside a UnionAll that shadows our var
+        if t.var === var
+            return t
+        end
+        newbody = _substitute_type(t.body, var, val)
+        # Also substitute in var bounds if needed
+        new_lb = _substitute_type(t.var.lb, var, val)
+        new_ub = _substitute_type(t.var.ub, var, val)
+        if newbody === t.body && new_lb === t.var.lb && new_ub === t.var.ub
+            return t
+        end
+        if new_lb !== t.var.lb || new_ub !== t.var.ub
+            newvar = TypeVar(t.var.name, new_lb, new_ub)
+            newbody = _substitute_type(newbody, t.var, newvar)
+            return UnionAll(newvar, newbody)
+        end
+        return UnionAll(t.var, newbody)
+    end
+    t isa DataType && begin
+        ps = t.parameters
+        np = length(ps)
+        np == 0 && return t
+        changed = false
+        new_ps = Vector{Any}(undef, np)
+        for i in 1:np
+            new_ps[i] = _substitute_type(ps[i], var, val)
+            if new_ps[i] !== ps[i]
+                changed = true
+            end
+        end
+        !changed && return t
+        # Reconstruct type with new parameters
+        try
+            if t.name === Tuple.name
+                return Tuple{new_ps...}
+            end
+            wrapper = t.name.wrapper
+            return wrapper{new_ps...}
+        catch
+            return t  # if type construction fails, return original
+        end
+    end
+    return t
+end
+
+# ─── DataType intersection with env (extends existing _intersect_datatypes) ───
+
+"""
+    _intersect_datatypes_env(x, y, env, param) → Type
+
+Intersect two DataTypes using the intersection environment for TypeVar tracking.
+"""
+function _intersect_datatypes_env(x::DataType, y::DataType, env::IntersectEnv, param::Int)
+    x === y && return x
+
+    xname = x.name
+    yname = y.name
+
+    # Both Tuples: element-wise intersection
+    if xname === Tuple.name && yname === Tuple.name
+        return _intersect_tuple_env(x, y, env, param)
+    end
+
+    # Same name: invariant parameter intersection
+    if xname === yname
+        return _intersect_same_name_env(x, y, env, param)
+    end
+
+    # Different names: walk supertype chains
+    return _intersect_different_names_env(x, y, env, param)
+end
+
+"""Intersect two Tuples with env."""
+function _intersect_tuple_env(x::DataType, y::DataType, env::IntersectEnv, param::Int)
+    x === y && return x
+    xp = x.parameters
+    yp = y.parameters
+    nx = length(xp)
+    ny = length(yp)
+
+    x_has_vararg = nx > 0 && xp[nx] isa Core.TypeofVararg
+    y_has_vararg = ny > 0 && yp[ny] isa Core.TypeofVararg
+
+    # Simple case: no Vararg, same length
+    if !x_has_vararg && !y_has_vararg
+        nx != ny && return Union{}
+        params = Vector{Any}(undef, nx)
+        for i in 1:nx
+            ii = _intersect_env(xp[i], yp[i], env, param == 0 ? 1 : param)
+            ii === Union{} && return Union{}
+            params[i] = ii
+        end
+        all_x = all(i -> params[i] === xp[i], 1:nx)
+        all_x && return x
+        all_y = all(i -> params[i] === yp[i], 1:ny)
+        all_y && return y
+        return Tuple{params...}
+    end
+
+    # For Vararg cases, delegate to the non-env version (handles expansion)
+    # but use env-aware intersection for element types
+    return _intersect_tuple(x, y, param)
+end
+
+"""Intersect same-name DataTypes with env (invariant params)."""
+function _intersect_same_name_env(x::DataType, y::DataType, env::IntersectEnv, param::Int)
+    xp = x.parameters
+    yp = y.parameters
+    np = length(xp)
+
+    np != length(yp) && return Union{}
+    np == 0 && return x
+
+    params = Vector{Any}(undef, np)
+    for i in 1:np
+        ii = _intersect_invariant_env(xp[i], yp[i], env)
+        if ii === nothing
+            return Union{}
+        end
+        params[i] = ii
+    end
+
+    try
+        wrapper = x.name.wrapper
+        return wrapper{params...}
+    catch
+        return Union{}
+    end
+end
+
+"""Intersect two types in invariant position with env."""
+function _intersect_invariant_env(@nospecialize(x), @nospecialize(y), env::IntersectEnv)
+    x === y && return x
+
+    # Handle non-type values (e.g., integer parameters like N in Array{T,N})
+    if !(x isa Type) && !(x isa TypeVar) && !(y isa Type) && !(y isa TypeVar)
+        return x === y ? x : nothing  # non-type values must be equal
+    end
+
+    # Use env-aware intersection in invariant mode
+    env.invdepth += 1
+    ii = _intersect_env(x, y, env, 2)
+    env.invdepth -= 1
+
+    if ii === Union{}
+        # Check if either side is actually Bottom
+        if (x isa Type) && !(wasm_subtype(x, Union{}))
+            return nothing  # inconsistent, not empty
+        end
+        return Union{}
+    end
+
+    # Consistency check: x <: y and y <: x (in the env context)
+    if _no_free_typevars(x) && _no_free_typevars(y)
+        if (x isa Type) && (y isa Type)
+            if !(wasm_subtype(x, y) && wasm_subtype(y, x))
+                return nothing
+            end
+        end
+    end
+
+    return ii
+end
+
+"""Intersect different-name DataTypes with env."""
+function _intersect_different_names_env(x::DataType, y::DataType, env::IntersectEnv, param::Int)
+    # Walk x's supertype chain to find a type with y's name
+    xd = x
+    while xd !== Any && xd.name !== y.name
+        xd_super = supertype(xd)
+        xd_super === xd && break
+        xd = xd_super
+    end
+
+    if xd !== Any && xd.name === y.name
+        # x inherits from y's name. Intersect the matched supertype with y
+        # to populate TypeVar constraints, then return x (the subtype).
+        ii = _intersect_datatypes_env(xd, y, env, param)
+        if ii !== Union{}
+            return x
+        end
+        return Union{}
+    end
+
+    # Try the other direction: walk y's chain to x's name
+    yd = y
+    while yd !== Any && yd.name !== x.name
+        yd_super = supertype(yd)
+        yd_super === yd && break
+        yd = yd_super
+    end
+
+    if yd !== Any && yd.name === x.name
+        ii = _intersect_datatypes_env(x, yd, env, param)
+        if ii !== Union{}
+            return y
+        end
+        return Union{}
+    end
+
+    # No inheritance relation
+    if isconcretetype(x) || isconcretetype(y)
+        return Union{}
+    end
+
+    return Union{}
 end
 
 # ─── Legacy entry points (keep backward compatibility with tests) ───
