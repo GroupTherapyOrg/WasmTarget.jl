@@ -25483,9 +25483,12 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
 
             # Handle JuliaSyntax internal functions that have complex implementations
             # These are intercepted and compiled as simplified stubs
-            elseif name === :parse_float_literal || name === :parse_int_literal ||
+            # PURE-5002: parse_float_literal REMOVED from stub — override in
+            # src/runtime/float_parse.jl provides a pure Julia implementation
+            # that compiles to Wasm correctly (no ccalls, no raw pointers).
+            elseif name === :parse_int_literal ||
                    name === :parse_uint_literal
-                # Float/int literal parsing — return a default value
+                # Int/uint literal parsing — return a default value
                 # These parse strings to numeric values; simplified to return 0
                 push!(bytes, Opcode.I32_CONST)
                 push!(bytes, 0x00)
