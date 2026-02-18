@@ -41,9 +41,12 @@ mutable struct TypeRegistry
     # PURE-4151: Type constant globals — each unique Type value gets a unique Wasm global
     # so that ref.eq distinguishes different Types (e.g., Int64 !== String)
     type_constant_globals::Dict{Type, UInt32}  # Type value -> Wasm global index
+    # PURE-4149: TypeName constant globals — each unique TypeName gets a unique Wasm global
+    # so that t.name === s.name identity comparison works via ref.eq
+    typename_constant_globals::Dict{Core.TypeName, UInt32}  # TypeName -> Wasm global index
 end
 
-TypeRegistry() = TypeRegistry(Dict{Type, StructInfo}(), Dict{Type, UInt32}(), nothing, Dict{Union, UnionInfo}(), Dict{WasmValType, UInt32}(), Dict{Type, UInt32}())
+TypeRegistry() = TypeRegistry(Dict{Type, StructInfo}(), Dict{Type, UInt32}(), nothing, Dict{Union, UnionInfo}(), Dict{WasmValType, UInt32}(), Dict{Type, UInt32}(), Dict{Core.TypeName, UInt32}())
 
 # ============================================================================
 # Function Registry - for multi-function modules
@@ -291,17 +294,217 @@ function get_type_constant_global!(mod::WasmModule, registry::TypeRegistry, @nos
     # Create init expression: struct.new_default $dt_type_idx
     # Each struct.new_default creates a unique allocation with all fields zeroed.
     # ref.eq compares pointer identity, so different allocations are distinguishable.
+    # Fields are populated later by populate_type_constant_globals!
     init_bytes = UInt8[]
     push!(init_bytes, Opcode.GC_PREFIX)
     push!(init_bytes, Opcode.STRUCT_NEW_DEFAULT)
     append!(init_bytes, encode_leb128_unsigned(dt_type_idx))
 
-    # Create the global (immutable ref to the DataType struct)
-    global_idx = add_global_ref!(mod, dt_type_idx, false, init_bytes; nullable=false)
+    # Create the global (mutable ref — needs patching by init function)
+    global_idx = add_global_ref!(mod, dt_type_idx, true, init_bytes; nullable=false)
 
-    # Cache and return
+    # Cache
     registry.type_constant_globals[type_val] = global_idx
+
+    # PURE-4149: Recursively ensure globals exist for the entire type hierarchy.
+    # This creates globals for supertypes, TypeNames, and parameter types
+    # so that field access works at runtime.
+    if type_val isa DataType
+        # Ensure TypeName global exists
+        get_typename_constant_global!(mod, registry, type_val.name)
+
+        # Ensure supertype global exists (recurse up the hierarchy)
+        if type_val.super !== type_val  # Any.super === Any (self-referential)
+            get_type_constant_global!(mod, registry, type_val.super)
+        end
+
+        # Ensure parameter type globals exist
+        for i in 1:length(type_val.parameters)
+            p = type_val.parameters[i]
+            if p isa DataType
+                get_type_constant_global!(mod, registry, p)
+            end
+        end
+    end
+
     return global_idx
+end
+
+"""
+    get_typename_constant_global!(mod, registry, tn::Core.TypeName) → UInt32
+
+Get or create a Wasm global for a TypeName value.
+Each TypeName gets a unique struct allocation so that `t.name === s.name`
+identity comparison works via `ref.eq`.
+
+Fields are populated by `populate_type_constant_globals!` after all globals exist.
+"""
+function get_typename_constant_global!(mod::WasmModule, registry::TypeRegistry, tn::Core.TypeName)::UInt32
+    if haskey(registry.typename_constant_globals, tn)
+        return registry.typename_constant_globals[tn]
+    end
+
+    # Register TypeName struct type
+    tn_info = register_struct_type!(mod, registry, Core.TypeName)
+    tn_type_idx = tn_info.wasm_type_idx
+
+    # Create with struct.new_default — fields populated later
+    init_bytes = UInt8[]
+    push!(init_bytes, Opcode.GC_PREFIX)
+    push!(init_bytes, Opcode.STRUCT_NEW_DEFAULT)
+    append!(init_bytes, encode_leb128_unsigned(tn_type_idx))
+
+    # Mutable global — needs patching by init function
+    global_idx = add_global_ref!(mod, tn_type_idx, true, init_bytes; nullable=false)
+
+    registry.typename_constant_globals[tn] = global_idx
+    return global_idx
+end
+
+"""
+    populate_type_constant_globals!(mod, registry)
+
+Create a start function that populates DataType and TypeName fields for all
+type constant globals. Called at the end of compile_module, after all
+Type globals have been created.
+
+Populates:
+- DataType.name (field 0) → TypeName global ref
+- DataType.super (field 1) → parent DataType global ref
+- DataType.parameters (field 2) → SimpleVector (externref array) with parameter types
+- TypeName.wrapper (field 6) → DataType global ref as externref
+"""
+function populate_type_constant_globals!(mod::WasmModule, registry::TypeRegistry)
+    isempty(registry.type_constant_globals) && return
+
+    dt_info = registry.structs[DataType]
+    dt_type_idx = dt_info.wasm_type_idx
+    tn_info = registry.structs[Core.TypeName]
+    tn_type_idx = tn_info.wasm_type_idx
+    svec_info = registry.structs[Core.SimpleVector]
+    svec_arr_idx = svec_info.wasm_type_idx
+
+    body = UInt8[]
+
+    for (type_val, dt_global_idx) in registry.type_constant_globals
+        type_val isa DataType || continue
+
+        # 1. Set DataType.name (field 0) → TypeName ref
+        tn = type_val.name
+        if haskey(registry.typename_constant_globals, tn)
+            tn_global_idx = registry.typename_constant_globals[tn]
+            # global.get $dt_global → struct on stack
+            push!(body, Opcode.GLOBAL_GET)
+            append!(body, encode_leb128_unsigned(dt_global_idx))
+            # global.get $tn_global → TypeName ref
+            push!(body, Opcode.GLOBAL_GET)
+            append!(body, encode_leb128_unsigned(tn_global_idx))
+            # struct.set $dt_type 0
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_SET)
+            append!(body, encode_leb128_unsigned(dt_type_idx))
+            append!(body, encode_leb128_unsigned(UInt32(0)))  # field 0 = name
+        end
+
+        # 2. Set DataType.super (field 1) → parent DataType ref
+        parent = type_val.super
+        if parent !== type_val  # Not self-referential (Any.super === Any)
+            if haskey(registry.type_constant_globals, parent)
+                parent_global_idx = registry.type_constant_globals[parent]
+                push!(body, Opcode.GLOBAL_GET)
+                append!(body, encode_leb128_unsigned(dt_global_idx))
+                push!(body, Opcode.GLOBAL_GET)
+                append!(body, encode_leb128_unsigned(parent_global_idx))
+                # struct.set $dt_type 1 — super field is StructRef, DataType ref is compatible
+                push!(body, Opcode.GC_PREFIX)
+                push!(body, Opcode.STRUCT_SET)
+                append!(body, encode_leb128_unsigned(dt_type_idx))
+                append!(body, encode_leb128_unsigned(UInt32(1)))  # field 1 = super
+            end
+        else
+            # Any.super === Any → self-reference
+            push!(body, Opcode.GLOBAL_GET)
+            append!(body, encode_leb128_unsigned(dt_global_idx))
+            push!(body, Opcode.GLOBAL_GET)
+            append!(body, encode_leb128_unsigned(dt_global_idx))
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_SET)
+            append!(body, encode_leb128_unsigned(dt_type_idx))
+            append!(body, encode_leb128_unsigned(UInt32(1)))  # field 1 = super
+        end
+
+        # 3. Set DataType.parameters (field 2) → SimpleVector (externref array)
+        params = type_val.parameters
+        nparams = length(params)
+        # Create array.new_fixed with parameter Type refs
+        # Each element is externref (Type globals converted via extern_convert_any)
+        if nparams == 0
+            # Empty array: array.new_default $svec_arr_idx 0
+            push!(body, Opcode.GLOBAL_GET)
+            append!(body, encode_leb128_unsigned(dt_global_idx))
+            push!(body, Opcode.I32_CONST)
+            push!(body, 0x00)  # length 0
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.ARRAY_NEW_DEFAULT)
+            append!(body, encode_leb128_unsigned(svec_arr_idx))
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_SET)
+            append!(body, encode_leb128_unsigned(dt_type_idx))
+            append!(body, encode_leb128_unsigned(UInt32(2)))  # field 2 = parameters
+        else
+            # Push all parameter elements, then array.new_fixed
+            push!(body, Opcode.GLOBAL_GET)
+            append!(body, encode_leb128_unsigned(dt_global_idx))
+            for i in 1:nparams
+                p = params[i]
+                if p isa DataType && haskey(registry.type_constant_globals, p)
+                    p_global_idx = registry.type_constant_globals[p]
+                    push!(body, Opcode.GLOBAL_GET)
+                    append!(body, encode_leb128_unsigned(p_global_idx))
+                    # Convert concrete ref to externref for the externref array
+                    push!(body, Opcode.EXTERN_CONVERT_ANY)
+                else
+                    # Non-DataType parameter (e.g., Int literal for array dims) → null
+                    push!(body, Opcode.REF_NULL)
+                    push!(body, UInt8(ExternRef))
+                end
+            end
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.ARRAY_NEW_FIXED)
+            append!(body, encode_leb128_unsigned(svec_arr_idx))
+            append!(body, encode_leb128_unsigned(UInt32(nparams)))
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_SET)
+            append!(body, encode_leb128_unsigned(dt_type_idx))
+            append!(body, encode_leb128_unsigned(UInt32(2)))  # field 2 = parameters
+        end
+    end
+
+    # Populate TypeName.wrapper (field 6) → DataType ref as externref
+    for (tn, tn_global_idx) in registry.typename_constant_globals
+        wrapper = tn.wrapper
+        if wrapper isa DataType && haskey(registry.type_constant_globals, wrapper)
+            wrapper_global_idx = registry.type_constant_globals[wrapper]
+            push!(body, Opcode.GLOBAL_GET)
+            append!(body, encode_leb128_unsigned(tn_global_idx))
+            push!(body, Opcode.GLOBAL_GET)
+            append!(body, encode_leb128_unsigned(wrapper_global_idx))
+            # TypeName.wrapper field is ExternRef, DataType ref needs extern_convert_any
+            push!(body, Opcode.EXTERN_CONVERT_ANY)
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_SET)
+            append!(body, encode_leb128_unsigned(tn_type_idx))
+            append!(body, encode_leb128_unsigned(UInt32(6)))  # field 6 = wrapper
+        end
+    end
+
+    isempty(body) && return
+
+    # Create the init function (no params, no returns, no locals)
+    func_idx = add_function!(mod, WasmValType[], WasmValType[], WasmValType[], body)
+
+    # Set as start function
+    add_start_function!(mod, func_idx)
 end
 
 """
@@ -564,6 +767,9 @@ function _compile_function_legacy(f, arg_types::Tuple, func_name::String)::WasmM
 
     # Export the function
     add_export!(mod, func_name, 0, func_idx)
+
+    # PURE-4149: Populate DataType/TypeName fields for type constant globals
+    populate_type_constant_globals!(mod, type_registry)
 
     return mod
 end
@@ -1439,6 +1645,10 @@ function compile_module(functions::Vector)::WasmModule
         export_name_counts[name] = count + 1
         add_export!(mod, export_name, 0, actual_idx)
     end
+
+    # PURE-4149: Populate DataType/TypeName fields for type constant globals.
+    # This creates a start function that patches .name, .super, .parameters, .wrapper.
+    populate_type_constant_globals!(mod, type_registry)
 
     return mod
 end
