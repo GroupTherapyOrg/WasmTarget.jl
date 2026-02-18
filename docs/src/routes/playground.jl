@@ -142,10 +142,11 @@ end
 # --- The playground JavaScript ---
 function _playground_script()
     # The script uses window._pgWasm to cache the WASM instance across SPA navigations.
-    # It registers a therapy:router:loaded listener so it re-inits after SPA content swap.
-    # On hard refresh, the IIFE runs directly. On SPA nav, the event listener fires.
+    # The TherapyHydrate marker tells the SPA router to re-execute this script after
+    # content swap, so it works on both hard refresh AND SPA navigation.
     """
     (function() {
+      // TherapyHydrate — marker so the SPA router re-executes this script on navigation
       // --- Global WASM cache (persists across SPA navigations) ---
       // window._pgWasm holds the loaded instance so we don't re-fetch on every nav
       var wasmPaths = [
@@ -308,13 +309,9 @@ function _playground_script()
         });
       }
 
-      // Run now (covers hard refresh / initial page load)
+      // Run now — works on both hard refresh AND SPA navigation because
+      // the router re-executes scripts containing 'TherapyHydrate'
       initPlayground();
-
-      // Re-run after SPA navigation (covers clicking Playground in the nav)
-      window.addEventListener('therapy:router:loaded', function(ev) {
-        initPlayground();
-      });
     })();
     """
 end
