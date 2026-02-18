@@ -230,13 +230,14 @@ function _var_gt(vb::VarBinding, @nospecialize(a), env::SubtypeEnv, param::Int):
                 # Non-type values (e.g., integer parameters in Tuple{1,2})
                 # Can't form Union of non-types. Use Any as join (will fail diagonal check).
                 vb.lb = Any
-            elseif !_subtype(vb.lb, a, env, 0)
-                if _subtype(a, vb.lb, env, 0)
-                    # a is narrower than current lb, keep current lb
-                else
-                    # Neither is subtype of other — join them
-                    vb.lb = Union{vb.lb, a}
-                end
+            elseif _subtype(vb.lb, a, env, 0)
+                # a is wider than current lb — widen lb to a
+                vb.lb = a
+            elseif _subtype(a, vb.lb, env, 0)
+                # a is narrower than current lb, keep current lb
+            else
+                # Neither is subtype of other — join them
+                vb.lb = Union{vb.lb, a}
             end
         end
         return true
@@ -308,6 +309,31 @@ function _subtype_unionall(@nospecialize(t), u::UnionAll, env::SubtypeEnv, R::Bo
                 ans = false
             end
         end
+
+        # Escape check: if this var (now out of scope) leaked into any remaining
+        # variable's bounds that were MODIFIED during the recursion, the answer is false.
+        # This handles cases like Vector{Vector{T} where T} vs Array{Vector{T}, 1} where T
+        # where the universal T would escape into the existential T's bounds.
+        # Only check bounds that changed from their original TypeVar bounds.
+        if ans
+            for i in 1:length(env.vars)
+                other = env.vars[i]
+                # Check lb only if it was modified (originally Union{} or the var's own lb)
+                if other.lb !== Union{} && other.lb !== other.var.lb
+                    if _type_contains_var(other.lb, vb.var)
+                        ans = false
+                        break
+                    end
+                end
+                # Check ub only if it was modified (originally Any or the var's own ub)
+                if other.ub !== Any && other.ub !== other.var.ub
+                    if _type_contains_var(other.ub, vb.var)
+                        ans = false
+                        break
+                    end
+                end
+            end
+        end
     end
 
     return ans
@@ -330,6 +356,21 @@ function _is_leaf_bound(@nospecialize(v))::Bool
     v isa DataType && return isconcretetype(v)
     # Non-type values (e.g., integers in value-parameterized types) are always concrete
     !(v isa Type) && !(v isa TypeVar) && return true
+    return false
+end
+
+"""Check if a type expression contains a reference to a specific TypeVar."""
+function _type_contains_var(@nospecialize(t), v::TypeVar)::Bool
+    t === v && return true
+    t isa TypeVar && return false
+    t isa Union && return _type_contains_var(t.a, v) || _type_contains_var(t.b, v)
+    t isa UnionAll && return _type_contains_var(t.body, v) || t.var === v
+    t isa DataType && begin
+        for p in t.parameters
+            _type_contains_var(p, v) && return true
+        end
+        return false
+    end
     return false
 end
 
