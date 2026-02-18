@@ -192,6 +192,71 @@ pipeline_cos(x::Float64)::Float64 = cos(x)               # cos(0.0) → 1.0
 pipeline_sqrt(x::Float64)::Float64 = sqrt(x)             # sqrt(4.0) → 2.0
 # NOTE: exp/log omitted — pre-existing codegen bugs (fma_float stub, wrong polynomial)
 
+# PURE-4166: Expression expansion Phase 2 — control flow + loops + algorithms
+# Control flow (if/else, ternary)
+pipeline_max(a::Int64, b::Int64)::Int64 = a > b ? a : b
+pipeline_min(a::Int64, b::Int64)::Int64 = a < b ? a : b
+pipeline_clamp(x::Int64, lo::Int64, hi::Int64)::Int64 = x < lo ? lo : (x > hi ? hi : x)
+pipeline_sign(x::Int64)::Int64 = x > 0 ? Int64(1) : (x < 0 ? Int64(-1) : Int64(0))
+pipeline_eq(a::Int64, b::Int64)::Int64 = a == b ? Int64(1) : Int64(0)
+pipeline_fmax(a::Float64, b::Float64)::Float64 = a > b ? a : b
+pipeline_fmin(a::Float64, b::Float64)::Float64 = a < b ? a : b
+
+# Loops (while, for)
+pipeline_sum_to(n::Int64)::Int64 = begin
+    s = Int64(0)
+    i = Int64(1)
+    while i <= n
+        s += i
+        i += 1
+    end
+    s
+end
+
+pipeline_factorial(n::Int64)::Int64 = begin
+    result = Int64(1)
+    for i in Int64(2):n
+        result *= i
+    end
+    result
+end
+
+pipeline_pow(base::Int64, exp::Int64)::Int64 = begin
+    result = Int64(1)
+    for _ in Int64(1):exp
+        result *= base
+    end
+    result
+end
+
+pipeline_fib(n::Int64)::Int64 = begin
+    a = Int64(0)
+    b = Int64(1)
+    for _ in Int64(1):n
+        a, b = b, a + b
+    end
+    a
+end
+
+pipeline_gcd(a::Int64, b::Int64)::Int64 = begin
+    while b != Int64(0)
+        a, b = b, mod(a, b)
+    end
+    a
+end
+
+pipeline_isprime(n::Int64)::Int64 = begin
+    n <= Int64(1) && return Int64(0)
+    n <= Int64(3) && return Int64(1)
+    mod(n, Int64(2)) == Int64(0) && return Int64(0)
+    i = Int64(3)
+    while i * i <= n
+        mod(n, i) == Int64(0) && return Int64(0)
+        i += Int64(2)
+    end
+    Int64(1)
+end
+
 test_wrappers = [
     (test_add_1_1, ()),
     (test_sub_1, ()),
@@ -215,6 +280,20 @@ test_wrappers = [
     (pipeline_abs_f, (Float64,)),
     (pipeline_cos, (Float64,)),
     (pipeline_sqrt, (Float64,)),
+    # PURE-4166: control flow + loops + algorithms
+    (pipeline_max, (Int64, Int64)),
+    (pipeline_min, (Int64, Int64)),
+    (pipeline_clamp, (Int64, Int64, Int64)),
+    (pipeline_sign, (Int64,)),
+    (pipeline_eq, (Int64, Int64)),
+    (pipeline_fmax, (Float64, Float64)),
+    (pipeline_fmin, (Float64, Float64)),
+    (pipeline_sum_to, (Int64,)),
+    (pipeline_factorial, (Int64,)),
+    (pipeline_pow, (Int64, Int64)),
+    (pipeline_fib, (Int64,)),
+    (pipeline_gcd, (Int64, Int64)),
+    (pipeline_isprime, (Int64,)),
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -348,6 +427,31 @@ if best !== nothing
             ("pipeline_mod: mod(10,3)=1", "pipeline_mod", (Int64(10), Int64(3)), Int64(1)),
             ("pipeline_neg: neg(5)=-5", "pipeline_neg", (Int64(5),), Int64(-5)),
             ("pipeline_abs_i: abs(-7)=7", "pipeline_abs_i", (Int64(-7),), Int64(7)),
+            # PURE-4166: control flow
+            ("pipeline_max: max(3,7)=7", "pipeline_max", (Int64(3), Int64(7)), Int64(7)),
+            ("pipeline_max: max(10,2)=10", "pipeline_max", (Int64(10), Int64(2)), Int64(10)),
+            ("pipeline_min: min(3,7)=3", "pipeline_min", (Int64(3), Int64(7)), Int64(3)),
+            ("pipeline_clamp: clamp(5,1,10)=5", "pipeline_clamp", (Int64(5), Int64(1), Int64(10)), Int64(5)),
+            ("pipeline_clamp: clamp(-1,1,10)=1", "pipeline_clamp", (Int64(-1), Int64(1), Int64(10)), Int64(1)),
+            ("pipeline_clamp: clamp(15,1,10)=10", "pipeline_clamp", (Int64(15), Int64(1), Int64(10)), Int64(10)),
+            ("pipeline_sign: sign(5)=1", "pipeline_sign", (Int64(5),), Int64(1)),
+            ("pipeline_sign: sign(-3)=-1", "pipeline_sign", (Int64(-3),), Int64(-1)),
+            ("pipeline_sign: sign(0)=0", "pipeline_sign", (Int64(0),), Int64(0)),
+            ("pipeline_eq: eq(3,3)=1", "pipeline_eq", (Int64(3), Int64(3)), Int64(1)),
+            ("pipeline_eq: eq(3,4)=0", "pipeline_eq", (Int64(3), Int64(4)), Int64(0)),
+            # PURE-4166: loops
+            ("pipeline_sum_to: sum_to(10)=55", "pipeline_sum_to", (Int64(10),), Int64(55)),
+            ("pipeline_sum_to: sum_to(100)=5050", "pipeline_sum_to", (Int64(100),), Int64(5050)),
+            ("pipeline_factorial: factorial(5)=120", "pipeline_factorial", (Int64(5),), Int64(120)),
+            ("pipeline_factorial: factorial(10)=3628800", "pipeline_factorial", (Int64(10),), Int64(3628800)),
+            ("pipeline_pow: pow(2,10)=1024", "pipeline_pow", (Int64(2), Int64(10)), Int64(1024)),
+            ("pipeline_fib: fib(10)=55", "pipeline_fib", (Int64(10),), Int64(55)),
+            ("pipeline_fib: fib(20)=6765", "pipeline_fib", (Int64(20),), Int64(6765)),
+            ("pipeline_gcd: gcd(12,8)=4", "pipeline_gcd", (Int64(12), Int64(8)), Int64(4)),
+            ("pipeline_gcd: gcd(100,75)=25", "pipeline_gcd", (Int64(100), Int64(75)), Int64(25)),
+            ("pipeline_isprime: isprime(7)=1", "pipeline_isprime", (Int64(7),), Int64(1)),
+            ("pipeline_isprime: isprime(10)=0", "pipeline_isprime", (Int64(10),), Int64(0)),
+            ("pipeline_isprime: isprime(97)=1", "pipeline_isprime", (Int64(97),), Int64(1)),
         ]
         for (label, fname, args, expected) in pipeline_i64_cases
             print("  $label → ")
@@ -377,6 +481,9 @@ if best !== nothing
             ("pipeline_abs_f: abs(-2.5)=2.5", "pipeline_abs_f", (-2.5,), 2.5),
             ("pipeline_cos: cos(0.0)=1.0", "pipeline_cos", (0.0,), 1.0),
             ("pipeline_sqrt: sqrt(4.0)=2.0", "pipeline_sqrt", (4.0,), 2.0),
+            # PURE-4166: float control flow
+            ("pipeline_fmax: fmax(3.5,2.1)=3.5", "pipeline_fmax", (3.5, 2.1), 3.5),
+            ("pipeline_fmin: fmin(3.5,2.1)=2.1", "pipeline_fmin", (3.5, 2.1), 2.1),
             # NOTE: exp/log omitted — pre-existing codegen bugs
         ]
         for (label, fname, args, expected) in pipeline_f64_cases
