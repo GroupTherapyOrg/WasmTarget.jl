@@ -104,24 +104,42 @@ push!(compiler_functions, (CC._typename, (Any,)))
 push!(compiler_functions, (CC.instanceof_tfunc, (Any,)))
 
 # Inference state management
-push!(compiler_functions, (CC.is_same_frame, (CC.InferenceState, CC.MethodInstance)))
-push!(compiler_functions, (CC.add_edges!, (CC.InferenceState,)))
+push!(compiler_functions, (CC.is_same_frame, (CC.AbstractInterpreter, Core.MethodInstance, CC.InferenceState)))
+push!(compiler_functions, (CC.add_edges!, (Vector{Any}, CC.CallInfo)))
+push!(compiler_functions, (CC.merge_call_chain!, (CC.AbstractInterpreter, CC.InferenceState, CC.InferenceState)))
+push!(compiler_functions, (CC.resolve_call_cycle!, (CC.AbstractInterpreter, Core.MethodInstance, CC.InferenceState)))
+# Removed: compute_edges! — fails validation (struct_get on SimpleVector array type)
+# push!(compiler_functions, (CC.compute_edges!, (CC.InferenceState,)))
 
 # Type lattice and effects
 push!(compiler_functions, (CC.decode_effects, (UInt32,)))
-push!(compiler_functions, (CC.tname_intersect, (DataType, DataType)))
+push!(compiler_functions, (CC.tname_intersect, (Core.TypeName, Core.TypeName)))
 push!(compiler_functions, (CC.type_more_complex, (Any, Any, Core.SimpleVector, Int, Int, Int)))
-
-# Abstract evaluation helpers
-push!(compiler_functions, (CC.count_const_size, (Any, Int)))
+push!(compiler_functions, (CC.count_const_size, (Any, Bool)))
 
 # Codegen/optimization (disabled but compiled)
 push!(compiler_functions, (CC.code_cache, (CC.AbstractInterpreter,)))
+
+# Abstract evaluation — some have validation errors in multi-func context, add selectively
+# push!(compiler_functions, (CC.abstract_eval_special_value, ...))  # func 45 VALIDATE_ERROR
+# push!(compiler_functions, (CC.abstract_eval_value, ...))
+# push!(compiler_functions, (CC.collect_argtypes, ...))
+# push!(compiler_functions, (CC.abstract_eval_globalref, ...))
+# push!(compiler_functions, (CC.abstract_eval_copyast, ...))
+# push!(compiler_functions, (CC.abstract_eval_isdefined_expr, ...))
+
+# Adjust effects
+push!(compiler_functions, (CC.adjust_effects, (CC.InferenceState,)))  # 1-arg variant
 
 # Base functions used by typeinf
 push!(compiler_functions, (Base._uniontypes, (Any, Vector{Any})))
 push!(compiler_functions, (Base.unionlen, (Any,)))
 push!(compiler_functions, (Base.datatype_fieldcount, (DataType,)))
+
+# Type lattice
+push!(compiler_functions, (CC.widenwrappedslotwrapper, (Any,)))
+push!(compiler_functions, (CC.argtypes_to_type, (Vector{Any},)))
+push!(compiler_functions, (CC.collect_const_args, (Vector{Any}, Int)))
 
 # Build combined list
 phase3_funcs = vcat(reimpl_functions, typeinf_entry, compiler_functions)
