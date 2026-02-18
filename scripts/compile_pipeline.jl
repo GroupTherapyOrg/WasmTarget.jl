@@ -39,8 +39,16 @@ function compile_and_report(label, func_list)
     tmpf = tempname() * ".wasm"
     write(tmpf, bytes)
     nfuncs = try
-        parse(Int, readchomp(`bash -c "wasm-tools print $tmpf 2>/dev/null | grep -c '(func (;'"` ))
-    catch; 0 end
+        # Count exported functions
+        out = read(`bash -c "wasm-tools print $tmpf 2>/dev/null | grep -c '(func '"`, String)
+        parse(Int, strip(out))
+    catch
+        try
+            # Alternative: count (export lines
+            out2 = read(`bash -c "wasm-tools print $tmpf 2>/dev/null | grep -c '(export '"`, String)
+            parse(Int, strip(out2))
+        catch; 0 end
+    end
     println("  Wasm functions: $nfuncs")
     try
         run(`wasm-tools validate --features=gc $tmpf`)
@@ -189,20 +197,33 @@ bytes5 = compile_and_report("Phase 5: Full pipeline + test wrappers", phase5)
 # ═══════════════════════════════════════════════════════════════════════════
 # SAVE BEST MODULE
 # ═══════════════════════════════════════════════════════════════════════════
-best = nothing
-best_label = ""
-for (label, bytes) in [
-    ("Phase 5: full + tests", bytes5),
-    ("Phase 4: all 4 stages", bytes4),
-    ("Phase 3: stages 1-3", bytes3),
-    ("Phase 2: stages 1-2", bytes2),
-    ("Phase 1: stage 1 only", bytes1),
-]
-    if bytes !== nothing
-        best = bytes
-        best_label = label
-        break
-    end
+# Pick best phase (prefer most complete)
+best = if bytes5 !== nothing
+    bytes5
+elseif bytes4 !== nothing
+    bytes4
+elseif bytes3 !== nothing
+    bytes3
+elseif bytes2 !== nothing
+    bytes2
+elseif bytes1 !== nothing
+    bytes1
+else
+    nothing
+end
+
+best_label = if best === bytes5
+    "Phase 5: full + tests"
+elseif best === bytes4
+    "Phase 4: all 4 stages"
+elseif best === bytes3
+    "Phase 3: stages 1-3"
+elseif best === bytes2
+    "Phase 2: stages 1-2"
+elseif best === bytes1
+    "Phase 1: stage 1 only"
+else
+    ""
 end
 
 if best !== nothing
