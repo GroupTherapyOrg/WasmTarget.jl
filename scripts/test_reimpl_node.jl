@@ -178,9 +178,7 @@ if NODE_CMD === nothing
     exit(0)
 end
 
-pass_count = 0
-fail_count = 0
-error_count = 0
+results = []
 
 for (label, f, expected) in test_cases
     func_name = string(nameof(f))
@@ -189,21 +187,24 @@ for (label, f, expected) in test_cases
         actual = run_wasm(bytes, func_name)
         if actual == expected
             println("Wasm: $actual — CORRECT ✓")
-            pass_count += 1
+            push!(results, :pass)
         else
             println("Wasm: $actual — MISMATCH ✗ (expected $expected)")
-            fail_count += 1
+            push!(results, :fail)
         end
     catch e
         errmsg = sprint(showerror, e)
         println("ERROR: $(first(errmsg, 80))")
-        error_count += 1
+        push!(results, :error)
     end
 end
 
 # ─── Results ───
 println("\n" * "=" ^ 80)
 total = length(test_cases)
+pass_count = count(r -> r == :pass, results)
+fail_count = count(r -> r == :fail, results)
+error_count = count(r -> r == :error, results)
 println("Results: $pass_count/$total CORRECT, $fail_count MISMATCH, $error_count ERROR")
 if pass_count == total
     println("ALL CORRECT (level 3) ✓")
