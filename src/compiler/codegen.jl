@@ -1764,6 +1764,18 @@ function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataT
         return nothing
     end
 
+    # PURE-4149: SimpleVector is a variable-length container in Julia (fieldcount=0).
+    # Register it as an externref array type so _svec_len and _svec_ref work.
+    # SimpleVector elements are Any-typed, mapping to externref in WasmGC.
+    if T === Core.SimpleVector
+        # Create an externref array type
+        arr_idx = add_array_type!(mod, ExternRef, true)
+        # Register as a "struct" with 0 Julia fields but backed by an array type
+        info = StructInfo(T, arr_idx, Symbol[], DataType[])
+        registry.structs[T] = info
+        return info
+    end
+
     # Redirect Tuple types to their specialized registration function
     # Tuples have integer field names (1, 2, ...) not symbols
     if T <: Tuple
@@ -21529,6 +21541,32 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         push!(bytes, Opcode.THROW)
         append!(bytes, encode_leb128_unsigned(0))  # tag index 0
         ctx.last_stmt_was_stub = true  # PURE-908
+
+    # PURE-4149: Core._svec_len(sv) — SimpleVector is an externref array in WasmGC.
+    # _svec_len returns Int64 = array.len (converted from i32 to i64).
+    elseif func isa GlobalRef && func.name === :_svec_len && func.mod === Core && length(args) == 1
+        append!(bytes, compile_value(args[1], ctx))
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_LEN)
+        # array.len returns i32 but Julia expects Int64
+        push!(bytes, Opcode.I64_EXTEND_I32_U)
+
+    # PURE-4149: Core._svec_ref(sv, i) — get element from SimpleVector (externref array).
+    # _svec_ref is 1-indexed in Julia, 0-indexed in Wasm → subtract 1.
+    elseif func isa GlobalRef && func.name === :_svec_ref && func.mod === Core && length(args) == 2
+        append!(bytes, compile_value(args[1], ctx))
+        append!(bytes, compile_value(args[2], ctx))
+        # Convert i64 Julia index to i32 Wasm index and subtract 1 for 0-indexing
+        push!(bytes, Opcode.I32_WRAP_I64)
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x01)  # 1
+        push!(bytes, Opcode.I32_SUB)
+        # Get element from externref array
+        svec_type_info = register_struct_type!(ctx.mod, ctx.type_registry, Core.SimpleVector)
+        svec_arr_idx = svec_type_info.wasm_type_idx
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_GET)
+        append!(bytes, encode_leb128_unsigned(svec_arr_idx))
 
     # PURE-604: Core builtins (svec, _apply_iterate) — genuinely unsupported, trap
     elseif func isa GlobalRef && func.name in (:svec, :_apply_iterate)
