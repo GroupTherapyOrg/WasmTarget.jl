@@ -1558,10 +1558,10 @@ function _intersect_tuple_vararg_env(a::DataType, ap, na::Int, b::DataType, bp, 
     vararg_T = vararg.T
     n_fixed = na - 1
 
-    if isdefined(vararg, :N)
+    if isdefined(vararg, :N) && vararg.N isa Int
         total = n_fixed + (vararg.N::Int)
         total != nb && return Union{}
-    else
+    elseif !isdefined(vararg, :N)
         nb < n_fixed && return Union{}
     end
 

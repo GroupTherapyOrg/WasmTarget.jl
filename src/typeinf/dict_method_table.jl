@@ -505,11 +505,13 @@ function verify_typeinf(f, argtypes::Tuple;
     end
     result = Core.Compiler.InferenceResult(mi)
     frame = InferenceState(result, src, #=cache_mode=# :no, interp)
-    Core.Compiler.typeinf(interp, frame)
-
-    # Deactivate reimplementation mode
-    _WASM_USE_REIMPL[] = false
-    _WASM_CODE_CACHE[] = nothing
+    try
+        Core.Compiler.typeinf(interp, frame)
+    finally
+        # Deactivate reimplementation mode — MUST happen even on exception
+        _WASM_USE_REIMPL[] = false
+        _WASM_CODE_CACHE[] = nothing
+    end
 
     # Step 4: Compare return types
     dict_rettype = result.result
