@@ -39,17 +39,14 @@ function compile_and_report(label, func_list)
     tmpf = tempname() * ".wasm"
     write(tmpf, bytes)
     nfuncs = try
-        # Count exported functions
-        out = read(`bash -c "wasm-tools print $tmpf 2>/dev/null | grep -c '(func '"`, String)
+        out = read(pipeline(`wasm-tools print $tmpf`, `grep -c "(func "`), String)
         parse(Int, strip(out))
-    catch
-        try
-            # Alternative: count (export lines
-            out2 = read(`bash -c "wasm-tools print $tmpf 2>/dev/null | grep -c '(export '"`, String)
-            parse(Int, strip(out2))
-        catch; 0 end
-    end
-    println("  Wasm functions: $nfuncs")
+    catch; -1 end
+    nexports = try
+        out = read(pipeline(`wasm-tools print $tmpf`, `grep -c "(export "`), String)
+        parse(Int, strip(out))
+    catch; -1 end
+    println("  Wasm functions: $nfuncs, exports: $nexports")
     try
         run(`wasm-tools validate --features=gc $tmpf`)
         println("  VALIDATES ✓")
@@ -156,14 +153,24 @@ stage4_functions = [
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Test wrapper: simple 1+1 that can be verified immediately
+# Test wrappers: verify each stage works in the combined module
 # ═══════════════════════════════════════════════════════════════════════════
+
+# Stage verification: simple arithmetic (proves module loads + executes)
 test_add_1_1() = Int32(1 + 1)
-test_sub_1() = Int32(wasm_subtype(Int64, Number))
+
+# Stage 3 verification: type system reimplementation
+test_sub_1() = Int32(wasm_subtype(Int64, Number))       # true
+test_sub_2() = Int32(wasm_subtype(Int64, String))        # false
+test_isect_1() = Int32(wasm_type_intersection(Int64, Number) === Int64)  # true
+test_isect_2() = Int32(wasm_type_intersection(Int64, String) === Union{})  # true (disjoint)
 
 test_wrappers = [
     (test_add_1_1, ()),
     (test_sub_1, ()),
+    (test_sub_2, ()),
+    (test_isect_1, ()),
+    (test_isect_2, ()),
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -242,19 +249,26 @@ end
 # ═══════════════════════════════════════════════════════════════════════════
 # NODE.JS QUICK TEST (if available)
 # ═══════════════════════════════════════════════════════════════════════════
-if best !== nothing && bytes5 !== nothing
+if best !== nothing
     include(joinpath(@__DIR__, "..", "test", "utils.jl"))
     if NODE_CMD !== nothing
-        println("\n--- Node.js quick test ---")
-        for (label, fname, expected) in [
+        println("\n--- Node.js verification ---")
+        test_cases = [
             ("test_add_1_1: 1+1=2", "test_add_1_1", Int32(2)),
-            ("test_sub_1: Int64<:Number=true", "test_sub_1", Int32(1)),
+            ("test_sub_1: Int64<:Number", "test_sub_1", Int32(1)),
+            ("test_sub_2: Int64≮:String", "test_sub_2", Int32(0)),
+            ("test_isect_1: Int64∩Number=Int64", "test_isect_1", Int32(1)),
+            ("test_isect_2: Int64∩String=⊥", "test_isect_2", Int32(1)),
         ]
+        local pass_count = 0
+        local total_count = length(test_cases)
+        for (label, fname, expected) in test_cases
             print("  $label → ")
             try
                 actual = run_wasm(best, fname)
                 if actual == expected
                     println("CORRECT ✓")
+                    pass_count += 1
                 else
                     println("MISMATCH ✗ (got $actual, expected $expected)")
                 end
@@ -262,6 +276,12 @@ if best !== nothing && bytes5 !== nothing
                 println("ERROR: $(first(sprint(showerror, e), 80))")
             end
         end
+        println("\nResults: $pass_count/$total_count CORRECT")
+        if pass_count == total_count
+            println("ALL CORRECT (level 3) ✓")
+        end
+    else
+        println("\n--- Node.js not available — VALIDATES only ---")
     end
 end
 
