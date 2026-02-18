@@ -1518,12 +1518,14 @@ function _intersect_tuple_env(x::DataType, y::DataType, env::IntersectEnv, param
     x_has_vararg = nx > 0 && xp[nx] isa Core.TypeofVararg
     y_has_vararg = ny > 0 && yp[ny] isa Core.TypeofVararg
 
+    p = param == 0 ? 1 : param
+
     # Simple case: no Vararg, same length
     if !x_has_vararg && !y_has_vararg
         nx != ny && return Union{}
         params = Vector{Any}(undef, nx)
         for i in 1:nx
-            ii = _intersect_env(xp[i], yp[i], env, param == 0 ? 1 : param)
+            ii = _intersect_env(xp[i], yp[i], env, p)
             ii === Union{} && return Union{}
             params[i] = ii
         end
@@ -1534,9 +1536,102 @@ function _intersect_tuple_env(x::DataType, y::DataType, env::IntersectEnv, param
         return Tuple{params...}
     end
 
-    # For Vararg cases, delegate to the non-env version (handles expansion)
-    # but use env-aware intersection for element types
-    return _intersect_tuple(x, y, param)
+    # Vararg × no-Vararg: expand the vararg side
+    if x_has_vararg && !y_has_vararg
+        return _intersect_tuple_vararg_env(x, xp, nx, y, yp, ny, env, p)
+    end
+    if y_has_vararg && !x_has_vararg
+        return _intersect_tuple_vararg_env(y, yp, ny, x, xp, nx, env, p)
+    end
+
+    # Both Vararg: use env-aware element intersection
+    if x_has_vararg && y_has_vararg
+        return _intersect_tuple_both_vararg_env(x, xp, nx, y, yp, ny, env, p)
+    end
+
+    return Union{}
+end
+
+"""Intersect tuple where side `a` has Vararg and `b` does not, using env."""
+function _intersect_tuple_vararg_env(a::DataType, ap, na::Int, b::DataType, bp, nb::Int, env::IntersectEnv, param::Int)
+    vararg = ap[na]::Core.TypeofVararg
+    vararg_T = vararg.T
+    n_fixed = na - 1
+
+    if isdefined(vararg, :N)
+        total = n_fixed + (vararg.N::Int)
+        total != nb && return Union{}
+    else
+        nb < n_fixed && return Union{}
+    end
+
+    params = Vector{Any}(undef, nb)
+    for i in 1:n_fixed
+        ii = _intersect_env(ap[i], bp[i], env, param)
+        ii === Union{} && return Union{}
+        params[i] = ii
+    end
+    for i in (n_fixed + 1):nb
+        ii = _intersect_env(vararg_T, bp[i], env, param)
+        ii === Union{} && return Union{}
+        params[i] = ii
+    end
+    return Tuple{params...}
+end
+
+"""Intersect tuple where both sides have Vararg, using env."""
+function _intersect_tuple_both_vararg_env(a::DataType, ap, na::Int, b::DataType, bp, nb::Int, env::IntersectEnv, param::Int)
+    va = ap[na]::Core.TypeofVararg
+    vb = bp[nb]::Core.TypeofVararg
+    va_T = va.T
+    vb_T = vb.T
+    n_fixed_a = na - 1
+    n_fixed_b = nb - 1
+
+    va_bounded = isdefined(va, :N)
+    vb_bounded = isdefined(vb, :N)
+
+    if va_bounded && vb_bounded
+        total_a = n_fixed_a + (va.N::Int)
+        total_b = n_fixed_b + (vb.N::Int)
+        total_a != total_b && return Union{}
+        n = total_a
+    elseif !va_bounded && !vb_bounded
+        n = max(n_fixed_a, n_fixed_b)
+        # Also intersect the vararg element types
+        vii = _intersect_env(va_T, vb_T, env, param)
+        params = Vector{Any}(undef, n)
+        for i in 1:n
+            at = i <= n_fixed_a ? ap[i] : va_T
+            bt = i <= n_fixed_b ? bp[i] : vb_T
+            ii = _intersect_env(at, bt, env, param)
+            ii === Union{} && return Union{}
+            params[i] = ii
+        end
+        if vii === Union{}
+            return Tuple{params...}
+        end
+        return Tuple{params..., Vararg{vii}}
+    else
+        # One bounded, one unbounded
+        if va_bounded
+            n = n_fixed_a + (va.N::Int)
+            n < n_fixed_b && return Union{}
+        else
+            n = n_fixed_b + (vb.N::Int)
+            n < n_fixed_a && return Union{}
+        end
+    end
+
+    params = Vector{Any}(undef, n)
+    for i in 1:n
+        at = i <= n_fixed_a ? ap[i] : va_T
+        bt = i <= n_fixed_b ? bp[i] : vb_T
+        ii = _intersect_env(at, bt, env, param)
+        ii === Union{} && return Union{}
+        params[i] = ii
+    end
+    return Tuple{params...}
 end
 
 """Intersect same-name DataTypes with env (invariant params)."""
