@@ -8354,8 +8354,9 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                 # Skip nothing statements
             else
                 # Regular statement
-                append!(bytes, compile_statement(stmt, i, ctx))
-            end
+                _preloop_stmt_bytes = compile_statement(stmt, i, ctx)
+                append!(bytes, _preloop_stmt_bytes)
+                    end
         end
 
         # Close any remaining pre-loop blocks
@@ -8822,7 +8823,19 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
         elseif stmt === nothing
             # Skip nothing statements
         else
-            append!(bytes, compile_statement(stmt, i, ctx))
+            _postloop_stmt_bytes = compile_statement(stmt, i, ctx)
+            append!(bytes, _postloop_stmt_bytes)
+            # DEBUG PURE-6005: detect orphan getfield values in post-loop
+            if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke) && length(stmt.args) >= 1
+                _f2 = stmt.args[1]
+                if _f2 isa GlobalRef && _f2.name in (:getfield, :getproperty) && length(stmt.args) >= 3
+                    if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
+                        _st2 = get(ctx.ssa_types, i, Any)
+                        _dropped2 = !isempty(_postloop_stmt_bytes) && _postloop_stmt_bytes[end] == Opcode.DROP
+                        println("DEBUG_ORPHAN_POSTLOOP: SSA $i type=$(_st2) dropped=$(_dropped2) func=$(ctx.func_name) stmt=$stmt")
+                    end
+                end
+            end
         end
     end
 
@@ -15606,9 +15619,24 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
         if haskey(ctx.ssa_locals, idx) && !ssa_type_mismatch
             stmt_type = get(ctx.ssa_types, idx, Any)
             is_unreachable_type = stmt_type === Union{}
+            # PURE-6005: The bytecode check for DROP+UNREACHABLE (0x1a 0x00) can false-positive
+            # on struct_get operands: struct_get type_26 field_0 = [0xfb 0x02 0x1a 0x00]
+            # where type_idx=26 (0x1a=DROP) and field_idx=0 (0x00=UNREACHABLE).
+            # Guard: also require that no GC_PREFIX (0xfb) appears in the last 4 bytes,
+            # since real DROP+UNREACHABLE never follows a GC instruction's operands.
+            _has_gc_in_tail = false
+            if length(stmt_bytes) >= 3
+                for _tbi in max(1, length(stmt_bytes)-3):(length(stmt_bytes)-2)
+                    if stmt_bytes[_tbi] == Opcode.GC_PREFIX
+                        _has_gc_in_tail = true
+                        break
+                    end
+                end
+            end
             is_unreachable_bytecode = (length(stmt_bytes) >= 2 &&
                                        stmt_bytes[end] == Opcode.UNREACHABLE &&
-                                       stmt_bytes[end-1] == Opcode.DROP) ||
+                                       stmt_bytes[end-1] == Opcode.DROP &&
+                                       !_has_gc_in_tail) ||
                                       _stmt_ends_unreachable  # PURE-908: catch stub UNREACHABLE
             is_unreachable = is_unreachable_type || is_unreachable_bytecode
             should_store = (!isempty(stmt_bytes) || is_passthrough_statement(stmt, ctx)) && !is_unreachable
