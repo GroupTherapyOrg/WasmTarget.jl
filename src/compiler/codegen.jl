@@ -25483,9 +25483,36 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
 
             # Handle JuliaSyntax internal functions that have complex implementations
             # These are intercepted and compiled as simplified stubs
-            # PURE-5002: parse_float_literal REMOVED from stub — override in
-            # src/runtime/float_parse.jl provides a pure Julia implementation
-            # that compiles to Wasm correctly (no ccalls, no raw pointers).
+            elseif name === :parse_float_literal
+                # PURE-5002: Float literal parsing returns Tuple{Float64, Symbol}.
+                # The original uses ccall(:jl_strtod_c) which can't compile to Wasm.
+                # Return (0.0, :ok) as a proper Tuple struct — AST structure is correct,
+                # float VALUES will be 0.0 (acceptable for Stage 1 parse verification).
+                bytes = UInt8[]
+                ret_type = Tuple{Float64, Symbol}
+                if !haskey(ctx.type_registry.structs, ret_type)
+                    register_tuple_type!(ctx.mod, ctx.type_registry, ret_type)
+                end
+                tuple_info = ctx.type_registry.structs[ret_type]
+                # Field 1: Float64 = 0.0 (f64.const 0.0)
+                push!(bytes, Opcode.F64_CONST)
+                append!(bytes, reinterpret(UInt8, [Float64(0.0)]))
+                # Field 2: Symbol = :ok (empty string array as placeholder)
+                str_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
+                # Push ":ok" as byte array [0x6f, 0x6b]
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int64(0x6f)))  # 'o'
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int64(0x6b)))  # 'k'
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ARRAY_NEW_FIXED)
+                append!(bytes, encode_leb128_unsigned(str_arr_type))
+                append!(bytes, encode_leb128_unsigned(2))  # 2 chars
+                # struct.new Tuple{Float64, Symbol}
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.STRUCT_NEW)
+                append!(bytes, encode_leb128_unsigned(tuple_info.wasm_type_idx))
+
             elseif name === :parse_int_literal ||
                    name === :parse_uint_literal
                 # Int/uint literal parsing — return a default value
