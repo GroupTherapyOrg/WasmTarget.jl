@@ -29,7 +29,7 @@ function PlaygroundPage()
                 Div(:class => "flex items-center justify-between",
                     Div(
                         Suite.CardTitle("Editor"),
-                        Suite.CardDescription("Type a Julia expression and click Run (or press Ctrl+Enter)")
+                        Suite.CardDescription("Type a Julia expression and click Run (or Ctrl+Enter)")
                     ),
                     Span(:id => "pg-status",
                          :class => "text-xs text-warm-400 dark:text-warm-500",
@@ -37,38 +37,41 @@ function PlaygroundPage()
                 )
             ),
             Suite.CardContent(
-                # Code input
+                # Code input — Suite.Textarea with monospace font
                 Div(:class => "mb-4",
-                    Textarea(
-                        :id => "pg-editor",
-                        :class => "w-full min-h-[120px] p-4 font-mono text-sm bg-warm-50 dark:bg-warm-900 border border-warm-200 dark:border-warm-700 rounded-lg text-warm-800 dark:text-warm-100 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-accent-500 resize-y",
-                        :placeholder => "Type Julia code here...",
-                        :spellcheck => "false",
-                        "1 + 1"
+                    Suite.Textarea(
+                        id="pg-editor",
+                        rows="5",
+                        placeholder="Type Julia code here...",
+                        spellcheck="false",
+                        autocomplete="off",
+                        autocorrect="off",
+                        autocapitalize="off",
+                        class="font-mono text-sm resize-y"
                     )
                 ),
 
-                # Run button
-                Div(:class => "mb-4",
-                    Button(
+                # Run button — Suite.Button with play icon
+                Div(:class => "mb-4 flex items-center gap-3",
+                    Suite.Button(
                         :id => "pg-run",
-                        :class => "inline-flex items-center gap-2 px-5 py-2 bg-accent-600 hover:bg-accent-700 text-white font-semibold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
                         :disabled => "true",
                         Svg(:class => "w-4 h-4", :viewBox => "0 0 24 24", :fill => "currentColor",
                             Polygon(:points => "5,3 19,12 5,21")
                         ),
                         "Run"
-                    )
+                    ),
+                    Span(:class => "text-xs text-warm-400 dark:text-warm-500", "Ctrl+Enter")
                 ),
 
-                # Output
+                # Output — CodeBlock-styled container
                 Div(
                     P(:class => "text-xs font-medium text-warm-500 dark:text-warm-400 mb-2 uppercase tracking-wider",
                         "Output"
                     ),
                     Div(:id => "pg-output",
-                        :class => "p-4 font-mono text-sm bg-warm-50 dark:bg-warm-900 border border-warm-200 dark:border-warm-700 rounded-lg min-h-[60px] whitespace-pre-wrap",
-                        Span(:class => "text-warm-400 dark:text-warm-500 italic",
+                        :class => "overflow-hidden rounded-lg border border-warm-200 dark:border-warm-700 bg-warm-950 p-4 font-mono text-sm leading-6 text-warm-200 min-h-[60px] whitespace-pre-wrap",
+                        Span(:class => "text-warm-500 italic",
                             "Click Run to evaluate."
                         )
                     )
@@ -122,14 +125,14 @@ end
 
 # --- Helper: example expression chip ---
 function _ExampleChip(expr)
-    Code(:class => "pg-example cursor-pointer px-2 py-1 text-xs font-mono bg-warm-100 dark:bg-warm-800 border border-warm-200 dark:border-warm-700 rounded hover:border-accent-500 dark:hover:border-accent-400 transition-colors text-warm-700 dark:text-warm-300",
-         :data_expr => expr,
-         expr)
+    Suite.Badge(variant="outline",
+        class="pg-example cursor-pointer font-mono hover:border-accent-500 dark:hover:border-accent-400 hover:text-accent-600 dark:hover:text-accent-400 transition-colors",
+        :data_expr => expr,
+        expr)
 end
 
 # --- The playground JavaScript ---
 function _playground_script()
-    # Use the base_path for WASM URL since we're on GitHub Pages at /WasmTarget.jl/
     """
     (function() {
       var wasmInstance = null;
@@ -137,6 +140,9 @@ function _playground_script()
       var runBtn = document.getElementById('pg-run');
       var output = document.getElementById('pg-output');
       var status = document.getElementById('pg-status');
+
+      // Set default value (Textarea renders empty, we set via JS)
+      if (editor && !editor.value) editor.value = '1 + 1';
 
       // Load WASM
       var wasmPaths = [
@@ -156,7 +162,7 @@ function _playground_script()
             wasmInstance = result.instance;
             var size = (bytes.byteLength / 1024).toFixed(0);
             status.textContent = 'Ready (' + size + ' KB)';
-            status.className = 'text-xs text-green-600 dark:text-green-400';
+            status.className = 'text-xs text-accent-600 dark:text-accent-400 font-medium';
             runBtn.disabled = false;
             return;
           } catch(e) { /* try next */ }
@@ -256,9 +262,9 @@ function _playground_script()
         var code = editor.value;
         try {
           var result = evaluate(code);
-          output.innerHTML = '<span class=\"text-warm-800 dark:text-warm-100\">' + escapeHtml(result) + '</span>';
+          output.innerHTML = '<span class=\"text-green-400\">' + escapeHtml(result) + '</span>';
         } catch(err) {
-          output.innerHTML = '<span class=\"text-red-500\">' + escapeHtml(err.message) + '</span>';
+          output.innerHTML = '<span class=\"text-red-400\">' + escapeHtml(err.message) + '</span>';
         }
       }
 
@@ -274,7 +280,7 @@ function _playground_script()
       // Example chips
       document.querySelectorAll('.pg-example').forEach(function(el) {
         el.addEventListener('click', function() {
-          editor.value = el.getAttribute('data-expr');
+          editor.value = el.textContent.trim();
         });
       });
 
