@@ -1667,6 +1667,133 @@ function compile_module(functions::Vector)::WasmModule
 end
 
 """
+    compile_module_from_ir(ir_entries::Vector)::WasmModule
+
+Compile pre-computed typed CodeInfo entries to a WasmModule, bypassing Base.code_typed().
+Each entry is (code_info::CodeInfo, return_type::Type, arg_types::Tuple, name::String).
+
+This is the entry point for the eval_julia pipeline where type inference has already been run.
+Unlike compile_module, this does NOT call get_typed_ir() or discover_dependencies().
+"""
+function compile_module_from_ir(ir_entries::Vector)::WasmModule
+    mod = WasmModule()
+    type_registry = TypeRegistry()
+    func_registry = FunctionRegistry()
+
+    # Add Math.pow import (same as compile_module)
+    add_import!(mod, "Math", "pow", NumType[F64, F64], NumType[F64])
+
+    # Pre-register numeric box types (same as compile_module)
+    for nt in (I32, I64, F32, F64)
+        get_numeric_box_type!(mod, type_registry, nt)
+    end
+
+    # Build function_data from pre-computed IR (no get_typed_ir call)
+    function_data = []
+    for (code_info, return_type, arg_types, name) in ir_entries
+        global_args = Set{Int}()
+
+        # Register types used in parameters
+        for (i, T) in enumerate(arg_types)
+            if T === Symbol
+                get_string_array_type!(mod, type_registry)
+            elseif is_struct_type(T)
+                register_struct_type!(mod, type_registry, T)
+            elseif T <: Array
+                register_vector_type!(mod, type_registry, T)
+            elseif T === String
+                get_string_array_type!(mod, type_registry)
+            end
+        end
+
+        # Register return type
+        if is_struct_type(return_type)
+            register_struct_type!(mod, type_registry, return_type)
+        elseif return_type !== Union{} && return_type <: Array
+            register_vector_type!(mod, type_registry, return_type)
+        elseif return_type === String
+            get_string_array_type!(mod, type_registry)
+        end
+
+        push!(function_data, (nothing, arg_types, name, code_info, return_type, global_args, false))
+    end
+
+    # Scan for GlobalRef to mutable structs (same as compile_module)
+    module_globals = Dict{Tuple{Module, Symbol}, UInt32}()
+    for (_, _, _, code_info, _, _, _) in function_data
+        for stmt in code_info.code
+            if stmt isa GlobalRef
+                try
+                    actual_val = getfield(stmt.mod, stmt.name)
+                    T = typeof(actual_val)
+                    if ismutabletype(T) && !isa(actual_val, Type) && !isa(actual_val, Function) && !isa(actual_val, Module)
+                        key = (stmt.mod, stmt.name)
+                        if !haskey(module_globals, key)
+                            info = register_struct_type!(mod, type_registry, T)
+                            type_idx = info.wasm_type_idx
+                            init_bytes = UInt8[]
+                            for field_name in fieldnames(T)
+                                field_val = getfield(actual_val, field_name)
+                                append!(init_bytes, compile_const_value(field_val, mod, type_registry))
+                            end
+                            push!(init_bytes, Opcode.GC_PREFIX)
+                            push!(init_bytes, Opcode.STRUCT_NEW)
+                            append!(init_bytes, encode_leb128_unsigned(type_idx))
+                            global_idx = add_global_ref!(mod, type_idx, true, init_bytes; nullable=false)
+                            module_globals[key] = global_idx
+                        end
+                    end
+                catch
+                end
+            end
+        end
+    end
+
+    # Calculate function indices
+    n_imports = length(mod.imports)
+    for (i, (f, arg_types, name, _, return_type, _, _)) in enumerate(function_data)
+        func_idx = UInt32(n_imports + i - 1)
+        register_function!(func_registry, name, f, arg_types, func_idx, return_type)
+    end
+
+    # Compile function bodies
+    export_name_counts = Dict{String, Int}()
+    for (i, (f, arg_types, name, code_info, return_type, global_args, is_closure)) in enumerate(function_data)
+        func_idx = UInt32(n_imports + i - 1)
+
+        # Generate function body from Julia IR (no intrinsic check — pre-computed IR is always normal code)
+        ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
+                                func_registry=func_registry, func_idx=func_idx, func_ref=nothing,
+                                global_args=global_args, is_compiled_closure=false,
+                                module_globals=module_globals)
+        body = generate_body(ctx)
+        locals = ctx.locals
+
+        # Get param/result types
+        param_types = WasmValType[]
+        for (j, T) in enumerate(arg_types)
+            push!(param_types, get_concrete_wasm_type(T, mod, type_registry))
+        end
+        result_types = (return_type === Nothing || return_type === Union{}) ? WasmValType[] : WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
+
+        # Add function to module
+        actual_idx = add_function!(mod, param_types, result_types, locals, body)
+
+        # Export
+        export_name = name
+        count = get(export_name_counts, name, 0)
+        if count > 0
+            export_name = "$(name)_$(count)"
+        end
+        export_name_counts[name] = count + 1
+        add_export!(mod, export_name, 0, actual_idx)
+    end
+
+    populate_type_constant_globals!(mod, type_registry)
+    return mod
+end
+
+"""
 Specification for a DOM update call after signal write.
 Used by compile_handler to inject DOM update calls after signal writes.
 """
