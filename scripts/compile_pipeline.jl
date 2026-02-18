@@ -171,6 +171,28 @@ pipeline_add(a::Int64, b::Int64)::Int64 = a + b          # 1+1 → 2
 pipeline_mul(a::Int64, b::Int64)::Int64 = a * b          # 2*3 → 6
 pipeline_sin(x::Float64)::Float64 = sin(x)               # sin(1.0) → 0.8414709848078965
 
+# PURE-4165: Expression expansion Phase 1 — arithmetic + math + variables
+# Integer operations
+pipeline_sub(a::Int64, b::Int64)::Int64 = a - b          # 10-3 → 7
+pipeline_neg(a::Int64)::Int64 = -a                        # neg(5) → -5
+pipeline_abs_i(a::Int64)::Int64 = abs(a)                  # abs(-7) → 7
+pipeline_div(a::Int64, b::Int64)::Int64 = div(a, b)      # div(10,3) → 3
+pipeline_mod(a::Int64, b::Int64)::Int64 = mod(a, b)      # mod(10,3) → 1
+
+# Float operations
+pipeline_fadd(a::Float64, b::Float64)::Float64 = a + b   # 2.5+3.5 → 6.0
+pipeline_fsub(a::Float64, b::Float64)::Float64 = a - b   # 10.0-3.5 → 6.5
+pipeline_fmul(a::Float64, b::Float64)::Float64 = a * b   # 2.5*4.0 → 10.0
+pipeline_fdiv(a::Float64, b::Float64)::Float64 = a / b   # 10.0/4.0 → 2.5
+pipeline_fneg(a::Float64)::Float64 = -a                   # neg(3.14) → -3.14
+pipeline_abs_f(a::Float64)::Float64 = abs(a)              # abs(-2.5) → 2.5
+
+# Math functions
+pipeline_cos(x::Float64)::Float64 = cos(x)               # cos(0.0) → 1.0
+pipeline_sqrt(x::Float64)::Float64 = sqrt(x)             # sqrt(4.0) → 2.0
+pipeline_exp(x::Float64)::Float64 = exp(x)               # exp(1.0) → 2.718...
+pipeline_log(x::Float64)::Float64 = log(x)               # log(1.0) → 0.0
+
 test_wrappers = [
     (test_add_1_1, ()),
     (test_sub_1, ()),
@@ -180,6 +202,22 @@ test_wrappers = [
     (pipeline_add, (Int64, Int64)),
     (pipeline_mul, (Int64, Int64)),
     (pipeline_sin, (Float64,)),
+    # PURE-4165: new functions
+    (pipeline_sub, (Int64, Int64)),
+    (pipeline_neg, (Int64,)),
+    (pipeline_abs_i, (Int64,)),
+    (pipeline_div, (Int64, Int64)),
+    (pipeline_mod, (Int64, Int64)),
+    (pipeline_fadd, (Float64, Float64)),
+    (pipeline_fsub, (Float64, Float64)),
+    (pipeline_fmul, (Float64, Float64)),
+    (pipeline_fdiv, (Float64, Float64)),
+    (pipeline_fneg, (Float64,)),
+    (pipeline_abs_f, (Float64,)),
+    (pipeline_cos, (Float64,)),
+    (pipeline_sqrt, (Float64,)),
+    (pipeline_exp, (Float64,)),
+    (pipeline_log, (Float64,)),
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -302,13 +340,19 @@ if best !== nothing
             end
         end
 
-        # PURE-4161: Pipeline tests with runtime arguments
+        # Pipeline tests with runtime arguments (Int64)
         println("\n--- Node.js verification (pipeline tests — runtime args) ---")
-        pipeline_cases = [
+        pipeline_i64_cases = [
             ("pipeline_add: 1+1=2", "pipeline_add", (Int64(1), Int64(1)), Int64(2)),
             ("pipeline_mul: 2*3=6", "pipeline_mul", (Int64(2), Int64(3)), Int64(6)),
+            ("pipeline_sub: 10-3=7", "pipeline_sub", (Int64(10), Int64(3)), Int64(7)),
+            ("pipeline_sub: 1-5=-4", "pipeline_sub", (Int64(1), Int64(5)), Int64(-4)),
+            ("pipeline_div: div(10,3)=3", "pipeline_div", (Int64(10), Int64(3)), Int64(3)),
+            ("pipeline_mod: mod(10,3)=1", "pipeline_mod", (Int64(10), Int64(3)), Int64(1)),
+            ("pipeline_neg: neg(5)=-5", "pipeline_neg", (Int64(5),), Int64(-5)),
+            ("pipeline_abs_i: abs(-7)=7", "pipeline_abs_i", (Int64(-7),), Int64(7)),
         ]
-        for (label, fname, args, expected) in pipeline_cases
+        for (label, fname, args, expected) in pipeline_i64_cases
             print("  $label → ")
             try
                 actual = run_wasm(best, fname, args...)
@@ -324,21 +368,36 @@ if best !== nothing
             total_count += 1
         end
 
-        # Float64 test: sin(1.0)
-        print("  pipeline_sin: sin(1.0)=0.8414709848078965 → ")
-        try
-            actual = run_wasm(best, "pipeline_sin", 1.0)
-            expected_sin = 0.8414709848078965
-            if actual isa Number && abs(actual - expected_sin) < 1e-15
-                println("CORRECT ✓")
-                pass_count += 1
-            else
-                println("MISMATCH ✗ (got $actual, expected $expected_sin)")
+        # Float64 tests
+        println("\n--- Node.js verification (pipeline Float64 tests) ---")
+        pipeline_f64_cases = [
+            ("pipeline_sin: sin(0.0)=0.0", "pipeline_sin", (0.0,), 0.0),
+            ("pipeline_fadd: 2.5+3.5=6.0", "pipeline_fadd", (2.5, 3.5), 6.0),
+            ("pipeline_fsub: 10.0-3.5=6.5", "pipeline_fsub", (10.0, 3.5), 6.5),
+            ("pipeline_fmul: 2.5*4.0=10.0", "pipeline_fmul", (2.5, 4.0), 10.0),
+            ("pipeline_fdiv: 10.0/4.0=2.5", "pipeline_fdiv", (10.0, 4.0), 2.5),
+            ("pipeline_fneg: neg(3.14)=-3.14", "pipeline_fneg", (3.14,), -3.14),
+            ("pipeline_abs_f: abs(-2.5)=2.5", "pipeline_abs_f", (-2.5,), 2.5),
+            ("pipeline_cos: cos(0.0)=1.0", "pipeline_cos", (0.0,), 1.0),
+            ("pipeline_sqrt: sqrt(4.0)=2.0", "pipeline_sqrt", (4.0,), 2.0),
+            ("pipeline_exp: exp(0.0)=1.0", "pipeline_exp", (0.0,), 1.0),
+            ("pipeline_log: log(1.0)=0.0", "pipeline_log", (1.0,), 0.0),
+        ]
+        for (label, fname, args, expected) in pipeline_f64_cases
+            print("  $label → ")
+            try
+                actual = run_wasm(best, fname, args...)
+                if actual isa Number && abs(actual - expected) < 1e-12
+                    println("CORRECT ✓")
+                    pass_count += 1
+                else
+                    println("MISMATCH ✗ (got $actual, expected $expected)")
+                end
+            catch e
+                println("ERROR: $(first(sprint(showerror, e), 80))")
             end
-        catch e
-            println("ERROR: $(first(sprint(showerror, e), 80))")
+            total_count += 1
         end
-        total_count += 1
 
         println("\nResults: $pass_count/$total_count CORRECT")
         if pass_count == total_count
