@@ -6021,7 +6021,10 @@ function infer_value_type(val, ctx::CompilationContext)
             elseif actual_val isa Char
                 return Char
             elseif actual_val isa Type
-                return Type  # Type references
+                # PURE-4155: Return Type{actual_val} (e.g., Type{Int64}) instead of bare Type.
+                # This allows get_concrete_wasm_type to return ConcreteRef for the DataType struct,
+                # which triggers extern_convert_any bridging when passed to externref-typed params.
+                return Type{actual_val}
             else
                 return typeof(actual_val)
             end
