@@ -328,12 +328,12 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
     elseif T <: Function
         # Abstract Function types (non-closure) map to externref
         return ExternRef
-    elseif T <: Type && !(T isa UnionAll)
-        # PURE-4155: Type{X} values are now represented as DataType struct refs (global.get)
+    elseif T <: Type && !(T isa UnionAll) && !isstructtype(T)
+        # PURE-4155: Type{X} singleton values are now represented as DataType struct refs (global.get)
         # instead of i32.const 0. Use StructRef as the generic fallback since we don't have
         # access to the module/registry here to get the concrete DataType type index.
-        # NOTE: DataType (the struct) is handled above at line 321 (isconcretetype && isstructtype)
-        # NOTE: T isa UnionAll is false for Type{Int64} but true for abstract Type
+        # NOTE: Struct types like Union, DataType are handled above (isconcretetype && isstructtype)
+        # NOTE: !isstructtype(T) ensures we only match singleton Type{X} (e.g., Type{Int64})
         return StructRef
     elseif isabstracttype(T)
         # Abstract types (e.g., Compiler.CallInfo, Type (UnionAll)) can hold any concrete subtype

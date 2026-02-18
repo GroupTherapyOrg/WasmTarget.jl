@@ -542,8 +542,9 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
         # For now, use i64 as a placeholder (this type won't actually be used)
         return I64
     end
-    # PURE-4155: Type{X} values are represented as DataType struct refs (global.get)
-    if T <: Type && !(T isa UnionAll)
+    # PURE-4155: Type{X} singleton values (e.g., Type{Int64}) are represented as DataType
+    # struct refs via global.get. Only match SINGLETON types (not struct types like Union/DataType).
+    if T <: Type && !(T isa UnionAll) && !isstructtype(T)
         info = register_struct_type!(mod, registry, DataType)
         return ConcreteRef(info.wasm_type_idx, true)
     end
@@ -4712,8 +4713,9 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
     if T isa Core.TypeofVararg
         return ExternRef
     end
-    # PURE-4155: Type{X} values are represented as DataType struct refs (global.get)
-    if T isa DataType && T <: Type && !(T isa UnionAll)
+    # PURE-4155: Type{X} singleton values (e.g., Type{Int64}) are represented as DataType
+    # struct refs via global.get. Only match SINGLETON types (not struct types like Union/DataType).
+    if T isa DataType && T <: Type && !(T isa UnionAll) && !isstructtype(T)
         info = register_struct_type!(ctx.mod, ctx.type_registry, DataType)
         return ConcreteRef(info.wasm_type_idx, true)
     end
