@@ -143,7 +143,23 @@ function _method_morespecific(m1::Method, m2::Method)::Bool
     # From gf.c: m1 is more specific than m2 if:
     # m1 is in m2.interferences (m2 interferes with m1) AND
     # m2 is NOT in m1.interferences (m1 does not interfere with m2)
-    return _in_interferences(m1, m2) && !_in_interferences(m2, m1)
+    if _in_interferences(m1, m2) && !_in_interferences(m2, m1)
+        return true
+    end
+    # Fallback: if interferences don't cover this pair, use subtype ordering.
+    # m1 is more specific if m1.sig <: m2.sig AND NOT m2.sig <: m1.sig
+    # This handles cases like +(Bool,Bool) vs +(Number,Number) where
+    # interferences are empty but the subtype relationship is clear.
+    try
+        m1_sub_m2 = wasm_subtype(m1.sig, m2.sig)
+        m2_sub_m1 = wasm_subtype(m2.sig, m1.sig)
+        if m1_sub_m2 && !m2_sub_m1
+            return true
+        end
+    catch
+        # Edge cases in subtype — fall through
+    end
+    return false
 end
 
 """
