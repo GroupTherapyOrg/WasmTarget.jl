@@ -1,4 +1,5 @@
-# PURE-4111: Verify wasm_subtype matches native <: for 100+ type pairs
+# PURE-4111 + PURE-4113: Verify wasm_subtype matches native <: for 700+ type pairs
+# Includes Union, Tuple, Vararg, and mixed combinations.
 # Zero tolerance for divergence.
 
 include(joinpath(@__DIR__, "..", "src", "typeinf", "subtype.jl"))
@@ -137,20 +138,226 @@ check_subtype(DataType, Any)                          # true
 check_subtype(Int64, DataType)                        # false (Int64 is a DataType instance, not a subtype of DataType)
 
 # ============================================================
-# Known gaps: These require PURE-4112 (Tuple covariance) or PURE-4114 (UnionAll)
-# Documented here for completeness, tested in PURE-4113/4115
+# Section 8 (PURE-4113): Tuple covariance
 # ============================================================
-# Tuple covariance (PURE-4112/4113):
-#   Tuple{Int64} <: Tuple{Number}              — needs covariant parameter check
-#   Tuple{Int64,Float64} <: Tuple{Number,Number} — same
+# Basic covariance: Tuple{SubType} <: Tuple{SuperType}
+check_subtype(Tuple{Int64}, Tuple{Number})                    # true
+check_subtype(Tuple{Int64}, Tuple{Real})                      # true
+check_subtype(Tuple{Int64}, Tuple{Integer})                   # true
+check_subtype(Tuple{Int64}, Tuple{Signed})                    # true
+check_subtype(Tuple{Int64}, Tuple{Any})                       # true
+check_subtype(Tuple{Float64}, Tuple{Number})                  # true
+check_subtype(Tuple{Float64}, Tuple{AbstractFloat})           # true
+check_subtype(Tuple{Bool}, Tuple{Integer})                    # true
+check_subtype(Tuple{UInt8}, Tuple{Unsigned})                  # true
+check_subtype(Tuple{String}, Tuple{AbstractString})           # true
+
+# Multi-element covariance
+check_subtype(Tuple{Int64,Float64}, Tuple{Number,Number})     # true
+check_subtype(Tuple{Int64,Float64}, Tuple{Real,Real})         # true
+check_subtype(Tuple{Int64,Float64}, Tuple{Any,Any})           # true
+check_subtype(Tuple{Int64,Float64}, Tuple{Integer,Number})    # false (Float64 !<: Integer)
+check_subtype(Tuple{Int64,String}, Tuple{Number,AbstractString}) # true
+check_subtype(Tuple{Int64,String}, Tuple{Any,Any})            # true
+check_subtype(Tuple{Int64,String}, Tuple{String,Int64})       # false (swapped)
+
+# Negative covariance (subtypes go wrong way)
+check_subtype(Tuple{Number}, Tuple{Int64})                    # false
+check_subtype(Tuple{Real}, Tuple{Float64})                    # false
+check_subtype(Tuple{Any}, Tuple{Int64})                       # false
+check_subtype(Tuple{Number,Number}, Tuple{Int64,Float64})     # false
+
+# Empty tuple
+check_subtype(Tuple{}, Tuple{})                               # true (identity, already tested but ensure)
+check_subtype(Tuple{}, Tuple{Int64})                          # false (length mismatch)
+check_subtype(Tuple{Int64}, Tuple{})                          # false (length mismatch)
+check_subtype(Tuple{}, Tuple{Vararg{Any}})                    # true (0 elements match Vararg)
+check_subtype(Tuple{}, Tuple{Vararg{Int64}})                  # true (0 elements)
+
+# 29 pairs
+
+# ============================================================
+# Section 9 (PURE-4113): Tuple with Vararg — comprehensive
+# ============================================================
+# Unbounded Vararg on right: Tuple{A...} <: Tuple{Vararg{B}} iff each A <: B
+check_subtype(Tuple{Int64}, Tuple{Vararg{Number}})            # true
+check_subtype(Tuple{Int64,Int64}, Tuple{Vararg{Number}})      # true
+check_subtype(Tuple{Int64,Int64,Int64}, Tuple{Vararg{Number}}) # true
+check_subtype(Tuple{Int64,Float64}, Tuple{Vararg{Number}})    # true (both <: Number)
+check_subtype(Tuple{Int64,String}, Tuple{Vararg{Number}})     # false (String !<: Number)
+check_subtype(Tuple{Int64,Float64}, Tuple{Vararg{Real}})      # true
+check_subtype(Tuple{Int64,Float64}, Tuple{Vararg{Integer}})   # false (Float64 !<: Integer)
+
+# Unbounded Vararg with fixed prefix
+check_subtype(Tuple{Int64,Float64}, Tuple{Number,Vararg{Number}})  # true
+check_subtype(Tuple{Int64}, Tuple{Number,Vararg{Number}})          # true (1 fixed, 0 vararg)
+check_subtype(Tuple{Int64,Float64,Bool}, Tuple{Number,Vararg{Number}}) # true
+check_subtype(Tuple{String,Int64}, Tuple{Number,Vararg{Number}})   # false (String !<: Number)
+
+# Bare Tuple = Tuple{Vararg{Any}}, everything is a subtype of bare Tuple
+check_subtype(Tuple{Int64}, Tuple)                            # true
+check_subtype(Tuple{Int64,Float64}, Tuple)                    # true
+check_subtype(Tuple{String,Symbol,Bool}, Tuple)               # true
+check_subtype(Tuple{}, Tuple)                                 # true
+
+# Vararg{T,N} — bounded
+check_subtype(Tuple{Int64,Int64}, Tuple{Vararg{Number,2}})    # true
+check_subtype(Tuple{Int64,Float64}, Tuple{Vararg{Number,2}})  # true
+check_subtype(Tuple{Int64}, Tuple{Vararg{Number,2}})          # false (length mismatch)
+check_subtype(Tuple{Int64,Int64,Int64}, Tuple{Vararg{Number,2}}) # false (length mismatch)
+
+# Vararg on left side — bounded only
+check_subtype(Tuple{Vararg{Int64,2}}, Tuple{Number,Number})   # true
+check_subtype(Tuple{Vararg{Int64,3}}, Tuple{Number,Number,Number}) # true
+check_subtype(Tuple{Vararg{Int64,2}}, Tuple{Number,Number,Number}) # false (length mismatch)
+check_subtype(Tuple{Vararg{Int64,2}}, Tuple{String,String})   # false (Int64 !<: String)
+
+# Vararg vs Vararg
+check_subtype(Tuple{Vararg{Int64}}, Tuple{Vararg{Number}})    # true (Int64 <: Number)
+check_subtype(Tuple{Vararg{Number}}, Tuple{Vararg{Int64}})    # false (Number !<: Int64)
+check_subtype(Tuple{Vararg{Int64}}, Tuple{Vararg{Any}})       # true
+check_subtype(Tuple{Vararg{Any}}, Tuple{Vararg{Int64}})       # false
+
+# Vararg edge: unbounded left vs fixed right
+check_subtype(Tuple{Vararg{Int64}}, Tuple{Int64})             # false (unbounded left, fixed right)
+check_subtype(Tuple{Vararg{Int64}}, Tuple{Int64,Int64})       # false
+
+# 31 pairs
+
+# ============================================================
+# Section 10 (PURE-4113): Nested Unions
+# ============================================================
+# Julia flattens nested Unions, so Union{Union{A,B},C} === Union{A,B,C}
+# But we test through wasm_subtype to ensure it handles them correctly
+
+check_subtype(Union{Union{Int8,Int16},Int32}, Signed)                # true
+check_subtype(Union{Union{Int8,Int16},Int32}, Integer)               # true
+check_subtype(Union{Union{Int8,Int16},Int32}, Number)                # true
+check_subtype(Union{Union{Int8,Int16},Int32}, Any)                   # true
+check_subtype(Union{Union{Int8,Int16},Int32}, Unsigned)              # false
+check_subtype(Union{Union{Int8,Int16},UInt8}, Signed)                # false (UInt8 !<: Signed)
+check_subtype(Int8, Union{Union{Int8,Int16},Int32})                  # true
+check_subtype(Int32, Union{Union{Int8,Int16},Int32})                 # true
+check_subtype(Int64, Union{Union{Int8,Int16},Int32})                 # false
+
+# Triple-nesting
+check_subtype(Union{Union{Union{Int8,Int16},Int32},Int64}, Signed)   # true
+check_subtype(Union{Union{Union{Int8,Int16},Int32},Int64}, Integer)  # true
+check_subtype(Int64, Union{Union{Union{Int8,Int16},Int32},Int64})    # true
+
+# Union with Nothing/Missing
+check_subtype(Union{Nothing,Union{Int64,Float64}}, Any)              # true
+check_subtype(Union{Nothing,Missing}, Union{Nothing,Missing,Int64})  # true
+check_subtype(Nothing, Union{Nothing,Union{Int64,Float64}})          # true
+check_subtype(Float64, Union{Nothing,Union{Int64,Float64}})          # true
+check_subtype(String, Union{Nothing,Union{Int64,Float64}})           # false
+
+# 17 pairs
+
+# ============================================================
+# Section 11 (PURE-4113): Single-element Union
+# ============================================================
+# Union{T} === T in Julia, so Union{Int64} === Int64
+check_subtype(Union{Int64}, Int64)                 # true (Union{Int64} === Int64)
+check_subtype(Int64, Union{Int64})                 # true
+check_subtype(Union{Int64}, Number)                # true
+check_subtype(Union{Int64}, String)                # false
+check_subtype(Union{String}, AbstractString)       # true
+check_subtype(Union{Nothing}, Nothing)             # true
+check_subtype(Union{Nothing}, Any)                 # true
+check_subtype(Union{Nothing}, Int64)               # false
+
+# 8 pairs
+
+# ============================================================
+# Section 12 (PURE-4113): Mixed Union + Tuple
+# ============================================================
+# Tuple containing Unions in its parameters
+check_subtype(Tuple{Union{Int64,Float64}}, Tuple{Number})               # true
+check_subtype(Tuple{Union{Int64,Float64}}, Tuple{Real})                 # true
+check_subtype(Tuple{Union{Int64,Float64}}, Tuple{Integer})              # false (Float64 !<: Integer)
+check_subtype(Tuple{Union{Int64,Float64}}, Tuple{Any})                  # true
+check_subtype(Tuple{Union{Int64,Float64}}, Tuple{String})               # false
+check_subtype(Tuple{Int64,Union{String,Symbol}}, Tuple{Number,Any})     # true
+check_subtype(Tuple{Int64,Union{String,Symbol}}, Tuple{Any,AbstractString}) # false (Symbol !<: AbstractString)
+
+# Union of Tuples
+check_subtype(Union{Tuple{Int64},Tuple{Float64}}, Tuple{Number})        # true
+check_subtype(Union{Tuple{Int64},Tuple{String}}, Tuple{Any})            # true
+check_subtype(Union{Tuple{Int64},Tuple{String}}, Tuple{Number})         # false (Tuple{String} !<: Tuple{Number})
+
+# Tuple <: Union
+check_subtype(Tuple{Int64}, Union{Tuple{Int64},Tuple{Float64}})         # true
+check_subtype(Tuple{String}, Union{Tuple{Int64},Tuple{Float64}})        # false
+check_subtype(Tuple{Int64,Int64}, Union{Tuple{Int64,Int64},Tuple{Float64,Float64}}) # true
+
+# Union{} in Tuple
+check_subtype(Tuple{Union{}}, Tuple{Int64})                             # true (Union{} <: Int64)
+check_subtype(Tuple{Union{}}, Tuple{Any})                               # true
+check_subtype(Tuple{Union{},Int64}, Tuple{Number,Number})               # true
+
+# Tuple with Vararg + Union
+check_subtype(Tuple{Union{Int64,Float64},Union{Int64,Float64}}, Tuple{Vararg{Number}})  # true
+check_subtype(Tuple{Union{Int64,String}}, Tuple{Vararg{Number}})        # false (String !<: Number)
+
+# 18 pairs
+
+# ============================================================
+# Section 13 (PURE-4113): Tuple vs non-Tuple, special cases
+# ============================================================
+# Tuple types are not subtypes of non-Tuple types (except Any)
+check_subtype(Tuple{Int64}, Any)                               # true
+check_subtype(Tuple{Int64}, Int64)                             # false
+check_subtype(Tuple{Int64}, Number)                            # false
+check_subtype(Int64, Tuple{Int64})                             # false
+check_subtype(Nothing, Tuple{})                                # false
+check_subtype(Tuple{}, Nothing)                                # false
+check_subtype(Union{}, Tuple{Int64})                           # true (Union{} <: anything)
+check_subtype(Tuple{Int64}, Union{})                           # false
+
+# Tuple{Any} vs various
+check_subtype(Tuple{Any}, Tuple{Any})                          # true
+check_subtype(Tuple{Int64}, Tuple{Any})                        # true
+check_subtype(Tuple{Any}, Tuple{Int64})                        # false (Any !<: Int64)
+check_subtype(Tuple{Any,Any}, Tuple{Any})                      # false (length mismatch)
+
+# Longer Tuples
+check_subtype(Tuple{Int8,Int16,Int32,Int64}, Tuple{Signed,Signed,Signed,Signed})  # true
+check_subtype(Tuple{Int8,Int16,Int32,Int64}, Tuple{Number,Number,Number,Number})  # true
+check_subtype(Tuple{Int8,Int16,Int32,Int64}, Tuple{Any,Any,Any,Any})              # true
+check_subtype(Tuple{Int8,Int16,Int32,Int64}, Tuple{Int8,Int16,Int32,Float64})     # false (Int64 !<: Float64)
+check_subtype(Tuple{Int8,Int16,Int32,Int64,Int128}, Tuple{Vararg{Signed}})        # true
+check_subtype(Tuple{Int8,Int16,Int32,Int64,UInt8}, Tuple{Vararg{Signed}})         # false (UInt8 !<: Signed)
+
+# 18 pairs
+
+# ============================================================
+# Section 14 (PURE-4113): Systematic Tuple covariance matrix
+# ============================================================
+# Cross all numeric types with abstract types through Tuples
+tuple_concrete = [Int8, Int64, Float32, Float64, Bool, UInt16]
+tuple_abstract = [Number, Real, Integer, AbstractFloat, Signed, Unsigned, Any]
+
+for c in tuple_concrete
+    for a in tuple_abstract
+        check_subtype(Tuple{c}, Tuple{a})
+    end
+end
+# 6 * 7 = 42 pairs
+
+# ============================================================
+# Known gaps: These require PURE-4114 (UnionAll)
+# Documented here for completeness, tested in PURE-4115
+# ============================================================
 # UnionAll (PURE-4114/4115):
 #   DataType <: Type                           — Type is UnionAll (Type{T} where T)
+#   Vector{Int64} <: AbstractVector             — AbstractVector is UnionAll
 
 # ============================================================
 # Report
 # ============================================================
 println("=" ^ 60)
-println("PURE-4111: wasm_subtype verification")
+println("PURE-4111 + PURE-4113: wasm_subtype verification")
 println("=" ^ 60)
 println("Passed: $passed")
 println("Failed: $failed")
@@ -164,5 +371,5 @@ if !isempty(errors)
     end
 end
 
-@assert failed == 0 "PURE-4111 FAILED: $failed divergences from native <:"
+@assert failed == 0 "PURE-4113 FAILED: $failed divergences from native <:"
 println("ALL $(passed) type pairs CORRECT — wasm_subtype matches native <:")
