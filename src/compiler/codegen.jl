@@ -544,7 +544,9 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
     end
     # PURE-4155: Type{X} singleton values (e.g., Type{Int64}) are represented as DataType
     # struct refs via global.get. Only match SINGLETON types (not struct types like Union/DataType).
-    if T <: Type && !(T isa UnionAll) && !isstructtype(T)
+    # PURE-4151: Exclude Union types (e.g., Union{Type{Int64}, Type{Number}}) — these are
+    # multi-variant unions that map to ExternRef, not single DataType refs.
+    if T <: Type && !(T isa UnionAll) && !(T isa Union) && !isstructtype(T)
         info = register_struct_type!(mod, registry, DataType)
         return ConcreteRef(info.wasm_type_idx, true)
     end
@@ -10360,6 +10362,14 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                         push!(result, Opcode.GC_PREFIX)
                         push!(result, Opcode.EXTERN_CONVERT_ANY)
                         return result
+                    elseif phi_local_type === ExternRef && (edge_val_type isa ConcreteRef || edge_val_type === StructRef || edge_val_type === ArrayRef || edge_val_type === AnyRef)
+                        # PURE-4151: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef for non-SSA phi edges
+                        # (e.g., Union{} literal in phi node produces global.get of DataType struct,
+                        #  needs extern_convert_any to store in ExternRef phi local)
+                        append!(result, compile_value(val, ctx))
+                        push!(result, Opcode.GC_PREFIX)
+                        push!(result, Opcode.EXTERN_CONVERT_ANY)
+                        return result
                     end
                     # Type mismatch: emit type-safe default instead
                     append!(result, emit_phi_type_default(phi_local_type))
@@ -15484,7 +15494,9 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                 # PURE-036bg: Check if value type matches local type
                 # When multiple SSAs share a local but have incompatible types (e.g., in dead code),
                 # DROP the value and emit a type-safe default instead of causing validation error.
-                value_wasm_type = get_concrete_wasm_type(stmt_type, ctx.mod, ctx.type_registry)
+                # PURE-4151: If extern_convert_any was already appended above (line ~15272),
+                # the stack type is now ExternRef regardless of the original value_wasm_type.
+                value_wasm_type = needs_extern_convert_any ? ExternRef : get_concrete_wasm_type(stmt_type, ctx.mod, ctx.type_registry)
                 if local_type !== nothing && !wasm_types_compatible(local_type, value_wasm_type)
                     # PURE-908: externref↔anyref conversion instead of drop+default
                     if value_wasm_type === ExternRef && local_type === AnyRef
