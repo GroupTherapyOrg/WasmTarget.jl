@@ -171,6 +171,65 @@ class WasmTargetRuntime {
         }
         return result;
     }
+
+    /**
+     * Execute a Julia expression using the eval_julia WASM module.
+     * Gap E: Codegen→Execute bridge.
+     *
+     * Pipeline:
+     *   1. Convert JS string to WasmGC string
+     *   2. Call eval_julia_wasm(code) → WasmGC String of bytes
+     *   3. Extract bytes via eval_julia_result_length + eval_julia_result_byte
+     *   4. Instantiate inner WASM module from bytes
+     *   5. Parse expression to determine export name + arguments
+     *   6. Call exported function → return result
+     *
+     * Currently supports: binary integer arithmetic ("+", "-", "*")
+     * with Int64 literals (e.g. "1+1", "10-3", "2*3")
+     *
+     * @param {WebAssembly.Instance} evalInstance - Loaded eval_julia WASM instance
+     * @param {string} code - A Julia arithmetic expression
+     * @returns {Promise<bigint>} The computed result
+     */
+    async evalJulia(evalInstance, code) {
+        const trimmed = code.trim();
+
+        // Step 1: Convert code to WasmGC string
+        const wasmCode = await this.jsToWasmString(trimmed);
+
+        // Step 2: Call eval_julia_wasm → WasmGC String bytes
+        const vecRef = evalInstance.exports.eval_julia_wasm(wasmCode);
+
+        // Step 3: Extract bytes via element-wise access
+        const len = evalInstance.exports.eval_julia_result_length(vecRef);
+        if (len < 8) throw new Error(`evalJulia: too few bytes (${len})`);
+        const bytes = new Uint8Array(len);
+        for (let i = 1; i <= len; i++) {
+            bytes[i - 1] = evalInstance.exports.eval_julia_result_byte(vecRef, i);
+        }
+
+        // Validate WASM magic: 0x00 0x61 0x73 0x6d
+        if (bytes[0] !== 0x00 || bytes[1] !== 0x61 || bytes[2] !== 0x73 || bytes[3] !== 0x6d) {
+            throw new Error("evalJulia: invalid WASM magic bytes");
+        }
+
+        // Step 4: Instantiate the inner WASM module from extracted bytes
+        const inner = await this.load(bytes.buffer);
+
+        // Step 5: Parse expression to determine export name and arguments
+        // Supports: "a OP b" where a,b are integers and OP is +, -, *
+        const m = trimmed.match(/^(-?\d+)\s*([+\-*])\s*(-?\d+)$/);
+        if (!m) throw new Error(`evalJulia: unsupported expression: ${trimmed}`);
+        const a = BigInt(m[1]), op = m[2], b = BigInt(m[3]);
+
+        // Step 6: Call exported function
+        const fn = inner.exports[op];
+        if (!fn) {
+            const available = Object.keys(inner.exports).filter(k => typeof inner.exports[k] === "function");
+            throw new Error(`evalJulia: export "${op}" not found. Available: ${available.join(", ")}`);
+        }
+        return fn(a, b);
+    }
 }
 
 // Export for both ES modules and script tags
