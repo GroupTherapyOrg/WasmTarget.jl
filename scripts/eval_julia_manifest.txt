@@ -1,0 +1,570 @@
+# PURE-6018: eval_julia_to_bytes(String) transitive dependency manifest
+# Generated: 2026-02-19T15:54:48.688
+# Total functions: 542
+#
+# Format: INDEX | MODULE | FUNCTION | ARG_TYPES | STMT_COUNT | CAN_CODE_TYPED
+
+1 | Base | == | (Base.Compiler.EscapeAnalysis.EscapeInfo, Base.Compiler.EscapeAnalysis.EscapeInfo) | 146 | true
+2 | Base | _replace_ | (String, Tuple{Pair{Char, String}}, Int64) | 68 | true
+3 | Base | _replace_ | (String, Tuple{Pair{Char, Char}}, Int64) | 68 | true
+4 | Base | _replace_finish | (IOBuffer, String, Int64, Int64, Tuple{Base.Fix2{typeof(isequal), Char}}, Tuple{String}, Tuple{UnitRange{Int64}}) | 117 | true
+5 | Base | _replace_finish | (IOBuffer, String, Int64, Int64, Tuple{Base.Fix2{typeof(isequal), Char}}, Tuple{Char}, Tuple{UnitRange{Int64}}) | 117 | true
+6 | Base | _replace_init | (String, Tuple{Pair{Char, String}}, Int64) | 58 | true
+7 | Base | _replace_init | (String, Tuple{Pair{Char, Char}}, Int64) | 58 | true
+8 | Base | copy | (Compiler.IRCode) | 88 | true
+9 | Base | copy | (Compiler.InstructionStream) | 18 | true
+10 | Base | copy | (Compiler.CFG) | 39 | true
+11 | Base | findnext | (Base.Fix2{typeof(isequal), Char}, String, Int64) | 89 | true
+12 | Base | getindex | (Any, Int64) | 15 | true
+13 | Base | getindex | (Any, Any) | 15 | true
+14 | Base | getindex | (SourceFile, UnitRange{UInt32}) | 22 | true
+15 | Base | getindex | (Compiler.TwoPhaseDefUseMap, Int64) | 66 | true
+16 | Base | ht_keyindex | (Dict{JuliaSyntax.Kind, String}, JuliaSyntax.Kind) | 96 | true
+17 | Base | ht_keyindex | (Dict{JuliaSyntax.Kind, Nothing}, JuliaSyntax.Kind) | 96 | true
+18 | Base | intersect | (WorldRange, WorldRange) | 26 | true
+19 | Base | iterate_continued | (String, Int64, UInt32) | 145 | true
+20 | Base | parseint_preamble | (Bool, Int64, String, Int64, Int64) | 172 | true
+21 | Base | push! | (Compiler.BitSetBoundedMinPrioritySet, Int64) | 29 | true
+22 | Base | resize! | (Compiler.InstructionStream, Int64) | 81 | true
+23 | Base | setindex! | (Compiler.IncrementalCompact, Any, Core.SSAValue) | 30 | true
+24 | Base | setindex! | (Compiler.IncrementalCompact, Any, Int64) | 15 | true
+25 | Base | setindex! | (Compiler.IncrementalCompact, Any, Compiler.OldSSAValue) | 96 | true
+26 | Base | take! | (IOBuffer) | 74 | true
+27 | Base | tryparse_internal | (Type{Int64}, String, Int64, Int64, Int64, Bool) | 550 | true
+28 | Base | tryparse_internal | (Type{Int128}, String, Int64, Int64, Int64, Bool) | 550 | true
+29 | Base | tryparse_internal | (Type{BigInt}, String, Int64, Int64, Int64, Bool) | 137 | true
+30 | Base | tryparse_internal | (Type{UInt8}, String, Int64, Int64, Int64, Bool) | 550 | true
+31 | Base | tryparse_internal | (Type{UInt16}, String, Int64, Int64, Int64, Bool) | 550 | true
+32 | Base | tryparse_internal | (Type{UInt32}, String, Int64, Int64, Int64, Bool) | 550 | true
+33 | Base | tryparse_internal | (Type{UInt64}, String, Int64, Int64, Int64, Bool) | 550 | true
+34 | Base | tryparse_internal | (Type{UInt128}, String, Int64, Int64, Int64, Bool) | 550 | true
+35 | Base | union! | (Base.Compiler.EscapeAnalysis.IntDisjointSet{Int64}, Int64, Int64) | 19 | true
+36 | Base | unsafe_write | (IOBuffer, Ptr{UInt8}, UInt64) | 78 | true
+37 | Base.Checked | mul_with_overflow | (Int128, Int128) | 64 | true
+38 | Base.Compiler.EscapeAnalysis | ArgEscapeCache | (Base.Compiler.EscapeAnalysis.EscapeState) | 99 | true
+39 | Base.Compiler.EscapeAnalysis | IntDisjointSet | (Int64) | 18 | true
+40 | Base.Compiler.EscapeAnalysis | _find_root_impl! | (Vector{Int64}, Int64) | 28 | true
+41 | Base.Compiler.EscapeAnalysis | add_alias_change! | (Base.Compiler.EscapeAnalysis.AnalysisState{Compiler.GetNativeEscapeCache{Compiler.WorldView{InternalCodeCache}}, Compiler.PartialsLattice{Compiler.ConstsLattice}}, Any, Any) | 72 | true
+42 | Base.Compiler.EscapeAnalysis | add_alias_escapes! | (Base.Compiler.EscapeAnalysis.AnalysisState{Compiler.GetNativeEscapeCache{Compiler.WorldView{InternalCodeCache}}, Compiler.PartialsLattice{Compiler.ConstsLattice}}, Any, IdSet{Any}) | 32 | true
+43 | Base.Compiler.EscapeAnalysis | add_conservative_changes! | (Base.Compiler.EscapeAnalysis.AnalysisState{Compiler.GetNativeEscapeCache{Compiler.WorldView{InternalCodeCache}}, Compiler.PartialsLattice{Compiler.ConstsLattice}}, Int64, Vector{Any}, Int64, Int64) | 28 | true
+44 | Base.Compiler.EscapeAnalysis | add_escape_change! | (Base.Compiler.EscapeAnalysis.AnalysisState{Compiler.GetNativeEscapeCache{Compiler.WorldView{InternalCodeCache}}, Compiler.PartialsLattice{Compiler.ConstsLattice}}, Any, Base.Compiler.EscapeAnalysis.EscapeInfo, Bool) | 35 | true
+45 | Base.Compiler.EscapeAnalysis | add_fallback_changes! | (Base.Compiler.EscapeAnalysis.AnalysisState{Compiler.GetNativeEscapeCache{Compiler.WorldView{InternalCodeCache}}, Compiler.PartialsLattice{Compiler.ConstsLattice}}, Int64, Vector{Any}, Int64, Int64) | 28 | true
+46 | Base.Compiler.EscapeAnalysis | add_liveness_changes! | (Base.Compiler.EscapeAnalysis.AnalysisState{Compiler.GetNativeEscapeCache{Compiler.WorldView{InternalCodeCache}}, Compiler.PartialsLattice{Compiler.ConstsLattice}}, Int64, Vector{Any}, Int64, Int64) | 22 | true
+47 | Base.Compiler.EscapeAnalysis | analyze_escapes | (Compiler.IRCode, Int64, Compiler.PartialsLattice{Compiler.ConstsLattice}, Compiler.GetNativeEscapeCache{Compiler.WorldView{InternalCodeCache}}) | 322 | true
+48 | Base.Compiler.EscapeAnalysis | compute_frameinfo | (Compiler.IRCode) | 85 | true
+49 | Base.Compiler.EscapeAnalysis | escape_call! | (Base.Compiler.EscapeAnalysis.AnalysisState{Compiler.GetNativeEscapeCache{Compiler.WorldView{InternalCodeCache}}, Compiler.PartialsLattice{Compiler.ConstsLattice}}, Int64, Vector{Any}) | 60 | true
+50 | Base.Compiler.EscapeAnalysis | escape_exception! | (Base.Compiler.EscapeAnalysis.AnalysisState{Compiler.GetNativeEscapeCache{Compiler.WorldView{InternalCodeCache}}, Compiler.PartialsLattice{Compiler.ConstsLattice}}, Vector{UnitRange{Int64}}) | 86 | true
+51 | Base.Compiler.EscapeAnalysis | escape_foreigncall! | (Base.Compiler.EscapeAnalysis.AnalysisState{Compiler.GetNativeEscapeCache{Compiler.WorldView{InternalCodeCache}}, Compiler.PartialsLattice{Compiler.ConstsLattice}}, Int64, Vector{Any}) | 119 | true
+52 | Base.Compiler.EscapeAnalysis | escape_invoke! | (Base.Compiler.EscapeAnalysis.AnalysisState{Compiler.GetNativeEscapeCache{Compiler.WorldView{InternalCodeCache}}, Compiler.PartialsLattice{Compiler.ConstsLattice}}, Int64, Vector{Any}) | 201 | true
+53 | Base.Compiler.EscapeAnalysis | escape_new! | (Base.Compiler.EscapeAnalysis.AnalysisState{Compiler.GetNativeEscapeCache{Compiler.WorldView{InternalCodeCache}}, Compiler.PartialsLattice{Compiler.ConstsLattice}}, Int64, Vector{Any}) | 226 | true
+54 | Base.Compiler.EscapeAnalysis | getaliases | (Int64, Base.Compiler.EscapeAnalysis.EscapeState) | 55 | true
+55 | Base.Compiler.EscapeAnalysis | merge_alias_info | (Any, Any) | 178 | true
+56 | Base.Compiler.EscapeAnalysis | merge_to_unindexable | (IdSet{Any}, Vector{IdSet{Any}}) | 26 | true
+57 | Base.Compiler.EscapeAnalysis | propagate_changes! | (Base.Compiler.EscapeAnalysis.EscapeState, Vector{Base.Compiler.EscapeAnalysis.Change}) | 51 | true
+58 | Base.GMP | BigInt | (UInt128) | 99 | true
+59 | Base.GMP.MPZ | realloc2 | (Int64) | 5 | true
+60 | Base.GMP.MPZ | set_si | (Int64) | 5 | true
+61 | Base.GMP.MPZ | set_ui | (UInt64) | 5 | true
+62 | Base.Iterators | only | (Any) | 6 | true
+63 | Base.Sort | _sort! | (Vector{JuliaSyntax.Diagnostic}, Base.Sort.InsertionSortAlg, Base.Order.By{typeof(JuliaSyntax.first_byte), Base.Order.ForwardOrdering}, @NamedTuple{scratch::Nothing, lo::Int64, hi::Int64}) | 88 | true
+64 | Base.Sort | _sort! | (Vector{JuliaSyntax.Diagnostic}, Base.Sort.StableCheckSorted{Base.Sort.ScratchQuickSort{Missing, Missing, Base.Sort.InsertionSortAlg}}, Base.Order.By{typeof(JuliaSyntax.first_byte), Base.Order.ForwardOrdering}, @NamedTuple{scratch::Nothing, lo::Int64, hi::Int64}) | 57 | true
+65 | Base.Unicode | utf8proc_error | (Int64) | 10 | true
+66 | Compiler | CFGInliningState | (Compiler.IRCode) | 26 | true
+67 | Compiler | CFGTransformState! | (Vector{Compiler.BasicBlock}, Bool) | 203 | true
+68 | Compiler | DFS! | (Compiler.DFSTree, Vector{Compiler.BasicBlock}, Bool) | 195 | true
+69 | Compiler | DFSTree | (Int64) | 30 | true
+70 | Compiler | DebugInfoStream | (Core.MethodInstance, Core.DebugInfo, Int64) | 71 | true
+71 | Compiler | DebugInfoStream | (Nothing, Core.DebugInfo, Int64) | 71 | true
+72 | Compiler | IRCode | (Compiler.IRCode, Compiler.InstructionStream, Compiler.CFG, Compiler.NewNodeStream) | 77 | true
+73 | Compiler | IncrementalCompact | (Compiler.IRCode, Compiler.CFGTransformState) | 228 | true
+74 | Compiler | IncrementalCompact | (Compiler.IncrementalCompact, Compiler.IRCode, Int64) | 210 | true
+75 | Compiler | InferenceState | (InferenceResult, UInt8, WasmInterpreter) | 23 | true
+76 | Compiler | InferenceState | (InferenceResult, Core.CodeInfo, UInt8, WasmInterpreter) | 771 | true
+77 | Compiler | InstructionStream | (Int64) | 37 | true
+78 | Compiler | SNCA! | (Compiler.GenericDomTree{false}, Vector{Compiler.BasicBlock}, Int64) | 331 | true
+79 | Compiler | _advance | (Any, Int64) | 28 | true
+80 | Compiler | _advance_bsbmp! | (Compiler.BitSetBoundedMinPrioritySet) | 37 | true
+81 | Compiler | _builtin_nothrow | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Core.Builtin, Vector{Any}, Any) | 356 | true
+82 | Compiler | _builtin_nothrow | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Core.Builtin, Vector{Any}, Any) | 356 | true
+83 | Compiler | _count_added_node! | (Compiler.IncrementalCompact, Any) | 41 | true
+84 | Compiler | _dominates | (Compiler.GenericDomTree{false}, Int64, Int64) | 51 | true
+85 | Compiler | _fieldtype_nothrow | (Any, Bool, Core.Const) | 122 | true
+86 | Compiler | _getfield_tfunc | (Compiler.ConstsLattice, Any, Any, Bool) | 55 | true
+87 | Compiler | _getfield_tfunc | (Compiler.JLTypeLattice, Any, Any, Bool) | 414 | true
+88 | Compiler | _is_immutable_type | (Any) | 25 | true
+89 | Compiler | _issubconditional | (Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}, Compiler.Conditional, Compiler.Conditional, Bool) | 25 | true
+90 | Compiler | _should_instrument | (Core.DebugInfo) | 20 | true
+91 | Compiler | _unioncomplexity | (Any) | 81 | true
+92 | Compiler | _useref_getindex | (Any, Int64) | 207 | true
+93 | Compiler | _useref_setindex! | (Any, Int64, Any) | 250 | true
+94 | Compiler | adce_erase! | (Vector{Int64}, Vector{Int64}, Compiler.IncrementalCompact, Int64, Bool) | 19 | true
+95 | Compiler | adce_pass! | (Compiler.IRCode, Compiler.InliningState{WasmInterpreter}) | 711 | true
+96 | Compiler | add_inlining_edge! | (Vector{Any}, CodeInstance) | 64 | true
+97 | Compiler | add_inlining_edge! | (Vector{Any}, Core.MethodInstance) | 54 | true
+98 | Compiler | already_inserted | (Compiler.IncrementalCompact, Compiler.OldSSAValue) | 7 | true
+99 | Compiler | and_int_tfunc | (Compiler.ConstsLattice, Any, Any) | 41 | true
+100 | Compiler | and_int_tfunc | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Any) | 6 | true
+101 | Compiler | and_int_tfunc | (Compiler.JLTypeLattice, Any, Any) | 4 | true
+102 | Compiler | apply_type_nothrow | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Vector{Any}, Any) | 288 | true
+103 | Compiler | apply_type_nothrow | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Vector{Any}, Any) | 288 | true
+104 | Compiler | argextype | (Any, Compiler.IncrementalCompact, Vector{Compiler.VarState}, Vector{Any}) | 185 | true
+105 | Compiler | argextype | (Any, Compiler.IRCode, Vector{Compiler.VarState}, Vector{Any}) | 185 | true
+106 | Compiler | argextype | (Any, Compiler.IRCode, Vector{Compiler.VarState}) | 5 | true
+107 | Compiler | argtypes_to_type | (Vector{Any}) | 28 | true
+108 | Compiler | array_type_undefable | (Any) | 62 | true
+109 | Compiler | assemble_inline_todo! | (Compiler.IRCode, Compiler.InliningState{WasmInterpreter}) | 152 | true
+110 | Compiler | batch_inline! | (Compiler.IRCode, Vector{Pair{Int64, Any}}, Bool, WasmInterpreter) | 418 | true
+111 | Compiler | builtin_effects | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Core.Builtin, Vector{Any}, Any) | 304 | true
+112 | Compiler | builtin_effects | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Core.Builtin, Vector{Any}, Any) | 304 | true
+113 | Compiler | call_sig | (Compiler.IRCode, Expr) | 122 | true
+114 | Compiler | cfg_delete_edge! | (Compiler.CFG, Int64, Int64) | 34 | true
+115 | Compiler | cfg_inline_item! | (Compiler.IRCode, Int64, Compiler.InliningTodo, Compiler.CFGInliningState, Bool) | 398 | true
+116 | Compiler | cfg_inline_unionsplit! | (Compiler.IRCode, Int64, Compiler.UnionSplit, Compiler.CFGInliningState, OptimizationParams) | 204 | true
+117 | Compiler | changed_lineinfo | (Core.DebugInfo, Int64, Int64) | 125 | true
+118 | Compiler | check_all_args_noescape! | (Compiler.PostOptAnalysisState, Compiler.IRCode, Any, Base.Compiler.EscapeAnalysis.EscapeState) | 99 | true
+119 | Compiler | check_inconsistentcy! | (Compiler.PostOptAnalysisState, Compiler.BBScanner) | 231 | true
+120 | Compiler | collect_const_args | (Vector{Any}, Int64) | 62 | true
+121 | Compiler | compact! | (Compiler.IRCode, Bool) | 21 | true
+122 | Compiler | compileable_specialization | (CodeInstance, Compiler.Effects, Compiler.InliningEdgeTracker, Compiler.CallInfo, Compiler.InliningState{WasmInterpreter}) | 116 | true
+123 | Compiler | complete | (Compiler.IncrementalCompact) | 103 | true
+124 | Compiler | complete! | (Compiler.TwoPhaseDefUseMap) | 43 | true
+125 | Compiler | compute_basic_blocks | (Vector{Any}) | 249 | true
+126 | Compiler | compute_domtree_nodes! | (Compiler.GenericDomTree{false}) | 131 | true
+127 | Compiler | compute_inlining_cases | (Compiler.CallInfo, UInt32, Compiler.Signature, Compiler.InliningState{WasmInterpreter}) | 235 | true
+128 | Compiler | compute_live_ins | (Compiler.CFG, Vector{Int64}, Vector{Int64}) | 195 | true
+129 | Compiler | compute_live_ins | (Compiler.CFG, Compiler.SSADefUse) | 36 | true
+130 | Compiler | compute_value_for_block | (Compiler.IRCode, Compiler.GenericDomTree{false}, BitSet, Compiler.SSADefUse, IdDict{Int64, Core.SSAValue}, Int64, Int64) | 43 | true
+131 | Compiler | compute_value_for_use | (Compiler.IRCode, Compiler.GenericDomTree{false}, BitSet, Compiler.SSADefUse, IdDict{Int64, Core.SSAValue}, Int64, Int64) | 39 | true
+132 | Compiler | concrete_result_item | (Compiler.ConcreteResult, Compiler.CallInfo, Compiler.InliningState{WasmInterpreter}) | 34 | true
+133 | Compiler | constrains_param | (TypeVar, Any, Bool, Bool) | 184 | true
+134 | Compiler | construct_domtree | (Vector{Compiler.BasicBlock}) | 5 | true
+135 | Compiler | construct_ssa! | (Core.CodeInfo, Compiler.IRCode, Compiler.OptimizationState{WasmInterpreter}, Compiler.GenericDomTree{false}, Vector{Compiler.SlotInfo}, Compiler.PartialsLattice{Compiler.ConstsLattice}) | 2079 | true
+136 | Compiler | convert_to_ircode | (Core.CodeInfo, Compiler.OptimizationState{WasmInterpreter}) | 965 | true
+137 | Compiler | count_added_node! | (Compiler.IncrementalCompact, Any) | 27 | true
+138 | Compiler | count_const_size | (Any, Bool) | 193 | true
+139 | Compiler | decode_effects | (UInt32) | 57 | true
+140 | Compiler | domsort_ssa! | (Compiler.IRCode, Compiler.GenericDomTree{false}) | 912 | true
+141 | Compiler | domtree_delete_edge! | (Compiler.GenericDomTree{false}, Vector{Compiler.BasicBlock}, Int64, Int64) | 24 | true
+142 | Compiler | early_inline_special_case | (Compiler.IRCode, Expr, UInt32, Any, Compiler.Signature, Compiler.InliningState{WasmInterpreter}) | 187 | true
+143 | Compiler | egal_tfunc | (Compiler.JLTypeLattice, Any, Any) | 14 | true
+144 | Compiler | fieldcount_noerror | (Any) | 118 | true
+145 | Compiler | fieldtype_nothrow | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any) | 101 | true
+146 | Compiler | fieldtype_nothrow | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Any) | 101 | true
+147 | Compiler | find_def_for_use | (Compiler.IRCode, Compiler.GenericDomTree{false}, BitSet, Compiler.SSADefUse, Int64, Bool) | 71 | true
+148 | Compiler | find_ssavalue_uses | (Vector{Any}, Int64) | 113 | true
+149 | Compiler | find_ssavalue_uses! | (Vector{BitSet}, Expr, Int64) | 51 | true
+150 | Compiler | find_ssavalue_uses! | (Vector{BitSet}, Core.PhiNode, Int64) | 42 | true
+151 | Compiler | find_ssavalue_uses1 | (Compiler.IncrementalCompact) | 93 | true
+152 | Compiler | finish | (WasmInterpreter, Compiler.OptimizationState{WasmInterpreter}, Compiler.IRCode, InferenceResult) | 168 | true
+153 | Compiler | finish_cfg_inline! | (Compiler.CFGInliningState) | 196 | true
+154 | Compiler | finish_current_bb! | (Compiler.IncrementalCompact, Int64, Int64, Bool) | 147 | true
+155 | Compiler | finish_phi_nest! | (Compiler.IncrementalCompact, Compiler.PhiNest{Compiler.TrivialWalker}) | 280 | true
+156 | Compiler | finish_phi_nest! | (Compiler.IncrementalCompact, Compiler.PhiNest{Compiler.KeyValueWalker}) | 280 | true
+157 | Compiler | fix_va_argexprs! | (Compiler.InsertHere, Compiler.IncrementalCompact, Vector{Any}, Int64, Tuple{Int32, Int32, Int32}) | 59 | true
+158 | Compiler | fix_va_argexprs! | (Compiler.InsertBefore{Compiler.IRCode}, Compiler.IRCode, Vector{Any}, Int64, Tuple{Int32, Int32, Int32}) | 59 | true
+159 | Compiler | fixup_node | (Compiler.IncrementalCompact, Any, Bool) | 198 | true
+160 | Compiler | fold_ifelse! | (Compiler.IncrementalCompact, Int64, Expr, Compiler.PartialsLattice{Compiler.ConstsLattice}) | 57 | true
+161 | Compiler | form_new_preserves | (Expr, Vector{Int64}, Vector{Any}) | 105 | true
+162 | Compiler | form_new_preserves | (Expr, IdSet{Int64}, Vector{Any}) | 105 | true
+163 | Compiler | getfield_boundscheck | (Vector{Any}) | 73 | true
+164 | Compiler | getfield_effects | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Vector{Any}, Any) | 88 | true
+165 | Compiler | getfield_effects | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Vector{Any}, Any) | 88 | true
+166 | Compiler | getfield_nothrow | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Vector{Any}, Symbol) | 71 | true
+167 | Compiler | getfield_nothrow | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Vector{Any}, Symbol) | 71 | true
+168 | Compiler | getfield_nothrow | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any, Bool) | 300 | true
+169 | Compiler | getfield_nothrow | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Any, Bool) | 300 | true
+170 | Compiler | getfield_tfunc | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Any) | 4 | true
+171 | Compiler | getfield_tfunc | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any) | 4 | true
+172 | Compiler | getresult | (Compiler.CallInfo, Int64) | 3 | true
+173 | Compiler | getsplit | (Compiler.CallInfo, Int64) | 5 | true
+174 | Compiler | handle_cases! | (Vector{Pair{Int64, Any}}, Compiler.IRCode, Int64, Expr, Any, Vector{Compiler.InliningCase}, Bool, Bool, Compiler.Effects) | 68 | true
+175 | Compiler | handle_finalizer_call! | (Compiler.IRCode, Int64, Expr, Compiler.FinalizerInfo, Compiler.InliningState{WasmInterpreter}) | 145 | true
+176 | Compiler | handle_invoke_call! | (Vector{Pair{Int64, Any}}, Compiler.IRCode, Int64, Expr, Compiler.InvokeCallInfo, UInt32, Compiler.Signature, Compiler.InliningState{WasmInterpreter}) | 103 | true
+177 | Compiler | handle_invoke_expr! | (Vector{Pair{Int64, Any}}, Compiler.IRCode, Int64, Expr, Compiler.CallInfo, UInt32, Compiler.Signature, Compiler.InliningState{WasmInterpreter}) | 23 | true
+178 | Compiler | handle_modifyop!_call! | (Compiler.IRCode, Int64, Expr, Compiler.ModifyOpInfo, Compiler.InliningState{WasmInterpreter}) | 101 | true
+179 | Compiler | handle_opaque_closure_call! | (Vector{Pair{Int64, Any}}, Compiler.IRCode, Int64, Expr, Compiler.OpaqueClosureCallInfo, UInt32, Compiler.Signature, Compiler.InliningState{WasmInterpreter}) | 80 | true
+180 | Compiler | handle_single_case! | (Vector{Pair{Int64, Any}}, Compiler.IRCode, Int64, Expr, Any, Bool) | 73 | true
+181 | Compiler | has_safe_def | (Compiler.IRCode, Compiler.GenericDomTree{false}, BitSet, Compiler.SSADefUse, Int64, Int64) | 127 | true
+182 | Compiler | heapify! | (Vector{Tuple{Int64, Int64}}, Base.Order.By{Compiler.var"#iterated_dominance_frontier##0#iterated_dominance_frontier##1", Base.Order.ForwardOrdering}) | 30 | true
+183 | Compiler | heappop! | (Vector{Tuple{Int64, Int64}}, Base.Order.By{Compiler.var"#iterated_dominance_frontier##0#iterated_dominance_frontier##1", Base.Order.ForwardOrdering}) | 13 | true
+184 | Compiler | heappop! | (Vector{Int64}, Base.Order.By{Compiler.var"#iterate_compact##0#iterate_compact##1"{Compiler.IncrementalCompact}, Base.Order.ForwardOrdering}) | 13 | true
+185 | Compiler | heappop! | (Vector{Int64}, Base.Order.By{Compiler.var"#iterate_compact##2#iterate_compact##3"{Compiler.IncrementalCompact}, Base.Order.ForwardOrdering}) | 13 | true
+186 | Compiler | heappush! | (Vector{Tuple{Int64, Int64}}, Tuple{Int64, Int64}, Base.Order.By{Compiler.var"#iterated_dominance_frontier##0#iterated_dominance_frontier##1", Base.Order.ForwardOrdering}) | 14 | true
+187 | Compiler | heappush! | (Vector{Int64}, Int64, Base.Order.By{Compiler.var"#add_pending!##0#add_pending!##1"{Compiler.IncrementalCompact}, Base.Order.ForwardOrdering}) | 14 | true
+188 | Compiler | inflate_ir! | (Core.CodeInfo, Core.MethodInstance) | 27 | true
+189 | Compiler | inflate_ir! | (Core.CodeInfo, Vector{Compiler.VarState}, Vector{Any}) | 248 | true
+190 | Compiler | info_effects | (Any, MethodMatch, Compiler.InliningState{WasmInterpreter}) | 52 | true
+191 | Compiler | inline_apply! | (Vector{Pair{Int64, Any}}, Compiler.IRCode, Int64, Expr, Compiler.Signature, Compiler.InliningState{WasmInterpreter}) | 249 | true
+192 | Compiler | inline_const_if_inlineable! | (Compiler.Instruction) | 21 | true
+193 | Compiler | inline_into_block! | (Compiler.CFGInliningState, Int64) | 48 | true
+194 | Compiler | inline_splatnew! | (Compiler.IRCode, Int64, Expr, Any, Compiler.InliningState{WasmInterpreter}) | 95 | true
+195 | Compiler | insert_node! | (Compiler.IRCode, Core.SSAValue, Compiler.NewInstruction, Bool) | 58 | true
+196 | Compiler | insert_node! | (Compiler.IncrementalCompact, Any, Compiler.NewInstruction, Bool) | 257 | true
+197 | Compiler | insert_node_here! | (Compiler.IncrementalCompact, Compiler.NewInstruction, Bool) | 77 | true
+198 | Compiler | insert_spval! | (Compiler.InsertBefore{Compiler.IncrementalCompact}, Core.SSAValue, Int64, Bool) | 40 | true
+199 | Compiler | insert_spval! | (Compiler.InsertBefore{Compiler.IRCode}, Core.SSAValue, Int64, Bool) | 40 | true
+200 | Compiler | instanceof_tfunc | (Any, Bool) | 3 | true
+201 | Compiler | instanceof_tfunc | (Any) | 3 | true
+202 | Compiler | instrumentation_enabled | (Module, Bool) | 86 | true
+203 | Compiler | ipo_dataflow_analysis! | (WasmInterpreter, Compiler.OptimizationState{WasmInterpreter}, Compiler.IRCode, InferenceResult) | 56 | true
+204 | Compiler | ir_inline_item! | (Compiler.IncrementalCompact, Int64, Vector{Any}, Compiler.InliningTodo, Symbol, Vector{Tuple{Int64, Int64}}) | 490 | true
+205 | Compiler | ir_inline_unionsplit! | (Compiler.IncrementalCompact, Int64, Vector{Any}, Compiler.UnionSplit, Symbol, Vector{Tuple{Int64, Int64}}, WasmInterpreter) | 472 | true
+206 | Compiler | ir_prepare_inlining! | (Compiler.InsertHere, Compiler.IncrementalCompact, Compiler.IRCode, Compiler.SpecInfo, Core.DebugInfo, Core.MethodInstance, Tuple{Int32, Int32, Int32}, Vector{Any}) | 95 | true
+207 | Compiler | ir_prepare_inlining! | (Compiler.InsertBefore{Compiler.IRCode}, Compiler.IRCode, Compiler.IRCode, Compiler.SpecInfo, Core.DebugInfo, Core.MethodInstance, Tuple{Int32, Int32, Int32}, Vector{Any}) | 95 | true
+208 | Compiler | is_all_const_arg | (Vector{Any}, Int64) | 29 | true
+209 | Compiler | is_getfield_captures | (Any, Compiler.IncrementalCompact, Compiler.PartialsLattice{Compiler.ConstsLattice}) | 51 | true
+210 | Compiler | is_identity_free_argtype | (Any) | 8 | true
+211 | Compiler | is_immutable_argtype | (Any) | 8 | true
+212 | Compiler | is_known_call | (Any, Any, Compiler.IncrementalCompact) | 18 | true
+213 | Compiler | is_known_invoke_or_call | (Any, Any, Compiler.IncrementalCompact) | 30 | true
+214 | Compiler | is_lattice_equal | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Any) | 127 | true
+215 | Compiler | is_lattice_equal | (Compiler.JLTypeLattice, Any, Any) | 15 | true
+216 | Compiler | is_lattice_equal | (Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}, Any, Any) | 34 | true
+217 | Compiler | is_mutation_free_argtype | (Any) | 8 | true
+218 | Compiler | is_valid_type_for_apply_rewrite | (Any, OptimizationParams) | 97 | true
+219 | Compiler | isa_tfunc | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Any) | 93 | true
+220 | Compiler | iscall_with_boundscheck | (Any, Compiler.PostOptAnalysisState) | 89 | true
+221 | Compiler | isdefined_effects | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Vector{Any}) | 79 | true
+222 | Compiler | isdefined_effects | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Vector{Any}) | 79 | true
+223 | Compiler | isdefined_nothrow | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any) | 32 | true
+224 | Compiler | isdefined_nothrow | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Any) | 32 | true
+225 | Compiler | isdefined_tfunc | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any) | 297 | true
+226 | Compiler | isdefined_tfunc | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Any) | 297 | true
+227 | Compiler | isknowntype | (Any) | 17 | true
+228 | Compiler | issimpleenoughtype | (Any) | 36 | true
+229 | Compiler | issimplertype | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Any) | 322 | true
+230 | Compiler | issimplertype | (Compiler.JLTypeLattice, Any, Any) | 322 | true
+231 | Compiler | issimplertype | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any) | 322 | true
+232 | Compiler | issubconditional | (Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}, Compiler.Conditional, Compiler.Conditional) | 4 | true
+233 | Compiler | iterate_compact | (Compiler.IncrementalCompact) | 450 | true
+234 | Compiler | iterated_dominance_frontier | (Compiler.CFG, Compiler.BlockLiveness, Compiler.GenericDomTree{false}) | 211 | true
+235 | Compiler | just_fixup! | (Compiler.IncrementalCompact, Nothing, Nothing) | 156 | true
+236 | Compiler | just_fixup! | (Compiler.IncrementalCompact, Int64, Int64) | 156 | true
+237 | Compiler | kill_current_use! | (Compiler.IncrementalCompact, Any) | 68 | true
+238 | Compiler | kill_current_uses! | (Compiler.IncrementalCompact, Any) | 22 | true
+239 | Compiler | kill_edge! | (Vector{Compiler.BasicBlock}, Int64, Int64, Nothing) | 67 | true
+240 | Compiler | kill_edge! | (Compiler.IncrementalCompact, Int64, Int64, Int64) | 313 | true
+241 | Compiler | kill_phi! | (Compiler.IncrementalCompact, Vector{Int64}, UnitRange{Int64}, Core.SSAValue, Core.PhiNode, Bool) | 61 | true
+242 | Compiler | kill_phi! | (Compiler.IncrementalCompact, Vector{Int64}, Vector{Int64}, Core.SSAValue, Core.PhiNode, Bool) | 61 | true
+243 | Compiler | late_inline_special_case! | (Compiler.IRCode, Int64, Expr, UInt32, Any, Compiler.Signature, Compiler.InliningState{WasmInterpreter}) | 240 | true
+244 | Compiler | lift_apply_args! | (Compiler.IncrementalCompact, Int64, Expr) | 187 | true
+245 | Compiler | lift_arg! | (Compiler.IncrementalCompact, Any, Any, Expr, Int64, IdDict{Any, Union{Nothing, Compiler.LiftedValue}}) | 57 | true
+246 | Compiler | lift_keyvalue_get! | (Compiler.IncrementalCompact, Int64, Expr, Compiler.PartialsLattice{Compiler.ConstsLattice}) | 138 | true
+247 | Compiler | lift_leaves | (Compiler.IncrementalCompact, Int64, Vector{Any}, Compiler.PartialsLattice{Compiler.ConstsLattice}) | 309 | true
+248 | Compiler | lift_leaves_keyvalue | (Compiler.IncrementalCompact, Any, Vector{Any}, Compiler.PartialsLattice{Compiler.ConstsLattice}) | 132 | true
+249 | Compiler | lift_svec_ref! | (Compiler.IncrementalCompact, Int64, Expr) | 128 | true
+250 | Compiler | lifted_value | (Compiler.IncrementalCompact, Union{Compiler.NewSSAValue, Compiler.OldSSAValue, Core.SSAValue}, Any, Vector{Compiler.LiftedPhilike}, IdDict{Any, Union{Nothing, Compiler.LiftedValue}}, IdDict{Union{Compiler.NewSSAValue, Compiler.OldSSAValue, Core.SSAValue}, Int64}, Compiler.TrivialWalker) | 81 | true
+251 | Compiler | lifted_value | (Compiler.IncrementalCompact, Union{Compiler.NewSSAValue, Compiler.OldSSAValue, Core.SSAValue}, Any, Vector{Compiler.LiftedPhilike}, IdDict{Any, Bool}, IdDict{Union{Compiler.NewSSAValue, Compiler.OldSSAValue, Core.SSAValue}, Int64}, Compiler.TrivialWalker) | 81 | true
+252 | Compiler | lifted_value | (Compiler.IncrementalCompact, Union{Compiler.NewSSAValue, Compiler.OldSSAValue, Core.SSAValue}, Any, Vector{Compiler.LiftedPhilike}, IdDict{Any, Union{Nothing, Compiler.LiftedValue}}, IdDict{Union{Compiler.NewSSAValue, Compiler.OldSSAValue, Core.SSAValue}, Int64}, Compiler.KeyValueWalker) | 81 | true
+253 | Compiler | lifted_value | (Compiler.IncrementalCompact, Union{Compiler.NewSSAValue, Compiler.OldSSAValue, Core.SSAValue}, Any, Vector{Compiler.LiftedPhilike}, IdDict{Any, Bool}, IdDict{Union{Compiler.NewSSAValue, Compiler.OldSSAValue, Core.SSAValue}, Int64}, Compiler.KeyValueWalker) | 81 | true
+254 | Compiler | make_ssa! | (Core.CodeInfo, Vector{Any}, Int64, Any) | 26 | true
+255 | Compiler | mark_phi_cycles! | (Compiler.IncrementalCompact, IdSet{Int64}, Int64) | 71 | true
+256 | Compiler | memorynew_nothrow | (Vector{Any}) | 77 | true
+257 | Compiler | memoryop_noub | (Any, Vector{Any}) | 114 | true
+258 | Compiler | memoryref_builtin_common_nothrow | (Vector{Any}) | 72 | true
+259 | Compiler | memoryref_elemtype | (Any) | 48 | true
+260 | Compiler | memoryrefop_builtin_common_nothrow | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Vector{Any}, Any) | 75 | true
+261 | Compiler | memoryrefop_builtin_common_nothrow | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Vector{Any}, Any) | 75 | true
+262 | Compiler | most_general_argtypes | (Nothing, Any) | 156 | true
+263 | Compiler | most_general_argtypes | (Method, Any) | 156 | true
+264 | Compiler | narrow_opaque_closure! | (Compiler.IRCode, Expr, Compiler.CallInfo, Compiler.InliningState{WasmInterpreter}) | 77 | true
+265 | Compiler | new_expr_effect_flags | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Vector{Any}, Compiler.IRCode, Nothing) | 142 | true
+266 | Compiler | new_expr_effect_flags | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Vector{Any}, Compiler.IRCode, Nothing) | 142 | true
+267 | Compiler | new_expr_effect_flags | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Vector{Any}, Compiler.IncrementalCompact, Nothing) | 142 | true
+268 | Compiler | new_to_regular | (Any, Int64) | 36 | true
+269 | Compiler | nfields_tfunc | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Any) | 173 | true
+270 | Compiler | non_dce_finish! | (Compiler.IncrementalCompact) | 28 | true
+271 | Compiler | nsplit | (Compiler.CallInfo) | 8 | true
+272 | Compiler | oracle_check | (Compiler.IncrementalCompact) | 35 | true
+273 | Compiler | perform_lifting! | (Compiler.IncrementalCompact, Vector{Union{Compiler.NewSSAValue, Compiler.OldSSAValue, Core.SSAValue}}, Any, Any, IdDict{Any, Union{Nothing, Compiler.LiftedValue}}, Any, Compiler.LazyGenericDomtree{false}, Compiler.TrivialWalker) | 334 | true
+274 | Compiler | perform_lifting! | (Compiler.IncrementalCompact, Vector{Union{Compiler.NewSSAValue, Compiler.OldSSAValue, Core.SSAValue}}, Any, Any, IdDict{Any, Bool}, Any, Compiler.LazyGenericDomtree{false}, Compiler.TrivialWalker) | 334 | true
+275 | Compiler | perform_lifting! | (Compiler.IncrementalCompact, Vector{Union{Compiler.NewSSAValue, Compiler.OldSSAValue, Core.SSAValue}}, Any, Any, IdDict{Any, Union{Nothing, Compiler.LiftedValue}}, Any, Nothing, Compiler.KeyValueWalker) | 334 | true
+276 | Compiler | process_newnode! | (Compiler.IncrementalCompact, Int64, Compiler.Instruction, Compiler.NewNodeInfo, Int64, Int64, Bool) | 51 | true
+277 | Compiler | process_node! | (Compiler.IncrementalCompact, Int64, Compiler.Instruction, Int64, Int64, Int64, Bool) | 967 | true
+278 | Compiler | process_simple! | (Vector{Pair{Int64, Any}}, Compiler.IRCode, Int64, UInt32, Compiler.InliningState{WasmInterpreter}) | 210 | true
+279 | Compiler | process_terminator! | (Any, Int64, Compiler.BitSetBoundedMinPrioritySet) | 77 | true
+280 | Compiler | reachable_blocks | (Compiler.CFG, Int64, Int64) | 41 | true
+281 | Compiler | record_immutable_preserve! | (Vector{Any}, Expr, Compiler.IncrementalCompact) | 50 | true
+282 | Compiler | refine_effects! | (WasmInterpreter, Compiler.OptimizationState{WasmInterpreter}, Compiler.PostOptAnalysisState) | 111 | true
+283 | Compiler | rename_phinode_edges | (Core.PhiNode, Int64, Vector{Int64}, Vector{Int64}) | 83 | true
+284 | Compiler | renumber_cfg_stmts! | (Compiler.CFG, Vector{Int64}) | 82 | true
+285 | Compiler | renumber_ir_elements! | (Vector{Any}, Vector{Int64}, Vector{Int64}) | 380 | true
+286 | Compiler | renumber_ssa | (Core.SSAValue, Vector{Core.SSAValue}, Bool) | 26 | true
+287 | Compiler | renumber_ssa2 | (Core.SSAValue, Vector{Any}, Vector{Int64}, Vector{Int64}, Bool, Compiler.Refiner) | 68 | true
+288 | Compiler | renumber_ssa2! | (Any, Vector{Any}, Vector{Int64}, Vector{Int64}, Vector{Int64}, Int64, Bool, Compiler.Refiner) | 63 | true
+289 | Compiler | replace_code_newstyle! | (Core.CodeInfo, Compiler.IRCode) | 248 | true
+290 | Compiler | reprocess_phi_node! | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Compiler.IncrementalCompact, Core.PhiNode, Int64) | 43 | true
+291 | Compiler | resolve_todo | (Core.MethodInstance, Compiler.CallInfo, UInt32, Compiler.InliningState{WasmInterpreter}) | 87 | true
+292 | Compiler | resolve_todo | (Core.MethodInstance, InferenceResult, Compiler.CallInfo, UInt32, Compiler.InliningState{WasmInterpreter}) | 160 | true
+293 | Compiler | retrieve_code_info | (Core.MethodInstance, UInt64) | 90 | true
+294 | Compiler | retrieve_ir_for_inlining | (CodeInstance, Core.CodeInfo) | 10 | true
+295 | Compiler | retrieve_ir_for_inlining | (CodeInstance, String) | 15 | true
+296 | Compiler | rewrite_apply_exprargs! | (Vector{Pair{Int64, Any}}, Compiler.IRCode, Int64, Expr, Vector{Any}, Vector{Union{Nothing, Compiler.AbstractIterationInfo}}, Int64, Compiler.InliningState{WasmInterpreter}) | 334 | true
+297 | Compiler | run_passes_ipo_safe | (Core.CodeInfo, Compiler.OptimizationState{WasmInterpreter}, Nothing) | 139 | true
+298 | Compiler | scan! | (Compiler.ScanStmt, Compiler.BBScanner, Bool) | 77 | true
+299 | Compiler | scan_entry! | (Vector{Compiler.SlotInfo}, Int64, Any) | 93 | true
+300 | Compiler | scan_slot_def_use | (Int64, Core.CodeInfo, Vector{Any}) | 90 | true
+301 | Compiler | searchsorted | (Vector{Pair{Int64, Any}}, Int64, Int64, Int64, Base.Order.By{typeof(first), Base.Order.ForwardOrdering}) | 92 | true
+302 | Compiler | semiconcrete_result_item | (Compiler.SemiConcreteResult, Compiler.CallInfo, UInt32, Compiler.InliningState{WasmInterpreter}) | 86 | true
+303 | Compiler | setfield!_nothrow | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any, Any) | 89 | true
+304 | Compiler | setfield!_nothrow | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Any, Any) | 89 | true
+305 | Compiler | simple_dce! | (Function, Compiler.IncrementalCompact) | 63 | true
+306 | Compiler | simple_walk | (Compiler.IncrementalCompact, Union{Compiler.NewSSAValue, Compiler.OldSSAValue, Core.SSAValue}, Compiler.IntermediaryCollector) | 116 | true
+307 | Compiler | simple_walk | (Compiler.IncrementalCompact, Union{Compiler.NewSSAValue, Compiler.OldSSAValue, Core.SSAValue}, Compiler.TypeConstrainingWalker) | 116 | true
+308 | Compiler | simple_walk | (Compiler.IncrementalCompact, Union{Compiler.NewSSAValue, Compiler.OldSSAValue, Core.SSAValue}, Compiler.TrivialWalker) | 116 | true
+309 | Compiler | simple_walk | (Compiler.IncrementalCompact, Union{Compiler.NewSSAValue, Compiler.OldSSAValue, Core.SSAValue}) | 5 | true
+310 | Compiler | simple_walk | (Compiler.IncrementalCompact, Union{Compiler.NewSSAValue, Compiler.OldSSAValue, Core.SSAValue}, Compiler.LiftedLeaveWalker{Compiler.TrivialWalker}) | 116 | true
+311 | Compiler | simple_walk | (Compiler.IncrementalCompact, Union{Compiler.NewSSAValue, Compiler.OldSSAValue, Core.SSAValue}, Compiler.LiftedLeaveWalker{Compiler.KeyValueWalker}) | 116 | true
+312 | Compiler | simple_walk | (Compiler.IncrementalCompact, Union{Compiler.NewSSAValue, Compiler.OldSSAValue, Core.SSAValue}, Compiler.PiWalker) | 116 | true
+313 | Compiler | sizeof_nothrow | (Any) | 168 | true
+314 | Compiler | snca_compress! | (Vector{Compiler.SNCAData}, Vector{Int64}, Int64, Int64) | 40 | true
+315 | Compiler | snca_compress_worklist! | (Vector{Compiler.SNCAData}, Vector{Int64}, Int64, Int64) | 83 | true
+316 | Compiler | something | (Nothing) | 3 | true
+317 | Compiler | sptypes_from_meth_instance | (Core.MethodInstance) | 274 | true
+318 | Compiler | src_inlining_policy | (WasmInterpreter, Any, Compiler.CallInfo, UInt32) | 38 | true
+319 | Compiler | sroa_mutables! | (Compiler.IRCode, IdDict{Int64, Tuple{IdSet{Int64}, Compiler.SSADefUse}}, Vector{Int64}, Compiler.LazyGenericDomtree{false}, Compiler.InliningState{WasmInterpreter}) | 1039 | true
+320 | Compiler | sroa_pass! | (Compiler.IRCode, Compiler.InliningState{WasmInterpreter}) | 1575 | true
+321 | Compiler | ssa_substitute_op! | (Compiler.InsertBefore{Compiler.IncrementalCompact}, Compiler.Instruction, Any, Compiler.SSASubstitute) | 435 | true
+322 | Compiler | ssa_substitute_op! | (Compiler.InsertBefore{Compiler.IRCode}, Compiler.Instruction, Any, Compiler.SSASubstitute) | 435 | true
+323 | Compiler | statement_cost | (Expr, Int64, Compiler.IRCode, Vector{Compiler.VarState}, OptimizationParams) | 436 | true
+324 | Compiler | stmt_effect_flags | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any, Compiler.IRCode) | 394 | true
+325 | Compiler | stmt_effect_flags | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Any, Compiler.IRCode) | 394 | true
+326 | Compiler | stmt_effect_flags | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any, Compiler.IncrementalCompact) | 394 | true
+327 | Compiler | strip_trailing_junk! | (Vector{Any}, Vector{Any}, Vector{UInt32}, Compiler.DebugInfoStream, Compiler.CFG, Vector{Compiler.CallInfo}) | 129 | true
+328 | Compiler | tmeet | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Type) | 160 | true
+329 | Compiler | tmeet | (Compiler.ConstsLattice, Any, Type) | 29 | true
+330 | Compiler | tmerge | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Any) | 182 | true
+331 | Compiler | tmerge | (Compiler.ConstsLattice, Any, Any) | 68 | true
+332 | Compiler | tmerge | (Compiler.JLTypeLattice, Type, Type) | 56 | true
+333 | Compiler | tmerge | (Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}, Any, Any) | 184 | true
+334 | Compiler | tmerge_limited | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any) | 163 | true
+335 | Compiler | tmerge_partial_struct | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Any) | 221 | true
+336 | Compiler | tmerge_types_slow | (Type, Type) | 532 | true
+337 | Compiler | tname_intersect | (Core.TypeName, Core.TypeName) | 94 | true
+338 | Compiler | try_compute_fieldidx | (Any, Any) | 69 | true
+339 | Compiler | try_compute_fieldidx_stmt | (Compiler.IncrementalCompact, Expr, Any) | 9 | true
+340 | Compiler | try_inline_finalizer! | (Compiler.IRCode, Vector{Any}, Int64, CodeInstance, Compiler.CallInfo, Compiler.InliningState{WasmInterpreter}, Bool) | 163 | true
+341 | Compiler | try_resolve_finalizer! | (Compiler.IRCode, Int64, Int64, Compiler.SSADefUse, Compiler.InliningState{WasmInterpreter}, Compiler.LazyGenericDomtree{false}, Compiler.LazyGenericDomtree{true}, Compiler.CallInfo) | 371 | true
+342 | Compiler | tuple_tfunc | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Vector{Any}) | 221 | true
+343 | Compiler | tuple_tfunc | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Vector{Any}) | 221 | true
+344 | Compiler | tuplemerge | (DataType, DataType) | 348 | true
+345 | Compiler | typ_for_val | (Any, Core.CodeInfo, Compiler.IRCode, Int64, Vector{Any}) | 108 | true
+346 | Compiler | typebound_nothrow | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any) | 20 | true
+347 | Compiler | typebound_nothrow | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Any) | 20 | true
+348 | Compiler | typeinf | (WasmInterpreter, InferenceState) | 349 | true
+349 | Compiler | typeinf_frame | (WasmInterpreter, Core.MethodInstance, Bool) | 65 | true
+350 | Compiler | union_count_abstract | (Union) | 9 | true
+351 | Compiler | update_level! | (Vector{Compiler.DomTreeNode}, Int64, Int64) | 50 | true
+352 | Compiler | update_scope_mapping! | (Vector{Core.SSAValue}, Int64, Core.SSAValue) | 28 | true
+353 | Compiler | va_process_argtypes | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Vector{Any}, UInt64, Bool) | 159 | true
+354 | Compiler | val_for_def_expr | (Compiler.IRCode, Int64, Int64) | 30 | true
+355 | Compiler | valid_as_lattice | (Any, Bool) | 75 | true
+356 | Compiler | valid_tparam_type | (UnionAll) | 5 | true
+357 | Compiler | valid_tparam_type | (Union) | 9 | true
+358 | Compiler | valid_typeof_tparam | (Any) | 65 | true
+359 | Compiler | walk_to_def | (Compiler.IncrementalCompact, Any) | 62 | true
+360 | Compiler | widen_all_consts! | (Core.CodeInfo) | 73 | true
+361 | Compiler | widenconst | (Compiler.LimitedAccuracy) | 3 | true
+362 | Compiler | ⊑ | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Any) | 315 | true
+363 | Compiler | ⊑ | (Compiler.ConstsLattice, Any, Any) | 63 | true
+364 | Compiler | ⊑ | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any) | 44 | true
+365 | Core | PartialStruct | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Vector{Any}) | 27 | true
+366 | Core | PartialStruct | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Vector{Any}) | 27 | true
+367 | JuliaSyntax | #SourceFile#40 | (Base.Pairs{Symbol, Union{Nothing, Int64}, Nothing, @NamedTuple{filename::Nothing, first_line::Int64}}, Type{SourceFile}, JuliaSyntax.ParseStream) | 80 | true
+368 | JuliaSyntax | #SourceFile#8 | (Nothing, Int64, Int64, Type{SourceFile}, SubString{String}) | 37 | true
+369 | JuliaSyntax | #_parse#75 | (VersionNumber, Bool, Nothing, Int64, Bool, Bool, Base.Pairs{Symbol, Union{}, Nothing, @NamedTuple{}}, typeof(JuliaSyntax._parse), Symbol, Bool, Type{Expr}, String, Int64) | 117 | true
+370 | JuliaSyntax | #bump#29 | (Bool, String, JuliaSyntax.Kind, typeof(JuliaSyntax.bump), JuliaSyntax.ParseStream, UInt16) | 22 | true
+371 | JuliaSyntax | #bump_dotted#45 | (Bool, JuliaSyntax.Kind, typeof(JuliaSyntax.bump_dotted), JuliaSyntax.ParseState, Bool, UInt16) | 29 | true
+372 | JuliaSyntax | #bump_trivia#30 | (Bool, String, typeof(JuliaSyntax.bump_trivia), JuliaSyntax.ParseStream, UInt16) | 25 | true
+373 | JuliaSyntax | #parse!#73 | (Symbol, typeof(JuliaSyntax.parse!), JuliaSyntax.ParseStream) | 47 | true
+374 | JuliaSyntax | #peek_behind#28 | (Base.Pairs{Symbol, Bool, Nothing, @NamedTuple{skip_parens::Bool}}, typeof(JuliaSyntax.peek_behind), JuliaSyntax.ParseStream) | 14 | true
+375 | JuliaSyntax | #peek_behind#28 | (Base.Pairs{Symbol, Union{}, Nothing, @NamedTuple{}}, typeof(JuliaSyntax.peek_behind), JuliaSyntax.ParseStream) | 14 | true
+376 | JuliaSyntax | #recover#60 | (JuliaSyntax.ParseStreamPosition, String, typeof(JuliaSyntax.recover), typeof(JuliaSyntax.is_closer_or_newline), JuliaSyntax.ParseState, UInt16) | 31 | true
+377 | JuliaSyntax | #recover#60 | (JuliaSyntax.ParseStreamPosition, String, typeof(JuliaSyntax.recover), JuliaSyntax.var"#parse_iteration_spec##0#parse_iteration_spec##1", JuliaSyntax.ParseState, UInt16) | 31 | true
+378 | JuliaSyntax | #untokenize#44 | (Bool, Bool, typeof(untokenize), JuliaSyntax.SyntaxHead) | 200 | true
+379 | JuliaSyntax | #untokenize#6 | (Bool, typeof(untokenize), JuliaSyntax.Kind) | 11 | true
+380 | JuliaSyntax | ParseStream | (Vector{UInt8}, String, Int64, VersionNumber) | 119 | true
+381 | JuliaSyntax | __lookahead_index | (JuliaSyntax.ParseStream, Int64, Bool) | 94 | true
+382 | JuliaSyntax | _append_iterspec! | (Vector{Any}, Any) | 41 | true
+383 | JuliaSyntax | _buffer_lookahead_tokens | (JuliaSyntax.Tokenize.Lexer{IOBuffer}, Vector{JuliaSyntax.SyntaxToken}) | 59 | true
+384 | JuliaSyntax | _bump_until_n | (JuliaSyntax.ParseStream, Int64, UInt16, JuliaSyntax.Kind) | 116 | true
+385 | JuliaSyntax | _extract_do_lambda! | (Vector{Any}) | 24 | true
+386 | JuliaSyntax | _node_to_expr | (Expr, LineNumberNode, UnitRange{UInt32}, JuliaSyntax.SyntaxHead, UnitRange{UInt32}, JuliaSyntax.SyntaxHead, SourceFile) | 1400 | true
+387 | JuliaSyntax | _parser_stuck_error | (JuliaSyntax.ParseStream) | 6 | true
+388 | JuliaSyntax | _reorder_parameters! | (Vector{Any}, Int64) | 80 | true
+389 | JuliaSyntax | _string_to_Expr | (JuliaSyntax.RedTreeCursor, SourceFile, Vector{UInt8}, UInt32) | 223 | true
+390 | JuliaSyntax | adjust_macro_name! | (Any) | 43 | true
+391 | JuliaSyntax | build_tree | (Type{Expr}, JuliaSyntax.ParseStream, SourceFile) | 69 | true
+392 | JuliaSyntax | bump_closing_token | (JuliaSyntax.ParseState, JuliaSyntax.Kind, Nothing) | 67 | true
+393 | JuliaSyntax | bump_closing_token | (JuliaSyntax.ParseState, JuliaSyntax.Kind, String) | 67 | true
+394 | JuliaSyntax | bump_semicolon_trivia | (JuliaSyntax.ParseState) | 11 | true
+395 | JuliaSyntax | bump_split | (JuliaSyntax.ParseStream, Tuple{Int64, JuliaSyntax.Kind, UInt16}, Tuple{Int64, JuliaSyntax.Kind, UInt16}) | 112 | true
+396 | JuliaSyntax | bump_split | (JuliaSyntax.ParseStream, Tuple{Int64, JuliaSyntax.Kind, UInt16}, Tuple{Int64, JuliaSyntax.Kind, UInt16}, Tuple{Int64, JuliaSyntax.Kind, UInt16}) | 112 | true
+397 | JuliaSyntax | emit_braces | (JuliaSyntax.ParseState, JuliaSyntax.ParseStreamPosition, JuliaSyntax.Kind, UInt16, Int64) | 47 | true
+398 | JuliaSyntax | first_child_position | (JuliaSyntax.ParseStream, JuliaSyntax.ParseStreamPosition) | 122 | true
+399 | JuliaSyntax | fixup_Expr_child | (JuliaSyntax.SyntaxHead, Any, Bool) | 257 | true
+400 | JuliaSyntax | internal_error | (String) | 5 | true
+401 | JuliaSyntax | internal_error | (String, String) | 5 | true
+402 | JuliaSyntax | last_child_position | (JuliaSyntax.ParseStream, JuliaSyntax.ParseStreamPosition) | 61 | true
+403 | JuliaSyntax | lower_identifier_name | (Symbol, JuliaSyntax.Kind) | 12 | true
+404 | JuliaSyntax | min_supported_version_err | (JuliaSyntax.ParseState, JuliaSyntax.ParseStreamPosition, String, VersionNumber) | 22 | true
+405 | JuliaSyntax | node_to_expr | (JuliaSyntax.RedTreeCursor, SourceFile, Vector{UInt8}, UInt32) | 329 | true
+406 | JuliaSyntax | parse_LtoR | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_range), typeof(JuliaSyntax.is_prec_pipe_gt)) | 42 | true
+407 | JuliaSyntax | parse_LtoR | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_shift), typeof(JuliaSyntax.is_prec_rational)) | 42 | true
+408 | JuliaSyntax | parse_LtoR | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_unary_subtype), typeof(JuliaSyntax.is_prec_bitshift)) | 42 | true
+409 | JuliaSyntax | parse_Nary | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_public), Tuple{JuliaSyntax.Kind}, Tuple{JuliaSyntax.Kind}) | 52 | true
+410 | JuliaSyntax | parse_Nary | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_eq), Tuple{JuliaSyntax.Kind, JuliaSyntax.Kind}, NTuple{5, JuliaSyntax.Kind}) | 52 | true
+411 | JuliaSyntax | parse_Nary | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_docstring), Tuple{JuliaSyntax.Kind, JuliaSyntax.Kind}, NTuple{5, JuliaSyntax.Kind}) | 52 | true
+412 | JuliaSyntax | parse_Nary | (JuliaSyntax.ParseState, JuliaSyntax.var"#parse_resword##0#parse_resword##1", Tuple{JuliaSyntax.Kind, JuliaSyntax.Kind}, NTuple{5, JuliaSyntax.Kind}) | 52 | true
+413 | JuliaSyntax | parse_Nary | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_public), Tuple{JuliaSyntax.Kind, JuliaSyntax.Kind}, NTuple{5, JuliaSyntax.Kind}) | 52 | true
+414 | JuliaSyntax | parse_RtoL | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_cond), typeof(JuliaSyntax.is_prec_pair), typeof(JuliaSyntax.parse_pair)) | 34 | true
+415 | JuliaSyntax | parse_RtoL | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_pipe_gt), typeof(JuliaSyntax.is_prec_pipe_lt), typeof(JuliaSyntax.parse_pipe_lt)) | 34 | true
+416 | JuliaSyntax | parse_RtoL | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_juxtapose), typeof(JuliaSyntax.is_prec_power), typeof(JuliaSyntax.parse_factor_after)) | 34 | true
+417 | JuliaSyntax | parse_array | (JuliaSyntax.ParseState, JuliaSyntax.ParseStreamPosition, JuliaSyntax.Kind, Bool) | 89 | true
+418 | JuliaSyntax | parse_array_inner | (JuliaSyntax.ParseState, Int64, Base.RefValue{Symbol}) | 76 | true
+419 | JuliaSyntax | parse_array_separator | (JuliaSyntax.ParseState, Base.RefValue{Symbol}) | 153 | true
+420 | JuliaSyntax | parse_arrow | (JuliaSyntax.ParseState) | 69 | true
+421 | JuliaSyntax | parse_assignment | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_comma)) | 7 | true
+422 | JuliaSyntax | parse_assignment_with_initial_ex | (JuliaSyntax.ParseState, JuliaSyntax.ParseStreamPosition, typeof(JuliaSyntax.parse_comma)) | 129 | true
+423 | JuliaSyntax | parse_assignment_with_initial_ex | (JuliaSyntax.ParseState, JuliaSyntax.ParseStreamPosition, typeof(JuliaSyntax.parse_pair)) | 129 | true
+424 | JuliaSyntax | parse_atom | (JuliaSyntax.ParseState, Bool, Bool) | 553 | true
+425 | JuliaSyntax | parse_block | (JuliaSyntax.ParseState, Function, JuliaSyntax.ParseStreamPosition) | 7 | true
+426 | JuliaSyntax | parse_brackets | (JuliaSyntax.var"#parse_paren##0#parse_paren##1"{JuliaSyntax.ParseState, Bool, Bool}, JuliaSyntax.ParseState, JuliaSyntax.Kind, Bool) | 213 | true
+427 | JuliaSyntax | parse_brackets | (JuliaSyntax.var"#parse_vect##0#parse_vect##1", JuliaSyntax.ParseState, JuliaSyntax.Kind, Bool) | 213 | true
+428 | JuliaSyntax | parse_brackets | (JuliaSyntax.var"#parse_call_arglist##0#parse_call_arglist##1", JuliaSyntax.ParseState, JuliaSyntax.Kind, Bool) | 213 | true
+429 | JuliaSyntax | parse_brackets | (JuliaSyntax.var"#parse_string##0#parse_string##1", JuliaSyntax.ParseState, JuliaSyntax.Kind, Bool) | 213 | true
+430 | JuliaSyntax | parse_brackets | (JuliaSyntax.var"#parse_function_signature##0#parse_function_signature##1"{JuliaSyntax.ParseState}, JuliaSyntax.ParseState, JuliaSyntax.Kind, Bool) | 213 | true
+431 | JuliaSyntax | parse_brackets | (JuliaSyntax.var"#parse_unary##0#parse_unary##1"{Bool}, JuliaSyntax.ParseState, JuliaSyntax.Kind, Bool) | 213 | true
+432 | JuliaSyntax | parse_call | (JuliaSyntax.ParseState) | 15 | true
+433 | JuliaSyntax | parse_call_chain | (JuliaSyntax.ParseState, JuliaSyntax.ParseStreamPosition, Bool) | 715 | true
+434 | JuliaSyntax | parse_call_chain | (JuliaSyntax.ParseState, JuliaSyntax.ParseStreamPosition) | 2 | true
+435 | JuliaSyntax | parse_cat | (JuliaSyntax.ParseState, JuliaSyntax.Kind, Bool) | 161 | true
+436 | JuliaSyntax | parse_catch | (JuliaSyntax.ParseState) | 47 | true
+437 | JuliaSyntax | parse_chain | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_term), JuliaSyntax.Kind) | 48 | true
+438 | JuliaSyntax | parse_chain | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_rational), JuliaSyntax.Kind) | 48 | true
+439 | JuliaSyntax | parse_comma | (JuliaSyntax.ParseState, Bool) | 37 | true
+440 | JuliaSyntax | parse_comma | (JuliaSyntax.ParseState) | 2 | true
+441 | JuliaSyntax | parse_comma_separated | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_iteration_spec)) | 19 | true
+442 | JuliaSyntax | parse_comma_separated | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_range)) | 19 | true
+443 | JuliaSyntax | parse_comma_separated | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_eq_star)) | 19 | true
+444 | JuliaSyntax | parse_comma_separated | (JuliaSyntax.ParseState, JuliaSyntax.var"#parse_resword##2#parse_resword##3") | 19 | true
+445 | JuliaSyntax | parse_comma_separated | (JuliaSyntax.ParseState, JuliaSyntax.var"#parse_imports##0#parse_imports##1"{Bool, JuliaSyntax.Kind}) | 19 | true
+446 | JuliaSyntax | parse_comma_separated | (JuliaSyntax.ParseState, JuliaSyntax.var"#parse_imports##2#parse_imports##3"{Bool, JuliaSyntax.Kind}) | 19 | true
+447 | JuliaSyntax | parse_comparison | (JuliaSyntax.ParseState, Bool) | 128 | true
+448 | JuliaSyntax | parse_cond | (JuliaSyntax.ParseState) | 131 | true
+449 | JuliaSyntax | parse_decl_with_initial_ex | (JuliaSyntax.ParseState, JuliaSyntax.ParseStreamPosition) | 45 | true
+450 | JuliaSyntax | parse_do | (JuliaSyntax.ParseState) | 45 | true
+451 | JuliaSyntax | parse_docstring | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_eq)) | 51 | true
+452 | JuliaSyntax | parse_docstring | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_struct_field)) | 51 | true
+453 | JuliaSyntax | parse_eq_star | (JuliaSyntax.ParseState) | 27 | true
+454 | JuliaSyntax | parse_factor_with_initial_ex | (JuliaSyntax.ParseState, JuliaSyntax.ParseStreamPosition) | 36 | true
+455 | JuliaSyntax | parse_float_literal | (Type{Float64}, Vector{UInt8}, Int64, Int64) | 68 | true
+456 | JuliaSyntax | parse_float_literal | (Type{Float32}, Vector{UInt8}, Int64, Int64) | 68 | true
+457 | JuliaSyntax | parse_float_literal | (Type{Float64}, Vector{UInt8}, UInt32, Int64) | 68 | true
+458 | JuliaSyntax | parse_float_literal | (Type{Float32}, Vector{UInt8}, UInt32, Int64) | 68 | true
+459 | JuliaSyntax | parse_function_signature | (JuliaSyntax.ParseState, Bool) | 200 | true
+460 | JuliaSyntax | parse_generator | (JuliaSyntax.ParseState, JuliaSyntax.ParseStreamPosition) | 46 | true
+461 | JuliaSyntax | parse_global_local_const_vars | (JuliaSyntax.ParseState) | 39 | true
+462 | JuliaSyntax | parse_if_elseif | (JuliaSyntax.ParseState, Bool, Bool) | 87 | true
+463 | JuliaSyntax | parse_import | (JuliaSyntax.ParseState, JuliaSyntax.Kind, Bool) | 35 | true
+464 | JuliaSyntax | parse_import_atsym | (JuliaSyntax.ParseState, Bool) | 150 | true
+465 | JuliaSyntax | parse_import_path | (JuliaSyntax.ParseState) | 125 | true
+466 | JuliaSyntax | parse_imports | (JuliaSyntax.ParseState) | 128 | true
+467 | JuliaSyntax | parse_int_literal | (String) | 50 | true
+468 | JuliaSyntax | parse_invalid_ops | (JuliaSyntax.ParseState) | 38 | true
+469 | JuliaSyntax | parse_iteration_spec | (JuliaSyntax.ParseState) | 61 | true
+470 | JuliaSyntax | parse_julia_literal | (Vector{UInt8}, JuliaSyntax.SyntaxHead, UnitRange{UInt32}) | 274 | true
+471 | JuliaSyntax | parse_juxtapose | (JuliaSyntax.ParseState) | 138 | true
+472 | JuliaSyntax | parse_lazy_cond | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_and), typeof(JuliaSyntax.is_prec_lazy_or), typeof(JuliaSyntax.parse_or)) | 45 | true
+473 | JuliaSyntax | parse_lazy_cond | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_comparison), typeof(JuliaSyntax.is_prec_lazy_and), typeof(JuliaSyntax.parse_and)) | 45 | true
+474 | JuliaSyntax | parse_macro_name | (JuliaSyntax.ParseState) | 40 | true
+475 | JuliaSyntax | parse_pair | (JuliaSyntax.ParseState) | 6 | true
+476 | JuliaSyntax | parse_paren | (JuliaSyntax.ParseState, Bool, Bool) | 156 | true
+477 | JuliaSyntax | parse_public | (JuliaSyntax.ParseState) | 30 | true
+478 | JuliaSyntax | parse_range | (JuliaSyntax.ParseState) | 226 | true
+479 | JuliaSyntax | parse_resword | (JuliaSyntax.ParseState) | 645 | true
+480 | JuliaSyntax | parse_space_separated_exprs | (JuliaSyntax.ParseState) | 40 | true
+481 | JuliaSyntax | parse_stmts | (JuliaSyntax.ParseState) | 40 | true
+482 | JuliaSyntax | parse_string | (JuliaSyntax.ParseState, Bool) | 501 | true
+483 | JuliaSyntax | parse_struct_field | (JuliaSyntax.ParseState) | 23 | true
+484 | JuliaSyntax | parse_toplevel | (JuliaSyntax.ParseState) | 26 | true
+485 | JuliaSyntax | parse_try | (JuliaSyntax.ParseState) | 126 | true
+486 | JuliaSyntax | parse_uint_literal | (String, JuliaSyntax.Kind) | 257 | true
+487 | JuliaSyntax | parse_unary | (JuliaSyntax.ParseState) | 399 | true
+488 | JuliaSyntax | parse_unary_prefix | (JuliaSyntax.ParseState, Bool) | 76 | true
+489 | JuliaSyntax | parse_unary_prefix | (JuliaSyntax.ParseState) | 2 | true
+490 | JuliaSyntax | parse_unary_subtype | (JuliaSyntax.ParseState) | 51 | true
+491 | JuliaSyntax | parse_where_chain | (JuliaSyntax.ParseState, JuliaSyntax.ParseStreamPosition) | 72 | true
+492 | JuliaSyntax | parse_with_chains | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_term), typeof(JuliaSyntax.is_prec_plus), Tuple{JuliaSyntax.Kind, JuliaSyntax.Kind}) | 76 | true
+493 | JuliaSyntax | parse_with_chains | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_rational), typeof(JuliaSyntax.is_prec_times), Tuple{JuliaSyntax.Kind}) | 76 | true
+494 | JuliaSyntax | parseargs! | (Expr, LineNumberNode, JuliaSyntax.RedTreeCursor, SourceFile, Vector{UInt8}, UInt32) | 92 | true
+495 | JuliaSyntax | peek_initial_reserved_words | (JuliaSyntax.ParseState) | 52 | true
+496 | JuliaSyntax | peek_skip_newline_in_gen | (JuliaSyntax.ParseState, Int64) | 14 | true
+497 | JuliaSyntax | release_positions | (JuliaSyntax.ParseStream, Vector{JuliaSyntax.ParseStreamPosition}) | 6 | true
+498 | JuliaSyntax | steal_token_bytes! | (JuliaSyntax.ParseStream, JuliaSyntax.ParseStreamPosition, Int64) | 67 | true
+499 | JuliaSyntax | unescape_julia_string | (IOBuffer, Vector{UInt8}, Int64, Int64, Vector{JuliaSyntax.Diagnostic}) | 471 | true
+500 | JuliaSyntax | unescape_julia_string | (Base.DevNull, Vector{UInt8}, Int64, Int64, Vector{JuliaSyntax.Diagnostic}) | 471 | true
+501 | JuliaSyntax | unescape_julia_string | (IOBuffer, Vector{UInt8}, UInt32, Int64, Vector{JuliaSyntax.Diagnostic}) | 471 | true
+502 | JuliaSyntax | unescape_raw_string | (IOBuffer, Vector{UInt8}, UInt32, Int64, Bool) | 125 | true
+503 | JuliaSyntax | utf8proc_map | (String, Int64) | 49 | true
+504 | JuliaSyntax | validate_tokens | (JuliaSyntax.ParseStream) | 322 | true
+505 | JuliaSyntax | was_eventually_call | (JuliaSyntax.ParseState) | 63 | true
+506 | JuliaSyntax.Tokenize | Lexer | (IOBuffer) | 73 | true
+507 | JuliaSyntax.Tokenize | _next_token | (JuliaSyntax.Tokenize.Lexer{IOBuffer}, Char) | 274 | true
+508 | JuliaSyntax.Tokenize | accept_number | (JuliaSyntax.Tokenize.Lexer{IOBuffer}, typeof(isdigit)) | 38 | true
+509 | JuliaSyntax.Tokenize | accept_number | (JuliaSyntax.Tokenize.Lexer{IOBuffer}, typeof(JuliaSyntax.Tokenize.ishex)) | 38 | true
+510 | JuliaSyntax.Tokenize | accept_number | (JuliaSyntax.Tokenize.Lexer{IOBuffer}, typeof(JuliaSyntax.Tokenize.isbinary)) | 38 | true
+511 | JuliaSyntax.Tokenize | accept_number | (JuliaSyntax.Tokenize.Lexer{IOBuffer}, typeof(JuliaSyntax.Tokenize.isoctal)) | 38 | true
+512 | JuliaSyntax.Tokenize | emit | (JuliaSyntax.Tokenize.Lexer{IOBuffer}, JuliaSyntax.Kind, Bool) | 27 | true
+513 | JuliaSyntax.Tokenize | is_never_id_char | (Char) | 114 | true
+514 | JuliaSyntax.Tokenize | is_operator_start_char | (Char) | 897 | true
+515 | JuliaSyntax.Tokenize | isopsuffix | (Char) | 359 | true
+516 | JuliaSyntax.Tokenize | lex_amper | (JuliaSyntax.Tokenize.Lexer{IOBuffer}) | 15 | true
+517 | JuliaSyntax.Tokenize | lex_backslash | (JuliaSyntax.Tokenize.Lexer{IOBuffer}) | 9 | true
+518 | JuliaSyntax.Tokenize | lex_backtick | (JuliaSyntax.Tokenize.Lexer{IOBuffer}) | 41 | true
+519 | JuliaSyntax.Tokenize | lex_bar | (JuliaSyntax.Tokenize.Lexer{IOBuffer}) | 21 | true
+520 | JuliaSyntax.Tokenize | lex_circumflex | (JuliaSyntax.Tokenize.Lexer{IOBuffer}) | 9 | true
+521 | JuliaSyntax.Tokenize | lex_colon | (JuliaSyntax.Tokenize.Lexer{IOBuffer}) | 15 | true
+522 | JuliaSyntax.Tokenize | lex_comment | (JuliaSyntax.Tokenize.Lexer{IOBuffer}) | 152 | true
+523 | JuliaSyntax.Tokenize | lex_digit | (JuliaSyntax.Tokenize.Lexer{IOBuffer}, JuliaSyntax.Kind) | 472 | true
+524 | JuliaSyntax.Tokenize | lex_division | (JuliaSyntax.Tokenize.Lexer{IOBuffer}) | 9 | true
+525 | JuliaSyntax.Tokenize | lex_dollar | (JuliaSyntax.Tokenize.Lexer{IOBuffer}) | 9 | true
+526 | JuliaSyntax.Tokenize | lex_dot | (JuliaSyntax.Tokenize.Lexer{IOBuffer}) | 58 | true
+527 | JuliaSyntax.Tokenize | lex_equal | (JuliaSyntax.Tokenize.Lexer{IOBuffer}) | 21 | true
+528 | JuliaSyntax.Tokenize | lex_exclaim | (JuliaSyntax.Tokenize.Lexer{IOBuffer}) | 15 | true
+529 | JuliaSyntax.Tokenize | lex_forwardslash | (JuliaSyntax.Tokenize.Lexer{IOBuffer}) | 21 | true
+530 | JuliaSyntax.Tokenize | lex_greater | (JuliaSyntax.Tokenize.Lexer{IOBuffer}) | 39 | true
+531 | JuliaSyntax.Tokenize | lex_identifier | (JuliaSyntax.Tokenize.Lexer{IOBuffer}, Char) | 170 | true
+532 | JuliaSyntax.Tokenize | lex_less | (JuliaSyntax.Tokenize.Lexer{IOBuffer}) | 64 | true
+533 | JuliaSyntax.Tokenize | lex_minus | (JuliaSyntax.Tokenize.Lexer{IOBuffer}) | 34 | true
+534 | JuliaSyntax.Tokenize | lex_percent | (JuliaSyntax.Tokenize.Lexer{IOBuffer}) | 9 | true
+535 | JuliaSyntax.Tokenize | lex_plus | (JuliaSyntax.Tokenize.Lexer{IOBuffer}) | 16 | true
+536 | JuliaSyntax.Tokenize | lex_quote | (JuliaSyntax.Tokenize.Lexer{IOBuffer}) | 62 | true
+537 | JuliaSyntax.Tokenize | lex_star | (JuliaSyntax.Tokenize.Lexer{IOBuffer}) | 16 | true
+538 | JuliaSyntax.Tokenize | lex_string_chunk | (JuliaSyntax.Tokenize.Lexer{IOBuffer}) | 602 | true
+539 | JuliaSyntax.Tokenize | lex_whitespace | (JuliaSyntax.Tokenize.Lexer{IOBuffer}, Char) | 61 | true
+540 | JuliaSyntax.Tokenize | lex_xor | (JuliaSyntax.Tokenize.Lexer{IOBuffer}) | 9 | true
+541 | JuliaSyntax.Tokenize | next_token | (JuliaSyntax.Tokenize.Lexer{IOBuffer}, Bool) | 18 | true
+542 | Main | eval_julia_to_bytes | (String) | 210 | true
+
+# === SUMMARY ===
+# Total functions: 542
+# code_typed OK: 542
+# code_typed FAIL: 0
+# Total statements (code_typed OK): 72500
+# Average statements per function: 133.8
+
+# === BY MODULE ===
+#   Compiler: 299 functions
+#   JuliaSyntax: 139 functions
+#   JuliaSyntax.Tokenize: 36 functions
+#   Base: 36 functions
+#   Base.Compiler.EscapeAnalysis: 20 functions
+#   Base.GMP.MPZ: 3 functions
+#   Core: 2 functions
+#   Base.Sort: 2 functions
+#   Base.Checked: 1 functions
+#   Main: 1 functions
+#   Base.Unicode: 1 functions
+#   Base.GMP: 1 functions
+#   Base.Iterators: 1 functions
