@@ -8615,7 +8615,11 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
             # Drop unused values from calls (prevents stack pollution in loops)
             if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
                 # PURE-220: Skip if compile_statement already emitted a DROP
-                already_dropped = !isempty(compiled_stmt_bytes) && compiled_stmt_bytes[end] == Opcode.DROP
+                # PURE-6006: Guard against false positive where call function_index=0x1a (26)
+                # matches DROP opcode. Call instruction is [0x10, LEB128(func_idx)]; if func_idx
+                # fits in 1 byte as 0x1a, the last byte == DROP but it's an operand, not DROP.
+                already_dropped = !isempty(compiled_stmt_bytes) && compiled_stmt_bytes[end] == Opcode.DROP &&
+                                  !(length(compiled_stmt_bytes) >= 2 && compiled_stmt_bytes[end-1] == Opcode.CALL)
                 # Use statement_produces_wasm_value for consistent handling
                 # This checks the function registry for accurate return type info
                 if !already_dropped && statement_produces_wasm_value(stmt, i, ctx)
@@ -10034,7 +10038,9 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 # Only drop unused values that don't have locals
                 if !haskey(ctx.ssa_locals, i) && stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
                     # PURE-220: Skip if compile_statement already emitted a DROP
-                    already_dropped = !isempty(stmt_bytes) && stmt_bytes[end] == Opcode.DROP
+                    # PURE-6006: Guard against call instruction false-positive (func_idx 0x1a == DROP)
+                    already_dropped = !isempty(stmt_bytes) && stmt_bytes[end] == Opcode.DROP &&
+                                      !(length(stmt_bytes) >= 2 && stmt_bytes[end-1] == Opcode.CALL)
                     # Use statement_produces_wasm_value to check if the call actually
                     # produces a value on the stack (handles Any type correctly)
                     if !already_dropped && statement_produces_wasm_value(stmt, i, ctx)
@@ -11120,7 +11126,9 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
 
                 if !haskey(ctx.ssa_locals, i)
                     # PURE-220: Skip if compile_statement already emitted a DROP
-                    already_dropped = !isempty(stmt_bytes) && stmt_bytes[end] == Opcode.DROP
+                    # PURE-6006: Guard against call instruction false-positive (func_idx 0x1a == DROP)
+                    already_dropped = !isempty(stmt_bytes) && stmt_bytes[end] == Opcode.DROP &&
+                                      !(length(stmt_bytes) >= 2 && stmt_bytes[end-1] == Opcode.CALL)
                     if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
                         if !already_dropped && statement_produces_wasm_value(stmt, i, ctx)
                             if !haskey(ctx.phi_locals, i)
@@ -11752,7 +11760,9 @@ function generate_void_flow(ctx::CompilationContext, blocks::Vector{BasicBlock},
                     if inner isa Expr && (inner.head === :call || inner.head === :invoke)
                         # PURE-220: Skip if compile_statement already emitted a DROP
                         # (e.g., compile_invoke adds DROP for higher-order Core.Argument calls)
-                        already_has_drop = !isempty(compiled_bytes) && compiled_bytes[end] == Opcode.DROP
+                        # PURE-6006: Guard against call instruction false-positive (func_idx 0x1a == DROP)
+                        already_has_drop = !isempty(compiled_bytes) && compiled_bytes[end] == Opcode.DROP &&
+                                           !(length(compiled_bytes) >= 2 && compiled_bytes[end-1] == Opcode.CALL)
 
                         # First check if this is a signal setter invoke - these ALWAYS need DROP
                         # because setters push a return value that won't be used in void context
