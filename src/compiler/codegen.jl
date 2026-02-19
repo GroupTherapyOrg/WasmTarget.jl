@@ -21875,6 +21875,55 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 push!(bytes, Opcode.REF_IS_NULL)
                 push!(bytes, Opcode.I32_EQZ)  # negate: 1->0, 0->1
             end
+        elseif check_type !== nothing && !isconcretetype(check_type)
+            # Abstract type check (e.g. Integer, AbstractFloat, Number, Real)
+            # Determine value's WASM local type and local index for re-loading
+            local isa3_val_wasm = nothing
+            local isa3_local_idx = nothing
+            if value_arg isa Core.SSAValue
+                local _idx3 = get(ctx.ssa_locals, value_arg.id, nothing)
+                if _idx3 !== nothing
+                    local _off3 = _idx3 - ctx.n_params
+                    if _off3 >= 0 && _off3 < length(ctx.locals)
+                        isa3_val_wasm = ctx.locals[_off3 + 1]
+                        isa3_local_idx = _idx3
+                    end
+                end
+            end
+            local _wasm_julia = Dict{WasmValType,Type}(I64=>Int64, I32=>Int32, F64=>Float64, F32=>Float32)
+            if isa3_val_wasm !== nothing && (isa3_val_wasm === I64 || isa3_val_wasm === I32 || isa3_val_wasm === F64 || isa3_val_wasm === F32)
+                # Unboxed numeric — check if representative Julia type is a subtype
+                local _jt = get(_wasm_julia, isa3_val_wasm, nothing)
+                push!(bytes, Opcode.DROP)
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, (_jt !== nothing && _jt <: check_type) ? 0x01 : 0x00)
+            elseif isa3_val_wasm === ExternRef && isa3_local_idx !== nothing
+                # Boxed externref — test each numeric box type that is a subtype of check_type
+                local _boxes = UInt32[]
+                for (wt, box_idx) in ctx.type_registry.numeric_boxes
+                    local _jt2 = get(_wasm_julia, wt, nothing)
+                    _jt2 !== nothing && _jt2 <: check_type && push!(_boxes, box_idx)
+                end
+                push!(bytes, Opcode.DROP)
+                if isempty(_boxes)
+                    push!(bytes, Opcode.I32_CONST)
+                    push!(bytes, 0x00)
+                else
+                    for (i, box_idx) in enumerate(_boxes)
+                        push!(bytes, Opcode.LOCAL_GET)
+                        append!(bytes, encode_leb128_unsigned(UInt32(isa3_local_idx)))
+                        append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.REF_TEST)
+                        append!(bytes, encode_leb128_signed(Int64(box_idx)))
+                        i > 1 && push!(bytes, Opcode.I32_OR)
+                    end
+                end
+            else
+                push!(bytes, Opcode.DROP)
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+            end
         else
             # Unknown type - drop value and return false
             push!(bytes, Opcode.DROP)
