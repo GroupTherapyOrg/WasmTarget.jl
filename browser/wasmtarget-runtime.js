@@ -194,13 +194,23 @@ class WasmTargetRuntime {
     async evalJulia(evalInstance, code) {
         const trimmed = code.trim();
 
-        // Step 1: Convert code to WasmGC string
-        const wasmCode = await this.jsToWasmString(trimmed);
+        // Step 1: Parse expression to determine operator and operands.
+        // We do this FIRST because eval_julia_wasm dispatches by str_char at position 2,
+        // which only works for single-digit operands (e.g. "1+1" but not "10-3").
+        // We build a canonical "1OP1" string for dispatch, use actual operands for execution.
+        const m = trimmed.match(/^(-?\d+)\s*([+\-*])\s*(-?\d+)$/);
+        if (!m) throw new Error(`evalJulia: unsupported expression: ${trimmed}`);
+        const a = BigInt(m[1]), op = m[2], b = BigInt(m[3]);
 
-        // Step 2: Call eval_julia_wasm → WasmGC String bytes
+        // Step 2: Convert canonical dispatch form to WasmGC string.
+        // "1OP1" ensures the operator is always at position 2 (1-based),
+        // matching eval_julia_wasm's str_char(code, Int32(2)) dispatch logic.
+        const wasmCode = await this.jsToWasmString("1" + op + "1");
+
+        // Step 3: Call eval_julia_wasm → WasmGC String bytes (pre-compiled WASM module)
         const vecRef = evalInstance.exports.eval_julia_wasm(wasmCode);
 
-        // Step 3: Extract bytes via element-wise access
+        // Step 4: Extract bytes via element-wise access
         const len = evalInstance.exports.eval_julia_result_length(vecRef);
         if (len < 8) throw new Error(`evalJulia: too few bytes (${len})`);
         const bytes = new Uint8Array(len);
@@ -213,16 +223,10 @@ class WasmTargetRuntime {
             throw new Error("evalJulia: invalid WASM magic bytes");
         }
 
-        // Step 4: Instantiate the inner WASM module from extracted bytes
+        // Step 5: Instantiate the inner WASM module from extracted bytes
         const inner = await this.load(bytes.buffer);
 
-        // Step 5: Parse expression to determine export name and arguments
-        // Supports: "a OP b" where a,b are integers and OP is +, -, *
-        const m = trimmed.match(/^(-?\d+)\s*([+\-*])\s*(-?\d+)$/);
-        if (!m) throw new Error(`evalJulia: unsupported expression: ${trimmed}`);
-        const a = BigInt(m[1]), op = m[2], b = BigInt(m[3]);
-
-        // Step 6: Call exported function
+        // Step 6: Call exported function with actual operands
         const fn = inner.exports[op];
         if (!fn) {
             const available = Object.keys(inner.exports).filter(k => typeof inner.exports[k] === "function");
