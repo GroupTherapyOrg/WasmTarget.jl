@@ -4,19 +4,13 @@
 # This file implements the eval_julia pipeline:
 #   1. Parse: JuliaSyntax.parsestmt(Expr, code) → Expr
 #   2. Extract: function + arg types from parsed Expr
-#   3. TypeInf: Base.code_typed(func, arg_types) → typed, optimized CodeInfo
+#   3. TypeInf: WasmInterpreter + Core.Compiler.typeinf → canonical CodeInfo
 #   4. Codegen: compile_from_codeinfo(ci, rettype, name, arg_types) → .wasm bytes
 #
-# Stage 3 currently uses Base.code_typed() which runs Julia's REAL type
-# inference and optimization pipeline. This produces optimized CodeInfo that
-# codegen can directly consume.
-#
-# FUTURE (when compiling eval_julia itself to WASM):
-#   Base.code_typed() is a ccall — it can't run in WASM. At that point,
-#   Stage 3 will switch to WasmInterpreter (custom AbstractInterpreter with
-#   DictMethodTable, PreDecompressedCodeInfo, pure Julia reimplementations).
-#   The WasmInterpreter infrastructure already exists (Phase 2d), but its
-#   output needs an optimization pass before codegen can consume it.
+# Stage 3 uses WasmInterpreter (custom AbstractInterpreter with DictMethodTable,
+# PreDecompressedCodeInfo, pure Julia reimplementations). may_optimize=true ensures
+# IR canonicalization runs, producing the same resolved-reference CodeInfo format
+# that Base.code_typed returns.
 #
 # NO pre-computed WASM bytes. NO character matching. NO shortcuts.
 # Every call runs the REAL Julia compiler pipeline from scratch.
@@ -29,10 +23,10 @@ The REAL eval_julia pipeline. Chains all 4 stages using Julia's compiler.
 Returns .wasm bytes that can be instantiated via WebAssembly.instantiate() in JS.
 
 Pipeline:
-  1. Parse: JuliaSyntax.parsestmt(Expr, code) → Expr(:call, :+, 1, 1)
-  2. Extract: function symbol + arg types from the Expr
-  3. TypeInf: Base.code_typed(func, arg_types) → typed, optimized CodeInfo
-  4. Codegen: compile_from_codeinfo(ci, rettype, name, arg_types) → .wasm bytes
+    1. Parse: JuliaSyntax.parsestmt(Expr, code) → Expr(:call, :+, 1, 1)
+    2. Extract: function symbol + arg types from the Expr
+    3. TypeInf: WasmInterpreter typeinf → typed, canonical CodeInfo
+    4. Codegen: compile_from_codeinfo(ci, rettype, name, arg_types) → .wasm bytes
 
 Currently handles: binary arithmetic on Int64 literals (e.g. "1+1", "10-3", "2*3")
 """
@@ -54,13 +48,44 @@ function eval_julia_to_bytes(code::String)::Vector{UInt8}
     # Determine argument types from literals
     arg_types = tuple((typeof(a) for a in arg_literals)...)
 
-    # Stage 3: Type inference using Julia's REAL compiler
-    # Base.code_typed runs: method lookup → inference → optimization → CodeInfo
-    typed = Base.code_typed(func, arg_types)
-    if isempty(typed)
+    # Stage 3: Type inference using WasmInterpreter
+    world = Base.get_world_counter()
+    sig = Tuple{typeof(func), arg_types...}
+
+    # Build WasmInterpreter with transitive method table
+    interp = build_wasm_interpreter([sig]; world=world)
+
+    # Find the MethodInstance for this signature
+    native_mt = Core.Compiler.InternalMethodTable(world)
+    lookup = Core.Compiler.findall(sig, native_mt; limit=3)
+    if lookup === nothing
         error("No method found for $func_sym with types $arg_types")
     end
-    code_info, return_type = typed[1]
+    mi = Core.Compiler.specialize_method(first(lookup.matches))
+
+    # Retrieve untyped CodeInfo and run typeinf with WasmInterpreter
+    src = Core.Compiler.retrieve_code_info(mi, world)
+    if src === nothing
+        error("retrieve_code_info returned nothing for $func_sym")
+    end
+    result = Core.Compiler.InferenceResult(mi)
+    frame = Core.Compiler.InferenceState(result, src, :no, interp)
+
+    _WASM_USE_REIMPL[] = true
+    _WASM_CODE_CACHE[] = interp.code_info_cache
+    try
+        Core.Compiler.typeinf(interp, frame)
+    finally
+        _WASM_USE_REIMPL[] = false
+        _WASM_CODE_CACHE[] = nothing
+    end
+
+    # Extract canonical CodeInfo and return type (may_optimize=true → resolved IR)
+    code_info = result.src
+    if !(code_info isa Core.CodeInfo)
+        error("Expected CodeInfo from WasmInterpreter typeinf, got $(typeof(code_info))")
+    end
+    return_type = Core.Compiler.widenconst(result.result)
 
     # Stage 4: Codegen — return .wasm bytes
     func_name = string(func_sym)

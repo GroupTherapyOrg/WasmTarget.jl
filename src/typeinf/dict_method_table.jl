@@ -96,8 +96,11 @@ Core.Compiler.get_inference_cache(interp::WasmInterpreter) = interp.inf_cache
 Core.Compiler.InferenceParams(interp::WasmInterpreter) = interp.inf_params
 Core.Compiler.OptimizationParams(interp::WasmInterpreter) = interp.opt_params
 
-# Disable optimization — Binaryen.js handles that on the Wasm side
-Core.Compiler.may_optimize(interp::WasmInterpreter) = false
+# Enable IR canonicalization (resolves indirect call references into direct calls).
+# Binaryen.js handles WASM-level optimization, but Julia IR canonicalization is
+# required for codegen to consume the IR correctly (matches Base.code_typed format).
+# Inlining is still disabled via OptimizationParams(inlining=false) in the constructor.
+Core.Compiler.may_optimize(interp::WasmInterpreter) = true
 Core.Compiler.may_compress(interp::WasmInterpreter) = false
 Core.Compiler.may_discard_trees(interp::WasmInterpreter) = false
 
