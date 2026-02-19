@@ -15425,7 +15425,11 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                 # think the value is a ref (e.g., memoryrefset! returns the stored value,
                 # which could be Type → SSA type is DataType → ConcreteRef). If stmt_bytes
                 # ends with i32_const 0 and the local is ref-typed, override to type_safe_default.
-                if !needs_type_safe_default && needs_ref_cast_local === nothing && local_is_ref && length(stmt_bytes) >= 2
+                # PURE-6015: Guard with !has_gc_prefix to avoid false positive on struct.get/array.get
+                # whose LEB128 type index bytes can match i32.const (0x41). For example,
+                # struct.get 65 0 = [0xFB, 0x02, 0x41, 0x00] where 0x41 = i32.const opcode.
+                # The earlier check at line 15046 already uses !has_gc_prefix for the same reason.
+                if !needs_type_safe_default && needs_ref_cast_local === nothing && local_is_ref && !has_gc_prefix && length(stmt_bytes) >= 2
                     if stmt_bytes[end-1] == Opcode.I32_CONST && stmt_bytes[end] == 0x00
                         needs_type_safe_default = true
                     end
