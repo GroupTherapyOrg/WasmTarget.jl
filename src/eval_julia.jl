@@ -63,29 +63,28 @@ function eval_julia_to_bytes(code::String)::Vector{UInt8}
     end
     mi = Core.Compiler.specialize_method(first(lookup.matches))
 
-    # Retrieve untyped CodeInfo and run typeinf with WasmInterpreter
-    src = Core.Compiler.retrieve_code_info(mi, world)
-    if src === nothing
-        error("retrieve_code_info returned nothing for $func_sym")
-    end
-    result = Core.Compiler.InferenceResult(mi)
-    frame = Core.Compiler.InferenceState(result, src, :no, interp)
-
+    # Run typeinf_frame(interp, mi, run_optimizer=true) — same path as Base.code_typed.
+    # This produces canonical 2-stmt IR: %1 = Base.add_int(_2, _3); %2 = return %1
+    # (vs 3-stmt indirect IR when using InferenceState directly without run_optimizer).
     _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
+    inf_frame = nothing
     try
-        Core.Compiler.typeinf(interp, frame)
+        inf_frame = Core.Compiler.typeinf_frame(interp, mi, true)
     finally
         _WASM_USE_REIMPL[] = false
         _WASM_CODE_CACHE[] = nothing
     end
+    if inf_frame === nothing
+        error("typeinf_frame returned nothing for $func_sym")
+    end
 
-    # Extract canonical CodeInfo and return type (may_optimize=true → resolved IR)
-    code_info = result.src
+    # Extract canonical CodeInfo and return type
+    code_info = inf_frame.result.src
     if !(code_info isa Core.CodeInfo)
         error("Expected CodeInfo from WasmInterpreter typeinf, got $(typeof(code_info))")
     end
-    return_type = Core.Compiler.widenconst(result.result)
+    return_type = Core.Compiler.widenconst(inf_frame.result.result)
 
     # Stage 4: Codegen — return .wasm bytes
     func_name = string(func_sym)
