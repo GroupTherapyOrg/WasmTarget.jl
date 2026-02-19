@@ -230,13 +230,19 @@
   </div>
 </div>
 
+<!-- WasmTargetRuntime: load as plain script (sets window.WasmTargetRuntime) -->
+<script src="./wasmtarget-runtime.js"></script>
+
 <!-- CodeMirror 6 from CDN -->
 <script type="module">
 import {EditorView, basicSetup} from "https://esm.sh/@codemirror/basic-setup@0.20.0";
 import {EditorState} from "https://esm.sh/@codemirror/state@6.5.2";
+const WasmTargetRuntime = window.WasmTargetRuntime;
 
 // ── State ──
-let wasmInstance = null;
+let wasmInstance = null;   // pipeline.wasm instance (fallback for non-supported expressions)
+let rt = null;             // WasmTargetRuntime for eval_julia pipeline
+let evalInstance = null;   // eval_julia.wasm instance (real pipeline)
 const runBtn = document.getElementById("run-btn");
 const statusEl = document.getElementById("status");
 const outputEl = document.getElementById("output");
@@ -250,17 +256,32 @@ const editor = new EditorView({
   parent: document.getElementById("editor"),
 });
 
-// ── Load Wasm module ──
+// ── Load Wasm modules ──
 async function loadWasm() {
-  // Try multiple paths for the pipeline wasm
-  const paths = [
+  // Load eval_julia.wasm — the real Julia compiler pipeline
+  rt = new WasmTargetRuntime();
+  const evalPaths = [
+    "eval_julia.wasm",
+    "../browser/eval_julia.wasm",
+  ];
+  for (const path of evalPaths) {
+    try {
+      evalInstance = await rt.load(path, "eval_julia");
+      console.log("Loaded eval_julia.wasm");
+      break;
+    } catch (e) {
+      // Try next path
+    }
+  }
+
+  // Load pipeline.wasm — fallback for expressions not yet handled by eval_julia
+  const pipelinePaths = [
     "pipeline-optimized.wasm",
     "../scripts/pipeline-optimized.wasm",
     "pipeline.wasm",
     "../scripts/pipeline.wasm",
   ];
-
-  for (const path of paths) {
+  for (const path of pipelinePaths) {
     try {
       const resp = await fetch(path);
       if (!resp.ok) continue;
@@ -268,19 +289,25 @@ async function loadWasm() {
       const importObject = { Math: { pow: Math.pow } };
       const { instance } = await WebAssembly.instantiate(bytes, importObject);
       wasmInstance = instance;
-      const size = (bytes.byteLength / 1024).toFixed(0);
-      statusEl.textContent = `Ready (${size} KB loaded)`;
-      statusEl.className = "status ready";
-      runBtn.disabled = false;
-      return;
+      console.log(`Loaded pipeline.wasm (${(bytes.byteLength/1024).toFixed(0)} KB)`);
+      break;
     } catch (e) {
       // Try next path
     }
   }
 
-  statusEl.textContent = "Failed to load .wasm module. See console.";
-  statusEl.className = "status error";
-  console.error("Could not load pipeline wasm from any path.");
+  if (evalInstance || wasmInstance) {
+    const parts = [];
+    if (evalInstance) parts.push("eval_julia pipeline");
+    if (wasmInstance) parts.push("pipeline fallback");
+    statusEl.textContent = `Ready (${parts.join(" + ")})`;
+    statusEl.className = "status ready";
+    runBtn.disabled = false;
+  } else {
+    statusEl.textContent = "Failed to load .wasm module. See console.";
+    statusEl.className = "status error";
+    console.error("Could not load any wasm module.");
+  }
 }
 
 // ── Parse + evaluate ──
@@ -391,15 +418,28 @@ function evaluate(code) {
 }
 
 // ── Run button ──
-function run() {
+async function run() {
   const code = editor.state.doc.toString();
   outputEl.innerHTML = "";
+  runBtn.disabled = true;
 
   try {
-    const result = evaluate(code);
+    let result;
+    // Binary integer arithmetic (+, -, *): use real eval_julia pipeline
+    const binIntMatch = code.trim().match(/^(-?\d+)\s*([+\-*])\s*(-?\d+)$/);
+    if (evalInstance && binIntMatch) {
+      result = String(await rt.evalJulia(evalInstance, code.trim()));
+    } else if (wasmInstance) {
+      // Fallback: pre-compiled pipeline.wasm for all other expressions
+      result = evaluate(code);
+    } else {
+      throw new Error("No WASM module loaded.");
+    }
     outputEl.innerHTML = `<span class="result">${escapeHtml(result)}</span>`;
   } catch (err) {
     outputEl.innerHTML = `<span class="error">${escapeHtml(err.message)}</span>`;
+  } finally {
+    runBtn.disabled = false;
   }
 }
 

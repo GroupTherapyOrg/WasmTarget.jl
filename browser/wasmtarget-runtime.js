@@ -236,7 +236,9 @@ class WasmTargetRuntime {
     }
 }
 
-// Export for both ES modules and script tags
+// Export for CommonJS (Node.js) or browser global (script tag)
 if (typeof module !== "undefined" && module.exports) {
     module.exports = { WasmTargetRuntime };
+} else if (typeof globalThis !== "undefined") {
+    globalThis.WasmTargetRuntime = WasmTargetRuntime;
 }
