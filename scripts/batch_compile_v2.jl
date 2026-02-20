@@ -146,8 +146,8 @@ tmpdir = mktempdir()
 
 # Process ALL functions from manifest (or set MAX_FUNCS to limit)
 MAX_FUNCS = length(data_lines)  # Test all 542
-VALIDATE = false  # Skip wasm-tools validate for speed (just test compile())
-TIMEOUT_SECS = 120.0  # Per-function timeout to avoid hangs
+VALIDATE = true   # Run wasm-tools validate for each function
+TIMEOUT_SECS = 30.0  # Per-function timeout (most functions compile in <5s)
 
 println("Compiling $MAX_FUNCS functions (VALIDATE=$VALIDATE, timeout=$(TIMEOUT_SECS)s)...")
 println()

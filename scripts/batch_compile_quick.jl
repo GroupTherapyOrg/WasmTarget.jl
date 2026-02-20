@@ -76,7 +76,7 @@ err_cats = Dict{String, Vector{String}}()
 for (loop_idx, line) in enumerate(data_lines[1:MAX_FUNCS])
     entry = resolve_func_entry(line)
     if isnothing(entry)
-        n_resolve += 1
+        global n_resolve += 1
         println("[$loop_idx] RESOLVE_FAIL: $line")
         continue
     end
@@ -90,17 +90,17 @@ for (loop_idx, line) in enumerate(data_lines[1:MAX_FUNCS])
     wait_result = timedwait(() -> istaskdone(compile_task), TIMEOUT_SECS)
 
     if wait_result == :timed_out
-        n_timeout += 1
+        global n_timeout += 1
         println("TIMEOUT (>$(TIMEOUT_SECS)s)")
         push!(get!(err_cats, "TIMEOUT", String[]), "$(entry.mod).$(entry.name)")
     else
         try
             bytes = fetch(compile_task)
             elapsed = round(time() - t_start, digits=2)
-            n_compiles += 1
+            global n_compiles += 1
             println("COMPILES ($(length(bytes)) bytes, $(elapsed)s)")
         catch e
-            n_err += 1
+            global n_err += 1
             elapsed = round(time() - t_start, digits=2)
             cat = classify_error(e)
             msg = sprint(showerror, e)
