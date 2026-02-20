@@ -1,0 +1,120 @@
+# PURE-6021c: Critical path for eval_julia_to_bytes("1+1")
+# Generated: 2026-02-20T00:40:47.389
+# Method: Profile.@profile with 200 iterations, 10μs sampling
+# Total manifest functions: 542
+# Critical path functions: 112 (profiled during execution)
+#
+# Format: INDEX | MODULE | FUNCTION | ARG_TYPES | STMT_COUNT | CAN_CODE_TYPED | PROFILE_COUNT
+
+542 | Main | eval_julia_to_bytes | (String) | 210 | true | 125
+297 | Compiler | run_passes_ipo_safe | (Core.CodeInfo, Compiler.OptimizationState{WasmInterpreter}, Nothing) | 139 | true | 42
+349 | Compiler | typeinf_frame | (WasmInterpreter, Core.MethodInstance, Bool) | 65 | true | 37
+451 | JuliaSyntax | parse_docstring | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_eq)) | 51 | true | 24
+452 | JuliaSyntax | parse_docstring | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_struct_field)) | 51 | true | 24
+406 | JuliaSyntax | parse_LtoR | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_range), typeof(JuliaSyntax.is_prec_pipe_gt)) | 42 | true | 20
+407 | JuliaSyntax | parse_LtoR | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_shift), typeof(JuliaSyntax.is_prec_rational)) | 42 | true | 20
+408 | JuliaSyntax | parse_LtoR | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_unary_subtype), typeof(JuliaSyntax.is_prec_bitshift)) | 42 | true | 20
+439 | JuliaSyntax | parse_comma | (JuliaSyntax.ParseState, Bool) | 37 | true | 20
+440 | JuliaSyntax | parse_comma | (JuliaSyntax.ParseState) | 2 | true | 20
+348 | Compiler | typeinf | (WasmInterpreter, InferenceState) | 349 | true | 19
+472 | JuliaSyntax | parse_lazy_cond | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_and), typeof(JuliaSyntax.is_prec_lazy_or), typeof(JuliaSyntax.parse_or)) | 45 | true | 18
+473 | JuliaSyntax | parse_lazy_cond | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_comparison), typeof(JuliaSyntax.is_prec_lazy_and), typeof(JuliaSyntax.parse_and)) | 45 | true | 18
+369 | JuliaSyntax | #_parse#75 | (VersionNumber, Bool, Nothing, Int64, Bool, Bool, Base.Pairs{Symbol, Union{}, Nothing, @NamedTuple{}}, typeof(JuliaSyntax._parse), Symbol, Bool, Type{Expr}, String, Int64) | 117 | true | 17
+414 | JuliaSyntax | parse_RtoL | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_cond), typeof(JuliaSyntax.is_prec_pair), typeof(JuliaSyntax.parse_pair)) | 34 | true | 17
+415 | JuliaSyntax | parse_RtoL | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_pipe_gt), typeof(JuliaSyntax.is_prec_pipe_lt), typeof(JuliaSyntax.parse_pipe_lt)) | 34 | true | 17
+416 | JuliaSyntax | parse_RtoL | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_juxtapose), typeof(JuliaSyntax.is_prec_power), typeof(JuliaSyntax.parse_factor_after)) | 34 | true | 17
+447 | JuliaSyntax | parse_comparison | (JuliaSyntax.ParseState, Bool) | 128 | true | 16
+373 | JuliaSyntax | #parse!#73 | (Symbol, typeof(JuliaSyntax.parse!), JuliaSyntax.ParseStream) | 47 | true | 14
+409 | JuliaSyntax | parse_Nary | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_public), Tuple{JuliaSyntax.Kind}, Tuple{JuliaSyntax.Kind}) | 52 | true | 14
+410 | JuliaSyntax | parse_Nary | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_eq), Tuple{JuliaSyntax.Kind, JuliaSyntax.Kind}, NTuple{5, JuliaSyntax.Kind}) | 52 | true | 14
+411 | JuliaSyntax | parse_Nary | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_docstring), Tuple{JuliaSyntax.Kind, JuliaSyntax.Kind}, NTuple{5, JuliaSyntax.Kind}) | 52 | true | 14
+412 | JuliaSyntax | parse_Nary | (JuliaSyntax.ParseState, JuliaSyntax.var"#parse_resword##0#parse_resword##1", Tuple{JuliaSyntax.Kind, JuliaSyntax.Kind}, NTuple{5, JuliaSyntax.Kind}) | 52 | true | 14
+413 | JuliaSyntax | parse_Nary | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_public), Tuple{JuliaSyntax.Kind, JuliaSyntax.Kind}, NTuple{5, JuliaSyntax.Kind}) | 52 | true | 14
+481 | JuliaSyntax | parse_stmts | (JuliaSyntax.ParseState) | 40 | true | 14
+492 | JuliaSyntax | parse_with_chains | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_term), typeof(JuliaSyntax.is_prec_plus), Tuple{JuliaSyntax.Kind, JuliaSyntax.Kind}) | 76 | true | 14
+493 | JuliaSyntax | parse_with_chains | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_rational), typeof(JuliaSyntax.is_prec_times), Tuple{JuliaSyntax.Kind}) | 76 | true | 14
+477 | JuliaSyntax | parse_public | (JuliaSyntax.ParseState) | 30 | true | 13
+75 | Compiler | InferenceState | (InferenceResult, UInt8, WasmInterpreter) | 23 | true | 12
+76 | Compiler | InferenceState | (InferenceResult, Core.CodeInfo, UInt8, WasmInterpreter) | 771 | true | 12
+104 | Compiler | argextype | (Any, Compiler.IncrementalCompact, Vector{Compiler.VarState}, Vector{Any}) | 185 | true | 12
+105 | Compiler | argextype | (Any, Compiler.IRCode, Vector{Compiler.VarState}, Vector{Any}) | 185 | true | 12
+106 | Compiler | argextype | (Any, Compiler.IRCode, Vector{Compiler.VarState}) | 5 | true | 12
+121 | Compiler | compact! | (Compiler.IRCode, Bool) | 21 | true | 10
+421 | JuliaSyntax | parse_assignment | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_comma)) | 7 | true | 10
+475 | JuliaSyntax | parse_pair | (JuliaSyntax.ParseState) | 6 | true | 10
+420 | JuliaSyntax | parse_arrow | (JuliaSyntax.ParseState) | 69 | true | 9
+448 | JuliaSyntax | parse_cond | (JuliaSyntax.ParseState) | 131 | true | 9
+468 | JuliaSyntax | parse_invalid_ops | (JuliaSyntax.ParseState) | 38 | true | 9
+478 | JuliaSyntax | parse_range | (JuliaSyntax.ParseState) | 226 | true | 8
+12 | Base | getindex | (Any, Int64) | 15 | true | 7
+13 | Base | getindex | (Any, Any) | 15 | true | 7
+14 | Base | getindex | (SourceFile, UnitRange{UInt32}) | 22 | true | 7
+15 | Base | getindex | (Compiler.TwoPhaseDefUseMap, Int64) | 66 | true | 7
+405 | JuliaSyntax | node_to_expr | (JuliaSyntax.RedTreeCursor, SourceFile, Vector{UInt8}, UInt32) | 329 | true | 7
+235 | Compiler | just_fixup! | (Compiler.IncrementalCompact, Nothing, Nothing) | 156 | true | 6
+236 | Compiler | just_fixup! | (Compiler.IncrementalCompact, Int64, Int64) | 156 | true | 6
+391 | JuliaSyntax | build_tree | (Type{Expr}, JuliaSyntax.ParseStream, SourceFile) | 69 | true | 6
+490 | JuliaSyntax | parse_unary_subtype | (JuliaSyntax.ParseState) | 51 | true | 6
+21 | Base | push! | (Compiler.BitSetBoundedMinPrioritySet, Int64) | 29 | true | 5
+73 | Compiler | IncrementalCompact | (Compiler.IRCode, Compiler.CFGTransformState) | 228 | true | 5
+74 | Compiler | IncrementalCompact | (Compiler.IncrementalCompact, Compiler.IRCode, Int64) | 210 | true | 5
+134 | Compiler | construct_domtree | (Vector{Compiler.BasicBlock}) | 5 | true | 5
+471 | JuliaSyntax | parse_juxtapose | (JuliaSyntax.ParseState) | 138 | true | 5
+487 | JuliaSyntax | parse_unary | (JuliaSyntax.ParseState) | 399 | true | 5
+95 | Compiler | adce_pass! | (Compiler.IRCode, Compiler.InliningState{WasmInterpreter}) | 711 | true | 4
+152 | Compiler | finish | (WasmInterpreter, Compiler.OptimizationState{WasmInterpreter}, Compiler.IRCode, InferenceResult) | 168 | true | 4
+320 | Compiler | sroa_pass! | (Compiler.IRCode, Compiler.InliningState{WasmInterpreter}) | 1575 | true | 4
+67 | Compiler | CFGTransformState! | (Vector{Compiler.BasicBlock}, Bool) | 203 | true | 3
+109 | Compiler | assemble_inline_todo! | (Compiler.IRCode, Compiler.InliningState{WasmInterpreter}) | 152 | true | 3
+135 | Compiler | construct_ssa! | (Core.CodeInfo, Compiler.IRCode, Compiler.OptimizationState{WasmInterpreter}, Compiler.GenericDomTree{false}, Vector{Compiler.SlotInfo}, Compiler.PartialsLattice{Compiler.ConstsLattice}) | 2079 | true | 3
+212 | Compiler | is_known_call | (Any, Any, Compiler.IncrementalCompact) | 18 | true | 3
+270 | Compiler | non_dce_finish! | (Compiler.IncrementalCompact) | 28 | true | 3
+278 | Compiler | process_simple! | (Vector{Pair{Int64, Any}}, Compiler.IRCode, Int64, UInt32, Compiler.InliningState{WasmInterpreter}) | 210 | true | 3
+432 | JuliaSyntax | parse_call | (JuliaSyntax.ParseState) | 15 | true | 3
+494 | JuliaSyntax | parseargs! | (Expr, LineNumberNode, JuliaSyntax.RedTreeCursor, SourceFile, Vector{UInt8}, UInt32) | 92 | true | 3
+22 | Base | resize! | (Compiler.InstructionStream, Int64) | 81 | true | 2
+111 | Compiler | builtin_effects | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Core.Builtin, Vector{Any}, Any) | 304 | true | 2
+112 | Compiler | builtin_effects | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Core.Builtin, Vector{Any}, Any) | 304 | true | 2
+123 | Compiler | complete | (Compiler.IncrementalCompact) | 103 | true | 2
+128 | Compiler | compute_live_ins | (Compiler.CFG, Vector{Int64}, Vector{Int64}) | 195 | true | 2
+129 | Compiler | compute_live_ins | (Compiler.CFG, Compiler.SSADefUse) | 36 | true | 2
+262 | Compiler | most_general_argtypes | (Nothing, Any) | 156 | true | 2
+263 | Compiler | most_general_argtypes | (Method, Any) | 156 | true | 2
+293 | Compiler | retrieve_code_info | (Core.MethodInstance, UInt64) | 90 | true | 2
+305 | Compiler | simple_dce! | (Function, Compiler.IncrementalCompact) | 63 | true | 2
+324 | Compiler | stmt_effect_flags | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any, Compiler.IRCode) | 394 | true | 2
+325 | Compiler | stmt_effect_flags | (Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Any, Compiler.IRCode) | 394 | true | 2
+326 | Compiler | stmt_effect_flags | (Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any, Compiler.IncrementalCompact) | 394 | true | 2
+433 | JuliaSyntax | parse_call_chain | (JuliaSyntax.ParseState, JuliaSyntax.ParseStreamPosition, Bool) | 715 | true | 2
+434 | JuliaSyntax | parse_call_chain | (JuliaSyntax.ParseState, JuliaSyntax.ParseStreamPosition) | 2 | true | 2
+488 | JuliaSyntax | parse_unary_prefix | (JuliaSyntax.ParseState, Bool) | 76 | true | 2
+489 | JuliaSyntax | parse_unary_prefix | (JuliaSyntax.ParseState) | 2 | true | 2
+8 | Base | copy | (Compiler.IRCode) | 88 | true | 1
+9 | Base | copy | (Compiler.InstructionStream) | 18 | true | 1
+10 | Base | copy | (Compiler.CFG) | 39 | true | 1
+23 | Base | setindex! | (Compiler.IncrementalCompact, Any, Core.SSAValue) | 30 | true | 1
+24 | Base | setindex! | (Compiler.IncrementalCompact, Any, Int64) | 15 | true | 1
+25 | Base | setindex! | (Compiler.IncrementalCompact, Any, Compiler.OldSSAValue) | 96 | true | 1
+35 | Base | union! | (Base.Compiler.EscapeAnalysis.IntDisjointSet{Int64}, Int64, Int64) | 19 | true | 1
+68 | Compiler | DFS! | (Compiler.DFSTree, Vector{Compiler.BasicBlock}, Bool) | 195 | true | 1
+69 | Compiler | DFSTree | (Int64) | 30 | true | 1
+72 | Compiler | IRCode | (Compiler.IRCode, Compiler.InstructionStream, Compiler.CFG, Compiler.NewNodeStream) | 77 | true | 1
+77 | Compiler | InstructionStream | (Int64) | 37 | true | 1
+78 | Compiler | SNCA! | (Compiler.GenericDomTree{false}, Vector{Compiler.BasicBlock}, Int64) | 331 | true | 1
+79 | Compiler | _advance | (Any, Int64) | 28 | true | 1
+92 | Compiler | _useref_getindex | (Any, Int64) | 207 | true | 1
+113 | Compiler | call_sig | (Compiler.IRCode, Expr) | 122 | true | 1
+125 | Compiler | compute_basic_blocks | (Vector{Any}) | 249 | true | 1
+136 | Compiler | convert_to_ircode | (Core.CodeInfo, Compiler.OptimizationState{WasmInterpreter}) | 965 | true | 1
+140 | Compiler | domsort_ssa! | (Compiler.IRCode, Compiler.GenericDomTree{false}) | 912 | true | 1
+148 | Compiler | find_ssavalue_uses | (Vector{Any}, Int64) | 113 | true | 1
+233 | Compiler | iterate_compact | (Compiler.IncrementalCompact) | 450 | true | 1
+289 | Compiler | replace_code_newstyle! | (Core.CodeInfo, Compiler.IRCode) | 248 | true | 1
+372 | JuliaSyntax | #bump_trivia#30 | (Bool, String, typeof(JuliaSyntax.bump_trivia), JuliaSyntax.ParseStream, UInt16) | 25 | true | 1
+399 | JuliaSyntax | fixup_Expr_child | (JuliaSyntax.SyntaxHead, Any, Bool) | 257 | true | 1
+424 | JuliaSyntax | parse_atom | (JuliaSyntax.ParseState, Bool, Bool) | 553 | true | 1
+437 | JuliaSyntax | parse_chain | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_term), JuliaSyntax.Kind) | 48 | true | 1
+438 | JuliaSyntax | parse_chain | (JuliaSyntax.ParseState, typeof(JuliaSyntax.parse_rational), JuliaSyntax.Kind) | 48 | true | 1
+454 | JuliaSyntax | parse_factor_with_initial_ex | (JuliaSyntax.ParseState, JuliaSyntax.ParseStreamPosition) | 36 | true | 1
+470 | JuliaSyntax | parse_julia_literal | (Vector{UInt8}, JuliaSyntax.SyntaxHead, UnitRange{UInt32}) | 274 | true | 1
+495 | JuliaSyntax | peek_initial_reserved_words | (JuliaSyntax.ParseState) | 52 | true | 1

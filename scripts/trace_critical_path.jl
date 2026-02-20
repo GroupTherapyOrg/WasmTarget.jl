@@ -37,7 +37,7 @@ for line in eachline(manifest_file)
     isempty(strip(line)) && continue
     parts = split(line, " | "; limit=6)
     length(parts) >= 4 || continue
-    idx = parse(Int, strip(parts[1]))
+    idx = Base.parse(Int, strip(parts[1]))
     mod_name = strip(parts[2])
     func_name = strip(parts[3])
     arg_types_str = strip(parts[4])
