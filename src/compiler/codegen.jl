@@ -18035,10 +18035,34 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         wasm_elem_type = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
         needs_extern_convert = (wasm_elem_type === ExternRef)
         for i in 1:length(val)
-            append!(bytes, compile_value(val[i], ctx))
             if needs_extern_convert
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                elem_val = val[i]
+                elem_bytes = compile_value(elem_val, ctx)
+                # Check if elem_bytes is a plain numeric value (no GC_PREFIX = not a struct/array).
+                # IntrinsicFunction and other primitives compile to i32_const/i64_const.
+                # These cannot be passed to extern_convert_any (which expects anyref),
+                # so we must box them via struct_new first using emit_numeric_to_externref!.
+                has_gc_prefix = any(b == Opcode.GC_PREFIX for b in elem_bytes)
+                is_numeric_elem = !has_gc_prefix && length(elem_bytes) >= 1 &&
+                                  (elem_bytes[1] == Opcode.I32_CONST || elem_bytes[1] == Opcode.I64_CONST ||
+                                   elem_bytes[1] == Opcode.F32_CONST || elem_bytes[1] == Opcode.F64_CONST)
+                if is_numeric_elem
+                    # Box numeric value into a struct then convert to externref
+                    val_wasm_elem = elem_bytes[1] == Opcode.I32_CONST ? I32 :
+                                    elem_bytes[1] == Opcode.I64_CONST ? I64 :
+                                    elem_bytes[1] == Opcode.F32_CONST ? F32 : F64
+                    emit_numeric_to_externref!(bytes, elem_val, val_wasm_elem, ctx)
+                elseif !isempty(elem_bytes) && elem_bytes[end] == UInt8(ExternRef) &&
+                       length(elem_bytes) >= 2 && elem_bytes[end-1] == Opcode.REF_NULL
+                    # Already externref (ref.null extern) — no conversion needed
+                    append!(bytes, elem_bytes)
+                else
+                    append!(bytes, elem_bytes)
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                end
+            else
+                append!(bytes, compile_value(val[i], ctx))
             end
         end
         push!(bytes, Opcode.GC_PREFIX)
@@ -18172,6 +18196,22 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
                 end
             end
             append!(bytes, field_val_bytes)
+            # If field expects externref but we produced a GC-managed ref (anyref subtype, e.g.
+            # string/symbol array or struct), emit extern.convert_any to bridge the two worlds.
+            # (Strings/Symbols compile as ConcreteRef to char array; externref slots need conversion.)
+            if !replaced && struct_type_def isa StructType && fi <= length(struct_type_def.fields)
+                local _ef = struct_type_def.fields[fi].valtype
+                if _ef === ExternRef && has_ref_producing_gc_op(field_val_bytes)
+                    # Check not already externref (ends with 0xFB 0x1B = EXTERN_CONVERT_ANY)
+                    already_extern = length(field_val_bytes) >= 2 &&
+                                     field_val_bytes[end-1] == 0xFB &&
+                                     field_val_bytes[end] == Opcode.EXTERN_CONVERT_ANY
+                    if !already_extern
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                    end
+                end
+            end
         end
 
         # Create the struct
@@ -20928,6 +20968,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                                           arg2_type === Int8 || arg2_type === UInt8 || arg2_type === Char
 
                 # Check arg1's actual Wasm local type (may differ from Julia type inference)
+                local _arg1_local_is_ref = false  # true if arg1's local is ref-typed (not numeric)
                 if length(args) >= 1
                     local arg1_chk = compile_value(args[1], ctx)
                     if length(arg1_chk) >= 2 && arg1_chk[1] == Opcode.LOCAL_GET
@@ -20945,11 +20986,22 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                         if off_chk >= 0 && off_chk < length(ctx.locals)
                             local lt_chk = ctx.locals[off_chk + 1]
                             arg1_actual_32bit = (lt_chk === I32)
+                            # Detect ref-typed locals masquerading as numeric (e.g. Core.IntrinsicFunction
+                            # is stored as ExternRef because julia_to_wasm_type returns ExternRef via
+                            # T<:Function branch, but is_ref_type_or_union returns false for it)
+                            if lt_chk === ExternRef || lt_chk === AnyRef || lt_chk === EqRef ||
+                               lt_chk === StructRef || lt_chk === ArrayRef || lt_chk isa ConcreteRef
+                                _arg1_local_is_ref = true
+                            end
                         elseif idx_chk < ctx.n_params && idx_chk < length(ctx.arg_types)
                             # Function parameter - check arg_types
                             local ptype = ctx.arg_types[idx_chk + 1]
                             local pwasm = julia_to_wasm_type_concrete(ptype, ctx)
                             arg1_actual_32bit = (pwasm === I32)
+                            if pwasm === ExternRef || pwasm === AnyRef || pwasm === EqRef ||
+                               pwasm === StructRef || pwasm === ArrayRef || pwasm isa ConcreteRef
+                                _arg1_local_is_ref = true
+                            end
                         end
                     elseif length(arg1_chk) >= 1 && arg1_chk[1] == Opcode.I32_CONST
                         arg1_actual_32bit = true
@@ -20990,7 +21042,15 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 end
 
                 # Select opcode based on actual Wasm types
-                if arg1_actual_32bit && arg2_actual_32bit
+                if _arg1_local_is_ref
+                    # arg1 is a ref type but Julia treated it as numeric (e.g. Core.IntrinsicFunction
+                    # stored as ExternRef). A ref value can never equal a numeric constant, so drop
+                    # both args and return false.
+                    push!(bytes, Opcode.DROP)
+                    push!(bytes, Opcode.DROP)
+                    push!(bytes, Opcode.I32_CONST)
+                    push!(bytes, 0x00)
+                elseif arg1_actual_32bit && arg2_actual_32bit
                     # Both i32 - use i32_eq
                     push!(bytes, Opcode.I32_EQ)
                 elseif arg1_actual_32bit && !arg2_actual_32bit
