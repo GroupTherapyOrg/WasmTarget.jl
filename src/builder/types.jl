@@ -325,6 +325,19 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
         # Parametric struct type without concrete parameters (e.g., SyntaxGraph)
         # PURE-908: Use ExternRef (not AnyRef) to avoid externref↔anyref type hierarchy mismatches
         return ExternRef
+    elseif isprimitivetype(T)
+        # Custom primitive types (e.g., JuliaSyntax.Kind, Core.IntrinsicFunction) - map by size.
+        # IMPORTANT: Check BEFORE T <: Function since Core.IntrinsicFunction IS a primitive type
+        # (sizeof=8, stored as an integer ID) AND is a subtype of Function.
+        # Without this ordering, IntrinsicFunction → ExternRef (wrong) instead of I64.
+        sz = sizeof(T)
+        if sz <= 4
+            return I32
+        elseif sz <= 8
+            return I64
+        else
+            error("Primitive type too large for Wasm: $T ($sz bytes)")
+        end
     elseif T <: Function
         # Abstract Function types (non-closure) map to externref
         return ExternRef
@@ -340,16 +353,6 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
         # Map to externref like Any
         # NOTE: Type (without parameter) is UnionAll and isabstracttype, maps here
         return ExternRef
-    elseif isprimitivetype(T)
-        # Custom primitive types (e.g., JuliaSyntax.Kind) - map by size
-        sz = sizeof(T)
-        if sz <= 4
-            return I32
-        elseif sz <= 8
-            return I64
-        else
-            error("Primitive type too large for Wasm: $T ($sz bytes)")
-        end
     else
         error("Unsupported Julia type for Wasm: $T")
     end
