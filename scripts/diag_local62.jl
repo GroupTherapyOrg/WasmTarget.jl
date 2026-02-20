@@ -1,63 +1,54 @@
 #!/usr/bin/env julia
-# diag_local62.jl — find where local 62 is set in builtin_effects [111]
-# Error: local_get 62 pushes externref but i64_mul expects i64
+# diag_local62.jl — Find mul_int in builtin_effects IR and identify func 15
+
 using Pkg
 Pkg.activate(joinpath(@__DIR__, ".."))
 using WasmTarget, JuliaSyntax
+
 include(joinpath(@__DIR__, "..", "src", "typeinf", "typeinf_wasm.jl"))
 include(joinpath(@__DIR__, "..", "src", "eval_julia.jl"))
 @isdefined(Compiler) || (@eval const Compiler = Core.Compiler)
 
-manifest_path = joinpath(@__DIR__, "eval_julia_manifest.txt")
-all_lines = readlines(manifest_path)
-data_lines = filter(l -> !startswith(l, "#") && !isempty(strip(l)), all_lines)
-line111 = data_lines[findfirst(l -> startswith(l, "111 |"), data_lines)]
-parts = split(line111, " | ")
-mod = eval(Meta.parse(strip(parts[2])))
-func = getfield(mod, Symbol(strip(parts[3])))
-arg_types = eval(Meta.parse(strip(parts[4])))
-arg_types isa Tuple || (arg_types = (arg_types,))
+bl = Core.Compiler.InferenceLattice{Core.Compiler.ConditionalsLattice{Core.Compiler.PartialsLattice{Core.Compiler.ConstsLattice}}}
 
-bytes = compile(func, arg_types)
-tmpf = tempname() * ".wasm"
-write(tmpf, bytes)
+# Look at builtin_effects IR for mul_int
+println("=== Julia IR for builtin_effects: looking for mul operations ===")
+results = code_typed(Core.Compiler.builtin_effects, (bl, Core.Builtin, Vector{Any}, Any); optimize=true)
+ci, rt = results[1]
+println("Total stmts: $(length(ci.code))")
 
-dump_buf = IOBuffer()
-Base.run(pipeline(`wasm-tools dump $tmpf`, stdout=dump_buf, stderr=devnull))
-dump_text = String(take!(dump_buf))
-dump_lines = split(dump_text, "\n")
-
-# Find all local_set/local_get for local 62 and surrounding context
-println("=== All references to local 62 ===")
-for (i, l) in enumerate(dump_lines)
-    if contains(l, "local_index:62") || contains(l, "local_index:63")
-        println(lpad(i, 6), ": ", l)
-    end
-end
-
-println("\n=== Local declarations (first 120 locals) ===")
-in_func15 = false
-func_count = 0
-for (i, l) in enumerate(dump_lines)
-    if contains(l, "func[")
-        if func_count == 15
-            println("\nfunc 15 boundary at line $i")
+for i in 1:length(ci.code)
+    inst = ci.code[i]
+    typ = ci.ssavaluetypes[i]
+    inst_str = sprint(show, inst)
+    if contains(inst_str, "mul_int") || contains(inst_str, "mul_float") ||
+       contains(inst_str, "checked_smul") || contains(inst_str, "checked_umul")
+        println("  %$i ::$typ = $inst_str")
+        # Show context
+        for j in max(1,i-5):min(length(ci.code),i+5)
+            inst2 = ci.code[j]
+            typ2 = ci.ssavaluetypes[j]
+            mark = j == i ? ">>>" : "   "
+            println("  $mark %$j ::$typ2 = $(sprint(show, inst2)[1:min(100,end)])")
         end
-        func_count += 1
+        println()
     end
 end
 
-println("\n=== Context around offset 0x7dc2 (where local_get 62 is) ===")
-# 30 lines before 0x7dc6
-for (i, l) in enumerate(dump_lines)
-    m = match(r"^\s+0x([0-9a-f]+)", l)
-    if m !== nothing
-        off = Base.parse(Int, "0x" * m.captures[1])
-        if 0x7d80 <= off <= 0x7dc8
-            println(lpad(i, 6), ": ", l)
+# Also search for any i64.mul equivalent (Base.mul_int, Core.Intrinsics.mul_int)
+println("\n=== All arithmetic binary ops ===")
+for i in 1:length(ci.code)
+    inst = ci.code[i]
+    typ = ci.ssavaluetypes[i]
+    if inst isa Expr && inst.head === :call
+        func = inst.args[1]
+        if func isa GlobalRef
+            name = string(func.name)
+            if contains(name, "mul") || contains(name, "add") || contains(name, "sub") || contains(name, "div")
+                println("  %$i ::$typ = $(sprint(show, inst)[1:min(100,end)])")
+            end
+        elseif func isa Core.IntrinsicFunction
+            println("  %$i ::$typ = intrinsic $(sprint(show, inst)[1:min(100,end)])")
         end
     end
 end
-
-rm(tmpf; force=true)
-println("\nDone")
