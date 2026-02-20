@@ -15991,6 +15991,9 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
             # Get the value's actual type
             val_type = if val isa Core.SSAValue
                 get(ctx.ssa_types, val.id, Any)
+            elseif val isa Core.Argument
+                # Core.Argument(n) is an IR node for the nth argument; look up its declared type
+                val.n <= length(ctx.arg_types) ? ctx.arg_types[val.n] : Any
             elseif val isa GlobalRef
                 actual_val = try getfield(val.mod, val.name) catch; nothing end
                 typeof(actual_val)
@@ -16001,8 +16004,10 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
             # Compile the value first
             append!(bytes, compile_value(val, ctx))
 
-            # Wrap it in the tagged union
-            append!(bytes, emit_wrap_union_value(ctx, val_type, field_type))
+            # If val_type is already a union (tagged union struct on stack), don't re-wrap
+            if !(val_type isa Union && val_type <: field_type)
+                append!(bytes, emit_wrap_union_value(ctx, val_type, field_type))
+            end
         elseif field_type isa Union
             # Simple nullable union (Union{Nothing, T})
             inner_type = get_nullable_inner_type(field_type)

@@ -1,0 +1,227 @@
+# PURE-6019: Compile-only catalog — first 420 functions
+# Generated: 2026-02-19T19:05:32.722
+# COMPILES: 369, COMPILE_ERR: 34, TIMEOUT: 17, RESOLVE_FAIL: 0
+#
+COMPILE_ERROR | 8 | Base | copy | TaskFailedException: TaskFailedException
+
+    nested task error: Type Union{Nothing, MethodInstance, Symbol} is not a variant of union Union{Nothing, MethodInstance, Symbol}
+    Stacktrace:
+      [1] error(s::String)
+    ...
+COMPILE_ERROR | 70 | Compiler | DebugInfoStream | TaskFailedException: TaskFailedException
+
+    nested task error: Type Core.Argument is not a variant of union Union{Nothing, MethodInstance, Symbol}
+    Stacktrace:
+      [1] error(s::String)
+        @ Base ./error.jl:44
+...
+COMPILE_ERROR | 71 | Compiler | DebugInfoStream | TaskFailedException: TaskFailedException
+
+    nested task error: Type Core.Argument is not a variant of union Union{Nothing, MethodInstance, Symbol}
+    Stacktrace:
+      [1] error(s::String)
+        @ Base ./error.jl:44
+...
+COMPILE_ERROR | 109 | Compiler | assemble_inline_todo! | TaskFailedException: TaskFailedException
+
+    nested task error: Type Union{Nothing, MethodInstance, Symbol} is not a variant of union Union{Nothing, MethodInstance, Symbol}
+    Stacktrace:
+      [1] error(s::String)
+    ...
+COMPILE_ERROR | 135 | Compiler | construct_ssa! | TaskFailedException: TaskFailedException
+
+    nested task error: BoundsError: attempt to access 6354-element Vector{Any} at index [-2]
+    Stacktrace:
+      [1] throw_boundserror(A::Vector{Any}, I::Tuple{Int64})
+        @...
+COMPILE_ERROR | 136 | Compiler | convert_to_ircode | TaskFailedException: TaskFailedException
+
+    nested task error: Type Core.Argument is not a variant of union Union{Nothing, MethodInstance, Symbol}
+    Stacktrace:
+      [1] error(s::String)
+        @ Base ./error.jl:44
+...
+COMPILE_ERROR | 140 | Compiler | domsort_ssa! | TaskFailedException: TaskFailedException
+
+    nested task error: BoundsError: attempt to access 3548-element Vector{Any} at index [-1]
+    Stacktrace:
+      [1] throw_boundserror(A::Vector{Any}, I::Tuple{Int64})
+        @...
+COMPILE_ERROR | 155 | Compiler | finish_phi_nest! | TaskFailedException: TaskFailedException
+
+    nested task error: Type Core.Argument is not a variant of union Union{IdDict{Any, Union{Nothing, Compiler.LiftedValue}}, IdDict{Any, Bool}}
+    Stacktrace:
+      [1] error(s::...
+COMPILE_ERROR | 156 | Compiler | finish_phi_nest! | TaskFailedException: TaskFailedException
+
+    nested task error: Type Core.Argument is not a variant of union Union{IdDict{Any, Union{Nothing, Compiler.LiftedValue}}, IdDict{Any, Bool}}
+    Stacktrace:
+      [1] error(s::...
+COMPILE_ERROR | 176 | Compiler | handle_invoke_call! | TaskFailedException: TaskFailedException
+
+    nested task error: Type Union{Nothing, MethodInstance, Symbol} is not a variant of union Union{Nothing, MethodInstance, Symbol}
+    Stacktrace:
+      [1] error(s::String)
+    ...
+COMPILE_ERROR | 177 | Compiler | handle_invoke_expr! | TaskFailedException: TaskFailedException
+
+    nested task error: Type Core.Argument is not a variant of union Union{Nothing, MethodInstance, Symbol}
+    Stacktrace:
+      [1] error(s::String)
+        @ Base ./error.jl:44
+...
+COMPILE_ERROR | 179 | Compiler | handle_opaque_closure_call! | TaskFailedException: TaskFailedException
+
+    nested task error: Type Union{Nothing, MethodInstance, Symbol} is not a variant of union Union{Nothing, MethodInstance, Symbol}
+    Stacktrace:
+      [1] error(s::String)
+    ...
+COMPILE_ERROR | 188 | Compiler | inflate_ir! | TaskFailedException: TaskFailedException
+
+    nested task error: Type Core.Argument is not a variant of union Union{Nothing, MethodInstance, Symbol}
+    Stacktrace:
+      [1] error(s::String)
+        @ Base ./error.jl:44
+...
+COMPILE_ERROR | 189 | Compiler | inflate_ir! | TaskFailedException: TaskFailedException
+
+    nested task error: Type Core.Argument is not a variant of union Union{Nothing, MethodInstance, Symbol}
+    Stacktrace:
+      [1] error(s::String)
+        @ Base ./error.jl:44
+...
+COMPILE_ERROR | 246 | Compiler | lift_keyvalue_get! | TaskFailedException: TaskFailedException
+
+    nested task error: Type Core.Argument is not a variant of union Union{IdDict{Any, Union{Nothing, Compiler.LiftedValue}}, IdDict{Any, Bool}}
+    Stacktrace:
+      [1] error(s::...
+COMPILE_ERROR | 250 | Compiler | lifted_value | TaskFailedException: TaskFailedException
+
+    nested task error: Type Core.Argument is not a variant of union Union{IdDict{Any, Union{Nothing, Compiler.LiftedValue}}, IdDict{Any, Bool}}
+    Stacktrace:
+      [1] error(s::...
+COMPILE_ERROR | 251 | Compiler | lifted_value | TaskFailedException: TaskFailedException
+
+    nested task error: Type Core.Argument is not a variant of union Union{IdDict{Any, Union{Nothing, Compiler.LiftedValue}}, IdDict{Any, Bool}}
+    Stacktrace:
+      [1] error(s::...
+COMPILE_ERROR | 252 | Compiler | lifted_value | TaskFailedException: TaskFailedException
+
+    nested task error: Type Core.Argument is not a variant of union Union{IdDict{Any, Union{Nothing, Compiler.LiftedValue}}, IdDict{Any, Bool}}
+    Stacktrace:
+      [1] error(s::...
+COMPILE_ERROR | 253 | Compiler | lifted_value | TaskFailedException: TaskFailedException
+
+    nested task error: Type Core.Argument is not a variant of union Union{IdDict{Any, Union{Nothing, Compiler.LiftedValue}}, IdDict{Any, Bool}}
+    Stacktrace:
+      [1] error(s::...
+COMPILE_ERROR | 273 | Compiler | perform_lifting! | TaskFailedException: TaskFailedException
+
+    nested task error: Type Core.Argument is not a variant of union Union{IdDict{Any, Union{Nothing, Compiler.LiftedValue}}, IdDict{Any, Bool}}
+    Stacktrace:
+      [1] error(s::...
+COMPILE_ERROR | 274 | Compiler | perform_lifting! | TaskFailedException: TaskFailedException
+
+    nested task error: Type Core.Argument is not a variant of union Union{IdDict{Any, Union{Nothing, Compiler.LiftedValue}}, IdDict{Any, Bool}}
+    Stacktrace:
+      [1] error(s::...
+COMPILE_ERROR | 275 | Compiler | perform_lifting! | TaskFailedException: TaskFailedException
+
+    nested task error: Type Core.Argument is not a variant of union Union{IdDict{Any, Union{Nothing, Compiler.LiftedValue}}, IdDict{Any, Bool}}
+    Stacktrace:
+      [1] error(s::...
+COMPILE_ERROR | 291 | Compiler | resolve_todo | TaskFailedException: TaskFailedException
+
+    nested task error: Type Core.Argument is not a variant of union Union{Nothing, MethodInstance, Symbol}
+    Stacktrace:
+      [1] error(s::String)
+        @ Base ./error.jl:44
+...
+COMPILE_ERROR | 292 | Compiler | resolve_todo | TaskFailedException: TaskFailedException
+
+    nested task error: Type Union{Nothing, MethodInstance, Symbol} is not a variant of union Union{Nothing, MethodInstance, Symbol}
+    Stacktrace:
+      [1] error(s::String)
+    ...
+COMPILE_ERROR | 294 | Compiler | retrieve_ir_for_inlining | TaskFailedException: TaskFailedException
+
+    nested task error: Type Core.Argument is not a variant of union Union{Nothing, MethodInstance, Symbol}
+    Stacktrace:
+      [1] error(s::String)
+        @ Base ./error.jl:44
+...
+COMPILE_ERROR | 295 | Compiler | retrieve_ir_for_inlining | TaskFailedException: TaskFailedException
+
+    nested task error: Type Core.Argument is not a variant of union Union{Nothing, MethodInstance, Symbol}
+    Stacktrace:
+      [1] error(s::String)
+        @ Base ./error.jl:44
+...
+COMPILE_ERROR | 297 | Compiler | run_passes_ipo_safe | TaskFailedException: TaskFailedException
+
+    nested task error: BoundsError: attempt to access 6354-element Vector{Any} at index [-2]
+    Stacktrace:
+      [1] throw_boundserror(A::Vector{Any}, I::Tuple{Int64})
+        @...
+COMPILE_ERROR | 302 | Compiler | semiconcrete_result_item | TaskFailedException: TaskFailedException
+
+    nested task error: Type Union{Nothing, MethodInstance, Symbol} is not a variant of union Union{Nothing, MethodInstance, Symbol}
+    Stacktrace:
+      [1] error(s::String)
+    ...
+COMPILE_ERROR | 319 | Compiler | sroa_mutables! | TaskFailedException: TaskFailedException
+
+    nested task error: Type Core.Argument is not a variant of union Union{Nothing, MethodInstance, Symbol}
+    Stacktrace:
+      [1] error(s::String)
+        @ Base ./error.jl:44
+...
+COMPILE_ERROR | 320 | Compiler | sroa_pass! | TaskFailedException: TaskFailedException
+
+    nested task error: BoundsError: attempt to access 6813-element Vector{Any} at index [0]
+    Stacktrace:
+      [1] throw_boundserror(A::Vector{Any}, I::Tuple{Int64})
+        @ ...
+COMPILE_ERROR | 340 | Compiler | try_inline_finalizer! | TaskFailedException: TaskFailedException
+
+    nested task error: Type Core.Argument is not a variant of union Union{Nothing, MethodInstance, Symbol}
+    Stacktrace:
+      [1] error(s::String)
+        @ Base ./error.jl:44
+...
+COMPILE_ERROR | 341 | Compiler | try_resolve_finalizer! | TaskFailedException: TaskFailedException
+
+    nested task error: Type Core.Argument is not a variant of union Union{Nothing, MethodInstance, Symbol}
+    Stacktrace:
+      [1] error(s::String)
+        @ Base ./error.jl:44
+...
+COMPILE_ERROR | 349 | Compiler | typeinf_frame | TaskFailedException: TaskFailedException
+
+    nested task error: BoundsError: attempt to access 6354-element Vector{Any} at index [-2]
+    Stacktrace:
+      [1] throw_boundserror(A::Vector{Any}, I::Tuple{Int64})
+        @...
+COMPILE_ERROR | 352 | Compiler | update_scope_mapping! | TaskFailedException: TaskFailedException
+
+    nested task error: BoundsError: attempt to access 53-element Vector{Any} at index [0]
+    Stacktrace:
+      [1] throw_boundserror(A::Vector{Any}, I::Tuple{Int64})
+        @ Ba...
+TIMEOUT | 1
+TIMEOUT | 369
+TIMEOUT | 373
+TIMEOUT | 406
+TIMEOUT | 407
+TIMEOUT | 408
+TIMEOUT | 409
+TIMEOUT | 410
+TIMEOUT | 411
+TIMEOUT | 412
+TIMEOUT | 413
+TIMEOUT | 414
+TIMEOUT | 415
+TIMEOUT | 416
+TIMEOUT | 417
+TIMEOUT | 418
+TIMEOUT | 420
