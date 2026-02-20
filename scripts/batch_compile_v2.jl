@@ -89,7 +89,7 @@ function resolve_func_entry(line)
     parts = split(line, " | ")
     length(parts) < 4 && return nothing
 
-    idx = parse(Int, strip(parts[1]))
+    idx = Base.parse(Int, strip(parts[1]))
     mod_name = strip(parts[2])
     func_name = strip(parts[3])
     arg_types_str = strip(parts[4])
