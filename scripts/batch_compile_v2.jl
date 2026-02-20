@@ -147,8 +147,9 @@ tmpdir = mktempdir()
 # Process ALL functions from manifest (or set MAX_FUNCS to limit)
 MAX_FUNCS = length(data_lines)  # Test all 542
 VALIDATE = false  # Skip wasm-tools validate for speed (just test compile())
+TIMEOUT_SECS = 120.0  # Per-function timeout to avoid hangs
 
-println("Compiling $MAX_FUNCS functions (VALIDATE=$VALIDATE)...")
+println("Compiling $MAX_FUNCS functions (VALIDATE=$VALIDATE, timeout=$(TIMEOUT_SECS)s)...")
 println()
 
 for (loop_idx, line) in enumerate(data_lines[1:MAX_FUNCS])
@@ -179,40 +180,51 @@ for (loop_idx, line) in enumerate(data_lines[1:MAX_FUNCS])
     err_msg = ""
     nbytes = 0
 
-    # Try compile directly (no timeout — if a function hangs, kill it externally)
-    try
-        bytes = compile(entry.func, entry.arg_types)
-        nbytes = length(bytes)
+    # Wrap compile() in @async + timedwait to handle hangs
+    # Note: timed-out tasks continue in background but main loop moves on
+    compile_task = @async compile(entry.func, entry.arg_types)
+    wait_result = timedwait(() -> istaskdone(compile_task), TIMEOUT_SECS)
 
-        if VALIDATE
-            tmpf = joinpath(tmpdir, "func_$(loop_idx).wasm")
-            write(tmpf, bytes)
+    if wait_result == :timed_out
+        status = :TIMEOUT
+        err_type = "Timeout"
+        err_msg = "Timed out after $(TIMEOUT_SECS)s"
+        n_timeout[] += 1
+    else
+        try
+            bytes = fetch(compile_task)
+            nbytes = length(bytes)
 
-            errbuf = IOBuffer()
-            validate_ok = false
-            try
-                run(pipeline(`wasm-tools validate --features=gc $tmpf`, stderr=errbuf, stdout=devnull))
-                validate_ok = true
-            catch; end
+            if VALIDATE
+                tmpf = joinpath(tmpdir, "func_$(loop_idx).wasm")
+                write(tmpf, bytes)
 
-            if validate_ok
-                status = :VALIDATES
-                n_validates[] += 1
+                errbuf = IOBuffer()
+                validate_ok = false
+                try
+                    Base.run(pipeline(`wasm-tools validate --features=gc $tmpf`, stderr=errbuf, stdout=devnull))
+                    validate_ok = true
+                catch; end
+
+                if validate_ok
+                    status = :VALIDATES
+                    n_validates[] += 1
+                else
+                    status = :VALIDATE_ERROR
+                    err_msg = String(take!(errbuf))
+                    err_type = classify_validate_error(err_msg)
+                    n_validate_err[] += 1
+                end
             else
-                status = :VALIDATE_ERROR
-                err_msg = String(take!(errbuf))
-                err_type = classify_validate_error(err_msg)
-                n_validate_err[] += 1
+                status = :COMPILES
+                n_compiles[] += 1
             end
-        else
-            status = :COMPILES
-            n_compiles[] += 1
+        catch e
+            status = :COMPILE_ERROR
+            err_msg = sprint(showerror, e)
+            err_type = classify_error(e)
+            n_compile_err[] += 1
         end
-    catch e
-        status = :COMPILE_ERROR
-        err_msg = sprint(showerror, e)
-        err_type = classify_error(e)
-        n_compile_err[] += 1
     end
 
     arg_str = "(" * join([string(t) for t in entry.arg_types], ", ") * ")"
