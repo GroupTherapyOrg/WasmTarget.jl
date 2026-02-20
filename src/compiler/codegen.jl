@@ -14712,10 +14712,10 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                     # PURE-325: PiNode narrowing from ExternRef → numeric (I64/I32/F64/F32).
                     # The externref holds a boxed numeric value. Unbox via any_convert_extern +
                     # ref_cast to box type + struct_get field 0.
-                    elseif !is_multi_value_src && val_wasm_type === ExternRef && (pi_local_type === I64 || pi_local_type === I32 || pi_local_type === F64 || pi_local_type === F32) && haskey(ctx.type_registry.numeric_boxes, pi_local_type)
+                    elseif !is_multi_value_src && val_wasm_type === ExternRef && (pi_local_type === I64 || pi_local_type === I32 || pi_local_type === F64 || pi_local_type === F32)
                         val_bytes = compile_value(stmt.val, ctx)
                         append!(bytes, val_bytes)
-                        local box_type_idx = ctx.type_registry.numeric_boxes[pi_local_type]
+                        local box_type_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, pi_local_type)
                         append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
                         push!(bytes, Opcode.GC_PREFIX)
                         push!(bytes, Opcode.REF_CAST_NULL)
