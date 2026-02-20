@@ -100,65 +100,69 @@ println("Step 2: Compiling $(length(sorted_funcs)) functions individually...")
 println("  (each function compiled as a standalone module)")
 println()
 
-n_validates = 0
-n_validate_err = 0
-n_compile_err = 0
+n_validates = Ref(0)
+n_validate_err = Ref(0)
+n_compile_err = Ref(0)
 
-for (idx, (f, arg_types, name)) in enumerate(sorted_funcs)
-    mod_name = try string(parentmodule(f)) catch; "Unknown" end
-    arg_str = "(" * join([string(t) for t in arg_types], ", ") * ")"
+function run_batch!(results, sorted_funcs, tmpdir, n_validates, n_validate_err, n_compile_err)
+    for (idx, (f, arg_types, name)) in enumerate(sorted_funcs)
+        mod_name = try string(parentmodule(f)) catch; "Unknown" end
+        arg_str = "(" * join([string(t) for t in arg_types], ", ") * ")"
 
-    if idx % 50 == 1
-        println("  Progress: $idx/$(length(sorted_funcs)) — validates=$n_validates, compile_err=$n_compile_err, validate_err=$n_validate_err")
-    end
-
-    # Try to compile
-    status = :COMPILE_ERROR
-    err_type = "Other"
-    err_msg = ""
-    nbytes = 0
-
-    try
-        bytes = compile(f, arg_types)
-        nbytes = length(bytes)
-
-        # Write to temp file and validate
-        tmpf = joinpath(tmpdir, "func_$(idx).wasm")
-        write(tmpf, bytes)
-
-        errbuf = IOBuffer()
-        validate_ok = false
-        try
-            run(pipeline(`wasm-tools validate --features=gc $tmpf`, stderr=errbuf, stdout=devnull))
-            validate_ok = true
-        catch; end
-
-        if validate_ok
-            status = :VALIDATES
-            n_validates += 1
-        else
-            status = :VALIDATE_ERROR
-            err_msg = String(take!(errbuf))
-            err_type = classify_validate_error(err_msg)
-            n_validate_err += 1
+        if idx % 50 == 1
+            println("  Progress: $idx/$(length(sorted_funcs)) — validates=$(n_validates[]), compile_err=$(n_compile_err[]), validate_err=$(n_validate_err[])")
         end
 
-    catch ce
+        # Try to compile
         status = :COMPILE_ERROR
-        err_msg = sprint(showerror, ce)
-        err_type = classify_compile_error(ce)
-        n_compile_err += 1
-    end
+        err_type = "Other"
+        err_msg = ""
+        nbytes = 0
 
-    push!(results, CompileResult(idx, mod_name, name, arg_str, status, err_type, err_msg, nbytes))
+        try
+            bytes = compile(f, arg_types)
+            nbytes = length(bytes)
+
+            # Write to temp file and validate
+            tmpf = joinpath(tmpdir, "func_$(idx).wasm")
+            write(tmpf, bytes)
+
+            errbuf = IOBuffer()
+            validate_ok = false
+            try
+                run(pipeline(`wasm-tools validate --features=gc $tmpf`, stderr=errbuf, stdout=devnull))
+                validate_ok = true
+            catch; end
+
+            if validate_ok
+                status = :VALIDATES
+                n_validates[] += 1
+            else
+                status = :VALIDATE_ERROR
+                err_msg = String(take!(errbuf))
+                err_type = classify_validate_error(err_msg)
+                n_validate_err[] += 1
+            end
+
+        catch ce
+            status = :COMPILE_ERROR
+            err_msg = sprint(showerror, ce)
+            err_type = classify_compile_error(ce)
+            n_compile_err[] += 1
+        end
+
+        push!(results, CompileResult(idx, mod_name, name, arg_str, status, err_type, err_msg, nbytes))
+    end
 end
+
+run_batch!(results, sorted_funcs, tmpdir, n_validates, n_validate_err, n_compile_err)
 
 # ── Step 3: Build failure catalog ─────────────────────────────────────────────
 println()
 println("=== RESULTS SUMMARY ===")
-println("  VALIDATES:      $n_validates / $(length(sorted_funcs))")
-println("  COMPILE_ERROR:  $n_compile_err / $(length(sorted_funcs))")
-println("  VALIDATE_ERROR: $n_validate_err / $(length(sorted_funcs))")
+println("  VALIDATES:      $(n_validates[]) / $(length(sorted_funcs))")
+println("  COMPILE_ERROR:  $(n_compile_err[]) / $(length(sorted_funcs))")
+println("  VALIDATE_ERROR: $(n_validate_err[]) / $(length(sorted_funcs))")
 println()
 
 # Group failures by error type
@@ -230,9 +234,9 @@ println("### $(Dates.today()): PURE-6019 [DONE] — Batch compile $(length(sorte
 println()
 println("| Category | Count |")
 println("|----------|-------|")
-println("| VALIDATES | $n_validates |")
-println("| COMPILE_ERROR (total) | $n_compile_err |")
-println("| VALIDATE_ERROR (total) | $n_validate_err |")
+println("| VALIDATES | $(n_validates[]) |")
+println("| COMPILE_ERROR (total) | $(n_compile_err[]) |")
+println("| VALIDATE_ERROR (total) | $(n_validate_err[]) |")
 println()
 for (cat, items) in sorted_cats
     println("| $cat | $(length(items)) |")
