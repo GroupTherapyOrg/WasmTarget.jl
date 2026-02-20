@@ -22040,8 +22040,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
     # _svec_len returns Int64 = array.len (converted from i32 to i64).
     # Match both GlobalRef(Core, :_svec_len) and the direct builtin function object.
     # Julia's type inference may resolve length(::SimpleVector) to the builtin directly.
+    # PURE-6021: args[1] (svec array) is already pre-pushed by the generic loop above.
     elseif ((func isa GlobalRef && func.name === :_svec_len && func.mod === Core) || func === Core._svec_len) && length(args) == 1
-        append!(bytes, compile_value(args[1], ctx))
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.ARRAY_LEN)
         # array.len returns i32 but Julia expects Int64
@@ -22050,9 +22050,10 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
     # PURE-4149: Core._svec_ref(sv, i) — get element from SimpleVector (externref array).
     # _svec_ref is 1-indexed in Julia, 0-indexed in Wasm → subtract 1.
     # Match both GlobalRef and direct builtin function object (same as _svec_len above).
+    # PURE-6021: args[1] (svec array) and args[2] (i64 index) are already pre-pushed by
+    # the generic loop above — do NOT call compile_value again here (causes double-push,
+    # leaving 2 orphaned values on the stack → "values remaining" validation error).
     elseif ((func isa GlobalRef && func.name === :_svec_ref && func.mod === Core) || func === Core._svec_ref) && length(args) == 2
-        append!(bytes, compile_value(args[1], ctx))
-        append!(bytes, compile_value(args[2], ctx))
         # Convert i64 Julia index to i32 Wasm index and subtract 1 for 0-indexing
         push!(bytes, Opcode.I32_WRAP_I64)
         push!(bytes, Opcode.I32_CONST)
