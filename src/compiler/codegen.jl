@@ -5259,7 +5259,7 @@ function allocate_ssa_locals!(ctx::CompilationContext)
             for j in 1:length(stmt.values)
                 if isassigned(stmt.values, j)
                     val = stmt.values[j]
-                    if val isa Core.SSAValue && !(code[val.id] isa Core.PhiNode)
+                    if val isa Core.SSAValue && 1 <= val.id <= length(code) && !(code[val.id] isa Core.PhiNode)
                         # This is a non-phi SSA referenced by a phi - needs local
                         push!(needs_local_set, val.id)
                     end
@@ -10406,6 +10406,11 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
             else
                 # SSA without local - need to recompute the statement
                 # This should ideally not happen for phi values, but handle it
+                # PURE-6021: Guard against out-of-bounds SSAValue IDs (sentinel values)
+                if val.id < 1 || val.id > length(code)
+                    append!(result, emit_phi_type_default(phi_local_wasm_type))
+                    return result
+                end
                 stmt = code[val.id]
                 # PURE-036bg: Check type compatibility for recomputed SSA values
                 # The compiled statement may produce a type incompatible with the phi local
@@ -12604,6 +12609,10 @@ function detect_switch_pattern(code, conditionals)
         cond = gin.cond
 
         if !(cond isa Core.SSAValue)
+            continue
+        end
+        # PURE-6021: Guard against out-of-bounds SSAValue IDs
+        if cond.id < 1 || cond.id > length(code)
             continue
         end
 
@@ -16139,7 +16148,7 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
             # compile_value(nothing) returns i32.const 0, which can't be extern.convert_any'd
             is_nothing_val = val === nothing ||
                             (val isa GlobalRef && val.name === :nothing) ||
-                            (val isa Core.SSAValue && begin
+                            (val isa Core.SSAValue && 1 <= val.id <= length(ctx.code_info.code) && begin
                                 ssa_stmt_check = ctx.code_info.code[val.id]
                                 (ssa_stmt_check isa GlobalRef && ssa_stmt_check.name === :nothing) ||
                                 (ssa_stmt_check isa Core.PiNode && ssa_stmt_check.typ === Nothing)
@@ -17534,6 +17543,11 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
             append!(bytes, encode_leb128_unsigned(local_idx))
         else
             # No local - check if this is a PiNode
+            # PURE-6021: Guard against out-of-bounds SSAValue IDs (e.g. sentinel Core.SSAValue(-2)
+            # that appear as constant literals in IR of compiler functions like construct_ssa!)
+            if val.id < 1 || val.id > length(ctx.code_info.code)
+                return bytes  # Dead code - sentinel SSAValue with invalid id
+            end
             stmt = ctx.code_info.code[val.id]
             if stmt isa Core.PiNode
                 pi_type = get(ctx.ssa_types, val.id, Any)
@@ -25976,6 +25990,8 @@ This is true for comparison results, Bool literals, and phi nodes with Bool type
 function is_boolean_value(val, ctx::CompilationContext)::Bool
     if val isa Core.SSAValue
         # Check if the SSA value is from a comparison
+        # PURE-6021: Guard against out-of-bounds SSAValue IDs
+        (val.id < 1 || val.id > length(ctx.code_info.code)) && return false
         stmt = ctx.code_info.code[val.id]
         if stmt isa Expr && stmt.head === :call && is_comparison(stmt.args[1])
             return true
