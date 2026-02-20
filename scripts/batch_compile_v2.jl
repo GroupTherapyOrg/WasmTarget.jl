@@ -23,17 +23,19 @@ println("Started: $(Dates.now())")
 println()
 
 # Create module aliases so type strings like "Compiler.IRCode" resolve
+# Use @isdefined guards to avoid conflicts with names already imported via
+# `using Core.Compiler: X, Y, Z` in included typeinf files (ccall_stubs.jl, etc.)
 # In Julia 1.12, Core.Compiler is the compiler module
-const Compiler = Core.Compiler
-const SourceFile = JuliaSyntax.SourceFile
-const InternalCodeCache = Core.Compiler.InternalCodeCache
-const WorldRange = Core.Compiler.WorldRange
-const InferenceResult = Core.Compiler.InferenceResult
-const IRCode = Core.Compiler.IRCode
-const CFG = Core.Compiler.CFG
-const InstructionStream = Core.Compiler.InstructionStream
-const CodeInfo = Core.CodeInfo
-const MethodInstance = Core.MethodInstance
+@isdefined(Compiler)          || (@eval const Compiler = Core.Compiler)
+@isdefined(SourceFile)        || (@eval const SourceFile = JuliaSyntax.SourceFile)
+@isdefined(InternalCodeCache) || (@eval const InternalCodeCache = Core.Compiler.InternalCodeCache)
+@isdefined(WorldRange)        || (@eval const WorldRange = Core.Compiler.WorldRange)
+@isdefined(InferenceResult)   || (@eval const InferenceResult = Core.Compiler.InferenceResult)
+@isdefined(IRCode)            || (@eval const IRCode = Core.Compiler.IRCode)
+@isdefined(CFG)               || (@eval const CFG = Core.Compiler.CFG)
+@isdefined(InstructionStream) || (@eval const InstructionStream = Core.Compiler.InstructionStream)
+@isdefined(CodeInfo)          || (@eval const CodeInfo = Core.CodeInfo)
+@isdefined(MethodInstance)    || (@eval const MethodInstance = Core.MethodInstance)
 
 # ── Read manifest ─────────────────────────────────────────────────────────────
 
