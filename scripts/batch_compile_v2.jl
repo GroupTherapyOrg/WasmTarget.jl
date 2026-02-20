@@ -180,9 +180,11 @@ for (loop_idx, line) in enumerate(data_lines[1:MAX_FUNCS])
     err_msg = ""
     nbytes = 0
 
-    # Wrap compile() in @async + timedwait to handle hangs
-    # Note: timed-out tasks continue in background but main loop moves on
-    compile_task = @async compile(entry.func, entry.arg_types)
+    # Wrap compile() in Threads.@spawn + timedwait to handle hangs
+    # Threads.@spawn runs on a real OS thread, so timedwait on the main thread
+    # can detect timeout even if compile() blocks in C code.
+    # Note: timed-out threads continue in background but main loop moves on
+    compile_task = Threads.@spawn compile(entry.func, entry.arg_types)
     wait_result = timedwait(() -> istaskdone(compile_task), TIMEOUT_SECS)
 
     if wait_result == :timed_out
