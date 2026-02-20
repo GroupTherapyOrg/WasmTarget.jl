@@ -5000,12 +5000,28 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
             # Union{Nothing, T} -> use T's concrete type (nullable reference)
             return julia_to_wasm_type_concrete(inner_type, ctx)
         else
-            # PURE-325: Use julia_to_wasm_type for consistency with function signatures.
-            # This ensures the caller's local type matches the called function's return type.
-            # resolve_union_type handles Int128/BigInt/UInt128 unions correctly.
-            result = julia_to_wasm_type(T)
-            # PURE-908: Never return AnyRef for locals — use ExternRef instead
-            return result === AnyRef ? ExternRef : result
+            # Multi-variant union (2+ non-Nothing types).
+            # Check if all non-Nothing variants are numeric (no tagged struct needed).
+            types_u = Base.uniontypes(T)
+            non_nothing_u = filter(t -> t !== Nothing, types_u)
+            all_numeric_u = !isempty(non_nothing_u) && all(non_nothing_u) do t
+                wt = julia_to_wasm_type(t)
+                wt === I32 || wt === I64 || wt === F32 || wt === F64
+            end
+            if all_numeric_u
+                # Numeric-only union: use widest numeric type (no struct boxing needed).
+                # PURE-325: resolve_union_type handles Int128/BigInt/UInt128 unions correctly.
+                result = julia_to_wasm_type(T)
+                # PURE-908: Never return AnyRef for locals — use ExternRef instead
+                return result === AnyRef ? ExternRef : result
+            else
+                # PURE-6021b: Non-numeric multi-variant union uses a tagged-union struct in WASM.
+                # The local must be ConcreteRef to the tagged union type, NOT ExternRef.
+                # Using ExternRef causes validation errors: "expected externref, found (ref null $type)"
+                # because struct.new $union_type_idx returns ConcreteRef, not externref.
+                union_info = get_union_type!(ctx.mod, ctx.type_registry, T)
+                return ConcreteRef(union_info.wasm_type_idx, true)
+            end
         end
     else
         # Use the standard conversion for non-struct types
