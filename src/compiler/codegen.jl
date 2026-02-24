@@ -3078,12 +3078,27 @@ function emit_wrap_union_value(ctx, value_type::Type, union_type::Union)::Vector
         push!(bytes, Opcode.LOCAL_GET)
         append!(bytes, encode_leb128_unsigned(scratch_local))
 
-        # Convert to anyref if it's a reference type
-        # For WasmGC, references can be cast to anyref
-        if value_wasm_type isa ConcreteRef || value_wasm_type isa RefType
-            # extern.convert_any converts any ref to anyref
-            # Actually for WasmGC, struct refs are subtypes of anyref, so no conversion needed
-            # The value is already compatible with anyref
+        # Convert to anyref if needed
+        if value_wasm_type === I32
+            # PURE-6024: Box i32 into i31ref (subtype of anyref) using ref.i31
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.REF_I31)
+        elseif value_wasm_type === I64
+            # PURE-6024: Truncate i64 to i32, then box via ref.i31
+            push!(bytes, Opcode.I32_WRAP_I64)
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.REF_I31)
+        elseif value_wasm_type === F32 || value_wasm_type === F64
+            # PURE-6024: Float in anyref field — drop value, emit ref.null any
+            push!(bytes, Opcode.DROP)
+            push!(bytes, Opcode.REF_NULL)
+            push!(bytes, UInt8(AnyRef))
+        elseif value_wasm_type === ExternRef
+            # ExternRef must be converted to anyref via any_convert_extern
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ANY_CONVERT_EXTERN)
+        elseif value_wasm_type isa ConcreteRef || value_wasm_type isa RefType
+            # Struct/array refs are subtypes of anyref — no conversion needed
         end
     end
 
