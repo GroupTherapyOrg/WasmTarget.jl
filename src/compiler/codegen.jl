@@ -4598,6 +4598,10 @@ mutable struct CompilationContext
     # PURE-908: Set true by compile_call/compile_invoke when a stub emits UNREACHABLE.
     # compile_statement reads and resets this to skip LOCAL_SET in dead code.
     last_stmt_was_stub::Bool
+    # PURE-6024: Slot variable locals for unoptimized IR (may_optimize=false).
+    # Maps SlotNumber.id -> WASM local index. Slot 1 = self, Slot 2 = arg1, etc.
+    # Slots > n_params+1 are local variables assigned with Expr(:(=), SlotNumber, rhs).
+    slot_locals::Dict{Int, Int}
 end
 
 function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
@@ -4635,12 +4639,14 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         nothing,                # scratch_locals (set by allocate_scratch_locals!)
         Dict{Int, Any}(),       # memoryref_offsets (populated during compilation)
         WasmStackValidator(enabled=true, func_name="func_$(func_idx)"),  # PURE-414: stack validator
-        false                   # last_stmt_was_stub (PURE-908)
+        false,                  # last_stmt_was_stub (PURE-908)
+        Dict{Int, Int}()        # slot_locals (PURE-6024: unoptimized IR slot variables)
     )
     # Analyze SSA types and allocate locals for multi-use SSAs
     analyze_ssa_types!(ctx)
     analyze_control_flow!(ctx)  # Find loops and phi nodes
     analyze_signal_captures!(ctx)  # Identify SSAs that are signal getters/setters
+    allocate_slot_locals!(ctx)  # PURE-6024: Slot locals BEFORE SSA locals (no overlap)
     allocate_ssa_locals!(ctx)
     allocate_scratch_locals!(ctx)  # Extra locals for complex operations
     return ctx
@@ -5807,6 +5813,45 @@ function allocate_ssa_locals!(ctx::CompilationContext)
 end
 
 """
+PURE-6024: Allocate WASM locals for slot variables in unoptimized IR (may_optimize=false).
+
+In unoptimized IR, local variables are represented as SlotNumber assignments:
+  code[i] = Expr(:(=), SlotNumber(n), rhs_expr)
+  code[j] = SlotNumber(n)  # reads the assigned value
+
+Slots 1..n_params+1 are the function self + arguments (mapped to WASM params).
+Slots > n_params+1 are local variables that need dedicated WASM locals.
+
+This function scans for slot assignments, determines their types from ssavaluetypes,
+and allocates WASM locals. The slot_locals dict maps SlotNumber.id → WASM local index.
+"""
+function allocate_slot_locals!(ctx::CompilationContext)
+    code = ctx.code_info.code
+    n_arg_slots = length(ctx.arg_types) + 1  # slot 1 = self, slot 2..n+1 = args
+
+    for (i, stmt) in enumerate(code)
+        if stmt isa Expr && stmt.head === :(=) && length(stmt.args) >= 2
+            lhs = stmt.args[1]
+            if lhs isa Core.SlotNumber && lhs.id > n_arg_slots
+                slot_id = lhs.id
+                if !haskey(ctx.slot_locals, slot_id)
+                    # Determine type from ssavaluetypes for this statement
+                    ssa_type = get(ctx.ssa_types, i, Any)
+                    wasm_type = julia_to_wasm_type_concrete(ssa_type, ctx)
+                    # Normalize AnyRef → ExternRef
+                    if wasm_type === AnyRef
+                        wasm_type = ExternRef
+                    end
+                    local_idx = ctx.n_params + length(ctx.locals)
+                    push!(ctx.locals, wasm_type)
+                    ctx.slot_locals[slot_id] = local_idx
+                end
+            end
+        end
+    end
+end
+
+"""
 Check if an SSA value needs a local (e.g., not used immediately or used after other stack-producing operations).
 """
 function needs_local(ctx::CompilationContext, ssa_id::Int)
@@ -6239,6 +6284,7 @@ function infer_value_type(val, ctx::CompilationContext)
     elseif val isa Core.SlotNumber
         # PURE-6024: SlotNumber is the unoptimized IR equivalent of Core.Argument.
         # Slot 1 = function self, slot 2+ = arguments (same indexing as Argument).
+        # For local variable slots (not params), use slottypes from CodeInfo.
         if ctx.is_compiled_closure
             idx = val.id
         else
@@ -6246,6 +6292,9 @@ function infer_value_type(val, ctx::CompilationContext)
         end
         if idx >= 1 && idx <= length(ctx.arg_types)
             return ctx.arg_types[idx]
+        elseif val.id >= 1 && val.id <= length(ctx.code_info.slottypes)
+            # Local variable slot — return its inferred type from CodeInfo
+            return ctx.code_info.slottypes[val.id]
         end
     elseif val isa Core.SSAValue
         return get(ctx.ssa_types, val.id, Any)
@@ -7629,6 +7678,22 @@ function get_phi_edge_wasm_type(val, ctx::CompilationContext)::Union{WasmValType
         edge_julia_type = get(ctx.ssa_types, val.id, nothing)
         if edge_julia_type !== nothing
             return julia_to_wasm_type_concrete(edge_julia_type, ctx)
+        end
+    elseif val isa Core.SlotNumber
+        # PURE-6024: SlotNumber in unoptimized IR — check slot_locals first
+        if haskey(ctx.slot_locals, val.id)
+            local_idx = ctx.slot_locals[val.id]
+            local_array_idx = local_idx - ctx.n_params + 1
+            if local_array_idx >= 1 && local_array_idx <= length(ctx.locals)
+                return ctx.locals[local_array_idx]
+            end
+        end
+        # Fall back to param mapping or slottypes
+        arg_types_idx = val.id - 1
+        if arg_types_idx >= 1 && arg_types_idx <= length(ctx.arg_types)
+            return get_concrete_wasm_type(ctx.arg_types[arg_types_idx], ctx.mod, ctx.type_registry)
+        elseif val.id >= 1 && val.id <= length(ctx.code_info.slottypes)
+            return julia_to_wasm_type_concrete(ctx.code_info.slottypes[val.id], ctx)
         end
     elseif val isa Core.Argument
         # PURE-036ab: Use the ACTUAL Wasm parameter type from arg_types, not the Julia slottype.
@@ -14820,6 +14885,14 @@ Compile a single IR statement to Wasm bytecode.
 function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt8}
     bytes = UInt8[]
 
+    # PURE-6024: Handle slot assignments in unoptimized IR (may_optimize=false).
+    # Unwrap Expr(:(=), SlotNumber(n), inner_expr) → compile inner_expr, store to slot local.
+    _slot_assign_id = 0  # SlotNumber.id if this is a slot assignment, 0 otherwise
+    if stmt isa Expr && stmt.head === :(=) && length(stmt.args) >= 2 && stmt.args[1] isa Core.SlotNumber
+        _slot_assign_id = stmt.args[1].id
+        stmt = stmt.args[2]  # Unwrap to inner expression
+    end
+
     if stmt isa Core.ReturnNode
         # DEBUG: Trace compile_statement ReturnNode handler
         if isdefined(stmt, :val)
@@ -15090,6 +15163,10 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
             push!(bytes, Opcode.LOCAL_SET)  # Use SET not TEE to not leave on stack
             append!(bytes, encode_leb128_unsigned(local_idx))
         end
+
+    elseif stmt isa Core.NewvarNode
+        # PURE-6024: Unoptimized IR slot initialization — no-op in WASM
+        # (WASM locals are default-initialized to null/zero)
 
     elseif stmt isa Core.EnterNode
         # Exception handling: Enter try block
@@ -15934,10 +16011,23 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                     end
                     end  # close else from PURE-908 externref↔anyref check
                 end
+                # PURE-6024: If this is a slot assignment, TEE to slot local first
+                # (leaves value on stack for the SSA local.set below)
+                if _slot_assign_id > 0 && haskey(ctx.slot_locals, _slot_assign_id)
+                    push!(bytes, Opcode.LOCAL_TEE)
+                    append!(bytes, encode_leb128_unsigned(ctx.slot_locals[_slot_assign_id]))
+                end
                 push!(bytes, Opcode.LOCAL_SET)
                 append!(bytes, encode_leb128_unsigned(local_idx))
             end
         end
+    end
+
+    # PURE-6024: If this is a slot assignment but there's NO SSA local to store to,
+    # the value is still on the stack — store it to the slot local directly.
+    if _slot_assign_id > 0 && haskey(ctx.slot_locals, _slot_assign_id) && !haskey(ctx.ssa_locals, idx)
+        push!(bytes, Opcode.LOCAL_SET)
+        append!(bytes, encode_leb128_unsigned(ctx.slot_locals[_slot_assign_id]))
     end
 
     return bytes
@@ -17718,6 +17808,27 @@ function infer_value_wasm_type(val, ctx::CompilationContext)::WasmValType
         # Fall back to Julia type inference
         ssa_type = get(ctx.ssa_types, val.id, Any)
         return julia_to_wasm_type_concrete(ssa_type, ctx)
+    elseif val isa Core.SlotNumber
+        # PURE-6024: SlotNumber in unoptimized IR — check slot_locals first, then params
+        if haskey(ctx.slot_locals, val.id)
+            local_idx = ctx.slot_locals[val.id]
+            local_array_idx = local_idx - ctx.n_params + 1
+            if local_array_idx >= 1 && local_array_idx <= length(ctx.locals)
+                return ctx.locals[local_array_idx]
+            end
+        end
+        # Fall back to param mapping or slottypes
+        if ctx.is_compiled_closure
+            arg_idx = val.id
+        else
+            arg_idx = val.id - 1
+        end
+        if arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
+            return julia_to_wasm_type_concrete(ctx.arg_types[arg_idx], ctx)
+        elseif val.id >= 1 && val.id <= length(ctx.code_info.slottypes)
+            return julia_to_wasm_type_concrete(ctx.code_info.slottypes[val.id], ctx)
+        end
+        return ExternRef
     elseif val isa Core.Argument
         # PURE-325: Match compile_value's offset — for regular functions, _1 is the
         # function object, so actual args start at _2 → arg_types[1].
@@ -17940,10 +18051,17 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         end
 
     elseif val isa Core.SlotNumber
-        local_idx = val.id - 2
-        if local_idx >= 0
+        # PURE-6024: Check slot_locals first (for local variables in unoptimized IR),
+        # then fall back to param mapping (slot 2 = param 0, slot 3 = param 1, etc.)
+        if haskey(ctx.slot_locals, val.id)
             push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(local_idx))
+            append!(bytes, encode_leb128_unsigned(ctx.slot_locals[val.id]))
+        else
+            local_idx = val.id - 2
+            if local_idx >= 0
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(local_idx))
+            end
         end
 
     elseif val isa Bool
