@@ -16634,7 +16634,15 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
         n_required = length(struct_type_def.fields)
         # DEBUG: trace ALL struct_new emissions with 2 externref fields
         if n_required == 2 && struct_type_def.fields[1].valtype === ExternRef && struct_type_def.fields[2].valtype === ExternRef
-            println("DEBUG_STRUCT_NEW_2EXTERN: struct_type=$struct_type type_idx=$(info.wasm_type_idx) n_provided=$n_provided bytes_len=$(length(bytes))")
+            println("DEBUG_STRUCT_NEW_2EXTERN: struct_type=$struct_type type_idx=$(info.wasm_type_idx) n_provided=$n_provided bytes_len=$(length(bytes)) idx=$idx")
+            # Count how many ref_null extern (D0 6F) appear in the bytes
+            n_ref_nulls = 0
+            for bi in 1:(length(bytes)-1)
+                if bytes[bi] == 0xD0 && bytes[bi+1] == 0x6F
+                    n_ref_nulls += 1
+                end
+            end
+            println("  ref_null_extern_count=$n_ref_nulls stacktrace=$(join(string.(stacktrace()[1:min(8, end)]), " <- "))")
         end
         for fi in (n_provided + 1):n_required
             missing_field_type = struct_type_def.fields[fi].valtype

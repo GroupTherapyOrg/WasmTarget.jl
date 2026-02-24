@@ -1,13 +1,15 @@
 using WasmTarget
+using JuliaSyntax
 
-# Compile construct_ssa! individually to trace the struct_new 164 issue
-# The types used by construct_ssa!:
-arg_types = (Core.Compiler.IncrementalCompact, Vector{Any}, Vector{Any}, Type, Bool, Bool)
+include(joinpath(@__DIR__, "..", "src", "typeinf", "typeinf_wasm.jl"))
+include(joinpath(@__DIR__, "..", "src", "eval_julia.jl"))
+
+arg_types = (Core.CodeInfo, Core.Compiler.IRCode, Core.Compiler.OptimizationState{WasmInterpreter}, Core.Compiler.GenericDomTree{false}, Vector{Core.Compiler.SlotInfo}, Core.Compiler.PartialsLattice{Core.Compiler.ConstsLattice})
 
 println("Compiling construct_ssa! individually...")
 try
     bytes = WasmTarget.compile(Core.Compiler.construct_ssa!, arg_types)
-    outfile = "/tmp/construct_ssa.wasm"
+    outfile = joinpath(@__DIR__, "..", "output", "construct_ssa.wasm")
     write(outfile, bytes)
     println("Size: $(length(bytes)) bytes")
 
