@@ -8742,8 +8742,9 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                                   !(length(compiled_stmt_bytes) >= 2 && compiled_stmt_bytes[end-1] == Opcode.CALL)
                 # Use statement_produces_wasm_value for consistent handling
                 # This checks the function registry for accurate return type info
-                # PURE-6024: Also skip DROP if last_stmt_was_stub (call to void/Union{} func)
-                if !already_dropped && !ctx.last_stmt_was_stub && statement_produces_wasm_value(stmt, i, ctx)
+                # Use statement_produces_wasm_value for consistent handling
+                # This checks the function registry for accurate return type info
+                if !already_dropped && statement_produces_wasm_value(stmt, i, ctx)
                     if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                         use_count = get(ssa_use_count, i, 0)
                         if use_count == 0
@@ -10179,8 +10180,7 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                       !(length(stmt_bytes) >= 2 && stmt_bytes[end-1] == Opcode.CALL)
                     # Use statement_produces_wasm_value to check if the call actually
                     # produces a value on the stack (handles Any type correctly)
-                    # PURE-6024: Also skip DROP if last_stmt_was_stub (call to void/Union{} func)
-                    if !already_dropped && !ctx.last_stmt_was_stub && statement_produces_wasm_value(stmt, i, ctx)
+                    if !already_dropped && statement_produces_wasm_value(stmt, i, ctx)
                         if !haskey(ctx.phi_locals, i)
                             use_count = get(ssa_use_count, i, 0)
                             if use_count == 0
