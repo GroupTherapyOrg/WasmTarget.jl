@@ -6414,21 +6414,6 @@ function statement_produces_wasm_value(stmt::Expr, idx::Int, ctx::CompilationCon
                     end
                 catch
                 end
-            elseif func_ref isa Core.SSAValue
-                # PURE-6024: Handle indirect calls through SSAValues (common in unoptimized IR)
-                # e.g., %1 = Core.throw; %2 = (%1)(err) — func_ref is SSAValue(1)
-                # Look up the SSA type to extract the actual function via Core.Const
-                ssa_func_type = get(ctx.ssa_types, func_ref.id, Any)
-                if ssa_func_type isa Core.Const
-                    try
-                        called_func = ssa_func_type.val
-                        if called_func !== Base.getfield && called_func !== Core.getfield &&
-                           called_func !== Base.setfield! && called_func !== Core.setfield!
-                            call_arg_types = Tuple{[infer_value_type(arg, ctx) for arg in stmt.args[2:end]]...}
-                        end
-                    catch
-                    end
-                end
             end
         end
 
