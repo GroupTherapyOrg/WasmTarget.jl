@@ -170,7 +170,7 @@ function eval_julia_test_toplevel(code_bytes::Vector{UInt8})::Int32
     end
 end
 
-# Step E: node_to_expr
+# Step E: node_to_expr — full call
 function eval_julia_test_node_to_expr(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
     JuliaSyntax.parse!(ps; rule=:statement)
@@ -185,6 +185,98 @@ function eval_julia_test_node_to_expr(code_bytes::Vector{UInt8})::Int32
         wrapper_head = JuliaSyntax.SyntaxHead(JuliaSyntax.K"wrapper", JuliaSyntax.EMPTY_FLAGS)
         e = JuliaSyntax.node_to_expr(cursor, source, txtbuf)
         return Int32(42)
+    catch
+        return Int32(-1)
+    end
+end
+
+# Step E1: byte_range of cursor
+function eval_julia_test_byte_range(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        srcrange = JuliaSyntax.byte_range(cursor)
+        return Int32(length(srcrange))
+    catch
+        return Int32(-1)
+    end
+end
+
+# Step E2: source_location
+function eval_julia_test_source_location(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        source = JuliaSyntax.SourceFile(ps)
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        srcrange = JuliaSyntax.byte_range(cursor)
+        loc = JuliaSyntax.source_location(LineNumberNode, source, first(srcrange))
+        return Int32(loc.line)
+    catch
+        return Int32(-1)
+    end
+end
+
+# Step E3: untokenize (returns String from head)
+function eval_julia_test_untokenize(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        nodehead = JuliaSyntax.head(cursor)
+        headstr = JuliaSyntax.untokenize(nodehead; include_flag_suff=false)
+        if headstr === nothing
+            return Int32(-2)
+        end
+        return Int32(length(headstr))
+    catch
+        return Int32(-1)
+    end
+end
+
+# Step E4: _expr_leaf_val on a leaf child
+function eval_julia_test_leaf_val(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        txtbuf = JuliaSyntax.unsafe_textbuf(ps)
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        # Get first nontrivia child (should be integer leaf "1")
+        for child in JuliaSyntax.reverse_nontrivia_children(cursor)
+            if JuliaSyntax.is_leaf(child)
+                val = JuliaSyntax._expr_leaf_val(child, txtbuf, UInt32(0))
+                if val isa Int64
+                    return Int32(val)
+                elseif val isa Symbol
+                    return Int32(99)  # Symbol found (e.g. :+)
+                else
+                    return Int32(88)  # other type
+                end
+            end
+        end
+        return Int32(-3)  # no leaf child found
+    catch
+        return Int32(-1)
+    end
+end
+
+# Step E5: parseargs! on the call node
+function eval_julia_test_parseargs(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        source = JuliaSyntax.SourceFile(ps)
+        txtbuf = JuliaSyntax.unsafe_textbuf(ps)
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        srcrange = JuliaSyntax.byte_range(cursor)
+        loc = JuliaSyntax.source_location(LineNumberNode, source, first(srcrange))
+        nodehead = JuliaSyntax.head(cursor)
+        headstr = JuliaSyntax.untokenize(nodehead; include_flag_suff=false)
+        headsym = Symbol(headstr)
+        retexpr = Expr(headsym)
+        (firstchildhead, firstchildrange) = JuliaSyntax.parseargs!(retexpr, loc, cursor, source, txtbuf, UInt32(0))
+        return Int32(length(retexpr.args))
     catch
         return Int32(-1)
     end

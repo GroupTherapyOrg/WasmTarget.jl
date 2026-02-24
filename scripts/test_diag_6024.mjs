@@ -24,13 +24,12 @@ async function main() {
     }
 
     const code = "1+1";
-    const vec = jsToWasmBytes(code);
 
-    // List all diagnostic exports
-    const diagExports = Object.keys(instance.exports).filter(k =>
-        k.startsWith('eval_julia_test_') && typeof instance.exports[k] === 'function'
+    // List all exports
+    const allExports = Object.keys(instance.exports).filter(k =>
+        typeof instance.exports[k] === 'function'
     );
-    console.log("Diagnostic exports:", diagExports);
+    console.log(`Total function exports: ${allExports.length}`);
 
     // Test each diagnostic function
     const tests = [
@@ -38,9 +37,14 @@ async function main() {
         'eval_julia_test_parse_int',
         'eval_julia_test_ps_create',
         'eval_julia_test_parse_only',
+        'eval_julia_test_sourcefile',
+        'eval_julia_test_textbuf',
+        'eval_julia_test_cursor',
+        'eval_julia_test_toplevel',
+        'eval_julia_test_node_to_expr',
         'eval_julia_test_build_tree',
-        'eval_julia_test_substring',
         'eval_julia_test_tree_nranges',
+        'eval_julia_test_substring',
         'eval_julia_test_parse',
     ];
 
@@ -51,16 +55,17 @@ async function main() {
             continue;
         }
         try {
-            // Need fresh vec for each test since some may consume it
             const v = jsToWasmBytes(code);
             const result = fn(v);
             console.log(`  ${name}("${code}") = ${result}`);
         } catch (e) {
-            console.log(`  ${name}("${code}") = ERROR: ${e.message}`);
+            const etype = e instanceof WebAssembly.RuntimeError ? 'RuntimeError' :
+                          e instanceof WebAssembly.Exception ? 'Exception' : e.constructor.name;
+            console.log(`  ${name}("${code}") = ${etype}: ${e.message || 'no message'}`);
         }
     }
 
-    // Also test with "42" for parse_int
+    // Test with "42" for parse_int
     try {
         const v42 = jsToWasmBytes("42");
         const r = instance.exports['eval_julia_test_parse_int'](v42);
@@ -69,19 +74,19 @@ async function main() {
         console.log(`  eval_julia_test_parse_int("42") = ERROR: ${e.message}`);
     }
 
-    // Test eval_julia_to_bytes_vec with better error details
+    // Test eval_julia_to_bytes_vec with full error info
     console.log("\n--- eval_julia_to_bytes_vec test ---");
     try {
         const v = jsToWasmBytes("1+1");
         const result = instance.exports.eval_julia_to_bytes_vec(v);
         console.log(`  Result: ${result} (type: ${typeof result})`);
     } catch (e) {
-        console.log(`  ERROR: ${e.constructor.name}: ${e.message}`);
-        if (e instanceof WebAssembly.RuntimeError) {
-            console.log(`  Stack: ${e.stack?.split('\n').slice(0, 10).join('\n')}`);
-        }
-        if (e instanceof WebAssembly.Exception) {
-            console.log(`  This is a WASM exception (thrown by Julia code via throw/error)`);
+        const etype = e instanceof WebAssembly.RuntimeError ? 'RuntimeError' :
+                      e instanceof WebAssembly.Exception ? 'Exception' : e.constructor.name;
+        console.log(`  ${etype}: ${e.message || 'no message'}`);
+        if (e.stack) {
+            const lines = e.stack.split('\n').slice(0, 10);
+            for (const line of lines) console.log(`    ${line}`);
         }
     }
 }
