@@ -32,7 +32,12 @@ Currently handles: binary arithmetic on Int64 literals (e.g. "1+1", "10-3", "2*3
 """
 function eval_julia_to_bytes(code::String)::Vector{UInt8}
     # Stage 1: Parse
-    expr = JuliaSyntax.parsestmt(Expr, code)
+    # Use Vector{UInt8} + ParseStream directly to avoid unsafe_wrap(Vector{UInt8}, String)
+    # which uses raw pointer operations that can't compile to WASM.
+    code_bytes = Vector{UInt8}(code)
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps, rule=:statement)
+    expr = JuliaSyntax.build_tree(Expr, ps)
 
     # Stage 2: Extract function and arguments from the Expr
     if !(expr isa Expr && expr.head === :call)

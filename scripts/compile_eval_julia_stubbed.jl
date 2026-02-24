@@ -20,6 +20,15 @@ using Dates
 include(joinpath(@__DIR__, "..", "src", "typeinf", "typeinf_wasm.jl"))
 include(joinpath(@__DIR__, "..", "src", "eval_julia.jl"))
 
+# Helper functions to extract bytes from WasmGC Vector{UInt8} result
+function eval_julia_result_length(v::Vector{UInt8})::Int32
+    return Int32(length(v))
+end
+
+function eval_julia_result_byte(v::Vector{UInt8}, idx::Int32)::Int32
+    return Int32(v[idx])
+end
+
 # Core.Compiler optimization functions to stub — never called with may_optimize=false
 # WHITELIST: Core.Compiler functions that ARE needed for type inference.
 # Everything else from Core.Compiler gets stubbed (optimization passes).
@@ -73,7 +82,11 @@ function main()
 
     # Step 1: Discover dependencies
     println("Step 1: Discovering dependencies...")
-    seed = [(eval_julia_to_bytes, (String,))]
+    seed = [
+        (eval_julia_to_bytes, (String,)),
+        (eval_julia_result_length, (Vector{UInt8},)),
+        (eval_julia_result_byte, (Vector{UInt8}, Int32)),
+    ]
     all_funcs = WasmTarget.discover_dependencies(seed)
     println("  Found $(length(all_funcs)) functions")
     println()
