@@ -16476,7 +16476,24 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
             # PURE-906: Check if field expects numeric but source is ref-typed (externref/anyref).
             # This happens when Julia's convert(Bool, x)::Any SSA is typed ExternRef
             # but the struct field is Bool (i32). Emit zero default for the numeric field.
-            if actual_field_wasm !== nothing && (actual_field_wasm === I32 || actual_field_wasm === I64 || actual_field_wasm === F32 || actual_field_wasm === F64) && !isempty(field_bytes) && length(field_bytes) >= 2 && field_bytes[1] == 0x20
+            # PURE-6024: Also catch ref.null (0xD0) values for numeric fields.
+            if actual_field_wasm !== nothing && (actual_field_wasm === I32 || actual_field_wasm === I64 || actual_field_wasm === F32 || actual_field_wasm === F64) && !isempty(field_bytes) && field_bytes[1] == 0xD0
+                # ref.null used for numeric field — emit zero constant instead
+                if actual_field_wasm === I32
+                    push!(bytes, Opcode.I32_CONST)
+                    push!(bytes, 0x00)
+                elseif actual_field_wasm === I64
+                    push!(bytes, Opcode.I64_CONST)
+                    push!(bytes, 0x00)
+                elseif actual_field_wasm === F32
+                    push!(bytes, Opcode.F32_CONST)
+                    append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+                elseif actual_field_wasm === F64
+                    push!(bytes, Opcode.F64_CONST)
+                    append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                end
+                field_bytes = UInt8[]  # Don't append original ref.null
+            elseif actual_field_wasm !== nothing && (actual_field_wasm === I32 || actual_field_wasm === I64 || actual_field_wasm === F32 || actual_field_wasm === F64) && !isempty(field_bytes) && length(field_bytes) >= 2 && field_bytes[1] == 0x20
                 # Decode source local index
                 src_idx_906 = 0; shift_906 = 0; leb_end_906 = 0
                 for bi in 2:length(field_bytes)
