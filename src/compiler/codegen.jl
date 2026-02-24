@@ -20048,7 +20048,21 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                             end
                         end
                     else
-                        append!(bytes, compile_value(value_arg, ctx))
+                        # PURE-6024: When value is nothing and field is ref-typed,
+                        # compile_value(nothing) emits i32_const 0 which fails
+                        # struct_set validation. Emit ref.null none instead.
+                        if is_nothing_value(value_arg, ctx)
+                            field_wasm = julia_to_wasm_type(field_type)
+                            if field_wasm === I32 || field_wasm === I64 || field_wasm === F32 || field_wasm === F64
+                                append!(bytes, compile_value(value_arg, ctx))
+                            else
+                                # Ref-typed field: ref.null none (bottom of internal ref hierarchy)
+                                push!(bytes, Opcode.REF_NULL)
+                                push!(bytes, 0x6E)  # none heap type
+                            end
+                        else
+                            append!(bytes, compile_value(value_arg, ctx))
+                        end
                     end
 
                     push!(bytes, Opcode.GC_PREFIX)
