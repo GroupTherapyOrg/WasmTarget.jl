@@ -84,6 +84,10 @@ function main()
     println("Step 1: Discovering dependencies...")
     seed = [
         (eval_julia_to_bytes_vec, (Vector{UInt8},)),
+        (eval_julia_test_ps_create, (Vector{UInt8},)),
+        (eval_julia_test_parse_only, (Vector{UInt8},)),
+        (eval_julia_test_build_tree, (Vector{UInt8},)),
+        (eval_julia_test_parse, (Vector{UInt8},)),
         (eval_julia_result_length, (Vector{UInt8},)),
         (eval_julia_result_byte, (Vector{UInt8}, Int32)),
         (make_byte_vec, (Int32,)),

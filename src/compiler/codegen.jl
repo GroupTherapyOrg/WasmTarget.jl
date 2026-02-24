@@ -7414,7 +7414,7 @@ function generate_branched_loops(ctx::CompilationContext, first_header::Int, fir
                         push!(bytes, UInt8(func_ret_wasm))
                     end
                     push!(bytes, Opcode.RETURN)
-                elseif !return_type_compatible(val_wasm_type, ret_wasm_type)
+                elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
                     push!(bytes, Opcode.UNREACHABLE)
                 else
                     append!(bytes, compile_value(stmt.val, ctx))
@@ -7512,7 +7512,7 @@ function generate_branched_loops(ctx::CompilationContext, first_header::Int, fir
                         push!(bytes, UInt8(func_ret_wasm))
                     end
                     push!(bytes, Opcode.RETURN)
-                elseif !return_type_compatible(val_wasm_type, ret_wasm_type)
+                elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
                     push!(bytes, Opcode.UNREACHABLE)
                 else
                     append!(bytes, compile_value(stmt.val, ctx))
@@ -8470,7 +8470,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                             push!(bytes, UInt8(func_ret_wasm))
                         end
                         push!(bytes, Opcode.RETURN)
-                    elseif !return_type_compatible(val_wasm_type, ret_wasm_type)
+                    elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
                         push!(bytes, Opcode.UNREACHABLE)
                     else
                         append!(bytes, compile_value(stmt.val, ctx))
@@ -8742,7 +8742,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                         push!(bytes, UInt8(func_ret_wasm))
                     end
                     push!(bytes, Opcode.RETURN)
-                elseif !return_type_compatible(val_wasm_type, ret_wasm_type)
+                elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
                     push!(bytes, Opcode.UNREACHABLE)
                 else
                     append!(bytes, compile_value(stmt.val, ctx))
@@ -8909,7 +8909,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                         push!(bytes, UInt8(func_ret_wasm))
                     end
                     push!(bytes, Opcode.RETURN)
-                elseif !return_type_compatible(val_wasm_type, ret_wasm_type)
+                elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
                     push!(bytes, Opcode.UNREACHABLE)
                 else
                     append!(bytes, compile_value(stmt.val, ctx))
@@ -9246,7 +9246,7 @@ function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBloc
                             push!(bytes, UInt8(func_ret_wasm))
                         end
                         push!(bytes, Opcode.RETURN)
-                    elseif !return_type_compatible(val_wasm_type, ret_wasm_type)
+                    elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
                         push!(bytes, Opcode.UNREACHABLE)
                     else
                         append!(bytes, compile_value(stmt.val, ctx))
@@ -10026,7 +10026,7 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                             push!(block_bytes, UInt8(func_ret_wasm))
                         end
                         push!(block_bytes, Opcode.RETURN)
-                    elseif !return_type_compatible(val_wasm_type, ret_wasm_type)
+                    elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
                         push!(block_bytes, Opcode.UNREACHABLE)
                     else
                         append!(block_bytes, compile_value(stmt.val, ctx))
@@ -11153,7 +11153,7 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                             push!(block_bytes, UInt8(func_ret_wasm))
                         end
                         push!(block_bytes, Opcode.RETURN)
-                    elseif !return_type_compatible(val_wasm_type, ret_wasm_type)
+                    elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
                         push!(block_bytes, Opcode.UNREACHABLE)
                     else
                         append!(block_bytes, compile_value(stmt.val, ctx))
@@ -11378,7 +11378,7 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 ret_wasm_type = julia_to_wasm_type_concrete(ctx.return_type, ctx)
                 func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
                 if _debug_stackified
-                    @warn "  RETURN types: val_wasm=$val_wasm_type, ret_wasm=$ret_wasm_type, func_ret=$func_ret_wasm, compatible=$(return_type_compatible(val_wasm_type, ret_wasm_type))"
+                    @warn "  RETURN types: val_wasm=$val_wasm_type, ret_wasm=$ret_wasm_type, func_ret=$func_ret_wasm, compatible=$(return_type_compatible(val_wasm_type, func_ret_wasm))"
                 end
                 # PURE-315: Check numeric-to-ref BEFORE return_type_compatible
                 is_numeric_val = val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
@@ -11394,7 +11394,13 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                         push!(bytes, UInt8(func_ret_wasm))
                     end
                     push!(bytes, Opcode.RETURN)
-                elseif !return_type_compatible(val_wasm_type, ret_wasm_type)
+                # PURE-6024: Use func_ret_wasm (actual WASM function signature type) for
+                # return type compatibility, not ret_wasm_type (julia_to_wasm_type_concrete).
+                # These disagree for Union types like Union{Int128, Int64, BigInt} where
+                # func_ret_wasm=I64 but ret_wasm_type=ConcreteRef(tagged_union).
+                # The phi local is correctly overridden to I64 (line 5196), so the value
+                # on the stack IS I64, but checking against ConcreteRef incorrectly fails.
+                elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
                     push!(bytes, Opcode.UNREACHABLE)
                 else
                     val_bytes = compile_value(term.val, ctx)
@@ -11668,7 +11674,7 @@ function generate_linear_flow(ctx::CompilationContext, blocks::Vector{BasicBlock
                             push!(range_bytes, UInt8(func_ret_wasm))
                         end
                         push!(range_bytes, Opcode.RETURN)
-                    elseif !return_type_compatible(val_wasm_type, ret_wasm_type)
+                    elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
                         push!(range_bytes, Opcode.UNREACHABLE)
                     else
                         append!(range_bytes, compile_value(stmt.val, ctx))

@@ -42,6 +42,39 @@ function set_byte_vec!(v::Vector{UInt8}, idx::Int32, val::Int32)::Int32
     return Int32(0)
 end
 
+# --- PURE-6024: Diagnostic functions to test individual pipeline stages ---
+function eval_julia_test_ps_create(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    return Int32(1)
+end
+
+function eval_julia_test_parse_only(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps, rule=:statement)
+    return Int32(1)
+end
+
+function eval_julia_test_build_tree(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps, rule=:statement)
+    try
+        expr = JuliaSyntax.build_tree(Expr, ps)
+        return Int32(42)
+    catch
+        return Int32(-42)
+    end
+end
+
+function eval_julia_test_parse(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps, rule=:statement)
+    expr = JuliaSyntax.build_tree(Expr, ps)
+    if expr isa Expr && expr.head === :call
+        return Int32(length(expr.args))
+    end
+    return Int32(-1)
+end
+
 # --- Entry point that takes Vector{UInt8} directly (WASM-compatible) ---
 # Avoids ALL String operations (codeunit, ncodeunits, pointer, unsafe_load)
 # which compile to `unreachable` in WASM.
