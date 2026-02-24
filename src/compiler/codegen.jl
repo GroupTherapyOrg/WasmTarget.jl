@@ -186,9 +186,9 @@ function compile_const_value(val, mod::WasmModule, registry::TypeRegistry)::Vect
         append!(bytes, encode_leb128_unsigned(str_type_idx))
         append!(bytes, encode_leb128_unsigned(length(val)))
     elseif val === nothing
-        # For Nothing type, we use ref.null with any heap type
+        # For Nothing type, we use ref.null none (bottom of any hierarchy)
         push!(bytes, Opcode.REF_NULL)
-        push!(bytes, 0x6E)  # none heap type
+        push!(bytes, 0x71)  # none heap type (NOT 0x6E which is any)
     else
         # For other types, try to push as integer if small enough
         T = typeof(val)
@@ -20058,7 +20058,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                             else
                                 # Ref-typed field: ref.null none (bottom of internal ref hierarchy)
                                 push!(bytes, Opcode.REF_NULL)
-                                push!(bytes, 0x6E)  # none heap type
+                                push!(bytes, 0x71)  # none heap type (NOT 0x6E which is any)
                             end
                         else
                             append!(bytes, compile_value(value_arg, ctx))
