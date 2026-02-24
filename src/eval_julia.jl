@@ -633,6 +633,109 @@ function eval_julia_test_textbuf_first_byte(code_bytes::Vector{UInt8})::Int32
     return Int32(tb[1])  # should be 49 for '1'
 end
 
+# --- Agent 22 Round 2: Root cause diagnostics for length() bug ---
+# length(v::Vector{UInt8}) returns 0 for ALL vectors!
+# But String(v) works (data array has correct bytes).
+# Hypothesis: size tuple is 0, or length() reads wrong location.
+
+# Test 6: Create a Vector INSIDE WASM and return its length
+# Bypasses JS boundary entirely — tests if Vector constructor sets size tuple
+function eval_julia_test_fresh_vec_len(code_bytes::Vector{UInt8})::Int32
+    v = Vector{UInt8}(undef, Int64(5))
+    return Int32(length(v))
+end
+
+# Test 7: Use the data array length directly via arrayref/arraylen
+# String(v) succeeds because it uses the raw array, not the size tuple
+function eval_julia_test_array_nvals(code_bytes::Vector{UInt8})::Int32
+    # Try to access elements directly — if data array exists with 3 elements,
+    # indexing should work even if length() is wrong
+    try
+        b1 = code_bytes[1]  # should be 49 ('1')
+        return Int32(b1)
+    catch
+        return Int32(-999)
+    end
+end
+
+# Test 8: Check if code_bytes[1] works when we KNOW data exists
+# Returns the sum of first N bytes where N is derived from the data array
+function eval_julia_test_getindex_works(code_bytes::Vector{UInt8})::Int32
+    try
+        # These should be '1', '+', '1' = 49, 43, 49
+        return Int32(code_bytes[1] + code_bytes[2] + code_bytes[3])
+    catch
+        return Int32(-999)
+    end
+end
+
+# Test 9: Simple constant to verify the testing works
+function eval_julia_test_constant(code_bytes::Vector{UInt8})::Int32
+    return Int32(42)
+end
+
+# Test 10: Create, setindex!, getindex ALL within WASM — no JS boundary
+function eval_julia_test_set_and_read(code_bytes::Vector{UInt8})::Int32
+    v = Vector{UInt8}(undef, Int64(3))
+    v[1] = UInt8(99)
+    return Int32(v[1])
+end
+
+# Test 11: Create, setindex! via setindex!, getindex — longer chain
+function eval_julia_test_set_read_chain(code_bytes::Vector{UInt8})::Int32
+    v = Vector{UInt8}(undef, Int64(5))
+    v[1] = UInt8(10)
+    v[2] = UInt8(20)
+    v[3] = UInt8(30)
+    return Int32(v[1] + v[2] + v[3])  # should be 60
+end
+
+# Test 12: Copy from input to new vector and read back
+function eval_julia_test_copy_byte(code_bytes::Vector{UInt8})::Int32
+    # Read first byte from code_bytes, store in new vector, read back
+    v = Vector{UInt8}(undef, Int64(1))
+    # If code_bytes[1] works, store it; if not, store 77
+    try
+        b = code_bytes[1]
+        v[1] = b
+    catch
+        v[1] = UInt8(77)
+    end
+    return Int32(v[1])
+end
+
+# Test 13: Call make_byte_vec + set_byte_vec! from WITHIN WASM
+# This isolates JS boundary vs. function-to-function issues
+function eval_julia_test_make_set_read(code_bytes::Vector{UInt8})::Int32
+    v = make_byte_vec(Int32(3))
+    set_byte_vec!(v, Int32(1), Int32(49))
+    set_byte_vec!(v, Int32(2), Int32(43))
+    set_byte_vec!(v, Int32(3), Int32(49))
+    return Int32(v[1])  # should be 49
+end
+
+# Test 14: Same as 13 but check length
+function eval_julia_test_make_len(code_bytes::Vector{UInt8})::Int32
+    v = make_byte_vec(Int32(3))
+    return Int32(length(v))  # should be 3
+end
+
+# Test 15: FULL PARSE PIPELINE — takes individual bytes, no JS boundary for Vector
+function eval_julia_test_parse_3bytes(b1::Int32, b2::Int32, b3::Int32)::Int32
+    code_bytes = Vector{UInt8}(undef, Int64(3))
+    code_bytes[1] = UInt8(b1)
+    code_bytes[2] = UInt8(b2)
+    code_bytes[3] = UInt8(b3)
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    expr = JuliaSyntax.build_tree(Expr, ps)
+    if !(expr isa Expr && expr.head === :call)
+        return Int32(-1)
+    end
+    nargs = length(expr.args)
+    return Int32(nargs)  # should be 3 for "1+1" → :call, :+, 1, 1
+end
+
 # --- Entry point that takes Vector{UInt8} directly (WASM-compatible) ---
 # Avoids ALL String operations (codeunit, ncodeunits, pointer, unsafe_load)
 # which compile to `unreachable` in WASM.
