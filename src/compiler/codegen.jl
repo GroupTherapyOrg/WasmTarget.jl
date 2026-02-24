@@ -1627,7 +1627,7 @@ function compile_module(functions::Vector; stub_names::Set{String}=Set{String}()
             # PURE-6024: Emit unreachable stub for functions that should not be compiled
             # (e.g. optimization pass functions eliminated by may_optimize=false).
             # The function exists as a valid call target but traps if ever called.
-            body = UInt8[Opcode.UNREACHABLE]
+            body = UInt8[Opcode.UNREACHABLE, Opcode.END]
             locals = WasmValType[]
         elseif intrinsic_body !== nothing
             # Use the intrinsic body directly
