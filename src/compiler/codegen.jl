@@ -21212,6 +21212,18 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                             push!(bytes, Opcode.F32_EQ)
                         elseif egal_wt === F64
                             push!(bytes, Opcode.F64_EQ)
+                        elseif egal_wt === ExternRef
+                            # PURE-6024: externref fields need conversion to eqref for ref.eq
+                            local egal_tmp = allocate_local!(ctx, EqRef)
+                            push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+                            push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                            push!(bytes, Opcode.LOCAL_SET)
+                            append!(bytes, encode_leb128_unsigned(egal_tmp))
+                            push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+                            push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                            push!(bytes, Opcode.LOCAL_GET)
+                            append!(bytes, encode_leb128_unsigned(egal_tmp))
+                            push!(bytes, Opcode.REF_EQ)
                         else
                             # Ref-typed field (nested struct, string, etc.): use ref.eq
                             push!(bytes, Opcode.REF_EQ)

@@ -87,9 +87,12 @@ function main()
         mod_name = try string(nameof(mod)) catch; "" end
         # Strip trailing _N suffix for whitelist matching (compile_module de-duplicates exports)
         base_name = replace(name, r"_\d+$" => "")
-        if mod_name == "Compiler" && !(base_name in INFERENCE_WHITELIST)
+        # Stub Core.Compiler functions not in whitelist, plus optimization submodules
+        is_compiler_mod = mod_name == "Compiler"
+        is_opt_submod = mod_name == "EscapeAnalysis"  # optimization-only submodule
+        if (is_compiler_mod && !(base_name in INFERENCE_WHITELIST)) || is_opt_submod
             push!(stub_names, name)
-        elseif mod_name == "Compiler"
+        elseif is_compiler_mod
             push!(kept_names, name)
         end
     end
