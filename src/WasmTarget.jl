@@ -73,8 +73,8 @@ wasm_bytes = compile_multi([
 
 Functions can call each other within the module.
 """
-function compile_multi(functions::Vector; optimize=false)::Vector{UInt8}
-    mod = compile_module(functions)
+function compile_multi(functions::Vector; optimize=false, stub_names::Set{String}=Set{String}())::Vector{UInt8}
+    mod = compile_module(functions; stub_names=stub_names)
     bytes = to_bytes(mod)
     optimize === false && return bytes
     level = optimize === true ? :size : optimize

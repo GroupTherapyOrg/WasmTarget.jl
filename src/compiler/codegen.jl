@@ -1442,7 +1442,7 @@ mod = compile_module([
 
 Functions can call each other within the module.
 """
-function compile_module(functions::Vector)::WasmModule
+function compile_module(functions::Vector; stub_names::Set{String}=Set{String}())::WasmModule
     # WASM-057: Auto-discover function dependencies
     functions = discover_dependencies(functions)
     # Create shared module and registries
@@ -1623,7 +1623,13 @@ function compile_module(functions::Vector)::WasmModule
         local body::Vector{UInt8}
         local locals::Vector{WasmValType}
 
-        if intrinsic_body !== nothing
+        if name in stub_names
+            # PURE-6024: Emit unreachable stub for functions that should not be compiled
+            # (e.g. optimization pass functions eliminated by may_optimize=false).
+            # The function exists as a valid call target but traps if ever called.
+            body = UInt8[Opcode.UNREACHABLE]
+            locals = WasmValType[]
+        elseif intrinsic_body !== nothing
             # Use the intrinsic body directly
             body = intrinsic_body
             locals = WasmValType[]  # Intrinsics don't need additional locals
