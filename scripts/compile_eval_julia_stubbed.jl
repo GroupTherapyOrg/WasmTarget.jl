@@ -111,6 +111,8 @@ function main()
         (eval_julia_test_untokenize_kind, (Vector{UInt8},)),
         (eval_julia_test_untokenize_kind_nouniq, (Vector{UInt8},)),
         (eval_julia_test_is_error, (Vector{UInt8},)),
+        (eval_julia_test_leaf_node_to_expr, (Vector{UInt8},)),
+        (eval_julia_test_should_include, (Vector{UInt8},)),
         (eval_julia_test_child_head, (Vector{UInt8},)),
         (eval_julia_test_parse_literal, (Vector{UInt8},)),
         (eval_julia_test_child_br_broadcast, (Vector{UInt8},)),

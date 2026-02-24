@@ -381,6 +381,44 @@ function eval_julia_test_child_byte_range(code_bytes::Vector{UInt8})::Int32
     end
 end
 
+# Step E10z: test node_to_expr on a single leaf child
+function eval_julia_test_leaf_node_to_expr(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        source = JuliaSyntax.SourceFile(ps)
+        txtbuf = JuliaSyntax.unsafe_textbuf(ps)
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        for child in JuliaSyntax.reverse_nontrivia_children(cursor)
+            if JuliaSyntax.is_leaf(child)
+                e = JuliaSyntax.node_to_expr(child, source, txtbuf, UInt32(0))
+                if e === nothing
+                    return Int32(-3)
+                end
+                return Int32(1)
+            end
+        end
+        return Int32(-2)
+    catch
+        return Int32(-1)
+    end
+end
+
+# Step E10y: test should_include_node on first leaf child
+function eval_julia_test_should_include(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        for child in JuliaSyntax.reverse_nontrivia_children(cursor)
+            return JuliaSyntax.should_include_node(child) ? Int32(1) : Int32(0)
+        end
+        return Int32(-2)
+    catch
+        return Int32(-1)
+    end
+end
+
 # Step E10a: test head(child) on leaf
 function eval_julia_test_child_head(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
