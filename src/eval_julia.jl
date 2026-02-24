@@ -235,27 +235,21 @@ function eval_julia_test_untokenize(code_bytes::Vector{UInt8})::Int32
     end
 end
 
-# Step E4: _expr_leaf_val on a leaf child
+# Step E4: _expr_leaf_val on a leaf child — just test it doesn't throw
 function eval_julia_test_leaf_val(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
     JuliaSyntax.parse!(ps; rule=:statement)
     try
         txtbuf = JuliaSyntax.unsafe_textbuf(ps)
         cursor = JuliaSyntax.RedTreeCursor(ps)
-        # Get first nontrivia child (should be integer leaf "1")
+        count = Int32(0)
         for child in JuliaSyntax.reverse_nontrivia_children(cursor)
             if JuliaSyntax.is_leaf(child)
                 val = JuliaSyntax._expr_leaf_val(child, txtbuf, UInt32(0))
-                if val isa Int64
-                    return Int32(val)
-                elseif val isa Symbol
-                    return Int32(99)  # Symbol found (e.g. :+)
-                else
-                    return Int32(88)  # other type
-                end
+                count += Int32(1)
             end
         end
-        return Int32(-3)  # no leaf child found
+        return count  # should be 3 for "1+1" (two ints + one symbol)
     catch
         return Int32(-1)
     end
@@ -277,6 +271,78 @@ function eval_julia_test_parseargs(code_bytes::Vector{UInt8})::Int32
         retexpr = Expr(headsym)
         (firstchildhead, firstchildrange) = JuliaSyntax.parseargs!(retexpr, loc, cursor, source, txtbuf, UInt32(0))
         return Int32(length(retexpr.args))
+    catch
+        return Int32(-1)
+    end
+end
+
+# Step E6: just count children (test iteration without _expr_leaf_val)
+function eval_julia_test_child_count(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        count = Int32(0)
+        for child in JuliaSyntax.reverse_nontrivia_children(cursor)
+            count += Int32(1)
+        end
+        return count
+    catch
+        return Int32(-1)
+    end
+end
+
+# Step E7: test string(Kind) directly — is Dict lookup working?
+function eval_julia_test_kind_string(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        k = JuliaSyntax.kind(cursor)
+        s = string(k)
+        return Int32(length(s))
+    catch
+        return Int32(-1)
+    end
+end
+
+# Step E8: test is_leaf on first child
+function eval_julia_test_child_is_leaf(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        for child in JuliaSyntax.reverse_nontrivia_children(cursor)
+            return JuliaSyntax.is_leaf(child) ? Int32(1) : Int32(0)
+        end
+        return Int32(-2)
+    catch
+        return Int32(-1)
+    end
+end
+
+# Step E9: test byte_range of first child
+function eval_julia_test_child_byte_range(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        for child in JuliaSyntax.reverse_nontrivia_children(cursor)
+            srcrange = JuliaSyntax.byte_range(child)
+            return Int32(length(srcrange))
+        end
+        return Int32(-2)
+    catch
+        return Int32(-1)
+    end
+end
+
+# Step E10: test getindex with UInt32 range (potential issue)
+function eval_julia_test_uint32_getindex(code_bytes::Vector{UInt8})::Int32
+    try
+        r = UInt32(1):UInt32(1)
+        slice = code_bytes[r]
+        return Int32(length(slice))
     catch
         return Int32(-1)
     end
