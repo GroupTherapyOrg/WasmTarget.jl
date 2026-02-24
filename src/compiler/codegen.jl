@@ -10158,6 +10158,14 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 stmt_bytes = compile_statement(stmt, i, ctx)
                 append!(block_bytes, stmt_bytes)
 
+                # PURE-6024: Skip remaining statements after unreachable.
+                # Dead code after unreachable leaves values on the stack causing
+                # "values remaining on stack at end of block" validation errors.
+                stmt_type = get(ctx.ssa_types, i, Any)
+                if stmt_type === Union{} || ctx.last_stmt_was_stub
+                    break
+                end
+
                 # NOTE: compile_statement already adds LOCAL_SET for SSA values
                 # that need storing. We don't add another one here to avoid
                 # duplicate stores that would cause "not enough arguments on stack" errors.
@@ -11256,6 +11264,12 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 stmt_bytes = compile_statement(stmt, i, ctx)
                 append!(block_bytes, stmt_bytes)
 
+                # PURE-6024: Skip remaining statements after unreachable.
+                stmt_type2 = get(ctx.ssa_types, i, Any)
+                if stmt_type2 === Union{} || ctx.last_stmt_was_stub
+                    break
+                end
+
                 if !haskey(ctx.ssa_locals, i)
                     # PURE-220: Skip if compile_statement already emitted a DROP
                     # PURE-6006: Guard against call instruction false-positive (func_idx 0x1a == DROP)
@@ -11671,6 +11685,12 @@ function generate_linear_flow(ctx::CompilationContext, blocks::Vector{BasicBlock
                 push!(compiled, i)
                 stmt_bytes = compile_statement(stmt, i, ctx)
                 append!(range_bytes, stmt_bytes)
+
+                # PURE-6024: Skip remaining statements after unreachable.
+                stmt_type_nc = get(ctx.ssa_types, i, Any)
+                if stmt_type_nc === Union{} || ctx.last_stmt_was_stub
+                    return range_bytes
+                end
 
                 # Drop unused values
                 if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
