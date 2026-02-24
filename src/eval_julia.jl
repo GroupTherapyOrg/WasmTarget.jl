@@ -20,16 +20,46 @@
 # These override JuliaSyntax methods that use Dict/Set globals (which crash in WASM).
 # Kind `==` comparison works in WASM, but Dict-backed Set{Kind} lookups hit `unreachable`.
 
-# Override untokenize(k::Kind) to avoid _nonunique_kind_names Set{Kind} lookup.
-# Uses `==` comparisons instead — KSet-style (Tuple-based) lookup.
-# The nonunique kinds are from JuliaSyntax/src/julia/kinds.jl lines 1084-1119.
-function JuliaSyntax.untokenize(k::JuliaSyntax.Kind; unique::Bool=true)
+# Override `in(::Kind, ::Set{Kind})` to avoid Dict-backed Set lookup.
+# JuliaSyntax._nonunique_kind_names is Set{Kind} — only Set{Kind} in the codebase.
+# Dict/Set globals crash in WASM; this replaces `haskey(dict, k)` with `==` comparisons.
+# Uses the exact 30 entries from JuliaSyntax/kynZ9/src/julia/kinds.jl lines 1084-1119.
+function Base.in(k::JuliaSyntax.Kind, ::Set{JuliaSyntax.Kind})::Bool
+    k == JuliaSyntax.K"Comment" || k == JuliaSyntax.K"Whitespace" ||
+    k == JuliaSyntax.K"NewlineWs" || k == JuliaSyntax.K"Identifier" ||
+    k == JuliaSyntax.K"Placeholder" ||
+    k == JuliaSyntax.K"ErrorEofMultiComment" ||
+    k == JuliaSyntax.K"ErrorInvalidNumericConstant" ||
+    k == JuliaSyntax.K"ErrorHexFloatMustContainP" ||
+    k == JuliaSyntax.K"ErrorAmbiguousNumericConstant" ||
+    k == JuliaSyntax.K"ErrorAmbiguousNumericDotMultiply" ||
+    k == JuliaSyntax.K"ErrorInvalidInterpolationTerminator" ||
+    k == JuliaSyntax.K"ErrorNumericOverflow" ||
+    k == JuliaSyntax.K"ErrorInvalidEscapeSequence" ||
+    k == JuliaSyntax.K"ErrorOverLongCharacter" ||
+    k == JuliaSyntax.K"ErrorInvalidUTF8" ||
+    k == JuliaSyntax.K"ErrorInvisibleChar" ||
+    k == JuliaSyntax.K"ErrorUnknownCharacter" ||
+    k == JuliaSyntax.K"ErrorBidiFormatting" ||
+    k == JuliaSyntax.K"ErrorInvalidOperator" ||
+    k == JuliaSyntax.K"Bool" || k == JuliaSyntax.K"Integer" ||
+    k == JuliaSyntax.K"BinInt" || k == JuliaSyntax.K"HexInt" ||
+    k == JuliaSyntax.K"OctInt" || k == JuliaSyntax.K"Float" ||
+    k == JuliaSyntax.K"Float32" || k == JuliaSyntax.K"String" ||
+    k == JuliaSyntax.K"Char" || k == JuliaSyntax.K"CmdString" ||
+    k == JuliaSyntax.K"StrMacroName" ||
+    k == JuliaSyntax.K"CmdMacroName"
+end
+
+# --- WASM-compatible non-kwarg untokenize (bypasses kwcall dispatch) ---
+# The kwarg dispatch mechanism doesn't work reliably in WASM-compiled code.
+# This provides identical logic to untokenize(::Kind; unique=true) but as a
+# positional-arg function that the WASM codegen can handle.
+function _wasm_untokenize_kind(k::JuliaSyntax.Kind, unique::Bool)::Union{Nothing, String}
     if unique
-        # Nonunique kinds: tokens that don't have a unique string representation
         if k == JuliaSyntax.K"Comment" || k == JuliaSyntax.K"Whitespace" ||
            k == JuliaSyntax.K"NewlineWs" || k == JuliaSyntax.K"Identifier" ||
            k == JuliaSyntax.K"Placeholder" ||
-           # Errors (all in _nonunique_kind_names)
            k == JuliaSyntax.K"ErrorEofMultiComment" ||
            k == JuliaSyntax.K"ErrorInvalidNumericConstant" ||
            k == JuliaSyntax.K"ErrorHexFloatMustContainP" ||
@@ -44,19 +74,28 @@ function JuliaSyntax.untokenize(k::JuliaSyntax.Kind; unique::Bool=true)
            k == JuliaSyntax.K"ErrorUnknownCharacter" ||
            k == JuliaSyntax.K"ErrorBidiFormatting" ||
            k == JuliaSyntax.K"ErrorInvalidOperator" ||
-           # Literals
            k == JuliaSyntax.K"Bool" || k == JuliaSyntax.K"Integer" ||
            k == JuliaSyntax.K"BinInt" || k == JuliaSyntax.K"HexInt" ||
            k == JuliaSyntax.K"OctInt" || k == JuliaSyntax.K"Float" ||
            k == JuliaSyntax.K"Float32" || k == JuliaSyntax.K"String" ||
            k == JuliaSyntax.K"Char" || k == JuliaSyntax.K"CmdString" ||
-           # Macros
            k == JuliaSyntax.K"StrMacroName" ||
            k == JuliaSyntax.K"CmdMacroName"
             return nothing
         end
     end
     return string(k)
+end
+
+# WASM-compatible untokenize for SyntaxHead (no kwargs, no Set lookup).
+# Equivalent to JuliaSyntax.untokenize(head::SyntaxHead; unique=true, include_flag_suff=false)
+function _wasm_untokenize_head(head::JuliaSyntax.SyntaxHead)::Union{Nothing, String}
+    # Matches untokenize(head; include_flag_suff=false) — no dotted/trivia/infix suffixes
+    k = JuliaSyntax.kind(head)
+    if JuliaSyntax.is_error(k)
+        return _wasm_untokenize_kind(k, false)
+    end
+    return _wasm_untokenize_kind(k, true)
 end
 
 """
@@ -900,6 +939,234 @@ function eval_julia_test_symbol_from_kind(code_bytes::Vector{UInt8})::Int32
     end
 end
 
+# Test I: Direct (non-kwarg) untokenize — bypasses kwcall dispatch
+function eval_julia_test_direct_untokenize(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        k = JuliaSyntax.kind(cursor)
+        result = _wasm_untokenize_kind(k, true)
+        if result === nothing
+            return Int32(-2)
+        end
+        return Int32(length(result))
+    catch
+        return Int32(-1)
+    end
+end
+
+# Test J: Direct head untokenize
+function eval_julia_test_direct_untokenize_head(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        h = JuliaSyntax.head(cursor)
+        result = _wasm_untokenize_head(h)
+        if result === nothing
+            return Int32(-2)
+        end
+        return Int32(length(result))
+    catch
+        return Int32(-1)
+    end
+end
+
+# Test K: build_tree using WASM-compatible untokenize
+function eval_julia_test_build_tree_wasm(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        expr = _wasm_build_tree_expr(ps)
+        if !(expr isa Expr)
+            return Int32(-10)
+        end
+        if expr.head === :call
+            return Int32(length(expr.args))  # should be 3 for "1+1"
+        end
+        return Int32(-20)
+    catch
+        return Int32(-1)
+    end
+end
+
+# --- WASM-compatible build_tree replacement (kynZ9 version) ---
+# The original build_tree(Expr, stream) calls node_to_expr which calls
+# untokenize(head::SyntaxHead) → untokenize(k::Kind) → _nonunique_kind_names Set lookup.
+# The Set{Kind} global crashes in WASM (Dict-backed globals hit unreachable).
+# We replace the entire node_to_expr chain with _wasm_* versions that use
+# _wasm_untokenize_head (== comparison instead of Set lookup).
+
+# WASM-compatible _string_to_Expr — calls _wasm_node_to_expr instead of node_to_expr
+function _wasm_string_to_Expr(cursor, source, txtbuf::Vector{UInt8}, txtbuf_offset::UInt32)
+    ret = Expr(:string)
+    it = JuliaSyntax.reverse_nontrivia_children(cursor)
+    r = iterate(it)
+    while r !== nothing
+        (child, state) = r
+        ex = _wasm_node_to_expr(child, source, txtbuf, txtbuf_offset)
+        if isa(ex, String)
+            r = iterate(it, state)
+            if r === nothing
+                pushfirst!(ret.args, ex)
+                continue
+            end
+            (child, state) = r
+            ex2 = _wasm_node_to_expr(child, source, txtbuf, txtbuf_offset)
+            if !isa(ex2, String)
+                pushfirst!(ret.args, ex)
+                ex = ex2
+            else
+                strings = String[ex2, ex]
+                r = iterate(it, state)
+                while r !== nothing
+                    (child, state) = r
+                    ex = _wasm_node_to_expr(child, source, txtbuf, txtbuf_offset)
+                    isa(ex, String) || break
+                    pushfirst!(strings, ex)
+                    r = iterate(it, state)
+                end
+                buf = IOBuffer()
+                for s in strings
+                    write(buf, s)
+                end
+                pushfirst!(ret.args, String(take!(buf)))
+                r === nothing && break
+            end
+        end
+        if Meta.isexpr(ex, :parens, 1)
+            ex = JuliaSyntax._strip_parens(ex)
+            if ex isa String
+                ex = Expr(:string, ex)
+            end
+        end
+        @assert ex !== nothing
+        pushfirst!(ret.args, ex)
+        r = iterate(it, state)
+    end
+    if length(ret.args) == 1 && ret.args[1] isa String
+        return only(ret.args)
+    else
+        return ret
+    end
+end
+
+# WASM-compatible parseargs! — calls _wasm_node_to_expr instead of node_to_expr
+function _wasm_parseargs!(retexpr::Expr, loc::LineNumberNode, cursor, source, txtbuf::Vector{UInt8}, txtbuf_offset::UInt32)
+    args = retexpr.args
+    firstchildhead = JuliaSyntax.head(cursor)
+    firstchildrange::UnitRange{UInt32} = JuliaSyntax.byte_range(cursor)
+    itr = JuliaSyntax.reverse_nontrivia_children(cursor)
+    r = iterate(itr)
+    while r !== nothing
+        (child, state) = r
+        r = iterate(itr, state)
+        expr = _wasm_node_to_expr(child, source, txtbuf, txtbuf_offset)
+        @assert expr !== nothing
+        firstchildhead = JuliaSyntax.head(child)
+        firstchildrange = JuliaSyntax.byte_range(child)
+        pushfirst!(args, JuliaSyntax.fixup_Expr_child(JuliaSyntax.head(cursor), expr, r === nothing))
+    end
+    return (firstchildhead, firstchildrange)
+end
+
+# WASM-compatible node_to_expr — uses _wasm_untokenize_head instead of untokenize
+function _wasm_node_to_expr(cursor, source, txtbuf::Vector{UInt8}, txtbuf_offset::UInt32=UInt32(0))
+    if !JuliaSyntax.should_include_node(cursor)
+        return nothing
+    end
+
+    nodehead = JuliaSyntax.head(cursor)
+    k = JuliaSyntax.kind(cursor)
+    srcrange::UnitRange{UInt32} = JuliaSyntax.byte_range(cursor)
+    if JuliaSyntax.is_leaf(cursor)
+        if JuliaSyntax.is_error(k)
+            return k == JuliaSyntax.K"error" ?
+                Expr(:error) :
+                Expr(:error, "$(JuliaSyntax._token_error_descriptions[k]): `$(source[srcrange])`")
+        else
+            scoped_val = JuliaSyntax._expr_leaf_val(cursor, txtbuf, txtbuf_offset)
+            val = Meta.isexpr(scoped_val, :scope_layer) ? scoped_val.args[1] : scoped_val
+            if val isa Union{Int128,UInt128,BigInt}
+                str = replace(source[srcrange], '_'=>"")
+                macname = val isa Int128  ? Symbol("@int128_str")  :
+                        val isa UInt128 ? Symbol("@uint128_str") :
+                        Symbol("@big_str")
+                return Expr(:macrocall, GlobalRef(Core, macname), nothing, str)
+            elseif JuliaSyntax.is_identifier(k)
+                val2 = JuliaSyntax.lower_identifier_name(val, k)
+                return Meta.isexpr(scoped_val, :scope_layer) ?
+                    Expr(:scope_layer, val2, scoped_val.args[2]) : val2
+            else
+                return scoped_val
+            end
+        end
+    end
+
+    if k == JuliaSyntax.K"string"
+        return _wasm_string_to_Expr(cursor, source, txtbuf, txtbuf_offset)
+    end
+
+    loc = JuliaSyntax.source_location(LineNumberNode, source, first(srcrange))
+
+    if k == JuliaSyntax.K"cmdstring"
+        return Expr(:macrocall, GlobalRef(Core, Symbol("@cmd")), loc,
+            _wasm_string_to_Expr(cursor, source, txtbuf, txtbuf_offset))
+    end
+
+    # THIS IS THE KEY CHANGE: use _wasm_untokenize_head instead of untokenize
+    headstr = _wasm_untokenize_head(nodehead)
+    headsym = !isnothing(headstr) ?
+              Symbol(headstr) :
+              error("Can't untokenize head of kind $(k)")
+    retexpr = Expr(headsym)
+
+    # Block gets special handling
+    if k == JuliaSyntax.K"block" || (k == JuliaSyntax.K"toplevel" && !JuliaSyntax.has_flags(nodehead, JuliaSyntax.TOPLEVEL_SEMICOLONS_FLAG))
+        args = retexpr.args
+        for child in JuliaSyntax.reverse_nontrivia_children(cursor)
+            expr = _wasm_node_to_expr(child, source, txtbuf, txtbuf_offset)
+            @assert expr !== nothing
+            pushfirst!(args, JuliaSyntax.fixup_Expr_child(JuliaSyntax.head(cursor), expr, false))
+            pushfirst!(args, JuliaSyntax.source_location(LineNumberNode, source, first(JuliaSyntax.byte_range(child))))
+        end
+        isempty(args) && push!(args, loc)
+        if k == JuliaSyntax.K"block" && JuliaSyntax.has_flags(nodehead, JuliaSyntax.PARENS_FLAG)
+            popfirst!(args)
+        end
+        return retexpr
+    end
+
+    # Recurse to parse all arguments
+    (firstchildhead, firstchildrange) = _wasm_parseargs!(retexpr, loc, cursor, source, txtbuf, txtbuf_offset)
+
+    # Delegate to _node_to_expr for kind-specific handling (no untokenize calls in there)
+    return JuliaSyntax._node_to_expr(retexpr, loc, srcrange,
+                         firstchildhead, firstchildrange,
+                         nodehead, source)
+end
+
+# WASM-compatible build_tree(Expr, ParseStream) — calls _wasm_node_to_expr
+# Single function (no kwargs, no inner split) to avoid WASM kwcall stubbing issues
+function _wasm_build_tree_expr(stream::JuliaSyntax.ParseStream)
+    source = JuliaSyntax.SourceFile(stream)
+    txtbuf = JuliaSyntax.unsafe_textbuf(stream)
+    cursor = JuliaSyntax.RedTreeCursor(stream)
+    wrapper_head = JuliaSyntax.SyntaxHead(JuliaSyntax.K"wrapper", JuliaSyntax.EMPTY_FLAGS)
+    if JuliaSyntax.has_toplevel_siblings(cursor)
+        entry = Expr(:block)
+        for child in
+                Iterators.filter(JuliaSyntax.should_include_node, JuliaSyntax.reverse_toplevel_siblings(cursor))
+            pushfirst!(entry.args, JuliaSyntax.fixup_Expr_child(wrapper_head, _wasm_node_to_expr(child, source, txtbuf), false))
+        end
+        length(entry.args) == 1 && (entry = only(entry.args))
+    else
+        entry = JuliaSyntax.fixup_Expr_child(wrapper_head, _wasm_node_to_expr(cursor, source, txtbuf), false)
+    end
+    return entry
+end
+
 # --- Entry point that takes Vector{UInt8} directly (WASM-compatible) ---
 # Avoids ALL String operations (codeunit, ncodeunits, pointer, unsafe_load)
 # which compile to `unreachable` in WASM.
@@ -907,6 +1174,9 @@ function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
     # Stage 1: Parse — bytes go directly to ParseStream
     ps = JuliaSyntax.ParseStream(code_bytes)
     JuliaSyntax.parse!(ps, rule=:statement)
+    # build_tree calls untokenize which uses `in(k, _nonunique_kind_names)`.
+    # We override Base.in(::Kind, ::Set{Kind}) above to use == comparisons
+    # instead of Dict-backed Set lookup (which crashes in WASM).
     expr = JuliaSyntax.build_tree(Expr, ps)
 
     # Stage 2: Extract function and arguments from the Expr

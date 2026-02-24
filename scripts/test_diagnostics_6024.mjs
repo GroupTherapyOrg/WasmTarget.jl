@@ -91,6 +91,10 @@ async function main() {
         'eval_julia_test_set_size',
         'eval_julia_test_build_tree_head',
         'eval_julia_test_symbol_from_kind',
+        // Agent 23: direct untokenize tests
+        'eval_julia_test_direct_untokenize',
+        'eval_julia_test_direct_untokenize_head',
+        'eval_julia_test_build_tree_wasm',
     ];
 
     // Expected values from Agent 22 + native Julia
@@ -150,6 +154,9 @@ async function main() {
         'eval_julia_test_set_size': 20,  // _nonunique_kind_names has 20 entries
         'eval_julia_test_build_tree_head': 1,  // build_tree returns Expr with head=:call
         'eval_julia_test_symbol_from_kind': 1,  // Symbol(string(kind)) === :call
+        'eval_julia_test_direct_untokenize': 4,  // non-kwarg untokenize for K"call"
+        'eval_julia_test_direct_untokenize_head': 4,  // non-kwarg head untokenize
+        'eval_julia_test_build_tree_wasm': 3,  // WASM build_tree returns 3 args for :call
     };
 
     console.log("--- Running diagnostics (each with fresh vector for '1+1') ---\n");

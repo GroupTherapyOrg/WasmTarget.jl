@@ -145,6 +145,13 @@ function main()
         (eval_julia_test_set_size, (Vector{UInt8},)),
         (eval_julia_test_build_tree_head, (Vector{UInt8},)),
         (eval_julia_test_symbol_from_kind, (Vector{UInt8},)),
+        # Agent 23: direct untokenize tests
+        (eval_julia_test_direct_untokenize, (Vector{UInt8},)),
+        (eval_julia_test_direct_untokenize_head, (Vector{UInt8},)),
+        (eval_julia_test_build_tree_wasm, (Vector{UInt8},)),
+        # Agent 23: WASM-compatible untokenize functions for diagnostic tests
+        (_wasm_untokenize_kind, (JuliaSyntax.Kind, Bool)),
+        (_wasm_untokenize_head, (JuliaSyntax.SyntaxHead,)),
         (eval_julia_result_length, (Vector{UInt8},)),
         (eval_julia_result_byte, (Vector{UInt8}, Int32)),
         (make_byte_vec, (Int32,)),
