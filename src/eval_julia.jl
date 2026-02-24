@@ -108,15 +108,85 @@ function eval_julia_test_substring(code_bytes::Vector{UInt8})::Int32
     end
 end
 
-# Test build_tree with the parse tree — return range count to verify parse tree is valid
+# Test build_tree with the parse tree — return output count (not ranges — field doesn't exist)
 function eval_julia_test_tree_nranges(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
-    JuliaSyntax.parse!(ps, rule=:statement)
+    JuliaSyntax.parse!(ps; rule=:statement)
     try
-        n = length(ps.ranges)
+        n = length(ps.output)
         return Int32(n)
     catch
         return Int32(-3)
+    end
+end
+
+# --- PURE-6024 Agent 21: Step-by-step build_tree diagnostics ---
+# Step A: SourceFile creation
+function eval_julia_test_sourcefile(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        source = JuliaSyntax.SourceFile(ps)
+        return Int32(1)
+    catch
+        return Int32(-1)
+    end
+end
+
+# Step B: unsafe_textbuf
+function eval_julia_test_textbuf(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        txtbuf = JuliaSyntax.unsafe_textbuf(ps)
+        return Int32(length(txtbuf))
+    catch
+        return Int32(-1)
+    end
+end
+
+# Step C: RedTreeCursor
+function eval_julia_test_cursor(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        return Int32(1)
+    catch
+        return Int32(-1)
+    end
+end
+
+# Step D: has_toplevel_siblings
+function eval_julia_test_toplevel(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        ht = JuliaSyntax.has_toplevel_siblings(cursor)
+        return ht ? Int32(1) : Int32(0)
+    catch
+        return Int32(-1)
+    end
+end
+
+# Step E: node_to_expr
+function eval_julia_test_node_to_expr(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        source = JuliaSyntax.SourceFile(ps)
+        txtbuf = JuliaSyntax.unsafe_textbuf(ps)
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        ht = JuliaSyntax.has_toplevel_siblings(cursor)
+        if ht
+            return Int32(-2)  # shouldn't happen for "1+1"
+        end
+        wrapper_head = JuliaSyntax.SyntaxHead(JuliaSyntax.K"wrapper", JuliaSyntax.EMPTY_FLAGS)
+        e = JuliaSyntax.node_to_expr(cursor, source, txtbuf)
+        return Int32(42)
+    catch
+        return Int32(-1)
     end
 end
 

@@ -92,6 +92,12 @@ function main()
         (eval_julia_test_parse_int, (Vector{UInt8},)),
         (eval_julia_test_substring, (Vector{UInt8},)),
         (eval_julia_test_tree_nranges, (Vector{UInt8},)),
+        # Agent 21: step-by-step build_tree diagnostics
+        (eval_julia_test_sourcefile, (Vector{UInt8},)),
+        (eval_julia_test_textbuf, (Vector{UInt8},)),
+        (eval_julia_test_cursor, (Vector{UInt8},)),
+        (eval_julia_test_toplevel, (Vector{UInt8},)),
+        (eval_julia_test_node_to_expr, (Vector{UInt8},)),
         (eval_julia_result_length, (Vector{UInt8},)),
         (eval_julia_result_byte, (Vector{UInt8}, Int32)),
         (make_byte_vec, (Int32,)),
