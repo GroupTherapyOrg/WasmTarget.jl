@@ -82,6 +82,15 @@ async function main() {
         'eval_julia_test_parseargs',
         'eval_julia_test_build_tree',
         'eval_julia_test_parse',
+        // Agent 23: targeted untokenize/Set diagnostics
+        'eval_julia_test_untokenize_inline',
+        'eval_julia_test_set_lookup',
+        'eval_julia_test_kind_eq',
+        'eval_julia_test_kind_raw',
+        'eval_julia_test_kcall_raw',
+        'eval_julia_test_set_size',
+        'eval_julia_test_build_tree_head',
+        'eval_julia_test_symbol_from_kind',
     ];
 
     // Expected values from Agent 22 + native Julia
@@ -132,6 +141,15 @@ async function main() {
         'eval_julia_test_parseargs': 3,
         'eval_julia_test_build_tree': 42,
         'eval_julia_test_parse': 3,
+        // Agent 23
+        'eval_julia_test_untokenize_inline': 4,  // inline untokenize should return "call" len=4
+        'eval_julia_test_set_lookup': 0,  // K"call" NOT in _nonunique_kind_names
+        'eval_julia_test_kind_eq': 1,  // kind(cursor) == K"call"
+        'eval_julia_test_kind_raw': null,  // just report the raw value
+        'eval_julia_test_kcall_raw': null,  // just report K"call" raw value
+        'eval_julia_test_set_size': 20,  // _nonunique_kind_names has 20 entries
+        'eval_julia_test_build_tree_head': 1,  // build_tree returns Expr with head=:call
+        'eval_julia_test_symbol_from_kind': 1,  // Symbol(string(kind)) === :call
     };
 
     console.log("--- Running diagnostics (each with fresh vector for '1+1') ---\n");
