@@ -8518,6 +8518,11 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
     open_blocks = Dict{Int, Bool}()
     current_depth = 0  # 0 = inside loop, additional depth for inner blocks
 
+    # PURE-6024: Track dead code state to skip instructions after unreachable.
+    # When a statement emits unreachable (Union{} type), record the depth.
+    # Skip all subsequent statements until the block at that depth closes.
+    dead_code_depth = -1  # -1 = not in dead code
+
     # Generate loop body (statements from loop_header to back_edge_idx)
     i = loop_header
     while i <= back_edge_idx
@@ -8543,9 +8548,20 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
             push!(bytes, Opcode.END)
             open_blocks[i] = false
             current_depth -= 1
+            # PURE-6024: If we were in dead code and the block at dead_code_depth
+            # just closed, we're no longer in dead code
+            if dead_code_depth >= 0 && current_depth <= dead_code_depth
+                dead_code_depth = -1
+            end
         end
 
         stmt = code[i]
+
+        # PURE-6024: Skip statements in dead code (after unreachable in current block)
+        if dead_code_depth >= 0
+            i += 1
+            continue
+        end
 
         # Skip dead code regions
         if i in dead_regions
@@ -8742,6 +8758,11 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
             # when stub emits UNREACHABLE). Byte-level detection of 0x00 is unreliable.
             stmt_type = get(ctx.ssa_types, i, Any)
             if stmt_type === Union{} || ctx.last_stmt_was_stub
+                # PURE-6024: Set dead_code_depth to skip ALL subsequent statements
+                # in this block until the block closes. The merge point skip below
+                # handles the common case, but dead_code_depth handles edge cases
+                # where merge point tracking is incomplete.
+                dead_code_depth = current_depth
                 # Skip to next merge point (block end) or back-edge
                 # Find the next merge point
                 next_merge = nothing
