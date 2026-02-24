@@ -22,18 +22,34 @@ include(joinpath(@__DIR__, "..", "src", "eval_julia.jl"))
 
 # Core.Compiler optimization functions to stub — never called with may_optimize=false
 const OPT_PASS_NAMES = Set([
-    "construct_ssa!",
-    "compact!",
-    "assemble_inline_todo!",
-    "batch_inline!",
-    "sroa_pass!",
-    "adce_pass!",
+    # Optimization driver
     "run_passes_ipo_safe",
-    "convert_to_ircode",
-    "construct_domtree",
-    "scan_slot_def_use",
-    "replace_code_newstyle!",
-    "widen_all_consts!",
+    "ipo_dataflow_analysis!",
+    # SSA construction
+    "construct_ssa!", "construct_domtree", "scan_slot_def_use",
+    "convert_to_ircode", "make_ssa!", "domsort_ssa!",
+    "compute_domtree_nodes!", "domtree_delete_edge!",
+    # IR types and streams
+    "DebugInfoStream", "InstructionStream", "IRCode", "IncrementalCompact",
+    # IR compaction
+    "compact!", "iterate_compact",
+    # SSA utilities
+    "find_ssavalue_uses", "find_ssavalue_uses!", "find_ssavalue_uses1",
+    "renumber_ssa", "renumber_ssa2!", "renumber_ssa2",
+    "ssa_substitute_op!",
+    # Optimization passes
+    "sroa_pass!", "sroa_mutables!",
+    "adce_pass!", "adce_erase!",
+    # Inlining
+    "assemble_inline_todo!", "batch_inline!",
+    "statement_cost", "inline_const_if_inlineable!",
+    "cfg_inline_unionsplit!", "cfg_inline_item!", "finish_cfg_inline!",
+    "ir_inline_item!", "ir_inline_unionsplit!",
+    "inline_splatnew!", "inline_apply!",
+    "early_inline_special_case", "late_inline_special_case!",
+    "inline_into_block!", "try_inline_finalizer!",
+    # Post-optimization helpers
+    "replace_code_newstyle!", "widen_all_consts!",
 ])
 
 function main()
@@ -109,7 +125,7 @@ function main()
         # Try to identify which function failed
         m = match(r"func (\d+) failed", err_msg)
         if m !== nothing
-            func_idx = parse(Int, m.captures[1])
+            func_idx = Base.parse(Int, m.captures[1])
             println()
             println("  Failed func index: $func_idx")
             # Read exports to find function name
