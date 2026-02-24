@@ -15896,6 +15896,7 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
 
 
 
+
     # Resolve the struct type if it's a GlobalRef, DataType, or SSAValue
     struct_type = if struct_type_ref isa GlobalRef
         getfield(struct_type_ref.mod, struct_type_ref.name)
