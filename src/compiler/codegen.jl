@@ -6364,6 +6364,16 @@ Returns false for calls to functions that return Nothing (void).
 This checks the function registry first (most reliable), then MethodInstance return type.
 """
 function statement_produces_wasm_value(stmt::Expr, idx::Int, ctx::CompilationContext)::Bool
+    # PURE-6024: memoryrefset! compiles to array.set (void in WASM).
+    # The handler manages its own return value emission when an SSA local exists,
+    # so this function must return false to prevent spurious DROP on empty stack.
+    if stmt.head === :call && length(stmt.args) >= 1
+        _f = stmt.args[1]
+        if _f isa GlobalRef && _f.name === :memoryrefset!
+            return false
+        end
+    end
+
     # Get the SSA type first
     stmt_type = get(ctx.ssa_types, idx, Any)
 
