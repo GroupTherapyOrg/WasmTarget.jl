@@ -11067,6 +11067,13 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
         end
     end
 
+    # PURE-6024 debug: trace function name for debugging
+    _debug_fn_name = try string(ctx.func_name) catch; "" end
+    _debug_stackified = contains(_debug_fn_name, "parse_int_literal")
+    if _debug_stackified
+        @warn "PURE-6024 STACKIFIED DEBUG: $(length(blocks)) blocks, non_trivial_targets=$non_trivial_targets, outer_targets=$outer_targets, return_type=$(ctx.return_type)"
+    end
+
     # Now generate code for each block in order
     for (block_idx, block) in enumerate(blocks)
         # First, close any blocks whose target is this block
@@ -11074,10 +11081,16 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
         while !isempty(open_blocks) && last(open_blocks) == block_idx
             pop!(open_blocks)
             push!(bytes, Opcode.END)  # End the block for this target
+            if _debug_stackified
+                @warn "  CLOSE block for target $block_idx, open_blocks=$open_blocks, bytes_len=$(length(bytes))"
+            end
         end
 
         # Skip dead blocks (from boundscheck patterns)
         if block_idx in dead_blocks
+            if _debug_stackified
+                @warn "  SKIP dead block $block_idx"
+            end
             continue
         end
 
@@ -11357,10 +11370,16 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
             # Otherwise, it's just a fall-through to a live block - nothing needed
 
         elseif term isa Core.ReturnNode
+            if _debug_stackified
+                @warn "  RETURN terminator at block $block_idx: term=$(term), val=$(isdefined(term,:val) ? term.val : :undef)"
+            end
             if isdefined(term, :val)
                 val_wasm_type = infer_value_wasm_type(term.val, ctx)
                 ret_wasm_type = julia_to_wasm_type_concrete(ctx.return_type, ctx)
                 func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+                if _debug_stackified
+                    @warn "  RETURN types: val_wasm=$val_wasm_type, ret_wasm=$ret_wasm_type, func_ret=$func_ret_wasm, compatible=$(return_type_compatible(val_wasm_type, ret_wasm_type))"
+                end
                 # PURE-315: Check numeric-to-ref BEFORE return_type_compatible
                 is_numeric_val = val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
                 is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
