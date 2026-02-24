@@ -581,6 +581,58 @@ function eval_julia_test_uint32_getindex(code_bytes::Vector{UInt8})::Int32
     end
 end
 
+# --- Agent 22: Field-level diagnostics ---
+# Test 1: Read textbuf BEFORE parse (is constructor storing it correctly?)
+function eval_julia_test_textbuf_before_parse(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    # NO parse! call
+    return Int32(length(JuliaSyntax.unsafe_textbuf(ps)))
+end
+
+# Test 2: Encode multiple ParseStream field values in one int
+# Returns: textbuf_len * 10000 + output_len * 100 + next_byte
+function eval_julia_test_ps_fields(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        tb_len = length(JuliaSyntax.unsafe_textbuf(ps))
+        out_len = length(ps.output)
+        nb = ps.next_byte
+        return Int32(tb_len * 10000 + out_len * 100 + nb)
+    catch
+        return Int32(-1)
+    end
+end
+
+# Test 3: Store a Vector{UInt8} in a mutable struct and read it back
+# This tests if Vector-in-struct field access works in general
+mutable struct VecHolder
+    data::Vector{UInt8}
+    count::Int64
+end
+
+function eval_julia_test_vec_in_struct(code_bytes::Vector{UInt8})::Int32
+    holder = VecHolder(code_bytes, Int64(42))
+    # Read back the stored vector's length
+    stored = holder.data
+    return Int32(length(stored))
+end
+
+# Test 4: Input vector length directly (baseline)
+function eval_julia_test_input_len(code_bytes::Vector{UInt8})::Int32
+    return Int32(length(code_bytes))
+end
+
+# Test 5: Read textbuf right after constructor, get first byte
+function eval_julia_test_textbuf_first_byte(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    tb = JuliaSyntax.unsafe_textbuf(ps)
+    if length(tb) == 0
+        return Int32(-100)  # textbuf is empty!
+    end
+    return Int32(tb[1])  # should be 49 for '1'
+end
+
 # --- Entry point that takes Vector{UInt8} directly (WASM-compatible) ---
 # Avoids ALL String operations (codeunit, ncodeunits, pointer, unsafe_load)
 # which compile to `unreachable` in WASM.

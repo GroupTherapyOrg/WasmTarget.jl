@@ -119,6 +119,12 @@ function main()
         (eval_julia_test_child_head, (Vector{UInt8},)),
         (eval_julia_test_parse_literal, (Vector{UInt8},)),
         (eval_julia_test_child_br_broadcast, (Vector{UInt8},)),
+        # Agent 22: Field-level diagnostics
+        (eval_julia_test_textbuf_before_parse, (Vector{UInt8},)),
+        (eval_julia_test_ps_fields, (Vector{UInt8},)),
+        (eval_julia_test_vec_in_struct, (Vector{UInt8},)),
+        (eval_julia_test_input_len, (Vector{UInt8},)),
+        (eval_julia_test_textbuf_first_byte, (Vector{UInt8},)),
         (eval_julia_result_length, (Vector{UInt8},)),
         (eval_julia_result_byte, (Vector{UInt8}, Int32)),
         (make_byte_vec, (Int32,)),
