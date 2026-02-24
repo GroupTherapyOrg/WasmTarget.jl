@@ -235,6 +235,50 @@ function eval_julia_test_untokenize(code_bytes::Vector{UInt8})::Int32
     end
 end
 
+# Step E3b: test untokenize(Kind; unique=true) directly
+function eval_julia_test_untokenize_kind(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        k = JuliaSyntax.kind(cursor)
+        result = JuliaSyntax.untokenize(k; unique=true)
+        if result === nothing
+            return Int32(-2)
+        end
+        return Int32(length(result))
+    catch
+        return Int32(-1)
+    end
+end
+
+# Step E3c: test untokenize(Kind; unique=false) — bypasses _nonunique check
+function eval_julia_test_untokenize_kind_nouniq(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        k = JuliaSyntax.kind(cursor)
+        result = JuliaSyntax.untokenize(k; unique=false)
+        return Int32(length(result))
+    catch
+        return Int32(-1)
+    end
+end
+
+# Step E3d: test is_error(kind(head)) — should be false for K"call"
+function eval_julia_test_is_error(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        k = JuliaSyntax.kind(cursor)
+        return JuliaSyntax.is_error(k) ? Int32(1) : Int32(0)
+    catch
+        return Int32(-1)
+    end
+end
+
 # Step E4: _expr_leaf_val on a leaf child — just test it doesn't throw
 function eval_julia_test_leaf_val(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
