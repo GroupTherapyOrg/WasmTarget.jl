@@ -26351,6 +26351,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 global_idx = get_type_constant_global!(ctx.mod, ctx.type_registry, result_type)
                 push!(bytes, Opcode.GLOBAL_GET)
                 append!(bytes, encode_leb128_unsigned(global_idx))
+                # Convert concrete ref to externref (Type values are externref in general context)
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
 
             # PURE-6024: _tuple_error — error function in tuple convert dead code path.
             # Emit throw (catchable) instead of unreachable (trap).
