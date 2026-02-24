@@ -381,6 +381,64 @@ function eval_julia_test_child_byte_range(code_bytes::Vector{UInt8})::Int32
     end
 end
 
+# Step E10a: test head(child) on leaf
+function eval_julia_test_child_head(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        for child in JuliaSyntax.reverse_nontrivia_children(cursor)
+            if JuliaSyntax.is_leaf(child)
+                h = JuliaSyntax.head(child)
+                return Int32(1)
+            end
+        end
+        return Int32(-2)
+    catch
+        return Int32(-1)
+    end
+end
+
+# Step E10b: test parse_julia_literal directly on first leaf
+function eval_julia_test_parse_literal(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        txtbuf = JuliaSyntax.unsafe_textbuf(ps)
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        for child in JuliaSyntax.reverse_nontrivia_children(cursor)
+            if JuliaSyntax.is_leaf(child)
+                h = JuliaSyntax.head(child)
+                br = JuliaSyntax.byte_range(child)
+                val = JuliaSyntax.parse_julia_literal(txtbuf, h, br)
+                return Int32(1)
+            end
+        end
+        return Int32(-2)
+    catch
+        return Int32(-1)
+    end
+end
+
+# Step E10c: test byte_range .+ UInt32(0) broadcast on child
+function eval_julia_test_child_br_broadcast(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        for child in JuliaSyntax.reverse_nontrivia_children(cursor)
+            if JuliaSyntax.is_leaf(child)
+                br = JuliaSyntax.byte_range(child)
+                adjusted = br .+ UInt32(0)
+                return Int32(length(adjusted))
+            end
+        end
+        return Int32(-2)
+    catch
+        return Int32(-1)
+    end
+end
+
 # Step E10: test getindex with UInt32 range (potential issue)
 function eval_julia_test_uint32_getindex(code_bytes::Vector{UInt8})::Int32
     try
