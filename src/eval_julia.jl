@@ -75,6 +75,51 @@ function eval_julia_test_parse(code_bytes::Vector{UInt8})::Int32
     return Int32(-1)
 end
 
+# --- PURE-6024 Agent 20: Fine-grained diagnostics ---
+# Test String construction from bytes
+function eval_julia_test_string_from_bytes(code_bytes::Vector{UInt8})::Int32
+    try
+        s = String(code_bytes)
+        return Int32(length(s))
+    catch
+        return Int32(-1)
+    end
+end
+
+# Test Base.parse(Int64, ...) on a simple string
+function eval_julia_test_parse_int(code_bytes::Vector{UInt8})::Int32
+    try
+        s = String(code_bytes)
+        n = Base.parse(Int64, s)
+        return Int32(n)
+    catch
+        return Int32(-99)
+    end
+end
+
+# Test SubString creation
+function eval_julia_test_substring(code_bytes::Vector{UInt8})::Int32
+    try
+        s = String(code_bytes)
+        ss = SubString(s, 1, 1)
+        return Int32(length(ss))
+    catch
+        return Int32(-2)
+    end
+end
+
+# Test build_tree with the parse tree — return range count to verify parse tree is valid
+function eval_julia_test_tree_nranges(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps, rule=:statement)
+    try
+        n = length(ps.ranges)
+        return Int32(n)
+    catch
+        return Int32(-3)
+    end
+end
+
 # --- Entry point that takes Vector{UInt8} directly (WASM-compatible) ---
 # Avoids ALL String operations (codeunit, ncodeunits, pointer, unsafe_load)
 # which compile to `unreachable` in WASM.
