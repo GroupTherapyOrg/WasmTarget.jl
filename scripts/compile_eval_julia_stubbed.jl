@@ -113,6 +113,8 @@ function main()
         (eval_julia_test_is_error, (Vector{UInt8},)),
         (eval_julia_test_leaf_node_to_expr, (Vector{UInt8},)),
         (eval_julia_test_manual_leaf_path, (Vector{UInt8},)),
+        (eval_julia_test_not_should_include, (Vector{UInt8},)),
+        (eval_julia_test_node_to_expr_direct, (Vector{UInt8},)),
         (eval_julia_test_should_include, (Vector{UInt8},)),
         (eval_julia_test_child_head, (Vector{UInt8},)),
         (eval_julia_test_parse_literal, (Vector{UInt8},)),

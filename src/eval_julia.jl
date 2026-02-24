@@ -453,6 +453,47 @@ function eval_julia_test_manual_leaf_path(code_bytes::Vector{UInt8})::Int32
     end
 end
 
+# Step E10yz: test boolean negation of should_include_node
+function eval_julia_test_not_should_include(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        for child in JuliaSyntax.reverse_nontrivia_children(cursor)
+            si = JuliaSyntax.should_include_node(child)
+            nsi = !si
+            # si should be true, nsi should be false
+            # Return encoded: si*10 + nsi (expected: 10, i.e. true=1 false=0)
+            return Int32(si ? 10 : 0) + Int32(nsi ? 1 : 0)
+        end
+        return Int32(-2)
+    catch
+        return Int32(-1)
+    end
+end
+
+# Step E10yw: test if node_to_expr CALLED from a simple wrapper returns nothing
+function eval_julia_test_node_to_expr_direct(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        source = JuliaSyntax.SourceFile(ps)
+        txtbuf = JuliaSyntax.unsafe_textbuf(ps)
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        # Call node_to_expr directly on the ROOT cursor (the call node, not leaf)
+        e = JuliaSyntax.node_to_expr(cursor, source, txtbuf)
+        if e === nothing
+            return Int32(-3)
+        end
+        if e isa Expr
+            return Int32(length(e.args))
+        end
+        return Int32(99)
+    catch
+        return Int32(-1)
+    end
+end
+
 # Step E10y: test should_include_node on first leaf child
 function eval_julia_test_should_include(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
