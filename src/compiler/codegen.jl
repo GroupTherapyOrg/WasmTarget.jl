@@ -16188,8 +16188,31 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
             should_emit_null = is_literal_nothing || is_nothing_type_ssa
 
             if should_emit_null
+                # PURE-6024: Check actual Wasm field type first. For nullable
+                # primitives (Union{Nothing, Bool/Int32/etc}), the Wasm field
+                # is i32/i64 — emit zero constant, NOT ref.null.
+                _null_field_wasm = nothing
+                _null_struct_def = ctx.mod.types[info.wasm_type_idx + 1]
+                if _null_struct_def isa StructType && i <= length(_null_struct_def.fields)
+                    _null_field_wasm = _null_struct_def.fields[i].valtype
+                end
+                if _null_field_wasm !== nothing && (_null_field_wasm === I32 || _null_field_wasm === I64 || _null_field_wasm === F32 || _null_field_wasm === F64)
+                    # Numeric field — emit zero constant for nothing
+                    if _null_field_wasm === I32
+                        push!(bytes, Opcode.I32_CONST)
+                        push!(bytes, 0x00)
+                    elseif _null_field_wasm === I64
+                        push!(bytes, Opcode.I64_CONST)
+                        push!(bytes, 0x00)
+                    elseif _null_field_wasm === F32
+                        push!(bytes, Opcode.F32_CONST)
+                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+                    elseif _null_field_wasm === F64
+                        push!(bytes, Opcode.F64_CONST)
+                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                    end
                 # Nothing value (literal or SSA with Nothing type) - emit ref.null
-                if inner_type !== nothing && (inner_type === String || inner_type === Symbol)
+                elseif inner_type !== nothing && (inner_type === String || inner_type === Symbol)
                     # Nullable string/symbol — use string array type
                     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
                     push!(bytes, Opcode.REF_NULL)
