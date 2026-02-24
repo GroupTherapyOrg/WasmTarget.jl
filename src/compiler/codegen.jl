@@ -16632,6 +16632,10 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
     if struct_type_def isa StructType
         n_provided = length(field_values)
         n_required = length(struct_type_def.fields)
+        # DEBUG: trace ALL struct_new emissions with 2 externref fields
+        if n_required == 2 && struct_type_def.fields[1].valtype === ExternRef && struct_type_def.fields[2].valtype === ExternRef
+            println("DEBUG_STRUCT_NEW_2EXTERN: struct_type=$struct_type type_idx=$(info.wasm_type_idx) n_provided=$n_provided bytes_len=$(length(bytes))")
+        end
         for fi in (n_provided + 1):n_required
             missing_field_type = struct_type_def.fields[fi].valtype
             if missing_field_type isa ConcreteRef
