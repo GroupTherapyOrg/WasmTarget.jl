@@ -7117,6 +7117,66 @@ function ensure_exception_tag!(mod::WasmModule)
     end
 end
 
+"""
+PURE-6024: Generate try/catch code using generate_stackified_flow for the try body.
+Used when the try body has complex control flow (phi nodes, nested conditionals).
+The simple linear approach in generate_try_catch can't handle phi locals or nested
+GotoIfNot, causing null pointer dereferences from uninitialized phi locals.
+
+Structure:
+  block \$catch_landing (void)          ; catch_all jumps here
+    try_table (catch_all 0) (void)     ; catch clause routes to label 0
+      ; generate_stackified_flow for all blocks before catch handler
+      ; (handles phi nodes, nested control flow, all returns)
+    end
+  end
+  ; catch handler code (pop_exception skipped, returns -1 or similar)
+"""
+function generate_try_catch_stackified(ctx::CompilationContext, blocks::Vector{BasicBlock}, code, region::TryRegion)::Vector{UInt8}
+    bytes = UInt8[]
+    catch_dest = region.catch_dest
+
+    # Catch landing block (void) — catch_all branches here
+    push!(bytes, Opcode.BLOCK)
+    push!(bytes, 0x40)  # void
+
+    # try_table with catch_all → label 0 (catch_landing block)
+    push!(bytes, Opcode.TRY_TABLE)
+    push!(bytes, 0x40)  # void block type
+    append!(bytes, encode_leb128_unsigned(1))    # 1 catch clause
+    push!(bytes, Opcode.CATCH_ALL)               # catch_all type
+    append!(bytes, encode_leb128_unsigned(0))    # label index 0
+
+    # Extract blocks before catch handler — includes try body + normal return path
+    try_body_blocks = [b for b in blocks if b.start_idx < catch_dest]
+
+    # Use generate_stackified_flow for proper control flow:
+    # - phi locals set at every edge (GotoNode, GotoIfNot, fall-through)
+    # - nested GotoIfNot properly generates if/else or br_if
+    # - returns use RETURN opcode (exits function from within try_table)
+    append!(bytes, generate_stackified_flow(ctx, try_body_blocks, code))
+
+    # End try_table
+    push!(bytes, Opcode.END)
+
+    # End catch_landing block
+    push!(bytes, Opcode.END)
+
+    # Catch handler (from catch_dest to end of code)
+    for i in catch_dest:length(code)
+        stmt = code[i]
+        if stmt !== nothing
+            # Skip pop_exception — it's a runtime marker, no WASM equivalent
+            if stmt isa Expr && stmt.head === :pop_exception
+                continue
+            end
+            append!(bytes, compile_statement(stmt, i, ctx))
+        end
+    end
+
+    return bytes
+end
+
 function generate_try_catch(ctx::CompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
     bytes = UInt8[]
     regions = find_try_regions(code)
@@ -7134,6 +7194,21 @@ function generate_try_catch(ctx::CompilationContext, blocks::Vector{BasicBlock},
     enter_idx = region.enter_idx
     catch_dest = region.catch_dest
     leave_idx = region.leave_idx
+
+    # PURE-6024: If try body has phi nodes (complex control flow with merge points),
+    # delegate to generate_stackified_flow which properly handles phi locals,
+    # nested GotoIfNot, and GotoNode. The simple linear approach below can only
+    # handle one level of GotoIfNot and doesn't set phi locals at edges.
+    has_phi = false
+    for i in (enter_idx+1):(catch_dest-1)
+        if i <= length(code) && code[i] isa Core.PhiNode
+            has_phi = true
+            break
+        end
+    end
+    if has_phi
+        return generate_try_catch_stackified(ctx, blocks, code, region)
+    end
 
     # Determine result type for the function
     result_type_byte = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
