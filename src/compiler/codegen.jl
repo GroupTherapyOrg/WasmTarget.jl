@@ -16508,7 +16508,15 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
                         push!(bytes, Opcode.REF_NULL)
                         push!(bytes, UInt8(ArrayRef))
                     elseif actual_field_wasm === ExternRef
-                        emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
+                        # PURE-6024: Box numeric local → struct_new → extern_convert_any
+                        # (was: emit_numeric_to_externref! with undefined vars stmt/val_wasm)
+                        append!(bytes, field_bytes)
+                        _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, src_type)
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.STRUCT_NEW)
+                        append!(bytes, encode_leb128_unsigned(_box_t))
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
                     else
                         push!(bytes, Opcode.REF_NULL)
                         push!(bytes, UInt8(StructRef))
