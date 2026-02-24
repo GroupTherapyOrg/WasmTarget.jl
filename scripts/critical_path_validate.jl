@@ -98,104 +98,112 @@ function resolve_entry(e)
     return (func=f, arg_types=arg_types), nothing
 end
 
-tmpdir = mktempdir()
+function run_all_validates(critical_entries)
+    tmpdir = mktempdir()
 
-n_validates = 0
-n_validate_err = 0
-n_compile_err = 0
-n_resolve_fail = 0
+    n_validates = 0
+    n_validate_err = 0
+    n_compile_err = 0
+    n_resolve_fail = 0
 
-all_results = NamedTuple[]
+    all_results = NamedTuple[]
 
-for (i, e) in enumerate(critical_entries)
-    entry_obj, resolve_err = resolve_entry(e)
+    for (i, e) in enumerate(critical_entries)
+        entry_obj, resolve_err = resolve_entry(e)
 
-    if entry_obj === nothing
-        n_resolve_fail += 1
-        push!(all_results, (idx=e.idx, func=e.func, stmt_count=e.stmt_count,
-                            status=:RESOLVE_FAIL, error=resolve_err))
-        print("R")
-        i % 20 == 0 && println()
-        continue
-    end
-
-    # Compile
-    bytes = try
-        compile(entry_obj.func, entry_obj.arg_types)
-    catch ex
-        n_compile_err += 1
-        msg = sprint(showerror, ex)[1:min(200,end)]
-        push!(all_results, (idx=e.idx, func=e.func, stmt_count=e.stmt_count,
-                            status=:COMPILE_ERROR, error=msg))
-        print("C")
-        i % 20 == 0 && println()
-        continue
-    end
-
-    # Validate
-    tmpf = joinpath(tmpdir, "func_$(e.idx).wasm")
-    write(tmpf, bytes)
-
-    errbuf = IOBuffer()
-    validate_ok = false
-    try
-        run(pipeline(`wasm-tools validate --features=gc $tmpf`, stderr=errbuf, stdout=devnull))
-        validate_ok = true
-    catch; end
-
-    if validate_ok
-        n_validates += 1
-        push!(all_results, (idx=e.idx, func=e.func, stmt_count=e.stmt_count,
-                            status=:VALIDATES, error=""))
-        print(".")
-    else
-        err_msg = String(take!(errbuf))
-        n_validate_err += 1
-        push!(all_results, (idx=e.idx, func=e.func, stmt_count=e.stmt_count,
-                            status=:VALIDATE_ERROR, error=err_msg[1:min(300,end)]))
-        print("V")
-    end
-    i % 20 == 0 && println()
-end
-println()
-println()
-
-# Results summary
-total = n_validates + n_validate_err + n_compile_err + n_resolve_fail
-println("=== CRITICAL PATH RESULTS ($(Dates.now())) ===")
-println("  VALIDATES:      $n_validates / $(length(critical_entries))")
-println("  VALIDATE_ERROR: $n_validate_err")
-println("  COMPILE_ERROR:  $n_compile_err")
-println("  RESOLVE_FAIL:   $n_resolve_fail")
-println()
-
-# Show failures
-failures = filter(r -> r.status != :VALIDATES, all_results)
-
-if !isempty(failures)
-    println("=== FAILURES ===")
-    for r in failures
-        println("  [$(r.idx)] $(r.func) ($(r.stmt_count) stmts) — $(r.status)")
-        if !isempty(r.error)
-            # Just show first line of error
-            first_line = split(r.error, '\n')[1]
-            println("    $(first_line[1:min(150,end)])")
+        if entry_obj === nothing
+            n_resolve_fail += 1
+            push!(all_results, (idx=e.idx, func=e.func, stmt_count=e.stmt_count,
+                                status=:RESOLVE_FAIL, error=resolve_err))
+            print("R")
+            i % 20 == 0 && println()
+            continue
         end
+
+        # Compile
+        bytes = try
+            compile(entry_obj.func, entry_obj.arg_types)
+        catch ex
+            n_compile_err += 1
+            msg = sprint(showerror, ex)[1:min(200,end)]
+            push!(all_results, (idx=e.idx, func=e.func, stmt_count=e.stmt_count,
+                                status=:COMPILE_ERROR, error=msg))
+            print("C")
+            i % 20 == 0 && println()
+            continue
+        end
+
+        # Validate
+        tmpf = joinpath(tmpdir, "func_$(e.idx).wasm")
+        write(tmpf, bytes)
+
+        errbuf = IOBuffer()
+        validate_ok = false
+        try
+            Base.run(pipeline(`wasm-tools validate --features=gc $tmpf`, stderr=errbuf, stdout=devnull))
+            validate_ok = true
+        catch; end
+
+        if validate_ok
+            n_validates += 1
+            push!(all_results, (idx=e.idx, func=e.func, stmt_count=e.stmt_count,
+                                status=:VALIDATES, error=""))
+            print(".")
+        else
+            err_msg = String(take!(errbuf))
+            n_validate_err += 1
+            push!(all_results, (idx=e.idx, func=e.func, stmt_count=e.stmt_count,
+                                status=:VALIDATE_ERROR, error=err_msg[1:min(300,end)]))
+            print("V")
+        end
+        i % 20 == 0 && println()
     end
     println()
+    println()
 
-    # Group by status and first error word
-    by_cat = Dict{String,Int}()
-    for r in failures
-        cat = string(r.status) * "/" * split(r.error, [' ', '\n', ':'])[1]
-        by_cat[cat] = get(by_cat, cat, 0) + 1
+    # Results summary
+    println("=== CRITICAL PATH RESULTS ($(Dates.now())) ===")
+    println("  VALIDATES:      $n_validates / $(length(critical_entries))")
+    println("  VALIDATE_ERROR: $n_validate_err")
+    println("  COMPILE_ERROR:  $n_compile_err")
+    println("  RESOLVE_FAIL:   $n_resolve_fail")
+    println()
+
+    # Show failures
+    failures = filter(r -> r.status != :VALIDATES, all_results)
+
+    if !isempty(failures)
+        println("=== FAILURES ===")
+        for r in failures
+            println("  [$(r.idx)] $(r.func) ($(r.stmt_count) stmts) — $(r.status)")
+            if !isempty(r.error)
+                # Just show first line of error
+                first_line = split(r.error, '\n')[1]
+                println("    $(first_line[1:min(150,end)])")
+            end
+        end
+        println()
+
+        # Group by error pattern
+        by_cat = Dict{String,Int}()
+        for r in failures
+            cat = string(r.status)
+            if !isempty(r.error)
+                first_line = split(r.error, '\n')[1]
+                cat *= ": " * first_line[1:min(80,end)]
+            end
+            by_cat[cat] = get(by_cat, cat, 0) + 1
+        end
+        println("Error categories:")
+        for (cat, cnt) in sort(collect(by_cat), by=x->-x[2])
+            println("  $(cnt)x $(cat)")
+        end
     end
-    println("Error categories:")
-    for (cat, cnt) in sort(collect(by_cat), by=x->-x[2])
-        println("  $(cnt)x $(cat)")
-    end
+
+    rm(tmpdir; recursive=true, force=true)
+    println()
+    println("Done: $(Dates.now())")
+    return all_results
 end
 
-rm(tmpdir; recursive=true, force=true)
-println()
-println("Done: $(Dates.now())")
+results = run_all_validates(critical_entries)
