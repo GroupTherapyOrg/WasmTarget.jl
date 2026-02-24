@@ -16,6 +16,49 @@
 # Every call runs the REAL Julia compiler pipeline from scratch.
 # ============================================================================
 
+# --- WASM-friendly method overrides ---
+# These override JuliaSyntax methods that use Dict/Set globals (which crash in WASM).
+# Kind `==` comparison works in WASM, but Dict-backed Set{Kind} lookups hit `unreachable`.
+
+# Override untokenize(k::Kind) to avoid _nonunique_kind_names Set{Kind} lookup.
+# Uses `==` comparisons instead — KSet-style (Tuple-based) lookup.
+# The 20 nonunique kinds are from JuliaSyntax/src/kinds.jl lines 1079-1115.
+function JuliaSyntax.untokenize(k::JuliaSyntax.Kind; unique::Bool=true)
+    if unique
+        # Nonunique kinds: tokens that don't have a unique string representation
+        if k == JuliaSyntax.K"Comment" || k == JuliaSyntax.K"Whitespace" ||
+           k == JuliaSyntax.K"NewlineWs" || k == JuliaSyntax.K"Identifier" ||
+           k == JuliaSyntax.K"Placeholder" ||
+           # Errors (all in _nonunique_kind_names)
+           k == JuliaSyntax.K"ErrorEofMultiComment" ||
+           k == JuliaSyntax.K"ErrorInvalidNumericConstant" ||
+           k == JuliaSyntax.K"ErrorHexFloatMustContainP" ||
+           k == JuliaSyntax.K"ErrorAmbiguousNumericConstant" ||
+           k == JuliaSyntax.K"ErrorAmbiguousNumericDotMultiply" ||
+           k == JuliaSyntax.K"ErrorInvalidInterpolationTerminator" ||
+           k == JuliaSyntax.K"ErrorNumericOverflow" ||
+           k == JuliaSyntax.K"ErrorInvalidEscapeSequence" ||
+           k == JuliaSyntax.K"ErrorOverLongCharacter" ||
+           k == JuliaSyntax.K"ErrorInvalidUTF8" ||
+           k == JuliaSyntax.K"ErrorInvisibleChar" ||
+           k == JuliaSyntax.K"ErrorUnknownCharacter" ||
+           k == JuliaSyntax.K"ErrorBidiFormatting" ||
+           k == JuliaSyntax.K"ErrorInvalidOperator" ||
+           # Literals
+           k == JuliaSyntax.K"Bool" || k == JuliaSyntax.K"Integer" ||
+           k == JuliaSyntax.K"BinInt" || k == JuliaSyntax.K"HexInt" ||
+           k == JuliaSyntax.K"OctInt" || k == JuliaSyntax.K"Float" ||
+           k == JuliaSyntax.K"Float32" || k == JuliaSyntax.K"String" ||
+           k == JuliaSyntax.K"Char" || k == JuliaSyntax.K"CmdString" ||
+           # Macros
+           k == JuliaSyntax.K"MacroName" || k == JuliaSyntax.K"StringMacroName" ||
+           k == JuliaSyntax.K"CmdMacroName"
+            return nothing
+        end
+    end
+    return string(k)
+end
+
 """
     eval_julia_to_bytes(code::String)::Vector{UInt8}
 
