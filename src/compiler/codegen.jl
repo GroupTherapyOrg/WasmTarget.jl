@@ -23467,11 +23467,13 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                         cross_call_handled = true
                         # PURE-6024: If callee returns Union{} (Bottom), it always throws/traps.
                         # The Wasm func type has no result, so code after is unreachable.
-                        # Emit unreachable to prevent stack underflow from DROP.
-                        # (Same logic as invoke cross-call handler)
+                        # Emit unreachable to make stack polymorphic — prevents DROP from
+                        # causing "nothing on stack" when the void call has no return value.
+                        # NOTE: Do NOT set ctx.last_stmt_was_stub here. The SSA type may not
+                        # be Union{} (e.g., Any in unoptimized IR), so setting the flag would
+                        # incorrectly trigger dead code detection and skip block structures.
                         if target_info.return_type === Union{}
                             push!(bytes, Opcode.UNREACHABLE)
-                            ctx.last_stmt_was_stub = true
                         end
                         # PURE-220: For higher-order calls (Core.Argument func_ref), if SSA has
                         # no local and target returns non-void, drop the unused return value.
