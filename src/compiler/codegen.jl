@@ -8736,10 +8736,12 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                 end
             end
 
-            # Check if this statement has Union{} type (never returns) - stop generating code
+            # Check if this statement has Union{} type or emitted unreachable - stop generating code
             # Code after unreachable/throw is dead and causes validation errors
+            # PURE-6024: Use ctx.last_stmt_was_stub flag (set by compile_call/compile_invoke
+            # when stub emits UNREACHABLE). Byte-level detection of 0x00 is unreliable.
             stmt_type = get(ctx.ssa_types, i, Any)
-            if stmt_type === Union{}
+            if stmt_type === Union{} || ctx.last_stmt_was_stub
                 # Skip to next merge point (block end) or back-edge
                 # Find the next merge point
                 next_merge = nothing
@@ -15041,7 +15043,9 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
         # Byte-level detection of 0x00 is unreliable (LEB128 zeros are common).
         # Instead, compile_call/compile_invoke set ctx.last_stmt_was_stub = true.
         _stmt_ends_unreachable = ctx.last_stmt_was_stub
-        ctx.last_stmt_was_stub = false  # Reset for next statement
+        # PURE-6024: Don't reset here — let callers (generate_stackified_flow etc.)
+        # detect unreachable and skip dead code. Reset happens at start of next
+        # compile_statement call (line ~15011).
 
         # Safety check: if stmt_bytes produces a value incompatible with the SSA local type,
         # replace with type-safe default. Catches:
