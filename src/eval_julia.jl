@@ -8,9 +8,9 @@
 #   4. Codegen: compile_from_codeinfo(ci, rettype, name, arg_types) → .wasm bytes
 #
 # Stage 3 uses WasmInterpreter (custom AbstractInterpreter with DictMethodTable,
-# PreDecompressedCodeInfo, pure Julia reimplementations). may_optimize=true ensures
-# IR canonicalization runs, producing the same resolved-reference CodeInfo format
-# that Base.code_typed returns.
+# PreDecompressedCodeInfo, pure Julia reimplementations). may_optimize=false skips
+# Julia's IR optimization passes (unnecessary for WASM — Binaryen handles it).
+# The unoptimized CodeInfo may differ from Base.code_typed format.
 #
 # NO pre-computed WASM bytes. NO character matching. NO shortcuts.
 # Every call runs the REAL Julia compiler pipeline from scratch.
@@ -63,14 +63,15 @@ function eval_julia_to_bytes(code::String)::Vector{UInt8}
     end
     mi = Core.Compiler.specialize_method(first(lookup.matches))
 
-    # Run typeinf_frame(interp, mi, run_optimizer=true) — same path as Base.code_typed.
-    # This produces canonical 2-stmt IR: %1 = Base.add_int(_2, _3); %2 = return %1
-    # (vs 3-stmt indirect IR when using InferenceState directly without run_optimizer).
+    # Run typeinf_frame(interp, mi, run_optimizer=false) — skip Julia IR optimization.
+    # Binaryen handles WASM-level optimization. Without the optimizer, the IR may
+    # have extra statements (e.g. 3-stmt indirect calls vs 2-stmt resolved intrinsics).
+    # Codegen must handle this unoptimized form.
     _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
     inf_frame = nothing
     try
-        inf_frame = Core.Compiler.typeinf_frame(interp, mi, true)
+        inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
     finally
         _WASM_USE_REIMPL[] = false
         _WASM_CODE_CACHE[] = nothing

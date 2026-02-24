@@ -96,11 +96,12 @@ Core.Compiler.get_inference_cache(interp::WasmInterpreter) = interp.inf_cache
 Core.Compiler.InferenceParams(interp::WasmInterpreter) = interp.inf_params
 Core.Compiler.OptimizationParams(interp::WasmInterpreter) = interp.opt_params
 
-# Enable IR canonicalization (resolves indirect call references into direct calls).
-# Binaryen.js handles WASM-level optimization, but Julia IR canonicalization is
-# required for codegen to consume the IR correctly (matches Base.code_typed format).
-# Inlining is still disabled via OptimizationParams(inlining=false) in the constructor.
-Core.Compiler.may_optimize(interp::WasmInterpreter) = true
+# Disable optimization — Binaryen handles WASM-level optimization.
+# Julia's IR optimization passes (compact!, adce_pass!, sroa_pass!, etc.) target
+# native code and are unnecessary for WASM. Disabling eliminates ~55 Core.Compiler
+# functions from the dependency tree, including all 3 that blocked PURE-6021c.
+# Inlining is also disabled via OptimizationParams(inlining=false) in the constructor.
+Core.Compiler.may_optimize(interp::WasmInterpreter) = false
 Core.Compiler.may_compress(interp::WasmInterpreter) = false
 Core.Compiler.may_discard_trees(interp::WasmInterpreter) = false
 
