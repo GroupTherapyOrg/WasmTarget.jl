@@ -30,11 +30,24 @@ Pipeline:
 
 Currently handles: binary arithmetic on Int64 literals (e.g. "1+1", "10-3", "2*3")
 """
+# WASM-safe String → Vector{UInt8} conversion. Avoids unsafe_wrap and copyto!
+# which use pointer operations that can't compile to WASM. Uses codeunit() loop.
+function _string_to_bytes(s::String)::Vector{UInt8}
+    n = ncodeunits(s)
+    v = Vector{UInt8}(undef, n)
+    i = 1
+    while i <= n
+        @inbounds v[i] = codeunit(s, i)
+        i += 1
+    end
+    return v
+end
+
 function eval_julia_to_bytes(code::String)::Vector{UInt8}
     # Stage 1: Parse
-    # Use Vector{UInt8} + ParseStream directly to avoid unsafe_wrap(Vector{UInt8}, String)
-    # which uses raw pointer operations that can't compile to WASM.
-    code_bytes = Vector{UInt8}(code)
+    # Use _string_to_bytes (codeunit loop) instead of Vector{UInt8}(code) or unsafe_wrap
+    # to avoid pointer-based operations that can't compile to WASM.
+    code_bytes = _string_to_bytes(code)
     ps = JuliaSyntax.ParseStream(code_bytes)
     JuliaSyntax.parse!(ps, rule=:statement)
     expr = JuliaSyntax.build_tree(Expr, ps)
