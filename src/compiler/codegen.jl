@@ -17093,7 +17093,16 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
         if dest_info !== nothing && src_info !== nothing
             dest_arr_ssa, dest_offset_ssa = dest_info
             src_arr_ssa, src_offset_ssa = src_info
-            str_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
+            # Determine actual array type from the SSA's wasm local type
+            # Default to string array (i32[]) but use correct type if SSA local is a ConcreteRef
+            arr_copy_type = get_string_array_type!(ctx.mod, ctx.type_registry)
+            if dest_arr_ssa isa Core.SSAValue && haskey(ctx.ssa_locals, dest_arr_ssa.id)
+                local_idx = ctx.ssa_locals[dest_arr_ssa.id]
+                local_type = _get_local_type(ctx, local_idx)
+                if local_type isa ConcreteRef
+                    arr_copy_type = local_type.type_idx
+                end
+            end
 
             # array.copy: dest_arr, dest_offset, src_arr, src_offset, count
             # dest array
@@ -17133,8 +17142,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
             # emit array.copy
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.ARRAY_COPY)
-            append!(bytes, encode_leb128_unsigned(str_arr_type))  # dest type
-            append!(bytes, encode_leb128_unsigned(str_arr_type))  # src type
+            append!(bytes, encode_leb128_unsigned(arr_copy_type))  # dest type
+            append!(bytes, encode_leb128_unsigned(arr_copy_type))  # src type
             # memmove returns dest ptr — push i64.const 0 as the result
             push!(bytes, Opcode.I64_CONST, 0x00)
             return bytes
