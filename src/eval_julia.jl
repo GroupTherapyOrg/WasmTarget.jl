@@ -1174,10 +1174,11 @@ function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
     # Stage 1: Parse — bytes go directly to ParseStream
     ps = JuliaSyntax.ParseStream(code_bytes)
     JuliaSyntax.parse!(ps, rule=:statement)
-    # build_tree calls untokenize which uses `in(k, _nonunique_kind_names)`.
-    # We override Base.in(::Kind, ::Set{Kind}) above to use == comparisons
-    # instead of Dict-backed Set lookup (which crashes in WASM).
-    expr = JuliaSyntax.build_tree(Expr, ps)
+    # Use _wasm_build_tree_expr instead of JuliaSyntax.build_tree(Expr, ps):
+    # - Avoids Set{Kind} globals (Dict-backed, crash in WASM)
+    # - Avoids kwcall dispatch issues
+    # - Avoids _expr_leaf_val method dispatch bug (SyntaxNode vs RedTreeCursor)
+    expr = _wasm_build_tree_expr(ps)
 
     # Stage 2: Extract function and arguments from the Expr
     if !(expr isa Expr && expr.head === :call)
