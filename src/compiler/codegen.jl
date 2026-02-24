@@ -16570,6 +16570,33 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
                     end
                 end
             end
+            # PURE-6024: If the field expects externref but field_bytes is non-empty and
+            # hasn't been handled above (not local.get, not ref.null), the compiled value
+            # is likely a concrete ref (from struct_new, struct_get, call, etc.) that needs
+            # extern_convert_any. This complements the local.get check at line ~16464.
+            if actual_field_wasm === ExternRef && !isempty(field_bytes)
+                last_is_extern_convert = length(field_bytes) >= 2 &&
+                                         field_bytes[end-1] == Opcode.GC_PREFIX &&
+                                         field_bytes[end] == Opcode.EXTERN_CONVERT_ANY
+                first_is_ref_null_extern = length(field_bytes) >= 2 &&
+                                           field_bytes[1] == Opcode.REF_NULL &&
+                                           field_bytes[2] == UInt8(ExternRef)
+                first_is_numeric = !isempty(field_bytes) &&
+                                   (field_bytes[1] == Opcode.I32_CONST || field_bytes[1] == Opcode.I64_CONST ||
+                                    field_bytes[1] == Opcode.F32_CONST || field_bytes[1] == Opcode.F64_CONST) &&
+                                   !has_ref_producing_gc_op(field_bytes)
+                if !last_is_extern_convert && !first_is_ref_null_extern && !first_is_numeric
+                    append!(bytes, field_bytes)
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                    field_bytes = UInt8[]  # Already appended
+                elseif first_is_numeric
+                    # Numeric value for externref field — emit ref.null extern
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, UInt8(ExternRef))
+                    field_bytes = UInt8[]  # Don't append original
+                end
+            end
             append!(bytes, field_bytes)
         end
     end
