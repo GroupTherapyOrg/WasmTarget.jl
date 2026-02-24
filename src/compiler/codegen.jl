@@ -6414,6 +6414,21 @@ function statement_produces_wasm_value(stmt::Expr, idx::Int, ctx::CompilationCon
                     end
                 catch
                 end
+            elseif func_ref isa Core.SSAValue
+                # PURE-6024: Handle indirect calls through SSAValues (common in unoptimized IR)
+                # e.g., %1 = Core.throw; %2 = (%1)(err) — func_ref is SSAValue(1)
+                # Look up the SSA type to extract the actual function via Core.Const
+                ssa_func_type = get(ctx.ssa_types, func_ref.id, Any)
+                if ssa_func_type isa Core.Const
+                    try
+                        called_func = ssa_func_type.val
+                        if called_func !== Base.getfield && called_func !== Core.getfield &&
+                           called_func !== Base.setfield! && called_func !== Core.setfield!
+                            call_arg_types = Tuple{[infer_value_type(arg, ctx) for arg in stmt.args[2:end]]...}
+                        end
+                    catch
+                    end
+                end
             end
         end
 
@@ -8742,7 +8757,8 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                                   !(length(compiled_stmt_bytes) >= 2 && compiled_stmt_bytes[end-1] == Opcode.CALL)
                 # Use statement_produces_wasm_value for consistent handling
                 # This checks the function registry for accurate return type info
-                if !already_dropped && statement_produces_wasm_value(stmt, i, ctx)
+                # PURE-6024: Also skip DROP if last_stmt_was_stub (call to void/Union{} func)
+                if !already_dropped && !ctx.last_stmt_was_stub && statement_produces_wasm_value(stmt, i, ctx)
                     if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                         use_count = get(ssa_use_count, i, 0)
                         if use_count == 0
@@ -10178,7 +10194,8 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                       !(length(stmt_bytes) >= 2 && stmt_bytes[end-1] == Opcode.CALL)
                     # Use statement_produces_wasm_value to check if the call actually
                     # produces a value on the stack (handles Any type correctly)
-                    if !already_dropped && statement_produces_wasm_value(stmt, i, ctx)
+                    # PURE-6024: Also skip DROP if last_stmt_was_stub (call to void/Union{} func)
+                    if !already_dropped && !ctx.last_stmt_was_stub && statement_produces_wasm_value(stmt, i, ctx)
                         if !haskey(ctx.phi_locals, i)
                             use_count = get(ssa_use_count, i, 0)
                             if use_count == 0
@@ -23463,6 +23480,14 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                         push!(bytes, Opcode.CALL)
                         append!(bytes, encode_leb128_unsigned(target_info.wasm_idx))
                         cross_call_handled = true
+                        # PURE-6024: If callee returns Union{} (Bottom), it always throws/traps.
+                        # The Wasm func type has no result, so code after is unreachable.
+                        # Emit unreachable to prevent stack underflow from DROP.
+                        # (Same logic as invoke cross-call handler)
+                        if target_info.return_type === Union{}
+                            push!(bytes, Opcode.UNREACHABLE)
+                            ctx.last_stmt_was_stub = true
+                        end
                         # PURE-220: For higher-order calls (Core.Argument func_ref), if SSA has
                         # no local and target returns non-void, drop the unused return value.
                         # Previously these emitted unreachable (making the code dead), but now
