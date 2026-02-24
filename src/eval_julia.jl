@@ -22,7 +22,7 @@
 
 # Override untokenize(k::Kind) to avoid _nonunique_kind_names Set{Kind} lookup.
 # Uses `==` comparisons instead — KSet-style (Tuple-based) lookup.
-# The 20 nonunique kinds are from JuliaSyntax/src/kinds.jl lines 1079-1115.
+# The nonunique kinds are from JuliaSyntax/src/julia/kinds.jl lines 1084-1119.
 function JuliaSyntax.untokenize(k::JuliaSyntax.Kind; unique::Bool=true)
     if unique
         # Nonunique kinds: tokens that don't have a unique string representation
@@ -51,7 +51,7 @@ function JuliaSyntax.untokenize(k::JuliaSyntax.Kind; unique::Bool=true)
            k == JuliaSyntax.K"Float32" || k == JuliaSyntax.K"String" ||
            k == JuliaSyntax.K"Char" || k == JuliaSyntax.K"CmdString" ||
            # Macros
-           k == JuliaSyntax.K"MacroName" || k == JuliaSyntax.K"StringMacroName" ||
+           k == JuliaSyntax.K"StrMacroName" ||
            k == JuliaSyntax.K"CmdMacroName"
             return nothing
         end
