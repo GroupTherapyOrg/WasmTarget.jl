@@ -1,0 +1,5 @@
+# Critical Path VALIDATES Results — 2026-02-23T23:52:55.117 — 20/112 processed
+# VALIDATES: 19, VALIDATE_ERROR: 1, COMPILE_ERROR: 0, RESOLVE_FAIL: 0
+
+[121] compact!((Compiler.IRCode, Bool)) — 21 stmts — VALIDATE_ERROR
+  error: func 4 failed to validate

@@ -5190,21 +5190,47 @@ function analyze_control_flow!(ctx::CompilationContext)
                         phi_wasm_type = I32
                         break
                     end
-                    # Check if used as argument to boolean intrinsics
+                    # Check if used as argument to boolean/comparison/arithmetic intrinsics
                     if use_stmt isa Expr && use_stmt.head === :call && length(use_stmt.args) >= 2
                         func = use_stmt.args[1]
                         if func isa GlobalRef && func.mod in (Core, Base, Core.Intrinsics)
                             fname = func.name
-                            is_bool_op = fname in (:not_int, :eq_int, :ne_int, :slt_int, :sle_int,
-                                                   :ult_int, :ule_int, :and_int, :or_int, :xor_int)
-                            if is_bool_op
+                            is_bool_op = fname in (:not_int, :and_int, :or_int, :xor_int)
+                            is_cmp_op = fname in (:eq_int, :ne_int, :slt_int, :sle_int,
+                                                   :ult_int, :ule_int)
+                            # PURE-6021c: Arithmetic intrinsics that require numeric operands
+                            is_arith_op = fname in (:add_int, :sub_int, :mul_int, :sdiv_int, :udiv_int,
+                                                    :srem_int, :urem_int, :neg_int,
+                                                    :add_float, :sub_float, :mul_float, :div_float,
+                                                    :neg_float, :abs_float, :sqrt_llvm,
+                                                    :shl_int, :lshr_int, :ashr_int,
+                                                    :checked_sadd_int, :checked_ssub_int, :checked_smul_int,
+                                                    :checked_uadd_int, :checked_usub_int, :checked_umul_int,
+                                                    :sitofp, :uitofp, :fptosi, :fptoui,
+                                                    :trunc_int, :sext_int, :zext_int, :fpext, :fptrunc,
+                                                    :ctpop_int, :ctlz_int, :cttz_int, :bswap_int,
+                                                    :flipsign_int, :copysign_float,
+                                                    :eq_float, :ne_float, :lt_float, :le_float)
+                            if is_bool_op || is_cmp_op || is_arith_op
                                 for arg in use_stmt.args[2:end]
                                     if arg === phi_ssa_val
-                                        phi_wasm_type = I32
+                                        if is_arith_op || is_cmp_op
+                                            # Arithmetic/comparison ops need I64 (Julia's default int width)
+                                            inferred = julia_to_wasm_type_concrete(phi_julia_type, ctx)
+                                            if inferred === I64
+                                                phi_wasm_type = I64
+                                            elseif inferred === I32
+                                                phi_wasm_type = I32
+                                            else
+                                                phi_wasm_type = I64  # Default for Any/Union
+                                            end
+                                        else
+                                            phi_wasm_type = I32  # Boolean ops
+                                        end
                                         break
                                     end
                                 end
-                                phi_wasm_type === I32 && break
+                                (phi_wasm_type === I32 || phi_wasm_type === I64) && break
                             end
                         end
                     end
@@ -5690,7 +5716,21 @@ function allocate_ssa_locals!(ctx::CompilationContext)
                             # Comparison ops that can take i32 or i64 operands
                             is_cmp_op = fname in (:eq_int, :ne_int, :slt_int, :sle_int,
                                                   :ult_int, :ule_int)
-                            if is_bool_op || is_cmp_op
+                            # PURE-6021c: Arithmetic and other numeric intrinsics that require
+                            # numeric operands — fixes externref/i64 mismatch in builtin_effects
+                            is_arith_op = fname in (:add_int, :sub_int, :mul_int, :sdiv_int, :udiv_int,
+                                                    :srem_int, :urem_int, :neg_int,
+                                                    :add_float, :sub_float, :mul_float, :div_float,
+                                                    :neg_float, :abs_float, :sqrt_llvm,
+                                                    :shl_int, :lshr_int, :ashr_int,
+                                                    :checked_sadd_int, :checked_ssub_int, :checked_smul_int,
+                                                    :checked_uadd_int, :checked_usub_int, :checked_umul_int,
+                                                    :sitofp, :uitofp, :fptosi, :fptoui,
+                                                    :trunc_int, :sext_int, :zext_int, :fpext, :fptrunc,
+                                                    :ctpop_int, :ctlz_int, :cttz_int, :bswap_int,
+                                                    :flipsign_int, :copysign_float,
+                                                    :eq_float, :ne_float, :lt_float, :le_float)
+                            if is_bool_op || is_cmp_op || is_arith_op
                                 for arg in use_stmt.args[2:end]
                                     if arg === ssa_val
                                         # PURE-046: Use Julia type to determine correct Wasm operand type
@@ -5701,8 +5741,12 @@ function allocate_ssa_locals!(ctx::CompilationContext)
                                         elseif inferred_wasm === I32 || is_bool_op
                                             wasm_type = I32
                                         elseif inferred_wasm isa ConcreteRef || inferred_wasm === ExternRef
-                                            # Int128/UInt128 are structs, keep as ExternRef
-                                            # (comparison ops on these are handled differently)
+                                            # For arithmetic ops with Any/Union type, the value must be
+                                            # numeric — default to I64 (Julia's default integer width)
+                                            if is_arith_op || is_cmp_op
+                                                wasm_type = I64
+                                            end
+                                            # Boolean ops keep ExternRef (Int128/UInt128 handled differently)
                                         else
                                             # Default to I32 for other cases (F32/F64 shouldn't reach here)
                                             wasm_type = I32

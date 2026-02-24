@@ -87,15 +87,22 @@ function resolve_argtypes(s::AbstractString)
 end
 
 # Run validation
-function run_validates(entries)
+function run_validates(entries; max_stmts::Int=typemax(Int))
     tmpdir = mktempdir()
     n_ok = 0
     n_verr = 0
     n_cerr = 0
     n_rerr = 0
+    n_skip = 0
     failures = []
 
     for (i, e) in enumerate(entries)
+        if e.stmt_count > max_stmts
+            n_skip += 1
+            print("S")
+            flush(stdout)
+            continue
+        end
         mod = resolve_mod(e.mod_str)
         if mod === nothing
             n_rerr += 1
@@ -123,7 +130,7 @@ function run_validates(entries)
             continue
         end
 
-        # Compile
+        # Compile (direct call — no timeout, Julia compile is CPU-bound)
         bytes = try
             compile(f, argtypes)
         catch ex
@@ -157,7 +164,20 @@ function run_validates(entries)
             print("V")
         end
         flush(stdout)
-        i % 20 == 0 && println(" ($i/$(length(entries)))")
+        if i % 20 == 0
+            println(" ($i/$(length(entries)))")
+            # Incremental save
+            results_file = joinpath(@__DIR__, "cp_validate_results.txt")
+            open(results_file, "w") do io
+                println(io, "# Critical Path VALIDATES Results — $(Dates.now()) — $i/$(length(entries)) processed")
+                println(io, "# VALIDATES: $n_ok, VALIDATE_ERROR: $n_verr, COMPILE_ERROR: $n_cerr, RESOLVE_FAIL: $n_rerr")
+                println(io, "")
+                for ff in failures
+                    println(io, "[$(ff.e.idx)] $(ff.e.func_str)($(ff.e.arg_types_str)) — $(ff.e.stmt_count) stmts — $(ff.status)")
+                    println(io, "  $(ff.err)")
+                end
+            end
+        end
     end
     println()
     println()
@@ -165,7 +185,9 @@ function run_validates(entries)
     # Summary
     total = length(entries)
     println("=== RESULTS ($(Dates.now())) ===")
-    println("  VALIDATES:      $n_ok / $total ($(round(100*n_ok/total, digits=1))%)")
+    tested = total - n_skip
+    println("  TESTED:         $tested / $total (skipped $n_skip with >(max_stmts) stmts)")
+    println("  VALIDATES:      $n_ok / $tested ($(tested>0 ? round(100*n_ok/tested, digits=1) : 0)%)")
     println("  VALIDATE_ERROR: $n_verr")
     println("  COMPILE_ERROR:  $n_cerr")
     println("  RESOLVE_FAIL:   $n_rerr")
@@ -179,10 +201,28 @@ function run_validates(entries)
         end
     end
 
+    # Save results to file for persistence across timeouts
+    results_file = joinpath(@__DIR__, "cp_validate_results.txt")
+    open(results_file, "w") do io
+        println(io, "# Critical Path VALIDATES Results — $(Dates.now())")
+        println(io, "# VALIDATES: $n_ok / $total ($(round(100*n_ok/total, digits=1))%)")
+        println(io, "# VALIDATE_ERROR: $n_verr, COMPILE_ERROR: $n_cerr, RESOLVE_FAIL: $n_rerr")
+        println(io, "")
+        for f in failures
+            println(io, "[$(f.e.idx)] $(f.e.func_str)($(f.e.arg_types_str)) — $(f.e.stmt_count) stmts — $(f.status)")
+            println(io, "  $(f.err)")
+        end
+    end
+    println("Results saved to: $results_file")
+
     rm(tmpdir; recursive=true, force=true)
     flush(stdout)
     return (n_ok=n_ok, n_verr=n_verr, n_cerr=n_cerr, n_rerr=n_rerr, failures=failures)
 end
 
-results = run_validates(entries)
+# Filter: MAX_STMTS env var (default 300 — covers most critical path, skips huge ones)
+max_stmts = something(tryparse(Int, get(ENV, "MAX_STMTS", "")), 300)
+println("Max stmts filter: $max_stmts")
+flush(stdout)
+results = run_validates(entries; max_stmts=max_stmts)
 println("\nDone: $(Dates.now())")
