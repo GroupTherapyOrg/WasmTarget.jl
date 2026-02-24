@@ -1,5 +1,50 @@
-# Critical Path VALIDATES Results — 2026-02-23T23:52:55.117 — 20/112 processed
-# VALIDATES: 19, VALIDATE_ERROR: 1, COMPILE_ERROR: 0, RESOLVE_FAIL: 0
+# Critical Path VALIDATES Results — 2026-02-24T00:50:04.226
+# VALIDATES: 89 / 112 (79.5%)
+# VALIDATE_ERROR: 22, COMPILE_ERROR: 0, RESOLVE_FAIL: 1
 
 [121] compact!((Compiler.IRCode, Bool)) — 21 stmts — VALIDATE_ERROR
   error: func 4 failed to validate
+[349] typeinf_frame((WasmInterpreter, Core.MethodInstance, Bool)) — 65 stmts — VALIDATE_ERROR
+  error: func 1 failed to validate
+[391] build_tree((Type{Expr}, JuliaSyntax.ParseStream, SourceFile)) — 69 stmts — VALIDATE_ERROR
+  error: func 25 failed to validate
+[494] parseargs!((Expr, LineNumberNode, JuliaSyntax.RedTreeCursor, SourceFile, Vector{UInt8}, UInt32)) — 92 stmts — VALIDATE_ERROR
+  error: func 24 failed to validate
+[369] #_parse#75((VersionNumber, Bool, Nothing, Int64, Bool, Bool, Base.Pairs{Symbol, Union{}, Nothing, @NamedTuple{}}, typeof(JuliaSyntax._parse), Symbol, Bool, Type{Expr}, String, Int64)) — 117 stmts — VALIDATE_ERROR
+  error: func 80 failed to validate
+[297] run_passes_ipo_safe((Core.CodeInfo, Compiler.OptimizationState{WasmInterpreter}, Nothing)) — 139 stmts — VALIDATE_ERROR
+  error: func 2 failed to validate
+[109] assemble_inline_todo!((Compiler.IRCode, Compiler.InliningState{WasmInterpreter})) — 152 stmts — VALIDATE_ERROR
+  error: func 4 failed to validate
+[152] finish((WasmInterpreter, Compiler.OptimizationState{WasmInterpreter}, Compiler.IRCode, InferenceResult)) — 168 stmts — VALIDATE_ERROR
+  error: func 3 failed to validate
+[542] eval_julia_to_bytes((String)) — 210 stmts — RESOLVE_FAIL
+  Func: eval_julia_to_bytes
+[278] process_simple!((Vector{Pair{Int64, Any}}, Compiler.IRCode, Int64, UInt32, Compiler.InliningState{WasmInterpreter})) — 210 stmts — VALIDATE_ERROR
+  error: func 3 failed to validate
+[289] replace_code_newstyle!((Core.CodeInfo, Compiler.IRCode)) — 248 stmts — VALIDATE_ERROR
+  error: func 1 failed to validate
+[111] builtin_effects((Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Core.Builtin, Vector{Any}, Any)) — 304 stmts — VALIDATE_ERROR
+  error: func 15 failed to validate
+[112] builtin_effects((Compiler.PartialsLattice{Compiler.ConstsLattice}, Core.Builtin, Vector{Any}, Any)) — 304 stmts — VALIDATE_ERROR
+  error: func 14 failed to validate
+[405] node_to_expr((JuliaSyntax.RedTreeCursor, SourceFile, Vector{UInt8}, UInt32)) — 329 stmts — VALIDATE_ERROR
+  error: func 24 failed to validate
+[324] stmt_effect_flags((Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any, Compiler.IRCode)) — 394 stmts — VALIDATE_ERROR
+  error: func 21 failed to validate
+[325] stmt_effect_flags((Compiler.PartialsLattice{Compiler.ConstsLattice}, Any, Any, Compiler.IRCode)) — 394 stmts — VALIDATE_ERROR
+  error: func 18 failed to validate
+[326] stmt_effect_flags((Compiler.InferenceLattice{Compiler.ConditionalsLattice{Compiler.PartialsLattice{Compiler.ConstsLattice}}}, Any, Any, Compiler.IncrementalCompact)) — 394 stmts — VALIDATE_ERROR
+  error: func 21 failed to validate
+[233] iterate_compact((Compiler.IncrementalCompact)) — 450 stmts — VALIDATE_ERROR
+  error: func 1 failed to validate
+[95] adce_pass!((Compiler.IRCode, Compiler.InliningState{WasmInterpreter})) — 711 stmts — VALIDATE_ERROR
+  error: func 4 failed to validate
+[140] domsort_ssa!((Compiler.IRCode, Compiler.GenericDomTree{false})) — 912 stmts — VALIDATE_ERROR
+  error: func 1 failed to validate
+[136] convert_to_ircode((Core.CodeInfo, Compiler.OptimizationState{WasmInterpreter})) — 965 stmts — VALIDATE_ERROR
+  error: func 1 failed to validate
+[320] sroa_pass!((Compiler.IRCode, Compiler.InliningState{WasmInterpreter})) — 1575 stmts — VALIDATE_ERROR
+  error: func 1 failed to validate
+[135] construct_ssa!((Core.CodeInfo, Compiler.IRCode, Compiler.OptimizationState{WasmInterpreter}, Compiler.GenericDomTree{false}, Vector{Compiler.SlotInfo}, Compiler.PartialsLattice{Compiler.ConstsLattice})) — 2079 stmts — VALIDATE_ERROR
+  error: func 1 failed to validate

@@ -5238,6 +5238,11 @@ function analyze_control_flow!(ctx::CompilationContext)
             end
 
             local_idx = ctx.n_params + length(ctx.locals)
+            # PURE-6021c DEBUG: Trace externref phi allocations
+            if get(ENV, "WASMTARGET_DEBUG_LOCALS", "") == "1"
+                n_stmts = length(ctx.code_info.code)
+                @warn "ALLOC PHI local $local_idx type=$(phi_wasm_type) for SSA $i (stmts=$n_stmts, n_params=$(ctx.n_params))" maxlog=200
+            end
             # PURE-908: normalize AnyRef → ExternRef for phi locals
             push!(ctx.locals, phi_wasm_type === AnyRef ? ExternRef : phi_wasm_type)
             ctx.phi_locals[i] = local_idx
@@ -5762,6 +5767,11 @@ function allocate_ssa_locals!(ctx::CompilationContext)
             end
 
             local_idx = ctx.n_params + length(ctx.locals)
+            # PURE-6021c DEBUG: Trace externref allocations for diagnostics
+            if get(ENV, "WASMTARGET_DEBUG_LOCALS", "") == "1"
+                n_stmts = length(ctx.code_info.code)
+                @warn "ALLOC SSA local $local_idx type=$(wasm_type) for SSA $ssa_id (stmts=$n_stmts, n_params=$(ctx.n_params))" maxlog=200
+            end
             # PURE-908: normalize AnyRef → ExternRef for SSA locals
             push!(ctx.locals, wasm_type === AnyRef ? ExternRef : wasm_type)
             ctx.ssa_locals[ssa_id] = local_idx
@@ -6019,7 +6029,12 @@ function analyze_ssa_types!(ctx::CompilationContext)
             # Store all concrete types including Nothing (needed for function dispatch)
             # Only skip Any as it provides no useful information
             if T !== Any
-                ctx.ssa_types[i] = T
+                # PURE-6024: Widen inference lattice elements to concrete Julia types.
+                # Unoptimized IR (may_optimize=false) retains Core.Const, Core.PartialStruct,
+                # etc. in ssavaluetypes. Downstream code (julia_to_wasm_type_concrete,
+                # allocate_ssa_locals!) expects plain Julia types, not lattice elements.
+                actual_T = T isa Type ? T : Core.Compiler.widenconst(T)
+                ctx.ssa_types[i] = actual_T
             end
         end
     end
@@ -6194,6 +6209,17 @@ function infer_value_type(val, ctx::CompilationContext)
             # This occurs in kwarg wrapper methods that pass `self` to the inner #method#N.
             # Return typeof(func_ref) so cross-function lookup can match the registered signature.
             return typeof(ctx.func_ref)
+        end
+    elseif val isa Core.SlotNumber
+        # PURE-6024: SlotNumber is the unoptimized IR equivalent of Core.Argument.
+        # Slot 1 = function self, slot 2+ = arguments (same indexing as Argument).
+        if ctx.is_compiled_closure
+            idx = val.id
+        else
+            idx = val.id - 1
+        end
+        if idx >= 1 && idx <= length(ctx.arg_types)
+            return ctx.arg_types[idx]
         end
     elseif val isa Core.SSAValue
         return get(ctx.ssa_types, val.id, Any)
@@ -14982,6 +15008,12 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
         ctx.last_stmt_was_stub = false  # PURE-908: reset before dispatch
         if stmt.head === :call
             stmt_bytes = compile_call(stmt, idx, ctx)
+            # DEBUG_PURE_6024: trace compile_call result
+            if length(stmt_bytes) == 1 && stmt_bytes[1] == 0x00
+                println("DEBUG_STMT: compile_call returned UNREACHABLE for idx=$idx stmt=$(repr(stmt))")
+            elseif isempty(stmt_bytes)
+                println("DEBUG_STMT: compile_call returned EMPTY for idx=$idx stmt=$(repr(stmt))")
+            end
         elseif stmt.head === :invoke
             stmt_bytes = compile_invoke(stmt, idx, ctx)
         elseif stmt.head === :new
@@ -18323,6 +18355,29 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
     func = expr.args[1]
     args = expr.args[2:end]
 
+    # PURE-6024: Resolve indirect calls through SSAValue callees.
+    # Unoptimized IR (may_optimize=false) produces patterns like:
+    #   %1 = Base.add_int   (GlobalRef, type=Core.Const(Core.Intrinsics.add_int))
+    #   %2 = (%1)(x, y)     (call with SSAValue(1) as callee)
+    # Resolve SSAValue to the original GlobalRef so is_func() checks work correctly.
+    if func isa Core.SSAValue && func.id >= 1 && func.id <= length(ctx.code_info.code)
+        src_stmt = ctx.code_info.code[func.id]
+        if src_stmt isa GlobalRef
+            func = src_stmt
+        else
+            # Fallback: use SSA type if it's Core.Const (wraps the actual function value)
+            ssa_type = get(ctx.ssa_types, func.id, nothing)
+            if ssa_type !== nothing
+                # ssa_type was widened by analyze_ssa_types!, try to get constant from ssavaluetypes
+                raw_type = ctx.code_info.ssavaluetypes isa Vector && func.id <= length(ctx.code_info.ssavaluetypes) ?
+                           ctx.code_info.ssavaluetypes[func.id] : nothing
+                if raw_type isa Core.Const
+                    func = raw_type.val
+                end
+            end
+        end
+    end
+
     # Special case for signal read: getfield(Signal, :value) -> global.get
     # This is detected by analyze_signal_captures! and stored in signal_ssa_getters
     # ONLY applies to actual getfield/getproperty(Signal, :value) calls (WasmGlobal pattern)
@@ -20118,6 +20173,10 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         end
     end
 
+    # DEBUG_PURE_6024_CHECKPOINT_A
+    if is_func(func, :add_int)
+        println("DEBUG_CHECKPOINT_A: reached arg_type determination for add_int")
+    end
     # Determine argument type for opcode selection (do this BEFORE compiling args)
     arg_type = length(args) > 0 ? infer_value_type(args[1], ctx) : Int64
     is_32bit = arg_type === Int32 || arg_type === UInt32 || arg_type === Bool || arg_type === Char ||
@@ -20138,6 +20197,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
     if is_numeric_intrinsic && (arg_type === Any ||
                                  (!isprimitivetype(arg_type) && !is_128bit && !(arg_type <: Integer)))
         # Type-confused code path - externref used as numeric
+        println("DEBUG_TYPE_CONFUSED: arg_type=$arg_type isprimitive=$(isprimitivetype(arg_type)) is_128bit=$is_128bit arg_type<:Integer=$(arg_type <: Integer)") # PURE-6024 debug
         # Emit unreachable since we can't do numeric ops on externref
         push!(bytes, Opcode.UNREACHABLE)
         ctx.last_stmt_was_stub = true  # PURE-908
@@ -20320,6 +20380,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
 
     # Match intrinsics by name
     if is_func(func, :add_int)
+        println("DEBUG_ADD_INT: matched! is_128bit=$is_128bit is_32bit=$is_32bit bytes_so_far=$(length(bytes))")
         if is_128bit
             # 128-bit addition: (a_lo, a_hi) + (b_lo, b_hi)
             # Stack has: [a_struct, b_struct], need to produce result_struct
@@ -22646,6 +22707,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
 
     else
         # Unknown function call — emit unreachable (will trap at runtime)
+        println("DEBUG_STUB: Unknown call func=$(repr(func)) typeof=$(typeof(func)) idx=$idx") # PURE-6024 debug
         @warn "Stubbing unsupported call: $func (will trap at runtime)" maxlog=1
         # PURE-908: Clear pre-pushed args before UNREACHABLE
         bytes = UInt8[]
