@@ -26341,11 +26341,31 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 # Just pass it through — no conversion needed.
                 # (args were already compiled and pushed to `bytes` above)
 
+            # PURE-6024: typeintersect(T1, T2) — C runtime function used in tuple convert.
+            # With unoptimized IR (may_optimize=false), the convert inlines typeintersect.
+            # Evaluate at compile time when both args are constant Type values.
+            elseif name === :typeintersect && length(args) >= 2 && args[1] isa Type && args[2] isa Type
+                # Evaluate at compile time — pure function with constant args
+                result_type = typeintersect(args[1], args[2])
+                bytes = UInt8[]  # Clear pre-pushed args
+                global_idx = get_type_constant_global!(ctx.mod, ctx.type_registry, result_type)
+                push!(bytes, Opcode.GLOBAL_GET)
+                append!(bytes, encode_leb128_unsigned(global_idx))
+
+            # PURE-6024: _tuple_error — error function in tuple convert dead code path.
+            # Emit throw (catchable) instead of unreachable (trap).
+            elseif name === :_tuple_error
+                bytes = UInt8[]  # Clear pre-pushed args
+                ensure_exception_tag!(ctx.mod)
+                push!(bytes, Opcode.THROW)
+                append!(bytes, encode_leb128_unsigned(0))
+                ctx.last_stmt_was_stub = true  # PURE-908
+
             else
                 # Unknown method — emit unreachable (will trap at runtime)
                 # This allows compilation to succeed for code paths that
                 # don't actually reach these methods.
-                @warn "Stubbing unsupported method: $name (will trap at runtime) (in func_$(ctx.func_idx))"
+                @warn "Stubbing unsupported method: $name (will trap at runtime) (in func_$(ctx.func_idx))" expr=expr idx=idx mi_info=(mi !== nothing ? string(mi.specTypes) : "nothing")
                 push!(bytes, Opcode.UNREACHABLE)
                 ctx.last_stmt_was_stub = true  # PURE-908
             end
