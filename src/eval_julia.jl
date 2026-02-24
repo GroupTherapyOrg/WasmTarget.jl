@@ -30,24 +30,23 @@ Pipeline:
 
 Currently handles: binary arithmetic on Int64 literals (e.g. "1+1", "10-3", "2*3")
 """
-# WASM-safe String → Vector{UInt8} conversion. Avoids unsafe_wrap and copyto!
-# which use pointer operations that can't compile to WASM. Uses codeunit() loop.
-function _string_to_bytes(s::String)::Vector{UInt8}
-    n = ncodeunits(s)
-    v = Vector{UInt8}(undef, n)
-    i = 1
-    while i <= n
-        @inbounds v[i] = codeunit(s, i)
-        i += 1
-    end
-    return v
+# --- WASM byte vector helpers ---
+# These are compiled to WASM and exported so JS can create Vector{UInt8}
+# in the module's own type space (cross-module WasmGC types are incompatible).
+function make_byte_vec(n::Int32)::Vector{UInt8}
+    return Vector{UInt8}(undef, Int(n))
 end
 
-function eval_julia_to_bytes(code::String)::Vector{UInt8}
-    # Stage 1: Parse
-    # Use _string_to_bytes (codeunit loop) instead of Vector{UInt8}(code) or unsafe_wrap
-    # to avoid pointer-based operations that can't compile to WASM.
-    code_bytes = _string_to_bytes(code)
+function set_byte_vec!(v::Vector{UInt8}, idx::Int32, val::Int32)::Int32
+    v[Int(idx)] = UInt8(val)
+    return Int32(0)
+end
+
+# --- Entry point that takes Vector{UInt8} directly (WASM-compatible) ---
+# Avoids ALL String operations (codeunit, ncodeunits, pointer, unsafe_load)
+# which compile to `unreachable` in WASM.
+function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
+    # Stage 1: Parse — bytes go directly to ParseStream
     ps = JuliaSyntax.ParseStream(code_bytes)
     JuliaSyntax.parse!(ps, rule=:statement)
     expr = JuliaSyntax.build_tree(Expr, ps)
@@ -108,6 +107,12 @@ function eval_julia_to_bytes(code::String)::Vector{UInt8}
     # Stage 4: Codegen — return .wasm bytes
     func_name = string(func_sym)
     return WasmTarget.compile_from_codeinfo(code_info, return_type, func_name, arg_types)
+end
+
+# --- Native-only String entry point (NOT compiled to WASM) ---
+# Uses codeunits/pointer operations that only work natively.
+function eval_julia_to_bytes(code::String)::Vector{UInt8}
+    return eval_julia_to_bytes_vec(Vector{UInt8}(codeunits(code)))
 end
 
 """

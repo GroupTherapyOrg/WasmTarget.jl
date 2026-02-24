@@ -83,9 +83,11 @@ function main()
     # Step 1: Discover dependencies
     println("Step 1: Discovering dependencies...")
     seed = [
-        (eval_julia_to_bytes, (String,)),
+        (eval_julia_to_bytes_vec, (Vector{UInt8},)),
         (eval_julia_result_length, (Vector{UInt8},)),
         (eval_julia_result_byte, (Vector{UInt8}, Int32)),
+        (make_byte_vec, (Int32,)),
+        (set_byte_vec!, (Vector{UInt8}, Int32, Int32)),
     ]
     all_funcs = WasmTarget.discover_dependencies(seed)
     println("  Found $(length(all_funcs)) functions")

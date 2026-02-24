@@ -1,5 +1,8 @@
-// PURE-6024: Test eval_julia_to_bytes in Node.js
-// Pipeline: Load module → string bridge → call eval_julia_to_bytes("1+1") → extract bytes → instantiate inner → execute
+// PURE-6024: Test eval_julia_to_bytes_vec in Node.js
+// Pipeline: Load module → create byte vec using module's OWN exports → call eval_julia_to_bytes_vec → extract bytes → instantiate inner → execute
+//
+// CRITICAL: Cross-module WasmGC types are incompatible. We MUST use make_byte_vec/set_byte_vec!
+// from eval_julia.wasm itself to create input byte vectors, NOT a separate string bridge module.
 //
 // Ground truth (verified natively with may_optimize=false):
 //   eval_julia_native("1+1") = 2
@@ -8,17 +11,13 @@
 //   eval_julia_native("6*7") = 42
 
 import { readFile } from 'fs/promises';
-import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// String bridge module (creates WasmGC array<i32> strings)
-const STRING_BRIDGE_BASE64 = "AGFzbQEAAAABJgZgAnx8AXxPAF5/AWABfwFjAWADYwF/fwBgAmMBfwF/YAFjAQF/AgwBBE1hdGgDcG93AAADBQQCAwQFBy8EB3N0cl9uZXcAAQxzdHJfc2V0Y2hhciEAAghzdHJfY2hhcgADB3N0cl9sZW4ABAosBAcAIAD7BwELDgAgACABQQFrIAL7DgELDAAgACABQQFr+wsBCwYAIAD7Dws=";
-
 async function main() {
-    console.log("=== PURE-6024: eval_julia_to_bytes Node.js Test ===\n");
+    console.log("=== PURE-6024: eval_julia_to_bytes_vec Node.js Test ===\n");
 
     // Step 1: Load eval_julia.wasm
     console.log("--- Step 1: Load eval_julia.wasm ---");
@@ -35,7 +34,7 @@ async function main() {
         console.log(`  Module LOADS: YES (${funcExports.length} function exports)`);
 
         // Check required exports
-        const required = ['eval_julia_to_bytes', 'eval_julia_result_length', 'eval_julia_result_byte'];
+        const required = ['eval_julia_to_bytes_vec', 'eval_julia_result_length', 'eval_julia_result_byte', 'make_byte_vec', 'set_byte_vec!'];
         for (const name of required) {
             const found = typeof instance.exports[name] === 'function';
             console.log(`  Export '${name}': ${found ? 'YES' : 'MISSING'}`);
@@ -50,25 +49,25 @@ async function main() {
     }
     console.log();
 
-    // Step 2: Initialize string bridge
-    console.log("--- Step 2: String bridge ---");
-    const bridgeBytes = Buffer.from(STRING_BRIDGE_BASE64, "base64");
-    const bridgeResult = await WebAssembly.instantiate(bridgeBytes, imports);
-    const bridge = bridgeResult.instance.exports;
+    // Step 2: Create input byte vectors using module's OWN make_byte_vec/set_byte_vec!
+    // This ensures WasmGC type compatibility (cross-module types are incompatible)
+    console.log("--- Step 2: Byte vector creation via module exports ---");
+    const makeByteVec = instance.exports['make_byte_vec'];
+    const setByteVec = instance.exports['set_byte_vec!'];
 
-    function jsToWasmString(str) {
-        const codepoints = [...str];
-        const wasmStr = bridge.str_new(codepoints.length);
-        for (let i = 0; i < codepoints.length; i++) {
-            bridge["str_setchar!"](wasmStr, i + 1, codepoints[i].codePointAt(0));
+    function jsToWasmBytes(str) {
+        const bytes = new TextEncoder().encode(str);
+        const vec = makeByteVec(bytes.length);
+        for (let i = 0; i < bytes.length; i++) {
+            setByteVec(vec, i + 1, bytes[i]);  // 1-indexed Julia arrays
         }
-        return wasmStr;
+        return vec;
     }
-    console.log("  String bridge: OK");
+    console.log("  Byte vector helpers: OK");
     console.log();
 
-    // Step 3: Test eval_julia_to_bytes for each expression
-    console.log("--- Step 3: eval_julia_to_bytes tests ---");
+    // Step 3: Test eval_julia_to_bytes_vec for each expression
+    console.log("--- Step 3: eval_julia_to_bytes_vec tests ---");
     const tests = [
         { expr: "1+1", op: "+", a: 1n, b: 1n, expected: 2n },
         { expr: "2+3", op: "+", a: 2n, b: 3n, expected: 5n },
@@ -78,13 +77,13 @@ async function main() {
 
     let allCorrect = true;
     for (const { expr, op, a, b, expected } of tests) {
-        console.log(`\n  Testing: eval_julia_to_bytes("${expr}")`);
+        console.log(`\n  Testing: eval_julia_to_bytes_vec("${expr}")`);
         try {
-            // Create WasmGC string
-            const wasmStr = jsToWasmString(expr);
+            // Create WasmGC byte vector using module's own exports
+            const wasmBytes = jsToWasmBytes(expr);
 
-            // Call eval_julia_to_bytes
-            const vecRef = instance.exports.eval_julia_to_bytes(wasmStr);
+            // Call eval_julia_to_bytes_vec
+            const vecRef = instance.exports.eval_julia_to_bytes_vec(wasmBytes);
             console.log(`    Call returned: ${vecRef} (type: ${typeof vecRef})`);
 
             // Extract bytes
@@ -146,7 +145,7 @@ async function main() {
     // Summary
     console.log("\n=== Summary ===");
     if (allCorrect) {
-        console.log("  ALL 4 CORRECT — eval_julia_to_bytes works in Node.js!");
+        console.log("  ALL 4 CORRECT — eval_julia_to_bytes_vec works in Node.js!");
     } else {
         console.log("  SOME TESTS FAILED");
         process.exit(1);

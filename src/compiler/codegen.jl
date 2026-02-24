@@ -22673,9 +22673,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 # Julia couldn't specialize (arg types contain Any/abstract types).
                 # These are dead code branches in WasmGC context (we compile with concrete types).
                 _has_abstract = any(t -> t === Any || !isconcretetype(t), call_arg_types)
-                if !_has_abstract
-                    @warn "CROSS-CALL UNREACHABLE: $(func) with arg types $(call_arg_types) (in func_$(ctx.func_idx))"
-                end
+                @warn "CROSS-CALL UNREACHABLE: $(func) with arg types $(call_arg_types) (in func_$(ctx.func_idx))$((_has_abstract ? " [abstract-suppressed]" : ""))"
                 # PURE-908: Clear pre-pushed args before emitting UNREACHABLE.
                 # The generic arg pre-push loop (line ~19103) pushes args when
                 # get_function returns nothing (no matching signature). Those args
@@ -22919,7 +22917,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
 
     else
         # Unknown function call — emit unreachable (will trap at runtime)
-        @warn "Stubbing unsupported call: $func (will trap at runtime)" maxlog=1
+        @warn "Stubbing unsupported call: $func (will trap at runtime) (in func_$(ctx.func_idx))"
         # PURE-908: Clear pre-pushed args before UNREACHABLE
         bytes = UInt8[]
         push!(bytes, Opcode.UNREACHABLE)
@@ -26347,7 +26345,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 # Unknown method — emit unreachable (will trap at runtime)
                 # This allows compilation to succeed for code paths that
                 # don't actually reach these methods.
-                @warn "Stubbing unsupported method: $name (will trap at runtime)" maxlog=1
+                @warn "Stubbing unsupported method: $name (will trap at runtime) (in func_$(ctx.func_idx))"
                 push!(bytes, Opcode.UNREACHABLE)
                 ctx.last_stmt_was_stub = true  # PURE-908
             end
