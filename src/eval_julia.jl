@@ -736,6 +736,127 @@ function eval_julia_test_parse_3bytes(b1::Int32, b2::Int32, b3::Int32)::Int32
     return Int32(nargs)  # should be 3 for "1+1" → :call, :+, 1, 1
 end
 
+# --- Agent 23: Targeted untokenize/Set diagnostics ---
+
+# Test A: Inline untokenize(k::Kind; unique=true) logic — bypass kwarg dispatch
+function eval_julia_test_untokenize_inline(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        k = JuliaSyntax.kind(cursor)
+        # Inline the body of untokenize(k::Kind; unique=true)
+        nonunique_set = JuliaSyntax._nonunique_kind_names
+        in_set = k in nonunique_set
+        if in_set
+            return Int32(-100)  # K"call" should NOT be in the set
+        end
+        s = string(k)
+        return Int32(length(s))  # should be 4 for "call"
+    catch
+        return Int32(-1)
+    end
+end
+
+# Test B: Test Set membership for K"call" directly
+function eval_julia_test_set_lookup(code_bytes::Vector{UInt8})::Int32
+    try
+        k_call = JuliaSyntax.K"call"
+        nonunique_set = JuliaSyntax._nonunique_kind_names
+        result = k_call in nonunique_set
+        return result ? Int32(1) : Int32(0)  # should be 0
+    catch
+        return Int32(-1)
+    end
+end
+
+# Test C: Test Kind equality — is k == K"call"?
+function eval_julia_test_kind_eq(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        k = JuliaSyntax.kind(cursor)
+        k_call = JuliaSyntax.K"call"
+        return (k == k_call) ? Int32(1) : Int32(0)  # should be 1
+    catch
+        return Int32(-1)
+    end
+end
+
+# Test D: Return Kind's raw value (UInt16 wrapped in Kind)
+function eval_julia_test_kind_raw(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        k = JuliaSyntax.kind(cursor)
+        # Kind wraps a UInt16 in .val field
+        return Int32(k.val)  # should be the internal value for K"call"
+    catch
+        return Int32(-1)
+    end
+end
+
+# Test E: Return K"call" constant raw value
+function eval_julia_test_kcall_raw(code_bytes::Vector{UInt8})::Int32
+    try
+        k_call = JuliaSyntax.K"call"
+        return Int32(k_call.val)  # should match kind_raw
+    catch
+        return Int32(-1)
+    end
+end
+
+# Test F: Test Set{Kind} size
+function eval_julia_test_set_size(code_bytes::Vector{UInt8})::Int32
+    try
+        return Int32(length(JuliaSyntax._nonunique_kind_names))  # should be 20
+    catch
+        return Int32(-1)
+    end
+end
+
+# Test G: Build tree but use string(kind) instead of untokenize for the head
+# This bypasses untokenize entirely to test if the rest of build_tree works
+function eval_julia_test_build_tree_head(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        expr = JuliaSyntax.build_tree(Expr, ps)
+        # Check what head was actually set
+        if !(expr isa Expr)
+            return Int32(-10)
+        end
+        h = expr.head
+        if h === :call
+            return Int32(1)
+        elseif h === Symbol("")
+            return Int32(-20)  # untokenize returned empty string
+        else
+            # Return the hash of the head symbol to identify it
+            return Int32(hash(h) % 1000)
+        end
+    catch
+        return Int32(-1)
+    end
+end
+
+# Test H: String comparison — test if Symbol(string(k)) works
+function eval_julia_test_symbol_from_kind(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        k = JuliaSyntax.kind(cursor)
+        s = string(k)
+        sym = Symbol(s)
+        return sym === :call ? Int32(1) : Int32(0)
+    catch
+        return Int32(-1)
+    end
+end
+
 # --- Entry point that takes Vector{UInt8} directly (WASM-compatible) ---
 # Avoids ALL String operations (codeunit, ncodeunits, pointer, unsafe_load)
 # which compile to `unreachable` in WASM.
