@@ -404,6 +404,55 @@ function eval_julia_test_leaf_node_to_expr(code_bytes::Vector{UInt8})::Int32
     end
 end
 
+# Step E10zz: replicate the EXACT leaf path of node_to_expr manually
+function eval_julia_test_manual_leaf_path(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        source = JuliaSyntax.SourceFile(ps)
+        txtbuf = JuliaSyntax.unsafe_textbuf(ps)
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        for child in JuliaSyntax.reverse_nontrivia_children(cursor)
+            if JuliaSyntax.is_leaf(child)
+                # Step 1: should_include_node
+                if !JuliaSyntax.should_include_node(child)
+                    return Int32(10)  # shouldn't happen
+                end
+                # Step 2: head + kind
+                nodehead = JuliaSyntax.head(child)
+                k = JuliaSyntax.kind(child)
+                # Step 3: byte_range
+                srcrange = JuliaSyntax.byte_range(child)::UnitRange{UInt32}
+                # Step 4: is_leaf check
+                if !JuliaSyntax.is_leaf(child)
+                    return Int32(11)  # shouldn't happen
+                end
+                # Step 5: is_error check
+                if JuliaSyntax.is_error(k)
+                    return Int32(12)
+                end
+                # Step 6: _expr_leaf_val (inlined to parse_julia_literal)
+                scoped_val = JuliaSyntax.parse_julia_literal(txtbuf, nodehead, srcrange)
+                # Step 7: @isexpr check
+                is_scope = scoped_val isa Expr && scoped_val.head === :scope_layer
+                val = is_scope ? scoped_val.args[1] : scoped_val
+                # Step 8: type checks
+                if val isa Union{Int128, UInt128, BigInt}
+                    return Int32(13)
+                end
+                if JuliaSyntax.is_identifier(k)
+                    return Int32(14)
+                end
+                # Step 9: return scoped_val (for Integer "1", this is just 1)
+                return Int32(42)  # success!
+            end
+        end
+        return Int32(-2)
+    catch
+        return Int32(-1)
+    end
+end
+
 # Step E10y: test should_include_node on first leaf child
 function eval_julia_test_should_include(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
