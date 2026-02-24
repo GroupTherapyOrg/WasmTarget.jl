@@ -3155,6 +3155,11 @@ function emit_unwrap_union_value(ctx, union_type::Union, target_type::Type)::Vec
             push!(bytes, Opcode.REF_CAST)
         end
         append!(bytes, encode_leb128_signed(Int64(target_wasm_type.type_idx)))
+    elseif target_wasm_type === ArrayRef || target_wasm_type === StructRef
+        # PURE-6024: Cast anyref to abstract arrayref/structref.
+        # Needed for abstract types (e.g., AbstractString → ArrayRef).
+        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL)
+        push!(bytes, UInt8(target_wasm_type))
     end
 
     return bytes
@@ -7694,6 +7699,11 @@ function wasm_types_compatible(local_type::WasmValType, value_type::WasmValType)
     # Abstract ref (StructRef/ArrayRef/AnyRef) is NOT directly compatible with ConcreteRef
     # (requires ref.cast to downcast from abstract/super to concrete)
     if local_type isa ConcreteRef && (value_type === StructRef || value_type === ArrayRef || value_type === AnyRef)
+        return false
+    end
+    # PURE-6024: Reverse direction — ConcreteRef value into ArrayRef/StructRef local.
+    # A concrete struct ref is NOT an arrayref (and vice versa). Needs unwrapping/casting.
+    if (local_type === ArrayRef || local_type === StructRef) && value_type isa ConcreteRef
         return false
     end
     # ExternRef is NOT compatible with ConcreteRef/StructRef/ArrayRef/AnyRef
@@ -14879,15 +14889,33 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                         append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
                         append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.REF_CAST_NULL])
                         append!(bytes, encode_leb128_signed(Int64(pi_local_type.type_idx)))
-                    elseif pi_local_type isa ConcreteRef
-                        push!(bytes, Opcode.REF_NULL)
-                        append!(bytes, encode_leb128_signed(Int64(pi_local_type.type_idx)))
-                    elseif pi_local_type === StructRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(StructRef))
-                    elseif pi_local_type === ArrayRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ArrayRef))
+                    # PURE-6024: Tagged union unwrapping — PiNode narrows Union{A,B} to variant.
+                    # Source is a ConcreteRef (tagged union struct), target is the extracted variant.
+                    # Example: π(%53::Union{AbstractString,Symbol}, Symbol) needs struct.get + cast.
+                    elseif !is_multi_value_src && val_wasm_type isa ConcreteRef
+                        src_julia_type = nothing
+                        if stmt.val isa Core.SSAValue
+                            src_julia_type = get(ctx.ssa_types, stmt.val.id, nothing)
+                        elseif stmt.val isa Core.Argument
+                            arg_idx = stmt.val.n - 1
+                            if arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
+                                src_julia_type = ctx.arg_types[arg_idx]
+                            end
+                        end
+                        if src_julia_type isa Union && needs_tagged_union(src_julia_type)
+                            val_bytes = compile_value(stmt.val, ctx)
+                            append!(bytes, val_bytes)
+                            append!(bytes, emit_unwrap_union_value(ctx, src_julia_type, stmt.typ))
+                        elseif pi_local_type isa ConcreteRef
+                            push!(bytes, Opcode.REF_NULL)
+                            append!(bytes, encode_leb128_signed(Int64(pi_local_type.type_idx)))
+                        elseif pi_local_type === ArrayRef
+                            push!(bytes, Opcode.REF_NULL, UInt8(ArrayRef))
+                        elseif pi_local_type === StructRef
+                            push!(bytes, Opcode.REF_NULL, UInt8(StructRef))
+                        else
+                            push!(bytes, Opcode.REF_NULL, UInt8(ExternRef))
+                        end
                     elseif pi_local_type === ExternRef
                         push!(bytes, Opcode.REF_NULL)
                         push!(bytes, UInt8(ExternRef))
