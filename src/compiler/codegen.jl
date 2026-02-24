@@ -19694,13 +19694,17 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
 
         # Julia's memoryrefset! returns the stored value, so push it again
         # This is needed because compile_statement may add LOCAL_SET after this
-        local ret_val_bytes = compile_value(value_arg, ctx)
-        append!(bytes, ret_val_bytes)
-        # PURE-3113: If the SSA local is externref but the return value is a concrete ref,
-        # emit extern_convert_any. The compile_statement safety check can't catch this
-        # because has_gc_prefix=true (from array_set above) skips the trailing local_get
-        # check, and the SSA type check sees Julia type (Any→ExternRef) matching the local.
+        # PURE-6024: Only emit return value if SSA has a local to store it in.
+        # Without this guard, the return value (e.g., i32.const 0 for nothing)
+        # is left on the stack when the SSA has no allocated local, causing
+        # "values remaining on stack at end of block" validation errors.
         if haskey(ctx.ssa_locals, idx)
+            local ret_val_bytes = compile_value(value_arg, ctx)
+            append!(bytes, ret_val_bytes)
+            # PURE-3113: If the SSA local is externref but the return value is a concrete ref,
+            # emit extern_convert_any. The compile_statement safety check can't catch this
+            # because has_gc_prefix=true (from array_set above) skips the trailing local_get
+            # check, and the SSA type check sees Julia type (Any→ExternRef) matching the local.
             local mset_ret_local = ctx.ssa_locals[idx]
             local mset_ret_arr_idx = mset_ret_local - ctx.n_params + 1
             if mset_ret_arr_idx >= 1 && mset_ret_arr_idx <= length(ctx.locals)
