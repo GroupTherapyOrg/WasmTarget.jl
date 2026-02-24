@@ -21,35 +21,40 @@ include(joinpath(@__DIR__, "..", "src", "typeinf", "typeinf_wasm.jl"))
 include(joinpath(@__DIR__, "..", "src", "eval_julia.jl"))
 
 # Core.Compiler optimization functions to stub — never called with may_optimize=false
-const OPT_PASS_NAMES = Set([
-    # Optimization driver
-    "run_passes_ipo_safe",
-    "ipo_dataflow_analysis!",
-    # SSA construction
-    "construct_ssa!", "construct_domtree", "scan_slot_def_use",
-    "convert_to_ircode", "make_ssa!", "domsort_ssa!",
-    "compute_domtree_nodes!", "domtree_delete_edge!",
-    # IR types and streams
-    "DebugInfoStream", "InstructionStream", "IRCode", "IncrementalCompact",
-    # IR compaction
-    "compact!", "iterate_compact",
-    # SSA utilities
-    "find_ssavalue_uses", "find_ssavalue_uses!", "find_ssavalue_uses1",
-    "renumber_ssa", "renumber_ssa2!", "renumber_ssa2",
-    "ssa_substitute_op!",
-    # Optimization passes
-    "sroa_pass!", "sroa_mutables!",
-    "adce_pass!", "adce_erase!",
-    # Inlining
-    "assemble_inline_todo!", "batch_inline!",
-    "statement_cost", "inline_const_if_inlineable!",
-    "cfg_inline_unionsplit!", "cfg_inline_item!", "finish_cfg_inline!",
-    "ir_inline_item!", "ir_inline_unionsplit!",
-    "inline_splatnew!", "inline_apply!",
-    "early_inline_special_case", "late_inline_special_case!",
-    "inline_into_block!", "try_inline_finalizer!",
-    # Post-optimization helpers
-    "replace_code_newstyle!", "widen_all_consts!",
+# WHITELIST: Core.Compiler functions that ARE needed for type inference.
+# Everything else from Core.Compiler gets stubbed (optimization passes).
+const INFERENCE_WHITELIST = Set([
+    # Core inference loop
+    "typeinf_frame", "typeinf", "typeinf_nocycle", "typeinf_local",
+    "_typeinf", "typeinf_edge",
+    # Inference state construction
+    "InferenceState", "finish", "retrieve_code_info",
+    "most_general_argtypes",
+    # Abstract interpretation
+    "abstract_call", "abstract_call_gf_by_type", "abstract_call_method",
+    "abstract_call_known", "abstract_call_opaque_closure",
+    "abstract_eval_statement", "abstract_eval_special_value",
+    "abstract_eval_value", "abstract_eval_cfunction",
+    "abstract_eval_ssavalue", "abstract_eval_globalref",
+    "abstract_eval_global", "abstract_interpret",
+    "abstract_eval_new", "abstract_eval_phi",
+    "resolve_call_cycle!",
+    # Effect analysis
+    "check_inconsistentcy!", "refine_effects!",
+    "builtin_effects",
+    # Lattice operations
+    "issimplertype", "widenconst", "tname_intersect", "tuplemerge",
+    # Type functions (tfunc)
+    "getfield_tfunc", "getfield_nothrow", "fieldtype_nothrow",
+    "setfield!_nothrow", "isdefined_tfunc", "isdefined_nothrow",
+    "apply_type_nothrow", "sizeof_nothrow", "typebound_nothrow",
+    "memoryrefop_builtin_common_nothrow",
+    # Type analysis
+    "argextype", "isknowntype", "is_lattice_equal",
+    # Generic functions also used by inference (not optimization-only)
+    "push!", "scan!", "check_inconsistentcy!", "something",
+    # Caching
+    "cache_lookup", "transform_result_for_cache",
 ])
 
 function main()
@@ -74,16 +79,25 @@ function main()
     println()
 
     # Step 2: Identify optimization pass functions to stub
+    # WHITELIST approach: stub ALL Core.Compiler functions EXCEPT those in INFERENCE_WHITELIST
     stub_names = Set{String}()
+    kept_names = Set{String}()
     for (f, arg_types, name) in all_funcs
         mod = try parentmodule(f) catch; nothing end
         mod_name = try string(nameof(mod)) catch; "" end
-        if mod_name == "Compiler" && name in OPT_PASS_NAMES
+        # Strip trailing _N suffix for whitelist matching (compile_module de-duplicates exports)
+        base_name = replace(name, r"_\d+$" => "")
+        if mod_name == "Compiler" && !(base_name in INFERENCE_WHITELIST)
             push!(stub_names, name)
-            println("  STUB: $name (Core.Compiler optimization pass)")
+        elseif mod_name == "Compiler"
+            push!(kept_names, name)
         end
     end
-    println("  Stubbing $(length(stub_names)) functions")
+    println("  Core.Compiler functions: $(length(stub_names) + length(kept_names))")
+    println("  Stubbing $(length(stub_names)) (optimization), keeping $(length(kept_names)) (inference)")
+    for n in sort(collect(stub_names))
+        println("    STUB: $n")
+    end
     println()
 
     # Step 3: Compile with stubs
