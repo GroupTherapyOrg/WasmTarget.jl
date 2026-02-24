@@ -480,8 +480,8 @@ function eval_julia_test_node_to_expr_direct(code_bytes::Vector{UInt8})::Int32
         source = JuliaSyntax.SourceFile(ps)
         txtbuf = JuliaSyntax.unsafe_textbuf(ps)
         cursor = JuliaSyntax.RedTreeCursor(ps)
-        # Call node_to_expr directly on the ROOT cursor (the call node, not leaf)
-        e = JuliaSyntax.node_to_expr(cursor, source, txtbuf)
+        # Call node_to_expr with EXPLICIT 4th arg (bypass default arg dispatch)
+        e = JuliaSyntax.node_to_expr(cursor, source, txtbuf, UInt32(0))
         if e === nothing
             return Int32(-3)
         end
@@ -494,16 +494,19 @@ function eval_julia_test_node_to_expr_direct(code_bytes::Vector{UInt8})::Int32
     end
 end
 
-# Step E10y: test should_include_node on first leaf child
+# Step E10y: test should_include_node on first leaf child AND ROOT
 function eval_julia_test_should_include(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
     JuliaSyntax.parse!(ps; rule=:statement)
     try
         cursor = JuliaSyntax.RedTreeCursor(ps)
-        for child in JuliaSyntax.reverse_nontrivia_children(cursor)
-            return JuliaSyntax.should_include_node(child) ? Int32(1) : Int32(0)
-        end
-        return Int32(-2)
+        # Test ROOT should_include_node
+        root_si = JuliaSyntax.should_include_node(cursor)
+        root_trivia = JuliaSyntax.is_trivia(cursor)
+        root_error = JuliaSyntax.is_error(cursor)
+        # Encode: root_si*100 + root_trivia*10 + root_error
+        # Expected: 100 (si=true, trivia=false, error=false)
+        return Int32(root_si ? 100 : 0) + Int32(root_trivia ? 10 : 0) + Int32(root_error ? 1 : 0)
     catch
         return Int32(-1)
     end
