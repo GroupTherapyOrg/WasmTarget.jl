@@ -81,18 +81,48 @@ async function main() {
         return v !== null ? "created" : "null";
     });
 
-    // === TEST 4: eval_julia_to_bytes_vec — THE MAIN PIPELINE ===
+    // === TEST 4: Diagnostic isolation — progressive pipeline stages ===
+    // Each _diag_stage* function adds one more pipeline step.
+    // Native Julia ground truth:
+    //   _diag_stage0_len("1+1")   = 3 (length of input)
+    //   _diag_stage0_ps("1+1")    = 1 (ParseStream created)
+    //   _diag_stage0_parse("1+1") = 2 (parse! completed)
+    //   _diag_stage0_cursor("1+1")= 3 (RedTreeCursor created)
+    //   _diag_stage1_parse("1+1") = 43 ('+' ASCII = 43, op_byte)
+    //   _diag_stage2_resolve("1+1")= 1 (getfield(Base, :+) succeeded)
+    console.log("\n--- Test 4: Diagnostic stages (progressive isolation) ---");
+    const diagTests = [
+        ["_diag_stage0_len", 3, "return input length"],
+        ["_diag_stage0_ps", 1, "create ParseStream"],
+        ["_diag_stage0_parse", 2, "parse!"],
+        ["_diag_stage0_cursor", 3, "create RedTreeCursor"],
+        ["_diag_stage1_parse", 43, "extract op_byte ('+' = 43)"],
+        ["_diag_stage2_resolve", 1, "getfield(Base, :+)"],
+    ];
+    for (const [fname, expected, desc] of diagTests) {
+        test(`${fname}('1+1') — ${desc}`, () => {
+            const v = jsToWasmBytes("1+1");
+            const fn = ex[fname];
+            if (!fn) return `MISSING EXPORT: ${fname}`;
+            const result = fn(v);
+            const resultNum = Number(result);
+            const ok = resultNum === expected;
+            return `${resultNum} — ${ok ? 'CORRECT' : `WRONG (expected ${expected})`}`;
+        });
+    }
+
+    // === TEST 5: eval_julia_to_bytes_vec — THE MAIN PIPELINE ===
     // Native Julia ground truth: eval_julia_to_bytes_vec(Vector{UInt8}("1+1")) returns
     // a Vector{UInt8} of valid .wasm bytes. eval_julia_native("1+1") = 2.
-    console.log("\n--- Test 4: eval_julia_to_bytes_vec('1+1') ---");
+    console.log("\n--- Test 5: eval_julia_to_bytes_vec('1+1') ---");
     test("eval_julia_to_bytes_vec('1+1')", () => {
         const v = jsToWasmBytes("1+1");
         const result = ex['eval_julia_to_bytes_vec'](v);
         return result !== null ? "returned bytes" : "null";
     });
 
-    // === TEST 5: If pipeline returned bytes, check length and try to instantiate ===
-    console.log("\n--- Test 5: Pipeline result analysis ---");
+    // === TEST 6: If pipeline returned bytes, check length and try to instantiate ===
+    console.log("\n--- Test 6: Pipeline result analysis ---");
     try {
         const v = jsToWasmBytes("1+1");
         const wasmResult = ex['eval_julia_to_bytes_vec'](v);
@@ -136,8 +166,8 @@ async function main() {
         console.log(`  Pipeline TRAP: ${e.message}`);
     }
 
-    // === TEST 6: Additional arithmetic expressions ===
-    console.log("\n--- Test 6: Additional expressions ---");
+    // === TEST 7: Additional arithmetic expressions ===
+    console.log("\n--- Test 7: Additional expressions ---");
     for (const [expr, expected] of [["2+3", 5], ["10-3", 7], ["6*7", 42]]) {
         test(`eval_julia('${expr}')`, () => {
             const v = jsToWasmBytes(expr);
