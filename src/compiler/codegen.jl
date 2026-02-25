@@ -18477,6 +18477,14 @@ Compile a value reference (SSA, Argument, or Literal).
 function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
     bytes = UInt8[]
 
+    # PURE-6022: If we're in dead code (previous sub-call was a stub), don't compile
+    # more values. Emitting data after unreachable creates invalid WASM byte sequences
+    # (e.g., array element i32_const values decode as block/loop instructions).
+    if ctx.last_stmt_was_stub
+        push!(bytes, 0x00)  # unreachable
+        return bytes
+    end
+
     # Handle nothing explicitly - it's the Julia singleton
     if val === nothing
         # Nothing maps to i32 in WasmGC — push i32(0) as placeholder
