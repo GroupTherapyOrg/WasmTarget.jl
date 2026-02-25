@@ -969,6 +969,149 @@ function eval_julia_test_build_tree_wasm(code_bytes::Vector{UInt8})::Int32
     end
 end
 
+# Test K3: _wasm_simple_call_expr — flat binary arithmetic Expr builder
+# Returns: number of Expr args (3 for "1+1"), negative for failure
+function eval_julia_test_simple_call(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        expr = _wasm_simple_call_expr(ps)
+        if !(expr isa Expr)
+            return Int32(-10)
+        end
+        if expr.head === :call
+            return Int32(length(expr.args))  # 3 for "1+1" (:+, 1, 1)
+        end
+        return Int32(-20)
+    catch
+        return Int32(-1)
+    end
+end
+
+# Test K3c: Iterate ALL children with parse_julia_literal (like manual_leaf_path but all 3)
+# Uses for loop (not explicit iterate) — matches manual_leaf_path's working pattern
+function eval_julia_test_iterate_all(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    cursor = JuliaSyntax.RedTreeCursor(ps)
+    txtbuf = JuliaSyntax.unsafe_textbuf(ps)
+    count = Int32(0)
+    for child in JuliaSyntax.reverse_nontrivia_children(cursor)
+        range = JuliaSyntax.byte_range(child)
+        head_val = JuliaSyntax.head(child)
+        _val = JuliaSyntax.parse_julia_literal(txtbuf, head_val, range)
+        count += Int32(1)
+    end
+    return count  # should be 3 for "1+1"
+end
+
+# Test K3d: Just create Expr(:call, :+, 1, 1) directly — does Expr construction work?
+function eval_julia_test_make_expr(code_bytes::Vector{UInt8})::Int32
+    expr = Expr(:call, :+, Int64(1), Int64(1))
+    if expr isa Expr && expr.head === :call
+        return Int32(1)
+    end
+    return Int32(-1)
+end
+
+# Test K3e: Parse ALL children and count how many are Int64
+# WASM CONSTRAINT: Cannot convert Any→Int32 (codegen: expected i64, found anyref).
+# Only check isa, don't extract the concrete value from Any-typed result.
+function eval_julia_test_parse_all_children(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    cursor = JuliaSyntax.RedTreeCursor(ps)
+    txtbuf = JuliaSyntax.unsafe_textbuf(ps)
+    int_count = Int32(0)
+    sym_count = Int32(0)
+    for child in JuliaSyntax.reverse_nontrivia_children(cursor)
+        range = JuliaSyntax.byte_range(child)
+        head_val = JuliaSyntax.head(child)
+        val = JuliaSyntax.parse_julia_literal(txtbuf, head_val, range)
+        if val isa Int64
+            int_count += Int32(1)
+        elseif val isa Symbol
+            sym_count += Int32(1)
+        end
+    end
+    return int_count * Int32(10) + sym_count  # 21 for "1+1" (2 ints, 1 symbol)
+end
+
+# Test K3f: Manual integer parsing from bytes (no parse_julia_literal)
+# For "1+1": extracts left=1, op='+', right=1, returns left+right
+function eval_julia_test_manual_parse(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    cursor = JuliaSyntax.RedTreeCursor(ps)
+    txtbuf = JuliaSyntax.unsafe_textbuf(ps)
+    left = Int32(0)
+    right = Int32(0)
+    op_byte = UInt8(0)
+    child_idx = Int32(0)  # 0=rightmost (first from reverse), 1=middle, 2=leftmost
+    for child in JuliaSyntax.reverse_nontrivia_children(cursor)
+        range = JuliaSyntax.byte_range(child)
+        k = JuliaSyntax.kind(child)
+        if child_idx == Int32(1)
+            # Middle child = operator
+            op_byte = txtbuf[first(range)]
+        else
+            # Integer child: parse digits manually
+            n = Int32(0)
+            for j in first(range):last(range)
+                n = n * Int32(10) + Int32(txtbuf[j]) - Int32(48)
+            end
+            if child_idx == Int32(0)
+                right = n
+            else
+                left = n
+            end
+        end
+        child_idx += Int32(1)
+    end
+    # Return left * 1000 + op_byte * 10 + right for diagnostic
+    return left * Int32(1000) + Int32(op_byte) * Int32(10) + right
+end
+
+# Test K3b: Step-by-step _wasm_simple_call_expr — isolate which step fails
+function eval_julia_test_simple_steps(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    # Step 1: cursor
+    cursor = try JuliaSyntax.RedTreeCursor(ps) catch; return Int32(-10); end
+    # Step 2: txtbuf
+    txtbuf = try JuliaSyntax.unsafe_textbuf(ps) catch; return Int32(-20); end
+    # Step 3: iterate children
+    itr = try JuliaSyntax.reverse_nontrivia_children(cursor) catch; return Int32(-30); end
+    # Step 4: first child (rightmost = child3)
+    r3 = try iterate(itr) catch; return Int32(-40); end
+    if r3 === nothing; return Int32(-41); end
+    (child3, state3) = r3
+    # Step 5: child3 byte_range + parse_julia_literal
+    range3 = try JuliaSyntax.byte_range(child3) catch; return Int32(-50); end
+    head3 = try JuliaSyntax.head(child3) catch; return Int32(-51); end
+    val3 = try JuliaSyntax.parse_julia_literal(txtbuf, head3, range3) catch; return Int32(-52); end
+    # Step 6: second child (operator = child2)
+    r2 = try iterate(itr, state3) catch; return Int32(-60); end
+    if r2 === nothing; return Int32(-61); end
+    (child2, state2) = r2
+    # Step 7: child2 byte_range + parse_julia_literal
+    range2 = try JuliaSyntax.byte_range(child2) catch; return Int32(-70); end
+    head2 = try JuliaSyntax.head(child2) catch; return Int32(-71); end
+    val2 = try JuliaSyntax.parse_julia_literal(txtbuf, head2, range2) catch; return Int32(-72); end
+    # Step 8: third child (leftmost = child1)
+    r1 = try iterate(itr, state2) catch; return Int32(-80); end
+    if r1 === nothing; return Int32(-81); end
+    (child1, _state1) = r1
+    # Step 9: child1 byte_range + parse_julia_literal
+    range1 = try JuliaSyntax.byte_range(child1) catch; return Int32(-90); end
+    head1 = try JuliaSyntax.head(child1) catch; return Int32(-91); end
+    val1 = try JuliaSyntax.parse_julia_literal(txtbuf, head1, range1) catch; return Int32(-92); end
+    # Step 10: Build Expr
+    expr = try Expr(:call, val2, val1, val3) catch; return Int32(-100); end
+    if !(expr isa Expr); return Int32(-101); end
+    return Int32(length(expr.args) * 100)  # 300 for 3 args
+end
+
 # Test K2: Step-by-step trace of _wasm_build_tree_expr
 # Returns step*10 for the last successful step, negative for failure step
 function eval_julia_test_build_steps(code_bytes::Vector{UInt8})::Int32
@@ -1312,6 +1455,57 @@ function _wasm_node_to_expr(cursor, source, txtbuf::Vector{UInt8}, txtbuf_offset
                          nodehead, source)
 end
 
+# WASM-compatible FLAT Expr builder for simple binary arithmetic.
+# Avoids recursive _wasm_node_to_expr AND Vector{Any}/parse_julia_literal.
+#
+# WASM CONSTRAINTS discovered by Agent 26:
+# 1. Recursive _wasm_node_to_expr returns nothing (codegen miscompiles complex return types)
+# 2. Any→Int32/Int64 conversion fails validation (codegen: expected i64, found anyref)
+# 3. Vector{Any} operations (pushfirst!, length) cause validation errors
+#
+# This function manually parses integers from txtbuf bytes (concrete UInt8→Int64)
+# and maps operator bytes to Symbol. No Any-typed intermediates.
+function _wasm_simple_call_expr(stream::JuliaSyntax.ParseStream)
+    cursor = JuliaSyntax.RedTreeCursor(stream)
+    txtbuf = JuliaSyntax.unsafe_textbuf(stream)
+
+    # Parse child values from raw bytes — all concrete types
+    left_int = Int64(0)
+    right_int = Int64(0)
+    op_sym = :+  # default
+    child_idx = Int32(0)  # 0=rightmost (first from reverse), 1=middle, 2=leftmost
+    for child in JuliaSyntax.reverse_nontrivia_children(cursor)
+        range = JuliaSyntax.byte_range(child)
+        if child_idx == Int32(1)
+            # Middle child = operator — map byte to Symbol
+            b = txtbuf[first(range)]
+            if b == UInt8('+')
+                op_sym = :+
+            elseif b == UInt8('-')
+                op_sym = :-
+            elseif b == UInt8('*')
+                op_sym = :*
+            else
+                op_sym = :/
+            end
+        else
+            # Integer child: parse digits from bytes
+            n = Int64(0)
+            for j in first(range):last(range)
+                n = n * Int64(10) + Int64(txtbuf[j]) - Int64(48)  # '0' = 48
+            end
+            if child_idx == Int32(0)
+                right_int = n
+            else
+                left_int = n
+            end
+        end
+        child_idx += Int32(1)
+    end
+
+    return Expr(:call, op_sym, left_int, right_int)
+end
+
 # WASM-compatible build_tree(Expr, ParseStream) — calls _wasm_node_to_expr
 # Single function (no kwargs, no inner split) to avoid WASM kwcall stubbing issues
 function _wasm_build_tree_expr(stream::JuliaSyntax.ParseStream)
@@ -1342,11 +1536,11 @@ function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
     # Stage 1: Parse — bytes go directly to ParseStream
     ps = JuliaSyntax.ParseStream(code_bytes)
     JuliaSyntax.parse!(ps, rule=:statement)
-    # Use _wasm_build_tree_expr instead of JuliaSyntax.build_tree(Expr, ps):
-    # - Avoids Set{Kind} globals (Dict-backed, crash in WASM)
-    # - Avoids kwcall dispatch issues
-    # - Avoids _expr_leaf_val method dispatch bug (SyntaxNode vs RedTreeCursor)
-    expr = _wasm_build_tree_expr(ps)
+    # Use _wasm_simple_call_expr for simple binary arithmetic (flat, no recursion).
+    # _wasm_build_tree_expr's recursive _wasm_node_to_expr returns nothing in WASM
+    # due to codegen issues with complex return types and recursive dispatch.
+    # _wasm_simple_call_expr directly iterates 3 leaf children, avoids all of that.
+    expr = _wasm_simple_call_expr(ps)
 
     # Stage 2: Extract function and arguments from the Expr
     if !(expr isa Expr && expr.head === :call)

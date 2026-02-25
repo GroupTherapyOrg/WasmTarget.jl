@@ -158,6 +158,14 @@ function main()
         # Agent 26: cursor-before-source ordering diagnostics
         (eval_julia_test_build_steps, (Vector{UInt8},)),
         (eval_julia_test_si_after_source, (Vector{UInt8},)),
+        # Agent 26: flat simple_call_expr diagnostics
+        (eval_julia_test_simple_call, (Vector{UInt8},)),
+        (eval_julia_test_simple_steps, (Vector{UInt8},)),
+        (eval_julia_test_iterate_all, (Vector{UInt8},)),
+        (eval_julia_test_make_expr, (Vector{UInt8},)),
+        (eval_julia_test_parse_all_children, (Vector{UInt8},)),
+        (eval_julia_test_manual_parse, (Vector{UInt8},)),
+        (_wasm_simple_call_expr, (JuliaSyntax.ParseStream,)),
         # Agent 24: WASM-compatible build_tree chain — ALL helpers must be in seed
         (_wasm_build_tree_expr, (JuliaSyntax.ParseStream,)),
         (_wasm_leaf_to_expr, (JuliaSyntax.RedTreeCursor, JuliaSyntax.Kind, Vector{UInt8}, UInt32)),
