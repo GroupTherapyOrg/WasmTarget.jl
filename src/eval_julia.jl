@@ -1086,7 +1086,10 @@ function _wasm_node_to_expr(cursor, source, txtbuf::Vector{UInt8}, txtbuf_offset
                 Expr(:error) :
                 Expr(:error, "$(JuliaSyntax._token_error_descriptions[k]): `$(source[srcrange])`")
         else
-            scoped_val = JuliaSyntax._expr_leaf_val(cursor, txtbuf, txtbuf_offset)
+            # WASM fix: call parse_julia_literal directly instead of _expr_leaf_val
+            # _expr_leaf_val(cursor::RedTreeCursor, ...) dispatches wrong in WASM
+            # (calls SyntaxNode method which tries cursor.val → "illegal cast")
+            scoped_val = JuliaSyntax.parse_julia_literal(txtbuf, JuliaSyntax.head(cursor), JuliaSyntax.byte_range(cursor) .+ txtbuf_offset)
             val = Meta.isexpr(scoped_val, :scope_layer) ? scoped_val.args[1] : scoped_val
             if val isa Union{Int128,UInt128,BigInt}
                 str = replace(source[srcrange], '_'=>"")
