@@ -6862,6 +6862,16 @@ function generate_body(ctx::CompilationContext)::Vector{UInt8}
     # Generate code using structured control flow
     bytes = generate_structured(ctx, blocks)
 
+    # PURE-6022: Diagnostic — check for bare 0x00 or 0x02 bytes inside array_new_fixed data
+    # before post-processors run, to determine if they come from codegen or post-processing.
+    _diag_pattern = UInt8[0x41, 0x1a, 0x00, 0x02]
+    for di in 1:(length(bytes) - length(_diag_pattern) + 1)
+        if bytes[di:di+length(_diag_pattern)-1] == _diag_pattern
+            @warn "PURE-6022 DIAG: Pattern [41 1a 00 02] found at byte $di in $(ctx.validator.func_name) BEFORE post-processing" body_len=length(bytes)
+            break
+        end
+    end
+
     # PURE-036y: Post-process to fix broken SELECT instructions.
     # Pattern: [local.get N, struct.new M, select] without a condition is broken.
     # Fix by removing the struct.new and select, keeping only local.get.
@@ -6875,6 +6885,14 @@ function generate_body(ctx::CompilationContext)::Vector{UInt8}
     # get_phi_edge_wasm_type returns ConcreteRef (matching the phi local type), but
     # compile_phi_value emits i32_const 111. Replace with ref.null of the local's type.
     bytes = fix_numeric_to_ref_local_stores(bytes, ctx.locals, ctx.n_params)
+
+    # PURE-6022: Diagnostic — check AFTER post-processing
+    for di in 1:(length(bytes) - length(_diag_pattern) + 1)
+        if bytes[di:di+length(_diag_pattern)-1] == _diag_pattern
+            @warn "PURE-6022 DIAG: Pattern [41 1a 00 02] found at byte $di in $(ctx.validator.func_name) AFTER post-processing" body_len=length(bytes)
+            break
+        end
+    end
 
     # PURE-6025: Fix dead returns at the very end of a function body.
     # Pattern: [end] [return] [unreachable] [end] at the tail of the function.
@@ -7093,6 +7111,39 @@ function fix_numeric_to_ref_local_stores(bytes::Vector{UInt8}, locals::Vector{Wa
         end
         if op == Opcode.F64_CONST && i + 8 <= length(bytes)
             for _ in 1:9; push!(result, bytes[i]); i += 1; end
+            continue
+        end
+
+        # PURE-6022: Skip operands for ALL instructions with LEB128 parameters.
+        # Without this, operand bytes (e.g., local_set's index = 0x41) are treated
+        # as opcodes in the next iteration, causing the parser to get out of sync
+        # and corrupting constant array data (4096-element lookup tables).
+        _n_leb_skip = if op == 0x20 || op == 0x21 || op == 0x22; 1  # local.get/set/tee
+                      elseif op == 0x23 || op == 0x24; 1             # global.get/set
+                      elseif op == 0x0C || op == 0x0D; 1             # br, br_if
+                      elseif op == 0x10; 1                           # call
+                      elseif op == 0x11; 2                           # call_indirect (type, table)
+                      elseif op == 0xD0; 1                           # ref.null (heap type)
+                      elseif op == 0xD2; 1                           # ref.func
+                      elseif op == 0x02 || op == 0x03 || op == 0x04  # block/loop/if
+                          1                                           # blocktype (1 byte or LEB128 type index)
+                      elseif op >= 0x28 && op <= 0x3E; 2             # memory load/store (align, offset)
+                      elseif op == 0x3F || op == 0x40; 1             # memory.size/grow
+                      else 0
+                      end
+        if _n_leb_skip > 0
+            push!(result, bytes[i])
+            i += 1
+            for _ in 1:_n_leb_skip
+                while i <= length(bytes)
+                    push!(result, bytes[i])
+                    if (bytes[i] & 0x80) == 0
+                        i += 1
+                        break
+                    end
+                    i += 1
+                end
+            end
             continue
         end
 
