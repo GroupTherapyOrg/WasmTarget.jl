@@ -6876,14 +6876,14 @@ function generate_body(ctx::CompilationContext)::Vector{UInt8}
     # compile_phi_value emits i32_const 111. Replace with ref.null of the local's type.
     bytes = fix_numeric_to_ref_local_stores(bytes, ctx.locals, ctx.n_params)
 
-    # PURE-6025: Fix dead returns after blocks where all paths already returned.
-    # Pattern: [end (0x0B)] [return (0x0F)] [unreachable (0x00)] — the return is dead
-    # code with empty stack (all paths returned inside the block). Replace the dead
-    # return with unreachable to avoid "expected <type> but nothing on stack" errors.
-    for bi in 2:(length(bytes) - 1)
-        if bytes[bi - 1] == Opcode.END && bytes[bi] == Opcode.RETURN && bytes[bi + 1] == 0x00  # unreachable
-            bytes[bi] = 0x00  # Replace RETURN with UNREACHABLE
-        end
+    # PURE-6025: Fix dead returns at the very end of a function body.
+    # Pattern: [end] [return] [unreachable] [end] at the tail of the function.
+    # This happens when all paths inside the block return, leaving a dead return
+    # with empty stack. Only apply at the LAST occurrence (not intermediate blocks
+    # where end→return→unreachable might be a valid reachable return).
+    if length(bytes) >= 4 && bytes[end] == Opcode.END && bytes[end - 1] == 0x00 &&
+       bytes[end - 2] == Opcode.RETURN && bytes[end - 3] == Opcode.END
+        bytes[end - 2] = 0x00  # Replace RETURN with UNREACHABLE
     end
 
     # PURE-414: Check validator for errors after function body generation
