@@ -1160,11 +1160,11 @@ function _wasm_build_tree_expr(stream::JuliaSyntax.ParseStream)
         entry = Expr(:block)
         for child in
                 Iterators.filter(JuliaSyntax.should_include_node, JuliaSyntax.reverse_toplevel_siblings(cursor))
-            pushfirst!(entry.args, JuliaSyntax.fixup_Expr_child(wrapper_head, _wasm_node_to_expr(child, source, txtbuf), false))
+            pushfirst!(entry.args, JuliaSyntax.fixup_Expr_child(wrapper_head, _wasm_node_to_expr(child, source, txtbuf, UInt32(0)), false))
         end
         length(entry.args) == 1 && (entry = only(entry.args))
     else
-        entry = JuliaSyntax.fixup_Expr_child(wrapper_head, _wasm_node_to_expr(cursor, source, txtbuf), false)
+        entry = JuliaSyntax.fixup_Expr_child(wrapper_head, _wasm_node_to_expr(cursor, source, txtbuf, UInt32(0)), false)
     end
     return entry
 end
