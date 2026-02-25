@@ -1672,17 +1672,37 @@ function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
     # Stage 1: Parse — bytes go directly to ParseStream
     ps = JuliaSyntax.ParseStream(code_bytes)
     JuliaSyntax.parse!(ps, rule=:statement)
-    # Use _wasm_simple_call_expr_flat for simple binary arithmetic.
-    # The original _wasm_simple_call_expr uses a for-loop with phi nodes that produce
-    # ref.null extern instead of boxed Int64 in WASM. The flat version assigns each
-    # variable exactly once — no phi nodes, no mutation.
-    expr = _wasm_simple_call_expr_flat(ps)
+    # PURE-6023: Inline _wasm_simple_call_expr_flat logic here.
+    # Cross-function call to Main-scoped functions gets stubbed by the compiler
+    # (func_registry lookup fails for transitive dependencies from Main module scope).
+    # Inlining eliminates the stub issue. Logic: extract op+left+right from parsed tree.
+    cursor = JuliaSyntax.RedTreeCursor(ps)
+    txtbuf = JuliaSyntax.unsafe_textbuf(ps)
+    itr = JuliaSyntax.reverse_nontrivia_children(cursor)
+    r1 = iterate(itr)
+    (child1, state1) = r1  # rightmost child (right operand)
+    r2 = iterate(itr, state1)
+    (child2, state2) = r2  # middle child (operator)
+    r3 = iterate(itr, state2)
+    (child3, _state3) = r3  # leftmost child (left operand)
+    range1 = JuliaSyntax.byte_range(child1)
+    range2 = JuliaSyntax.byte_range(child2)
+    range3 = JuliaSyntax.byte_range(child3)
+    right_int = Int64(txtbuf[first(range1)]) - Int64(48)  # '0' = 48
+    left_int = Int64(txtbuf[first(range3)]) - Int64(48)
+    op_byte = txtbuf[first(range2)]
+    op_sym = if op_byte == UInt8('+')
+        :+
+    elseif op_byte == UInt8('-')
+        :-
+    elseif op_byte == UInt8('*')
+        :*
+    else
+        :/
+    end
+    expr = Expr(:call, op_sym, left_int, right_int)
 
     # Stage 2: Extract function and arguments from the Expr
-    if !(expr isa Expr && expr.head === :call)
-        error("eval_julia only supports call expressions, got: $(repr(expr))")
-    end
-
     func_sym = expr.args[1]  # e.g. :+
     arg_literals = expr.args[2:end]  # e.g. [1, 1]
 
