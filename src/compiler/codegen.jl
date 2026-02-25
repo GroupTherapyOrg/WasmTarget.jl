@@ -6965,31 +6965,162 @@ PURE-6022: Remove spurious i32_wrap_i64 after instructions that already produce 
 
 Comparison ops (i32_eqz 0x45, i64_eq 0x51, etc.) all return i32. The codegen sometimes
 emits i32_wrap_i64 (0xA7) after these, expecting i64 input — which fails validation.
-This post-processor removes i32_wrap_i64 when the immediately preceding single-byte
-instruction is a known i32-producing op.
+This post-processor uses instruction-level parsing (tracking last_opcode with proper
+LEB128 skipping) to avoid false positives from operand bytes that happen to match
+i32-producing opcodes.
 """
 function fix_i32_wrap_after_i32_ops(bytes::Vector{UInt8})::Vector{UInt8}
-    # Conservative approach: only remove i32_wrap_i64 (0xA7) when the immediately
-    # preceding byte is a known single-byte, zero-operand i32-producing instruction.
-    # These are SAFE because the preceding byte IS the instruction (no operands to confuse).
-    # Comparison ops (0x45-0x66) and i32 unary/binary ops (0x67-0x78) are all
-    # single-byte with no operands, so the byte before 0xA7 IS the instruction.
-    is_i32_single_byte = falses(256)
-    for op in 0x45:0x78  # comparisons + i32 unary/binary
-        is_i32_single_byte[op + 1] = true
+    # Track the opcode of the last fully-emitted instruction (not operand bytes).
+    # Single-byte opcodes that produce i32:
+    # 0x45-0x66 = all comparison ops (i32_eqz through f64_ge)
+    # 0x67-0x78 = i32 unary/binary ops (i32_clz through i32_rotr)
+    # 0xD1 = ref.is_null
+    is_i32_producing = falses(256)
+    for op in 0x45:0x78  # comparisons + i32 ops
+        is_i32_producing[op + 1] = true
     end
-    is_i32_single_byte[0xD1 + 1] = true  # ref.is_null (also single-byte, no operands)
+    is_i32_producing[0xD1 + 1] = true  # ref.is_null
 
     result = UInt8[]
     sizehint!(result, length(bytes))
+    i = 1
     fixes = 0
-    for i in 1:length(bytes)
-        if bytes[i] == 0xA7 && i >= 2 && is_i32_single_byte[bytes[i-1] + 1]
-            # Previous byte is a single-byte i32-producing instruction — skip i32_wrap_i64
+    last_opcode = 0x00  # Track last instruction's opcode
+    while i <= length(bytes)
+        op = bytes[i]
+        # Check if this is i32_wrap_i64 and the preceding instruction produces i32
+        if op == 0xA7 && is_i32_producing[last_opcode + 1]
+            # Previous instruction already produces i32 — skip this i32_wrap_i64
+            i += 1
             fixes += 1
+            last_opcode = 0x00  # Reset since we skipped
             continue
         end
-        push!(result, bytes[i])
+        push!(result, op)
+        # Update last_opcode based on instruction parsing:
+        # Skip operands for instructions that have them, so last_opcode
+        # only tracks actual instruction opcodes.
+        if op == 0xFB  # GC prefix — 2nd byte is the sub-opcode + optional LEB operands
+            last_opcode = 0x00  # GC ops may or may not produce i32; conservatively skip
+            i += 1
+            # Skip the rest of the GC instruction (sub-opcode + LEB operands)
+            if i <= length(bytes)
+                push!(result, bytes[i])
+                sub = bytes[i]
+                i += 1
+                # array_new_fixed has 2 LEB operands, most GC ops have 1
+                n_lebs = (sub == 0x08 || sub == 0x09) ? 2 :  # array_new_fixed, array_new_data
+                         (sub in (0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x1A, 0x1C, 0x1D, 0x1E, 0x1F)) ? 1 :
+                         (sub in (0x1B, 0x1A)) ? 0 : 0  # extern_convert_any, any_convert_extern have 0
+                for _ in 1:n_lebs
+                    while i <= length(bytes)
+                        push!(result, bytes[i])
+                        done = (bytes[i] & 0x80) == 0
+                        i += 1
+                        done && break
+                    end
+                end
+            end
+        elseif op in (0x20, 0x21, 0x22, 0x23, 0x24)  # local.get/set/tee, global.get/set
+            last_opcode = op
+            i += 1
+            while i <= length(bytes)
+                push!(result, bytes[i])
+                done = (bytes[i] & 0x80) == 0
+                i += 1
+                done && break
+            end
+        elseif op == 0x41  # i32_const
+            last_opcode = 0x41
+            i += 1
+            while i <= length(bytes)
+                push!(result, bytes[i])
+                done = (bytes[i] & 0x80) == 0
+                i += 1
+                done && break
+            end
+        elseif op == 0x42  # i64_const
+            last_opcode = 0x42
+            i += 1
+            while i <= length(bytes)
+                push!(result, bytes[i])
+                done = (bytes[i] & 0x80) == 0
+                i += 1
+                done && break
+            end
+        elseif op == 0x43  # f32_const — 4 bytes
+            last_opcode = 0x43
+            i += 1
+            for _ in 1:4
+                i <= length(bytes) && (push!(result, bytes[i]); i += 1)
+            end
+        elseif op == 0x44  # f64_const — 8 bytes
+            last_opcode = 0x44
+            i += 1
+            for _ in 1:8
+                i <= length(bytes) && (push!(result, bytes[i]); i += 1)
+            end
+        elseif op == 0x10 || op == 0x0C || op == 0x0D  # call, br, br_if — 1 LEB
+            last_opcode = op
+            i += 1
+            while i <= length(bytes)
+                push!(result, bytes[i])
+                done = (bytes[i] & 0x80) == 0
+                i += 1
+                done && break
+            end
+        elseif op == 0x11  # call_indirect — 2 LEBs
+            last_opcode = op
+            i += 1
+            for _ in 1:2
+                while i <= length(bytes)
+                    push!(result, bytes[i])
+                    done = (bytes[i] & 0x80) == 0
+                    i += 1
+                    done && break
+                end
+            end
+        elseif op == 0x28 || op == 0x36  # memory.load/store — 2 LEBs (align + offset)
+            last_opcode = op
+            i += 1
+            for _ in 1:2
+                while i <= length(bytes)
+                    push!(result, bytes[i])
+                    done = (bytes[i] & 0x80) == 0
+                    i += 1
+                    done && break
+                end
+            end
+        elseif op == 0xD2  # ref.func — 1 LEB
+            last_opcode = op
+            i += 1
+            while i <= length(bytes)
+                push!(result, bytes[i])
+                done = (bytes[i] & 0x80) == 0
+                i += 1
+                done && break
+            end
+        elseif op == 0xD0  # ref.null — 1 LEB (heap type)
+            last_opcode = op
+            i += 1
+            while i <= length(bytes)
+                push!(result, bytes[i])
+                done = (bytes[i] & 0x80) == 0
+                i += 1
+                done && break
+            end
+        elseif op == 0x02 || op == 0x03 || op == 0x04  # block/loop/if — 1 byte blocktype
+            last_opcode = op
+            i += 1
+            if i <= length(bytes)
+                push!(result, bytes[i])
+                i += 1
+            end
+        else
+            # Single-byte instruction (no operands): comparisons, arithmetic, drops, etc.
+            last_opcode = op
+            i += 1
+        end
     end
     if fixes > 0
         @warn "fix_i32_wrap_after_i32_ops: removed $fixes spurious i32_wrap_i64 after i32-producing ops"
