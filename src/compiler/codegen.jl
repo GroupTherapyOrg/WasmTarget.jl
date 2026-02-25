@@ -21402,20 +21402,17 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             # Compile and convert index to i32 (Julia uses 1-based Int64, Wasm uses 0-based i32)
             append!(bytes, compile_value(index, ctx))
 
-            # Check if index is already Int32
+            # PURE-6027: Check BOTH Julia type AND actual WASM type for i64→i32 wrap.
+            # infer_value_type may return Any/Union while the actual local is i64.
             idx_type = infer_value_type(index, ctx)
-            if idx_type === Int64 || idx_type === Int
+            idx_wasm = get_phi_edge_wasm_type(index, ctx)
+            if idx_type === Int64 || idx_type === Int || idx_wasm === I64
                 # Convert to i32 and subtract 1 for 0-based indexing
                 push!(bytes, Opcode.I32_WRAP_I64)  # i64 -> i32
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x01)  # 1
-                push!(bytes, Opcode.I32_SUB)  # index - 1 for 0-based
-            else
-                # Already i32, just subtract 1
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x01)  # 1
-                push!(bytes, Opcode.I32_SUB)  # index - 1 for 0-based
             end
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x01)  # 1
+            push!(bytes, Opcode.I32_SUB)  # index - 1 for 0-based
 
             # Now stack has [array_ref, i32_index] which is what memoryrefget needs
             return bytes
