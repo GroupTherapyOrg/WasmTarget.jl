@@ -8,7 +8,25 @@ include("builder/validator.jl")
 
 # Compiler - Julia IR to Wasm translation
 include("compiler/ir.jl")
-include("compiler/codegen.jl")
+
+# Codegen - Julia IR to Wasm bytecode (split from compiler/codegen.jl)
+include("codegen/types.jl")
+include("codegen/compile.jl")
+include("codegen/structs.jl")
+include("codegen/unions.jl")
+include("codegen/int128.jl")
+include("codegen/context.jl")
+include("codegen/generate.jl")
+include("codegen/flow.jl")
+include("codegen/stackified.jl")
+include("codegen/conditionals.jl")
+include("codegen/statements.jl")
+include("codegen/values.jl")
+include("codegen/calls.jl")
+include("codegen/invoke.jl")
+include("codegen/helpers.jl")
+include("codegen/strings.jl")
+include("codegen/dicts.jl")
 
 # Runtime - Intrinsics and stdlib mapping
 include("runtime/intrinsics.jl")
