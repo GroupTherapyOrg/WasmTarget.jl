@@ -150,8 +150,8 @@ function main()
         (eval_julia_test_direct_untokenize_head, (Vector{UInt8},)),
         (eval_julia_test_build_tree_wasm, (Vector{UInt8},)),
         # Agent 24: step-by-step _wasm_build_tree diagnostics
+        # eval_julia_test_wasm_leaf REMOVED: try/catch + Any return causes codegen stack imbalance
         (eval_julia_test_wasm_node_to_expr, (Vector{UInt8},)),
-        (eval_julia_test_wasm_leaf, (Vector{UInt8},)),
         (eval_julia_test_has_toplevel, (Vector{UInt8},)),
         (eval_julia_test_fixup, (Vector{UInt8},)),
         # Agent 24: WASM-compatible build_tree chain — ALL helpers must be in seed
