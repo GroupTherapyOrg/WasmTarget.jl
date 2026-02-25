@@ -149,7 +149,12 @@ function main()
         (eval_julia_test_direct_untokenize, (Vector{UInt8},)),
         (eval_julia_test_direct_untokenize_head, (Vector{UInt8},)),
         (eval_julia_test_build_tree_wasm, (Vector{UInt8},)),
-        # Agent 23: WASM-compatible untokenize functions for diagnostic tests
+        # Agent 24: WASM-compatible build_tree chain — ALL helpers must be in seed
+        (_wasm_build_tree_expr, (JuliaSyntax.ParseStream,)),
+        (_wasm_node_to_expr, (JuliaSyntax.RedTreeCursor, JuliaSyntax.SourceFile, Vector{UInt8}, UInt32)),
+        (_wasm_node_to_expr, (JuliaSyntax.RedTreeCursor, JuliaSyntax.SourceFile, Vector{UInt8})),
+        (_wasm_parseargs!, (Expr, LineNumberNode, JuliaSyntax.RedTreeCursor, JuliaSyntax.SourceFile, Vector{UInt8}, UInt32)),
+        (_wasm_string_to_Expr, (JuliaSyntax.RedTreeCursor, JuliaSyntax.SourceFile, Vector{UInt8}, UInt32)),
         (_wasm_untokenize_kind, (JuliaSyntax.Kind, Bool)),
         (_wasm_untokenize_head, (JuliaSyntax.SyntaxHead,)),
         (eval_julia_result_length, (Vector{UInt8},)),
