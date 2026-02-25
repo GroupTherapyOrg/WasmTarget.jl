@@ -7154,6 +7154,7 @@ function fix_numeric_to_ref_local_stores(bytes::Vector{UInt8}, locals::Vector{Wa
             while j <= length(bytes) && (bytes[j] & 0x80) != 0
                 j += 1
             end
+            matched = false
             if j <= length(bytes)
                 j += 1  # Past the terminal LEB128 byte
                 # Check if next instruction is local_set (0x21)
@@ -7185,7 +7186,7 @@ function fix_numeric_to_ref_local_stores(bytes::Vector{UInt8}, locals::Vector{Wa
                             end
                             fixes += 1
                             i = k
-                            continue
+                            matched = true
                         elseif local_type === StructRef || local_type === ArrayRef || local_type === AnyRef || local_type === ExternRef
                             # Replace with ref_null of abstract type
                             push!(result, Opcode.REF_NULL)
@@ -7195,11 +7196,29 @@ function fix_numeric_to_ref_local_stores(bytes::Vector{UInt8}, locals::Vector{Wa
                             end
                             fixes += 1
                             i = k
-                            continue
+                            matched = true
                         end
                     end
                 end
             end
+            if matched
+                continue
+            end
+            # PURE-6022: Pattern didn't match — still need to properly skip the LEB128
+            # value operand. Without this, value bytes (e.g., 0x20=local.get, 0x21=local.set)
+            # are misinterpreted as opcodes, causing the parser to get out of sync and
+            # corrupting constant array data (4096-element lookup tables).
+            push!(result, bytes[i])
+            i += 1
+            while i <= length(bytes)
+                push!(result, bytes[i])
+                if (bytes[i] & 0x80) == 0
+                    i += 1
+                    break
+                end
+                i += 1
+            end
+            continue
         end
 
         push!(result, bytes[i])
