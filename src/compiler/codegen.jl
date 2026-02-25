@@ -18901,6 +18901,10 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         # Helper: compile Memory elements, handling UndefRefError for ref-typed slots
         function compile_memory_elements!(bytes, mem, arr_type_idx, elem_type, ctx)
             for i in 1:length(mem)
+                # PURE-6022: Stop emitting elements after stub/unreachable
+                if ctx.last_stmt_was_stub
+                    break
+                end
                 try
                     v = mem[i]
                     append!(bytes, compile_value(v, ctx))
@@ -18985,6 +18989,12 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         wasm_elem_type = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
         needs_extern_convert = (wasm_elem_type === ExternRef)
         for i in 1:length(val)
+            # PURE-6022: Stop emitting array elements after unreachable (stub).
+            # Dead code after unreachable contains raw data bytes that decode as
+            # invalid WASM instructions (e.g., block with invalid type byte).
+            if ctx.last_stmt_was_stub
+                break
+            end
             if needs_extern_convert
                 elem_val = val[i]
                 elem_bytes = compile_value(elem_val, ctx)
@@ -19014,11 +19024,18 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
             else
                 append!(bytes, compile_value(val[i], ctx))
             end
+            # PURE-6022: Check after each element in case compile_value hit a stub
+            if ctx.last_stmt_was_stub
+                break
+            end
         end
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_NEW_FIXED)
-        append!(bytes, encode_leb128_unsigned(array_type_idx))
-        append!(bytes, encode_leb128_unsigned(length(val)))
+        # PURE-6022: Skip array_new_fixed if we're in dead code (stub was hit)
+        if !ctx.last_stmt_was_stub
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ARRAY_NEW_FIXED)
+            append!(bytes, encode_leb128_unsigned(array_type_idx))
+            append!(bytes, encode_leb128_unsigned(length(val)))
+        end
 
         # Field 1: size tuple — Tuple{Int64} with the length
         size_tuple_type = Tuple{Int64}
