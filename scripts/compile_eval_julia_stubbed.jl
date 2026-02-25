@@ -91,6 +91,8 @@ function main()
         (_wasm_string_to_Expr, (JuliaSyntax.RedTreeCursor, JuliaSyntax.SourceFile, Vector{UInt8}, UInt32)),
         (_wasm_untokenize_kind, (JuliaSyntax.Kind, Bool)),
         (_wasm_untokenize_head, (JuliaSyntax.SyntaxHead,)),
+        # PURE-7001: parse! port (bypasses kwarg dispatch)
+        (_wasm_parse_statement!, (JuliaSyntax.ParseStream,)),
         # JS bridge helpers
         (eval_julia_result_length, (Vector{UInt8},)),
         (eval_julia_result_byte, (Vector{UInt8}, Int32)),

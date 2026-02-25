@@ -423,13 +423,26 @@ function _wasm_simple_call_expr_flat(stream::JuliaSyntax.ParseStream)::Expr
     end
     return Expr(:call, op_sym, left_int, right_int)
 end
+# WASM-compatible parse! replacement — bypasses kwarg dispatch (PURE-7001).
+# _wasm_parse_statement!(ps) compiles to #parse!#73 which
+# dispatches on Symbol kwarg via === chain. The codegen emits dead code guards
+# (unreachable instructions) between the Symbol comparison blocks, causing a
+# runtime trap when rule == :statement. This port calls parse_stmts + validate_tokens
+# directly — identical output, no kwarg dispatch. 1-1 tested against original.
+function _wasm_parse_statement!(ps::JuliaSyntax.ParseStream)
+    pstate = JuliaSyntax.ParseState(ps)
+    JuliaSyntax.parse_stmts(pstate)
+    JuliaSyntax.validate_tokens(ps)
+    return ps
+end
+
 # --- Entry point that takes Vector{UInt8} directly (WASM-compatible) ---
 # Avoids ALL String operations (codeunit, ncodeunits, pointer, unsafe_load)
 # which compile to `unreachable` in WASM.
 function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
     # Stage 1: Parse — bytes go directly to ParseStream
     ps = JuliaSyntax.ParseStream(code_bytes)
-    JuliaSyntax.parse!(ps, rule=:statement)
+    _wasm_parse_statement!(ps)
     # PURE-6023: Inline _wasm_simple_call_expr_flat logic here.
     # Cross-function call to Main-scoped functions gets stubbed by the compiler
     # (func_registry lookup fails for transitive dependencies from Main module scope).
@@ -531,14 +544,14 @@ end
 # Stage 0c: Create ParseStream + parse!
 function _diag_stage0_parse(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
-    JuliaSyntax.parse!(ps, rule=:statement)
+    _wasm_parse_statement!(ps)
     return Int32(2)
 end
 
 # Stage 0d: Parse + create cursor
 function _diag_stage0_cursor(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
-    JuliaSyntax.parse!(ps, rule=:statement)
+    _wasm_parse_statement!(ps)
     cursor = JuliaSyntax.RedTreeCursor(ps)
     return Int32(3)
 end
@@ -546,7 +559,7 @@ end
 # Stage 1 only: parse + extract Expr fields (returns op_byte for verification)
 function _diag_stage1_parse(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
-    JuliaSyntax.parse!(ps, rule=:statement)
+    _wasm_parse_statement!(ps)
     cursor = JuliaSyntax.RedTreeCursor(ps)
     txtbuf = JuliaSyntax.unsafe_textbuf(ps)
     itr = JuliaSyntax.reverse_nontrivia_children(cursor)
@@ -564,7 +577,7 @@ end
 # Stage 2: parse + resolve function from Base (returns 1 if getfield works)
 function _diag_stage2_resolve(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
-    JuliaSyntax.parse!(ps, rule=:statement)
+    _wasm_parse_statement!(ps)
     cursor = JuliaSyntax.RedTreeCursor(ps)
     txtbuf = JuliaSyntax.unsafe_textbuf(ps)
     itr = JuliaSyntax.reverse_nontrivia_children(cursor)
