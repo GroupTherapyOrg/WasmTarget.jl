@@ -16433,8 +16433,10 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
             val_type = if val isa Core.SSAValue
                 get(ctx.ssa_types, val.id, Any)
             elseif val isa Core.Argument
-                # Core.Argument(n) is an IR node for the nth argument; look up its declared type
-                val.n <= length(ctx.arg_types) ? ctx.arg_types[val.n] : Any
+                # Core.Argument(n) is an IR node for the nth argument; look up its declared type.
+                # PURE-6025: For non-closures, Core.Argument(1) is #self#, so subtract 1.
+                local arg_idx_fix = ctx.is_compiled_closure ? val.n : val.n - 1
+                (arg_idx_fix >= 1 && arg_idx_fix <= length(ctx.arg_types)) ? ctx.arg_types[arg_idx_fix] : Any
             elseif val isa GlobalRef
                 actual_val = try getfield(val.mod, val.name) catch; nothing end
                 typeof(actual_val)
@@ -22819,6 +22821,27 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                             push!(bytes, Opcode.GC_PREFIX)
                             push!(bytes, Opcode.REF_CAST_NULL)       # anyref → (ref null X)
                             append!(bytes, encode_leb128_signed(Int64(expected_wasm.type_idx)))
+                        elseif expected_wasm isa ConcreteRef && (actual_wasm === I32 || actual_wasm === I64 || actual_wasm === F32 || actual_wasm === F64)
+                            # PURE-6025: Numeric value to tagged union struct — wrap via emit_wrap_union_value.
+                            # This happens when a function expects a Union param (represented as tagged union struct)
+                            # but the actual value is a numeric type (e.g., NumType passed to Dict{WasmValType,...} key).
+                            if expected_julia_type isa Union && needs_tagged_union(expected_julia_type)
+                                append!(bytes, emit_wrap_union_value(ctx, actual_julia_type, expected_julia_type))
+                            else
+                                # ConcreteRef expected but not a union — box numeric to ref via ref.i31
+                                if actual_wasm === I32
+                                    push!(bytes, Opcode.GC_PREFIX)
+                                    push!(bytes, Opcode.REF_I31)
+                                elseif actual_wasm === I64
+                                    push!(bytes, Opcode.I32_WRAP_I64)
+                                    push!(bytes, Opcode.GC_PREFIX)
+                                    push!(bytes, Opcode.REF_I31)
+                                end
+                                # Cast to expected concrete ref type
+                                push!(bytes, Opcode.GC_PREFIX)
+                                push!(bytes, Opcode.REF_CAST_NULL)
+                                append!(bytes, encode_leb128_signed(Int64(expected_wasm.type_idx)))
+                            end
                         elseif expected_wasm === ExternRef && (actual_wasm isa ConcreteRef || actual_wasm === StructRef || actual_wasm === ArrayRef || actual_wasm === AnyRef)
                             # Concrete or abstract ref to externref — insert extern.convert_any
                             push!(bytes, Opcode.GC_PREFIX)
@@ -23504,6 +23527,27 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                         push!(bytes, Opcode.GC_PREFIX)
                         push!(bytes, Opcode.REF_CAST_NULL)
                         append!(bytes, encode_leb128_signed(Int64(expected_wasm.type_idx)))
+                    elseif expected_wasm isa ConcreteRef && (actual_wasm === I32 || actual_wasm === I64 || actual_wasm === F32 || actual_wasm === F64)
+                        # PURE-6025: Numeric value to tagged union struct — wrap via emit_wrap_union_value.
+                        # This happens when a function expects a Union param (represented as tagged union struct)
+                        # but the actual value is a numeric type (e.g., NumType passed to Dict{WasmValType,...} key).
+                        if expected_julia_type isa Union && needs_tagged_union(expected_julia_type)
+                            append!(bytes, emit_wrap_union_value(ctx, actual_julia_type, expected_julia_type))
+                        else
+                            # ConcreteRef expected but not a union — box numeric to ref via ref.i31
+                            if actual_wasm === I32
+                                push!(bytes, Opcode.GC_PREFIX)
+                                push!(bytes, Opcode.REF_I31)
+                            elseif actual_wasm === I64
+                                push!(bytes, Opcode.I32_WRAP_I64)
+                                push!(bytes, Opcode.GC_PREFIX)
+                                push!(bytes, Opcode.REF_I31)
+                            end
+                            # Cast to expected concrete ref type
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.REF_CAST_NULL)
+                            append!(bytes, encode_leb128_signed(Int64(expected_wasm.type_idx)))
+                        end
                     elseif expected_wasm === I32 && actual_wasm === I64
                         # i64 to i32 — insert i32.wrap_i64
                         push!(bytes, Opcode.I32_WRAP_I64)
