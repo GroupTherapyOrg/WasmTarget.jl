@@ -6877,13 +6877,16 @@ function generate_body(ctx::CompilationContext)::Vector{UInt8}
     bytes = fix_numeric_to_ref_local_stores(bytes, ctx.locals, ctx.n_params)
 
     # PURE-6025: Fix dead returns at the very end of a function body.
-    # Pattern: [end] [return] [unreachable] [end] at the tail of the function.
     # This happens when all paths inside the block return, leaving a dead return
-    # with empty stack. Only apply at the LAST occurrence (not intermediate blocks
-    # where end→return→unreachable might be a valid reachable return).
-    if length(bytes) >= 4 && bytes[end] == Opcode.END && bytes[end - 1] == 0x00 &&
-       bytes[end - 2] == Opcode.RETURN && bytes[end - 3] == Opcode.END
-        bytes[end - 2] = 0x00  # Replace RETURN with UNREACHABLE
+    # with empty stack. Two patterns:
+    # Pattern 1: [end] [return] [unreachable] [end] — dead return before unreachable
+    # Pattern 2: [return] [end] [return] [end] — both if/else branches return
+    if length(bytes) >= 4 && bytes[end] == Opcode.END
+        if bytes[end - 1] == 0x00 && bytes[end - 2] == Opcode.RETURN && bytes[end - 3] == Opcode.END
+            bytes[end - 2] = 0x00  # Replace RETURN with UNREACHABLE
+        elseif bytes[end - 1] == Opcode.RETURN && bytes[end - 2] == Opcode.END && bytes[end - 3] == Opcode.RETURN
+            bytes[end - 1] = 0x00  # Replace dead RETURN with UNREACHABLE
+        end
     end
 
     # PURE-6022: Fix consecutive local_set instructions (multi-target phi assignments).
