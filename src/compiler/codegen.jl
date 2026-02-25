@@ -6904,6 +6904,15 @@ function generate_body(ctx::CompilationContext)::Vector{UInt8}
         bytes[end - 2] = 0x00  # Replace RETURN with UNREACHABLE
     end
 
+    # PURE-6022: Fix local_get → local_set/tee with i32↔i64 type mismatch.
+    # Build full local type array (params + locals) for type-aware fixing.
+    param_wasm_types = WasmValType[]
+    for T in ctx.arg_types
+        push!(param_wasm_types, get_concrete_wasm_type(T, ctx.mod, ctx.type_registry))
+    end
+    all_local_types = vcat(param_wasm_types, ctx.locals)
+    bytes = fix_local_get_set_type_mismatch(bytes, all_local_types)
+
     # PURE-6022: Fix consecutive local_set instructions (multi-target phi assignments).
     # When a value feeds into multiple phi nodes, the codegen emits local_set for each
     # target. But local_set consumes the stack value, leaving nothing for subsequent sets.
@@ -6956,6 +6965,70 @@ function fix_consecutive_local_sets(bytes::Vector{UInt8})::Vector{UInt8}
                     i += 1
                     fixes += 1
                     continue
+                end
+            end
+        end
+        push!(result, bytes[i])
+        i += 1
+    end
+    return result
+end
+
+"""
+PURE-6022: Fix local_get → local_set/tee with i32↔i64 type mismatch.
+
+When a phi node merges values from branches with different numeric types (e.g., one
+branch produces i64, phi local is i32), the codegen emits local_get X → local_set Y
+where X has type i64 and Y has type i32 (or vice versa). Insert the appropriate
+conversion instruction between them.
+"""
+function fix_local_get_set_type_mismatch(bytes::Vector{UInt8}, all_types::Vector{WasmValType})::Vector{UInt8}
+    result = UInt8[]
+    sizehint!(result, length(bytes) + 64)
+    i = 1
+    fixes = 0
+    while i <= length(bytes)
+        op = bytes[i]
+        if op == 0x20  # local_get
+            # Decode source local index
+            j = i + 1
+            src_idx = 0; shift = 0
+            while j <= length(bytes)
+                b = bytes[j]
+                src_idx |= (Int(b & 0x7f) << shift)
+                shift += 7; j += 1
+                (b & 0x80) == 0 && break
+            end
+            # Check if next instruction is local_set (0x21) or local_tee (0x22)
+            if j <= length(bytes) && (bytes[j] == 0x21 || bytes[j] == 0x22)
+                # Decode destination local index
+                k = j + 1
+                dst_idx = 0; shift = 0
+                while k <= length(bytes)
+                    b = bytes[k]
+                    dst_idx |= (Int(b & 0x7f) << shift)
+                    shift += 7; k += 1
+                    (b & 0x80) == 0 && break
+                end
+                # Look up types (0-indexed local index → 1-indexed array)
+                src_arr = src_idx + 1
+                dst_arr = dst_idx + 1
+                if src_arr >= 1 && src_arr <= length(all_types) && dst_arr >= 1 && dst_arr <= length(all_types)
+                    src_type = all_types[src_arr]
+                    dst_type = all_types[dst_arr]
+                    if src_type === I64 && dst_type === I32
+                        # Copy local_get, insert i32_wrap_i64, then copy local_set/tee
+                        for bi in i:j-1; push!(result, bytes[bi]); end
+                        push!(result, 0xA7)  # i32_wrap_i64
+                        for bi in j:k-1; push!(result, bytes[bi]); end
+                        fixes += 1; i = k; continue
+                    elseif src_type === I32 && dst_type === I64
+                        # Copy local_get, insert i64_extend_i32_s, then copy local_set/tee
+                        for bi in i:j-1; push!(result, bytes[bi]); end
+                        push!(result, 0xAC)  # i64_extend_i32_s
+                        for bi in j:k-1; push!(result, bytes[bi]); end
+                        fixes += 1; i = k; continue
+                    end
                 end
             end
         end
