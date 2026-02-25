@@ -24144,7 +24144,10 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                                 is_numeric = true
                             end
                         elseif src_idx < ctx.n_params && src_idx < length(ctx.arg_types)
-                            if ctx.arg_types[src_idx + 1] in (I32, I64, F32, F64)
+                            # PURE-6022: arg_types contains Julia types, not WasmValTypes.
+                            # Convert via julia_to_wasm_type before comparing.
+                            _param_wasm = julia_to_wasm_type(ctx.arg_types[src_idx + 1])
+                            if _param_wasm === I32 || _param_wasm === I64 || _param_wasm === F32 || _param_wasm === F64
                                 is_numeric = true
                             end
                         end
@@ -24166,6 +24169,9 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                             arr_idx2 = src_idx2 - ctx.n_params + 1
                             if arr_idx2 >= 1 && arr_idx2 <= length(ctx.locals)
                                 is_extern = (ctx.locals[arr_idx2] === ExternRef)
+                            elseif src_idx2 < ctx.n_params && src_idx2 < length(ctx.arg_types)
+                                # PURE-6022: Check if parameter is already externref
+                                is_extern = (julia_to_wasm_type(ctx.arg_types[src_idx2 + 1]) === ExternRef)
                             end
                         end
                         if !is_extern
