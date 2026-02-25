@@ -15929,8 +15929,16 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                 if !needs_type_safe_default && needs_ref_cast_local === nothing && local_is_ref && !has_gc_prefix && length(stmt_bytes) >= 2
                     # PURE-6025: Expanded to catch any small numeric constant, not just i32.const 0.
                     # An i64.const 1 stored into a ref-typed local also needs type_safe_default.
+                    # Check 1-byte LEB128 (values 0-63 signed / 0-127 unsigned)
                     if (stmt_bytes[end-1] == Opcode.I32_CONST || stmt_bytes[end-1] == Opcode.I64_CONST) && (stmt_bytes[end] & 0x80) == 0
                         needs_type_safe_default = true
+                    end
+                    # Check 2-byte LEB128 (values 64-8191): opcode + continuation + terminal
+                    # e.g., i32.const 111 = [0x41, 0xEF, 0x00]
+                    if !needs_type_safe_default && length(stmt_bytes) >= 3
+                        if (stmt_bytes[end-2] == Opcode.I32_CONST || stmt_bytes[end-2] == Opcode.I64_CONST) && (stmt_bytes[end-1] & 0x80) != 0 && (stmt_bytes[end] & 0x80) == 0
+                            needs_type_safe_default = true
+                        end
                     end
                 end
 
