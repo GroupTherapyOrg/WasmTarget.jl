@@ -16853,6 +16853,12 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
                     push!(bytes, Opcode.GC_PREFIX)
                     push!(bytes, Opcode.EXTERN_CONVERT_ANY)
                     field_bytes = UInt8[]  # Already appended
+                elseif actual_field_wasm === ExternRef && src_type !== nothing && src_type === ExternRef
+                    # PURE-6025: Source IS already externref, field expects externref — no conversion needed.
+                    # Must explicitly handle to prevent the catch-all below from emitting EXTERN_CONVERT_ANY
+                    # which expects anyref input and would fail on externref.
+                    append!(bytes, field_bytes)
+                    field_bytes = UInt8[]  # Already appended — prevent catch-all
                 end
             end
             # PURE-6025: Handle global.get sources (0x23) for externref field conversion.
