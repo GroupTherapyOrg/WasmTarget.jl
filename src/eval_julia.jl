@@ -994,51 +994,47 @@ function eval_julia_test_wasm_node_to_expr(code_bytes::Vector{UInt8})::Int32
     end
 end
 
-# Test L2: Trace _wasm_node_to_expr steps individually to find where it fails
+# Test L2: Trace _wasm_node_to_expr steps with per-step error isolation
+# Returns: step_number * 100 on success, -(step_number * 100) on failure at that step
 function eval_julia_test_node_steps(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
     JuliaSyntax.parse!(ps; rule=:statement)
-    try
-        source = JuliaSyntax.SourceFile(ps)
-        txtbuf = JuliaSyntax.unsafe_textbuf(ps)
-        cursor = JuliaSyntax.RedTreeCursor(ps)
-        # Step 1: should_include_node
-        si = JuliaSyntax.should_include_node(cursor)
-        if !si
-            return Int32(-100)  # should_include_node is false
-        end
-        # Step 2: head, kind
-        nodehead = JuliaSyntax.head(cursor)
-        k = JuliaSyntax.kind(cursor)
-        # Step 3: is_leaf
-        if JuliaSyntax.is_leaf(cursor)
-            return Int32(-200)  # it's a leaf (shouldn't be for "1+1")
-        end
-        # Step 4: byte_range
-        srcrange = JuliaSyntax.byte_range(cursor)
-        # Step 5: check kind isn't string/cmdstring
-        if k == JuliaSyntax.K"string"
-            return Int32(-300)
-        end
-        # Step 6: source_location
-        _loc = JuliaSyntax.source_location(LineNumberNode, source, first(srcrange))
-        # Step 7: _wasm_untokenize_head
-        headstr = _wasm_untokenize_head(nodehead)
-        if headstr === nothing
-            return Int32(-400)  # untokenize_head returned nothing
-        end
-        # Step 8: Symbol creation
-        _headsym = Symbol(headstr)
-        # Step 9: _wasm_parseargs!
-        retexpr = Expr(_headsym)
-        loc = JuliaSyntax.source_location(LineNumberNode, source, first(srcrange))
-        (fch, fcr) = _wasm_parseargs!(retexpr, loc, cursor, source, txtbuf, UInt32(0))
-        # Step 10: _node_to_expr
-        _result = JuliaSyntax._node_to_expr(retexpr, loc, srcrange, fch, fcr, nodehead, source)
-        return Int32(10000)  # all steps passed
+    source = JuliaSyntax.SourceFile(ps)
+    txtbuf = JuliaSyntax.unsafe_textbuf(ps)
+    cursor = JuliaSyntax.RedTreeCursor(ps)
+    # Step 1: should_include_node
+    step1 = try
+        JuliaSyntax.should_include_node(cursor) ? Int32(100) : Int32(-100)
     catch
-        return Int32(-1)
+        return Int32(-100)
     end
+    if step1 < 0; return step1; end
+    # Step 2: head + kind
+    nodehead = try JuliaSyntax.head(cursor) catch; return Int32(-200); end
+    k = try JuliaSyntax.kind(cursor) catch; return Int32(-201); end
+    # Step 3: byte_range
+    srcrange = try JuliaSyntax.byte_range(cursor) catch; return Int32(-300); end
+    # Step 4: source_location
+    loc = try JuliaSyntax.source_location(LineNumberNode, source, first(srcrange)) catch; return Int32(-400); end
+    # Step 5: _wasm_untokenize_head
+    headstr = try _wasm_untokenize_head(nodehead) catch; return Int32(-500); end
+    if headstr === nothing; return Int32(-501); end
+    # Step 6: Symbol + Expr creation
+    headsym = try Symbol(headstr) catch; return Int32(-600); end
+    retexpr = try Expr(headsym) catch; return Int32(-601); end
+    # Step 7: _wasm_parseargs!
+    parseargs_result = try
+        _wasm_parseargs!(retexpr, loc, cursor, source, txtbuf, UInt32(0))
+    catch
+        return Int32(-700)
+    end
+    # Step 8: _node_to_expr
+    final_result = try
+        JuliaSyntax._node_to_expr(retexpr, loc, srcrange, parseargs_result[1], parseargs_result[2], nodehead, source)
+    catch
+        return Int32(-800)
+    end
+    return Int32(10000)  # all steps passed
 end
 
 # Test M: _wasm_leaf_to_expr for an integer leaf
