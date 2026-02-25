@@ -969,6 +969,71 @@ function eval_julia_test_build_tree_wasm(code_bytes::Vector{UInt8})::Int32
     end
 end
 
+# Test K2: Step-by-step trace of _wasm_build_tree_expr
+# Returns step*10 for the last successful step, negative for failure step
+function eval_julia_test_build_steps(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    # Step 1: SourceFile
+    source = try JuliaSyntax.SourceFile(ps) catch; return Int32(-10); end
+    # Step 2: unsafe_textbuf
+    txtbuf = try JuliaSyntax.unsafe_textbuf(ps) catch; return Int32(-20); end
+    # Step 3: RedTreeCursor
+    cursor = try JuliaSyntax.RedTreeCursor(ps) catch; return Int32(-30); end
+    # Step 4: should_include_node on cursor (after source/txtbuf creation)
+    si = try JuliaSyntax.should_include_node(cursor) catch; return Int32(-40); end
+    if !si; return Int32(-41); end  # -41 = should_include returned false
+    # Step 5: kind
+    k = try JuliaSyntax.kind(cursor) catch; return Int32(-50); end
+    # Step 6: has_toplevel_siblings
+    has_top = try JuliaSyntax.has_toplevel_siblings(cursor) catch; return Int32(-60); end
+    # Step 7: head
+    nodehead = try JuliaSyntax.head(cursor) catch; return Int32(-70); end
+    # Step 8: _wasm_untokenize_head
+    headstr = try _wasm_untokenize_head(nodehead) catch; return Int32(-80); end
+    if headstr === nothing; return Int32(-81); end
+    # Step 9: Symbol + Expr
+    headsym = try Symbol(headstr) catch; return Int32(-90); end
+    retexpr = try Expr(headsym) catch; return Int32(-91); end
+    # Step 10: is_leaf check (should be false for :call)
+    isleaf = try JuliaSyntax.is_leaf(cursor) catch; return Int32(-100); end
+    if isleaf; return Int32(-101); end  # unexpected leaf
+    # Step 11: byte_range
+    srcrange = try JuliaSyntax.byte_range(cursor) catch; return Int32(-110); end
+    # Step 12: source_location
+    loc = try JuliaSyntax.source_location(LineNumberNode, source, first(srcrange)) catch; return Int32(-120); end
+    # Step 13: _wasm_parseargs!
+    parseargs_result = try
+        _wasm_parseargs!(retexpr, loc, cursor, source, txtbuf, UInt32(0))
+    catch
+        return Int32(-130)
+    end
+    # Step 14: _node_to_expr
+    final_result = try
+        JuliaSyntax._node_to_expr(retexpr, loc, srcrange,
+            parseargs_result[1], parseargs_result[2], nodehead, source)
+    catch
+        return Int32(-140)
+    end
+    if final_result === nothing; return Int32(-141); end
+    if final_result isa Expr
+        return Int32(length(final_result.args) * 10 + 1000)  # 1030 for 3 args
+    end
+    return Int32(999)
+end
+
+# Test K3: Does creating SourceFile/txtbuf before cursor affect should_include_node?
+function eval_julia_test_si_after_source(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    # Create source and txtbuf FIRST (like _wasm_build_tree_expr does)
+    source = try JuliaSyntax.SourceFile(ps) catch; return Int32(-1); end
+    txtbuf = try JuliaSyntax.unsafe_textbuf(ps) catch; return Int32(-2); end
+    cursor = try JuliaSyntax.RedTreeCursor(ps) catch; return Int32(-3); end
+    si = try JuliaSyntax.should_include_node(cursor) catch; return Int32(-4); end
+    return si ? Int32(1) : Int32(0)
+end
+
 # Test L: _wasm_node_to_expr directly on top-level cursor
 function eval_julia_test_wasm_node_to_expr(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
