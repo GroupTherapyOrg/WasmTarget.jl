@@ -6914,6 +6914,11 @@ function generate_body(ctx::CompilationContext)::Vector{UInt8}
     # as i64 and inserts i32_wrap_i64 expecting i64 input, causing validation error.
     bytes = fix_array_len_wrap(bytes)
 
+    # PURE-6022: Remove spurious i32_wrap_i64 after comparison/i32 ops.
+    # Comparisons (i32_eqz, i64_eq, etc.) return i32, but codegen may emit i32_wrap_i64
+    # expecting i64 input from a value that is already i32.
+    bytes = fix_i32_wrap_after_i32_ops(bytes)
+
     # PURE-414: Check validator for errors after function body generation
     if has_errors(ctx.validator)
         @warn "Stack validator found $(length(ctx.validator.errors)) issue(s) in $(ctx.validator.func_name)" errors=ctx.validator.errors
@@ -6951,6 +6956,50 @@ function fix_array_len_wrap(bytes::Vector{UInt8})::Vector{UInt8}
     end
     if fixes > 0
         @warn "fix_array_len_wrap: removed $fixes spurious i32_wrap_i64 after array_len"
+    end
+    return result
+end
+
+"""
+PURE-6022: Remove spurious i32_wrap_i64 after instructions that already produce i32.
+
+Comparison ops (i32_eqz 0x45, i64_eq 0x51, etc.) all return i32. The codegen sometimes
+emits i32_wrap_i64 (0xA7) after these, expecting i64 input — which fails validation.
+This post-processor removes i32_wrap_i64 when the immediately preceding single-byte
+instruction is a known i32-producing op.
+"""
+function fix_i32_wrap_after_i32_ops(bytes::Vector{UInt8})::Vector{UInt8}
+    # Single-byte opcodes that produce i32:
+    # 0x45-0x66 = all comparison ops (i32_eqz through f64_ge)
+    # 0x67-0x78 = i32 unary/binary ops (i32_clz through i32_rotr)
+    # 0xA7 = i32_wrap_i64 itself produces i32
+    # 0xD1 = ref.is_null produces i32
+    is_i32_producing = falses(256)
+    for op in 0x45:0x78  # comparisons + i32 ops
+        is_i32_producing[op + 1] = true
+    end
+    is_i32_producing[0xA7 + 1] = true  # i32_wrap_i64
+    is_i32_producing[0xD1 + 1] = true  # ref.is_null
+
+    result = UInt8[]
+    sizehint!(result, length(bytes))
+    i = 1
+    fixes = 0
+    while i <= length(bytes)
+        if bytes[i] == 0xA7 && i >= 2  # i32_wrap_i64
+            prev = result[end]
+            if is_i32_producing[prev + 1]
+                # Previous instruction already produces i32 — skip this i32_wrap_i64
+                i += 1
+                fixes += 1
+                continue
+            end
+        end
+        push!(result, bytes[i])
+        i += 1
+    end
+    if fixes > 0
+        @warn "fix_i32_wrap_after_i32_ops: removed $fixes spurious i32_wrap_i64 after i32-producing ops"
     end
     return result
 end
