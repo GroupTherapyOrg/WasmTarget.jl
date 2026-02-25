@@ -7058,6 +7058,20 @@ function fix_numeric_to_ref_local_stores(bytes::Vector{UInt8}, locals::Vector{Wa
                     i += 1
                 end
             end
+            # PURE-6025: After struct_new/array_new_fixed (which pushes a ref type),
+            # check if next instruction is a numeric opcode (0x80-0xC4, e.g., i32_wrap_i64).
+            # This is NEVER valid (ref type can't be treated as i64/i32) and happens in
+            # dead code after unreachable where the compiler emits both struct construction
+            # and a dead boxing path. Replace the numeric opcode with DROP (0x1A) to
+            # consume the ref value safely.
+            if (sub_op == 0x00 || sub_op == 0x08) && i <= length(bytes)
+                next_byte = bytes[i]
+                if next_byte >= 0x80 && next_byte <= 0xC4
+                    push!(result, UInt8(0x1A))  # DROP
+                    i += 1  # Skip the numeric opcode
+                    fixes += 1
+                end
+            end
             continue
         end
 
