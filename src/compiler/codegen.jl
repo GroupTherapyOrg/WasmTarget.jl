@@ -8014,8 +8014,37 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::C
             end
             return false
         else
-            # Type mismatch: skip this store (unreachable path for Union types)
-            return false
+            # PURE-6025: Type mismatch — emit type-safe default instead of skipping.
+            # Skipping leaves the local uninitialized, but we need a valid value
+            # for the Wasm type checker (e.g., ConcreteRef local must have ref.null, not i32).
+            if phi_local_type isa ConcreteRef
+                push!(bytes, Opcode.REF_NULL)
+                append!(bytes, encode_leb128_signed(Int64(phi_local_type.type_idx)))
+            elseif phi_local_type === StructRef
+                push!(bytes, Opcode.REF_NULL)
+                push!(bytes, UInt8(StructRef))
+            elseif phi_local_type === ArrayRef
+                push!(bytes, Opcode.REF_NULL)
+                push!(bytes, UInt8(ArrayRef))
+            elseif phi_local_type === ExternRef
+                push!(bytes, Opcode.REF_NULL)
+                push!(bytes, UInt8(ExternRef))
+            elseif phi_local_type === AnyRef
+                push!(bytes, Opcode.REF_NULL)
+                push!(bytes, UInt8(AnyRef))
+            elseif phi_local_type === I64
+                push!(bytes, Opcode.I64_CONST)
+                push!(bytes, 0x00)
+            elseif phi_local_type === I32
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+            else
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+            end
+            push!(bytes, Opcode.LOCAL_SET)
+            append!(bytes, encode_leb128_unsigned(local_idx))
+            return true
         end
     end
 
@@ -8271,6 +8300,30 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::C
                 end
             end
         end
+    end
+
+    # PURE-6025: Final safety net — if value_bytes is a numeric constant (i32_const, i64_const, etc.)
+    # but the phi local is ref-typed, emit type-safe default instead.
+    # This catches cases where a UInt8 enum value (e.g., ExternRef=0x6f=111) is compiled
+    # as i32_const 111 but the phi local expects (ref null $type).
+    if !isempty(value_bytes) && (phi_local_type isa ConcreteRef || phi_local_type === StructRef || phi_local_type === ArrayRef || phi_local_type === AnyRef) &&
+       (value_bytes[1] == Opcode.I32_CONST || value_bytes[1] == Opcode.I64_CONST || value_bytes[1] == Opcode.F32_CONST || value_bytes[1] == Opcode.F64_CONST)
+        if phi_local_type isa ConcreteRef
+            push!(bytes, Opcode.REF_NULL)
+            append!(bytes, encode_leb128_signed(Int64(phi_local_type.type_idx)))
+        elseif phi_local_type === StructRef
+            push!(bytes, Opcode.REF_NULL)
+            push!(bytes, UInt8(StructRef))
+        elseif phi_local_type === ArrayRef
+            push!(bytes, Opcode.REF_NULL)
+            push!(bytes, UInt8(ArrayRef))
+        elseif phi_local_type === AnyRef
+            push!(bytes, Opcode.REF_NULL)
+            push!(bytes, UInt8(AnyRef))
+        end
+        push!(bytes, Opcode.LOCAL_SET)
+        append!(bytes, encode_leb128_unsigned(local_idx))
+        return true
     end
 
     append!(bytes, value_bytes)
@@ -14497,10 +14550,25 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                     # For non-ref types, nothing produces no value (shouldn't happen for valid code)
                 elseif then_value !== nothing
                     value_bytes = compile_value(then_value, ctx)
-                    if isempty(value_bytes) && phi_wasm_type isa ConcreteRef
+                    if isempty(value_bytes) && (phi_wasm_type isa ConcreteRef || phi_wasm_type === StructRef || phi_wasm_type === ArrayRef || phi_wasm_type === AnyRef || phi_wasm_type === ExternRef)
                         # Value compiled to nothing but we need a ref type - emit ref.null
-                        push!(inner_bytes, Opcode.REF_NULL)
-                        append!(inner_bytes, encode_leb128_signed(Int64(phi_wasm_type.type_idx)))
+                        if phi_wasm_type isa ConcreteRef
+                            push!(inner_bytes, Opcode.REF_NULL)
+                            append!(inner_bytes, encode_leb128_signed(Int64(phi_wasm_type.type_idx)))
+                        else
+                            push!(inner_bytes, Opcode.REF_NULL)
+                            push!(inner_bytes, UInt8(phi_wasm_type))
+                        end
+                    elseif !isempty(value_bytes) && (phi_wasm_type isa ConcreteRef || phi_wasm_type === StructRef || phi_wasm_type === ArrayRef || phi_wasm_type === AnyRef) &&
+                           (value_bytes[1] == Opcode.I32_CONST || value_bytes[1] == Opcode.I64_CONST || value_bytes[1] == Opcode.F32_CONST || value_bytes[1] == Opcode.F64_CONST)
+                        # PURE-6025: Numeric constant but phi expects ref type — emit ref.null
+                        if phi_wasm_type isa ConcreteRef
+                            push!(inner_bytes, Opcode.REF_NULL)
+                            append!(inner_bytes, encode_leb128_signed(Int64(phi_wasm_type.type_idx)))
+                        else
+                            push!(inner_bytes, Opcode.REF_NULL)
+                            push!(inner_bytes, UInt8(phi_wasm_type))
+                        end
                     else
                         append!(inner_bytes, value_bytes)
                         # PURE-303: Convert concrete/any ref to externref when phi expects externref
@@ -14561,10 +14629,27 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                         end
                     elseif else_value !== nothing
                         value_bytes = compile_value(else_value, ctx)
-                        if isempty(value_bytes) && phi_wasm_type isa ConcreteRef
+                        if isempty(value_bytes) && (phi_wasm_type isa ConcreteRef || phi_wasm_type === StructRef || phi_wasm_type === ArrayRef || phi_wasm_type === AnyRef || phi_wasm_type === ExternRef)
                             # Value compiled to nothing but we need a ref type - emit ref.null
-                            push!(inner_bytes, Opcode.REF_NULL)
-                            append!(inner_bytes, encode_leb128_signed(Int64(phi_wasm_type.type_idx)))
+                            if phi_wasm_type isa ConcreteRef
+                                push!(inner_bytes, Opcode.REF_NULL)
+                                append!(inner_bytes, encode_leb128_signed(Int64(phi_wasm_type.type_idx)))
+                            else
+                                push!(inner_bytes, Opcode.REF_NULL)
+                                push!(inner_bytes, UInt8(phi_wasm_type))
+                            end
+                        elseif !isempty(value_bytes) && (phi_wasm_type isa ConcreteRef || phi_wasm_type === StructRef || phi_wasm_type === ArrayRef || phi_wasm_type === AnyRef) &&
+                               (value_bytes[1] == Opcode.I32_CONST || value_bytes[1] == Opcode.I64_CONST || value_bytes[1] == Opcode.F32_CONST || value_bytes[1] == Opcode.F64_CONST)
+                            # PURE-6025: Numeric constant in else-branch but phi expects ref type.
+                            # This happens when a Union{ConcreteRef, UInt8} phi has a UInt8 constant
+                            # (like ExternRef=0x6f=111) compiled as i32_const. Replace with ref.null.
+                            if phi_wasm_type isa ConcreteRef
+                                push!(inner_bytes, Opcode.REF_NULL)
+                                append!(inner_bytes, encode_leb128_signed(Int64(phi_wasm_type.type_idx)))
+                            else
+                                push!(inner_bytes, Opcode.REF_NULL)
+                                push!(inner_bytes, UInt8(phi_wasm_type))
+                            end
                         else
                             append!(inner_bytes, value_bytes)
                             # PURE-303: Convert concrete/any ref to externref when phi expects externref
