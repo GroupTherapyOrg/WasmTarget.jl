@@ -96,6 +96,13 @@ function main()
         (eval_julia_result_byte, (Vector{UInt8}, Int32)),
         (make_byte_vec, (Int32,)),
         (set_byte_vec!, (Vector{UInt8}, Int32, Int32)),
+        # PURE-7001: Diagnostic functions for isolation testing
+        (_diag_stage0_len, (Vector{UInt8},)),
+        (_diag_stage0_ps, (Vector{UInt8},)),
+        (_diag_stage0_parse, (Vector{UInt8},)),
+        (_diag_stage0_cursor, (Vector{UInt8},)),
+        (_diag_stage1_parse, (Vector{UInt8},)),
+        (_diag_stage2_resolve, (Vector{UInt8},)),
     ]
     all_funcs = WasmTarget.discover_dependencies(seed)
     println("  Found $(length(all_funcs)) functions")
