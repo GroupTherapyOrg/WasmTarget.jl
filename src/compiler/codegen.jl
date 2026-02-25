@@ -6468,14 +6468,11 @@ function _get_local_wasm_type(val, compiled_bytes::Vector{UInt8}, ctx::Compilati
                 end
             else
                 # Parameter — infer wasm type from arg_types
-                arg_idx = src_idx + 1  # 0-based param → 1-based arg_types
-                if !ctx.is_compiled_closure
-                    arg_idx = src_idx  # For non-closures, param 0 = _1 (self), param 1 = arg_types[1]
-                end
+                # Wasm param N → arg_types[N+1] for non-closures (param 0 = arg_types[1])
+                # Wasm param N → arg_types[N+1] for closures (param 0 = closure = arg_types[1])
+                arg_idx = src_idx + 1
                 if arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
                     return get_concrete_wasm_type(ctx.arg_types[arg_idx], ctx.mod, ctx.type_registry)
-                elseif src_idx == 0
-                    return ExternRef  # Self parameter (_1) is typically externref
                 end
             end
         end
