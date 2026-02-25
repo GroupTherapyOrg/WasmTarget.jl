@@ -1537,6 +1537,30 @@ end
 # For "1+1": 43*1000000 + 1*1000 + 1 = 43001001
 # For "6*7": 42*1000000 + 6*1000 + 7 = 42006007
 # This completely avoids: Expr construction, Symbol comparison, Vector{Any} boxing
+# PURE-6023: Parse multi-digit integer from byte range in txtbuf.
+# Flat unrolled logic — no for-loop to avoid phi node issues in WASM.
+function _wasm_parse_int_from_range(txtbuf::Vector{UInt8}, r::UnitRange)::Int64
+    n = last(r) - first(r) + 1  # number of digits
+    if n == 1
+        return Int64(txtbuf[first(r)]) - Int64(48)
+    elseif n == 2
+        d1 = Int64(txtbuf[first(r)]) - Int64(48)
+        d2 = Int64(txtbuf[first(r) + 1]) - Int64(48)
+        return d1 * Int64(10) + d2
+    elseif n == 3
+        d1 = Int64(txtbuf[first(r)]) - Int64(48)
+        d2 = Int64(txtbuf[first(r) + 1]) - Int64(48)
+        d3 = Int64(txtbuf[first(r) + 2]) - Int64(48)
+        return d1 * Int64(100) + d2 * Int64(10) + d3
+    else
+        d1 = Int64(txtbuf[first(r)]) - Int64(48)
+        d2 = Int64(txtbuf[first(r) + 1]) - Int64(48)
+        d3 = Int64(txtbuf[first(r) + 2]) - Int64(48)
+        d4 = Int64(txtbuf[first(r) + 3]) - Int64(48)
+        return d1 * Int64(1000) + d2 * Int64(100) + d3 * Int64(10) + d4
+    end
+end
+
 function _wasm_parse_arith(stream::JuliaSyntax.ParseStream)::Int64
     cursor = JuliaSyntax.RedTreeCursor(stream)
     txtbuf = JuliaSyntax.unsafe_textbuf(stream)
@@ -1550,9 +1574,10 @@ function _wasm_parse_arith(stream::JuliaSyntax.ParseStream)::Int64
     range1 = JuliaSyntax.byte_range(child1)
     range2 = JuliaSyntax.byte_range(child2)
     range3 = JuliaSyntax.byte_range(child3)
-    right_int = Int64(txtbuf[first(range1)]) - Int64(48)
+    # PURE-6023: Multi-digit integer parsing (was single-digit only)
+    right_int = _wasm_parse_int_from_range(txtbuf, range1)
     op_byte = Int64(txtbuf[first(range2)])
-    left_int = Int64(txtbuf[first(range3)]) - Int64(48)
+    left_int = _wasm_parse_int_from_range(txtbuf, range3)
     return op_byte * Int64(1000000) + left_int * Int64(1000) + right_int
 end
 
@@ -1758,6 +1783,32 @@ end
 
 # PURE-6023: Step-by-step diagnostic functions for isolating pipeline traps.
 # Each returns Int32 to be easily testable from Node.js.
+
+# Stage 0a: Just return the input length (tests that the function runs at all)
+function _diag_stage0_len(code_bytes::Vector{UInt8})::Int32
+    return Int32(length(code_bytes))
+end
+
+# Stage 0b: Create ParseStream only (no parse, no tree)
+function _diag_stage0_ps(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    return Int32(1)
+end
+
+# Stage 0c: Create ParseStream + parse!
+function _diag_stage0_parse(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps, rule=:statement)
+    return Int32(2)
+end
+
+# Stage 0d: Parse + create cursor
+function _diag_stage0_cursor(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps, rule=:statement)
+    cursor = JuliaSyntax.RedTreeCursor(ps)
+    return Int32(3)
+end
 
 # Stage 1 only: parse + extract Expr fields (returns op_byte for verification)
 function _diag_stage1_parse(code_bytes::Vector{UInt8})::Int32
