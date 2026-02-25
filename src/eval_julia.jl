@@ -1756,6 +1756,53 @@ function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
     return WasmTarget.compile_from_codeinfo(code_info, return_type, func_name, arg_types)
 end
 
+# PURE-6023: Step-by-step diagnostic functions for isolating pipeline traps.
+# Each returns Int32 to be easily testable from Node.js.
+
+# Stage 1 only: parse + extract Expr fields (returns op_byte for verification)
+function _diag_stage1_parse(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps, rule=:statement)
+    cursor = JuliaSyntax.RedTreeCursor(ps)
+    txtbuf = JuliaSyntax.unsafe_textbuf(ps)
+    itr = JuliaSyntax.reverse_nontrivia_children(cursor)
+    r1 = iterate(itr)
+    (child1, state1) = r1
+    r2 = iterate(itr, state1)
+    (child2, state2) = r2
+    r3 = iterate(itr, state2)
+    (child3, _state3) = r3
+    range2 = JuliaSyntax.byte_range(child2)
+    op_byte = txtbuf[first(range2)]
+    return Int32(op_byte)  # '+' = 43, '-' = 45, '*' = 42
+end
+
+# Stage 2: parse + resolve function from Base (returns 1 if getfield works)
+function _diag_stage2_resolve(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps, rule=:statement)
+    cursor = JuliaSyntax.RedTreeCursor(ps)
+    txtbuf = JuliaSyntax.unsafe_textbuf(ps)
+    itr = JuliaSyntax.reverse_nontrivia_children(cursor)
+    r1 = iterate(itr)
+    (child1, state1) = r1
+    r2 = iterate(itr, state1)
+    (child2, state2) = r2
+    range2 = JuliaSyntax.byte_range(child2)
+    op_byte = txtbuf[first(range2)]
+    op_sym = if op_byte == UInt8('+')
+        :+
+    elseif op_byte == UInt8('-')
+        :-
+    elseif op_byte == UInt8('*')
+        :*
+    else
+        :/
+    end
+    func = getfield(Base, op_sym)
+    return Int32(1)  # Got here = getfield succeeded
+end
+
 # ============================================================================
 # WASM-compatible pipeline — Agent 28 (PURE-6026)
 #

@@ -64,6 +64,9 @@ function main()
     funcs_to_compile = [
         # Primary entry point — full pipeline
         (eval_julia_to_bytes_vec, (Vector{UInt8},)),
+        # PURE-6023: Stage-by-stage diagnostics
+        (_diag_stage1_parse, (Vector{UInt8},)),
+        (_diag_stage2_resolve, (Vector{UInt8},)),
         # JS interop helpers (create/populate byte vectors)
         (make_byte_vec, (Int32,)),
         (set_byte_vec!, (Vector{UInt8}, Int32, Int32)),
