@@ -6954,17 +6954,103 @@ function fix_consecutive_local_sets(bytes::Vector{UInt8})::Vector{UInt8}
                 end
             end
             # No fix needed — copy the ENTIRE local_set instruction (opcode + LEB128 index)
-            # to avoid the index byte being re-processed as an opcode
             for k in i:(j-1)
                 push!(result, bytes[k])
             end
             i = j
             continue
         end
+        # Skip ALL instructions with LEB128 operands to prevent index bytes
+        # from being misinterpreted as opcodes (e.g., index 33 = 0x21 = local_set)
+        n_leb = _skip_leb_count(op)
+        if n_leb > 0
+            push!(result, bytes[i])
+            i += 1
+            for _ in 1:n_leb
+                while i <= length(bytes)
+                    push!(result, bytes[i])
+                    if (bytes[i] & 0x80) == 0
+                        i += 1
+                        break
+                    end
+                    i += 1
+                end
+            end
+            continue
+        end
+        # Handle GC prefix instructions
+        if op == 0xFB && i + 1 <= length(bytes)
+            push!(result, bytes[i])
+            i += 1
+            sub_op = bytes[i]
+            push!(result, bytes[i])
+            i += 1
+            n_gc_leb = _skip_gc_leb_count(sub_op)
+            for _ in 1:n_gc_leb
+                while i <= length(bytes)
+                    push!(result, bytes[i])
+                    if (bytes[i] & 0x80) == 0
+                        i += 1
+                        break
+                    end
+                    i += 1
+                end
+            end
+            continue
+        end
+        # Handle f32.const (4 raw bytes) and f64.const (8 raw bytes)
+        if op == 0x43 && i + 4 <= length(bytes)  # f32.const
+            for _ in 1:5; push!(result, bytes[i]); i += 1; end
+            continue
+        end
+        if op == 0x44 && i + 8 <= length(bytes)  # f64.const
+            for _ in 1:9; push!(result, bytes[i]); i += 1; end
+            continue
+        end
         push!(result, bytes[i])
         i += 1
     end
     return result
+end
+
+# Helper: number of LEB128 operands to skip for a given opcode
+function _skip_leb_count(op::UInt8)::Int
+    # local.get/set/tee, global.get/set
+    (op == 0x20 || op == 0x22 || op == 0x23 || op == 0x24) && return 1
+    # br, br_if
+    (op == 0x0C || op == 0x0D) && return 1
+    # call
+    op == 0x10 && return 1
+    # call_indirect (type_idx, table_idx)
+    op == 0x11 && return 2
+    # ref.null (heap type)
+    op == 0xD0 && return 1
+    # ref.func
+    op == 0xD2 && return 1
+    # block/loop/if (blocktype)
+    (op == 0x02 || op == 0x03 || op == 0x04) && return 1
+    # i32.const, i64.const (signed LEB128 value)
+    (op == 0x41 || op == 0x42) && return 1
+    # memory load/store instructions (align + offset)
+    (op >= 0x28 && op <= 0x3E) && return 2
+    # memory.size, memory.grow
+    (op == 0x3F || op == 0x40) && return 1
+    return 0
+end
+
+# Helper: number of LEB128 operands to skip for a GC prefix sub-opcode
+function _skip_gc_leb_count(sub_op::UInt8)::Int
+    sub_op == 0x00 && return 1  # struct.new
+    sub_op == 0x01 && return 1  # struct.new_default
+    (sub_op >= 0x02 && sub_op <= 0x05) && return 2  # struct.get/get_s/get_u/set
+    (sub_op == 0x06 || sub_op == 0x07) && return 1  # array.new/new_default
+    sub_op == 0x08 && return 2  # array.new_fixed
+    (sub_op >= 0x0b && sub_op <= 0x0e) && return 1  # array.get/get_s/get_u/set
+    sub_op == 0x0f && return 0  # array.len
+    (sub_op >= 0x14 && sub_op <= 0x17) && return 1  # ref.test/cast
+    (sub_op == 0x1a || sub_op == 0x1b) && return 0  # extern/any convert
+    (sub_op >= 0x1c && sub_op <= 0x1e) && return 0  # i31 ops
+    return 0
 end
 
 """
@@ -7026,11 +7112,57 @@ function fix_local_get_set_type_mismatch(bytes::Vector{UInt8}, all_types::Vector
                 end
             end
             # No fix applied — copy the full local_get instruction (opcode + LEB128 index)
-            # to avoid the index byte being re-processed as an opcode
             for bi in i:(j-1)
                 push!(result, bytes[bi])
             end
             i = j
+            continue
+        end
+        # Skip ALL instructions with LEB128 operands to prevent index bytes
+        # from being misinterpreted as opcodes
+        n_leb = _skip_leb_count(op)
+        if n_leb > 0
+            push!(result, bytes[i])
+            i += 1
+            for _ in 1:n_leb
+                while i <= length(bytes)
+                    push!(result, bytes[i])
+                    if (bytes[i] & 0x80) == 0
+                        i += 1
+                        break
+                    end
+                    i += 1
+                end
+            end
+            continue
+        end
+        # Handle GC prefix instructions
+        if op == 0xFB && i + 1 <= length(bytes)
+            push!(result, bytes[i])
+            i += 1
+            sub_op = bytes[i]
+            push!(result, bytes[i])
+            i += 1
+            n_gc_leb = _skip_gc_leb_count(sub_op)
+            for _ in 1:n_gc_leb
+                while i <= length(bytes)
+                    push!(result, bytes[i])
+                    if (bytes[i] & 0x80) == 0
+                        i += 1
+                        break
+                    end
+                    i += 1
+                end
+            end
+            continue
+        end
+        # Handle f32.const (4 raw bytes) and f64.const (8 raw bytes)
+        if op == 0x43 && i + 4 <= length(bytes)
+            for _ in 1:5; push!(result, bytes[i]); i += 1; end
+            continue
+        end
+        if op == 0x44 && i + 8 <= length(bytes)
+            for _ in 1:9; push!(result, bytes[i]); i += 1; end
             continue
         end
         push!(result, bytes[i])
