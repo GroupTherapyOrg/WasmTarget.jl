@@ -16789,6 +16789,28 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
                     field_bytes = UInt8[]  # Already appended
                 end
             end
+            # PURE-6025: Handle global.get sources (0x23) for externref field conversion.
+            # Same pattern as local.get above but looks up source type from module globals.
+            if actual_field_wasm === ExternRef && !isempty(field_bytes) && field_bytes[1] == 0x23
+                # Decode global index from LEB128
+                g_idx = 0; g_shift = 0
+                for bi in 2:length(field_bytes)
+                    b = field_bytes[bi]
+                    g_idx |= (Int(b & 0x7f) << g_shift)
+                    g_shift += 7
+                    (b & 0x80) == 0 && break
+                end
+                if g_idx + 1 <= length(ctx.mod.globals)
+                    g_type = ctx.mod.globals[g_idx + 1].valtype
+                    if g_type !== ExternRef
+                        # Source global is concrete ref but field expects externref
+                        append!(bytes, field_bytes)
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        field_bytes = UInt8[]
+                    end
+                end
+            end
             # PURE-906: Check if field expects numeric but source is ref-typed (externref/anyref).
             # This happens when Julia's convert(Bool, x)::Any SSA is typed ExternRef
             # but the struct field is Bool (i32). Emit zero default for the numeric field.
@@ -18753,14 +18775,36 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
             # (Strings/Symbols compile as ConcreteRef to char array; externref slots need conversion.)
             if !replaced && struct_type_def isa StructType && fi <= length(struct_type_def.fields)
                 local _ef = struct_type_def.fields[fi].valtype
-                if _ef === ExternRef && has_ref_producing_gc_op(field_val_bytes)
+                if _ef === ExternRef
                     # Check not already externref (ends with 0xFB 0x1B = EXTERN_CONVERT_ANY)
                     already_extern = length(field_val_bytes) >= 2 &&
                                      field_val_bytes[end-1] == 0xFB &&
                                      field_val_bytes[end] == Opcode.EXTERN_CONVERT_ANY
-                    if !already_extern
+                    if !already_extern && has_ref_producing_gc_op(field_val_bytes)
                         push!(bytes, Opcode.GC_PREFIX)
                         push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                    elseif !already_extern && length(field_val_bytes) >= 2 && field_val_bytes[1] == 0x23
+                        # PURE-6025: global.get produces a concrete ref (e.g., Type constant)
+                        # but field expects externref — need extern.convert_any.
+                        # global.get has no GC prefix, so has_ref_producing_gc_op misses it.
+                        _g_idx = 0; _g_shift = 0
+                        for _gbi in 2:length(field_val_bytes)
+                            _gb = field_val_bytes[_gbi]
+                            _g_idx |= (Int(_gb & 0x7f) << _g_shift)
+                            _g_shift += 7
+                            (_gb & 0x80) == 0 && break
+                        end
+                        if _g_idx + 1 <= length(ctx.mod.globals)
+                            _g_type = ctx.mod.globals[_g_idx + 1].valtype
+                            if _g_type !== ExternRef
+                                push!(bytes, Opcode.GC_PREFIX)
+                                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                            end
+                        else
+                            # Unknown global — conservatively emit conversion
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        end
                     end
                 end
             end
