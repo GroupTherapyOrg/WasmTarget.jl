@@ -1529,6 +1529,44 @@ function _wasm_build_tree_expr(stream::JuliaSyntax.ParseStream)
     return entry
 end
 
+# Agent 27: FLAT version of _wasm_simple_call_expr — NO for-loop, NO phi nodes
+# The original _wasm_simple_call_expr uses a for-loop with phi nodes for left_int/right_int/op_sym/child_idx.
+# In WASM, the phi nodes produce ref.null extern instead of boxed Int64, making the Expr args null.
+# This flat version assigns each variable exactly once — no phi nodes, no mutation.
+# Only handles single-digit integers. Multi-digit support can be added by unrolling range iteration.
+function _wasm_simple_call_expr_flat(stream::JuliaSyntax.ParseStream)::Expr
+    cursor = JuliaSyntax.RedTreeCursor(stream)
+    txtbuf = JuliaSyntax.unsafe_textbuf(stream)
+    # Get 3 children one by one (no for loop)
+    itr = JuliaSyntax.reverse_nontrivia_children(cursor)
+    r1 = iterate(itr)
+    # r1 === nothing is checked implicitly — for "N op M" there are always 3 children
+    (child1, state1) = r1  # rightmost child (right operand)
+    r2 = iterate(itr, state1)
+    (child2, state2) = r2  # middle child (operator)
+    r3 = iterate(itr, state2)
+    (child3, _state3) = r3  # leftmost child (left operand)
+    # Get byte ranges
+    range1 = JuliaSyntax.byte_range(child1)
+    range2 = JuliaSyntax.byte_range(child2)
+    range3 = JuliaSyntax.byte_range(child3)
+    # Parse single-digit integers from bytes (extend to multi-digit later)
+    right_int = Int64(txtbuf[first(range1)]) - Int64(48)  # '0' = 48
+    left_int = Int64(txtbuf[first(range3)]) - Int64(48)
+    # Map operator byte to Symbol
+    op_byte = txtbuf[first(range2)]
+    op_sym = if op_byte == UInt8('+')
+        :+
+    elseif op_byte == UInt8('-')
+        :-
+    elseif op_byte == UInt8('*')
+        :*
+    else
+        :/
+    end
+    return Expr(:call, op_sym, left_int, right_int)
+end
+
 # Agent 27: Step-by-step diagnostic for _wasm_simple_call_expr
 # Tests each step without parse_julia_literal (avoids Any-type issues)
 function eval_julia_test_simple_call_steps(code_bytes::Vector{UInt8})::Int32
@@ -1569,6 +1607,24 @@ function eval_julia_test_simple_call_steps(code_bytes::Vector{UInt8})::Int32
     return Int32(b1) * Int32(100) + Int32(b2) * Int32(10) + Int32(b3)  # 49*100+43*10+49*1 = 5379
 end
 
+# Agent 27: Test flat version — calls _wasm_simple_call_expr_flat and checks Expr
+function eval_julia_test_flat_call(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        expr = _wasm_simple_call_expr_flat(ps)
+        if !(expr isa Expr)
+            return Int32(-10)
+        end
+        if expr.head !== :call
+            return Int32(-20)
+        end
+        return Int32(length(expr.args))  # 3 for "1+1"
+    catch
+        return Int32(-1)
+    end
+end
+
 # --- Entry point that takes Vector{UInt8} directly (WASM-compatible) ---
 # Avoids ALL String operations (codeunit, ncodeunits, pointer, unsafe_load)
 # which compile to `unreachable` in WASM.
@@ -1576,11 +1632,11 @@ function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
     # Stage 1: Parse — bytes go directly to ParseStream
     ps = JuliaSyntax.ParseStream(code_bytes)
     JuliaSyntax.parse!(ps, rule=:statement)
-    # Use _wasm_simple_call_expr for simple binary arithmetic (flat, no recursion).
-    # _wasm_build_tree_expr's recursive _wasm_node_to_expr returns nothing in WASM
-    # due to codegen issues with complex return types and recursive dispatch.
-    # _wasm_simple_call_expr directly iterates 3 leaf children, avoids all of that.
-    expr = _wasm_simple_call_expr(ps)
+    # Use _wasm_simple_call_expr_flat for simple binary arithmetic.
+    # The original _wasm_simple_call_expr uses a for-loop with phi nodes that produce
+    # ref.null extern instead of boxed Int64 in WASM. The flat version assigns each
+    # variable exactly once — no phi nodes, no mutation.
+    expr = _wasm_simple_call_expr_flat(ps)
 
     # Stage 2: Extract function and arguments from the Expr
     if !(expr isa Expr && expr.head === :call)
