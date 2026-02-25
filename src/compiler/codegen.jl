@@ -18038,6 +18038,34 @@ function compile_condition_to_i32(cond, ctx::CompilationContext)::Vector{UInt8}
                     push!(bytes, Opcode.STRUCT_GET)
                     append!(bytes, encode_leb128_unsigned(box_type_idx))
                     append!(bytes, encode_leb128_unsigned(0))  # field 0
+                elseif local_type isa ConcreteRef
+                    # PURE-6025: Value is a concrete ref (tagged union struct) but should
+                    # be i32 (Bool). This happens when a stubbed call's result local was
+                    # allocated as a tagged union (e.g., Union{Bool, Nothing} → struct{i32, anyref})
+                    # but the GotoIfNot condition expects i32. Extract i32 tag from field 0.
+                    # Check that the struct type's field 0 is actually i32 before extracting.
+                    type_idx = local_type.type_idx
+                    if type_idx + 1 <= length(ctx.mod.types)
+                        mod_type = ctx.mod.types[type_idx + 1]
+                        if mod_type isa StructType && !isempty(mod_type.fields) && mod_type.fields[1].valtype === I32
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.STRUCT_GET)
+                            append!(bytes, encode_leb128_unsigned(type_idx))
+                            append!(bytes, encode_leb128_unsigned(0))  # field 0 (i32 tag)
+                        else
+                            # Not a tagged union — drop the ref and push i32 default
+                            push!(bytes, Opcode.DROP)
+                            push!(bytes, Opcode.I32_CONST, 0x00)
+                        end
+                    else
+                        # Unknown type — drop and push i32 default
+                        push!(bytes, Opcode.DROP)
+                        push!(bytes, Opcode.I32_CONST, 0x00)
+                    end
+                elseif local_type === StructRef || local_type === ArrayRef
+                    # PURE-6025: Abstract ref in condition — drop and push i32 default
+                    push!(bytes, Opcode.DROP)
+                    push!(bytes, Opcode.I32_CONST, 0x00)
                 end
             end
         end
