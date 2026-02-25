@@ -6886,12 +6886,6 @@ function generate_body(ctx::CompilationContext)::Vector{UInt8}
         bytes[end - 2] = 0x00  # Replace RETURN with UNREACHABLE
     end
 
-    # PURE-6022: Remove spurious i32_wrap_i64 after array_len.
-    # WasmGC array_len returns i32, but Julia's length() returns Int64.
-    # The codegen emits i32_wrap_i64 expecting i64, which fails validation.
-    # Pattern: [0xFB 0x0F] [0xA7] → remove the 0xA7 (already i32).
-    bytes = fix_array_len_wrap(bytes)
-
     # PURE-6022: Fix consecutive local_set instructions (multi-target phi assignments).
     # When a value feeds into multiple phi nodes, the codegen emits local_set for each
     # target. But local_set consumes the stack value, leaving nothing for subsequent sets.
@@ -6913,6 +6907,12 @@ function generate_body(ctx::CompilationContext)::Vector{UInt8}
     end
     all_local_types = vcat(param_wasm_types, ctx.locals)
     bytes = fix_local_get_set_type_mismatch(bytes, all_local_types)
+
+    # PURE-6022: Remove spurious i32_wrap_i64 after array_len.
+    # Must run LAST — fix_local_get_set_type_mismatch can introduce i32_wrap_i64 patterns
+    # that land after array_len. WasmGC array_len returns i32, but codegen treats length()
+    # as i64 and inserts i32_wrap_i64 expecting i64 input, causing validation error.
+    bytes = fix_array_len_wrap(bytes)
 
     # PURE-414: Check validator for errors after function body generation
     if has_errors(ctx.validator)
@@ -6948,6 +6948,9 @@ function fix_array_len_wrap(bytes::Vector{UInt8})::Vector{UInt8}
         end
         push!(result, bytes[i])
         i += 1
+    end
+    if fixes > 0
+        @warn "fix_array_len_wrap: removed $fixes spurious i32_wrap_i64 after array_len"
     end
     return result
 end
