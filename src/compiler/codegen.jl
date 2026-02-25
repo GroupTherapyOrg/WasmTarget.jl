@@ -6876,6 +6876,16 @@ function generate_body(ctx::CompilationContext)::Vector{UInt8}
     # compile_phi_value emits i32_const 111. Replace with ref.null of the local's type.
     bytes = fix_numeric_to_ref_local_stores(bytes, ctx.locals, ctx.n_params)
 
+    # PURE-6025: Fix dead returns after blocks where all paths already returned.
+    # Pattern: [end (0x0B)] [return (0x0F)] [unreachable (0x00)] — the return is dead
+    # code with empty stack (all paths returned inside the block). Replace the dead
+    # return with unreachable to avoid "expected <type> but nothing on stack" errors.
+    for bi in 2:(length(bytes) - 1)
+        if bytes[bi - 1] == Opcode.END && bytes[bi] == Opcode.RETURN && bytes[bi + 1] == 0x00  # unreachable
+            bytes[bi] = 0x00  # Replace RETURN with UNREACHABLE
+        end
+    end
+
     # PURE-414: Check validator for errors after function body generation
     if has_errors(ctx.validator)
         @warn "Stack validator found $(length(ctx.validator.errors)) issue(s) in $(ctx.validator.func_name)" errors=ctx.validator.errors
