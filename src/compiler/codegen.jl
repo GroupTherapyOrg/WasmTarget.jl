@@ -7228,7 +7228,7 @@ end
 # Helper: number of LEB128 operands to skip for a given opcode
 function _skip_leb_count(op::UInt8)::Int
     # local.get/set/tee, global.get/set
-    (op == 0x20 || op == 0x22 || op == 0x23 || op == 0x24) && return 1
+    (op == 0x20 || op == 0x21 || op == 0x22 || op == 0x23 || op == 0x24) && return 1
     # br, br_if
     (op == 0x0C || op == 0x0D) && return 1
     # call
