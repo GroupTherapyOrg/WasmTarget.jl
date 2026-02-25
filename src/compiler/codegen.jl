@@ -9712,6 +9712,8 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
             # just closed, we're no longer in dead code
             if dead_code_depth >= 0 && current_depth <= dead_code_depth
                 dead_code_depth = -1
+                # PURE-6027: Also reset stub flag — this merge point starts a reachable block
+                ctx.last_stmt_was_stub = false
             end
         end
 
@@ -15985,14 +15987,33 @@ Compile a single IR statement to Wasm bytecode.
 function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt8}
     bytes = UInt8[]
 
+    # PURE-6027: Reset dead code guard at basic block boundaries.
+    # The last_stmt_was_stub flag from a previous stub should NOT cascade across basic
+    # block boundaries — the next block is reachable via a different control flow path.
+    # Check: (a) previous stmt is a terminator, OR (b) this idx is a jump target.
+    if ctx.last_stmt_was_stub && idx > 1
+        _should_reset = false
+        _prev_stmt = ctx.code_info.code[idx - 1]
+        if _prev_stmt isa Core.GotoNode || _prev_stmt isa Core.GotoIfNot || _prev_stmt isa Core.ReturnNode
+            _should_reset = true
+        else
+            # Check if this idx is a jump target of any GotoNode/GotoIfNot
+            for _s in ctx.code_info.code
+                if (_s isa Core.GotoIfNot && _s.dest == idx) || (_s isa Core.GotoNode && _s.label == idx)
+                    _should_reset = true
+                    break
+                end
+            end
+        end
+        if _should_reset
+            ctx.last_stmt_was_stub = false
+        end
+    end
+
     # PURE-6022: If a previous statement in this function was a stub (emitted unreachable),
-    # skip ALL further statement compilation. Bytes after unreachable must be structurally
-    # valid WASM, and continuing to compile (blocks, calls, array inits) produces invalid
-    # opcodes. Emit unreachable (not empty) so the validator stays in polymorphic stack mode —
-    # callers may expect a value on the stack (for local.set, block result, etc.).
-    # NOTE: PURE-6023 found this is cascade-fatal (kills ALL freshly compiled modules).
-    # Fixing requires BOTH: scoped guard reset AND type mismatch fixes for unguarded code.
-    # See PURE-6027 for the proper fix. Until then, use pre-guard modules for execution.
+    # skip ALL further statement compilation within the SAME basic block. Bytes after
+    # unreachable must be structurally valid WASM, and continuing to compile produces invalid
+    # opcodes. Emit unreachable (not empty) so the validator stays in polymorphic stack mode.
     if ctx.last_stmt_was_stub
         push!(bytes, 0x00)  # unreachable — keeps stack polymorphic
         return bytes
