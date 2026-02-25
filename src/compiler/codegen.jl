@@ -6926,16 +6926,6 @@ function generate_body(ctx::CompilationContext)::Vector{UInt8}
 end
 
 """
-PURE-6022: Strip excess bytes after the function body's closing `end`.
-
-Scans the function body bytes tracking block nesting depth. When depth reaches 0
-after an `end` instruction, we've found the function body's final `end`. Everything
-after that byte is excess and gets truncated.
-
-Properly handles all WASM instructions with LEB128 operands to avoid misidentifying
-data bytes as block/end instructions.
-"""
-"""
 PURE-6022: Fix consecutive local_set instructions (multi-target phi assignments).
 
 When a value feeds into multiple phi nodes, the codegen emits local_set for each
