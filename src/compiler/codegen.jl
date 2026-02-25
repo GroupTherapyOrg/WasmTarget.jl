@@ -15985,15 +15985,24 @@ Compile a single IR statement to Wasm bytecode.
 function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt8}
     bytes = UInt8[]
 
-    # PURE-6022: If a previous statement in this function was a stub (emitted unreachable),
-    # skip ALL further statement compilation. Bytes after unreachable must be structurally
-    # valid WASM, and continuing to compile (blocks, calls, array inits) produces invalid
-    # opcodes. Emit unreachable (not empty) so the validator stays in polymorphic stack mode —
-    # callers may expect a value on the stack (for local.set, block result, etc.).
-    # NOTE: This check must be BEFORE the Expr last_stmt_was_stub reset at line ~15661.
+    # PURE-6022: Dead code guard — skip statements after a stub emitted unreachable.
+    # PURE-6023: Reset the flag at basic block boundaries (where previous statement is
+    # a branch/jump). Stubs in conditional branches should NOT kill merge-point code.
+    # The flag only cascades within the SAME basic block (straight-line code).
     if ctx.last_stmt_was_stub
-        push!(bytes, 0x00)  # unreachable — keeps stack polymorphic
-        return bytes
+        # Check if we're at a basic block boundary (previous stmt was a branch)
+        prev_stmt = idx > 1 ? ctx.code_info.code[idx - 1] : nothing
+        at_block_boundary = prev_stmt isa Core.GotoNode || prev_stmt isa Core.GotoIfNot ||
+                           (prev_stmt isa Core.ReturnNode) ||
+                           (prev_stmt isa Expr && prev_stmt.head === :leave)
+        if at_block_boundary
+            # Reset: the stub was in a different basic block
+            ctx.last_stmt_was_stub = false
+        else
+            # Same basic block — code after stub is genuinely dead
+            push!(bytes, 0x00)  # unreachable — keeps stack polymorphic
+            return bytes
+        end
     end
 
     # PURE-6024: Handle slot assignments in unoptimized IR (may_optimize=false).
