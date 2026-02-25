@@ -31,27 +31,48 @@ function main()
     println()
 
     # Step 0: Verify native pipeline
-    println("Step 0: Verify _wasm_eval_arith_to_bytes natively...")
-    for expr in ["1+1", "2+3", "9-3", "6*7"]
+    println("Step 0: Verify _wasm_eval_arith natively...")
+    ground_truth = [("1+1", 2), ("2+3", 5), ("9-3", 6), ("6*7", 42)]
+    for (expr, expected) in ground_truth
         code_bytes = Vector{UInt8}(codeunits(expr))
-        result = _wasm_eval_arith_to_bytes(code_bytes)
-        println("  _wasm_eval_arith_to_bytes(\"$expr\"): $(length(result)) bytes")
+        result = _wasm_eval_arith(code_bytes)
+        status = result == expected ? "CORRECT" : "WRONG (got $result, expected $expected)"
+        println("  _wasm_eval_arith(\"$expr\") = $result — $status")
     end
     println()
 
     # Step 1: Discover dependencies
+    # Uses the PROVEN seed from compile_eval_julia_minimal.jl (Agent 27: parse 4/4 CORRECT)
+    # PLUS the new _wasm_eval_arith function.
+    # NOTE: We exclude eval_julia_to_bytes_vec (has Module/kwargs/string blockers).
     println("Step 1: Discovering dependencies...")
     seed = [
-        # === NEW WASM-COMPATIBLE PIPELINE ===
-        (_wasm_eval_arith_to_bytes, (Vector{UInt8},)),
-        (eval_julia_test_arith_to_bytes, (Vector{UInt8},)),
-        (_wasm_compile_codeinfo_to_bytes, (Core.CodeInfo, Type, String, Tuple)),
+        # === NEW: DIRECT EVALUATION ===
+        (_wasm_eval_arith, (Vector{UInt8},)),
+        (eval_julia_test_eval_arith, (Vector{UInt8},)),
         # === HELPERS ===
         (eval_julia_result_length, (Vector{UInt8},)),
         (eval_julia_result_byte, (Vector{UInt8}, Int32)),
         (make_byte_vec, (Int32,)),
         (set_byte_vec!, (Vector{UInt8}, Int32, Int32)),
-        # === PARSE DIAGNOSTICS (already CORRECT in WASM) ===
+        # === WASM-COMPATIBLE PARSERS (from proven Agent 27 seed) ===
+        (_wasm_simple_call_expr, (JuliaSyntax.ParseStream,)),
+        (_wasm_build_tree_expr, (JuliaSyntax.ParseStream,)),
+        (_wasm_leaf_to_expr, (JuliaSyntax.RedTreeCursor, JuliaSyntax.Kind, Vector{UInt8}, UInt32)),
+        (_wasm_node_to_expr, (JuliaSyntax.RedTreeCursor, JuliaSyntax.SourceFile, Vector{UInt8}, UInt32)),
+        (_wasm_parseargs!, (Expr, LineNumberNode, JuliaSyntax.RedTreeCursor, JuliaSyntax.SourceFile, Vector{UInt8}, UInt32)),
+        (_wasm_string_to_Expr, (JuliaSyntax.RedTreeCursor, JuliaSyntax.SourceFile, Vector{UInt8}, UInt32)),
+        (_wasm_untokenize_kind, (JuliaSyntax.Kind, Bool)),
+        (_wasm_untokenize_head, (JuliaSyntax.SyntaxHead,)),
+        # === DIAGNOSTICS (known to work from Agent 27) ===
+        (eval_julia_test_ps_create, (Vector{UInt8},)),
+        (eval_julia_test_parse_only, (Vector{UInt8},)),
+        (eval_julia_test_input_len, (Vector{UInt8},)),
+        (eval_julia_test_build_tree_wasm, (Vector{UInt8},)),
+        (eval_julia_test_simple_call, (Vector{UInt8},)),
+        (eval_julia_test_simple_call_steps, (Vector{UInt8},)),
+        (eval_julia_test_flat_call, (Vector{UInt8},)),
+        (_wasm_simple_call_expr_flat, (JuliaSyntax.ParseStream,)),
         (eval_julia_test_parse_arith, (Vector{UInt8},)),
         (_wasm_parse_arith, (JuliaSyntax.ParseStream,)),
     ]
