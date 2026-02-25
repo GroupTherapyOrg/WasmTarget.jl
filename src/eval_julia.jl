@@ -1028,8 +1028,8 @@ function eval_julia_test_wasm_leaf(code_bytes::Vector{UInt8})::Int32
         if JuliaSyntax.is_leaf(cursor)
             k = JuliaSyntax.kind(cursor)
             # Just test that _wasm_leaf_to_expr runs without error
-            # Don't try to unbox Any→Int64 (externref→i64 type mismatch in WASM)
-            _wasm_leaf_to_expr(cursor, k, txtbuf, UInt32(0))
+            # Assign to variable to ensure codegen drops the value properly
+            _leaf_result = _wasm_leaf_to_expr(cursor, k, txtbuf, UInt32(0))
             return Int32(1)  # leaf processed successfully
         end
         return Int32(-5)  # not a leaf
