@@ -15332,6 +15332,15 @@ Compile a single IR statement to Wasm bytecode.
 function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt8}
     bytes = UInt8[]
 
+    # PURE-6022: If a previous statement in this function was a stub (emitted unreachable),
+    # skip ALL further statement compilation. Bytes after unreachable must be structurally
+    # valid WASM, and continuing to compile (blocks, calls, array inits) produces invalid
+    # opcodes. Return empty bytes — the unreachable already terminates this code path.
+    # NOTE: This check must be BEFORE the Expr last_stmt_was_stub reset at line ~15661.
+    if ctx.last_stmt_was_stub
+        return bytes
+    end
+
     # PURE-6024: Handle slot assignments in unoptimized IR (may_optimize=false).
     # Unwrap Expr(:(=), SlotNumber(n), inner_expr) → compile inner_expr, store to slot local.
     _slot_assign_id = 0  # SlotNumber.id if this is a slot assignment, 0 otherwise
