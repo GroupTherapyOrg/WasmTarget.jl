@@ -6428,6 +6428,49 @@ function emit_ref_cast_if_structref!(bytes::Vector{UInt8}, val, target_type_idx:
 end
 
 """
+    _get_local_wasm_type(val, compiled_bytes, ctx) -> WasmValType or nothing
+
+PURE-6025: Get the Wasm type of the value that `compiled_bytes` pushes onto the stack.
+Checks SSA locals, phi locals, and parameter types. Returns the local's Wasm type
+or nothing if it can't be determined.
+"""
+function _get_local_wasm_type(val, compiled_bytes::Vector{UInt8}, ctx::CompilationContext)
+    # Check via val (SSA or Argument)
+    if val isa Core.SSAValue
+        local_idx = get(ctx.ssa_locals, val.id, nothing)
+        if local_idx === nothing
+            local_idx = get(ctx.phi_locals, val.id, nothing)
+        end
+        if local_idx !== nothing
+            arr_idx = local_idx - ctx.n_params + 1
+            if arr_idx >= 1 && arr_idx <= length(ctx.locals)
+                return ctx.locals[arr_idx]
+            end
+        end
+    end
+    # Fallback: decode local_get from compiled bytes
+    if length(compiled_bytes) >= 2 && compiled_bytes[1] == Opcode.LOCAL_GET
+        src_idx = 0
+        shift = 0
+        pos = 2
+        while pos <= length(compiled_bytes)
+            b = compiled_bytes[pos]
+            src_idx |= (Int(b & 0x7f) << shift)
+            shift += 7
+            pos += 1
+            (b & 0x80) == 0 && break
+        end
+        if pos - 1 == length(compiled_bytes) && src_idx >= ctx.n_params
+            arr_idx = src_idx - ctx.n_params + 1
+            if arr_idx >= 1 && arr_idx <= length(ctx.locals)
+                return ctx.locals[arr_idx]
+            end
+        end
+    end
+    return nothing
+end
+
+"""
     _narrow_generic_local!(bytes, local_idx, ssa_id, ctx)
 
 PURE-901: When a local has generic type (anyref/structref) but the SSA's Julia type
@@ -19447,6 +19490,19 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 end
             else
                 append!(bytes, item_bytes)
+                # PURE-6025: If value is externref but array element is concrete ref,
+                # convert externref → anyref → ref.cast (ref null $elem_type)
+                local elem_wasm = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
+                if elem_wasm isa ConcreteRef
+                    local item_src_wasm = _get_local_wasm_type(item_arg, item_bytes, ctx)
+                    if item_src_wasm === ExternRef
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.ANY_CONVERT_EXTERN)
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.REF_CAST_NULL)
+                        append!(bytes, encode_leb128_signed(Int64(elem_wasm.type_idx)))
+                    end
+                end
             end
 
             # array.set
