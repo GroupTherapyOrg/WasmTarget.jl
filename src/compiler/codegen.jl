@@ -15335,9 +15335,11 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
     # PURE-6022: If a previous statement in this function was a stub (emitted unreachable),
     # skip ALL further statement compilation. Bytes after unreachable must be structurally
     # valid WASM, and continuing to compile (blocks, calls, array inits) produces invalid
-    # opcodes. Return empty bytes — the unreachable already terminates this code path.
+    # opcodes. Emit unreachable (not empty) so the validator stays in polymorphic stack mode —
+    # callers may expect a value on the stack (for local.set, block result, etc.).
     # NOTE: This check must be BEFORE the Expr last_stmt_was_stub reset at line ~15661.
     if ctx.last_stmt_was_stub
+        push!(bytes, 0x00)  # unreachable — keeps stack polymorphic
         return bytes
     end
 
