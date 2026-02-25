@@ -8,6 +8,14 @@ using JuliaSyntax
 include(joinpath(@__DIR__, "..", "src", "typeinf", "typeinf_wasm.jl"))
 include(joinpath(@__DIR__, "..", "src", "eval_julia.jl"))
 
+# Result extraction helpers (defined here for WASM export)
+function eval_julia_result_length(v::Vector{UInt8})::Int32
+    return Int32(length(v))
+end
+function eval_julia_result_byte(v::Vector{UInt8}, idx::Int32)::Int32
+    return Int32(v[idx])
+end
+
 # Collect all eval_julia_test_* and helper functions
 seed = Tuple{Any, Tuple}[
     (eval_julia_to_bytes_vec, (Vector{UInt8},)),

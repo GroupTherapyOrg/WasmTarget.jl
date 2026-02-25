@@ -1039,9 +1039,10 @@ function eval_julia_test_wasm_node_to_expr(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
     JuliaSyntax.parse!(ps; rule=:statement)
     try
+        # WASM FIX: Create cursor BEFORE source/txtbuf (Agent 26)
+        cursor = JuliaSyntax.RedTreeCursor(ps)
         source = JuliaSyntax.SourceFile(ps)
         txtbuf = JuliaSyntax.unsafe_textbuf(ps)
-        cursor = JuliaSyntax.RedTreeCursor(ps)
         result = _wasm_node_to_expr(cursor, source, txtbuf, UInt32(0))
         if result === nothing
             return Int32(-10)
@@ -1064,9 +1065,10 @@ end
 function eval_julia_test_node_steps(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
     JuliaSyntax.parse!(ps; rule=:statement)
+    # WASM FIX: Create cursor BEFORE source/txtbuf (Agent 26)
+    cursor = JuliaSyntax.RedTreeCursor(ps)
     source = JuliaSyntax.SourceFile(ps)
     txtbuf = JuliaSyntax.unsafe_textbuf(ps)
-    cursor = JuliaSyntax.RedTreeCursor(ps)
     # Step 1: should_include_node
     step1 = try
         JuliaSyntax.should_include_node(cursor) ? Int32(100) : Int32(-100)
@@ -1312,9 +1314,12 @@ end
 # WASM-compatible build_tree(Expr, ParseStream) — calls _wasm_node_to_expr
 # Single function (no kwargs, no inner split) to avoid WASM kwcall stubbing issues
 function _wasm_build_tree_expr(stream::JuliaSyntax.ParseStream)
+    # WASM FIX: Create cursor BEFORE source/txtbuf.
+    # Creating SourceFile/unsafe_textbuf first corrupts ParseStream state in WASM,
+    # causing should_include_node(cursor) to return false (Agent 26 diagnosis).
+    cursor = JuliaSyntax.RedTreeCursor(stream)
     source = JuliaSyntax.SourceFile(stream)
     txtbuf = JuliaSyntax.unsafe_textbuf(stream)
-    cursor = JuliaSyntax.RedTreeCursor(stream)
     wrapper_head = JuliaSyntax.SyntaxHead(JuliaSyntax.K"wrapper", JuliaSyntax.EMPTY_FLAGS)
     if JuliaSyntax.has_toplevel_siblings(cursor)
         entry = Expr(:block)
