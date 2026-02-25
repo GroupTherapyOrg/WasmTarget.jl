@@ -1071,6 +1071,24 @@ function _wasm_parseargs!(retexpr::Expr, loc::LineNumberNode, cursor, source, tx
     return (firstchildhead, firstchildrange)
 end
 
+# WASM-compatible leaf processing — extracted to reduce function size
+# (codegen has a memoryref bug in large functions with many conditional branches)
+function _wasm_leaf_to_expr(cursor, k, txtbuf::Vector{UInt8}, txtbuf_offset::UInt32)
+    if JuliaSyntax.is_error(k)
+        return Expr(:error)
+    end
+    leaf_range = JuliaSyntax.byte_range(cursor)
+    offset_range = (first(leaf_range) + txtbuf_offset):(last(leaf_range) + txtbuf_offset)
+    scoped_val = JuliaSyntax.parse_julia_literal(txtbuf, JuliaSyntax.head(cursor), offset_range)
+    val = Meta.isexpr(scoped_val, :scope_layer) ? scoped_val.args[1] : scoped_val
+    if JuliaSyntax.is_identifier(k)
+        val2 = JuliaSyntax.lower_identifier_name(val, k)
+        return Meta.isexpr(scoped_val, :scope_layer) ?
+            Expr(:scope_layer, val2, scoped_val.args[2]) : val2
+    end
+    return scoped_val
+end
+
 # WASM-compatible node_to_expr — uses _wasm_untokenize_head instead of untokenize
 function _wasm_node_to_expr(cursor, source, txtbuf::Vector{UInt8}, txtbuf_offset::UInt32=UInt32(0))
     if !JuliaSyntax.should_include_node(cursor)
@@ -1079,36 +1097,14 @@ function _wasm_node_to_expr(cursor, source, txtbuf::Vector{UInt8}, txtbuf_offset
 
     nodehead = JuliaSyntax.head(cursor)
     k = JuliaSyntax.kind(cursor)
-    srcrange::UnitRange{UInt32} = JuliaSyntax.byte_range(cursor)
     if JuliaSyntax.is_leaf(cursor)
-        if JuliaSyntax.is_error(k)
-            return k == JuliaSyntax.K"error" ?
-                Expr(:error) :
-                Expr(:error, "$(JuliaSyntax._token_error_descriptions[k]): `$(source[srcrange])`")
-        else
-            # WASM fix: call parse_julia_literal directly instead of _expr_leaf_val
-            # _expr_leaf_val(cursor::RedTreeCursor, ...) dispatches wrong in WASM
-            # (calls SyntaxNode method which tries cursor.val → "illegal cast")
-            # Avoid `.+` broadcast — use manual range construction for WASM compatibility
-            leaf_range = JuliaSyntax.byte_range(cursor)
-            offset_range = (first(leaf_range) + txtbuf_offset):(last(leaf_range) + txtbuf_offset)
-            scoped_val = JuliaSyntax.parse_julia_literal(txtbuf, JuliaSyntax.head(cursor), offset_range)
-            val = Meta.isexpr(scoped_val, :scope_layer) ? scoped_val.args[1] : scoped_val
-            if val isa Union{Int128,UInt128,BigInt}
-                str = replace(source[srcrange], '_'=>"")
-                macname = val isa Int128  ? Symbol("@int128_str")  :
-                        val isa UInt128 ? Symbol("@uint128_str") :
-                        Symbol("@big_str")
-                return Expr(:macrocall, GlobalRef(Core, macname), nothing, str)
-            elseif JuliaSyntax.is_identifier(k)
-                val2 = JuliaSyntax.lower_identifier_name(val, k)
-                return Meta.isexpr(scoped_val, :scope_layer) ?
-                    Expr(:scope_layer, val2, scoped_val.args[2]) : val2
-            else
-                return scoped_val
-            end
-        end
+        # Leaf nodes: parse literal values directly
+        # WASM fix: call parse_julia_literal directly instead of _expr_leaf_val
+        # Avoids SyntaxNode dispatch (cursor.val → "illegal cast")
+        return _wasm_leaf_to_expr(cursor, k, txtbuf, txtbuf_offset)
     end
+
+    srcrange::UnitRange{UInt32} = JuliaSyntax.byte_range(cursor)
 
     if k == JuliaSyntax.K"string"
         return _wasm_string_to_Expr(cursor, source, txtbuf, txtbuf_offset)
@@ -1121,11 +1117,11 @@ function _wasm_node_to_expr(cursor, source, txtbuf::Vector{UInt8}, txtbuf_offset
             _wasm_string_to_Expr(cursor, source, txtbuf, txtbuf_offset))
     end
 
-    # THIS IS THE KEY CHANGE: use _wasm_untokenize_head instead of untokenize
+    # Use _wasm_untokenize_head instead of untokenize (avoids Set{Kind} + kwcall)
     headstr = _wasm_untokenize_head(nodehead)
     headsym = !isnothing(headstr) ?
               Symbol(headstr) :
-              error("Can't untokenize head of kind $(k)")
+              error("Can't untokenize head")
     retexpr = Expr(headsym)
 
     # Block gets special handling
