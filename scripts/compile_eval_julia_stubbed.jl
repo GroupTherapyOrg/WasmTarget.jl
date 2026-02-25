@@ -155,6 +155,9 @@ function main()
         (eval_julia_test_node_steps, (Vector{UInt8},)),
         (eval_julia_test_has_toplevel, (Vector{UInt8},)),
         (eval_julia_test_fixup, (Vector{UInt8},)),
+        # Agent 26: cursor-before-source ordering diagnostics
+        (eval_julia_test_build_steps, (Vector{UInt8},)),
+        (eval_julia_test_si_after_source, (Vector{UInt8},)),
         # Agent 24: WASM-compatible build_tree chain — ALL helpers must be in seed
         (_wasm_build_tree_expr, (JuliaSyntax.ParseStream,)),
         (_wasm_leaf_to_expr, (JuliaSyntax.RedTreeCursor, JuliaSyntax.Kind, Vector{UInt8}, UInt32)),
