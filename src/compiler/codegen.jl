@@ -2637,8 +2637,7 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
     # PURE-6026: Union of Tuples (e.g., Union{Tuple{Vararg{Int64}}, Tuple{Vararg{Symbol}}})
     # passes `T <: Tuple` but doesn't have `.parameters`. Return nothing so the caller
     # falls through to the StructRef fallback.
-    # PURE-6025: UnionAll tuples (e.g., Tuple{T, T} where T<:Type) also lack `.parameters`.
-    if T isa Union || T isa UnionAll
+    if T isa Union
         return nothing
     end
 
@@ -4950,6 +4949,11 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
         # Fallback to abstract StructRef
         return StructRef
     elseif T <: Tuple
+        # PURE-6025: UnionAll tuples (e.g., Tuple{T, T} where T<:Type) lack .parameters.
+        # Skip registration and fall through to StructRef.
+        if T isa UnionAll
+            return StructRef
+        end
         # Tuples are stored as WasmGC structs
         if haskey(ctx.type_registry.structs, T)
             info = ctx.type_registry.structs[T]
