@@ -1529,6 +1529,43 @@ function _wasm_build_tree_expr(stream::JuliaSyntax.ParseStream)
     return entry
 end
 
+# Agent 27: Parse binary arithmetic to raw values — avoids Expr/Symbol/Vector{Any} entirely.
+# Returns encoded Int64: op_byte * 1000000 + left * 1000 + right
+# For "1+1": 43*1000000 + 1*1000 + 1 = 43001001
+# For "6*7": 42*1000000 + 6*1000 + 7 = 42006007
+# This completely avoids: Expr construction, Symbol comparison, Vector{Any} boxing
+function _wasm_parse_arith(stream::JuliaSyntax.ParseStream)::Int64
+    cursor = JuliaSyntax.RedTreeCursor(stream)
+    txtbuf = JuliaSyntax.unsafe_textbuf(stream)
+    itr = JuliaSyntax.reverse_nontrivia_children(cursor)
+    r1 = iterate(itr)
+    (child1, state1) = r1  # rightmost (right operand)
+    r2 = iterate(itr, state1)
+    (child2, state2) = r2  # middle (operator)
+    r3 = iterate(itr, state2)
+    (child3, _state3) = r3  # leftmost (left operand)
+    range1 = JuliaSyntax.byte_range(child1)
+    range2 = JuliaSyntax.byte_range(child2)
+    range3 = JuliaSyntax.byte_range(child3)
+    right_int = Int64(txtbuf[first(range1)]) - Int64(48)
+    op_byte = Int64(txtbuf[first(range2)])
+    left_int = Int64(txtbuf[first(range3)]) - Int64(48)
+    return op_byte * Int64(1000000) + left_int * Int64(1000) + right_int
+end
+
+# Agent 27: Test _wasm_parse_arith diagnostic
+function eval_julia_test_parse_arith(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        encoded = _wasm_parse_arith(ps)
+        # For "1+1": 43*1000000 + 1*1000 + 1 = 43001001
+        return Int32(encoded % Int64(1000000000))  # truncate to fit Int32
+    catch
+        return Int32(-1)
+    end
+end
+
 # Agent 27: FLAT version of _wasm_simple_call_expr — NO for-loop, NO phi nodes
 # The original _wasm_simple_call_expr uses a for-loop with phi nodes for left_int/right_int/op_sym/child_idx.
 # In WASM, the phi nodes produce ref.null extern instead of boxed Int64, making the Expr args null.

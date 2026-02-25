@@ -101,6 +101,8 @@ function main()
         (eval_julia_test_simple_call_steps, (Vector{UInt8},)),
         (eval_julia_test_flat_call, (Vector{UInt8},)),
         (_wasm_simple_call_expr_flat, (JuliaSyntax.ParseStream,)),
+        (eval_julia_test_parse_arith, (Vector{UInt8},)),
+        (_wasm_parse_arith, (JuliaSyntax.ParseStream,)),
     ]
     all_funcs = WasmTarget.discover_dependencies(seed)
     println("  Found $(length(all_funcs)) functions")
