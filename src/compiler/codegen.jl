@@ -3167,6 +3167,25 @@ function emit_unwrap_union_value(ctx, union_type::Union, target_type::Type)::Vec
         # Needed for abstract types (e.g., AbstractString → ArrayRef).
         push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL)
         push!(bytes, UInt8(target_wasm_type))
+    elseif target_wasm_type === I32
+        # PURE-6025: Unbox i31ref → i32. Value was boxed via ref.i31 in emit_wrap_union_value.
+        # anyref → (ref null i31) → i32
+        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL)
+        push!(bytes, UInt8(I31Ref))  # heaptype: i31
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.I31_GET_S)
+    elseif target_wasm_type === I64
+        # PURE-6025: Unbox i31ref → i32 → i64. Value was boxed via i32.wrap_i64 + ref.i31.
+        # anyref → (ref null i31) → i32 → i64
+        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL)
+        push!(bytes, UInt8(I31Ref))  # heaptype: i31
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.I31_GET_S)
+        push!(bytes, Opcode.I64_EXTEND_I32_S)
+    elseif target_wasm_type === ExternRef
+        # PURE-6025: Convert anyref → externref via extern.convert_any.
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
     end
 
     return bytes
