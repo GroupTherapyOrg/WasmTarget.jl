@@ -20181,6 +20181,16 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 append!(bytes, encode_leb128_signed(Int64(wasm_elem_type.type_idx)))
             else
                 append!(bytes, mset_val_bytes)
+                # PURE-6025: If value is externref but array element is concrete ref,
+                # convert externref → anyref → ref.cast (ref null $elem_type)
+                local mset_item_wasm = _get_local_wasm_type(value_arg, mset_val_bytes, ctx)
+                if mset_item_wasm === ExternRef
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.ANY_CONVERT_EXTERN)
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.REF_CAST_NULL)
+                    append!(bytes, encode_leb128_signed(Int64(wasm_elem_type.type_idx)))
+                end
             end
         else
             append!(bytes, mset_val_bytes)
