@@ -22823,6 +22823,16 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                             # Concrete or abstract ref to externref — insert extern.convert_any
                             push!(bytes, Opcode.GC_PREFIX)
                             push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        elseif expected_wasm === ExternRef && (actual_wasm === I32 || actual_wasm === I64 || actual_wasm === F32 || actual_wasm === F64)
+                            # PURE-6025: Numeric value to externref — box via struct_new then extern.convert_any.
+                            # This happens when a function expects Any (externref) but the actual value is numeric
+                            # (e.g., Int64 → externref for cross-function calls with abstract signatures).
+                            local box_type_idx_arg = get_numeric_box_type!(ctx.mod, ctx.type_registry, actual_wasm)
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.STRUCT_NEW)
+                            append!(bytes, encode_leb128_unsigned(box_type_idx_arg))
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
                         elseif (expected_wasm === I32 || expected_wasm === I64 || expected_wasm === F32 || expected_wasm === F64) &&
                                (actual_wasm === ExternRef || actual_wasm === AnyRef || actual_wasm isa ConcreteRef || actual_wasm === StructRef)
                             # PURE-906: Expected numeric but actual is ref-typed.
@@ -23519,6 +23529,15 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                     elseif expected_wasm === ExternRef && (actual_wasm isa ConcreteRef || actual_wasm === StructRef || actual_wasm === ArrayRef || actual_wasm === AnyRef)
                         # Concrete or abstract ref to externref — insert extern.convert_any
                         # extern.convert_any converts anyref → externref (concrete refs are subtypes of anyref)
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        extern_convert_emitted = true
+                    elseif expected_wasm === ExternRef && (actual_wasm === I32 || actual_wasm === I64 || actual_wasm === F32 || actual_wasm === F64)
+                        # PURE-6025: Numeric value to externref — box via struct_new then extern.convert_any.
+                        local box_type_idx_inv = get_numeric_box_type!(ctx.mod, ctx.type_registry, actual_wasm)
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.STRUCT_NEW)
+                        append!(bytes, encode_leb128_unsigned(box_type_idx_inv))
                         push!(bytes, Opcode.GC_PREFIX)
                         push!(bytes, Opcode.EXTERN_CONVERT_ANY)
                         extern_convert_emitted = true
