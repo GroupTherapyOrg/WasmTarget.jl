@@ -6904,12 +6904,138 @@ function generate_body(ctx::CompilationContext)::Vector{UInt8}
         bytes[end - 2] = 0x00  # Replace RETURN with UNREACHABLE
     end
 
+    # PURE-6022: Strip excess bytes after the function body's closing `end`.
+    # The flow generator may emit dead code (unreachable, br, etc.) after all blocks
+    # are closed, creating bytes outside the function body expression. The WASM spec
+    # requires: func = locals* expr, where expr = instr* end. Any bytes after the
+    # expression's closing `end` cause "operators remaining after end of function body."
+    bytes = strip_excess_after_function_end(bytes)
+
     # PURE-414: Check validator for errors after function body generation
     if has_errors(ctx.validator)
         @warn "Stack validator found $(length(ctx.validator.errors)) issue(s) in $(ctx.validator.func_name)" errors=ctx.validator.errors
     end
 
     return bytes
+end
+
+"""
+PURE-6022: Strip excess bytes after the function body's closing `end`.
+
+Scans the function body bytes tracking block nesting depth. When depth reaches 0
+after an `end` instruction, we've found the function body's final `end`. Everything
+after that byte is excess and gets truncated.
+
+Properly handles all WASM instructions with LEB128 operands to avoid misidentifying
+data bytes as block/end instructions.
+"""
+function strip_excess_after_function_end(bytes::Vector{UInt8})::Vector{UInt8}
+    depth = 0
+    i = 1
+    while i <= length(bytes)
+        op = bytes[i]
+
+        # Track block depth
+        if op == 0x02 || op == 0x03 || op == 0x04  # block, loop, if
+            depth += 1
+            i += 1
+            # Skip blocktype (void=0x40, or signed LEB128 type index/value type)
+            if i <= length(bytes)
+                if bytes[i] == 0x40  # void
+                    i += 1
+                else
+                    # LEB128 blocktype
+                    while i <= length(bytes)
+                        b = bytes[i]
+                        i += 1
+                        (b & 0x80) == 0 && break
+                    end
+                end
+            end
+            continue
+        end
+
+        if op == 0x05  # else — doesn't change depth
+            i += 1
+            continue
+        end
+
+        if op == 0x0B  # end
+            if depth == 0
+                # This is the function body's closing `end`.
+                # Truncate everything after this byte.
+                if i < length(bytes)
+                    return bytes[1:i]
+                end
+                return bytes
+            end
+            depth -= 1
+            i += 1
+            continue
+        end
+
+        # Skip GC prefix instructions with LEB128 params
+        if op == 0xFB && i + 1 <= length(bytes)
+            i += 1  # GC prefix
+            sub_op = bytes[i]
+            i += 1
+            n_leb = if sub_op == 0x00; 1
+                    elseif sub_op == 0x01; 1
+                    elseif sub_op in (0x02, 0x03, 0x04, 0x05); 2
+                    elseif sub_op in (0x06, 0x07); 1
+                    elseif sub_op == 0x08; 2
+                    elseif sub_op in (0x0b, 0x0c, 0x0d, 0x0e); 1
+                    elseif sub_op == 0x0f; 0
+                    elseif sub_op in (0x14, 0x15, 0x16, 0x17); 1
+                    elseif sub_op in (0x1a, 0x1b); 0
+                    elseif sub_op in (0x1c, 0x1d, 0x1e); 0
+                    else 0
+                    end
+            for _ in 1:n_leb
+                while i <= length(bytes)
+                    b = bytes[i]; i += 1
+                    (b & 0x80) == 0 && break
+                end
+            end
+            continue
+        end
+
+        # Skip f32.const (4 raw bytes) and f64.const (8 raw bytes)
+        if op == 0x43 && i + 4 <= length(bytes)
+            i += 5; continue
+        end
+        if op == 0x44 && i + 8 <= length(bytes)
+            i += 9; continue
+        end
+
+        # Skip instructions with LEB128 operands
+        n_skip = if op == 0x20 || op == 0x21 || op == 0x22; 1      # local.get/set/tee
+                 elseif op == 0x23 || op == 0x24; 1                  # global.get/set
+                 elseif op == 0x0C || op == 0x0D; 1                  # br, br_if
+                 elseif op == 0x10; 1                                # call
+                 elseif op == 0x11; 2                                # call_indirect
+                 elseif op == 0xD0; 1                                # ref.null
+                 elseif op == 0xD2; 1                                # ref.func
+                 elseif op == 0x41 || op == 0x42; 1                  # i32.const, i64.const
+                 elseif op >= 0x28 && op <= 0x3E; 2                  # memory load/store
+                 elseif op == 0x3F || op == 0x40; 1                  # memory.size/grow
+                 else 0
+                 end
+        if n_skip > 0
+            i += 1  # Skip opcode
+            for _ in 1:n_skip
+                while i <= length(bytes)
+                    b = bytes[i]; i += 1
+                    (b & 0x80) == 0 && break
+                end
+            end
+            continue
+        end
+
+        # All other instructions: single byte (no operands)
+        i += 1
+    end
+    return bytes  # No excess found
 end
 
 """
