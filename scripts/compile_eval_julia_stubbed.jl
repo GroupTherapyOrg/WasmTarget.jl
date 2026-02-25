@@ -1,14 +1,11 @@
 #!/usr/bin/env julia
-# compile_eval_julia_stubbed.jl — PURE-6024
+# compile_eval_julia_stubbed.jl — PURE-6024 (cleaned: PURE-7000)
 #
-# Compile eval_julia_to_bytes(String) to WASM, stubbing optimization pass
+# Compile eval_julia_to_bytes_vec to WASM, stubbing optimization pass
 # functions that are never called at runtime (may_optimize=false).
 #
-# discover_dependencies uses static analysis and follows ALL branches,
-# including dead branches from may_optimize=true. This pulls in ~10
-# Core.Compiler optimization pass functions that fail validation.
-# With may_optimize=false on WasmInterpreter, these functions are never
-# called at runtime, so we stub them with `unreachable`.
+# Seed: 13 essential functions (pipeline + ports + JS helpers).
+# All 72 diagnostic test functions removed in PURE-7000.
 
 using Pkg
 Pkg.activate(joinpath(@__DIR__, ".."))
@@ -83,90 +80,10 @@ function main()
     # Step 1: Discover dependencies
     println("Step 1: Discovering dependencies...")
     seed = [
+        # Real pipeline entry point
         (eval_julia_to_bytes_vec, (Vector{UInt8},)),
-        (eval_julia_test_ps_create, (Vector{UInt8},)),
-        (eval_julia_test_parse_only, (Vector{UInt8},)),
-        (eval_julia_test_build_tree, (Vector{UInt8},)),
-        (eval_julia_test_parse, (Vector{UInt8},)),
-        (eval_julia_test_string_from_bytes, (Vector{UInt8},)),
-        (eval_julia_test_parse_int, (Vector{UInt8},)),
-        (eval_julia_test_substring, (Vector{UInt8},)),
-        (eval_julia_test_tree_nranges, (Vector{UInt8},)),
-        # Agent 21: step-by-step build_tree diagnostics
-        (eval_julia_test_sourcefile, (Vector{UInt8},)),
-        (eval_julia_test_textbuf, (Vector{UInt8},)),
-        (eval_julia_test_cursor, (Vector{UInt8},)),
-        (eval_julia_test_toplevel, (Vector{UInt8},)),
-        (eval_julia_test_node_to_expr, (Vector{UInt8},)),
-        (eval_julia_test_byte_range, (Vector{UInt8},)),
-        (eval_julia_test_source_location, (Vector{UInt8},)),
-        (eval_julia_test_untokenize, (Vector{UInt8},)),
-        (eval_julia_test_leaf_val, (Vector{UInt8},)),
-        (eval_julia_test_parseargs, (Vector{UInt8},)),
-        (eval_julia_test_child_count, (Vector{UInt8},)),
-        (eval_julia_test_kind_string, (Vector{UInt8},)),
-        (eval_julia_test_child_is_leaf, (Vector{UInt8},)),
-        (eval_julia_test_child_byte_range, (Vector{UInt8},)),
-        (eval_julia_test_uint32_getindex, (Vector{UInt8},)),
-        (eval_julia_test_untokenize_kind, (Vector{UInt8},)),
-        (eval_julia_test_untokenize_kind_nouniq, (Vector{UInt8},)),
-        (eval_julia_test_is_error, (Vector{UInt8},)),
-        (eval_julia_test_leaf_node_to_expr, (Vector{UInt8},)),
-        (eval_julia_test_manual_leaf_path, (Vector{UInt8},)),
-        (eval_julia_test_not_should_include, (Vector{UInt8},)),
-        (eval_julia_test_node_to_expr_direct, (Vector{UInt8},)),
-        (eval_julia_test_should_include, (Vector{UInt8},)),
-        (eval_julia_test_child_head, (Vector{UInt8},)),
-        (eval_julia_test_parse_literal, (Vector{UInt8},)),
-        (eval_julia_test_child_br_broadcast, (Vector{UInt8},)),
-        # Agent 22: Field-level diagnostics
-        (eval_julia_test_textbuf_before_parse, (Vector{UInt8},)),
-        (eval_julia_test_ps_fields, (Vector{UInt8},)),
-        (eval_julia_test_vec_in_struct, (Vector{UInt8},)),
-        (eval_julia_test_input_len, (Vector{UInt8},)),
-        (eval_julia_test_textbuf_first_byte, (Vector{UInt8},)),
-        # Agent 22 Round 2: Root cause diagnostics
-        (eval_julia_test_fresh_vec_len, (Vector{UInt8},)),
-        (eval_julia_test_array_nvals, (Vector{UInt8},)),
-        (eval_julia_test_getindex_works, (Vector{UInt8},)),
-        (eval_julia_test_constant, (Vector{UInt8},)),
-        (eval_julia_test_set_and_read, (Vector{UInt8},)),
-        (eval_julia_test_set_read_chain, (Vector{UInt8},)),
-        (eval_julia_test_copy_byte, (Vector{UInt8},)),
-        (eval_julia_test_make_set_read, (Vector{UInt8},)),
-        (eval_julia_test_make_len, (Vector{UInt8},)),
-        (eval_julia_test_parse_3bytes, (Int32, Int32, Int32)),
-        # Agent 23: targeted untokenize/Set diagnostics
-        (eval_julia_test_untokenize_inline, (Vector{UInt8},)),
-        (eval_julia_test_set_lookup, (Vector{UInt8},)),
-        (eval_julia_test_kind_eq, (Vector{UInt8},)),
-        (eval_julia_test_kind_raw, (Vector{UInt8},)),
-        (eval_julia_test_kcall_raw, (Vector{UInt8},)),
-        (eval_julia_test_set_size, (Vector{UInt8},)),
-        (eval_julia_test_build_tree_head, (Vector{UInt8},)),
-        (eval_julia_test_symbol_from_kind, (Vector{UInt8},)),
-        # Agent 23: direct untokenize tests
-        (eval_julia_test_direct_untokenize, (Vector{UInt8},)),
-        (eval_julia_test_direct_untokenize_head, (Vector{UInt8},)),
-        (eval_julia_test_build_tree_wasm, (Vector{UInt8},)),
-        # Agent 24: step-by-step _wasm_build_tree diagnostics
-        # eval_julia_test_wasm_leaf REMOVED: try/catch + Any return causes codegen stack imbalance
-        (eval_julia_test_wasm_node_to_expr, (Vector{UInt8},)),
-        (eval_julia_test_node_steps, (Vector{UInt8},)),
-        (eval_julia_test_has_toplevel, (Vector{UInt8},)),
-        (eval_julia_test_fixup, (Vector{UInt8},)),
-        # Agent 26: cursor-before-source ordering diagnostics
-        (eval_julia_test_build_steps, (Vector{UInt8},)),
-        (eval_julia_test_si_after_source, (Vector{UInt8},)),
-        # Agent 26: flat simple_call_expr diagnostics
-        (eval_julia_test_simple_call, (Vector{UInt8},)),
-        (eval_julia_test_simple_steps, (Vector{UInt8},)),
-        (eval_julia_test_iterate_all, (Vector{UInt8},)),
-        (eval_julia_test_make_expr, (Vector{UInt8},)),
-        (eval_julia_test_parse_all_children, (Vector{UInt8},)),
-        (eval_julia_test_manual_parse, (Vector{UInt8},)),
+        # WASM-compatible port functions (build_tree chain)
         (_wasm_simple_call_expr, (JuliaSyntax.ParseStream,)),
-        # Agent 24: WASM-compatible build_tree chain — ALL helpers must be in seed
         (_wasm_build_tree_expr, (JuliaSyntax.ParseStream,)),
         (_wasm_leaf_to_expr, (JuliaSyntax.RedTreeCursor, JuliaSyntax.Kind, Vector{UInt8}, UInt32)),
         (_wasm_node_to_expr, (JuliaSyntax.RedTreeCursor, JuliaSyntax.SourceFile, Vector{UInt8}, UInt32)),
@@ -174,6 +91,7 @@ function main()
         (_wasm_string_to_Expr, (JuliaSyntax.RedTreeCursor, JuliaSyntax.SourceFile, Vector{UInt8}, UInt32)),
         (_wasm_untokenize_kind, (JuliaSyntax.Kind, Bool)),
         (_wasm_untokenize_head, (JuliaSyntax.SyntaxHead,)),
+        # JS bridge helpers
         (eval_julia_result_length, (Vector{UInt8},)),
         (eval_julia_result_byte, (Vector{UInt8}, Int32)),
         (make_byte_vec, (Int32,)),
