@@ -15800,18 +15800,22 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                 end
 
                 if needs_ref_cast_local !== nothing
-                    # PURE-204: Check if stmt_bytes end with a numeric constant (i32.const, i64.const, etc.)
+                    # PURE-204/6025: Check if stmt_bytes end with a numeric constant (i32.const, i64.const, etc.)
                     # This happens when SSA type is Union{Nothing, T} — ssa_wasm_type maps to T's ConcreteRef,
-                    # but the actual value is nothing (i32.const 0). ref.cast requires anyref, not i32.
-                    # Switch to type_safe_default instead.
+                    # but the actual value is nothing/integer (e.g., i32.const 0, i64.const 1).
+                    # ref.cast requires anyref, not i32/i64. Switch to type_safe_default instead.
                     ends_with_numeric = false
                     if length(stmt_bytes) >= 2
-                        last_opcode_pos = length(stmt_bytes)
-                        # Check for i32.const 0 (2 bytes: 0x41 0x00)
-                        if stmt_bytes[end-1] == Opcode.I32_CONST && stmt_bytes[end] == 0x00
+                        # Check for i32.const VALUE or i64.const VALUE where VALUE is a single-byte
+                        # LEB128 (high bit clear = terminal byte, values 0-127).
+                        # PURE-6025: Previous check only caught value==0x00; now catches any small constant.
+                        if (stmt_bytes[end-1] == Opcode.I32_CONST || stmt_bytes[end-1] == Opcode.I64_CONST) && (stmt_bytes[end] & 0x80) == 0
                             ends_with_numeric = true
-                        # Check for i64.const 0 (2 bytes: 0x42 0x00)
-                        elseif stmt_bytes[end-1] == Opcode.I64_CONST && stmt_bytes[end] == 0x00
+                        end
+                    end
+                    if !ends_with_numeric && length(stmt_bytes) >= 3
+                        # Check for 2-byte LEB128 values (128-16383): opcode + continuation + terminal
+                        if (stmt_bytes[end-2] == Opcode.I32_CONST || stmt_bytes[end-2] == Opcode.I64_CONST) && (stmt_bytes[end-1] & 0x80) != 0 && (stmt_bytes[end] & 0x80) == 0
                             ends_with_numeric = true
                         end
                     end
@@ -15923,7 +15927,9 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                 # struct.get 65 0 = [0xFB, 0x02, 0x41, 0x00] where 0x41 = i32.const opcode.
                 # The earlier check at line 15046 already uses !has_gc_prefix for the same reason.
                 if !needs_type_safe_default && needs_ref_cast_local === nothing && local_is_ref && !has_gc_prefix && length(stmt_bytes) >= 2
-                    if stmt_bytes[end-1] == Opcode.I32_CONST && stmt_bytes[end] == 0x00
+                    # PURE-6025: Expanded to catch any small numeric constant, not just i32.const 0.
+                    # An i64.const 1 stored into a ref-typed local also needs type_safe_default.
+                    if (stmt_bytes[end-1] == Opcode.I32_CONST || stmt_bytes[end-1] == Opcode.I64_CONST) && (stmt_bytes[end] & 0x80) == 0
                         needs_type_safe_default = true
                     end
                 end
