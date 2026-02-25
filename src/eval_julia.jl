@@ -1529,6 +1529,46 @@ function _wasm_build_tree_expr(stream::JuliaSyntax.ParseStream)
     return entry
 end
 
+# Agent 27: Step-by-step diagnostic for _wasm_simple_call_expr
+# Tests each step without parse_julia_literal (avoids Any-type issues)
+function eval_julia_test_simple_call_steps(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    # Step 1: cursor
+    cursor = try JuliaSyntax.RedTreeCursor(ps) catch; return Int32(-10) end
+    # Step 2: txtbuf
+    txtbuf = try JuliaSyntax.unsafe_textbuf(ps) catch; return Int32(-20) end
+    # Step 3: create iterator
+    itr = try JuliaSyntax.reverse_nontrivia_children(cursor) catch; return Int32(-30) end
+    # Step 4: first iterate
+    r1 = try iterate(itr) catch; return Int32(-40) end
+    if r1 === nothing; return Int32(-41) end
+    (child1, state1) = r1
+    # Step 5: byte_range of first child
+    range1 = try JuliaSyntax.byte_range(child1) catch; return Int32(-50) end
+    # Step 6: read from txtbuf using range
+    b1 = try txtbuf[first(range1)] catch; return Int32(-60) end
+    # Step 7: second iterate
+    r2 = try iterate(itr, state1) catch; return Int32(-70) end
+    if r2 === nothing; return Int32(-71) end
+    (child2, state2) = r2
+    # Step 8: byte_range of second child
+    range2 = try JuliaSyntax.byte_range(child2) catch; return Int32(-80) end
+    b2 = try txtbuf[first(range2)] catch; return Int32(-90) end
+    # Step 9: third iterate
+    r3 = try iterate(itr, state2) catch; return Int32(-100) end
+    if r3 === nothing; return Int32(-101) end
+    (child3, state3) = r3
+    # Step 10: byte_range of third child
+    range3 = try JuliaSyntax.byte_range(child3) catch; return Int32(-110) end
+    b3 = try txtbuf[first(range3)] catch; return Int32(-120) end
+    # Step 11: Construct Expr (the part that might fail)
+    expr = try Expr(:call, :+, Int64(b1) - Int64(48), Int64(b3) - Int64(48)) catch; return Int32(-130) end
+    # Success: return byte values
+    # For "1+1": b1=49('1'), b2=43('+'), b3=49('1')
+    return Int32(b1) * Int32(100) + Int32(b2) * Int32(10) + Int32(b3)  # 49*100+43*10+49*1 = 5379
+end
+
 # --- Entry point that takes Vector{UInt8} directly (WASM-compatible) ---
 # Avoids ALL String operations (codeunit, ncodeunits, pointer, unsafe_load)
 # which compile to `unreachable` in WASM.

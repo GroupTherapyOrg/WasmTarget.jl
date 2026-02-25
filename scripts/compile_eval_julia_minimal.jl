@@ -98,6 +98,7 @@ function main()
         (eval_julia_test_input_len, (Vector{UInt8},)),
         (eval_julia_test_build_tree_wasm, (Vector{UInt8},)),
         (eval_julia_test_simple_call, (Vector{UInt8},)),
+        (eval_julia_test_simple_call_steps, (Vector{UInt8},)),
     ]
     all_funcs = WasmTarget.discover_dependencies(seed)
     println("  Found $(length(all_funcs)) functions")
