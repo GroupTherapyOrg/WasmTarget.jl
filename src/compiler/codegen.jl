@@ -6904,15 +6904,6 @@ function generate_body(ctx::CompilationContext)::Vector{UInt8}
         bytes[end - 2] = 0x00  # Replace RETURN with UNREACHABLE
     end
 
-    # PURE-6022: Fix local_get → local_set/tee with i32↔i64 type mismatch.
-    # Build full local type array (params + locals) for type-aware fixing.
-    param_wasm_types = WasmValType[]
-    for T in ctx.arg_types
-        push!(param_wasm_types, get_concrete_wasm_type(T, ctx.mod, ctx.type_registry))
-    end
-    all_local_types = vcat(param_wasm_types, ctx.locals)
-    bytes = fix_local_get_set_type_mismatch(bytes, all_local_types)
-
     # PURE-6022: Fix consecutive local_set instructions (multi-target phi assignments).
     # When a value feeds into multiple phi nodes, the codegen emits local_set for each
     # target. But local_set consumes the stack value, leaving nothing for subsequent sets.
@@ -6925,6 +6916,15 @@ function generate_body(ctx::CompilationContext)::Vector{UInt8}
     # requires: func = locals* expr, where expr = instr* end. Any bytes after the
     # expression's closing `end` cause "operators remaining after end of function body."
     bytes = strip_excess_after_function_end(bytes)
+
+    # PURE-6022: Fix local_get → local_set/tee with i32↔i64 type mismatch.
+    # Runs LAST to process the final bytes (same as what wasm-tools validates).
+    param_wasm_types = WasmValType[]
+    for T in ctx.arg_types
+        push!(param_wasm_types, get_concrete_wasm_type(T, ctx.mod, ctx.type_registry))
+    end
+    all_local_types = vcat(param_wasm_types, ctx.locals)
+    bytes = fix_local_get_set_type_mismatch(bytes, all_local_types)
 
     # PURE-414: Check validator for errors after function body generation
     if has_errors(ctx.validator)
