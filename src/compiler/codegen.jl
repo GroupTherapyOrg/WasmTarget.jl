@@ -21967,6 +21967,18 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             continue
         end
         append!(bytes, compile_value(arg, ctx))
+        # PURE-6027: Fix i32/i64 mismatch for numeric intrinsics.
+        # When is_32bit=true but the actual compiled value is i64 (e.g., from a phi
+        # node or SSA local allocated as i64), insert i32_wrap_i64 to match.
+        # Conversely, when is_32bit=false but value is i32, extend to i64.
+        if is_numeric_intrinsic && !_is_externref_value(arg, ctx)
+            _actual_wasm = get_phi_edge_wasm_type(arg, ctx)
+            if is_32bit && _actual_wasm === I64
+                push!(bytes, Opcode.I32_WRAP_I64)
+            elseif !is_32bit && !is_128bit && _actual_wasm === I32
+                push!(bytes, Opcode.I64_EXTEND_I32_S)
+            end
+        end
         # PURE-904: Unbox externref args for numeric intrinsics.
         # When a param/SSA has Wasm type externref but Julia IR uses it as
         # numeric (UInt32, Int64, etc.), unbox: any_convert_extern → ref.cast → struct.get
