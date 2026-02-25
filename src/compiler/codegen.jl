@@ -6917,6 +6917,12 @@ function generate_body(ctx::CompilationContext)::Vector{UInt8}
     # as i64 and inserts i32_wrap_i64 expecting i64 input, causing validation error.
     bytes = fix_array_len_wrap(bytes)
 
+    # PURE-6027: Insert i32_wrap_i64 when i64 local feeds into i32 binary ops.
+    # Pattern: local_get <i64_idx>, i32_const <val>, i32_sub/add/etc.
+    # The codegen may emit i32 ops for values that are actually in i64 locals
+    # (e.g., after dead code guard scoping exposes previously masked code paths).
+    bytes = fix_i64_local_in_i32_ops(bytes, all_local_types)
+
     # PURE-6022: Remove spurious i32_wrap_i64 after comparison/i32 ops.
     # Comparisons (i32_eqz, i64_eq, etc.) return i32, but codegen may emit i32_wrap_i64
     # expecting i64 input from a value that is already i32.
@@ -7127,6 +7133,67 @@ function fix_i32_wrap_after_i32_ops(bytes::Vector{UInt8})::Vector{UInt8}
     end
     if fixes > 0
         @warn "fix_i32_wrap_after_i32_ops: removed $fixes spurious i32_wrap_i64 after i32-producing ops"
+    end
+    return result
+end
+
+"""
+PURE-6027: Insert i32_wrap_i64 when an i64-typed local feeds into i32 binary operations.
+
+Pattern: local_get <idx> (where local is i64), followed by i32_const, then i32 binary op
+(i32_add 0x6a through i32_rotr 0x78). This happens when the codegen determines is_32bit=true
+from Julia type inference but the actual SSA local was allocated as i64 (e.g., phi nodes that
+merge values from branches with different type contexts, or code exposed by dead code guard
+scoping). Fix: insert i32_wrap_i64 (0xa7) after the local_get.
+"""
+function fix_i64_local_in_i32_ops(bytes::Vector{UInt8}, all_local_types::Vector{WasmValType})::Vector{UInt8}
+    result = UInt8[]
+    sizehint!(result, length(bytes) + 64)
+    i = 1
+    fixes = 0
+    while i <= length(bytes)
+        op = bytes[i]
+        if op == 0x20  # local_get
+            # Read LEB128 local index
+            push!(result, op)
+            i += 1
+            local_idx = 0
+            shift = 0
+            leb_start = length(result) + 1
+            while i <= length(bytes)
+                b = bytes[i]
+                push!(result, b)
+                local_idx |= (Int(b) & 0x7f) << shift
+                shift += 7
+                i += 1
+                (b & 0x80) == 0 && break
+            end
+            # Check if this local is i64-typed
+            if local_idx + 1 <= length(all_local_types) && all_local_types[local_idx + 1] === I64
+                # Look ahead: is next instruction i32_const followed by i32 binary op?
+                j = i
+                if j <= length(bytes) && bytes[j] == 0x41  # i32_const
+                    # Skip i32_const LEB128 operand
+                    k = j + 1
+                    while k <= length(bytes)
+                        (bytes[k] & 0x80) == 0 && break
+                        k += 1
+                    end
+                    k += 1  # past last LEB byte
+                    # Check if next byte is an i32 binary op (0x6a-0x78)
+                    if k <= length(bytes) && bytes[k] >= 0x6a && bytes[k] <= 0x78
+                        push!(result, 0xa7)  # i32_wrap_i64
+                        fixes += 1
+                    end
+                end
+            end
+        else
+            push!(result, op)
+            i += 1
+        end
+    end
+    if fixes > 0
+        @warn "fix_i64_local_in_i32_ops: inserted $fixes i32_wrap_i64 for i64 locals used in i32 ops"
     end
     return result
 end
