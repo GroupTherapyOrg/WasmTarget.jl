@@ -6904,6 +6904,12 @@ function generate_body(ctx::CompilationContext)::Vector{UInt8}
         bytes[end - 2] = 0x00  # Replace RETURN with UNREACHABLE
     end
 
+    # PURE-6022: Fix consecutive local_set instructions (multi-target phi assignments).
+    # When a value feeds into multiple phi nodes, the codegen emits local_set for each
+    # target. But local_set consumes the stack value, leaving nothing for subsequent sets.
+    # Fix: convert local_set to local_tee when the next instruction is also local_set.
+    bytes = fix_consecutive_local_sets(bytes)
+
     # PURE-6022: Strip excess bytes after the function body's closing `end`.
     # The flow generator may emit dead code (unreachable, br, etc.) after all blocks
     # are closed, creating bytes outside the function body expression. The WASM spec
@@ -6929,6 +6935,46 @@ after that byte is excess and gets truncated.
 Properly handles all WASM instructions with LEB128 operands to avoid misidentifying
 data bytes as block/end instructions.
 """
+"""
+PURE-6022: Fix consecutive local_set instructions (multi-target phi assignments).
+
+When a value feeds into multiple phi nodes, the codegen emits local_set for each
+target. But local_set (0x21) consumes the stack value, leaving nothing for the next
+local_set. Fix: convert local_set to local_tee (0x22) when the next instruction is
+also local_set. local_tee stores to the local but KEEPS the value on the stack.
+
+Handles chains of any length: tee tee tee ... set.
+"""
+function fix_consecutive_local_sets(bytes::Vector{UInt8})::Vector{UInt8}
+    result = UInt8[]
+    sizehint!(result, length(bytes))
+    i = 1
+    fixes = 0
+    while i <= length(bytes)
+        op = bytes[i]
+        if op == 0x21  # local_set
+            # Peek past the LEB128 local index to see if next instruction is also local_set
+            j = i + 1
+            while j <= length(bytes) && (bytes[j] & 0x80) != 0
+                j += 1
+            end
+            if j <= length(bytes)
+                j += 1  # Past the terminal LEB128 byte
+                if j <= length(bytes) && bytes[j] == 0x21  # next is also local_set
+                    # Replace local_set with local_tee (keeps value on stack)
+                    push!(result, 0x22)  # local_tee
+                    i += 1
+                    fixes += 1
+                    continue
+                end
+            end
+        end
+        push!(result, bytes[i])
+        i += 1
+    end
+    return result
+end
+
 function strip_excess_after_function_end(bytes::Vector{UInt8})::Vector{UInt8}
     depth = 0
     i = 1
