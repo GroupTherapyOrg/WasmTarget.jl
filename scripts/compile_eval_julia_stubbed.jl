@@ -118,6 +118,12 @@ function main()
         elseif is_compiler_mod
             push!(kept_names, name)
         end
+        # PURE-7001: Stub Base functions that fail WASM validation due to codegen bugs
+        # (UInt128 comparison chain → boolean typed as ref instead of i32).
+        # These are NOT on the critical path for "1+1" arithmetic evaluation.
+        if base_name in ("tryparse_internal",)
+            push!(stub_names, name)
+        end
     end
     println("  Core.Compiler functions: $(length(stub_names) + length(kept_names))")
     println("  Stubbing $(length(stub_names)) (optimization), keeping $(length(kept_names)) (inference)")
