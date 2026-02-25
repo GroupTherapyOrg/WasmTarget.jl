@@ -22,6 +22,8 @@ sbv = getfield(Main, Symbol("set_byte_vec!"))
 
 funcs = [
     (_wasm_eval_arith, (Vector{UInt8},)),
+    (_wasm_parse_arith, (JuliaSyntax.ParseStream,)),
+    (_wasm_parse_int_from_range, (Vector{UInt8}, UnitRange{Int64})),
     (make_byte_vec, (Int32,)),
     (sbv, (Vector{UInt8}, Int32, Int32)),
     (eval_julia_result_length, (Vector{UInt8},)),
@@ -37,12 +39,12 @@ println("  Size: $(length(bytes)) bytes ($(round(length(bytes)/1024, digits=1)) 
 println("  Time: $(round(dt, digits=1))s")
 
 errbuf = IOBuffer()
-ok = false
+local validate_ok = false
 try
     Base.run(pipeline(`wasm-tools validate --features=gc /tmp/eval_arith_fresh.wasm`, stderr=errbuf, stdout=devnull))
-    ok = true
+    validate_ok = true
 catch; end
-println("  Validate: $(ok ? "PASS" : "FAIL")")
-if !ok
+println("  Validate: $(validate_ok ? "PASS" : "FAIL")")
+if !validate_ok
     println("  $(String(take!(errbuf)))")
 end
