@@ -6415,6 +6415,14 @@ function emit_ref_cast_if_structref!(bytes::Vector{UInt8}, val, target_type_idx:
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.REF_CAST_NULL)
         append!(bytes, encode_leb128_signed(Int64(target_type_idx)))
+    elseif local_wasm_type === ExternRef
+        # PURE-6025: Value on stack is externref (from Any-typed local or Dict/Vector retrieval).
+        # Must convert externref → anyref → (ref null $target_type_idx) for struct_get.
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ANY_CONVERT_EXTERN)
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.REF_CAST_NULL)
+        append!(bytes, encode_leb128_signed(Int64(target_type_idx)))
     end
     return bytes
 end
@@ -6435,7 +6443,7 @@ function _narrow_generic_local!(bytes::Vector{UInt8}, local_idx::Integer, ssa_id
         return
     end
     local_wasm_type = ctx.locals[arr_idx]
-    if !(local_wasm_type === AnyRef || local_wasm_type === StructRef)
+    if !(local_wasm_type === AnyRef || local_wasm_type === StructRef || local_wasm_type === ExternRef)
         return  # Local is already concrete — no narrowing needed
     end
     # Look up the SSA's Julia type to find a concrete Wasm type
@@ -6445,6 +6453,11 @@ function _narrow_generic_local!(bytes::Vector{UInt8}, local_idx::Integer, ssa_id
     end
     concrete_wasm = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
     if concrete_wasm isa ConcreteRef
+        if local_wasm_type === ExternRef
+            # PURE-6025: ExternRef needs any_convert_extern before ref.cast
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ANY_CONVERT_EXTERN)
+        end
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.REF_CAST_NULL)
         append!(bytes, encode_leb128_signed(Int64(concrete_wasm.type_idx)))
