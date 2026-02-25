@@ -991,6 +991,83 @@ function eval_julia_test_build_tree_wasm(code_bytes::Vector{UInt8})::Int32
     end
 end
 
+# Test L: _wasm_node_to_expr directly on top-level cursor
+function eval_julia_test_wasm_node_to_expr(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        source = JuliaSyntax.SourceFile(ps)
+        txtbuf = JuliaSyntax.unsafe_textbuf(ps)
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        result = _wasm_node_to_expr(cursor, source, txtbuf, UInt32(0))
+        if result === nothing
+            return Int32(-10)
+        end
+        if result isa Expr
+            if result.head === :call
+                return Int32(length(result.args))  # 3 for "1+1"
+            end
+            return Int32(-20)
+        end
+        if result isa Int64
+            return Int32(result)  # leaf literal
+        end
+        return Int32(-30)
+    catch
+        return Int32(-1)
+    end
+end
+
+# Test M: _wasm_leaf_to_expr for an integer leaf
+function eval_julia_test_wasm_leaf(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        txtbuf = JuliaSyntax.unsafe_textbuf(ps)
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        # For "1+1", the top-level node has kind :call (not leaf)
+        # For "42", it's a leaf with kind :Integer
+        if JuliaSyntax.is_leaf(cursor)
+            k = JuliaSyntax.kind(cursor)
+            val = _wasm_leaf_to_expr(cursor, k, txtbuf, UInt32(0))
+            if val isa Int64
+                return Int32(val)
+            end
+            return Int32(-20)
+        end
+        return Int32(-5)  # not a leaf
+    catch
+        return Int32(-1)
+    end
+end
+
+# Test N: has_toplevel_siblings check
+function eval_julia_test_has_toplevel(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        return JuliaSyntax.has_toplevel_siblings(cursor) ? Int32(1) : Int32(0)
+    catch
+        return Int32(-1)
+    end
+end
+
+# Test O: fixup_Expr_child with a simple Expr
+function eval_julia_test_fixup(code_bytes::Vector{UInt8})::Int32
+    try
+        wrapper_head = JuliaSyntax.SyntaxHead(JuliaSyntax.K"wrapper", JuliaSyntax.EMPTY_FLAGS)
+        expr = Expr(:call, :+, 1, 1)
+        result = JuliaSyntax.fixup_Expr_child(wrapper_head, expr, false)
+        if result isa Expr && result.head === :call
+            return Int32(length(result.args))
+        end
+        return Int32(-20)
+    catch
+        return Int32(-1)
+    end
+end
+
 # --- WASM-compatible build_tree replacement (kynZ9 version) ---
 # The original build_tree(Expr, stream) calls node_to_expr which calls
 # untokenize(head::SyntaxHead) → untokenize(k::Kind) → _nonunique_kind_names Set lookup.
