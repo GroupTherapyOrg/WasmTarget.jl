@@ -118,10 +118,17 @@ function main()
         elseif is_compiler_mod
             push!(kept_names, name)
         end
-        # PURE-7001: Stub Base functions that fail WASM validation due to codegen bugs
-        # (UInt128 comparison chain → boolean typed as ref instead of i32).
-        # These are NOT on the critical path for "1+1" arithmetic evaluation.
-        if base_name in ("tryparse_internal",)
+        # PURE-7001: Stub Base functions that fail WASM validation due to codegen bugs.
+        # Pattern: UInt128/Int128 comparison chains → boolean typed as ref instead of i32.
+        # Also stub large Base functions not on the critical path for "1+1" arithmetic.
+        # The critical path is: JuliaSyntax parse → getfield(Base, :+) → typeinf → codegen.
+        # Error/IO/BigInt/parsing functions are pulled in but never called at runtime.
+        if base_name in ("tryparse_internal", "BigInt", "_parser_stuck_error",
+                          "throw_code_point_err", "ensureroom_slowpath",
+                          "ensureroom_reallocate", "_assert_tostring",
+                          "normalize_typevars", "argument_datatype",
+                          "_fieldindex_nothrow", "copy_exprs", "rewrap_unionall",
+                          "reduce_empty")
             push!(stub_names, name)
         end
     end
