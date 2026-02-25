@@ -56,33 +56,11 @@ end
 # This provides identical logic to untokenize(::Kind; unique=true) but as a
 # positional-arg function that the WASM codegen can handle.
 function _wasm_untokenize_kind(k::JuliaSyntax.Kind, unique::Bool)::Union{Nothing, String}
-    if unique
-        if k == JuliaSyntax.K"Comment" || k == JuliaSyntax.K"Whitespace" ||
-           k == JuliaSyntax.K"NewlineWs" || k == JuliaSyntax.K"Identifier" ||
-           k == JuliaSyntax.K"Placeholder" ||
-           k == JuliaSyntax.K"ErrorEofMultiComment" ||
-           k == JuliaSyntax.K"ErrorInvalidNumericConstant" ||
-           k == JuliaSyntax.K"ErrorHexFloatMustContainP" ||
-           k == JuliaSyntax.K"ErrorAmbiguousNumericConstant" ||
-           k == JuliaSyntax.K"ErrorAmbiguousNumericDotMultiply" ||
-           k == JuliaSyntax.K"ErrorInvalidInterpolationTerminator" ||
-           k == JuliaSyntax.K"ErrorNumericOverflow" ||
-           k == JuliaSyntax.K"ErrorInvalidEscapeSequence" ||
-           k == JuliaSyntax.K"ErrorOverLongCharacter" ||
-           k == JuliaSyntax.K"ErrorInvalidUTF8" ||
-           k == JuliaSyntax.K"ErrorInvisibleChar" ||
-           k == JuliaSyntax.K"ErrorUnknownCharacter" ||
-           k == JuliaSyntax.K"ErrorBidiFormatting" ||
-           k == JuliaSyntax.K"ErrorInvalidOperator" ||
-           k == JuliaSyntax.K"Bool" || k == JuliaSyntax.K"Integer" ||
-           k == JuliaSyntax.K"BinInt" || k == JuliaSyntax.K"HexInt" ||
-           k == JuliaSyntax.K"OctInt" || k == JuliaSyntax.K"Float" ||
-           k == JuliaSyntax.K"Float32" || k == JuliaSyntax.K"String" ||
-           k == JuliaSyntax.K"Char" || k == JuliaSyntax.K"CmdString" ||
-           k == JuliaSyntax.K"StrMacroName" ||
-           k == JuliaSyntax.K"CmdMacroName"
-            return nothing
-        end
+    # Use the original Set-based check — `k in _nonunique_kind_names` works in WASM
+    # (verified by eval_julia_test_set_lookup=0, eval_julia_test_untokenize_inline=4).
+    # The previous 30-entry `||` chain had a codegen bug where K"call" matched incorrectly.
+    if unique && k in JuliaSyntax._nonunique_kind_names
+        return nothing
     end
     return string(k)
 end
