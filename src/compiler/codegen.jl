@@ -19505,6 +19505,10 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 local elem_wasm = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
                 if elem_wasm isa ConcreteRef
                     local item_src_wasm = _get_local_wasm_type(item_arg, item_bytes, ctx)
+                    if item_src_wasm === nothing
+                        local item_julia_t = infer_value_type(item_arg, ctx)
+                        item_src_wasm = get_concrete_wasm_type(item_julia_t, ctx.mod, ctx.type_registry)
+                    end
                     if item_src_wasm === ExternRef
                         push!(bytes, Opcode.GC_PREFIX)
                         push!(bytes, Opcode.ANY_CONVERT_EXTERN)
@@ -20193,7 +20197,13 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 append!(bytes, mset_val_bytes)
                 # PURE-6025: If value is externref but array element is concrete ref,
                 # convert externref → anyref → ref.cast (ref null $elem_type)
+                # Check both: (1) byte-level local type, (2) Julia type inference
                 local mset_item_wasm = _get_local_wasm_type(value_arg, mset_val_bytes, ctx)
+                if mset_item_wasm === nothing
+                    # Fallback: use Julia type inference
+                    local val_julia_type = infer_value_type(value_arg, ctx)
+                    mset_item_wasm = get_concrete_wasm_type(val_julia_type, ctx.mod, ctx.type_registry)
+                end
                 if mset_item_wasm === ExternRef
                     push!(bytes, Opcode.GC_PREFIX)
                     push!(bytes, Opcode.ANY_CONVERT_EXTERN)
