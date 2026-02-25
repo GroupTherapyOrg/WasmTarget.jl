@@ -16533,7 +16533,29 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                             # PURE-3113: SSA produces concrete/abstract ref, local expects externref.
                             # This happens with memoryrefset! return values when has_gc_prefix
                             # skips the trailing local.get check. Convert via extern_convert_any.
-                            needs_extern_convert_any = true
+                            # PURE-6022: But if the callee's actual WASM return type is already
+                            # externref, skip the conversion — extern_convert_any expects anyref.
+                            callee_already_externref = false
+                            if stmt isa Expr && stmt.head === :invoke && length(stmt.args) >= 1
+                                mi = stmt.args[1]
+                                if mi isa Core.MethodInstance
+                                    callee_ret_wt = julia_to_wasm_type(mi.rettype)
+                                    if callee_ret_wt === ExternRef
+                                        callee_already_externref = true
+                                    end
+                                end
+                            elseif stmt isa Expr && stmt.head === :call && length(stmt.args) >= 1
+                                callee_func = stmt.args[1]
+                                if callee_func isa GlobalRef
+                                    sig_ret = julia_to_wasm_type(ssa_julia_type)
+                                    if sig_ret === ExternRef
+                                        callee_already_externref = true
+                                    end
+                                end
+                            end
+                            if !callee_already_externref
+                                needs_extern_convert_any = true
+                            end
                         end
                         # PURE-036ae: Also check signature-level type mapping.
                         # When a cross-function call returns a struct type, the function's Wasm
@@ -24936,7 +24958,12 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                                 elseif target_local_type === ExternRef && func_ref isa Core.Argument
                                     # PURE-220: Higher-order call returns concrete ref but local expects externref
                                     # (SSA type is Any because the function parameter is generic)
-                                    append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.EXTERN_CONVERT_ANY])
+                                    # PURE-6022: But if the callee already returns externref, skip —
+                                    # extern_convert_any expects anyref input, not externref.
+                                    callee_ret_wasm = julia_to_wasm_type(target_info.return_type)
+                                    if callee_ret_wasm !== ExternRef
+                                        append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.EXTERN_CONVERT_ANY])
+                                    end
                                 end
                             end
                         end
