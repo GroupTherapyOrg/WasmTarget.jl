@@ -64,6 +64,10 @@ function main()
     funcs_to_compile = [
         # Primary entry point — full pipeline
         (eval_julia_to_bytes_vec, (Vector{UInt8},)),
+        # PURE-6023: Explicitly include pipeline helper called from eval_julia_to_bytes_vec.
+        # Without this, the compiler stubs the call (func_registry lookup fails for
+        # transitive dependency from Main module scope).
+        (_wasm_simple_call_expr_flat, (JuliaSyntax.ParseStream,)),
         # JS interop helpers (create/populate byte vectors)
         (make_byte_vec, (Int32,)),
         (set_byte_vec!, (Vector{UInt8}, Int32, Int32)),
