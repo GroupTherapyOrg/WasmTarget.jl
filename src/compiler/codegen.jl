@@ -16049,6 +16049,21 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                     end
                 end
 
+                # PURE-6025: Catch numeric opcodes at end of stmt_bytes that produce numeric
+                # values into ref-typed locals. The existing compound-numeric check (line ~15789)
+                # is skipped when has_gc_prefix=true, and the SSA type check above misses cases
+                # where the Julia type is Any/Union (maps to ExternRef, matching the local) but
+                # the actual compiled code produces i64 (e.g., array_len + i64_extend_i32_s).
+                # Bytes >= 0x80 at the end of stmt_bytes can't be LEB128 terminal bytes (bit 7
+                # clear required), so they're guaranteed to be opcodes. Range 0x80-0xC4 covers
+                # i64 arithmetic (0x79-0x8A) and numeric conversions (0xA7-0xC4).
+                if !needs_type_safe_default && needs_ref_cast_local === nothing && local_is_ref && length(stmt_bytes) >= 1
+                    last_byte = stmt_bytes[end]
+                    if last_byte >= 0x80 && last_byte <= 0xC4
+                        needs_type_safe_default = true
+                    end
+                end
+
                 if needs_ref_cast_local !== nothing
                     # PURE-204/6025: Check if stmt_bytes end with a numeric constant (i32.const, i64.const, etc.)
                     # This happens when SSA type is Union{Nothing, T} — ssa_wasm_type maps to T's ConcreteRef,
