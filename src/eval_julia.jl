@@ -1016,6 +1016,53 @@ function eval_julia_test_wasm_node_to_expr(code_bytes::Vector{UInt8})::Int32
     end
 end
 
+# Test L2: Trace _wasm_node_to_expr steps individually to find where it fails
+function eval_julia_test_node_steps(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    JuliaSyntax.parse!(ps; rule=:statement)
+    try
+        source = JuliaSyntax.SourceFile(ps)
+        txtbuf = JuliaSyntax.unsafe_textbuf(ps)
+        cursor = JuliaSyntax.RedTreeCursor(ps)
+        # Step 1: should_include_node
+        si = JuliaSyntax.should_include_node(cursor)
+        if !si
+            return Int32(-100)  # should_include_node is false
+        end
+        # Step 2: head, kind
+        nodehead = JuliaSyntax.head(cursor)
+        k = JuliaSyntax.kind(cursor)
+        # Step 3: is_leaf
+        if JuliaSyntax.is_leaf(cursor)
+            return Int32(-200)  # it's a leaf (shouldn't be for "1+1")
+        end
+        # Step 4: byte_range
+        srcrange = JuliaSyntax.byte_range(cursor)
+        # Step 5: check kind isn't string/cmdstring
+        if k == JuliaSyntax.K"string"
+            return Int32(-300)
+        end
+        # Step 6: source_location
+        _loc = JuliaSyntax.source_location(LineNumberNode, source, first(srcrange))
+        # Step 7: _wasm_untokenize_head
+        headstr = _wasm_untokenize_head(nodehead)
+        if headstr === nothing
+            return Int32(-400)  # untokenize_head returned nothing
+        end
+        # Step 8: Symbol creation
+        _headsym = Symbol(headstr)
+        # Step 9: _wasm_parseargs!
+        retexpr = Expr(_headsym)
+        loc = JuliaSyntax.source_location(LineNumberNode, source, first(srcrange))
+        (fch, fcr) = _wasm_parseargs!(retexpr, loc, cursor, source, txtbuf, UInt32(0))
+        # Step 10: _node_to_expr
+        _result = JuliaSyntax._node_to_expr(retexpr, loc, srcrange, fch, fcr, nodehead, source)
+        return Int32(10000)  # all steps passed
+    catch
+        return Int32(-1)
+    end
+end
+
 # Test M: _wasm_leaf_to_expr for an integer leaf
 function eval_julia_test_wasm_leaf(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
