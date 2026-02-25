@@ -2634,6 +2634,13 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
 
+    # PURE-6026: Union of Tuples (e.g., Union{Tuple{Vararg{Int64}}, Tuple{Vararg{Symbol}}})
+    # passes `T <: Tuple` but doesn't have `.parameters`. Return nothing so the caller
+    # falls through to the StructRef fallback.
+    if T isa Union
+        return nothing
+    end
+
     # Get element types
     elem_types = T.parameters
 

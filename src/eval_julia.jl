@@ -1770,7 +1770,10 @@ end
 # This wrapper calls compile_module_from_ir directly, avoiding kwargs entirely.
 function _wasm_compile_codeinfo_to_bytes(ci::Core.CodeInfo, return_type::Type,
                                           func_name::String, arg_types::Tuple)::Vector{UInt8}
-    mod = WasmTarget.compile_module_from_ir([(ci, return_type, arg_types, func_name)])
+    entry = (ci, return_type, arg_types, func_name)
+    entries = Vector{Any}(undef, 1)
+    entries[1] = entry
+    mod = WasmTarget.compile_module_from_ir(entries)
     return WasmTarget.to_bytes(mod)
 end
 
