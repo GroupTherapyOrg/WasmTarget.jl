@@ -6886,6 +6886,12 @@ function generate_body(ctx::CompilationContext)::Vector{UInt8}
         bytes[end - 2] = 0x00  # Replace RETURN with UNREACHABLE
     end
 
+    # PURE-6022: Remove spurious i32_wrap_i64 after array_len.
+    # WasmGC array_len returns i32, but Julia's length() returns Int64.
+    # The codegen emits i32_wrap_i64 expecting i64, which fails validation.
+    # Pattern: [0xFB 0x0F] [0xA7] → remove the 0xA7 (already i32).
+    bytes = fix_array_len_wrap(bytes)
+
     # PURE-6022: Fix consecutive local_set instructions (multi-target phi assignments).
     # When a value feeds into multiple phi nodes, the codegen emits local_set for each
     # target. But local_set consumes the stack value, leaving nothing for subsequent sets.
@@ -6914,6 +6920,36 @@ function generate_body(ctx::CompilationContext)::Vector{UInt8}
     end
 
     return bytes
+end
+
+"""
+PURE-6022: Remove spurious i32_wrap_i64 after array_len.
+
+WasmGC array_len (0xFB 0x0F) returns i32, but Julia's length() returns Int64.
+The codegen emits i32_wrap_i64 (0xA7) expecting i64 input, which fails validation.
+Also handles: array_len followed by i64_extend_i32_s (0xAC) is redundant but valid —
+we leave those alone since they don't cause validation errors.
+"""
+function fix_array_len_wrap(bytes::Vector{UInt8})::Vector{UInt8}
+    result = UInt8[]
+    sizehint!(result, length(bytes))
+    i = 1
+    fixes = 0
+    while i <= length(bytes)
+        # Check for array_len (0xFB 0x0F) followed by i32_wrap_i64 (0xA7)
+        if bytes[i] == 0xFB && i + 2 <= length(bytes) && bytes[i+1] == 0x0F && bytes[i+2] == 0xA7
+            # Emit array_len but skip the i32_wrap_i64
+            push!(result, bytes[i])    # 0xFB
+            push!(result, bytes[i+1])  # 0x0F
+            # Skip 0xA7 (i32_wrap_i64) — array_len already returns i32
+            i += 3
+            fixes += 1
+            continue
+        end
+        push!(result, bytes[i])
+        i += 1
+    end
+    return result
 end
 
 """
