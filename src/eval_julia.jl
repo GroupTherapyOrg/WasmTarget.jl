@@ -98,7 +98,10 @@ function make_byte_vec(n::Int32)::Vector{UInt8}
 end
 
 function set_byte_vec!(v::Vector{UInt8}, idx::Int32, val::Int32)::Int32
-    v[Int(idx)] = UInt8(val)
+    # Use @inbounds + % UInt8 to avoid throw_boundserror and throw_inexacterror paths.
+    # Those throws set ctx.last_stmt_was_stub=true in codegen, killing the entire function body.
+    # JS controls all inputs, so bounds are guaranteed valid.
+    @inbounds v[Int(idx)] = val % UInt8
     return Int32(0)
 end
 

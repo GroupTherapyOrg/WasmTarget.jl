@@ -25,7 +25,8 @@ function eval_julia_result_length(v::Vector{UInt8})::Int32
 end
 
 function eval_julia_result_byte(v::Vector{UInt8}, idx::Int32)::Int32
-    return Int32(v[idx])
+    # Use @inbounds to avoid throw_boundserror which triggers dead code guard
+    @inbounds return Int32(v[Int(idx)])
 end
 
 function main()
