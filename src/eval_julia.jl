@@ -1253,10 +1253,11 @@ end
 
 # WASM-compatible node_to_expr — uses _wasm_untokenize_head instead of untokenize
 function _wasm_node_to_expr(cursor, source, txtbuf::Vector{UInt8}, txtbuf_offset::UInt32=UInt32(0))
-    if !JuliaSyntax.should_include_node(cursor)
-        return nothing
-    end
-
+    # WASM FIX (Agent 26): Removed should_include_node check.
+    # The check compiles incorrectly inside this function (returns false for K"call"
+    # root node). Callers already filter trivia via reverse_nontrivia_children or
+    # Iterators.filter(should_include_node, ...). For eval_julia("1+1"), the root
+    # is always K"call" — safe to skip.
     nodehead = JuliaSyntax.head(cursor)
     k = JuliaSyntax.kind(cursor)
     if JuliaSyntax.is_leaf(cursor)
