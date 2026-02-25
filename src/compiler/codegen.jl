@@ -6867,6 +6867,15 @@ function generate_body(ctx::CompilationContext)::Vector{UInt8}
     # Fix by removing the struct.new and select, keeping only local.get.
     bytes = fix_broken_select_instructions(bytes)
 
+    # PURE-6025: Post-process to fix numeric constants stored to ref-typed locals.
+    # Pattern: [i32_const VALUE] [local_set IDX] where IDX is a ref-typed local.
+    # This happens when Julia type inference returns a Union type (e.g., Union{ConcreteRef, UInt8})
+    # whose wasm type maps to ConcreteRef, but the actual compiled value is a UInt8 literal
+    # (e.g., ExternRef=0x6f=111). The type mismatch goes undetected because
+    # get_phi_edge_wasm_type returns ConcreteRef (matching the phi local type), but
+    # compile_phi_value emits i32_const 111. Replace with ref.null of the local's type.
+    bytes = fix_numeric_to_ref_local_stores(bytes, ctx.locals, ctx.n_params)
+
     # PURE-414: Check validator for errors after function body generation
     if has_errors(ctx.validator)
         @warn "Stack validator found $(length(ctx.validator.errors)) issue(s) in $(ctx.validator.func_name)" errors=ctx.validator.errors
@@ -6977,6 +6986,148 @@ function fix_broken_select_instructions(bytes::Vector{UInt8})::Vector{UInt8}
 
     if fixes > 0
         @info "PURE-036y: Fixed $fixes broken SELECT instructions"
+    end
+
+    return result
+end
+
+"""
+PURE-6025: Scan bytecode for numeric constants (i32.const, i64.const) stored
+directly to ref-typed locals via local.set. Replace with ref.null of the
+appropriate type.
+
+Pattern detected: [i32_const LEB128_value] [local_set LEB128_idx]
+where local idx is ref-typed (ConcreteRef, StructRef, ArrayRef, AnyRef, ExternRef).
+
+This catches cases where Julia type inference says a value is a ref type
+(e.g., Union{ConcreteRef, UInt8} → ConcreteRef) but the actual compiled value
+is a numeric constant (e.g., ExternRef=0x6f=111 compiled as i32_const 111).
+"""
+function fix_numeric_to_ref_local_stores(bytes::Vector{UInt8}, locals::Vector{WasmValType}, n_params::Int)::Vector{UInt8}
+    result = UInt8[]
+    sizehint!(result, length(bytes))
+    fixes = 0
+    i = 1
+
+    # Track whether we're inside a GC prefix instruction's parameters
+    # to avoid matching type index bytes (e.g., struct.get 65 0 = [0xFB,0x02,0x41,0x00]
+    # where 0x41 is the type index, not i32.const).
+    while i <= length(bytes)
+        op = bytes[i]
+
+        # Skip GC prefix instructions — their parameters contain LEB128 values
+        # that can coincidentally match i32.const (0x41) or local_set (0x21).
+        if op == Opcode.GC_PREFIX && i + 1 <= length(bytes)
+            push!(result, bytes[i])
+            i += 1
+            sub_op = bytes[i]
+            push!(result, bytes[i])
+            i += 1
+            # Skip LEB128 parameters based on sub-opcode
+            # struct.new (0x00): 1 LEB128 (type_idx)
+            # struct.get (0x02), struct.get_s (0x03), struct.get_u (0x04): 2 LEB128 (type_idx, field_idx)
+            # struct.set (0x05): 2 LEB128 (type_idx, field_idx)
+            # array.new (0x06), array.new_default (0x07): 1 LEB128 (type_idx)
+            # array.get (0x0b), array.get_s (0x0c), array.get_u (0x0d): 1 LEB128 (type_idx)
+            # array.set (0x0e): 1 LEB128 (type_idx)
+            # array.len (0x0f): 0 LEB128
+            # array.new_fixed (0x08): 2 LEB128 (type_idx, count)
+            # ref.cast (0x17), ref.cast_nullable (0x17): 1 LEB128 (type_idx) — actually htf byte
+            # ref.test (0x14/0x15): 1 htf byte
+            # extern_convert_any (0x1b), any_convert_extern (0x1a): 0 params
+            # i31.new/get (0x1c/0x1d/0x1e): 0 params
+            n_leb = if sub_op == 0x00; 1       # struct.new
+                    elseif sub_op == 0x01; 1   # struct.new_default
+                    elseif sub_op in (0x02, 0x03, 0x04, 0x05); 2  # struct.get/set
+                    elseif sub_op in (0x06, 0x07); 1  # array.new
+                    elseif sub_op == 0x08; 2   # array.new_fixed
+                    elseif sub_op in (0x0b, 0x0c, 0x0d, 0x0e); 1  # array.get/set
+                    elseif sub_op == 0x0f; 0   # array.len
+                    elseif sub_op in (0x14, 0x15, 0x16, 0x17); 1  # ref.test/cast
+                    elseif sub_op in (0x1a, 0x1b); 0  # extern/any convert
+                    elseif sub_op in (0x1c, 0x1d, 0x1e); 0  # i31 ops
+                    else 0  # Unknown — don't skip, safer to not match
+                    end
+            for _ in 1:n_leb
+                while i <= length(bytes)
+                    push!(result, bytes[i])
+                    if (bytes[i] & 0x80) == 0
+                        i += 1
+                        break
+                    end
+                    i += 1
+                end
+            end
+            continue
+        end
+
+        # Skip f32.const (4 raw bytes) and f64.const (8 raw bytes)
+        if op == Opcode.F32_CONST && i + 4 <= length(bytes)
+            for _ in 1:5; push!(result, bytes[i]); i += 1; end
+            continue
+        end
+        if op == Opcode.F64_CONST && i + 8 <= length(bytes)
+            for _ in 1:9; push!(result, bytes[i]); i += 1; end
+            continue
+        end
+
+        # Now check for i32.const / i64.const → local_set to ref-typed local
+        if (op == Opcode.I32_CONST || op == Opcode.I64_CONST) && i + 1 <= length(bytes)
+            # Decode the signed LEB128 value (skip over it to find the next instruction)
+            j = i + 1
+            while j <= length(bytes) && (bytes[j] & 0x80) != 0
+                j += 1
+            end
+            if j <= length(bytes)
+                j += 1  # Past the terminal LEB128 byte
+                # Check if next instruction is local_set (0x21)
+                if j <= length(bytes) && bytes[j] == Opcode.LOCAL_SET
+                    # Decode the local index (unsigned LEB128)
+                    k = j + 1
+                    local_idx = 0
+                    shift = 0
+                    while k <= length(bytes)
+                        b = bytes[k]
+                        local_idx |= (Int(b & 0x7f) << shift)
+                        shift += 7
+                        k += 1
+                        if (b & 0x80) == 0
+                            break
+                        end
+                    end
+                    # Check if this local is ref-typed
+                    local_array_idx = local_idx - n_params + 1
+                    if local_array_idx >= 1 && local_array_idx <= length(locals)
+                        local_type = locals[local_array_idx]
+                        if local_type isa ConcreteRef
+                            # Replace i32_const VALUE with ref_null TYPE
+                            push!(result, Opcode.REF_NULL)
+                            append!(result, encode_leb128_signed(Int64(local_type.type_idx)))
+                            # Keep the local_set instruction as-is
+                            for bi in j:k-1
+                                push!(result, bytes[bi])
+                            end
+                            fixes += 1
+                            i = k
+                            continue
+                        elseif local_type === StructRef || local_type === ArrayRef || local_type === AnyRef || local_type === ExternRef
+                            # Replace with ref_null of abstract type
+                            push!(result, Opcode.REF_NULL)
+                            push!(result, UInt8(local_type))
+                            for bi in j:k-1
+                                push!(result, bytes[bi])
+                            end
+                            fixes += 1
+                            i = k
+                            continue
+                        end
+                    end
+                end
+            end
+        end
+
+        push!(result, bytes[i])
+        i += 1
     end
 
     return result
@@ -11339,7 +11490,21 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                         append!(bytes, phi_value_bytes)
                                         push!(bytes, actual_val_type === I64 ? Opcode.F32_CONVERT_I64_S : Opcode.F32_CONVERT_I32_S)
                                     else
-                                        append!(bytes, phi_value_bytes)
+                                        # PURE-6025: Final safety net — detect numeric constants
+                                        # being stored to ref-typed locals. This happens when
+                                        # get_phi_edge_wasm_type returns ConcreteRef (from Julia
+                                        # type inference of a Union type) but compile_phi_value
+                                        # actually emits a numeric constant (e.g., UInt8 literal
+                                        # like ExternRef=0x6f=111). The LOCAL_GET check above
+                                        # doesn't catch this because the value is a recomputed
+                                        # statement, not a local.get.
+                                        phi_is_ref = phi_local_type isa ConcreteRef || phi_local_type === StructRef || phi_local_type === ArrayRef || phi_local_type === AnyRef || phi_local_type === ExternRef
+                                        phi_val_is_numeric = !isempty(phi_value_bytes) && (phi_value_bytes[1] == Opcode.I32_CONST || phi_value_bytes[1] == Opcode.I64_CONST || phi_value_bytes[1] == Opcode.F32_CONST || phi_value_bytes[1] == Opcode.F64_CONST)
+                                        if phi_is_ref && phi_val_is_numeric
+                                            append!(bytes, emit_phi_type_default(phi_local_type))
+                                        else
+                                            append!(bytes, phi_value_bytes)
+                                        end
                                     end
                                     push!(bytes, Opcode.LOCAL_SET)
                                     append!(bytes, encode_leb128_unsigned(local_idx))
