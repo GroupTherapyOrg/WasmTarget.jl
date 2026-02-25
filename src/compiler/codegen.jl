@@ -6934,21 +6934,32 @@ function fix_consecutive_local_sets(bytes::Vector{UInt8})::Vector{UInt8}
     while i <= length(bytes)
         op = bytes[i]
         if op == 0x21  # local_set
-            # Peek past the LEB128 local index to see if next instruction is also local_set
+            # Peek past the LEB128 local index to find where next instruction starts
             j = i + 1
             while j <= length(bytes) && (bytes[j] & 0x80) != 0
                 j += 1
             end
             if j <= length(bytes)
-                j += 1  # Past the terminal LEB128 byte
+                j += 1  # Past the terminal LEB128 byte — j now points to next instruction
                 if j <= length(bytes) && bytes[j] == 0x21  # next is also local_set
                     # Replace local_set with local_tee (keeps value on stack)
-                    push!(result, 0x22)  # local_tee
-                    i += 1
+                    push!(result, 0x22)  # local_tee opcode
+                    # Copy the LEB128 index bytes
+                    for k in (i+1):(j-1)
+                        push!(result, bytes[k])
+                    end
+                    i = j  # Skip to the next local_set instruction
                     fixes += 1
                     continue
                 end
             end
+            # No fix needed — copy the ENTIRE local_set instruction (opcode + LEB128 index)
+            # to avoid the index byte being re-processed as an opcode
+            for k in i:(j-1)
+                push!(result, bytes[k])
+            end
+            i = j
+            continue
         end
         push!(result, bytes[i])
         i += 1
@@ -6981,6 +6992,7 @@ function fix_local_get_set_type_mismatch(bytes::Vector{UInt8}, all_types::Vector
                 shift += 7; j += 1
                 (b & 0x80) == 0 && break
             end
+            # j is now past the local_get's LEB128 index (start of next instruction)
             # Check if next instruction is local_set (0x21) or local_tee (0x22)
             if j <= length(bytes) && (bytes[j] == 0x21 || bytes[j] == 0x22)
                 # Decode destination local index
@@ -7013,6 +7025,13 @@ function fix_local_get_set_type_mismatch(bytes::Vector{UInt8}, all_types::Vector
                     end
                 end
             end
+            # No fix applied — copy the full local_get instruction (opcode + LEB128 index)
+            # to avoid the index byte being re-processed as an opcode
+            for bi in i:(j-1)
+                push!(result, bytes[bi])
+            end
+            i = j
+            continue
         end
         push!(result, bytes[i])
         i += 1
