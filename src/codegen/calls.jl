@@ -2009,7 +2009,15 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             _skip_arg_prepush = _target !== nothing
         end
     end
-    for arg in args
+    # PURE-7012: Reorder muladd_float args for correct WASM stack order.
+    # muladd_float(a, b, c) = a*b + c. With default push order [a, b, c],
+    # WASM f64.mul takes top 2 (b,c) giving a+b*c (WRONG). Reorder to
+    # [c, a, b] so f64.mul takes (a,b) then f64.add takes (c, a*b) = a*b+c.
+    _push_args = args
+    if is_func(func, :muladd_float) && length(args) == 3
+        _push_args = Any[args[3], args[1], args[2]]
+    end
+    for arg in _push_args
         if _skip_arg_prepush
             continue
         end
