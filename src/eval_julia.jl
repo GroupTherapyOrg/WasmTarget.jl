@@ -98,6 +98,30 @@ const _CC_typeinf_frame = Core.Compiler.typeinf_frame
 const _CC_widenconst = Core.Compiler.widenconst
 const _CC_compile_from_codeinfo = WasmTarget.compile_from_codeinfo
 
+# PURE-8001: Pre-resolve inference parameters at include time (avoids kwargs in WASM).
+# OptimizationParams(; inlining=false) uses kwargs — must be pre-constructed.
+const _WASM_INF_PARAMS = Core.Compiler.InferenceParams()
+const _WASM_OPT_PARAMS = Core.Compiler.OptimizationParams(; inlining=false)
+
+# PURE-8001: Pre-resolve MethodInstance + CodeInfo at include time.
+# findall + retrieve_code_info use ccalls that trap in WASM (trap #1: _methods_by_ftype).
+# By pre-resolving here, runtime only needs typeinf_frame + codegen.
+function _pre_resolve_method(sig, world::UInt64)
+    native_mt = _CC_InternalMethodTable(world)
+    lu = _CC_findall(sig, native_mt)
+    mi = _CC_specialize_method(first(lu.matches))
+    ci_raw = _CC_retrieve_code_info(mi, world)
+    return (sig, mi, lu, ci_raw)
+end
+
+# Binary ops — pre-resolve at include time (ops exist before _WASM_WORLD_AGE)
+const _PRE_PLUS_I64 = _pre_resolve_method(Tuple{typeof(Base.:+), Int64, Int64}, _WASM_WORLD_AGE)
+const _PRE_MINUS_I64 = _pre_resolve_method(Tuple{typeof(Base.:-), Int64, Int64}, _WASM_WORLD_AGE)
+const _PRE_MUL_I64 = _pre_resolve_method(Tuple{typeof(Base.:*), Int64, Int64}, _WASM_WORLD_AGE)
+const _PRE_DIV_F64 = _pre_resolve_method(Tuple{typeof(Base.:/), Float64, Float64}, _WASM_WORLD_AGE)
+const _PRE_PLUS_F64 = _pre_resolve_method(Tuple{typeof(Base.:+), Float64, Float64}, _WASM_WORLD_AGE)
+const _PRE_MINUS_F64 = _pre_resolve_method(Tuple{typeof(Base.:-), Float64, Float64}, _WASM_WORLD_AGE)
+const _PRE_MUL_F64 = _pre_resolve_method(Tuple{typeof(Base.:*), Float64, Float64}, _WASM_WORLD_AGE)
 
 
 """
@@ -586,34 +610,39 @@ function _wasm_extract_binop_raw(code_bytes::Vector{UInt8})::Tuple{UInt8, Int64,
     return (op_byte, left_int, right_int)
 end
 
-# --- PURE-8000: Runtime stage 3-4 pipeline (replaces pre-computed bytes) ---
-# ALL 4 stages run at RUNTIME in WASM. No pre-computed bytes.
-#
-# Pipeline: parse (stages 1-2) → typeinf (stage 3) → codegen (stage 4)
-# All stages run every time eval_julia_to_bytes_vec is called.
+# --- PURE-8001: Runtime stage 3-4 pipeline (pre-resolved method lookup) ---
+# Stages 1-2 (parse + resolve) run at WASM runtime.
+# Stages 3-4 (typeinf + codegen) run at WASM runtime, but method lookup
+# (findall, specialize_method, retrieve_code_info) is pre-resolved at include time.
+# This eliminates the _methods_by_ftype ccall trap (PURE-8000 trap #1).
 #
 # Key design choices:
 #   - NO kwargs anywhere (kwcall dispatch traps in WASM)
-#   - _WASM_USE_REIMPL=true routes ccall-based method lookup to pure Julia
-#   - DictMethodTable populated via wasm_matching_methods (pure Julia)
-#   - compile_from_codeinfo called with positional args only (optimize defaults to false)
+#   - Method lookup pre-resolved at include time (no ccalls at runtime)
+#   - _WASM_USE_REIMPL=true routes ccall-based type operations to pure Julia
+#   - DictMethodTable populated with pre-resolved MethodLookupResult
+#   - WasmInterpreter constructed via positional-only _wasm_make_interp
 
-# Runtime compile: full pipeline for a given signature.
-# Calls typeinf_frame + compile_from_codeinfo at RUNTIME (not include time).
-#
-# IMPORTANT: _WASM_USE_REIMPL is set AFTER findall/retrieve_code_info (which use
-# native ccall in Julia, will trap in WASM — documented trap #1 for PORT stories).
-# The reimpl flag is only needed during typeinf_frame (for type intersection/matching).
+# WASM-friendly WasmInterpreter construction (no kwargs).
+# The standard WasmInterpreter(world, table) constructor uses kwargs
+# (OptimizationParams(; inlining=false)) which traps in WASM.
+# This uses the 6-arg inner constructor with pre-constructed params.
+function _wasm_make_interp(world::UInt64, table::DictMethodTable)::WasmInterpreter
+    cached_table = Core.Compiler.CachedMethodTable(table)
+    inf_cache = Vector{Core.Compiler.InferenceResult}()
+    code_cache = PreDecompressedCodeInfo()
+    return WasmInterpreter(world, cached_table, inf_cache, _WASM_INF_PARAMS, _WASM_OPT_PARAMS, code_cache)
+end
+
+# Runtime compile for each op — uses pre-resolved (sig, mi, lu, ci_raw) from include time.
+# At WASM runtime: construct DictMethodTable + WasmInterpreter, call typeinf_frame + codegen.
+# findall/specialize_method/retrieve_code_info are SKIPPED (pre-resolved).
 function _wasm_runtime_compile_plus_i64()::Vector{UInt8}
-    sig = Tuple{typeof(Base.:+), Int64, Int64}
+    sig, mi, lu, ci_raw = _PRE_PLUS_I64
     world = _WASM_WORLD_AGE
-    native_mt = _CC_InternalMethodTable(world)
-    lu = _CC_findall(sig, native_mt)
-    mi = _CC_specialize_method(first(lu.matches))
     table = DictMethodTable(world)
     table.methods[sig] = lu
-    interp = WasmInterpreter(world, table)
-    ci_raw = _CC_retrieve_code_info(mi, world)
+    interp = _wasm_make_interp(world, table)
     interp.code_info_cache.cache[mi] = ci_raw
     _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
@@ -626,15 +655,11 @@ function _wasm_runtime_compile_plus_i64()::Vector{UInt8}
 end
 
 function _wasm_runtime_compile_minus_i64()::Vector{UInt8}
-    sig = Tuple{typeof(Base.:-), Int64, Int64}
+    sig, mi, lu, ci_raw = _PRE_MINUS_I64
     world = _WASM_WORLD_AGE
-    native_mt = _CC_InternalMethodTable(world)
-    lu = _CC_findall(sig, native_mt)
-    mi = _CC_specialize_method(first(lu.matches))
     table = DictMethodTable(world)
     table.methods[sig] = lu
-    interp = WasmInterpreter(world, table)
-    ci_raw = _CC_retrieve_code_info(mi, world)
+    interp = _wasm_make_interp(world, table)
     interp.code_info_cache.cache[mi] = ci_raw
     _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
@@ -647,15 +672,11 @@ function _wasm_runtime_compile_minus_i64()::Vector{UInt8}
 end
 
 function _wasm_runtime_compile_mul_i64()::Vector{UInt8}
-    sig = Tuple{typeof(Base.:*), Int64, Int64}
+    sig, mi, lu, ci_raw = _PRE_MUL_I64
     world = _WASM_WORLD_AGE
-    native_mt = _CC_InternalMethodTable(world)
-    lu = _CC_findall(sig, native_mt)
-    mi = _CC_specialize_method(first(lu.matches))
     table = DictMethodTable(world)
     table.methods[sig] = lu
-    interp = WasmInterpreter(world, table)
-    ci_raw = _CC_retrieve_code_info(mi, world)
+    interp = _wasm_make_interp(world, table)
     interp.code_info_cache.cache[mi] = ci_raw
     _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
@@ -668,15 +689,11 @@ function _wasm_runtime_compile_mul_i64()::Vector{UInt8}
 end
 
 function _wasm_runtime_compile_div_f64()::Vector{UInt8}
-    sig = Tuple{typeof(Base.:/), Float64, Float64}
+    sig, mi, lu, ci_raw = _PRE_DIV_F64
     world = _WASM_WORLD_AGE
-    native_mt = _CC_InternalMethodTable(world)
-    lu = _CC_findall(sig, native_mt)
-    mi = _CC_specialize_method(first(lu.matches))
     table = DictMethodTable(world)
     table.methods[sig] = lu
-    interp = WasmInterpreter(world, table)
-    ci_raw = _CC_retrieve_code_info(mi, world)
+    interp = _wasm_make_interp(world, table)
     interp.code_info_cache.cache[mi] = ci_raw
     _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
@@ -689,15 +706,11 @@ function _wasm_runtime_compile_div_f64()::Vector{UInt8}
 end
 
 function _wasm_runtime_compile_plus_f64()::Vector{UInt8}
-    sig = Tuple{typeof(Base.:+), Float64, Float64}
+    sig, mi, lu, ci_raw = _PRE_PLUS_F64
     world = _WASM_WORLD_AGE
-    native_mt = _CC_InternalMethodTable(world)
-    lu = _CC_findall(sig, native_mt)
-    mi = _CC_specialize_method(first(lu.matches))
     table = DictMethodTable(world)
     table.methods[sig] = lu
-    interp = WasmInterpreter(world, table)
-    ci_raw = _CC_retrieve_code_info(mi, world)
+    interp = _wasm_make_interp(world, table)
     interp.code_info_cache.cache[mi] = ci_raw
     _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
@@ -710,15 +723,11 @@ function _wasm_runtime_compile_plus_f64()::Vector{UInt8}
 end
 
 function _wasm_runtime_compile_minus_f64()::Vector{UInt8}
-    sig = Tuple{typeof(Base.:-), Float64, Float64}
+    sig, mi, lu, ci_raw = _PRE_MINUS_F64
     world = _WASM_WORLD_AGE
-    native_mt = _CC_InternalMethodTable(world)
-    lu = _CC_findall(sig, native_mt)
-    mi = _CC_specialize_method(first(lu.matches))
     table = DictMethodTable(world)
     table.methods[sig] = lu
-    interp = WasmInterpreter(world, table)
-    ci_raw = _CC_retrieve_code_info(mi, world)
+    interp = _wasm_make_interp(world, table)
     interp.code_info_cache.cache[mi] = ci_raw
     _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
@@ -731,15 +740,11 @@ function _wasm_runtime_compile_minus_f64()::Vector{UInt8}
 end
 
 function _wasm_runtime_compile_mul_f64()::Vector{UInt8}
-    sig = Tuple{typeof(Base.:*), Float64, Float64}
+    sig, mi, lu, ci_raw = _PRE_MUL_F64
     world = _WASM_WORLD_AGE
-    native_mt = _CC_InternalMethodTable(world)
-    lu = _CC_findall(sig, native_mt)
-    mi = _CC_specialize_method(first(lu.matches))
     table = DictMethodTable(world)
     table.methods[sig] = lu
-    interp = WasmInterpreter(world, table)
-    ci_raw = _CC_retrieve_code_info(mi, world)
+    interp = _wasm_make_interp(world, table)
     interp.code_info_cache.cache[mi] = ci_raw
     _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
@@ -850,19 +855,19 @@ function _wasm_sin_f64(x::Float64)::Float64
     end
 end
 
-# PURE-8000: Runtime compile for unary functions.
-# Uses the same pipeline as binary ops but with unary port function signatures.
-# Port functions use Core.Intrinsics directly — the pipeline compiles them at runtime.
+# Unary ops — pre-resolve with fresh world (port funcs defined after _WASM_WORLD_AGE)
+const _WASM_UNARY_WORLD = UInt64(Base.get_world_counter())
+const _PRE_SIN_F64 = _pre_resolve_method(Tuple{typeof(_wasm_sin_f64), Float64}, _WASM_UNARY_WORLD)
+const _PRE_ABS_I64 = _pre_resolve_method(Tuple{typeof(_wasm_abs_i64), Int64}, _WASM_UNARY_WORLD)
+const _PRE_SQRT_F64 = _pre_resolve_method(Tuple{typeof(_wasm_sqrt_f64), Float64}, _WASM_UNARY_WORLD)
+
+# PURE-8001: Runtime compile for unary functions — pre-resolved method lookup.
 function _wasm_runtime_compile_sin_f64()::Vector{UInt8}
-    sig = Tuple{typeof(_wasm_sin_f64), Float64}
-    world = UInt64(Base.get_world_counter())  # need fresh world (port func defined after _WASM_WORLD_AGE)
-    native_mt = _CC_InternalMethodTable(world)
-    lu = _CC_findall(sig, native_mt)
-    mi = _CC_specialize_method(first(lu.matches))
+    sig, mi, lu, ci_raw = _PRE_SIN_F64
+    world = _WASM_UNARY_WORLD
     table = DictMethodTable(world)
     table.methods[sig] = lu
-    interp = WasmInterpreter(world, table)
-    ci_raw = _CC_retrieve_code_info(mi, world)
+    interp = _wasm_make_interp(world, table)
     interp.code_info_cache.cache[mi] = ci_raw
     _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
@@ -875,15 +880,11 @@ function _wasm_runtime_compile_sin_f64()::Vector{UInt8}
 end
 
 function _wasm_runtime_compile_abs_i64()::Vector{UInt8}
-    sig = Tuple{typeof(_wasm_abs_i64), Int64}
-    world = UInt64(Base.get_world_counter())  # need fresh world (port func defined after _WASM_WORLD_AGE)
-    native_mt = _CC_InternalMethodTable(world)
-    lu = _CC_findall(sig, native_mt)
-    mi = _CC_specialize_method(first(lu.matches))
+    sig, mi, lu, ci_raw = _PRE_ABS_I64
+    world = _WASM_UNARY_WORLD
     table = DictMethodTable(world)
     table.methods[sig] = lu
-    interp = WasmInterpreter(world, table)
-    ci_raw = _CC_retrieve_code_info(mi, world)
+    interp = _wasm_make_interp(world, table)
     interp.code_info_cache.cache[mi] = ci_raw
     _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
@@ -896,15 +897,11 @@ function _wasm_runtime_compile_abs_i64()::Vector{UInt8}
 end
 
 function _wasm_runtime_compile_sqrt_f64()::Vector{UInt8}
-    sig = Tuple{typeof(_wasm_sqrt_f64), Float64}
-    world = UInt64(Base.get_world_counter())  # need fresh world (port func defined after _WASM_WORLD_AGE)
-    native_mt = _CC_InternalMethodTable(world)
-    lu = _CC_findall(sig, native_mt)
-    mi = _CC_specialize_method(first(lu.matches))
+    sig, mi, lu, ci_raw = _PRE_SQRT_F64
+    world = _WASM_UNARY_WORLD
     table = DictMethodTable(world)
     table.methods[sig] = lu
-    interp = WasmInterpreter(world, table)
-    ci_raw = _CC_retrieve_code_info(mi, world)
+    interp = _wasm_make_interp(world, table)
     interp.code_info_cache.cache[mi] = ci_raw
     _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
