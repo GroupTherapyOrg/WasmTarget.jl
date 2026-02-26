@@ -4,8 +4,8 @@
 # Compile eval_julia_to_bytes_vec to WASM, stubbing optimization pass
 # functions that are never called at runtime (may_optimize=false).
 #
-# Seed: 13 essential functions (pipeline + ports + JS helpers).
-# All 72 diagnostic test functions removed in PURE-7000.
+# PURE-7006: Seed cleaned — removed unused build_tree chain (_wasm_string_to_Expr etc.)
+# Pipeline now uses _wasm_extract_binop_raw (stages 1-2) + _wasm_cached_arith_bytes (3-4).
 
 using Pkg
 Pkg.activate(joinpath(@__DIR__, ".."))
@@ -82,32 +82,28 @@ function main()
     seed = [
         # Real pipeline entry point
         (eval_julia_to_bytes_vec, (Vector{UInt8},)),
-        # WASM-compatible port functions (build_tree chain)
-        (_wasm_simple_call_expr, (JuliaSyntax.ParseStream,)),
-        (_wasm_build_tree_expr, (JuliaSyntax.ParseStream,)),
-        (_wasm_leaf_to_expr, (JuliaSyntax.RedTreeCursor, JuliaSyntax.Kind, Vector{UInt8}, UInt32)),
-        (_wasm_node_to_expr, (JuliaSyntax.RedTreeCursor, JuliaSyntax.SourceFile, Vector{UInt8}, UInt32)),
-        (_wasm_parseargs!, (Expr, LineNumberNode, JuliaSyntax.RedTreeCursor, JuliaSyntax.SourceFile, Vector{UInt8}, UInt32)),
-        (_wasm_string_to_Expr, (JuliaSyntax.RedTreeCursor, JuliaSyntax.SourceFile, Vector{UInt8}, UInt32)),
-        (_wasm_untokenize_kind, (JuliaSyntax.Kind, Bool)),
-        (_wasm_untokenize_head, (JuliaSyntax.SyntaxHead,)),
         # PURE-7001: parse! port (bypasses kwarg dispatch)
         (_wasm_parse_statement!, (JuliaSyntax.ParseStream,)),
-        # PURE-7001a: flat array tree traversal (bypasses broken iterate protocol)
-        (_wasm_binop_byte_starts, (JuliaSyntax.ParseStream,)),
+        # PURE-7002: Raw byte extraction port (bypasses broken Vector growth)
+        (_wasm_extract_binop_raw, (Vector{UInt8},)),
+        # PURE-7006: Pre-computed WASM bytes (bypasses kwargs + ccall in stages 3-4)
+        (_set_bytes8, (Vector{UInt8}, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32)),
+        (_set_bytes3, (Vector{UInt8}, Int32, Int32, Int32, Int32)),
+        (_wasm_cached_int_arith_bytes, (UInt8,)),
+        (_wasm_cached_div_bytes, ()),
+        (_wasm_cached_arith_bytes, (UInt8,)),
         # JS bridge helpers
         (eval_julia_result_length, (Vector{UInt8},)),
         (eval_julia_result_byte, (Vector{UInt8}, Int32)),
         (make_byte_vec, (Int32,)),
         (set_byte_vec!, (Vector{UInt8}, Int32, Int32)),
-        # PURE-7001: Diagnostic functions for isolation testing
+        # Diagnostic functions (stages 0-3)
         (_diag_stage0_len, (Vector{UInt8},)),
         (_diag_stage0_ps, (Vector{UInt8},)),
         (_diag_stage0_parse, (Vector{UInt8},)),
         (_diag_stage0_cursor, (Vector{UInt8},)),
         (_diag_stage1_parse, (Vector{UInt8},)),
         (_diag_stage2_resolve, (Vector{UInt8},)),
-        # PURE-7003: Sub-stage diagnostics for stage 3 isolation
         (_diag_stage3a_world, (Vector{UInt8},)),
         (_diag_stage3b_sig, (Vector{UInt8},)),
         (_diag_stage3c_interp, (Vector{UInt8},)),
@@ -131,14 +127,6 @@ function main()
         (_diag_binop_d_child2, (Vector{UInt8},)),
         (_diag_binop_e_txtaccess, (Vector{UInt8},)),
         (_diag_binop_f_full, (Vector{UInt8},)),
-        # PURE-7002: Raw byte extraction port (bypasses broken Vector growth)
-        (_wasm_extract_binop_raw, (Vector{UInt8},)),
-        # PURE-7006: Pre-computed WASM bytes (bypasses kwargs + ccall in stages 3-4)
-        (_set_bytes8, (Vector{UInt8}, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32)),
-        (_set_bytes3, (Vector{UInt8}, Int32, Int32, Int32, Int32)),
-        (_wasm_cached_int_arith_bytes, (UInt8,)),
-        (_wasm_cached_div_bytes, ()),
-        (_wasm_cached_arith_bytes, (UInt8,)),
         # PURE-7002: Vector length vs getfield diagnostics
         (_diag_7002_output_len, (Vector{UInt8},)),
         (_diag_7002_output_5, (Vector{UInt8},)),
