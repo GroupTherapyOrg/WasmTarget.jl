@@ -133,6 +133,12 @@ function main()
         (_diag_binop_f_full, (Vector{UInt8},)),
         # PURE-7002: Raw byte extraction port (bypasses broken Vector growth)
         (_wasm_extract_binop_raw, (Vector{UInt8},)),
+        # PURE-7006: Pre-computed WASM bytes (bypasses kwargs + ccall in stages 3-4)
+        (_set_bytes8, (Vector{UInt8}, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32)),
+        (_set_bytes3, (Vector{UInt8}, Int32, Int32, Int32, Int32)),
+        (_wasm_cached_int_arith_bytes, (UInt8,)),
+        (_wasm_cached_div_bytes, ()),
+        (_wasm_cached_arith_bytes, (UInt8,)),
         # PURE-7002: Vector length vs getfield diagnostics
         (_diag_7002_output_len, (Vector{UInt8},)),
         (_diag_7002_output_5, (Vector{UInt8},)),
