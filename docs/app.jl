@@ -67,4 +67,13 @@ if length(ARGS) >= 1 && ARGS[1] == "build"
         cp(src_wasm, joinpath(playground_dist, "pipeline-optimized.wasm"); force=true)
         println("  Copied: playground/pipeline-optimized.wasm")
     end
+
+    # Copy eval_julia.wasm (real compiler pipeline) for live compilation
+    output_dir = joinpath(dirname(@__DIR__), "output")
+    eval_wasm = joinpath(output_dir, "eval_julia.wasm")
+    if isfile(eval_wasm)
+        cp(eval_wasm, joinpath(playground_dist, "eval_julia.wasm"); force=true)
+        sz_kb = round(Int, filesize(eval_wasm) / 1024)
+        println("  Copied: playground/eval_julia.wasm ($(sz_kb) KB)")
+    end
 end

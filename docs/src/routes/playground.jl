@@ -120,9 +120,10 @@ function PlaygroundPage()
         Suite.Alert(class="mb-8",
             Suite.AlertTitle("How It Works"),
             Suite.AlertDescription(
-                "This playground loads a 216 KB WebAssembly module (pipeline-optimized.wasm) compiled from Julia by WasmTarget.jl. " *
-                "Your expressions are matched to pre-compiled WASM functions that execute natively in the browser — no server required. " *
-                "Full arbitrary code compilation is coming in a future update."
+                "For simple arithmetic like '1 + 1', this playground runs the real Julia compiler pipeline entirely in your browser: " *
+                "it parses Julia source code, performs type inference, and generates a fresh WebAssembly module on the fly — no server required. " *
+                "Other expressions use pre-compiled WASM functions as a fallback. " *
+                "More expression types will be compiled live as the compiler expands."
             )
         ),
 
@@ -144,22 +145,35 @@ function _playground_script()
     # The script uses window._pgWasm to cache the WASM instance across SPA navigations.
     # The TherapyHydrate marker tells the SPA router to re-execute this script after
     # content swap, so it works on both hard refresh AND SPA navigation.
+    #
+    # PURE-7009: Real eval_julia pipeline wired in alongside regex fallback.
+    # For integer arithmetic (+, -), the real pipeline is used:
+    #   1. Load eval_julia.wasm (the outer compiler module, ~2MB)
+    #   2. Encode expression string → WasmGC byte vector
+    #   3. Call eval_julia_to_bytes_vec → inner WASM module bytes
+    #   4. Instantiate inner module → call operator export → display result
+    # All other expressions fall back to pre-compiled pipeline-optimized.wasm.
     """
     (function() {
       // TherapyHydrate — marker so the SPA router re-executes this script on navigation
       // --- Global WASM cache (persists across SPA navigations) ---
-      // window._pgWasm holds the loaded instance so we don't re-fetch on every nav
-      var wasmPaths = [
+      var pipelinePaths = [
         window.location.pathname.replace(/\\/playground\\/.*/, '/playground/pipeline-optimized.wasm'),
         './pipeline-optimized.wasm',
         '/WasmTarget.jl/playground/pipeline-optimized.wasm'
       ];
+      var evalPaths = [
+        window.location.pathname.replace(/\\/playground\\/.*/, '/playground/eval_julia.wasm'),
+        './eval_julia.wasm',
+        '/WasmTarget.jl/playground/eval_julia.wasm'
+      ];
 
-      async function ensureWasm() {
+      // Load pipeline-optimized.wasm (regex fallback)
+      async function ensurePipelineWasm() {
         if (window._pgWasm) return window._pgWasm;
-        for (var i = 0; i < wasmPaths.length; i++) {
+        for (var i = 0; i < pipelinePaths.length; i++) {
           try {
-            var resp = await fetch(wasmPaths[i]);
+            var resp = await fetch(pipelinePaths[i]);
             if (!resp.ok) continue;
             var bytes = await resp.arrayBuffer();
             var result = await WebAssembly.instantiate(bytes, { Math: { pow: Math.pow } });
@@ -171,11 +185,87 @@ function _playground_script()
         return null;
       }
 
+      // Load eval_julia.wasm (real compiler pipeline)
+      async function ensureEvalWasm() {
+        if (window._pgEvalWasm) return window._pgEvalWasm;
+        for (var i = 0; i < evalPaths.length; i++) {
+          try {
+            var resp = await fetch(evalPaths[i]);
+            if (!resp.ok) continue;
+            var bytes = await resp.arrayBuffer();
+            var result = await WebAssembly.instantiate(bytes, { Math: { pow: Math.pow } });
+            window._pgEvalWasm = result.instance;
+            window._pgEvalSize = (bytes.byteLength / 1024).toFixed(0);
+            return window._pgEvalWasm;
+          } catch(e) { /* try next */ }
+        }
+        return null;
+      }
+
+      // --- Bridge helpers (from PURE-7008, browser-compatible) ---
+
+      // Encode JS string → WasmGC byte vector
+      function jsToWasmBytes(exports, str) {
+        var vec = exports['make_byte_vec'](str.length);
+        for (var i = 0; i < str.length; i++) {
+          exports['set_byte_vec!'](vec, i + 1, str.charCodeAt(i));
+        }
+        return vec;
+      }
+
+      // Extract WasmGC byte vector → JS Uint8Array
+      function extractWasmBytes(exports, wasmVec) {
+        var len = exports['eval_julia_result_length'](wasmVec);
+        var bytes = new Uint8Array(len);
+        for (var i = 0; i < len; i++) {
+          bytes[i] = exports['eval_julia_result_byte'](wasmVec, i + 1);
+        }
+        return bytes;
+      }
+
+      // Full eval_julia pipeline: string → compile → extract → instantiate → execute
+      async function evalJulia(expr) {
+        var e = window._pgEvalWasm.exports;
+        var t0 = performance.now();
+
+        // Step 1: Encode expression → WasmGC byte vector
+        var inputVec = jsToWasmBytes(e, expr);
+
+        // Step 2: Compile — eval_julia_to_bytes_vec → inner WASM bytes
+        var resultVec = e['eval_julia_to_bytes_vec'](inputVec);
+        var innerBytes = extractWasmBytes(e, resultVec);
+
+        // Validate WASM magic
+        if (innerBytes.length < 8 || innerBytes[0] !== 0x00 || innerBytes[1] !== 0x61 ||
+            innerBytes[2] !== 0x73 || innerBytes[3] !== 0x6d) {
+          throw new Error('Compiler produced invalid WASM bytes (' + innerBytes.length + ' bytes)');
+        }
+
+        // Step 3: Instantiate inner module
+        var inner = await WebAssembly.instantiate(innerBytes, { Math: { pow: Math.pow } });
+        var compileMs = (performance.now() - t0).toFixed(1);
+
+        // Step 4: Find and call the operator export
+        var opMatch = expr.match(/([+\\-*/])/);
+        if (!opMatch) throw new Error('No operator found in "' + expr + '"');
+        var fn = inner.instance.exports[opMatch[1]];
+        if (!fn) throw new Error('No export "' + opMatch[1] + '" in inner module');
+
+        // Parse operands and call
+        var parts = expr.split(opMatch[0]);
+        var left = BigInt(parseInt(parts[0].trim(), 10));
+        var right = BigInt(parseInt(parts[1].trim(), 10));
+        var result = fn(left, right);
+
+        return { value: Number(result), innerSize: innerBytes.length, compileMs: compileMs };
+      }
+
       function escapeHtml(s) {
         return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
       }
 
-      function evaluate(code) {
+      // Regex-based evaluate (fallback for pre-compiled pipeline-optimized.wasm)
+      function evaluateFallback(code) {
         var e = window._pgWasm.exports;
         var trimmed = code.trim();
 
@@ -252,21 +342,31 @@ function _playground_script()
         );
       }
 
+      // Check if expression is simple integer arithmetic that eval_julia supports
+      function isEvalJuliaSupported(code) {
+        return /^\\s*-?\\d+\\s*[+\\-]\\s*-?\\d+\\s*\$/.test(code);
+      }
+
       // --- Init: wire up DOM elements and load WASM ---
-      // Called on page load AND after SPA navigation
       async function initPlayground() {
         var editor = document.getElementById('pg-editor');
         var runBtn = document.getElementById('pg-run');
         var output = document.getElementById('pg-output');
         var status = document.getElementById('pg-status');
 
-        // Bail if playground DOM isn't on this page
         if (!editor || !runBtn || !output || !status) return;
 
-        // Load WASM (cached after first load)
-        var inst = await ensureWasm();
-        if (inst) {
-          status.textContent = 'Ready (' + (window._pgWasmSize || '?') + ' KB)';
+        // Load both WASM modules in parallel
+        status.textContent = 'Loading WASM modules...';
+        var results = await Promise.allSettled([ensurePipelineWasm(), ensureEvalWasm()]);
+        var hasPipeline = !!window._pgWasm;
+        var hasEval = !!window._pgEvalWasm;
+
+        if (hasEval || hasPipeline) {
+          var parts = [];
+          if (hasEval) parts.push('compiler ' + (window._pgEvalSize || '?') + ' KB');
+          if (hasPipeline) parts.push('pre-compiled ' + (window._pgWasmSize || '?') + ' KB');
+          status.textContent = 'Ready (' + parts.join(' + ') + ')';
           status.className = 'text-xs text-accent-600 dark:text-accent-400 font-medium';
           runBtn.disabled = false;
         } else {
@@ -275,12 +375,38 @@ function _playground_script()
           return;
         }
 
-        function run() {
-          try {
-            var result = evaluate(editor.value);
-            output.innerHTML = '<span class=\"text-green-400\">' + escapeHtml(result) + '</span>';
-          } catch(err) {
-            output.innerHTML = '<span class=\"text-red-400\">' + escapeHtml(err.message) + '</span>';
+        async function run() {
+          var code = editor.value;
+          var trimmed = code.trim();
+
+          // Try real eval_julia pipeline for supported expressions
+          if (hasEval && isEvalJuliaSupported(trimmed)) {
+            try {
+              var r = await evalJulia(trimmed);
+              output.innerHTML =
+                '<span class=\"text-green-400\">' + escapeHtml(String(r.value)) + '</span>' +
+                '<span class=\"text-warm-500 text-xs ml-3\">' +
+                'Compiled live via eval_julia (' + r.innerSize + ' byte inner module, ' + r.compileMs + ' ms)' +
+                '</span>';
+              return;
+            } catch(e) {
+              // Fall through to regex fallback
+              console.warn('eval_julia failed, falling back:', e.message);
+            }
+          }
+
+          // Fallback to pre-compiled pipeline-optimized.wasm
+          if (hasPipeline) {
+            try {
+              var result = evaluateFallback(code);
+              output.innerHTML =
+                '<span class=\"text-green-400\">' + escapeHtml(result) + '</span>' +
+                '<span class=\"text-warm-500 text-xs ml-3\">Pre-compiled</span>';
+            } catch(err) {
+              output.innerHTML = '<span class=\"text-red-400\">' + escapeHtml(err.message) + '</span>';
+            }
+          } else {
+            output.innerHTML = '<span class=\"text-red-400\">No WASM module available for this expression.</span>';
           }
         }
 
@@ -288,10 +414,9 @@ function _playground_script()
         var fresh = runBtn.cloneNode(true);
         fresh.disabled = false;
         runBtn.parentNode.replaceChild(fresh, runBtn);
-        fresh.addEventListener('click', run);
+        fresh.addEventListener('click', function() { run(); });
 
         // Ctrl/Cmd+Enter
-        // Use a named handler on window so we can avoid duplicates
         if (window._pgKeyHandler) document.removeEventListener('keydown', window._pgKeyHandler);
         window._pgKeyHandler = function(ev) {
           if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter' && document.getElementById('pg-editor')) {
