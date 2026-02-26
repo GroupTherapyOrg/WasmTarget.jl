@@ -637,7 +637,7 @@ const _WASM_BYTES_MINUS = _wasm_precompute_arith_bytes(Base.:-, "-")
 const _WASM_BYTES_MUL   = _wasm_precompute_arith_bytes(Base.:*, "*")
 const _WASM_BYTES_DIV   = _wasm_precompute_arith_bytes(Base.:/, "/")
 
-# PURE-7011: Float64 precomputed bytes — same real pipeline, Float64 signatures
+# PURE-7011: Float64 bytes from real pipeline, Float64 signatures
 const _WASM_BYTES_PLUS_F64  = _wasm_precompute_arith_bytes_f64(Base.:+, "+")
 const _WASM_BYTES_MINUS_F64 = _wasm_precompute_arith_bytes_f64(Base.:-, "-")
 const _WASM_BYTES_MUL_F64   = _wasm_precompute_arith_bytes_f64(Base.:*, "*")
