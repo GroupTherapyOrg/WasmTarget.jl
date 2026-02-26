@@ -588,10 +588,13 @@ end
 
 # Runtime compile: full pipeline for a given signature.
 # Calls typeinf_frame + compile_from_codeinfo at RUNTIME (not include time).
+#
+# IMPORTANT: _WASM_USE_REIMPL is set AFTER findall/retrieve_code_info (which use
+# native ccall in Julia, will trap in WASM — documented trap #1 for PORT stories).
+# The reimpl flag is only needed during typeinf_frame (for type intersection/matching).
 function _wasm_runtime_compile_plus_i64()::Vector{UInt8}
     sig = Tuple{typeof(Base.:+), Int64, Int64}
     world = _WASM_WORLD_AGE
-    _WASM_USE_REIMPL[] = true
     native_mt = Core.Compiler.InternalMethodTable(world)
     lu = Core.Compiler.findall(sig, native_mt)
     mi = Core.Compiler.specialize_method(first(lu.matches))
@@ -600,6 +603,7 @@ function _wasm_runtime_compile_plus_i64()::Vector{UInt8}
     interp = WasmInterpreter(world, table)
     ci_raw = Core.Compiler.retrieve_code_info(mi, world)
     interp.code_info_cache.cache[mi] = ci_raw
+    _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
     inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
     _WASM_USE_REIMPL[] = false
@@ -612,7 +616,6 @@ end
 function _wasm_runtime_compile_minus_i64()::Vector{UInt8}
     sig = Tuple{typeof(Base.:-), Int64, Int64}
     world = _WASM_WORLD_AGE
-    _WASM_USE_REIMPL[] = true
     native_mt = Core.Compiler.InternalMethodTable(world)
     lu = Core.Compiler.findall(sig, native_mt)
     mi = Core.Compiler.specialize_method(first(lu.matches))
@@ -621,6 +624,7 @@ function _wasm_runtime_compile_minus_i64()::Vector{UInt8}
     interp = WasmInterpreter(world, table)
     ci_raw = Core.Compiler.retrieve_code_info(mi, world)
     interp.code_info_cache.cache[mi] = ci_raw
+    _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
     inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
     _WASM_USE_REIMPL[] = false
@@ -633,7 +637,6 @@ end
 function _wasm_runtime_compile_mul_i64()::Vector{UInt8}
     sig = Tuple{typeof(Base.:*), Int64, Int64}
     world = _WASM_WORLD_AGE
-    _WASM_USE_REIMPL[] = true
     native_mt = Core.Compiler.InternalMethodTable(world)
     lu = Core.Compiler.findall(sig, native_mt)
     mi = Core.Compiler.specialize_method(first(lu.matches))
@@ -642,6 +645,7 @@ function _wasm_runtime_compile_mul_i64()::Vector{UInt8}
     interp = WasmInterpreter(world, table)
     ci_raw = Core.Compiler.retrieve_code_info(mi, world)
     interp.code_info_cache.cache[mi] = ci_raw
+    _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
     inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
     _WASM_USE_REIMPL[] = false
@@ -654,7 +658,6 @@ end
 function _wasm_runtime_compile_div_f64()::Vector{UInt8}
     sig = Tuple{typeof(Base.:/), Float64, Float64}
     world = _WASM_WORLD_AGE
-    _WASM_USE_REIMPL[] = true
     native_mt = Core.Compiler.InternalMethodTable(world)
     lu = Core.Compiler.findall(sig, native_mt)
     mi = Core.Compiler.specialize_method(first(lu.matches))
@@ -663,6 +666,7 @@ function _wasm_runtime_compile_div_f64()::Vector{UInt8}
     interp = WasmInterpreter(world, table)
     ci_raw = Core.Compiler.retrieve_code_info(mi, world)
     interp.code_info_cache.cache[mi] = ci_raw
+    _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
     inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
     _WASM_USE_REIMPL[] = false
@@ -675,7 +679,6 @@ end
 function _wasm_runtime_compile_plus_f64()::Vector{UInt8}
     sig = Tuple{typeof(Base.:+), Float64, Float64}
     world = _WASM_WORLD_AGE
-    _WASM_USE_REIMPL[] = true
     native_mt = Core.Compiler.InternalMethodTable(world)
     lu = Core.Compiler.findall(sig, native_mt)
     mi = Core.Compiler.specialize_method(first(lu.matches))
@@ -684,6 +687,7 @@ function _wasm_runtime_compile_plus_f64()::Vector{UInt8}
     interp = WasmInterpreter(world, table)
     ci_raw = Core.Compiler.retrieve_code_info(mi, world)
     interp.code_info_cache.cache[mi] = ci_raw
+    _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
     inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
     _WASM_USE_REIMPL[] = false
@@ -696,7 +700,6 @@ end
 function _wasm_runtime_compile_minus_f64()::Vector{UInt8}
     sig = Tuple{typeof(Base.:-), Float64, Float64}
     world = _WASM_WORLD_AGE
-    _WASM_USE_REIMPL[] = true
     native_mt = Core.Compiler.InternalMethodTable(world)
     lu = Core.Compiler.findall(sig, native_mt)
     mi = Core.Compiler.specialize_method(first(lu.matches))
@@ -705,6 +708,7 @@ function _wasm_runtime_compile_minus_f64()::Vector{UInt8}
     interp = WasmInterpreter(world, table)
     ci_raw = Core.Compiler.retrieve_code_info(mi, world)
     interp.code_info_cache.cache[mi] = ci_raw
+    _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
     inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
     _WASM_USE_REIMPL[] = false
@@ -717,7 +721,6 @@ end
 function _wasm_runtime_compile_mul_f64()::Vector{UInt8}
     sig = Tuple{typeof(Base.:*), Float64, Float64}
     world = _WASM_WORLD_AGE
-    _WASM_USE_REIMPL[] = true
     native_mt = Core.Compiler.InternalMethodTable(world)
     lu = Core.Compiler.findall(sig, native_mt)
     mi = Core.Compiler.specialize_method(first(lu.matches))
@@ -726,6 +729,7 @@ function _wasm_runtime_compile_mul_f64()::Vector{UInt8}
     interp = WasmInterpreter(world, table)
     ci_raw = Core.Compiler.retrieve_code_info(mi, world)
     interp.code_info_cache.cache[mi] = ci_raw
+    _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
     inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
     _WASM_USE_REIMPL[] = false
@@ -839,8 +843,7 @@ end
 # Port functions use Core.Intrinsics directly — the pipeline compiles them at runtime.
 function _wasm_runtime_compile_sin_f64()::Vector{UInt8}
     sig = Tuple{typeof(_wasm_sin_f64), Float64}
-    world = _WASM_WORLD_AGE
-    _WASM_USE_REIMPL[] = true
+    world = UInt64(Base.get_world_counter())  # need fresh world (port func defined after _WASM_WORLD_AGE)
     native_mt = Core.Compiler.InternalMethodTable(world)
     lu = Core.Compiler.findall(sig, native_mt)
     mi = Core.Compiler.specialize_method(first(lu.matches))
@@ -849,6 +852,7 @@ function _wasm_runtime_compile_sin_f64()::Vector{UInt8}
     interp = WasmInterpreter(world, table)
     ci_raw = Core.Compiler.retrieve_code_info(mi, world)
     interp.code_info_cache.cache[mi] = ci_raw
+    _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
     inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
     _WASM_USE_REIMPL[] = false
@@ -860,8 +864,7 @@ end
 
 function _wasm_runtime_compile_abs_i64()::Vector{UInt8}
     sig = Tuple{typeof(_wasm_abs_i64), Int64}
-    world = _WASM_WORLD_AGE
-    _WASM_USE_REIMPL[] = true
+    world = UInt64(Base.get_world_counter())  # need fresh world (port func defined after _WASM_WORLD_AGE)
     native_mt = Core.Compiler.InternalMethodTable(world)
     lu = Core.Compiler.findall(sig, native_mt)
     mi = Core.Compiler.specialize_method(first(lu.matches))
@@ -870,6 +873,7 @@ function _wasm_runtime_compile_abs_i64()::Vector{UInt8}
     interp = WasmInterpreter(world, table)
     ci_raw = Core.Compiler.retrieve_code_info(mi, world)
     interp.code_info_cache.cache[mi] = ci_raw
+    _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
     inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
     _WASM_USE_REIMPL[] = false
@@ -881,8 +885,7 @@ end
 
 function _wasm_runtime_compile_sqrt_f64()::Vector{UInt8}
     sig = Tuple{typeof(_wasm_sqrt_f64), Float64}
-    world = _WASM_WORLD_AGE
-    _WASM_USE_REIMPL[] = true
+    world = UInt64(Base.get_world_counter())  # need fresh world (port func defined after _WASM_WORLD_AGE)
     native_mt = Core.Compiler.InternalMethodTable(world)
     lu = Core.Compiler.findall(sig, native_mt)
     mi = Core.Compiler.specialize_method(first(lu.matches))
@@ -891,6 +894,7 @@ function _wasm_runtime_compile_sqrt_f64()::Vector{UInt8}
     interp = WasmInterpreter(world, table)
     ci_raw = Core.Compiler.retrieve_code_info(mi, world)
     interp.code_info_cache.cache[mi] = ci_raw
+    _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
     inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
     _WASM_USE_REIMPL[] = false
