@@ -101,9 +101,10 @@ export async function evalJulia(exports, expr, imports = { Math: { pow: Math.pow
     }
 
     // Parse operands — split on the operator
-    // PURE-7011: Detect Float64 (contains '.') and use Number instead of BigInt
+    // PURE-7011: Detect Float64 (contains '.') and use Number instead of BigInt.
+    // Division always uses Float64 (Julia /(Int64,Int64) returns Float64).
     const parts = expr.split(opMatch[0]);
-    const isFloat = expr.includes('.');
+    const isFloat = expr.includes('.') || op === '/';
     let left, right;
     if (isFloat) {
         left = parseFloat(parts[0].trim());

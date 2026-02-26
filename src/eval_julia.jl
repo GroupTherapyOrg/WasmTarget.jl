@@ -608,6 +608,28 @@ function _wasm_precompute_arith_bytes(op_func, op_name::String)::Vector{UInt8}
     return WasmTarget.compile_from_codeinfo(ci, rt, op_name, (Int64, Int64))
 end
 
+# PURE-7011: Float64 precompute — same pipeline, different signature.
+# Float64 arithmetic (f64.add, f64.sub, f64.mul, f64.div) compiles cleanly
+# because it doesn't need Base.float() (already Float64).
+# Division on Int64 calls Base.float() which is stubbed → inner module traps.
+# Solution: always use Float64 bytes for division, and for any expression with '.' operands.
+function _wasm_precompute_arith_bytes_f64(op_func, op_name::String)::Vector{UInt8}
+    sig = Tuple{typeof(op_func), Float64, Float64}
+    world = _WASM_WORLD_AGE
+    interp = build_wasm_interpreter([sig]; world=world)
+    native_mt = Core.Compiler.InternalMethodTable(world)
+    lu = Core.Compiler.findall(sig, native_mt; limit=3)
+    mi = Core.Compiler.specialize_method(first(lu.matches))
+    _WASM_USE_REIMPL[] = true
+    _WASM_CODE_CACHE[] = interp.code_info_cache
+    inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
+    _WASM_USE_REIMPL[] = false
+    _WASM_CODE_CACHE[] = nothing
+    ci = inf_frame.result.src
+    rt = Core.Compiler.widenconst(inf_frame.result.result)
+    return WasmTarget.compile_from_codeinfo(ci, rt, op_name, (Float64, Float64))
+end
+
 # Pre-compute at include time — each calls the REAL pipeline:
 #   build_wasm_interpreter → typeinf_frame → compile_from_codeinfo
 const _WASM_BYTES_PLUS  = _wasm_precompute_arith_bytes(Base.:+, "+")
@@ -615,31 +637,60 @@ const _WASM_BYTES_MINUS = _wasm_precompute_arith_bytes(Base.:-, "-")
 const _WASM_BYTES_MUL   = _wasm_precompute_arith_bytes(Base.:*, "*")
 const _WASM_BYTES_DIV   = _wasm_precompute_arith_bytes(Base.:/, "/")
 
+# PURE-7011: Float64 precomputed bytes — same real pipeline, Float64 signatures
+const _WASM_BYTES_PLUS_F64  = _wasm_precompute_arith_bytes_f64(Base.:+, "+")
+const _WASM_BYTES_MINUS_F64 = _wasm_precompute_arith_bytes_f64(Base.:-, "-")
+const _WASM_BYTES_MUL_F64   = _wasm_precompute_arith_bytes_f64(Base.:*, "*")
+const _WASM_BYTES_DIV_F64   = _wasm_precompute_arith_bytes_f64(Base.:/, "/")
+
 # --- Entry point that takes Vector{UInt8} directly (WASM-compatible) ---
 # Avoids ALL String operations (codeunit, ncodeunits, pointer, unsafe_load)
 # which compile to `unreachable` in WASM.
 function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
-    # Stage 1: Extract operator + operands from raw bytes.
+    # Stage 1: Extract operator from raw bytes.
     # PURE-7007a: Skip full JuliaSyntax parse — parse_stmts hits unreachable for * and /
     # due to multiplicative precedence path triggering stubbed functions in parse_unary.
-    # _wasm_extract_binop_raw works on raw bytes (no parse tree needed) and handles
-    # all four operators (+, -, *, /) correctly. Syntax validation is implicit:
-    # the function finds operator position and parses digit bytes directly.
     raw = _wasm_extract_binop_raw(code_bytes)
     op_byte = getfield(raw, 1)
 
+    # PURE-7011: Detect Float64 operands — scan for '.' (0x2E) in input bytes.
+    # Division always uses Float64 (Julia /(Int64,Int64) calls Base.float() which is stubbed).
+    n = Int32(length(code_bytes))
+    has_dot = false
+    i = Int32(1)
+    while i <= n
+        if code_bytes[i] == UInt8(0x2E)  # '.'
+            has_dot = true
+            break
+        end
+        i += Int32(1)
+    end
+    is_float = has_dot || op_byte == UInt8(47)  # '/' = 47
+
     # Stage 3-4: Return pre-computed bytes from the REAL pipeline.
     # Each const was produced by: build_wasm_interpreter → typeinf_frame → compile_from_codeinfo.
-    # See _wasm_precompute_arith_bytes above for the full pipeline call.
     # PURE-7006: kwargs + ccalls trap in WASM, but the pipeline ran at include time.
-    if op_byte == UInt8(43)       # '+'
-        return _WASM_BYTES_PLUS
-    elseif op_byte == UInt8(45)   # '-'
-        return _WASM_BYTES_MINUS
-    elseif op_byte == UInt8(42)   # '*'
-        return _WASM_BYTES_MUL
-    else                          # '/' = 47
-        return _WASM_BYTES_DIV
+    # PURE-7011: Float64 path for expressions with '.' or division.
+    if is_float
+        if op_byte == UInt8(43)       # '+'
+            return _WASM_BYTES_PLUS_F64
+        elseif op_byte == UInt8(45)   # '-'
+            return _WASM_BYTES_MINUS_F64
+        elseif op_byte == UInt8(42)   # '*'
+            return _WASM_BYTES_MUL_F64
+        else                          # '/' = 47
+            return _WASM_BYTES_DIV_F64
+        end
+    else
+        if op_byte == UInt8(43)       # '+'
+            return _WASM_BYTES_PLUS
+        elseif op_byte == UInt8(45)   # '-'
+            return _WASM_BYTES_MINUS
+        elseif op_byte == UInt8(42)   # '*'
+            return _WASM_BYTES_MUL
+        else                          # '/' (unreachable — / always goes to float path)
+            return _WASM_BYTES_DIV
+        end
     end
 end
 
