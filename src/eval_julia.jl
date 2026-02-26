@@ -574,336 +574,101 @@ function _wasm_extract_binop_raw(code_bytes::Vector{UInt8})::Tuple{UInt8, Int64,
     return (op_byte, left_int, right_int)
 end
 
-# --- PURE-7006: Pre-computed WASM bytes for arithmetic operators ---
-# build_wasm_interpreter uses kwargs (stubbed in WASM) and populate_transitive
-# uses _methods_by_ftype ccall (stubbed). Const ref globals also fail (codegen
-# emits i32 for ref type globals). Solution: pre-compute stages 3-4 at include
-# time, hardcode the resulting WASM bytes in functions that construct Vector{UInt8}.
-#
-# The method table IS frozen in WASM — these bytes are deterministic.
-# Caching the output of the real pipeline != cheating.
-#
-# +, -, * produce identical 96-byte modules differing in only 3 bytes:
-#   byte 70: export name char (0x2b=+, 0x2d=-, 0x2a=*)
-#   byte 83: instruction-related (0x02=+, 0x03=-, 0x04=*)
-#   byte 90: WASM opcode (0x7c=i64.add, 0x7d=i64.sub, 0x7e=i64.mul)
-# / produces a 107-byte module (returns Float64, different structure).
-
-# Helper: set 8 consecutive bytes in a Vector{UInt8} (reduces call count)
-function _set_bytes8(v::Vector{UInt8}, s::Int32, b0::Int32, b1::Int32, b2::Int32, b3::Int32,
-                    b4::Int32, b5::Int32, b6::Int32, b7::Int32)::Int32
-    i = Int(s)
-    @inbounds v[i] = b0 % UInt8
-    @inbounds v[i + 1] = b1 % UInt8
-    @inbounds v[i + 2] = b2 % UInt8
-    @inbounds v[i + 3] = b3 % UInt8
-    @inbounds v[i + 4] = b4 % UInt8
-    @inbounds v[i + 5] = b5 % UInt8
-    @inbounds v[i + 6] = b6 % UInt8
-    @inbounds v[i + 7] = b7 % UInt8
-    return Int32(0)
-end
-
-# Helper: set 3 remaining bytes (for / operator's 107 = 13*8 + 3)
-function _set_bytes3(v::Vector{UInt8}, s::Int32, b0::Int32, b1::Int32, b2::Int32)::Int32
-    i = Int(s)
-    @inbounds v[i] = b0 % UInt8
-    @inbounds v[i + 1] = b1 % UInt8
-    @inbounds v[i + 2] = b2 % UInt8
-    return Int32(0)
-end
-
-# Build 96-byte WASM module for +, -, or * (Int64, Int64) → Int64
-# Template from + operator, bytes 70/83/90 patched per op_byte.
-function _wasm_cached_int_arith_bytes(op_byte::UInt8)::Vector{UInt8}
-    v = make_byte_vec(Int32(96))
-    # WASM header + type section (bytes 1-16)
-    _set_bytes8(v, Int32(1),  Int32(0x00), Int32(0x61), Int32(0x73), Int32(0x6d), Int32(0x01), Int32(0x00), Int32(0x00), Int32(0x00))
-    _set_bytes8(v, Int32(9),  Int32(0x01), Int32(0x25), Int32(0x06), Int32(0x60), Int32(0x02), Int32(0x7c), Int32(0x7c), Int32(0x01))
-    # Type section cont. (bytes 17-48)
-    _set_bytes8(v, Int32(17), Int32(0x7c), Int32(0x4f), Int32(0x00), Int32(0x5f), Int32(0x01), Int32(0x7f), Int32(0x00), Int32(0x4f))
-    _set_bytes8(v, Int32(25), Int32(0x00), Int32(0x5f), Int32(0x01), Int32(0x7e), Int32(0x00), Int32(0x4f), Int32(0x00), Int32(0x5f))
-    _set_bytes8(v, Int32(33), Int32(0x01), Int32(0x7d), Int32(0x00), Int32(0x4f), Int32(0x00), Int32(0x5f), Int32(0x01), Int32(0x7c))
-    _set_bytes8(v, Int32(41), Int32(0x00), Int32(0x60), Int32(0x02), Int32(0x7e), Int32(0x7e), Int32(0x01), Int32(0x7e), Int32(0x02))
-    # Import section (bytes 49-64)
-    _set_bytes8(v, Int32(49), Int32(0x0c), Int32(0x01), Int32(0x04), Int32(0x4d), Int32(0x61), Int32(0x74), Int32(0x68), Int32(0x03))
-    _set_bytes8(v, Int32(57), Int32(0x70), Int32(0x6f), Int32(0x77), Int32(0x00), Int32(0x00), Int32(0x03), Int32(0x02), Int32(0x01))
-    # Function + export section (bytes 65-72) — byte 70 is export name
-    _set_bytes8(v, Int32(65), Int32(0x05), Int32(0x07), Int32(0x05), Int32(0x01), Int32(0x01), Int32(op_byte), Int32(0x00), Int32(0x01))
-    # Code section (bytes 73-96) — bytes 83 and 90 vary per operator
-    _set_bytes8(v, Int32(73), Int32(0x0a), Int32(0x16), Int32(0x01), Int32(0x14), Int32(0x02), Int32(0x01), Int32(0x7f), Int32(0x01))
-    # Byte 83: instruction-related, byte 90: WASM opcode
-    instr_byte = if op_byte == UInt8(43)  # +
-        Int32(0x02)
-    elseif op_byte == UInt8(45)  # -
-        Int32(0x03)
-    else  # * (42)
-        Int32(0x04)
-    end
-    opcode_byte = if op_byte == UInt8(43)  # +
-        Int32(0x7c)  # i64.add
-    elseif op_byte == UInt8(45)  # -
-        Int32(0x7d)  # i64.sub
-    else  # * (42)
-        Int32(0x7e)  # i64.mul
-    end
-    _set_bytes8(v, Int32(81), Int32(0x7e), Int32(0x41), instr_byte, Int32(0x21), Int32(0x02), Int32(0x20), Int32(0x00), Int32(0x20))
-    _set_bytes8(v, Int32(89), Int32(0x01), opcode_byte, Int32(0x21), Int32(0x03), Int32(0x20), Int32(0x03), Int32(0x0f), Int32(0x0b))
-    return v
-end
-
-# Build 107-byte WASM module for / (Int64, Int64) → Float64
-function _wasm_cached_div_bytes()::Vector{UInt8}
-    v = make_byte_vec(Int32(107))
-    _set_bytes8(v, Int32(1),   Int32(0x00), Int32(0x61), Int32(0x73), Int32(0x6d), Int32(0x01), Int32(0x00), Int32(0x00), Int32(0x00))
-    _set_bytes8(v, Int32(9),   Int32(0x01), Int32(0x29), Int32(0x07), Int32(0x60), Int32(0x02), Int32(0x7c), Int32(0x7c), Int32(0x01))
-    _set_bytes8(v, Int32(17),  Int32(0x7c), Int32(0x4f), Int32(0x00), Int32(0x5f), Int32(0x01), Int32(0x7f), Int32(0x00), Int32(0x4f))
-    _set_bytes8(v, Int32(25),  Int32(0x00), Int32(0x5f), Int32(0x01), Int32(0x7e), Int32(0x00), Int32(0x4f), Int32(0x00), Int32(0x5f))
-    _set_bytes8(v, Int32(33),  Int32(0x01), Int32(0x7d), Int32(0x00), Int32(0x4f), Int32(0x00), Int32(0x5f), Int32(0x01), Int32(0x7c))
-    _set_bytes8(v, Int32(41),  Int32(0x00), Int32(0x4f), Int32(0x00), Int32(0x5f), Int32(0x00), Int32(0x60), Int32(0x02), Int32(0x7e))
-    _set_bytes8(v, Int32(49),  Int32(0x7e), Int32(0x01), Int32(0x7c), Int32(0x02), Int32(0x0c), Int32(0x01), Int32(0x04), Int32(0x4d))
-    _set_bytes8(v, Int32(57),  Int32(0x61), Int32(0x74), Int32(0x68), Int32(0x03), Int32(0x70), Int32(0x6f), Int32(0x77), Int32(0x00))
-    _set_bytes8(v, Int32(65),  Int32(0x00), Int32(0x03), Int32(0x02), Int32(0x01), Int32(0x06), Int32(0x07), Int32(0x05), Int32(0x01))
-    _set_bytes8(v, Int32(73),  Int32(0x01), Int32(0x2f), Int32(0x00), Int32(0x01), Int32(0x0a), Int32(0x1d), Int32(0x01), Int32(0x1b))
-    _set_bytes8(v, Int32(81),  Int32(0x04), Int32(0x02), Int32(0x63), Int32(0x05), Int32(0x01), Int32(0x7c), Int32(0x01), Int32(0x63))
-    _set_bytes8(v, Int32(89),  Int32(0x05), Int32(0x02), Int32(0x7c), Int32(0xfb), Int32(0x00), Int32(0x05), Int32(0x21), Int32(0x02))
-    _set_bytes8(v, Int32(97),  Int32(0xfb), Int32(0x00), Int32(0x05), Int32(0x21), Int32(0x03), Int32(0x00), Int32(0x00), Int32(0x00))
-    _set_bytes3(v, Int32(105), Int32(0x00), Int32(0x00), Int32(0x0b))
-    return v
-end
-
-# Main cached bytes dispatcher — returns pre-computed WASM module bytes
-function _wasm_cached_arith_bytes(op_byte::UInt8)::Vector{UInt8}
-    if op_byte == UInt8(47)  # '/'
-        return _wasm_cached_div_bytes()
-    end
-    # +, -, * all return Int64 and share a 96-byte template
-    return _wasm_cached_int_arith_bytes(op_byte)
-end
-
-# PURE-7007a: Conditional parse helper.
-# For additive ops (+ and -), runs the full JuliaSyntax parse.
-# For multiplicative ops (* and /), skips parse (parse_unary traps in WASM).
-# Uses explicit if-else-end to avoid codegen bug with if-without-else blocks.
-function _wasm_maybe_parse!(code_bytes::Vector{UInt8}, op_byte::UInt8)::Int32
-    if op_byte == UInt8(43) || op_byte == UInt8(45)  # + or -
-        ps = JuliaSyntax.ParseStream(code_bytes)
-        _wasm_parse_statement!(ps)
-        return Int32(1)
-    else
-        return Int32(0)
-    end
-end
-
-# --- PURE-7011: Float64 arithmetic support ---
-
-# Check if input bytes contain a '.' (indicating Float64 literals).
-# Returns Int32(1) for float, Int32(0) for integer.
-# Uses concrete types only — WASM-safe.
-function _wasm_check_float(code_bytes::Vector{UInt8})::Int32
-    n = Int32(length(code_bytes))
-    i = Int32(1)
-    while i <= n
-        if code_bytes[i] == UInt8(0x2e)  # '.'
-            return Int32(1)
-        end
-        i += Int32(1)
-    end
-    return Int32(0)
-end
-
-# Build 90-byte WASM module for Float64 +, -, or * : (f64, f64) → f64
-# Generated by compile_from_codeinfo for Base.:+(::Float64, ::Float64) etc.
-# Same structure as Int64 template but uses type 0 (f64,f64→f64) directly.
-# Variable bytes: 64 (export name), 77 (instr tag), 84 (WASM opcode).
-function _wasm_cached_float_arith_bytes(op_byte::UInt8)::Vector{UInt8}
-    v = make_byte_vec(Int32(90))
-    # WASM header + type section start (bytes 1-8)
-    _set_bytes8(v, Int32(1),  Int32(0x00), Int32(0x61), Int32(0x73), Int32(0x6d), Int32(0x01), Int32(0x00), Int32(0x00), Int32(0x00))
-    # Type section: 5 types (31 bytes) — type 0 is (f64,f64)→f64
-    _set_bytes8(v, Int32(9),  Int32(0x01), Int32(0x1f), Int32(0x05), Int32(0x60), Int32(0x02), Int32(0x7c), Int32(0x7c), Int32(0x01))
-    _set_bytes8(v, Int32(17), Int32(0x7c), Int32(0x4f), Int32(0x00), Int32(0x5f), Int32(0x01), Int32(0x7f), Int32(0x00), Int32(0x4f))
-    _set_bytes8(v, Int32(25), Int32(0x00), Int32(0x5f), Int32(0x01), Int32(0x7e), Int32(0x00), Int32(0x4f), Int32(0x00), Int32(0x5f))
-    _set_bytes8(v, Int32(33), Int32(0x01), Int32(0x7d), Int32(0x00), Int32(0x4f), Int32(0x00), Int32(0x5f), Int32(0x01), Int32(0x7c))
-    # Import section (bytes 41-56)
-    _set_bytes8(v, Int32(41), Int32(0x00), Int32(0x02), Int32(0x0c), Int32(0x01), Int32(0x04), Int32(0x4d), Int32(0x61), Int32(0x74))
-    _set_bytes8(v, Int32(49), Int32(0x68), Int32(0x03), Int32(0x70), Int32(0x6f), Int32(0x77), Int32(0x00), Int32(0x00), Int32(0x03))
-    # Function + export section (bytes 57-64) — byte 64 is export name char
-    _set_bytes8(v, Int32(57), Int32(0x02), Int32(0x01), Int32(0x00), Int32(0x07), Int32(0x05), Int32(0x01), Int32(0x01), Int32(op_byte))
-    # Code section (bytes 65-80) — byte 77 is instr tag
-    _set_bytes8(v, Int32(65), Int32(0x00), Int32(0x01), Int32(0x0a), Int32(0x16), Int32(0x01), Int32(0x14), Int32(0x02), Int32(0x01))
-    # Variable byte at position 77: instr tag (0x0a=+, 0x0b=-, 0x0c=*)
-    instr_byte = if op_byte == UInt8(43)  # +
-        Int32(0x0a)
-    elseif op_byte == UInt8(45)  # -
-        Int32(0x0b)
-    else  # * (42)
-        Int32(0x0c)
-    end
-    # Variable byte at position 84: WASM opcode (0xa0=f64.add, 0xa1=f64.sub, 0xa2=f64.mul)
-    opcode_byte = if op_byte == UInt8(43)  # +
-        Int32(0xa0)  # f64.add
-    elseif op_byte == UInt8(45)  # -
-        Int32(0xa1)  # f64.sub
-    else  # * (42)
-        Int32(0xa2)  # f64.mul
-    end
-    _set_bytes8(v, Int32(73), Int32(0x7f), Int32(0x01), Int32(0x7c), Int32(0x41), instr_byte, Int32(0x21), Int32(0x02), Int32(0x20))
-    _set_bytes8(v, Int32(81), Int32(0x00), Int32(0x20), Int32(0x01), opcode_byte, Int32(0x21), Int32(0x03), Int32(0x20), Int32(0x03))
-    # Last 2 bytes (89-90): return + end
-    @inbounds v[89] = UInt8(0x0f)
-    @inbounds v[90] = UInt8(0x0b)
-    return v
-end
-
-# --- PURE-7012: Function call support (sin, abs, sqrt) ---
-
-# Detect function call pattern: name(arg). Returns function ID:
-#   0 = not a function call
-#   1 = sin, 2 = abs, 3 = sqrt, 4 = cos
-# Uses concrete types only — WASM-safe.
-function _wasm_detect_funcall(code_bytes::Vector{UInt8})::Int32
-    n = Int32(length(code_bytes))
-    # Find '(' position
-    paren_pos = Int32(0)
-    i = Int32(1)
-    while i <= n
-        if code_bytes[i] == UInt8(0x28)  # '('
-            paren_pos = i
-            break
-        end
-        i += Int32(1)
-    end
-    if paren_pos == Int32(0)
-        return Int32(0)  # not a function call
-    end
-    # Match function name (bytes 1 to paren_pos-1)
-    name_len = paren_pos - Int32(1)
-    if name_len == Int32(3)
-        # sin = 0x73 0x69 0x6e
-        if code_bytes[1] == UInt8(0x73) && code_bytes[2] == UInt8(0x69) && code_bytes[3] == UInt8(0x6e)
-            return Int32(1)
-        end
-        # abs = 0x61 0x62 0x73
-        if code_bytes[1] == UInt8(0x61) && code_bytes[2] == UInt8(0x62) && code_bytes[3] == UInt8(0x73)
-            return Int32(2)
-        end
-        # cos = 0x63 0x6f 0x73
-        if code_bytes[1] == UInt8(0x63) && code_bytes[2] == UInt8(0x6f) && code_bytes[3] == UInt8(0x73)
-            return Int32(4)
-        end
-    elseif name_len == Int32(4)
-        # sqrt = 0x73 0x71 0x72 0x74
-        if code_bytes[1] == UInt8(0x73) && code_bytes[2] == UInt8(0x71) && code_bytes[3] == UInt8(0x72) && code_bytes[4] == UInt8(0x74)
-            return Int32(3)
-        end
-    end
-    return Int32(0)  # unknown function
-end
-
-# Build 53-byte WASM module for sin(f64) → f64, importing Math.sin
-function _wasm_cached_sin_bytes()::Vector{UInt8}
-    v = make_byte_vec(Int32(53))
-    _set_bytes8(v, Int32(1),  Int32(0x00), Int32(0x61), Int32(0x73), Int32(0x6d), Int32(0x01), Int32(0x00), Int32(0x00), Int32(0x00))
-    _set_bytes8(v, Int32(9),  Int32(0x01), Int32(0x06), Int32(0x01), Int32(0x60), Int32(0x01), Int32(0x7c), Int32(0x01), Int32(0x7c))
-    _set_bytes8(v, Int32(17), Int32(0x02), Int32(0x0c), Int32(0x01), Int32(0x04), Int32(0x4d), Int32(0x61), Int32(0x74), Int32(0x68))
-    _set_bytes8(v, Int32(25), Int32(0x03), Int32(0x73), Int32(0x69), Int32(0x6e), Int32(0x00), Int32(0x00), Int32(0x03), Int32(0x02))
-    _set_bytes8(v, Int32(33), Int32(0x01), Int32(0x00), Int32(0x07), Int32(0x07), Int32(0x01), Int32(0x03), Int32(0x73), Int32(0x69))
-    _set_bytes8(v, Int32(41), Int32(0x6e), Int32(0x00), Int32(0x01), Int32(0x0a), Int32(0x08), Int32(0x01), Int32(0x06), Int32(0x00))
-    # Last 5 bytes (49-53): local.get 0, call 0, end
-    @inbounds v[49] = UInt8(0x20)
-    @inbounds v[50] = UInt8(0x00)
-    @inbounds v[51] = UInt8(0x10)
-    @inbounds v[52] = UInt8(0x00)
-    @inbounds v[53] = UInt8(0x0b)
-    return v
-end
-
-# Build 39-byte WASM module for sqrt(f64) → f64, using native f64.sqrt
-function _wasm_cached_sqrt_bytes()::Vector{UInt8}
-    v = make_byte_vec(Int32(39))
-    _set_bytes8(v, Int32(1),  Int32(0x00), Int32(0x61), Int32(0x73), Int32(0x6d), Int32(0x01), Int32(0x00), Int32(0x00), Int32(0x00))
-    _set_bytes8(v, Int32(9),  Int32(0x01), Int32(0x06), Int32(0x01), Int32(0x60), Int32(0x01), Int32(0x7c), Int32(0x01), Int32(0x7c))
-    _set_bytes8(v, Int32(17), Int32(0x03), Int32(0x02), Int32(0x01), Int32(0x00), Int32(0x07), Int32(0x08), Int32(0x01), Int32(0x04))
-    _set_bytes8(v, Int32(25), Int32(0x73), Int32(0x71), Int32(0x72), Int32(0x74), Int32(0x00), Int32(0x00), Int32(0x0a), Int32(0x07))
-    # Last 7 bytes (33-39): body count, body size, 0 locals, local.get 0, f64.sqrt, end
-    @inbounds v[33] = UInt8(0x01)
-    @inbounds v[34] = UInt8(0x05)
-    @inbounds v[35] = UInt8(0x00)
-    @inbounds v[36] = UInt8(0x20)
-    @inbounds v[37] = UInt8(0x00)
-    @inbounds v[38] = UInt8(0x9f)
-    @inbounds v[39] = UInt8(0x0b)
-    return v
-end
-
-# Build 48-byte WASM module for abs(i64) → i64, using select+sub
-function _wasm_cached_abs_int_bytes()::Vector{UInt8}
-    v = make_byte_vec(Int32(48))
-    _set_bytes8(v, Int32(1),  Int32(0x00), Int32(0x61), Int32(0x73), Int32(0x6d), Int32(0x01), Int32(0x00), Int32(0x00), Int32(0x00))
-    _set_bytes8(v, Int32(9),  Int32(0x01), Int32(0x06), Int32(0x01), Int32(0x60), Int32(0x01), Int32(0x7e), Int32(0x01), Int32(0x7e))
-    _set_bytes8(v, Int32(17), Int32(0x03), Int32(0x02), Int32(0x01), Int32(0x00), Int32(0x07), Int32(0x07), Int32(0x01), Int32(0x03))
-    _set_bytes8(v, Int32(25), Int32(0x61), Int32(0x62), Int32(0x73), Int32(0x00), Int32(0x00), Int32(0x0a), Int32(0x11), Int32(0x01))
-    _set_bytes8(v, Int32(33), Int32(0x0f), Int32(0x00), Int32(0x20), Int32(0x00), Int32(0x42), Int32(0x00), Int32(0x20), Int32(0x00))
-    _set_bytes8(v, Int32(41), Int32(0x7d), Int32(0x20), Int32(0x00), Int32(0x42), Int32(0x00), Int32(0x59), Int32(0x1b), Int32(0x0b))
-    return v
-end
-
-# Build 53-byte WASM module for cos(f64) → f64, importing Math.cos
-function _wasm_cached_cos_bytes()::Vector{UInt8}
-    v = make_byte_vec(Int32(53))
-    _set_bytes8(v, Int32(1),  Int32(0x00), Int32(0x61), Int32(0x73), Int32(0x6d), Int32(0x01), Int32(0x00), Int32(0x00), Int32(0x00))
-    _set_bytes8(v, Int32(9),  Int32(0x01), Int32(0x06), Int32(0x01), Int32(0x60), Int32(0x01), Int32(0x7c), Int32(0x01), Int32(0x7c))
-    _set_bytes8(v, Int32(17), Int32(0x02), Int32(0x0c), Int32(0x01), Int32(0x04), Int32(0x4d), Int32(0x61), Int32(0x74), Int32(0x68))
-    _set_bytes8(v, Int32(25), Int32(0x03), Int32(0x63), Int32(0x6f), Int32(0x73), Int32(0x00), Int32(0x00), Int32(0x03), Int32(0x02))
-    _set_bytes8(v, Int32(33), Int32(0x01), Int32(0x00), Int32(0x07), Int32(0x07), Int32(0x01), Int32(0x03), Int32(0x63), Int32(0x6f))
-    _set_bytes8(v, Int32(41), Int32(0x73), Int32(0x00), Int32(0x01), Int32(0x0a), Int32(0x08), Int32(0x01), Int32(0x06), Int32(0x00))
-    # Last 5 bytes (49-53): local.get 0, call 0, end
-    @inbounds v[49] = UInt8(0x20)
-    @inbounds v[50] = UInt8(0x00)
-    @inbounds v[51] = UInt8(0x10)
-    @inbounds v[52] = UInt8(0x00)
-    @inbounds v[53] = UInt8(0x0b)
-    return v
-end
-
-# Dispatch cached bytes for function calls by ID
-function _wasm_cached_funcall_bytes(func_id::Int32)::Vector{UInt8}
-    if func_id == Int32(1)
-        return _wasm_cached_sin_bytes()
-    elseif func_id == Int32(2)
-        return _wasm_cached_abs_int_bytes()
-    elseif func_id == Int32(3)
-        return _wasm_cached_sqrt_bytes()
-    elseif func_id == Int32(4)
-        return _wasm_cached_cos_bytes()
-    else
-        return make_byte_vec(Int32(0))
-    end
-end
-
 # --- Entry point that takes Vector{UInt8} directly (WASM-compatible) ---
 # Avoids ALL String operations (codeunit, ncodeunits, pointer, unsafe_load)
 # which compile to `unreachable` in WASM.
 function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
-    # PURE-7012: Check for function calls first (sin, abs, sqrt, cos)
-    func_id = _wasm_detect_funcall(code_bytes)
-    if func_id > Int32(0)
-        return _wasm_cached_funcall_bytes(func_id)
-    end
-
-    # Binary arithmetic path (PURE-7007a + PURE-7011)
+    # Stage 1: Parse — JuliaSyntax validates syntax (real parser)
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    # PURE-7002 PORT: Extract op + operands from raw bytes instead of parse tree.
+    # Vector{RawGreenNode} growth is broken in WASM (push!/resize! stubbed),
+    # so ps.output only has 2 of 5 nodes. We extract from code_bytes directly.
+    # Returns concrete types (UInt8, Int64, Int64) — no Expr/Symbol/Vector{Any}.
     raw = _wasm_extract_binop_raw(code_bytes)
     op_byte = getfield(raw, 1)
+    left_int = getfield(raw, 2)
+    right_int = getfield(raw, 3)
 
-    # PURE-7011: Check for Float64 literals (input contains '.')
-    is_float = _wasm_check_float(code_bytes)
-    if is_float == Int32(1)
-        return _wasm_cached_float_arith_bytes(op_byte)
+    # Stage 2: Map operator byte directly to function reference.
+    # PURE-7003 PORT: getfield(Base, op_sym) traps in WASM — Module.getfield is unreachable.
+    # Compile log: "CROSS-CALL UNREACHABLE: Main.getfield with arg types (Module, Symbol)".
+    # Fix: map op_byte to function reference at compile time (no module introspection).
+    func = if op_byte == UInt8(43)  # '+'
+        Base.:+
+    elseif op_byte == UInt8(45)  # '-'
+        Base.:-
+    elseif op_byte == UInt8(42)  # '*'
+        Base.:*
+    else  # '/' = 47
+        Base.:/
+    end
+    func_sym = if op_byte == UInt8(43)
+        :+
+    elseif op_byte == UInt8(45)
+        :-
+    elseif op_byte == UInt8(42)
+        :*
+    else
+        :/
+    end
+    arg_types = (Int64, Int64)  # both operands are Int64
+
+    # Stage 3: Type inference using WasmInterpreter
+    world = _wasm_get_world_counter()
+    # PURE-7005 PORT: typeof(func) on union type traps in WASM (CROSS-CALL UNREACHABLE).
+    # Compute sig directly per operator — each branch is a concrete type literal.
+    sig = if op_byte == UInt8(43)
+        Tuple{typeof(Base.:+), Int64, Int64}
+    elseif op_byte == UInt8(45)
+        Tuple{typeof(Base.:-), Int64, Int64}
+    elseif op_byte == UInt8(42)
+        Tuple{typeof(Base.:*), Int64, Int64}
+    else
+        Tuple{typeof(Base.:/), Int64, Int64}
     end
 
-    # Stages 2-4: PURE-7006 — Return pre-computed WASM bytes.
-    return _wasm_cached_arith_bytes(op_byte)
+    # Build WasmInterpreter with transitive method table
+    # NOTE: This call VALIDATES but TRAPS at runtime (kwargs + ccalls stubbed in WASM).
+    # PURE-7006 attempted to pre-build at compile time but const ref types fail validation.
+    # TODO: Need codegen support for const ref globals, or pre-compute stage 3-4 output.
+    interp = build_wasm_interpreter([sig]; world=world)
+
+    # Find the MethodInstance for this signature
+    native_mt = Core.Compiler.InternalMethodTable(world)
+    lookup = Core.Compiler.findall(sig, native_mt; limit=3)
+    if lookup === nothing
+        error("No method found for $func_sym with types $arg_types")
+    end
+    mi = Core.Compiler.specialize_method(first(lookup.matches))
+
+    # Run typeinf_frame(interp, mi, run_optimizer=false) — skip Julia IR optimization.
+    # Binaryen handles WASM-level optimization. Without the optimizer, the IR may
+    # have extra statements (e.g. 3-stmt indirect calls vs 2-stmt resolved intrinsics).
+    # Codegen must handle this unoptimized form.
+    _WASM_USE_REIMPL[] = true
+    _WASM_CODE_CACHE[] = interp.code_info_cache
+    inf_frame = nothing
+    try
+        inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
+    finally
+        _WASM_USE_REIMPL[] = false
+        _WASM_CODE_CACHE[] = nothing
+    end
+    if inf_frame === nothing
+        error("typeinf_frame returned nothing for $func_sym")
+    end
+
+    # Extract canonical CodeInfo and return type
+    code_info = inf_frame.result.src
+    if !(code_info isa Core.CodeInfo)
+        error("Expected CodeInfo from WasmInterpreter typeinf, got $(typeof(code_info))")
+    end
+    return_type = Core.Compiler.widenconst(inf_frame.result.result)
+
+    # Stage 4: Codegen — return .wasm bytes
+    func_name = string(func_sym)
+    return WasmTarget.compile_from_codeinfo(code_info, return_type, func_name, arg_types)
 end
 
 # PURE-6023: Step-by-step diagnostic functions for isolating pipeline traps.
@@ -920,12 +685,10 @@ function _diag_stage0_ps(code_bytes::Vector{UInt8})::Int32
     return Int32(1)
 end
 
-# Stage 0c: Validate expression structure.
-# PURE-7007a: Replaced full JuliaSyntax parse with raw byte extraction.
-# parse_stmts traps for * in WASM (parse_unary dead code guard at 0x1ecbc8).
-# _wasm_extract_binop_raw validates syntax (finds 1 operator + 2 digit operands).
+# Stage 0c: Create ParseStream + parse!
 function _diag_stage0_parse(code_bytes::Vector{UInt8})::Int32
-    _wasm_extract_binop_raw(code_bytes)
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
     return Int32(2)
 end
 
@@ -1082,47 +845,80 @@ function _diag_stage3b_sig(code_bytes::Vector{UInt8})::Int32
     return Int32(2)  # sig constructed
 end
 
-# Stage 3c: PURE-7006 — Can we get cached WASM bytes?
-# Previously: tried to build WasmInterpreter (kwargs + ccalls → trap).
-# Now: return pre-computed bytes via _wasm_cached_arith_bytes.
+# Stage 3c: Can we build the WasmInterpreter?
 function _diag_stage3c_interp(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
     _wasm_parse_statement!(ps)
     raw = _wasm_extract_binop_raw(code_bytes)
     op_byte = getfield(raw, 1)
-    # Get cached WASM bytes (replaces build_wasm_interpreter)
-    cached = _wasm_cached_arith_bytes(op_byte)
-    return Int32(3)  # cached bytes retrieved
+    world = _wasm_get_world_counter()
+    # PURE-7005: Direct sig construction (no typeof on union)
+    sig = if op_byte == UInt8(43)
+        Tuple{typeof(Base.:+), Int64, Int64}
+    elseif op_byte == UInt8(45)
+        Tuple{typeof(Base.:-), Int64, Int64}
+    elseif op_byte == UInt8(42)
+        Tuple{typeof(Base.:*), Int64, Int64}
+    else
+        Tuple{typeof(Base.:/), Int64, Int64}
+    end
+    interp = build_wasm_interpreter([sig]; world=world)
+    return Int32(3)  # interpreter built
 end
 
-# Stage 3d: PURE-7006 — Can we check cached byte length?
-# Previously: tried Core.Compiler.findall (kwargs + ccall → trap).
-# Now: validates cached bytes have expected length.
+# Stage 3d: Can we find methods?
 function _diag_stage3d_findall(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
     _wasm_parse_statement!(ps)
     raw = _wasm_extract_binop_raw(code_bytes)
     op_byte = getfield(raw, 1)
-    cached = _wasm_cached_arith_bytes(op_byte)
-    n = Int32(length(cached))
-    return Int32(4)  # byte count verified
+    world = _wasm_get_world_counter()
+    # PURE-7005: Direct sig construction (no typeof on union)
+    sig = if op_byte == UInt8(43)
+        Tuple{typeof(Base.:+), Int64, Int64}
+    elseif op_byte == UInt8(45)
+        Tuple{typeof(Base.:-), Int64, Int64}
+    elseif op_byte == UInt8(42)
+        Tuple{typeof(Base.:*), Int64, Int64}
+    else
+        Tuple{typeof(Base.:/), Int64, Int64}
+    end
+    native_mt = Core.Compiler.InternalMethodTable(world)
+    lookup = Core.Compiler.findall(sig, native_mt; limit=3)
+    return Int32(4)  # findall succeeded
 end
 
-# Stage 3e: PURE-7006 — Full cached pipeline test.
-# Previously: tried typeinf_frame (complex, many kwargs/ccalls → trap).
-# Now: verifies cached bytes start with WASM magic number.
+# Stage 3e: Can we run typeinf?
 function _diag_stage3e_typeinf(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
     _wasm_parse_statement!(ps)
     raw = _wasm_extract_binop_raw(code_bytes)
     op_byte = getfield(raw, 1)
-    cached = _wasm_cached_arith_bytes(op_byte)
-    # Verify WASM magic: 0x00 0x61 0x73 0x6d
-    @inbounds b0 = cached[1]
-    @inbounds b1 = cached[2]
-    @inbounds b2 = cached[3]
-    @inbounds b3 = cached[4]
-    return Int32(5)  # WASM magic verified
+    world = _wasm_get_world_counter()
+    # PURE-7005: Direct sig construction (no typeof on union)
+    sig = if op_byte == UInt8(43)
+        Tuple{typeof(Base.:+), Int64, Int64}
+    elseif op_byte == UInt8(45)
+        Tuple{typeof(Base.:-), Int64, Int64}
+    elseif op_byte == UInt8(42)
+        Tuple{typeof(Base.:*), Int64, Int64}
+    else
+        Tuple{typeof(Base.:/), Int64, Int64}
+    end
+    interp = build_wasm_interpreter([sig]; world=world)
+    native_mt = Core.Compiler.InternalMethodTable(world)
+    lookup = Core.Compiler.findall(sig, native_mt; limit=3)
+    mi = Core.Compiler.specialize_method(first(lookup.matches))
+    _WASM_USE_REIMPL[] = true
+    _WASM_CODE_CACHE[] = interp.code_info_cache
+    inf_frame = nothing
+    try
+        inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
+    finally
+        _WASM_USE_REIMPL[] = false
+        _WASM_CODE_CACHE[] = nothing
+    end
+    return Int32(5)  # typeinf succeeded
 end
 
 # PURE-7001a: Sub-stage diagnostics to isolate stage1 trap
