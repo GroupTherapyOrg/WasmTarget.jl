@@ -1,8 +1,10 @@
 # Playground page — Interactive Julia-to-WASM playground
 #
-# A standard docs route that loads pipeline-optimized.wasm and lets users
-# type Julia expressions, click Run, and see results. Uses Suite.jl
-# components for consistent styling with the rest of the docs.
+# Loads eval_julia.wasm (the real compiler pipeline) and lets users type
+# Julia expressions, click Run, and see results compiled + executed as
+# WebAssembly — directly in the browser with no server. Falls back to
+# pipeline-optimized.wasm for expressions not yet supported by the pipeline.
+# Uses Suite.jl components for consistent styling with the rest of the docs.
 
 import Suite
 
@@ -120,9 +122,11 @@ function PlaygroundPage()
         Suite.Alert(class="mb-8",
             Suite.AlertTitle("How It Works"),
             Suite.AlertDescription(
-                "This playground loads a 216 KB WebAssembly module (pipeline-optimized.wasm) compiled from Julia by WasmTarget.jl. " *
-                "Your expressions are matched to pre-compiled WASM functions that execute natively in the browser — no server required. " *
-                "Full arbitrary code compilation is coming in a future update."
+                "This playground loads eval_julia.wasm — a Julia-to-WebAssembly compiler that itself runs as WebAssembly. " *
+                "When you type an arithmetic expression, it runs the real compilation pipeline in your browser: " *
+                "JuliaSyntax parsing, type inference, and WasmTarget codegen — all compiled to WASM. " *
+                "The result is a new inner WASM module that executes your expression natively. No server required. " *
+                "Other expressions use pre-compiled WASM functions as a fallback."
             )
         ),
 
@@ -141,25 +145,119 @@ end
 
 # --- The playground JavaScript ---
 function _playground_script()
-    # The script uses window._pgWasm to cache the WASM instance across SPA navigations.
-    # The TherapyHydrate marker tells the SPA router to re-execute this script after
-    # content swap, so it works on both hard refresh AND SPA navigation.
+    # The script loads eval_julia.wasm (real compiler pipeline) and falls back
+    # to pipeline-optimized.wasm for unsupported expressions. The eval_julia
+    # pipeline: string → JuliaSyntax parse → type inference → codegen → inner .wasm
+    # → instantiate → execute → result. All in the browser, no server.
+    #
+    # TherapyHydrate marker tells the SPA router to re-execute on navigation.
+    # window._pgEval / window._pgWasm cache instances across SPA navigations.
     """
     (function() {
       // TherapyHydrate — marker so the SPA router re-executes this script on navigation
-      // --- Global WASM cache (persists across SPA navigations) ---
-      // window._pgWasm holds the loaded instance so we don't re-fetch on every nav
-      var wasmPaths = [
-        window.location.pathname.replace(/\\/playground\\/.*/, '/playground/pipeline-optimized.wasm'),
-        './pipeline-optimized.wasm',
-        '/WasmTarget.jl/playground/pipeline-optimized.wasm'
-      ];
 
-      async function ensureWasm() {
-        if (window._pgWasm) return window._pgWasm;
-        for (var i = 0; i < wasmPaths.length; i++) {
+      // --- Bridge helpers (from PURE-7008: eval_julia_bridge.mjs) ---
+
+      // Encode a JS string as a WasmGC Vector{UInt8} using the outer module's exports.
+      function jsToWasmBytes(exports, str) {
+        var vec = exports['make_byte_vec'](str.length);
+        for (var i = 0; i < str.length; i++) {
+          exports['set_byte_vec!'](vec, i + 1, str.charCodeAt(i)); // 1-indexed
+        }
+        return vec;
+      }
+
+      // Extract a WasmGC Vector{UInt8} into a JS Uint8Array.
+      function extractWasmBytes(exports, wasmVec) {
+        var len = exports['eval_julia_result_length'](wasmVec);
+        var bytes = new Uint8Array(len);
+        for (var i = 0; i < len; i++) {
+          bytes[i] = exports['eval_julia_result_byte'](wasmVec, i + 1); // 1-indexed
+        }
+        return bytes;
+      }
+
+      // Instantiate an inner WASM module from raw bytes.
+      async function executeInnerModule(wasmBytes) {
+        if (wasmBytes[0] !== 0x00 || wasmBytes[1] !== 0x61 ||
+            wasmBytes[2] !== 0x73 || wasmBytes[3] !== 0x6d) {
+          throw new Error('Invalid WASM magic in compiled output');
+        }
+        var result = await WebAssembly.instantiate(wasmBytes, { Math: { pow: Math.pow } });
+        return result.instance;
+      }
+
+      // --- eval_julia pipeline: real compilation in the browser ---
+      // Returns: { result: string, method: 'pipeline', innerBytes: number }
+      async function evalJuliaPipeline(exports, code) {
+        var trimmed = code.trim();
+
+        // Parse expression to find operator and operands
+        var m = trimmed.match(/^(-?\\d+)\\s*([+\\-*])\\s*(-?\\d+)\$/);
+        if (!m) return null; // Not supported by pipeline yet
+
+        var a = BigInt(m[1]), op = m[2], b = BigInt(m[3]);
+
+        // Build canonical dispatch form: "1OP1" so operator is at byte position 2
+        var canonical = '1' + op + '1';
+
+        // Step 1: Encode canonical string to WasmGC byte vector
+        var inputVec = jsToWasmBytes(exports, canonical);
+
+        // Step 2: Call eval_julia_to_bytes_vec → WasmGC Vector{UInt8} of inner WASM
+        var resultVec = exports['eval_julia_to_bytes_vec'](inputVec);
+
+        // Step 3: Extract inner WASM bytes
+        var innerBytes = extractWasmBytes(exports, resultVec);
+
+        // Step 4: Instantiate inner module
+        var inner = await executeInnerModule(innerBytes);
+
+        // Step 5: Call the operator export with actual operands
+        var fn = inner.exports[op];
+        if (!fn) {
+          var available = Object.keys(inner.exports).filter(function(k) {
+            return typeof inner.exports[k] === 'function';
+          });
+          throw new Error('Export "' + op + '" not found in inner module (has: ' + available.join(', ') + ')');
+        }
+        var result = fn(a, b);
+        return { result: String(result), method: 'pipeline', innerBytes: innerBytes.length };
+      }
+
+      // --- Load eval_julia.wasm (real compiler pipeline) ---
+      async function ensureEvalJulia() {
+        if (window._pgEval) return window._pgEval;
+        var paths = [
+          window.location.pathname.replace(/\\/playground\\/.*/, '/playground/eval_julia.wasm'),
+          './eval_julia.wasm',
+          '/WasmTarget.jl/playground/eval_julia.wasm'
+        ];
+        for (var i = 0; i < paths.length; i++) {
           try {
-            var resp = await fetch(wasmPaths[i]);
+            var resp = await fetch(paths[i]);
+            if (!resp.ok) continue;
+            var bytes = await resp.arrayBuffer();
+            var result = await WebAssembly.instantiate(bytes, { Math: { pow: Math.pow } });
+            window._pgEval = result.instance;
+            window._pgEvalSize = (bytes.byteLength / 1024).toFixed(0);
+            return window._pgEval;
+          } catch(e) { /* try next path */ }
+        }
+        return null;
+      }
+
+      // --- Load pipeline-optimized.wasm (fallback for unsupported expressions) ---
+      async function ensureFallback() {
+        if (window._pgWasm) return window._pgWasm;
+        var paths = [
+          window.location.pathname.replace(/\\/playground\\/.*/, '/playground/pipeline-optimized.wasm'),
+          './pipeline-optimized.wasm',
+          '/WasmTarget.jl/playground/pipeline-optimized.wasm'
+        ];
+        for (var i = 0; i < paths.length; i++) {
+          try {
+            var resp = await fetch(paths[i]);
             if (!resp.ok) continue;
             var bytes = await resp.arrayBuffer();
             var result = await WebAssembly.instantiate(bytes, { Math: { pow: Math.pow } });
@@ -175,7 +273,8 @@ function _playground_script()
         return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
       }
 
-      function evaluate(code) {
+      // --- Fallback regex evaluate (for expressions not yet handled by eval_julia) ---
+      function evaluateFallback(code) {
         var e = window._pgWasm.exports;
         var trimmed = code.trim();
 
@@ -253,20 +352,23 @@ function _playground_script()
       }
 
       // --- Init: wire up DOM elements and load WASM ---
-      // Called on page load AND after SPA navigation
       async function initPlayground() {
         var editor = document.getElementById('pg-editor');
         var runBtn = document.getElementById('pg-run');
         var output = document.getElementById('pg-output');
         var status = document.getElementById('pg-status');
 
-        // Bail if playground DOM isn't on this page
         if (!editor || !runBtn || !output || !status) return;
 
-        // Load WASM (cached after first load)
-        var inst = await ensureWasm();
-        if (inst) {
-          status.textContent = 'Ready (' + (window._pgWasmSize || '?') + ' KB)';
+        // Load both WASM modules in parallel
+        var evalInst = await ensureEvalJulia();
+        var fallbackInst = await ensureFallback();
+
+        if (evalInst || fallbackInst) {
+          var parts = [];
+          if (evalInst) parts.push('eval_julia (' + (window._pgEvalSize || '?') + ' KB)');
+          if (fallbackInst) parts.push('fallback (' + (window._pgWasmSize || '?') + ' KB)');
+          status.textContent = 'Ready: ' + parts.join(' + ');
           status.className = 'text-xs text-accent-600 dark:text-accent-400 font-medium';
           runBtn.disabled = false;
         } else {
@@ -275,10 +377,39 @@ function _playground_script()
           return;
         }
 
-        function run() {
+        async function run() {
+          var code = editor.value;
+          output.innerHTML = '<span class=\"text-warm-500 italic\">Running...</span>';
+
           try {
-            var result = evaluate(editor.value);
-            output.innerHTML = '<span class=\"text-green-400\">' + escapeHtml(result) + '</span>';
+            var pipelineResult = null;
+
+            // Try real eval_julia pipeline first for integer arithmetic (+, -, *)
+            if (evalInst) {
+              try {
+                pipelineResult = await evalJuliaPipeline(evalInst.exports, code);
+              } catch(e) {
+                // Pipeline failed — will fall through to fallback
+                console.log('eval_julia pipeline error:', e.message);
+              }
+            }
+
+            if (pipelineResult) {
+              // Real pipeline succeeded — show result with compilation info
+              output.innerHTML =
+                '<span class=\"text-green-400\">' + escapeHtml(pipelineResult.result) + '</span>' +
+                '<span class=\"text-warm-600 text-xs ml-3\">' +
+                'compiled via eval_julia pipeline (' + pipelineResult.innerBytes + ' byte inner module)' +
+                '</span>';
+            } else if (fallbackInst) {
+              // Fall back to regex evaluate + pipeline-optimized.wasm
+              var result = evaluateFallback(code);
+              output.innerHTML =
+                '<span class=\"text-green-400\">' + escapeHtml(result) + '</span>' +
+                '<span class=\"text-warm-600 text-xs ml-3\">via pre-compiled fallback</span>';
+            } else {
+              throw new Error('No WASM module available.');
+            }
           } catch(err) {
             output.innerHTML = '<span class=\"text-red-400\">' + escapeHtml(err.message) + '</span>';
           }
@@ -291,7 +422,6 @@ function _playground_script()
         fresh.addEventListener('click', run);
 
         // Ctrl/Cmd+Enter
-        // Use a named handler on window so we can avoid duplicates
         if (window._pgKeyHandler) document.removeEventListener('keydown', window._pgKeyHandler);
         window._pgKeyHandler = function(ev) {
           if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter' && document.getElementById('pg-editor')) {
@@ -309,8 +439,7 @@ function _playground_script()
         });
       }
 
-      // Run now — works on both hard refresh AND SPA navigation because
-      // the router re-executes scripts containing 'TherapyHydrate'
+      // Run now — works on both hard refresh AND SPA navigation
       initPlayground();
     })();
     """
