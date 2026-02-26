@@ -209,8 +209,11 @@ function Base._methods_by_ftype(@nospecialize(t), mt::Union{Core.MethodTable, No
                                  lim::Int, world::UInt, ambig::Bool,
                                  min::Ref{UInt}, max::Ref{UInt}, has_ambig::Ref{Int32})
     # Reimplementation mode (Phase 2d): use wasm_matching_methods
+    # PURE-8001: Use positional-only version to avoid kwargs recursion in WASM.
+    # The kwargs version (wasm_matching_methods(t; limit=lim)) causes infinite recursion:
+    # kwcall dispatch → _methods_by_ftype → wasm_matching_methods → kwcall → ...
     if _WASM_USE_REIMPL[]
-        result = wasm_matching_methods(t; limit=lim)
+        result = _wasm_matching_methods_positional(t, lim)
         if result === nothing
             return nothing
         end

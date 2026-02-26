@@ -346,3 +346,102 @@ function wasm_matching_methods(@nospecialize(sig); limit::Int=-1)::Union{MethodL
 
     return MethodLookupResult(matches, WorldRange(UInt(1), typemax(UInt)), ambig)
 end
+
+# PURE-8001: Positional-only version — identical logic, no kwargs.
+# The kwargs version (wasm_matching_methods(sig; limit=lim)) causes infinite recursion
+# when called from _methods_by_ftype override: kwcall dispatch → _methods_by_ftype → wasm_matching_methods → kwcall → ...
+# This positional version breaks the recursion cycle.
+function _wasm_matching_methods_positional(@nospecialize(sig), limit::Int)::Union{MethodLookupResult, Nothing}
+    all_meths = _get_all_methods(sig)
+    isempty(all_meths) && return MethodLookupResult(Any[], WorldRange(UInt(1), typemax(UInt)), false)
+
+    unw = Base.unwrap_unionall(sig)
+    is_dispatch = unw isa DataType && Base.isdispatchtuple(sig)
+
+    matches = Any[]
+    for method in all_meths
+        issubty = false
+        try
+            issubty = wasm_subtype(sig, method.sig)
+        catch
+        end
+
+        if is_dispatch && !issubty
+            continue
+        end
+
+        ti = Union{}
+        if issubty
+            ti = sig
+        else
+            try
+                ti = wasm_type_intersection(sig, method.sig)
+            catch
+                continue
+            end
+        end
+
+        if ti !== Union{}
+            sparams = try
+                _extract_sparams(sig, method.sig)
+            catch
+                Core.svec()
+            end
+            spec_types = issubty ? sig : ti
+            mm = MethodMatch(spec_types, sparams, method, issubty)
+            push!(matches, mm)
+        end
+    end
+
+    if length(matches) > 1
+        _sort_by_specificity!(matches)
+    end
+
+    if length(matches) > 1
+        minmax_idx = 0
+        for i in 1:length(matches)
+            mm_i = matches[i]::MethodMatch
+            if mm_i.fully_covers
+                is_minmax = true
+                for j in 1:length(matches)
+                    i == j && continue
+                    mm_j = matches[j]::MethodMatch
+                    if mm_j.fully_covers
+                        if !_method_morespecific(mm_i.method, mm_j.method)
+                            is_minmax = false
+                            break
+                        end
+                    end
+                end
+                if is_minmax
+                    minmax_idx = i
+                    break
+                end
+            end
+        end
+
+        if minmax_idx > 0
+            minmax_method = (matches[minmax_idx]::MethodMatch).method
+            pruned = Any[]
+            for i in 1:length(matches)
+                mm_i = matches[i]::MethodMatch
+                if i == minmax_idx
+                    push!(pruned, mm_i)
+                elseif !mm_i.fully_covers
+                    if !_method_morespecific(minmax_method, mm_i.method)
+                        push!(pruned, mm_i)
+                    end
+                end
+            end
+            matches = pruned
+        end
+    end
+
+    ambig = _detect_ambiguity(matches)
+
+    if limit >= 0 && length(matches) > limit
+        return nothing
+    end
+
+    return MethodLookupResult(matches, WorldRange(UInt(1), typemax(UInt)), ambig)
+end
