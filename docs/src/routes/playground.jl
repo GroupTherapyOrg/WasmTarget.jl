@@ -228,8 +228,11 @@ function _playground_script()
         var e = window._pgEvalWasm.exports;
         var t0 = performance.now();
 
+        // Strip whitespace — WASM parser handles "1+1" but not "1 + 1" yet
+        var exprClean = expr.replace(/\\s+/g, '');
+
         // Step 1: Encode expression → WasmGC byte vector
-        var inputVec = jsToWasmBytes(e, expr);
+        var inputVec = jsToWasmBytes(e, exprClean);
 
         // Step 2: Compile — eval_julia_to_bytes_vec → inner WASM bytes
         var resultVec = e['eval_julia_to_bytes_vec'](inputVec);
