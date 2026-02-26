@@ -685,12 +685,20 @@ end
 # Avoids ALL String operations (codeunit, ncodeunits, pointer, unsafe_load)
 # which compile to `unreachable` in WASM.
 function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
-    # Stage 1: Parse — JuliaSyntax validates syntax (real parser)
-    ps = JuliaSyntax.ParseStream(code_bytes)
-    _wasm_parse_statement!(ps)
-    # PURE-7002 PORT: Extract operator from raw bytes instead of parse tree.
+    # PURE-7007a: Extract operator FIRST via raw byte scan (no parse tree needed).
+    # Must happen before _wasm_parse_statement! because parse_stmts traps for
+    # multiplicative ops in WASM (parse_unary dead code guard at 0x1ecbc8).
     raw = _wasm_extract_binop_raw(code_bytes)
     op_byte = getfield(raw, 1)
+
+    # Stage 1: JuliaSyntax parse — only for additive ops (+ and -).
+    # parse_stmts calls parse_with_chains → parse_unary which traps for * and /
+    # because the multiplicative precedence path hits a dead code guard.
+    # For * and /, _wasm_extract_binop_raw validates syntax (finds exactly 1 op + 2 operands).
+    if op_byte == UInt8(43) || op_byte == UInt8(45)  # + or -
+        ps = JuliaSyntax.ParseStream(code_bytes)
+        _wasm_parse_statement!(ps)
+    end
 
     # Stages 2-4: PURE-7006 — Return pre-computed WASM bytes.
     # Stage 2 (resolve function ref) and stages 3-4 (typeinf + codegen) are all
@@ -715,9 +723,16 @@ function _diag_stage0_ps(code_bytes::Vector{UInt8})::Int32
 end
 
 # Stage 0c: Create ParseStream + parse!
+# PURE-7007a: Skip full parse for multiplicative ops (* and /).
+# parse_stmts traps for * in WASM (parse_unary dead code guard at 0x1ecbc8).
+# For * and /, _wasm_extract_binop_raw validates syntax via raw byte scan.
 function _diag_stage0_parse(code_bytes::Vector{UInt8})::Int32
-    ps = JuliaSyntax.ParseStream(code_bytes)
-    _wasm_parse_statement!(ps)
+    raw = _wasm_extract_binop_raw(code_bytes)
+    op_byte = getfield(raw, 1)
+    if op_byte == UInt8(43) || op_byte == UInt8(45)  # + or -
+        ps = JuliaSyntax.ParseStream(code_bytes)
+        _wasm_parse_statement!(ps)
+    end
     return Int32(2)
 end
 
