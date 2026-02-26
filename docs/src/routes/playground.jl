@@ -244,13 +244,26 @@ function _playground_script()
           throw new Error('Compiler produced invalid WASM bytes (' + innerBytes.length + ' bytes)');
         }
 
-        // Step 3: Instantiate inner module
-        var inner = await WebAssembly.instantiate(innerBytes, { Math: { pow: Math.pow } });
+        // Step 3: Instantiate inner module — PURE-7012: add sin/cos imports
+        var inner = await WebAssembly.instantiate(innerBytes, { Math: { pow: Math.pow, sin: Math.sin, cos: Math.cos } });
         var compileMs = (performance.now() - t0).toFixed(1);
 
-        // Step 4: Find and call the operator export
+        // PURE-7012: Handle function calls: name(arg)
+        var funcMatch = expr.match(/^(\\w+)\\((.+)\\)\$/);
+        if (funcMatch) {
+          var funcName = funcMatch[1];
+          var argStr = funcMatch[2].trim();
+          var fn = inner.instance.exports[funcName];
+          if (!fn) throw new Error('No export "' + funcName + '" in inner module');
+          var isFloat = argStr.indexOf('.') >= 0;
+          var arg = isFloat ? parseFloat(argStr) : BigInt(parseInt(argStr, 10));
+          var result = fn(arg);
+          return { value: Number(result), innerSize: innerBytes.length, compileMs: compileMs };
+        }
+
+        // Step 4: Find and call the operator export (binary arithmetic)
         var opMatch = expr.match(/([+\\-*/])/);
-        if (!opMatch) throw new Error('No operator found in "' + expr + '"');
+        if (!opMatch) throw new Error('No operator or function call found in "' + expr + '"');
         var fn = inner.instance.exports[opMatch[1]];
         if (!fn) throw new Error('No export "' + opMatch[1] + '" in inner module');
 
@@ -352,10 +365,14 @@ function _playground_script()
         );
       }
 
-      // Check if expression is arithmetic that eval_julia supports (Int64 or Float64)
-      // PURE-7011: expanded to include *, Float64 literals (digits with optional .digits)
+      // Check if expression is supported by eval_julia (real pipeline)
+      // PURE-7012: expanded to include function calls (sin, abs, sqrt, cos)
       function isEvalJuliaSupported(code) {
-        return /^\\s*-?\\d+(?:\\.\\d+)?\\s*[+\\-*]\\s*-?\\d+(?:\\.\\d+)?\\s*\$/.test(code);
+        // Binary arithmetic: 1+1, 2*3, 2.0+3.0
+        if (/^\\s*-?\\d+(?:\\.\\d+)?\\s*[+\\-*]\\s*-?\\d+(?:\\.\\d+)?\\s*\$/.test(code)) return true;
+        // Function calls: sin(1.0), abs(-5), sqrt(4.0), cos(2.0)
+        if (/^\\s*(?:sin|abs|sqrt|cos)\\s*\\(.+\\)\\s*\$/.test(code)) return true;
+        return false;
       }
 
       // --- Init: wire up DOM elements and load WASM ---

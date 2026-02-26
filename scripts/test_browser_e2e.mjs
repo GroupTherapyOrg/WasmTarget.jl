@@ -23,7 +23,7 @@ async function main() {
 
     // Step 3: Instantiate eval_julia.wasm (same as browser initPlayground)
     console.log("3. Instantiating eval_julia.wasm...");
-    const imports = { Math: { pow: Math.pow } };
+    const imports = { Math: { pow: Math.pow, sin: Math.sin, cos: Math.cos } };
     const evalResult = await WebAssembly.instantiate(evalBytes, imports);
     const ex = evalResult.instance.exports;
     const funcCount = Object.keys(ex).filter(k => typeof ex[k] === 'function').length;
@@ -78,8 +78,22 @@ async function main() {
         var inner = await WebAssembly.instantiate(innerBytes, imports);
         var compileMs = (performance.now() - t0).toFixed(1);
 
+        // PURE-7012: Handle function calls: name(arg)
+        var funcMatch = expr.match(/^(\w+)\((.+)\)$/);
+        if (funcMatch) {
+            var funcName = funcMatch[1];
+            var argStr = funcMatch[2].trim();
+            var fn = inner.instance.exports[funcName];
+            if (!fn) throw new Error('No export "' + funcName + '"');
+            var isFloat = argStr.indexOf('.') >= 0;
+            var arg = isFloat ? parseFloat(argStr) : BigInt(parseInt(argStr, 10));
+            var result = fn(arg);
+            return { value: Number(result), innerSize: innerBytes.length, compileMs };
+        }
+
+        // Binary operator path
         var opMatch = expr.match(/([+\-*/])/);
-        if (!opMatch) throw new Error('No operator found');
+        if (!opMatch) throw new Error('No operator or function call found');
         var fn = inner.instance.exports[opMatch[1]];
         if (!fn) throw new Error('No export "' + opMatch[1] + '"');
 
@@ -99,28 +113,35 @@ async function main() {
         return { value: Number(result), innerSize: innerBytes.length, compileMs };
     }
 
-    // PURE-7011: expanded to include *, Float64
+    // PURE-7012: expanded to include function calls (sin, abs, sqrt, cos)
     function isEvalJuliaSupported(code) {
-        return /^\s*-?\d+(?:\.\d+)?\s*[+\-*]\s*-?\d+(?:\.\d+)?\s*$/.test(code);
+        // Binary arithmetic: 1+1, 2*3, 2.0+3.0
+        if (/^\s*-?\d+(?:\.\d+)?\s*[+\-*]\s*-?\d+(?:\.\d+)?\s*$/.test(code)) return true;
+        // Function calls: sin(1.0), abs(-5), sqrt(4.0), cos(2.0)
+        if (/^\s*(?:sin|abs|sqrt|cos)\s*\(.+\)\s*$/.test(code)) return true;
+        return false;
     }
 
     // Step 5: Run the EXACT same flow as playground's run() function
     console.log("\n5. Testing playground run() flow:\n");
 
     const testCases = [
-        { expr: "1+1",      expected: 2,   useRealPipeline: true },
-        { expr: "1 + 1",    expected: 2,   useRealPipeline: true },
-        { expr: "2+3",      expected: 5,   useRealPipeline: true },
-        { expr: "10-3",     expected: 7,   useRealPipeline: true },
-        { expr: "6*7",      expected: 42,  useRealPipeline: true },    // PURE-7011: now real pipeline
-        { expr: "2.0+3.0",  expected: 5.0, useRealPipeline: true },    // PURE-7011: Float64
-        { expr: "sin(1.0)", expected: Math.sin(1.0), useRealPipeline: false },  // Falls back
+        { expr: "1+1",       expected: 2,    useRealPipeline: true },
+        { expr: "1 + 1",     expected: 2,    useRealPipeline: true },
+        { expr: "2+3",       expected: 5,    useRealPipeline: true },
+        { expr: "10-3",      expected: 7,    useRealPipeline: true },
+        { expr: "6*7",       expected: 42,   useRealPipeline: true },    // PURE-7011: now real pipeline
+        { expr: "2.0+3.0",   expected: 5.0,  useRealPipeline: true },    // PURE-7011: Float64
+        // PURE-7012: Function calls — now real pipeline
+        { expr: "sin(1.0)",  expected: Math.sin(1.0), useRealPipeline: true, approx: true },
+        { expr: "abs(-5)",   expected: 5,    useRealPipeline: true },
+        { expr: "sqrt(4.0)", expected: 2.0,  useRealPipeline: true },
     ];
 
     let pass = 0;
     let fail = 0;
 
-    for (const { expr, expected, useRealPipeline } of testCases) {
+    for (const { expr, expected, useRealPipeline, approx } of testCases) {
         const trimmed = expr.trim();
         const shouldUseReal = isEvalJuliaSupported(trimmed);
 
@@ -135,7 +156,10 @@ async function main() {
                 // Real pipeline path (what the playground does for "1+1")
                 const r = await evalJulia(trimmed);
                 const label = `Compiled live via eval_julia (${r.innerSize} byte inner module, ${r.compileMs} ms)`;
-                if (r.value === expected) {
+                const matches = approx
+                    ? Math.abs(r.value - expected) < 1e-14
+                    : r.value === expected;
+                if (matches) {
                     console.log(`  "${expr}" → ${r.value} — CORRECT [${label}]`);
                     pass++;
                 } else {
