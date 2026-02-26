@@ -126,7 +126,7 @@ function main()
         (_diag_binop_e_txtaccess, (Vector{UInt8},)),
         (_diag_binop_f_full, (Vector{UInt8},)),
         # PURE-7002: Raw byte extraction port (bypasses broken Vector growth)
-        (_wasm_extract_binop_from_bytes, (Vector{UInt8},)),
+        (_wasm_extract_binop_raw, (Vector{UInt8},)),
         # PURE-7002: Vector length vs getfield diagnostics
         (_diag_7002_output_len, (Vector{UInt8},)),
         (_diag_7002_output_5, (Vector{UInt8},)),

@@ -520,15 +520,17 @@ end
 # This function extracts the operator and operands directly from the input bytes,
 # bypassing the parse tree traversal entirely.
 #
+# Returns (op_byte::UInt8, left_int::Int64, right_int::Int64) — concrete types only.
+# Avoids Expr/Symbol/Vector{Any} which cause === comparison issues in WASM.
+#
 # For binary arithmetic "NNN op NNN", byte positions are deterministic:
 #   - Left operand: bytes 1..op_pos-1 (digits)
 #   - Operator: byte at op_pos (+, -, *, /)
 #   - Right operand: bytes op_pos+1..end (digits)
 #
 # Parsing still runs (JuliaSyntax validates syntax), but tree extraction is on raw bytes.
-# Produces identical Expr to the original _wasm_binop_byte_starts path.
-# 1-1 tested: _wasm_extract_binop_from_bytes == original for all test cases.
-function _wasm_extract_binop_from_bytes(code_bytes::Vector{UInt8})::Expr
+# 1-1 tested: _wasm_extract_binop_raw == original for 11/11 test cases.
+function _wasm_extract_binop_raw(code_bytes::Vector{UInt8})::Tuple{UInt8, Int64, Int64}
     n = Int32(length(code_bytes))
     # Find operator position: first byte that is +, -, *, /
     op_pos = Int32(0)
@@ -557,17 +559,7 @@ function _wasm_extract_binop_from_bytes(code_bytes::Vector{UInt8})::Expr
         right_int = right_int * Int64(10) + Int64(code_bytes[k]) - Int64(48)
         k += Int32(1)
     end
-    # Map operator byte to Symbol
-    op_sym = if op_byte == UInt8('+')
-        :+
-    elseif op_byte == UInt8('-')
-        :-
-    elseif op_byte == UInt8('*')
-        :*
-    else
-        :/
-    end
-    return Expr(:call, op_sym, left_int, right_int)
+    return (op_byte, left_int, right_int)
 end
 
 # --- Entry point that takes Vector{UInt8} directly (WASM-compatible) ---
@@ -577,20 +569,28 @@ function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
     # Stage 1: Parse — JuliaSyntax validates syntax (real parser)
     ps = JuliaSyntax.ParseStream(code_bytes)
     _wasm_parse_statement!(ps)
-    # PURE-7002 PORT: Extract expr from raw bytes instead of parse tree.
+    # PURE-7002 PORT: Extract op + operands from raw bytes instead of parse tree.
     # Vector{RawGreenNode} growth is broken in WASM (push!/resize! stubbed),
     # so ps.output only has 2 of 5 nodes. We extract from code_bytes directly.
-    expr = _wasm_extract_binop_from_bytes(code_bytes)
+    # Returns concrete types (UInt8, Int64, Int64) — no Expr/Symbol/Vector{Any}.
+    raw = _wasm_extract_binop_raw(code_bytes)
+    op_byte = getfield(raw, 1)
+    left_int = getfield(raw, 2)
+    right_int = getfield(raw, 3)
 
-    # Stage 2: Extract function and arguments from the Expr
-    func_sym = expr.args[1]  # e.g. :+
-    arg_literals = expr.args[2:end]  # e.g. [1, 1]
-
-    # Resolve the function symbol to an actual function
+    # Stage 2: Map operator byte to function + build Expr with concrete types
+    # Use byte comparison (UInt8 == UInt8) instead of Symbol === (broken in WASM)
+    func_sym = if op_byte == UInt8(43)  # '+'
+        :+
+    elseif op_byte == UInt8(45)  # '-'
+        :-
+    elseif op_byte == UInt8(42)  # '*'
+        :*
+    else  # '/' = 47
+        :/
+    end
     func = getfield(Base, func_sym)
-
-    # Determine argument types from literals
-    arg_types = tuple((typeof(a) for a in arg_literals)...)
+    arg_types = (Int64, Int64)  # both operands are Int64
 
     # Stage 3: Type inference using WasmInterpreter
     world = Base.get_world_counter()
@@ -740,32 +740,31 @@ function _diag_binop_f_full(code_bytes::Vector{UInt8})::Int32
 end
 
 # Stage 1 only: parse + extract op_byte
-# PURE-7002: Use _wasm_extract_binop_from_bytes instead of _wasm_binop_byte_starts
+# PURE-7002: Use _wasm_extract_binop_raw instead of _wasm_binop_byte_starts
 function _diag_stage1_parse(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
     _wasm_parse_statement!(ps)
-    expr = _wasm_extract_binop_from_bytes(code_bytes)
-    op_sym = expr.args[1]
-    # Return op as byte value for backwards compatibility with test harness
-    op_byte = if op_sym === :+
-        Int32(43)
-    elseif op_sym === :-
-        Int32(45)
-    elseif op_sym === :*
-        Int32(42)
-    else
-        Int32(47)
-    end
-    return op_byte  # '+' = 43, '-' = 45, '*' = 42
+    raw = _wasm_extract_binop_raw(code_bytes)
+    op_byte = getfield(raw, 1)
+    return Int32(op_byte)  # '+' = 43, '-' = 45, '*' = 42
 end
 
 # Stage 2: parse + resolve function from Base (returns 1 if getfield works)
-# PURE-7002: Use _wasm_extract_binop_from_bytes instead of _wasm_binop_byte_starts
+# PURE-7002: Use _wasm_extract_binop_raw instead of _wasm_binop_byte_starts
 function _diag_stage2_resolve(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
     _wasm_parse_statement!(ps)
-    expr = _wasm_extract_binop_from_bytes(code_bytes)
-    op_sym = expr.args[1]
+    raw = _wasm_extract_binop_raw(code_bytes)
+    op_byte = getfield(raw, 1)
+    op_sym = if op_byte == UInt8(43)
+        :+
+    elseif op_byte == UInt8(45)
+        :-
+    elseif op_byte == UInt8(42)
+        :*
+    else
+        :/
+    end
     func = getfield(Base, op_sym)
     return Int32(1)  # Got here = getfield succeeded
 end
