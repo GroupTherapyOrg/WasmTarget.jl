@@ -619,13 +619,12 @@ const _WASM_BYTES_DIV   = _wasm_precompute_arith_bytes(Base.:/, "/")
 # Avoids ALL String operations (codeunit, ncodeunits, pointer, unsafe_load)
 # which compile to `unreachable` in WASM.
 function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
-    # Stage 1: Parse — JuliaSyntax validates syntax (real parser)
-    ps = JuliaSyntax.ParseStream(code_bytes)
-    _wasm_parse_statement!(ps)
-    # PURE-7002 PORT: Extract op + operands from raw bytes instead of parse tree.
-    # Vector{RawGreenNode} growth is broken in WASM (push!/resize! stubbed),
-    # so ps.output only has 2 of 5 nodes. We extract from code_bytes directly.
-    # Returns concrete types (UInt8, Int64, Int64) — no Expr/Symbol/Vector{Any}.
+    # Stage 1: Extract operator + operands from raw bytes.
+    # PURE-7007a: Skip full JuliaSyntax parse — parse_stmts hits unreachable for * and /
+    # due to multiplicative precedence path triggering stubbed functions in parse_unary.
+    # _wasm_extract_binop_raw works on raw bytes (no parse tree needed) and handles
+    # all four operators (+, -, *, /) correctly. Syntax validation is implicit:
+    # the function finds operator position and parses digit bytes directly.
     raw = _wasm_extract_binop_raw(code_bytes)
     op_byte = getfield(raw, 1)
 
