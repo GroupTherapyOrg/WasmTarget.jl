@@ -83,27 +83,37 @@ async function main() {
         var fn = inner.instance.exports[opMatch[1]];
         if (!fn) throw new Error('No export "' + opMatch[1] + '"');
 
+        // PURE-7011: Detect Float64 (contains '.') and use Number instead of BigInt
         var parts = expr.split(opMatch[0]);
-        var left = BigInt(parseInt(parts[0].trim(), 10));
-        var right = BigInt(parseInt(parts[1].trim(), 10));
-        var result = fn(left, right);
+        var isFloat = expr.indexOf('.') >= 0;
+        var left, right, result;
+        if (isFloat) {
+            left = parseFloat(parts[0].trim());
+            right = parseFloat(parts[1].trim());
+        } else {
+            left = BigInt(parseInt(parts[0].trim(), 10));
+            right = BigInt(parseInt(parts[1].trim(), 10));
+        }
+        result = fn(left, right);
 
         return { value: Number(result), innerSize: innerBytes.length, compileMs };
     }
 
+    // PURE-7011: expanded to include *, Float64
     function isEvalJuliaSupported(code) {
-        return /^\s*-?\d+\s*[+\-]\s*-?\d+\s*$/.test(code);
+        return /^\s*-?\d+(?:\.\d+)?\s*[+\-*]\s*-?\d+(?:\.\d+)?\s*$/.test(code);
     }
 
     // Step 5: Run the EXACT same flow as playground's run() function
     console.log("\n5. Testing playground run() flow:\n");
 
     const testCases = [
-        { expr: "1+1",    expected: 2,  useRealPipeline: true },
-        { expr: "1 + 1",  expected: 2,  useRealPipeline: true },
-        { expr: "2+3",    expected: 5,  useRealPipeline: true },
-        { expr: "10-3",   expected: 7,  useRealPipeline: true },
-        { expr: "6*7",    expected: 42, useRealPipeline: false },  // Falls back
+        { expr: "1+1",      expected: 2,   useRealPipeline: true },
+        { expr: "1 + 1",    expected: 2,   useRealPipeline: true },
+        { expr: "2+3",      expected: 5,   useRealPipeline: true },
+        { expr: "10-3",     expected: 7,   useRealPipeline: true },
+        { expr: "6*7",      expected: 42,  useRealPipeline: true },    // PURE-7011: now real pipeline
+        { expr: "2.0+3.0",  expected: 5.0, useRealPipeline: true },    // PURE-7011: Float64
         { expr: "sin(1.0)", expected: Math.sin(1.0), useRealPipeline: false },  // Falls back
     ];
 

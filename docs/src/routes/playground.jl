@@ -254,11 +254,18 @@ function _playground_script()
         var fn = inner.instance.exports[opMatch[1]];
         if (!fn) throw new Error('No export "' + opMatch[1] + '" in inner module');
 
-        // Parse operands and call
+        // Parse operands and call — PURE-7011: detect Float64 (contains '.')
         var parts = expr.split(opMatch[0]);
-        var left = BigInt(parseInt(parts[0].trim(), 10));
-        var right = BigInt(parseInt(parts[1].trim(), 10));
-        var result = fn(left, right);
+        var isFloat = expr.indexOf('.') >= 0;
+        var left, right, result;
+        if (isFloat) {
+          left = parseFloat(parts[0].trim());
+          right = parseFloat(parts[1].trim());
+        } else {
+          left = BigInt(parseInt(parts[0].trim(), 10));
+          right = BigInt(parseInt(parts[1].trim(), 10));
+        }
+        result = fn(left, right);
 
         return { value: Number(result), innerSize: innerBytes.length, compileMs: compileMs };
       }
@@ -345,9 +352,10 @@ function _playground_script()
         );
       }
 
-      // Check if expression is simple integer arithmetic that eval_julia supports
+      // Check if expression is arithmetic that eval_julia supports (Int64 or Float64)
+      // PURE-7011: expanded to include *, Float64 literals (digits with optional .digits)
       function isEvalJuliaSupported(code) {
-        return /^\\s*-?\\d+\\s*[+\\-]\\s*-?\\d+\\s*\$/.test(code);
+        return /^\\s*-?\\d+(?:\\.\\d+)?\\s*[+\\-*]\\s*-?\\d+(?:\\.\\d+)?\\s*\$/.test(code);
       }
 
       // --- Init: wire up DOM elements and load WASM ---

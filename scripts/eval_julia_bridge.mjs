@@ -86,12 +86,20 @@ export async function evalJulia(exports, expr, imports = { Math: { pow: Math.pow
     }
 
     // Parse operands — split on the operator
+    // PURE-7011: Detect Float64 (contains '.') and use Number instead of BigInt
     const parts = expr.split(opMatch[0]);
-    const left = BigInt(parseInt(parts[0].trim(), 10));
-    const right = BigInt(parseInt(parts[1].trim(), 10));
+    const isFloat = expr.includes('.');
+    let left, right;
+    if (isFloat) {
+        left = parseFloat(parts[0].trim());
+        right = parseFloat(parts[1].trim());
+    } else {
+        left = BigInt(parseInt(parts[0].trim(), 10));
+        right = BigInt(parseInt(parts[1].trim(), 10));
+    }
 
     const result = fn(left, right);
-    return { result, innerExports, innerBytes };
+    return { result, innerExports, innerBytes, isFloat };
 }
 
 // Load the outer WASM module from a file path.
@@ -125,9 +133,10 @@ async function selfTest() {
 
     // Test cases (native Julia ground truth)
     const testCases = [
-        { expr: "1+1",  expected: 2 },
-        { expr: "2+3",  expected: 5 },
-        { expr: "10-3", expected: 7 },
+        { expr: "1+1",     expected: 2 },
+        { expr: "2+3",     expected: 5 },
+        { expr: "10-3",    expected: 7 },
+        { expr: "2.0+3.0", expected: 5.0 },  // PURE-7011: Float64
     ];
 
     let pass = 0;
