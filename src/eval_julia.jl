@@ -848,6 +848,52 @@ function _diag_stage1j_root_byterange(code_bytes::Vector{UInt8})::Int32
     return Int32(first(range_root))
 end
 
+# PURE-7002: Targeted diagnostics to isolate Vector length vs getfield issue
+# Test: direct length(ps.output) — does Vector length work?
+function _diag_7002_output_len(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    return Int32(length(ps.output))  # expect 5 for "1+1"
+end
+
+# Test: direct ps.output[5] access (hardcoded index) — is data there?
+function _diag_7002_output_5(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    raw5 = ps.output[5]  # should be the root "call" node
+    return Int32(getfield(raw5, :byte_span))  # expect 3 for "1+1"
+end
+
+# Test: ps.output[5].node_span_or_orig_kind — should be 3 (3 children)
+function _diag_7002_output_5_span(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    raw5 = ps.output[5]
+    return Int32(getfield(raw5, :node_span_or_orig_kind))  # expect 3
+end
+
+# Test: lastindex(ps.output) — another way to get length
+function _diag_7002_lastindex(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    return Int32(lastindex(ps.output))  # expect 5
+end
+
+# Test: ps.output[2].node_span_or_orig_kind — should be 44 (K"Integer")
+function _diag_7002_output_2(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    raw2 = ps.output[2]
+    return Int32(getfield(raw2, :node_span_or_orig_kind))  # expect 44
+end
+
+# Test: ps.next_byte — used to compute byte_end
+function _diag_7002_next_byte(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    return Int32(ps.next_byte)  # expect 4 for "1+1" (3 bytes + 1)
+end
+
 # --- Native-only String entry point (NOT compiled to WASM) ---
 # Uses codeunits/pointer operations that only work natively.
 function eval_julia_to_bytes(code::String)::Vector{UInt8}

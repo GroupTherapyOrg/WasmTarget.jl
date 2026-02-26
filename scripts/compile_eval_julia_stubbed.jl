@@ -125,6 +125,13 @@ function main()
         (_diag_binop_d_child2, (Vector{UInt8},)),
         (_diag_binop_e_txtaccess, (Vector{UInt8},)),
         (_diag_binop_f_full, (Vector{UInt8},)),
+        # PURE-7002: Vector length vs getfield diagnostics
+        (_diag_7002_output_len, (Vector{UInt8},)),
+        (_diag_7002_output_5, (Vector{UInt8},)),
+        (_diag_7002_output_5_span, (Vector{UInt8},)),
+        (_diag_7002_lastindex, (Vector{UInt8},)),
+        (_diag_7002_output_2, (Vector{UInt8},)),
+        (_diag_7002_next_byte, (Vector{UInt8},)),
     ]
     all_funcs = WasmTarget.discover_dependencies(seed)
     println("  Found $(length(all_funcs)) functions")
