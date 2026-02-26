@@ -107,6 +107,12 @@ function main()
         (_diag_stage0_cursor, (Vector{UInt8},)),
         (_diag_stage1_parse, (Vector{UInt8},)),
         (_diag_stage2_resolve, (Vector{UInt8},)),
+        # PURE-7003: Sub-stage diagnostics for stage 3 isolation
+        (_diag_stage3a_world, (Vector{UInt8},)),
+        (_diag_stage3b_sig, (Vector{UInt8},)),
+        (_diag_stage3c_interp, (Vector{UInt8},)),
+        (_diag_stage3d_findall, (Vector{UInt8},)),
+        (_diag_stage3e_typeinf, (Vector{UInt8},)),
         # PURE-7001a: Sub-stage diagnostics for stage1 isolation
         (_diag_stage1a_textbuf, (Vector{UInt8},)),
         (_diag_stage1b_children, (Vector{UInt8},)),

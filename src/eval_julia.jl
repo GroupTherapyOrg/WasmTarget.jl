@@ -780,6 +780,126 @@ function _diag_stage2_resolve(code_bytes::Vector{UInt8})::Int32
     return Int32(1)  # Got here = function reference resolved
 end
 
+# PURE-7003: Sub-stage diagnostics for stage 3 (typeinf) trap isolation
+# Stage 3a: Can we get world counter?
+function _diag_stage3a_world(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    raw = _wasm_extract_binop_raw(code_bytes)
+    op_byte = getfield(raw, 1)
+    func = if op_byte == UInt8(43)
+        Base.:+
+    elseif op_byte == UInt8(45)
+        Base.:-
+    elseif op_byte == UInt8(42)
+        Base.:*
+    else
+        Base.:/
+    end
+    world = Base.get_world_counter()
+    return Int32(1)  # world counter accessed
+end
+
+# Stage 3b: Can we construct the type signature?
+function _diag_stage3b_sig(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    raw = _wasm_extract_binop_raw(code_bytes)
+    op_byte = getfield(raw, 1)
+    func = if op_byte == UInt8(43)
+        Base.:+
+    elseif op_byte == UInt8(45)
+        Base.:-
+    elseif op_byte == UInt8(42)
+        Base.:*
+    else
+        Base.:/
+    end
+    arg_types = (Int64, Int64)
+    world = Base.get_world_counter()
+    sig = Tuple{typeof(func), arg_types...}
+    return Int32(2)  # sig constructed
+end
+
+# Stage 3c: Can we build the WasmInterpreter?
+function _diag_stage3c_interp(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    raw = _wasm_extract_binop_raw(code_bytes)
+    op_byte = getfield(raw, 1)
+    func = if op_byte == UInt8(43)
+        Base.:+
+    elseif op_byte == UInt8(45)
+        Base.:-
+    elseif op_byte == UInt8(42)
+        Base.:*
+    else
+        Base.:/
+    end
+    arg_types = (Int64, Int64)
+    world = Base.get_world_counter()
+    sig = Tuple{typeof(func), arg_types...}
+    interp = build_wasm_interpreter([sig]; world=world)
+    return Int32(3)  # interpreter built
+end
+
+# Stage 3d: Can we find methods?
+function _diag_stage3d_findall(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    raw = _wasm_extract_binop_raw(code_bytes)
+    op_byte = getfield(raw, 1)
+    func = if op_byte == UInt8(43)
+        Base.:+
+    elseif op_byte == UInt8(45)
+        Base.:-
+    elseif op_byte == UInt8(42)
+        Base.:*
+    else
+        Base.:/
+    end
+    arg_types = (Int64, Int64)
+    world = Base.get_world_counter()
+    sig = Tuple{typeof(func), arg_types...}
+    native_mt = Core.Compiler.InternalMethodTable(world)
+    lookup = Core.Compiler.findall(sig, native_mt; limit=3)
+    return Int32(4)  # findall succeeded
+end
+
+# Stage 3e: Can we run typeinf?
+function _diag_stage3e_typeinf(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    raw = _wasm_extract_binop_raw(code_bytes)
+    op_byte = getfield(raw, 1)
+    func = if op_byte == UInt8(43)
+        Base.:+
+    elseif op_byte == UInt8(45)
+        Base.:-
+    elseif op_byte == UInt8(42)
+        Base.:*
+    else
+        Base.:/
+    end
+    arg_types = (Int64, Int64)
+    world = Base.get_world_counter()
+    sig = Tuple{typeof(func), arg_types...}
+    interp = build_wasm_interpreter([sig]; world=world)
+    native_mt = Core.Compiler.InternalMethodTable(world)
+    lookup = Core.Compiler.findall(sig, native_mt; limit=3)
+    mi = Core.Compiler.specialize_method(first(lookup.matches))
+    _WASM_USE_REIMPL[] = true
+    _WASM_CODE_CACHE[] = interp.code_info_cache
+    inf_frame = nothing
+    try
+        inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
+    finally
+        _WASM_USE_REIMPL[] = false
+        _WASM_CODE_CACHE[] = nothing
+    end
+    return Int32(5)  # typeinf succeeded
+end
+
 # PURE-7001a: Sub-stage diagnostics to isolate stage1 trap
 # Stage 1a: Get textbuf (tests unsafe_textbuf)
 function _diag_stage1a_textbuf(code_bytes::Vector{UInt8})::Int32
