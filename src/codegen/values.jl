@@ -398,21 +398,25 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         append!(bytes, reinterpret(UInt8, [val]))
 
     elseif val isa String
-        # String constant - create a WasmGC array with the characters
+        # String constant - create a WasmGC array with the raw bytes
         # Get the string array type
         type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
 
-        # Push each character as an i32
-        for c in val
+        # PURE-8001: Push each BYTE as an i32 (not character).
+        # Julia Strings can contain invalid UTF-8 (e.g., CodeInfo.debuginfo strings).
+        # Iterating characters with `for c in val` throws InvalidCharError on these.
+        # Using codeunit() accesses raw bytes safely.
+        n_bytes = ncodeunits(val)
+        for i in 1:n_bytes
             push!(bytes, Opcode.I32_CONST)
-            append!(bytes, encode_leb128_signed(Int32(c)))
+            append!(bytes, encode_leb128_signed(Int32(codeunit(val, i))))
         end
 
         # array.new_fixed $type_idx $length
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.ARRAY_NEW_FIXED)
         append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(length(val)))
+        append!(bytes, encode_leb128_unsigned(n_bytes))
 
     elseif val isa GlobalRef
         # Check if this GlobalRef is a module-level global (mutable struct instance)
