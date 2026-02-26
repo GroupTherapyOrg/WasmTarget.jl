@@ -624,6 +624,80 @@ function _diag_stage0_cursor(code_bytes::Vector{UInt8})::Int32
     return Int32(3)
 end
 
+# PURE-7001a: Step-by-step diagnostics for _wasm_binop_byte_starts
+
+# Test: can we access root cursor fields?
+function _diag_binop_a_fields(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    cursor = JuliaSyntax.RedTreeCursor(ps)
+    green = getfield(cursor, :green)
+    root_pos = getfield(green, :position)
+    root_byte_end = getfield(cursor, :byte_end)
+    return Int32(root_pos)  # expect 5 for "1+1"
+end
+
+# Test: can we access root raw node?
+function _diag_binop_b_rootraw(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    cursor = JuliaSyntax.RedTreeCursor(ps)
+    green = getfield(cursor, :green)
+    po = getfield(green, :parser_output)
+    root_pos = getfield(green, :position)
+    root_raw = po[root_pos]
+    node_span = getfield(root_raw, :node_span_or_orig_kind)
+    return Int32(node_span)  # expect 3 for "1+1"
+end
+
+# Test: can we access first child (root_pos - 1)?
+function _diag_binop_c_child1(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    cursor = JuliaSyntax.RedTreeCursor(ps)
+    green = getfield(cursor, :green)
+    po = getfield(green, :parser_output)
+    root_pos = getfield(green, :position)
+    idx1 = root_pos - UInt32(1)
+    child_raw = po[idx1]
+    child_byte_span = getfield(child_raw, :byte_span)
+    return Int32(child_byte_span)  # expect 1 for "1" token
+end
+
+# Test: can we access second child (root_pos - 2)?
+function _diag_binop_d_child2(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    cursor = JuliaSyntax.RedTreeCursor(ps)
+    green = getfield(cursor, :green)
+    po = getfield(green, :parser_output)
+    root_pos = getfield(green, :position)
+    idx2 = root_pos - UInt32(2)
+    child_raw = po[idx2]
+    child_byte_span = getfield(child_raw, :byte_span)
+    return Int32(child_byte_span)  # expect 1 for "+" token
+end
+
+# Test: can we access txtbuf[byte_end]?
+function _diag_binop_e_txtaccess(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    txtbuf = JuliaSyntax.unsafe_textbuf(ps)
+    cursor = JuliaSyntax.RedTreeCursor(ps)
+    root_byte_end = getfield(cursor, :byte_end)
+    val = txtbuf[root_byte_end]
+    return Int32(val)  # expect 49 ('1' = 0x31)
+end
+
+# Test: full _wasm_binop_byte_starts call
+function _diag_binop_f_full(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    byte_starts = _wasm_binop_byte_starts(ps)
+    op_start = getfield(byte_starts, 2)
+    return Int32(op_start)  # expect 2 for "1+1"
+end
+
 # Stage 1 only: parse + extract op_byte via flat array traversal
 function _diag_stage1_parse(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
