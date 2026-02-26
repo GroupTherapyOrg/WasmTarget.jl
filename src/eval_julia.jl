@@ -614,7 +614,17 @@ function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
 
     # Stage 3: Type inference using WasmInterpreter
     world = _wasm_get_world_counter()
-    sig = Tuple{typeof(func), arg_types...}
+    # PURE-7005 PORT: typeof(func) on union type traps in WASM (CROSS-CALL UNREACHABLE).
+    # Compute sig directly per operator — each branch is a concrete type literal.
+    sig = if op_byte == UInt8(43)
+        Tuple{typeof(Base.:+), Int64, Int64}
+    elseif op_byte == UInt8(45)
+        Tuple{typeof(Base.:-), Int64, Int64}
+    elseif op_byte == UInt8(42)
+        Tuple{typeof(Base.:*), Int64, Int64}
+    else
+        Tuple{typeof(Base.:/), Int64, Int64}
+    end
 
     # Build WasmInterpreter with transitive method table
     interp = build_wasm_interpreter([sig]; world=world)
@@ -816,18 +826,17 @@ function _diag_stage3b_sig(code_bytes::Vector{UInt8})::Int32
     _wasm_parse_statement!(ps)
     raw = _wasm_extract_binop_raw(code_bytes)
     op_byte = getfield(raw, 1)
-    func = if op_byte == UInt8(43)
-        Base.:+
-    elseif op_byte == UInt8(45)
-        Base.:-
-    elseif op_byte == UInt8(42)
-        Base.:*
-    else
-        Base.:/
-    end
-    arg_types = (Int64, Int64)
     world = _wasm_get_world_counter()
-    sig = Tuple{typeof(func), arg_types...}
+    # PURE-7005: Direct sig construction (no typeof on union)
+    sig = if op_byte == UInt8(43)
+        Tuple{typeof(Base.:+), Int64, Int64}
+    elseif op_byte == UInt8(45)
+        Tuple{typeof(Base.:-), Int64, Int64}
+    elseif op_byte == UInt8(42)
+        Tuple{typeof(Base.:*), Int64, Int64}
+    else
+        Tuple{typeof(Base.:/), Int64, Int64}
+    end
     return Int32(2)  # sig constructed
 end
 
@@ -837,18 +846,17 @@ function _diag_stage3c_interp(code_bytes::Vector{UInt8})::Int32
     _wasm_parse_statement!(ps)
     raw = _wasm_extract_binop_raw(code_bytes)
     op_byte = getfield(raw, 1)
-    func = if op_byte == UInt8(43)
-        Base.:+
-    elseif op_byte == UInt8(45)
-        Base.:-
-    elseif op_byte == UInt8(42)
-        Base.:*
-    else
-        Base.:/
-    end
-    arg_types = (Int64, Int64)
     world = _wasm_get_world_counter()
-    sig = Tuple{typeof(func), arg_types...}
+    # PURE-7005: Direct sig construction (no typeof on union)
+    sig = if op_byte == UInt8(43)
+        Tuple{typeof(Base.:+), Int64, Int64}
+    elseif op_byte == UInt8(45)
+        Tuple{typeof(Base.:-), Int64, Int64}
+    elseif op_byte == UInt8(42)
+        Tuple{typeof(Base.:*), Int64, Int64}
+    else
+        Tuple{typeof(Base.:/), Int64, Int64}
+    end
     interp = build_wasm_interpreter([sig]; world=world)
     return Int32(3)  # interpreter built
 end
@@ -859,18 +867,17 @@ function _diag_stage3d_findall(code_bytes::Vector{UInt8})::Int32
     _wasm_parse_statement!(ps)
     raw = _wasm_extract_binop_raw(code_bytes)
     op_byte = getfield(raw, 1)
-    func = if op_byte == UInt8(43)
-        Base.:+
-    elseif op_byte == UInt8(45)
-        Base.:-
-    elseif op_byte == UInt8(42)
-        Base.:*
-    else
-        Base.:/
-    end
-    arg_types = (Int64, Int64)
     world = _wasm_get_world_counter()
-    sig = Tuple{typeof(func), arg_types...}
+    # PURE-7005: Direct sig construction (no typeof on union)
+    sig = if op_byte == UInt8(43)
+        Tuple{typeof(Base.:+), Int64, Int64}
+    elseif op_byte == UInt8(45)
+        Tuple{typeof(Base.:-), Int64, Int64}
+    elseif op_byte == UInt8(42)
+        Tuple{typeof(Base.:*), Int64, Int64}
+    else
+        Tuple{typeof(Base.:/), Int64, Int64}
+    end
     native_mt = Core.Compiler.InternalMethodTable(world)
     lookup = Core.Compiler.findall(sig, native_mt; limit=3)
     return Int32(4)  # findall succeeded
@@ -882,18 +889,17 @@ function _diag_stage3e_typeinf(code_bytes::Vector{UInt8})::Int32
     _wasm_parse_statement!(ps)
     raw = _wasm_extract_binop_raw(code_bytes)
     op_byte = getfield(raw, 1)
-    func = if op_byte == UInt8(43)
-        Base.:+
-    elseif op_byte == UInt8(45)
-        Base.:-
-    elseif op_byte == UInt8(42)
-        Base.:*
-    else
-        Base.:/
-    end
-    arg_types = (Int64, Int64)
     world = _wasm_get_world_counter()
-    sig = Tuple{typeof(func), arg_types...}
+    # PURE-7005: Direct sig construction (no typeof on union)
+    sig = if op_byte == UInt8(43)
+        Tuple{typeof(Base.:+), Int64, Int64}
+    elseif op_byte == UInt8(45)
+        Tuple{typeof(Base.:-), Int64, Int64}
+    elseif op_byte == UInt8(42)
+        Tuple{typeof(Base.:*), Int64, Int64}
+    else
+        Tuple{typeof(Base.:/), Int64, Int64}
+    end
     interp = build_wasm_interpreter([sig]; world=world)
     native_mt = Core.Compiler.InternalMethodTable(world)
     lookup = Core.Compiler.findall(sig, native_mt; limit=3)
