@@ -11183,6 +11183,8 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
     # Helper to compile statements in a basic block
     function compile_block_statements(block::BasicBlock, skip_terminator::Bool)::Vector{UInt8}
         block_bytes = UInt8[]
+        # PURE-7001a: Reset dead code guard — this block is reachable
+        ctx.last_stmt_was_stub = false
 
         for i in block.start_idx:block.end_idx
             stmt = code[i]
@@ -12319,6 +12321,8 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
         # Compile the block's statements (not the terminator, we handle it separately)
         # Skip any dead statements within the block
         block_bytes = UInt8[]
+        # PURE-7001a: Reset dead code guard — this block is reachable
+        ctx.last_stmt_was_stub = false
         for i in block.start_idx:block.end_idx
             # Skip dead statements
             if i in dead_regions
