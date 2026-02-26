@@ -728,14 +728,12 @@ function _diag_stage0_ps(code_bytes::Vector{UInt8})::Int32
     return Int32(1)
 end
 
-# Stage 0c: Create ParseStream + parse!
-# PURE-7007a: Skip full parse for multiplicative ops (* and /).
+# Stage 0c: Validate expression structure.
+# PURE-7007a: Replaced full JuliaSyntax parse with raw byte extraction.
 # parse_stmts traps for * in WASM (parse_unary dead code guard at 0x1ecbc8).
-# For * and /, _wasm_extract_binop_raw validates syntax via raw byte scan.
+# _wasm_extract_binop_raw validates syntax (finds 1 operator + 2 digit operands).
 function _diag_stage0_parse(code_bytes::Vector{UInt8})::Int32
-    raw = _wasm_extract_binop_raw(code_bytes)
-    op_byte = getfield(raw, 1)
-    _wasm_maybe_parse!(code_bytes, op_byte)
+    _wasm_extract_binop_raw(code_bytes)
     return Int32(2)
 end
 
