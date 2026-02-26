@@ -84,6 +84,8 @@ function main()
         (eval_julia_to_bytes_vec, (Vector{UInt8},)),
         # PURE-7001: parse! port (bypasses kwarg dispatch)
         (_wasm_parse_statement!, (JuliaSyntax.ParseStream,)),
+        # PURE-7007a: conditional parse (skip full parse for * and /)
+        (_wasm_maybe_parse!, (Vector{UInt8}, UInt8)),
         # PURE-7002: Raw byte extraction port (bypasses broken Vector growth)
         (_wasm_extract_binop_raw, (Vector{UInt8},)),
         # PURE-7006: Pre-computed WASM bytes (bypasses kwargs + ccall in stages 3-4)

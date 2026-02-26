@@ -681,24 +681,31 @@ function _wasm_cached_arith_bytes(op_byte::UInt8)::Vector{UInt8}
     return _wasm_cached_int_arith_bytes(op_byte)
 end
 
+# PURE-7007a: Conditional parse helper — avoids "values remaining on stack"
+# codegen bug when an if-without-else block discards a ref-typed return value.
+# For additive ops (+ and -), runs the full JuliaSyntax parse.
+# For multiplicative ops (* and /), skips parse (parse_unary traps in WASM).
+function _wasm_maybe_parse!(code_bytes::Vector{UInt8}, op_byte::UInt8)::Int32
+    if op_byte == UInt8(43) || op_byte == UInt8(45)  # + or -
+        ps = JuliaSyntax.ParseStream(code_bytes)
+        _wasm_parse_statement!(ps)
+    end
+    return Int32(0)
+end
+
 # --- Entry point that takes Vector{UInt8} directly (WASM-compatible) ---
 # Avoids ALL String operations (codeunit, ncodeunits, pointer, unsafe_load)
 # which compile to `unreachable` in WASM.
 function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
     # PURE-7007a: Extract operator FIRST via raw byte scan (no parse tree needed).
-    # Must happen before _wasm_parse_statement! because parse_stmts traps for
+    # Must happen before parse because parse_stmts traps for
     # multiplicative ops in WASM (parse_unary dead code guard at 0x1ecbc8).
     raw = _wasm_extract_binop_raw(code_bytes)
     op_byte = getfield(raw, 1)
 
     # Stage 1: JuliaSyntax parse — only for additive ops (+ and -).
-    # parse_stmts calls parse_with_chains → parse_unary which traps for * and /
-    # because the multiplicative precedence path hits a dead code guard.
-    # For * and /, _wasm_extract_binop_raw validates syntax (finds exactly 1 op + 2 operands).
-    if op_byte == UInt8(43) || op_byte == UInt8(45)  # + or -
-        ps = JuliaSyntax.ParseStream(code_bytes)
-        _wasm_parse_statement!(ps)
-    end
+    # Multiplicative ops validated by _wasm_extract_binop_raw (raw byte check).
+    _wasm_maybe_parse!(code_bytes, op_byte)
 
     # Stages 2-4: PURE-7006 — Return pre-computed WASM bytes.
     # Stage 2 (resolve function ref) and stages 3-4 (typeinf + codegen) are all
@@ -729,10 +736,7 @@ end
 function _diag_stage0_parse(code_bytes::Vector{UInt8})::Int32
     raw = _wasm_extract_binop_raw(code_bytes)
     op_byte = getfield(raw, 1)
-    if op_byte == UInt8(43) || op_byte == UInt8(45)  # + or -
-        ps = JuliaSyntax.ParseStream(code_bytes)
-        _wasm_parse_statement!(ps)
-    end
+    _wasm_maybe_parse!(code_bytes, op_byte)
     return Int32(2)
 end
 
