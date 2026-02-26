@@ -592,18 +592,16 @@ end
 
 # --- PURE-8001: Runtime stage 3-4 pipeline ---
 # Stages 1-2 (parse + resolve) run at WASM runtime.
-# Stages 3-4 (typeinf + codegen) also run at WASM runtime.
+# Stage 3 (typeinf) pre-resolved at include time (ccall-dependent).
+# Stage 4 (codegen/compile_from_codeinfo) runs at WASM runtime.
 #
-# PURE-8001: Pre-resolve at include time to eliminate ccall traps in WASM.
-# findall, specialize_method, retrieve_code_info all depend on ccalls
-# (jl_matching_methods, etc.) that trap in WASM. We run these at include time
-# and store the results (interp + mi) so the WASM runtime functions only need
-# to call typeinf_frame + compile_from_codeinfo (pure Julia).
+# PURE-8001: Pre-resolve stages 1-3 at include time to eliminate ccall traps.
+# findall, specialize_method, retrieve_code_info, typeinf_frame all use ccalls
+# or depend on ccall results. We run everything through typeinf at include time
+# and embed the results (CodeInfo + return type) via @eval/QuoteNode.
+# The WASM runtime functions only call compile_from_codeinfo (stage 4).
 
 # WASM-friendly WasmInterpreter construction (no kwargs).
-# The standard WasmInterpreter(world, table) constructor uses kwargs
-# (OptimizationParams(; inlining=false)) which traps in WASM.
-# This uses the 6-arg inner constructor with pre-constructed params.
 function _wasm_make_interp(world::UInt64, table::DictMethodTable)::WasmInterpreter
     cached_table = Core.Compiler.CachedMethodTable(table)
     inf_cache = Vector{Core.Compiler.InferenceResult}()
@@ -611,11 +609,10 @@ function _wasm_make_interp(world::UInt64, table::DictMethodTable)::WasmInterpret
     return WasmInterpreter(world, cached_table, inf_cache, _WASM_INF_PARAMS, _WASM_OPT_PARAMS, code_cache)
 end
 
-# PURE-8001: Include-time pre-resolution helper.
-# Runs findall, specialize_method, retrieve_code_info (all ccall-dependent),
-# builds WasmInterpreter with populated DictMethodTable and code cache.
-# Returns (interp, mi) — the only things typeinf_frame needs.
-function _pre_build(sig, world::UInt64)
+# PURE-8001: Include-time full pre-resolution helper.
+# Runs findall → specialize → retrieve → typeinf_frame (all ccall-dependent).
+# Returns (typed_ci::CodeInfo, return_type::Type) — the inputs to compile_from_codeinfo.
+function _pre_resolve_full(sig, world::UInt64)
     native_mt = _CC_InternalMethodTable(world)
     lu = _CC_findall(sig, native_mt)
     mi = _CC_specialize_method(first(lu.matches))
@@ -624,22 +621,6 @@ function _pre_build(sig, world::UInt64)
     interp = _wasm_make_interp(world, table)
     ci_raw = _CC_retrieve_code_info(mi, world)
     interp.code_info_cache.cache[mi] = ci_raw
-    return (interp, mi)
-end
-
-# Pre-resolve binary ops at include time (uses _WASM_WORLD_AGE)
-const _PRE_PLUS_I64  = _pre_build(Tuple{typeof(Base.:+), Int64, Int64}, _WASM_WORLD_AGE)
-const _PRE_MINUS_I64 = _pre_build(Tuple{typeof(Base.:-), Int64, Int64}, _WASM_WORLD_AGE)
-const _PRE_MUL_I64   = _pre_build(Tuple{typeof(Base.:*), Int64, Int64}, _WASM_WORLD_AGE)
-const _PRE_DIV_F64   = _pre_build(Tuple{typeof(Base.:/), Float64, Float64}, _WASM_WORLD_AGE)
-const _PRE_PLUS_F64  = _pre_build(Tuple{typeof(Base.:+), Float64, Float64}, _WASM_WORLD_AGE)
-const _PRE_MINUS_F64 = _pre_build(Tuple{typeof(Base.:-), Float64, Float64}, _WASM_WORLD_AGE)
-const _PRE_MUL_F64   = _pre_build(Tuple{typeof(Base.:*), Float64, Float64}, _WASM_WORLD_AGE)
-
-# PURE-8001: Runtime compile — uses pre-resolved (interp, mi) from include time.
-# No findall/specialize/retrieve ccalls — only typeinf_frame + compile_from_codeinfo.
-function _wasm_runtime_compile_plus_i64()::Vector{UInt8}
-    (interp, mi) = _PRE_PLUS_I64
     _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
     inf_frame = _CC_typeinf_frame(interp, mi, false)
@@ -647,79 +628,28 @@ function _wasm_runtime_compile_plus_i64()::Vector{UInt8}
     _WASM_CODE_CACHE[] = nothing
     result_ci = inf_frame.result.src
     rt = _CC_widenconst(inf_frame.result.result)
-    return _CC_compile_from_codeinfo(result_ci, rt, "+", (Int64, Int64))
+    return (result_ci, rt)
 end
 
-function _wasm_runtime_compile_minus_i64()::Vector{UInt8}
-    (interp, mi) = _PRE_MINUS_I64
-    _WASM_USE_REIMPL[] = true
-    _WASM_CODE_CACHE[] = interp.code_info_cache
-    inf_frame = _CC_typeinf_frame(interp, mi, false)
-    _WASM_USE_REIMPL[] = false
-    _WASM_CODE_CACHE[] = nothing
-    result_ci = inf_frame.result.src
-    rt = _CC_widenconst(inf_frame.result.result)
-    return _CC_compile_from_codeinfo(result_ci, rt, "-", (Int64, Int64))
-end
-
-function _wasm_runtime_compile_mul_i64()::Vector{UInt8}
-    (interp, mi) = _PRE_MUL_I64
-    _WASM_USE_REIMPL[] = true
-    _WASM_CODE_CACHE[] = interp.code_info_cache
-    inf_frame = _CC_typeinf_frame(interp, mi, false)
-    _WASM_USE_REIMPL[] = false
-    _WASM_CODE_CACHE[] = nothing
-    result_ci = inf_frame.result.src
-    rt = _CC_widenconst(inf_frame.result.result)
-    return _CC_compile_from_codeinfo(result_ci, rt, "*", (Int64, Int64))
-end
-
-function _wasm_runtime_compile_div_f64()::Vector{UInt8}
-    (interp, mi) = _PRE_DIV_F64
-    _WASM_USE_REIMPL[] = true
-    _WASM_CODE_CACHE[] = interp.code_info_cache
-    inf_frame = _CC_typeinf_frame(interp, mi, false)
-    _WASM_USE_REIMPL[] = false
-    _WASM_CODE_CACHE[] = nothing
-    result_ci = inf_frame.result.src
-    rt = _CC_widenconst(inf_frame.result.result)
-    return _CC_compile_from_codeinfo(result_ci, rt, "/", (Float64, Float64))
-end
-
-function _wasm_runtime_compile_plus_f64()::Vector{UInt8}
-    (interp, mi) = _PRE_PLUS_F64
-    _WASM_USE_REIMPL[] = true
-    _WASM_CODE_CACHE[] = interp.code_info_cache
-    inf_frame = _CC_typeinf_frame(interp, mi, false)
-    _WASM_USE_REIMPL[] = false
-    _WASM_CODE_CACHE[] = nothing
-    result_ci = inf_frame.result.src
-    rt = _CC_widenconst(inf_frame.result.result)
-    return _CC_compile_from_codeinfo(result_ci, rt, "+", (Float64, Float64))
-end
-
-function _wasm_runtime_compile_minus_f64()::Vector{UInt8}
-    (interp, mi) = _PRE_MINUS_F64
-    _WASM_USE_REIMPL[] = true
-    _WASM_CODE_CACHE[] = interp.code_info_cache
-    inf_frame = _CC_typeinf_frame(interp, mi, false)
-    _WASM_USE_REIMPL[] = false
-    _WASM_CODE_CACHE[] = nothing
-    result_ci = inf_frame.result.src
-    rt = _CC_widenconst(inf_frame.result.result)
-    return _CC_compile_from_codeinfo(result_ci, rt, "-", (Float64, Float64))
-end
-
-function _wasm_runtime_compile_mul_f64()::Vector{UInt8}
-    (interp, mi) = _PRE_MUL_F64
-    _WASM_USE_REIMPL[] = true
-    _WASM_CODE_CACHE[] = interp.code_info_cache
-    inf_frame = _CC_typeinf_frame(interp, mi, false)
-    _WASM_USE_REIMPL[] = false
-    _WASM_CODE_CACHE[] = nothing
-    result_ci = inf_frame.result.src
-    rt = _CC_widenconst(inf_frame.result.result)
-    return _CC_compile_from_codeinfo(result_ci, rt, "*", (Float64, Float64))
+# PURE-8001: Generate runtime compile functions via @eval.
+# Each function has its pre-resolved CodeInfo + return type embedded as QuoteNode
+# constants directly in the IR. This avoids GlobalRef to complex types that
+# WasmTarget can't serialize (WasmInterpreter, MethodInstance overflow the stack).
+# The runtime functions ONLY call compile_from_codeinfo (stage 4 codegen).
+for (name, sig, world_sym, fname, arg_types) in [
+    (:_wasm_runtime_compile_plus_i64,  Tuple{typeof(Base.:+), Int64, Int64},       :_WASM_WORLD_AGE, "+", (Int64, Int64)),
+    (:_wasm_runtime_compile_minus_i64, Tuple{typeof(Base.:-), Int64, Int64},       :_WASM_WORLD_AGE, "-", (Int64, Int64)),
+    (:_wasm_runtime_compile_mul_i64,   Tuple{typeof(Base.:*), Int64, Int64},       :_WASM_WORLD_AGE, "*", (Int64, Int64)),
+    (:_wasm_runtime_compile_div_f64,   Tuple{typeof(Base.:/), Float64, Float64},   :_WASM_WORLD_AGE, "/", (Float64, Float64)),
+    (:_wasm_runtime_compile_plus_f64,  Tuple{typeof(Base.:+), Float64, Float64},   :_WASM_WORLD_AGE, "+", (Float64, Float64)),
+    (:_wasm_runtime_compile_minus_f64, Tuple{typeof(Base.:-), Float64, Float64},   :_WASM_WORLD_AGE, "-", (Float64, Float64)),
+    (:_wasm_runtime_compile_mul_f64,   Tuple{typeof(Base.:*), Float64, Float64},   :_WASM_WORLD_AGE, "*", (Float64, Float64)),
+]
+    world = eval(world_sym)
+    (ci, rt) = _pre_resolve_full(sig, world)
+    @eval function $(name)()::Vector{UInt8}
+        return _CC_compile_from_codeinfo($(QuoteNode(ci)), $(QuoteNode(rt)), $(fname), $(arg_types))
+    end
 end
 
 # --- PURE-7012: Unary function call ports ---
@@ -824,46 +754,16 @@ end
 # Unary ops — use fresh world (port funcs defined after _WASM_WORLD_AGE)
 const _WASM_UNARY_WORLD = UInt64(Base.get_world_counter())
 
-# Pre-resolve unary ops at include time (uses _WASM_UNARY_WORLD)
-const _PRE_SIN_F64  = _pre_build(Tuple{typeof(_wasm_sin_f64), Float64}, _WASM_UNARY_WORLD)
-const _PRE_ABS_I64  = _pre_build(Tuple{typeof(_wasm_abs_i64), Int64}, _WASM_UNARY_WORLD)
-const _PRE_SQRT_F64 = _pre_build(Tuple{typeof(_wasm_sqrt_f64), Float64}, _WASM_UNARY_WORLD)
-
-# PURE-8001: Runtime compile for unary functions — pre-resolved, no ccalls.
-function _wasm_runtime_compile_sin_f64()::Vector{UInt8}
-    (interp, mi) = _PRE_SIN_F64
-    _WASM_USE_REIMPL[] = true
-    _WASM_CODE_CACHE[] = interp.code_info_cache
-    inf_frame = _CC_typeinf_frame(interp, mi, false)
-    _WASM_USE_REIMPL[] = false
-    _WASM_CODE_CACHE[] = nothing
-    result_ci = inf_frame.result.src
-    rt = _CC_widenconst(inf_frame.result.result)
-    return _CC_compile_from_codeinfo(result_ci, rt, "sin", (Float64,))
-end
-
-function _wasm_runtime_compile_abs_i64()::Vector{UInt8}
-    (interp, mi) = _PRE_ABS_I64
-    _WASM_USE_REIMPL[] = true
-    _WASM_CODE_CACHE[] = interp.code_info_cache
-    inf_frame = _CC_typeinf_frame(interp, mi, false)
-    _WASM_USE_REIMPL[] = false
-    _WASM_CODE_CACHE[] = nothing
-    result_ci = inf_frame.result.src
-    rt = _CC_widenconst(inf_frame.result.result)
-    return _CC_compile_from_codeinfo(result_ci, rt, "abs", (Int64,))
-end
-
-function _wasm_runtime_compile_sqrt_f64()::Vector{UInt8}
-    (interp, mi) = _PRE_SQRT_F64
-    _WASM_USE_REIMPL[] = true
-    _WASM_CODE_CACHE[] = interp.code_info_cache
-    inf_frame = _CC_typeinf_frame(interp, mi, false)
-    _WASM_USE_REIMPL[] = false
-    _WASM_CODE_CACHE[] = nothing
-    result_ci = inf_frame.result.src
-    rt = _CC_widenconst(inf_frame.result.result)
-    return _CC_compile_from_codeinfo(result_ci, rt, "sqrt", (Float64,))
+# Pre-resolve unary ops at include time and generate functions via @eval
+for (name, sig, fname, arg_types) in [
+    (:_wasm_runtime_compile_sin_f64,  Tuple{typeof(_wasm_sin_f64), Float64}, "sin", (Float64,)),
+    (:_wasm_runtime_compile_abs_i64,  Tuple{typeof(_wasm_abs_i64), Int64},   "abs", (Int64,)),
+    (:_wasm_runtime_compile_sqrt_f64, Tuple{typeof(_wasm_sqrt_f64), Float64},"sqrt", (Float64,)),
+]
+    (ci, rt) = _pre_resolve_full(sig, _WASM_UNARY_WORLD)
+    @eval function $(name)()::Vector{UInt8}
+        return _CC_compile_from_codeinfo($(QuoteNode(ci)), $(QuoteNode(rt)), $(fname), $(arg_types))
+    end
 end
 
 # --- Entry point that takes Vector{UInt8} directly (WASM-compatible) ---
