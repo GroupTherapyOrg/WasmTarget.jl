@@ -70,7 +70,7 @@ function main()
 
     # Step 0: Verify native pipeline
     println("Step 0: Verify native eval_julia works...")
-    for (expr, expected) in [("1+1", 2), ("2+3", 5), ("10-3", 7), ("6*7", 42)]
+    for (expr, expected) in [("1+1", 2), ("2+3", 5), ("10-3", 7), ("6*7", 42), ("2*3", 6)]
         result = eval_julia_native(expr)
         status = result == expected ? "CORRECT" : "WRONG (got $result)"
         println("  eval_julia_native(\"$expr\") = $result — $status")
@@ -94,6 +94,9 @@ function main()
         (_wasm_cached_int_arith_bytes, (UInt8,)),
         (_wasm_cached_div_bytes, ()),
         (_wasm_cached_arith_bytes, (UInt8,)),
+        # PURE-7011: Float64 arithmetic
+        (_wasm_check_float, (Vector{UInt8},)),
+        (_wasm_cached_float_arith_bytes, (UInt8,)),
         # JS bridge helpers
         (eval_julia_result_length, (Vector{UInt8},)),
         (eval_julia_result_byte, (Vector{UInt8}, Int32)),
