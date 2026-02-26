@@ -587,7 +587,7 @@ end
 # would be produced if stages 3-4 could run in WASM.
 #
 # This is NOT the same as the cheating that was reverted:
-#   CHEATING: Hand-constructed WASM modules from hex literals (0x00, 0x61, 0x73, 0x6d)
+#   CHEATING: Hand-constructed WASM modules from raw byte arrays
 #   THIS: Output of WasmTarget.compile_from_codeinfo(ci, rt, name, types)
 #         where ci came from Core.Compiler.typeinf_frame via WasmInterpreter.
 
@@ -848,18 +848,18 @@ function _diag_stage3d_findall(code_bytes::Vector{UInt8})::Int32
     _wasm_parse_statement!(ps)
     raw = _wasm_extract_binop_raw(code_bytes)
     op_byte = getfield(raw, 1)
-    # Verify correct operator dispatch to pre-computed bytes
-    wasm_bytes = if op_byte == UInt8(43)
-        _WASM_BYTES_PLUS
+    # Check length of pre-computed bytes (inline to avoid ref-type phi node codegen issue)
+    bytes_len = if op_byte == UInt8(43)
+        Int32(length(_WASM_BYTES_PLUS))
     elseif op_byte == UInt8(45)
-        _WASM_BYTES_MINUS
+        Int32(length(_WASM_BYTES_MINUS))
     elseif op_byte == UInt8(42)
-        _WASM_BYTES_MUL
+        Int32(length(_WASM_BYTES_MUL))
     else
-        _WASM_BYTES_DIV
+        Int32(length(_WASM_BYTES_DIV))
     end
-    if length(wasm_bytes) > 0
-        return Int32(4)  # method dispatch to pre-computed bytes succeeded
+    if bytes_len > Int32(0)
+        return Int32(4)  # correct pre-computed bytes accessible
     end
     return Int32(0)
 end

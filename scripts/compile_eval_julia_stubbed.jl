@@ -82,15 +82,11 @@ function main()
     seed = [
         # Real pipeline entry point
         (eval_julia_to_bytes_vec, (Vector{UInt8},)),
-        # WASM-compatible port functions (build_tree chain)
-        (_wasm_simple_call_expr, (JuliaSyntax.ParseStream,)),
-        (_wasm_build_tree_expr, (JuliaSyntax.ParseStream,)),
-        (_wasm_leaf_to_expr, (JuliaSyntax.RedTreeCursor, JuliaSyntax.Kind, Vector{UInt8}, UInt32)),
-        (_wasm_node_to_expr, (JuliaSyntax.RedTreeCursor, JuliaSyntax.SourceFile, Vector{UInt8}, UInt32)),
-        (_wasm_parseargs!, (Expr, LineNumberNode, JuliaSyntax.RedTreeCursor, JuliaSyntax.SourceFile, Vector{UInt8}, UInt32)),
-        (_wasm_string_to_Expr, (JuliaSyntax.RedTreeCursor, JuliaSyntax.SourceFile, Vector{UInt8}, UInt32)),
-        (_wasm_untokenize_kind, (JuliaSyntax.Kind, Bool)),
-        (_wasm_untokenize_head, (JuliaSyntax.SyntaxHead,)),
+        # PURE-7006: Tree-building chain removed from seed — not on critical path.
+        # eval_julia_to_bytes_vec uses _wasm_extract_binop_raw (flat byte parsing).
+        # Tree functions (_wasm_node_to_expr, _wasm_string_to_Expr, etc.) had a
+        # pre-existing codegen bug (func 7 "control frames remain" validation error).
+        # They remain in eval_julia.jl for future use but are not compiled to WASM.
         # PURE-7001: parse! port (bypasses kwarg dispatch)
         (_wasm_parse_statement!, (JuliaSyntax.ParseStream,)),
         # PURE-7001a: flat array tree traversal (bypasses broken iterate protocol)
