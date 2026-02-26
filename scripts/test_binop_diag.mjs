@@ -74,6 +74,30 @@ async function main() {
         }
     }
 
+    // PURE-7002: Vector length vs getfield diagnostics
+    console.log("\n--- PURE-7002: Vector length diagnostics ---");
+    const diag7002 = [
+        ['_diag_7002_output_len', 5, 'length(ps.output)'],
+        ['_diag_7002_output_5', 3, 'ps.output[5].byte_span'],
+        ['_diag_7002_output_5_span', 3, 'ps.output[5].node_span'],
+        ['_diag_7002_lastindex', 5, 'lastindex(ps.output)'],
+        ['_diag_7002_output_2', 44, 'ps.output[2].node_span (K"Integer")'],
+        ['_diag_7002_next_byte', 4, 'ps.next_byte'],
+    ];
+    for (const [fname, expected, desc] of diag7002) {
+        try {
+            const v = jsToWasmBytes("1+1");
+            const fn = ex[fname];
+            if (!fn) { console.log(`  MISSING: ${fname}`); continue; }
+            const r = fn(v);
+            const rn = Number(r);
+            const ok = rn === expected;
+            console.log(`  ${ok ? 'PASS' : 'WRONG'}: ${fname} = ${rn} (expected ${expected}) — ${desc}`);
+        } catch (e) {
+            console.log(`  TRAP: ${fname} — ${e.message} — ${desc}`);
+        }
+    }
+
     // Also test _diag_stage1_parse directly for the stack trace
     console.log("\n--- _diag_stage1_parse trap trace ---");
     try {
