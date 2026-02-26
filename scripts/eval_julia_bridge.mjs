@@ -55,11 +55,11 @@ export async function executeInnerModule(wasmBytes, imports = {}) {
 // Parameters:
 //   exports  — the outer WASM module's exports (must have make_byte_vec, set_byte_vec!,
 //              eval_julia_to_bytes_vec, eval_julia_result_length, eval_julia_result_byte)
-//   expr     — Julia expression string (e.g. "1+1")
-//   imports  — imports for the inner WASM module (default: { Math: { pow: Math.pow } })
+//   expr     — Julia expression string (e.g. "1+1", "sin(1.0)", "abs(-5)")
+//   imports  — imports for the inner WASM module (default: { Math: { pow, sin, cos } })
 //
-// Returns: { result: BigInt|number, innerExports: string[], innerBytes: Uint8Array }
-export async function evalJulia(exports, expr, imports = { Math: { pow: Math.pow } }) {
+// Returns: { result: BigInt|number, innerExports: string[], innerBytes: Uint8Array, isFloat: boolean }
+export async function evalJulia(exports, expr, imports = { Math: { pow: Math.pow, sin: Math.sin, cos: Math.cos } }) {
     // Step 1: Encode expression string → WasmGC byte vector
     const inputVec = jsToWasmBytes(exports, expr);
 
@@ -73,11 +73,26 @@ export async function evalJulia(exports, expr, imports = { Math: { pow: Math.pow
     const { instance } = await executeInnerModule(innerBytes, imports);
     const innerExports = Object.keys(instance.exports);
 
-    // Step 5: Find and call the operator export
-    // Inner modules export a single function named after the operator ("+", "-", "*", "/")
+    // PURE-7012: Detect function call pattern: name(arg)
+    const funcMatch = expr.match(/^(\w+)\((.+)\)$/);
+    if (funcMatch) {
+        const funcName = funcMatch[1];
+        const argStr = funcMatch[2].trim();
+        const fn = instance.exports[funcName];
+        if (!fn) {
+            throw new Error(`No export "${funcName}" in inner module (has: ${innerExports.join(', ')})`);
+        }
+        // Determine arg type: contains '.' → f64 (Number), else i64 (BigInt)
+        const isFloat = argStr.includes('.');
+        const arg = isFloat ? parseFloat(argStr) : BigInt(parseInt(argStr, 10));
+        const result = fn(arg);
+        return { result, innerExports, innerBytes, isFloat };
+    }
+
+    // Binary operator path ("+", "-", "*", "/")
     const opMatch = expr.match(/([+\-*/])/);
     if (!opMatch) {
-        throw new Error(`Cannot find operator in expression "${expr}"`);
+        throw new Error(`Cannot find operator or function call in expression "${expr}"`);
     }
     const op = opMatch[1];
     const fn = instance.exports[op];
@@ -104,7 +119,7 @@ export async function evalJulia(exports, expr, imports = { Math: { pow: Math.pow
 
 // Load the outer WASM module from a file path.
 // Returns the WebAssembly instance exports.
-export async function loadOuterModule(wasmPath, imports = { Math: { pow: Math.pow } }) {
+export async function loadOuterModule(wasmPath, imports = { Math: { pow: Math.pow, sin: Math.sin, cos: Math.cos } }) {
     const wasmBytes = await readFile(wasmPath);
     const { instance } = await WebAssembly.instantiate(wasmBytes, imports);
     return instance.exports;
@@ -133,20 +148,27 @@ async function selfTest() {
 
     // Test cases (native Julia ground truth)
     const testCases = [
-        { expr: "1+1",     expected: 2 },
-        { expr: "2+3",     expected: 5 },
-        { expr: "10-3",    expected: 7 },
-        { expr: "2.0+3.0", expected: 5.0 },  // PURE-7011: Float64
+        { expr: "1+1",       expected: 2 },
+        { expr: "2+3",       expected: 5 },
+        { expr: "10-3",      expected: 7 },
+        { expr: "2.0+3.0",   expected: 5.0 },     // PURE-7011: Float64
+        // PURE-7012: Function calls
+        { expr: "sin(1.0)",   expected: 0.8414709848078965, approx: true },
+        { expr: "abs(-5)",    expected: 5 },
+        { expr: "sqrt(4.0)",  expected: 2.0 },
     ];
 
     let pass = 0;
     let fail = 0;
 
-    for (const { expr, expected } of testCases) {
+    for (const { expr, expected, approx } of testCases) {
         try {
             const { result, innerBytes } = await evalJulia(outerExports, expr);
             const resultNum = Number(result);
-            if (resultNum === expected) {
+            const matches = approx
+                ? Math.abs(resultNum - expected) < 1e-14
+                : resultNum === expected;
+            if (matches) {
                 console.log(`  evalJulia("${expr}") = ${resultNum} — CORRECT (${innerBytes.length} byte inner module)`);
                 pass++;
             } else {
@@ -179,7 +201,7 @@ async function selfTest() {
         const inputVec = jsToWasmBytes(outerExports, "2+3");
         const resultVec = outerExports['eval_julia_to_bytes_vec'](inputVec);
         const bytes = extractWasmBytes(outerExports, resultVec);
-        const { instance } = await executeInnerModule(bytes, { Math: { pow: Math.pow } });
+        const { instance } = await executeInnerModule(bytes, { Math: { pow: Math.pow, sin: Math.sin, cos: Math.cos } });
         const exports = Object.keys(instance.exports);
         console.log(`  executeInnerModule: instantiated OK, exports: [${exports.join(', ')}]`);
         pass++;

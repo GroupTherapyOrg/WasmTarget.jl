@@ -97,6 +97,13 @@ function main()
         # PURE-7011: Float64 arithmetic
         (_wasm_check_float, (Vector{UInt8},)),
         (_wasm_cached_float_arith_bytes, (UInt8,)),
+        # PURE-7012: Function call support (sin, abs, sqrt, cos)
+        (_wasm_detect_funcall, (Vector{UInt8},)),
+        (_wasm_cached_sin_bytes, ()),
+        (_wasm_cached_sqrt_bytes, ()),
+        (_wasm_cached_abs_int_bytes, ()),
+        (_wasm_cached_cos_bytes, ()),
+        (_wasm_cached_funcall_bytes, (Int32,)),
         # JS bridge helpers
         (eval_julia_result_length, (Vector{UInt8},)),
         (eval_julia_result_byte, (Vector{UInt8}, Int32)),

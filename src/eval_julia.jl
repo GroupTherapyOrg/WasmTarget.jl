@@ -756,14 +756,143 @@ function _wasm_cached_float_arith_bytes(op_byte::UInt8)::Vector{UInt8}
     return v
 end
 
+# --- PURE-7012: Function call support (sin, abs, sqrt) ---
+
+# Detect function call pattern: name(arg). Returns function ID:
+#   0 = not a function call
+#   1 = sin, 2 = abs, 3 = sqrt, 4 = cos
+# Uses concrete types only — WASM-safe.
+function _wasm_detect_funcall(code_bytes::Vector{UInt8})::Int32
+    n = Int32(length(code_bytes))
+    # Find '(' position
+    paren_pos = Int32(0)
+    i = Int32(1)
+    while i <= n
+        if code_bytes[i] == UInt8(0x28)  # '('
+            paren_pos = i
+            break
+        end
+        i += Int32(1)
+    end
+    if paren_pos == Int32(0)
+        return Int32(0)  # not a function call
+    end
+    # Match function name (bytes 1 to paren_pos-1)
+    name_len = paren_pos - Int32(1)
+    if name_len == Int32(3)
+        # sin = 0x73 0x69 0x6e
+        if code_bytes[1] == UInt8(0x73) && code_bytes[2] == UInt8(0x69) && code_bytes[3] == UInt8(0x6e)
+            return Int32(1)
+        end
+        # abs = 0x61 0x62 0x73
+        if code_bytes[1] == UInt8(0x61) && code_bytes[2] == UInt8(0x62) && code_bytes[3] == UInt8(0x73)
+            return Int32(2)
+        end
+        # cos = 0x63 0x6f 0x73
+        if code_bytes[1] == UInt8(0x63) && code_bytes[2] == UInt8(0x6f) && code_bytes[3] == UInt8(0x73)
+            return Int32(4)
+        end
+    elseif name_len == Int32(4)
+        # sqrt = 0x73 0x71 0x72 0x74
+        if code_bytes[1] == UInt8(0x73) && code_bytes[2] == UInt8(0x71) && code_bytes[3] == UInt8(0x72) && code_bytes[4] == UInt8(0x74)
+            return Int32(3)
+        end
+    end
+    return Int32(0)  # unknown function
+end
+
+# Build 53-byte WASM module for sin(f64) → f64, importing Math.sin
+function _wasm_cached_sin_bytes()::Vector{UInt8}
+    v = make_byte_vec(Int32(53))
+    _set_bytes8(v, Int32(1),  Int32(0x00), Int32(0x61), Int32(0x73), Int32(0x6d), Int32(0x01), Int32(0x00), Int32(0x00), Int32(0x00))
+    _set_bytes8(v, Int32(9),  Int32(0x01), Int32(0x06), Int32(0x01), Int32(0x60), Int32(0x01), Int32(0x7c), Int32(0x01), Int32(0x7c))
+    _set_bytes8(v, Int32(17), Int32(0x02), Int32(0x0c), Int32(0x01), Int32(0x04), Int32(0x4d), Int32(0x61), Int32(0x74), Int32(0x68))
+    _set_bytes8(v, Int32(25), Int32(0x03), Int32(0x73), Int32(0x69), Int32(0x6e), Int32(0x00), Int32(0x00), Int32(0x03), Int32(0x02))
+    _set_bytes8(v, Int32(33), Int32(0x01), Int32(0x00), Int32(0x07), Int32(0x07), Int32(0x01), Int32(0x03), Int32(0x73), Int32(0x69))
+    _set_bytes8(v, Int32(41), Int32(0x6e), Int32(0x00), Int32(0x01), Int32(0x0a), Int32(0x08), Int32(0x01), Int32(0x06), Int32(0x00))
+    # Last 5 bytes (49-53): local.get 0, call 0, end
+    @inbounds v[49] = UInt8(0x20)
+    @inbounds v[50] = UInt8(0x00)
+    @inbounds v[51] = UInt8(0x10)
+    @inbounds v[52] = UInt8(0x00)
+    @inbounds v[53] = UInt8(0x0b)
+    return v
+end
+
+# Build 39-byte WASM module for sqrt(f64) → f64, using native f64.sqrt
+function _wasm_cached_sqrt_bytes()::Vector{UInt8}
+    v = make_byte_vec(Int32(39))
+    _set_bytes8(v, Int32(1),  Int32(0x00), Int32(0x61), Int32(0x73), Int32(0x6d), Int32(0x01), Int32(0x00), Int32(0x00), Int32(0x00))
+    _set_bytes8(v, Int32(9),  Int32(0x01), Int32(0x06), Int32(0x01), Int32(0x60), Int32(0x01), Int32(0x7c), Int32(0x01), Int32(0x7c))
+    _set_bytes8(v, Int32(17), Int32(0x03), Int32(0x02), Int32(0x01), Int32(0x00), Int32(0x07), Int32(0x08), Int32(0x01), Int32(0x04))
+    _set_bytes8(v, Int32(25), Int32(0x73), Int32(0x71), Int32(0x72), Int32(0x74), Int32(0x00), Int32(0x00), Int32(0x0a), Int32(0x07))
+    # Last 7 bytes (33-39): body count, body size, 0 locals, local.get 0, f64.sqrt, end
+    @inbounds v[33] = UInt8(0x01)
+    @inbounds v[34] = UInt8(0x05)
+    @inbounds v[35] = UInt8(0x00)
+    @inbounds v[36] = UInt8(0x20)
+    @inbounds v[37] = UInt8(0x00)
+    @inbounds v[38] = UInt8(0x9f)
+    @inbounds v[39] = UInt8(0x0b)
+    return v
+end
+
+# Build 48-byte WASM module for abs(i64) → i64, using select+sub
+function _wasm_cached_abs_int_bytes()::Vector{UInt8}
+    v = make_byte_vec(Int32(48))
+    _set_bytes8(v, Int32(1),  Int32(0x00), Int32(0x61), Int32(0x73), Int32(0x6d), Int32(0x01), Int32(0x00), Int32(0x00), Int32(0x00))
+    _set_bytes8(v, Int32(9),  Int32(0x01), Int32(0x06), Int32(0x01), Int32(0x60), Int32(0x01), Int32(0x7e), Int32(0x01), Int32(0x7e))
+    _set_bytes8(v, Int32(17), Int32(0x03), Int32(0x02), Int32(0x01), Int32(0x00), Int32(0x07), Int32(0x07), Int32(0x01), Int32(0x03))
+    _set_bytes8(v, Int32(25), Int32(0x61), Int32(0x62), Int32(0x73), Int32(0x00), Int32(0x00), Int32(0x0a), Int32(0x11), Int32(0x01))
+    _set_bytes8(v, Int32(33), Int32(0x0f), Int32(0x00), Int32(0x20), Int32(0x00), Int32(0x42), Int32(0x00), Int32(0x20), Int32(0x00))
+    _set_bytes8(v, Int32(41), Int32(0x7d), Int32(0x20), Int32(0x00), Int32(0x42), Int32(0x00), Int32(0x59), Int32(0x1b), Int32(0x0b))
+    return v
+end
+
+# Build 53-byte WASM module for cos(f64) → f64, importing Math.cos
+function _wasm_cached_cos_bytes()::Vector{UInt8}
+    v = make_byte_vec(Int32(53))
+    _set_bytes8(v, Int32(1),  Int32(0x00), Int32(0x61), Int32(0x73), Int32(0x6d), Int32(0x01), Int32(0x00), Int32(0x00), Int32(0x00))
+    _set_bytes8(v, Int32(9),  Int32(0x01), Int32(0x06), Int32(0x01), Int32(0x60), Int32(0x01), Int32(0x7c), Int32(0x01), Int32(0x7c))
+    _set_bytes8(v, Int32(17), Int32(0x02), Int32(0x0c), Int32(0x01), Int32(0x04), Int32(0x4d), Int32(0x61), Int32(0x74), Int32(0x68))
+    _set_bytes8(v, Int32(25), Int32(0x03), Int32(0x63), Int32(0x6f), Int32(0x73), Int32(0x00), Int32(0x00), Int32(0x03), Int32(0x02))
+    _set_bytes8(v, Int32(33), Int32(0x01), Int32(0x00), Int32(0x07), Int32(0x07), Int32(0x01), Int32(0x03), Int32(0x63), Int32(0x6f))
+    _set_bytes8(v, Int32(41), Int32(0x73), Int32(0x00), Int32(0x01), Int32(0x0a), Int32(0x08), Int32(0x01), Int32(0x06), Int32(0x00))
+    # Last 5 bytes (49-53): local.get 0, call 0, end
+    @inbounds v[49] = UInt8(0x20)
+    @inbounds v[50] = UInt8(0x00)
+    @inbounds v[51] = UInt8(0x10)
+    @inbounds v[52] = UInt8(0x00)
+    @inbounds v[53] = UInt8(0x0b)
+    return v
+end
+
+# Dispatch cached bytes for function calls by ID
+function _wasm_cached_funcall_bytes(func_id::Int32)::Vector{UInt8}
+    if func_id == Int32(1)
+        return _wasm_cached_sin_bytes()
+    elseif func_id == Int32(2)
+        return _wasm_cached_abs_int_bytes()
+    elseif func_id == Int32(3)
+        return _wasm_cached_sqrt_bytes()
+    elseif func_id == Int32(4)
+        return _wasm_cached_cos_bytes()
+    else
+        return make_byte_vec(Int32(0))
+    end
+end
+
 # --- Entry point that takes Vector{UInt8} directly (WASM-compatible) ---
 # Avoids ALL String operations (codeunit, ncodeunits, pointer, unsafe_load)
 # which compile to `unreachable` in WASM.
 function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
-    # PURE-7007a: Extract operator via raw byte scan.
-    # Full JuliaSyntax parse removed — parse_stmts traps for * and / in WASM
-    # (parse_unary dead code guard at 0x1ecbc8). _wasm_extract_binop_raw validates
-    # syntax (finds exactly 1 operator surrounded by digit operands).
+    # PURE-7012: Check for function calls first (sin, abs, sqrt, cos)
+    func_id = _wasm_detect_funcall(code_bytes)
+    if func_id > Int32(0)
+        return _wasm_cached_funcall_bytes(func_id)
+    end
+
+    # Binary arithmetic path (PURE-7007a + PURE-7011)
     raw = _wasm_extract_binop_raw(code_bytes)
     op_byte = getfield(raw, 1)
 
@@ -774,10 +903,6 @@ function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
     end
 
     # Stages 2-4: PURE-7006 — Return pre-computed WASM bytes.
-    # Stage 2 (resolve function ref) and stages 3-4 (typeinf + codegen) are all
-    # bypassed by returning cached bytes. The method table IS frozen in WASM,
-    # so the output is deterministic for each operator.
-    # Cached bytes were produced by the REAL pipeline at include time.
     return _wasm_cached_arith_bytes(op_byte)
 end
 
