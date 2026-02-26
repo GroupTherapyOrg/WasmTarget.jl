@@ -436,6 +436,84 @@ function _wasm_parse_statement!(ps::JuliaSyntax.ParseStream)
     return ps
 end
 
+# PURE-7001a: WASM-friendly flat tree traversal for binary operations.
+# JuliaSyntax's iterate protocol for Reverse{RedTreeCursor} uses tuple destructuring
+# internally (in _iterate_red_cursor), which compiles to broken indexed_iterate calls
+# in unoptimized IR. This port walks the flat parser_output array directly.
+#
+# Tree structure for "1+1": output = [TOMBSTONE, Integer"1", Identifier"+", Integer"1", call]
+# Root (call) at position N, node_span=3. Children at positions (N-3):(N-1).
+# Reverse order (rightmost first): N-1, N-2, N-3.
+# byte_end tracks absolute byte position, decremented by each child's byte_span.
+#
+# For each child, check NON_TERMINAL_FLAG (bit 7 = 128) to determine node_span:
+#   terminal: node_span = 0 (skip 1 position backward)
+#   non-terminal: node_span = raw field value (skip node_span+1 positions backward)
+# Skip trivia nodes (TRIVIA_FLAG = bit 0 = 1).
+
+const _WASM_NON_TERMINAL_FLAG = UInt16(128)
+const _WASM_TRIVIA_FLAG = UInt16(1)
+
+# Extract 3 non-trivia children's byte ranges from a binary operation parse tree.
+# Returns (right_byte_start, op_byte_start, left_byte_start) — first byte of each child.
+function _wasm_binop_byte_starts(ps::JuliaSyntax.ParseStream)::Tuple{UInt32, UInt32, UInt32}
+    cursor = JuliaSyntax.RedTreeCursor(ps)
+    green = getfield(cursor, :green)
+    po = getfield(green, :parser_output)
+    root_pos = getfield(green, :position)
+    root_byte_end = getfield(cursor, :byte_end)
+
+    # Root node: get node_span (# of child nodes in subtree)
+    root_raw = po[root_pos]
+    root_head = getfield(root_raw, :head)
+    root_node_span = getfield(root_raw, :node_span_or_orig_kind)  # always non-terminal
+
+    # Walk children in reverse: start at root_pos-1, stop at root_pos-root_node_span-1
+    byte_end = root_byte_end
+    idx = root_pos - UInt32(1)
+    final_idx = root_pos - root_node_span - UInt32(1)
+
+    # Collect first 3 non-trivia children's byte_start positions
+    right_start = UInt32(0)
+    op_start = UInt32(0)
+    left_start = UInt32(0)
+    found = Int32(0)
+
+    while idx != final_idx
+        child_raw = po[idx]
+        child_head = getfield(child_raw, :head)
+        child_flags = getfield(child_head, :flags)
+        child_byte_span = getfield(child_raw, :byte_span)
+
+        # Determine node_span: 0 for terminals, raw value for non-terminals
+        is_nonterminal = (UInt16(child_flags) & _WASM_NON_TERMINAL_FLAG) != UInt16(0)
+        child_node_span = if is_nonterminal
+            getfield(child_raw, :node_span_or_orig_kind)
+        else
+            UInt32(0)
+        end
+
+        # Skip trivia
+        is_trivia = (UInt16(child_flags) & _WASM_TRIVIA_FLAG) != UInt16(0)
+        if !is_trivia
+            range_start = byte_end - child_byte_span + UInt32(1)
+            if found == Int32(0)
+                right_start = range_start
+            elseif found == Int32(1)
+                op_start = range_start
+            elseif found == Int32(2)
+                left_start = range_start
+            end
+            found += Int32(1)
+        end
+
+        byte_end = byte_end - child_byte_span
+        idx = idx - child_node_span - UInt32(1)
+    end
+
+    return (right_start, op_start, left_start)
+end
+
 # --- Entry point that takes Vector{UInt8} directly (WASM-compatible) ---
 # Avoids ALL String operations (codeunit, ncodeunits, pointer, unsafe_load)
 # which compile to `unreachable` in WASM.
@@ -443,30 +521,15 @@ function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
     # Stage 1: Parse — bytes go directly to ParseStream
     ps = JuliaSyntax.ParseStream(code_bytes)
     _wasm_parse_statement!(ps)
-    # PURE-6023: Inline _wasm_simple_call_expr_flat logic here.
-    # Cross-function call to Main-scoped functions gets stubbed by the compiler
-    # (func_registry lookup fails for transitive dependencies from Main module scope).
-    # Inlining eliminates the stub issue. Logic: extract op+left+right from parsed tree.
-    cursor = JuliaSyntax.RedTreeCursor(ps)
+    # PURE-7001a: Use flat array traversal (bypasses broken iterate protocol in WASM).
     txtbuf = JuliaSyntax.unsafe_textbuf(ps)
-    itr = JuliaSyntax.reverse_nontrivia_children(cursor)
-    # PURE-7001a: iterate() returns Union{Nothing,Tuple{...}}. The codegen can't
-    # handle getfield/getindex on Union types (emits unreachable). Type-assert ::Tuple
-    # to narrow the type, then use getfield (builtin) to extract elements.
-    r1 = iterate(itr)::Tuple
-    child1 = getfield(r1, 1)   # rightmost child (right operand)
-    state1 = getfield(r1, 2)
-    r2 = iterate(itr, state1)::Tuple
-    child2 = getfield(r2, 1)   # middle child (operator)
-    state2 = getfield(r2, 2)
-    r3 = iterate(itr, state2)::Tuple
-    child3 = getfield(r3, 1)   # leftmost child (left operand)
-    range1 = JuliaSyntax.byte_range(child1)
-    range2 = JuliaSyntax.byte_range(child2)
-    range3 = JuliaSyntax.byte_range(child3)
-    right_int = Int64(txtbuf[first(range1)]) - Int64(48)  # '0' = 48
-    left_int = Int64(txtbuf[first(range3)]) - Int64(48)
-    op_byte = txtbuf[first(range2)]
+    byte_starts = _wasm_binop_byte_starts(ps)
+    right_start = getfield(byte_starts, 1)
+    op_start = getfield(byte_starts, 2)
+    left_start = getfield(byte_starts, 3)
+    right_int = Int64(txtbuf[right_start]) - Int64(48)  # '0' = 48
+    left_int = Int64(txtbuf[left_start]) - Int64(48)
+    op_byte = txtbuf[op_start]
     op_sym = if op_byte == UInt8('+')
         :+
     elseif op_byte == UInt8('-')
@@ -561,24 +624,14 @@ function _diag_stage0_cursor(code_bytes::Vector{UInt8})::Int32
     return Int32(3)
 end
 
-# Stage 1 only: parse + extract Expr fields (returns op_byte for verification)
+# Stage 1 only: parse + extract op_byte via flat array traversal
 function _diag_stage1_parse(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
     _wasm_parse_statement!(ps)
-    cursor = JuliaSyntax.RedTreeCursor(ps)
     txtbuf = JuliaSyntax.unsafe_textbuf(ps)
-    itr = JuliaSyntax.reverse_nontrivia_children(cursor)
-    # PURE-7001a: ::Tuple narrows Union{Nothing,Tuple} + getfield is builtin
-    r1 = iterate(itr)::Tuple
-    child1 = getfield(r1, 1)
-    state1 = getfield(r1, 2)
-    r2 = iterate(itr, state1)::Tuple
-    child2 = getfield(r2, 1)
-    state2 = getfield(r2, 2)
-    r3 = iterate(itr, state2)::Tuple
-    child3 = getfield(r3, 1)
-    range2 = JuliaSyntax.byte_range(child2)
-    op_byte = txtbuf[first(range2)]
+    byte_starts = _wasm_binop_byte_starts(ps)
+    op_start = getfield(byte_starts, 2)
+    op_byte = txtbuf[op_start]
     return Int32(op_byte)  # '+' = 43, '-' = 45, '*' = 42
 end
 
@@ -586,18 +639,10 @@ end
 function _diag_stage2_resolve(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
     _wasm_parse_statement!(ps)
-    cursor = JuliaSyntax.RedTreeCursor(ps)
     txtbuf = JuliaSyntax.unsafe_textbuf(ps)
-    itr = JuliaSyntax.reverse_nontrivia_children(cursor)
-    # PURE-7001a: ::Tuple narrows Union{Nothing,Tuple} + getfield is builtin
-    r1 = iterate(itr)::Tuple
-    child1 = getfield(r1, 1)
-    state1 = getfield(r1, 2)
-    r2 = iterate(itr, state1)::Tuple
-    child2 = getfield(r2, 1)
-    state2 = getfield(r2, 2)
-    range2 = JuliaSyntax.byte_range(child2)
-    op_byte = txtbuf[first(range2)]
+    byte_starts = _wasm_binop_byte_starts(ps)
+    op_start = getfield(byte_starts, 2)
+    op_byte = txtbuf[op_start]
     op_sym = if op_byte == UInt8('+')
         :+
     elseif op_byte == UInt8('-')
@@ -651,7 +696,7 @@ function _diag_stage1d_getindex(code_bytes::Vector{UInt8})::Int32
     return Int32(6)
 end
 
-# Stage 1e: byte_range on first child
+# Stage 1e: byte_range on first child — decomposed to find exact failure
 function _diag_stage1e_byterange(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
     _wasm_parse_statement!(ps)
@@ -660,8 +705,73 @@ function _diag_stage1e_byterange(code_bytes::Vector{UInt8})::Int32
     itr = JuliaSyntax.reverse_nontrivia_children(cursor)
     r1 = iterate(itr)::Tuple
     child1 = getfield(r1, 1)
+    # Decompose byte_range: (byte_end - span(green) + 1):byte_end
+    # child1 is a RedTreeCursor{green::GreenTreeCursor, byte_end::UInt32}
+    child_byte_end = getfield(child1, :byte_end)
+    return Int32(child_byte_end)  # Just return byte_end to see if field access works
+end
+
+# Stage 1f: test span(green) — accesses parser_output[position]
+function _diag_stage1f_span(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    cursor = JuliaSyntax.RedTreeCursor(ps)
+    itr = JuliaSyntax.reverse_nontrivia_children(cursor)
+    r1 = iterate(itr)::Tuple
+    child1 = getfield(r1, 1)
+    green = getfield(child1, :green)
+    # GreenTreeCursor has parser_output::Vector{RawGreenNode} and position::UInt32
+    pos = getfield(green, :position)
+    return Int32(pos)  # Just return position to see the value
+end
+
+# Stage 1g: test actual span access — parser_output[position].byte_span
+function _diag_stage1g_rawnode(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    cursor = JuliaSyntax.RedTreeCursor(ps)
+    itr = JuliaSyntax.reverse_nontrivia_children(cursor)
+    r1 = iterate(itr)::Tuple
+    child1 = getfield(r1, 1)
+    green = getfield(child1, :green)
+    po = getfield(green, :parser_output)
+    pos = getfield(green, :position)
+    # Access the RawGreenNode at position
+    raw_node = po[pos]
+    return Int32(7)
+end
+
+# Stage 1h: Test second iterate call
+function _diag_stage1h_iter2(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    cursor = JuliaSyntax.RedTreeCursor(ps)
+    itr = JuliaSyntax.reverse_nontrivia_children(cursor)
+    r1 = iterate(itr)::Tuple
+    state1 = getfield(r1, 2)
+    r2 = iterate(itr, state1)::Tuple
+    return Int32(8)
+end
+
+# Stage 1i: Test byte_range on child1 (actual call, not decomposed)
+function _diag_stage1i_byterange_call(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    cursor = JuliaSyntax.RedTreeCursor(ps)
+    itr = JuliaSyntax.reverse_nontrivia_children(cursor)
+    r1 = iterate(itr)::Tuple
+    child1 = getfield(r1, 1)
     range1 = JuliaSyntax.byte_range(child1)
     return Int32(first(range1))
+end
+
+# Stage 1j: Test byte_range on root cursor (not a child)
+function _diag_stage1j_root_byterange(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    cursor = JuliaSyntax.RedTreeCursor(ps)
+    range_root = JuliaSyntax.byte_range(cursor)
+    return Int32(first(range_root))
 end
 
 # --- Native-only String entry point (NOT compiled to WASM) ---

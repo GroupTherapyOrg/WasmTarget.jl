@@ -93,6 +93,8 @@ function main()
         (_wasm_untokenize_head, (JuliaSyntax.SyntaxHead,)),
         # PURE-7001: parse! port (bypasses kwarg dispatch)
         (_wasm_parse_statement!, (JuliaSyntax.ParseStream,)),
+        # PURE-7001a: flat array tree traversal (bypasses broken iterate protocol)
+        (_wasm_binop_byte_starts, (JuliaSyntax.ParseStream,)),
         # JS bridge helpers
         (eval_julia_result_length, (Vector{UInt8},)),
         (eval_julia_result_byte, (Vector{UInt8}, Int32)),
@@ -111,6 +113,11 @@ function main()
         (_diag_stage1c_iterate, (Vector{UInt8},)),
         (_diag_stage1d_getindex, (Vector{UInt8},)),
         (_diag_stage1e_byterange, (Vector{UInt8},)),
+        (_diag_stage1f_span, (Vector{UInt8},)),
+        (_diag_stage1g_rawnode, (Vector{UInt8},)),
+        (_diag_stage1h_iter2, (Vector{UInt8},)),
+        (_diag_stage1i_byterange_call, (Vector{UInt8},)),
+        (_diag_stage1j_root_byterange, (Vector{UInt8},)),
     ]
     all_funcs = WasmTarget.discover_dependencies(seed)
     println("  Found $(length(all_funcs)) functions")
