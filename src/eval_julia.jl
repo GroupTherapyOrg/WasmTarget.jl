@@ -76,6 +76,16 @@ function _wasm_untokenize_head(head::JuliaSyntax.SyntaxHead)::Union{Nothing, Str
     return _wasm_untokenize_kind(k, true)
 end
 
+# PURE-7004 PORT: Base.get_world_counter() → compile-time constant.
+# get_world_counter() is a ccall to jl_get_world_counter() — unreachable in WASM.
+# In WASM, the method table is frozen at compile time, so world age is meaningless.
+# Capture the world value at include time (= compile time for WASM).
+const _WASM_WORLD_AGE = UInt64(Base.get_world_counter())
+
+function _wasm_get_world_counter()::UInt64
+    return _WASM_WORLD_AGE
+end
+
 """
     eval_julia_to_bytes(code::String)::Vector{UInt8}
 
@@ -603,7 +613,7 @@ function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
     arg_types = (Int64, Int64)  # both operands are Int64
 
     # Stage 3: Type inference using WasmInterpreter
-    world = Base.get_world_counter()
+    world = _wasm_get_world_counter()
     sig = Tuple{typeof(func), arg_types...}
 
     # Build WasmInterpreter with transitive method table
@@ -796,7 +806,7 @@ function _diag_stage3a_world(code_bytes::Vector{UInt8})::Int32
     else
         Base.:/
     end
-    world = Base.get_world_counter()
+    world = _wasm_get_world_counter()
     return Int32(1)  # world counter accessed
 end
 
@@ -816,7 +826,7 @@ function _diag_stage3b_sig(code_bytes::Vector{UInt8})::Int32
         Base.:/
     end
     arg_types = (Int64, Int64)
-    world = Base.get_world_counter()
+    world = _wasm_get_world_counter()
     sig = Tuple{typeof(func), arg_types...}
     return Int32(2)  # sig constructed
 end
@@ -837,7 +847,7 @@ function _diag_stage3c_interp(code_bytes::Vector{UInt8})::Int32
         Base.:/
     end
     arg_types = (Int64, Int64)
-    world = Base.get_world_counter()
+    world = _wasm_get_world_counter()
     sig = Tuple{typeof(func), arg_types...}
     interp = build_wasm_interpreter([sig]; world=world)
     return Int32(3)  # interpreter built
@@ -859,7 +869,7 @@ function _diag_stage3d_findall(code_bytes::Vector{UInt8})::Int32
         Base.:/
     end
     arg_types = (Int64, Int64)
-    world = Base.get_world_counter()
+    world = _wasm_get_world_counter()
     sig = Tuple{typeof(func), arg_types...}
     native_mt = Core.Compiler.InternalMethodTable(world)
     lookup = Core.Compiler.findall(sig, native_mt; limit=3)
@@ -882,7 +892,7 @@ function _diag_stage3e_typeinf(code_bytes::Vector{UInt8})::Int32
         Base.:/
     end
     arg_types = (Int64, Int64)
-    world = Base.get_world_counter()
+    world = _wasm_get_world_counter()
     sig = Tuple{typeof(func), arg_types...}
     interp = build_wasm_interpreter([sig]; world=world)
     native_mt = Core.Compiler.InternalMethodTable(world)
