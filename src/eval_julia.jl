@@ -450,12 +450,17 @@ function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
     cursor = JuliaSyntax.RedTreeCursor(ps)
     txtbuf = JuliaSyntax.unsafe_textbuf(ps)
     itr = JuliaSyntax.reverse_nontrivia_children(cursor)
-    r1 = iterate(itr)
-    (child1, state1) = r1  # rightmost child (right operand)
-    r2 = iterate(itr, state1)
-    (child2, state2) = r2  # middle child (operator)
-    r3 = iterate(itr, state2)
-    (child3, _state3) = r3  # leftmost child (left operand)
+    # PURE-7001a: iterate() returns Union{Nothing,Tuple{...}}. The codegen can't
+    # handle getfield/getindex on Union types (emits unreachable). Type-assert ::Tuple
+    # to narrow the type, then use getfield (builtin) to extract elements.
+    r1 = iterate(itr)::Tuple
+    child1 = getfield(r1, 1)   # rightmost child (right operand)
+    state1 = getfield(r1, 2)
+    r2 = iterate(itr, state1)::Tuple
+    child2 = getfield(r2, 1)   # middle child (operator)
+    state2 = getfield(r2, 2)
+    r3 = iterate(itr, state2)::Tuple
+    child3 = getfield(r3, 1)   # leftmost child (left operand)
     range1 = JuliaSyntax.byte_range(child1)
     range2 = JuliaSyntax.byte_range(child2)
     range3 = JuliaSyntax.byte_range(child3)
@@ -563,12 +568,15 @@ function _diag_stage1_parse(code_bytes::Vector{UInt8})::Int32
     cursor = JuliaSyntax.RedTreeCursor(ps)
     txtbuf = JuliaSyntax.unsafe_textbuf(ps)
     itr = JuliaSyntax.reverse_nontrivia_children(cursor)
-    r1 = iterate(itr)
-    (child1, state1) = r1
-    r2 = iterate(itr, state1)
-    (child2, state2) = r2
-    r3 = iterate(itr, state2)
-    (child3, _state3) = r3
+    # PURE-7001a: ::Tuple narrows Union{Nothing,Tuple} + getfield is builtin
+    r1 = iterate(itr)::Tuple
+    child1 = getfield(r1, 1)
+    state1 = getfield(r1, 2)
+    r2 = iterate(itr, state1)::Tuple
+    child2 = getfield(r2, 1)
+    state2 = getfield(r2, 2)
+    r3 = iterate(itr, state2)::Tuple
+    child3 = getfield(r3, 1)
     range2 = JuliaSyntax.byte_range(child2)
     op_byte = txtbuf[first(range2)]
     return Int32(op_byte)  # '+' = 43, '-' = 45, '*' = 42
@@ -581,10 +589,13 @@ function _diag_stage2_resolve(code_bytes::Vector{UInt8})::Int32
     cursor = JuliaSyntax.RedTreeCursor(ps)
     txtbuf = JuliaSyntax.unsafe_textbuf(ps)
     itr = JuliaSyntax.reverse_nontrivia_children(cursor)
-    r1 = iterate(itr)
-    (child1, state1) = r1
-    r2 = iterate(itr, state1)
-    (child2, state2) = r2
+    # PURE-7001a: ::Tuple narrows Union{Nothing,Tuple} + getfield is builtin
+    r1 = iterate(itr)::Tuple
+    child1 = getfield(r1, 1)
+    state1 = getfield(r1, 2)
+    r2 = iterate(itr, state1)::Tuple
+    child2 = getfield(r2, 1)
+    state2 = getfield(r2, 2)
     range2 = JuliaSyntax.byte_range(child2)
     op_byte = txtbuf[first(range2)]
     op_sym = if op_byte == UInt8('+')
@@ -599,6 +610,60 @@ function _diag_stage2_resolve(code_bytes::Vector{UInt8})::Int32
     func = getfield(Base, op_sym)
     return Int32(1)  # Got here = getfield succeeded
 end
+
+# PURE-7001a: Sub-stage diagnostics to isolate stage1 trap
+# Stage 1a: Get textbuf (tests unsafe_textbuf)
+function _diag_stage1a_textbuf(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    cursor = JuliaSyntax.RedTreeCursor(ps)
+    txtbuf = JuliaSyntax.unsafe_textbuf(ps)
+    return Int32(length(txtbuf))
+end
+
+# Stage 1b: Get children iterator (tests reverse_nontrivia_children)
+function _diag_stage1b_children(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    cursor = JuliaSyntax.RedTreeCursor(ps)
+    itr = JuliaSyntax.reverse_nontrivia_children(cursor)
+    return Int32(4)
+end
+
+# Stage 1c: First iterate call (tests iterate on children)
+function _diag_stage1c_iterate(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    cursor = JuliaSyntax.RedTreeCursor(ps)
+    itr = JuliaSyntax.reverse_nontrivia_children(cursor)
+    r1 = iterate(itr)
+    return Int32(5)
+end
+
+# Stage 1d: Access first element of iterate result
+function _diag_stage1d_getindex(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    cursor = JuliaSyntax.RedTreeCursor(ps)
+    itr = JuliaSyntax.reverse_nontrivia_children(cursor)
+    r1 = iterate(itr)::Tuple
+    child1 = getfield(r1, 1)
+    return Int32(6)
+end
+
+# Stage 1e: byte_range on first child
+function _diag_stage1e_byterange(code_bytes::Vector{UInt8})::Int32
+    ps = JuliaSyntax.ParseStream(code_bytes)
+    _wasm_parse_statement!(ps)
+    cursor = JuliaSyntax.RedTreeCursor(ps)
+    txtbuf = JuliaSyntax.unsafe_textbuf(ps)
+    itr = JuliaSyntax.reverse_nontrivia_children(cursor)
+    r1 = iterate(itr)::Tuple
+    child1 = getfield(r1, 1)
+    range1 = JuliaSyntax.byte_range(child1)
+    return Int32(first(range1))
+end
+
 # --- Native-only String entry point (NOT compiled to WASM) ---
 # Uses codeunits/pointer operations that only work natively.
 function eval_julia_to_bytes(code::String)::Vector{UInt8}
