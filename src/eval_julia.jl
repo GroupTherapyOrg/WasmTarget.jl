@@ -574,74 +574,166 @@ function _wasm_extract_binop_raw(code_bytes::Vector{UInt8})::Tuple{UInt8, Int64,
     return (op_byte, left_int, right_int)
 end
 
-# --- PURE-7006: Pre-compute stage 3-4 (typeinf + codegen) at include time ---
-# WHY: build_wasm_interpreter uses kwargs (stubbed in WASM) and ccalls (unreachable in WASM).
-# Const ref-type globals (CodeInfo, WasmInterpreter, MethodInstance) fail codegen
-# (compile_value tries to inline them recursively → stack overflow / VALIDATE_ERROR).
-# Vector{UInt8} const globals DO work (compile_value handles them correctly).
+# --- PURE-8000: Runtime stage 3-4 pipeline (replaces pre-computed bytes) ---
+# ALL 4 stages run at RUNTIME in WASM. No pre-computed bytes.
 #
-# APPROACH: Run the REAL pipeline (typeinf + compile_from_codeinfo) at include time
-# on the dev machine where kwargs + ccalls work. Store the resulting WASM bytes as
-# const Vector{UInt8}. At WASM runtime, parse (stages 0-2) still runs for real.
-# The stored bytes ARE the output of compile_from_codeinfo — identical to what
-# would be produced if stages 3-4 could run in WASM.
+# Pipeline: parse (stages 1-2) → typeinf (stage 3) → codegen (stage 4)
+# All stages run every time eval_julia_to_bytes_vec is called.
 #
-# This is NOT the same as the cheating that was reverted:
-#   CHEATING: Hand-constructed WASM modules from raw byte arrays
-#   THIS: Output of WasmTarget.compile_from_codeinfo(ci, rt, name, types)
-#         where ci came from Core.Compiler.typeinf_frame via WasmInterpreter.
+# Key design choices:
+#   - NO kwargs anywhere (kwcall dispatch traps in WASM)
+#   - _WASM_USE_REIMPL=true routes ccall-based method lookup to pure Julia
+#   - DictMethodTable populated via wasm_matching_methods (pure Julia)
+#   - compile_from_codeinfo called with positional args only (optimize defaults to false)
 
-function _wasm_precompute_arith_bytes(op_func, op_name::String)::Vector{UInt8}
-    sig = Tuple{typeof(op_func), Int64, Int64}
+# Runtime compile: full pipeline for a given signature.
+# Calls typeinf_frame + compile_from_codeinfo at RUNTIME (not include time).
+function _wasm_runtime_compile_plus_i64()::Vector{UInt8}
+    sig = Tuple{typeof(Base.:+), Int64, Int64}
     world = _WASM_WORLD_AGE
-    interp = build_wasm_interpreter([sig]; world=world)
-    native_mt = Core.Compiler.InternalMethodTable(world)
-    lu = Core.Compiler.findall(sig, native_mt; limit=3)
-    mi = Core.Compiler.specialize_method(first(lu.matches))
     _WASM_USE_REIMPL[] = true
+    native_mt = Core.Compiler.InternalMethodTable(world)
+    lu = Core.Compiler.findall(sig, native_mt)
+    mi = Core.Compiler.specialize_method(first(lu.matches))
+    table = DictMethodTable(world)
+    table.methods[sig] = lu
+    interp = WasmInterpreter(world, table)
+    ci_raw = Core.Compiler.retrieve_code_info(mi, world)
+    interp.code_info_cache.cache[mi] = ci_raw
     _WASM_CODE_CACHE[] = interp.code_info_cache
     inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
     _WASM_USE_REIMPL[] = false
     _WASM_CODE_CACHE[] = nothing
-    ci = inf_frame.result.src
+    result_ci = inf_frame.result.src
     rt = Core.Compiler.widenconst(inf_frame.result.result)
-    return WasmTarget.compile_from_codeinfo(ci, rt, op_name, (Int64, Int64))
+    return WasmTarget.compile_from_codeinfo(result_ci, rt, "+", (Int64, Int64))
 end
 
-# PURE-7011: Float64 precompute — same pipeline, different signature.
-# Float64 arithmetic (f64.add, f64.sub, f64.mul, f64.div) compiles cleanly
-# because it doesn't need Base.float() (already Float64).
-# Division on Int64 calls Base.float() which is stubbed → inner module traps.
-# Solution: always use Float64 bytes for division, and for any expression with '.' operands.
-function _wasm_precompute_arith_bytes_f64(op_func, op_name::String)::Vector{UInt8}
-    sig = Tuple{typeof(op_func), Float64, Float64}
+function _wasm_runtime_compile_minus_i64()::Vector{UInt8}
+    sig = Tuple{typeof(Base.:-), Int64, Int64}
     world = _WASM_WORLD_AGE
-    interp = build_wasm_interpreter([sig]; world=world)
-    native_mt = Core.Compiler.InternalMethodTable(world)
-    lu = Core.Compiler.findall(sig, native_mt; limit=3)
-    mi = Core.Compiler.specialize_method(first(lu.matches))
     _WASM_USE_REIMPL[] = true
+    native_mt = Core.Compiler.InternalMethodTable(world)
+    lu = Core.Compiler.findall(sig, native_mt)
+    mi = Core.Compiler.specialize_method(first(lu.matches))
+    table = DictMethodTable(world)
+    table.methods[sig] = lu
+    interp = WasmInterpreter(world, table)
+    ci_raw = Core.Compiler.retrieve_code_info(mi, world)
+    interp.code_info_cache.cache[mi] = ci_raw
     _WASM_CODE_CACHE[] = interp.code_info_cache
     inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
     _WASM_USE_REIMPL[] = false
     _WASM_CODE_CACHE[] = nothing
-    ci = inf_frame.result.src
+    result_ci = inf_frame.result.src
     rt = Core.Compiler.widenconst(inf_frame.result.result)
-    return WasmTarget.compile_from_codeinfo(ci, rt, op_name, (Float64, Float64))
+    return WasmTarget.compile_from_codeinfo(result_ci, rt, "-", (Int64, Int64))
 end
 
-# Pre-compute at include time — each calls the REAL pipeline:
-#   build_wasm_interpreter → typeinf_frame → compile_from_codeinfo
-const _WASM_BYTES_PLUS  = _wasm_precompute_arith_bytes(Base.:+, "+")
-const _WASM_BYTES_MINUS = _wasm_precompute_arith_bytes(Base.:-, "-")
-const _WASM_BYTES_MUL   = _wasm_precompute_arith_bytes(Base.:*, "*")
-const _WASM_BYTES_DIV   = _wasm_precompute_arith_bytes(Base.:/, "/")
+function _wasm_runtime_compile_mul_i64()::Vector{UInt8}
+    sig = Tuple{typeof(Base.:*), Int64, Int64}
+    world = _WASM_WORLD_AGE
+    _WASM_USE_REIMPL[] = true
+    native_mt = Core.Compiler.InternalMethodTable(world)
+    lu = Core.Compiler.findall(sig, native_mt)
+    mi = Core.Compiler.specialize_method(first(lu.matches))
+    table = DictMethodTable(world)
+    table.methods[sig] = lu
+    interp = WasmInterpreter(world, table)
+    ci_raw = Core.Compiler.retrieve_code_info(mi, world)
+    interp.code_info_cache.cache[mi] = ci_raw
+    _WASM_CODE_CACHE[] = interp.code_info_cache
+    inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
+    _WASM_USE_REIMPL[] = false
+    _WASM_CODE_CACHE[] = nothing
+    result_ci = inf_frame.result.src
+    rt = Core.Compiler.widenconst(inf_frame.result.result)
+    return WasmTarget.compile_from_codeinfo(result_ci, rt, "*", (Int64, Int64))
+end
 
-# PURE-7011: Float64 bytes from real pipeline, Float64 signatures
-const _WASM_BYTES_PLUS_F64  = _wasm_precompute_arith_bytes_f64(Base.:+, "+")
-const _WASM_BYTES_MINUS_F64 = _wasm_precompute_arith_bytes_f64(Base.:-, "-")
-const _WASM_BYTES_MUL_F64   = _wasm_precompute_arith_bytes_f64(Base.:*, "*")
-const _WASM_BYTES_DIV_F64   = _wasm_precompute_arith_bytes_f64(Base.:/, "/")
+function _wasm_runtime_compile_div_f64()::Vector{UInt8}
+    sig = Tuple{typeof(Base.:/), Float64, Float64}
+    world = _WASM_WORLD_AGE
+    _WASM_USE_REIMPL[] = true
+    native_mt = Core.Compiler.InternalMethodTable(world)
+    lu = Core.Compiler.findall(sig, native_mt)
+    mi = Core.Compiler.specialize_method(first(lu.matches))
+    table = DictMethodTable(world)
+    table.methods[sig] = lu
+    interp = WasmInterpreter(world, table)
+    ci_raw = Core.Compiler.retrieve_code_info(mi, world)
+    interp.code_info_cache.cache[mi] = ci_raw
+    _WASM_CODE_CACHE[] = interp.code_info_cache
+    inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
+    _WASM_USE_REIMPL[] = false
+    _WASM_CODE_CACHE[] = nothing
+    result_ci = inf_frame.result.src
+    rt = Core.Compiler.widenconst(inf_frame.result.result)
+    return WasmTarget.compile_from_codeinfo(result_ci, rt, "/", (Float64, Float64))
+end
+
+function _wasm_runtime_compile_plus_f64()::Vector{UInt8}
+    sig = Tuple{typeof(Base.:+), Float64, Float64}
+    world = _WASM_WORLD_AGE
+    _WASM_USE_REIMPL[] = true
+    native_mt = Core.Compiler.InternalMethodTable(world)
+    lu = Core.Compiler.findall(sig, native_mt)
+    mi = Core.Compiler.specialize_method(first(lu.matches))
+    table = DictMethodTable(world)
+    table.methods[sig] = lu
+    interp = WasmInterpreter(world, table)
+    ci_raw = Core.Compiler.retrieve_code_info(mi, world)
+    interp.code_info_cache.cache[mi] = ci_raw
+    _WASM_CODE_CACHE[] = interp.code_info_cache
+    inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
+    _WASM_USE_REIMPL[] = false
+    _WASM_CODE_CACHE[] = nothing
+    result_ci = inf_frame.result.src
+    rt = Core.Compiler.widenconst(inf_frame.result.result)
+    return WasmTarget.compile_from_codeinfo(result_ci, rt, "+", (Float64, Float64))
+end
+
+function _wasm_runtime_compile_minus_f64()::Vector{UInt8}
+    sig = Tuple{typeof(Base.:-), Float64, Float64}
+    world = _WASM_WORLD_AGE
+    _WASM_USE_REIMPL[] = true
+    native_mt = Core.Compiler.InternalMethodTable(world)
+    lu = Core.Compiler.findall(sig, native_mt)
+    mi = Core.Compiler.specialize_method(first(lu.matches))
+    table = DictMethodTable(world)
+    table.methods[sig] = lu
+    interp = WasmInterpreter(world, table)
+    ci_raw = Core.Compiler.retrieve_code_info(mi, world)
+    interp.code_info_cache.cache[mi] = ci_raw
+    _WASM_CODE_CACHE[] = interp.code_info_cache
+    inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
+    _WASM_USE_REIMPL[] = false
+    _WASM_CODE_CACHE[] = nothing
+    result_ci = inf_frame.result.src
+    rt = Core.Compiler.widenconst(inf_frame.result.result)
+    return WasmTarget.compile_from_codeinfo(result_ci, rt, "-", (Float64, Float64))
+end
+
+function _wasm_runtime_compile_mul_f64()::Vector{UInt8}
+    sig = Tuple{typeof(Base.:*), Float64, Float64}
+    world = _WASM_WORLD_AGE
+    _WASM_USE_REIMPL[] = true
+    native_mt = Core.Compiler.InternalMethodTable(world)
+    lu = Core.Compiler.findall(sig, native_mt)
+    mi = Core.Compiler.specialize_method(first(lu.matches))
+    table = DictMethodTable(world)
+    table.methods[sig] = lu
+    interp = WasmInterpreter(world, table)
+    ci_raw = Core.Compiler.retrieve_code_info(mi, world)
+    interp.code_info_cache.cache[mi] = ci_raw
+    _WASM_CODE_CACHE[] = interp.code_info_cache
+    inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
+    _WASM_USE_REIMPL[] = false
+    _WASM_CODE_CACHE[] = nothing
+    result_ci = inf_frame.result.src
+    rt = Core.Compiler.widenconst(inf_frame.result.result)
+    return WasmTarget.compile_from_codeinfo(result_ci, rt, "*", (Float64, Float64))
+end
 
 # --- PURE-7012: Unary function call ports ---
 # Port functions using direct Core.Intrinsics — avoids multi-dispatch issues
@@ -742,19 +834,71 @@ function _wasm_sin_f64(x::Float64)::Float64
     end
 end
 
-# PURE-7012: Pre-compute unary function bytes using code_typed(optimize=true).
-# Unlike arith precompute (which uses build_wasm_interpreter + typeinf_frame),
-# unary ports use code_typed because the port functions use Core.Intrinsics
-# directly, which don't have method table entries for build_wasm_interpreter.
-function _wasm_precompute_unary_bytes(func, name::String, ::Type{ArgType})::Vector{UInt8} where ArgType
-    ci, rt = only(code_typed(func, (ArgType,); optimize=true))
-    return WasmTarget.compile_from_codeinfo(ci, rt, name, (ArgType,))
+# PURE-8000: Runtime compile for unary functions.
+# Uses the same pipeline as binary ops but with unary port function signatures.
+# Port functions use Core.Intrinsics directly — the pipeline compiles them at runtime.
+function _wasm_runtime_compile_sin_f64()::Vector{UInt8}
+    sig = Tuple{typeof(_wasm_sin_f64), Float64}
+    world = _WASM_WORLD_AGE
+    _WASM_USE_REIMPL[] = true
+    native_mt = Core.Compiler.InternalMethodTable(world)
+    lu = Core.Compiler.findall(sig, native_mt)
+    mi = Core.Compiler.specialize_method(first(lu.matches))
+    table = DictMethodTable(world)
+    table.methods[sig] = lu
+    interp = WasmInterpreter(world, table)
+    ci_raw = Core.Compiler.retrieve_code_info(mi, world)
+    interp.code_info_cache.cache[mi] = ci_raw
+    _WASM_CODE_CACHE[] = interp.code_info_cache
+    inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
+    _WASM_USE_REIMPL[] = false
+    _WASM_CODE_CACHE[] = nothing
+    result_ci = inf_frame.result.src
+    rt = Core.Compiler.widenconst(inf_frame.result.result)
+    return WasmTarget.compile_from_codeinfo(result_ci, rt, "sin", (Float64,))
 end
 
-# Pre-compute at include time — each calls the REAL pipeline via code_typed + compile_from_codeinfo
-const _WASM_BYTES_ABS_I64  = _wasm_precompute_unary_bytes(_wasm_abs_i64, "abs", Int64)
-const _WASM_BYTES_SQRT_F64 = _wasm_precompute_unary_bytes(_wasm_sqrt_f64, "sqrt", Float64)
-const _WASM_BYTES_SIN_F64  = _wasm_precompute_unary_bytes(_wasm_sin_f64, "sin", Float64)
+function _wasm_runtime_compile_abs_i64()::Vector{UInt8}
+    sig = Tuple{typeof(_wasm_abs_i64), Int64}
+    world = _WASM_WORLD_AGE
+    _WASM_USE_REIMPL[] = true
+    native_mt = Core.Compiler.InternalMethodTable(world)
+    lu = Core.Compiler.findall(sig, native_mt)
+    mi = Core.Compiler.specialize_method(first(lu.matches))
+    table = DictMethodTable(world)
+    table.methods[sig] = lu
+    interp = WasmInterpreter(world, table)
+    ci_raw = Core.Compiler.retrieve_code_info(mi, world)
+    interp.code_info_cache.cache[mi] = ci_raw
+    _WASM_CODE_CACHE[] = interp.code_info_cache
+    inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
+    _WASM_USE_REIMPL[] = false
+    _WASM_CODE_CACHE[] = nothing
+    result_ci = inf_frame.result.src
+    rt = Core.Compiler.widenconst(inf_frame.result.result)
+    return WasmTarget.compile_from_codeinfo(result_ci, rt, "abs", (Int64,))
+end
+
+function _wasm_runtime_compile_sqrt_f64()::Vector{UInt8}
+    sig = Tuple{typeof(_wasm_sqrt_f64), Float64}
+    world = _WASM_WORLD_AGE
+    _WASM_USE_REIMPL[] = true
+    native_mt = Core.Compiler.InternalMethodTable(world)
+    lu = Core.Compiler.findall(sig, native_mt)
+    mi = Core.Compiler.specialize_method(first(lu.matches))
+    table = DictMethodTable(world)
+    table.methods[sig] = lu
+    interp = WasmInterpreter(world, table)
+    ci_raw = Core.Compiler.retrieve_code_info(mi, world)
+    interp.code_info_cache.cache[mi] = ci_raw
+    _WASM_CODE_CACHE[] = interp.code_info_cache
+    inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
+    _WASM_USE_REIMPL[] = false
+    _WASM_CODE_CACHE[] = nothing
+    result_ci = inf_frame.result.src
+    rt = Core.Compiler.widenconst(inf_frame.result.result)
+    return WasmTarget.compile_from_codeinfo(result_ci, rt, "sqrt", (Float64,))
+end
 
 # --- Entry point that takes Vector{UInt8} directly (WASM-compatible) ---
 # Avoids ALL String operations (codeunit, ncodeunits, pointer, unsafe_load)
@@ -777,14 +921,14 @@ function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
         # Function call: extract name bytes before '('
         # Match against known functions: "sin" (115,105,110), "abs" (97,98,115), "sqrt" (115,113,114,116)
         if paren_pos == Int32(4) && code_bytes[1] == UInt8(115) && code_bytes[2] == UInt8(105) && code_bytes[3] == UInt8(110)
-            # "sin" → return pre-computed sin(Float64) bytes
-            return _WASM_BYTES_SIN_F64
+            # "sin" → runtime compile sin(Float64)
+            return _wasm_runtime_compile_sin_f64()
         elseif paren_pos == Int32(4) && code_bytes[1] == UInt8(97) && code_bytes[2] == UInt8(98) && code_bytes[3] == UInt8(115)
-            # "abs" → return pre-computed abs(Int64) bytes
-            return _WASM_BYTES_ABS_I64
+            # "abs" → runtime compile abs(Int64)
+            return _wasm_runtime_compile_abs_i64()
         elseif paren_pos == Int32(5) && code_bytes[1] == UInt8(115) && code_bytes[2] == UInt8(113) && code_bytes[3] == UInt8(114) && code_bytes[4] == UInt8(116)
-            # "sqrt" → return pre-computed sqrt(Float64) bytes
-            return _WASM_BYTES_SQRT_F64
+            # "sqrt" → runtime compile sqrt(Float64)
+            return _wasm_runtime_compile_sqrt_f64()
         end
     end
 
@@ -808,29 +952,27 @@ function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
     end
     is_float = has_dot || op_byte == UInt8(47)  # '/' = 47
 
-    # Stage 3-4: Return pre-computed bytes from the REAL pipeline.
-    # Each const was produced by: build_wasm_interpreter → typeinf_frame → compile_from_codeinfo.
-    # PURE-7006: kwargs + ccalls trap in WASM, but the pipeline ran at include time.
-    # PURE-7011: Float64 path for expressions with '.' or division.
+    # Stage 3-4: Runtime compile — full pipeline runs in WASM.
+    # PURE-8000: No pre-computed bytes. Each call runs typeinf + codegen from scratch.
     if is_float
         if op_byte == UInt8(43)       # '+'
-            return _WASM_BYTES_PLUS_F64
+            return _wasm_runtime_compile_plus_f64()
         elseif op_byte == UInt8(45)   # '-'
-            return _WASM_BYTES_MINUS_F64
+            return _wasm_runtime_compile_minus_f64()
         elseif op_byte == UInt8(42)   # '*'
-            return _WASM_BYTES_MUL_F64
+            return _wasm_runtime_compile_mul_f64()
         else                          # '/' = 47
-            return _WASM_BYTES_DIV_F64
+            return _wasm_runtime_compile_div_f64()
         end
     else
         if op_byte == UInt8(43)       # '+'
-            return _WASM_BYTES_PLUS
+            return _wasm_runtime_compile_plus_i64()
         elseif op_byte == UInt8(45)   # '-'
-            return _WASM_BYTES_MINUS
+            return _wasm_runtime_compile_minus_i64()
         elseif op_byte == UInt8(42)   # '*'
-            return _WASM_BYTES_MUL
+            return _wasm_runtime_compile_mul_i64()
         else                          # '/' (unreachable — / always goes to float path)
-            return _WASM_BYTES_DIV
+            return _wasm_runtime_compile_div_f64()
         end
     end
 end
@@ -1009,48 +1151,22 @@ function _diag_stage3b_sig(code_bytes::Vector{UInt8})::Int32
     return Int32(2)  # sig constructed
 end
 
-# Stage 3c: Are pre-computed typeinf results available?
-# PURE-7006: build_wasm_interpreter traps in WASM (kwargs + ccalls).
-# The real pipeline ran at include time; we verify the bytes are available.
+# Stage 3c: PURE-8000 — runtime compile test (replaces pre-computed check)
+# Tests that _wasm_runtime_compile_plus_i64 returns valid bytes
 function _diag_stage3c_interp(code_bytes::Vector{UInt8})::Int32
-    ps = JuliaSyntax.ParseStream(code_bytes)
-    _wasm_parse_statement!(ps)
-    raw = _wasm_extract_binop_raw(code_bytes)
-    op_byte = getfield(raw, 1)
-    # Check that pre-computed bytes from the real pipeline are available
-    bytes_len = if op_byte == UInt8(43)
-        Int32(length(_WASM_BYTES_PLUS))
-    elseif op_byte == UInt8(45)
-        Int32(length(_WASM_BYTES_MINUS))
-    elseif op_byte == UInt8(42)
-        Int32(length(_WASM_BYTES_MUL))
-    else
-        Int32(length(_WASM_BYTES_DIV))
-    end
-    if bytes_len > Int32(0)
-        return Int32(3)  # typeinf results available (ran at include time)
+    bytes = _wasm_runtime_compile_plus_i64()
+    if length(bytes) > 0
+        return Int32(3)  # runtime compile produced bytes
     end
     return Int32(0)
 end
 
-# Stage 3d: Can we select the correct pre-computed bytes?
+# Stage 3d: PURE-8000 — full runtime pipeline test
+# Tests that eval_julia_to_bytes_vec calls runtime compile
 function _diag_stage3d_findall(code_bytes::Vector{UInt8})::Int32
-    ps = JuliaSyntax.ParseStream(code_bytes)
-    _wasm_parse_statement!(ps)
-    raw = _wasm_extract_binop_raw(code_bytes)
-    op_byte = getfield(raw, 1)
-    # Check length of pre-computed bytes (inline to avoid ref-type phi node codegen issue)
-    bytes_len = if op_byte == UInt8(43)
-        Int32(length(_WASM_BYTES_PLUS))
-    elseif op_byte == UInt8(45)
-        Int32(length(_WASM_BYTES_MINUS))
-    elseif op_byte == UInt8(42)
-        Int32(length(_WASM_BYTES_MUL))
-    else
-        Int32(length(_WASM_BYTES_DIV))
-    end
-    if bytes_len > Int32(0)
-        return Int32(4)  # correct pre-computed bytes accessible
+    result = eval_julia_to_bytes_vec(code_bytes)
+    if length(result) > 0
+        return Int32(4)  # runtime pipeline produced bytes
     end
     return Int32(0)
 end
@@ -1064,13 +1180,9 @@ function _diag_stage3e_typeinf(code_bytes::Vector{UInt8})::Int32
     return Int32(0)
 end
 
-# Legacy diagnostic kept for reference — shows what WOULD run if kwargs+ccalls worked:
-# Stage 3c-original: build_wasm_interpreter([sig]; world=world)
-# Stage 3d-original: Core.Compiler.findall(sig, native_mt; limit=3)
-# Stage 3e-original: Core.Compiler.typeinf_frame(interp, mi, false)
-# These trap in WASM due to kwargs (kwcall stubbed) and ccalls (unreachable).
-# The pre-computed bytes in _WASM_BYTES_* are the output of running these stages
-# at include time on the dev machine where they work natively.
+# PURE-8000: Runtime pipeline now calls typeinf + codegen directly in WASM.
+# The _wasm_runtime_compile_* functions above replace the old pre-computed bytes.
+# All stages run at RUNTIME: findall → specialize → retrieve_code_info → typeinf_frame → compile_from_codeinfo
 
 # (Deleted: old _diag_stage3e_typeinf body that called build_wasm_interpreter)
 # (The old body is preserved in git history: PURE-7005 state)
