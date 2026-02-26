@@ -182,7 +182,7 @@ async function selfTest() {
     // Test error handling
     console.log("\n--- Error handling ---");
     try {
-        await executeInnerModule(new Uint8Array([0, 0, 0, 0]), {});
+        await executeInnerModule(new Uint8Array([0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0]), {});
         console.log("  Invalid magic: WRONG (should have thrown)");
         fail++;
     } catch (e) {
