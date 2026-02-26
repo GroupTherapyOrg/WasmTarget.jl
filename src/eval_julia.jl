@@ -681,16 +681,18 @@ function _wasm_cached_arith_bytes(op_byte::UInt8)::Vector{UInt8}
     return _wasm_cached_int_arith_bytes(op_byte)
 end
 
-# PURE-7007a: Conditional parse helper — avoids "values remaining on stack"
-# codegen bug when an if-without-else block discards a ref-typed return value.
+# PURE-7007a: Conditional parse helper.
 # For additive ops (+ and -), runs the full JuliaSyntax parse.
 # For multiplicative ops (* and /), skips parse (parse_unary traps in WASM).
+# Uses explicit if-else-end to avoid codegen bug with if-without-else blocks.
 function _wasm_maybe_parse!(code_bytes::Vector{UInt8}, op_byte::UInt8)::Int32
     if op_byte == UInt8(43) || op_byte == UInt8(45)  # + or -
         ps = JuliaSyntax.ParseStream(code_bytes)
         _wasm_parse_statement!(ps)
+        return Int32(1)
+    else
+        return Int32(0)
     end
-    return Int32(0)
 end
 
 # --- Entry point that takes Vector{UInt8} directly (WASM-compatible) ---
