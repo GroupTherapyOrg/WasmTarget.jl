@@ -86,6 +86,45 @@ function _wasm_get_world_counter()::UInt64
     return _WASM_WORLD_AGE
 end
 
+# PURE-7006 PORT: Pre-build WasmInterpreter + MethodInstances at compile time.
+# build_wasm_interpreter uses kwargs (stubbed in WASM) and populate_transitive
+# uses _methods_by_ftype (ccall, stubbed). Both are HOST-ONLY setup functions.
+# Pre-build everything at include time; the pipeline uses the cached objects.
+# DictMethodTable is pure Julia (wasm_matching_methods) — works in WASM.
+const _WASM_ARITH_SIGS = DataType[
+    Tuple{typeof(Base.:+), Int64, Int64},
+    Tuple{typeof(Base.:-), Int64, Int64},
+    Tuple{typeof(Base.:*), Int64, Int64},
+    Tuple{typeof(Base.:/), Int64, Int64},
+]
+const _WASM_ARITH_INTERP = build_wasm_interpreter(_WASM_ARITH_SIGS; world=_WASM_WORLD_AGE)
+
+# Pre-compute MethodInstances for each operator
+const _WASM_ARITH_MI = let
+    world = _WASM_WORLD_AGE
+    native_mt = Core.Compiler.InternalMethodTable(world)
+    mis = Dict{UInt8, Core.MethodInstance}()
+    for (op_byte, sig) in [(UInt8(43), _WASM_ARITH_SIGS[1]),
+                            (UInt8(45), _WASM_ARITH_SIGS[2]),
+                            (UInt8(42), _WASM_ARITH_SIGS[3]),
+                            (UInt8(47), _WASM_ARITH_SIGS[4])]
+        lookup = Core.Compiler.findall(sig, native_mt; limit=3)
+        mi = Core.Compiler.specialize_method(first(lookup.matches))
+        mis[op_byte] = mi
+    end
+    mis
+end
+
+# WASM-friendly accessor: get pre-built interpreter (no kwargs, no ccalls)
+function _wasm_get_interp()::WasmInterpreter
+    return _WASM_ARITH_INTERP
+end
+
+# WASM-friendly accessor: get pre-built MethodInstance for operator
+function _wasm_get_mi(op_byte::UInt8)::Core.MethodInstance
+    return _WASM_ARITH_MI[op_byte]
+end
+
 """
     eval_julia_to_bytes(code::String)::Vector{UInt8}
 
@@ -613,29 +652,11 @@ function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
     arg_types = (Int64, Int64)  # both operands are Int64
 
     # Stage 3: Type inference using WasmInterpreter
-    world = _wasm_get_world_counter()
-    # PURE-7005 PORT: typeof(func) on union type traps in WASM (CROSS-CALL UNREACHABLE).
-    # Compute sig directly per operator — each branch is a concrete type literal.
-    sig = if op_byte == UInt8(43)
-        Tuple{typeof(Base.:+), Int64, Int64}
-    elseif op_byte == UInt8(45)
-        Tuple{typeof(Base.:-), Int64, Int64}
-    elseif op_byte == UInt8(42)
-        Tuple{typeof(Base.:*), Int64, Int64}
-    else
-        Tuple{typeof(Base.:/), Int64, Int64}
-    end
-
-    # Build WasmInterpreter with transitive method table
-    interp = build_wasm_interpreter([sig]; world=world)
-
-    # Find the MethodInstance for this signature
-    native_mt = Core.Compiler.InternalMethodTable(world)
-    lookup = Core.Compiler.findall(sig, native_mt; limit=3)
-    if lookup === nothing
-        error("No method found for $func_sym with types $arg_types")
-    end
-    mi = Core.Compiler.specialize_method(first(lookup.matches))
+    # PURE-7006 PORT: build_wasm_interpreter kwargs + populate_transitive ccalls
+    # are unreachable in WASM. Use pre-built interpreter + MethodInstances
+    # (constructed at include time on the host, where ccalls work).
+    interp = _wasm_get_interp()
+    mi = _wasm_get_mi(op_byte)
 
     # Run typeinf_frame(interp, mi, run_optimizer=false) — skip Julia IR optimization.
     # Binaryen handles WASM-level optimization. Without the optimizer, the IR may
@@ -840,47 +861,27 @@ function _diag_stage3b_sig(code_bytes::Vector{UInt8})::Int32
     return Int32(2)  # sig constructed
 end
 
-# Stage 3c: Can we build the WasmInterpreter?
+# Stage 3c: Can we get the pre-built WasmInterpreter?
 function _diag_stage3c_interp(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
     _wasm_parse_statement!(ps)
     raw = _wasm_extract_binop_raw(code_bytes)
     op_byte = getfield(raw, 1)
-    world = _wasm_get_world_counter()
-    # PURE-7005: Direct sig construction (no typeof on union)
-    sig = if op_byte == UInt8(43)
-        Tuple{typeof(Base.:+), Int64, Int64}
-    elseif op_byte == UInt8(45)
-        Tuple{typeof(Base.:-), Int64, Int64}
-    elseif op_byte == UInt8(42)
-        Tuple{typeof(Base.:*), Int64, Int64}
-    else
-        Tuple{typeof(Base.:/), Int64, Int64}
-    end
-    interp = build_wasm_interpreter([sig]; world=world)
-    return Int32(3)  # interpreter built
+    # PURE-7006: Use pre-built interpreter (no kwargs, no ccalls)
+    interp = _wasm_get_interp()
+    return Int32(3)  # interpreter retrieved
 end
 
-# Stage 3d: Can we find methods?
+# Stage 3d: Can we get the pre-built MethodInstance?
 function _diag_stage3d_findall(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
     _wasm_parse_statement!(ps)
     raw = _wasm_extract_binop_raw(code_bytes)
     op_byte = getfield(raw, 1)
-    world = _wasm_get_world_counter()
-    # PURE-7005: Direct sig construction (no typeof on union)
-    sig = if op_byte == UInt8(43)
-        Tuple{typeof(Base.:+), Int64, Int64}
-    elseif op_byte == UInt8(45)
-        Tuple{typeof(Base.:-), Int64, Int64}
-    elseif op_byte == UInt8(42)
-        Tuple{typeof(Base.:*), Int64, Int64}
-    else
-        Tuple{typeof(Base.:/), Int64, Int64}
-    end
-    native_mt = Core.Compiler.InternalMethodTable(world)
-    lookup = Core.Compiler.findall(sig, native_mt; limit=3)
-    return Int32(4)  # findall succeeded
+    # PURE-7006: Use pre-built MI (no kwargs, no ccalls)
+    interp = _wasm_get_interp()
+    mi = _wasm_get_mi(op_byte)
+    return Int32(4)  # MI retrieved
 end
 
 # Stage 3e: Can we run typeinf?
@@ -889,21 +890,9 @@ function _diag_stage3e_typeinf(code_bytes::Vector{UInt8})::Int32
     _wasm_parse_statement!(ps)
     raw = _wasm_extract_binop_raw(code_bytes)
     op_byte = getfield(raw, 1)
-    world = _wasm_get_world_counter()
-    # PURE-7005: Direct sig construction (no typeof on union)
-    sig = if op_byte == UInt8(43)
-        Tuple{typeof(Base.:+), Int64, Int64}
-    elseif op_byte == UInt8(45)
-        Tuple{typeof(Base.:-), Int64, Int64}
-    elseif op_byte == UInt8(42)
-        Tuple{typeof(Base.:*), Int64, Int64}
-    else
-        Tuple{typeof(Base.:/), Int64, Int64}
-    end
-    interp = build_wasm_interpreter([sig]; world=world)
-    native_mt = Core.Compiler.InternalMethodTable(world)
-    lookup = Core.Compiler.findall(sig, native_mt; limit=3)
-    mi = Core.Compiler.specialize_method(first(lookup.matches))
+    # PURE-7006: Use pre-built interpreter + MI
+    interp = _wasm_get_interp()
+    mi = _wasm_get_mi(op_byte)
     _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
     inf_frame = nothing
