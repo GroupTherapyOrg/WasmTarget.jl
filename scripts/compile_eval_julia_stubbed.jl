@@ -136,6 +136,9 @@ function main()
         (_diag_7002_lastindex, (Vector{UInt8},)),
         (_diag_7002_output_2, (Vector{UInt8},)),
         (_diag_7002_next_byte, (Vector{UInt8},)),
+        # PURE-8000: Runtime compile function (stages 3-4 at runtime)
+        # Zero-arg — calls Core.Compiler.findall, typeinf_frame, compile_from_codeinfo
+        (_wasm_runtime_compile_plus_i64, ()),
     ]
     all_funcs = WasmTarget.discover_dependencies(seed)
     println("  Found $(length(all_funcs)) functions")

@@ -86,6 +86,18 @@ function _wasm_get_world_counter()::UInt64
     return _WASM_WORLD_AGE
 end
 
+# PURE-8000: Const aliases for Core.Compiler functions used in runtime compile.
+# Without these, Julia compiles `Core.Compiler.findall(sig, mt)` as dynamic dispatch
+# (getproperty → dynamic call). With const aliases, Julia resolves the exact
+# MethodInstance at compile time, enabling static `:invoke` and proper dep discovery.
+const _CC_InternalMethodTable = Core.Compiler.InternalMethodTable
+const _CC_findall = Core.Compiler.findall
+const _CC_specialize_method = Core.Compiler.specialize_method
+const _CC_retrieve_code_info = Core.Compiler.retrieve_code_info
+const _CC_typeinf_frame = Core.Compiler.typeinf_frame
+const _CC_widenconst = Core.Compiler.widenconst
+const _CC_compile_from_codeinfo = WasmTarget.compile_from_codeinfo
+
 
 
 """
@@ -595,148 +607,148 @@ end
 function _wasm_runtime_compile_plus_i64()::Vector{UInt8}
     sig = Tuple{typeof(Base.:+), Int64, Int64}
     world = _WASM_WORLD_AGE
-    native_mt = Core.Compiler.InternalMethodTable(world)
-    lu = Core.Compiler.findall(sig, native_mt)
-    mi = Core.Compiler.specialize_method(first(lu.matches))
+    native_mt = _CC_InternalMethodTable(world)
+    lu = _CC_findall(sig, native_mt)
+    mi = _CC_specialize_method(first(lu.matches))
     table = DictMethodTable(world)
     table.methods[sig] = lu
     interp = WasmInterpreter(world, table)
-    ci_raw = Core.Compiler.retrieve_code_info(mi, world)
+    ci_raw = _CC_retrieve_code_info(mi, world)
     interp.code_info_cache.cache[mi] = ci_raw
     _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
-    inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
+    inf_frame = _CC_typeinf_frame(interp, mi, false)
     _WASM_USE_REIMPL[] = false
     _WASM_CODE_CACHE[] = nothing
     result_ci = inf_frame.result.src
-    rt = Core.Compiler.widenconst(inf_frame.result.result)
-    return WasmTarget.compile_from_codeinfo(result_ci, rt, "+", (Int64, Int64))
+    rt = _CC_widenconst(inf_frame.result.result)
+    return _CC_compile_from_codeinfo(result_ci, rt, "+", (Int64, Int64))
 end
 
 function _wasm_runtime_compile_minus_i64()::Vector{UInt8}
     sig = Tuple{typeof(Base.:-), Int64, Int64}
     world = _WASM_WORLD_AGE
-    native_mt = Core.Compiler.InternalMethodTable(world)
-    lu = Core.Compiler.findall(sig, native_mt)
-    mi = Core.Compiler.specialize_method(first(lu.matches))
+    native_mt = _CC_InternalMethodTable(world)
+    lu = _CC_findall(sig, native_mt)
+    mi = _CC_specialize_method(first(lu.matches))
     table = DictMethodTable(world)
     table.methods[sig] = lu
     interp = WasmInterpreter(world, table)
-    ci_raw = Core.Compiler.retrieve_code_info(mi, world)
+    ci_raw = _CC_retrieve_code_info(mi, world)
     interp.code_info_cache.cache[mi] = ci_raw
     _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
-    inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
+    inf_frame = _CC_typeinf_frame(interp, mi, false)
     _WASM_USE_REIMPL[] = false
     _WASM_CODE_CACHE[] = nothing
     result_ci = inf_frame.result.src
-    rt = Core.Compiler.widenconst(inf_frame.result.result)
-    return WasmTarget.compile_from_codeinfo(result_ci, rt, "-", (Int64, Int64))
+    rt = _CC_widenconst(inf_frame.result.result)
+    return _CC_compile_from_codeinfo(result_ci, rt, "-", (Int64, Int64))
 end
 
 function _wasm_runtime_compile_mul_i64()::Vector{UInt8}
     sig = Tuple{typeof(Base.:*), Int64, Int64}
     world = _WASM_WORLD_AGE
-    native_mt = Core.Compiler.InternalMethodTable(world)
-    lu = Core.Compiler.findall(sig, native_mt)
-    mi = Core.Compiler.specialize_method(first(lu.matches))
+    native_mt = _CC_InternalMethodTable(world)
+    lu = _CC_findall(sig, native_mt)
+    mi = _CC_specialize_method(first(lu.matches))
     table = DictMethodTable(world)
     table.methods[sig] = lu
     interp = WasmInterpreter(world, table)
-    ci_raw = Core.Compiler.retrieve_code_info(mi, world)
+    ci_raw = _CC_retrieve_code_info(mi, world)
     interp.code_info_cache.cache[mi] = ci_raw
     _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
-    inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
+    inf_frame = _CC_typeinf_frame(interp, mi, false)
     _WASM_USE_REIMPL[] = false
     _WASM_CODE_CACHE[] = nothing
     result_ci = inf_frame.result.src
-    rt = Core.Compiler.widenconst(inf_frame.result.result)
-    return WasmTarget.compile_from_codeinfo(result_ci, rt, "*", (Int64, Int64))
+    rt = _CC_widenconst(inf_frame.result.result)
+    return _CC_compile_from_codeinfo(result_ci, rt, "*", (Int64, Int64))
 end
 
 function _wasm_runtime_compile_div_f64()::Vector{UInt8}
     sig = Tuple{typeof(Base.:/), Float64, Float64}
     world = _WASM_WORLD_AGE
-    native_mt = Core.Compiler.InternalMethodTable(world)
-    lu = Core.Compiler.findall(sig, native_mt)
-    mi = Core.Compiler.specialize_method(first(lu.matches))
+    native_mt = _CC_InternalMethodTable(world)
+    lu = _CC_findall(sig, native_mt)
+    mi = _CC_specialize_method(first(lu.matches))
     table = DictMethodTable(world)
     table.methods[sig] = lu
     interp = WasmInterpreter(world, table)
-    ci_raw = Core.Compiler.retrieve_code_info(mi, world)
+    ci_raw = _CC_retrieve_code_info(mi, world)
     interp.code_info_cache.cache[mi] = ci_raw
     _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
-    inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
+    inf_frame = _CC_typeinf_frame(interp, mi, false)
     _WASM_USE_REIMPL[] = false
     _WASM_CODE_CACHE[] = nothing
     result_ci = inf_frame.result.src
-    rt = Core.Compiler.widenconst(inf_frame.result.result)
-    return WasmTarget.compile_from_codeinfo(result_ci, rt, "/", (Float64, Float64))
+    rt = _CC_widenconst(inf_frame.result.result)
+    return _CC_compile_from_codeinfo(result_ci, rt, "/", (Float64, Float64))
 end
 
 function _wasm_runtime_compile_plus_f64()::Vector{UInt8}
     sig = Tuple{typeof(Base.:+), Float64, Float64}
     world = _WASM_WORLD_AGE
-    native_mt = Core.Compiler.InternalMethodTable(world)
-    lu = Core.Compiler.findall(sig, native_mt)
-    mi = Core.Compiler.specialize_method(first(lu.matches))
+    native_mt = _CC_InternalMethodTable(world)
+    lu = _CC_findall(sig, native_mt)
+    mi = _CC_specialize_method(first(lu.matches))
     table = DictMethodTable(world)
     table.methods[sig] = lu
     interp = WasmInterpreter(world, table)
-    ci_raw = Core.Compiler.retrieve_code_info(mi, world)
+    ci_raw = _CC_retrieve_code_info(mi, world)
     interp.code_info_cache.cache[mi] = ci_raw
     _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
-    inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
+    inf_frame = _CC_typeinf_frame(interp, mi, false)
     _WASM_USE_REIMPL[] = false
     _WASM_CODE_CACHE[] = nothing
     result_ci = inf_frame.result.src
-    rt = Core.Compiler.widenconst(inf_frame.result.result)
-    return WasmTarget.compile_from_codeinfo(result_ci, rt, "+", (Float64, Float64))
+    rt = _CC_widenconst(inf_frame.result.result)
+    return _CC_compile_from_codeinfo(result_ci, rt, "+", (Float64, Float64))
 end
 
 function _wasm_runtime_compile_minus_f64()::Vector{UInt8}
     sig = Tuple{typeof(Base.:-), Float64, Float64}
     world = _WASM_WORLD_AGE
-    native_mt = Core.Compiler.InternalMethodTable(world)
-    lu = Core.Compiler.findall(sig, native_mt)
-    mi = Core.Compiler.specialize_method(first(lu.matches))
+    native_mt = _CC_InternalMethodTable(world)
+    lu = _CC_findall(sig, native_mt)
+    mi = _CC_specialize_method(first(lu.matches))
     table = DictMethodTable(world)
     table.methods[sig] = lu
     interp = WasmInterpreter(world, table)
-    ci_raw = Core.Compiler.retrieve_code_info(mi, world)
+    ci_raw = _CC_retrieve_code_info(mi, world)
     interp.code_info_cache.cache[mi] = ci_raw
     _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
-    inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
+    inf_frame = _CC_typeinf_frame(interp, mi, false)
     _WASM_USE_REIMPL[] = false
     _WASM_CODE_CACHE[] = nothing
     result_ci = inf_frame.result.src
-    rt = Core.Compiler.widenconst(inf_frame.result.result)
-    return WasmTarget.compile_from_codeinfo(result_ci, rt, "-", (Float64, Float64))
+    rt = _CC_widenconst(inf_frame.result.result)
+    return _CC_compile_from_codeinfo(result_ci, rt, "-", (Float64, Float64))
 end
 
 function _wasm_runtime_compile_mul_f64()::Vector{UInt8}
     sig = Tuple{typeof(Base.:*), Float64, Float64}
     world = _WASM_WORLD_AGE
-    native_mt = Core.Compiler.InternalMethodTable(world)
-    lu = Core.Compiler.findall(sig, native_mt)
-    mi = Core.Compiler.specialize_method(first(lu.matches))
+    native_mt = _CC_InternalMethodTable(world)
+    lu = _CC_findall(sig, native_mt)
+    mi = _CC_specialize_method(first(lu.matches))
     table = DictMethodTable(world)
     table.methods[sig] = lu
     interp = WasmInterpreter(world, table)
-    ci_raw = Core.Compiler.retrieve_code_info(mi, world)
+    ci_raw = _CC_retrieve_code_info(mi, world)
     interp.code_info_cache.cache[mi] = ci_raw
     _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
-    inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
+    inf_frame = _CC_typeinf_frame(interp, mi, false)
     _WASM_USE_REIMPL[] = false
     _WASM_CODE_CACHE[] = nothing
     result_ci = inf_frame.result.src
-    rt = Core.Compiler.widenconst(inf_frame.result.result)
-    return WasmTarget.compile_from_codeinfo(result_ci, rt, "*", (Float64, Float64))
+    rt = _CC_widenconst(inf_frame.result.result)
+    return _CC_compile_from_codeinfo(result_ci, rt, "*", (Float64, Float64))
 end
 
 # --- PURE-7012: Unary function call ports ---
@@ -844,64 +856,64 @@ end
 function _wasm_runtime_compile_sin_f64()::Vector{UInt8}
     sig = Tuple{typeof(_wasm_sin_f64), Float64}
     world = UInt64(Base.get_world_counter())  # need fresh world (port func defined after _WASM_WORLD_AGE)
-    native_mt = Core.Compiler.InternalMethodTable(world)
-    lu = Core.Compiler.findall(sig, native_mt)
-    mi = Core.Compiler.specialize_method(first(lu.matches))
+    native_mt = _CC_InternalMethodTable(world)
+    lu = _CC_findall(sig, native_mt)
+    mi = _CC_specialize_method(first(lu.matches))
     table = DictMethodTable(world)
     table.methods[sig] = lu
     interp = WasmInterpreter(world, table)
-    ci_raw = Core.Compiler.retrieve_code_info(mi, world)
+    ci_raw = _CC_retrieve_code_info(mi, world)
     interp.code_info_cache.cache[mi] = ci_raw
     _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
-    inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
+    inf_frame = _CC_typeinf_frame(interp, mi, false)
     _WASM_USE_REIMPL[] = false
     _WASM_CODE_CACHE[] = nothing
     result_ci = inf_frame.result.src
-    rt = Core.Compiler.widenconst(inf_frame.result.result)
-    return WasmTarget.compile_from_codeinfo(result_ci, rt, "sin", (Float64,))
+    rt = _CC_widenconst(inf_frame.result.result)
+    return _CC_compile_from_codeinfo(result_ci, rt, "sin", (Float64,))
 end
 
 function _wasm_runtime_compile_abs_i64()::Vector{UInt8}
     sig = Tuple{typeof(_wasm_abs_i64), Int64}
     world = UInt64(Base.get_world_counter())  # need fresh world (port func defined after _WASM_WORLD_AGE)
-    native_mt = Core.Compiler.InternalMethodTable(world)
-    lu = Core.Compiler.findall(sig, native_mt)
-    mi = Core.Compiler.specialize_method(first(lu.matches))
+    native_mt = _CC_InternalMethodTable(world)
+    lu = _CC_findall(sig, native_mt)
+    mi = _CC_specialize_method(first(lu.matches))
     table = DictMethodTable(world)
     table.methods[sig] = lu
     interp = WasmInterpreter(world, table)
-    ci_raw = Core.Compiler.retrieve_code_info(mi, world)
+    ci_raw = _CC_retrieve_code_info(mi, world)
     interp.code_info_cache.cache[mi] = ci_raw
     _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
-    inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
+    inf_frame = _CC_typeinf_frame(interp, mi, false)
     _WASM_USE_REIMPL[] = false
     _WASM_CODE_CACHE[] = nothing
     result_ci = inf_frame.result.src
-    rt = Core.Compiler.widenconst(inf_frame.result.result)
-    return WasmTarget.compile_from_codeinfo(result_ci, rt, "abs", (Int64,))
+    rt = _CC_widenconst(inf_frame.result.result)
+    return _CC_compile_from_codeinfo(result_ci, rt, "abs", (Int64,))
 end
 
 function _wasm_runtime_compile_sqrt_f64()::Vector{UInt8}
     sig = Tuple{typeof(_wasm_sqrt_f64), Float64}
     world = UInt64(Base.get_world_counter())  # need fresh world (port func defined after _WASM_WORLD_AGE)
-    native_mt = Core.Compiler.InternalMethodTable(world)
-    lu = Core.Compiler.findall(sig, native_mt)
-    mi = Core.Compiler.specialize_method(first(lu.matches))
+    native_mt = _CC_InternalMethodTable(world)
+    lu = _CC_findall(sig, native_mt)
+    mi = _CC_specialize_method(first(lu.matches))
     table = DictMethodTable(world)
     table.methods[sig] = lu
     interp = WasmInterpreter(world, table)
-    ci_raw = Core.Compiler.retrieve_code_info(mi, world)
+    ci_raw = _CC_retrieve_code_info(mi, world)
     interp.code_info_cache.cache[mi] = ci_raw
     _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
-    inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
+    inf_frame = _CC_typeinf_frame(interp, mi, false)
     _WASM_USE_REIMPL[] = false
     _WASM_CODE_CACHE[] = nothing
     result_ci = inf_frame.result.src
-    rt = Core.Compiler.widenconst(inf_frame.result.result)
-    return WasmTarget.compile_from_codeinfo(result_ci, rt, "sqrt", (Float64,))
+    rt = _CC_widenconst(inf_frame.result.result)
+    return _CC_compile_from_codeinfo(result_ci, rt, "sqrt", (Float64,))
 end
 
 # --- Entry point that takes Vector{UInt8} directly (WASM-compatible) ---
