@@ -578,18 +578,28 @@ function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
     left_int = getfield(raw, 2)
     right_int = getfield(raw, 3)
 
-    # Stage 2: Map operator byte to function + build Expr with concrete types
-    # Use byte comparison (UInt8 == UInt8) instead of Symbol === (broken in WASM)
-    func_sym = if op_byte == UInt8(43)  # '+'
-        :+
+    # Stage 2: Map operator byte directly to function reference.
+    # PURE-7003 PORT: getfield(Base, op_sym) traps in WASM — Module.getfield is unreachable.
+    # Compile log: "CROSS-CALL UNREACHABLE: Main.getfield with arg types (Module, Symbol)".
+    # Fix: map op_byte to function reference at compile time (no module introspection).
+    func = if op_byte == UInt8(43)  # '+'
+        Base.:+
     elseif op_byte == UInt8(45)  # '-'
-        :-
+        Base.:-
     elseif op_byte == UInt8(42)  # '*'
-        :*
+        Base.:*
     else  # '/' = 47
+        Base.:/
+    end
+    func_sym = if op_byte == UInt8(43)
+        :+
+    elseif op_byte == UInt8(45)
+        :-
+    elseif op_byte == UInt8(42)
+        :*
+    else
         :/
     end
-    func = getfield(Base, func_sym)
     arg_types = (Int64, Int64)  # both operands are Int64
 
     # Stage 3: Type inference using WasmInterpreter
@@ -749,24 +759,25 @@ function _diag_stage1_parse(code_bytes::Vector{UInt8})::Int32
     return Int32(op_byte)  # '+' = 43, '-' = 45, '*' = 42
 end
 
-# Stage 2: parse + resolve function from Base (returns 1 if getfield works)
-# PURE-7002: Use _wasm_extract_binop_raw instead of _wasm_binop_byte_starts
+# Stage 2: parse + resolve function reference (returns 1 if resolved)
+# PURE-7003 PORT: getfield(Base, op_sym) traps in WASM — Module.getfield unreachable.
+# Fixed: map op_byte directly to function reference (no module introspection).
 function _diag_stage2_resolve(code_bytes::Vector{UInt8})::Int32
     ps = JuliaSyntax.ParseStream(code_bytes)
     _wasm_parse_statement!(ps)
     raw = _wasm_extract_binop_raw(code_bytes)
     op_byte = getfield(raw, 1)
-    op_sym = if op_byte == UInt8(43)
-        :+
+    # Direct function reference — no getfield(Base, sym) needed
+    func = if op_byte == UInt8(43)
+        Base.:+
     elseif op_byte == UInt8(45)
-        :-
+        Base.:-
     elseif op_byte == UInt8(42)
-        :*
+        Base.:*
     else
-        :/
+        Base.:/
     end
-    func = getfield(Base, op_sym)
-    return Int32(1)  # Got here = getfield succeeded
+    return Int32(1)  # Got here = function reference resolved
 end
 
 # PURE-7001a: Sub-stage diagnostics to isolate stage1 trap
