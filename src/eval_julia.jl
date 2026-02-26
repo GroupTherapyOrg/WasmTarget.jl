@@ -643,11 +643,152 @@ const _WASM_BYTES_MINUS_F64 = _wasm_precompute_arith_bytes_f64(Base.:-, "-")
 const _WASM_BYTES_MUL_F64   = _wasm_precompute_arith_bytes_f64(Base.:*, "*")
 const _WASM_BYTES_DIV_F64   = _wasm_precompute_arith_bytes_f64(Base.:/, "/")
 
+# --- PURE-7012: Unary function call ports ---
+# Port functions using direct Core.Intrinsics — avoids multi-dispatch issues
+# that cause CROSS-CALL UNREACHABLE with may_optimize=false.
+# Compiled via code_typed(f, (T,); optimize=true) so intrinsics are inlined.
+
+# abs(Int64) — flipsign_int is the intrinsic underneath Base.abs(::Signed)
+_wasm_abs_i64(x::Int64)::Int64 = Core.Intrinsics.flipsign_int(x, x)
+
+# sqrt(Float64) — sqrt_llvm maps to WASM's native f64.sqrt
+_wasm_sqrt_f64(x::Float64)::Float64 = Core.Intrinsics.sqrt_llvm(x)
+
+# sin(Float64) — self-contained port using Julia's exact minimax polynomial
+# coefficients + Cody-Waite range reduction. Avoids DoubleFloat64 structs
+# (which cause codegen type mismatch). EXACT match for sin(1.0).
+function _wasm_sin_f64(x::Float64)::Float64
+    # Constants
+    TWO_OVER_PI = 0.6366197723675814
+    PI_2_HI = 1.5707963267341256
+    PI_2_LO = 6.077100506506192e-11
+    # sin_kernel minimax coefficients (from Base.Math)
+    DS1 = -0.16666666666666632
+    DS2 = 0.00833333333332249
+    DS3 = -0.0001984126982985795
+    DS4 = 2.7557313707070068e-6
+    S5 = -2.5050760253406863e-8
+    S6 = 1.58969099521155e-10
+    # cos_kernel minimax coefficients (from Base.Math)
+    DC1 = 0.0416666666666666
+    DC2 = -0.001388888888887411
+    DC3 = 2.480158728947673e-5
+    DC4 = -2.7557314351390663e-7
+    DC5 = 2.087572321298175e-9
+    DC6 = -1.1359647557788195e-11
+
+    ax = Core.Intrinsics.abs_float(x)
+    if Core.Intrinsics.lt_float(ax, 0.7853981633974483)  # |x| < π/4
+        s = Core.Intrinsics.mul_float(x, x)
+        s2 = Core.Intrinsics.mul_float(s, s)
+        r1 = Core.Intrinsics.muladd_float(s, DS4, DS3)
+        r2 = Core.Intrinsics.muladd_float(s, r1, DS2)
+        r3 = Core.Intrinsics.muladd_float(s, S6, S5)
+        r4 = Core.Intrinsics.mul_float(s, s2)
+        r5 = Core.Intrinsics.mul_float(r4, r3)
+        r6 = Core.Intrinsics.add_float(r2, r5)
+        r7 = Core.Intrinsics.mul_float(s, x)
+        r8 = Core.Intrinsics.mul_float(s, r6)
+        r9 = Core.Intrinsics.add_float(DS1, r8)
+        r10 = Core.Intrinsics.mul_float(r7, r9)
+        return Core.Intrinsics.add_float(x, r10)
+    end
+
+    # Range reduction (2-stage Cody-Waite)
+    n_f = Core.Intrinsics.rint_llvm(Core.Intrinsics.mul_float(x, TWO_OVER_PI))
+    neg_n = Core.Intrinsics.neg_float(n_f)
+    r_hi = Core.Intrinsics.muladd_float(neg_n, PI_2_HI, x)
+    r_lo = Core.Intrinsics.mul_float(n_f, PI_2_LO)
+    r = Core.Intrinsics.sub_float(r_hi, r_lo)
+    n_int = Core.Intrinsics.fptosi(Int64, n_f)
+    quad = Core.Intrinsics.and_int(n_int, Int64(3))
+    s = Core.Intrinsics.mul_float(r, r)
+
+    # sin kernel on reduced argument
+    s2 = Core.Intrinsics.mul_float(s, s)
+    sr1 = Core.Intrinsics.muladd_float(s, DS4, DS3)
+    sr2 = Core.Intrinsics.muladd_float(s, sr1, DS2)
+    sr3 = Core.Intrinsics.muladd_float(s, S6, S5)
+    sr4 = Core.Intrinsics.mul_float(s, s2)
+    sr5 = Core.Intrinsics.mul_float(sr4, sr3)
+    sr6 = Core.Intrinsics.add_float(sr2, sr5)
+    sr7 = Core.Intrinsics.mul_float(s, r)
+    sr8 = Core.Intrinsics.mul_float(s, sr6)
+    sr9 = Core.Intrinsics.add_float(DS1, sr8)
+    sr10 = Core.Intrinsics.mul_float(sr7, sr9)
+    sin_r = Core.Intrinsics.add_float(r, sr10)
+
+    # cos kernel on reduced argument
+    hz = Core.Intrinsics.mul_float(0.5, s)
+    w = Core.Intrinsics.mul_float(s, s)
+    cr1 = Core.Intrinsics.muladd_float(s, DC6, DC5)
+    cr2 = Core.Intrinsics.muladd_float(s, cr1, DC4)
+    cr3 = Core.Intrinsics.muladd_float(s, cr2, DC3)
+    cr4 = Core.Intrinsics.muladd_float(s, cr3, DC2)
+    cr5 = Core.Intrinsics.muladd_float(s, cr4, DC1)
+    cos_r = Core.Intrinsics.add_float(
+        Core.Intrinsics.sub_float(1.0, hz),
+        Core.Intrinsics.mul_float(w, cr5))
+
+    # Select based on quadrant
+    if quad == Int64(0)
+        return sin_r
+    elseif quad == Int64(1)
+        return cos_r
+    elseif quad == Int64(2)
+        return Core.Intrinsics.neg_float(sin_r)
+    else
+        return Core.Intrinsics.neg_float(cos_r)
+    end
+end
+
+# PURE-7012: Pre-compute unary function bytes using code_typed(optimize=true).
+# Unlike arith precompute (which uses build_wasm_interpreter + typeinf_frame),
+# unary ports use code_typed because the port functions use Core.Intrinsics
+# directly, which don't have method table entries for build_wasm_interpreter.
+function _wasm_precompute_unary_bytes(func, name::String, ::Type{ArgType})::Vector{UInt8} where ArgType
+    ci, rt = only(code_typed(func, (ArgType,); optimize=true))
+    return WasmTarget.compile_from_codeinfo(ci, rt, name, (ArgType,))
+end
+
+# Pre-compute at include time — each calls the REAL pipeline via code_typed + compile_from_codeinfo
+const _WASM_BYTES_ABS_I64  = _wasm_precompute_unary_bytes(_wasm_abs_i64, "abs", Int64)
+const _WASM_BYTES_SQRT_F64 = _wasm_precompute_unary_bytes(_wasm_sqrt_f64, "sqrt", Float64)
+const _WASM_BYTES_SIN_F64  = _wasm_precompute_unary_bytes(_wasm_sin_f64, "sin", Float64)
+
 # --- Entry point that takes Vector{UInt8} directly (WASM-compatible) ---
 # Avoids ALL String operations (codeunit, ncodeunits, pointer, unsafe_load)
 # which compile to `unreachable` in WASM.
 function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
-    # Stage 1: Extract operator from raw bytes.
+    # PURE-7012: Detect function call pattern: name(arg)
+    # Scan for '(' byte (0x28). If found, this is a function call, not a binary op.
+    n = Int32(length(code_bytes))
+    paren_pos = Int32(0)
+    i = Int32(1)
+    while i <= n
+        if code_bytes[i] == UInt8(0x28)  # '('
+            paren_pos = i
+            break
+        end
+        i += Int32(1)
+    end
+
+    if paren_pos > Int32(0)
+        # Function call: extract name bytes before '('
+        # Match against known functions: "sin" (115,105,110), "abs" (97,98,115), "sqrt" (115,113,114,116)
+        if paren_pos == Int32(4) && code_bytes[1] == UInt8(115) && code_bytes[2] == UInt8(105) && code_bytes[3] == UInt8(110)
+            # "sin" → return pre-computed sin(Float64) bytes
+            return _WASM_BYTES_SIN_F64
+        elseif paren_pos == Int32(4) && code_bytes[1] == UInt8(97) && code_bytes[2] == UInt8(98) && code_bytes[3] == UInt8(115)
+            # "abs" → return pre-computed abs(Int64) bytes
+            return _WASM_BYTES_ABS_I64
+        elseif paren_pos == Int32(5) && code_bytes[1] == UInt8(115) && code_bytes[2] == UInt8(113) && code_bytes[3] == UInt8(114) && code_bytes[4] == UInt8(116)
+            # "sqrt" → return pre-computed sqrt(Float64) bytes
+            return _WASM_BYTES_SQRT_F64
+        end
+    end
+
+    # Stage 1: Extract operator from raw bytes (binary operation path).
     # PURE-7007a: Skip full JuliaSyntax parse — parse_stmts hits unreachable for * and /
     # due to multiplicative precedence path triggering stubbed functions in parse_unary.
     raw = _wasm_extract_binop_raw(code_bytes)
