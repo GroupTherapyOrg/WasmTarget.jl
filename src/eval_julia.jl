@@ -697,15 +697,12 @@ end
 # Avoids ALL String operations (codeunit, ncodeunits, pointer, unsafe_load)
 # which compile to `unreachable` in WASM.
 function eval_julia_to_bytes_vec(code_bytes::Vector{UInt8})::Vector{UInt8}
-    # PURE-7007a: Extract operator FIRST via raw byte scan (no parse tree needed).
-    # Must happen before parse because parse_stmts traps for
-    # multiplicative ops in WASM (parse_unary dead code guard at 0x1ecbc8).
+    # PURE-7007a: Extract operator via raw byte scan.
+    # Full JuliaSyntax parse removed — parse_stmts traps for * and / in WASM
+    # (parse_unary dead code guard at 0x1ecbc8). _wasm_extract_binop_raw validates
+    # syntax (finds exactly 1 operator surrounded by digit operands).
     raw = _wasm_extract_binop_raw(code_bytes)
     op_byte = getfield(raw, 1)
-
-    # Stage 1: JuliaSyntax parse — only for additive ops (+ and -).
-    # Multiplicative ops validated by _wasm_extract_binop_raw (raw byte check).
-    _wasm_maybe_parse!(code_bytes, op_byte)
 
     # Stages 2-4: PURE-7006 — Return pre-computed WASM bytes.
     # Stage 2 (resolve function ref) and stages 3-4 (typeinf + codegen) are all
