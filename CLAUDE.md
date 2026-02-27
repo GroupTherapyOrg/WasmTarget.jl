@@ -466,12 +466,12 @@ This is the same architecture as Rust Playground (https://play.rust-lang.org/) w
 
 **Success criteria**: Users can write Julia code in browser, compile and execute it entirely client-side (no server roundtrip).
 
-## TherapeuticJulia Ecosystem
+## GroupTherapyOrg Ecosystem
 
-WasmTarget.jl is part of the TherapeuticJulia ecosystem (sibling packages):
+WasmTarget.jl is part of the GroupTherapyOrg ecosystem (sibling packages):
 
 ```
-TherapeuticJulia/
+GroupTherapyOrg/
 ├── WasmTarget.jl    # This package: Julia → WASM compiler (foundation)
 ├── Therapy.jl       # Reactive web framework (Leptos-style, uses WasmTarget)
 └── Sessions.jl      # VSCode+Pluto hybrid IDE (uses Therapy.jl)

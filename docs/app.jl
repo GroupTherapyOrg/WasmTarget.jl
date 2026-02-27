@@ -11,7 +11,7 @@
 # - Interactive Wasm components with HMR in dev mode
 
 # Ensure we're using Therapy.jl and WasmTarget.jl
-# For local development, both packages are in the parent TherapeuticJulia directory
+# For local development, both packages are in the parent GroupTherapyOrg directory
 if !haskey(ENV, "JULIA_PROJECT")
     # Running without --project, add paths manually
     parent_dir = dirname(dirname(@__DIR__))
