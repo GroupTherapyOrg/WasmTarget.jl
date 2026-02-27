@@ -12,6 +12,8 @@
   Compile real Julia functions to WebAssembly that runs in any modern browser or Node.js — no runtime, no server, no LLVM.
 
   Same architecture as [dart2wasm](https://dart.dev/web/wasm) (Dart's official Wasm compiler for Flutter Web).
+
+  [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE.md)
 </div>
 
 ---
@@ -401,4 +403,4 @@ julia +1.12 --project=. -e '
 
 ## License
 
-MIT License
+Apache License 2.0 — see [LICENSE.md](LICENSE.md)
