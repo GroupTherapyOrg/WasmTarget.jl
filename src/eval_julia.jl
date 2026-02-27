@@ -631,11 +631,25 @@ function _pre_resolve_full(sig, world::UInt64)
     return (result_ci, rt)
 end
 
+# PURE-8001: Strip CodeInfo of deeply nested fields that cause stack overflow
+# in WasmTarget's struct registration. CodeInfo.debuginfo → MethodInstance →
+# CodeInstance → CodeInstance (linked list) overflows register_struct_type!.
+# The codegen (generate_body) never reads debuginfo, parent, or edges.
+function _strip_codeinfo(ci::Core.CodeInfo)::Core.CodeInfo
+    ci2 = copy(ci)
+    ci2.debuginfo = Core.DebugInfo(:stripped)
+    ci2.parent = nothing
+    ci2.edges = Core.svec()
+    ci2.method_for_inference_limit_heuristics = nothing
+    return ci2
+end
+
 # PURE-8001: Generate runtime compile functions via @eval.
 # Each function has its pre-resolved CodeInfo + return type embedded as QuoteNode
 # constants directly in the IR. This avoids GlobalRef to complex types that
 # WasmTarget can't serialize (WasmInterpreter, MethodInstance overflow the stack).
-# The runtime functions ONLY call compile_from_codeinfo (stage 4 codegen).
+# The CodeInfo is stripped of debuginfo/parent/edges (deeply nested types) before
+# embedding. The runtime functions ONLY call compile_from_codeinfo (stage 4 codegen).
 for (name, sig, world_sym, fname, arg_types) in [
     (:_wasm_runtime_compile_plus_i64,  Tuple{typeof(Base.:+), Int64, Int64},       :_WASM_WORLD_AGE, "+", (Int64, Int64)),
     (:_wasm_runtime_compile_minus_i64, Tuple{typeof(Base.:-), Int64, Int64},       :_WASM_WORLD_AGE, "-", (Int64, Int64)),
@@ -647,8 +661,9 @@ for (name, sig, world_sym, fname, arg_types) in [
 ]
     world = eval(world_sym)
     (ci, rt) = _pre_resolve_full(sig, world)
+    ci_clean = _strip_codeinfo(ci)
     @eval function $(name)()::Vector{UInt8}
-        return _CC_compile_from_codeinfo($(QuoteNode(ci)), $(QuoteNode(rt)), $(fname), $(arg_types))
+        return _CC_compile_from_codeinfo($(QuoteNode(ci_clean)), $(QuoteNode(rt)), $(fname), $(arg_types))
     end
 end
 
@@ -761,8 +776,9 @@ for (name, sig, fname, arg_types) in [
     (:_wasm_runtime_compile_sqrt_f64, Tuple{typeof(_wasm_sqrt_f64), Float64},"sqrt", (Float64,)),
 ]
     (ci, rt) = _pre_resolve_full(sig, _WASM_UNARY_WORLD)
+    ci_clean = _strip_codeinfo(ci)
     @eval function $(name)()::Vector{UInt8}
-        return _CC_compile_from_codeinfo($(QuoteNode(ci)), $(QuoteNode(rt)), $(fname), $(arg_types))
+        return _CC_compile_from_codeinfo($(QuoteNode(ci_clean)), $(QuoteNode(rt)), $(fname), $(arg_types))
     end
 end
 

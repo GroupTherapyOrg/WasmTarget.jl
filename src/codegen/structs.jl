@@ -655,6 +655,12 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
         return nothing
     end
 
+    # PURE-8001: UnionAll tuples (e.g., Tuple{T,T} where T<:Type) don't have
+    # .parameters — only DataType does. Return nothing for non-concrete tuples.
+    if T isa UnionAll
+        return nothing
+    end
+
     # Get element types
     elem_types = T.parameters
 

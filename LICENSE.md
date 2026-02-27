@@ -1,215 +1,191 @@
-# WasmTarget.jl License
 
-## The Short Version
-
-**Free for:** researchers, students, hobbyists, open source projects, non-profits, and small businesses (under $1M annual revenue).
-
-**Please reach out:** if you're a larger organization using this in production.
-
-**Questions?** Email dalejamesblack@gmail.com — I'm friendly and flexible.
-
----
-
-## End User License Agreement
-
-**Copyright © 2025 Dale Black. All rights reserved.**
-
-THIS END USER LICENSE AGREEMENT IS A LEGAL AGREEMENT BETWEEN YOU OR THE ORGANIZATION OR ENTITY WHO HAS AUTHORIZED YOU TO ENTER INTO THIS AGREEMENT ("YOU") AND DALE BLACK ("LICENSOR"). BY DOWNLOADING, INSTALLING, COPYING, OR OTHERWISE USING THE SOFTWARE, YOU AGREE TO BE BOUND BY THE TERMS OF THIS AGREEMENT. IF YOU DO NOT AGREE TO THESE TERMS, YOU MAY NOT USE OR DOWNLOAD THE SOFTWARE.
-
-YOU REPRESENT AND WARRANT THAT YOU ARE OVER THE AGE OF EIGHTEEN (18) YEARS AND HAVE THE CAPACITY TO ENTER INTO A LEGAL AGREEMENT. IF YOU ARE ENTERING INTO THIS AGREEMENT ON BEHALF OF AN ENTITY OR ORGANIZATION, YOU REPRESENT AND WARRANT THAT YOU HAVE ALL LEGAL AUTHORITY TO BIND SUCH ENTITY OR ORGANIZATION TO THIS AGREEMENT.
-
-In addition to this End User License Agreement, Licensor makes the Software available under commercial licensing terms that may grant additional rights. If you wish to use the Software for commercial purposes beyond what is permitted in Section 1, please contact Licensor at dalejamesblack@gmail.com to discuss a Commercial License Agreement. If you are a party to an executed Commercial License Agreement with Licensor, then, to the extent the Commercial License Agreement and this Agreement conflict, the Commercial License Agreement shall take priority.
-
----
-
-### 1. Definitions
-
-(a) **"Software"** means the WasmTarget.jl software and all associated packages, documentation, source code, specifications, algorithms, libraries, and binary and/or executable code included in the distribution, and any modifications, updates, or improvements made thereto by Licensor.
-
-(b) **"Academic Use"** means the use of the Software for non-commercial academic teaching, research, or other non-commercial scholarly purposes at any educational institution or research organization.
-
-(c) **"Personal Use"** means the use of the Software by an individual for personal, non-commercial purposes, including learning, experimentation, and hobbyist projects.
-
-(d) **"Open Source Use"** means the use of the Software as a dependency of or in conjunction with a software project that is distributed under an OSI-approved open source license, provided that the open source project itself does not generate revenue exceeding the Small Business Threshold.
-
-(e) **"Small Business"** means any entity, including its affiliates, with total annual revenue of less than One Million United States Dollars ($1,000,000 USD) in the most recently completed tax year (the "Small Business Threshold").
-
-(f) **"Commercial Use"** means any use of the Software that does not qualify as Academic Use, Personal Use, Open Source Use, or Small Business use, including but not limited to: use in customer-facing products, internal tools, dashboards, documentation systems, developer infrastructure, or any other application that supports business operations, whether or not the Software or its output is directly sold or distributed to third parties.
-
-(g) **"Contributions"** means any modifications, additions, or improvements to the Software submitted to Licensor by any means, including but not limited to pull requests, patches, or code submissions.
-
----
-
-### 2. License Grant — Free Tier
-
-Subject to the terms and conditions of this Agreement, Licensor grants to you a nonexclusive, nontransferable, revocable, limited license to download, install, compile, use, and copy the Software, provided that your use falls within one or more of the following categories:
-
-(a) **Academic Use.** You are an individual engaged in Academic Use at any educational institution, research laboratory, or non-profit research organization.
-
-(b) **Personal Use.** You are an individual engaged in Personal Use.
-
-(c) **Non-Profit Use.** You are a non-profit organization using the Software in furtherance of your non-profit mission.
-
-(d) **Open Source Use.** You are using the Software in conjunction with an Open Source Use project.
-
-(e) **Small Business Use.** You are a Small Business using the Software for any lawful purpose, including commercial purposes.
-
-Any copy of the Software made by you must retain all copyright notices, license terms, and proprietary markings as set forth in the Software. You may not sublicense, rent, sell, lease, or otherwise transfer access to the Software to any third party, except as expressly permitted herein.
-
----
-
-### 3. License Grant — Commercial Use
-
-If your use of the Software constitutes Commercial Use and you do not qualify under any category in Section 2, you must obtain a Commercial License from Licensor prior to such use.
-
-Organizations exceeding the Small Business Threshold that wish to use the Software for any purpose that supports business operations — including internal tools, dashboards, data visualization, documentation systems, and developer infrastructure — must contact Licensor to negotiate commercial terms.
-
-**Evaluation.** If you are a commercial entity that has obtained the Software for evaluation purposes, you may use the Software solely for internal evaluation for a period not to exceed thirty (30) days. If you wish to continue use beyond the evaluation period, you must contact Licensor to obtain a Commercial License.
-
----
-
-### 4. Commercial Licensing Philosophy and Pricing
-
-Licensor believes in sustainable open source. Commercial licensing from larger organizations funds continued development, maintenance, and new features, keeping the Software healthy for everyone, including the researchers and small teams who use it for free.
-
-These are suggested starting points, not rigid rules:
-
-| Organization Size | Suggested Annual License |
-|---|---|
-| $100K – $1M revenue | $5,000 – $15,000 |
-| $1M – $25M+ revenue | Contact Licensor |
-
-Early adopters, startups, and multi-year commitments may receive discounts at Licensor's discretion.
-
-To discuss commercial licensing: **dalejamesblack@gmail.com**
-
----
-
-### 5. Intellectual Property and Ownership
-
-(a) **Licensor's Ownership.** You acknowledge that Licensor is the owner of the Software, including without limitation all modifications and enhancements thereof developed by Licensor, and all intellectual property rights therein. Nothing in this Agreement transfers any ownership interest in the Software to you. You shall not do anything that would infringe or otherwise interfere with Licensor's intellectual property rights.
-
-(b) **Your Applications.** Licensor does not claim ownership over applications, websites, dashboards, or other works that you create *using* the Software. Your original creative work remains yours. However, this does not grant you any ownership interest in the Software itself or any right to distribute the Software outside the terms of this Agreement.
-
-(c) **Contributions.** By submitting a Contribution, you grant Licensor a perpetual, irrevocable, worldwide, royalty-free, fully paid-up, nonexclusive license to use, reproduce, modify, distribute, sublicense, and otherwise exploit the Contribution, in whole or in part, in connection with the Software and any derivative works thereof. You represent and warrant that you have the legal right to grant this license, that your Contribution does not infringe any third-party rights, and that your Contribution is not subject to any conflicting license terms that would restrict Licensor's ability to use it as described herein. You retain copyright ownership of your Contributions, subject to the license granted above.
-
----
-
-### 6. License Restrictions
-
-You may not:
-
-(a) Sublicense, rent, sell, lease, distribute, transfer, or otherwise make available the Software or copies thereof to third parties, except as expressly permitted under Section 2.
-
-(b) Remove, erase, delete, or modify any copyright notice, trademark, or other proprietary notice included in or on the Software.
-
-(c) Reverse engineer, decompile, or disassemble the Software, except to the extent expressly permitted by applicable law.
-
-(d) Use the Software to develop a competing product or service that replicates the core functionality of the Software.
-
-(e) Represent or imply that you are the author or owner of the Software, or use Licensor's name, trademarks, or branding without prior written permission, except for accurate attribution.
-
-(f) Use the Software in any manner that violates applicable law.
-
----
-
-### 7. Third-Party Components
-
-The Software may include or depend upon third-party software packages and/or open source components ("Third-Party Components") that are subject to their own license terms. Each Third-Party Component is subject to the terms of its applicable license agreement. In the event of any conflict between the terms of this Agreement and the terms of any third-party license agreement with respect to any Third-Party Component, the applicable third-party license agreement shall control with respect to that component.
-
----
-
-### 8. Term and Termination
-
-(a) **Term.** This Agreement is effective upon your first download, installation, or use of the Software and continues until terminated as set forth herein.
-
-(b) **Termination by You.** You may terminate this Agreement at any time by ceasing all use of the Software and deleting all copies in your possession or control.
-
-(c) **Termination by Licensor.** Licensor may terminate this Agreement immediately upon written notice to you if you breach any term or condition of this Agreement. Licensor may also terminate this Agreement for any reason upon thirty (30) days' written notice to you.
-
-(d) **Effect of Termination.** Upon termination for any reason, all rights granted to you under this Agreement shall immediately cease, and you shall promptly cease all use of the Software and delete all copies thereof. Sections 5, 6, 9, 10, 11, and 12 shall survive termination.
-
----
-
-### 9. Disclaimer of Warranties
-
-THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED WARRANTIES OF MERCHANTABILITY, TITLE, NONINFRINGEMENT, AND FITNESS FOR A PARTICULAR PURPOSE. LICENSOR DOES NOT WARRANT THAT THE SOFTWARE WILL BE UNINTERRUPTED, ERROR-FREE, OR FREE OF HARMFUL COMPONENTS. LICENSOR MAKES NO REPRESENTATIONS OR WARRANTIES REGARDING THE ACCURACY, RELIABILITY, OR COMPLETENESS OF ANY RESULTS OBTAINED THROUGH USE OF THE SOFTWARE. YOU ASSUME ALL RISK ASSOCIATED WITH YOUR USE OF THE SOFTWARE.
-
----
-
-### 10. Limitation of Liability
-
-TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL LICENSOR BE LIABLE FOR ANY SPECIAL, INCIDENTAL, INDIRECT, CONSEQUENTIAL, OR PUNITIVE DAMAGES WHATSOEVER, INCLUDING BUT NOT LIMITED TO DAMAGES FOR LOST PROFITS, LOSS OF DATA, BUSINESS INTERRUPTION, LOSS OF GOODWILL, OR ANY OTHER COMMERCIAL DAMAGES OR LOSSES, ARISING OUT OF OR RELATED TO YOUR USE OF OR INABILITY TO USE THE SOFTWARE, HOWEVER CAUSED, WHETHER IN CONTRACT, TORT (INCLUDING NEGLIGENCE), STRICT LIABILITY, OR OTHERWISE, EVEN IF LICENSOR HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
-
-IN ALL EVENTS, LICENSOR'S TOTAL AGGREGATE LIABILITY UNDER THIS AGREEMENT SHALL NOT EXCEED THE GREATER OF (A) THE TOTAL AMOUNT OF LICENSE FEES ACTUALLY PAID BY YOU TO LICENSOR FOR THE SOFTWARE IN THE TWELVE (12) MONTHS PRECEDING THE EVENT GIVING RISE TO THE CLAIM, OR (B) TEN UNITED STATES DOLLARS ($10.00 USD).
-
-THE PARTIES ACKNOWLEDGE THAT THESE LIMITATIONS OF LIABILITY ARE AN ESSENTIAL ELEMENT OF THIS AGREEMENT AND THAT LICENSOR WOULD NOT PROVIDE THE SOFTWARE WITHOUT THESE LIMITATIONS. THIS LIMITATION OF LIABILITY SHALL SURVIVE FAILURE OF ITS ESSENTIAL PURPOSE.
-
----
-
-### 11. Indemnification
-
-You agree to indemnify, defend, and hold harmless Licensor from and against any and all claims, damages, losses, costs, and expenses (including reasonable attorneys' fees) arising out of or related to: (a) your use of the Software; (b) any breach of this Agreement by you; (c) any violation of applicable law by you in connection with your use of the Software; or (d) any claim that your use of the Software or any application you develop using the Software infringes any third-party rights.
-
----
-
-### 12. Choice of Law and Dispute Resolution
-
-(a) This Agreement shall be governed by and construed in accordance with the laws of the State of California, without reference to its conflict of laws principles. The United Nations Convention on Contracts for the International Sale of Goods shall not apply to this Agreement.
-
-(b) Any dispute arising out of or in connection with this Agreement shall first be subject to good-faith negotiation between the parties for a period of thirty (30) days. If the dispute is not resolved through negotiation, it shall be resolved by binding arbitration in Orange County, California, in accordance with the then-current rules of the American Arbitration Association, by one (1) arbitrator. The arbitrator shall apply the laws of the State of California. Judgment on the award rendered by the arbitrator may be entered in any court of competent jurisdiction.
-
-(c) In the event of any arbitration or legal proceeding arising out of this Agreement, the prevailing party shall be entitled to recover its reasonable attorneys' fees and costs.
-
-(d) Notwithstanding the foregoing, Licensor may seek injunctive or other equitable relief from any court of competent jurisdiction to prevent the breach of this Agreement or the infringement of Licensor's intellectual property rights, without the necessity of posting any bond.
-
----
-
-### 13. Miscellaneous
-
-(a) **Entire Agreement.** This Agreement, together with any applicable Commercial License Agreement, constitutes the entire agreement between you and Licensor with respect to the Software and supersedes all prior or contemporaneous understandings regarding such subject matter.
-
-(b) **Severability.** If any provision of this Agreement is held invalid or unenforceable, such provision shall be modified to the minimum extent necessary to make it valid and enforceable, and the remainder of this Agreement shall continue in full force and effect.
-
-(c) **No Waiver.** The failure of Licensor to enforce any right or provision of this Agreement shall not constitute a waiver of such right or provision.
-
-(d) **Assignment.** You may not assign or transfer this Agreement or any rights or obligations hereunder without the prior written consent of Licensor. Licensor may assign this Agreement freely.
-
-(e) **Notices.** All notices under this Agreement shall be in writing and shall be deemed given when sent by email to the addresses specified herein or such other addresses as the parties may designate in writing.
-
-(f) **No Agency.** Nothing in this Agreement creates any agency, partnership, joint venture, or employment relationship between the parties.
-
-(g) **Export Compliance.** You shall comply with all applicable export control laws and regulations in connection with your use of the Software.
-
----
-
-## FAQ
-
-**Q: I'm a researcher at a university. Can I use this?**
-A: Yes, completely free under the Academic Use terms. No need to contact me (though I'd love to hear what you're building).
-
-**Q: I'm building an open source project that depends on WasmTarget.jl. Is that okay?**
-A: Yes, completely free under the Open Source Use terms.
-
-**Q: I work at a big company but I'm just experimenting personally.**
-A: Personal experimentation and learning is always free under the Personal Use terms. If your company starts using it for business purposes — customer-facing products, internal tools, dashboards, anything that supports business operations — that's when a Commercial License is needed.
-
-**Q: We're a funded startup but haven't hit $1M revenue yet.**
-A: You're covered under the Small Business terms. When you grow past that threshold (congrats!), reach out about a Commercial License.
-
-**Q: We're only using it for internal tools, not a product we sell. Do we need a Commercial License?**
-A: If your organization exceeds the $1M revenue threshold, yes. Internal tools, dashboards, documentation systems, and developer infrastructure all count as Commercial Use. The license isn't about whether your customers see it — it's about whether your business benefits from it.
-
-**Q: What if we can't afford the suggested pricing?**
-A: Email me. I'd rather have you using WasmTarget.jl with a discounted license than not using it at all. We'll figure something out.
-
-**Q: Can we get an invoice or formal agreement for our legal team?**
-A: Yes, I can provide proper documentation for your records.
-
----
-
-## Contact
-
-For all licensing inquiries: **dalejamesblack@gmail.com**
-
-Full Polyform Small Business License 1.0.0 reference: https://polyformproject.org/licenses/small-business/1.0.0/
+                                 Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      "License" shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      "Licensor" shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      "Legal Entity" shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      "control" means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      "You" (or "Your") shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      "Source" form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      "Object" form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      "Work" shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      "Derivative Works" shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      "Contribution" shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to the Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, "submitted"
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as "Not a Contribution."
+
+      "Contributor" shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by the Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a "NOTICE" text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding any notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   Copyright 2025 Dale Black
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
