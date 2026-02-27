@@ -100,7 +100,7 @@ console.log(instance.exports.add(5, 3)); // → 8
 
 ## What Works Today
 
-325 tests passing. Verified correct against native Julia output via automated comparison harness.
+1475+ functions validated. Verified correct against native Julia output via automated comparison harness.
 
 | Feature | Status | Example |
 |---------|--------|---------|
@@ -124,7 +124,7 @@ console.log(instance.exports.add(5, 3)); // → 8
 
 ### Build-Time Compilation Use Case
 
-WasmTarget powers a reactive web framework (in a private companion repo) that uses Julia macros for compile-time optimization, fine-grained reactivity, and SSR with hydration. WasmTarget compiles event handlers, reactive computations, and UI logic to Wasm at build time. The framework handles the DOM layer. No Julia runtime ships to the browser — just compiled `.wasm` files.
+WasmTarget powers [Therapy.jl](https://github.com/GroupTherapyOrg/Therapy.jl), a reactive web framework that uses Julia macros for compile-time optimization, fine-grained reactivity, and SSR with hydration. WasmTarget compiles event handlers, reactive computations, and UI logic to Wasm at build time. The framework handles the DOM layer. No Julia runtime ships to the browser — just compiled `.wasm` files.
 
 ## Self-Hosting Progress
 
