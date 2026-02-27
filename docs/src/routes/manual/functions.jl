@@ -13,7 +13,7 @@ import Suite
 # =============================================================================
 
 """
-Functions chapter for the Interactive Julia Manual.
+Functions chapter for the Julia Manual.
 """
 function Functions()
     ManualLayout(chapter_id="functions", chapter_title="Functions",

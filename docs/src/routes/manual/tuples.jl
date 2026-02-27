@@ -14,7 +14,7 @@ import Suite
 # =============================================================================
 
 """
-Tuples chapter for the Interactive Julia Manual.
+Tuples chapter for the Julia Manual.
 """
 function Tuples()
     ManualLayout(chapter_id="tuples", chapter_title="Tuples",

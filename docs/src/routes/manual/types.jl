@@ -13,7 +13,7 @@
 import Suite
 
 """
-Types chapter for the Interactive Julia Manual.
+Types chapter for the Julia Manual.
 """
 function Types()
     ManualLayout(chapter_id="types", chapter_title="Types (Structs)",

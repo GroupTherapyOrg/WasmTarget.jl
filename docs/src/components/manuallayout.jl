@@ -1,7 +1,7 @@
 # ManualLayout.jl - Layout component for manual pages
 #
 # Provides sidebar navigation, breadcrumbs, and prev/next links
-# for the interactive Julia manual chapters.
+# for the Julia manual chapters.
 # Follows the same cyan/teal color scheme as Layout.jl
 #
 # NOTE: This is an INNER layout — it does NOT include nav or footer.

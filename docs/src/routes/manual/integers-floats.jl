@@ -14,7 +14,7 @@ import Suite
 # =============================================================================
 
 """
-Integers and Floating-Point Numbers chapter for the Interactive Julia Manual.
+Integers and Floating-Point Numbers chapter for the Julia Manual.
 """
 function IntegersFloats()
     ManualLayout(chapter_id="integers-floats", chapter_title="Integers & Floats",

@@ -1,4 +1,4 @@
-# Manual Index Page - Chapter overview for the Interactive Julia Manual
+# Manual Index Page - Chapter overview for the Julia Manual
 #
 # Uses Suite.jl components: Card, Badge, Alert, Button.
 # Landing page for /manual route showing all chapters with descriptions and links.
@@ -22,7 +22,7 @@ const CHAPTERS = [
     (
         "math-operations",
         "Mathematical Operations",
-        "Master arithmetic, comparison, and bitwise operators with interactive examples.",
+        "Master arithmetic, comparison, and bitwise operators with code examples.",
         ["arithmetic", "comparison", "bitwise"]
     ),
     (
@@ -113,17 +113,15 @@ function ManualIndex()
                 )
             ),
             H1(:class => "text-4xl font-serif font-semibold text-warm-800 dark:text-warm-100 mb-4",
-                "Interactive Julia Manual"
+                "Julia Manual"
             ),
             P(:class => "text-xl text-warm-600 dark:text-warm-400 max-w-2xl mx-auto mb-6",
-                "Learn Julia through hands-on examples that run real code in your browser via WebAssembly."
+                "Learn Julia through code examples demonstrating features compiled to WebAssembly."
             ),
             # Explanation callout
             Suite.Alert(class="max-w-2xl mx-auto",
                 Suite.AlertDescription(
-                    "Each chapter includes ",
-                    Span(:class => "font-semibold", "live interactive examples"),
-                    " powered by WasmTarget.jl. The Julia code is compiled to WebAssembly at build time, so you can experiment with real compiled code directly in your browser."
+                    "Each chapter includes code examples demonstrating Julia concepts compiled to WebAssembly via WasmTarget.jl."
                 )
             )
         ),

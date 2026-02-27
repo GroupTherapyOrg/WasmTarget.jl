@@ -328,11 +328,11 @@ write("output.wasm", bytes)"""
                 "Ready to build?"
             ),
             P(:class => "text-warm-500 dark:text-warm-400 mb-8",
-                "Check out the interactive demos or explore the source code on GitHub."
+                "Check out the code examples or explore the source code on GitHub."
             ),
             Div(:class => "flex justify-center gap-4",
                 A(:href => "./features/",
-                    Suite.Button("Interactive Demos")
+                    Suite.Button("Code Examples")
                 ),
                 A(:href => "https://github.com/GroupTherapyOrg/WasmTarget.jl",
                   :target => "_blank",

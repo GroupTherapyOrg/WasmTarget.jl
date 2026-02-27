@@ -13,7 +13,7 @@
 import Suite
 
 """
-Control Flow chapter for the Interactive Julia Manual.
+Control Flow chapter for the Julia Manual.
 """
 function ControlFlow()
     ManualLayout(chapter_id="control-flow", chapter_title="Control Flow",

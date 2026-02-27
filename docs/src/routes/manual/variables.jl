@@ -13,7 +13,7 @@ import Suite
 # =============================================================================
 
 """
-Variables chapter for the Interactive Julia Manual.
+Variables chapter for the Julia Manual.
 """
 function Variables()
     ManualLayout(chapter_id="variables", chapter_title="Variables",

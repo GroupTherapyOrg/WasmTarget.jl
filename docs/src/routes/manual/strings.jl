@@ -13,7 +13,7 @@ import Suite
 # =============================================================================
 
 """
-Strings chapter for the Interactive Julia Manual.
+Strings chapter for the Julia Manual.
 """
 function Strings()
     ManualLayout(chapter_id="strings", chapter_title="Strings",

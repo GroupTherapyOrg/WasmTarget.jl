@@ -13,7 +13,7 @@ import Suite
 # =============================================================================
 
 """
-Mathematical Operations chapter for the Interactive Julia Manual.
+Mathematical Operations chapter for the Julia Manual.
 """
 function MathOperations()
     ManualLayout(chapter_id="math-operations", chapter_title="Math Operations",

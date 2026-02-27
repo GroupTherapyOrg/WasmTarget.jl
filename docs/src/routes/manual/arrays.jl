@@ -13,7 +13,7 @@
 import Suite
 
 """
-Arrays chapter for the Interactive Julia Manual.
+Arrays chapter for the Julia Manual.
 """
 function Arrays()
     ManualLayout(chapter_id="arrays", chapter_title="Arrays",

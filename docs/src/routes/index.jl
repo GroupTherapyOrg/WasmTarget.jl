@@ -94,7 +94,7 @@ end
             )
         ),
 
-        # Interactive Julia Manual Section
+        # Julia Manual Section
         _ManualFeatureSection()
     )
 end

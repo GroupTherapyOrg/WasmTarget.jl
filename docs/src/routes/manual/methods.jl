@@ -13,7 +13,7 @@
 import Suite
 
 """
-Methods chapter for the Interactive Julia Manual.
+Methods chapter for the Julia Manual.
 """
 function Methods()
     ManualLayout(chapter_id="methods", chapter_title="Methods (Multiple Dispatch)",
