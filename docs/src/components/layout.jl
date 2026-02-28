@@ -98,9 +98,6 @@ function Layout(children...; title="WasmTarget.jl")
         ),
 
         # Toast notification container
-        Suite.Toaster(),
-
-        # Suite.jl JS Runtime (theme toggle + all interactive components)
-        Suite.suite_script()
+        Suite.Toaster()
     )
 end
