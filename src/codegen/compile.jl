@@ -781,17 +781,39 @@ mod = compile_module([
 
 Functions can call each other within the module.
 """
-function compile_module(functions::Vector; stub_names::Set{String}=Set{String}())::WasmModule
+function compile_module(functions::Vector;
+                        stub_names::Set{String}=Set{String}(),
+                        existing_module::Union{WasmModule, Nothing}=nothing,
+                        import_stubs::Vector=[]
+                        )::WasmModule
     # WASM-057: Auto-discover function dependencies
     functions = discover_dependencies(functions)
-    # Create shared module and registries
-    mod = WasmModule()
+
+    # Filter out any discovered functions that are import stubs
+    # (import stubs are registered in func_registry at their import indices, not compiled)
+    if !isempty(import_stubs)
+        import_stub_funcs = Set{Any}(entry[1] for entry in import_stubs)
+        functions = filter(entry -> !(entry isa Tuple && entry[1] in import_stub_funcs), functions)
+    end
+
+    # Create shared module and registries (or use existing module)
+    if existing_module !== nothing
+        mod = existing_module
+    else
+        mod = WasmModule()
+        # WASM-060: Add Math.pow import for float power operations
+        # This enables x^y for Float32/Float64 types
+        add_import!(mod, "Math", "pow", NumType[F64, F64], NumType[F64])
+    end
     type_registry = TypeRegistry()
     func_registry = FunctionRegistry()
 
-    # WASM-060: Add Math.pow import for float power operations
-    # This enables x^y for Float32/Float64 types
-    add_import!(mod, "Math", "pow", NumType[F64, F64], NumType[F64])
+    # Pre-register import stubs at their import indices in func_registry.
+    # This enables compiled functions to call imports via cross-function call resolution.
+    for entry in import_stubs
+        func_ref, name, arg_types, wasm_idx, return_type = entry
+        register_function!(func_registry, name, func_ref, arg_types, UInt32(wasm_idx), return_type)
+    end
 
     # PURE-325: Pre-register numeric box types for all common numeric Wasm types.
     # These are needed when functions with ExternRef return types (heterogeneous Unions)
