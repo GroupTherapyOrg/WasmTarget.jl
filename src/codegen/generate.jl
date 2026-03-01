@@ -194,9 +194,14 @@ function generate_body(ctx::CompilationContext)::Vector{UInt8}
 
     # PURE-6022: Fix local_get → local_set/tee with i32↔i64 type mismatch.
     # Runs LAST to process the final bytes (same as what wasm-tools validates).
+    # SUITE-1101: Skip WasmGlobal args — they're accessed via global.get/set,
+    # not as wasm function params. Including them shifts all local type indices,
+    # causing fix_local_get_set_type_mismatch to insert spurious conversions.
     param_wasm_types = WasmValType[]
-    for T in ctx.arg_types
-        push!(param_wasm_types, get_concrete_wasm_type(T, ctx.mod, ctx.type_registry))
+    for (i, T) in enumerate(ctx.arg_types)
+        if !(i in ctx.global_args)
+            push!(param_wasm_types, get_concrete_wasm_type(T, ctx.mod, ctx.type_registry))
+        end
     end
     all_local_types = vcat(param_wasm_types, ctx.locals)
     bytes = fix_local_get_set_type_mismatch(bytes, all_local_types)
