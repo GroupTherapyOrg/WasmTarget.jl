@@ -4056,6 +4056,16 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             nothing
         end
 
+        # Fallback: if getfield failed (e.g., GlobalRef from anonymous module),
+        # try looking up by name string in func_registry. This handles import stubs
+        # like compiled_get_prop_string_id referenced from re-exported modules.
+        if called_func === nothing
+            target_by_name = get_function(ctx.func_registry, string(func.name))
+            if target_by_name !== nothing
+                called_func = target_by_name.func_ref
+            end
+        end
+
         if called_func !== nothing
             # Infer argument types BEFORE pushing (need for type checking)
             call_arg_types = tuple([infer_value_type(arg, ctx) for arg in args]...)
