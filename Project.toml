@@ -5,16 +5,10 @@ authors = ["Dale Black"]
 
 [deps]
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
-JuliaLowering = "f3c80556-a63f-4383-b822-37d64f81a311"
 JuliaSyntax = "70703baa-626e-46a2-a12c-08ffd08c73b4"
-Therapy = "b2c3d4e5-f6a7-8901-bcde-f12345678901"
-
-[sources]
-Therapy = {path = "../Therapy.jl"}
 
 [compat]
 JSON = "0.21"
-JuliaLowering = "1"
 JuliaSyntax = "1, 2"
 julia = "1.12"
 
