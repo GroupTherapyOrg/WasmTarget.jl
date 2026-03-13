@@ -136,6 +136,15 @@
 
     const COMPILE_URL = (new URLSearchParams(window.location.search)).get("server") || "http://localhost:8080";
 
+    // Pre-load base.wasm via compileStreaming (benefits from V8 code caching on second load)
+    let baseModule = null;
+    WebAssembly.compileStreaming(fetch(COMPILE_URL + "/base.wasm"))
+      .then(mod => {
+        baseModule = mod;
+        console.log("base.wasm pre-compiled (" + (baseModule ? "cached" : "fresh") + ")");
+      })
+      .catch(e => console.warn("base.wasm pre-load failed:", e));
+
     const defaultCode = `# Julia Playground — powered by WasmTarget.jl
 # Your code is compiled to WebAssembly and executed in the browser.
 

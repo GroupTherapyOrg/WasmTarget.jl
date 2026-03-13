@@ -21,8 +21,10 @@ if !isfile(BASE_WASM)
     exit(1)
 end
 
+const BASE_WASM_BYTES = read(BASE_WASM)
+
 println("WasmTarget Compile Server")
-println("  base.wasm: $BASE_WASM ($(filesize(BASE_WASM)) bytes)")
+println("  base.wasm: $BASE_WASM ($(length(BASE_WASM_BYTES)) bytes)")
 println("  Port: $PORT")
 
 """
@@ -101,6 +103,15 @@ function handle_request(req::HTTP.Request)::HTTP.Response
     if req.method == "GET" && req.target == "/health"
         return HTTP.Response(200, ["Content-Type" => "application/json"],
                              body="""{"status":"ok","base_functions":108}""")
+    end
+
+    # Serve base.wasm with long cache (V8 code caching requires stable GET URL + Cache-Control)
+    if req.method == "GET" && req.target == "/base.wasm"
+        return HTTP.Response(200, [
+            "Content-Type" => "application/wasm",
+            "Cache-Control" => "public, max-age=31536000, immutable",
+            "Access-Control-Allow-Origin" => "*",
+        ], body=BASE_WASM_BYTES)
     end
 
     if req.method == "POST" && req.target == "/compile"
