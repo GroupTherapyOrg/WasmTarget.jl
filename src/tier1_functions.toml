@@ -1,0 +1,922 @@
+# Tier 1 Function List — Verified Compilable Base Functions
+# Generated: 2026-03-13 by PURE-9044
+#
+# Each function listed here has been verified to compile via WasmTarget.compile().
+# "status" values:
+#   compiled  = compile() succeeds, wasm-tools validate passes
+#   verified  = compiled + ground truth matches native Julia output
+#   known_bug = compiles but known accuracy issues (e.g. stackifier)
+#   blocked   = fails to compile (documented reason)
+#
+# Categories: math, comparison, predicate, conversion, bitwise, tuple, char,
+#             arithmetic, number_theory, control_flow, string, array, io
+
+# ============================================================================
+# ARITHMETIC — Basic operators
+# ============================================================================
+
+[[functions]]
+name = "+"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Int64", status = "compiled" },
+    { args = ["Float64", "Float64"], ret = "Float64", status = "compiled" },
+    { args = ["Int64", "Float64"], ret = "Float64", status = "compiled" },
+    { args = ["Int32", "Int32"], ret = "Int32", status = "compiled" },
+]
+category = "arithmetic"
+
+[[functions]]
+name = "-"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Int64", status = "compiled" },
+    { args = ["Float64", "Float64"], ret = "Float64", status = "compiled" },
+    { args = ["Int32", "Int32"], ret = "Int32", status = "compiled" },
+]
+category = "arithmetic"
+
+[[functions]]
+name = "*"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Int64", status = "compiled" },
+    { args = ["Float64", "Float64"], ret = "Float64", status = "compiled" },
+    { args = ["Int64", "Float64"], ret = "Float64", status = "compiled" },
+    { args = ["Int32", "Int32"], ret = "Int32", status = "compiled" },
+]
+category = "arithmetic"
+
+[[functions]]
+name = "/"
+module = "Base"
+signatures = [
+    { args = ["Float64", "Float64"], ret = "Float64", status = "compiled" },
+]
+category = "arithmetic"
+
+[[functions]]
+name = "^"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Int64", status = "compiled" },
+]
+category = "arithmetic"
+
+[[functions]]
+name = "div"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Int64", status = "compiled" },
+]
+category = "arithmetic"
+
+[[functions]]
+name = "rem"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Int64", status = "compiled" },
+]
+category = "arithmetic"
+
+[[functions]]
+name = "mod"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Int64", status = "compiled" },
+]
+category = "arithmetic"
+
+[[functions]]
+name = "divrem"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Tuple{Int64,Int64}", status = "compiled" },
+]
+category = "arithmetic"
+
+[[functions]]
+name = "fld"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Int64", status = "compiled" },
+]
+category = "arithmetic"
+
+[[functions]]
+name = "cld"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Int64", status = "compiled" },
+]
+category = "arithmetic"
+
+[[functions]]
+name = "muladd"
+module = "Base"
+signatures = [
+    { args = ["Float64", "Float64", "Float64"], ret = "Float64", status = "compiled" },
+]
+category = "arithmetic"
+
+[[functions]]
+name = "widemul"
+module = "Base"
+signatures = [
+    { args = ["Int32", "Int32"], ret = "Int64", status = "compiled" },
+]
+category = "arithmetic"
+
+# ============================================================================
+# MATH — Rounding, abs, sign
+# ============================================================================
+
+[[functions]]
+name = "abs"
+module = "Base"
+signatures = [
+    { args = ["Int64"], ret = "Int64", status = "compiled" },
+    { args = ["Int32"], ret = "Int32", status = "compiled" },
+    { args = ["Float64"], ret = "Float64", status = "compiled" },
+]
+category = "math"
+
+[[functions]]
+name = "sign"
+module = "Base"
+signatures = [
+    { args = ["Int64"], ret = "Int64", status = "compiled" },
+    { args = ["Float64"], ret = "Float64", status = "compiled" },
+]
+category = "math"
+
+[[functions]]
+name = "signbit"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Bool", status = "compiled" },
+]
+category = "math"
+
+[[functions]]
+name = "copysign"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Int64", status = "compiled" },
+    { args = ["Float64", "Float64"], ret = "Float64", status = "compiled" },
+]
+category = "math"
+
+[[functions]]
+name = "flipsign"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Int64", status = "compiled" },
+    { args = ["Float64", "Float64"], ret = "Float64", status = "compiled" },
+]
+category = "math"
+
+[[functions]]
+name = "floor"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Float64", status = "compiled" },
+]
+category = "math"
+
+[[functions]]
+name = "ceil"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Float64", status = "compiled" },
+]
+category = "math"
+
+[[functions]]
+name = "round"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Float64", status = "compiled" },
+]
+category = "math"
+
+[[functions]]
+name = "trunc"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Float64", status = "compiled" },
+]
+category = "math"
+
+[[functions]]
+name = "clamp"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64", "Int64"], ret = "Int64", status = "compiled" },
+    { args = ["Float64", "Float64", "Float64"], ret = "Float64", status = "compiled" },
+]
+category = "math"
+
+[[functions]]
+name = "min"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Int64", status = "compiled" },
+    { args = ["Float64", "Float64"], ret = "Float64", status = "compiled" },
+]
+category = "math"
+
+[[functions]]
+name = "max"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Int64", status = "compiled" },
+    { args = ["Float64", "Float64"], ret = "Float64", status = "compiled" },
+]
+category = "math"
+
+[[functions]]
+name = "minmax"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Tuple{Int64,Int64}", status = "compiled" },
+]
+category = "math"
+
+[[functions]]
+name = "sqrt"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Float64", status = "compiled" },
+]
+category = "math"
+
+[[functions]]
+name = "cbrt"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Float64", status = "compiled" },
+]
+category = "math"
+
+# ============================================================================
+# MATH — Trigonometric (compiles, known_bug for some edge values)
+# ============================================================================
+
+[[functions]]
+name = "sin"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Float64", status = "known_bug", note = "sin(pi/4) returns 0 — stackifier issue" },
+]
+category = "math"
+
+[[functions]]
+name = "cos"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Float64", status = "known_bug", note = "stackifier edge case accuracy" },
+]
+category = "math"
+
+[[functions]]
+name = "tan"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Float64", status = "known_bug", note = "stackifier edge case accuracy" },
+]
+category = "math"
+
+[[functions]]
+name = "asin"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Float64", status = "compiled" },
+]
+category = "math"
+
+[[functions]]
+name = "acos"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Float64", status = "compiled" },
+]
+category = "math"
+
+[[functions]]
+name = "atan"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Float64", status = "compiled" },
+    { args = ["Float64", "Float64"], ret = "Float64", status = "compiled" },
+]
+category = "math"
+
+# ============================================================================
+# MATH — Exponential/Logarithmic
+# ============================================================================
+
+[[functions]]
+name = "exp"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Float64", status = "compiled" },
+]
+category = "math"
+
+[[functions]]
+name = "exp2"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Float64", status = "compiled" },
+]
+category = "math"
+
+[[functions]]
+name = "exp10"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Float64", status = "compiled" },
+]
+category = "math"
+
+[[functions]]
+name = "cosh"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Float64", status = "compiled" },
+]
+category = "math"
+
+[[functions]]
+name = "tanh"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Float64", status = "compiled" },
+]
+category = "math"
+
+# Blocked: log, log2, log10, sinh, expm1, log1p, hypot — _svec_len error
+
+# ============================================================================
+# MATH — Number Theory
+# ============================================================================
+
+[[functions]]
+name = "gcd"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Int64", status = "compiled" },
+]
+category = "number_theory"
+
+[[functions]]
+name = "lcm"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Int64", status = "compiled" },
+]
+category = "number_theory"
+
+[[functions]]
+name = "gcdx"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Tuple{Int64,Int64,Int64}", status = "compiled" },
+]
+category = "number_theory"
+
+[[functions]]
+name = "powermod"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64", "Int64"], ret = "Int64", status = "compiled" },
+]
+category = "number_theory"
+
+[[functions]]
+name = "invmod"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Int64", status = "compiled" },
+]
+category = "number_theory"
+
+[[functions]]
+name = "ndigits"
+module = "Base"
+signatures = [
+    { args = ["Int64"], ret = "Int64", status = "compiled" },
+]
+category = "number_theory"
+
+# ============================================================================
+# COMPARISON
+# ============================================================================
+
+[[functions]]
+name = "isequal"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Bool", status = "compiled" },
+]
+category = "comparison"
+note = "Float64 variant blocked by _svec_len"
+
+[[functions]]
+name = "isless"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Bool", status = "compiled" },
+    { args = ["Float64", "Float64"], ret = "Bool", status = "compiled" },
+]
+category = "comparison"
+
+[[functions]]
+name = "cmp"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Int64", status = "compiled" },
+]
+category = "comparison"
+
+# ============================================================================
+# PREDICATES
+# ============================================================================
+
+[[functions]]
+name = "iszero"
+module = "Base"
+signatures = [
+    { args = ["Int64"], ret = "Bool", status = "compiled" },
+]
+category = "predicate"
+
+[[functions]]
+name = "isone"
+module = "Base"
+signatures = [
+    { args = ["Int64"], ret = "Bool", status = "compiled" },
+]
+category = "predicate"
+
+[[functions]]
+name = "iseven"
+module = "Base"
+signatures = [
+    { args = ["Int64"], ret = "Bool", status = "compiled" },
+]
+category = "predicate"
+
+[[functions]]
+name = "isodd"
+module = "Base"
+signatures = [
+    { args = ["Int64"], ret = "Bool", status = "compiled" },
+]
+category = "predicate"
+
+[[functions]]
+name = "isnan"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Bool", status = "compiled" },
+]
+category = "predicate"
+
+[[functions]]
+name = "isinf"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Bool", status = "compiled" },
+]
+category = "predicate"
+
+[[functions]]
+name = "isfinite"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Bool", status = "compiled" },
+]
+category = "predicate"
+
+# ============================================================================
+# BITWISE
+# ============================================================================
+
+[[functions]]
+name = "&"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Int64", status = "compiled" },
+]
+category = "bitwise"
+
+[[functions]]
+name = "|"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Int64", status = "compiled" },
+]
+category = "bitwise"
+
+[[functions]]
+name = "xor"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Int64", status = "compiled" },
+    { args = ["Bool", "Bool"], ret = "Bool", status = "compiled" },
+]
+category = "bitwise"
+
+[[functions]]
+name = "~"
+module = "Base"
+signatures = [
+    { args = ["Int64"], ret = "Int64", status = "compiled" },
+]
+category = "bitwise"
+
+[[functions]]
+name = "<<"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Int64", status = "compiled" },
+]
+category = "bitwise"
+
+[[functions]]
+name = ">>"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Int64", status = "compiled" },
+]
+category = "bitwise"
+
+[[functions]]
+name = ">>>"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "Int64", status = "compiled" },
+]
+category = "bitwise"
+
+[[functions]]
+name = "count_ones"
+module = "Base"
+signatures = [
+    { args = ["Int64"], ret = "Int64", status = "compiled" },
+]
+category = "bitwise"
+
+[[functions]]
+name = "leading_zeros"
+module = "Base"
+signatures = [
+    { args = ["Int64"], ret = "Int64", status = "compiled" },
+]
+category = "bitwise"
+
+[[functions]]
+name = "trailing_zeros"
+module = "Base"
+signatures = [
+    { args = ["Int64"], ret = "Int64", status = "compiled" },
+]
+category = "bitwise"
+
+# ============================================================================
+# TYPE CONVERSION
+# ============================================================================
+
+[[functions]]
+name = "float"
+module = "Base"
+signatures = [
+    { args = ["Int64"], ret = "Float64", status = "compiled" },
+]
+category = "conversion"
+
+[[functions]]
+name = "Int64"
+module = "Base"
+signatures = [
+    { args = ["Int32"], ret = "Int64", status = "compiled" },
+    { args = ["UInt64"], ret = "Int64", status = "compiled" },
+]
+category = "conversion"
+
+[[functions]]
+name = "Int32"
+module = "Base"
+signatures = [
+    { args = ["Char"], ret = "Int32", status = "compiled" },
+]
+category = "conversion"
+
+[[functions]]
+name = "Float64"
+module = "Base"
+signatures = [
+    { args = ["Int32"], ret = "Float64", status = "compiled" },
+    { args = ["Float32"], ret = "Float64", status = "compiled" },
+]
+category = "conversion"
+
+[[functions]]
+name = "Float32"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Float32", status = "compiled" },
+]
+category = "conversion"
+
+[[functions]]
+name = "UInt64"
+module = "Base"
+signatures = [
+    { args = ["Int64"], ret = "UInt64", status = "compiled" },
+]
+category = "conversion"
+
+[[functions]]
+name = "UInt32"
+module = "Base"
+signatures = [
+    { args = ["Int32"], ret = "UInt32", status = "compiled" },
+]
+category = "conversion"
+
+[[functions]]
+name = "Char"
+module = "Base"
+signatures = [
+    { args = ["Int32"], ret = "Char", status = "compiled" },
+]
+category = "conversion"
+
+[[functions]]
+name = "widen"
+module = "Base"
+signatures = [
+    { args = ["Int32"], ret = "Int64", status = "compiled" },
+]
+category = "conversion"
+
+[[functions]]
+name = "Bool"
+module = "Base"
+signatures = [
+    { args = ["Int64"], ret = "Bool", status = "compiled" },
+]
+category = "conversion"
+
+# ============================================================================
+# BOOLEAN
+# ============================================================================
+
+[[functions]]
+name = "!"
+module = "Base"
+signatures = [
+    { args = ["Bool"], ret = "Bool", status = "compiled" },
+]
+category = "boolean"
+
+# ============================================================================
+# CHAR OPERATIONS
+# ============================================================================
+
+[[functions]]
+name = "isdigit"
+module = "Base"
+signatures = [
+    { args = ["Char"], ret = "Bool", status = "compiled" },
+]
+category = "char"
+
+[[functions]]
+name = "isletter"
+module = "Base"
+signatures = [
+    { args = ["Char"], ret = "Bool", status = "compiled" },
+]
+category = "char"
+
+[[functions]]
+name = "isspace"
+module = "Base"
+signatures = [
+    { args = ["Char"], ret = "Bool", status = "compiled" },
+]
+category = "char"
+
+[[functions]]
+name = "isuppercase"
+module = "Base"
+signatures = [
+    { args = ["Char"], ret = "Bool", status = "compiled" },
+]
+category = "char"
+
+[[functions]]
+name = "islowercase"
+module = "Base"
+signatures = [
+    { args = ["Char"], ret = "Bool", status = "compiled" },
+]
+category = "char"
+
+[[functions]]
+name = "uppercase"
+module = "Base"
+signatures = [
+    { args = ["Char"], ret = "Char", status = "compiled" },
+]
+category = "char"
+
+[[functions]]
+name = "lowercase"
+module = "Base"
+signatures = [
+    { args = ["Char"], ret = "Char", status = "compiled" },
+]
+category = "char"
+
+# ============================================================================
+# TUPLE OPERATIONS
+# ============================================================================
+
+[[functions]]
+name = "first"
+module = "Base"
+signatures = [
+    { args = ["Tuple{Int64,Int64}"], ret = "Int64", status = "compiled" },
+]
+category = "tuple"
+
+[[functions]]
+name = "last"
+module = "Base"
+signatures = [
+    { args = ["Tuple{Int64,Int64}"], ret = "Int64", status = "compiled" },
+]
+category = "tuple"
+
+[[functions]]
+name = "length"
+module = "Base"
+signatures = [
+    { args = ["Tuple{Int64,Int64,Int64}"], ret = "Int64", status = "compiled" },
+]
+category = "tuple"
+
+[[functions]]
+name = "reverse"
+module = "Base"
+signatures = [
+    { args = ["Tuple{Int64,Int64}"], ret = "Tuple{Int64,Int64}", status = "compiled" },
+]
+category = "tuple"
+
+# ============================================================================
+# IDENTITY / CONSTANTS
+# ============================================================================
+
+[[functions]]
+name = "identity"
+module = "Base"
+signatures = [
+    { args = ["Int64"], ret = "Int64", status = "compiled" },
+]
+category = "misc"
+
+[[functions]]
+name = "zero"
+module = "Base"
+signatures = [
+    { args = ["Int64"], ret = "Int64", status = "compiled" },
+]
+category = "misc"
+
+[[functions]]
+name = "one"
+module = "Base"
+signatures = [
+    { args = ["Int64"], ret = "Int64", status = "compiled" },
+]
+category = "misc"
+
+[[functions]]
+name = "typemax"
+module = "Base"
+signatures = [
+    { args = ["Type{Int64}"], ret = "Int64", status = "compiled" },
+]
+category = "misc"
+
+[[functions]]
+name = "typemin"
+module = "Base"
+signatures = [
+    { args = ["Type{Int64}"], ret = "Int64", status = "compiled" },
+]
+category = "misc"
+
+[[functions]]
+name = "objectid"
+module = "Base"
+signatures = [
+    { args = ["Int64"], ret = "UInt64", status = "compiled" },
+]
+category = "misc"
+
+[[functions]]
+name = "hash"
+module = "Base"
+signatures = [
+    { args = ["Int64"], ret = "UInt64", status = "compiled" },
+]
+category = "misc"
+
+# ============================================================================
+# RANGE
+# ============================================================================
+
+[[functions]]
+name = "UnitRange"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Int64"], ret = "UnitRange{Int64}", status = "compiled" },
+]
+category = "control_flow"
+
+# ============================================================================
+# IO (via IO Bridge)
+# ============================================================================
+
+[[functions]]
+name = "println"
+module = "Base"
+signatures = [
+    { args = ["Int64"], ret = "Nothing", status = "compiled", note = "via IO bridge imports" },
+    { args = ["Float64"], ret = "Nothing", status = "compiled", note = "via IO bridge imports" },
+    { args = ["Bool"], ret = "Nothing", status = "compiled", note = "via IO bridge imports" },
+    { args = ["String"], ret = "Nothing", status = "compiled", note = "via IO bridge imports" },
+    { args = ["Nothing"], ret = "Nothing", status = "compiled", note = "via IO bridge imports" },
+    { args = ["UInt64"], ret = "Nothing", status = "compiled", note = "via IO bridge imports" },
+]
+category = "io"
+
+[[functions]]
+name = "print"
+module = "Base"
+signatures = [
+    { args = ["Int64"], ret = "Nothing", status = "compiled", note = "via IO bridge imports" },
+    { args = ["Float64"], ret = "Nothing", status = "compiled", note = "via IO bridge imports" },
+    { args = ["String"], ret = "Nothing", status = "compiled", note = "via IO bridge imports" },
+]
+category = "io"
+
+[[functions]]
+name = "show"
+module = "Base"
+signatures = [
+    { args = ["Int64"], ret = "Nothing", status = "compiled", note = "via IO bridge imports" },
+    { args = ["Float64"], ret = "Nothing", status = "compiled", note = "via IO bridge imports" },
+    { args = ["Bool"], ret = "Nothing", status = "compiled", note = "via IO bridge imports" },
+    { args = ["Nothing"], ret = "Nothing", status = "compiled", note = "via IO bridge imports" },
+]
+category = "io"
+
+# ============================================================================
+# TIMING
+# ============================================================================
+
+[[functions]]
+name = "time_ns"
+module = "Base"
+signatures = [
+    { args = [], ret = "UInt64", status = "compiled", note = "via env.perf_now() JS import" },
+]
+category = "io"
+
+# ============================================================================
+# BLOCKED FUNCTIONS (documented for tracking)
+# ============================================================================
+# The following functions fail to compile due to _svec_len error:
+#   log, log2, log10, sinh, expm1, log1p, hypot
+#   isequal(Float64,Float64), fma(Float64,Float64,Float64)
+#
+# These will be unblocked when the _svec_len issue is resolved.
+
+# ============================================================================
+# SUMMARY
+# ============================================================================
+# Total unique functions: 75
+# Total signatures: 115+
+# Categories covered: arithmetic, math, comparison, predicate, conversion,
+#                     bitwise, boolean, char, tuple, number_theory, misc,
+#                     control_flow, io
+# Blocked by _svec_len: 9 functions
+# Known accuracy bugs: sin, cos, tan (stackifier edge cases)
