@@ -135,6 +135,7 @@ mutable struct IOImports
     write_float_idx::UInt32     # io.write_float(f64) → void
     write_bool_idx::UInt32      # io.write_bool(i32) → void
     write_newline_idx::UInt32   # io.write_newline() → void
+    write_nothing_idx::UInt32   # io.write_nothing() → void (PURE-9041)
     decode_idx::UInt32          # wasm:text-decoder.decodeStringFromUTF8Array
 end
 
@@ -165,9 +166,12 @@ function add_io_imports!(mod::WasmModule, type_registry::TypeRegistry)
         WasmValType[I32], WasmValType[])
     write_newline_idx = add_import!(mod, "io", "write_newline",
         WasmValType[], WasmValType[])
+    # PURE-9041: write_nothing() outputs "nothing" string
+    write_nothing_idx = add_import!(mod, "io", "write_nothing",
+        WasmValType[], WasmValType[])
 
     return IOImports(write_string_idx, write_int_idx, write_float_idx,
-                     write_bool_idx, write_newline_idx, decode_idx)
+                     write_bool_idx, write_newline_idx, write_nothing_idx, decode_idx)
 end
 
 # Module-level storage for IO imports (set during compile_module if println/print is used)

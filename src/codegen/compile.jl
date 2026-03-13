@@ -295,6 +295,8 @@ const SKIP_AUTODISCOVER_METHODS = Set([
     :(===), :isa, :typeof, :ifelse, :throw_boundserror,
     # PURE-9040: IO functions handled via JS imports
     :println, :print,
+    # PURE-9041: show/repr handled via JS imports
+    :show,
 ])
 
 """
@@ -1305,7 +1307,7 @@ function compile_module(functions::Vector;
         end
     end
 
-    # PURE-9040: Scan all functions for println/print usage and add IO imports if needed
+    # PURE-9040/9041: Scan all functions for println/print/show usage and add IO imports if needed
     needs_io = false
     for (f, arg_types, fname) in normalized
         try
@@ -1313,7 +1315,7 @@ function compile_module(functions::Vector;
             for stmt in ci.code
                 if stmt isa Expr && (stmt.head === :invoke || stmt.head === :call)
                     func_arg = stmt.head === :invoke ? stmt.args[2] : stmt.args[1]
-                    if func_arg isa GlobalRef && (func_arg.name === :println || func_arg.name === :print)
+                    if func_arg isa GlobalRef && (func_arg.name === :println || func_arg.name === :print || func_arg.name === :show)
                         needs_io = true
                         break
                     end
