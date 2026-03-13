@@ -491,9 +491,9 @@ function populate_type_constant_globals!(mod::WasmModule, registry::TypeRegistry
             append!(body, encode_leb128_unsigned(tn_global_idx))
             push!(body, Opcode.GLOBAL_GET)
             append!(body, encode_leb128_unsigned(wrapper_global_idx))
-            # TypeName.wrapper field is ExternRef, DataType ref needs extern_convert_any
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.EXTERN_CONVERT_ANY)
+            # PURE-9020: TypeName.wrapper is now anyref (abstract Type)
+            # Concrete DataType ref is a subtype of anyref — no conversion needed
+            # (extern.convert_any would produce externref, wrong for anyref field)
             push!(body, Opcode.GC_PREFIX)
             push!(body, Opcode.STRUCT_SET)
             append!(body, encode_leb128_unsigned(tn_type_idx))

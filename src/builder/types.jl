@@ -309,9 +309,10 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
         # Return I32 as a placeholder (functions returning Nothing don't actually return)
         return I32
     elseif T === Any
-        # Any can hold any value - map to externref for JS interop
-        # This handles Julia 1.12 closure types that have Any fields
-        return ExternRef
+        # Any can hold any value - map to anyref for internal polymorphism
+        # anyref supports ref.cast/ref.test/br_on_cast (externref does not)
+        # Convert to externref only at JS boundary via extern.convert_any
+        return AnyRef
     elseif T === JSValue
         # JS values are held as externref
         return ExternRef
@@ -337,8 +338,8 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
         return StructRef
     elseif T isa UnionAll && isstructtype(T)
         # Parametric struct type without concrete parameters (e.g., SyntaxGraph)
-        # PURE-908: Use ExternRef (not AnyRef) to avoid externref↔anyref type hierarchy mismatches
-        return ExternRef
+        # PURE-9020: Use AnyRef for internal polymorphism (supports ref.cast/ref.test)
+        return AnyRef
     elseif isprimitivetype(T)
         # Custom primitive types (e.g., JuliaSyntax.Kind, Core.IntrinsicFunction) - map by size.
         # IMPORTANT: Check BEFORE T <: Function since Core.IntrinsicFunction IS a primitive type
@@ -364,9 +365,9 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
         return StructRef
     elseif isabstracttype(T)
         # Abstract types (e.g., Compiler.CallInfo, Type (UnionAll)) can hold any concrete subtype
-        # Map to externref like Any
+        # PURE-9020: Use AnyRef for internal polymorphism (supports ref.cast/ref.test)
         # NOTE: Type (without parameter) is UnionAll and isabstracttype, maps here
-        return ExternRef
+        return AnyRef
     else
         error("Unsupported Julia type for Wasm: $T")
     end
@@ -444,8 +445,8 @@ function find_common_wasm_type(types::Vector)::WasmValType
     end
 
     # Heterogeneous union (mix of primitives, strings, structs, etc.)
-    # Use externref as the universal boxed value type (same as Any)
-    return ExternRef
+    # PURE-9020: Use anyref as the universal boxed value type (supports ref.cast/ref.test)
+    return AnyRef
 end
 
 """
