@@ -2158,8 +2158,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, is_32bit ? Opcode.I32_MUL : Opcode.I64_MUL)
         end
 
-    # PURE-325: checked_smul_int(a, b) -> Tuple{T, Bool} (result, overflow_flag)
-    # In Wasm we just do the mul and return (result, false) — no overflow detection.
+    # PURE-9003: checked_smul_int(a, b) -> Tuple{T, Bool} (result, overflow_flag)
+    # Overflow detection via division check: if a != 0 && a != -1: overflow = result/a != b
     elseif is_func(func, :checked_smul_int) || is_func(func, :checked_umul_int)
         if is_128bit
             # 128-bit checked mul: not supported, emit unreachable
@@ -2168,13 +2168,99 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, Opcode.UNREACHABLE)
             ctx.last_stmt_was_stub = true  # PURE-908
         else
+            is_signed = is_func(func, :checked_smul_int)
+            local_type = is_32bit ? I32 : I64
+            local_a = allocate_local!(ctx, local_type)
+            local_b = allocate_local!(ctx, local_type)
+            local_result = allocate_local!(ctx, local_type)
+
+            # Save b, save a, compute a*b, save result
+            push!(bytes, Opcode.LOCAL_SET)
+            append!(bytes, encode_leb128_unsigned(local_b))
+            push!(bytes, Opcode.LOCAL_TEE)
+            append!(bytes, encode_leb128_unsigned(local_a))
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(local_b))
             push!(bytes, is_32bit ? Opcode.I32_MUL : Opcode.I64_MUL)
+            push!(bytes, Opcode.LOCAL_TEE)
+            append!(bytes, encode_leb128_unsigned(local_result))
+
             if is_32bit
                 push!(bytes, Opcode.I64_EXTEND_I32_S)
             end
-            # Push false (0) as overflow flag — Bool is i32 in Tuple{Int64, Bool} struct
-            push!(bytes, Opcode.I32_CONST)
-            push!(bytes, 0x00)
+
+            # Overflow detection for mul
+            if is_signed
+                # Signed mul overflow: if a==0: false; if a==-1: b==MIN; else: result/a != b
+                # Use if/else chain: a.eqz ? 0 : (a==-1 ? (b==MIN) : (result/a != b))
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(local_a))
+                push!(bytes, is_32bit ? Opcode.I32_EQZ : Opcode.I64_EQZ)
+                push!(bytes, Opcode.IF)
+                push!(bytes, UInt8(I32))  # result type i32
+                # a == 0 → no overflow
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+                push!(bytes, Opcode.ELSE)
+                # Check a == -1
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(local_a))
+                if is_32bit
+                    push!(bytes, Opcode.I32_CONST)
+                    append!(bytes, encode_leb128_signed(-1))
+                    push!(bytes, Opcode.I32_EQ)
+                else
+                    push!(bytes, Opcode.I64_CONST)
+                    append!(bytes, encode_leb128_signed(-1))
+                    push!(bytes, Opcode.I64_EQ)
+                end
+                push!(bytes, Opcode.IF)
+                push!(bytes, UInt8(I32))  # result type i32
+                # a == -1 → overflow iff b == MIN_INT
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(local_b))
+                if is_32bit
+                    push!(bytes, Opcode.I32_CONST)
+                    append!(bytes, encode_leb128_signed(typemin(Int32)))
+                    push!(bytes, Opcode.I32_EQ)
+                else
+                    push!(bytes, Opcode.I64_CONST)
+                    append!(bytes, encode_leb128_signed(typemin(Int64)))
+                    push!(bytes, Opcode.I64_EQ)
+                end
+                push!(bytes, Opcode.ELSE)
+                # General case: overflow = result / a != b
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(local_result))
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(local_a))
+                push!(bytes, is_32bit ? Opcode.I32_DIV_S : Opcode.I64_DIV_S)
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(local_b))
+                push!(bytes, is_32bit ? Opcode.I32_NE : Opcode.I64_NE)
+                push!(bytes, Opcode.END)  # end inner if/else
+                push!(bytes, Opcode.END)  # end outer if/else
+            else
+                # Unsigned mul overflow: if a==0: false; else: result/a != b
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(local_a))
+                push!(bytes, is_32bit ? Opcode.I32_EQZ : Opcode.I64_EQZ)
+                push!(bytes, Opcode.IF)
+                push!(bytes, UInt8(I32))  # result type i32
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+                push!(bytes, Opcode.ELSE)
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(local_result))
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(local_a))
+                push!(bytes, is_32bit ? Opcode.I32_DIV_U : Opcode.I64_DIV_U)
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(local_b))
+                push!(bytes, is_32bit ? Opcode.I32_NE : Opcode.I64_NE)
+                push!(bytes, Opcode.END)  # end if/else
+            end
+
             tuple_type = Tuple{Int64, Bool}
             if !haskey(ctx.type_registry.structs, tuple_type)
                 register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
@@ -2185,7 +2271,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             append!(bytes, encode_leb128_unsigned(tuple_info.wasm_type_idx))
         end
 
-    # PURE-325: checked_sadd_int(a, b) -> Tuple{T, Bool} (result, overflow_flag)
+    # PURE-9003: checked_sadd_int(a, b) -> Tuple{T, Bool} (result, overflow_flag)
+    # Overflow detection: ((a ^ result) & (b ^ result)) has sign bit set
     elseif is_func(func, :checked_sadd_int) || is_func(func, :checked_uadd_int)
         if is_128bit
             # PURE-908: Clear pre-pushed args
@@ -2193,12 +2280,61 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, Opcode.UNREACHABLE)
             ctx.last_stmt_was_stub = true  # PURE-908
         else
+            is_signed = is_func(func, :checked_sadd_int)
+            local_type = is_32bit ? I32 : I64
+            local_a = allocate_local!(ctx, local_type)
+            local_b = allocate_local!(ctx, local_type)
+            local_result = allocate_local!(ctx, local_type)
+
+            # Save b, save a, compute a+b, save result
+            push!(bytes, is_32bit ? Opcode.LOCAL_SET : Opcode.LOCAL_SET)
+            append!(bytes, encode_leb128_unsigned(local_b))
+            push!(bytes, Opcode.LOCAL_TEE)
+            append!(bytes, encode_leb128_unsigned(local_a))
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(local_b))
             push!(bytes, is_32bit ? Opcode.I32_ADD : Opcode.I64_ADD)
+            push!(bytes, Opcode.LOCAL_TEE)
+            append!(bytes, encode_leb128_unsigned(local_result))
+
+            # Result is on stack — extend to i64 for tuple if needed
             if is_32bit
                 push!(bytes, Opcode.I64_EXTEND_I32_S)
             end
-            push!(bytes, Opcode.I32_CONST)
-            push!(bytes, 0x00)
+
+            # Compute overflow flag
+            if is_signed
+                # Signed: overflow = ((a ^ result) & (b ^ result)) >> (bits-1)
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(local_a))
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(local_result))
+                push!(bytes, is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(local_b))
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(local_result))
+                push!(bytes, is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
+                push!(bytes, is_32bit ? Opcode.I32_AND : Opcode.I64_AND)
+                if is_32bit
+                    push!(bytes, Opcode.I32_CONST)
+                    append!(bytes, encode_leb128_signed(31))
+                    push!(bytes, Opcode.I32_SHR_U)
+                else
+                    push!(bytes, Opcode.I64_CONST)
+                    append!(bytes, encode_leb128_signed(63))
+                    push!(bytes, Opcode.I64_SHR_U)
+                    push!(bytes, Opcode.I32_WRAP_I64)
+                end
+            else
+                # Unsigned: overflow = result < a
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(local_result))
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(local_a))
+                push!(bytes, is_32bit ? Opcode.I32_LT_U : Opcode.I64_LT_U)
+            end
+
             tuple_type = Tuple{Int64, Bool}
             if !haskey(ctx.type_registry.structs, tuple_type)
                 register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
@@ -2209,7 +2345,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             append!(bytes, encode_leb128_unsigned(tuple_info.wasm_type_idx))
         end
 
-    # PURE-325: checked_ssub_int(a, b) -> Tuple{T, Bool} (result, overflow_flag)
+    # PURE-9003: checked_ssub_int(a, b) -> Tuple{T, Bool} (result, overflow_flag)
+    # Signed overflow: ((a ^ b) & (a ^ result)) has sign bit set
     elseif is_func(func, :checked_ssub_int) || is_func(func, :checked_usub_int)
         if is_128bit
             # PURE-908: Clear pre-pushed args
@@ -2217,12 +2354,59 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, Opcode.UNREACHABLE)
             ctx.last_stmt_was_stub = true  # PURE-908
         else
+            is_signed = is_func(func, :checked_ssub_int)
+            local_type = is_32bit ? I32 : I64
+            local_a = allocate_local!(ctx, local_type)
+            local_b = allocate_local!(ctx, local_type)
+            local_result = allocate_local!(ctx, local_type)
+
+            # Save b, save a, compute a-b, save result
+            push!(bytes, Opcode.LOCAL_SET)
+            append!(bytes, encode_leb128_unsigned(local_b))
+            push!(bytes, Opcode.LOCAL_TEE)
+            append!(bytes, encode_leb128_unsigned(local_a))
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(local_b))
             push!(bytes, is_32bit ? Opcode.I32_SUB : Opcode.I64_SUB)
+            push!(bytes, Opcode.LOCAL_TEE)
+            append!(bytes, encode_leb128_unsigned(local_result))
+
             if is_32bit
                 push!(bytes, Opcode.I64_EXTEND_I32_S)
             end
-            push!(bytes, Opcode.I32_CONST)
-            push!(bytes, 0x00)
+
+            if is_signed
+                # Signed: overflow = ((a ^ b) & (a ^ result)) >> (bits-1)
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(local_a))
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(local_b))
+                push!(bytes, is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(local_a))
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(local_result))
+                push!(bytes, is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
+                push!(bytes, is_32bit ? Opcode.I32_AND : Opcode.I64_AND)
+                if is_32bit
+                    push!(bytes, Opcode.I32_CONST)
+                    append!(bytes, encode_leb128_signed(31))
+                    push!(bytes, Opcode.I32_SHR_U)
+                else
+                    push!(bytes, Opcode.I64_CONST)
+                    append!(bytes, encode_leb128_signed(63))
+                    push!(bytes, Opcode.I64_SHR_U)
+                    push!(bytes, Opcode.I32_WRAP_I64)
+                end
+            else
+                # Unsigned: overflow = a < b
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(local_a))
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(local_b))
+                push!(bytes, is_32bit ? Opcode.I32_LT_U : Opcode.I64_LT_U)
+            end
+
             tuple_type = Tuple{Int64, Bool}
             if !haskey(ctx.type_registry.structs, tuple_type)
                 register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
