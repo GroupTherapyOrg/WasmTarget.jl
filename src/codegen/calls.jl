@@ -3144,18 +3144,19 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             # Also check for local.get of ref-typed local
             local arg1_wasm_is_ref = arg1_is_ref
             local arg2_wasm_is_ref = arg2_is_ref
-            # PURE-9064: Any maps to externref (PURE-908) OR anyref (JlType hierarchy active).
-            # Check actual wasm type instead of hardcoding externref.
-            local _any_is_extern = (ctx.type_registry.jl_type_idx === nothing)
-            local arg1_is_externref = (arg_type === Any && _any_is_extern)
-            local arg2_is_externref = (arg2_type === Any && _any_is_extern)
-            local arg1_is_anyref = (arg_type === Any && !_any_is_extern)
-            local arg2_is_anyref = (arg2_type === Any && !_any_is_extern)
-            # Any is always a ref type regardless of externref vs anyref
-            if arg_type === Any
+            # PURE-9064: Detect anyref/externref from actual wasm type, not just arg_type === Any.
+            # Abstract types like Type, DataType etc. also map to AnyRef.
+            local _arg1_wasm = julia_to_wasm_type(arg_type)
+            local _arg2_wasm = julia_to_wasm_type(arg2_type)
+            local arg1_is_externref = (_arg1_wasm === ExternRef)
+            local arg2_is_externref = (_arg2_wasm === ExternRef)
+            local arg1_is_anyref = (_arg1_wasm === AnyRef)
+            local arg2_is_anyref = (_arg2_wasm === AnyRef)
+            # anyref/externref types are always ref types
+            if arg1_is_anyref || arg1_is_externref
                 arg1_wasm_is_ref = true
             end
-            if arg2_type === Any
+            if arg2_is_anyref || arg2_is_externref
                 arg2_wasm_is_ref = true
             end
             # Check Wasm representation for any potentially mixed comparison
@@ -3203,11 +3204,9 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                             end
                         end
                     end
-                    # PURE-046/9064: Override local type check if Julia type is Any
-                    if arg_type === Any
+                    # PURE-046/9064: Override local type check if Julia type maps to anyref/externref
+                    if arg1_is_anyref || arg1_is_externref
                         arg1_wasm_is_ref = true
-                        arg1_is_externref = _any_is_extern
-                        arg1_is_anyref = !_any_is_extern
                     end
                 end
                 # Check arg2's Wasm type when:
@@ -3248,11 +3247,9 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                             end
                         end
                     end
-                    # PURE-046/9064: Override local type check if Julia type is Any
-                    if arg2_type === Any
+                    # PURE-046/9064: Override local type check if Julia type maps to anyref/externref
+                    if arg2_is_anyref || arg2_is_externref
                         arg2_wasm_is_ref = true
-                        arg2_is_externref = _any_is_extern
-                        arg2_is_anyref = !_any_is_extern
                     end
                 end
             end
