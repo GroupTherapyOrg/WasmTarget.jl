@@ -3444,7 +3444,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                             # (ref extern) is subtype of externref — no conversion needed
                             push!(bytes, Opcode.CALL)
                             append!(bytes, encode_leb128_unsigned(io.write_string_idx))
-                        elseif arg_type === Int64 || arg_type === Int
+                        elseif arg_type === Int64 || arg_type === Int || arg_type === UInt64
                             append!(bytes, compile_value(arg, ctx))
                             push!(bytes, Opcode.CALL)
                             append!(bytes, encode_leb128_unsigned(io.write_int_idx))
@@ -3522,7 +3522,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                             emit_jl_string_to_js!(bytes, io.decode_idx, tmp_local)
                             push!(bytes, Opcode.CALL)
                             append!(bytes, encode_leb128_unsigned(io.write_string_idx))
-                        elseif arg_type === Int64 || arg_type === Int
+                        elseif arg_type === Int64 || arg_type === Int || arg_type === UInt64
                             append!(bytes, compile_value(arg, ctx))
                             push!(bytes, Opcode.CALL)
                             append!(bytes, encode_leb128_unsigned(io.write_int_idx))
