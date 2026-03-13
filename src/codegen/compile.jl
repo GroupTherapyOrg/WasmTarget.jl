@@ -1508,6 +1508,11 @@ function compile_module(functions::Vector;
     # PURE-9063: Create $JlType hierarchy types (before type globals use them)
     create_jl_type_hierarchy!(mod, type_registry)
 
+    # PURE-9064: Patch struct types registered before JlType hierarchy existed.
+    # Any-typed fields were mapped to ExternRef (since jl_type_idx was nothing).
+    # Now that the hierarchy exists, patch them to AnyRef.
+    patch_any_fields_for_jltype_hierarchy!(mod, type_registry)
+
     # PURE-9063: Create DataType globals for ALL types with DFS IDs + type lookup table
     ensure_all_type_globals!(mod, type_registry)
     create_type_lookup_table!(mod, type_registry)
@@ -1774,6 +1779,9 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
 
     # PURE-9063: Create $JlType hierarchy types (before type globals use them)
     create_jl_type_hierarchy!(mod, type_registry)
+
+    # PURE-9064: Patch struct types registered before JlType hierarchy existed.
+    patch_any_fields_for_jltype_hierarchy!(mod, type_registry)
 
     # PURE-9063: Create DataType globals for ALL types with DFS IDs + type lookup table
     ensure_all_type_globals!(mod, type_registry)

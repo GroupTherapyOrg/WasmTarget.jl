@@ -508,8 +508,11 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
                 # Numeric-only union: use widest numeric type (no struct boxing needed).
                 # PURE-325: resolve_union_type handles Int128/BigInt/UInt128 unions correctly.
                 result = julia_to_wasm_type(T)
-                # PURE-908: Never return AnyRef for locals — use ExternRef instead
-                return result === AnyRef ? ExternRef : result
+                # PURE-908/9064: Never return AnyRef for locals unless JlType hierarchy active
+                if result === AnyRef && ctx.type_registry.jl_type_idx === nothing
+                    return ExternRef
+                end
+                return result
             else
                 # PURE-6021b: Non-numeric multi-variant union uses a tagged-union struct in WASM.
                 # The local must be ConcreteRef to the tagged union type, NOT ExternRef.
@@ -746,7 +749,12 @@ function analyze_control_flow!(ctx::CompilationContext)
                 @warn "ALLOC PHI local $local_idx type=$(phi_wasm_type) for SSA $i (stmts=$n_stmts, n_params=$(ctx.n_params))" maxlog=200
             end
             # PURE-908: normalize AnyRef → ExternRef for phi locals
-            push!(ctx.locals, phi_wasm_type === AnyRef ? ExternRef : phi_wasm_type)
+            # PURE-9064: Exception — keep AnyRef when $JlType hierarchy is active
+            local phi_actual = phi_wasm_type
+            if phi_wasm_type === AnyRef && ctx.type_registry.jl_type_idx === nothing
+                phi_actual = ExternRef
+            end
+            push!(ctx.locals, phi_actual)
             ctx.phi_locals[i] = local_idx
         end
     end
@@ -767,7 +775,12 @@ function analyze_control_flow!(ctx::CompilationContext)
             end
             phic_wasm_type = julia_to_wasm_type_concrete(phic_julia_type, ctx)
             local_idx = ctx.n_params + length(ctx.locals)
-            push!(ctx.locals, phic_wasm_type === AnyRef ? ExternRef : phic_wasm_type)
+            # PURE-908/9064: normalize AnyRef → ExternRef unless JlType hierarchy active
+            local phic_actual = phic_wasm_type
+            if phic_wasm_type === AnyRef && ctx.type_registry.jl_type_idx === nothing
+                phic_actual = ExternRef
+            end
+            push!(ctx.locals, phic_actual)
             ctx.phi_locals[i] = local_idx
         end
     end
@@ -1268,7 +1281,8 @@ function allocate_ssa_locals!(ctx::CompilationContext)
                         if field_sym isa Symbol && hasfield(obj_type, field_sym)
                             jft = fieldtype(obj_type, field_sym)
                             if jft === Any
-                                wasm_type = ExternRef
+                                # PURE-908/9064: ExternRef unless JlType hierarchy active
+                                wasm_type = ctx.type_registry.jl_type_idx !== nothing ? AnyRef : ExternRef
                             end
                         end
                     end
@@ -1285,7 +1299,8 @@ function allocate_ssa_locals!(ctx::CompilationContext)
                             elt = ref_type.parameters[2]
                         end
                         if elt === Any
-                            wasm_type = ExternRef
+                            # PURE-908/9064: ExternRef unless JlType hierarchy active
+                            wasm_type = ctx.type_registry.jl_type_idx !== nothing ? AnyRef : ExternRef
                         end
                     end
                 end
@@ -1364,7 +1379,12 @@ function allocate_ssa_locals!(ctx::CompilationContext)
                 @warn "ALLOC SSA local $local_idx type=$(wasm_type) for SSA $ssa_id (stmts=$n_stmts, n_params=$(ctx.n_params))" maxlog=200
             end
             # PURE-908: normalize AnyRef → ExternRef for SSA locals
-            push!(ctx.locals, wasm_type === AnyRef ? ExternRef : wasm_type)
+            # PURE-9064: Exception — keep AnyRef when $JlType hierarchy is active
+            local ssa_actual = wasm_type
+            if wasm_type === AnyRef && ctx.type_registry.jl_type_idx === nothing
+                ssa_actual = ExternRef
+            end
+            push!(ctx.locals, ssa_actual)
             ctx.ssa_locals[ssa_id] = local_idx
         end
     end
@@ -1397,8 +1417,8 @@ function allocate_slot_locals!(ctx::CompilationContext)
                     # Determine type from ssavaluetypes for this statement
                     ssa_type = get(ctx.ssa_types, i, Any)
                     wasm_type = julia_to_wasm_type_concrete(ssa_type, ctx)
-                    # Normalize AnyRef → ExternRef
-                    if wasm_type === AnyRef
+                    # PURE-908/9064: Normalize AnyRef → ExternRef unless JlType hierarchy active
+                    if wasm_type === AnyRef && ctx.type_registry.jl_type_idx === nothing
                         wasm_type = ExternRef
                     end
                     local_idx = ctx.n_params + length(ctx.locals)

@@ -1829,10 +1829,16 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
                 end
             end
         elseif field_type === Any
-            # Any field maps to externref in WasmGC
-            # We need to convert internal refs to externref using extern.convert_any
+            # PURE-9064: Determine actual Wasm field type (AnyRef when JlType hierarchy active,
+            # ExternRef otherwise). Look it up from the module type definition.
+            local _cn_wasm_fi = i + Int(info.field_offset)  # i is 1-based, +offset for typeId
+            local _cn_struct_def = ctx.mod.types[info.wasm_type_idx + 1]
+            local _cn_field_is_anyref = _cn_struct_def isa StructType &&
+                _cn_wasm_fi <= length(_cn_struct_def.fields) &&
+                _cn_struct_def.fields[_cn_wasm_fi].valtype === AnyRef
+
             # PURE-044: Check for nothing values FIRST before compile_value
-            # compile_value(nothing) returns i32.const 0, which can't be extern.convert_any'd
+            # compile_value(nothing) returns i32.const 0, which can't be converted
             is_nothing_val = val === nothing ||
                             (val isa GlobalRef && val.name === :nothing) ||
                             (val isa Core.SSAValue && 1 <= val.id <= length(ctx.code_info.code) && begin
@@ -1841,94 +1847,109 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
                                 (ssa_stmt_check isa Core.PiNode && ssa_stmt_check.typ === Nothing)
                             end)
             if is_nothing_val
-                # Nothing value for Any field → emit ref.null extern
                 push!(bytes, Opcode.REF_NULL)
-                push!(bytes, UInt8(ExternRef))
+                if _cn_field_is_anyref
+                    push!(bytes, 0x6E)  # any heap type
+                else
+                    push!(bytes, UInt8(ExternRef))
+                end
                 continue  # Skip to next field
             end
 
-            val_bytes = compile_value(val, ctx)
-            # Safety: if compile_value produced local.get of a numeric local (I32/I64),
-            # extern_convert_any will fail because it requires anyref input.
-            # Emit ref.null extern instead.
-            is_numeric_local = false
-            # PURE-044/PURE-325: Check for i32.const/i64.const, but skip if GC ops present
-            ends_with_ref_producing_gc = has_ref_producing_gc_op(val_bytes)
-            if length(val_bytes) >= 1 && (val_bytes[1] == 0x41 || val_bytes[1] == 0x42) && !ends_with_ref_producing_gc  # I32_CONST or I64_CONST
-                is_numeric_local = true
-            elseif length(val_bytes) >= 2 && val_bytes[1] == 0x20
-                # Decode LEB128 source local index
-                src_idx = 0; shift = 0; leb_end = 0
-                for bi in 2:length(val_bytes)
-                    b = val_bytes[bi]
-                    src_idx |= (Int(b & 0x7f) << shift)
-                    shift += 7
-                    if (b & 0x80) == 0
-                        leb_end = bi
-                        break
+            if _cn_field_is_anyref
+                # Field is anyref — concrete/struct refs are subtypes of anyref.
+                # No extern.convert_any needed. Numerics need boxing.
+                val_julia_type = if val isa Core.SSAValue
+                    get(ctx.ssa_types, val.id, Any)
+                elseif val isa Core.Argument
+                    local _arg_i = ctx.is_compiled_closure ? val.n : val.n - 1
+                    (_arg_i >= 1 && _arg_i <= length(ctx.arg_types)) ? ctx.arg_types[_arg_i] : Any
+                else
+                    typeof(val)
+                end
+                val_wasm_type = julia_to_wasm_type(val_julia_type)
+                if val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
+                    emit_numeric_to_anyref!(bytes, val, val_wasm_type, ctx)
+                else
+                    append!(bytes, compile_value(val, ctx))
+                    if val_wasm_type === ExternRef
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.ANY_CONVERT_EXTERN)
                     end
                 end
-                if leb_end == length(val_bytes)  # Pure local.get (no trailing instructions)
-                    if src_idx < ctx.n_params
-                        # PURE-906: Check if PARAMETER is numeric (i64/i32/f32/f64).
-                        # Parameters can't be extern_convert_any'd either.
-                        if src_idx + 1 <= length(ctx.arg_types)
-                            param_wasm = julia_to_wasm_type(ctx.arg_types[src_idx + 1])
-                            if param_wasm === I32 || param_wasm === I64 || param_wasm === F32 || param_wasm === F64
-                                is_numeric_local = true
-                            end
-                        end
-                    else
-                        arr_idx = src_idx - ctx.n_params + 1
-                        if arr_idx >= 1 && arr_idx <= length(ctx.locals)
-                            src_type = ctx.locals[arr_idx]
-                            if src_type === I32 || src_type === I64 || src_type === F32 || src_type === F64
-                                is_numeric_local = true
-                            end
-                        end
-                    end
-                end
-            end
-            if is_numeric_local
-                # Numeric local can't be extern_convert_any'd — emit ref.null extern
-                push!(bytes, Opcode.REF_NULL)
-                push!(bytes, UInt8(ExternRef))
             else
-                append!(bytes, val_bytes)
-                # Convert internal ref to externref — but skip if already externref
-                # PURE-038c: Check if source is already externref local
-                is_already_externref = false
-                if length(val_bytes) >= 2 && val_bytes[1] == 0x20
-                    src_idx2 = 0; shift2 = 0; leb_end2 = 0
+                # Legacy ExternRef path
+                val_bytes = compile_value(val, ctx)
+                is_numeric_local = false
+                ends_with_ref_producing_gc = has_ref_producing_gc_op(val_bytes)
+                if length(val_bytes) >= 1 && (val_bytes[1] == 0x41 || val_bytes[1] == 0x42) && !ends_with_ref_producing_gc
+                    is_numeric_local = true
+                elseif length(val_bytes) >= 2 && val_bytes[1] == 0x20
+                    src_idx = 0; shift = 0; leb_end = 0
                     for bi in 2:length(val_bytes)
                         b = val_bytes[bi]
-                        src_idx2 |= (Int(b & 0x7f) << shift2)
-                        shift2 += 7
+                        src_idx |= (Int(b & 0x7f) << shift)
+                        shift += 7
                         if (b & 0x80) == 0
-                            leb_end2 = bi
+                            leb_end = bi
                             break
                         end
                     end
-                    if leb_end2 == length(val_bytes)
-                        if src_idx2 < ctx.n_params
-                            if src_idx2 + 1 <= length(ctx.arg_types)
-                                src_t = ctx.arg_types[src_idx2 + 1]
-                                # PURE-049: arg_types contains Julia types, not WasmValTypes.
-                                # Convert to wasm type before comparing (Any -> ExternRef).
-                                is_already_externref = (julia_to_wasm_type(src_t) === ExternRef)
+                    if leb_end == length(val_bytes)
+                        if src_idx < ctx.n_params
+                            if src_idx + 1 <= length(ctx.arg_types)
+                                param_wasm = julia_to_wasm_type(ctx.arg_types[src_idx + 1])
+                                if param_wasm === I32 || param_wasm === I64 || param_wasm === F32 || param_wasm === F64
+                                    is_numeric_local = true
+                                end
                             end
                         else
-                            arr_idx2 = src_idx2 - ctx.n_params + 1
-                            if arr_idx2 >= 1 && arr_idx2 <= length(ctx.locals)
-                                src_t = ctx.locals[arr_idx2]
-                                is_already_externref = (src_t === ExternRef)
+                            arr_idx = src_idx - ctx.n_params + 1
+                            if arr_idx >= 1 && arr_idx <= length(ctx.locals)
+                                src_type = ctx.locals[arr_idx]
+                                if src_type === I32 || src_type === I64 || src_type === F32 || src_type === F64
+                                    is_numeric_local = true
+                                end
                             end
                         end
                     end
                 end
-                if !is_already_externref
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                if is_numeric_local
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, UInt8(ExternRef))
+                else
+                    append!(bytes, val_bytes)
+                    is_already_externref = false
+                    if length(val_bytes) >= 2 && val_bytes[1] == 0x20
+                        src_idx2 = 0; shift2 = 0; leb_end2 = 0
+                        for bi in 2:length(val_bytes)
+                            b = val_bytes[bi]
+                            src_idx2 |= (Int(b & 0x7f) << shift2)
+                            shift2 += 7
+                            if (b & 0x80) == 0
+                                leb_end2 = bi
+                                break
+                            end
+                        end
+                        if leb_end2 == length(val_bytes)
+                            if src_idx2 < ctx.n_params
+                                if src_idx2 + 1 <= length(ctx.arg_types)
+                                    src_t = ctx.arg_types[src_idx2 + 1]
+                                    is_already_externref = (julia_to_wasm_type(src_t) === ExternRef)
+                                end
+                            else
+                                arr_idx2 = src_idx2 - ctx.n_params + 1
+                                if arr_idx2 >= 1 && arr_idx2 <= length(ctx.locals)
+                                    src_t = ctx.locals[arr_idx2]
+                                    is_already_externref = (src_t === ExternRef)
+                                end
+                            end
+                        end
+                    end
+                    if !is_already_externref
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                    end
                 end
             end
         else

@@ -1880,11 +1880,20 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     # PURE-4150: Track if value is a Type reference (used for both struct_set and return value)
                     is_type_value = false
 
-                    # PURE-045: If field type is Any (externref), convert value to externref
+                    # PURE-045: If field type is Any, convert value to match field's WasmGC type.
+                    # PURE-9064: The actual Wasm field type may be AnyRef (when JlType hierarchy
+                    # is active) or ExternRef (legacy). Look it up from the module type definition.
                     if field_type === Any
+                        # Determine the actual Wasm field type from the module
+                        local _sf_wasm_fi = wasm_field_idx(info, field_idx)
+                        local _sf_ct = ctx.mod.types[info.wasm_type_idx + 1]
+                        local _sf_field_is_anyref = _sf_ct isa StructType &&
+                            _sf_wasm_fi + 1 <= length(_sf_ct.fields) &&
+                            _sf_ct.fields[_sf_wasm_fi + 1].valtype === AnyRef
+
                         # PURE-4150: Check if value is a Type reference (GlobalRef → Type value)
-                        # compile_value(Type) emits i32.const 0, but field expects externref.
-                        # Emit ref.null extern as placeholder (type objects can't be constructed in WasmGC).
+                        # compile_value(Type) emits i32.const 0, but field expects ref.
+                        # Emit ref.null as placeholder (type objects can't be constructed in WasmGC).
                         if value_arg isa GlobalRef
                             try
                                 actual_sf_val = getfield(value_arg.mod, value_arg.name)
@@ -1895,23 +1904,41 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                         end
 
                         if is_type_value
-                            # Type objects → ref.null extern (placeholder for WasmGC)
                             push!(bytes, Opcode.REF_NULL)
-                            push!(bytes, UInt8(ExternRef))
+                            if _sf_field_is_anyref
+                                push!(bytes, 0x6E)  # any heap type
+                            else
+                                push!(bytes, UInt8(ExternRef))
+                            end
                         else
                             val_julia_type = infer_value_type(value_arg, ctx)
                             val_wasm_type = julia_to_wasm_type(val_julia_type)
-                            if val_julia_type === Any || val_wasm_type === ExternRef
-                                # PURE-3112/PURE-4150: Already externref — no conversion needed
-                                append!(bytes, compile_value(value_arg, ctx))
-                            elseif val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
-                                # PURE-4150: Numeric type → box then convert
-                                emit_numeric_to_externref!(bytes, value_arg, val_wasm_type, ctx)
+                            if _sf_field_is_anyref
+                                # Field is anyref — concrete/struct refs are already subtypes of anyref.
+                                # Numerics need boxing. No extern_convert_any needed.
+                                if val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
+                                    emit_numeric_to_anyref!(bytes, value_arg, val_wasm_type, ctx)
+                                else
+                                    # anyref, externref→any.convert_extern, or concrete ref (subtype of anyref)
+                                    append!(bytes, compile_value(value_arg, ctx))
+                                    if val_wasm_type === ExternRef
+                                        push!(bytes, Opcode.GC_PREFIX)
+                                        push!(bytes, Opcode.ANY_CONVERT_EXTERN)
+                                    end
+                                end
                             else
-                                # Concrete/abstract ref → extern_convert_any
-                                append!(bytes, compile_value(value_arg, ctx))
-                                push!(bytes, Opcode.GC_PREFIX)
-                                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                if val_julia_type === Any || val_wasm_type === ExternRef
+                                    # PURE-3112/PURE-4150: Already externref — no conversion needed
+                                    append!(bytes, compile_value(value_arg, ctx))
+                                elseif val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
+                                    # PURE-4150: Numeric type → box then convert
+                                    emit_numeric_to_externref!(bytes, value_arg, val_wasm_type, ctx)
+                                else
+                                    # Concrete/abstract ref → extern_convert_any
+                                    append!(bytes, compile_value(value_arg, ctx))
+                                    push!(bytes, Opcode.GC_PREFIX)
+                                    push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                end
                             end
                         end
                     else
@@ -3004,6 +3031,10 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     (arg1_bytes_chk[1] == Opcode.LOCAL_GET && length(arg1_bytes_chk) >= 2))
                 local a2_is_ref = length(arg2_bytes_chk) >= 1 && (arg2_bytes_chk[1] == Opcode.REF_NULL ||
                     (arg2_bytes_chk[1] == Opcode.LOCAL_GET && length(arg2_bytes_chk) >= 2))
+                local a1_is_anyref_fp = false
+                local a2_is_anyref_fp = false
+                local a1_is_externref_fp = false
+                local a2_is_externref_fp = false
                 # Check local types for LOCAL_GET
                 if arg1_bytes_chk[1] == Opcode.LOCAL_GET && length(arg1_bytes_chk) >= 2
                     local idx1 = 0
@@ -3020,6 +3051,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     if off1 >= 0 && off1 < length(ctx.locals)
                         local lt1 = ctx.locals[off1 + 1]
                         a1_is_ref = lt1 isa ConcreteRef || lt1 === StructRef || lt1 === ArrayRef || lt1 === ExternRef || lt1 === AnyRef
+                        a1_is_anyref_fp = (lt1 === AnyRef)
+                        a1_is_externref_fp = (lt1 === ExternRef)
                     else
                         a1_is_ref = false
                     end
@@ -3039,6 +3072,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     if off2 >= 0 && off2 < length(ctx.locals)
                         local lt2 = ctx.locals[off2 + 1]
                         a2_is_ref = lt2 isa ConcreteRef || lt2 === StructRef || lt2 === ArrayRef || lt2 === ExternRef || lt2 === AnyRef
+                        a2_is_anyref_fp = (lt2 === AnyRef)
+                        a2_is_externref_fp = (lt2 === ExternRef)
                     else
                         a2_is_ref = false
                     end
@@ -3051,7 +3086,52 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     push!(bytes, 0x00)
                     return bytes
                 elseif a1_is_ref && a2_is_ref
-                    # Both refs - use ref.eq
+                    # Both refs - need ref.eq, but anyref/externref require casting to eqref first
+                    if a1_is_anyref_fp && a2_is_anyref_fp
+                        # Both anyref: cast both to eqref
+                        local _fp_tmp = allocate_local!(ctx, EqRef)
+                        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                        push!(bytes, Opcode.LOCAL_SET)
+                        append!(bytes, encode_leb128_unsigned(_fp_tmp))
+                        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                        push!(bytes, Opcode.LOCAL_GET)
+                        append!(bytes, encode_leb128_unsigned(_fp_tmp))
+                    elseif a1_is_externref_fp && a2_is_externref_fp
+                        # Both externref: convert to anyref then cast to eqref
+                        local _fp_tmp2 = allocate_local!(ctx, EqRef)
+                        push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+                        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                        push!(bytes, Opcode.LOCAL_SET)
+                        append!(bytes, encode_leb128_unsigned(_fp_tmp2))
+                        push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+                        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                        push!(bytes, Opcode.LOCAL_GET)
+                        append!(bytes, encode_leb128_unsigned(_fp_tmp2))
+                    elseif a1_is_anyref_fp
+                        # arg1 anyref, arg2 concrete/eqref: save arg2, cast arg1, restore
+                        local _fp_tmp3 = allocate_local!(ctx, EqRef)
+                        push!(bytes, Opcode.LOCAL_SET)
+                        append!(bytes, encode_leb128_unsigned(_fp_tmp3))
+                        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                        push!(bytes, Opcode.LOCAL_GET)
+                        append!(bytes, encode_leb128_unsigned(_fp_tmp3))
+                    elseif a2_is_anyref_fp
+                        # arg2 anyref: cast to eqref
+                        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                    elseif a1_is_externref_fp
+                        # arg1 externref: save arg2, convert+cast arg1, restore
+                        local _fp_tmp4 = allocate_local!(ctx, EqRef)
+                        push!(bytes, Opcode.LOCAL_SET)
+                        append!(bytes, encode_leb128_unsigned(_fp_tmp4))
+                        push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+                        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                        push!(bytes, Opcode.LOCAL_GET)
+                        append!(bytes, encode_leb128_unsigned(_fp_tmp4))
+                    elseif a2_is_externref_fp
+                        # arg2 externref: convert+cast
+                        push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+                        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                    end
                     push!(bytes, Opcode.REF_EQ)
                     return bytes
                 end
@@ -3064,17 +3144,19 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             # Also check for local.get of ref-typed local
             local arg1_wasm_is_ref = arg1_is_ref
             local arg2_wasm_is_ref = arg2_is_ref
-            local arg1_is_externref = (arg_type === Any)
-            local arg2_is_externref = (arg2_type === Any)
-            # PURE-046: Any ALWAYS maps to externref, so if arg_type or arg2_type is Any,
-            # the corresponding wasm_is_ref must be true (regardless of local type checks)
+            # PURE-9064: Any maps to externref (PURE-908) OR anyref (JlType hierarchy active).
+            # Check actual wasm type instead of hardcoding externref.
+            local _any_is_extern = (ctx.type_registry.jl_type_idx === nothing)
+            local arg1_is_externref = (arg_type === Any && _any_is_extern)
+            local arg2_is_externref = (arg2_type === Any && _any_is_extern)
+            local arg1_is_anyref = (arg_type === Any && !_any_is_extern)
+            local arg2_is_anyref = (arg2_type === Any && !_any_is_extern)
+            # Any is always a ref type regardless of externref vs anyref
             if arg_type === Any
                 arg1_wasm_is_ref = true
-                arg1_is_externref = true
             end
             if arg2_type === Any
                 arg2_wasm_is_ref = true
-                arg2_is_externref = true
             end
             # Check Wasm representation for any potentially mixed comparison
             # (when one arg is ref-typed or Nothing, verify actual Wasm types)
@@ -3121,12 +3203,11 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                             end
                         end
                     end
-                    # PURE-046: Override local type check if Julia type is Any
-                    # The local might have been allocated wrong (PURE-036be issue), but
-                    # Any ALWAYS means externref at runtime, so treat it as ref
+                    # PURE-046/9064: Override local type check if Julia type is Any
                     if arg_type === Any
                         arg1_wasm_is_ref = true
-                        arg1_is_externref = true
+                        arg1_is_externref = _any_is_extern
+                        arg1_is_anyref = !_any_is_extern
                     end
                 end
                 # Check arg2's Wasm type when:
@@ -3167,12 +3248,11 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                             end
                         end
                     end
-                    # PURE-046: Override local type check if Julia type is Any
-                    # The local might have been allocated wrong (PURE-036be issue), but
-                    # Any ALWAYS means externref at runtime, so treat it as ref
+                    # PURE-046/9064: Override local type check if Julia type is Any
                     if arg2_type === Any
                         arg2_wasm_is_ref = true
-                        arg2_is_externref = true
+                        arg2_is_externref = _any_is_extern
+                        arg2_is_anyref = !_any_is_extern
                     end
                 end
             end
@@ -3253,6 +3333,17 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                         push!(bytes, Opcode.I32_CONST)
                         push!(bytes, 0x01)
                     end
+                elseif arg1_is_anyref && arg2_is_anyref
+                    # PURE-9064: Both anyref — cast to eqref before ref.eq
+                    # anyref is supertype of eqref, so ref.cast works directly (no any.convert_extern)
+                    local tmp_eq_a = allocate_local!(ctx, EqRef)
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(tmp_eq_a))
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(tmp_eq_a))
+                    push!(bytes, Opcode.REF_EQ)
                 elseif arg1_is_externref && arg2_is_externref
                     # ref.eq requires eqref operands. externref is NOT eqref.
                     # Convert externref → anyref → eqref before ref.eq
@@ -3283,8 +3374,21 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
                     push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
                     push!(bytes, Opcode.REF_EQ)
+                elseif arg1_is_anyref
+                    # PURE-9064: arg1 anyref (under arg2 on stack): save arg2, cast arg1, restore
+                    local tmp_eq_a2 = allocate_local!(ctx, EqRef)
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(tmp_eq_a2))
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(tmp_eq_a2))
+                    push!(bytes, Opcode.REF_EQ)
+                elseif arg2_is_anyref
+                    # PURE-9064: arg2 anyref (top of stack): cast to eqref
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                    push!(bytes, Opcode.REF_EQ)
                 else
-                    # Both are non-externref refs (mutable structs, arrays, etc.): identity comparison
+                    # Both are non-externref, non-anyref refs (mutable structs, arrays, etc.): identity comparison
                     push!(bytes, Opcode.REF_EQ)
                 end
             elseif arg1_wasm_is_ref && !arg2_wasm_is_ref
@@ -4620,8 +4724,11 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         push!(bytes, Opcode.ARRAY_GET)
         append!(bytes, encode_leb128_unsigned(svec_arr_idx))
         # array.get returns externref but downstream ref.cast expects anyref
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ANY_CONVERT_EXTERN)
+        # PURE-9064: Skip conversion when array elements are already anyref (JlType hierarchy)
+        if ctx.type_registry.jl_type_idx === nothing
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ANY_CONVERT_EXTERN)
+        end
 
     # PURE-604: Core builtins (svec, _apply_iterate) — genuinely unsupported, trap
     elseif func isa GlobalRef && func.name in (:svec, :_apply_iterate)

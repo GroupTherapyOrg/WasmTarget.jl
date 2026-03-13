@@ -142,6 +142,44 @@ function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::
     return
 end
 
+"""
+    emit_numeric_to_anyref!(target_bytes, val, val_wasm, ctx)
+
+Like emit_numeric_to_externref! but produces anyref (no extern_convert_any).
+Used when storing into AnyRef-typed struct fields (JlType hierarchy active).
+"""
+function emit_numeric_to_anyref!(target_bytes::Vector{UInt8}, val, val_wasm::WasmValType, ctx::CompilationContext)
+    if is_nothing_value(val, ctx)
+        push!(target_bytes, Opcode.REF_NULL)
+        push!(target_bytes, 0x6E)  # any heap type
+        return
+    end
+    # ref.i31 path for Bool/Int8/UInt8 — ref.i31 is already a subtype of anyref
+    if val_wasm === I32
+        local _jl_type = nothing
+        if val isa Core.SSAValue && val.id <= length(ctx.ssa_types)
+            _jl_type = ctx.ssa_types[val.id]
+        elseif val isa Bool
+            _jl_type = Bool
+        elseif val isa Core.Argument && val.n <= length(ctx.arg_types)
+            _jl_type = ctx.arg_types[val.n]
+        end
+        if _jl_type !== nothing && should_use_i31(_jl_type)
+            append!(target_bytes, compile_value(val, ctx))
+            emit_box_i31!(target_bytes)
+            return  # ref.i31 is already anyref — no conversion needed
+        end
+    end
+    # Box: compile value → struct_new(box_type) — struct ref is already a subtype of anyref
+    emit_box_type_id!(target_bytes, ctx.type_registry, val_wasm)
+    append!(target_bytes, compile_value(val, ctx))
+    box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
+    push!(target_bytes, Opcode.GC_PREFIX)
+    push!(target_bytes, Opcode.STRUCT_NEW)
+    append!(target_bytes, encode_leb128_unsigned(box_type))
+    return  # No extern_convert_any — struct ref is already anyref
+end
+
 function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
     # ========================================================================
     # STEP 0: BOUNDSCHECK PATTERN DETECTION
