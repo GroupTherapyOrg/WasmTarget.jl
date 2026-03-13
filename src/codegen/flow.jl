@@ -418,9 +418,9 @@ function get_phi_edge_wasm_type(val, ctx::CompilationContext)::Union{WasmValType
         return I32
     elseif val isa Type
         # PURE-4155: Type{T} values are now represented as DataType struct refs (global.get).
-        # Return the ConcreteRef for the DataType struct type.
-        info = register_struct_type!(ctx.mod, ctx.type_registry, DataType)
-        return ConcreteRef(info.wasm_type_idx, true)
+        # PURE-9063: Use $JlDataType when hierarchy is available
+        dt_idx = get_datatype_type_idx(ctx.type_registry)
+        return ConcreteRef(dt_idx, true)
     end
     return nothing
 end

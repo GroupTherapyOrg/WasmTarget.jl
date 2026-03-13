@@ -1100,8 +1100,9 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
             return I32
         elseif val isa Type
             # PURE-4155: Type{T} values are now represented as DataType struct refs (global.get).
-            info = register_struct_type!(ctx.mod, ctx.type_registry, DataType)
-            return ConcreteRef(info.wasm_type_idx, true)
+            # PURE-9063: Use $JlDataType when hierarchy is available
+            dt_idx = get_datatype_type_idx(ctx.type_registry)
+            return ConcreteRef(dt_idx, true)
         else
             # For any other value, try to get its Julia type and convert to Wasm type
             julia_type = typeof(val)

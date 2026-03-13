@@ -97,8 +97,9 @@ function infer_value_wasm_type(val, ctx::CompilationContext)::WasmValType
         elseif val isa Type
             # PURE-4155: Type values (like Bool, Int64) compile to global.get (DataType struct ref).
             # Must check BEFORE isstructtype since typeof(Type) is DataType (a struct)
-            info = register_struct_type!(ctx.mod, ctx.type_registry, DataType)
-            return ConcreteRef(info.wasm_type_idx, true)
+            # PURE-9063: Use $JlDataType when hierarchy is available
+            dt_idx = get_datatype_type_idx(ctx.type_registry)
+            return ConcreteRef(dt_idx, true)
         elseif isstructtype(typeof(val))
             # PURE-043: Struct values compile to struct_new (ConcreteRef)
             return get_concrete_wasm_type(typeof(val), ctx.mod, ctx.type_registry)

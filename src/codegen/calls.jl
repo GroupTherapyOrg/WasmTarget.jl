@@ -1981,7 +1981,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     append!(bytes, encode_leb128_unsigned(dt_global))
                 else
                     # Type not in globals — return null ref
-                    dt_type_idx = ctx.type_registry.structs[DataType].wasm_type_idx
+                    dt_type_idx = get_datatype_type_idx(ctx.type_registry)
                     push!(bytes, Opcode.REF_NULL)
                     append!(bytes, encode_leb128_unsigned(dt_type_idx))
                 end
@@ -1995,7 +1995,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     temp_local = _ensure_typeof_scratch_local!(ctx)
                     emit_typeof_struct_with_local!(bytes, base_idx, ctx.type_registry, temp_local)
                 else
-                    dt_type_idx = ctx.type_registry.structs[DataType].wasm_type_idx
+                    dt_type_idx = get_datatype_type_idx(ctx.type_registry)
                     push!(bytes, Opcode.REF_NULL)
                     append!(bytes, encode_leb128_unsigned(dt_type_idx))
                 end
@@ -2065,7 +2065,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                         push!(bytes, Opcode.GLOBAL_GET)
                         append!(bytes, encode_leb128_unsigned(dt_global))
                     else
-                        dt_type_idx = ctx.type_registry.structs[DataType].wasm_type_idx
+                        dt_type_idx = get_datatype_type_idx(ctx.type_registry)
                         push!(bytes, Opcode.REF_NULL)
                         append!(bytes, encode_leb128_unsigned(dt_type_idx))
                     end
@@ -2076,7 +2076,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                         push!(bytes, Opcode.GLOBAL_GET)
                         append!(bytes, encode_leb128_unsigned(dt_global))
                     else
-                        dt_type_idx = ctx.type_registry.structs[DataType].wasm_type_idx
+                        dt_type_idx = get_datatype_type_idx(ctx.type_registry)
                         push!(bytes, Opcode.REF_NULL)
                         append!(bytes, encode_leb128_unsigned(dt_type_idx))
                     end

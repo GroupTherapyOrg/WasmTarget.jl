@@ -347,9 +347,10 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
     end
     # PURE-4155: Type{X} singleton values (e.g., Type{Int64}) are represented as DataType
     # struct refs via global.get. Only match SINGLETON types (not struct types like Union/DataType).
+    # PURE-9063: Use $JlDataType when hierarchy is available
     if T isa DataType && T <: Type && !(T isa UnionAll) && !isstructtype(T)
-        info = register_struct_type!(ctx.mod, ctx.type_registry, DataType)
-        return ConcreteRef(info.wasm_type_idx, true)
+        dt_idx = get_datatype_type_idx(ctx.type_registry)
+        return ConcreteRef(dt_idx, true)
     end
     # Union{} (TypeofBottom) is the bottom type — no values exist of this type.
     # Used for unreachable code paths. Map to I32 as placeholder.
