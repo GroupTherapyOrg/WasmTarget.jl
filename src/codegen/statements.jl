@@ -2937,6 +2937,15 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
         end
     end
 
+    # PURE-9043: jl_get_current_task → phantom value (no bytecode)
+    # Task SSA is used by getfield/setfield for rngState0..3 (Xoshiro256++ RNG)
+    # We handle those field accesses as Wasm global reads/writes in compile_call.
+    if name === :jl_get_current_task
+        # No bytecode needed — the Task value is phantom.
+        # Mark this SSA so it doesn't get stored to a local.
+        return bytes
+    end
+
     # Unknown foreigncall - emit unreachable.
     # We cannot execute native C FFI in WebAssembly. Emitting unreachable:
     # (1) Makes the wasm validator accept any stack type (polymorphic)

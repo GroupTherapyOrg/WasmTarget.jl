@@ -1333,6 +1333,31 @@ function compile_module(functions::Vector;
         clear_io_imports!()
     end
 
+    # PURE-9043: Scan for jl_get_current_task (rand() usage) and add RNG globals if needed
+    needs_rng = false
+    for (f, arg_types, fname) in normalized
+        try
+            ci, _ = get_typed_ir(f, arg_types)
+            for stmt in ci.code
+                if stmt isa Expr && stmt.head === :foreigncall
+                    fc_name = stmt.args[1]
+                    fc_name_sym = fc_name isa QuoteNode ? fc_name.value : fc_name
+                    if fc_name_sym === :jl_get_current_task
+                        needs_rng = true
+                        break
+                    end
+                end
+            end
+        catch
+        end
+        needs_rng && break
+    end
+    if needs_rng
+        ensure_rng_globals!(mod)
+    else
+        clear_rng_globals!()
+    end
+
     # Track all required globals across all functions
     required_globals = Dict{Int, Tuple{WasmValType, Type}}()  # global_idx -> (wasm_type, julia_elem_type)
 
@@ -1553,8 +1578,9 @@ function compile_module(functions::Vector;
     # This creates a start function that patches .name, .super, .parameters, .wrapper.
     populate_type_constant_globals!(mod, type_registry)
 
-    # PURE-9040: Clear IO imports after compilation
+    # PURE-9040/9043: Clear module-level state after compilation
     clear_io_imports!()
+    clear_rng_globals!()
 
     return mod
 end

@@ -1010,9 +1010,19 @@ function allocate_ssa_locals!(ctx::CompilationContext)
         if !haskey(ctx.ssa_locals, ssa_id)  # Skip phi nodes already added
             ssa_type = get(ctx.ssa_types, ssa_id, Any)
 
+            # PURE-9043: Skip Task SSAs (from jl_get_current_task foreigncall)
+            # Task values are phantom — rngState fields map to Wasm globals
+            stmt = ctx.code_info.code[ssa_id]
+            if stmt isa Expr && stmt.head === :foreigncall
+                fc_name = stmt.args[1]
+                fc_name_sym = fc_name isa QuoteNode ? fc_name.value : fc_name
+                if fc_name_sym === :jl_get_current_task
+                    continue
+                end
+            end
+
             # Skip multi-arg memoryrefnew results - they leave [array_ref, i32_index] on stack
             # and can't be stored in a single local. They must be used immediately.
-            stmt = ctx.code_info.code[ssa_id]
             if stmt isa Expr && stmt.head === :call
                 func = stmt.args[1]
                 is_memrefnew = (func isa GlobalRef &&

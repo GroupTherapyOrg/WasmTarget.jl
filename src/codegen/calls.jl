@@ -888,6 +888,17 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             return bytes
         end
 
+        # PURE-9043: Handle Task.rngState0..3 field access → Wasm global.get
+        # Julia's rand() accesses task-local Xoshiro state via getfield(task, :rngStateN)
+        if obj_type === Task && field_sym in (:rngState0, :rngState1, :rngState2, :rngState3)
+            rng_global = get_rng_global_idx(field_sym)
+            if rng_global !== nothing
+                push!(bytes, Opcode.GLOBAL_GET)
+                append!(bytes, encode_leb128_unsigned(rng_global))
+                return bytes
+            end
+        end
+
         # Handle WasmGlobal field access (:value -> global.get)
         if obj_type <: WasmGlobal
             field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
@@ -1728,9 +1739,21 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         value_arg = args[3]
         obj_type = infer_value_type(obj_arg, ctx)
 
+        field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
+
+        # PURE-9043: Handle Task.rngState0..3 field assignment → Wasm global.set
+        if obj_type === Task && field_sym in (:rngState0, :rngState1, :rngState2, :rngState3)
+            rng_global = get_rng_global_idx(field_sym)
+            if rng_global !== nothing
+                append!(bytes, compile_value(value_arg, ctx))
+                push!(bytes, Opcode.GLOBAL_SET)
+                append!(bytes, encode_leb128_unsigned(rng_global))
+                return bytes
+            end
+        end
+
         # Handle WasmGlobal field assignment (:value -> global.set)
         if obj_type <: WasmGlobal
-            field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
             if field_sym === :value
                 # Extract global index from type parameter
                 global_idx = get_wasm_global_idx(obj_arg, ctx)

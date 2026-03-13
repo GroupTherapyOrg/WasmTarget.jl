@@ -205,6 +205,99 @@ function clear_io_imports!()
 end
 
 # ============================================================================
+# RNG State — Xoshiro256++ via Wasm Globals (PURE-9043)
+# ============================================================================
+
+"""
+PURE-9043: RNG state stored in 4 mutable i64 Wasm globals.
+Julia's rand() uses Xoshiro256++ with task-local state (rngState0..3).
+We store these in Wasm globals instead.
+"""
+struct RNGGlobals
+    rng0_idx::UInt32  # global index for rngState0 (i64)
+    rng1_idx::UInt32  # global index for rngState1 (i64)
+    rng2_idx::UInt32  # global index for rngState2 (i64)
+    rng3_idx::UInt32  # global index for rngState3 (i64)
+    seed_import_idx::UInt32  # import index for env.random_i64
+end
+
+const _RNG_GLOBALS = Ref{Union{Nothing, RNGGlobals}}(nothing)
+
+function get_rng_globals()
+    return _RNG_GLOBALS[]
+end
+
+function set_rng_globals!(rng::RNGGlobals)
+    _RNG_GLOBALS[] = rng
+end
+
+function clear_rng_globals!()
+    _RNG_GLOBALS[] = nothing
+end
+
+"""
+    ensure_rng_globals!(mod) -> RNGGlobals
+
+Create 4 mutable i64 globals for Xoshiro256++ RNG state + JS seed import.
+Idempotent — returns existing globals if already created.
+"""
+function ensure_rng_globals!(mod::WasmModule)::RNGGlobals
+    existing = get_rng_globals()
+    if existing !== nothing
+        return existing
+    end
+
+    # Import seed function: env.random_i64() -> i64
+    seed_idx = add_import!(mod, "env", "random_i64",
+        WasmValType[], WasmValType[I64])
+
+    # Create 4 mutable i64 globals with non-zero seeds
+    # Initial values are arbitrary non-zero constants (within signed i64 range)
+    seeds = Int64[
+        1311768467294899695,   # 0x1234567890ABCDEF & 0x7FFF...
+        3978425108881204001,   # non-zero seed
+        7463728394857261543,   # non-zero seed
+        2846573918374629105,   # non-zero seed
+    ]
+
+    rng_indices = UInt32[]
+    for seed in seeds
+        init = UInt8[]
+        push!(init, Opcode.I64_CONST)
+        append!(init, encode_leb128_signed(seed))
+        push!(init, Opcode.END)
+        push!(mod.globals, WasmGlobalDef(I64, true, init))
+        push!(rng_indices, UInt32(length(mod.globals) - 1))
+    end
+
+    rng = RNGGlobals(rng_indices[1], rng_indices[2], rng_indices[3], rng_indices[4], seed_idx)
+    set_rng_globals!(rng)
+    return rng
+end
+
+"""
+    get_rng_global_idx(field_name::Symbol) -> Union{UInt32, Nothing}
+
+Map rngState field name to global index. Returns nothing if field is not an RNG field.
+"""
+function get_rng_global_idx(field_name::Symbol)::Union{UInt32, Nothing}
+    rng = get_rng_globals()
+    if rng === nothing
+        return nothing
+    end
+    if field_name === :rngState0
+        return rng.rng0_idx
+    elseif field_name === :rngState1
+        return rng.rng1_idx
+    elseif field_name === :rngState2
+        return rng.rng2_idx
+    elseif field_name === :rngState3
+        return rng.rng3_idx
+    end
+    return nothing
+end
+
+# ============================================================================
 # String Operations
 # ============================================================================
 
