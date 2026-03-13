@@ -355,13 +355,17 @@ end
 """
     WasmDataSegment
 
-A data segment for initializing linear memory with constant data.
+A data segment for initializing linear memory with constant data,
+or a passive data segment for use with array.new_data / memory.init.
 """
 struct WasmDataSegment
-    memory_idx::UInt32       # Which memory to initialize
-    offset::UInt32           # Offset in memory (constant)
-    data::Vector{UInt8}      # The data to initialize with
+    memory_idx::UInt32       # Which memory to initialize (ignored for passive)
+    offset::UInt32           # Offset in memory (ignored for passive)
+    data::Vector{UInt8}      # The data bytes
+    passive::Bool            # If true, this is a passive data segment (mode 0x01)
 end
+
+WasmDataSegment(memory_idx, offset, data) = WasmDataSegment(memory_idx, offset, data, false)
 
 """
     WasmTag
@@ -679,6 +683,18 @@ function add_data_segment!(mod::WasmModule, memory_idx::Integer, offset::Integer
 end
 
 """
+    add_passive_data_segment!(mod, data) -> segment_index
+
+Add a passive data segment (used with array.new_data or memory.init).
+Returns the 0-based index of the data segment.
+"""
+function add_passive_data_segment!(mod::WasmModule, data::Vector{UInt8})::UInt32
+    idx = UInt32(length(mod.data_segments))
+    push!(mod.data_segments, WasmDataSegment(UInt32(0), UInt32(0), data, true))
+    return idx
+end
+
+"""
     add_tag!(mod, type_idx) -> tag_idx
 
 Add an exception tag to the module and return its index.
@@ -952,15 +968,24 @@ function to_bytes(mod::WasmModule)::Vector{UInt8}
         write_section!(w, SECTION_DATA) do section
             write_u32!(section, length(mod.data_segments))
             for data in mod.data_segments
-                # Active data segment (mode 0): memory index 0
-                write_byte!(section, 0x00)
-                # Offset expression (i32.const offset)
-                push!(section.buffer, Opcode.I32_CONST)
-                append!(section.buffer, encode_leb128_signed(Int32(data.offset)))
-                push!(section.buffer, Opcode.END)
-                # Data bytes
-                write_u32!(section, length(data.data))
-                append!(section.buffer, data.data)
+                if data.passive
+                    # Passive data segment (mode 1): no memory association
+                    # Used with array.new_data and memory.init
+                    write_byte!(section, 0x01)
+                    # Data bytes
+                    write_u32!(section, length(data.data))
+                    append!(section.buffer, data.data)
+                else
+                    # Active data segment (mode 0): memory index 0
+                    write_byte!(section, 0x00)
+                    # Offset expression (i32.const offset)
+                    push!(section.buffer, Opcode.I32_CONST)
+                    append!(section.buffer, encode_leb128_signed(Int32(data.offset)))
+                    push!(section.buffer, Opcode.END)
+                    # Data bytes
+                    write_u32!(section, length(data.data))
+                    append!(section.buffer, data.data)
+                end
             end
         end
     end

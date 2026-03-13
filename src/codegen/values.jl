@@ -398,25 +398,32 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         append!(bytes, reinterpret(UInt8, [val]))
 
     elseif val isa String
-        # String constant - create a WasmGC array with the raw bytes
-        # Get the string array type
+        # PURE-9013: String constant via passive data segment + array.new_data
+        # Much more compact than N × i32.const + array.new_fixed
         type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-
-        # PURE-8001: Push each BYTE as an i32 (not character).
-        # Julia Strings can contain invalid UTF-8 (e.g., CodeInfo.debuginfo strings).
-        # Iterating characters with `for c in val` throws InvalidCharError on these.
-        # Using codeunit() accesses raw bytes safely.
         n_bytes = ncodeunits(val)
-        for i in 1:n_bytes
-            push!(bytes, Opcode.I32_CONST)
-            append!(bytes, encode_leb128_signed(Int32(codeunit(val, i))))
-        end
 
-        # array.new_fixed $type_idx $length
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_NEW_FIXED)
-        append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(n_bytes))
+        if n_bytes == 0
+            # Empty string: use array.new_fixed with 0 elements (no data segment needed)
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ARRAY_NEW_FIXED)
+            append!(bytes, encode_leb128_unsigned(type_idx))
+            append!(bytes, encode_leb128_unsigned(UInt32(0)))
+        else
+            # Create a passive data segment with UTF-8 bytes
+            utf8_bytes = Vector{UInt8}(codeunits(val))
+            seg_idx = add_passive_data_segment!(ctx.mod, utf8_bytes)
+
+            # array.new_data $type_idx $seg_idx : [offset, length] -> [(ref $type)]
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x00)  # offset 0 (start of segment)
+            push!(bytes, Opcode.I32_CONST)
+            append!(bytes, encode_leb128_unsigned(n_bytes))
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ARRAY_NEW_DATA)
+            append!(bytes, encode_leb128_unsigned(type_idx))
+            append!(bytes, encode_leb128_unsigned(seg_idx))
+        end
 
     elseif val isa GlobalRef
         # Check if this GlobalRef is a module-level global (mutable struct instance)
@@ -468,23 +475,29 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         end
 
     elseif val isa Symbol
-        # Symbol constant - represent as string (UTF-8 byte array of its name)
-        # Uses same representation as String constants
+        # Symbol constant - represent as string via passive data segment
         type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
         name_str = String(val)
-
-        # Push each UTF-8 byte as i32 (truncated to i8 by packed array)
         n_bytes = ncodeunits(name_str)
-        for i in 1:n_bytes
-            push!(bytes, Opcode.I32_CONST)
-            append!(bytes, encode_leb128_signed(Int32(codeunit(name_str, i))))
-        end
 
-        # array.new_fixed $type_idx $length
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_NEW_FIXED)
-        append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(n_bytes))
+        if n_bytes == 0
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ARRAY_NEW_FIXED)
+            append!(bytes, encode_leb128_unsigned(type_idx))
+            append!(bytes, encode_leb128_unsigned(UInt32(0)))
+        else
+            utf8_bytes = Vector{UInt8}(codeunits(name_str))
+            seg_idx = add_passive_data_segment!(ctx.mod, utf8_bytes)
+
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x00)
+            push!(bytes, Opcode.I32_CONST)
+            append!(bytes, encode_leb128_unsigned(n_bytes))
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ARRAY_NEW_DATA)
+            append!(bytes, encode_leb128_unsigned(type_idx))
+            append!(bytes, encode_leb128_unsigned(seg_idx))
+        end
 
     elseif typeof(val) <: Tuple
         # Tuple constant - create it with struct.new
