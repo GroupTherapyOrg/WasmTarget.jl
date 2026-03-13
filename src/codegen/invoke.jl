@@ -3392,14 +3392,22 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                    name === :throw || name === :rethrow ||
                    name === :_throw_not_readable || name === :_throw_not_writable
                 ensure_exception_tag!(ctx.mod)
-                # PURE-9032: Stash ref.null any as exception placeholder
-                exn_global = ensure_exception_global!(ctx.mod)
-                push!(bytes, 0xD0)  # ref.null
-                push!(bytes, 0x6E)  # any
-                push!(bytes, Opcode.GLOBAL_SET)
-                append!(bytes, encode_leb128_unsigned(exn_global))
-                push!(bytes, Opcode.THROW)
-                append!(bytes, encode_leb128_unsigned(0))  # tag index 0
+                if name === :rethrow
+                    # PURE-9034: rethrow() preserves the exception in the global —
+                    # just re-throw without overwriting. The caught exception is
+                    # already in $current_exn from the original throw.
+                    push!(bytes, Opcode.THROW)
+                    append!(bytes, encode_leb128_unsigned(0))  # tag index 0
+                else
+                    # PURE-9032: Stash ref.null any as exception placeholder
+                    exn_global = ensure_exception_global!(ctx.mod)
+                    push!(bytes, 0xD0)  # ref.null
+                    push!(bytes, 0x6E)  # any
+                    push!(bytes, Opcode.GLOBAL_SET)
+                    append!(bytes, encode_leb128_unsigned(exn_global))
+                    push!(bytes, Opcode.THROW)
+                    append!(bytes, encode_leb128_unsigned(0))  # tag index 0
+                end
                 ctx.last_stmt_was_stub = true  # PURE-908
 
             # Handle truncate (IOBuffer resize) — no-op in WasmGC
