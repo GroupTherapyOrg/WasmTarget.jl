@@ -165,21 +165,22 @@ function compile_condition_to_i32(cond, ctx::CompilationContext)::Vector{UInt8}
                     push!(bytes, Opcode.GC_PREFIX)
                     push!(bytes, Opcode.STRUCT_GET)
                     append!(bytes, encode_leb128_unsigned(box_type_idx))
-                    append!(bytes, encode_leb128_unsigned(0))  # field 0
+                    append!(bytes, encode_leb128_unsigned(1))  # PURE-9024: field 1 (0=typeId, 1=value)
                 elseif local_type isa ConcreteRef
                     # PURE-6025: Value is a concrete ref (tagged union struct) but should
                     # be i32 (Bool). This happens when a stubbed call's result local was
                     # allocated as a tagged union (e.g., Union{Bool, Nothing} → struct{i32, anyref})
                     # but the GotoIfNot condition expects i32. Extract i32 tag from field 0.
-                    # Check that the struct type's field 0 is actually i32 before extracting.
+                    # PURE-9024: Field 0 is now typeId. Tag is at field 1.
+                    # Check that the struct has at least 3 fields (typeId, tag, value = tagged union)
                     type_idx = local_type.type_idx
                     if type_idx + 1 <= length(ctx.mod.types)
                         mod_type = ctx.mod.types[type_idx + 1]
-                        if mod_type isa StructType && !isempty(mod_type.fields) && mod_type.fields[1].valtype === I32
+                        if mod_type isa StructType && length(mod_type.fields) >= 3 && mod_type.fields[2].valtype === I32
                             push!(bytes, Opcode.GC_PREFIX)
                             push!(bytes, Opcode.STRUCT_GET)
                             append!(bytes, encode_leb128_unsigned(type_idx))
-                            append!(bytes, encode_leb128_unsigned(0))  # field 0 (i32 tag)
+                            append!(bytes, encode_leb128_unsigned(1))  # field 1 (tag, after typeId at 0)
                         else
                             # Not a tagged union — drop the ref and push i32 default
                             push!(bytes, Opcode.DROP)

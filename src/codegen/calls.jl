@@ -3957,11 +3957,11 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 push!(bytes, Opcode.GC_PREFIX)
                 push!(bytes, Opcode.REF_CAST_NULL)
                 append!(bytes, encode_leb128_signed(Int64(union_info.wasm_type_idx)))
-                # Get the tag field (field 0)
+                # Get the tag field (PURE-9024: field 1 due to typeId at field 0)
                 push!(bytes, Opcode.GC_PREFIX)
                 push!(bytes, Opcode.STRUCT_GET)
                 append!(bytes, encode_leb128_unsigned(union_info.wasm_type_idx))
-                append!(bytes, encode_leb128_unsigned(0))  # field 0 is tag
+                append!(bytes, encode_leb128_unsigned(1))  # field 1 is tag (0=typeId, 1=tag, 2=value)
                 # Compare tag to expected value
                 push!(bytes, Opcode.I32_CONST)
                 append!(bytes, encode_leb128_signed(Int64(expected_tag)))

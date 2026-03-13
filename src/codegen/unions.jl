@@ -133,9 +133,10 @@ function register_union_type!(mod::WasmModule, registry::TypeRegistry, T::Union)
         end
     end
 
-    # Create WasmGC struct with two fields: tag (i32) and value (anyref)
-    # Using AnyRef allows us to store any WasmGC reference type
+    # PURE-9024: Prepend typeId:i32 as field 0 (universal object layout)
+    # Create WasmGC struct with fields: typeId (i32), tag (i32), value (anyref)
     wasm_fields = [
+        FieldType(I32, false),   # PURE-9024: typeId (immutable)
         FieldType(I32, true),    # tag - mutable so we can set it
         FieldType(AnyRef, true)  # value - anyref can hold any reference
     ]
@@ -208,6 +209,9 @@ function emit_wrap_union_value(ctx, value_type::Type, union_type::Union)::Vector
     # For Nothing, we need to create a null anyref
     if value_type === Nothing
         # Drop any value on stack (Nothing has no value)
+        # PURE-9024: Push typeId (0 placeholder)
+        push!(bytes, Opcode.I32_CONST)
+        append!(bytes, encode_leb128_signed(Int64(0)))
         # Push tag (0 for Nothing)
         push!(bytes, Opcode.I32_CONST)
         append!(bytes, encode_leb128_signed(Int64(tag)))
@@ -215,7 +219,7 @@ function emit_wrap_union_value(ctx, value_type::Type, union_type::Union)::Vector
         push!(bytes, Opcode.REF_NULL)
         push!(bytes, UInt8(AnyRef))  # anyref
     else
-        # Value is on stack - need to save it, push tag, then restore value
+        # Value is on stack - need to save it, push typeId + tag, then restore value
         # Allocate a scratch local for the value
         scratch_local = length(ctx.locals) + ctx.n_params
         value_wasm_type = julia_to_wasm_type_concrete(value_type, ctx)
@@ -224,6 +228,10 @@ function emit_wrap_union_value(ctx, value_type::Type, union_type::Union)::Vector
         # Store value to scratch local
         push!(bytes, Opcode.LOCAL_SET)
         append!(bytes, encode_leb128_unsigned(scratch_local))
+
+        # PURE-9024: Push typeId (0 placeholder)
+        push!(bytes, Opcode.I32_CONST)
+        append!(bytes, encode_leb128_signed(Int64(0)))
 
         # Push tag
         push!(bytes, Opcode.I32_CONST)
@@ -286,11 +294,11 @@ function emit_unwrap_union_value(ctx, union_type::Union, target_type::Type)::Vec
     # Get the union info
     union_info = get_union_type!(ctx.mod, ctx.type_registry, union_type)
 
-    # Get the value field (field 1)
+    # Get the value field (PURE-9024: field 2 due to typeId at field 0)
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(union_info.wasm_type_idx))
-    append!(bytes, encode_leb128_unsigned(1))  # field 1 is value
+    append!(bytes, encode_leb128_unsigned(2))  # field 2 is value (0=typeId, 1=tag, 2=value)
 
     # Cast anyref to the target type
     target_wasm_type = julia_to_wasm_type_concrete(target_type, ctx)

@@ -273,7 +273,8 @@ function get_numeric_box_type!(mod::WasmModule, registry::TypeRegistry, wasm_typ
     if haskey(registry.numeric_boxes, wasm_type)
         return registry.numeric_boxes[wasm_type]
     end
-    fields = [FieldType(wasm_type, false)]  # immutable single field
+    # PURE-9024: Prepend typeId:i32 as field 0 (universal object layout)
+    fields = [FieldType(I32, false), FieldType(wasm_type, false)]  # typeId + value
     type_idx = add_struct_type!(mod, fields)
     registry.numeric_boxes[wasm_type] = type_idx
     return type_idx

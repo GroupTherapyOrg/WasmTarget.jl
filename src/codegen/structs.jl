@@ -54,7 +54,8 @@ function register_closure_type!(mod::WasmModule, registry::TypeRegistry, T::Data
     field_types = [fieldtype(T, i) for i in 1:fieldcount(T)]
 
     # Create WasmGC field types (same logic as register_struct_type)
-    wasm_fields = FieldType[]
+    # PURE-9024: Prepend typeId:i32 as field 0 (universal object layout)
+    wasm_fields = FieldType[FieldType(I32, false)]  # typeId, immutable
     for ft in field_types
         if ft <: Vector
             # Vector{T} is represented as a struct with (array_ref, size_tuple)
@@ -88,8 +89,8 @@ function register_closure_type!(mod::WasmModule, registry::TypeRegistry, T::Data
     # Add struct type to module
     type_idx = add_struct_type!(mod, wasm_fields)
 
-    # Record mapping
-    info = StructInfo(T, type_idx, field_names, field_types)
+    # Record mapping (field_offset=1 for typeId prefix)
+    info = StructInfo(T, type_idx, field_names, field_types, UInt32(1))
     registry.structs[T] = info
 
     return info
@@ -215,7 +216,8 @@ function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataT
 
         # Step 1: Add struct placeholder first (with placeholder fields)
         # We need the struct index before creating array types that reference it
-        temp_fields = FieldType[]
+        # PURE-9024: Prepend typeId:i32 as field 0
+        temp_fields = FieldType[FieldType(I32, false)]
         for i in 1:fieldcount(T)
             ft = fieldtype(T, i)
             if ft === Int32 || ft === UInt32 || ft === Bool || ft === Char ||
@@ -265,12 +267,14 @@ function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataT
                         register_tuple_type!(mod, registry, size_tuple_type)
                     end
                     size_struct_info = registry.structs[size_tuple_type]
+                    # PURE-9024: Prepend typeId:i32 as field 0
                     vec_fields = [
+                        FieldType(I32, false),  # PURE-9024: typeId
                         FieldType(ConcreteRef(arr_idx, true), true),
                         FieldType(ConcreteRef(size_struct_info.wasm_type_idx, true), true)
                     ]
                     vec_type_idx = add_struct_type!(mod, vec_fields)
-                    vec_info = StructInfo(vec_type, vec_type_idx, [:ref, :size], DataType[Array{T, 1}, size_tuple_type])
+                    vec_info = StructInfo(vec_type, vec_type_idx, [:ref, :size], DataType[Array{T, 1}, size_tuple_type], UInt32(1))
                     registry.structs[vec_type] = vec_info
                     push!(vector_wrapper_indices, vec_type_idx)
                 end
@@ -316,7 +320,8 @@ function _register_struct_type_impl_with_reserved!(mod::WasmModule, registry::Ty
     #
     # IMPORTANT: Check Memory/MemoryRef BEFORE AbstractVector because
     # Memory <: AbstractVector but should map to raw array, not Vector struct
-    wasm_fields = FieldType[]
+    # PURE-9024: Prepend typeId:i32 as field 0
+    wasm_fields = FieldType[FieldType(I32, false)]
     for ft in field_types
         if ft isa DataType && (ft.name.name === :MemoryRef || ft.name.name === :GenericMemoryRef)
             # MemoryRef{T} / GenericMemoryRef maps to array type for element T
@@ -456,7 +461,8 @@ function _register_struct_type_impl_with_reserved!(mod::WasmModule, registry::Ty
     mod.types[reserved_idx + 1] = StructType(wasm_fields)
 
     # Record mapping (rec groups already set up by register_struct_type!)
-    info = StructInfo(T, reserved_idx, field_names, field_types)
+    # PURE-9024: field_offset=1 for typeId prefix
+    info = StructInfo(T, reserved_idx, field_names, field_types, UInt32(1))
     registry.structs[T] = info
 
     return info
@@ -468,7 +474,8 @@ function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T:
     field_types = [fieldtype(T, i) for i in 1:fieldcount(T)]
 
     # Create WasmGC field types
-    wasm_fields = FieldType[]
+    # PURE-9024: Prepend typeId:i32 as field 0 (universal object layout)
+    wasm_fields = FieldType[FieldType(I32, false)]
     for ft in field_types
         # For array fields, use concrete reference to registered array type
         # But for Vector{T}, use the Vector struct type (with ref and size fields)
@@ -633,8 +640,8 @@ function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T:
     # Add struct type to module
     type_idx = add_struct_type!(mod, wasm_fields)
 
-    # Record mapping
-    info = StructInfo(T, type_idx, field_names, field_types)
+    # Record mapping (PURE-9024: field_offset=1 for typeId prefix)
+    info = StructInfo(T, type_idx, field_names, field_types, UInt32(1))
     registry.structs[T] = info
 
     return info
@@ -665,7 +672,8 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
     elem_types = T.parameters
 
     # Create WasmGC field types
-    wasm_fields = FieldType[]
+    # PURE-9024: Prepend typeId:i32 as field 0
+    wasm_fields = FieldType[FieldType(I32, false)]
     field_names = Symbol[]
     field_types_vec = DataType[]
 
@@ -718,8 +726,8 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
     # Add struct type to module
     type_idx = add_struct_type!(mod, wasm_fields)
 
-    # Record mapping (use T as DataType)
-    info = StructInfo(T, type_idx, field_names, field_types_vec)
+    # Record mapping (PURE-9024: field_offset=1 for typeId prefix)
+    info = StructInfo(T, type_idx, field_names, field_types_vec, UInt32(1))
     registry.structs[T] = info
 
     return info
@@ -757,10 +765,12 @@ function register_matrix_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
     # Create/get the data array type
     data_array_idx = get_array_type!(mod, registry, elem_type)
 
-    # Create WasmGC struct with two fields:
-    # - Field 0: ref (nullable reference to data array)
-    # - Field 1: size (nullable reference to size tuple struct)
+    # Create WasmGC struct with fields:
+    # PURE-9024: Field 0: typeId (i32, immutable)
+    # - Field 1: ref (nullable reference to data array)
+    # - Field 2: size (nullable reference to size tuple struct)
     wasm_fields = [
+        FieldType(I32, false),  # PURE-9024: typeId
         FieldType(ConcreteRef(data_array_idx, true), true),  # data array, mutable
         FieldType(ConcreteRef(size_struct_info.wasm_type_idx, true), false)  # size, immutable
     ]
@@ -768,11 +778,11 @@ function register_matrix_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
     # Add struct type to module
     type_idx = add_struct_type!(mod, wasm_fields)
 
-    # Record mapping with field info
+    # Record mapping with field info (PURE-9024: field_offset=1)
     field_names = [:ref, :size]  # Julia field names
     field_types_vec = DataType[Array{elem_type, 1}, size_tuple_type]  # Use Vector for ref field type
 
-    info = StructInfo(T, type_idx, field_names, field_types_vec)
+    info = StructInfo(T, type_idx, field_names, field_types_vec, UInt32(1))
     registry.structs[T] = info
 
     return info
@@ -811,10 +821,12 @@ function register_vector_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
     # Create/get the data array type
     data_array_idx = get_array_type!(mod, registry, elem_type)
 
-    # Create WasmGC struct with two fields:
-    # - Field 0: ref (reference to data array)
-    # - Field 1: size (MUTABLE reference to size tuple struct)
+    # Create WasmGC struct with fields:
+    # PURE-9024: Field 0: typeId (i32, immutable)
+    # - Field 1: ref (reference to data array)
+    # - Field 2: size (MUTABLE reference to size tuple struct)
     wasm_fields = [
+        FieldType(I32, false),  # PURE-9024: typeId
         FieldType(ConcreteRef(data_array_idx, true), true),  # data array, mutable
         FieldType(ConcreteRef(size_struct_info.wasm_type_idx, true), true)  # size, MUTABLE for setfield!
     ]
@@ -822,11 +834,11 @@ function register_vector_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
     # Add struct type to module
     type_idx = add_struct_type!(mod, wasm_fields)
 
-    # Record mapping with field info
+    # Record mapping with field info (PURE-9024: field_offset=1)
     field_names = [:ref, :size]  # Julia field names
     field_types_vec = DataType[Array{elem_type, 1}, size_tuple_type]
 
-    info = StructInfo(T, type_idx, field_names, field_types_vec)
+    info = StructInfo(T, type_idx, field_names, field_types_vec, UInt32(1))
     registry.structs[T] = info
 
     return info
@@ -845,8 +857,10 @@ function register_int128_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
 
-    # Create WasmGC struct with two i64 fields (lo, hi)
+    # PURE-9024: Prepend typeId:i32 as field 0
+    # Create WasmGC struct with typeId + two i64 fields (lo, hi)
     wasm_fields = [
+        FieldType(I32, false),  # PURE-9024: typeId
         FieldType(I64, true),   # lo (low 64 bits), mutable for potential in-place ops
         FieldType(I64, true)    # hi (high 64 bits)
     ]
@@ -854,11 +868,11 @@ function register_int128_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
     # Add struct type to module
     type_idx = add_struct_type!(mod, wasm_fields)
 
-    # Record mapping with field info
+    # Record mapping with field info (PURE-9024: field_offset=1)
     field_names = [:lo, :hi]
     field_types_vec = DataType[UInt64, UInt64]  # Both fields are 64-bit
 
-    info = StructInfo(T, type_idx, field_names, field_types_vec)
+    info = StructInfo(T, type_idx, field_names, field_types_vec, UInt32(1))
     registry.structs[T] = info
 
     return info
