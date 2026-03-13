@@ -329,7 +329,12 @@ end
 function allocate_local!(ctx::CompilationContext, wasm_type::WasmValType)::Int
     local_idx = ctx.n_params + length(ctx.locals)
     # PURE-908: normalize AnyRef → ExternRef to avoid type hierarchy mismatches
-    push!(ctx.locals, wasm_type === AnyRef ? ExternRef : wasm_type)
+    # PURE-9064: Exception — keep AnyRef when $JlType hierarchy is active
+    local actual_type = wasm_type
+    if wasm_type === AnyRef && ctx.type_registry.jl_type_idx === nothing
+        actual_type = ExternRef
+    end
+    push!(ctx.locals, actual_type)
     return local_idx
 end
 
@@ -517,8 +522,14 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
     else
         # Use the standard conversion for non-struct types
         result = julia_to_wasm_type(T)
-        # PURE-908: Never return AnyRef for locals — use ExternRef instead
-        return result === AnyRef ? ExternRef : result
+        # PURE-908: Never return AnyRef for locals — use ExternRef instead.
+        # PURE-9064: Exception — when the $JlType hierarchy is active, keep AnyRef
+        # for Any-typed locals. $JlType struct fields return (ref null $JlType) which
+        # is a subtype of anyref but NOT externref. Aligns locals with function params.
+        if result === AnyRef && ctx.type_registry.jl_type_idx === nothing
+            return ExternRef
+        end
+        return result
     end
 end
 
