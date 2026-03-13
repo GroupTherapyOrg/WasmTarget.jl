@@ -177,16 +177,26 @@ println("1 + 1 = ", 1 + 1)
       outputEl.scrollTop = outputEl.scrollHeight;
     }
 
+    const EXEC_TIMEOUT_MS = 5000;
+    let activeWorker = null;
+    let activeTimer = null;
+
+    function cleanupWorker() {
+      if (activeTimer) { clearTimeout(activeTimer); activeTimer = null; }
+      if (activeWorker) { activeWorker.terminate(); activeWorker = null; }
+    }
+
     async function runCode() {
       const code = editor.state.doc.toString();
       if (!code.trim()) return;
 
+      cleanupWorker();
       outputEl.innerHTML = "";
       runBtn.disabled = true;
       statusEl.textContent = "Compiling...";
 
       try {
-        // Step 1: Compile
+        // Step 1: Compile on server
         const t0 = performance.now();
         const resp = await fetch(COMPILE_URL + "/compile", {
           method: "POST",
@@ -198,55 +208,60 @@ println("1 + 1 = ", 1 + 1)
           const err = await resp.json();
           statusEl.textContent = "Compile error";
           appendOutput("Compile error: " + (err.error || err.message || "Unknown error"), "error");
+          runBtn.disabled = false;
           return;
         }
 
         const wasmBytes = await resp.arrayBuffer();
         const compileTime = performance.now() - t0;
         statusEl.textContent = `Compiled (${(compileTime / 1000).toFixed(2)}s, ${(wasmBytes.byteLength / 1024).toFixed(1)} KB)`;
-
-        // Step 2: Execute in browser
         appendOutput(`[Compiled ${(wasmBytes.byteLength / 1024).toFixed(1)} KB in ${(compileTime / 1000).toFixed(2)}s]\n`, "info");
 
-        const importObject = {
-          "io": {
-            "write_string": (s) => { appendOutput(s); },
-            "write_int": (n) => { appendOutput(String(n)); },
-            "write_float": (f) => { appendOutput(String(f)); },
-            "write_bool": (b) => { appendOutput(b ? "true" : "false"); },
-            "write_newline": () => { appendOutput("\n"); },
-            "write_nothing": () => { appendOutput("nothing"); },
-          },
-          "Math": { "pow": Math.pow },
-          "env": {
-            "capture_stack": () => null,
-            "perf_now": () => performance.now(),
-            "random_i64": () => BigInt(Math.floor(Math.random() * 2**63)),
-          },
+        // Step 2: Execute in Web Worker with timeout
+        statusEl.textContent += " | Executing...";
+        const worker = new Worker("worker.js");
+        activeWorker = worker;
+
+        activeTimer = setTimeout(() => {
+          worker.terminate();
+          activeWorker = null;
+          activeTimer = null;
+          appendOutput("\n[Execution timed out after " + (EXEC_TIMEOUT_MS / 1000) + "s]\n", "error");
+          statusEl.textContent += " | Timed out";
+          runBtn.disabled = false;
+        }, EXEC_TIMEOUT_MS);
+
+        worker.onmessage = (e) => {
+          const msg = e.data;
+          if (msg.type === "stdout") {
+            appendOutput(msg.data);
+          } else if (msg.type === "done") {
+            cleanupWorker();
+            appendOutput(`\n[Executed in ${msg.execTime.toFixed(1)}ms]\n`, "info");
+            statusEl.textContent += ` | Executed (${msg.execTime.toFixed(1)}ms)`;
+            runBtn.disabled = false;
+          } else if (msg.type === "error") {
+            cleanupWorker();
+            appendOutput("Runtime error: " + msg.error + "\n", "error");
+            statusEl.textContent = "Runtime error";
+            runBtn.disabled = false;
+          }
         };
 
-        const t1 = performance.now();
-        const mod = await WebAssembly.compile(new Uint8Array(wasmBytes));
-        const instance = await WebAssembly.instantiate(mod, importObject);
+        worker.onerror = (e) => {
+          cleanupWorker();
+          appendOutput("Worker error: " + e.message + "\n", "error");
+          statusEl.textContent = "Worker error";
+          runBtn.disabled = false;
+        };
 
-        // Call main (bare expressions) or list exports
-        if (instance.exports.main) {
-          instance.exports.main();
-        } else {
-          // List available exports for function-definition mode
-          const exports = Object.keys(instance.exports);
-          appendOutput("Exported functions: " + exports.join(", ") + "\n", "info");
-        }
-
-        const execTime = performance.now() - t1;
-        appendOutput(`\n[Executed in ${execTime.toFixed(1)}ms]\n`, "info");
-        statusEl.textContent += ` | Executed (${execTime.toFixed(1)}ms)`;
+        // Transfer wasm bytes to worker (zero-copy)
+        worker.postMessage({ type: "run", wasm: wasmBytes }, [wasmBytes]);
 
       } catch (e) {
+        cleanupWorker();
         appendOutput("Error: " + e.message + "\n", "error");
-        if (e.stack) appendOutput(e.stack + "\n", "error");
         statusEl.textContent = "Error";
-      } finally {
         runBtn.disabled = false;
       }
     }
