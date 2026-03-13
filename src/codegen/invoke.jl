@@ -3433,6 +3433,10 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                             arg_type = Bool
                         elseif arg isa Nothing || arg === nothing || (arg isa GlobalRef && arg.name === :nothing)
                             arg_type = Nothing
+                        elseif arg isa Tuple
+                            arg_type = typeof(arg)
+                        elseif arg isa Vector
+                            arg_type = typeof(arg)
                         end
 
                         if arg_type === String || arg_type === Symbol
@@ -3470,6 +3474,225 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                             # PURE-9041: println(nothing) → write "nothing"
                             push!(bytes, Opcode.CALL)
                             append!(bytes, encode_leb128_unsigned(io.write_nothing_idx))
+                        elseif arg_type !== nothing && arg_type <: Vector
+                            # PURE-9067: Vector display — emit "[e1, e2, ...]"
+                            elem_type = eltype(arg_type)
+
+                            # Register vector type to get struct info
+                            vec_info = register_vector_type!(ctx.mod, ctx.type_registry, arg_type)
+                            vec_type_idx = vec_info.wasm_type_idx
+                            data_array_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
+
+                            # Compile the vector value onto stack
+                            append!(bytes, compile_value(arg, ctx))
+
+                            # Allocate locals: vec_ref, data_arr, len, i, tmp_str
+                            vec_local = UInt32(allocate_local!(ctx, ConcreteRef(vec_type_idx, true)))
+                            data_local = UInt32(allocate_local!(ctx, ConcreteRef(data_array_idx, true)))
+                            len_local = UInt32(allocate_local!(ctx, I32))
+                            i_local = UInt32(allocate_local!(ctx, I32))
+                            str_tmp_local = UInt32(allocate_local!(ctx, ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true)))
+
+                            # Store vec ref
+                            push!(bytes, Opcode.LOCAL_SET)
+                            append!(bytes, encode_leb128_unsigned(vec_local))
+
+                            # Get data array: struct.get field 1 (after typeId at field 0)
+                            push!(bytes, Opcode.LOCAL_GET)
+                            append!(bytes, encode_leb128_unsigned(vec_local))
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.STRUCT_GET)
+                            append!(bytes, encode_leb128_unsigned(vec_type_idx))
+                            append!(bytes, encode_leb128_unsigned(UInt32(1)))  # field 1 = data array
+                            push!(bytes, Opcode.LOCAL_SET)
+                            append!(bytes, encode_leb128_unsigned(data_local))
+
+                            # Get length: array.len
+                            push!(bytes, Opcode.LOCAL_GET)
+                            append!(bytes, encode_leb128_unsigned(data_local))
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.ARRAY_LEN)
+                            push!(bytes, Opcode.LOCAL_SET)
+                            append!(bytes, encode_leb128_unsigned(len_local))
+
+                            # Write "["
+                            append!(bytes, compile_value("[", ctx))
+                            emit_jl_string_to_js!(bytes, io.decode_idx, str_tmp_local)
+                            push!(bytes, Opcode.CALL)
+                            append!(bytes, encode_leb128_unsigned(io.write_string_idx))
+
+                            # Initialize i = 0
+                            push!(bytes, Opcode.I32_CONST)
+                            push!(bytes, 0x00)
+                            push!(bytes, Opcode.LOCAL_SET)
+                            append!(bytes, encode_leb128_unsigned(i_local))
+
+                            # Loop: block { loop { ... } }
+                            push!(bytes, Opcode.BLOCK)   # block (label 1 = break)
+                            push!(bytes, 0x40)            # void
+                            push!(bytes, Opcode.LOOP)     # loop (label 0 = continue)
+                            push!(bytes, 0x40)            # void
+
+                            # if i >= len, break
+                            push!(bytes, Opcode.LOCAL_GET)
+                            append!(bytes, encode_leb128_unsigned(i_local))
+                            push!(bytes, Opcode.LOCAL_GET)
+                            append!(bytes, encode_leb128_unsigned(len_local))
+                            push!(bytes, Opcode.I32_GE_S)
+                            push!(bytes, Opcode.BR_IF)
+                            push!(bytes, 0x01)  # break to outer block
+
+                            # if i > 0, write ", "
+                            push!(bytes, Opcode.LOCAL_GET)
+                            append!(bytes, encode_leb128_unsigned(i_local))
+                            push!(bytes, Opcode.I32_CONST)
+                            push!(bytes, 0x00)
+                            push!(bytes, Opcode.I32_NE)
+                            push!(bytes, Opcode.IF)
+                            push!(bytes, 0x40)  # void
+                            append!(bytes, compile_value(", ", ctx))
+                            emit_jl_string_to_js!(bytes, io.decode_idx, str_tmp_local)
+                            push!(bytes, Opcode.CALL)
+                            append!(bytes, encode_leb128_unsigned(io.write_string_idx))
+                            push!(bytes, Opcode.END)  # end if
+
+                            # Get element: data_arr[i]
+                            push!(bytes, Opcode.LOCAL_GET)
+                            append!(bytes, encode_leb128_unsigned(data_local))
+                            push!(bytes, Opcode.LOCAL_GET)
+                            append!(bytes, encode_leb128_unsigned(i_local))
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.ARRAY_GET)
+                            append!(bytes, encode_leb128_unsigned(data_array_idx))
+
+                            # Display element based on element type
+                            if elem_type === Int32
+                                push!(bytes, Opcode.I64_EXTEND_I32_S)
+                                push!(bytes, Opcode.CALL)
+                                append!(bytes, encode_leb128_unsigned(io.write_int_idx))
+                            elseif elem_type === Int64 || elem_type === Int || elem_type === UInt64
+                                push!(bytes, Opcode.CALL)
+                                append!(bytes, encode_leb128_unsigned(io.write_int_idx))
+                            elseif elem_type === Float64
+                                push!(bytes, Opcode.CALL)
+                                append!(bytes, encode_leb128_unsigned(io.write_float_idx))
+                            elseif elem_type === Float32
+                                push!(bytes, Opcode.F64_PROMOTE_F32)
+                                push!(bytes, Opcode.CALL)
+                                append!(bytes, encode_leb128_unsigned(io.write_float_idx))
+                            elseif elem_type === Bool
+                                push!(bytes, Opcode.CALL)
+                                append!(bytes, encode_leb128_unsigned(io.write_bool_idx))
+                            else
+                                # Unsupported element type — just write "?"
+                                push!(bytes, Opcode.DROP)
+                                append!(bytes, compile_value("?", ctx))
+                                emit_jl_string_to_js!(bytes, io.decode_idx, str_tmp_local)
+                                push!(bytes, Opcode.CALL)
+                                append!(bytes, encode_leb128_unsigned(io.write_string_idx))
+                            end
+
+                            # i += 1
+                            push!(bytes, Opcode.LOCAL_GET)
+                            append!(bytes, encode_leb128_unsigned(i_local))
+                            push!(bytes, Opcode.I32_CONST)
+                            push!(bytes, 0x01)
+                            push!(bytes, Opcode.I32_ADD)
+                            push!(bytes, Opcode.LOCAL_SET)
+                            append!(bytes, encode_leb128_unsigned(i_local))
+
+                            # Branch back to loop
+                            push!(bytes, Opcode.BR)
+                            push!(bytes, 0x00)  # continue loop
+
+                            push!(bytes, Opcode.END)  # end loop
+                            push!(bytes, Opcode.END)  # end block
+
+                            # Write "]"
+                            append!(bytes, compile_value("]", ctx))
+                            emit_jl_string_to_js!(bytes, io.decode_idx, str_tmp_local)
+                            push!(bytes, Opcode.CALL)
+                            append!(bytes, encode_leb128_unsigned(io.write_string_idx))
+                        elseif arg_type !== nothing && arg_type <: Tuple && arg_type isa DataType
+                            # PURE-9067: Tuple display — emit "(e1, e2, ...)"
+                            tuple_info = register_tuple_type!(ctx.mod, ctx.type_registry, arg_type)
+                            if tuple_info !== nothing
+                                tuple_type_idx = tuple_info.wasm_type_idx
+                                elem_types = arg_type.parameters
+
+                                # Compile tuple value and store in local
+                                append!(bytes, compile_value(arg, ctx))
+                                tup_local = UInt32(allocate_local!(ctx, ConcreteRef(tuple_type_idx, true)))
+                                str_tmp_local2 = UInt32(allocate_local!(ctx, ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true)))
+                                push!(bytes, Opcode.LOCAL_SET)
+                                append!(bytes, encode_leb128_unsigned(tup_local))
+
+                                # Write "("
+                                append!(bytes, compile_value("(", ctx))
+                                emit_jl_string_to_js!(bytes, io.decode_idx, str_tmp_local2)
+                                push!(bytes, Opcode.CALL)
+                                append!(bytes, encode_leb128_unsigned(io.write_string_idx))
+
+                                for (fi, et) in enumerate(elem_types)
+                                    # Write ", " separator (after first element)
+                                    if fi > 1
+                                        append!(bytes, compile_value(", ", ctx))
+                                        emit_jl_string_to_js!(bytes, io.decode_idx, str_tmp_local2)
+                                        push!(bytes, Opcode.CALL)
+                                        append!(bytes, encode_leb128_unsigned(io.write_string_idx))
+                                    end
+
+                                    # Get field: struct.get (field index = fi because of typeId at 0)
+                                    push!(bytes, Opcode.LOCAL_GET)
+                                    append!(bytes, encode_leb128_unsigned(tup_local))
+                                    push!(bytes, Opcode.GC_PREFIX)
+                                    push!(bytes, Opcode.STRUCT_GET)
+                                    append!(bytes, encode_leb128_unsigned(tuple_type_idx))
+                                    append!(bytes, encode_leb128_unsigned(UInt32(fi)))  # field fi (1-based = after typeId)
+
+                                    # Write element based on type
+                                    if et === Int32
+                                        push!(bytes, Opcode.I64_EXTEND_I32_S)
+                                        push!(bytes, Opcode.CALL)
+                                        append!(bytes, encode_leb128_unsigned(io.write_int_idx))
+                                    elseif et === Int64 || et === Int || et === UInt64
+                                        push!(bytes, Opcode.CALL)
+                                        append!(bytes, encode_leb128_unsigned(io.write_int_idx))
+                                    elseif et === Float64
+                                        push!(bytes, Opcode.CALL)
+                                        append!(bytes, encode_leb128_unsigned(io.write_float_idx))
+                                    elseif et === Float32
+                                        push!(bytes, Opcode.F64_PROMOTE_F32)
+                                        push!(bytes, Opcode.CALL)
+                                        append!(bytes, encode_leb128_unsigned(io.write_float_idx))
+                                    elseif et === Bool
+                                        push!(bytes, Opcode.CALL)
+                                        append!(bytes, encode_leb128_unsigned(io.write_bool_idx))
+                                    else
+                                        push!(bytes, Opcode.DROP)
+                                        append!(bytes, compile_value("?", ctx))
+                                        emit_jl_string_to_js!(bytes, io.decode_idx, str_tmp_local2)
+                                        push!(bytes, Opcode.CALL)
+                                        append!(bytes, encode_leb128_unsigned(io.write_string_idx))
+                                    end
+                                end
+
+                                # Single-element tuple gets trailing comma: (1,)
+                                if length(elem_types) == 1
+                                    append!(bytes, compile_value(",", ctx))
+                                    emit_jl_string_to_js!(bytes, io.decode_idx, str_tmp_local2)
+                                    push!(bytes, Opcode.CALL)
+                                    append!(bytes, encode_leb128_unsigned(io.write_string_idx))
+                                end
+
+                                # Write ")"
+                                append!(bytes, compile_value(")", ctx))
+                                emit_jl_string_to_js!(bytes, io.decode_idx, str_tmp_local2)
+                                push!(bytes, Opcode.CALL)
+                                append!(bytes, encode_leb128_unsigned(io.write_string_idx))
+                            else
+                                @warn "println/print: unsupported Tuple type $arg_type, skipping"
+                            end
                         else
                             # Unknown type — skip (stub)
                             @warn "println/print: unsupported argument type $arg_type, skipping"
