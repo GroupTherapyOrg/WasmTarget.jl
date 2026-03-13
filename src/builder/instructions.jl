@@ -1120,6 +1120,13 @@ function write_valtype!(w::WasmWriter, vt::UInt8)
     write_byte!(w, vt)
 end
 
+function write_valtype!(w::WasmWriter, vt::NonNullAbstractRef)
+    # Non-nullable reference to an abstract heap type: (ref extern), (ref func), etc.
+    # Binary: 0x64 (non-null ref prefix) + heap type byte
+    write_byte!(w, 0x64)  # ref (non-null)
+    write_byte!(w, vt.heaptype_byte)
+end
+
 function write_valtype!(w::WasmWriter, vt::ConcreteRef)
     # Concrete reference type: (ref null $typeidx) or (ref $typeidx)
     # Binary format: 0x63 (nullable) or 0x64 (non-nullable) followed by heap type index

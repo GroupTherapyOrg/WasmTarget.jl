@@ -1,4 +1,88 @@
 # ============================================================================
+# String IO — wasm:text-decoder / wasm:text-encoder Imports
+# ============================================================================
+
+"""
+    add_string_io_imports!(mod, type_registry) -> (decode_idx, encode_idx)
+
+Add `wasm:text-decoder.decodeStringFromUTF8Array` and
+`wasm:text-encoder.encodeStringToUTF8Array` imports to the module.
+
+These are JS String Builtins that convert between WasmGC `(array (mut i8))`
+UTF-8 byte arrays and JS strings (externref). They are provided automatically
+by engines compiled with `builtins: ["js-string"]`, or can be polyfilled.
+
+Returns a named tuple `(decode_idx, encode_idx)` with the import function indices.
+"""
+function add_string_io_imports!(mod::WasmModule, type_registry::TypeRegistry)
+    # Ensure string array type is registered (needed for ConcreteRef in signatures)
+    str_arr_type_idx = get_string_array_type!(mod, type_registry)
+    str_arr_ref_nullable = ConcreteRef(str_arr_type_idx, true)   # (ref null $str_arr)
+    str_arr_ref_nonnull = ConcreteRef(str_arr_type_idx, false)   # (ref $str_arr)
+
+    # decodeStringFromUTF8Array: (ref null (array (mut i8)), i32, i32) → (ref extern)
+    # V8 requires non-null (ref extern) return type, not nullable externref
+    decode_idx = add_import!(mod, "wasm:text-decoder", "decodeStringFromUTF8Array",
+        WasmValType[str_arr_ref_nullable, I32, I32],
+        WasmValType[NonNullExternRef])
+
+    # encodeStringToUTF8Array: (externref) → (ref (array (mut i8)))
+    encode_idx = add_import!(mod, "wasm:text-encoder", "encodeStringToUTF8Array",
+        WasmValType[ExternRef],
+        WasmValType[str_arr_ref_nonnull])
+
+    return (decode_idx=decode_idx, encode_idx=encode_idx)
+end
+
+"""
+    emit_jl_string_to_js(bytes, decode_func_idx)
+
+Emit bytecode to convert a Julia string (WasmGC i8 array on stack) to a JS string (externref).
+
+**Stack effect:** `[(ref \$str_arr)] → [externref]`
+
+Emits: `local.tee \$tmp; i32.const 0; local.get \$tmp; array.len; call \$decode`
+
+Note: Caller must ensure a scratch local is available for tee-ing the array ref.
+This function takes `tmp_local` as the index of that scratch local.
+"""
+function emit_jl_string_to_js!(bytes::Vector{UInt8}, decode_func_idx::UInt32, tmp_local::UInt32)
+    # Stack: [str_arr_ref]
+    # We need: [str_arr_ref, 0, str_arr_ref.len]
+    # Tee the array ref so we can get its length
+    push!(bytes, Opcode.LOCAL_TEE)
+    append!(bytes, encode_leb128_unsigned(tmp_local))
+
+    # Push offset = 0
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+
+    # Push length = array.len
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(tmp_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_LEN)
+
+    # Call decodeStringFromUTF8Array(array, offset, length) → externref
+    push!(bytes, Opcode.CALL)
+    append!(bytes, encode_leb128_unsigned(decode_func_idx))
+end
+
+"""
+    emit_js_to_jl_string!(bytes, encode_func_idx)
+
+Emit bytecode to convert a JS string (externref on stack) to a Julia string (WasmGC i8 array).
+
+**Stack effect:** `[externref] → [(ref \$str_arr)]`
+"""
+function emit_js_to_jl_string!(bytes::Vector{UInt8}, encode_func_idx::UInt32)
+    # Stack: [externref]
+    # Call encodeStringToUTF8Array(externref) → (ref $str_arr)
+    push!(bytes, Opcode.CALL)
+    append!(bytes, encode_leb128_unsigned(encode_func_idx))
+end
+
+# ============================================================================
 # String Operations
 # ============================================================================
 

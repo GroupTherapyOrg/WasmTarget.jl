@@ -1,7 +1,7 @@
 # Wasm Types - Value types, Reference types, and composite types
 # Reference: https://webassembly.github.io/spec/core/binary/types.html
 
-export ValType, NumType, RefType, ConcreteRef, FuncType, StructType, ArrayType, FieldType, CompositeType, WasmValType, JSValue, WasmGlobal
+export ValType, NumType, RefType, ConcreteRef, NonNullAbstractRef, FuncType, StructType, ArrayType, FieldType, CompositeType, WasmValType, JSValue, WasmGlobal
 
 # ============================================================================
 # Value Types (Section 5.3.1)
@@ -56,11 +56,25 @@ end
 ConcreteRef(type_idx::UInt32) = ConcreteRef(type_idx, true)  # Default nullable
 
 """
+    NonNullAbstractRef
+
+A non-nullable reference to an abstract heap type, e.g., `(ref extern)` or `(ref func)`.
+RefType values like ExternRef (0x6F) are always nullable shorthand; this type
+expresses the non-null variant needed for some import signatures (e.g., JS String Builtins).
+"""
+struct NonNullAbstractRef
+    heaptype_byte::UInt8  # Same byte as the RefType enum: 0x6F for extern, 0x70 for func, etc.
+end
+
+const NonNullExternRef = NonNullAbstractRef(UInt8(ExternRef))  # (ref extern)
+const NonNullFuncRef = NonNullAbstractRef(UInt8(FuncRef))      # (ref func)
+
+"""
     WasmValType
 
 Union type for all Wasm value types (numeric, reference, packed, concrete refs).
 """
-const WasmValType = Union{NumType, RefType, ConcreteRef, UInt8}
+const WasmValType = Union{NumType, RefType, ConcreteRef, NonNullAbstractRef, UInt8}
 
 # ============================================================================
 # Function Types (Section 5.3.6)
