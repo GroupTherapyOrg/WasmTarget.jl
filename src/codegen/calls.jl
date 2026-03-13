@@ -4177,32 +4177,37 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 push!(bytes, Opcode.I32_CONST)
                 push!(bytes, 0x01)
             elseif isa2_val_wasm === ExternRef
-                # PURE-324: Value is externref (Any-typed field). Need proper type check,
-                # not just null check. Use any.convert_extern + ref.test to check actual type.
-                # Example: isa(stream.text_root, String) where text_root::Any could be
-                # IOBuffer, String, or SubString — must distinguish at runtime.
-                local target_wasm = get_concrete_wasm_type(check_type, ctx.mod, ctx.type_registry)
-                if target_wasm isa ConcreteRef
+                # PURE-324: Value is externref (Any-typed field). Need proper type check.
+                # PURE-9032: For Exception subtypes with DFS typeIds, use typeId comparison
+                # instead of ref.test (which can't distinguish structurally identical types
+                # due to Wasm type canonicalization).
+                local _isa2_check_tid = get_type_id(ctx.type_registry, check_type)
+                if _isa2_check_tid > 0 && check_type <: Exception && ctx.type_registry.base_struct_idx !== nothing
+                    # typeId-based check: extract typeId from exception struct + compare
                     append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
-                    push!(bytes, Opcode.GC_PREFIX)
-                    # PURE-325: Use REF_TEST (non-nullable) instead of REF_TEST_NULL.
-                    # ref.test null returns true for null refs, but isa(nothing, T) should
-                    # return false for concrete types. null externref in Vector{Any} was
-                    # passing isa(x, Expr) check and crashing on struct_get.
-                    push!(bytes, Opcode.REF_TEST)
-                    append!(bytes, encode_leb128_signed(Int64(target_wasm.type_idx)))
-                elseif haskey(ctx.type_registry.numeric_boxes, target_wasm)
-                    # PURE-325: Check for boxed numeric type (e.g., isa(externref, Int64)
-                    # where Int64 was boxed via get_numeric_box_type!)
-                    local box_type_idx = ctx.type_registry.numeric_boxes[target_wasm]
-                    append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.REF_TEST)
-                    append!(bytes, encode_leb128_signed(Int64(box_type_idx)))
+                    emit_typeof!(bytes, ctx.type_registry.base_struct_idx)
+                    push!(bytes, Opcode.I32_CONST)
+                    append!(bytes, encode_leb128_signed(Int64(_isa2_check_tid)))
+                    push!(bytes, Opcode.I32_EQ)
                 else
-                    # Fallback: non-null check for non-concrete wasm types
-                    push!(bytes, Opcode.REF_IS_NULL)
-                    push!(bytes, Opcode.I32_EQZ)
+                    local target_wasm = get_concrete_wasm_type(check_type, ctx.mod, ctx.type_registry)
+                    if target_wasm isa ConcreteRef
+                        append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                        push!(bytes, Opcode.GC_PREFIX)
+                        # PURE-325: Use REF_TEST (non-nullable) instead of REF_TEST_NULL.
+                        push!(bytes, Opcode.REF_TEST)
+                        append!(bytes, encode_leb128_signed(Int64(target_wasm.type_idx)))
+                    elseif haskey(ctx.type_registry.numeric_boxes, target_wasm)
+                        local box_type_idx = ctx.type_registry.numeric_boxes[target_wasm]
+                        append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.REF_TEST)
+                        append!(bytes, encode_leb128_signed(Int64(box_type_idx)))
+                    else
+                        # Fallback: non-null check for non-concrete wasm types
+                        push!(bytes, Opcode.REF_IS_NULL)
+                        push!(bytes, Opcode.I32_EQZ)
+                    end
                 end
             elseif isa2_val_wasm === AnyRef || isa2_val_wasm isa ConcreteRef || isa2_val_wasm === StructRef
                 # PURE-9030: anyref/structref value — use ref.test to check concrete box type.

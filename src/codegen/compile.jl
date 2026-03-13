@@ -1435,6 +1435,14 @@ function compile_module(functions::Vector;
         end
     end
 
+    # PURE-9032: Pre-register common exception types so they get DFS typeIds
+    # and proper Wasm struct types before codegen begins. This enables
+    # typeId-based isa checks in catch blocks.
+    for _exn_T in (ErrorException, ArgumentError, BoundsError, KeyError, MethodError,
+                   OverflowError, DivideError, TypeError, DomainError, InexactError)
+        register_struct_type!(mod, type_registry, _exn_T)
+    end
+
     # PURE-9025: Assign DFS type IDs after all types are registered
     assign_type_ids!(type_registry)
 
@@ -1608,6 +1616,12 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
                 end
             end
         end
+    end
+
+    # PURE-9032: Pre-register common exception types so they get DFS typeIds
+    for _exn_T in (ErrorException, ArgumentError, BoundsError, KeyError, MethodError,
+                   OverflowError, DivideError, TypeError, DomainError, InexactError)
+        register_struct_type!(mod, type_registry, _exn_T)
     end
 
     # PURE-9025: Assign DFS type IDs after all types are registered
