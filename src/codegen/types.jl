@@ -1643,6 +1643,19 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
             # Multi-variant union - fall back to generic type
             return julia_to_wasm_type(T)
         end
+    elseif T === Core.SimpleVector
+        # PURE-9064: Core.SimpleVector maps to $JlSVec array type when JlType hierarchy is active.
+        # This ensures field access on DataType.parameters returns the correct type.
+        if registry.jl_svec_idx !== nothing
+            return ConcreteRef(registry.jl_svec_idx, true)
+        end
+        return ArrayRef
+    elseif T === Core.TypeName
+        # PURE-9064: Core.TypeName maps to $JlTypeName struct type when hierarchy is active.
+        if registry.jl_typename_idx !== nothing
+            return ConcreteRef(registry.jl_typename_idx, true)
+        end
+        return StructRef
     else
         return julia_to_wasm_type(T)
     end

@@ -385,6 +385,18 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
         elem_type = T.parameters[2]
         type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
         return ConcreteRef(type_idx, true)
+    elseif T === Core.SimpleVector
+        # PURE-9064: Core.SimpleVector maps to $JlSVec array when hierarchy is active.
+        if ctx.type_registry.jl_svec_idx !== nothing
+            return ConcreteRef(ctx.type_registry.jl_svec_idx, true)
+        end
+        return ArrayRef
+    elseif T === Core.TypeName
+        # PURE-9064: Core.TypeName maps to $JlTypeName struct when hierarchy is active.
+        if ctx.type_registry.jl_typename_idx !== nothing
+            return ConcreteRef(ctx.type_registry.jl_typename_idx, true)
+        end
+        return StructRef
     elseif is_struct_type(T)
         # If struct is registered, return a ConcreteRef
         if haskey(ctx.type_registry.structs, T)

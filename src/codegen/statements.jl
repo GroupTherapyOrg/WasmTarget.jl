@@ -810,9 +810,12 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                                     # Skip SSA type check — it would see Julia Any→ExternRef and
                                     # incorrectly emit any_convert_extern.
                                     struct_get_type_ok = true
-                                elseif field_result_type isa ConcreteRef
-                                    # Incompatible concrete ref types
-                                    needs_type_safe_default = true
+                                elseif field_result_type isa ConcreteRef && local_wasm_type isa ConcreteRef
+                                    # PURE-9064: Different concrete ref types. The field may return a
+                                    # supertype ref (e.g., $JlType from DataType.super) that needs
+                                    # downcasting to the target local type (e.g., $JlDataType).
+                                    # Use ref.cast instead of type-safe default (ref.null).
+                                    needs_ref_cast_local = local_wasm_type
                                 elseif (field_result_type === I32 || field_result_type === I64 ||
                                         field_result_type === F32 || field_result_type === F64)
                                     # struct_get produces a numeric value but target local is ref-typed
