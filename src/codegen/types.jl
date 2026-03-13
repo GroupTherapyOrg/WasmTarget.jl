@@ -264,9 +264,8 @@ Result: i32 typeId on the stack.
 function emit_typeof!(bytes::Vector{UInt8}, base_idx::UInt32)
     # ref.cast (ref $JlBase) — cast anyref/structref to base struct ref
     push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.REF_CAST)  # ref.cast non-null
-    push!(bytes, 0x63)  # ref (non-nullable)
-    append!(bytes, encode_leb128_unsigned(base_idx))
+    push!(bytes, Opcode.REF_CAST)  # ref.cast non-null: immediate is just the heap type index
+    append!(bytes, encode_leb128_signed(Int64(base_idx)))
     # struct.get $JlBase 0 — extract typeId field
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)

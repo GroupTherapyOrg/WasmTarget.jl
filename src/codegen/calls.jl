@@ -38,6 +38,48 @@ function _is_externref_value(val, ctx::CompilationContext)::Bool
 end
 
 """
+    _is_typeof_ssa(val, ctx) -> Bool
+
+PURE-9026: Check if a value is an SSAValue whose defining statement is a typeof() call.
+"""
+function _is_typeof_ssa(val, ctx::CompilationContext)::Bool
+    if !(val isa Core.SSAValue)
+        return false
+    end
+    if val.id < 1 || val.id > length(ctx.code_info.code)
+        return false
+    end
+    stmt = ctx.code_info.code[val.id]
+    if stmt isa Expr && stmt.head === :call && length(stmt.args) >= 2
+        f = stmt.args[1]
+        return is_func(f, :typeof)
+    end
+    return false
+end
+
+"""
+    _resolve_type_const(val, ctx) -> Union{DataType, Nothing}
+
+PURE-9026: If val is a Type constant (GlobalRef to a type, or a direct Type value),
+return the DataType. Otherwise return nothing.
+"""
+function _resolve_type_const(val, ctx::CompilationContext)::Union{DataType, Nothing}
+    if val isa Type && isconcretetype(val)
+        return val
+    end
+    if val isa GlobalRef
+        try
+            actual = getfield(val.mod, val.name)
+            if actual isa Type && isconcretetype(actual)
+                return actual
+            end
+        catch
+        end
+    end
+    return nothing
+end
+
+"""
 Compile a function call expression.
 """
 function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt8}
@@ -1840,6 +1882,32 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         return bytes
     end
 
+    # PURE-9026: typeof(x) — extract typeId from struct field 0
+    # Returns the DFS type ID as an i32 (statically or dynamically)
+    if is_func(func, :typeof) && length(args) >= 1
+        arg = args[1]
+        arg_type = infer_value_type(arg, ctx)
+
+        if arg_type !== nothing && isconcretetype(arg_type)
+            # Statically known type — push constant typeId
+            type_id = get_type_id(ctx.type_registry, arg_type)
+            push!(bytes, Opcode.I32_CONST)
+            append!(bytes, encode_leb128_signed(Int64(type_id)))
+        else
+            # Polymorphic value (anyref/structref) — extract typeId at runtime
+            append!(bytes, compile_value(arg, ctx))
+            base_idx = ctx.type_registry.base_struct_idx
+            if base_idx !== nothing
+                emit_typeof!(bytes, base_idx)
+            else
+                # Fallback: no base struct type, push 0 (unknown)
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+            end
+        end
+        return bytes
+    end
+
     # Special case for typeassert - just pass through the value
     # Core.typeassert(x, T) returns x if type matches, throws otherwise
     # In Wasm we don't do runtime type checks, so just return the value
@@ -1860,6 +1928,35 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             append!(bytes, compile_string_equal(args[1], args[2], ctx))
             if is_func(func, :(!==))
                 # Negate the result for !==
+                push!(bytes, Opcode.I32_EQZ)
+            end
+            return bytes
+        end
+
+        # PURE-9026: typeof(x) === Type — compare typeIds as i32
+        # Detect when one arg comes from typeof() and the other is a Type constant
+        arg1_is_typeof = _is_typeof_ssa(args[1], ctx)
+        arg2_is_typeof = _is_typeof_ssa(args[2], ctx)
+        arg1_is_type_const = _resolve_type_const(args[1], ctx)
+        arg2_is_type_const = _resolve_type_const(args[2], ctx)
+
+        if (arg1_is_typeof && arg2_is_type_const !== nothing) ||
+           (arg2_is_typeof && arg1_is_type_const !== nothing)
+            # Both sides become i32 typeIds, compared with i32.eq
+            if arg1_is_typeof
+                append!(bytes, compile_value(args[1], ctx))  # emits typeof → i32 typeId
+                # Push the type constant's typeId
+                type_id = get_type_id(ctx.type_registry, arg2_is_type_const)
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int64(type_id)))
+            else
+                append!(bytes, compile_value(args[2], ctx))  # emits typeof → i32 typeId
+                type_id = get_type_id(ctx.type_registry, arg1_is_type_const)
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int64(type_id)))
+            end
+            push!(bytes, Opcode.I32_EQ)
+            if is_func(func, :(!==))
                 push!(bytes, Opcode.I32_EQZ)
             end
             return bytes

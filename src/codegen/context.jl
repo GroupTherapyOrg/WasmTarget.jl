@@ -1037,6 +1037,19 @@ function allocate_ssa_locals!(ctx::CompilationContext)
                 end
             end
 
+            # PURE-9026: typeof(x) returns i32 typeId, not DataType struct ref.
+            # Override the SSA type so the local is allocated as i32.
+            if stmt isa Expr && stmt.head === :call
+                func = stmt.args[1]
+                _is_typeof_call = (func isa GlobalRef &&
+                    (func.name === :typeof)) ||
+                    (func isa Function && func === typeof)
+                if _is_typeof_call
+                    ssa_type = Int32
+                    ctx.ssa_types[ssa_id] = Int32
+                end
+            end
+
             # Skip Nothing type - nothing is compiled as ref.null, not i32
             # Trying to store it in an i32 local causes type errors
             if ssa_type === Nothing
