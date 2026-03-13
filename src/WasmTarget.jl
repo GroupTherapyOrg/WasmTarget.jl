@@ -37,7 +37,7 @@ include("runtime/bytebuffer.jl")
 include("runtime/tokenizer.jl")
 
 # Main API
-export compile, compile_multi, compile_from_codeinfo, optimize, WasmModule, to_bytes
+export compile, compile_multi, compile_from_codeinfo, compile_with_base, optimize, WasmModule, to_bytes
 export WasmGlobal, global_index, global_eltype
 # Therapy.jl integration - direct IR compilation for reactive handlers
 export compile_handler, compile_closure_body, DOMBindingSpec, TypeRegistry, FunctionRegistry
@@ -133,6 +133,72 @@ function compile_from_codeinfo(code_info::Core.CodeInfo, return_type::Type,
     optimize === false && return bytes
     level = optimize === true ? :size : optimize
     return WasmTarget.optimize(bytes; level=level)
+end
+
+# ============================================================================
+# PURE-9047: Compile with base.wasm merge
+# ============================================================================
+
+const WASM_MERGE_GC_FLAGS = [
+    "--enable-gc", "--enable-reference-types", "--enable-multivalue",
+    "--enable-bulk-memory", "--enable-sign-ext", "--enable-exception-handling",
+]
+
+"""
+    compile_with_base(functions; base_wasm_path, optimize=false) -> Vector{UInt8}
+
+Compile user functions and merge with a pre-compiled base.wasm module.
+User functions that would normally be compiled standalone are instead compiled
+into a separate user.wasm module, then merged with base.wasm via wasm-merge.
+
+The merged module contains all base exports + user exports, and user code
+can call base functions directly.
+
+# Arguments
+- `functions`: Same format as `compile_multi` — `[(f, arg_types, name), ...]`
+- `base_wasm_path`: Path to pre-compiled base.wasm (default: base.wasm in project root)
+- `optimize`: Same as compile() — false, true, :speed, or :debug
+
+# Returns
+Merged `Vector{UInt8}` containing both base and user functions.
+"""
+function compile_with_base(functions::Vector;
+                           base_wasm_path::String=joinpath(@__DIR__, "..", "base.wasm"),
+                           optimize=false)::Vector{UInt8}
+    # Check tools
+    wasm_merge = Sys.which("wasm-merge")
+    if wasm_merge === nothing
+        error("wasm-merge not found. Install Binaryen: brew install binaryen (macOS) or apt install binaryen (Linux)")
+    end
+
+    if !isfile(base_wasm_path)
+        error("base.wasm not found at $base_wasm_path. Run: julia --project=. scripts/build_base.jl")
+    end
+
+    # Compile user functions
+    user_bytes = compile_multi(functions)
+
+    # Merge with base.wasm
+    mktempdir() do dir
+        user_path = joinpath(dir, "user.wasm")
+        merged_path = joinpath(dir, "merged.wasm")
+        write(user_path, user_bytes)
+
+        cmd = `$(wasm_merge) $(WASM_MERGE_GC_FLAGS) $(base_wasm_path) base $(user_path) user -o $(merged_path)`
+        try
+            Base.run(cmd)
+        catch e
+            error("wasm-merge failed: $(e)")
+        end
+
+        merged_bytes = read(merged_path)
+
+        if optimize !== false
+            level = optimize === true ? :size : optimize
+            return WasmTarget.optimize(merged_bytes; level=level)
+        end
+        return merged_bytes
+    end
 end
 
 # ============================================================================
