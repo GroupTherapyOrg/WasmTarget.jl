@@ -135,7 +135,7 @@ These are intrinsic functions that have special compilation support.
 """
 const WASMTARGET_RUNTIME_FUNCTIONS = Set([
     # String operations (StringOps.jl)
-    :str_char, :str_setchar!, :str_len, :str_charlen, :str_new, :str_copy, :str_substr,
+    :str_char, :str_getchar, :str_setchar!, :str_len, :str_charlen, :str_new, :str_copy, :str_substr,
     :str_eq, :str_hash, :str_find, :str_contains, :str_startswith, :str_endswith,
     :str_uppercase, :str_lowercase, :str_trim,
     # String conversion (WASM-054, WASM-055)
@@ -585,7 +585,7 @@ Returns Nothing if types cannot be inferred.
 """
 function infer_runtime_func_arg_types(name::Symbol)::Union{Tuple, Nothing}
     # String operations typically use String and Int32
-    if name in [:str_char]
+    if name in [:str_char, :str_getchar]
         return (String, Int32)
     elseif name in [:str_setchar!]
         return (String, Int32, Int32)
@@ -651,7 +651,7 @@ function is_intrinsic_function(f)::Bool
         return false
     end
     fname = nameof(f)
-    return fname in [:str_char, :str_len, :str_charlen, :str_eq, :str_new, :str_setchar!, :str_concat, :str_substr]
+    return fname in [:str_char, :str_getchar, :str_len, :str_charlen, :str_eq, :str_new, :str_setchar!, :str_concat, :str_substr]
 end
 
 """

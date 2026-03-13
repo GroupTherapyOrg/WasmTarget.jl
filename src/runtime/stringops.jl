@@ -4,7 +4,7 @@
 # In WASM, strings are stored as packed i8 arrays (UTF-8 bytes).
 # These functions compile to direct array operations with array.get_u for reads.
 
-export str_char, str_setchar!, str_len, str_charlen, str_new, str_copy, str_substr, str_eq, str_hash,
+export str_char, str_getchar, str_setchar!, str_len, str_charlen, str_new, str_copy, str_substr, str_eq, str_hash,
        str_contains, str_find, str_uppercase, str_lowercase, str_trim, str_startswith, str_endswith,
        digit_to_str, int_to_string, float_to_string
 
@@ -31,6 +31,34 @@ end
 @noinline function str_char(s::String, i::Int32)::Int32
     # Use inferencebarrier to prevent constant folding
     return Base.inferencebarrier(Int32(codeunit(s, Int(i))))::Int32
+end
+
+"""
+    str_getchar(s::String, i::Int32)::Int32
+
+Decode the UTF-8 character starting at 1-based byte index `i` and return
+the Unicode codepoint as Int32. Handles 1-4 byte UTF-8 sequences.
+
+This is the Char-producing string index operation (like Julia's `s[i]`).
+Unlike `str_char` which returns a raw byte, this decodes multi-byte sequences.
+
+Compiles to Wasm inline UTF-8 decode logic (no loop needed — fixed 4-case branch).
+
+# Example
+```julia
+str_getchar("hello", Int32(1))  # Returns Int32(104) = codepoint of 'h'
+str_getchar("héllo", Int32(1))  # Returns Int32(104) = codepoint of 'h'
+str_getchar("héllo", Int32(2))  # Returns Int32(233) = codepoint of 'é'
+str_getchar("😀x", Int32(1))   # Returns Int32(128512) = codepoint of '😀'
+```
+"""
+@noinline function str_getchar(s::String, i::Int32)::Int32
+    # Julia fallback: decode UTF-8 at byte index i → codepoint
+    return Base.inferencebarrier(Int32(s[Int(i)]))::Int32
+end
+
+@noinline function str_getchar(s::String, i::Int)::Int32
+    return Base.inferencebarrier(Int32(s[i]))::Int32
 end
 
 """
