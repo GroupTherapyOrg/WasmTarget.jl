@@ -109,6 +109,26 @@ function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::
         push!(target_bytes, UInt8(ExternRef))
         return
     end
+    # PURE-9029: Check if this value should use ref.i31 (Bool, Int8, UInt8)
+    # ref.i31 is zero-allocation and makes ref.eq work correctly for ===
+    if val_wasm === I32
+        local _jl_type = nothing
+        if val isa Core.SSAValue && val.id <= length(ctx.ssa_types)
+            _jl_type = ctx.ssa_types[val.id]
+        elseif val isa Bool
+            _jl_type = Bool
+        elseif val isa Core.Argument && val.n <= length(ctx.arg_types)
+            _jl_type = ctx.arg_types[val.n]
+        end
+        if _jl_type !== nothing && should_use_i31(_jl_type)
+            # ref.i31 path: compile i32 value → ref.i31 → extern.convert_any
+            append!(target_bytes, compile_value(val, ctx))
+            emit_box_i31!(target_bytes)
+            push!(target_bytes, Opcode.GC_PREFIX)
+            push!(target_bytes, Opcode.EXTERN_CONVERT_ANY)
+            return
+        end
+    end
     # Box: compile value → struct_new(box_type) → extern_convert_any
     # PURE-9028: Push correct DFS typeId as field 0 before the value
     emit_box_type_id!(target_bytes, ctx.type_registry, val_wasm)
