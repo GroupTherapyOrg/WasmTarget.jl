@@ -196,6 +196,15 @@ struct DispOverlay2 x::Int32 end
 @noinline make_disp_overlay1(v::Int32) = DispOverlay1(v)
 @noinline make_disp_overlay2(v::Int32) = DispOverlay2(v)
 
+# PURE-9063: Type hierarchy test types
+struct TypeHierS1 x::Int32 end
+struct TypeHierS2 x::Int32 end
+@noinline typeof_check_s1(s::TypeHierS1)::Int32 = typeof(s) === TypeHierS1 ? Int32(1) : Int32(0)
+@noinline typeof_check_s2(s::TypeHierS2)::Int32 = typeof(s) === TypeHierS2 ? Int32(1) : Int32(0)
+@noinline typeof_cross_check(s::TypeHierS1)::Int32 = typeof(s) === TypeHierS2 ? Int32(1) : Int32(0)
+@noinline make_th_s1(v::Int32) = TypeHierS1(v)
+@noinline make_th_s2(v::Int32) = TypeHierS2(v)
+
 @testset "WasmTarget.jl" begin
 
     # ========================================================================
@@ -5036,6 +5045,124 @@ struct DispOverlay2 x::Int32 end
             @test h_overlay1 != h_overlay2  # Different overlay types get different hashes
             @test h_overlay1 != UInt32(0)   # Not the sentinel
             @test h_overlay2 != UInt32(0)
+        end
+
+    end
+
+    # ========================================================================
+    # Phase 36: Full $JlType Hierarchy Structs (PURE-9063)
+    # ========================================================================
+    @testset "Phase 36: JlType Hierarchy (PURE-9063)" begin
+
+        @testset "Type lookup table is created with all DFS types" begin
+            mod, type_registry, func_registry, _ = compile_module(
+                [(make_th_s1, (Int32,)), (make_th_s2, (Int32,))];
+                return_registries=true)
+
+            # Type lookup table should be created
+            @test type_registry.type_lookup_array_idx !== nothing
+            @test type_registry.type_lookup_global !== nothing
+
+            # All types with DFS IDs should have DataType globals
+            for (T, _) in type_registry.type_ids
+                T isa DataType || continue
+                @test haskey(type_registry.type_constant_globals, T)
+            end
+
+            # Abstract types in the hierarchy should also have globals
+            for T in [Any, Number, Integer, Signed, Unsigned, AbstractFloat, Real, Exception]
+                if haskey(type_registry.type_ranges, T)
+                    @test haskey(type_registry.type_constant_globals, T)
+                end
+            end
+
+            # Verify module validates
+            bytes = to_bytes(mod)
+            @test length(bytes) > 0
+        end
+
+        @testset "typeof(x) returns correct type via ref.eq" begin
+            if NODE_CMD !== nothing
+                funcs = [
+                    (typeof_check_s1, (TypeHierS1,)),
+                    (typeof_check_s2, (TypeHierS2,)),
+                    (typeof_cross_check, (TypeHierS1,)),
+                    (make_th_s1, (Int32,)),
+                    (make_th_s2, (Int32,)),
+                ]
+                mod = compile_module(funcs)
+                bytes = to_bytes(mod)
+                wasm_path = joinpath(tempdir(), "test_jltype_typeof.wasm")
+                write(wasm_path, bytes)
+
+                js_code = """
+                const bytes = require('fs').readFileSync('$wasm_path');
+                WebAssembly.instantiate(bytes, {Math: {pow: Math.pow}}).then(m => {
+                    const exp = m.instance.exports;
+                    const s1 = exp.make_th_s1(42);
+                    const s2 = exp.make_th_s2(42);
+                    const r1 = exp.typeof_check_s1(s1);
+                    const r2 = exp.typeof_check_s2(s2);
+                    const r3 = exp.typeof_cross_check(s1);
+                    console.log(JSON.stringify([r1, r2, r3]));
+                }).catch(e => { console.error(e.message); process.exit(1); });
+                """
+                result = read(`$NODE_CMD -e $js_code`, String)
+                results = JSON.parse(strip(result))
+
+                # Ground truth
+                native_s1 = typeof_check_s1(TypeHierS1(Int32(42)))    # 1 (TypeHierS1 === TypeHierS1)
+                native_s2 = typeof_check_s2(TypeHierS2(Int32(42)))    # 1 (TypeHierS2 === TypeHierS2)
+                native_cross = typeof_cross_check(TypeHierS1(Int32(42)))  # 0 (TypeHierS1 !== TypeHierS2)
+
+                @test results[1] == native_s1   # typeof(s1) === TypeHierS1 → 1
+                @test results[2] == native_s2   # typeof(s2) === TypeHierS2 → 1
+                @test results[3] == native_cross # typeof(s1) === TypeHierS2 → 0
+            end
+        end
+
+        @testset "Type hierarchy: super chain matches Julia's" begin
+            mod, type_registry, _, _ = compile_module(
+                [(make_th_s1, (Int32,))];
+                return_registries=true)
+
+            # Verify concrete type hierarchy
+            for T in [Int32, Float64, Bool, TypeHierS1]
+                haskey(type_registry.type_ids, T) || continue
+                type_id = WasmTarget.get_type_id(type_registry, T)
+                @test type_id > Int32(0)
+
+                # The parent type should also have a global
+                parent = supertype(T)
+                @test haskey(type_registry.type_constant_globals, parent)
+
+                # The DFS range of the parent should contain this type's ID
+                parent_range = WasmTarget.get_type_range(type_registry, parent)
+                if parent_range !== nothing
+                    lo, hi = parent_range
+                    @test lo <= type_id <= hi
+                end
+            end
+
+            # Verify abstract type ranges contain concrete subtypes
+            int32_id = WasmTarget.get_type_id(type_registry, Int32)
+            signed_range = WasmTarget.get_type_range(type_registry, Signed)
+            integer_range = WasmTarget.get_type_range(type_registry, Integer)
+            number_range = WasmTarget.get_type_range(type_registry, Number)
+            any_range = WasmTarget.get_type_range(type_registry, Any)
+
+            if signed_range !== nothing
+                @test signed_range[1] <= int32_id <= signed_range[2]
+            end
+            if integer_range !== nothing
+                @test integer_range[1] <= int32_id <= integer_range[2]
+            end
+            if number_range !== nothing
+                @test number_range[1] <= int32_id <= number_range[2]
+            end
+            if any_range !== nothing
+                @test any_range[1] <= int32_id <= any_range[2]
+            end
         end
 
     end

@@ -1505,6 +1505,10 @@ function compile_module(functions::Vector;
     # PURE-9028: Create BoxedNothing singleton global (after type IDs assigned)
     get_nothing_global!(mod, type_registry)
 
+    # PURE-9063: Create DataType globals for ALL types with DFS IDs + type lookup table
+    ensure_all_type_globals!(mod, type_registry)
+    create_type_lookup_table!(mod, type_registry)
+
     # PURE-9026: Set all struct types as subtypes of $JlBase for typeof(x)
     if type_registry.base_struct_idx !== nothing
         set_struct_supertypes!(mod, type_registry.base_struct_idx)
@@ -1764,6 +1768,10 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
 
     # PURE-9028: Create BoxedNothing singleton global (after type IDs assigned)
     get_nothing_global!(mod, type_registry)
+
+    # PURE-9063: Create DataType globals for ALL types with DFS IDs + type lookup table
+    ensure_all_type_globals!(mod, type_registry)
+    create_type_lookup_table!(mod, type_registry)
 
     # PURE-9026: Set all struct types as subtypes of $JlBase for typeof(x)
     if type_registry.base_struct_idx !== nothing

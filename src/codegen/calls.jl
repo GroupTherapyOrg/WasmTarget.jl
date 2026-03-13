@@ -80,6 +80,23 @@ function _resolve_type_const(val, ctx::CompilationContext)::Union{DataType, Noth
 end
 
 """
+    _ensure_typeof_scratch_local!(ctx) -> UInt32
+
+PURE-9063: Allocate (or return cached) a scratch i32 local for typeof struct lookups.
+The local stores the typeId temporarily while the lookup array ref is pushed.
+"""
+function _ensure_typeof_scratch_local!(ctx::CompilationContext)::UInt32
+    if ctx.typeof_scratch_local !== nothing
+        return ctx.typeof_scratch_local
+    end
+    # Allocate a new i32 local
+    local_idx = UInt32(ctx.n_params + length(ctx.locals))
+    push!(ctx.locals, I32)
+    ctx.typeof_scratch_local = local_idx
+    return local_idx
+end
+
+"""
 Compile a function call expression.
 """
 function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt8}
@@ -1946,27 +1963,58 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         return bytes
     end
 
-    # PURE-9026: typeof(x) — extract typeId from struct field 0
-    # Returns the DFS type ID as an i32 (statically or dynamically)
+    # PURE-9063: typeof(x) — returns a $JlDataType struct ref from the type lookup table
+    # If the type lookup table exists, returns (ref null $DataType) for full type object support.
+    # Falls back to i32 typeId if no lookup table.
     if is_func(func, :typeof) && length(args) >= 1
         arg = args[1]
         arg_type = infer_value_type(arg, ctx)
+        has_lookup = ctx.type_registry.type_lookup_global !== nothing
 
-        if arg_type !== nothing && isconcretetype(arg_type)
-            # Statically known type — push constant typeId
-            type_id = get_type_id(ctx.type_registry, arg_type)
-            push!(bytes, Opcode.I32_CONST)
-            append!(bytes, encode_leb128_signed(Int64(type_id)))
-        else
-            # Polymorphic value (anyref/structref) — extract typeId at runtime
-            append!(bytes, compile_value(arg, ctx))
-            base_idx = ctx.type_registry.base_struct_idx
-            if base_idx !== nothing
-                emit_typeof!(bytes, base_idx)
+        if has_lookup
+            # PURE-9063: Return DataType struct ref from lookup table
+            if arg_type !== nothing && isconcretetype(arg_type)
+                # Statically known type — directly return its DataType global
+                if haskey(ctx.type_registry.type_constant_globals, arg_type)
+                    dt_global = ctx.type_registry.type_constant_globals[arg_type]
+                    push!(bytes, Opcode.GLOBAL_GET)
+                    append!(bytes, encode_leb128_unsigned(dt_global))
+                else
+                    # Type not in globals — return null ref
+                    dt_type_idx = ctx.type_registry.structs[DataType].wasm_type_idx
+                    push!(bytes, Opcode.REF_NULL)
+                    append!(bytes, encode_leb128_unsigned(dt_type_idx))
+                end
             else
-                # Fallback: no base struct type, push 0 (unknown)
+                # Polymorphic value — extract typeId, look up in type table
+                append!(bytes, compile_value(arg, ctx))
+                base_idx = ctx.type_registry.base_struct_idx
+                if base_idx !== nothing
+                    # Need a scratch local for the typeId. Use a convention:
+                    # allocate one if needed, stored in ctx.
+                    temp_local = _ensure_typeof_scratch_local!(ctx)
+                    emit_typeof_struct_with_local!(bytes, base_idx, ctx.type_registry, temp_local)
+                else
+                    dt_type_idx = ctx.type_registry.structs[DataType].wasm_type_idx
+                    push!(bytes, Opcode.REF_NULL)
+                    append!(bytes, encode_leb128_unsigned(dt_type_idx))
+                end
+            end
+        else
+            # Fallback: return i32 typeId (pre-PURE-9063 behavior)
+            if arg_type !== nothing && isconcretetype(arg_type)
+                type_id = get_type_id(ctx.type_registry, arg_type)
                 push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
+                append!(bytes, encode_leb128_signed(Int64(type_id)))
+            else
+                append!(bytes, compile_value(arg, ctx))
+                base_idx = ctx.type_registry.base_struct_idx
+                if base_idx !== nothing
+                    emit_typeof!(bytes, base_idx)
+                else
+                    push!(bytes, Opcode.I32_CONST)
+                    push!(bytes, 0x00)
+                end
             end
         end
         return bytes
@@ -1997,29 +2045,58 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             return bytes
         end
 
-        # PURE-9026: typeof(x) === Type — compare typeIds as i32
+        # PURE-9063: typeof(x) === Type — compare DataType struct refs with ref.eq
         # Detect when one arg comes from typeof() and the other is a Type constant
         arg1_is_typeof = _is_typeof_ssa(args[1], ctx)
         arg2_is_typeof = _is_typeof_ssa(args[2], ctx)
         arg1_is_type_const = _resolve_type_const(args[1], ctx)
         arg2_is_type_const = _resolve_type_const(args[2], ctx)
+        has_lookup = ctx.type_registry.type_lookup_global !== nothing
 
         if (arg1_is_typeof && arg2_is_type_const !== nothing) ||
            (arg2_is_typeof && arg1_is_type_const !== nothing)
-            # Both sides become i32 typeIds, compared with i32.eq
-            if arg1_is_typeof
-                append!(bytes, compile_value(args[1], ctx))  # emits typeof → i32 typeId
-                # Push the type constant's typeId
-                type_id = get_type_id(ctx.type_registry, arg2_is_type_const)
-                push!(bytes, Opcode.I32_CONST)
-                append!(bytes, encode_leb128_signed(Int64(type_id)))
+            if has_lookup
+                # PURE-9063: Both sides become DataType struct refs, compared with ref.eq
+                if arg1_is_typeof
+                    append!(bytes, compile_value(args[1], ctx))  # emits typeof → DataType ref
+                    # Push the DataType global for the type constant
+                    if haskey(ctx.type_registry.type_constant_globals, arg2_is_type_const)
+                        dt_global = ctx.type_registry.type_constant_globals[arg2_is_type_const]
+                        push!(bytes, Opcode.GLOBAL_GET)
+                        append!(bytes, encode_leb128_unsigned(dt_global))
+                    else
+                        dt_type_idx = ctx.type_registry.structs[DataType].wasm_type_idx
+                        push!(bytes, Opcode.REF_NULL)
+                        append!(bytes, encode_leb128_unsigned(dt_type_idx))
+                    end
+                else
+                    append!(bytes, compile_value(args[2], ctx))  # emits typeof → DataType ref
+                    if haskey(ctx.type_registry.type_constant_globals, arg1_is_type_const)
+                        dt_global = ctx.type_registry.type_constant_globals[arg1_is_type_const]
+                        push!(bytes, Opcode.GLOBAL_GET)
+                        append!(bytes, encode_leb128_unsigned(dt_global))
+                    else
+                        dt_type_idx = ctx.type_registry.structs[DataType].wasm_type_idx
+                        push!(bytes, Opcode.REF_NULL)
+                        append!(bytes, encode_leb128_unsigned(dt_type_idx))
+                    end
+                end
+                push!(bytes, Opcode.REF_EQ)
             else
-                append!(bytes, compile_value(args[2], ctx))  # emits typeof → i32 typeId
-                type_id = get_type_id(ctx.type_registry, arg1_is_type_const)
-                push!(bytes, Opcode.I32_CONST)
-                append!(bytes, encode_leb128_signed(Int64(type_id)))
+                # Fallback: i32 typeId comparison (pre-PURE-9063)
+                if arg1_is_typeof
+                    append!(bytes, compile_value(args[1], ctx))
+                    type_id = get_type_id(ctx.type_registry, arg2_is_type_const)
+                    push!(bytes, Opcode.I32_CONST)
+                    append!(bytes, encode_leb128_signed(Int64(type_id)))
+                else
+                    append!(bytes, compile_value(args[2], ctx))
+                    type_id = get_type_id(ctx.type_registry, arg1_is_type_const)
+                    push!(bytes, Opcode.I32_CONST)
+                    append!(bytes, encode_leb128_signed(Int64(type_id)))
+                end
+                push!(bytes, Opcode.I32_EQ)
             end
-            push!(bytes, Opcode.I32_EQ)
             if is_func(func, :(!==))
                 push!(bytes, Opcode.I32_EQZ)
             end

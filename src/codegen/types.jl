@@ -65,9 +65,12 @@ mutable struct TypeRegistry
     # PURE-9028: BoxedNothing struct type and singleton global
     nothing_box_idx::Union{Nothing, UInt32}   # Struct type: (struct (field $typeId i32))
     nothing_global_idx::Union{Nothing, UInt32}  # Singleton global holding BoxedNothing instance
+    # PURE-9063: Type lookup table — typeId (i32) → DataType struct ref
+    type_lookup_array_idx::Union{Nothing, UInt32}  # Array type: (array (mut (ref null $DataType)))
+    type_lookup_global::Union{Nothing, UInt32}  # Global holding the lookup array
 end
 
-TypeRegistry() = TypeRegistry(Dict{Type, StructInfo}(), Dict{Type, UInt32}(), nothing, Dict{Union, UnionInfo}(), Dict{WasmValType, UInt32}(), Dict{Type, UInt32}(), Dict{Core.TypeName, UInt32}(), Dict{Type, Int32}(), Dict{Type, Tuple{Int32, Int32}}(), nothing, nothing, nothing)
+TypeRegistry() = TypeRegistry(Dict{Type, StructInfo}(), Dict{Type, UInt32}(), nothing, Dict{Union, UnionInfo}(), Dict{WasmValType, UInt32}(), Dict{Type, UInt32}(), Dict{Core.TypeName, UInt32}(), Dict{Type, Int32}(), Dict{Type, Tuple{Int32, Int32}}(), nothing, nothing, nothing, nothing, nothing)
 
 # ============================================================================
 # PURE-9025: DFS Type ID Assignment
@@ -895,6 +898,9 @@ function populate_type_constant_globals!(mod::WasmModule, registry::TypeRegistry
         end
     end
 
+    # PURE-9063: Populate the type lookup table (typeId → DataType struct ref)
+    populate_type_lookup_table!(body, registry)
+
     isempty(body) && return
 
     # Add END opcode to terminate the function body
@@ -905,6 +911,198 @@ function populate_type_constant_globals!(mod::WasmModule, registry::TypeRegistry
 
     # Set as start function
     add_start_function!(mod, func_idx)
+end
+
+# ============================================================================
+# PURE-9063: Full $JlType Hierarchy — Type Lookup Table
+# ============================================================================
+
+"""
+    ensure_all_type_globals!(mod::WasmModule, registry::TypeRegistry)
+
+Create DataType globals for ALL types that have DFS type IDs.
+This ensures every type (concrete and abstract) has a materialized \$JlDataType
+struct that can be returned by typeof(x).
+
+Must be called AFTER assign_type_ids!.
+"""
+function ensure_all_type_globals!(mod::WasmModule, registry::TypeRegistry)
+    # Collect all types that need globals: those with DFS IDs or DFS ranges
+    all_typed = Set{Type}()
+    for T in keys(registry.type_ids)
+        push!(all_typed, T)
+    end
+    for T in keys(registry.type_ranges)
+        push!(all_typed, T)
+    end
+
+    # Create DataType globals for each (get_type_constant_global! is idempotent)
+    for T in all_typed
+        T isa DataType || continue
+        get_type_constant_global!(mod, registry, T)
+    end
+end
+
+"""
+    create_type_lookup_table!(mod::WasmModule, registry::TypeRegistry)
+
+Create a WasmGC array that maps typeId (i32 index) → DataType struct ref.
+This enables typeof(x) to return a \$JlDataType struct by looking up the typeId.
+
+Must be called AFTER ensure_all_type_globals!.
+"""
+function create_type_lookup_table!(mod::WasmModule, registry::TypeRegistry)
+    isempty(registry.type_constant_globals) && return
+
+    # Get DataType struct type index
+    if !haskey(registry.structs, DataType)
+        return  # No DataType struct registered
+    end
+    dt_type_idx = registry.structs[DataType].wasm_type_idx
+
+    # Create array type: (array (mut (ref null $DataType)))
+    arr_type = ArrayType(FieldType(ConcreteRef(dt_type_idx, true), true))
+    arr_type_idx = add_type!(mod, arr_type)
+    registry.type_lookup_array_idx = arr_type_idx
+
+    # Determine table size: max typeId + 1
+    max_id = Int32(0)
+    for id in values(registry.type_ids)
+        max_id = max(max_id, id)
+    end
+    # Also check abstract types that have ranges but may not have IDs
+    for (_, (_, high)) in registry.type_ranges
+        max_id = max(max_id, high)
+    end
+    table_size = max_id + Int32(1)
+
+    # Create the lookup array global initialized with null refs
+    # Init expression: i32.const <size>, array.new_default $arr_type
+    init_bytes = UInt8[]
+    push!(init_bytes, Opcode.I32_CONST)
+    append!(init_bytes, encode_leb128_signed(Int64(table_size)))
+    push!(init_bytes, Opcode.GC_PREFIX)
+    push!(init_bytes, Opcode.ARRAY_NEW_DEFAULT)
+    append!(init_bytes, encode_leb128_unsigned(arr_type_idx))
+
+    global_idx = add_global_ref!(mod, arr_type_idx, true, init_bytes; nullable=false)
+    registry.type_lookup_global = global_idx
+end
+
+"""
+    populate_type_lookup_table!(body::Vector{UInt8}, registry::TypeRegistry)
+
+Emit bytecode into a start function body to populate the type lookup array.
+For each type with a DFS ID and a DataType global, emits:
+  global.get \$type_table
+  i32.const <typeId>
+  global.get \$dt_global
+  array.set \$arr_type
+
+Must be called from within populate_type_constant_globals! (appended to the body).
+"""
+function populate_type_lookup_table!(body::Vector{UInt8}, registry::TypeRegistry)
+    registry.type_lookup_global === nothing && return
+    registry.type_lookup_array_idx === nothing && return
+
+    table_global = registry.type_lookup_global
+    arr_type_idx = registry.type_lookup_array_idx
+
+    # For each concrete type with a DFS ID and a DataType global, populate the table
+    for (T, type_id) in registry.type_ids
+        T isa DataType || continue
+        haskey(registry.type_constant_globals, T) || continue
+        dt_global_idx = registry.type_constant_globals[T]
+
+        # global.get $type_table
+        push!(body, Opcode.GLOBAL_GET)
+        append!(body, encode_leb128_unsigned(table_global))
+        # i32.const <typeId>
+        push!(body, Opcode.I32_CONST)
+        append!(body, encode_leb128_signed(Int64(type_id)))
+        # global.get $dt_global
+        push!(body, Opcode.GLOBAL_GET)
+        append!(body, encode_leb128_unsigned(dt_global_idx))
+        # array.set $arr_type
+        push!(body, Opcode.GC_PREFIX)
+        push!(body, Opcode.ARRAY_SET)
+        append!(body, encode_leb128_unsigned(arr_type_idx))
+    end
+end
+
+"""
+    emit_typeof_struct!(bytes::Vector{UInt8}, base_idx::UInt32, registry::TypeRegistry)
+
+Emit bytecode for typeof(x) that returns a DataType struct ref instead of i32.
+Expects a struct ref (or anyref) on top of the stack.
+Result: (ref null \$DataType) on the stack.
+
+Flow: value → extract typeId → global.get type_table → array.get[typeId]
+"""
+function emit_typeof_struct!(bytes::Vector{UInt8}, base_idx::UInt32, registry::TypeRegistry)
+    registry.type_lookup_global === nothing && error("Type lookup table not created")
+    registry.type_lookup_array_idx === nothing && error("Type lookup array type not created")
+
+    # Extract typeId from value (ref.cast $JlBase + struct.get field 0 → i32)
+    emit_typeof!(bytes, base_idx)
+
+    # Look up in type table: global.get $table → array.get $arr[typeId]
+    # Stack: [typeId:i32]
+    # Need: [arr_ref, typeId:i32] for array.get
+    # Use a local? No — we can reorder: push table first, then typeId via local.tee is complex.
+    # Simpler: the typeId is already on stack. We need to get the table below it.
+    # Approach: save typeId to a temp, push table, restore typeId, array.get
+    # But we don't have a local here... We can use a pattern that's common in WasmGC:
+    # Actually, we just need to structure the stack correctly.
+    # After emit_typeof!, stack has: [..., typeId:i32]
+    # We need: [..., (ref $arr), typeId:i32]
+    # Can't insert below stack top without locals.
+
+    # WORKAROUND: Use a fresh approach — emit table ref first, then typeof
+    # This requires restructuring. Instead, we use a convention that the caller
+    # provides a scratch local for typeId. But that complicates the API.
+
+    # Better: accept that we need caller to manage stack. Return (needs_local=true, body)
+    # OR: just emit global.get BEFORE typeof and use a local.tee in the caller.
+
+    # SIMPLEST: emit the array lookup inline with a known local index convention.
+    # The caller (compile_call in calls.jl) will allocate a local and provide its index.
+    error("emit_typeof_struct! should not be called directly; use emit_typeof_struct_with_local! instead")
+end
+
+"""
+    emit_typeof_struct_with_local!(bytes::Vector{UInt8}, base_idx::UInt32,
+                                    registry::TypeRegistry, temp_local::UInt32)
+
+Emit bytecode for typeof(x) returning a DataType struct ref.
+Uses `temp_local` as scratch space for the typeId.
+Expects a struct ref on the stack. Leaves a (ref null \$DataType) on the stack.
+"""
+function emit_typeof_struct_with_local!(bytes::Vector{UInt8}, base_idx::UInt32,
+                                         registry::TypeRegistry, temp_local::UInt32)
+    registry.type_lookup_global === nothing && return
+    registry.type_lookup_array_idx === nothing && return
+
+    # Extract typeId: ref.cast $JlBase + struct.get → i32
+    emit_typeof!(bytes, base_idx)
+    # Stack: [typeId:i32]
+
+    # Save typeId to scratch local
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(temp_local))
+
+    # Push type lookup array
+    push!(bytes, Opcode.GLOBAL_GET)
+    append!(bytes, encode_leb128_unsigned(registry.type_lookup_global))
+
+    # Push typeId back
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(temp_local))
+
+    # array.get $type_lookup_array → (ref null $DataType)
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_GET)
+    append!(bytes, encode_leb128_unsigned(registry.type_lookup_array_idx))
 end
 
 """

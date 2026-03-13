@@ -50,6 +50,8 @@ mutable struct CompilationContext
     slot_locals::Dict{Int, Int}
     # PURE-9060: Tier 2 hash dispatch tables for megamorphic calls
     dispatch_registry::Union{Nothing, DispatchTableRegistry}
+    # PURE-9063: Scratch i32 local for typeof struct lookup (cached)
+    typeof_scratch_local::Union{Nothing, UInt32}
 end
 
 function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
@@ -90,7 +92,8 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         WasmStackValidator(enabled=true, func_name="func_$(func_idx)"),  # PURE-414: stack validator
         false,                  # last_stmt_was_stub (PURE-908)
         Dict{Int, Int}(),       # slot_locals (PURE-6024: unoptimized IR slot variables)
-        dispatch_registry       # PURE-9060: Tier 2 hash dispatch
+        dispatch_registry,      # PURE-9060: Tier 2 hash dispatch
+        nothing                 # PURE-9063: typeof scratch local (allocated on demand)
     )
     # Analyze SSA types and allocate locals for multi-use SSAs
     analyze_ssa_types!(ctx)
@@ -1072,16 +1075,23 @@ function allocate_ssa_locals!(ctx::CompilationContext)
                 end
             end
 
-            # PURE-9026: typeof(x) returns i32 typeId, not DataType struct ref.
-            # Override the SSA type so the local is allocated as i32.
+            # PURE-9063: typeof(x) now returns a DataType struct ref (if type lookup exists).
+            # Override the SSA type so the local is allocated as the correct WasmGC ref type.
             if stmt isa Expr && stmt.head === :call
                 func = stmt.args[1]
                 _is_typeof_call = (func isa GlobalRef &&
                     (func.name === :typeof)) ||
                     (func isa Function && func === typeof)
                 if _is_typeof_call
-                    ssa_type = Int32
-                    ctx.ssa_types[ssa_id] = Int32
+                    if ctx.type_registry.type_lookup_global !== nothing && haskey(ctx.type_registry.structs, DataType)
+                        # PURE-9063: typeof returns DataType struct ref
+                        ssa_type = DataType
+                        ctx.ssa_types[ssa_id] = DataType
+                    else
+                        # Fallback: i32 typeId
+                        ssa_type = Int32
+                        ctx.ssa_types[ssa_id] = Int32
+                    end
                 end
             end
 
