@@ -995,12 +995,7 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
             # Union{Nothing, T} -> concrete type of T (nullable reference)
             return get_concrete_wasm_type(inner_type, mod, registry)
         else
-            # Multi-variant union - check if it needs anyref boxing for runtime dispatch
-            # PURE-9030: Mixed int/float unions (e.g., Union{Int32, Float64}) need AnyRef
-            if needs_anyref_boxing(T)
-                return AnyRef
-            end
-            # Fall back to widened numeric type for same-category unions
+            # Multi-variant union - fall back to generic type
             return julia_to_wasm_type(T)
         end
     else

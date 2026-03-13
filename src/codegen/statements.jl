@@ -127,6 +127,22 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                         val_bytes = compile_value(stmt.val, ctx)
                         append!(bytes, val_bytes)
                         push!(bytes, Opcode.I32_WRAP_I64)
+                    # PURE-9030: F64→I32 narrowing — PiNode narrows a widened phi (F64) to I32.
+                    # Occurs in Union{Int32, Float64} dispatch where phi is F64 (widened).
+                    elseif !is_multi_value_src && val_wasm_type === F64 && pi_local_type === I32
+                        val_bytes = compile_value(stmt.val, ctx)
+                        append!(bytes, val_bytes)
+                        push!(bytes, Opcode.I32_TRUNC_F64_S)
+                    # PURE-9030: F64→I64 narrowing — PiNode narrows a widened phi (F64) to I64.
+                    elseif !is_multi_value_src && val_wasm_type === F64 && pi_local_type === I64
+                        val_bytes = compile_value(stmt.val, ctx)
+                        append!(bytes, val_bytes)
+                        push!(bytes, Opcode.I64_TRUNC_F64_S)
+                    # PURE-9030: F32→I32 narrowing — PiNode narrows a widened phi (F32) to I32.
+                    elseif !is_multi_value_src && val_wasm_type === F32 && pi_local_type === I32
+                        val_bytes = compile_value(stmt.val, ctx)
+                        append!(bytes, val_bytes)
+                        push!(bytes, Opcode.I32_TRUNC_F32_S)
                     # PURE-325: PiNode narrowing from ExternRef → numeric (I64/I32/F64/F32).
                     # The externref holds a boxed numeric value. Unbox via any_convert_extern +
                     # ref_cast to box type + struct_get field 0.

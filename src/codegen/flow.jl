@@ -383,7 +383,12 @@ function get_phi_edge_wasm_type(val, ctx::CompilationContext)::Union{WasmValType
         # So arg_types index = val.n - 1 for non-closures.
         arg_types_idx = val.n - 1  # _2 → arg_types[1], _3 → arg_types[2], etc.
         if arg_types_idx >= 1 && arg_types_idx <= length(ctx.arg_types)
-            return get_concrete_wasm_type(ctx.arg_types[arg_types_idx], ctx.mod, ctx.type_registry)
+            local _arg_t = ctx.arg_types[arg_types_idx]
+            # PURE-9030: Union params promoted to anyref for dispatch
+            if _arg_t isa Union && needs_anyref_boxing(_arg_t)
+                return AnyRef
+            end
+            return get_concrete_wasm_type(_arg_t, ctx.mod, ctx.type_registry)
         end
     elseif val isa Int64 || val isa UInt64 || val isa Int
         return I64

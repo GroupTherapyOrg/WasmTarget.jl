@@ -494,11 +494,6 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
             if all_numeric_u
                 # Numeric-only union: use widest numeric type (no struct boxing needed).
                 # PURE-325: resolve_union_type handles Int128/BigInt/UInt128 unions correctly.
-                # PURE-9030: Mixed int/float unions (e.g., Union{Int32, Float64}) need AnyRef
-                # for runtime dispatch via ref.test/ref.cast. Don't downgrade to ExternRef.
-                if needs_anyref_boxing(T)
-                    return AnyRef
-                end
                 result = julia_to_wasm_type(T)
                 # PURE-908: Never return AnyRef for locals — use ExternRef instead
                 return result === AnyRef ? ExternRef : result
@@ -1101,24 +1096,35 @@ function allocate_ssa_locals!(ctx::CompilationContext)
                     # PiNode π(x::Union{Int32,Float64}, Int32) should allocate I32,
                     # not the Union's type. The unboxing in compile_statement extracts
                     # the concrete numeric value from the anyref box.
-                    local _pi_src_val_wasm = nothing
-                    if stmt.val isa Core.SSAValue
-                        val_type = get(ctx.ssa_types, stmt.val.id, nothing)
-                        if val_type !== nothing
-                            # Use get_concrete_wasm_type to detect anyref-boxed unions
-                            _pi_src_val_wasm = get_concrete_wasm_type(val_type, ctx.mod, ctx.type_registry)
-                            if _pi_src_val_wasm !== AnyRef
-                                effective_type = val_type
-                            end
-                        end
-                    elseif stmt.val isa Core.Argument
+                    # PURE-9030: For PiNode from anyref Union params, keep narrowed type
+                    # (don't widen to source's Union type). For non-Union sources, use source type.
+                    local _pi_src_is_anyref = false
+                    if stmt.val isa Core.Argument
                         arg_idx = stmt.val.n
                         if arg_idx <= length(ctx.code_info.slottypes)
                             local _slot_type = ctx.code_info.slottypes[arg_idx]
-                            # Use get_concrete_wasm_type to detect anyref-boxed unions
-                            _pi_src_val_wasm = get_concrete_wasm_type(_slot_type, ctx.mod, ctx.type_registry)
-                            if _pi_src_val_wasm !== AnyRef
-                                effective_type = _slot_type
+                            if _slot_type isa Union && needs_anyref_boxing(_slot_type)
+                                _pi_src_is_anyref = true
+                                # Keep effective_type = ssa_type (the narrowed target)
+                            end
+                        end
+                    elseif stmt.val isa Core.SSAValue
+                        val_type = get(ctx.ssa_types, stmt.val.id, nothing)
+                        if val_type !== nothing && val_type isa Union && needs_anyref_boxing(val_type)
+                            _pi_src_is_anyref = true
+                        end
+                    end
+                    if !_pi_src_is_anyref
+                        # Non-Union source: use source type for compatible locals
+                        if stmt.val isa Core.SSAValue
+                            val_type = get(ctx.ssa_types, stmt.val.id, nothing)
+                            if val_type !== nothing
+                                effective_type = val_type
+                            end
+                        elseif stmt.val isa Core.Argument
+                            arg_idx = stmt.val.n
+                            if arg_idx <= length(ctx.code_info.slottypes)
+                                effective_type = ctx.code_info.slottypes[arg_idx]
                             end
                         end
                     end

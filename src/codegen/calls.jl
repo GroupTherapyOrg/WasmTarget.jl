@@ -4162,7 +4162,13 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 # actual args start at Argument(2) → arg_types[1].
                 local arg_idx_isa = ctx.is_compiled_closure ? value_arg.n : value_arg.n - 1
                 if arg_idx_isa >= 1 && arg_idx_isa <= length(ctx.arg_types)
-                    isa2_val_wasm = get_concrete_wasm_type(ctx.arg_types[arg_idx_isa], ctx.mod, ctx.type_registry)
+                    local _arg_jtype = ctx.arg_types[arg_idx_isa]
+                    # PURE-9030: Check if this param was promoted to anyref for Union dispatch
+                    if _arg_jtype isa Union && needs_anyref_boxing(_arg_jtype)
+                        isa2_val_wasm = AnyRef
+                    else
+                        isa2_val_wasm = get_concrete_wasm_type(_arg_jtype, ctx.mod, ctx.type_registry)
+                    end
                 end
             end
             if isa2_val_wasm !== nothing && (isa2_val_wasm === I64 || isa2_val_wasm === I32 || isa2_val_wasm === F64 || isa2_val_wasm === F32)
