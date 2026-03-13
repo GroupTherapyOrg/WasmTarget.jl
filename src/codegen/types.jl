@@ -491,6 +491,51 @@ function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)
     ], jl_type_idx)
     jl_typevar_idx = add_type!(mod, jl_typevar)
     registry.jl_typevar_idx = jl_typevar_idx
+
+    # PURE-9064: Register Julia type system types as StructInfo entries
+    # so that isa(x, Union), getfield(::DataType, :parameters), PiNode narrowing, etc.
+    # all work through the existing codegen paths.
+    # field_offset=1 because field 0 is always $kind (like typeId for user structs)
+
+    # Union: fields a, b (both ref null $JlType)
+    registry.structs[Union] = StructInfo(
+        Union, jl_union_idx,
+        [:a, :b],
+        Type[Any, Any],
+        UInt32(1)  # skip kind field
+    )
+
+    # DataType: fields name, super, parameters, hash, abstract, dfs_low, dfs_high
+    registry.structs[DataType] = StructInfo(
+        DataType, jl_datatype_idx,
+        [:name, :super, :parameters, :hash, :abstract, :dfs_low, :dfs_high],
+        Type[Core.TypeName, DataType, Core.SimpleVector, Int32, Int32, Int32, Int32],
+        UInt32(1)  # skip kind field
+    )
+
+    # UnionAll: fields body, var
+    registry.structs[UnionAll] = StructInfo(
+        UnionAll, jl_unionall_idx,
+        [:body, :var],
+        Type[Any, TypeVar],
+        UInt32(1)  # skip kind field
+    )
+
+    # TypeVar: fields name, lb, ub
+    registry.structs[TypeVar] = StructInfo(
+        TypeVar, jl_typevar_idx,
+        [:name, :lb, :ub],
+        Type[String, Any, Any],
+        UInt32(1)  # skip kind field
+    )
+
+    # Core.TypeName: fields name, module_name, wrapper (NO kind prefix)
+    registry.structs[Core.TypeName] = StructInfo(
+        Core.TypeName, jl_typename_idx,
+        [:name, :module, :wrapper],
+        Type[String, String, Any],
+        UInt32(0)  # no kind/typeId prefix
+    )
 end
 
 """
