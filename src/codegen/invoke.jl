@@ -373,12 +373,18 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                         push!(bytes, Opcode.ANY_CONVERT_EXTERN)
                     elseif expected_wasm === AnyRef && (actual_wasm === I32 || actual_wasm === I64 || actual_wasm === F32 || actual_wasm === F64)
                         # PURE-9022: Numeric value to anyref — box via struct_new (no extern.convert needed)
+                        # Insert typeId (i32.const 0) before the value already on the stack
+                        local box_insert_pos_any = length(bytes) - length(arg_bytes) + 1
+                        splice!(bytes, box_insert_pos_any:box_insert_pos_any-1, [Opcode.I32_CONST, 0x00])
                         local box_type_idx_any = get_numeric_box_type!(ctx.mod, ctx.type_registry, actual_wasm)
                         push!(bytes, Opcode.GC_PREFIX)
                         push!(bytes, Opcode.STRUCT_NEW)
                         append!(bytes, encode_leb128_unsigned(box_type_idx_any))
                     elseif expected_wasm === ExternRef && (actual_wasm === I32 || actual_wasm === I64 || actual_wasm === F32 || actual_wasm === F64)
                         # PURE-6025: Numeric value to externref — box via struct_new then extern.convert_any.
+                        # Insert typeId (i32.const 0) before the value already on the stack
+                        local box_insert_pos_inv = length(bytes) - length(arg_bytes) + 1
+                        splice!(bytes, box_insert_pos_inv:box_insert_pos_inv-1, [Opcode.I32_CONST, 0x00])
                         local box_type_idx_inv = get_numeric_box_type!(ctx.mod, ctx.type_registry, actual_wasm)
                         push!(bytes, Opcode.GC_PREFIX)
                         push!(bytes, Opcode.STRUCT_NEW)
@@ -905,7 +911,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                         push!(bytes, Opcode.GC_PREFIX)
                         push!(bytes, Opcode.STRUCT_GET)
                         append!(bytes, encode_leb128_unsigned(cu_info.wasm_type_idx))
-                        append!(bytes, encode_leb128_unsigned(0))  # field 0 = :s (String)
+                        append!(bytes, encode_leb128_unsigned(1))  # field 1 = :s (String) (field 0 = typeId)
                     end
                 end
 
@@ -2691,10 +2697,16 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 # Store capacity in a local so we can use it multiple times
                 cap_local = ctx.n_params + length(ctx.locals)
                 push!(ctx.locals, I32)
-                push!(bytes, Opcode.LOCAL_TEE)
+                push!(bytes, Opcode.LOCAL_SET)
                 append!(bytes, encode_leb128_unsigned(cap_local))
 
+                # Push typeId = 0 (field 0)
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+
                 # Create keys array: array.new_default arr_type_idx
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(cap_local))
                 push!(bytes, Opcode.GC_PREFIX)
                 push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
                 append!(bytes, encode_leb128_unsigned(arr_type_idx))
@@ -2721,7 +2733,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 push!(bytes, Opcode.LOCAL_GET)
                 append!(bytes, encode_leb128_unsigned(cap_local))
 
-                # struct.new SimpleDict (fields: keys, values, slots, count, capacity)
+                # struct.new SimpleDict (fields: typeId, keys, values, slots, count, capacity)
                 push!(bytes, Opcode.GC_PREFIX)
                 push!(bytes, Opcode.STRUCT_NEW)
                 append!(bytes, encode_leb128_unsigned(dict_type_idx))
@@ -2737,7 +2749,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 push!(bytes, Opcode.GC_PREFIX)
                 push!(bytes, Opcode.STRUCT_GET)
                 append!(bytes, encode_leb128_unsigned(dict_type_idx))
-                append!(bytes, encode_leb128_unsigned(3))  # count is field 3 (0-indexed)
+                append!(bytes, encode_leb128_unsigned(4))  # count is field 4 (0-indexed, field 0 = typeId)
 
             # sd_haskey(d::SimpleDict, key::Int32) -> Bool
             elseif name === :sd_haskey && length(args) == 2
@@ -2776,11 +2788,11 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 dict_type_idx = dict_info.wasm_type_idx
                 arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, Int32)
 
-                # Get values array (field 1)
+                # Get values array (field 2, field 0 = typeId)
                 push!(bytes, Opcode.GC_PREFIX)
                 push!(bytes, Opcode.STRUCT_GET)
                 append!(bytes, encode_leb128_unsigned(dict_type_idx))
-                append!(bytes, encode_leb128_unsigned(1))  # values field
+                append!(bytes, encode_leb128_unsigned(2))  # values field (field 0 = typeId)
 
                 # Get index (slot - 1 for 0-based)
                 push!(bytes, Opcode.LOCAL_GET)
@@ -2832,7 +2844,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 # Store capacity in local
                 cap_local = ctx.n_params + length(ctx.locals)
                 push!(ctx.locals, I32)
-                push!(bytes, Opcode.LOCAL_TEE)
+                push!(bytes, Opcode.LOCAL_SET)
                 append!(bytes, encode_leb128_unsigned(cap_local))
 
                 # Create keys array (array of string refs, initialized with empty strings)
@@ -2848,6 +2860,10 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 push!(ctx.locals, ConcreteRef(str_type_idx))
                 push!(bytes, Opcode.LOCAL_SET)
                 append!(bytes, encode_leb128_unsigned(empty_str_local))
+
+                # Push typeId = 0 (field 0)
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
 
                 # Create keys array with capacity elements, filled with empty string ref
                 push!(bytes, Opcode.LOCAL_GET)
@@ -2880,7 +2896,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 push!(bytes, Opcode.LOCAL_GET)
                 append!(bytes, encode_leb128_unsigned(cap_local))
 
-                # struct.new StringDict (fields: keys, values, slots, count, capacity)
+                # struct.new StringDict (fields: typeId, keys, values, slots, count, capacity)
                 push!(bytes, Opcode.GC_PREFIX)
                 push!(bytes, Opcode.STRUCT_NEW)
                 append!(bytes, encode_leb128_unsigned(dict_type_idx))
@@ -2894,7 +2910,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 push!(bytes, Opcode.GC_PREFIX)
                 push!(bytes, Opcode.STRUCT_GET)
                 append!(bytes, encode_leb128_unsigned(dict_type_idx))
-                append!(bytes, encode_leb128_unsigned(3))  # count is field 3
+                append!(bytes, encode_leb128_unsigned(4))  # count is field 4 (field 0 = typeId)
 
             # sdict_haskey(d::StringDict, key::String) -> Bool
             elseif name === :sdict_haskey && length(args) == 2
@@ -2929,7 +2945,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 push!(bytes, Opcode.GC_PREFIX)
                 push!(bytes, Opcode.STRUCT_GET)
                 append!(bytes, encode_leb128_unsigned(dict_type_idx))
-                append!(bytes, encode_leb128_unsigned(1))  # values field
+                append!(bytes, encode_leb128_unsigned(2))  # values field (field 0 = typeId)
 
                 push!(bytes, Opcode.LOCAL_GET)
                 append!(bytes, encode_leb128_unsigned(slot_local))
@@ -3062,13 +3078,16 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                     str_arg = args[1]
                     start_arg = args[2]
                     stop_arg = args[3]
-                    # Field 0: string (ref null array<i32>)
+                    # Field 0: typeId = 0
+                    push!(bytes, Opcode.I32_CONST)
+                    push!(bytes, 0x00)
+                    # Field 1: string (ref null array<i32>)
                     append!(bytes, compile_value(str_arg, ctx))
-                    # Field 1: offset = start - 1
+                    # Field 2: offset = start - 1
                     append!(bytes, compile_value(start_arg, ctx))
                     push!(bytes, Opcode.I64_CONST, 0x01)
                     push!(bytes, Opcode.I64_SUB)
-                    # Field 2: ncodeunits = stop - start + 1
+                    # Field 3: ncodeunits = stop - start + 1
                     append!(bytes, compile_value(stop_arg, ctx))
                     append!(bytes, compile_value(start_arg, ctx))
                     push!(bytes, Opcode.I64_SUB)
@@ -3083,6 +3102,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 elseif length(args) >= 1
                     # SubString(str) — view of entire string
                     str_arg = args[1]
+                    # Field 0: typeId = 0
+                    push!(bytes, Opcode.I32_CONST)
+                    push!(bytes, 0x00)
                     append!(bytes, compile_value(str_arg, ctx))
                     push!(bytes, Opcode.I64_CONST, 0x00)  # offset = 0
                     # ncodeunits = array.len(str)
@@ -3490,6 +3512,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                     register_tuple_type!(ctx.mod, ctx.type_registry, ret_type)
                 end
                 tuple_info = ctx.type_registry.structs[ret_type]
+                # Field 0: typeId = 0
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
                 # Field 1: Float64 = 0.0 (f64.const 0.0)
                 push!(bytes, Opcode.F64_CONST)
                 append!(bytes, reinterpret(UInt8, [Float64(0.0)]))
@@ -3593,7 +3618,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                     append!(bytes, encode_leb128_unsigned(vec_scratch_local))
                     push!(bytes, Opcode.GC_PREFIX, Opcode.STRUCT_GET)
                     append!(bytes, encode_leb128_unsigned(vec_type_idx))
-                    append!(bytes, encode_leb128_unsigned(0))  # field 0 = array ref
+                    append!(bytes, encode_leb128_unsigned(1))  # field 1 = array ref (field 0 = typeId)
                     push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL)
                     # PURE-045: heap type for ref.cast must use signed LEB128
                     append!(bytes, encode_leb128_signed(Int64(arr_type_idx)))
@@ -3658,7 +3683,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                     append!(bytes, encode_leb128_unsigned(new_arr_local))
                     push!(bytes, Opcode.GC_PREFIX, Opcode.STRUCT_SET)
                     append!(bytes, encode_leb128_unsigned(vec_type_idx))
-                    append!(bytes, encode_leb128_unsigned(0))  # field 0 = array ref
+                    append!(bytes, encode_leb128_unsigned(1))  # field 1 = array ref (field 0 = typeId)
 
                     # 8. Growth code is side-effect only — no wasm value produced.
                     #    Mark the SSA type as Nothing so statement_produces_wasm_value

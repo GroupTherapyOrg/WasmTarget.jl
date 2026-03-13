@@ -1445,7 +1445,7 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
         end
         append!(bytes, field0_bytes)
 
-        # Compile field 1: the size tuple
+        # Compile field 2: the size tuple (field 0=typeId, field 1=array_ref, field 2=size_tuple)
         if length(field_values) >= 2
             field1_bytes = compile_value(field_values[2], ctx)
             if length(field1_bytes) >= 2 && field1_bytes[1] == Opcode.LOCAL_GET
@@ -1475,23 +1475,26 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
             append!(bytes, field1_bytes)
         else
             # No size provided - get array length and create tuple
-            # Push array ref again for array.len
-            append!(bytes, compile_value(field_values[1], ctx))
-            push!(bytes, Opcode.GC_PREFIX)
-            push!(bytes, Opcode.ARRAY_LEN)
-            push!(bytes, Opcode.I64_EXTEND_I32_S)
-            # Create Tuple{Int64} struct
+            # Create Tuple{Int64} struct (typeId + i64 value)
             size_tuple_type = Tuple{Int64}
             if !haskey(ctx.type_registry.structs, size_tuple_type)
                 register_tuple_type!(ctx.mod, ctx.type_registry, size_tuple_type)
             end
             size_info = ctx.type_registry.structs[size_tuple_type]
+            # PURE-9024: Push typeId first, then compute i64 value
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x00)  # typeId = 0
+            # Push array ref again for array.len
+            append!(bytes, compile_value(field_values[1], ctx))
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ARRAY_LEN)
+            push!(bytes, Opcode.I64_EXTEND_I32_S)
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.STRUCT_NEW)
             append!(bytes, encode_leb128_unsigned(size_info.wasm_type_idx))
         end
 
-        # Create the Vector struct
+        # Create the Vector struct (already has typeId from above)
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_NEW)
         append!(bytes, encode_leb128_unsigned(vec_info.wasm_type_idx))
@@ -1542,6 +1545,12 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
     end
 
     info = ctx.type_registry.structs[struct_type]
+
+    # PURE-9024: Push typeId (i32) as field 0 before Julia field values
+    if info.field_offset > 0
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x00)  # typeId = 0
+    end
 
     # Push field values in order, handling Union field types
     for (i, val) in enumerate(field_values)
@@ -1598,8 +1607,9 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
                 # is i32/i64 — emit zero constant, NOT ref.null.
                 _null_field_wasm = nothing
                 _null_struct_def = ctx.mod.types[info.wasm_type_idx + 1]
-                if _null_struct_def isa StructType && i <= length(_null_struct_def.fields)
-                    _null_field_wasm = _null_struct_def.fields[i].valtype
+                local _wasm_fi = i + Int(info.field_offset)  # PURE-9024: skip typeId
+                if _null_struct_def isa StructType && _wasm_fi <= length(_null_struct_def.fields)
+                    _null_field_wasm = _null_struct_def.fields[_wasm_fi].valtype
                 end
                 if _null_field_wasm !== nothing && (_null_field_wasm === I32 || _null_field_wasm === I64 || _null_field_wasm === F32 || _null_field_wasm === F64)
                     # Numeric field — emit zero constant for nothing
@@ -1813,8 +1823,9 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
             # Look up the actual Wasm field type from the module's type definition
             actual_field_wasm = nothing
             struct_type_def = ctx.mod.types[info.wasm_type_idx + 1]
-            if struct_type_def isa StructType && i <= length(struct_type_def.fields)
-                actual_field_wasm = struct_type_def.fields[i].valtype
+            local _wasm_fi2 = i + Int(info.field_offset)  # PURE-9024: skip typeId
+            if struct_type_def isa StructType && _wasm_fi2 <= length(struct_type_def.fields)
+                actual_field_wasm = struct_type_def.fields[_wasm_fi2].valtype
             end
             # Safety: if field_bytes is empty (SSA without local, not re-compilable)
             # and the field expects a ref type, emit ref.null of the correct type.
@@ -1887,6 +1898,9 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
                     elseif actual_field_wasm === ExternRef
                         # PURE-6024: Box numeric local → struct_new → extern_convert_any
                         # (was: emit_numeric_to_externref! with undefined vars stmt/val_wasm)
+                        # PURE-9024: Push typeId before the numeric value for box struct
+                        push!(bytes, Opcode.I32_CONST)
+                        push!(bytes, 0x00)  # typeId = 0
                         append!(bytes, field_bytes)
                         _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, src_type)
                         push!(bytes, Opcode.GC_PREFIX)
@@ -2037,8 +2051,12 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
     if struct_type_def isa StructType
         n_provided = length(field_values)
         n_required = length(struct_type_def.fields)
+        # PURE-9024: n_provided counts Julia fields. typeId (field 0) was already pushed above.
+        # Missing Wasm fields start after typeId offset + provided Julia fields.
+        n_wasm_provided = n_provided + Int(info.field_offset)
         # DEBUG: trace ALL struct_new emissions with 2 externref fields
-        if n_required == 2 && struct_type_def.fields[1].valtype === ExternRef && struct_type_def.fields[2].valtype === ExternRef
+        # PURE-9024: typeId is now field[1], so 2 Julia externref fields means 3 total Wasm fields
+        if n_required == 3 && struct_type_def.fields[2].valtype === ExternRef && struct_type_def.fields[3].valtype === ExternRef
             println("DEBUG_STRUCT_NEW_2EXTERN: struct_type=$struct_type type_idx=$(info.wasm_type_idx) n_provided=$n_provided bytes_len=$(length(bytes)) idx=$idx")
             # Count how many ref_null extern (D0 6F) appear in the bytes
             n_ref_nulls = 0
@@ -2049,7 +2067,7 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
             end
             println("  ref_null_extern_count=$n_ref_nulls stacktrace=$(join(string.(stacktrace()[1:min(8, end)]), " <- "))")
         end
-        for fi in (n_provided + 1):n_required
+        for fi in (n_wasm_provided + 1):n_required
             missing_field_type = struct_type_def.fields[fi].valtype
             if missing_field_type isa ConcreteRef
                 push!(bytes, Opcode.REF_NULL)
@@ -2554,10 +2572,16 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
                     end
                     size_info = ctx.type_registry.structs[size_tuple_type]
 
-                    # Stack: [data_array_ref, size_tuple_ref] for struct.new Vector
+                    # Stack: [typeId, data_array_ref, size_tuple_ref] for struct.new Vector
+                    # PURE-9024: Push typeId for Vector struct
+                    push!(bytes, Opcode.I32_CONST)
+                    push!(bytes, 0x00)  # typeId = 0
                     # 1. Push data array ref
                     append!(bytes, compile_value(data_source, ctx))
-                    # 2. Push length as i64 for size tuple, then struct.new Tuple{Int64}
+                    # 2. Push typeId + length as i64 for size tuple, then struct.new Tuple{Int64}
+                    # PURE-9024: Push typeId for Tuple{Int64} struct
+                    push!(bytes, Opcode.I32_CONST)
+                    push!(bytes, 0x00)  # typeId = 0
                     if len_arg !== nothing
                         append!(bytes, compile_value(len_arg, ctx))
                         len_type = infer_value_type(len_arg, ctx)
@@ -2574,7 +2598,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
                     push!(bytes, Opcode.GC_PREFIX)
                     push!(bytes, Opcode.STRUCT_NEW)
                     append!(bytes, encode_leb128_unsigned(size_info.wasm_type_idx))
-                    # 3. struct.new Vector(data_ref, size_tuple_ref)
+                    # 3. struct.new Vector(typeId, data_ref, size_tuple_ref)
                     push!(bytes, Opcode.GC_PREFIX)
                     push!(bytes, Opcode.STRUCT_NEW)
                     append!(bytes, encode_leb128_unsigned(vec_type_idx))

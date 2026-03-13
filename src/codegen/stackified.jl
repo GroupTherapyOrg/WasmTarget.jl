@@ -888,6 +888,9 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_wasm_type) && !(phi_local_wasm_type === I64 && ssa_wasm_type === I32)
                     if phi_local_wasm_type === ExternRef && (ssa_wasm_type === I32 || ssa_wasm_type === I64 || ssa_wasm_type === F32 || ssa_wasm_type === F64)
                         # PURE-325: Box recomputed numeric SSA for ExternRef phi
+                        # PURE-9024: Push typeId:i32 = 0 as field 0 before the value
+                        push!(result, Opcode.I32_CONST)
+                        push!(result, 0x00)
                         if stmt !== nothing && !(stmt isa Core.PhiNode)
                             append!(result, compile_statement(stmt, val.id, ctx))
                         else
@@ -979,6 +982,9 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type) && !(phi_local_type === I64 && edge_val_type === I32)
                     if phi_local_type === ExternRef && (edge_val_type === I32 || edge_val_type === I64 || edge_val_type === F32 || edge_val_type === F64)
                         # PURE-325: Box numeric non-SSA value for ExternRef phi
+                        # PURE-9024: Push typeId:i32 = 0 as field 0 before the value
+                        push!(result, Opcode.I32_CONST)
+                        push!(result, 0x00)
                         append!(result, compile_value(val, ctx))
                         _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
                         push!(result, Opcode.GC_PREFIX)
@@ -1214,14 +1220,19 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                             _pvb2_boxed = length(_pvb2) >= 2 && _pvb2[end-1] == Opcode.GC_PREFIX && _pvb2[end] == Opcode.EXTERN_CONVERT_ANY
                                             # PURE-602: compile_phi_value may return ref.null extern for nothing values
                                             _pvb2_is_ref_null = length(_pvb2) >= 1 && _pvb2[1] == Opcode.REF_NULL
-                                            append!(bytes, _pvb2)
                                             if !_pvb2_boxed && !_pvb2_is_ref_null
+                                                # PURE-9024: Push typeId:i32 = 0 as field 0 before the value
+                                                push!(bytes, Opcode.I32_CONST)
+                                                push!(bytes, 0x00)
+                                                append!(bytes, _pvb2)
                                                 _box_t2 = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
                                                 push!(bytes, Opcode.GC_PREFIX)
                                                 push!(bytes, Opcode.STRUCT_NEW)
                                                 append!(bytes, encode_leb128_unsigned(_box_t2))
                                                 push!(bytes, Opcode.GC_PREFIX)
                                                 push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                            else
+                                                append!(bytes, _pvb2)
                                             end
                                             push!(bytes, Opcode.LOCAL_SET)
                                             append!(bytes, encode_leb128_unsigned(local_idx))
@@ -1534,14 +1545,19 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                             _pvb3_boxed = length(_pvb3) >= 2 && _pvb3[end-1] == Opcode.GC_PREFIX && _pvb3[end] == Opcode.EXTERN_CONVERT_ANY
                                             # PURE-602: compile_phi_value may return ref.null extern for nothing values
                                             _pvb3_is_ref_null = length(_pvb3) >= 1 && _pvb3[1] == Opcode.REF_NULL
-                                            append!(block_bytes, _pvb3)
                                             if !_pvb3_boxed && !_pvb3_is_ref_null
+                                                # PURE-9024: Push typeId:i32 = 0 as field 0 before the value
+                                                push!(block_bytes, Opcode.I32_CONST)
+                                                push!(block_bytes, 0x00)
+                                                append!(block_bytes, _pvb3)
                                                 _box_t3 = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
                                                 push!(block_bytes, Opcode.GC_PREFIX)
                                                 push!(block_bytes, Opcode.STRUCT_NEW)
                                                 append!(block_bytes, encode_leb128_unsigned(_box_t3))
                                                 push!(block_bytes, Opcode.GC_PREFIX)
                                                 push!(block_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                            else
+                                                append!(block_bytes, _pvb3)
                                             end
                                             push!(block_bytes, Opcode.LOCAL_SET)
                                             append!(block_bytes, encode_leb128_unsigned(local_idx))

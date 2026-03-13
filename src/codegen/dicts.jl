@@ -143,13 +143,13 @@ function compile_sd_find_slot(args, ctx::CompilationContext)::Vector{UInt8}
     append!(bytes, encode_leb128_unsigned(slot_idx_local))
 
     # Get slot state from slots array
-    # slots = d.slots (field 2)
+    # slots = d.slots (field 3)
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(d_local))
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(dict_type_idx))
-    append!(bytes, encode_leb128_unsigned(3))  # slots is field 3
+    append!(bytes, encode_leb128_unsigned(4))  # slots is field 4
     # array.get with slot_idx - 1 (0-based)
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(slot_idx_local))
@@ -193,13 +193,13 @@ function compile_sd_find_slot(args, ctx::CompilationContext)::Vector{UInt8}
     push!(bytes, 0x40)  # void
 
     # Get key from keys array and compare
-    # keys = d.keys (field 0)
+    # keys = d.keys (field 1)
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(d_local))
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(dict_type_idx))
-    append!(bytes, encode_leb128_unsigned(1))  # keys is field 1
+    append!(bytes, encode_leb128_unsigned(2))  # keys is field 2
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(slot_idx_local))
     push!(bytes, Opcode.I32_CONST)
@@ -408,7 +408,7 @@ function compile_sd_set(args, ctx::CompilationContext)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(dict_type_idx))
-    append!(bytes, encode_leb128_unsigned(3))
+    append!(bytes, encode_leb128_unsigned(4))  # slots is field 4
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(slot_idx_local))
     push!(bytes, Opcode.I32_CONST)
@@ -453,7 +453,7 @@ function compile_sd_set(args, ctx::CompilationContext)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(dict_type_idx))
-    append!(bytes, encode_leb128_unsigned(1))
+    append!(bytes, encode_leb128_unsigned(2))  # keys is field 2
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(slot_idx_local))
     push!(bytes, Opcode.I32_CONST)
@@ -505,7 +505,7 @@ function compile_sd_set(args, ctx::CompilationContext)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(dict_type_idx))
-    append!(bytes, encode_leb128_unsigned(2))  # values
+    append!(bytes, encode_leb128_unsigned(3))  # values is field 3
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(result_local))
     push!(bytes, Opcode.I32_CONST)
@@ -546,7 +546,7 @@ function compile_sd_set(args, ctx::CompilationContext)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(dict_type_idx))
-    append!(bytes, encode_leb128_unsigned(1))  # keys
+    append!(bytes, encode_leb128_unsigned(2))  # keys is field 2
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(slot_idx_local))
     push!(bytes, Opcode.LOCAL_GET)
@@ -561,7 +561,7 @@ function compile_sd_set(args, ctx::CompilationContext)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(dict_type_idx))
-    append!(bytes, encode_leb128_unsigned(2))  # values
+    append!(bytes, encode_leb128_unsigned(3))  # values is field 3
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(slot_idx_local))
     push!(bytes, Opcode.LOCAL_GET)
@@ -576,7 +576,7 @@ function compile_sd_set(args, ctx::CompilationContext)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(dict_type_idx))
-    append!(bytes, encode_leb128_unsigned(3))  # slots
+    append!(bytes, encode_leb128_unsigned(4))  # slots is field 4
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(slot_idx_local))
     push!(bytes, Opcode.I32_CONST)
@@ -585,7 +585,7 @@ function compile_sd_set(args, ctx::CompilationContext)::Vector{UInt8}
     push!(bytes, Opcode.ARRAY_SET)
     append!(bytes, encode_leb128_unsigned(arr_type_idx))
 
-    # count++ (struct.set for field 4)
+    # count++ (struct.set for field 5)
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(d_local))
     push!(bytes, Opcode.LOCAL_GET)
@@ -593,14 +593,14 @@ function compile_sd_set(args, ctx::CompilationContext)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(dict_type_idx))
-    append!(bytes, encode_leb128_unsigned(4))  # count
+    append!(bytes, encode_leb128_unsigned(5))  # count is field 5
     push!(bytes, Opcode.I32_CONST)
     push!(bytes, 0x01)
     push!(bytes, Opcode.I32_ADD)
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_SET)
     append!(bytes, encode_leb128_unsigned(dict_type_idx))
-    append!(bytes, encode_leb128_unsigned(4))
+    append!(bytes, encode_leb128_unsigned(5))  # count is field 5
 
     push!(bytes, Opcode.END)  # if slot < 0
     push!(bytes, Opcode.END)  # else
@@ -815,7 +815,7 @@ function compile_sdict_find_slot(args, ctx::CompilationContext)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(dict_type_idx))
-    append!(bytes, encode_leb128_unsigned(2))  # slots field
+    append!(bytes, encode_leb128_unsigned(3))  # slots field
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(slot_idx_local))
     push!(bytes, Opcode.I32_CONST)
@@ -861,7 +861,7 @@ function compile_sdict_find_slot(args, ctx::CompilationContext)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(dict_type_idx))
-    append!(bytes, encode_leb128_unsigned(0))  # keys field
+    append!(bytes, encode_leb128_unsigned(1))  # keys field
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(slot_idx_local))
     push!(bytes, Opcode.I32_CONST)
@@ -1098,7 +1098,7 @@ function compile_sdict_set(args, ctx::CompilationContext)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(dict_type_idx))
-    append!(bytes, encode_leb128_unsigned(4))
+    append!(bytes, encode_leb128_unsigned(5))
     push!(bytes, Opcode.LOCAL_SET)
     append!(bytes, encode_leb128_unsigned(capacity_local))
 
@@ -1223,7 +1223,7 @@ function compile_sdict_set(args, ctx::CompilationContext)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(dict_type_idx))
-    append!(bytes, encode_leb128_unsigned(2))
+    append!(bytes, encode_leb128_unsigned(3))
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(slot_idx_local))
     push!(bytes, Opcode.I32_CONST)
@@ -1266,7 +1266,7 @@ function compile_sdict_set(args, ctx::CompilationContext)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(dict_type_idx))
-    append!(bytes, encode_leb128_unsigned(0))
+    append!(bytes, encode_leb128_unsigned(1))
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(slot_idx_local))
     push!(bytes, Opcode.I32_CONST)
@@ -1318,7 +1318,7 @@ function compile_sdict_set(args, ctx::CompilationContext)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(dict_type_idx))
-    append!(bytes, encode_leb128_unsigned(1))
+    append!(bytes, encode_leb128_unsigned(2))
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(result_local))
     push!(bytes, Opcode.I32_CONST)
@@ -1358,7 +1358,7 @@ function compile_sdict_set(args, ctx::CompilationContext)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(dict_type_idx))
-    append!(bytes, encode_leb128_unsigned(0))
+    append!(bytes, encode_leb128_unsigned(1))
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(slot_idx_local))
     push!(bytes, Opcode.LOCAL_GET)
@@ -1373,7 +1373,7 @@ function compile_sdict_set(args, ctx::CompilationContext)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(dict_type_idx))
-    append!(bytes, encode_leb128_unsigned(1))
+    append!(bytes, encode_leb128_unsigned(2))
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(slot_idx_local))
     push!(bytes, Opcode.LOCAL_GET)
@@ -1388,7 +1388,7 @@ function compile_sdict_set(args, ctx::CompilationContext)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(dict_type_idx))
-    append!(bytes, encode_leb128_unsigned(2))
+    append!(bytes, encode_leb128_unsigned(3))
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(slot_idx_local))
     push!(bytes, Opcode.I32_CONST)
@@ -1405,14 +1405,14 @@ function compile_sdict_set(args, ctx::CompilationContext)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(dict_type_idx))
-    append!(bytes, encode_leb128_unsigned(3))
+    append!(bytes, encode_leb128_unsigned(4))
     push!(bytes, Opcode.I32_CONST)
     push!(bytes, 0x01)
     push!(bytes, Opcode.I32_ADD)
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_SET)
     append!(bytes, encode_leb128_unsigned(dict_type_idx))
-    append!(bytes, encode_leb128_unsigned(3))
+    append!(bytes, encode_leb128_unsigned(4))
 
     push!(bytes, Opcode.END)  # if slot < 0
     push!(bytes, Opcode.END)  # else

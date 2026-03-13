@@ -531,8 +531,9 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
             # PURE-141: When field value is a Type constant and field expects a ref type,
             # emit ref.null instead of i32.const 0 (compile_value(Type) returns i32)
             expected_wasm = nothing
-            if struct_type_def isa StructType && i <= length(struct_type_def.fields)
-                expected_wasm = struct_type_def.fields[i].valtype
+            local _wasm_fi = i + Int(info.field_offset)  # PURE-9024: skip typeId
+            if struct_type_def isa StructType && _wasm_fi <= length(struct_type_def.fields)
+                expected_wasm = struct_type_def.fields[_wasm_fi].valtype
             end
             if field_val isa Type && expected_wasm !== nothing &&
                (expected_wasm isa ConcreteRef || expected_wasm === StructRef ||
@@ -698,7 +699,11 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
             end
         end
 
-        # field 0: slots — array of UInt8 (always defined, never throws)
+        # PURE-9024: Push typeId (field 0, i32.const 0)
+        push!(bytes, Opcode.I32_CONST)
+        append!(bytes, encode_leb128_signed(Int64(0)))
+
+        # field 1: slots — array of UInt8 (always defined, never throws)
         for i in 1:length(dict_slots)
             push!(bytes, Opcode.I32_CONST)
             append!(bytes, encode_leb128_signed(Int32(dict_slots[i])))
@@ -708,37 +713,37 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         append!(bytes, encode_leb128_unsigned(slots_arr_type))
         append!(bytes, encode_leb128_unsigned(length(dict_slots)))
 
-        # field 1: keys — array of K (may have undef for ref-typed keys)
+        # field 2: keys — array of K (may have undef for ref-typed keys)
         compile_memory_elements!(bytes, dict_keys, keys_arr_type, K, ctx)
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.ARRAY_NEW_FIXED)
         append!(bytes, encode_leb128_unsigned(keys_arr_type))
         append!(bytes, encode_leb128_unsigned(length(dict_keys)))
 
-        # field 2: vals — array of V (may have undef for ref-typed vals)
+        # field 3: vals — array of V (may have undef for ref-typed vals)
         compile_memory_elements!(bytes, dict_vals, vals_arr_type, V, ctx)
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.ARRAY_NEW_FIXED)
         append!(bytes, encode_leb128_unsigned(vals_arr_type))
         append!(bytes, encode_leb128_unsigned(length(dict_vals)))
 
-        # field 3: ndel (i64)
+        # field 4: ndel (i64)
         push!(bytes, Opcode.I64_CONST)
         append!(bytes, encode_leb128_signed(Int64(getfield(val, :ndel))))
 
-        # field 4: count (i64)
+        # field 5: count (i64)
         push!(bytes, Opcode.I64_CONST)
         append!(bytes, encode_leb128_signed(Int64(getfield(val, :count))))
 
-        # field 5: age (u64, stored as i64)
+        # field 6: age (u64, stored as i64)
         push!(bytes, Opcode.I64_CONST)
         append!(bytes, encode_leb128_signed(Int64(getfield(val, :age))))
 
-        # field 6: idxfloor (i64)
+        # field 7: idxfloor (i64)
         push!(bytes, Opcode.I64_CONST)
         append!(bytes, encode_leb128_signed(Int64(getfield(val, :idxfloor))))
 
-        # field 7: maxprobe (i64)
+        # field 8: maxprobe (i64)
         push!(bytes, Opcode.I64_CONST)
         append!(bytes, encode_leb128_signed(Int64(getfield(val, :maxprobe))))
 
@@ -763,7 +768,11 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         # Get the array type for elements
         array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
 
-        # Field 0: data array — emit array.new_fixed with actual element values
+        # PURE-9024: Push typeId (field 0, i32.const 0) for Vector struct
+        push!(bytes, Opcode.I32_CONST)
+        append!(bytes, encode_leb128_signed(Int64(0)))
+
+        # Field 1: data array — emit array.new_fixed with actual element values
         # Check if the array element type is externref — if so, each element needs
         # extern_convert_any because compile_value produces concrete refs for structs/strings
         wasm_elem_type = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
@@ -817,12 +826,15 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
             append!(bytes, encode_leb128_unsigned(length(val)))
         end
 
-        # Field 1: size tuple — Tuple{Int64} with the length
+        # Field 2: size tuple — Tuple{Int64} with the length
         size_tuple_type = Tuple{Int64}
         if !haskey(ctx.type_registry.structs, size_tuple_type)
             register_tuple_type!(ctx.mod, ctx.type_registry, size_tuple_type)
         end
         size_info = ctx.type_registry.structs[size_tuple_type]
+        # PURE-9024: Push typeId (field 0, i32.const 0) for size tuple
+        push!(bytes, Opcode.I32_CONST)
+        append!(bytes, encode_leb128_signed(Int64(0)))
         push!(bytes, Opcode.I64_CONST)
         append!(bytes, encode_leb128_signed(Int64(length(val))))
         push!(bytes, Opcode.GC_PREFIX)
@@ -863,13 +875,17 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
 
         # Push field values with type safety checks
         struct_type_def = ctx.mod.types[type_idx + 1]
+        # PURE-9024: Push typeId (field 0, i32.const 0)
+        push!(bytes, Opcode.I32_CONST)
+        append!(bytes, encode_leb128_signed(Int64(0)))
         for (fi, field_name) in enumerate(fieldnames(T))
             field_val = getfield(val, field_name)
             field_val_bytes = compile_value(field_val, ctx)
             # Check field type compatibility
             replaced = false
-            if struct_type_def isa StructType && fi <= length(struct_type_def.fields)
-                expected_wasm = struct_type_def.fields[fi].valtype
+            local _wasm_fi = fi + Int(info.field_offset)  # PURE-9024: skip typeId
+            if struct_type_def isa StructType && _wasm_fi <= length(struct_type_def.fields)
+                expected_wasm = struct_type_def.fields[_wasm_fi].valtype
                 if expected_wasm isa ConcreteRef || expected_wasm === StructRef || expected_wasm === ArrayRef || expected_wasm === AnyRef || expected_wasm === ExternRef
                     # Field expects a ref type — check if field_val_bytes produces something incompatible
                     need_replace = false
@@ -946,8 +962,9 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
             # If field expects externref but we produced a GC-managed ref (anyref subtype, e.g.
             # string/symbol array or struct), emit extern.convert_any to bridge the two worlds.
             # (Strings/Symbols compile as ConcreteRef to char array; externref slots need conversion.)
-            if !replaced && struct_type_def isa StructType && fi <= length(struct_type_def.fields)
-                local _ef = struct_type_def.fields[fi].valtype
+            local _wasm_fi2 = fi + Int(info.field_offset)  # PURE-9024: skip typeId
+            if !replaced && struct_type_def isa StructType && _wasm_fi2 <= length(struct_type_def.fields)
+                local _ef = struct_type_def.fields[_wasm_fi2].valtype
                 if _ef === ExternRef
                     # Check not already externref (ends with 0xFB 0x1B = EXTERN_CONVERT_ANY)
                     already_extern = length(field_val_bytes) >= 2 &&
