@@ -54,16 +54,14 @@ If code defines functions, compiles them directly.
 If code is bare expressions (e.g. `println(1+1)`), wraps in a `main()` function.
 Merges result with base.wasm.
 """
-function compile_code(code::String)::Vector{UInt8}
-    temp_mod = Module()
-
-    if _has_function_defs(code)
-        # Code defines functions — evaluate and discover them
-        Base.eval(temp_mod, Meta.parse("begin\n$code\nend"))
-
+function _discover_and_compile(temp_mod::Module, has_funcs::Bool)::Vector{UInt8}
+    if has_funcs
         functions = []
-        for name in names(temp_mod; all=false)
-            name === nameof(temp_mod) && continue
+        skip_names = Set([:eval, :include, nameof(temp_mod)])
+        for name in names(temp_mod; all=true)
+            name in skip_names && continue
+            startswith(string(name), '#') && continue
+            isdefined(temp_mod, name) || continue
             f = getfield(temp_mod, name)
             if f isa Function
                 for m in methods(f)
@@ -75,19 +73,28 @@ function compile_code(code::String)::Vector{UInt8}
                 end
             end
         end
-
-        if isempty(functions)
-            error("Code appears to define functions but none were found. Check syntax.")
-        end
-
+        isempty(functions) && error("Code appears to define functions but none were found. Check syntax.")
         return compile_with_base(functions; base_wasm_path=BASE_WASM)
     else
-        # Bare expressions — wrap in main()
-        wrapped = "function main()::Nothing\n$code\nreturn nothing\nend"
-        Base.eval(temp_mod, Meta.parse(wrapped))
         main_fn = getfield(temp_mod, :main)
         return compile_with_base([(main_fn, (), "main")]; base_wasm_path=BASE_WASM)
     end
+end
+
+function compile_code(code::String)::Vector{UInt8}
+    temp_mod = Module()
+    has_funcs = _has_function_defs(code)
+
+    # Step 1: eval creates bindings (bumps world age)
+    if has_funcs
+        Base.eval(temp_mod, Meta.parse("begin\n$code\nend"))
+    else
+        wrapped = "function main()::Nothing\n$code\nreturn nothing\nend"
+        Base.eval(temp_mod, Meta.parse(wrapped))
+    end
+
+    # Step 2: invokelatest accesses bindings in latest world age
+    return Base.invokelatest(_discover_and_compile, temp_mod, has_funcs)
 end
 
 function handle_request(req::HTTP.Request)::HTTP.Response
