@@ -200,17 +200,13 @@ end
 # ==================== Wasm Codegen ====================
 
 """
-Emit all dispatch infrastructure into the Wasm module:
-1. Wrapper functions (anyref -> concrete cast -> call target)
-2. Funcref table + element segment
-3. Hash table arrays as globals
-
-Must be called AFTER all target functions are added to the module
-but BEFORE compiling any function bodies that need dispatch.
+Phase 1: Emit dispatch metadata (signatures, globals, funcref table placeholder).
+Called BEFORE body compilation so that emit_dispatch_call! can reference global indices.
+Does NOT add wrapper functions — those are deferred to emit_dispatch_wrappers!.
 """
-function emit_dispatch_tables!(mod::WasmModule,
-                                type_registry::TypeRegistry,
-                                dt_registry::DispatchTableRegistry)
+function emit_dispatch_metadata!(mod::WasmModule,
+                                  type_registry::TypeRegistry,
+                                  dt_registry::DispatchTableRegistry)
     isempty(dt_registry.tables) && return
 
     # Get or create i32 array type (reuse string array if available)
@@ -220,13 +216,10 @@ function emit_dispatch_tables!(mod::WasmModule,
         add_array_type!(mod, I32, true)
     end
 
-    n_imports = UInt32(length(mod.imports))
-
     for (func_ref, dt) in dt_registry.tables
         dt.i32_array_type_idx = i32_array_idx
 
         # --- 1. Create dispatch signature type ---
-        # Uniform signature: (anyref, anyref, ...) -> result_type
         param_types = fill(AnyRef, Int(dt.arity))
         result_types = dt.result_wasm_type == I32 || dt.result_wasm_type == I64 ||
                        dt.result_wasm_type == F32 || dt.result_wasm_type == F64 ?
@@ -234,24 +227,46 @@ function emit_dispatch_tables!(mod::WasmModule,
         dispatch_sig_idx = add_type!(mod, FuncType(param_types, result_types))
         dt.dispatch_sig_idx = dispatch_sig_idx
 
-        # --- 2. Generate wrapper functions ---
+        # --- 2. Create funcref table (element segment added later with correct wrapper indices) ---
+        table_idx = add_table!(mod, FuncRef, UInt32(length(dt.entries)))
+        dt.func_table_idx = table_idx
+
+        # --- 3. Build hash table and emit as globals ---
+        keys, values, type_ids_flat = resolve_table_layout(dt)
+
+        keys_init = emit_i32_array_init(i32_array_idx, keys)
+        dt.keys_global_idx = add_global_ref!(mod, i32_array_idx, false, keys_init; nullable=false)
+
+        values_init = emit_i32_array_init(i32_array_idx, values)
+        dt.values_global_idx = add_global_ref!(mod, i32_array_idx, false, values_init; nullable=false)
+
+        typeids_init = emit_i32_array_init(i32_array_idx, type_ids_flat)
+        dt.typeids_global_idx = add_global_ref!(mod, i32_array_idx, false, typeids_init; nullable=false)
+    end
+end
+
+"""
+Phase 2: Emit wrapper functions and element segments.
+Called AFTER all actual functions are added to the module, so entry.target_idx
+values (set from func_registry during build_dispatch_tables) are correct.
+"""
+function emit_dispatch_wrappers!(mod::WasmModule,
+                                  type_registry::TypeRegistry,
+                                  dt_registry::DispatchTableRegistry)
+    isempty(dt_registry.tables) && return
+
+    for (func_ref, dt) in dt_registry.tables
+        param_types = fill(AnyRef, Int(dt.arity))
+        result_types = dt.result_wasm_type == I32 || dt.result_wasm_type == I64 ||
+                       dt.result_wasm_type == F32 || dt.result_wasm_type == F64 ?
+                       WasmValType[dt.result_wasm_type] : WasmValType[]
+
         wrapper_indices = UInt32[]
         for (entry_i, entry) in enumerate(dt.entries)
-            # Build wrapper body: cast each anyref param to concrete type, call target
             body = UInt8[]
-
-            # Find the target's FunctionInfo to get concrete param types
-            target_info = nothing
-            for info in func_registry_by_ref_get(dt, entry)
-                if info.wasm_idx == entry.target_idx
-                    target_info = info
-                    break
-                end
-            end
 
             # For each parameter: local.get + ref.cast to concrete type
             for (j, tid) in enumerate(entry.type_ids)
-                # local.get j (0-indexed)
                 push!(body, Opcode.LOCAL_GET)
                 append!(body, encode_leb128_unsigned(UInt32(j - 1)))
 
@@ -266,60 +281,31 @@ function emit_dispatch_tables!(mod::WasmModule,
 
                 if concrete_type !== nothing && haskey(type_registry.structs, concrete_type)
                     struct_info = type_registry.structs[concrete_type]
-                    # ref.cast (ref $concrete_struct)
                     push!(body, Opcode.GC_PREFIX)
                     push!(body, Opcode.REF_CAST)
                     append!(body, encode_leb128_signed(Int64(struct_info.wasm_type_idx)))
                 end
-                # If no struct info, leave as anyref (the target should handle it)
             end
 
-            # call $target
+            # call $target — target_idx is correct because actual functions were added first
             push!(body, Opcode.CALL)
             append!(body, encode_leb128_unsigned(entry.target_idx))
 
-            # end
             push!(body, Opcode.END)
 
-            # Add wrapper function to module
             wrapper_idx = add_function!(mod, param_types, result_types, WasmValType[], body)
             push!(wrapper_indices, wrapper_idx)
 
-            # Update entry with wrapper index
             dt.entries[entry_i] = DispatchEntry(
                 entry.type_ids, entry.hash, entry.target_idx, wrapper_idx
             )
         end
 
-        # --- 3. Create funcref table + element segment ---
-        table_idx = add_table!(mod, FuncRef, UInt32(length(wrapper_indices)))
-        dt.func_table_idx = table_idx
-        add_elem_segment!(mod, table_idx, 0, wrapper_indices)
-
-        # --- 4. Build hash table and emit as globals ---
-        keys, values, type_ids_flat = resolve_table_layout(dt)
-
-        # Keys global: i32 array initialized with hash keys
-        keys_init = emit_i32_array_init(i32_array_idx, keys)
-        dt.keys_global_idx = add_global_ref!(mod, i32_array_idx, false, keys_init; nullable=false)
-
-        # Values global: i32 array initialized with funcref table indices
-        values_init = emit_i32_array_init(i32_array_idx, values)
-        dt.values_global_idx = add_global_ref!(mod, i32_array_idx, false, values_init; nullable=false)
-
-        # TypeIds global: i32 array initialized with flat type IDs
-        typeids_init = emit_i32_array_init(i32_array_idx, type_ids_flat)
-        dt.typeids_global_idx = add_global_ref!(mod, i32_array_idx, false, typeids_init; nullable=false)
+        # Add element segment with correct wrapper indices
+        add_elem_segment!(mod, dt.func_table_idx, 0, wrapper_indices)
     end
 end
 
-"""
-Helper: look up FunctionInfo entries for a dispatch table's function.
-"""
-function func_registry_by_ref_get(dt::DispatchTable, entry::DispatchEntry)
-    # This is a fallback — the caller should use func_registry directly
-    return DispatchEntry[]  # Placeholder
-end
 
 """
 Emit init expression for an i32 array with constant values.
@@ -558,9 +544,9 @@ function emit_dispatch_call!(bytes::Vector{UInt8},
     append!(bytes, encode_leb128_unsigned(dt.dispatch_sig_idx))
     append!(bytes, encode_leb128_unsigned(dt.func_table_idx))
 
-    # br $done (label 3: past loop, past not_found block, to done block)
+    # br $done (label 4: past typeIds-if, hash-if, loop, not_found, to done block)
     push!(bytes, Opcode.BR)
-    append!(bytes, encode_leb128_unsigned(UInt32(3)))
+    append!(bytes, encode_leb128_unsigned(UInt32(4)))
 
     push!(bytes, Opcode.END)  # end typeIds match if
     push!(bytes, Opcode.END)  # end hash match if
@@ -588,4 +574,76 @@ function emit_dispatch_call!(bytes::Vector{UInt8},
     push!(bytes, Opcode.UNREACHABLE)
 
     push!(bytes, Opcode.END)  # end block $done
+end
+
+"""
+Generate a complete function body for a dispatch caller.
+Used when a function's IR is just a dynamic call to a dispatch-table function.
+Returns (body_bytes, locals) that can be used directly as the function body.
+"""
+function generate_dispatch_caller_body(dt::DispatchTable,
+                                        n_params::Int,
+                                        base_struct_idx::UInt32,
+                                        type_registry)
+    body = UInt8[]
+    locals = WasmValType[]
+    arity = Int(dt.arity)
+
+    # Allocate anyref locals for storing arguments
+    arg_locals = UInt32[]
+    for j in 1:arity
+        local_idx = UInt32(n_params + length(locals))
+        push!(locals, AnyRef)
+        push!(arg_locals, local_idx)
+    end
+
+    # Store params as anyref in arg_locals
+    for (j, arg_local) in enumerate(arg_locals)
+        push!(body, Opcode.LOCAL_GET)
+        append!(body, encode_leb128_unsigned(UInt32(j - 1)))  # param j-1
+        push!(body, Opcode.LOCAL_SET)
+        append!(body, encode_leb128_unsigned(arg_local))
+    end
+
+    # Allocate i32 locals for dispatch (typeIds + hash/slot/key/func_idx)
+    dispatch_locals = UInt32[]
+    for _ in 1:(arity + 4)
+        local_idx = UInt32(n_params + length(locals))
+        push!(locals, I32)
+        push!(dispatch_locals, local_idx)
+    end
+
+    # Emit the dispatch probe + call_indirect (leaves result on stack)
+    emit_dispatch_call!(body, dt, arg_locals, base_struct_idx, dispatch_locals)
+
+    # Return the dispatch result and end function
+    push!(body, Opcode.RETURN)
+    push!(body, Opcode.END)
+
+    return (body, locals)
+end
+
+"""
+Check if a CodeInfo body is a simple dispatch caller (calls a function with a dispatch table).
+Returns the dispatch table if found, nothing otherwise.
+"""
+function find_dispatch_call(code_info::Core.CodeInfo,
+                             dt_registry::DispatchTableRegistry)
+    for stmt in code_info.code
+        if stmt isa Expr && stmt.head === :call
+            callee = stmt.args[1]
+            if callee isa GlobalRef
+                callee_func = try
+                    getfield(callee.mod, callee.name)
+                catch
+                    nothing
+                end
+                if callee_func !== nothing
+                    dt = get_dispatch_table(dt_registry, callee_func)
+                    dt !== nothing && return dt
+                end
+            end
+        end
+    end
+    return nothing
 end

@@ -1518,9 +1518,10 @@ function compile_module(functions::Vector;
     end
 
     # PURE-9060: Build dispatch tables for megamorphic functions (>8 specializations)
+    # Phase 1: metadata (signatures, globals, tables) — needed by emit_dispatch_call! during body compilation
     dispatch_registry = build_dispatch_tables(func_registry, type_registry)
     if !isempty(dispatch_registry.tables)
-        emit_dispatch_tables!(mod, type_registry, dispatch_registry)
+        emit_dispatch_metadata!(mod, type_registry, dispatch_registry)
     end
 
     # Track export names to avoid duplicates (WASM requires unique export names)
@@ -1535,22 +1536,31 @@ function compile_module(functions::Vector;
         local body::Vector{UInt8}
         local locals::Vector{WasmValType}
 
+        # PURE-9060: Check if this function is a dispatch caller (calls a megamorphic function
+        # with abstract args). If so, generate a direct dispatch body instead of the normal body.
+        dispatch_dt = nothing
+        if !isempty(dispatch_registry.tables) && code_info !== nothing && type_registry.base_struct_idx !== nothing
+            dispatch_dt = find_dispatch_call(code_info, dispatch_registry)
+        end
+
         if name in stub_names
             # PURE-6024: Emit unreachable stub for functions that should not be compiled
-            # (e.g. optimization pass functions eliminated by may_optimize=false).
-            # The function exists as a valid call target but traps if ever called.
             body = UInt8[Opcode.UNREACHABLE, Opcode.END]
             locals = WasmValType[]
         elseif intrinsic_body !== nothing
             # Use the intrinsic body directly
             body, locals = intrinsic_body
+        elseif dispatch_dt !== nothing
+            # PURE-9060: Generate dispatch-only body (probe + call_indirect + return)
+            n_params = sum(j -> !(j in global_args) ? 1 : 0, 1:length(arg_types); init=0)
+            body, locals = generate_dispatch_caller_body(
+                dispatch_dt, n_params, type_registry.base_struct_idx, type_registry)
         else
             # Generate function body from Julia IR
             ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
                                     func_registry=func_registry, func_idx=func_idx, func_ref=f,
                                     global_args=global_args, is_compiled_closure=is_closure,
-                                    module_globals=module_globals,
-                                    dispatch_registry=dispatch_registry)
+                                    module_globals=module_globals)
             body = generate_body(ctx)
             locals = ctx.locals
         end
@@ -1580,6 +1590,12 @@ function compile_module(functions::Vector;
         end
         export_name_counts[name] = count + 1
         add_export!(mod, export_name, 0, actual_idx)
+    end
+
+    # PURE-9060 Phase 2: Add wrapper functions AFTER all actual functions are compiled.
+    # This ensures entry.target_idx values (from func_registry) point to correct indices.
+    if !isempty(dispatch_registry.tables)
+        emit_dispatch_wrappers!(mod, type_registry, dispatch_registry)
     end
 
     # PURE-4149: Populate DataType/TypeName fields for type constant globals.
