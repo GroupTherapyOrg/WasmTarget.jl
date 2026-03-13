@@ -356,7 +356,61 @@ signatures = [
 ]
 category = "math"
 
-# Blocked: log, log2, log10, sinh, expm1, log1p, hypot — _svec_len error
+[[functions]]
+name = "log"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Float64", status = "compiled", note = "fma_emulated stubbed — V8 instantiation may fail" },
+]
+category = "math"
+
+[[functions]]
+name = "log2"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Float64", status = "compiled", note = "fma_emulated stubbed — V8 instantiation may fail" },
+]
+category = "math"
+
+[[functions]]
+name = "log10"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Float64", status = "compiled", note = "fma_emulated stubbed — V8 instantiation may fail" },
+]
+category = "math"
+
+[[functions]]
+name = "log1p"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Float64", status = "compiled", note = "fma_emulated stubbed — V8 instantiation may fail" },
+]
+category = "math"
+
+[[functions]]
+name = "sinh"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Float64", status = "compiled", note = "fma_emulated stubbed — V8 instantiation may fail" },
+]
+category = "math"
+
+[[functions]]
+name = "expm1"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Float64", status = "compiled", note = "fma_emulated stubbed — V8 instantiation may fail" },
+]
+category = "math"
+
+[[functions]]
+name = "hypot"
+module = "Base"
+signatures = [
+    { args = ["Float64", "Float64"], ret = "Float64", status = "compiled", note = "fma_emulated stubbed — V8 instantiation may fail" },
+]
+category = "math"
 
 # ============================================================================
 # MATH — Number Theory
@@ -419,9 +473,9 @@ name = "isequal"
 module = "Base"
 signatures = [
     { args = ["Int64", "Int64"], ret = "Bool", status = "compiled" },
+    { args = ["Float64", "Float64"], ret = "Bool", status = "compiled", note = "compiles but fpiseq cross-call unreachable at runtime" },
 ]
 category = "comparison"
-note = "Float64 variant blocked by _svec_len"
 
 [[functions]]
 name = "isless"
@@ -727,57 +781,7 @@ signatures = [
 ]
 category = "char"
 
-[[functions]]
-name = "uppercase"
-module = "Base"
-signatures = [
-    { args = ["Char"], ret = "Char", status = "compiled" },
-]
-category = "char"
-
-[[functions]]
-name = "lowercase"
-module = "Base"
-signatures = [
-    { args = ["Char"], ret = "Char", status = "compiled" },
-]
-category = "char"
-
-# ============================================================================
-# TUPLE OPERATIONS
-# ============================================================================
-
-[[functions]]
-name = "first"
-module = "Base"
-signatures = [
-    { args = ["Tuple{Int64,Int64}"], ret = "Int64", status = "compiled" },
-]
-category = "tuple"
-
-[[functions]]
-name = "last"
-module = "Base"
-signatures = [
-    { args = ["Tuple{Int64,Int64}"], ret = "Int64", status = "compiled" },
-]
-category = "tuple"
-
-[[functions]]
-name = "length"
-module = "Base"
-signatures = [
-    { args = ["Tuple{Int64,Int64,Int64}"], ret = "Int64", status = "compiled" },
-]
-category = "tuple"
-
-[[functions]]
-name = "reverse"
-module = "Base"
-signatures = [
-    { args = ["Tuple{Int64,Int64}"], ret = "Tuple{Int64,Int64}", status = "compiled" },
-]
-category = "tuple"
+# uppercase/lowercase moved to STRING OPERATIONS section (includes both Char and String variants)
 
 # ============================================================================
 # IDENTITY / CONSTANTS
@@ -902,21 +906,488 @@ signatures = [
 category = "io"
 
 # ============================================================================
-# BLOCKED FUNCTIONS (documented for tracking)
+# STRING OPERATIONS
 # ============================================================================
-# The following functions fail to compile due to _svec_len error:
-#   log, log2, log10, sinh, expm1, log1p, hypot
-#   isequal(Float64,Float64), fma(Float64,Float64,Float64)
-#
-# These will be unblocked when the _svec_len issue is resolved.
+
+[[functions]]
+name = "ncodeunits"
+module = "Base"
+signatures = [
+    { args = ["String"], ret = "Int64", status = "compiled" },
+]
+category = "string"
+
+[[functions]]
+name = "codeunit"
+module = "Base"
+signatures = [
+    { args = ["String", "Int64"], ret = "UInt8", status = "compiled" },
+]
+category = "string"
+
+[[functions]]
+name = "sizeof"
+module = "Base"
+signatures = [
+    { args = ["String"], ret = "Int64", status = "compiled" },
+]
+category = "string"
+
+[[functions]]
+name = "startswith"
+module = "Base"
+signatures = [
+    { args = ["String", "String"], ret = "Bool", status = "compiled" },
+]
+category = "string"
+
+[[functions]]
+name = "endswith"
+module = "Base"
+signatures = [
+    { args = ["String", "String"], ret = "Bool", status = "compiled" },
+]
+category = "string"
+
+[[functions]]
+name = "contains"
+module = "Base"
+signatures = [
+    { args = ["String", "String"], ret = "Bool", status = "compiled" },
+]
+category = "string"
+
+[[functions]]
+name = "repeat"
+module = "Base"
+signatures = [
+    { args = ["String", "Int64"], ret = "String", status = "compiled" },
+]
+category = "string"
+
+[[functions]]
+name = "chomp"
+module = "Base"
+signatures = [
+    { args = ["String"], ret = "String", status = "compiled" },
+]
+category = "string"
+
+[[functions]]
+name = "strip"
+module = "Base"
+signatures = [
+    { args = ["String"], ret = "String", status = "compiled" },
+]
+category = "string"
+
+[[functions]]
+name = "lstrip"
+module = "Base"
+signatures = [
+    { args = ["String"], ret = "String", status = "compiled" },
+]
+category = "string"
+
+[[functions]]
+name = "rstrip"
+module = "Base"
+signatures = [
+    { args = ["String"], ret = "String", status = "compiled" },
+]
+category = "string"
+
+[[functions]]
+name = "uppercase"
+module = "Base"
+signatures = [
+    { args = ["String"], ret = "String", status = "compiled" },
+    { args = ["Char"], ret = "Char", status = "compiled" },
+]
+category = "string"
+note = "String variant via auto-discovery, Char variant is direct"
+
+[[functions]]
+name = "lowercase"
+module = "Base"
+signatures = [
+    { args = ["String"], ret = "String", status = "compiled" },
+    { args = ["Char"], ret = "Char", status = "compiled" },
+]
+category = "string"
+note = "String variant via auto-discovery, Char variant is direct"
+
+[[functions]]
+name = "titlecase"
+module = "Base"
+signatures = [
+    { args = ["String"], ret = "String", status = "compiled" },
+]
+category = "string"
+
+[[functions]]
+name = "ascii"
+module = "Base"
+signatures = [
+    { args = ["String"], ret = "String", status = "compiled" },
+]
+category = "string"
+
+[[functions]]
+name = "isascii"
+module = "Base"
+signatures = [
+    { args = ["String"], ret = "Bool", status = "compiled" },
+    { args = ["Char"], ret = "Bool", status = "compiled" },
+]
+category = "string"
+
+[[functions]]
+name = "isempty"
+module = "Base"
+signatures = [
+    { args = ["String"], ret = "Bool", status = "compiled" },
+]
+category = "string"
+
+[[functions]]
+name = "isvalid"
+module = "Base"
+signatures = [
+    { args = ["String"], ret = "Bool", status = "compiled" },
+]
+category = "string"
+
+[[functions]]
+name = "lpad"
+module = "Base"
+signatures = [
+    { args = ["String", "Int64", "Char"], ret = "String", status = "compiled" },
+]
+category = "string"
+
+[[functions]]
+name = "rpad"
+module = "Base"
+signatures = [
+    { args = ["String", "Int64", "Char"], ret = "String", status = "compiled" },
+]
+category = "string"
+
+[[functions]]
+name = "first"
+module = "Base"
+signatures = [
+    { args = ["String", "Int64"], ret = "String", status = "compiled" },
+    { args = ["Tuple{Int64,Int64}"], ret = "Int64", status = "compiled" },
+]
+category = "string"
+note = "first(::String,::Int) for string prefix, first(::Tuple) for tuple access"
+
+[[functions]]
+name = "last"
+module = "Base"
+signatures = [
+    { args = ["String", "Int64"], ret = "String", status = "compiled" },
+    { args = ["Tuple{Int64,Int64}"], ret = "Int64", status = "compiled" },
+]
+category = "string"
+note = "last(::String,::Int) for string suffix, last(::Tuple) for tuple access"
+
+[[functions]]
+name = "chop"
+module = "Base"
+signatures = [
+    { args = ["String"], ret = "String", status = "compiled" },
+]
+category = "string"
+
+[[functions]]
+name = "textwidth"
+module = "Base"
+signatures = [
+    { args = ["Char"], ret = "Int64", status = "compiled" },
+]
+category = "string"
+
+[[functions]]
+name = "thisind"
+module = "Base"
+signatures = [
+    { args = ["String", "Int64"], ret = "Int64", status = "compiled" },
+]
+category = "string"
+
+[[functions]]
+name = "nextind"
+module = "Base"
+signatures = [
+    { args = ["String", "Int64"], ret = "Int64", status = "compiled" },
+]
+category = "string"
+
+[[functions]]
+name = "prevind"
+module = "Base"
+signatures = [
+    { args = ["String", "Int64"], ret = "Int64", status = "compiled" },
+]
+category = "string"
+
+[[functions]]
+name = "replace"
+module = "Base"
+signatures = [
+    { args = ["String", "Pair{String,String}"], ret = "String", status = "compiled" },
+]
+category = "string"
+
+[[functions]]
+name = "string"
+module = "Base"
+signatures = [
+    { args = ["Int64"], ret = "String", status = "compiled" },
+    { args = ["Float64"], ret = "String", status = "compiled" },
+    { args = ["Bool"], ret = "String", status = "compiled" },
+]
+category = "string"
+
+# ============================================================================
+# ARRAY OPERATIONS
+# ============================================================================
+
+[[functions]]
+name = "length"
+module = "Base"
+signatures = [
+    { args = ["Vector{Int64}"], ret = "Int64", status = "compiled" },
+    { args = ["Vector{Float64}"], ret = "Int64", status = "compiled" },
+    { args = ["Vector{Int32}"], ret = "Int64", status = "compiled" },
+    { args = ["Tuple{Int64,Int64,Int64}"], ret = "Int64", status = "compiled" },
+]
+category = "array"
+
+[[functions]]
+name = "getindex"
+module = "Base"
+signatures = [
+    { args = ["Vector{Int64}", "Int64"], ret = "Int64", status = "compiled" },
+]
+category = "array"
+
+[[functions]]
+name = "setindex!"
+module = "Base"
+signatures = [
+    { args = ["Vector{Int64}", "Int64", "Int64"], ret = "Vector{Int64}", status = "compiled" },
+]
+category = "array"
+
+[[functions]]
+name = "push!"
+module = "Base"
+signatures = [
+    { args = ["Vector{Int64}", "Int64"], ret = "Vector{Int64}", status = "compiled" },
+]
+category = "array"
+
+[[functions]]
+name = "pop!"
+module = "Base"
+signatures = [
+    { args = ["Vector{Int64}"], ret = "Int64", status = "compiled" },
+]
+category = "array"
+
+[[functions]]
+name = "empty!"
+module = "Base"
+signatures = [
+    { args = ["Vector{Int64}"], ret = "Vector{Int64}", status = "compiled" },
+]
+category = "array"
+
+[[functions]]
+name = "append!"
+module = "Base"
+signatures = [
+    { args = ["Vector{Int64}", "Vector{Int64}"], ret = "Vector{Int64}", status = "compiled" },
+]
+category = "array"
+
+[[functions]]
+name = "sum"
+module = "Base"
+signatures = [
+    { args = ["Vector{Int64}"], ret = "Int64", status = "compiled" },
+    { args = ["Vector{Float64}"], ret = "Float64", status = "compiled" },
+]
+category = "array"
+
+[[functions]]
+name = "prod"
+module = "Base"
+signatures = [
+    { args = ["Vector{Int64}"], ret = "Int64", status = "compiled" },
+]
+category = "array"
+
+[[functions]]
+name = "maximum"
+module = "Base"
+signatures = [
+    { args = ["Vector{Int64}"], ret = "Int64", status = "compiled" },
+]
+category = "array"
+
+[[functions]]
+name = "minimum"
+module = "Base"
+signatures = [
+    { args = ["Vector{Int64}"], ret = "Int64", status = "compiled" },
+]
+category = "array"
+
+[[functions]]
+name = "findmax"
+module = "Base"
+signatures = [
+    { args = ["Vector{Int64}"], ret = "Tuple{Int64,Int64}", status = "compiled" },
+]
+category = "array"
+
+[[functions]]
+name = "findmin"
+module = "Base"
+signatures = [
+    { args = ["Vector{Int64}"], ret = "Tuple{Int64,Int64}", status = "compiled" },
+]
+category = "array"
+
+[[functions]]
+name = "reverse"
+module = "Base"
+signatures = [
+    { args = ["Vector{Int64}"], ret = "Vector{Int64}", status = "compiled" },
+    { args = ["Tuple{Int64,Int64}"], ret = "Tuple{Int64,Int64}", status = "compiled" },
+]
+category = "array"
+
+[[functions]]
+name = "sort"
+module = "Base"
+signatures = [
+    { args = ["Vector{Int64}"], ret = "Vector{Int64}", status = "compiled" },
+]
+category = "array"
+
+[[functions]]
+name = "sort!"
+module = "Base"
+signatures = [
+    { args = ["Vector{Int64}"], ret = "Vector{Int64}", status = "compiled" },
+]
+category = "array"
+
+[[functions]]
+name = "issorted"
+module = "Base"
+signatures = [
+    { args = ["Vector{Int64}"], ret = "Bool", status = "compiled" },
+]
+category = "array"
+
+[[functions]]
+name = "any"
+module = "Base"
+signatures = [
+    { args = ["Vector{Bool}"], ret = "Bool", status = "compiled" },
+]
+category = "array"
+
+[[functions]]
+name = "all"
+module = "Base"
+signatures = [
+    { args = ["Vector{Bool}"], ret = "Bool", status = "compiled" },
+]
+category = "array"
+
+[[functions]]
+name = "in"
+module = "Base"
+signatures = [
+    { args = ["Int64", "Vector{Int64}"], ret = "Bool", status = "compiled" },
+]
+category = "array"
+
+[[functions]]
+name = "unique"
+module = "Base"
+signatures = [
+    { args = ["Vector{Int64}"], ret = "Vector{Int64}", status = "compiled" },
+]
+category = "array"
+
+[[functions]]
+name = "diff"
+module = "Base"
+signatures = [
+    { args = ["Vector{Int64}"], ret = "Vector{Int64}", status = "compiled" },
+]
+category = "array"
+
+[[functions]]
+name = "cumsum"
+module = "Base"
+signatures = [
+    { args = ["Vector{Int64}"], ret = "Vector{Int64}", status = "compiled" },
+]
+category = "array"
+
+[[functions]]
+name = "collect"
+module = "Base"
+signatures = [
+    { args = ["UnitRange{Int64}"], ret = "Vector{Int64}", status = "compiled" },
+]
+category = "array"
+
+[[functions]]
+name = "reduce"
+module = "Base"
+signatures = [
+    { args = ["typeof(+)", "Vector{Int64}"], ret = "Int64", status = "compiled" },
+]
+category = "array"
+
+# ============================================================================
+# CONTROL FLOW HELPERS
+# ============================================================================
+
+[[functions]]
+name = "ifelse"
+module = "Base"
+signatures = [
+    { args = ["Bool", "Int64", "Int64"], ret = "Int64", status = "compiled" },
+]
+category = "control_flow"
+
+[[functions]]
+name = "Int"
+module = "Base"
+signatures = [
+    { args = ["Float64"], ret = "Int64", status = "compiled" },
+]
+category = "conversion"
 
 # ============================================================================
 # SUMMARY
 # ============================================================================
-# Total unique functions: 75
-# Total signatures: 115+
+# Total unique functions: 120+
+# Total signatures: 175+
 # Categories covered: arithmetic, math, comparison, predicate, conversion,
 #                     bitwise, boolean, char, tuple, number_theory, misc,
-#                     control_flow, io
-# Blocked by _svec_len: 9 functions
+#                     control_flow, io, string, array
 # Known accuracy bugs: sin, cos, tan (stackifier edge cases)
+# Previously blocked (now compile): log, log2, log10, sinh, expm1, log1p, hypot
