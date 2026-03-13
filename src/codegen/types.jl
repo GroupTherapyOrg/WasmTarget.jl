@@ -546,7 +546,7 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
     # PURE-4155: Type{X} singleton values (e.g., Type{Int64}) are represented as DataType
     # struct refs via global.get. Only match SINGLETON types (not struct types like Union/DataType).
     # PURE-4151: Exclude Union types (e.g., Union{Type{Int64}, Type{Number}}) — these are
-    # multi-variant unions that map to ExternRef, not single DataType refs.
+    # multi-variant unions that map to AnyRef (via julia_to_wasm_type), not single DataType refs.
     if T <: Type && !(T isa UnionAll) && !(T isa Union) && !isstructtype(T)
         info = register_struct_type!(mod, registry, DataType)
         return ConcreteRef(info.wasm_type_idx, true)

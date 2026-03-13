@@ -23,8 +23,8 @@ function infer_value_wasm_type(val, ctx::CompilationContext)::WasmValType
             actual_val = getfield(val.mod, val.name)
             return infer_value_wasm_type(actual_val, ctx)
         catch
-            # If we can't resolve, fall back to ExternRef
-            return ExternRef
+            # If we can't resolve, fall back to AnyRef (internal polymorphic type)
+            return AnyRef
         end
     end
     if val isa Core.SSAValue
@@ -64,7 +64,7 @@ function infer_value_wasm_type(val, ctx::CompilationContext)::WasmValType
         elseif val.id >= 1 && val.id <= length(ctx.code_info.slottypes)
             return julia_to_wasm_type_concrete(ctx.code_info.slottypes[val.id], ctx)
         end
-        return ExternRef
+        return AnyRef
     elseif val isa Core.Argument
         # PURE-325: Match compile_value's offset — for regular functions, _1 is the
         # function object, so actual args start at _2 → arg_types[1].
@@ -103,7 +103,7 @@ function infer_value_wasm_type(val, ctx::CompilationContext)::WasmValType
             # PURE-043: Struct values compile to struct_new (ConcreteRef)
             return get_concrete_wasm_type(typeof(val), ctx.mod, ctx.type_registry)
         else
-            return ExternRef
+            return AnyRef
         end
     end
 end
@@ -111,7 +111,7 @@ end
 """
 Check if two wasm types are compatible for return (can be used interchangeably).
 Numeric types (I32/I64/F32/F64) are only compatible with themselves.
-Ref types are compatible with each other for externref purposes.
+Ref types are compatible with each other for polymorphic purposes.
 """
 function return_type_compatible(value_type::WasmValType, return_type::WasmValType)::Bool
     if value_type == return_type
