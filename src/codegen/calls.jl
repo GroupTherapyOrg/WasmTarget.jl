@@ -1082,6 +1082,20 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 push!(bytes, Opcode.STRUCT_GET)
                 append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
                 append!(bytes, encode_leb128_unsigned(wasm_field_idx(info, field_idx)))  # PURE-9024
+                # PURE-9064: For $JlType hierarchy struct fields that return GC refs,
+                # emit extern.convert_any so the value is compatible with ExternRef locals
+                # (PURE-908 maps Any-typed SSA locals to ExternRef).
+                # Fields like :hash, :abstract, :dfs_low, :dfs_high are i32 — skip those.
+                _jl_hier_types = (ctx.type_registry.jl_union_idx, ctx.type_registry.jl_datatype_idx,
+                                  ctx.type_registry.jl_unionall_idx, ctx.type_registry.jl_typevar_idx,
+                                  ctx.type_registry.jl_typename_idx)
+                if info.wasm_type_idx in _jl_hier_types
+                    _ft = info.field_types[field_idx]
+                    if _ft !== Int32 && _ft !== Int64 && _ft !== UInt32 && _ft !== UInt64 &&
+                       _ft !== Float32 && _ft !== Float64 && _ft !== Bool
+                        append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.EXTERN_CONVERT_ANY])
+                    end
+                end
                 return bytes
             end
         end
