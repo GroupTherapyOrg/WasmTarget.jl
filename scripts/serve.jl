@@ -134,12 +134,29 @@ function handle_request(req::HTTP.Request)::HTTP.Response
         ])
     end
 
+    # Serve playground static files
+    if req.method == "GET"
+        playground_dir = joinpath(dirname(@__DIR__), "playground")
+        path = req.target == "/" ? "/index.html" : req.target
+        filepath = joinpath(playground_dir, lstrip(path, '/'))
+        filepath = realpath(filepath)  # resolve symlinks
+        if startswith(filepath, playground_dir) && isfile(filepath)
+            content_type = endswith(filepath, ".html") ? "text/html" :
+                           endswith(filepath, ".js") ? "application/javascript" :
+                           endswith(filepath, ".css") ? "text/css" :
+                           "application/octet-stream"
+            return HTTP.Response(200, ["Content-Type" => content_type], body=read(filepath))
+        end
+    end
+
     return HTTP.Response(404, body="Not found")
 end
 
+const PLAYGROUND_DIR = joinpath(dirname(@__DIR__), "playground")
 println("  Listening on http://localhost:$PORT")
-println("  POST /compile — compile Julia code to Wasm")
-println("  GET  /health  — health check")
+println("  GET  /         — playground UI ($(PLAYGROUND_DIR))")
+println("  POST /compile  — compile Julia code to Wasm")
+println("  GET  /health   — health check")
 println()
 
 HTTP.serve(handle_request, "0.0.0.0", PORT)

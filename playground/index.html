@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Julia Playground — WasmTarget.jl</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #1e1e2e;
+      color: #cdd6f4;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 16px;
+      background: #181825;
+      border-bottom: 1px solid #313244;
+    }
+    header h1 {
+      font-size: 16px;
+      font-weight: 600;
+      color: #89b4fa;
+    }
+    header .actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    #run-btn {
+      background: #a6e3a1;
+      color: #1e1e2e;
+      border: none;
+      padding: 6px 16px;
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    #run-btn:hover { background: #94e2d5; }
+    #run-btn:disabled { background: #585b70; color: #a6adc8; cursor: wait; }
+    #status {
+      font-size: 12px;
+      color: #a6adc8;
+    }
+    .main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .editor-pane {
+      flex: 1;
+      overflow: auto;
+      min-height: 200px;
+    }
+    .output-pane {
+      height: 200px;
+      min-height: 80px;
+      background: #11111b;
+      border-top: 1px solid #313244;
+      display: flex;
+      flex-direction: column;
+    }
+    .output-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 12px;
+      background: #181825;
+      border-bottom: 1px solid #313244;
+      font-size: 12px;
+      color: #a6adc8;
+    }
+    #output {
+      flex: 1;
+      padding: 8px 12px;
+      font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+      font-size: 13px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    #output .error { color: #f38ba8; }
+    #output .info { color: #a6adc8; font-style: italic; }
+
+    /* CodeMirror theme overrides */
+    .cm-editor { height: 100%; }
+    .cm-editor .cm-scroller { overflow: auto; }
+    .cm-editor .cm-content { font-family: "JetBrains Mono", "Fira Code", monospace; font-size: 14px; }
+    .cm-editor.cm-focused { outline: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Julia Playground</h1>
+    <div class="actions">
+      <span id="status"></span>
+      <button id="run-btn">Run (Ctrl+Enter)</button>
+    </div>
+  </header>
+
+  <div class="main">
+    <div class="editor-pane" id="editor"></div>
+    <div class="output-pane">
+      <div class="output-header">
+        <span>Output</span>
+        <button id="clear-btn" style="background:none;border:none;color:#a6adc8;cursor:pointer;font-size:12px;">Clear</button>
+      </div>
+      <div id="output"><span class="info">Press Run or Ctrl+Enter to compile and execute.</span></div>
+    </div>
+  </div>
+
+  <!-- CodeMirror 6 via CDN -->
+  <script type="module">
+    // Import CodeMirror packages from esm.sh CDN
+    import {EditorView, basicSetup} from "https://esm.sh/@codemirror/basic-setup@0.20.0";
+    import {keymap} from "https://esm.sh/@codemirror/view@6.36.8";
+    import {EditorState} from "https://esm.sh/@codemirror/state@6.5.2";
+    import {oneDark} from "https://esm.sh/@codemirror/theme-one-dark@6.1.2";
+
+    // Julia language support
+    let juliaLang;
+    try {
+      const mod = await import("https://esm.sh/@plutojl/lang-julia@0.2.1");
+      juliaLang = mod.julia();
+    } catch (e) {
+      console.warn("Julia language support not available, falling back to plain text:", e);
+      juliaLang = null;
+    }
+
+    const COMPILE_URL = (new URLSearchParams(window.location.search)).get("server") || "http://localhost:8080";
+
+    const defaultCode = `# Julia Playground — powered by WasmTarget.jl
+# Your code is compiled to WebAssembly and executed in the browser.
+
+println("Hello from Julia!")
+println("1 + 1 = ", 1 + 1)
+`;
+
+    const extensions = [
+      basicSetup,
+      oneDark,
+      keymap.of([{
+        key: "Ctrl-Enter",
+        mac: "Cmd-Enter",
+        run: () => { runCode(); return true; }
+      }]),
+    ];
+    if (juliaLang) extensions.push(juliaLang);
+
+    const editor = new EditorView({
+      state: EditorState.create({
+        doc: defaultCode,
+        extensions,
+      }),
+      parent: document.getElementById("editor"),
+    });
+
+    const runBtn = document.getElementById("run-btn");
+    const statusEl = document.getElementById("status");
+    const outputEl = document.getElementById("output");
+    const clearBtn = document.getElementById("clear-btn");
+
+    clearBtn.onclick = () => { outputEl.innerHTML = ""; };
+
+    function appendOutput(text, cls = "") {
+      const span = document.createElement("span");
+      if (cls) span.className = cls;
+      span.textContent = text;
+      outputEl.appendChild(span);
+      outputEl.scrollTop = outputEl.scrollHeight;
+    }
+
+    async function runCode() {
+      const code = editor.state.doc.toString();
+      if (!code.trim()) return;
+
+      outputEl.innerHTML = "";
+      runBtn.disabled = true;
+      statusEl.textContent = "Compiling...";
+
+      try {
+        // Step 1: Compile
+        const t0 = performance.now();
+        const resp = await fetch(COMPILE_URL + "/compile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code }),
+        });
+
+        if (!resp.ok) {
+          const err = await resp.json();
+          statusEl.textContent = "Compile error";
+          appendOutput("Compile error: " + (err.error || err.message || "Unknown error"), "error");
+          return;
+        }
+
+        const wasmBytes = await resp.arrayBuffer();
+        const compileTime = performance.now() - t0;
+        statusEl.textContent = `Compiled (${(compileTime / 1000).toFixed(2)}s, ${(wasmBytes.byteLength / 1024).toFixed(1)} KB)`;
+
+        // Step 2: Execute in browser
+        appendOutput(`[Compiled ${(wasmBytes.byteLength / 1024).toFixed(1)} KB in ${(compileTime / 1000).toFixed(2)}s]\n`, "info");
+
+        const importObject = {
+          "io": {
+            "write_string": (s) => { appendOutput(s); },
+            "write_int": (n) => { appendOutput(String(n)); },
+            "write_float": (f) => { appendOutput(String(f)); },
+            "write_bool": (b) => { appendOutput(b ? "true" : "false"); },
+            "write_newline": () => { appendOutput("\n"); },
+            "write_nothing": () => { appendOutput("nothing"); },
+          },
+          "Math": { "pow": Math.pow },
+          "env": {
+            "capture_stack": () => null,
+            "perf_now": () => performance.now(),
+            "random_i64": () => BigInt(Math.floor(Math.random() * 2**63)),
+          },
+        };
+
+        const t1 = performance.now();
+        const mod = await WebAssembly.compile(new Uint8Array(wasmBytes));
+        const instance = await WebAssembly.instantiate(mod, importObject);
+
+        // Call main (bare expressions) or list exports
+        if (instance.exports.main) {
+          instance.exports.main();
+        } else {
+          // List available exports for function-definition mode
+          const exports = Object.keys(instance.exports);
+          appendOutput("Exported functions: " + exports.join(", ") + "\n", "info");
+        }
+
+        const execTime = performance.now() - t1;
+        appendOutput(`\n[Executed in ${execTime.toFixed(1)}ms]\n`, "info");
+        statusEl.textContent += ` | Executed (${execTime.toFixed(1)}ms)`;
+
+      } catch (e) {
+        appendOutput("Error: " + e.message + "\n", "error");
+        if (e.stack) appendOutput(e.stack + "\n", "error");
+        statusEl.textContent = "Error";
+      } finally {
+        runBtn.disabled = false;
+      }
+    }
+
+    runBtn.onclick = runCode;
+    editor.focus();
+  </script>
+</body>
+</html>
