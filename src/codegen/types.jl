@@ -62,9 +62,12 @@ mutable struct TypeRegistry
     type_ranges::Dict{Type, Tuple{Int32, Int32}}  # Abstract/concrete type -> [low, high] DFS range
     # PURE-9026: Base struct type index for typeof(x) extraction
     base_struct_idx::Union{Nothing, UInt32}  # Index of $JlBase = (struct (field i32))
+    # PURE-9028: BoxedNothing struct type and singleton global
+    nothing_box_idx::Union{Nothing, UInt32}   # Struct type: (struct (field $typeId i32))
+    nothing_global_idx::Union{Nothing, UInt32}  # Singleton global holding BoxedNothing instance
 end
 
-TypeRegistry() = TypeRegistry(Dict{Type, StructInfo}(), Dict{Type, UInt32}(), nothing, Dict{Union, UnionInfo}(), Dict{WasmValType, UInt32}(), Dict{Type, UInt32}(), Dict{Core.TypeName, UInt32}(), Dict{Type, Int32}(), Dict{Type, Tuple{Int32, Int32}}(), nothing)
+TypeRegistry() = TypeRegistry(Dict{Type, StructInfo}(), Dict{Type, UInt32}(), nothing, Dict{Union, UnionInfo}(), Dict{WasmValType, UInt32}(), Dict{Type, UInt32}(), Dict{Core.TypeName, UInt32}(), Dict{Type, Int32}(), Dict{Type, Tuple{Int32, Int32}}(), nothing, nothing, nothing)
 
 # ============================================================================
 # PURE-9025: DFS Type ID Assignment
@@ -90,8 +93,9 @@ function assign_type_ids!(registry::TypeRegistry)
     end
 
     # Also include primitive numeric types that may need boxing/dispatch
+    # PURE-9028: Include Nothing for BoxedNothing typeId
     for T in (Bool, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64,
-              Float16, Float32, Float64)
+              Float16, Float32, Float64, Nothing)
         push!(concrete_types, T)
     end
 
@@ -531,6 +535,42 @@ function get_numeric_box_type!(mod::WasmModule, registry::TypeRegistry, wasm_typ
     type_idx = add_struct_type!(mod, fields)
     registry.numeric_boxes[wasm_type] = type_idx
     return type_idx
+end
+
+"""
+PURE-9028: Get or create the BoxedNothing struct type.
+BoxedNothing has only typeId:i32 (no value field) — a singleton type.
+"""
+function get_nothing_box_type!(mod::WasmModule, registry::TypeRegistry)::UInt32
+    if registry.nothing_box_idx !== nothing
+        return registry.nothing_box_idx
+    end
+    # BoxedNothing: just typeId field (no value)
+    fields = [FieldType(I32, false)]
+    type_idx = add_struct_type!(mod, fields)
+    registry.nothing_box_idx = type_idx
+    return type_idx
+end
+
+"""
+PURE-9028: Get or create a singleton global holding the BoxedNothing instance.
+Returns the global index. The global is initialized with struct.new \$BoxedNothing(typeId).
+"""
+function get_nothing_global!(mod::WasmModule, registry::TypeRegistry)::UInt32
+    if registry.nothing_global_idx !== nothing
+        return registry.nothing_global_idx
+    end
+    box_type = get_nothing_box_type!(mod, registry)
+    # Create init expr: i32.const <typeId> → struct.new BoxedNothing (without END)
+    init_expr = UInt8[]
+    emit_type_id!(init_expr, registry, Nothing)
+    push!(init_expr, Opcode.GC_PREFIX)
+    push!(init_expr, Opcode.STRUCT_NEW)
+    append!(init_expr, encode_leb128_unsigned(box_type))
+    # Use add_global_ref! which handles non-null concrete ref type + END byte
+    global_idx = add_global_ref!(mod, box_type, false, init_expr; nullable=false)
+    registry.nothing_global_idx = global_idx
+    return global_idx
 end
 
 """

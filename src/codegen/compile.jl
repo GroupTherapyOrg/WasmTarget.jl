@@ -1283,6 +1283,8 @@ function compile_module(functions::Vector;
     for nt in (I32, I64, F32, F64)
         get_numeric_box_type!(mod, type_registry, nt)
     end
+    # PURE-9028: Pre-register BoxedNothing type
+    get_nothing_box_type!(mod, type_registry)
 
     # Normalize input: ensure each entry is (func, arg_types, name)
     normalized = []
@@ -1431,6 +1433,9 @@ function compile_module(functions::Vector;
     # PURE-9025: Assign DFS type IDs after all types are registered
     assign_type_ids!(type_registry)
 
+    # PURE-9028: Create BoxedNothing singleton global (after type IDs assigned)
+    get_nothing_global!(mod, type_registry)
+
     # PURE-9026: Set all struct types as subtypes of $JlBase for typeof(x)
     if type_registry.base_struct_idx !== nothing
         set_struct_supertypes!(mod, type_registry.base_struct_idx)
@@ -1528,6 +1533,8 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
     for nt in (I32, I64, F32, F64)
         get_numeric_box_type!(mod, type_registry, nt)
     end
+    # PURE-9028: Pre-register BoxedNothing type
+    get_nothing_box_type!(mod, type_registry)
 
     # Build function_data from pre-computed IR (no get_typed_ir call)
     function_data = []
@@ -1595,6 +1602,9 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
 
     # PURE-9025: Assign DFS type IDs after all types are registered
     assign_type_ids!(type_registry)
+
+    # PURE-9028: Create BoxedNothing singleton global (after type IDs assigned)
+    get_nothing_global!(mod, type_registry)
 
     # PURE-9026: Set all struct types as subtypes of $JlBase for typeof(x)
     if type_registry.base_struct_idx !== nothing
