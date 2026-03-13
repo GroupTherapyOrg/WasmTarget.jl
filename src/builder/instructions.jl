@@ -990,6 +990,46 @@ function to_bytes(mod::WasmModule)::Vector{UInt8}
         end
     end
 
+    # PURE-9036: Name section (custom section) for stack trace readability
+    # Includes function names from exports so stack traces show meaningful names
+    func_names = Dict{UInt32, String}()
+    # Collect names from imports
+    func_idx = UInt32(0)
+    for imp in mod.imports
+        if imp.kind == 0x00  # function import
+            func_names[func_idx] = "$(imp.module_name).$(imp.field_name)"
+            func_idx += 1
+        end
+    end
+    # Collect names from exports (overrides import names if both exist)
+    for exp in mod.exports
+        if exp.kind == 0x00  # function export
+            func_names[exp.idx] = exp.name
+        end
+    end
+    if !isempty(func_names)
+        # Custom section (section id 0)
+        write_byte!(w, 0x00)
+        custom_section = WasmWriter()
+        # Section name: "name"
+        write_name!(custom_section, "name")
+        # Subsection 1: function names
+        subsection = WasmWriter()
+        sorted_names = sort(collect(func_names), by=first)
+        write_u32!(subsection, length(sorted_names))
+        for (idx, name) in sorted_names
+            write_u32!(subsection, idx)
+            write_name!(subsection, name)
+        end
+        # Write subsection (id=1, then size, then content)
+        write_byte!(custom_section, 0x01)  # subsection id: function names
+        write_u32!(custom_section, length(subsection.buffer))
+        append!(custom_section.buffer, subsection.buffer)
+        # Write custom section size then content
+        write_u32!(w, length(custom_section.buffer))
+        append!(w.buffer, custom_section.buffer)
+    end
+
     return bytes(w)
 end
 

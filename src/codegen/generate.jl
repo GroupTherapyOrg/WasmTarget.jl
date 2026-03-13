@@ -1429,6 +1429,44 @@ function ensure_exception_global!(mod::WasmModule)::UInt32
 end
 
 """
+PURE-9036: Ensure module has stack trace capture infrastructure.
+Adds `capture_stack` import (env.capture_stack: () → externref) and
+`\$current_stack_trace` global (mut externref). Returns (import_idx, global_idx).
+Idempotent — scans existing imports to avoid duplicates.
+"""
+function ensure_stack_trace_support!(mod::WasmModule)
+    # Check if capture_stack import already exists
+    import_idx = nothing
+    func_count = UInt32(0)
+    for imp in mod.imports
+        if imp.kind == 0x00  # function import
+            if imp.module_name == "env" && imp.field_name == "capture_stack"
+                import_idx = func_count
+            end
+            func_count += 1
+        end
+    end
+
+    if import_idx === nothing
+        import_idx = add_stack_trace_import!(mod)
+    end
+
+    global_idx = ensure_stack_trace_global!(mod)
+    return (import_idx=import_idx, global_idx=global_idx)
+end
+
+"""
+PURE-9036: Emit capture_stack() + global.set at a throw site.
+Call this before emitting the `throw` instruction to capture the stack trace.
+"""
+function emit_capture_stack!(bytes::Vector{UInt8}, capture_import_idx::UInt32, trace_global_idx::UInt32)
+    push!(bytes, Opcode.CALL)
+    append!(bytes, encode_leb128_unsigned(capture_import_idx))
+    push!(bytes, Opcode.GLOBAL_SET)
+    append!(bytes, encode_leb128_unsigned(trace_global_idx))
+end
+
+"""
 PURE-6024: Generate try/catch code using generate_stackified_flow for the try body.
 Used when the try body has complex control flow (phi nodes, nested conditionals).
 The simple linear approach in generate_try_catch can't handle phi locals or nested
