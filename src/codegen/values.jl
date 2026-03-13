@@ -100,6 +100,13 @@ function infer_value_wasm_type(val, ctx::CompilationContext)::WasmValType
             # PURE-9063: Use $JlDataType when hierarchy is available
             dt_idx = get_datatype_type_idx(ctx.type_registry)
             return ConcreteRef(dt_idx, true)
+        elseif val isa Core.TypeName
+            # PURE-9064: TypeName constants compile to global.get ($JlTypeName struct ref)
+            tn_idx = ctx.type_registry.jl_typename_idx
+            if tn_idx !== nothing
+                return ConcreteRef(tn_idx, true)
+            end
+            return StructRef
         elseif isstructtype(typeof(val))
             # PURE-043: Struct values compile to struct_new (ConcreteRef)
             return get_concrete_wasm_type(typeof(val), ctx.mod, ctx.type_registry)
@@ -599,6 +606,14 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         global_idx = get_type_constant_global!(ctx.mod, ctx.type_registry, val)
         push!(bytes, Opcode.GLOBAL_GET)
         append!(bytes, encode_leb128_unsigned(global_idx))
+
+    elseif val isa Core.TypeName
+        # PURE-9064: TypeName constant — look up or create the TypeName global.
+        # TypeName objects have many undefined fields so the general struct constant
+        # path would emit ref.null. Instead, use the dedicated TypeName global registry.
+        tn_global_idx = get_typename_constant_global!(ctx.mod, ctx.type_registry, val)
+        push!(bytes, Opcode.GLOBAL_GET)
+        append!(bytes, encode_leb128_unsigned(tn_global_idx))
 
     elseif val isa Module
         # Module constant — empty struct (fieldcount=0), like Function singletons.
