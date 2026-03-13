@@ -4342,7 +4342,44 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
     # throw() - compile to WASM throw instruction
     elseif func isa GlobalRef && func.name === :throw
         # PURE-1102: Emit throw instruction with tag 0 (our Julia exception tag)
+        # PURE-9032: Stash exception value in $current_exn global before throwing.
+        # The throw(obj) call has obj as args[1]. Compile it to anyref for stashing.
         ensure_exception_tag!(ctx.mod)
+        exn_global = ensure_exception_global!(ctx.mod)
+        if length(args) >= 1
+            # Check if the value is a QuoteNode containing a struct with undefined fields.
+            # compile_value produces ref.null for such structs, but we need a non-null
+            # struct instance for ref.test (isa checks) to work in catch blocks.
+            local _throw_val = args[1]
+            local _throw_raw = _throw_val isa QuoteNode ? _throw_val.value : _throw_val
+            local _throw_used_default = false
+            if !(_throw_raw isa Core.SSAValue) && !(_throw_raw isa Core.Argument) &&
+               isstructtype(typeof(_throw_raw)) && !isa(_throw_raw, Function) && !isa(_throw_raw, Module)
+                local _throw_T = typeof(_throw_raw)
+                local _throw_has_undef = any(!isdefined(_throw_raw, fn) for fn in fieldnames(_throw_T))
+                if _throw_has_undef
+                    # Create a struct with default fields instead of ref.null
+                    local _throw_info = register_struct_type!(ctx.mod, ctx.type_registry, _throw_T)
+                    if _throw_info !== nothing
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.STRUCT_NEW_DEFAULT)
+                        append!(bytes, encode_leb128_unsigned(_throw_info.wasm_type_idx))
+                        push!(bytes, Opcode.GLOBAL_SET)
+                        append!(bytes, encode_leb128_unsigned(exn_global))
+                        _throw_used_default = true
+                    end
+                end
+            end
+            if !_throw_used_default
+                # Compile the exception value normally
+                exn_bytes = compile_value(_throw_val, ctx)
+                if !isempty(exn_bytes)
+                    append!(bytes, exn_bytes)
+                    push!(bytes, Opcode.GLOBAL_SET)
+                    append!(bytes, encode_leb128_unsigned(exn_global))
+                end
+            end
+        end
         push!(bytes, Opcode.THROW)
         append!(bytes, encode_leb128_unsigned(0))  # tag index 0
 

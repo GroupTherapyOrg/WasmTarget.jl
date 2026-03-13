@@ -1050,6 +1050,14 @@ function allocate_ssa_locals!(ctx::CompilationContext)
                 end
             end
 
+            # PURE-9032: :the_exception produces anyref from global.get $current_exn.
+            # Override the SSA type so the local is allocated as anyref (not the Union's
+            # tagged union type, which would cause illegal cast at runtime).
+            if stmt isa Expr && stmt.head === :the_exception
+                ssa_type = Any
+                ctx.ssa_types[ssa_id] = Any
+            end
+
             # Skip Nothing type - nothing is compiled as ref.null, not i32
             # Trying to store it in an i32 local causes type errors
             if ssa_type === Nothing
@@ -1442,7 +1450,7 @@ Check if a statement produces a value on the stack.
 function produces_stack_value(stmt)
     # Most expressions produce values
     if stmt isa Expr
-        return stmt.head in (:call, :invoke, :new, :boundscheck, :tuple)
+        return stmt.head in (:call, :invoke, :new, :boundscheck, :tuple, :the_exception)
     end
     if stmt isa Core.PhiNode
         return true

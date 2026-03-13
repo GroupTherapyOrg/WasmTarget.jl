@@ -431,14 +431,40 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
         elseif stmt.head === :foreigncall
             # Handle foreign calls - specifically for Vector allocation
             stmt_bytes = compile_foreigncall(stmt, idx, ctx)
+        elseif stmt.head === :the_exception
+            # PURE-9032: Retrieve the caught exception value from the $current_exn global.
+            # Julia IR emits :the_exception in catch blocks to get the caught exception.
+            # We stash exception values into a (mut anyref) global before throw,
+            # and retrieve them here with global.get.
+            exn_global = ensure_exception_global!(ctx.mod)
+            push!(stmt_bytes, Opcode.GLOBAL_GET)
+            append!(stmt_bytes, encode_leb128_unsigned(exn_global))
+            # The global is anyref but the SSA local may be structref (for Union{ErrorException, BoundsError}).
+            # Downcast anyref → structref so the local.set is type-valid.
+            local _exn_local_wasm = nothing
+            if haskey(ctx.ssa_locals, idx)
+                local _exn_local_idx = ctx.ssa_locals[idx]
+                local _exn_arr_idx = _exn_local_idx - ctx.n_params + 1
+                if _exn_arr_idx >= 1 && _exn_arr_idx <= length(ctx.locals)
+                    _exn_local_wasm = ctx.locals[_exn_arr_idx]
+                end
+            end
+            if _exn_local_wasm === StructRef
+                # anyref → structref via ref.cast null struct
+                push!(stmt_bytes, Opcode.GC_PREFIX)
+                push!(stmt_bytes, Opcode.REF_CAST_NULL)
+                push!(stmt_bytes, UInt8(StructRef))
+            elseif _exn_local_wasm isa ConcreteRef
+                # anyref → concrete ref via ref.cast null $type
+                push!(stmt_bytes, Opcode.GC_PREFIX)
+                push!(stmt_bytes, Opcode.REF_CAST_NULL)
+                append!(stmt_bytes, encode_leb128_signed(Int64(_exn_local_wasm.type_idx)))
+            end
         elseif stmt.head === :leave
-            # Exception handling: Leave try block
-            # For now, skip - full implementation requires try_table control flow
-            # TODO: Implement proper br out of try_table
+            # Exception handling: Leave try block — no-op in WASM
+            # (try_table control flow handles this structurally)
         elseif stmt.head === :pop_exception
-            # Exception handling: Pop exception from handler stack
-            # For now, skip - full implementation requires exnref handling
-            # TODO: Implement proper exception value handling
+            # Exception handling: Pop exception from handler stack — no-op in WASM
         end
 
         # PURE-908: Check if compile_call/compile_invoke emitted a stub UNREACHABLE.

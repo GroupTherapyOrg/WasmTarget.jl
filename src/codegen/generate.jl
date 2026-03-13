@@ -1401,12 +1401,31 @@ WASM structure:
   ;; code after try/catch
 """
 # PURE-1102: Ensure module has exception tag 0 for Julia exceptions (idempotent)
+# PURE-9032: Also ensures the $current_exn global exists for exception value stashing.
 function ensure_exception_tag!(mod::WasmModule)
     if isempty(mod.tags)
         void_ft = FuncType(WasmValType[], WasmValType[])
         void_type_idx = add_type!(mod, void_ft)
         add_tag!(mod, void_type_idx)
     end
+end
+
+"""
+PURE-9032: Ensure module has the \$current_exn global for exception value stashing.
+This is a (mut anyref) global initialized to ref.null any.
+Returns the global index. Idempotent — scans existing globals to avoid duplicates.
+"""
+function ensure_exception_global!(mod::WasmModule)::UInt32
+    # Check if we already have an anyref mutable global (our exception stash)
+    for (i, g) in enumerate(mod.globals)
+        if g.valtype === AnyRef && g.mutable_
+            return UInt32(i - 1)
+        end
+    end
+    # Create (global (mut anyref) (ref.null any))
+    init = UInt8[0xD0, 0x6E, Opcode.END]  # ref.null any + end
+    push!(mod.globals, WasmGlobalDef(AnyRef, true, init))
+    return UInt32(length(mod.globals) - 1)
 end
 
 """
@@ -1616,6 +1635,9 @@ function generate_try_catch(ctx::CompilationContext, blocks::Vector{BasicBlock},
         # End catch landing block — catch_all lands here
         push!(bytes, Opcode.END)
 
+        # PURE-9032: Reset dead code flag — catch handler is always reachable
+        ctx.last_stmt_was_stub = false
+
         # Catch handler code (from catch_dest to merge_start-1)
         for i in catch_dest:(merge_start-1)
             stmt = code[i]
@@ -1741,14 +1763,74 @@ function generate_try_catch(ctx::CompilationContext, blocks::Vector{BasicBlock},
         # End inner (catch destination) block
         push!(bytes, Opcode.END)
 
+        # PURE-9032: Reset dead code flag — catch handler is always reachable
+        # (catch_all means ANY throw reaches here, regardless of what happened in try body)
+        ctx.last_stmt_was_stub = false
+
         # Catch handler code (from catch_dest to end)
-        for i in catch_dest:length(code)
-            stmt = code[i]
-            if stmt !== nothing
-                if stmt isa Expr && stmt.head === :pop_exception
-                    continue
+        # PURE-9032: Handle GotoIfNot in catch body — generate if/else blocks
+        # for exception type dispatch (isa checks in catch blocks).
+        local _catch_i = catch_dest
+        while _catch_i <= length(code)
+            local _catch_stmt = code[_catch_i]
+            if _catch_stmt === nothing
+                _catch_i += 1
+                continue
+            end
+            if _catch_stmt isa Expr && _catch_stmt.head === :pop_exception
+                _catch_i += 1
+                continue
+            end
+            if _catch_stmt isa Core.GotoIfNot
+                # Generate if/else for the conditional branch
+                local _else_target = _catch_stmt.dest
+                append!(bytes, compile_condition_to_i32(_catch_stmt.cond, ctx))
+                # Determine if the then-branch has a return/throw (one-way)
+                local _then_start = _catch_i + 1
+                local _then_has_return = false
+                for _j in _then_start:min(_else_target - 1, length(code))
+                    if code[_j] isa Core.ReturnNode
+                        _then_has_return = true
+                        break
+                    end
                 end
-                append!(bytes, compile_statement(stmt, i, ctx))
+                if _then_has_return
+                    # Then-branch returns: just wrap in if/end (no else needed)
+                    push!(bytes, Opcode.IF)
+                    push!(bytes, 0x40)
+                    for _j in _then_start:min(_else_target - 1, length(code))
+                        local _ts = code[_j]
+                        if _ts !== nothing && !(_ts isa Expr && _ts.head === :pop_exception)
+                            append!(bytes, compile_statement(_ts, _j, ctx))
+                        end
+                    end
+                    push!(bytes, Opcode.END)
+                    ctx.last_stmt_was_stub = false
+                    _catch_i = _else_target
+                else
+                    # Both branches present: if/else/end
+                    push!(bytes, Opcode.IF)
+                    push!(bytes, 0x40)
+                    for _j in _then_start:min(_else_target - 1, length(code))
+                        local _ts2 = code[_j]
+                        if _ts2 !== nothing && !(_ts2 isa Expr && _ts2.head === :pop_exception)
+                            append!(bytes, compile_statement(_ts2, _j, ctx))
+                        end
+                    end
+                    push!(bytes, Opcode.ELSE)
+                    for _j in _else_target:length(code)
+                        local _es = code[_j]
+                        if _es !== nothing && !(_es isa Expr && _es.head === :pop_exception)
+                            append!(bytes, compile_statement(_es, _j, ctx))
+                        end
+                    end
+                    push!(bytes, Opcode.END)
+                    ctx.last_stmt_was_stub = false
+                    _catch_i = length(code) + 1  # done
+                end
+            else
+                append!(bytes, compile_statement(_catch_stmt, _catch_i, ctx))
+                _catch_i += 1
             end
         end
 
@@ -1793,6 +1875,9 @@ function _compile_try_body_gotoifnot(stmt::Core.GotoIfNot, i::Int, leave_idx::In
             end
         end
         push!(bytes, Opcode.END)
+        # PURE-9032: Reset dead code flag after if/end — the throw/error inside the
+        # if block is a dead-end, but control resumes on the else path after end.
+        ctx.last_stmt_was_stub = false
     else
         push!(bytes, Opcode.IF)
         push!(bytes, 0x40)
@@ -1808,6 +1893,7 @@ function _compile_try_body_gotoifnot(stmt::Core.GotoIfNot, i::Int, leave_idx::In
             end
         end
         push!(bytes, Opcode.END)
+        ctx.last_stmt_was_stub = false
     end
     return bytes
 end

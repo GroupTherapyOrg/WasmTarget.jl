@@ -1,6 +1,6 @@
 {
   "name": "gt_skip_test",
-  "julia_version": "1.12.4",
+  "julia_version": "1.11.7",
   "entries": [
     {
       "expected": 1,
@@ -9,5 +9,5 @@
       ]
     }
   ],
-  "generated": "2026-03-13T00:26:35.699"
+  "generated": "2026-03-13T01:30:50.116"
 }

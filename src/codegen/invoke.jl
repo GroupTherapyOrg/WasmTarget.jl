@@ -805,6 +805,12 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 # Clear the stack first (arguments were pushed but not needed)
                 bytes = UInt8[]  # Reset - don't need the pushed args
                 ensure_exception_tag!(ctx.mod)
+                # PURE-9032: Stash a ref.null any as exception (no specific value for these)
+                exn_global = ensure_exception_global!(ctx.mod)
+                push!(bytes, 0xD0)  # ref.null
+                push!(bytes, 0x6E)  # any
+                push!(bytes, Opcode.GLOBAL_SET)
+                append!(bytes, encode_leb128_unsigned(exn_global))
                 push!(bytes, Opcode.THROW)
                 append!(bytes, encode_leb128_unsigned(0))  # tag index 0
                 ctx.last_stmt_was_stub = true  # PURE-908
@@ -3336,6 +3342,12 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                    name === :throw || name === :rethrow ||
                    name === :_throw_not_readable || name === :_throw_not_writable
                 ensure_exception_tag!(ctx.mod)
+                # PURE-9032: Stash ref.null any as exception placeholder
+                exn_global = ensure_exception_global!(ctx.mod)
+                push!(bytes, 0xD0)  # ref.null
+                push!(bytes, 0x6E)  # any
+                push!(bytes, Opcode.GLOBAL_SET)
+                append!(bytes, encode_leb128_unsigned(exn_global))
                 push!(bytes, Opcode.THROW)
                 append!(bytes, encode_leb128_unsigned(0))  # tag index 0
                 ctx.last_stmt_was_stub = true  # PURE-908
@@ -3494,13 +3506,60 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 end
 
             # PURE-1102: Error/throw functions — emit throw (catchable) instead of unreachable (trap)
-            elseif name === :error || name === :throw || name === :throw_boundserror ||
+            # PURE-9032: Create exception struct objects and stash in $current_exn
+            # so that :the_exception + isa checks can identify the exception type.
+            elseif name === :error
+                bytes = UInt8[]  # Clear pre-pushed args
+                ensure_exception_tag!(ctx.mod)
+                exn_global = ensure_exception_global!(ctx.mod)
+                # error("msg") → create ErrorException struct, stash, throw
+                local _ee_info = register_struct_type!(ctx.mod, ctx.type_registry, ErrorException)
+                if _ee_info !== nothing
+                    emit_type_id!(bytes, ctx.type_registry, ErrorException)
+                    # Field 1: msg (ArrayRef for AbstractString)
+                    if length(args) >= 1
+                        append!(bytes, compile_value(args[1], ctx))
+                    else
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(ArrayRef))
+                    end
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.STRUCT_NEW)
+                    append!(bytes, encode_leb128_unsigned(_ee_info.wasm_type_idx))
+                    push!(bytes, Opcode.GLOBAL_SET)
+                    append!(bytes, encode_leb128_unsigned(exn_global))
+                end
+                push!(bytes, Opcode.THROW)
+                append!(bytes, encode_leb128_unsigned(0))
+                ctx.last_stmt_was_stub = true
+            elseif name === :throw || name === :throw_boundserror ||
                    name === :ArgumentError || name === :AssertionError ||
                    name === :KeyError || name === :ErrorException ||
                    name === :BoundsError || name === :MethodError
+                bytes = UInt8[]  # Clear pre-pushed args
                 ensure_exception_tag!(ctx.mod)
+                exn_global = ensure_exception_global!(ctx.mod)
+                # Try to create a proper exception struct for known error types
+                local _exn_type = nothing
+                if name === :BoundsError; _exn_type = BoundsError
+                elseif name === :ErrorException; _exn_type = ErrorException
+                elseif name === :ArgumentError; _exn_type = ArgumentError
+                elseif name === :KeyError; _exn_type = KeyError
+                elseif name === :MethodError; _exn_type = MethodError
+                end
+                if _exn_type !== nothing
+                    local _exn_info = register_struct_type!(ctx.mod, ctx.type_registry, _exn_type)
+                    if _exn_info !== nothing
+                        # Create struct with default fields using struct.new_default
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.STRUCT_NEW_DEFAULT)
+                        append!(bytes, encode_leb128_unsigned(_exn_info.wasm_type_idx))
+                        push!(bytes, Opcode.GLOBAL_SET)
+                        append!(bytes, encode_leb128_unsigned(exn_global))
+                    end
+                end
                 push!(bytes, Opcode.THROW)
-                append!(bytes, encode_leb128_unsigned(0))  # tag index 0
+                append!(bytes, encode_leb128_unsigned(0))
                 ctx.last_stmt_was_stub = true  # PURE-908
 
             # Handle JuliaSyntax internal functions that have complex implementations
