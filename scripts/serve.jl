@@ -10,6 +10,7 @@
 
 using WasmTarget
 using HTTP
+using JSON
 
 const PORT = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 8080
 const BASE_WASM = joinpath(dirname(@__DIR__), "base.wasm")
@@ -32,48 +33,61 @@ function parse_code(req::HTTP.Request)::String
     body = String(req.body)
     content_type = HTTP.header(req, "Content-Type", "text/plain")
     if startswith(content_type, "application/json")
-        # Simple JSON parsing: extract "code" field
-        m = match(r"\"code\"\s*:\s*\"((?:[^\"\\]|\\.)*)\"", body)
-        if m === nothing
-            error("JSON body must have a \"code\" field")
-        end
-        return replace(m.captures[1], "\\n" => "\n", "\\\"" => "\"", "\\\\" => "\\")
+        data = JSON.parse(body)
+        code = get(data, "code", nothing)
+        code === nothing && error("JSON body must have a \"code\" field")
+        return String(code)
     end
     return body
 end
 
 """
+Check if code defines any functions (heuristic: contains `function` keyword or `f(args) =` pattern).
+"""
+function _has_function_defs(code::String)::Bool
+    return occursin(r"^\s*(function\s|[a-zA-Z_]\w*\s*\([^)]*\)\s*=)"m, code)
+end
+
+"""
 Compile Julia code string to Wasm bytes.
-Wraps the code in a function, compiles it, and merges with base.wasm.
+If code defines functions, compiles them directly.
+If code is bare expressions (e.g. `println(1+1)`), wraps in a `main()` function.
+Merges result with base.wasm.
 """
 function compile_code(code::String)::Vector{UInt8}
-    # The code should define one or more functions. We evaluate it in a temporary module
-    # and compile the exported functions.
     temp_mod = Module()
-    Base.eval(temp_mod, Meta.parse("begin\n$code\nend"))
 
-    # Find all exported functions (the ones the user defined)
-    functions = []
-    for name in names(temp_mod; all=false)
-        name === nameof(temp_mod) && continue
-        f = getfield(temp_mod, name)
-        if f isa Function
-            # Get the method signatures
-            for m in methods(f)
-                sig = m.sig
-                if sig isa DataType && sig <: Tuple
-                    arg_types = Tuple(sig.parameters[2:end])
-                    push!(functions, (f, arg_types, string(name)))
+    if _has_function_defs(code)
+        # Code defines functions — evaluate and discover them
+        Base.eval(temp_mod, Meta.parse("begin\n$code\nend"))
+
+        functions = []
+        for name in names(temp_mod; all=false)
+            name === nameof(temp_mod) && continue
+            f = getfield(temp_mod, name)
+            if f isa Function
+                for m in methods(f)
+                    sig = m.sig
+                    if sig isa DataType && sig <: Tuple
+                        arg_types = Tuple(sig.parameters[2:end])
+                        push!(functions, (f, arg_types, string(name)))
+                    end
                 end
             end
         end
-    end
 
-    if isempty(functions)
-        error("No functions found in code. Define at least one function with type annotations.")
-    end
+        if isempty(functions)
+            error("Code appears to define functions but none were found. Check syntax.")
+        end
 
-    return compile_with_base(functions; base_wasm_path=BASE_WASM)
+        return compile_with_base(functions; base_wasm_path=BASE_WASM)
+    else
+        # Bare expressions — wrap in main()
+        wrapped = "function main()::Nothing\n$code\nreturn nothing\nend"
+        Base.eval(temp_mod, Meta.parse(wrapped))
+        main_fn = getfield(temp_mod, :main)
+        return compile_with_base([(main_fn, (), "main")]; base_wasm_path=BASE_WASM)
+    end
 end
 
 function handle_request(req::HTTP.Request)::HTTP.Response
