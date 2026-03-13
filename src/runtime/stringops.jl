@@ -1,26 +1,24 @@
 # String Operations - Intrinsic string functions that compile to WASM
 # These functions are recognized by the compiler and translated directly to WASM array operations.
 #
-# In WASM, strings are stored as i32 arrays (one element per character).
-# These functions compile to direct array operations.
+# In WASM, strings are stored as packed i8 arrays (UTF-8 bytes).
+# These functions compile to direct array operations with array.get_u for reads.
 
-export str_char, str_setchar!, str_len, str_new, str_copy, str_substr, str_eq, str_hash,
+export str_char, str_setchar!, str_len, str_charlen, str_new, str_copy, str_substr, str_eq, str_hash,
        str_contains, str_find, str_uppercase, str_lowercase, str_trim, str_startswith, str_endswith,
        digit_to_str, int_to_string, float_to_string
 
 """
     str_char(s::String, i::Int)::Int32
 
-Get the character (as Int32 codepoint) at 1-based index `i` in string `s`.
-Compiles to WASM `array.get` instruction.
-
-Note: In WASM, strings are i32 arrays. This function assumes single-byte ASCII
-characters for the Julia fallback.
+Get the byte (as Int32) at 1-based byte index `i` in string `s`.
+Compiles to WASM `array.get_u` instruction on packed i8 array.
+Equivalent to Julia's `codeunit(s, i)`.
 
 # Example
 ```julia
 s = "hello"
-c = str_char(s, 1)  # Returns Int32('h') = 104
+c = str_char(s, 1)  # Returns Int32(104) = 'h'
 ```
 """
 @noinline function str_char(s::String, i::Int)::Int32
@@ -64,17 +62,36 @@ end
 """
     str_len(s::String)::Int32
 
-Get the length of string `s` as Int32.
-Compiles to WASM `array.len` instruction.
+Get the byte length (ncodeunits) of string `s` as Int32.
+Compiles to WASM `array.len` instruction on packed i8 array.
+Returns byte count, not character count. For character count, use `str_charlen`.
 
 # Example
 ```julia
-s = "hello"
-len = str_len(s)  # Returns Int32(5)
+str_len("hello")  # Returns Int32(5)
+str_len("héllo")  # Returns Int32(6) — é is 2 UTF-8 bytes
 ```
 """
 @noinline function str_len(s::String)::Int32
     # Use inferencebarrier to prevent constant folding
+    # ncodeunits returns byte count, matching array.len on i8 array
+    return Base.inferencebarrier(Int32(ncodeunits(s)))::Int32
+end
+
+"""
+    str_charlen(s::String)::Int32
+
+Count the number of Unicode codepoints in string `s`.
+O(n) — scans bytes to count UTF-8 lead bytes.
+Equivalent to Julia's `length(s)`.
+
+# Example
+```julia
+str_charlen("hello")  # Returns Int32(5)
+str_charlen("héllo")  # Returns Int32(5)
+```
+"""
+@noinline function str_charlen(s::String)::Int32
     return Base.inferencebarrier(Int32(length(s)))::Int32
 end
 
@@ -145,8 +162,8 @@ end
 """
     str_eq(a::String, b::String)::Bool
 
-Check if two strings are equal character by character.
-Returns true if all characters match and lengths are equal.
+Check if two strings are equal byte by byte (memcmp semantics).
+Returns true if all bytes match and byte lengths are equal.
 
 # Example
 ```julia
@@ -162,11 +179,11 @@ end
     str_hash(s::String)::Int32
 
 Compute a hash value for the string.
-Uses Java-style hash: h = 31 * h + char[i] for each character.
+Uses Java-style hash: h = 31 * h + byte[i] for each UTF-8 byte.
 Result is masked to positive Int32 range.
 
 This is the same algorithm used by SimpleDict for Int32 keys,
-extended to work with strings.
+extended to work with strings. Iterates raw bytes, not codepoints.
 
 # Example
 ```julia
@@ -174,10 +191,10 @@ h = str_hash("hello")  # Returns consistent Int32 hash value
 ```
 """
 @noinline function str_hash(s::String)::Int32
-    # Julia fallback - compute hash
+    # Julia fallback - compute hash over raw bytes
     h = Int32(0)
-    for c in s
-        h = Int32(31) * h + Int32(UInt8(c))
+    for i in 1:ncodeunits(s)
+        h = Int32(31) * h + Int32(codeunit(s, i))
         h = h & Int32(0x7FFFFFFF)  # Keep positive
     end
     return Base.inferencebarrier(h)::Int32

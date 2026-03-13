@@ -135,7 +135,7 @@ These are intrinsic functions that have special compilation support.
 """
 const WASMTARGET_RUNTIME_FUNCTIONS = Set([
     # String operations (StringOps.jl)
-    :str_char, :str_setchar!, :str_len, :str_new, :str_copy, :str_substr,
+    :str_char, :str_setchar!, :str_len, :str_charlen, :str_new, :str_copy, :str_substr,
     :str_eq, :str_hash, :str_find, :str_contains, :str_startswith, :str_endswith,
     :str_uppercase, :str_lowercase, :str_trim,
     # String conversion (WASM-054, WASM-055)
@@ -589,7 +589,7 @@ function infer_runtime_func_arg_types(name::Symbol)::Union{Tuple, Nothing}
         return (String, Int32)
     elseif name in [:str_setchar!]
         return (String, Int32, Int32)
-    elseif name in [:str_len]
+    elseif name in [:str_len, :str_charlen]
         return (String,)
     elseif name in [:str_new]
         return (Int32,)
@@ -651,7 +651,7 @@ function is_intrinsic_function(f)::Bool
         return false
     end
     fname = nameof(f)
-    return fname in [:str_char, :str_len, :str_eq, :str_new, :str_setchar!, :str_concat, :str_substr]
+    return fname in [:str_char, :str_len, :str_charlen, :str_eq, :str_new, :str_setchar!, :str_concat, :str_substr]
 end
 
 """
@@ -693,7 +693,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
 
     elseif fname === :str_len
         # str_len(s::String)::Int32
-        # Returns length of string array
+        # Returns byte length of string (ncodeunits)
         # local 0 = string (array ref)
         push!(bytes, Opcode.LOCAL_GET)
         push!(bytes, 0x00)  # string
@@ -701,6 +701,94 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.ARRAY_LEN)
         push!(bytes, Opcode.END)
+        return (bytes, extra_locals)
+
+    elseif fname === :str_charlen
+        # str_charlen(s::String)::Int32
+        # Count UTF-8 codepoints by counting non-continuation bytes
+        # A byte is a continuation byte if (byte & 0xC0) == 0x80
+        # local 0 = string (array ref)
+        # local 1 = i (loop counter), local 2 = count, local 3 = len
+        push!(extra_locals, I32)  # local 1: i
+        push!(extra_locals, I32)  # local 2: count
+        push!(extra_locals, I32)  # local 3: len
+
+        # len = array.len(s)
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x00)
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_LEN)
+        push!(bytes, Opcode.LOCAL_SET)
+        push!(bytes, 0x03)  # len
+
+        # i = 0, count = 0 (already zero-initialized)
+
+        # block $exit (result i32)
+        push!(bytes, Opcode.BLOCK)
+        push!(bytes, UInt8(I32))
+
+        # loop $loop (void)
+        push!(bytes, Opcode.LOOP)
+        push!(bytes, 0x40)
+
+        # if i >= len: break with count
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x01)  # i
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x03)  # len
+        push!(bytes, Opcode.I32_GE_U)
+        push!(bytes, Opcode.IF)
+        push!(bytes, 0x40)
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x02)  # count
+        push!(bytes, Opcode.BR)
+        push!(bytes, 0x02)  # br $exit
+        push!(bytes, Opcode.END)
+
+        # byte = s[i]; if (byte & 0xC0) != 0x80: count++
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x00)  # string
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x01)  # i
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_GET_U)
+        append!(bytes, encode_leb128_unsigned(str_type_idx))
+        push!(bytes, Opcode.I32_CONST)
+        append!(bytes, encode_leb128_signed(Int32(0xC0)))
+        push!(bytes, Opcode.I32_AND)
+        push!(bytes, Opcode.I32_CONST)
+        append!(bytes, encode_leb128_signed(Int32(0x80)))
+        push!(bytes, Opcode.I32_NE)
+        push!(bytes, Opcode.IF)
+        push!(bytes, 0x40)
+        # count++
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x02)
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x01)
+        push!(bytes, Opcode.I32_ADD)
+        push!(bytes, Opcode.LOCAL_SET)
+        push!(bytes, 0x02)
+        push!(bytes, Opcode.END)
+
+        # i++
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x01)
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x01)
+        push!(bytes, Opcode.I32_ADD)
+        push!(bytes, Opcode.LOCAL_SET)
+        push!(bytes, 0x01)
+
+        # continue loop
+        push!(bytes, Opcode.BR)
+        push!(bytes, 0x00)
+
+        push!(bytes, Opcode.END)  # end loop
+        push!(bytes, Opcode.UNREACHABLE)
+        push!(bytes, Opcode.END)  # end block
+
+        push!(bytes, Opcode.END)  # end function
         return (bytes, extra_locals)
 
     elseif fname === :str_eq
