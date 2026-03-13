@@ -3436,6 +3436,10 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
     elseif is_func(func, :cttz_int)
         push!(bytes, is_32bit ? Opcode.I32_CTZ : Opcode.I64_CTZ)
 
+    # PURE-9004: Population count (number of set bits)
+    elseif is_func(func, :ctpop_int)
+        push!(bytes, is_32bit ? Opcode.I32_POPCNT : Opcode.I64_POPCNT)
+
     # Byte swap (used in Char ↔ codepoint conversion)
     # WebAssembly has no native bswap — implement with bit manipulation
     elseif is_func(func, :bswap_int)
