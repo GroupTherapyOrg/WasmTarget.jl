@@ -1500,7 +1500,7 @@ function generate_try_catch(ctx::CompilationContext, blocks::Vector{BasicBlock},
     # Ensure module has an exception tag for Julia exceptions
     ensure_exception_tag!(ctx.mod)
 
-    # PURE-9033: Detect nested try/catch regions and dispatch accordingly.
+    # PURE-9033: Detect nested/sequential try/catch regions and dispatch accordingly.
     if length(regions) >= 2
         sort!(regions, by=r -> r.enter_idx)
         outer = regions[1]
@@ -1508,6 +1508,9 @@ function generate_try_catch(ctx::CompilationContext, blocks::Vector{BasicBlock},
         # Inner is nested if its enter is within the outer's try scope
         if inner.enter_idx > outer.enter_idx && inner.enter_idx < outer.catch_dest
             return generate_nested_try_catch_2(ctx, blocks, code, outer, inner)
+        else
+            # Sequential (non-nested) try/catch regions
+            return generate_sequential_try_catch(ctx, blocks, code, regions)
         end
     end
 
@@ -1847,6 +1850,254 @@ function generate_try_catch(ctx::CompilationContext, blocks::Vector{BasicBlock},
 
         # End outer block
         push!(bytes, Opcode.END)
+    end
+
+    return bytes
+end
+
+# PURE-9033: Generate sequential (non-nested) try/catch regions.
+# Each region gets its own try_table block structure, processed in order.
+# Example: two sequential try/catch blocks in one function.
+function generate_sequential_try_catch(ctx::CompilationContext, blocks::Vector{BasicBlock},
+                                       code, regions::Vector{TryRegion})::Vector{UInt8}
+    bytes = UInt8[]
+
+    # Ensure exception infrastructure
+    ensure_exception_tag!(ctx.mod)
+    ensure_exception_global!(ctx.mod)
+
+    # Process code in segments: pre-region, region, inter-region, region, post-region
+    n = length(regions)
+    last_processed = 0  # last SSA index we've processed
+
+    for (ri, region) in enumerate(regions)
+        enter_idx = region.enter_idx
+        catch_dest = region.catch_dest
+        leave_idx = region.leave_idx
+
+        # Compile code between last processed and this region's enter
+        for i in (last_processed + 1):(enter_idx - 1)
+            stmt = code[i]
+            if stmt !== nothing && !(stmt isa Core.EnterNode)
+                append!(bytes, compile_statement(stmt, i, ctx))
+            end
+        end
+
+        # Find merge PhiNodes after this region's catch
+        # They appear after catch_dest and merge try-exit + catch edges
+        merge_phi_nodes = Int[]
+        merge_start = length(code) + 1
+
+        # Determine the end of this region's influence: either next region's enter or end of code
+        region_end = ri < n ? regions[ri + 1].enter_idx - 1 : length(code)
+
+        for i in catch_dest:region_end
+            if code[i] isa Core.PhiNode && haskey(ctx.phi_locals, i)
+                push!(merge_phi_nodes, i)
+                if i < merge_start
+                    merge_start = i
+                end
+            end
+        end
+        has_merge_phis = !isempty(merge_phi_nodes)
+
+        try_exit_range = (leave_idx + 1):(catch_dest - 1)
+
+        if has_merge_phis
+            # 3-block structure: merge block → catch landing → try_table
+            push!(bytes, Opcode.BLOCK)
+            push!(bytes, 0x40)  # void
+
+            push!(bytes, Opcode.BLOCK)
+            push!(bytes, 0x40)  # void
+
+            push!(bytes, Opcode.TRY_TABLE)
+            push!(bytes, 0x40)  # void
+            append!(bytes, encode_leb128_unsigned(1))
+            push!(bytes, Opcode.CATCH_ALL)
+            append!(bytes, encode_leb128_unsigned(0))
+
+            # Try body
+            local _ti = enter_idx + 1
+            while _ti <= leave_idx - 1
+                stmt = code[_ti]
+                if stmt === nothing
+                    _ti += 1
+                    continue
+                end
+                if stmt isa Core.GotoIfNot
+                    append!(bytes, _compile_try_body_gotoifnot(stmt, _ti, leave_idx, code, ctx))
+                    _ti = _advance_past_gotoifnot(stmt, _ti, leave_idx, code)
+                else
+                    append!(bytes, compile_statement(stmt, _ti, ctx))
+                    _ti += 1
+                end
+            end
+
+            # SET try-exit phi locals
+            for phi_idx in merge_phi_nodes
+                phi_stmt = code[phi_idx]::Core.PhiNode
+                for (ei, edge) in enumerate(phi_stmt.edges)
+                    edge_ssa = Int(edge)
+                    if edge_ssa in try_exit_range
+                        phi_val = phi_stmt.values[ei]
+                        phi_local = ctx.phi_locals[phi_idx]
+                        append!(bytes, compile_value(phi_val, ctx))
+                        push!(bytes, Opcode.LOCAL_SET)
+                        append!(bytes, encode_leb128_unsigned(phi_local))
+                        break
+                    end
+                end
+            end
+
+            # br 2 → merge block end
+            push!(bytes, Opcode.BR)
+            append!(bytes, encode_leb128_unsigned(2))
+
+            push!(bytes, Opcode.END)  # end try_table
+            push!(bytes, Opcode.END)  # end catch landing block
+
+            ctx.last_stmt_was_stub = false
+
+            # Catch handler code
+            catch_end = has_merge_phis ? merge_start - 1 : region_end
+            for i in catch_dest:catch_end
+                stmt = code[i]
+                if stmt !== nothing
+                    if stmt isa Expr && stmt.head === :pop_exception
+                        continue
+                    end
+                    append!(bytes, compile_statement(stmt, i, ctx))
+                end
+            end
+
+            # SET catch phi locals
+            for phi_idx in merge_phi_nodes
+                phi_stmt = code[phi_idx]::Core.PhiNode
+                for (ei, edge) in enumerate(phi_stmt.edges)
+                    edge_ssa = Int(edge)
+                    if edge_ssa >= catch_dest && edge_ssa < merge_start
+                        phi_val = phi_stmt.values[ei]
+                        phi_local = ctx.phi_locals[phi_idx]
+                        append!(bytes, compile_value(phi_val, ctx))
+                        push!(bytes, Opcode.LOCAL_SET)
+                        append!(bytes, encode_leb128_unsigned(phi_local))
+                        break
+                    end
+                end
+            end
+
+            push!(bytes, Opcode.END)  # end merge block
+
+            # Read phi locals (copy to SSA locals if needed)
+            for phi_idx in merge_phi_nodes
+                if haskey(ctx.ssa_locals, phi_idx)
+                    phi_local = ctx.phi_locals[phi_idx]
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(phi_local))
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(ctx.ssa_locals[phi_idx]))
+                end
+            end
+
+            # Non-phi statements between merge_start and region_end (but not EnterNode of next region)
+            for i in merge_start:region_end
+                stmt = code[i]
+                if stmt === nothing
+                    continue
+                end
+                if stmt isa Core.PhiNode && haskey(ctx.phi_locals, i)
+                    continue  # already handled above
+                end
+                if stmt isa Core.EnterNode
+                    continue  # next region handles this
+                end
+                if stmt isa Expr && stmt.head === :pop_exception
+                    continue
+                end
+                append!(bytes, compile_statement(stmt, i, ctx))
+            end
+
+            last_processed = region_end
+        else
+            # No merge phis — use 2-block structure (direct return in both paths)
+            result_type_byte = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+
+            push!(bytes, Opcode.BLOCK)
+            append!(bytes, encode_block_type(result_type_byte))
+
+            push!(bytes, Opcode.BLOCK)
+            push!(bytes, 0x40)
+
+            push!(bytes, Opcode.TRY_TABLE)
+            push!(bytes, 0x40)
+            append!(bytes, encode_leb128_unsigned(1))
+            push!(bytes, Opcode.CATCH_ALL)
+            append!(bytes, encode_leb128_unsigned(0))
+
+            # Try body
+            local _ti2 = enter_idx + 1
+            while _ti2 <= leave_idx - 1
+                stmt = code[_ti2]
+                if stmt === nothing
+                    _ti2 += 1
+                    continue
+                end
+                if stmt isa Core.GotoIfNot
+                    append!(bytes, _compile_try_body_gotoifnot(stmt, _ti2, leave_idx, code, ctx))
+                    _ti2 = _advance_past_gotoifnot(stmt, _ti2, leave_idx, code)
+                else
+                    append!(bytes, compile_statement(stmt, _ti2, ctx))
+                    _ti2 += 1
+                end
+            end
+
+            # Normal path after leave
+            for i in (leave_idx + 1):(catch_dest - 1)
+                stmt = code[i]
+                if stmt !== nothing
+                    if stmt isa Core.ReturnNode
+                        append!(bytes, compile_statement(stmt, i, ctx))
+                        push!(bytes, Opcode.BR)
+                        append!(bytes, encode_leb128_unsigned(1))
+                        break
+                    else
+                        append!(bytes, compile_statement(stmt, i, ctx))
+                    end
+                end
+            end
+
+            push!(bytes, Opcode.BR)
+            append!(bytes, encode_leb128_unsigned(1))
+
+            push!(bytes, Opcode.END)  # end try_table
+            push!(bytes, Opcode.END)  # end catch landing
+
+            ctx.last_stmt_was_stub = false
+
+            # Catch handler
+            for i in catch_dest:region_end
+                stmt = code[i]
+                if stmt !== nothing
+                    if stmt isa Expr && stmt.head === :pop_exception
+                        continue
+                    end
+                    append!(bytes, compile_statement(stmt, i, ctx))
+                end
+            end
+
+            push!(bytes, Opcode.END)  # end outer block
+
+            last_processed = region_end
+        end
+    end
+
+    # Post-all-regions code
+    for i in (last_processed + 1):length(code)
+        stmt = code[i]
+        if stmt !== nothing && !(stmt isa Expr && stmt.head === :pop_exception)
+            append!(bytes, compile_statement(stmt, i, ctx))
+        end
     end
 
     return bytes
