@@ -854,7 +854,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                         push!(bytes, Opcode.GC_PREFIX)
                         push!(bytes, Opcode.STRUCT_GET)
                         append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
-                        append!(bytes, encode_leb128_unsigned(field_idx - 1))
+                        append!(bytes, encode_leb128_unsigned(wasm_field_idx(info, field_idx)))  # PURE-9024
                         return bytes
                     end
                 end
@@ -928,7 +928,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     push!(bytes, Opcode.GC_PREFIX)
                     push!(bytes, Opcode.STRUCT_GET)
                     append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
-                    append!(bytes, encode_leb128_unsigned(field_idx - 1))
+                    append!(bytes, encode_leb128_unsigned(wasm_field_idx(info, field_idx)))  # PURE-9024
                     return bytes
                 end
             end
@@ -957,7 +957,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 push!(bytes, Opcode.GC_PREFIX)
                 push!(bytes, Opcode.STRUCT_GET)
                 append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
-                append!(bytes, encode_leb128_unsigned(field_idx - 1))
+                append!(bytes, encode_leb128_unsigned(wasm_field_idx(info, field_idx)))  # PURE-9024
                 return bytes
             end
         end
@@ -1078,7 +1078,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     push!(bytes, Opcode.GC_PREFIX)
                     push!(bytes, Opcode.STRUCT_GET)
                     append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
-                    append!(bytes, encode_leb128_unsigned(field_idx - 1))  # 0-indexed
+                    append!(bytes, encode_leb128_unsigned(wasm_field_idx(info, field_idx)))  # PURE-9024
                     return bytes
                 end
             end
@@ -1792,7 +1792,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     push!(bytes, Opcode.GC_PREFIX)
                     push!(bytes, Opcode.STRUCT_SET)
                     append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
-                    append!(bytes, encode_leb128_unsigned(field_idx - 1))  # 0-indexed
+                    append!(bytes, encode_leb128_unsigned(wasm_field_idx(info, field_idx)))  # PURE-9024
                     # setfield! returns the value — use compile_value to match SSA return type
                     append!(bytes, compile_value(value_arg, ctx))
                     return bytes

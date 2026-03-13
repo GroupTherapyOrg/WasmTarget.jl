@@ -142,7 +142,7 @@ function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataT
         # Create an externref array type
         arr_idx = add_array_type!(mod, ExternRef, true)
         # Register as a "struct" with 0 Julia fields but backed by an array type
-        info = StructInfo(T, arr_idx, Symbol[], DataType[])
+        info = StructInfo(T, arr_idx, Symbol[], DataType[], UInt32(0))  # SimpleVector is an array type, no typeId
         registry.structs[T] = info
         return info
     end

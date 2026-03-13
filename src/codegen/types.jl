@@ -18,9 +18,9 @@ struct StructInfo
     field_offset::UInt32  # PURE-9024: offset for typeId field (1 if typeId present, 0 otherwise)
 end
 
-# Backward-compatible constructor (field_offset defaults to 0)
+# PURE-9024: Default field_offset=1 (all structs have typeId at field 0)
 StructInfo(julia_type::Type, wasm_type_idx::UInt32, field_names::Vector{Symbol}, field_types::Vector) =
-    StructInfo(julia_type, wasm_type_idx, field_names, convert(Vector{Type}, field_types), UInt32(0))
+    StructInfo(julia_type, wasm_type_idx, field_names, convert(Vector{Type}, field_types), UInt32(1))
 
 """
     wasm_field_idx(info::StructInfo, julia_field_idx::Int) -> UInt32
@@ -404,7 +404,7 @@ function populate_type_constant_globals!(mod::WasmModule, registry::TypeRegistry
     for (type_val, dt_global_idx) in registry.type_constant_globals
         type_val isa DataType || continue
 
-        # 1. Set DataType.name (field 0) → TypeName ref
+        # 1. Set DataType.name (PURE-9024: field 1, was field 0) → TypeName ref
         tn = type_val.name
         if haskey(registry.typename_constant_globals, tn)
             tn_global_idx = registry.typename_constant_globals[tn]
@@ -414,14 +414,14 @@ function populate_type_constant_globals!(mod::WasmModule, registry::TypeRegistry
             # global.get $tn_global → TypeName ref
             push!(body, Opcode.GLOBAL_GET)
             append!(body, encode_leb128_unsigned(tn_global_idx))
-            # struct.set $dt_type 0
+            # struct.set $dt_type 1 (PURE-9024: +1 for typeId at field 0)
             push!(body, Opcode.GC_PREFIX)
             push!(body, Opcode.STRUCT_SET)
             append!(body, encode_leb128_unsigned(dt_type_idx))
-            append!(body, encode_leb128_unsigned(UInt32(0)))  # field 0 = name
+            append!(body, encode_leb128_unsigned(wasm_field_idx(dt_info, 1)))  # field 1 = name
         end
 
-        # 2. Set DataType.super (field 1) → parent DataType ref
+        # 2. Set DataType.super (PURE-9024: field 2, was field 1) → parent DataType ref
         parent = type_val.super
         if parent !== type_val  # Not self-referential (Any.super === Any)
             if haskey(registry.type_constant_globals, parent)
@@ -430,11 +430,11 @@ function populate_type_constant_globals!(mod::WasmModule, registry::TypeRegistry
                 append!(body, encode_leb128_unsigned(dt_global_idx))
                 push!(body, Opcode.GLOBAL_GET)
                 append!(body, encode_leb128_unsigned(parent_global_idx))
-                # struct.set $dt_type 1 — super field is StructRef, DataType ref is compatible
+                # struct.set $dt_type 2 (PURE-9024: +1 for typeId) — super field
                 push!(body, Opcode.GC_PREFIX)
                 push!(body, Opcode.STRUCT_SET)
                 append!(body, encode_leb128_unsigned(dt_type_idx))
-                append!(body, encode_leb128_unsigned(UInt32(1)))  # field 1 = super
+                append!(body, encode_leb128_unsigned(wasm_field_idx(dt_info, 2)))  # field 2 = super
             end
         else
             # Any.super === Any → self-reference
@@ -445,7 +445,7 @@ function populate_type_constant_globals!(mod::WasmModule, registry::TypeRegistry
             push!(body, Opcode.GC_PREFIX)
             push!(body, Opcode.STRUCT_SET)
             append!(body, encode_leb128_unsigned(dt_type_idx))
-            append!(body, encode_leb128_unsigned(UInt32(1)))  # field 1 = super
+            append!(body, encode_leb128_unsigned(wasm_field_idx(dt_info, 2)))  # field 2 = super
         end
 
         # 3. Set DataType.parameters (field 2) → SimpleVector (externref array)
@@ -465,7 +465,7 @@ function populate_type_constant_globals!(mod::WasmModule, registry::TypeRegistry
             push!(body, Opcode.GC_PREFIX)
             push!(body, Opcode.STRUCT_SET)
             append!(body, encode_leb128_unsigned(dt_type_idx))
-            append!(body, encode_leb128_unsigned(UInt32(2)))  # field 2 = parameters
+            append!(body, encode_leb128_unsigned(wasm_field_idx(dt_info, 3)))  # field 3 = parameters
         else
             # Push all parameter elements, then array.new_fixed
             push!(body, Opcode.GLOBAL_GET)
@@ -492,7 +492,7 @@ function populate_type_constant_globals!(mod::WasmModule, registry::TypeRegistry
             push!(body, Opcode.GC_PREFIX)
             push!(body, Opcode.STRUCT_SET)
             append!(body, encode_leb128_unsigned(dt_type_idx))
-            append!(body, encode_leb128_unsigned(UInt32(2)))  # field 2 = parameters
+            append!(body, encode_leb128_unsigned(wasm_field_idx(dt_info, 3)))  # field 3 = parameters
         end
     end
 
@@ -511,7 +511,7 @@ function populate_type_constant_globals!(mod::WasmModule, registry::TypeRegistry
             push!(body, Opcode.GC_PREFIX)
             push!(body, Opcode.STRUCT_SET)
             append!(body, encode_leb128_unsigned(tn_type_idx))
-            append!(body, encode_leb128_unsigned(UInt32(6)))  # field 6 = wrapper
+            append!(body, encode_leb128_unsigned(wasm_field_idx(tn_info, 7)))  # field 7 = wrapper (PURE-9024: +1 for typeId)
         end
     end
 
