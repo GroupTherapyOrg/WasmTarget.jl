@@ -96,6 +96,33 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
     elseif stmt isa Core.GotoIfNot
         # Conditional branch - handled by control flow analysis
 
+    elseif stmt isa Core.UpsilonNode
+        # PURE-9033: UpsilonNode stores a value for later PhiCNode retrieval.
+        # Semantics: local.set into the associated PhiCNode's local.
+        # The association is: PhiCNode.values contains SSAValue(this_upsilon_idx).
+        # Find which PhiCNode references this UpsilonNode.
+        if isdefined(stmt, :val)
+            for (phic_idx, phic_stmt) in enumerate(ctx.code_info.code)
+                if phic_stmt isa Core.PhiCNode && haskey(ctx.phi_locals, phic_idx)
+                    for v in phic_stmt.values
+                        if v isa Core.SSAValue && v.id == idx
+                            append!(bytes, compile_value(stmt.val, ctx))
+                            push!(bytes, Opcode.LOCAL_SET)
+                            append!(bytes, encode_leb128_unsigned(ctx.phi_locals[phic_idx]))
+                            @goto upsilon_done
+                        end
+                    end
+                end
+            end
+        end
+        @label upsilon_done
+        # If no PhiCNode found, UpsilonNode is dead — no-op
+
+    elseif stmt isa Core.PhiCNode
+        # PURE-9033: PhiCNode is a no-op at the statement level.
+        # The value was already stored into phi_locals[idx] by the associated UpsilonNode.
+        # When other statements use SSAValue(idx), compile_value reads from phi_locals[idx].
+
     elseif stmt isa Core.PiNode
         # PiNode is a type assertion - just pass through the value
         pi_type = get(ctx.ssa_types, idx, Any)

@@ -1500,7 +1500,18 @@ function generate_try_catch(ctx::CompilationContext, blocks::Vector{BasicBlock},
     # Ensure module has an exception tag for Julia exceptions
     ensure_exception_tag!(ctx.mod)
 
-    # For now, handle single try/catch region
+    # PURE-9033: Detect nested try/catch regions and dispatch accordingly.
+    if length(regions) >= 2
+        sort!(regions, by=r -> r.enter_idx)
+        outer = regions[1]
+        inner = regions[2]
+        # Inner is nested if its enter is within the outer's try scope
+        if inner.enter_idx > outer.enter_idx && inner.enter_idx < outer.catch_dest
+            return generate_nested_try_catch_2(ctx, blocks, code, outer, inner)
+        end
+    end
+
+    # Single try/catch region
     region = regions[1]
     enter_idx = region.enter_idx
     catch_dest = region.catch_dest
@@ -1836,6 +1847,213 @@ function generate_try_catch(ctx::CompilationContext, blocks::Vector{BasicBlock},
 
         # End outer block
         push!(bytes, Opcode.END)
+    end
+
+    return bytes
+end
+
+# PURE-9033: Generate nested try/catch (2-level nesting: inner try/catch inside outer try/catch).
+#
+# WASM structure:
+#   ; pre-outer code
+#   block void                                ; outer_catch_land
+#     try_table void (catch_all 0)            ; outer try
+#       ; code between outer enter and inner enter (e.g. UpsilonNodes)
+#       block void                            ; inner_catch_land
+#         try_table void (catch_all 0)        ; inner try
+#           ; inner try body
+#           ; normal exit (return)
+#         end                                 ; inner try_table
+#       end                                   ; inner_catch_land
+#       ; inner catch handler (INSIDE outer try — re-throws caught by outer!)
+#     end                                     ; outer try_table
+#   end                                       ; outer_catch_land
+#   ; outer catch handler
+#
+function generate_nested_try_catch_2(ctx::CompilationContext, blocks::Vector{BasicBlock},
+                                     code, outer::TryRegion, inner::TryRegion)::Vector{UInt8}
+    bytes = UInt8[]
+
+    # Ensure exception infrastructure
+    ensure_exception_tag!(ctx.mod)
+    ensure_exception_global!(ctx.mod)
+
+    # === Pre-outer code (stmts before outer enter) ===
+    for i in 1:(outer.enter_idx - 1)
+        stmt = code[i]
+        if stmt !== nothing && !(stmt isa Core.EnterNode)
+            append!(bytes, compile_statement(stmt, i, ctx))
+        end
+    end
+
+    # === Outer catch landing block (void) ===
+    push!(bytes, Opcode.BLOCK)
+    push!(bytes, 0x40)
+
+    # === Outer try_table ===
+    push!(bytes, Opcode.TRY_TABLE)
+    push!(bytes, 0x40)  # void
+    append!(bytes, encode_leb128_unsigned(1))  # 1 catch clause
+    push!(bytes, Opcode.CATCH_ALL)
+    append!(bytes, encode_leb128_unsigned(0))  # → label 0 (outer catch landing)
+
+    # Code between outer enter and inner enter (e.g. UpsilonNodes)
+    for i in (outer.enter_idx + 1):(inner.enter_idx - 1)
+        stmt = code[i]
+        if stmt !== nothing && !(stmt isa Core.EnterNode)
+            append!(bytes, compile_statement(stmt, i, ctx))
+        end
+    end
+
+    # === Inner catch landing block (void) ===
+    push!(bytes, Opcode.BLOCK)
+    push!(bytes, 0x40)
+
+    # === Inner try_table ===
+    push!(bytes, Opcode.TRY_TABLE)
+    push!(bytes, 0x40)  # void
+    append!(bytes, encode_leb128_unsigned(1))  # 1 catch clause
+    push!(bytes, Opcode.CATCH_ALL)
+    append!(bytes, encode_leb128_unsigned(0))  # → label 0 (inner catch landing)
+
+    # Inner try body (inner.enter_idx+1 to inner.leave_idx-1)
+    local _it = inner.enter_idx + 1
+    while _it <= inner.leave_idx - 1
+        local _is = code[_it]
+        if _is === nothing
+            _it += 1
+            continue
+        end
+        if _is isa Core.GotoIfNot
+            append!(bytes, _compile_try_body_gotoifnot(_is, _it, inner.leave_idx, code, ctx))
+            _it = _advance_past_gotoifnot(_is, _it, inner.leave_idx, code)
+        else
+            append!(bytes, compile_statement(_is, _it, ctx))
+            _it += 1
+        end
+    end
+
+    # Normal exit after inner try body (leave markers → skip, compile rest including return)
+    for i in inner.leave_idx:(inner.catch_dest - 1)
+        stmt = code[i]
+        if stmt !== nothing
+            if stmt isa Expr && stmt.head === :leave
+                continue
+            end
+            append!(bytes, compile_statement(stmt, i, ctx))
+        end
+    end
+
+    # End inner try_table
+    push!(bytes, Opcode.END)
+
+    # End inner catch landing block
+    push!(bytes, Opcode.END)
+
+    # Reset dead code flag — inner catch handler is reachable
+    ctx.last_stmt_was_stub = false
+
+    # === Inner catch handler (stmts inner.catch_dest to outer.catch_dest-1) ===
+    # This is INSIDE the outer try_table, so re-throws are caught by outer catch!
+    local _ci = inner.catch_dest
+    while _ci <= outer.catch_dest - 1
+        local _cs = code[_ci]
+        if _cs === nothing
+            _ci += 1
+            continue
+        end
+        if _cs isa Expr && (_cs.head === :pop_exception || _cs.head === :leave)
+            _ci += 1
+            continue
+        end
+        if _cs isa Core.GotoIfNot
+            # GotoIfNot in inner catch body — generate if/then[/else]/end
+            local _else_tgt = _cs.dest
+            append!(bytes, compile_condition_to_i32(_cs.cond, ctx))
+
+            # Check if then-branch has return or throw
+            local _ts = _ci + 1
+            local _thr = false
+            local _tret = false
+            for _j in _ts:min(_else_tgt - 1, outer.catch_dest - 1)
+                if code[_j] isa Core.ReturnNode
+                    _tret = true
+                    break
+                elseif code[_j] isa Expr
+                    if code[_j].head === :call
+                        local _cf = code[_j].args[1]
+                        if _cf isa GlobalRef && _cf.name === :throw
+                            _thr = true
+                            break
+                        end
+                    elseif code[_j].head === :invoke && length(code[_j].args) >= 2
+                        local _invf = code[_j].args[2]
+                        if _invf isa GlobalRef && (_invf.name === :throw || _invf.name === :error)
+                            _thr = true
+                            break
+                        end
+                    end
+                end
+            end
+
+            if _thr || _tret
+                # Then-branch terminates (throw/return) — just if/then/end, fall through else
+                push!(bytes, Opcode.IF)
+                push!(bytes, 0x40)
+                for _j in _ts:min(_else_tgt - 1, outer.catch_dest - 1)
+                    local _s1 = code[_j]
+                    if _s1 !== nothing && !(_s1 isa Expr && (_s1.head === :pop_exception || _s1.head === :leave))
+                        append!(bytes, compile_statement(_s1, _j, ctx))
+                    end
+                end
+                push!(bytes, Opcode.END)
+                ctx.last_stmt_was_stub = false
+                _ci = _else_tgt
+            else
+                # Both branches present — if/then/else/end
+                push!(bytes, Opcode.IF)
+                push!(bytes, 0x40)
+                for _j in _ts:min(_else_tgt - 1, outer.catch_dest - 1)
+                    local _s2 = code[_j]
+                    if _s2 !== nothing && !(_s2 isa Expr && (_s2.head === :pop_exception || _s2.head === :leave))
+                        append!(bytes, compile_statement(_s2, _j, ctx))
+                    end
+                end
+                push!(bytes, Opcode.ELSE)
+                for _j in _else_tgt:(outer.catch_dest - 1)
+                    local _s3 = code[_j]
+                    if _s3 !== nothing && !(_s3 isa Expr && (_s3.head === :pop_exception || _s3.head === :leave))
+                        append!(bytes, compile_statement(_s3, _j, ctx))
+                    end
+                end
+                push!(bytes, Opcode.END)
+                ctx.last_stmt_was_stub = false
+                _ci = outer.catch_dest  # done with inner catch
+            end
+        else
+            append!(bytes, compile_statement(_cs, _ci, ctx))
+            _ci += 1
+        end
+    end
+
+    # End outer try_table
+    push!(bytes, Opcode.END)
+
+    # End outer catch landing block
+    push!(bytes, Opcode.END)
+
+    # Reset dead code flag — outer catch handler is reachable
+    ctx.last_stmt_was_stub = false
+
+    # === Outer catch handler (stmts outer.catch_dest to end) ===
+    for i in outer.catch_dest:length(code)
+        stmt = code[i]
+        if stmt !== nothing
+            if stmt isa Expr && stmt.head === :pop_exception
+                continue
+            end
+            append!(bytes, compile_statement(stmt, i, ctx))
+        end
     end
 
     return bytes

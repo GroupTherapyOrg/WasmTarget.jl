@@ -731,6 +731,27 @@ function analyze_control_flow!(ctx::CompilationContext)
             ctx.phi_locals[i] = local_idx
         end
     end
+
+    # PURE-9033: Allocate locals for PhiCNode values (exception handler value capture).
+    # PhiCNode is the dual of UpsilonNode: UpsilonNode stores, PhiCNode reads.
+    # Each PhiCNode gets a local so UpsilonNode can local.set and PhiCNode can local.get.
+    for (i, stmt) in enumerate(code)
+        if stmt isa Core.PhiCNode
+            phic_julia_type = get(ctx.ssa_types, i, nothing)
+            if phic_julia_type === nothing
+                ssatypes = ctx.code_info.ssavaluetypes
+                if ssatypes isa Vector && i <= length(ssatypes)
+                    phic_julia_type = ssatypes[i]
+                else
+                    phic_julia_type = Int64
+                end
+            end
+            phic_wasm_type = julia_to_wasm_type_concrete(phic_julia_type, ctx)
+            local_idx = ctx.n_params + length(ctx.locals)
+            push!(ctx.locals, phic_wasm_type === AnyRef ? ExternRef : phic_wasm_type)
+            ctx.phi_locals[i] = local_idx
+        end
+    end
 end
 
 """
