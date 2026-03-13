@@ -2181,7 +2181,7 @@ function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataT
                         if elem !== T && isconcretetype(elem) && isstructtype(elem) && !haskey(registry.structs, elem) && !haskey(_registering_types, elem)
                             register_struct_type!(mod, registry, elem)
                         end
-                        if !haskey(registry.vectors, inner)
+                        if !haskey(registry.structs, inner)
                             register_vector_type!(mod, registry, inner)
                         end
                     elseif isconcretetype(inner) && isstructtype(inner) && !haskey(registry.structs, inner) && !haskey(_registering_types, inner)
@@ -2193,7 +2193,7 @@ function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataT
                 if elem !== T && isconcretetype(elem) && isstructtype(elem) && !haskey(registry.structs, elem) && !haskey(_registering_types, elem)
                     register_struct_type!(mod, registry, elem)
                 end
-                if !haskey(registry.vectors, ft)
+                if !haskey(registry.structs, ft)
                     register_vector_type!(mod, registry, ft)
                 end
             elseif ft <: AbstractVector && ft isa DataType && !(ft <: Array)
