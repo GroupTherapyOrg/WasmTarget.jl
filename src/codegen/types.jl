@@ -263,6 +263,42 @@ function emit_box_type_id!(bytes::Vector{UInt8}, registry::TypeRegistry, wasm_ty
 end
 
 """
+PURE-9028: Box an i32 value as ref.i31 (zero-allocation boxing for small integers).
+Expects an i32 on the Wasm stack. Produces (ref i31) which is a subtype of anyref.
+Use for Bool, Int8, UInt8, Int16, UInt16 — values that always fit in 31 bits.
+"""
+function emit_box_i31!(bytes::Vector{UInt8})
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.REF_I31)
+end
+
+"""
+PURE-9028: Unbox a ref.i31 value to i32 (signed extension).
+Expects (ref null i31) on the Wasm stack. Produces i32.
+"""
+function emit_unbox_i31_s!(bytes::Vector{UInt8})
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.I31_GET_S)
+end
+
+"""
+PURE-9028: Unbox a ref.i31 value to i32 (unsigned extension).
+Expects (ref null i31) on the Wasm stack. Produces i32.
+Use for UInt8, UInt16, Bool (non-negative values).
+"""
+function emit_unbox_i31_u!(bytes::Vector{UInt8})
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.I31_GET_U)
+end
+
+"""
+PURE-9028: Check if a Julia type should use ref.i31 for boxing (fits in 31 bits).
+"""
+function should_use_i31(T::Type)::Bool
+    T === Bool || T === Int8 || T === UInt8 || T === Int16 || T === UInt16
+end
+
+"""
     get_base_struct_type!(mod::WasmModule, registry::TypeRegistry) -> UInt32
 
 Get or create the base struct type \$JlBase = (struct (field i32)).
