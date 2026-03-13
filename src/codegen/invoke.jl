@@ -3111,6 +3111,107 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 push!(bytes, Opcode.I64_ADD)
 
             # ================================================================
+            # PURE-9016: Multi-arg string() → inline N-way concatenation
+            # string("hello", " ", "world") or string("x = ", int_to_string(x))
+            # Allocates one result array of total length, copies each arg in
+            # ================================================================
+            elseif (name === :string || name === :_string) && length(args) > 1
+                bytes = UInt8[]  # Clear pre-compiled args
+
+                str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+                str_arr_type = ConcreteRef(str_type_idx, true)
+                n = length(args)
+
+                # Check arg types — for now handle all-String args
+                arg_types = [infer_value_type(a, ctx) for a in args]
+                all_strings = all(t -> t === String || t === Symbol, arg_types)
+
+                if all_strings
+                    # Allocate locals: one per string arg + offset + total_len + result
+                    str_locals = [allocate_local!(ctx, str_arr_type) for _ in 1:n]
+                    offset_local = allocate_local!(ctx, I32)
+                    total_len_local = allocate_local!(ctx, I32)
+                    result_local = allocate_local!(ctx, str_arr_type)
+
+                    # Step 1: Compile each arg and store in locals
+                    for i in 1:n
+                        append!(bytes, compile_value(args[i], ctx))
+                        push!(bytes, Opcode.LOCAL_SET)
+                        append!(bytes, encode_leb128_unsigned(str_locals[i]))
+                    end
+
+                    # Step 2: Compute total length = sum(array.len(si))
+                    push!(bytes, Opcode.I32_CONST)
+                    push!(bytes, 0x00)
+                    for i in 1:n
+                        push!(bytes, Opcode.LOCAL_GET)
+                        append!(bytes, encode_leb128_unsigned(str_locals[i]))
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.ARRAY_LEN)
+                        push!(bytes, Opcode.I32_ADD)
+                    end
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(total_len_local))
+
+                    # Step 3: result = array.new_default(total_len)
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(total_len_local))
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
+                    append!(bytes, encode_leb128_unsigned(str_type_idx))
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(result_local))
+
+                    # Step 4: offset = 0; copy each string into result
+                    push!(bytes, Opcode.I32_CONST)
+                    push!(bytes, 0x00)
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(offset_local))
+
+                    for i in 1:n
+                        # array.copy(result, offset, si, 0, len(si))
+                        push!(bytes, Opcode.LOCAL_GET)
+                        append!(bytes, encode_leb128_unsigned(result_local))  # dst
+                        push!(bytes, Opcode.LOCAL_GET)
+                        append!(bytes, encode_leb128_unsigned(offset_local))  # dst_offset
+                        push!(bytes, Opcode.LOCAL_GET)
+                        append!(bytes, encode_leb128_unsigned(str_locals[i]))  # src
+                        push!(bytes, Opcode.I32_CONST)
+                        push!(bytes, 0x00)  # src_offset
+                        push!(bytes, Opcode.LOCAL_GET)
+                        append!(bytes, encode_leb128_unsigned(str_locals[i]))
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.ARRAY_LEN)  # len
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.ARRAY_COPY)
+                        append!(bytes, encode_leb128_unsigned(str_type_idx))
+                        append!(bytes, encode_leb128_unsigned(str_type_idx))
+
+                        # offset += len(si)
+                        push!(bytes, Opcode.LOCAL_GET)
+                        append!(bytes, encode_leb128_unsigned(offset_local))
+                        push!(bytes, Opcode.LOCAL_GET)
+                        append!(bytes, encode_leb128_unsigned(str_locals[i]))
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.ARRAY_LEN)
+                        push!(bytes, Opcode.I32_ADD)
+                        push!(bytes, Opcode.LOCAL_SET)
+                        append!(bytes, encode_leb128_unsigned(offset_local))
+                    end
+
+                    # Step 5: push result
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(result_local))
+                else
+                    # Mixed types — not yet supported for multi-arg string()
+                    # Fall back to empty string for now
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.ARRAY_NEW_FIXED)
+                    append!(bytes, encode_leb128_unsigned(str_type_idx))
+                    append!(bytes, encode_leb128_unsigned(0))
+                end
+
+            # ================================================================
             # PURE-004: Base.string dispatch for Float32/Float64
             # When Julia compiles string(x::Float32), it invokes the Ryu method
             # We intercept and redirect to our simpler float_to_string
@@ -3183,9 +3284,12 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                         error("Base.string(::$(value_type)) requires int_to_string in compile_multi. " *
                               "Add WasmTarget.int_to_string and WasmTarget.digit_to_str to your function list.")
                     end
+                elseif value_type === String || value_type === Symbol
+                    # string(s::String) is identity — the arg is already on the stack
+                    # (pre-compiled by the argument loop above)
                 else
                     error("Base.string(::$(value_type)) not yet supported. " *
-                          "Supported types: Float32, Float64, Int32, Int64, UInt32, UInt64, Int16, UInt16, Int8, UInt8")
+                          "Supported types: String, Symbol, Float32, Float64, Int32, Int64, UInt32, UInt64, Int16, UInt16, Int8, UInt8")
                 end
 
             # PURE-1102: Error-throwing functions from Base (used by pop!, resize!, etc.)
@@ -3217,18 +3321,139 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 append!(bytes, compile_value(args[3], ctx))  # u::UInt32 is the char
 
             # Handle print_to_string (used in string interpolation / error messages)
-            # Returns an empty string since this is typically used for error message construction
+            # PURE-9016: Convert each arg to string and concatenate
             elseif name === :print_to_string
-                # Discard all compiled argument bytes (including literal strings on stack)
-                # The argument loop compiled all args (Strings, SSAValues, etc.) into bytes.
-                # We must discard ALL of them, not just SSAValues without locals.
                 bytes = UInt8[]
-                # Return empty string (empty byte array)
-                type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_NEW_FIXED)
-                append!(bytes, encode_leb128_unsigned(type_idx))
-                append!(bytes, encode_leb128_unsigned(0))  # 0 elements
+                str_type_idx_pt = get_string_array_type!(ctx.mod, ctx.type_registry)
+                str_arr_type_pt = ConcreteRef(str_type_idx_pt, true)
+                n_pt = length(args)
+
+                if n_pt == 0
+                    # No args — return empty string
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.ARRAY_NEW_FIXED)
+                    append!(bytes, encode_leb128_unsigned(str_type_idx_pt))
+                    append!(bytes, encode_leb128_unsigned(0))
+                else
+                    # Convert each arg to string, store in locals
+                    str_locals_pt = UInt32[]
+                    for i in 1:n_pt
+                        local_idx = allocate_local!(ctx, str_arr_type_pt)
+                        push!(str_locals_pt, local_idx)
+
+                        arg_type = infer_value_type(args[i], ctx)
+                        if arg_type === String || arg_type === Symbol
+                            # Already a string — just compile it
+                            append!(bytes, compile_value(args[i], ctx))
+                        elseif arg_type === Int32 || arg_type === Int64 ||
+                               arg_type === UInt32 || arg_type === UInt64 ||
+                               arg_type === Int16 || arg_type === UInt16 ||
+                               arg_type === Int8 || arg_type === UInt8
+                            # Integer — convert via int_to_string
+                            int_to_string_info_pt = nothing
+                            if ctx.func_registry !== nothing
+                                try
+                                    int_to_string_func_pt = getfield(WasmTarget, :int_to_string)
+                                    int_to_string_info_pt = get_function(ctx.func_registry, int_to_string_func_pt, (Int32,))
+                                catch; end
+                            end
+                            if int_to_string_info_pt !== nothing
+                                append!(bytes, compile_value(args[i], ctx))
+                                if arg_type === Int64 || arg_type === UInt64
+                                    push!(bytes, Opcode.I32_WRAP_I64)
+                                end
+                                push!(bytes, Opcode.CALL)
+                                append!(bytes, encode_leb128_unsigned(int_to_string_info_pt.wasm_idx))
+                            else
+                                # No int_to_string available — emit empty string
+                                push!(bytes, Opcode.GC_PREFIX)
+                                push!(bytes, Opcode.ARRAY_NEW_FIXED)
+                                append!(bytes, encode_leb128_unsigned(str_type_idx_pt))
+                                append!(bytes, encode_leb128_unsigned(0))
+                            end
+                        else
+                            # Unsupported type — emit empty string placeholder
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.ARRAY_NEW_FIXED)
+                            append!(bytes, encode_leb128_unsigned(str_type_idx_pt))
+                            append!(bytes, encode_leb128_unsigned(0))
+                        end
+
+                        push!(bytes, Opcode.LOCAL_SET)
+                        append!(bytes, encode_leb128_unsigned(local_idx))
+                    end
+
+                    if n_pt == 1
+                        # Single arg — just return it
+                        push!(bytes, Opcode.LOCAL_GET)
+                        append!(bytes, encode_leb128_unsigned(str_locals_pt[1]))
+                    else
+                        # N-way concatenation: same inline pattern as multi-arg string()
+                        offset_local_pt = allocate_local!(ctx, I32)
+                        total_len_local_pt = allocate_local!(ctx, I32)
+                        result_local_pt = allocate_local!(ctx, str_arr_type_pt)
+
+                        # Compute total length
+                        push!(bytes, Opcode.I32_CONST)
+                        push!(bytes, 0x00)
+                        for i in 1:n_pt
+                            push!(bytes, Opcode.LOCAL_GET)
+                            append!(bytes, encode_leb128_unsigned(str_locals_pt[i]))
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.ARRAY_LEN)
+                            push!(bytes, Opcode.I32_ADD)
+                        end
+                        push!(bytes, Opcode.LOCAL_SET)
+                        append!(bytes, encode_leb128_unsigned(total_len_local_pt))
+
+                        # Allocate result
+                        push!(bytes, Opcode.LOCAL_GET)
+                        append!(bytes, encode_leb128_unsigned(total_len_local_pt))
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
+                        append!(bytes, encode_leb128_unsigned(str_type_idx_pt))
+                        push!(bytes, Opcode.LOCAL_SET)
+                        append!(bytes, encode_leb128_unsigned(result_local_pt))
+
+                        # Copy each string
+                        push!(bytes, Opcode.I32_CONST)
+                        push!(bytes, 0x00)
+                        push!(bytes, Opcode.LOCAL_SET)
+                        append!(bytes, encode_leb128_unsigned(offset_local_pt))
+
+                        for i in 1:n_pt
+                            push!(bytes, Opcode.LOCAL_GET)
+                            append!(bytes, encode_leb128_unsigned(result_local_pt))
+                            push!(bytes, Opcode.LOCAL_GET)
+                            append!(bytes, encode_leb128_unsigned(offset_local_pt))
+                            push!(bytes, Opcode.LOCAL_GET)
+                            append!(bytes, encode_leb128_unsigned(str_locals_pt[i]))
+                            push!(bytes, Opcode.I32_CONST)
+                            push!(bytes, 0x00)
+                            push!(bytes, Opcode.LOCAL_GET)
+                            append!(bytes, encode_leb128_unsigned(str_locals_pt[i]))
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.ARRAY_LEN)
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.ARRAY_COPY)
+                            append!(bytes, encode_leb128_unsigned(str_type_idx_pt))
+                            append!(bytes, encode_leb128_unsigned(str_type_idx_pt))
+
+                            push!(bytes, Opcode.LOCAL_GET)
+                            append!(bytes, encode_leb128_unsigned(offset_local_pt))
+                            push!(bytes, Opcode.LOCAL_GET)
+                            append!(bytes, encode_leb128_unsigned(str_locals_pt[i]))
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.ARRAY_LEN)
+                            push!(bytes, Opcode.I32_ADD)
+                            push!(bytes, Opcode.LOCAL_SET)
+                            append!(bytes, encode_leb128_unsigned(offset_local_pt))
+                        end
+
+                        push!(bytes, Opcode.LOCAL_GET)
+                        append!(bytes, encode_leb128_unsigned(result_local_pt))
+                    end
+                end
 
             # PURE-1102: Error/throw functions — emit throw (catchable) instead of unreachable (trap)
             elseif name === :error || name === :throw || name === :throw_boundserror ||

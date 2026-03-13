@@ -757,9 +757,15 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                             # externref, skip the conversion — extern_convert_any expects anyref.
                             callee_already_externref = false
                             if stmt isa Expr && stmt.head === :invoke && length(stmt.args) >= 1
-                                mi = stmt.args[1]
-                                if mi isa Core.MethodInstance
-                                    callee_ret_wt = julia_to_wasm_type(mi.rettype)
+                                mi_or_ci = stmt.args[1]
+                                _callee_ret = nothing
+                                if isdefined(Core, :CodeInstance) && mi_or_ci isa Core.CodeInstance
+                                    _callee_ret = mi_or_ci.rettype
+                                elseif mi_or_ci isa Core.MethodInstance && isdefined(mi_or_ci, :rettype)
+                                    _callee_ret = mi_or_ci.rettype
+                                end
+                                if _callee_ret !== nothing
+                                    callee_ret_wt = julia_to_wasm_type(_callee_ret)
                                     if callee_ret_wt === ExternRef
                                         callee_already_externref = true
                                     end
@@ -791,9 +797,15 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                                 # type may be externref (e.g. getindex returning Any). In that case,
                                 # we need any_convert_extern before ref_cast.
                                 if stmt isa Expr && stmt.head === :invoke && length(stmt.args) >= 1
-                                    mi = stmt.args[1]
-                                    if mi isa Core.MethodInstance
-                                        callee_ret_wt = julia_to_wasm_type(mi.rettype)
+                                    mi_or_ci2 = stmt.args[1]
+                                    _callee_ret2 = nothing
+                                    if isdefined(Core, :CodeInstance) && mi_or_ci2 isa Core.CodeInstance
+                                        _callee_ret2 = mi_or_ci2.rettype
+                                    elseif mi_or_ci2 isa Core.MethodInstance && isdefined(mi_or_ci2, :rettype)
+                                        _callee_ret2 = mi_or_ci2.rettype
+                                    end
+                                    if _callee_ret2 !== nothing
+                                        callee_ret_wt = julia_to_wasm_type(_callee_ret2)
                                         if callee_ret_wt === ExternRef
                                             needs_any_convert_extern = true
                                         end

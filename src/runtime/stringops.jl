@@ -5,7 +5,7 @@
 # These functions compile to direct array operations with array.get_u for reads.
 
 export str_char, str_getchar, str_setchar!, str_len, str_charlen, str_new, str_copy, str_substr, str_eq, str_hash,
-       str_contains, str_find, str_uppercase, str_lowercase, str_trim, str_startswith, str_endswith,
+       str_concat, str_contains, str_find, str_uppercase, str_lowercase, str_trim, str_startswith, str_endswith,
        digit_to_str, int_to_string, float_to_string
 
 """
@@ -161,6 +161,20 @@ const _STRCOPY_SINK = Ref{Int32}(0)
     # Use _STRCOPY_SINK to prevent optimization
     _STRCOPY_SINK[] = len
     return nothing
+end
+
+"""
+    str_concat(a::String, b::String)::String
+
+Concatenate two strings. Compiles to WASM array.new_default + two array.copy instructions.
+
+# Example
+```julia
+str_concat("hello", " world")  # Returns "hello world"
+```
+"""
+@noinline function str_concat(a::String, b::String)::String
+    return Base.inferencebarrier(a * b)::String
 end
 
 """

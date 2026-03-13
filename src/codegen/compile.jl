@@ -136,7 +136,7 @@ These are intrinsic functions that have special compilation support.
 const WASMTARGET_RUNTIME_FUNCTIONS = Set([
     # String operations (StringOps.jl)
     :str_char, :str_getchar, :str_setchar!, :str_len, :str_charlen, :str_new, :str_copy, :str_substr,
-    :str_eq, :str_hash, :str_find, :str_contains, :str_startswith, :str_endswith,
+    :str_concat, :str_eq, :str_hash, :str_find, :str_contains, :str_startswith, :str_endswith,
     :str_uppercase, :str_lowercase, :str_trim,
     # String conversion (WASM-054, WASM-055)
     :digit_to_str, :int_to_string,
@@ -597,7 +597,7 @@ function infer_runtime_func_arg_types(name::Symbol)::Union{Tuple, Nothing}
         return (String, Int32, String, Int32, Int32)
     elseif name in [:str_substr]
         return (String, Int32, Int32)
-    elseif name in [:str_eq, :str_find, :str_contains]
+    elseif name in [:str_concat, :str_eq, :str_find, :str_contains]
         return (String, String)
     elseif name in [:str_startswith, :str_endswith]
         return (String, String)
@@ -1124,6 +1124,77 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.ARRAY_SET)
         append!(bytes, encode_leb128_unsigned(str_type_idx))
+        push!(bytes, Opcode.END)
+        return (bytes, extra_locals)
+
+    elseif fname === :str_concat
+        # str_concat(a::String, b::String)::String
+        # Concatenate two UTF-8 byte arrays into a new array
+        # local 0 = a (array ref), local 1 = b (array ref)
+        # extra locals: local 2 = len_a, local 3 = result (array ref)
+        push!(extra_locals, I32)  # local 2: len_a
+        str_ref_type = ConcreteRef(str_type_idx, true)
+        push!(extra_locals, str_ref_type)  # local 3: result array ref
+
+        # len_a = array.len(a)
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x00)  # a
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_LEN)
+        push!(bytes, Opcode.LOCAL_SET)
+        push!(bytes, 0x02)  # len_a
+
+        # result = array.new_default(len_a + array.len(b))
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x02)  # len_a
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x01)  # b
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_LEN)
+        push!(bytes, Opcode.I32_ADD)
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
+        append!(bytes, encode_leb128_unsigned(str_type_idx))
+        push!(bytes, Opcode.LOCAL_SET)
+        push!(bytes, 0x03)  # result
+
+        # array.copy(result, 0, a, 0, len_a)
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x03)  # dst: result
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x00)  # dst_offset: 0
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x00)  # src: a
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x00)  # src_offset: 0
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x02)  # len: len_a
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_COPY)
+        append!(bytes, encode_leb128_unsigned(str_type_idx))  # dst type
+        append!(bytes, encode_leb128_unsigned(str_type_idx))  # src type
+
+        # array.copy(result, len_a, b, 0, array.len(b))
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x03)  # dst: result
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x02)  # dst_offset: len_a
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x01)  # src: b
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x00)  # src_offset: 0
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x01)  # b
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_LEN)  # len: array.len(b)
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_COPY)
+        append!(bytes, encode_leb128_unsigned(str_type_idx))  # dst type
+        append!(bytes, encode_leb128_unsigned(str_type_idx))  # src type
+
+        # return result
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x03)  # result
         push!(bytes, Opcode.END)
         return (bytes, extra_locals)
 

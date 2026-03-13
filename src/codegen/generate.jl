@@ -798,16 +798,20 @@ function strip_excess_after_function_end(bytes::Vector{UInt8})::Vector{UInt8}
             i += 1  # GC prefix
             sub_op = bytes[i]
             i += 1
-            n_leb = if sub_op == 0x00; 1
-                    elseif sub_op == 0x01; 1
-                    elseif sub_op in (0x02, 0x03, 0x04, 0x05); 2
-                    elseif sub_op in (0x06, 0x07); 1
-                    elseif sub_op == 0x08; 2
-                    elseif sub_op in (0x0b, 0x0c, 0x0d, 0x0e); 1
-                    elseif sub_op == 0x0f; 0
-                    elseif sub_op in (0x14, 0x15, 0x16, 0x17); 1
-                    elseif sub_op in (0x1a, 0x1b); 0
-                    elseif sub_op in (0x1c, 0x1d, 0x1e); 0
+            n_leb = if sub_op == 0x00; 1                          # struct.new
+                    elseif sub_op == 0x01; 1                          # struct.new_default
+                    elseif sub_op in (0x02, 0x03, 0x04, 0x05); 2     # struct.get/get_s/get_u/set
+                    elseif sub_op in (0x06, 0x07); 1                  # array.new/new_default
+                    elseif sub_op == 0x08; 2                          # array.new_fixed
+                    elseif sub_op in (0x09, 0x0a); 2                  # array.new_data/new_elem
+                    elseif sub_op in (0x0b, 0x0c, 0x0d, 0x0e); 1     # array.get/get_s/get_u/set
+                    elseif sub_op == 0x0f; 0                          # array.len
+                    elseif sub_op == 0x10; 1                          # array.fill
+                    elseif sub_op == 0x11; 2                          # array.copy
+                    elseif sub_op in (0x12, 0x13); 2                  # array.init_data/init_elem
+                    elseif sub_op in (0x14, 0x15, 0x16, 0x17); 1     # ref.test/cast variants
+                    elseif sub_op in (0x1a, 0x1b); 0                  # any_convert_extern/extern_convert_any
+                    elseif sub_op in (0x1c, 0x1d, 0x1e); 0           # ref.i31/i31.get_s/i31.get_u
                     else 0
                     end
             for _ in 1:n_leb
