@@ -37,73 +37,73 @@
   },
   {
     "arg_types": [
-      "Int64",
+      "Float64",
       "Int64"
     ],
-    "name": "sub_i64",
-    "return_type": "Int64",
+    "name": "add_f64_i64",
+    "return_type": "Float64",
     "wasm_idx": 5
   },
   {
     "arg_types": [
-      "Float64",
-      "Float64"
+      "Int32",
+      "Int64"
     ],
-    "name": "sub_f64",
-    "return_type": "Float64",
+    "name": "add_i32_i64",
+    "return_type": "Int64",
     "wasm_idx": 6
   },
   {
     "arg_types": [
-      "Int32",
+      "Int64",
       "Int32"
     ],
-    "name": "sub_i32",
-    "return_type": "Int32",
+    "name": "add_i64_i32",
+    "return_type": "Int64",
     "wasm_idx": 7
   },
   {
     "arg_types": [
-      "Int64",
-      "Int64"
+      "Float32",
+      "Float32"
     ],
-    "name": "mul_i64",
-    "return_type": "Int64",
+    "name": "add_f32",
+    "return_type": "Float32",
     "wasm_idx": 8
   },
   {
     "arg_types": [
-      "Float64",
+      "Float32",
       "Float64"
     ],
-    "name": "mul_f64",
+    "name": "add_f32_f64",
     "return_type": "Float64",
     "wasm_idx": 9
   },
   {
     "arg_types": [
-      "Int64",
-      "Float64"
+      "Float64",
+      "Float32"
     ],
-    "name": "mul_i64_f64",
+    "name": "add_f64_f32",
     "return_type": "Float64",
     "wasm_idx": 10
   },
   {
     "arg_types": [
       "Int32",
-      "Int32"
+      "Float64"
     ],
-    "name": "mul_i32",
-    "return_type": "Int32",
+    "name": "add_i32_f64",
+    "return_type": "Float64",
     "wasm_idx": 11
   },
   {
     "arg_types": [
       "Float64",
-      "Float64"
+      "Int32"
     ],
-    "name": "div_f64",
+    "name": "add_f64_i32",
     "return_type": "Float64",
     "wasm_idx": 12
   },
@@ -112,9 +112,234 @@
       "Int64",
       "Int64"
     ],
-    "name": "div_i64",
+    "name": "sub_i64",
     "return_type": "Int64",
     "wasm_idx": 13
+  },
+  {
+    "arg_types": [
+      "Float64",
+      "Float64"
+    ],
+    "name": "sub_f64",
+    "return_type": "Float64",
+    "wasm_idx": 14
+  },
+  {
+    "arg_types": [
+      "Int32",
+      "Int32"
+    ],
+    "name": "sub_i32",
+    "return_type": "Int32",
+    "wasm_idx": 15
+  },
+  {
+    "arg_types": [
+      "Int64",
+      "Float64"
+    ],
+    "name": "sub_i64_f64",
+    "return_type": "Float64",
+    "wasm_idx": 16
+  },
+  {
+    "arg_types": [
+      "Float64",
+      "Int64"
+    ],
+    "name": "sub_f64_i64",
+    "return_type": "Float64",
+    "wasm_idx": 17
+  },
+  {
+    "arg_types": [
+      "Int32",
+      "Int64"
+    ],
+    "name": "sub_i32_i64",
+    "return_type": "Int64",
+    "wasm_idx": 18
+  },
+  {
+    "arg_types": [
+      "Int64",
+      "Int32"
+    ],
+    "name": "sub_i64_i32",
+    "return_type": "Int64",
+    "wasm_idx": 19
+  },
+  {
+    "arg_types": [
+      "Float32",
+      "Float32"
+    ],
+    "name": "sub_f32",
+    "return_type": "Float32",
+    "wasm_idx": 20
+  },
+  {
+    "arg_types": [
+      "Float32",
+      "Float64"
+    ],
+    "name": "sub_f32_f64",
+    "return_type": "Float64",
+    "wasm_idx": 21
+  },
+  {
+    "arg_types": [
+      "Float64",
+      "Float32"
+    ],
+    "name": "sub_f64_f32",
+    "return_type": "Float64",
+    "wasm_idx": 22
+  },
+  {
+    "arg_types": [
+      "Int32",
+      "Float64"
+    ],
+    "name": "sub_i32_f64",
+    "return_type": "Float64",
+    "wasm_idx": 23
+  },
+  {
+    "arg_types": [
+      "Float64",
+      "Int32"
+    ],
+    "name": "sub_f64_i32",
+    "return_type": "Float64",
+    "wasm_idx": 24
+  },
+  {
+    "arg_types": [
+      "Int64",
+      "Int64"
+    ],
+    "name": "mul_i64",
+    "return_type": "Int64",
+    "wasm_idx": 25
+  },
+  {
+    "arg_types": [
+      "Float64",
+      "Float64"
+    ],
+    "name": "mul_f64",
+    "return_type": "Float64",
+    "wasm_idx": 26
+  },
+  {
+    "arg_types": [
+      "Int64",
+      "Float64"
+    ],
+    "name": "mul_i64_f64",
+    "return_type": "Float64",
+    "wasm_idx": 27
+  },
+  {
+    "arg_types": [
+      "Int32",
+      "Int32"
+    ],
+    "name": "mul_i32",
+    "return_type": "Int32",
+    "wasm_idx": 28
+  },
+  {
+    "arg_types": [
+      "Float64",
+      "Int64"
+    ],
+    "name": "mul_f64_i64",
+    "return_type": "Float64",
+    "wasm_idx": 29
+  },
+  {
+    "arg_types": [
+      "Int32",
+      "Int64"
+    ],
+    "name": "mul_i32_i64",
+    "return_type": "Int64",
+    "wasm_idx": 30
+  },
+  {
+    "arg_types": [
+      "Int64",
+      "Int32"
+    ],
+    "name": "mul_i64_i32",
+    "return_type": "Int64",
+    "wasm_idx": 31
+  },
+  {
+    "arg_types": [
+      "Float32",
+      "Float32"
+    ],
+    "name": "mul_f32",
+    "return_type": "Float32",
+    "wasm_idx": 32
+  },
+  {
+    "arg_types": [
+      "Float32",
+      "Float64"
+    ],
+    "name": "mul_f32_f64",
+    "return_type": "Float64",
+    "wasm_idx": 33
+  },
+  {
+    "arg_types": [
+      "Float64",
+      "Float32"
+    ],
+    "name": "mul_f64_f32",
+    "return_type": "Float64",
+    "wasm_idx": 34
+  },
+  {
+    "arg_types": [
+      "Int32",
+      "Float64"
+    ],
+    "name": "mul_i32_f64",
+    "return_type": "Float64",
+    "wasm_idx": 35
+  },
+  {
+    "arg_types": [
+      "Float64",
+      "Int32"
+    ],
+    "name": "mul_f64_i32",
+    "return_type": "Float64",
+    "wasm_idx": 36
+  },
+  {
+    "arg_types": [
+      "Float64",
+      "Float64"
+    ],
+    "name": "div_f64",
+    "return_type": "Float64",
+    "wasm_idx": 37
+  },
+  {
+    "arg_types": [
+      "Int64",
+      "Int64"
+    ],
+    "name": "div_i64",
+    "return_type": "Int64",
+    "wasm_idx": 38
   },
   {
     "arg_types": [
@@ -123,7 +348,7 @@
     ],
     "name": "rem_i64",
     "return_type": "Int64",
-    "wasm_idx": 14
+    "wasm_idx": 39
   },
   {
     "arg_types": [
@@ -132,7 +357,7 @@
     ],
     "name": "mod_i64",
     "return_type": "Int64",
-    "wasm_idx": 15
+    "wasm_idx": 40
   },
   {
     "arg_types": [
@@ -141,7 +366,7 @@
     ],
     "name": "divrem_i64",
     "return_type": "Tuple{Int64, Int64}",
-    "wasm_idx": 16
+    "wasm_idx": 41
   },
   {
     "arg_types": [
@@ -150,7 +375,7 @@
     ],
     "name": "fld_i64",
     "return_type": "Int64",
-    "wasm_idx": 17
+    "wasm_idx": 42
   },
   {
     "arg_types": [
@@ -159,7 +384,7 @@
     ],
     "name": "cld_i64",
     "return_type": "Int64",
-    "wasm_idx": 18
+    "wasm_idx": 43
   },
   {
     "arg_types": [
@@ -169,7 +394,7 @@
     ],
     "name": "muladd_f64",
     "return_type": "Float64",
-    "wasm_idx": 19
+    "wasm_idx": 44
   },
   {
     "arg_types": [
@@ -178,7 +403,7 @@
     ],
     "name": "widemul_i32",
     "return_type": "Int64",
-    "wasm_idx": 20
+    "wasm_idx": 45
   },
   {
     "arg_types": [
@@ -186,7 +411,7 @@
     ],
     "name": "abs_i64",
     "return_type": "Int64",
-    "wasm_idx": 21
+    "wasm_idx": 46
   },
   {
     "arg_types": [
@@ -194,7 +419,7 @@
     ],
     "name": "abs_i32",
     "return_type": "Int32",
-    "wasm_idx": 22
+    "wasm_idx": 47
   },
   {
     "arg_types": [
@@ -202,7 +427,7 @@
     ],
     "name": "abs_f64",
     "return_type": "Float64",
-    "wasm_idx": 23
+    "wasm_idx": 48
   },
   {
     "arg_types": [
@@ -210,7 +435,7 @@
     ],
     "name": "sign_i64",
     "return_type": "Int64",
-    "wasm_idx": 24
+    "wasm_idx": 49
   },
   {
     "arg_types": [
@@ -218,7 +443,7 @@
     ],
     "name": "sign_f64",
     "return_type": "Float64",
-    "wasm_idx": 25
+    "wasm_idx": 50
   },
   {
     "arg_types": [
@@ -226,7 +451,7 @@
     ],
     "name": "signbit_f64",
     "return_type": "Bool",
-    "wasm_idx": 26
+    "wasm_idx": 51
   },
   {
     "arg_types": [
@@ -235,7 +460,7 @@
     ],
     "name": "copysign_i64",
     "return_type": "Int64",
-    "wasm_idx": 27
+    "wasm_idx": 52
   },
   {
     "arg_types": [
@@ -244,7 +469,7 @@
     ],
     "name": "copysign_f64",
     "return_type": "Float64",
-    "wasm_idx": 28
+    "wasm_idx": 53
   },
   {
     "arg_types": [
@@ -253,7 +478,7 @@
     ],
     "name": "flipsign_i64",
     "return_type": "Int64",
-    "wasm_idx": 29
+    "wasm_idx": 54
   },
   {
     "arg_types": [
@@ -262,7 +487,7 @@
     ],
     "name": "flipsign_f64",
     "return_type": "Float64",
-    "wasm_idx": 30
+    "wasm_idx": 55
   },
   {
     "arg_types": [
@@ -270,7 +495,7 @@
     ],
     "name": "floor_f64",
     "return_type": "Float64",
-    "wasm_idx": 31
+    "wasm_idx": 56
   },
   {
     "arg_types": [
@@ -278,7 +503,7 @@
     ],
     "name": "ceil_f64",
     "return_type": "Float64",
-    "wasm_idx": 32
+    "wasm_idx": 57
   },
   {
     "arg_types": [
@@ -286,7 +511,7 @@
     ],
     "name": "round_f64",
     "return_type": "Float64",
-    "wasm_idx": 33
+    "wasm_idx": 58
   },
   {
     "arg_types": [
@@ -294,7 +519,7 @@
     ],
     "name": "trunc_f64",
     "return_type": "Float64",
-    "wasm_idx": 34
+    "wasm_idx": 59
   },
   {
     "arg_types": [
@@ -304,7 +529,7 @@
     ],
     "name": "clamp_i64",
     "return_type": "Int64",
-    "wasm_idx": 35
+    "wasm_idx": 60
   },
   {
     "arg_types": [
@@ -314,7 +539,7 @@
     ],
     "name": "clamp_f64",
     "return_type": "Float64",
-    "wasm_idx": 36
+    "wasm_idx": 61
   },
   {
     "arg_types": [
@@ -323,7 +548,7 @@
     ],
     "name": "min_i64",
     "return_type": "Int64",
-    "wasm_idx": 37
+    "wasm_idx": 62
   },
   {
     "arg_types": [
@@ -332,7 +557,7 @@
     ],
     "name": "max_i64",
     "return_type": "Int64",
-    "wasm_idx": 38
+    "wasm_idx": 63
   },
   {
     "arg_types": [
@@ -341,7 +566,7 @@
     ],
     "name": "min_f64",
     "return_type": "Float64",
-    "wasm_idx": 39
+    "wasm_idx": 64
   },
   {
     "arg_types": [
@@ -350,7 +575,7 @@
     ],
     "name": "max_f64",
     "return_type": "Float64",
-    "wasm_idx": 40
+    "wasm_idx": 65
   },
   {
     "arg_types": [
@@ -359,7 +584,7 @@
     ],
     "name": "minmax_i64",
     "return_type": "Tuple{Int64, Int64}",
-    "wasm_idx": 41
+    "wasm_idx": 66
   },
   {
     "arg_types": [
@@ -367,7 +592,7 @@
     ],
     "name": "cbrt_f64",
     "return_type": "Float64",
-    "wasm_idx": 42
+    "wasm_idx": 67
   },
   {
     "arg_types": [
@@ -375,7 +600,7 @@
     ],
     "name": "atan_f64",
     "return_type": "Float64",
-    "wasm_idx": 43
+    "wasm_idx": 68
   },
   {
     "arg_types": [
@@ -384,7 +609,7 @@
     ],
     "name": "atan2_f64",
     "return_type": "Float64",
-    "wasm_idx": 44
+    "wasm_idx": 69
   },
   {
     "arg_types": [
@@ -392,7 +617,7 @@
     ],
     "name": "exp_f64",
     "return_type": "Float64",
-    "wasm_idx": 45
+    "wasm_idx": 70
   },
   {
     "arg_types": [
@@ -400,7 +625,7 @@
     ],
     "name": "exp2_f64",
     "return_type": "Float64",
-    "wasm_idx": 46
+    "wasm_idx": 71
   },
   {
     "arg_types": [
@@ -408,7 +633,7 @@
     ],
     "name": "exp10_f64",
     "return_type": "Float64",
-    "wasm_idx": 47
+    "wasm_idx": 72
   },
   {
     "arg_types": [
@@ -416,7 +641,7 @@
     ],
     "name": "cosh_f64",
     "return_type": "Float64",
-    "wasm_idx": 48
+    "wasm_idx": 73
   },
   {
     "arg_types": [
@@ -424,7 +649,7 @@
     ],
     "name": "tanh_f64",
     "return_type": "Float64",
-    "wasm_idx": 49
+    "wasm_idx": 74
   },
   {
     "arg_types": [
@@ -433,7 +658,7 @@
     ],
     "name": "gcdx_i64",
     "return_type": "Tuple{Int64, Int64, Int64}",
-    "wasm_idx": 50
+    "wasm_idx": 75
   },
   {
     "arg_types": [
@@ -443,7 +668,7 @@
     ],
     "name": "powermod_i64",
     "return_type": "Int64",
-    "wasm_idx": 51
+    "wasm_idx": 76
   },
   {
     "arg_types": [
@@ -451,7 +676,7 @@
     ],
     "name": "ndigits_i64",
     "return_type": "Int64",
-    "wasm_idx": 52
+    "wasm_idx": 77
   },
   {
     "arg_types": [
@@ -460,7 +685,7 @@
     ],
     "name": "isequal_i64",
     "return_type": "Bool",
-    "wasm_idx": 53
+    "wasm_idx": 78
   },
   {
     "arg_types": [
@@ -469,7 +694,7 @@
     ],
     "name": "isless_i64",
     "return_type": "Bool",
-    "wasm_idx": 54
+    "wasm_idx": 79
   },
   {
     "arg_types": [
@@ -478,7 +703,7 @@
     ],
     "name": "isless_f64",
     "return_type": "Bool",
-    "wasm_idx": 55
+    "wasm_idx": 80
   },
   {
     "arg_types": [
@@ -487,7 +712,7 @@
     ],
     "name": "cmp_i64",
     "return_type": "Int64",
-    "wasm_idx": 56
+    "wasm_idx": 81
   },
   {
     "arg_types": [
@@ -495,7 +720,7 @@
     ],
     "name": "iszero_i64",
     "return_type": "Bool",
-    "wasm_idx": 57
+    "wasm_idx": 82
   },
   {
     "arg_types": [
@@ -503,7 +728,7 @@
     ],
     "name": "isone_i64",
     "return_type": "Bool",
-    "wasm_idx": 58
+    "wasm_idx": 83
   },
   {
     "arg_types": [
@@ -511,7 +736,7 @@
     ],
     "name": "iseven_i64",
     "return_type": "Bool",
-    "wasm_idx": 59
+    "wasm_idx": 84
   },
   {
     "arg_types": [
@@ -519,7 +744,7 @@
     ],
     "name": "isodd_i64",
     "return_type": "Bool",
-    "wasm_idx": 60
+    "wasm_idx": 85
   },
   {
     "arg_types": [
@@ -527,7 +752,7 @@
     ],
     "name": "isnan_f64",
     "return_type": "Bool",
-    "wasm_idx": 61
+    "wasm_idx": 86
   },
   {
     "arg_types": [
@@ -535,7 +760,7 @@
     ],
     "name": "isinf_f64",
     "return_type": "Bool",
-    "wasm_idx": 62
+    "wasm_idx": 87
   },
   {
     "arg_types": [
@@ -543,7 +768,7 @@
     ],
     "name": "isfinite_f64",
     "return_type": "Bool",
-    "wasm_idx": 63
+    "wasm_idx": 88
   },
   {
     "arg_types": [
@@ -552,7 +777,7 @@
     ],
     "name": "band_i64",
     "return_type": "Int64",
-    "wasm_idx": 64
+    "wasm_idx": 89
   },
   {
     "arg_types": [
@@ -561,7 +786,7 @@
     ],
     "name": "bor_i64",
     "return_type": "Int64",
-    "wasm_idx": 65
+    "wasm_idx": 90
   },
   {
     "arg_types": [
@@ -570,7 +795,7 @@
     ],
     "name": "xor_i64",
     "return_type": "Int64",
-    "wasm_idx": 66
+    "wasm_idx": 91
   },
   {
     "arg_types": [
@@ -578,7 +803,7 @@
     ],
     "name": "bnot_i64",
     "return_type": "Int64",
-    "wasm_idx": 67
+    "wasm_idx": 92
   },
   {
     "arg_types": [
@@ -587,7 +812,7 @@
     ],
     "name": "shl_i64",
     "return_type": "Int64",
-    "wasm_idx": 68
+    "wasm_idx": 93
   },
   {
     "arg_types": [
@@ -596,7 +821,7 @@
     ],
     "name": "shr_i64",
     "return_type": "Int64",
-    "wasm_idx": 69
+    "wasm_idx": 94
   },
   {
     "arg_types": [
@@ -605,7 +830,7 @@
     ],
     "name": "ushr_i64",
     "return_type": "Int64",
-    "wasm_idx": 70
+    "wasm_idx": 95
   },
   {
     "arg_types": [
@@ -613,7 +838,7 @@
     ],
     "name": "count_ones_i64",
     "return_type": "Int64",
-    "wasm_idx": 71
+    "wasm_idx": 96
   },
   {
     "arg_types": [
@@ -621,7 +846,7 @@
     ],
     "name": "leading_zeros_i64",
     "return_type": "Int64",
-    "wasm_idx": 72
+    "wasm_idx": 97
   },
   {
     "arg_types": [
@@ -629,7 +854,7 @@
     ],
     "name": "trailing_zeros_i64",
     "return_type": "Int64",
-    "wasm_idx": 73
+    "wasm_idx": 98
   },
   {
     "arg_types": [
@@ -637,7 +862,7 @@
     ],
     "name": "float_i64",
     "return_type": "Float64",
-    "wasm_idx": 74
+    "wasm_idx": 99
   },
   {
     "arg_types": [
@@ -645,7 +870,7 @@
     ],
     "name": "widen_i32",
     "return_type": "Int64",
-    "wasm_idx": 75
+    "wasm_idx": 100
   },
   {
     "arg_types": [
@@ -653,7 +878,7 @@
     ],
     "name": "not_bool",
     "return_type": "Bool",
-    "wasm_idx": 76
+    "wasm_idx": 101
   },
   {
     "arg_types": [
@@ -662,7 +887,7 @@
     ],
     "name": "xor_bool",
     "return_type": "Bool",
-    "wasm_idx": 77
+    "wasm_idx": 102
   },
   {
     "arg_types": [
@@ -670,7 +895,7 @@
     ],
     "name": "isdigit_char",
     "return_type": "Bool",
-    "wasm_idx": 78
+    "wasm_idx": 103
   },
   {
     "arg_types": [
@@ -678,7 +903,7 @@
     ],
     "name": "isletter_char",
     "return_type": "Bool",
-    "wasm_idx": 79
+    "wasm_idx": 104
   },
   {
     "arg_types": [
@@ -686,7 +911,7 @@
     ],
     "name": "isspace_char",
     "return_type": "Bool",
-    "wasm_idx": 80
+    "wasm_idx": 105
   },
   {
     "arg_types": [
@@ -694,7 +919,7 @@
     ],
     "name": "uppercase_char",
     "return_type": "Char",
-    "wasm_idx": 81
+    "wasm_idx": 106
   },
   {
     "arg_types": [
@@ -702,7 +927,7 @@
     ],
     "name": "lowercase_char",
     "return_type": "Char",
-    "wasm_idx": 82
+    "wasm_idx": 107
   },
   {
     "arg_types": [
@@ -710,7 +935,7 @@
     ],
     "name": "isascii_char",
     "return_type": "Bool",
-    "wasm_idx": 83
+    "wasm_idx": 108
   },
   {
     "arg_types": [
@@ -718,7 +943,7 @@
     ],
     "name": "textwidth_char",
     "return_type": "Int64",
-    "wasm_idx": 84
+    "wasm_idx": 109
   },
   {
     "arg_types": [
@@ -726,7 +951,7 @@
     ],
     "name": "first_tuple2",
     "return_type": "Int64",
-    "wasm_idx": 85
+    "wasm_idx": 110
   },
   {
     "arg_types": [
@@ -734,7 +959,7 @@
     ],
     "name": "last_tuple2",
     "return_type": "Int64",
-    "wasm_idx": 86
+    "wasm_idx": 111
   },
   {
     "arg_types": [
@@ -742,7 +967,7 @@
     ],
     "name": "identity_i64",
     "return_type": "Int64",
-    "wasm_idx": 87
+    "wasm_idx": 112
   },
   {
     "arg_types": [
@@ -750,7 +975,7 @@
     ],
     "name": "zero_i64",
     "return_type": "Int64",
-    "wasm_idx": 88
+    "wasm_idx": 113
   },
   {
     "arg_types": [
@@ -758,7 +983,7 @@
     ],
     "name": "one_i64",
     "return_type": "Int64",
-    "wasm_idx": 89
+    "wasm_idx": 114
   },
   {
     "arg_types": [
@@ -766,7 +991,7 @@
     ],
     "name": "hash_i64",
     "return_type": "UInt64",
-    "wasm_idx": 90
+    "wasm_idx": 115
   },
   {
     "arg_types": [
@@ -776,7 +1001,7 @@
     ],
     "name": "ifelse_i64",
     "return_type": "Int64",
-    "wasm_idx": 91
+    "wasm_idx": 116
   },
   {
     "arg_types": [
@@ -784,7 +1009,7 @@
     ],
     "name": "ncodeunits_str",
     "return_type": "Int64",
-    "wasm_idx": 92
+    "wasm_idx": 117
   },
   {
     "arg_types": [
@@ -792,7 +1017,7 @@
     ],
     "name": "sizeof_str",
     "return_type": "Int64",
-    "wasm_idx": 93
+    "wasm_idx": 118
   },
   {
     "arg_types": [
@@ -801,7 +1026,7 @@
     ],
     "name": "startswith_str",
     "return_type": "Bool",
-    "wasm_idx": 94
+    "wasm_idx": 119
   },
   {
     "arg_types": [
@@ -810,7 +1035,7 @@
     ],
     "name": "endswith_str",
     "return_type": "Bool",
-    "wasm_idx": 95
+    "wasm_idx": 120
   },
   {
     "arg_types": [
@@ -818,7 +1043,7 @@
     ],
     "name": "isempty_str",
     "return_type": "Bool",
-    "wasm_idx": 96
+    "wasm_idx": 121
   },
   {
     "arg_types": [
@@ -826,7 +1051,7 @@
     ],
     "name": "isascii_str",
     "return_type": "Bool",
-    "wasm_idx": 97
+    "wasm_idx": 122
   },
   {
     "arg_types": [
@@ -835,7 +1060,7 @@
     ],
     "name": "prevind_str",
     "return_type": "Int64",
-    "wasm_idx": 98
+    "wasm_idx": 123
   },
   {
     "arg_types": [
@@ -843,7 +1068,7 @@
     ],
     "name": "length_vec_i64",
     "return_type": "Int64",
-    "wasm_idx": 99
+    "wasm_idx": 124
   },
   {
     "arg_types": [
@@ -851,7 +1076,7 @@
     ],
     "name": "length_vec_f64",
     "return_type": "Int64",
-    "wasm_idx": 100
+    "wasm_idx": 125
   },
   {
     "arg_types": [
@@ -859,7 +1084,7 @@
     ],
     "name": "sum_vec_i64",
     "return_type": "Int64",
-    "wasm_idx": 101
+    "wasm_idx": 126
   },
   {
     "arg_types": [
@@ -867,7 +1092,7 @@
     ],
     "name": "sum_vec_f64",
     "return_type": "Float64",
-    "wasm_idx": 102
+    "wasm_idx": 127
   },
   {
     "arg_types": [
@@ -875,7 +1100,7 @@
     ],
     "name": "prod_vec_i64",
     "return_type": "Int64",
-    "wasm_idx": 103
+    "wasm_idx": 128
   },
   {
     "arg_types": [
@@ -883,7 +1108,7 @@
     ],
     "name": "maximum_vec_i64",
     "return_type": "Int64",
-    "wasm_idx": 104
+    "wasm_idx": 129
   },
   {
     "arg_types": [
@@ -891,7 +1116,7 @@
     ],
     "name": "minimum_vec_i64",
     "return_type": "Int64",
-    "wasm_idx": 105
+    "wasm_idx": 130
   },
   {
     "arg_types": [
@@ -899,7 +1124,7 @@
     ],
     "name": "issorted_vec_i64",
     "return_type": "Bool",
-    "wasm_idx": 106
+    "wasm_idx": 131
   },
   {
     "arg_types": [
@@ -907,7 +1132,7 @@
     ],
     "name": "any_vec_bool",
     "return_type": "Bool",
-    "wasm_idx": 107
+    "wasm_idx": 132
   },
   {
     "arg_types": [
@@ -915,6 +1140,6 @@
     ],
     "name": "all_vec_bool",
     "return_type": "Bool",
-    "wasm_idx": 108
+    "wasm_idx": 133
   }
 ]

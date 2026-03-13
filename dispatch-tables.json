@@ -1,0 +1,368 @@
+[
+  {
+    "arity": 2,
+    "dispatch_sig_idx": 14,
+    "entries": [
+      {
+        "hash": 1016835159,
+        "target_idx": 1,
+        "type_ids": [
+          17,
+          17
+        ],
+        "wrapper_idx": 134
+      },
+      {
+        "hash": 2155741775,
+        "target_idx": 2,
+        "type_ids": [
+          13,
+          13
+        ],
+        "wrapper_idx": 135
+      },
+      {
+        "hash": 2174637965,
+        "target_idx": 3,
+        "type_ids": [
+          16,
+          16
+        ],
+        "wrapper_idx": 136
+      },
+      {
+        "hash": 1083945635,
+        "target_idx": 4,
+        "type_ids": [
+          17,
+          13
+        ],
+        "wrapper_idx": 137
+      },
+      {
+        "hash": 1954410347,
+        "target_idx": 5,
+        "type_ids": [
+          13,
+          17
+        ],
+        "wrapper_idx": 138
+      },
+      {
+        "hash": 2157860346,
+        "target_idx": 6,
+        "type_ids": [
+          16,
+          17
+        ],
+        "wrapper_idx": 139
+      },
+      {
+        "hash": 1000057540,
+        "target_idx": 7,
+        "type_ids": [
+          17,
+          16
+        ],
+        "wrapper_idx": 140
+      },
+      {
+        "hash": 2776660773,
+        "target_idx": 8,
+        "type_ids": [
+          12,
+          12
+        ],
+        "wrapper_idx": 141
+      },
+      {
+        "hash": 2759883154,
+        "target_idx": 9,
+        "type_ids": [
+          12,
+          13
+        ],
+        "wrapper_idx": 142
+      },
+      {
+        "hash": 2138964156,
+        "target_idx": 10,
+        "type_ids": [
+          13,
+          12
+        ],
+        "wrapper_idx": 143
+      },
+      {
+        "hash": 1688087014,
+        "target_idx": 11,
+        "type_ids": [
+          16,
+          13
+        ],
+        "wrapper_idx": 144
+      },
+      {
+        "hash": 1937632728,
+        "target_idx": 12,
+        "type_ids": [
+          13,
+          16
+        ],
+        "wrapper_idx": 145
+      }
+    ],
+    "func_table_idx": 0,
+    "function": "+",
+    "keys_global_idx": 1,
+    "mask": 15,
+    "num_entries": 12,
+    "table_size": 16,
+    "typeids_global_idx": 3,
+    "values_global_idx": 2
+  },
+  {
+    "arity": 2,
+    "dispatch_sig_idx": 14,
+    "entries": [
+      {
+        "hash": 1016835159,
+        "target_idx": 13,
+        "type_ids": [
+          17,
+          17
+        ],
+        "wrapper_idx": 146
+      },
+      {
+        "hash": 2155741775,
+        "target_idx": 14,
+        "type_ids": [
+          13,
+          13
+        ],
+        "wrapper_idx": 147
+      },
+      {
+        "hash": 2174637965,
+        "target_idx": 15,
+        "type_ids": [
+          16,
+          16
+        ],
+        "wrapper_idx": 148
+      },
+      {
+        "hash": 1083945635,
+        "target_idx": 16,
+        "type_ids": [
+          17,
+          13
+        ],
+        "wrapper_idx": 149
+      },
+      {
+        "hash": 1954410347,
+        "target_idx": 17,
+        "type_ids": [
+          13,
+          17
+        ],
+        "wrapper_idx": 150
+      },
+      {
+        "hash": 2157860346,
+        "target_idx": 18,
+        "type_ids": [
+          16,
+          17
+        ],
+        "wrapper_idx": 151
+      },
+      {
+        "hash": 1000057540,
+        "target_idx": 19,
+        "type_ids": [
+          17,
+          16
+        ],
+        "wrapper_idx": 152
+      },
+      {
+        "hash": 2776660773,
+        "target_idx": 20,
+        "type_ids": [
+          12,
+          12
+        ],
+        "wrapper_idx": 153
+      },
+      {
+        "hash": 2759883154,
+        "target_idx": 21,
+        "type_ids": [
+          12,
+          13
+        ],
+        "wrapper_idx": 154
+      },
+      {
+        "hash": 2138964156,
+        "target_idx": 22,
+        "type_ids": [
+          13,
+          12
+        ],
+        "wrapper_idx": 155
+      },
+      {
+        "hash": 1688087014,
+        "target_idx": 23,
+        "type_ids": [
+          16,
+          13
+        ],
+        "wrapper_idx": 156
+      },
+      {
+        "hash": 1937632728,
+        "target_idx": 24,
+        "type_ids": [
+          13,
+          16
+        ],
+        "wrapper_idx": 157
+      }
+    ],
+    "func_table_idx": 1,
+    "function": "-",
+    "keys_global_idx": 4,
+    "mask": 15,
+    "num_entries": 12,
+    "table_size": 16,
+    "typeids_global_idx": 6,
+    "values_global_idx": 5
+  },
+  {
+    "arity": 2,
+    "dispatch_sig_idx": 14,
+    "entries": [
+      {
+        "hash": 1016835159,
+        "target_idx": 25,
+        "type_ids": [
+          17,
+          17
+        ],
+        "wrapper_idx": 158
+      },
+      {
+        "hash": 2155741775,
+        "target_idx": 26,
+        "type_ids": [
+          13,
+          13
+        ],
+        "wrapper_idx": 159
+      },
+      {
+        "hash": 1083945635,
+        "target_idx": 27,
+        "type_ids": [
+          17,
+          13
+        ],
+        "wrapper_idx": 160
+      },
+      {
+        "hash": 2174637965,
+        "target_idx": 28,
+        "type_ids": [
+          16,
+          16
+        ],
+        "wrapper_idx": 161
+      },
+      {
+        "hash": 1954410347,
+        "target_idx": 29,
+        "type_ids": [
+          13,
+          17
+        ],
+        "wrapper_idx": 162
+      },
+      {
+        "hash": 2157860346,
+        "target_idx": 30,
+        "type_ids": [
+          16,
+          17
+        ],
+        "wrapper_idx": 163
+      },
+      {
+        "hash": 1000057540,
+        "target_idx": 31,
+        "type_ids": [
+          17,
+          16
+        ],
+        "wrapper_idx": 164
+      },
+      {
+        "hash": 2776660773,
+        "target_idx": 32,
+        "type_ids": [
+          12,
+          12
+        ],
+        "wrapper_idx": 165
+      },
+      {
+        "hash": 2759883154,
+        "target_idx": 33,
+        "type_ids": [
+          12,
+          13
+        ],
+        "wrapper_idx": 166
+      },
+      {
+        "hash": 2138964156,
+        "target_idx": 34,
+        "type_ids": [
+          13,
+          12
+        ],
+        "wrapper_idx": 167
+      },
+      {
+        "hash": 1688087014,
+        "target_idx": 35,
+        "type_ids": [
+          16,
+          13
+        ],
+        "wrapper_idx": 168
+      },
+      {
+        "hash": 1937632728,
+        "target_idx": 36,
+        "type_ids": [
+          13,
+          16
+        ],
+        "wrapper_idx": 169
+      }
+    ],
+    "func_table_idx": 2,
+    "function": "*",
+    "keys_global_idx": 7,
+    "mask": 15,
+    "num_entries": 12,
+    "table_size": 16,
+    "typeids_global_idx": 9,
+    "values_global_idx": 8
+  }
+]

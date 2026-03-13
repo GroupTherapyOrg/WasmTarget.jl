@@ -170,7 +170,7 @@
         "Int64"
       ],
       "julia_type": "Tuple{Int64, Int64}",
-      "wasm_type_idx": 17
+      "wasm_type_idx": 26
     },
     {
       "field_names": [
@@ -691,7 +691,7 @@
         "UInt64"
       ],
       "julia_type": "NTuple{256, UInt64}",
-      "wasm_type_idx": 26
+      "wasm_type_idx": 35
     },
     {
       "field_names": [
@@ -706,7 +706,7 @@
         "Int64"
       ],
       "julia_type": "Tuple{Int64, Int64, Int64}",
-      "wasm_type_idx": 27
+      "wasm_type_idx": 36
     },
     {
       "field_names": [
@@ -719,14 +719,14 @@
         "UInt64"
       ],
       "julia_type": "Int128",
-      "wasm_type_idx": 29
+      "wasm_type_idx": 38
     },
     {
       "field_names": [],
       "field_offset": 0,
       "field_types": [],
       "julia_type": "Core.SimpleVector",
-      "wasm_type_idx": 30
+      "wasm_type_idx": 39
     },
     {
       "field_names": [
@@ -743,7 +743,7 @@
         "Int64"
       ],
       "julia_type": "Core.MethodCache",
-      "wasm_type_idx": 31
+      "wasm_type_idx": 40
     },
     {
       "field_names": [
@@ -788,7 +788,7 @@
         "UInt8"
       ],
       "julia_type": "Core.TypeName",
-      "wasm_type_idx": 32
+      "wasm_type_idx": 41
     },
     {
       "field_names": [
@@ -813,7 +813,7 @@
         "UInt16"
       ],
       "julia_type": "DataType",
-      "wasm_type_idx": 33
+      "wasm_type_idx": 42
     },
     {
       "field_names": [
@@ -826,7 +826,7 @@
         "Any"
       ],
       "julia_type": "BoundsError",
-      "wasm_type_idx": 43
+      "wasm_type_idx": 52
     },
     {
       "field_names": [
@@ -837,7 +837,7 @@
         "String"
       ],
       "julia_type": "Base.CodeUnits{UInt8, String}",
-      "wasm_type_idx": 46
+      "wasm_type_idx": 55
     }
   ],
   "type_ids": {
