@@ -3071,7 +3071,8 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
             elseif name === :BoundsError || name === :ArgumentError || name === :TypeError ||
                    name === :DomainError || name === :OverflowError || name === :DivideError ||
                    name === :InexactError || name === :ErrorException || name === :KeyError ||
-                   name === :MethodError || name === :AssertionError || name === :AssertionError
+                   name === :MethodError || name === :AssertionError || name === :AssertionError ||
+                   name === :StackOverflowError || name === :OutOfMemoryError || name === :UndefVarError
                 bytes = UInt8[]  # Clear pre-compiled args (we re-compile below for correct field order)
                 local _ctor_type = nothing
                 if name === :BoundsError; _ctor_type = BoundsError
@@ -3084,6 +3085,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 elseif name === :ErrorException; _ctor_type = ErrorException
                 elseif name === :KeyError; _ctor_type = KeyError
                 elseif name === :MethodError; _ctor_type = MethodError
+                elseif name === :StackOverflowError; _ctor_type = StackOverflowError
+                elseif name === :OutOfMemoryError; _ctor_type = OutOfMemoryError
+                elseif name === :UndefVarError; _ctor_type = UndefVarError
                 end
                 local _ctor_info = _ctor_type !== nothing ? register_struct_type!(ctx.mod, ctx.type_registry, _ctor_type) : nothing
                 if _ctor_info !== nothing
@@ -3102,7 +3106,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                                 push!(bytes, UInt8(AnyRef))
                             elseif _ft === Int32 || _ft === Bool
                                 push!(bytes, Opcode.I32_CONST, 0x00)
-                            elseif _ft === Int64
+                            elseif _ft === Int64 || _ft === UInt64
                                 push!(bytes, Opcode.I64_CONST, 0x00)
                             else
                                 push!(bytes, Opcode.REF_NULL)

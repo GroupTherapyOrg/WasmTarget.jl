@@ -1435,10 +1435,10 @@ function compile_module(functions::Vector;
         end
     end
 
-    # PURE-9032: Pre-register simple exception types so they get DFS typeIds.
-    # Only register types with simple fields (AbstractString → ArrayRef) to avoid
-    # creating complex array/struct types that shift indices.
-    for _exn_T in (ErrorException, ArgumentError, OverflowError, DivideError)
+    # PURE-9035: Pre-register all 12 core exception types for DFS typeIds.
+    # Only register types with simple fields to avoid creating complex types.
+    for _exn_T in (ErrorException, ArgumentError, OverflowError, DivideError,
+                   StackOverflowError, OutOfMemoryError)
         register_struct_type!(mod, type_registry, _exn_T)
     end
 
@@ -1617,8 +1617,9 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
         end
     end
 
-    # PURE-9032: Pre-register common exception types so they get DFS typeIds
-    for _exn_T in (ErrorException, ArgumentError, OverflowError, DivideError)
+    # PURE-9035: Pre-register all core exception types for DFS typeIds
+    for _exn_T in (ErrorException, ArgumentError, OverflowError, DivideError,
+                   StackOverflowError, OutOfMemoryError)
         register_struct_type!(mod, type_registry, _exn_T)
     end
 
