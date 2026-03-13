@@ -1402,6 +1402,9 @@ function compile_module(functions::Vector;
 
                             # Build initialization expression: struct.new with default values
                             init_bytes = UInt8[]
+                            # Field 0: typeId (i32) - type discriminant
+                            push!(init_bytes, Opcode.I32_CONST)
+                            push!(init_bytes, 0x00)
                             for field_name in fieldnames(T)
                                 field_val = getfield(actual_val, field_name)
                                 append!(init_bytes, compile_const_value(field_val, mod, type_registry))
@@ -1556,6 +1559,9 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
                             info = register_struct_type!(mod, type_registry, T)
                             type_idx = info.wasm_type_idx
                             init_bytes = UInt8[]
+                            # Field 0: typeId (i32) - type discriminant
+                            push!(init_bytes, Opcode.I32_CONST)
+                            push!(init_bytes, 0x00)
                             for field_name in fieldnames(T)
                                 field_val = getfield(actual_val, field_name)
                                 append!(init_bytes, compile_const_value(field_val, mod, type_registry))
