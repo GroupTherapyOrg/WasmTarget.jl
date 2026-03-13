@@ -220,7 +220,15 @@ function generate_void_flow(ctx::CompilationContext, blocks::Vector{BasicBlock},
                     # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
                     push!(bytes, Opcode.REF_NULL)
                     append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
-                elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef) && is_numeric_val
+                elseif func_ret_wasm === AnyRef && is_numeric_val
+                    # PURE-9030: Box numeric value for AnyRef return
+                    local _ret_box_c1 = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
+                    emit_box_type_id!(bytes, ctx.type_registry, val_wasm)
+                    append!(bytes, compile_value(stmt.val, ctx))
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.STRUCT_NEW)
+                    append!(bytes, encode_leb128_unsigned(_ret_box_c1))
+                elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                     # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
                     push!(bytes, Opcode.REF_NULL)
                     push!(bytes, UInt8(func_ret_wasm))
@@ -1846,7 +1854,15 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                         # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
                         push!(bytes, Opcode.REF_NULL)
                         append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
-                    elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef) && is_numeric_val
+                    elseif func_ret_wasm === AnyRef && is_numeric_val
+                        # PURE-9030: Box numeric value for AnyRef return
+                        local _ret_box_c2 = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
+                        emit_box_type_id!(bytes, ctx.type_registry, val_wasm)
+                        append!(bytes, compile_value(stmt.val, ctx))
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.STRUCT_NEW)
+                        append!(bytes, encode_leb128_unsigned(_ret_box_c2))
+                    elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                         # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
                         push!(bytes, Opcode.REF_NULL)
                         push!(bytes, UInt8(func_ret_wasm))
@@ -1964,7 +1980,15 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                                 # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
                                 push!(inner_bytes, Opcode.REF_NULL)
                                 append!(inner_bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
-                            elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef) && is_numeric_val
+                            elseif func_ret_wasm === AnyRef && is_numeric_val
+                                # PURE-9030: Box numeric value for AnyRef return
+                                local _ret_box_c3 = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
+                                emit_box_type_id!(inner_bytes, ctx.type_registry, val_wasm)
+                                append!(inner_bytes, compile_value(stmt.val, ctx))
+                                push!(inner_bytes, Opcode.GC_PREFIX)
+                                push!(inner_bytes, Opcode.STRUCT_NEW)
+                                append!(inner_bytes, encode_leb128_unsigned(_ret_box_c3))
+                            elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                                 # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
                                 push!(inner_bytes, Opcode.REF_NULL)
                                 push!(inner_bytes, UInt8(func_ret_wasm))
@@ -2022,7 +2046,15 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                                     # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
                                     push!(inner_bytes, Opcode.REF_NULL)
                                     append!(inner_bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
-                                elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef) && is_numeric_val
+                                elseif func_ret_wasm === AnyRef && is_numeric_val
+                                    # PURE-9030: Box numeric value for AnyRef return
+                                    local _ret_box_c4 = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
+                                    emit_box_type_id!(inner_bytes, ctx.type_registry, val_wasm)
+                                    append!(inner_bytes, compile_value(stmt.val, ctx))
+                                    push!(inner_bytes, Opcode.GC_PREFIX)
+                                    push!(inner_bytes, Opcode.STRUCT_NEW)
+                                    append!(inner_bytes, encode_leb128_unsigned(_ret_box_c4))
+                                elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                                     # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
                                     push!(inner_bytes, Opcode.REF_NULL)
                                     push!(inner_bytes, UInt8(func_ret_wasm))
@@ -2561,7 +2593,15 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                                         # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
                                         push!(inner_bytes, Opcode.REF_NULL)
                                         append!(inner_bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
-                                    elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef) && is_numeric_val
+                                    elseif func_ret_wasm === AnyRef && is_numeric_val
+                                        # PURE-9030: Box numeric value for AnyRef return
+                                        local _ret_box_c5 = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
+                                        emit_box_type_id!(inner_bytes, ctx.type_registry, val_wasm)
+                                        append!(inner_bytes, compile_value(stmt.val, ctx))
+                                        push!(inner_bytes, Opcode.GC_PREFIX)
+                                        push!(inner_bytes, Opcode.STRUCT_NEW)
+                                        append!(inner_bytes, encode_leb128_unsigned(_ret_box_c5))
+                                    elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                                         # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
                                         push!(inner_bytes, Opcode.REF_NULL)
                                         push!(inner_bytes, UInt8(func_ret_wasm))
@@ -2918,7 +2958,15 @@ function generate_nested_conditionals(ctx::CompilationContext, blocks, code, con
                             # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
                             push!(inner_bytes, Opcode.REF_NULL)
                             append!(inner_bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
-                        elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef) && is_numeric_val
+                        elseif func_ret_wasm === AnyRef && is_numeric_val
+                            # PURE-9030: Box numeric value for AnyRef return
+                            local _ret_box_c6 = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
+                            emit_box_type_id!(inner_bytes, ctx.type_registry, val_wasm)
+                            append!(inner_bytes, compile_value(stmt.val, ctx))
+                            push!(inner_bytes, Opcode.GC_PREFIX)
+                            push!(inner_bytes, Opcode.STRUCT_NEW)
+                            append!(inner_bytes, encode_leb128_unsigned(_ret_box_c6))
+                        elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                             # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
                             push!(inner_bytes, Opcode.REF_NULL)
                             push!(inner_bytes, UInt8(func_ret_wasm))

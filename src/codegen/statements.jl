@@ -63,7 +63,16 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                 # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
                 push!(bytes, Opcode.REF_NULL)
                 append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
-            elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef) && is_numeric_val
+            elseif func_ret_wasm === AnyRef && is_numeric_val
+                # PURE-9030: Box numeric value for AnyRef return (Union{Int,Float} return type).
+                # Push typeId, push value, struct.new BoxedXxx → anyref.
+                local _ret_box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
+                emit_box_type_id!(bytes, ctx.type_registry, val_wasm)
+                append!(bytes, compile_value(stmt.val, ctx))
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.STRUCT_NEW)
+                append!(bytes, encode_leb128_unsigned(_ret_box_idx))
+            elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                 # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
                 push!(bytes, Opcode.REF_NULL)
                 push!(bytes, UInt8(func_ret_wasm))

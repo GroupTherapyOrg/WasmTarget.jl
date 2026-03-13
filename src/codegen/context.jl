@@ -1105,7 +1105,8 @@ function allocate_ssa_locals!(ctx::CompilationContext)
                     if stmt.val isa Core.SSAValue
                         val_type = get(ctx.ssa_types, stmt.val.id, nothing)
                         if val_type !== nothing
-                            _pi_src_val_wasm = julia_to_wasm_type(val_type)
+                            # Use get_concrete_wasm_type to detect anyref-boxed unions
+                            _pi_src_val_wasm = get_concrete_wasm_type(val_type, ctx.mod, ctx.type_registry)
                             if _pi_src_val_wasm !== AnyRef
                                 effective_type = val_type
                             end
@@ -1114,7 +1115,8 @@ function allocate_ssa_locals!(ctx::CompilationContext)
                         arg_idx = stmt.val.n
                         if arg_idx <= length(ctx.code_info.slottypes)
                             local _slot_type = ctx.code_info.slottypes[arg_idx]
-                            _pi_src_val_wasm = julia_to_wasm_type(_slot_type)
+                            # Use get_concrete_wasm_type to detect anyref-boxed unions
+                            _pi_src_val_wasm = get_concrete_wasm_type(_slot_type, ctx.mod, ctx.type_registry)
                             if _pi_src_val_wasm !== AnyRef
                                 effective_type = _slot_type
                             end
