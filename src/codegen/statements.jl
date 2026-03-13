@@ -2946,6 +2946,22 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
         return bytes
     end
 
+    # PURE-9042: jl_hrtime → performance.now() * 1e6 (nanoseconds as UInt64)
+    # Used by @elapsed and @time for timing.
+    if name === :jl_hrtime
+        perf_now_idx = ensure_perf_now_import!(ctx.mod)
+        push!(bytes, Opcode.CALL)
+        append!(bytes, encode_leb128_unsigned(perf_now_idx))
+        # performance.now() returns f64 milliseconds → multiply by 1e6 for nanoseconds
+        push!(bytes, Opcode.F64_CONST)
+        append!(bytes, reinterpret(UInt8, [1.0e6]))
+        push!(bytes, Opcode.F64_MUL)
+        # Convert f64 → i64 (unsigned — trunc_sat to handle large values)
+        push!(bytes, 0xFC)  # saturating truncation prefix
+        push!(bytes, 0x07)  # i64.trunc_sat_f64_u
+        return bytes
+    end
+
     # Unknown foreigncall - emit unreachable.
     # We cannot execute native C FFI in WebAssembly. Emitting unreachable:
     # (1) Makes the wasm validator accept any stack type (polymorphic)

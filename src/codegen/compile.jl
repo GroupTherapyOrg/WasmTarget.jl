@@ -1578,9 +1578,10 @@ function compile_module(functions::Vector;
     # This creates a start function that patches .name, .super, .parameters, .wrapper.
     populate_type_constant_globals!(mod, type_registry)
 
-    # PURE-9040/9043: Clear module-level state after compilation
+    # PURE-9040/9042/9043: Clear module-level state after compilation
     clear_io_imports!()
     clear_rng_globals!()
+    clear_perf_now!()
 
     return mod
 end

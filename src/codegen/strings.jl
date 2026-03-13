@@ -205,6 +205,31 @@ function clear_io_imports!()
 end
 
 # ============================================================================
+# Performance Timer — jl_hrtime via performance.now() (PURE-9042)
+# ============================================================================
+
+const _PERF_NOW_IDX = Ref{Union{Nothing, UInt32}}(nothing)
+
+"""
+    ensure_perf_now_import!(mod) -> UInt32
+
+Import env.perf_now() → f64 for high-resolution timing. Idempotent.
+"""
+function ensure_perf_now_import!(mod::WasmModule)::UInt32
+    existing = _PERF_NOW_IDX[]
+    if existing !== nothing
+        return existing
+    end
+    idx = add_import!(mod, "env", "perf_now", WasmValType[], WasmValType[F64])
+    _PERF_NOW_IDX[] = idx
+    return idx
+end
+
+function clear_perf_now!()
+    _PERF_NOW_IDX[] = nothing
+end
+
+# ============================================================================
 # RNG State — Xoshiro256++ via Wasm Globals (PURE-9043)
 # ============================================================================
 
