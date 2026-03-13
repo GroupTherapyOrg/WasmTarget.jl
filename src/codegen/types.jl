@@ -66,11 +66,26 @@ mutable struct TypeRegistry
     nothing_box_idx::Union{Nothing, UInt32}   # Struct type: (struct (field $typeId i32))
     nothing_global_idx::Union{Nothing, UInt32}  # Singleton global holding BoxedNothing instance
     # PURE-9063: Type lookup table — typeId (i32) → DataType struct ref
-    type_lookup_array_idx::Union{Nothing, UInt32}  # Array type: (array (mut (ref null $DataType)))
+    type_lookup_array_idx::Union{Nothing, UInt32}  # Array type: (array (mut (ref null $JlDataType)))
     type_lookup_global::Union{Nothing, UInt32}  # Global holding the lookup array
+    # PURE-9063: $JlType hierarchy struct type indices
+    jl_type_idx::Union{Nothing, UInt32}       # $JlType = (struct (field $kind i32))
+    jl_datatype_idx::Union{Nothing, UInt32}   # $JlDataType (sub $JlType) — most Julia types
+    jl_union_idx::Union{Nothing, UInt32}      # $JlUnion (sub $JlType) — flat union of types
+    jl_unionall_idx::Union{Nothing, UInt32}   # $JlUnionAll (sub $JlType) — type constructor
+    jl_typevar_idx::Union{Nothing, UInt32}    # $JlTypeVar (sub $JlType) — bound variable
+    jl_typename_idx::Union{Nothing, UInt32}   # $JlTypeName — identity token
+    jl_svec_idx::Union{Nothing, UInt32}       # $JlSVec = (array (mut (ref null $JlType)))
 end
 
-TypeRegistry() = TypeRegistry(Dict{Type, StructInfo}(), Dict{Type, UInt32}(), nothing, Dict{Union, UnionInfo}(), Dict{WasmValType, UInt32}(), Dict{Type, UInt32}(), Dict{Core.TypeName, UInt32}(), Dict{Type, Int32}(), Dict{Type, Tuple{Int32, Int32}}(), nothing, nothing, nothing, nothing, nothing)
+TypeRegistry() = TypeRegistry(
+    Dict{Type, StructInfo}(), Dict{Type, UInt32}(), nothing,
+    Dict{Union, UnionInfo}(), Dict{WasmValType, UInt32}(),
+    Dict{Type, UInt32}(), Dict{Core.TypeName, UInt32}(),
+    Dict{Type, Int32}(), Dict{Type, Tuple{Int32, Int32}}(),
+    nothing, nothing, nothing, nothing, nothing,
+    nothing, nothing, nothing, nothing, nothing, nothing, nothing
+)
 
 # ============================================================================
 # PURE-9025: DFS Type ID Assignment
@@ -370,6 +385,97 @@ function emit_typeof!(bytes::Vector{UInt8}, base_idx::UInt32)
     append!(bytes, encode_leb128_unsigned(UInt32(0)))
 end
 
+# PURE-9063: Kind constants for $JlType.$kind field
+const JL_TYPE_KIND_DATATYPE  = Int32(0)
+const JL_TYPE_KIND_UNION     = Int32(1)
+const JL_TYPE_KIND_UNIONALL  = Int32(2)
+const JL_TYPE_KIND_TYPEVAR   = Int32(3)
+
+"""
+    create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)
+
+Create the \$JlType hierarchy of WasmGC struct types for runtime type representation.
+This is separate from \$JlBase (which is for user struct typeId extraction).
+
+Hierarchy (from §3.2.5):
+  \$JlType         = (struct (field \$kind i32))
+  \$JlDataType     = (sub \$JlType (struct \$kind, \$name, \$super, \$parameters, \$hash, \$abstract, \$dfs_low, \$dfs_high))
+  \$JlUnion        = (sub \$JlType (struct \$kind, \$a, \$b))
+  \$JlUnionAll     = (sub \$JlType (struct \$kind, \$body, \$var))
+  \$JlTypeVar      = (sub \$JlType (struct \$kind, \$name, \$lb, \$ub))
+  \$JlTypeName     = (struct \$name_str, \$module_name_str, \$wrapper)
+  \$JlSVec         = (array (mut (ref null \$JlType)))
+
+Must be called early, before type constant globals are created.
+"""
+function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)
+    registry.jl_type_idx !== nothing && return  # Already created
+
+    # 1. $JlType base: (struct (field $kind (mut i32)))
+    # Mutable so subtypes ($JlUnion, $JlUnionAll, $JlTypeVar) can set different kind values
+    jl_type = StructType([FieldType(I32, true)], nothing)
+    jl_type_idx = add_type!(mod, jl_type)
+    registry.jl_type_idx = jl_type_idx
+
+    # 2. $JlTypeName: (struct (field $name (ref null str), $module_name (ref null str), $wrapper (ref null $JlType)))
+    str_arr_idx = get_string_array_type!(mod, registry)
+    jl_typename = StructType([
+        FieldType(ConcreteRef(str_arr_idx, true), false),      # name (string)
+        FieldType(ConcreteRef(str_arr_idx, true), false),      # module_name (string)
+        FieldType(ConcreteRef(jl_type_idx, true), true),       # wrapper (ref null $JlType), mutable for circular init
+    ], nothing)
+    jl_typename_idx = add_type!(mod, jl_typename)
+    registry.jl_typename_idx = jl_typename_idx
+
+    # 3. $JlSVec: (array (mut (ref null $JlType)))
+    jl_svec = ArrayType(FieldType(ConcreteRef(jl_type_idx, true), true))
+    jl_svec_idx = add_type!(mod, jl_svec)
+    registry.jl_svec_idx = jl_svec_idx
+
+    # 4. $JlDataType: (sub $JlType (struct $kind, $name, $super, $parameters, $hash, $abstract, $dfs_low, $dfs_high))
+    # All fields mutable because struct.new_default creates zeroed instance, then start function populates
+    jl_datatype = StructType([
+        FieldType(I32, true),                                    # kind (mut i32) = TYPE_DATATYPE=0 (default)
+        FieldType(ConcreteRef(jl_typename_idx, true), true),     # name (mut ref null $JlTypeName)
+        FieldType(ConcreteRef(jl_type_idx, true), true),         # super (mut ref null $JlType)
+        FieldType(ConcreteRef(jl_svec_idx, true), true),         # parameters (mut ref null $JlSVec)
+        FieldType(I32, true),                                    # hash (mut i32)
+        FieldType(I32, true),                                    # abstract (mut i32): 1 if abstract, 0 if concrete
+        FieldType(I32, true),                                    # dfs_low (mut i32)
+        FieldType(I32, true),                                    # dfs_high (mut i32)
+    ], jl_type_idx)  # sub $JlType
+    jl_datatype_idx = add_type!(mod, jl_datatype)
+    registry.jl_datatype_idx = jl_datatype_idx
+
+    # 5. $JlUnion: (sub $JlType (struct $kind, $a, $b))
+    jl_union = StructType([
+        FieldType(I32, true),                                    # kind (mut i32) = TYPE_UNION=1
+        FieldType(ConcreteRef(jl_type_idx, true), true),         # a (mut ref null $JlType)
+        FieldType(ConcreteRef(jl_type_idx, true), true),         # b (mut ref null $JlType)
+    ], jl_type_idx)
+    jl_union_idx = add_type!(mod, jl_union)
+    registry.jl_union_idx = jl_union_idx
+
+    # 6. $JlUnionAll: (sub $JlType (struct $kind, $body, $var))
+    jl_unionall = StructType([
+        FieldType(I32, true),                                    # kind (mut i32) = TYPE_UNIONALL=2
+        FieldType(ConcreteRef(jl_type_idx, true), true),         # body (mut ref null $JlType)
+        FieldType(ConcreteRef(jl_type_idx, true), true),         # var (mut ref null $JlType) — $JlTypeVar is a subtype
+    ], jl_type_idx)
+    jl_unionall_idx = add_type!(mod, jl_unionall)
+    registry.jl_unionall_idx = jl_unionall_idx
+
+    # 7. $JlTypeVar: (sub $JlType (struct $kind, $name, $lb, $ub))
+    jl_typevar = StructType([
+        FieldType(I32, true),                                    # kind (mut i32) = TYPE_TYPEVAR=3
+        FieldType(ConcreteRef(str_arr_idx, true), true),         # name (mut string ref)
+        FieldType(ConcreteRef(jl_type_idx, true), true),         # lb (mut ref null $JlType)
+        FieldType(ConcreteRef(jl_type_idx, true), true),         # ub (mut ref null $JlType)
+    ], jl_type_idx)
+    jl_typevar_idx = add_type!(mod, jl_typevar)
+    registry.jl_typevar_idx = jl_typevar_idx
+end
+
 """
     set_struct_supertypes!(mod::WasmModule, base_idx::UInt32)
 
@@ -379,10 +485,17 @@ on any struct reference.
 
 Must be called AFTER all types are registered and BEFORE serialization.
 """
-function set_struct_supertypes!(mod::WasmModule, base_idx::UInt32)
+function set_struct_supertypes!(mod::WasmModule, base_idx::UInt32; registry::Union{Nothing, TypeRegistry}=nothing)
+    # PURE-9063: Collect JlType hierarchy indices to exclude from $JlBase subtyping
+    jl_exclude = Set{UInt32}()
+    if registry !== nothing
+        for idx in (registry.jl_type_idx, registry.jl_typename_idx)
+            idx !== nothing && push!(jl_exclude, idx)
+        end
+    end
     for (i, ct) in enumerate(mod.types)
         ti = UInt32(i - 1)
-        if ct isa StructType && ti != base_idx && ct.supertype_idx === nothing
+        if ct isa StructType && ti != base_idx && ct.supertype_idx === nothing && !(ti in jl_exclude)
             # Replace with version that declares base as supertype
             mod.types[i] = StructType(ct.fields, base_idx)
         end
@@ -664,19 +777,15 @@ function get_nothing_global!(mod::WasmModule, registry::TypeRegistry)::UInt32
 end
 
 """
-PURE-4151: Get or create a Wasm global for a Type constant value.
+PURE-4151 + PURE-9063: Get or create a Wasm global for a Type constant value.
 
 Each unique Julia Type (e.g., Int64, String, Number) gets a unique Wasm global
-holding a non-null struct instance. This ensures that `ref.eq` correctly
+holding a \$JlDataType struct instance. This ensures that `ref.eq` correctly
 distinguishes different Type objects at runtime.
 
-Without this, all Type values compile to `i32.const 0` and become `ref.null`
-when stored in ref-typed locals — making `Int64 === String` return true.
-
-The struct type used is DataType's registered Wasm struct type, so the global
-is compatible with function parameters typed as `(ref null \$datatype_struct)`.
-Each `struct.new_default` creates a unique allocation → `ref.eq` returns false
-for different Types.
+When the JlType hierarchy is available, globals use \$JlDataType struct type
+(with kind, name, super, parameters, hash, abstract, dfs_low, dfs_high fields).
+Otherwise falls back to Julia's DataType struct type for backward compatibility.
 """
 function get_type_constant_global!(mod::WasmModule, registry::TypeRegistry, @nospecialize(type_val::Type))::UInt32
     # Return cached global if this Type was already seen
@@ -684,10 +793,13 @@ function get_type_constant_global!(mod::WasmModule, registry::TypeRegistry, @nos
         return registry.type_constant_globals[type_val]
     end
 
-    # Use DataType's registered struct type so the global is compatible
-    # with function parameters that expect (ref null $datatype_struct)
-    info = register_struct_type!(mod, registry, DataType)
-    dt_type_idx = info.wasm_type_idx
+    # PURE-9063: Use $JlDataType when hierarchy is available, else fall back to Julia DataType
+    if registry.jl_datatype_idx !== nothing
+        dt_type_idx = registry.jl_datatype_idx
+    else
+        info = register_struct_type!(mod, registry, DataType)
+        dt_type_idx = info.wasm_type_idx
+    end
 
     # Create init expression: struct.new_default $dt_type_idx
     # Each struct.new_default creates a unique allocation with all fields zeroed.
@@ -742,9 +854,13 @@ function get_typename_constant_global!(mod::WasmModule, registry::TypeRegistry, 
         return registry.typename_constant_globals[tn]
     end
 
-    # Register TypeName struct type
-    tn_info = register_struct_type!(mod, registry, Core.TypeName)
-    tn_type_idx = tn_info.wasm_type_idx
+    # PURE-9063: Use $JlTypeName when hierarchy is available, else fall back to Julia TypeName
+    if registry.jl_typename_idx !== nothing
+        tn_type_idx = registry.jl_typename_idx
+    else
+        tn_info = register_struct_type!(mod, registry, Core.TypeName)
+        tn_type_idx = tn_info.wasm_type_idx
+    end
 
     # Create with struct.new_default — fields populated later
     init_bytes = UInt8[]
@@ -762,139 +878,335 @@ end
 """
     populate_type_constant_globals!(mod, registry)
 
-Create a start function that populates DataType and TypeName fields for all
+Create a start function that populates \$JlDataType and \$JlTypeName fields for all
 type constant globals. Called at the end of compile_module, after all
 Type globals have been created.
 
-Populates:
-- DataType.name (field 0) → TypeName global ref
-- DataType.super (field 1) → parent DataType global ref
-- DataType.parameters (field 2) → SimpleVector (externref array) with parameter types
-- TypeName.wrapper (field 6) → DataType global ref as externref
+PURE-9063: Uses new \$JlDataType layout (kind, name, super, parameters, hash, abstract, dfs_low, dfs_high)
+and \$JlTypeName layout (name_str, module_name_str, wrapper).
+Falls back to legacy Julia DataType struct layout when JlType hierarchy is not available.
 """
 function populate_type_constant_globals!(mod::WasmModule, registry::TypeRegistry)
     isempty(registry.type_constant_globals) && return
 
-    dt_info = registry.structs[DataType]
-    dt_type_idx = dt_info.wasm_type_idx
-    tn_info = registry.structs[Core.TypeName]
-    tn_type_idx = tn_info.wasm_type_idx
-    svec_info = registry.structs[Core.SimpleVector]
-    svec_arr_idx = svec_info.wasm_type_idx
+    # PURE-9063: Use $JlDataType/$JlTypeName when available
+    use_jl_hierarchy = registry.jl_datatype_idx !== nothing
+
+    if use_jl_hierarchy
+        dt_type_idx = registry.jl_datatype_idx
+        tn_type_idx = registry.jl_typename_idx
+        svec_arr_idx = registry.jl_svec_idx
+    else
+        dt_info = registry.structs[DataType]
+        dt_type_idx = dt_info.wasm_type_idx
+        tn_info = registry.structs[Core.TypeName]
+        tn_type_idx = tn_info.wasm_type_idx
+        svec_info = registry.structs[Core.SimpleVector]
+        svec_arr_idx = svec_info.wasm_type_idx
+    end
 
     body = UInt8[]
+
+    # Get string array type for TypeName name fields
+    str_arr_idx = use_jl_hierarchy ? get_string_array_type!(mod, registry) : nothing
 
     for (type_val, dt_global_idx) in registry.type_constant_globals
         type_val isa DataType || continue
 
-        # 1. Set DataType.name (PURE-9024: field 1, was field 0) → TypeName ref
-        tn = type_val.name
-        if haskey(registry.typename_constant_globals, tn)
-            tn_global_idx = registry.typename_constant_globals[tn]
-            # global.get $dt_global → struct on stack
-            push!(body, Opcode.GLOBAL_GET)
-            append!(body, encode_leb128_unsigned(dt_global_idx))
-            # global.get $tn_global → TypeName ref
-            push!(body, Opcode.GLOBAL_GET)
-            append!(body, encode_leb128_unsigned(tn_global_idx))
-            # struct.set $dt_type 1 (PURE-9024: +1 for typeId at field 0)
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.STRUCT_SET)
-            append!(body, encode_leb128_unsigned(dt_type_idx))
-            append!(body, encode_leb128_unsigned(wasm_field_idx(dt_info, 1)))  # field 1 = name
-        end
+        if use_jl_hierarchy
+            # === PURE-9063: $JlDataType field layout ===
+            # field 0: kind (i32) = 0 — already set by struct.new_default (i32 defaults to 0 = TYPE_DATATYPE)
 
-        # 2. Set DataType.super (PURE-9024: field 2, was field 1) → parent DataType ref
-        parent = type_val.super
-        if parent !== type_val  # Not self-referential (Any.super === Any)
-            if haskey(registry.type_constant_globals, parent)
-                parent_global_idx = registry.type_constant_globals[parent]
+            # field 1: name → $JlTypeName ref
+            tn = type_val.name
+            if haskey(registry.typename_constant_globals, tn)
+                tn_global_idx = registry.typename_constant_globals[tn]
                 push!(body, Opcode.GLOBAL_GET)
                 append!(body, encode_leb128_unsigned(dt_global_idx))
                 push!(body, Opcode.GLOBAL_GET)
-                append!(body, encode_leb128_unsigned(parent_global_idx))
-                # struct.set $dt_type 2 (PURE-9024: +1 for typeId) — super field
+                append!(body, encode_leb128_unsigned(tn_global_idx))
                 push!(body, Opcode.GC_PREFIX)
                 push!(body, Opcode.STRUCT_SET)
                 append!(body, encode_leb128_unsigned(dt_type_idx))
-                append!(body, encode_leb128_unsigned(wasm_field_idx(dt_info, 2)))  # field 2 = super
+                append!(body, encode_leb128_unsigned(UInt32(1)))  # field 1 = name
             end
-        else
-            # Any.super === Any → self-reference
+
+            # field 2: super → $JlType ref (parent DataType)
+            parent = type_val.super
+            if parent !== type_val  # Not self-referential (Any.super === Any)
+                if haskey(registry.type_constant_globals, parent)
+                    parent_global_idx = registry.type_constant_globals[parent]
+                    push!(body, Opcode.GLOBAL_GET)
+                    append!(body, encode_leb128_unsigned(dt_global_idx))
+                    push!(body, Opcode.GLOBAL_GET)
+                    append!(body, encode_leb128_unsigned(parent_global_idx))
+                    push!(body, Opcode.GC_PREFIX)
+                    push!(body, Opcode.STRUCT_SET)
+                    append!(body, encode_leb128_unsigned(dt_type_idx))
+                    append!(body, encode_leb128_unsigned(UInt32(2)))  # field 2 = super
+                end
+            else
+                # Any.super === Any → self-reference
+                push!(body, Opcode.GLOBAL_GET)
+                append!(body, encode_leb128_unsigned(dt_global_idx))
+                push!(body, Opcode.GLOBAL_GET)
+                append!(body, encode_leb128_unsigned(dt_global_idx))
+                push!(body, Opcode.GC_PREFIX)
+                push!(body, Opcode.STRUCT_SET)
+                append!(body, encode_leb128_unsigned(dt_type_idx))
+                append!(body, encode_leb128_unsigned(UInt32(2)))  # field 2 = super
+            end
+
+            # field 3: parameters → $JlSVec (array of $JlType refs)
+            params = type_val.parameters
+            nparams = length(params)
             push!(body, Opcode.GLOBAL_GET)
             append!(body, encode_leb128_unsigned(dt_global_idx))
-            push!(body, Opcode.GLOBAL_GET)
-            append!(body, encode_leb128_unsigned(dt_global_idx))
+            if nparams == 0
+                # Empty: i32.const 0, array.new_default $JlSVec
+                push!(body, Opcode.I32_CONST)
+                push!(body, 0x00)
+                push!(body, Opcode.GC_PREFIX)
+                push!(body, Opcode.ARRAY_NEW_DEFAULT)
+                append!(body, encode_leb128_unsigned(svec_arr_idx))
+            else
+                # Push each parameter type as $JlType ref, then array.new_fixed
+                for i in 1:nparams
+                    p = params[i]
+                    if p isa DataType && haskey(registry.type_constant_globals, p)
+                        p_global_idx = registry.type_constant_globals[p]
+                        push!(body, Opcode.GLOBAL_GET)
+                        append!(body, encode_leb128_unsigned(p_global_idx))
+                        # $JlDataType is a subtype of $JlType — no cast needed
+                    else
+                        # Non-DataType parameter → null $JlType ref
+                        push!(body, Opcode.REF_NULL)
+                        append!(body, encode_leb128_signed(Int64(registry.jl_type_idx)))
+                    end
+                end
+                push!(body, Opcode.GC_PREFIX)
+                push!(body, Opcode.ARRAY_NEW_FIXED)
+                append!(body, encode_leb128_unsigned(svec_arr_idx))
+                append!(body, encode_leb128_unsigned(UInt32(nparams)))
+            end
             push!(body, Opcode.GC_PREFIX)
             push!(body, Opcode.STRUCT_SET)
             append!(body, encode_leb128_unsigned(dt_type_idx))
-            append!(body, encode_leb128_unsigned(wasm_field_idx(dt_info, 2)))  # field 2 = super
-        end
+            append!(body, encode_leb128_unsigned(UInt32(3)))  # field 3 = parameters
 
-        # 3. Set DataType.parameters (field 2) → SimpleVector (externref array)
-        params = type_val.parameters
-        nparams = length(params)
-        # Create array.new_fixed with parameter Type refs
-        # Each element is externref (Type globals converted via extern_convert_any)
-        if nparams == 0
-            # Empty array: array.new_default $svec_arr_idx 0
+            # field 4: hash (i32) — use Julia's type hash (already Int32)
             push!(body, Opcode.GLOBAL_GET)
             append!(body, encode_leb128_unsigned(dt_global_idx))
             push!(body, Opcode.I32_CONST)
-            push!(body, 0x00)  # length 0
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.ARRAY_NEW_DEFAULT)
-            append!(body, encode_leb128_unsigned(svec_arr_idx))
+            append!(body, encode_leb128_signed(Int64(type_val.hash)))
             push!(body, Opcode.GC_PREFIX)
             push!(body, Opcode.STRUCT_SET)
             append!(body, encode_leb128_unsigned(dt_type_idx))
-            append!(body, encode_leb128_unsigned(wasm_field_idx(dt_info, 3)))  # field 3 = parameters
-        else
-            # Push all parameter elements, then array.new_fixed
+            append!(body, encode_leb128_unsigned(UInt32(4)))  # field 4 = hash
+
+            # field 5: abstract (i32) — 1 if abstract, 0 if concrete
             push!(body, Opcode.GLOBAL_GET)
             append!(body, encode_leb128_unsigned(dt_global_idx))
-            for i in 1:nparams
-                p = params[i]
-                if p isa DataType && haskey(registry.type_constant_globals, p)
-                    p_global_idx = registry.type_constant_globals[p]
-                    push!(body, Opcode.GLOBAL_GET)
-                    append!(body, encode_leb128_unsigned(p_global_idx))
-                    # Convert concrete ref to externref for the externref array
-                    push!(body, Opcode.GC_PREFIX)
-                    push!(body, Opcode.EXTERN_CONVERT_ANY)
-                else
-                    # Non-DataType parameter (e.g., Int literal for array dims) → null
-                    push!(body, Opcode.REF_NULL)
-                    push!(body, UInt8(ExternRef))
-                end
-            end
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.ARRAY_NEW_FIXED)
-            append!(body, encode_leb128_unsigned(svec_arr_idx))
-            append!(body, encode_leb128_unsigned(UInt32(nparams)))
+            push!(body, Opcode.I32_CONST)
+            push!(body, isabstracttype(type_val) ? 0x01 : 0x00)
             push!(body, Opcode.GC_PREFIX)
             push!(body, Opcode.STRUCT_SET)
             append!(body, encode_leb128_unsigned(dt_type_idx))
-            append!(body, encode_leb128_unsigned(wasm_field_idx(dt_info, 3)))  # field 3 = parameters
+            append!(body, encode_leb128_unsigned(UInt32(5)))  # field 5 = abstract
+
+            # field 6: dfs_low, field 7: dfs_high — from registry.type_ranges or type_ids
+            dfs_low = Int32(0)
+            dfs_high = Int32(0)
+            if haskey(registry.type_ranges, type_val)
+                dfs_low, dfs_high = registry.type_ranges[type_val]
+            elseif haskey(registry.type_ids, type_val)
+                dfs_low = registry.type_ids[type_val]
+                dfs_high = dfs_low
+            end
+            # field 6: dfs_low
+            push!(body, Opcode.GLOBAL_GET)
+            append!(body, encode_leb128_unsigned(dt_global_idx))
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(Int64(dfs_low)))
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_SET)
+            append!(body, encode_leb128_unsigned(dt_type_idx))
+            append!(body, encode_leb128_unsigned(UInt32(6)))  # field 6 = dfs_low
+            # field 7: dfs_high
+            push!(body, Opcode.GLOBAL_GET)
+            append!(body, encode_leb128_unsigned(dt_global_idx))
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(Int64(dfs_high)))
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_SET)
+            append!(body, encode_leb128_unsigned(dt_type_idx))
+            append!(body, encode_leb128_unsigned(UInt32(7)))  # field 7 = dfs_high
+
+        else
+            # === Legacy: Julia DataType struct layout ===
+            dt_info = registry.structs[DataType]
+
+            # 1. Set DataType.name → TypeName ref
+            tn = type_val.name
+            if haskey(registry.typename_constant_globals, tn)
+                tn_global_idx = registry.typename_constant_globals[tn]
+                push!(body, Opcode.GLOBAL_GET)
+                append!(body, encode_leb128_unsigned(dt_global_idx))
+                push!(body, Opcode.GLOBAL_GET)
+                append!(body, encode_leb128_unsigned(tn_global_idx))
+                push!(body, Opcode.GC_PREFIX)
+                push!(body, Opcode.STRUCT_SET)
+                append!(body, encode_leb128_unsigned(dt_type_idx))
+                append!(body, encode_leb128_unsigned(wasm_field_idx(dt_info, 1)))
+            end
+
+            # 2. Set DataType.super → parent DataType ref
+            parent = type_val.super
+            if parent !== type_val
+                if haskey(registry.type_constant_globals, parent)
+                    parent_global_idx = registry.type_constant_globals[parent]
+                    push!(body, Opcode.GLOBAL_GET)
+                    append!(body, encode_leb128_unsigned(dt_global_idx))
+                    push!(body, Opcode.GLOBAL_GET)
+                    append!(body, encode_leb128_unsigned(parent_global_idx))
+                    push!(body, Opcode.GC_PREFIX)
+                    push!(body, Opcode.STRUCT_SET)
+                    append!(body, encode_leb128_unsigned(dt_type_idx))
+                    append!(body, encode_leb128_unsigned(wasm_field_idx(dt_info, 2)))
+                end
+            else
+                push!(body, Opcode.GLOBAL_GET)
+                append!(body, encode_leb128_unsigned(dt_global_idx))
+                push!(body, Opcode.GLOBAL_GET)
+                append!(body, encode_leb128_unsigned(dt_global_idx))
+                push!(body, Opcode.GC_PREFIX)
+                push!(body, Opcode.STRUCT_SET)
+                append!(body, encode_leb128_unsigned(dt_type_idx))
+                append!(body, encode_leb128_unsigned(wasm_field_idx(dt_info, 2)))
+            end
+
+            # 3. Set DataType.parameters → SimpleVector (externref array)
+            if haskey(registry.structs, Core.SimpleVector)
+                svec_info_legacy = registry.structs[Core.SimpleVector]
+                svec_arr_idx_legacy = svec_info_legacy.wasm_type_idx
+                params = type_val.parameters
+                nparams = length(params)
+                push!(body, Opcode.GLOBAL_GET)
+                append!(body, encode_leb128_unsigned(dt_global_idx))
+                if nparams == 0
+                    push!(body, Opcode.I32_CONST)
+                    push!(body, 0x00)
+                    push!(body, Opcode.GC_PREFIX)
+                    push!(body, Opcode.ARRAY_NEW_DEFAULT)
+                    append!(body, encode_leb128_unsigned(svec_arr_idx_legacy))
+                else
+                    for i in 1:nparams
+                        p = params[i]
+                        if p isa DataType && haskey(registry.type_constant_globals, p)
+                            p_global_idx = registry.type_constant_globals[p]
+                            push!(body, Opcode.GLOBAL_GET)
+                            append!(body, encode_leb128_unsigned(p_global_idx))
+                            push!(body, Opcode.GC_PREFIX)
+                            push!(body, Opcode.EXTERN_CONVERT_ANY)
+                        else
+                            push!(body, Opcode.REF_NULL)
+                            push!(body, UInt8(ExternRef))
+                        end
+                    end
+                    push!(body, Opcode.GC_PREFIX)
+                    push!(body, Opcode.ARRAY_NEW_FIXED)
+                    append!(body, encode_leb128_unsigned(svec_arr_idx_legacy))
+                    append!(body, encode_leb128_unsigned(UInt32(nparams)))
+                end
+                push!(body, Opcode.GC_PREFIX)
+                push!(body, Opcode.STRUCT_SET)
+                append!(body, encode_leb128_unsigned(dt_type_idx))
+                append!(body, encode_leb128_unsigned(wasm_field_idx(dt_info, 3)))
+            end
         end
     end
 
-    # Populate TypeName.wrapper (field 6) → DataType ref as externref
-    for (tn, tn_global_idx) in registry.typename_constant_globals
-        wrapper = tn.wrapper
-        if wrapper isa DataType && haskey(registry.type_constant_globals, wrapper)
-            wrapper_global_idx = registry.type_constant_globals[wrapper]
-            push!(body, Opcode.GLOBAL_GET)
-            append!(body, encode_leb128_unsigned(tn_global_idx))
-            push!(body, Opcode.GLOBAL_GET)
-            append!(body, encode_leb128_unsigned(wrapper_global_idx))
-            # PURE-9020: TypeName.wrapper is now anyref (abstract Type)
-            # Concrete DataType ref is a subtype of anyref — no conversion needed
-            # (extern.convert_any would produce externref, wrong for anyref field)
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.STRUCT_SET)
-            append!(body, encode_leb128_unsigned(tn_type_idx))
-            append!(body, encode_leb128_unsigned(wasm_field_idx(tn_info, 7)))  # field 7 = wrapper (PURE-9024: +1 for typeId)
+    # Populate TypeName fields
+    if use_jl_hierarchy
+        # === PURE-9063: $JlTypeName layout: (name_str, module_name_str, wrapper) ===
+        for (tn, tn_global_idx) in registry.typename_constant_globals
+            # field 0: name (string) — from data segment
+            name_str = String(tn.name)
+            name_bytes = Vector{UInt8}(name_str)
+            if !isempty(name_bytes)
+                seg_idx = add_passive_data_segment!(mod, name_bytes)
+                # Stack for struct.set: [struct_ref, value]
+                # value = array.new_data needs [offset, length] on stack first
+                push!(body, Opcode.GLOBAL_GET)
+                append!(body, encode_leb128_unsigned(tn_global_idx))
+                # Push offset and length for array.new_data
+                push!(body, Opcode.I32_CONST)
+                push!(body, 0x00)  # offset 0
+                push!(body, Opcode.I32_CONST)
+                append!(body, encode_leb128_unsigned(UInt32(length(name_bytes))))
+                push!(body, Opcode.GC_PREFIX)
+                push!(body, Opcode.ARRAY_NEW_DATA)
+                append!(body, encode_leb128_unsigned(str_arr_idx))
+                append!(body, encode_leb128_unsigned(UInt32(seg_idx)))
+                # struct.set field 0 = name
+                push!(body, Opcode.GC_PREFIX)
+                push!(body, Opcode.STRUCT_SET)
+                append!(body, encode_leb128_unsigned(tn_type_idx))
+                append!(body, encode_leb128_unsigned(UInt32(0)))
+            end
+
+            # field 1: module_name (string) — from data segment
+            mod_name = String(tn.module.name)
+            mod_bytes = Vector{UInt8}(mod_name)
+            if !isempty(mod_bytes)
+                seg_idx = add_passive_data_segment!(mod, mod_bytes)
+                push!(body, Opcode.GLOBAL_GET)
+                append!(body, encode_leb128_unsigned(tn_global_idx))
+                push!(body, Opcode.I32_CONST)
+                push!(body, 0x00)  # offset 0
+                push!(body, Opcode.I32_CONST)
+                append!(body, encode_leb128_unsigned(UInt32(length(mod_bytes))))
+                push!(body, Opcode.GC_PREFIX)
+                push!(body, Opcode.ARRAY_NEW_DATA)
+                append!(body, encode_leb128_unsigned(str_arr_idx))
+                append!(body, encode_leb128_unsigned(UInt32(seg_idx)))
+                push!(body, Opcode.GC_PREFIX)
+                push!(body, Opcode.STRUCT_SET)
+                append!(body, encode_leb128_unsigned(tn_type_idx))
+                append!(body, encode_leb128_unsigned(UInt32(1)))
+            end
+
+            # field 2: wrapper → ref null $JlType (DataType global)
+            wrapper = tn.wrapper
+            if wrapper isa DataType && haskey(registry.type_constant_globals, wrapper)
+                wrapper_global_idx = registry.type_constant_globals[wrapper]
+                push!(body, Opcode.GLOBAL_GET)
+                append!(body, encode_leb128_unsigned(tn_global_idx))
+                push!(body, Opcode.GLOBAL_GET)
+                append!(body, encode_leb128_unsigned(wrapper_global_idx))
+                # $JlDataType is subtype of $JlType — no cast needed for $JlType field
+                push!(body, Opcode.GC_PREFIX)
+                push!(body, Opcode.STRUCT_SET)
+                append!(body, encode_leb128_unsigned(tn_type_idx))
+                append!(body, encode_leb128_unsigned(UInt32(2)))
+            end
+        end
+    else
+        # === Legacy: Julia TypeName struct layout ===
+        tn_info = registry.structs[Core.TypeName]
+        for (tn, tn_global_idx) in registry.typename_constant_globals
+            wrapper = tn.wrapper
+            if wrapper isa DataType && haskey(registry.type_constant_globals, wrapper)
+                wrapper_global_idx = registry.type_constant_globals[wrapper]
+                push!(body, Opcode.GLOBAL_GET)
+                append!(body, encode_leb128_unsigned(tn_global_idx))
+                push!(body, Opcode.GLOBAL_GET)
+                append!(body, encode_leb128_unsigned(wrapper_global_idx))
+                push!(body, Opcode.GC_PREFIX)
+                push!(body, Opcode.STRUCT_SET)
+                append!(body, encode_leb128_unsigned(tn_type_idx))
+                append!(body, encode_leb128_unsigned(wasm_field_idx(tn_info, 7)))
+            end
         end
     end
 
@@ -954,11 +1266,14 @@ Must be called AFTER ensure_all_type_globals!.
 function create_type_lookup_table!(mod::WasmModule, registry::TypeRegistry)
     isempty(registry.type_constant_globals) && return
 
-    # Get DataType struct type index
-    if !haskey(registry.structs, DataType)
+    # PURE-9063: Use $JlDataType when available, else fall back to Julia DataType
+    if registry.jl_datatype_idx !== nothing
+        dt_type_idx = registry.jl_datatype_idx
+    elseif haskey(registry.structs, DataType)
+        dt_type_idx = registry.structs[DataType].wasm_type_idx
+    else
         return  # No DataType struct registered
     end
-    dt_type_idx = registry.structs[DataType].wasm_type_idx
 
     # Create array type: (array (mut (ref null $DataType)))
     arr_type = ArrayType(FieldType(ConcreteRef(dt_type_idx, true), true))
