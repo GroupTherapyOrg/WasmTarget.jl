@@ -293,6 +293,8 @@ const SKIP_AUTODISCOVER_METHODS = Set([
     :throw_inexacterror,
     # PURE-605: Builtins that return Method from code_typed, not CodeInfo
     :(===), :isa, :typeof, :ifelse, :throw_boundserror,
+    # PURE-9040: IO functions handled via JS imports
+    :println, :print,
 ])
 
 """
@@ -1303,6 +1305,32 @@ function compile_module(functions::Vector;
         end
     end
 
+    # PURE-9040: Scan all functions for println/print usage and add IO imports if needed
+    needs_io = false
+    for (f, arg_types, fname) in normalized
+        try
+            ci, _ = get_typed_ir(f, arg_types)
+            for stmt in ci.code
+                if stmt isa Expr && (stmt.head === :invoke || stmt.head === :call)
+                    func_arg = stmt.head === :invoke ? stmt.args[2] : stmt.args[1]
+                    if func_arg isa GlobalRef && (func_arg.name === :println || func_arg.name === :print)
+                        needs_io = true
+                        break
+                    end
+                end
+            end
+        catch
+            # If IR fails, skip — the main compilation loop will handle errors
+        end
+        needs_io && break
+    end
+    if needs_io
+        io_imports = add_io_imports!(mod, type_registry)
+        set_io_imports!(io_imports)
+    else
+        clear_io_imports!()
+    end
+
     # Track all required globals across all functions
     required_globals = Dict{Int, Tuple{WasmValType, Type}}()  # global_idx -> (wasm_type, julia_elem_type)
 
@@ -1522,6 +1550,9 @@ function compile_module(functions::Vector;
     # PURE-4149: Populate DataType/TypeName fields for type constant globals.
     # This creates a start function that patches .name, .super, .parameters, .wrapper.
     populate_type_constant_globals!(mod, type_registry)
+
+    # PURE-9040: Clear IO imports after compilation
+    clear_io_imports!()
 
     return mod
 end

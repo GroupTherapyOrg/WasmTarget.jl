@@ -3410,6 +3410,74 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 end
                 ctx.last_stmt_was_stub = true  # PURE-908
 
+            # PURE-9040: println/print → JS IO bridge imports
+            elseif name === :println || name === :print
+                io = get_io_imports()
+                if io !== nothing
+                    bytes = UInt8[]
+                    for arg in args
+                        # Determine argument type
+                        arg_type = nothing
+                        if arg isa Core.SSAValue
+                            arg_type = ctx.code_info.ssavaluetypes[arg.id]
+                        elseif arg isa Core.Argument
+                            slot_id = arg.n
+                            arg_type = ctx.code_info.slottypes[slot_id]
+                        elseif arg isa String || arg isa Symbol
+                            arg_type = String
+                        elseif arg isa Int64 || arg isa Int32 || arg isa Int
+                            arg_type = typeof(arg)
+                        elseif arg isa Float64 || arg isa Float32
+                            arg_type = typeof(arg)
+                        elseif arg isa Bool
+                            arg_type = Bool
+                        end
+
+                        if arg_type === String || arg_type === Symbol
+                            # String: compile value, convert to JS string via decoder, call write_string
+                            append!(bytes, compile_value(arg, ctx))
+                            # Need a temp local for tee
+                            tmp_local = UInt32(allocate_local!(ctx, ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true)))
+                            emit_jl_string_to_js!(bytes, io.decode_idx, tmp_local)
+                            # (ref extern) is subtype of externref — no conversion needed
+                            push!(bytes, Opcode.CALL)
+                            append!(bytes, encode_leb128_unsigned(io.write_string_idx))
+                        elseif arg_type === Int64 || arg_type === Int
+                            append!(bytes, compile_value(arg, ctx))
+                            push!(bytes, Opcode.CALL)
+                            append!(bytes, encode_leb128_unsigned(io.write_int_idx))
+                        elseif arg_type === Int32
+                            append!(bytes, compile_value(arg, ctx))
+                            push!(bytes, Opcode.I64_EXTEND_I32_S)
+                            push!(bytes, Opcode.CALL)
+                            append!(bytes, encode_leb128_unsigned(io.write_int_idx))
+                        elseif arg_type === Float64
+                            append!(bytes, compile_value(arg, ctx))
+                            push!(bytes, Opcode.CALL)
+                            append!(bytes, encode_leb128_unsigned(io.write_float_idx))
+                        elseif arg_type === Float32
+                            append!(bytes, compile_value(arg, ctx))
+                            push!(bytes, Opcode.F64_PROMOTE_F32)
+                            push!(bytes, Opcode.CALL)
+                            append!(bytes, encode_leb128_unsigned(io.write_float_idx))
+                        elseif arg_type === Bool
+                            append!(bytes, compile_value(arg, ctx))
+                            push!(bytes, Opcode.CALL)
+                            append!(bytes, encode_leb128_unsigned(io.write_bool_idx))
+                        else
+                            # Unknown type — skip (stub)
+                            @warn "println/print: unsupported argument type $arg_type, skipping"
+                        end
+                    end
+                    if name === :println
+                        push!(bytes, Opcode.CALL)
+                        append!(bytes, encode_leb128_unsigned(io.write_newline_idx))
+                    end
+                else
+                    # No IO imports — stub as no-op
+                    bytes = UInt8[]
+                end
+
             # Handle truncate (IOBuffer resize) — no-op in WasmGC
             # Returns the IOBuffer itself
             elseif name === :truncate

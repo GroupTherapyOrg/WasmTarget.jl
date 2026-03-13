@@ -123,6 +123,84 @@ function ensure_stack_trace_global!(mod::WasmModule)
 end
 
 # ============================================================================
+# IO Bridge — println/print via JS Imports
+# ============================================================================
+
+"""
+PURE-9040: IO import indices stored in the module for println/print support.
+"""
+mutable struct IOImports
+    write_string_idx::UInt32    # io.write_string(externref) → void
+    write_int_idx::UInt32       # io.write_int(i64) → void
+    write_float_idx::UInt32     # io.write_float(f64) → void
+    write_bool_idx::UInt32      # io.write_bool(i32) → void
+    write_newline_idx::UInt32   # io.write_newline() → void
+    decode_idx::UInt32          # wasm:text-decoder.decodeStringFromUTF8Array
+end
+
+"""
+    add_io_imports!(mod, type_registry) -> IOImports
+
+Add IO bridge imports for println/print support.
+Imports: io.write_string, io.write_int, io.write_float, io.write_bool, io.write_newline
+Also adds wasm:text-decoder import for string conversion.
+"""
+function add_io_imports!(mod::WasmModule, type_registry::TypeRegistry)
+    # String decoder for converting Julia strings to JS strings
+    str_arr_type_idx = get_string_array_type!(mod, type_registry)
+    str_arr_ref_nullable = ConcreteRef(str_arr_type_idx, true)
+
+    decode_idx = add_import!(mod, "wasm:text-decoder", "decodeStringFromUTF8Array",
+        WasmValType[str_arr_ref_nullable, I32, I32],
+        WasmValType[NonNullExternRef])
+
+    # IO imports
+    write_string_idx = add_import!(mod, "io", "write_string",
+        WasmValType[ExternRef], WasmValType[])
+    write_int_idx = add_import!(mod, "io", "write_int",
+        WasmValType[I64], WasmValType[])
+    write_float_idx = add_import!(mod, "io", "write_float",
+        WasmValType[F64], WasmValType[])
+    write_bool_idx = add_import!(mod, "io", "write_bool",
+        WasmValType[I32], WasmValType[])
+    write_newline_idx = add_import!(mod, "io", "write_newline",
+        WasmValType[], WasmValType[])
+
+    return IOImports(write_string_idx, write_int_idx, write_float_idx,
+                     write_bool_idx, write_newline_idx, decode_idx)
+end
+
+# Module-level storage for IO imports (set during compile_module if println/print is used)
+const _IO_IMPORTS = Ref{Union{Nothing, IOImports}}(nothing)
+
+"""
+    get_io_imports() -> Union{Nothing, IOImports}
+
+Get the current IO imports, or nothing if not initialized.
+"""
+function get_io_imports()
+    return _IO_IMPORTS[]
+end
+
+"""
+    set_io_imports!(imports::IOImports)
+
+Store IO imports for use during compilation.
+"""
+function set_io_imports!(imports::IOImports)
+    _IO_IMPORTS[] = imports
+end
+
+"""
+    clear_io_imports!()
+
+Clear IO imports after compilation.
+"""
+function clear_io_imports!()
+    _IO_IMPORTS[] = nothing
+end
+
+# ============================================================================
 # String Operations
 # ============================================================================
 
