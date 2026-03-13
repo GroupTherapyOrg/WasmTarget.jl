@@ -691,6 +691,211 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         push!(bytes, Opcode.END)
         return (bytes, extra_locals)
 
+    elseif fname === :str_getchar
+        # str_getchar(s::String, i::Int32)::Int32
+        # Decode UTF-8 character at 1-based byte index → Unicode codepoint as i32
+        # local 0 = string (array ref)
+        # local 1 = index (i32, 1-based)
+        # extra locals: local 2 = b0 (first byte), local 3 = idx0 (0-based index)
+        push!(extra_locals, I32)  # local 2: b0
+        push!(extra_locals, I32)  # local 3: idx0
+
+        # idx0 = i - 1 (convert 1-based to 0-based)
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x01)  # i
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x01)
+        push!(bytes, Opcode.I32_SUB)
+        push!(bytes, Opcode.LOCAL_SET)
+        push!(bytes, 0x03)  # idx0
+
+        # b0 = s[idx0] (array.get_u)
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x00)  # string
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x03)  # idx0
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_GET_U)
+        append!(bytes, encode_leb128_unsigned(str_type_idx))
+        push!(bytes, Opcode.LOCAL_SET)
+        push!(bytes, 0x02)  # b0
+
+        # if b0 < 0x80: return b0 (ASCII)
+        # else if b0 < 0xE0: 2-byte
+        # else if b0 < 0xF0: 3-byte
+        # else: 4-byte
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x02)  # b0
+        push!(bytes, Opcode.I32_CONST)
+        append!(bytes, encode_leb128_signed(Int32(0x80)))
+        push!(bytes, Opcode.I32_LT_U)
+        push!(bytes, Opcode.IF)
+        push!(bytes, UInt8(I32))  # result type i32
+
+        # === ASCII: return b0 ===
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x02)  # b0
+
+        push!(bytes, Opcode.ELSE)
+
+        # Check if 2-byte (b0 < 0xE0)
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x02)  # b0
+        push!(bytes, Opcode.I32_CONST)
+        append!(bytes, encode_leb128_signed(Int32(0xE0)))
+        push!(bytes, Opcode.I32_LT_U)
+        push!(bytes, Opcode.IF)
+        push!(bytes, UInt8(I32))
+
+        # === 2-byte: ((b0 & 0x1F) << 6) | (s[idx0+1] & 0x3F) ===
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x02)  # b0
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x1F)
+        push!(bytes, Opcode.I32_AND)
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x06)
+        push!(bytes, Opcode.I32_SHL)
+        # s[idx0+1] & 0x3F
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x00)  # string
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x03)  # idx0
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x01)
+        push!(bytes, Opcode.I32_ADD)
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_GET_U)
+        append!(bytes, encode_leb128_unsigned(str_type_idx))
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x3F)
+        push!(bytes, Opcode.I32_AND)
+        push!(bytes, Opcode.I32_OR)
+
+        push!(bytes, Opcode.ELSE)
+
+        # Check if 3-byte (b0 < 0xF0)
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x02)  # b0
+        push!(bytes, Opcode.I32_CONST)
+        append!(bytes, encode_leb128_signed(Int32(0xF0)))
+        push!(bytes, Opcode.I32_LT_U)
+        push!(bytes, Opcode.IF)
+        push!(bytes, UInt8(I32))
+
+        # === 3-byte: ((b0 & 0x0F) << 12) | ((s[idx0+1] & 0x3F) << 6) | (s[idx0+2] & 0x3F) ===
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x02)  # b0
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x0F)
+        push!(bytes, Opcode.I32_AND)
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x0C)  # 12
+        push!(bytes, Opcode.I32_SHL)
+        # (s[idx0+1] & 0x3F) << 6
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x00)
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x03)
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x01)
+        push!(bytes, Opcode.I32_ADD)
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_GET_U)
+        append!(bytes, encode_leb128_unsigned(str_type_idx))
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x3F)
+        push!(bytes, Opcode.I32_AND)
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x06)
+        push!(bytes, Opcode.I32_SHL)
+        push!(bytes, Opcode.I32_OR)
+        # s[idx0+2] & 0x3F
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x00)
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x03)
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x02)
+        push!(bytes, Opcode.I32_ADD)
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_GET_U)
+        append!(bytes, encode_leb128_unsigned(str_type_idx))
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x3F)
+        push!(bytes, Opcode.I32_AND)
+        push!(bytes, Opcode.I32_OR)
+
+        push!(bytes, Opcode.ELSE)
+
+        # === 4-byte: ((b0 & 0x07) << 18) | ((s[idx0+1] & 0x3F) << 12) | ((s[idx0+2] & 0x3F) << 6) | (s[idx0+3] & 0x3F) ===
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x02)  # b0
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x07)
+        push!(bytes, Opcode.I32_AND)
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x12)  # 18
+        push!(bytes, Opcode.I32_SHL)
+        # (s[idx0+1] & 0x3F) << 12
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x00)
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x03)
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x01)
+        push!(bytes, Opcode.I32_ADD)
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_GET_U)
+        append!(bytes, encode_leb128_unsigned(str_type_idx))
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x3F)
+        push!(bytes, Opcode.I32_AND)
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x0C)  # 12
+        push!(bytes, Opcode.I32_SHL)
+        push!(bytes, Opcode.I32_OR)
+        # (s[idx0+2] & 0x3F) << 6
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x00)
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x03)
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x02)
+        push!(bytes, Opcode.I32_ADD)
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_GET_U)
+        append!(bytes, encode_leb128_unsigned(str_type_idx))
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x3F)
+        push!(bytes, Opcode.I32_AND)
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x06)
+        push!(bytes, Opcode.I32_SHL)
+        push!(bytes, Opcode.I32_OR)
+        # s[idx0+3] & 0x3F
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x00)
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x03)
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x03)
+        push!(bytes, Opcode.I32_ADD)
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_GET_U)
+        append!(bytes, encode_leb128_unsigned(str_type_idx))
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x3F)
+        push!(bytes, Opcode.I32_AND)
+        push!(bytes, Opcode.I32_OR)
+
+        push!(bytes, Opcode.END)  # end 3-byte if/else (4-byte)
+        push!(bytes, Opcode.END)  # end 2-byte if/else (3/4-byte)
+        push!(bytes, Opcode.END)  # end ASCII if/else (multi-byte)
+
+        push!(bytes, Opcode.END)  # end function
+        return (bytes, extra_locals)
+
     elseif fname === :str_len
         # str_len(s::String)::Int32
         # Returns byte length of string (ncodeunits)
