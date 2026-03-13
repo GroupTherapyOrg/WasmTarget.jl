@@ -1063,9 +1063,16 @@ function write_composite_type!(w::WasmWriter, ft::FuncType)
 end
 
 function write_composite_type!(w::WasmWriter, st::StructType)
-    # WasmGC struct types must be wrapped in "sub final" for the current spec
-    write_byte!(w, SUB_FINAL_BYTE)  # 0x4F = sub final
-    write_u32!(w, 0)                # 0 supertypes
+    if st.supertype_idx !== nothing
+        # PURE-9026: Non-final subtype with one supertype
+        write_byte!(w, SUB_BYTE)        # 0x50 = sub (non-final, allows further subtyping)
+        write_u32!(w, 1)                # 1 supertype
+        write_u32!(w, st.supertype_idx) # supertype index
+    else
+        # No supertype — use sub (non-final) to allow subtypes
+        write_byte!(w, SUB_BYTE)        # 0x50 = sub (non-final)
+        write_u32!(w, 0)                # 0 supertypes
+    end
     write_byte!(w, STRUCTTYPE_BYTE)
     write_u32!(w, length(st.fields))
     for field in st.fields

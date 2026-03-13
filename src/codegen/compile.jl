@@ -1266,6 +1266,9 @@ function compile_module(functions::Vector;
     type_registry = TypeRegistry()
     func_registry = FunctionRegistry()
 
+    # PURE-9026: Create base struct type FIRST — all other structs will be subtypes
+    get_base_struct_type!(mod, type_registry)
+
     # Pre-register import stubs at their import indices in func_registry.
     # This enables compiled functions to call imports via cross-function call resolution.
     for entry in import_stubs
@@ -1428,6 +1431,11 @@ function compile_module(functions::Vector;
     # PURE-9025: Assign DFS type IDs after all types are registered
     assign_type_ids!(type_registry)
 
+    # PURE-9026: Set all struct types as subtypes of $JlBase for typeof(x)
+    if type_registry.base_struct_idx !== nothing
+        set_struct_supertypes!(mod, type_registry.base_struct_idx)
+    end
+
     # Calculate function indices (accounting for imports)
     # Functions are added in order, so index = n_imports + position - 1
     n_imports = length(mod.imports)
@@ -1513,6 +1521,9 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
     # Add Math.pow import (same as compile_module)
     add_import!(mod, "Math", "pow", NumType[F64, F64], NumType[F64])
 
+    # PURE-9026: Create base struct type FIRST
+    get_base_struct_type!(mod, type_registry)
+
     # Pre-register numeric box types (same as compile_module)
     for nt in (I32, I64, F32, F64)
         get_numeric_box_type!(mod, type_registry, nt)
@@ -1584,6 +1595,11 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
 
     # PURE-9025: Assign DFS type IDs after all types are registered
     assign_type_ids!(type_registry)
+
+    # PURE-9026: Set all struct types as subtypes of $JlBase for typeof(x)
+    if type_registry.base_struct_idx !== nothing
+        set_struct_supertypes!(mod, type_registry.base_struct_idx)
+    end
 
     # Calculate function indices
     n_imports = length(mod.imports)

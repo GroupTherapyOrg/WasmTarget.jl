@@ -60,9 +60,11 @@ mutable struct TypeRegistry
     # PURE-9025: DFS type ID assignment for runtime dispatch
     type_ids::Dict{Type, Int32}  # Concrete type -> unique DFS integer ID
     type_ranges::Dict{Type, Tuple{Int32, Int32}}  # Abstract/concrete type -> [low, high] DFS range
+    # PURE-9026: Base struct type index for typeof(x) extraction
+    base_struct_idx::Union{Nothing, UInt32}  # Index of $JlBase = (struct (field i32))
 end
 
-TypeRegistry() = TypeRegistry(Dict{Type, StructInfo}(), Dict{Type, UInt32}(), nothing, Dict{Union, UnionInfo}(), Dict{WasmValType, UInt32}(), Dict{Type, UInt32}(), Dict{Core.TypeName, UInt32}(), Dict{Type, Int32}(), Dict{Type, Tuple{Int32, Int32}}())
+TypeRegistry() = TypeRegistry(Dict{Type, StructInfo}(), Dict{Type, UInt32}(), nothing, Dict{Union, UnionInfo}(), Dict{WasmValType, UInt32}(), Dict{Type, UInt32}(), Dict{Core.TypeName, UInt32}(), Dict{Type, Int32}(), Dict{Type, Tuple{Int32, Int32}}(), nothing)
 
 # ============================================================================
 # PURE-9025: DFS Type ID Assignment
@@ -232,6 +234,63 @@ function emit_type_id!(bytes::Vector{UInt8}, registry::TypeRegistry, T::Type)
     id = get_type_id(registry, T)
     push!(bytes, Opcode.I32_CONST)
     append!(bytes, encode_leb128_signed(Int64(id)))
+end
+
+"""
+    get_base_struct_type!(mod::WasmModule, registry::TypeRegistry) -> UInt32
+
+Get or create the base struct type \$JlBase = (struct (field i32)).
+All other struct types should be subtypes of this, enabling typeof(x) via
+struct.get \$JlBase 0 on any struct reference.
+"""
+function get_base_struct_type!(mod::WasmModule, registry::TypeRegistry)::UInt32
+    if registry.base_struct_idx !== nothing
+        return registry.base_struct_idx
+    end
+    # Create $JlBase = (struct (field i32)) — no supertype, non-final
+    base_type = StructType([FieldType(I32, false)], nothing)
+    idx = add_type!(mod, base_type)
+    registry.base_struct_idx = idx
+    return idx
+end
+
+"""
+    emit_typeof!(bytes::Vector{UInt8}, base_idx::UInt32)
+
+Emit bytecode to extract typeId (field 0) from a struct reference on the stack.
+Assumes the value on top of the stack is a struct ref (or anyref that can be cast).
+Result: i32 typeId on the stack.
+"""
+function emit_typeof!(bytes::Vector{UInt8}, base_idx::UInt32)
+    # ref.cast (ref $JlBase) — cast anyref/structref to base struct ref
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.REF_CAST)  # ref.cast non-null
+    push!(bytes, 0x63)  # ref (non-nullable)
+    append!(bytes, encode_leb128_unsigned(base_idx))
+    # struct.get $JlBase 0 — extract typeId field
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(base_idx))
+    append!(bytes, encode_leb128_unsigned(UInt32(0)))
+end
+
+"""
+    set_struct_supertypes!(mod::WasmModule, base_idx::UInt32)
+
+Post-processing: set all StructType objects in the module to be subtypes of the
+base struct type (at base_idx). This enables typeof(x) via struct.get \$JlBase 0
+on any struct reference.
+
+Must be called AFTER all types are registered and BEFORE serialization.
+"""
+function set_struct_supertypes!(mod::WasmModule, base_idx::UInt32)
+    for (i, ct) in enumerate(mod.types)
+        ti = UInt32(i - 1)
+        if ct isa StructType && ti != base_idx && ct.supertype_idx === nothing
+            # Replace with version that declares base as supertype
+            mod.types[i] = StructType(ct.fields, base_idx)
+        end
+    end
 end
 
 # ============================================================================

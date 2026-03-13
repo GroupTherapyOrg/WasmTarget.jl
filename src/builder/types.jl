@@ -119,7 +119,11 @@ A WasmGC struct type with named fields.
 """
 struct StructType
     fields::Vector{FieldType}
+    supertype_idx::Union{Nothing, UInt32}  # PURE-9026: supertype index for subtyping (nothing = no supertype)
 end
+
+# Backward-compatible constructor (no supertype)
+StructType(fields::Vector{FieldType}) = StructType(fields, nothing)
 
 """
     ArrayType
