@@ -156,6 +156,38 @@ end
     return dispatch_process(x) + Int64(1)
 end
 
+# PURE-9060: Tier 2 Dispatch test types (>8 to trigger megamorphic)
+struct DispS1  x::Int32 end
+struct DispS2  x::Int32 end
+struct DispS3  x::Int32 end
+struct DispS4  x::Int32 end
+struct DispS5  x::Int32 end
+struct DispS6  x::Int32 end
+struct DispS7  x::Int32 end
+struct DispS8  x::Int32 end
+struct DispS9  x::Int32 end
+struct DispS10 x::Int32 end
+
+@noinline disp_val(s::DispS1)::Int32  = s.x + Int32(1)
+@noinline disp_val(s::DispS2)::Int32  = s.x + Int32(2)
+@noinline disp_val(s::DispS3)::Int32  = s.x + Int32(3)
+@noinline disp_val(s::DispS4)::Int32  = s.x + Int32(4)
+@noinline disp_val(s::DispS5)::Int32  = s.x + Int32(5)
+@noinline disp_val(s::DispS6)::Int32  = s.x + Int32(6)
+@noinline disp_val(s::DispS7)::Int32  = s.x + Int32(7)
+@noinline disp_val(s::DispS8)::Int32  = s.x + Int32(8)
+@noinline disp_val(s::DispS9)::Int32  = s.x + Int32(9)
+@noinline disp_val(s::DispS10)::Int32 = s.x + Int32(10)
+
+# Dynamic dispatch caller — Julia emits :call (not :invoke) since arg is Any
+@noinline disp_caller(x)::Int32 = disp_val(x)
+
+# Factory functions that return opaque struct refs
+@noinline make_disp_s1(v::Int32)  = DispS1(v)
+@noinline make_disp_s3(v::Int32)  = DispS3(v)
+@noinline make_disp_s5(v::Int32)  = DispS5(v)
+@noinline make_disp_s10(v::Int32) = DispS10(v)
+
 @testset "WasmTarget.jl" begin
 
     # ========================================================================
@@ -4781,6 +4813,101 @@ end
             @test compare_julia_wasm(f_throw, Int64(5)).pass
             # Error path: error() now emits throw (catchable by try_table + catch_all)
             @test compare_julia_wasm(f_throw, Int64(-3)).pass
+        end
+
+    end
+
+    # ========================================================================
+    # Phase 34: PURE-9060 — Tier 2 Hash-Based Dispatch (FNV-1a)
+    # ========================================================================
+    @testset "Phase 34: Tier 2 Hash Dispatch (PURE-9060)" begin
+
+        @testset "Individual specializations compile correctly" begin
+            # Each specialization should work standalone
+            @test compare_julia_wasm(disp_val, DispS1(Int32(100))).pass
+            @test compare_julia_wasm(disp_val, DispS5(Int32(100))).pass
+            @test compare_julia_wasm(disp_val, DispS10(Int32(100))).pass
+        end
+
+        @testset "Dispatch table is built for >8 specializations" begin
+            # Compile all 10 specializations and verify dispatch table is created
+            functions = [
+                (disp_val, (DispS1,)),  (disp_val, (DispS2,)),
+                (disp_val, (DispS3,)),  (disp_val, (DispS4,)),
+                (disp_val, (DispS5,)),  (disp_val, (DispS6,)),
+                (disp_val, (DispS7,)),  (disp_val, (DispS8,)),
+                (disp_val, (DispS9,)),  (disp_val, (DispS10,)),
+            ]
+            mod, type_registry, func_registry = compile_module(functions; return_registries=true)
+            dt_registry = WasmTarget.build_dispatch_tables(func_registry, type_registry)
+            @test length(dt_registry.tables) == 1  # one table for disp_val
+            dt = first(values(dt_registry.tables))
+            @test length(dt.entries) == 10
+            @test dt.arity == Int32(1)
+            @test dt.table_size >= 14  # power of 2, load factor ≤ 0.75
+        end
+
+        @testset "FNV-1a hash produces correct values" begin
+            # Verify FNV-1a implementation matches known values
+            h1 = WasmTarget.fnv1a_hash(Int32[1])
+            h2 = WasmTarget.fnv1a_hash(Int32[2])
+            @test h1 != h2  # different inputs → different hashes
+            @test h1 == WasmTarget.fnv1a_hash(Int32[1])  # deterministic
+            # Multi-arg hash
+            h12 = WasmTarget.fnv1a_hash(Int32[1, 2])
+            h21 = WasmTarget.fnv1a_hash(Int32[2, 1])
+            @test h12 != h21  # order matters
+        end
+
+        @testset "Megamorphic dispatch via call_indirect" begin
+            # End-to-end: factory → dispatch caller → correct specialization
+            functions = [
+                (disp_val, (DispS1,)),  (disp_val, (DispS2,)),
+                (disp_val, (DispS3,)),  (disp_val, (DispS4,)),
+                (disp_val, (DispS5,)),  (disp_val, (DispS6,)),
+                (disp_val, (DispS7,)),  (disp_val, (DispS8,)),
+                (disp_val, (DispS9,)),  (disp_val, (DispS10,)),
+                (disp_caller, (Any,)),
+                (make_disp_s1, (Int32,)),
+                (make_disp_s3, (Int32,)),
+                (make_disp_s5, (Int32,)),
+                (make_disp_s10, (Int32,)),
+            ]
+            bytes = compile_multi(functions)
+
+            # Validate wasm
+            wasm_path = joinpath(mktempdir(), "dispatch.wasm")
+            write(wasm_path, bytes)
+
+            # Run in Node.js: factory creates struct, dispatch caller resolves via hash table
+            js_code = """
+            import fs from 'fs';
+            const bytes = fs.readFileSync('$(escape_string(wasm_path))');
+            const importObject = { Math: { pow: Math.pow } };
+            async function run() {
+                const mod = await WebAssembly.instantiate(bytes, importObject);
+                const e = mod.instance.exports;
+                const results = [];
+                results.push(e.disp_caller(e.make_disp_s1(100)));
+                results.push(e.disp_caller(e.make_disp_s3(100)));
+                results.push(e.disp_caller(e.make_disp_s5(100)));
+                results.push(e.disp_caller(e.make_disp_s10(100)));
+                console.log(JSON.stringify(results));
+            }
+            run();
+            """
+            js_path = joinpath(dirname(wasm_path), "test.mjs")
+            write(js_path, js_code)
+
+            node_cmd = NEEDS_EXPERIMENTAL_FLAG ? `$NODE_CMD --experimental-wasm-gc $js_path` : `$NODE_CMD $js_path`
+            output = strip(read(node_cmd, String))
+            results = JSON.parse(output)
+
+            # Ground truth: native Julia
+            @test results[1] == Int(disp_caller(DispS1(Int32(100))))   # 101
+            @test results[2] == Int(disp_caller(DispS3(Int32(100))))   # 103
+            @test results[3] == Int(disp_caller(DispS5(Int32(100))))   # 105
+            @test results[4] == Int(disp_caller(DispS10(Int32(100))))  # 110
         end
 
     end
