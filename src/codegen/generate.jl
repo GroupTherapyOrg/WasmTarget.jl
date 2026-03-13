@@ -1502,184 +1502,338 @@ function generate_try_catch(ctx::CompilationContext, blocks::Vector{BasicBlock},
         return generate_try_catch_stackified(ctx, blocks, code, region)
     end
 
+    # PURE-9031: Find PhiNodes at the merge point after try/catch.
+    # These merge values from the try-exit path and the catch path.
+    # PhiNode edges use SSA indices: edges from [leave_idx+1..catch_dest-1] are
+    # try-exit, edges from [catch_dest..] are catch-exit.
+    merge_phi_nodes = Int[]  # SSA indices of merge PhiNodes
+    merge_start = length(code) + 1  # First merge PhiNode index
+    for i in catch_dest:length(code)
+        if code[i] isa Core.PhiNode && haskey(ctx.phi_locals, i)
+            push!(merge_phi_nodes, i)
+            if i < merge_start
+                merge_start = i
+            end
+        end
+    end
+    has_merge_phis = !isempty(merge_phi_nodes)
+
+    # Determine the try-exit SSA range (normal path after :leave before catch)
+    # and the catch SSA range to identify phi edge sources
+    try_exit_range = (leave_idx+1):(catch_dest-1)
+    catch_range = catch_dest:(has_merge_phis ? merge_start - 1 : length(code))
+
     # Determine result type for the function
     result_type_byte = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
 
-    # Structure:
-    # (block $after_try [result_type]      ; outer block - exit for both paths
-    #   (block $catch_block                 ; catch jumps here
-    #     (try_table (catch_all 0)          ; try body, catch_all jumps to label 0 ($catch_block)
+    # PURE-9031: Structure with merge phi support:
+    # block $merge (void)                    ; merge block — both paths converge here
+    #   block $catch_landing (void)          ; catch_all jumps here
+    #     try_table (catch_all 0)            ; try body
     #       ;; code before EnterNode
-    #       ;; try body (enter_idx+1 to leave_idx-1)
-    #       ;; normal path after :leave until catch_dest-1
-    #       (br 1)                          ; skip catch, go to $after_try
-    #     )
-    #   )
-    #   ;; catch handler (catch_dest to end of catch)
-    # )
+    #       ;; try body
+    #       ;; SET try-exit phi locals
+    #       (br 2)                           ; skip catch, go to $merge end
+    #     end
+    #   end  ; $catch_landing
+    #   ;; catch handler code (pop_exception = skip)
+    #   ;; SET catch phi locals
+    #   ;; fall through to $merge end
+    # end  ; $merge
+    # ;; READ phi locals
+    # ;; post-merge code (return etc.)
 
-    # Outer block for the result value
-    push!(bytes, Opcode.BLOCK)
-    append!(bytes, encode_block_type(result_type_byte))
+    if has_merge_phis
+        # 3-block structure: merge block → catch landing → try_table
+        # Merge block (void) — both paths converge after this block ends
+        push!(bytes, Opcode.BLOCK)
+        push!(bytes, 0x40)  # void
 
-    # Inner void block for catch destination
-    push!(bytes, Opcode.BLOCK)
-    push!(bytes, 0x40)  # void result type
+        # Catch landing block (void) — catch_all branches here
+        push!(bytes, Opcode.BLOCK)
+        push!(bytes, 0x40)  # void
 
-    # try_table with catch_all clause
-    # Format: try_table blocktype vec(catch) end
-    push!(bytes, Opcode.TRY_TABLE)
-    push!(bytes, 0x40)  # void block type (no result from try_table itself)
+        # try_table with catch_all → label 0 (catch landing)
+        push!(bytes, Opcode.TRY_TABLE)
+        push!(bytes, 0x40)  # void
+        append!(bytes, encode_leb128_unsigned(1))
+        push!(bytes, Opcode.CATCH_ALL)
+        append!(bytes, encode_leb128_unsigned(0))  # → catch landing block
 
-    # Catch clauses: catch_all 0 (branch to label 0 on any exception)
-    append!(bytes, encode_leb128_unsigned(1))  # 1 catch clause
-    push!(bytes, Opcode.CATCH_ALL)             # catch_all type
-    append!(bytes, encode_leb128_unsigned(0))  # label index 0 (inner block)
-
-    # Generate code BEFORE EnterNode
-    for i in 1:(enter_idx-1)
-        stmt = code[i]
-        if stmt !== nothing && !(stmt isa Core.EnterNode)
-            append!(bytes, compile_statement(stmt, i, ctx))
-        end
-    end
-
-    # Generate try body (from EnterNode+1 to leave_idx-1)
-    # Need to handle control flow (GotoIfNot) properly
-    i = enter_idx + 1
-    while i <= leave_idx - 1
-        stmt = code[i]
-        if stmt === nothing
-            i += 1
-            continue
-        end
-
-        # Handle GotoIfNot (if statement) inside try body
-        if stmt isa Core.GotoIfNot
-            # This is an if statement in the try body
-            # The then-branch is from i+1 to dest-1
-            # The else-branch starts at dest
-            goto_if_not = stmt
-            else_target = goto_if_not.dest
-
-            # Compile the condition value
-            append!(bytes, compile_condition_to_i32(goto_if_not.cond, ctx))
-
-            # Check if then-branch has a return or throw (void if) vs needs else
-            then_start = i + 1
-            then_end = min(else_target - 1, leave_idx - 1)
-            then_has_return = false
-            then_has_throw = false
-
-            for j in then_start:then_end
-                if code[j] isa Core.ReturnNode
-                    then_has_return = true
-                    break
-                elseif code[j] isa Expr && code[j].head === :call
-                    func = code[j].args[1]
-                    if func isa GlobalRef && func.name === :throw
-                        then_has_throw = true
-                        break
-                    end
-                end
-            end
-
-            if then_has_throw || then_has_return
-                # Then branch ends with throw/return, no else branch needed
-                # Use: (if (then ...))
-                push!(bytes, Opcode.IF)
-                push!(bytes, 0x40)  # void result type
-
-                # Generate then branch
-                for j in then_start:then_end
-                    if code[j] !== nothing
-                        append!(bytes, compile_statement(code[j], j, ctx))
-                    end
-                end
-
-                push!(bytes, Opcode.END)
-
-                # Skip to else_target (which becomes the continuation)
-                i = else_target
-            else
-                # Normal if-else pattern (rare in try body, but handle it)
-                push!(bytes, Opcode.IF)
-                push!(bytes, 0x40)  # void result type
-
-                for j in then_start:then_end
-                    if code[j] !== nothing
-                        append!(bytes, compile_statement(code[j], j, ctx))
-                    end
-                end
-
-                push!(bytes, Opcode.ELSE)
-
-                # Else branch from else_target to leave_idx-1
-                for j in else_target:(leave_idx-1)
-                    if code[j] !== nothing
-                        append!(bytes, compile_statement(code[j], j, ctx))
-                    end
-                end
-
-                push!(bytes, Opcode.END)
-
-                # We've processed everything up to leave_idx
-                i = leave_idx
-            end
-        else
-            append!(bytes, compile_statement(stmt, i, ctx))
-            i += 1
-        end
-    end
-
-    # Skip the :leave itself (it's a control flow marker)
-
-    # Generate normal path code after :leave until catch_dest
-    for i in (leave_idx+1):(catch_dest-1)
-        stmt = code[i]
-        if stmt !== nothing
-            # Check if this is a return - if so, we need to handle it specially
-            if stmt isa Core.ReturnNode
-                append!(bytes, compile_statement(stmt, i, ctx))
-                # After return in try, branch out
-                push!(bytes, Opcode.BR)
-                append!(bytes, encode_leb128_unsigned(1))  # branch to outer block
-                break
-            else
+        # Code BEFORE EnterNode
+        for i in 1:(enter_idx-1)
+            stmt = code[i]
+            if stmt !== nothing && !(stmt isa Core.EnterNode)
                 append!(bytes, compile_statement(stmt, i, ctx))
             end
         end
-    end
 
-    # If no return in try body, branch past catch
-    push!(bytes, Opcode.BR)
-    append!(bytes, encode_leb128_unsigned(1))  # branch to outer block (past catch)
-
-    # End try_table
-    push!(bytes, Opcode.END)
-
-    # End inner (catch destination) block
-    push!(bytes, Opcode.END)
-
-    # Catch handler code (from catch_dest to end)
-    for i in catch_dest:length(code)
-        stmt = code[i]
-        if stmt !== nothing
-            # Skip :pop_exception - it's just a marker
-            if stmt isa Expr && stmt.head === :pop_exception
+        # Try body (enter_idx+1 to leave_idx-1)
+        i = enter_idx + 1
+        while i <= leave_idx - 1
+            stmt = code[i]
+            if stmt === nothing
+                i += 1
                 continue
             end
-            append!(bytes, compile_statement(stmt, i, ctx))
+            if stmt isa Core.GotoIfNot
+                append!(bytes, _compile_try_body_gotoifnot(stmt, i, leave_idx, code, ctx))
+                i = _advance_past_gotoifnot(stmt, i, leave_idx, code)
+            else
+                append!(bytes, compile_statement(stmt, i, ctx))
+                i += 1
+            end
+        end
+
+        # Normal path code after :leave (GotoNode etc. — skip, don't compile)
+        # The GotoNode just targets the merge point; we handle that with phi locals + br
+
+        # SET try-exit phi locals before branching to merge
+        for phi_idx in merge_phi_nodes
+            phi_stmt = code[phi_idx]::Core.PhiNode
+            for (ei, edge) in enumerate(phi_stmt.edges)
+                edge_ssa = Int(edge)
+                if edge_ssa in try_exit_range
+                    # This edge comes from the try-exit path
+                    phi_val = phi_stmt.values[ei]
+                    phi_local = ctx.phi_locals[phi_idx]
+                    append!(bytes, compile_value(phi_val, ctx))
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(phi_local))
+                    break
+                end
+            end
+        end
+
+        # br 2 → merge block end (skip catch handler)
+        # Labels from inside try_table: 0=try_table, 1=catch_landing, 2=merge
+        push!(bytes, Opcode.BR)
+        append!(bytes, encode_leb128_unsigned(2))
+
+        # End try_table
+        push!(bytes, Opcode.END)
+
+        # End catch landing block — catch_all lands here
+        push!(bytes, Opcode.END)
+
+        # Catch handler code (from catch_dest to merge_start-1)
+        for i in catch_dest:(merge_start-1)
+            stmt = code[i]
+            if stmt !== nothing
+                if stmt isa Expr && stmt.head === :pop_exception
+                    continue
+                end
+                append!(bytes, compile_statement(stmt, i, ctx))
+            end
+        end
+
+        # SET catch phi locals
+        for phi_idx in merge_phi_nodes
+            phi_stmt = code[phi_idx]::Core.PhiNode
+            for (ei, edge) in enumerate(phi_stmt.edges)
+                edge_ssa = Int(edge)
+                if edge_ssa >= catch_dest && edge_ssa < merge_start
+                    # This edge comes from the catch path
+                    phi_val = phi_stmt.values[ei]
+                    phi_local = ctx.phi_locals[phi_idx]
+                    append!(bytes, compile_value(phi_val, ctx))
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(phi_local))
+                    break
+                end
+            end
+        end
+
+        # Fall through to merge block end
+        # End merge block — both paths converge here
+        push!(bytes, Opcode.END)
+
+        # Post-merge code: read phi locals and compile remaining statements
+        for i in merge_start:length(code)
+            stmt = code[i]
+            if stmt === nothing
+                continue
+            end
+            if stmt isa Core.PhiNode && haskey(ctx.phi_locals, i)
+                # PhiNode at merge: the phi local was set by whichever path executed.
+                # If this phi has an SSA local, copy phi_local → ssa_local.
+                phi_local = ctx.phi_locals[i]
+                if haskey(ctx.ssa_locals, i)
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(phi_local))
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(ctx.ssa_locals[i]))
+                end
+                # Otherwise the phi_local is read directly when the value is used
+            elseif stmt isa Core.ReturnNode
+                append!(bytes, compile_statement(stmt, i, ctx))
+            elseif stmt isa Expr && stmt.head === :pop_exception
+                continue
+            else
+                append!(bytes, compile_statement(stmt, i, ctx))
+            end
+        end
+
+    else
+        # No merge phis — use original 2-block structure
+        # Outer block for the result value
+        push!(bytes, Opcode.BLOCK)
+        append!(bytes, encode_block_type(result_type_byte))
+
+        # Inner void block for catch destination
+        push!(bytes, Opcode.BLOCK)
+        push!(bytes, 0x40)  # void result type
+
+        # try_table with catch_all clause
+        push!(bytes, Opcode.TRY_TABLE)
+        push!(bytes, 0x40)  # void block type
+        append!(bytes, encode_leb128_unsigned(1))
+        push!(bytes, Opcode.CATCH_ALL)
+        append!(bytes, encode_leb128_unsigned(0))  # label index 0 (inner block)
+
+        # Generate code BEFORE EnterNode
+        for i in 1:(enter_idx-1)
+            stmt = code[i]
+            if stmt !== nothing && !(stmt isa Core.EnterNode)
+                append!(bytes, compile_statement(stmt, i, ctx))
+            end
+        end
+
+        # Generate try body (from EnterNode+1 to leave_idx-1)
+        i = enter_idx + 1
+        while i <= leave_idx - 1
+            stmt = code[i]
+            if stmt === nothing
+                i += 1
+                continue
+            end
+            if stmt isa Core.GotoIfNot
+                append!(bytes, _compile_try_body_gotoifnot(stmt, i, leave_idx, code, ctx))
+                i = _advance_past_gotoifnot(stmt, i, leave_idx, code)
+            else
+                append!(bytes, compile_statement(stmt, i, ctx))
+                i += 1
+            end
+        end
+
+        # Generate normal path code after :leave until catch_dest
+        for i in (leave_idx+1):(catch_dest-1)
+            stmt = code[i]
+            if stmt !== nothing
+                if stmt isa Core.ReturnNode
+                    append!(bytes, compile_statement(stmt, i, ctx))
+                    push!(bytes, Opcode.BR)
+                    append!(bytes, encode_leb128_unsigned(1))
+                    break
+                else
+                    append!(bytes, compile_statement(stmt, i, ctx))
+                end
+            end
+        end
+
+        # If no return in try body, branch past catch
+        push!(bytes, Opcode.BR)
+        append!(bytes, encode_leb128_unsigned(1))  # branch to outer block (past catch)
+
+        # End try_table
+        push!(bytes, Opcode.END)
+
+        # End inner (catch destination) block
+        push!(bytes, Opcode.END)
+
+        # Catch handler code (from catch_dest to end)
+        for i in catch_dest:length(code)
+            stmt = code[i]
+            if stmt !== nothing
+                if stmt isa Expr && stmt.head === :pop_exception
+                    continue
+                end
+                append!(bytes, compile_statement(stmt, i, ctx))
+            end
+        end
+
+        # End outer block
+        push!(bytes, Opcode.END)
+    end
+
+    return bytes
+end
+
+# PURE-9031: Helper — compile a GotoIfNot inside the try body
+function _compile_try_body_gotoifnot(stmt::Core.GotoIfNot, i::Int, leave_idx::Int, code, ctx::CompilationContext)::Vector{UInt8}
+    bytes = UInt8[]
+    else_target = stmt.dest
+
+    append!(bytes, compile_condition_to_i32(stmt.cond, ctx))
+
+    then_start = i + 1
+    then_end = min(else_target - 1, leave_idx - 1)
+    then_has_return = false
+    then_has_throw = false
+
+    for j in then_start:then_end
+        if code[j] isa Core.ReturnNode
+            then_has_return = true
+            break
+        elseif code[j] isa Expr && code[j].head === :call
+            func = code[j].args[1]
+            if func isa GlobalRef && func.name === :throw
+                then_has_throw = true
+                break
+            end
         end
     end
 
-    # End outer block - don't add END here, generate_structured will add it
-    # Actually wait, we need to end the outer block but the END is added by generate_structured
-    # Let me check... generate_structured adds one END at the end of the function
-
-    # Actually we DO need to end the outer block here
-    push!(bytes, Opcode.END)
-
+    if then_has_throw || then_has_return
+        push!(bytes, Opcode.IF)
+        push!(bytes, 0x40)
+        for j in then_start:then_end
+            if code[j] !== nothing
+                append!(bytes, compile_statement(code[j], j, ctx))
+            end
+        end
+        push!(bytes, Opcode.END)
+    else
+        push!(bytes, Opcode.IF)
+        push!(bytes, 0x40)
+        for j in then_start:then_end
+            if code[j] !== nothing
+                append!(bytes, compile_statement(code[j], j, ctx))
+            end
+        end
+        push!(bytes, Opcode.ELSE)
+        for j in else_target:(leave_idx-1)
+            if code[j] !== nothing
+                append!(bytes, compile_statement(code[j], j, ctx))
+            end
+        end
+        push!(bytes, Opcode.END)
+    end
     return bytes
+end
+
+# PURE-9031: Helper — advance past a GotoIfNot in the try body
+function _advance_past_gotoifnot(stmt::Core.GotoIfNot, i::Int, leave_idx::Int, code)::Int
+    else_target = stmt.dest
+    then_end = min(else_target - 1, leave_idx - 1)
+    then_has_return = false
+    then_has_throw = false
+    for j in (i+1):then_end
+        if code[j] isa Core.ReturnNode
+            then_has_return = true
+            break
+        elseif code[j] isa Expr && code[j].head === :call
+            func = code[j].args[1]
+            if func isa GlobalRef && func.name === :throw
+                then_has_throw = true
+                break
+            end
+        end
+    end
+    if then_has_throw || then_has_return
+        return else_target
+    else
+        return leave_idx
+    end
 end
 
