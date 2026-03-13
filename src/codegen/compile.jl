@@ -1526,9 +1526,16 @@ function compile_module(functions::Vector;
     # Overlay entries (user methods) go into a separate table checked before the base table.
     overlay_registry = OverlayRegistry()
     if !isempty(overlay_entries) && !isempty(dispatch_registry.tables)
-        # Identify which func_refs have base dispatch tables
-        base_func_refs = Set(keys(dispatch_registry.tables))
-        overlay_registry = build_overlay_tables(dispatch_registry, base_func_refs;
+        # Convert overlay_entries Set{(func, arg_types)} → Dict{func → Set{arg_types}}
+        overlay_arg_types = Dict{Any, Set{Tuple}}()
+        for (func_ref, arg_types) in overlay_entries
+            if !haskey(overlay_arg_types, func_ref)
+                overlay_arg_types[func_ref] = Set{Tuple}()
+            end
+            push!(overlay_arg_types[func_ref], arg_types)
+        end
+
+        overlay_registry = build_overlay_tables(dispatch_registry, overlay_arg_types;
                                                  type_registry=type_registry)
 
         if !isempty(overlay_registry.overlays)

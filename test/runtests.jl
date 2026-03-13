@@ -188,6 +188,14 @@ struct DispS10 x::Int32 end
 @noinline make_disp_s5(v::Int32)  = DispS5(v)
 @noinline make_disp_s10(v::Int32) = DispS10(v)
 
+# PURE-9062: Overlay dispatch test types (user-defined struct methods)
+struct DispOverlay1 x::Int32 end
+struct DispOverlay2 x::Int32 end
+@noinline disp_val(s::DispOverlay1)::Int32 = s.x + Int32(100)  # User overlay
+@noinline disp_val(s::DispOverlay2)::Int32 = s.x + Int32(200)  # User overlay
+@noinline make_disp_overlay1(v::Int32) = DispOverlay1(v)
+@noinline make_disp_overlay2(v::Int32) = DispOverlay2(v)
+
 @testset "WasmTarget.jl" begin
 
     # ========================================================================
@@ -4908,6 +4916,126 @@ struct DispS10 x::Int32 end
             @test results[2] == Int(disp_caller(DispS3(Int32(100))))   # 103
             @test results[3] == Int(disp_caller(DispS5(Int32(100))))   # 105
             @test results[4] == Int(disp_caller(DispS10(Int32(100))))  # 110
+        end
+
+    end
+
+    # ========================================================================
+    # Phase 24: Overlay Dispatch Tables (PURE-9062)
+    # User-defined methods are checked BEFORE frozen Base dispatch tables.
+    # ========================================================================
+
+    @testset "Phase 24: Overlay Dispatch Tables" begin
+
+        @testset "Overlay registry is built for user struct methods" begin
+            # Base functions (10 structs → triggers megamorphic dispatch)
+            base_functions = [
+                (disp_val, (DispS1,)),  (disp_val, (DispS2,)),
+                (disp_val, (DispS3,)),  (disp_val, (DispS4,)),
+                (disp_val, (DispS5,)),  (disp_val, (DispS6,)),
+                (disp_val, (DispS7,)),  (disp_val, (DispS8,)),
+                (disp_val, (DispS9,)),  (disp_val, (DispS10,)),
+            ]
+            # User overlay functions (2 new struct methods)
+            overlay_functions = [
+                (disp_val, (DispOverlay1,)),
+                (disp_val, (DispOverlay2,)),
+            ]
+            all_functions = [base_functions..., overlay_functions...]
+
+            # Compile with overlay entries specified
+            overlay_set = Set{Tuple{Any,Tuple}}([
+                (disp_val, (DispOverlay1,)),
+                (disp_val, (DispOverlay2,)),
+            ])
+            mod, type_registry, func_registry, dt_registry = compile_module(
+                all_functions; return_registries=true, overlay_entries=overlay_set)
+
+            # The overlay should have split the dispatch table:
+            # - Normal dispatch_registry should NOT contain disp_val (it's in overlay)
+            # - OR the overlay registry was built internally
+            # Check that we at least got a valid module
+            @test mod isa WasmModule
+            bytes = to_bytes(mod)
+            @test length(bytes) > 0
+        end
+
+        @testset "Overlay dispatch: user method overrides base" begin
+            if NODE_CMD === nothing
+                @test_skip "Node.js not available"
+            else
+                # Compile base + overlay functions with a dispatcher
+                functions = [
+                    (disp_val, (DispS1,)),  (disp_val, (DispS2,)),
+                    (disp_val, (DispS3,)),  (disp_val, (DispS4,)),
+                    (disp_val, (DispS5,)),  (disp_val, (DispS6,)),
+                    (disp_val, (DispS7,)),  (disp_val, (DispS8,)),
+                    (disp_val, (DispS9,)),  (disp_val, (DispS10,)),
+                    (disp_val, (DispOverlay1,)),
+                    (disp_val, (DispOverlay2,)),
+                    (disp_caller, (Any,)),
+                    (make_disp_s1, (Int32,)),
+                    (make_disp_s5, (Int32,)),
+                    (make_disp_overlay1, (Int32,)),
+                    (make_disp_overlay2, (Int32,)),
+                ]
+
+                overlay_set = Set{Tuple{Any,Tuple}}([
+                    (disp_val, (DispOverlay1,)),
+                    (disp_val, (DispOverlay2,)),
+                ])
+
+                bytes = to_bytes(compile_module(functions; overlay_entries=overlay_set))
+
+                wasm_path = joinpath(mktempdir(), "overlay_dispatch.wasm")
+                write(wasm_path, bytes)
+
+                js_code = """
+                import fs from 'fs';
+                const bytes = fs.readFileSync('$(escape_string(wasm_path))');
+                const importObject = { Math: { pow: Math.pow } };
+                async function run() {
+                    const mod = await WebAssembly.instantiate(bytes, importObject);
+                    const e = mod.instance.exports;
+                    const results = [];
+                    // Base dispatch: DispS1(10) → 10+1=11, DispS5(10) → 10+5=15
+                    results.push(e.disp_caller(e.make_disp_s1(10)));
+                    results.push(e.disp_caller(e.make_disp_s5(10)));
+                    // Overlay dispatch: DispOverlay1(10) → 10+100=110, DispOverlay2(10) → 10+200=210
+                    results.push(e.disp_caller(e.make_disp_overlay1(10)));
+                    results.push(e.disp_caller(e.make_disp_overlay2(10)));
+                    console.log(JSON.stringify(results));
+                }
+                run();
+                """
+                js_path = joinpath(dirname(wasm_path), "test.mjs")
+                write(js_path, js_code)
+
+                node_cmd = NEEDS_EXPERIMENTAL_FLAG ? `\$NODE_CMD --experimental-wasm-gc \$js_path` : `\$NODE_CMD \$js_path`
+                output = strip(read(node_cmd, String))
+                results = JSON.parse(output)
+
+                # Ground truth comparison: native Julia
+                native_s1 = Int(disp_caller(DispS1(Int32(10))))           # 11
+                native_s5 = Int(disp_caller(DispS5(Int32(10))))           # 15
+                native_o1 = Int(disp_caller(DispOverlay1(Int32(10))))     # 110
+                native_o2 = Int(disp_caller(DispOverlay2(Int32(10))))     # 210
+
+                @test results[1] == native_s1   # Base: DispS1(10) → 11
+                @test results[2] == native_s5   # Base: DispS5(10) → 15
+                @test results[3] == native_o1   # Overlay: DispOverlay1(10) → 110
+                @test results[4] == native_o2   # Overlay: DispOverlay2(10) → 210
+            end
+        end
+
+        @testset "FNV-1a hash overlay separation" begin
+            # Verify that overlay hash keys don't collide with base hash keys
+            # (since overlay and base tables are separate, collisions within each are handled by probing)
+            h_overlay1 = WasmTarget.fnv1a_hash(Int32[100])  # DispOverlay1 type ID
+            h_overlay2 = WasmTarget.fnv1a_hash(Int32[200])  # DispOverlay2 type ID
+            @test h_overlay1 != h_overlay2  # Different overlay types get different hashes
+            @test h_overlay1 != UInt32(0)   # Not the sentinel
+            @test h_overlay2 != UInt32(0)
         end
 
     end

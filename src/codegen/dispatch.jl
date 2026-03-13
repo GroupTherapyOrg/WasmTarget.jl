@@ -787,57 +787,45 @@ end
 Build overlay dispatch tables for user-defined methods that shadow functions
 with existing base dispatch tables.
 
-Splits entries in `dt_registry` into base entries (from `base_func_refs`) and
-overlay entries (everything else). Functions that have ONLY base entries keep
-their normal dispatch table. Functions that have BOTH base and user entries
-get split into base_dt + overlay_dt.
+`overlay_arg_types` maps func_ref → Set of arg_type tuples that are user overlay.
+All other entries for the same function are treated as base entries.
 
 Returns an OverlayRegistry. Functions with no overlap are not included.
 """
 function build_overlay_tables(dt_registry::DispatchTableRegistry,
-                               base_func_refs::Set;
+                               overlay_arg_types::Dict{Any, Set{Tuple}};
                                type_registry=nothing)::OverlayRegistry
     overlay_reg = OverlayRegistry()
 
     for (func_ref, dt) in dt_registry.tables
-        # Only create overlay if this function has base entries AND user entries
+        overlay_types = get(overlay_arg_types, func_ref, nothing)
+        overlay_types === nothing && continue
+
         base_entries = DispatchEntry[]
         user_entries = DispatchEntry[]
 
         for entry in dt.entries
-            # Check if this entry's arg types are in the base set
-            # We use the type_ids to determine if it's a "base" type signature
-            is_base = func_ref in base_func_refs
-            # Actually, we need per-entry granularity. A user might add Point+Point
-            # while base has Int32+Int32. The func_ref is the same (+).
-            # So we check if the entry was contributed by a base specialization
-            # or a user specialization.
-            #
-            # For now, we use a simple heuristic: entries whose arg types are all
-            # "base types" (numeric, string, etc.) go to base_dt. Entries with
-            # user-defined struct types go to overlay_dt.
-            is_base_entry = true
+            # Reconstruct the arg_types for this entry by looking up type_ids → Julia types
+            is_overlay = false
             if type_registry !== nothing
+                arg_types = Type[]
                 for tid in entry.type_ids
-                    # Check if this typeId corresponds to a user-defined type
-                    # Base types have typeIds assigned during base build; user types
-                    # get typeIds from a counter above the base range.
-                    # For within-module testing, we use a simpler check.
                     for (T, id) in type_registry.type_ids
-                        if id == tid && !(T <: Number || T <: AbstractString || T <: AbstractChar || T === Bool)
-                            # User-defined struct type
-                            is_base_entry = false
+                        if id == tid
+                            push!(arg_types, T)
                             break
                         end
                     end
-                    is_base_entry || break
+                end
+                if length(arg_types) == length(entry.type_ids)
+                    is_overlay = Tuple(arg_types) in overlay_types
                 end
             end
 
-            if is_base_entry
-                push!(base_entries, entry)
-            else
+            if is_overlay
                 push!(user_entries, entry)
+            else
+                push!(base_entries, entry)
             end
         end
 
@@ -847,7 +835,7 @@ function build_overlay_tables(dt_registry::DispatchTableRegistry,
 
         # Build base dispatch table
         base_table_size = max(Int32(4), next_pow2_for_load(length(base_entries)))
-        base_dt = DispatchTable(
+        base_dt_new = DispatchTable(
             func_ref, dt.arity, base_entries,
             base_table_size, base_table_size - Int32(1),
             UInt32(0), UInt32(0), UInt32(0), UInt32(0), UInt32(0), UInt32(0),
@@ -864,7 +852,7 @@ function build_overlay_tables(dt_registry::DispatchTableRegistry,
         )
 
         overlay_reg.overlays[func_ref] = overlay_dt
-        overlay_reg.bases[func_ref] = base_dt
+        overlay_reg.bases[func_ref] = base_dt_new
     end
 
     return overlay_reg
@@ -1171,8 +1159,8 @@ function emit_overlay_dispatch_call!(bytes::Vector{UInt8},
     _emit_table_probe_body!(bytes, overlay_dt, type_id_locals, hash_local,
                              slot_local, key_local, func_idx_local, arg_locals,
                              arity,
-                             3,  # br depth to $done (past: overlay_probe, overlay_miss, done)
-                             1)  # br depth to $overlay_miss (past: overlay_probe)
+                             UInt32(3),  # br depth to $done (past: overlay_probe, overlay_miss, done)
+                             UInt32(1))  # br depth to $overlay_miss (past: overlay_probe)
 
     # Next slot: (slot + 1) & mask
     _emit_next_slot!(bytes, slot_local, overlay_dt.mask)
@@ -1205,8 +1193,8 @@ function emit_overlay_dispatch_call!(bytes::Vector{UInt8},
     _emit_table_probe_body!(bytes, base_dt, type_id_locals, hash_local,
                              slot_local, key_local, func_idx_local, arg_locals,
                              arity,
-                             3,  # br depth to $done (past: base_probe, base_miss, done)
-                             1)  # br depth to $base_miss (past: base_probe)
+                             UInt32(3),  # br depth to $done (past: base_probe, base_miss, done)
+                             UInt32(1))  # br depth to $base_miss (past: base_probe)
 
     _emit_next_slot!(bytes, slot_local, base_dt.mask)
 

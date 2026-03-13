@@ -909,13 +909,24 @@ function to_bytes(mod::WasmModule)::Vector{UInt8}
         write_section!(w, SECTION_ELEMENT) do section
             write_u32!(section, length(mod.elem_segments))
             for elem in mod.elem_segments
-                # Element segment kind 0: active, table index 0, funcref
-                # Binary format: flags (0) + offset expr + vec(funcidx)
-                write_byte!(section, 0x00)  # flags: active segment, table 0
+                if elem.table_idx == UInt32(0)
+                    # Element segment kind 0: active, table index 0, funcref
+                    # Binary format: flags (0) + offset expr + vec(funcidx)
+                    write_byte!(section, 0x00)  # flags: active segment, table 0
+                else
+                    # Element segment kind 2: active, explicit table index, funcref
+                    # Binary format: flags (2) + table_idx + offset expr + elemkind + vec(funcidx)
+                    write_byte!(section, 0x02)  # flags: active segment, explicit table index
+                    write_u32!(section, elem.table_idx)
+                end
                 # Offset expression (i32.const offset)
                 push!(section.buffer, Opcode.I32_CONST)
                 append!(section.buffer, encode_leb128_signed(Int32(elem.offset)))
                 push!(section.buffer, Opcode.END)
+                if elem.table_idx != UInt32(0)
+                    # elemkind for flags=2: 0x00 = funcref
+                    write_byte!(section, 0x00)
+                end
                 # Vector of function indices
                 write_u32!(section, length(elem.func_indices))
                 for func_idx in elem.func_indices
