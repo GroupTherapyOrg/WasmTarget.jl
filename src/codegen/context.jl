@@ -1051,11 +1051,16 @@ function allocate_ssa_locals!(ctx::CompilationContext)
             end
 
             # PURE-9032: :the_exception produces anyref from global.get $current_exn.
-            # Override the SSA type so the local is allocated as anyref (not the Union's
-            # tagged union type, which would cause illegal cast at runtime).
+            # For Union exception types, override to Any so the local is anyref
+            # (not the Union's tagged union type, which would cause illegal cast).
+            # For concrete exception types (ErrorException etc.), keep the original
+            # type so getfield can resolve struct fields — the :the_exception handler
+            # in statements.jl will emit ref.cast from anyref to the concrete type.
             if stmt isa Expr && stmt.head === :the_exception
-                ssa_type = Any
-                ctx.ssa_types[ssa_id] = Any
+                if ssa_type isa Union || !isconcretetype(ssa_type) || !isstructtype(ssa_type)
+                    ssa_type = Any
+                    ctx.ssa_types[ssa_id] = Any
+                end
             end
 
             # Skip Nothing type - nothing is compiled as ref.null, not i32

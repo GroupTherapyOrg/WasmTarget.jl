@@ -424,6 +424,47 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         # For other types, fall through to error
     end
 
+    # PURE-9032: ncodeunits(s) → array.len for string byte arrays
+    # Handles AbstractString fields from exception structs (e.g., e.msg)
+    if is_func(func, :ncodeunits) && length(args) == 1
+        arg = args[1]
+        arg_type = infer_value_type(arg, ctx)
+        if arg_type === String || arg_type <: AbstractString
+            append!(bytes, compile_value(arg, ctx))
+            # If value is in an externref or anyref local, cast to arrayref
+            local _nc_needs_cast = false
+            if arg isa Core.SSAValue
+                local _nc_local_idx = get(ctx.ssa_locals, arg.id, get(ctx.phi_locals, arg.id, nothing))
+                if _nc_local_idx !== nothing
+                    local _nc_arr_idx = _nc_local_idx - ctx.n_params + 1
+                    if _nc_arr_idx >= 1 && _nc_arr_idx <= length(ctx.locals)
+                        local _nc_lt = ctx.locals[_nc_arr_idx]
+                        if _nc_lt === ExternRef
+                            _nc_needs_cast = true
+                        elseif _nc_lt === AnyRef
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.REF_CAST_NULL)
+                            push!(bytes, UInt8(ArrayRef))
+                            _nc_needs_cast = false
+                        end
+                    end
+                end
+            end
+            if _nc_needs_cast
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ANY_CONVERT_EXTERN)
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.REF_CAST_NULL)
+                push!(bytes, UInt8(ArrayRef))
+            end
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ARRAY_LEN)
+            # Return as Int (i64) to match Julia's ncodeunits return type
+            push!(bytes, Opcode.I64_EXTEND_I32_S)
+            return bytes
+        end
+    end
+
     # Special case for length - returns character count for strings, element count for arrays
     if is_func(func, :length) && length(args) == 1
         arg = args[1]

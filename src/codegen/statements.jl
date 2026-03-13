@@ -191,6 +191,23 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                         append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
                         append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.REF_CAST_NULL])
                         append!(bytes, encode_leb128_signed(Int64(pi_local_type.type_idx)))
+                    # PURE-9032: PiNode narrowing from ArrayRef → ConcreteRef.
+                    # Example: arrayref (from struct field typed AbstractString) → (ref null $str_array)
+                    # This occurs when getfield returns an abstract ref type but PiNode narrows it.
+                    elseif !is_multi_value_src && val_wasm_type === ArrayRef && pi_local_type isa ConcreteRef
+                        val_bytes = compile_value(stmt.val, ctx)
+                        append!(bytes, val_bytes)
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.REF_CAST_NULL)
+                        append!(bytes, encode_leb128_signed(Int64(pi_local_type.type_idx)))
+                    # PURE-9032: PiNode narrowing from StructRef → ConcreteRef.
+                    # Example: structref (from :the_exception with Union type) → concrete exception struct
+                    elseif !is_multi_value_src && val_wasm_type === StructRef && pi_local_type isa ConcreteRef
+                        val_bytes = compile_value(stmt.val, ctx)
+                        append!(bytes, val_bytes)
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.REF_CAST_NULL)
+                        append!(bytes, encode_leb128_signed(Int64(pi_local_type.type_idx)))
                     # PURE-6024: Tagged union unwrapping — PiNode narrows Union{A,B} to variant.
                     # Source is a ConcreteRef (tagged union struct), target is the extracted variant.
                     # Example: π(%53::Union{AbstractString,Symbol}, Symbol) needs struct.get + cast.
