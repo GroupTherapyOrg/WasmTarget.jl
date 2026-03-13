@@ -383,9 +383,8 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         lo = UInt64(val & 0xFFFFFFFFFFFFFFFF)
         hi = UInt64((val >> 64) & 0xFFFFFFFFFFFFFFFF)
 
-        # PURE-9024: Push typeId (field 0, i32.const 0)
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int64(0)))
+        # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
+        emit_type_id!(bytes, ctx.type_registry, result_type)
 
         # Push lo value
         push!(bytes, Opcode.I64_CONST)
@@ -521,9 +520,8 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         # Get the struct type definition to check expected field types
         struct_type_def = ctx.mod.types[type_idx + 1]
 
-        # PURE-9024: Push typeId (field 0, i32.const 0)
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int64(0)))
+        # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
+        emit_type_id!(bytes, ctx.type_registry, T)
 
         # Push field values (tuples use 1-based indexing)
         for i in 1:length(val)
@@ -578,9 +576,8 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         # Used for === identity checks (ref.eq). Each struct.new creates a unique ref.
         info = register_struct_type!(ctx.mod, ctx.type_registry, Module)
         type_idx = info.wasm_type_idx
-        # PURE-9024: Push typeId (field 0, i32.const 0)
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int64(0)))
+        # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
+        emit_type_id!(bytes, ctx.type_registry, Module)
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_NEW)
         append!(bytes, encode_leb128_unsigned(type_idx))
@@ -590,9 +587,8 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         T = typeof(val)
         info = register_struct_type!(ctx.mod, ctx.type_registry, T)
         type_idx = info.wasm_type_idx
-        # PURE-9024: Push typeId (field 0, i32.const 0)
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int64(0)))
+        # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
+        emit_type_id!(bytes, ctx.type_registry, T)
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_NEW)
         append!(bytes, encode_leb128_unsigned(type_idx))
@@ -612,9 +608,8 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         end
 
         struct_type_def = ctx.mod.types[type_idx + 1]
-        # PURE-9024: Push typeId (field 0, i32.const 0)
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int64(0)))
+        # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
+        emit_type_id!(bytes, ctx.type_registry, T)
         for (fi, field_name) in enumerate(fieldnames(T))
             field_val = getfield(val, field_name)
             append!(bytes, compile_value(field_val, ctx))
@@ -699,9 +694,8 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
             end
         end
 
-        # PURE-9024: Push typeId (field 0, i32.const 0)
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int64(0)))
+        # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
+        emit_type_id!(bytes, ctx.type_registry, T)
 
         # field 1: slots — array of UInt8 (always defined, never throws)
         for i in 1:length(dict_slots)
@@ -768,9 +762,8 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         # Get the array type for elements
         array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
 
-        # PURE-9024: Push typeId (field 0, i32.const 0) for Vector struct
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int64(0)))
+        # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID for Vector struct
+        emit_type_id!(bytes, ctx.type_registry, T)
 
         # Field 1: data array — emit array.new_fixed with actual element values
         # Check if the array element type is externref — if so, each element needs
@@ -832,9 +825,8 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
             register_tuple_type!(ctx.mod, ctx.type_registry, size_tuple_type)
         end
         size_info = ctx.type_registry.structs[size_tuple_type]
-        # PURE-9024: Push typeId (field 0, i32.const 0) for size tuple
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int64(0)))
+        # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID for size tuple
+        emit_type_id!(bytes, ctx.type_registry, Tuple{Int64})
         push!(bytes, Opcode.I64_CONST)
         append!(bytes, encode_leb128_signed(Int64(length(val))))
         push!(bytes, Opcode.GC_PREFIX)
@@ -875,9 +867,8 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
 
         # Push field values with type safety checks
         struct_type_def = ctx.mod.types[type_idx + 1]
-        # PURE-9024: Push typeId (field 0, i32.const 0)
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int64(0)))
+        # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
+        emit_type_id!(bytes, ctx.type_registry, T)
         for (fi, field_name) in enumerate(fieldnames(T))
             field_val = getfield(val, field_name)
             field_val_bytes = compile_value(field_val, ctx)

@@ -1546,10 +1546,9 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
 
     info = ctx.type_registry.structs[struct_type]
 
-    # PURE-9024: Push typeId (i32) as field 0 before Julia field values
+    # PURE-9024/9025: Push typeId (i32) as field 0 before Julia field values
     if info.field_offset > 0
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x00)  # typeId = 0
+        emit_type_id!(bytes, ctx.type_registry, struct_type)
     end
 
     # Push field values in order, handling Union field types

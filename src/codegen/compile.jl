@@ -1425,6 +1425,9 @@ function compile_module(functions::Vector;
         end
     end
 
+    # PURE-9025: Assign DFS type IDs after all types are registered
+    assign_type_ids!(type_registry)
+
     # Calculate function indices (accounting for imports)
     # Functions are added in order, so index = n_imports + position - 1
     n_imports = length(mod.imports)
@@ -1578,6 +1581,9 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
             end
         end
     end
+
+    # PURE-9025: Assign DFS type IDs after all types are registered
+    assign_type_ids!(type_registry)
 
     # Calculate function indices
     n_imports = length(mod.imports)

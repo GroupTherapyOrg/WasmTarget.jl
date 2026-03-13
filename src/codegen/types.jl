@@ -57,9 +57,182 @@ mutable struct TypeRegistry
     # PURE-4149: TypeName constant globals — each unique TypeName gets a unique Wasm global
     # so that t.name === s.name identity comparison works via ref.eq
     typename_constant_globals::Dict{Core.TypeName, UInt32}  # TypeName -> Wasm global index
+    # PURE-9025: DFS type ID assignment for runtime dispatch
+    type_ids::Dict{Type, Int32}  # Concrete type -> unique DFS integer ID
+    type_ranges::Dict{Type, Tuple{Int32, Int32}}  # Abstract/concrete type -> [low, high] DFS range
 end
 
-TypeRegistry() = TypeRegistry(Dict{Type, StructInfo}(), Dict{Type, UInt32}(), nothing, Dict{Union, UnionInfo}(), Dict{WasmValType, UInt32}(), Dict{Type, UInt32}(), Dict{Core.TypeName, UInt32}())
+TypeRegistry() = TypeRegistry(Dict{Type, StructInfo}(), Dict{Type, UInt32}(), nothing, Dict{Union, UnionInfo}(), Dict{WasmValType, UInt32}(), Dict{Type, UInt32}(), Dict{Core.TypeName, UInt32}(), Dict{Type, Int32}(), Dict{Type, Tuple{Int32, Int32}}())
+
+# ============================================================================
+# PURE-9025: DFS Type ID Assignment
+# ============================================================================
+
+"""
+    assign_type_ids!(registry::TypeRegistry)
+
+Assign DFS-based type IDs to all registered struct types.
+Walks Julia's abstract type hierarchy via DFS, assigning contiguous ID ranges
+so that `isa(x, AbstractType)` becomes an O(1) range check:
+  `typeId >= low && typeId <= high`.
+
+IDs start at 1 (0 is reserved for unknown/unassigned).
+"""
+function assign_type_ids!(registry::TypeRegistry)
+    # Collect all concrete types from the registry that have typeId (field_offset > 0)
+    concrete_types = Set{DataType}()
+    for (T, info) in registry.structs
+        if T isa DataType && isconcretetype(T) && info.field_offset > 0
+            push!(concrete_types, T)
+        end
+    end
+
+    # Also include primitive numeric types that may need boxing/dispatch
+    for T in (Bool, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64,
+              Float16, Float32, Float64)
+        push!(concrete_types, T)
+    end
+
+    isempty(concrete_types) && return
+
+    # Walk supertype chains to collect all relevant abstract types
+    # Use base types (without parameters) for abstract types to ensure
+    # all subtypes of e.g. AbstractVector are grouped together
+    abstract_types = Set{DataType}()
+    for T in concrete_types
+        S = supertype(T)
+        while S !== Any
+            # Use the base type for parametric abstract types
+            base_S = S isa DataType ? (isempty(S.parameters) ? S : S.name.wrapper) : S
+            if base_S isa DataType
+                push!(abstract_types, base_S)
+            else
+                # UnionAll - use the body's base type
+                push!(abstract_types, Base.unwrap_unionall(base_S)::DataType)
+            end
+            S = supertype(S)
+        end
+    end
+    push!(abstract_types, Any)
+
+    # Build parent → children map
+    # For each type, find its parent in our collected set (skip intermediate types not in the set)
+    all_types = union(concrete_types, abstract_types)
+    children = Dict{DataType, Vector{DataType}}()
+
+    for T in all_types
+        T === Any && continue
+        # Walk up from T's supertype until we find a type in our set
+        S = supertype(T)
+        parent = Any  # default parent
+        while S !== Any
+            base_S = S isa DataType ? (isempty(S.parameters) ? S : S.name.wrapper) : S
+            resolved_S = base_S isa DataType ? base_S : Base.unwrap_unionall(base_S)::DataType
+            if resolved_S in all_types
+                parent = resolved_S
+                break
+            end
+            S = supertype(S)
+        end
+        if !haskey(children, parent)
+            children[parent] = DataType[]
+        end
+        # Avoid duplicate children
+        if !(T in children[parent])
+            push!(children[parent], T)
+        end
+    end
+
+    # DFS traverse from Any, assigning IDs
+    # Abstract types visit children first, then get [low, high] range
+    # Concrete types get a single ID (leaf)
+    type_ids = Dict{Type, Int32}()
+    type_ranges = Dict{Type, Tuple{Int32, Int32}}()
+    counter = Ref(Int32(1))  # Start at 1, reserve 0 for unknown
+
+    function dfs!(node::DataType)
+        low = counter[]
+        kids = get(children, node, DataType[])
+        # Sort children deterministically by type name for reproducible IDs
+        sort!(kids, by=T -> string(T))
+
+        if isempty(kids) && isconcretetype(node)
+            # Leaf concrete type
+            type_ids[node] = counter[]
+            type_ranges[node] = (counter[], counter[])
+            counter[] += Int32(1)
+        else
+            # Has children or is abstract: visit children
+            for child in kids
+                dfs!(child)
+            end
+            if low == counter[]
+                # Abstract type with no registered subtypes - assign a single ID
+                type_ranges[node] = (low, low)
+                counter[] += Int32(1)
+            else
+                type_ranges[node] = (low, counter[] - Int32(1))
+            end
+        end
+    end
+
+    dfs!(Any)
+
+    # Store results in registry
+    registry.type_ids = type_ids
+    registry.type_ranges = type_ranges
+end
+
+"""
+    get_type_id(registry::TypeRegistry, T::Type) -> Int32
+
+Return the DFS type ID for a concrete type, or 0 if not assigned.
+"""
+function get_type_id(registry::TypeRegistry, T::Type)::Int32
+    return get(registry.type_ids, T, Int32(0))
+end
+
+"""
+    get_type_range(registry::TypeRegistry, T::Type) -> Union{Tuple{Int32, Int32}, Nothing}
+
+Return the DFS [low, high] range for an abstract type, or nothing if not assigned.
+"""
+function get_type_range(registry::TypeRegistry, T::Type)::Union{Tuple{Int32, Int32}, Nothing}
+    return get(registry.type_ranges, T, nothing)
+end
+
+"""
+    serialize_type_ids(registry::TypeRegistry) -> Dict{String, Any}
+
+Serialize the type ID table to a Dict suitable for JSON output.
+"""
+function serialize_type_ids(registry::TypeRegistry)::Dict{String, Any}
+    result = Dict{String, Any}()
+    ids = Dict{String, Int32}()
+    for (T, id) in registry.type_ids
+        ids[string(T)] = id
+    end
+    result["type_ids"] = ids
+
+    ranges = Dict{String, Any}()
+    for (T, (low, high)) in registry.type_ranges
+        ranges[string(T)] = Dict("low" => low, "high" => high)
+    end
+    result["type_ranges"] = ranges
+    return result
+end
+
+"""
+    emit_type_id!(bytes::Vector{UInt8}, registry::TypeRegistry, T::Type)
+
+Emit `i32.const <typeId>` bytecode for type T.
+Uses the DFS-assigned type ID, or 0 if T has no assigned ID.
+"""
+function emit_type_id!(bytes::Vector{UInt8}, registry::TypeRegistry, T::Type)
+    id = get_type_id(registry, T)
+    push!(bytes, Opcode.I32_CONST)
+    append!(bytes, encode_leb128_signed(Int64(id)))
+end
 
 # ============================================================================
 # Function Registry - for multi-function modules
