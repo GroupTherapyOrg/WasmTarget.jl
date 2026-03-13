@@ -132,7 +132,7 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                         push!(bytes, Opcode.GC_PREFIX)
                         push!(bytes, Opcode.STRUCT_GET)
                         append!(bytes, encode_leb128_unsigned(box_type_idx))
-                        append!(bytes, encode_leb128_unsigned(UInt32(0)))  # field 0
+                        append!(bytes, encode_leb128_unsigned(UInt32(1)))  # field 1 (0=typeId, 1=value)
                     # PURE-321: PiNode narrowing from ExternRef → ConcreteRef means the value
                     # IS available as externref and just needs conversion (not ref.null).
                     # Example: PiNode(%198, String) narrows Any (externref) → String (array<i32>).
@@ -1305,44 +1305,48 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
         # Initial capacity of 16
         initial_cap = Int32(16)
 
-        # field 0: slots - array of UInt8, initialized to 0 (empty)
+        # field 0: typeId (i32) - PURE-9024
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x00)
+
+        # field 1: slots - array of UInt8, initialized to 0 (empty)
         push!(bytes, Opcode.I32_CONST)
         append!(bytes, encode_leb128_signed(initial_cap))
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
         append!(bytes, encode_leb128_unsigned(slots_arr_type))
 
-        # field 1: keys - array of K, default initialized
+        # field 2: keys - array of K, default initialized
         push!(bytes, Opcode.I32_CONST)
         append!(bytes, encode_leb128_signed(initial_cap))
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
         append!(bytes, encode_leb128_unsigned(keys_arr_type))
 
-        # field 2: vals - array of V, default initialized
+        # field 3: vals - array of V, default initialized
         push!(bytes, Opcode.I32_CONST)
         append!(bytes, encode_leb128_signed(initial_cap))
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
         append!(bytes, encode_leb128_unsigned(vals_arr_type))
 
-        # field 3: ndel = 0 (i64)
+        # field 4: ndel = 0 (i64)
         push!(bytes, Opcode.I64_CONST)
         append!(bytes, encode_leb128_signed(Int64(0)))
 
-        # field 4: count = 0 (i64)
+        # field 5: count = 0 (i64)
         push!(bytes, Opcode.I64_CONST)
         append!(bytes, encode_leb128_signed(Int64(0)))
 
-        # field 5: age = 0 (u64, stored as i64)
+        # field 6: age = 0 (u64, stored as i64)
         push!(bytes, Opcode.I64_CONST)
         append!(bytes, encode_leb128_signed(Int64(0)))
 
-        # field 6: idxfloor = 1 (i64)
+        # field 7: idxfloor = 1 (i64)
         push!(bytes, Opcode.I64_CONST)
         append!(bytes, encode_leb128_signed(Int64(1)))
 
-        # field 7: maxprobe = 0 (i64)
+        # field 8: maxprobe = 0 (i64)
         push!(bytes, Opcode.I64_CONST)
         append!(bytes, encode_leb128_signed(Int64(0)))
 
@@ -1366,7 +1370,11 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
         end
         vec_info = ctx.type_registry.structs[struct_type]
 
-        # Compile field 0: the array reference (from MemoryRef)
+        # field 0: typeId (i32) - PURE-9024
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x00)
+
+        # Compile field 1: the array reference (from MemoryRef)
         # Safety: if the SSA local is numeric (i64/i32) but the Vector struct expects a ref,
         # emit ref.null of the correct array type instead of the wrong-typed local.get.
         # This happens with non-Array AbstractVector types (UnitRange, StepRange) whose

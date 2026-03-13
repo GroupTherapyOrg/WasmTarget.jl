@@ -383,6 +383,10 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         lo = UInt64(val & 0xFFFFFFFFFFFFFFFF)
         hi = UInt64((val >> 64) & 0xFFFFFFFFFFFFFFFF)
 
+        # PURE-9024: Push typeId (field 0, i32.const 0)
+        push!(bytes, Opcode.I32_CONST)
+        append!(bytes, encode_leb128_signed(Int64(0)))
+
         # Push lo value
         push!(bytes, Opcode.I64_CONST)
         append!(bytes, encode_leb128_signed(reinterpret(Int64, lo)))
@@ -517,6 +521,10 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         # Get the struct type definition to check expected field types
         struct_type_def = ctx.mod.types[type_idx + 1]
 
+        # PURE-9024: Push typeId (field 0, i32.const 0)
+        push!(bytes, Opcode.I32_CONST)
+        append!(bytes, encode_leb128_signed(Int64(0)))
+
         # Push field values (tuples use 1-based indexing)
         for i in 1:length(val)
             field_val = val[i]
@@ -569,6 +577,9 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         # Used for === identity checks (ref.eq). Each struct.new creates a unique ref.
         info = register_struct_type!(ctx.mod, ctx.type_registry, Module)
         type_idx = info.wasm_type_idx
+        # PURE-9024: Push typeId (field 0, i32.const 0)
+        push!(bytes, Opcode.I32_CONST)
+        append!(bytes, encode_leb128_signed(Int64(0)))
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_NEW)
         append!(bytes, encode_leb128_unsigned(type_idx))
@@ -578,6 +589,9 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         T = typeof(val)
         info = register_struct_type!(ctx.mod, ctx.type_registry, T)
         type_idx = info.wasm_type_idx
+        # PURE-9024: Push typeId (field 0, i32.const 0)
+        push!(bytes, Opcode.I32_CONST)
+        append!(bytes, encode_leb128_signed(Int64(0)))
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_NEW)
         append!(bytes, encode_leb128_unsigned(type_idx))
@@ -597,6 +611,9 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         end
 
         struct_type_def = ctx.mod.types[type_idx + 1]
+        # PURE-9024: Push typeId (field 0, i32.const 0)
+        push!(bytes, Opcode.I32_CONST)
+        append!(bytes, encode_leb128_signed(Int64(0)))
         for (fi, field_name) in enumerate(fieldnames(T))
             field_val = getfield(val, field_name)
             append!(bytes, compile_value(field_val, ctx))
