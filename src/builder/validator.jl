@@ -141,9 +141,9 @@ Rules:
 """
 function wasm_types_assignable(actual::WasmValType, expected::WasmValType)::Bool
     actual == expected && return true
-    # Permissive ref-to-ref: externref → anyref, ConcreteRef → ExternRef, etc.
-    # dart2wasm uses isSubtypeOf() for full hierarchy; we start permissive
-    # and tighten in PURE-413 (WasmGC operations).
+    # Permissive ref-to-ref: anyref ↔ externref, ConcreteRef ↔ AnyRef, etc.
+    # PURE-9023: anyref is accepted in all polymorphic positions (replacing externref)
+    # dart2wasm uses isSubtypeOf() for full hierarchy; we start permissive.
     _is_ref_type(actual) && _is_ref_type(expected) && return true
     return false
 end
