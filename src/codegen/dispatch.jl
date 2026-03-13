@@ -747,3 +747,691 @@ function serialize_dispatch_tables(dt_registry::DispatchTableRegistry,
     end
     return tables
 end
+
+# ==================== PURE-9062: Overlay Dispatch Tables ====================
+#
+# User-defined methods are stored in an overlay table checked BEFORE the frozen
+# Base dispatch tables. This matches Julia's world-age semantics — new methods
+# shadow old ones but don't invalidate pre-computed results for unaffected signatures.
+#
+# Architecture:
+#   1. Base dispatch tables are frozen (built by build_base.jl, shipped in base.wasm)
+#   2. User methods go into a separate overlay table (mutable)
+#   3. At call sites: probe overlay → if found, call user wrapper
+#                                   → if miss, probe base → if found, call base wrapper
+#                                   → if both miss, unreachable
+#   4. After wasm-merge, both tables live in the same module
+
+"""
+Registry pairing overlay (user) dispatch tables with base (frozen) dispatch tables.
+At call sites, the overlay is probed first; on miss, falls back to the base table.
+"""
+mutable struct OverlayRegistry
+    overlays::Dict{Any, DispatchTable}   # func_ref → user overlay table
+    bases::Dict{Any, DispatchTable}      # func_ref → frozen base table
+end
+
+OverlayRegistry() = OverlayRegistry(Dict{Any, DispatchTable}(), Dict{Any, DispatchTable}())
+
+"""Check if a function has overlay dispatch (user entries shadowing base)."""
+has_overlay(reg::OverlayRegistry, func_ref) = haskey(reg.overlays, func_ref)
+
+"""Get overlay + base table pair for a function."""
+function get_overlay_pair(reg::OverlayRegistry, func_ref)
+    overlay = get(reg.overlays, func_ref, nothing)
+    base = get(reg.bases, func_ref, nothing)
+    return (overlay, base)
+end
+
+"""
+Build overlay dispatch tables for user-defined methods that shadow functions
+with existing base dispatch tables.
+
+Splits entries in `dt_registry` into base entries (from `base_func_refs`) and
+overlay entries (everything else). Functions that have ONLY base entries keep
+their normal dispatch table. Functions that have BOTH base and user entries
+get split into base_dt + overlay_dt.
+
+Returns an OverlayRegistry. Functions with no overlap are not included.
+"""
+function build_overlay_tables(dt_registry::DispatchTableRegistry,
+                               base_func_refs::Set;
+                               type_registry=nothing)::OverlayRegistry
+    overlay_reg = OverlayRegistry()
+
+    for (func_ref, dt) in dt_registry.tables
+        # Only create overlay if this function has base entries AND user entries
+        base_entries = DispatchEntry[]
+        user_entries = DispatchEntry[]
+
+        for entry in dt.entries
+            # Check if this entry's arg types are in the base set
+            # We use the type_ids to determine if it's a "base" type signature
+            is_base = func_ref in base_func_refs
+            # Actually, we need per-entry granularity. A user might add Point+Point
+            # while base has Int32+Int32. The func_ref is the same (+).
+            # So we check if the entry was contributed by a base specialization
+            # or a user specialization.
+            #
+            # For now, we use a simple heuristic: entries whose arg types are all
+            # "base types" (numeric, string, etc.) go to base_dt. Entries with
+            # user-defined struct types go to overlay_dt.
+            is_base_entry = true
+            if type_registry !== nothing
+                for tid in entry.type_ids
+                    # Check if this typeId corresponds to a user-defined type
+                    # Base types have typeIds assigned during base build; user types
+                    # get typeIds from a counter above the base range.
+                    # For within-module testing, we use a simpler check.
+                    for (T, id) in type_registry.type_ids
+                        if id == tid && !(T <: Number || T <: AbstractString || T <: AbstractChar || T === Bool)
+                            # User-defined struct type
+                            is_base_entry = false
+                            break
+                        end
+                    end
+                    is_base_entry || break
+                end
+            end
+
+            if is_base_entry
+                push!(base_entries, entry)
+            else
+                push!(user_entries, entry)
+            end
+        end
+
+        # Only create overlay if there are BOTH base and user entries
+        isempty(user_entries) && continue
+        isempty(base_entries) && continue
+
+        # Build base dispatch table
+        base_table_size = max(Int32(4), next_pow2_for_load(length(base_entries)))
+        base_dt = DispatchTable(
+            func_ref, dt.arity, base_entries,
+            base_table_size, base_table_size - Int32(1),
+            UInt32(0), UInt32(0), UInt32(0), UInt32(0), UInt32(0), UInt32(0),
+            dt.result_wasm_type
+        )
+
+        # Build overlay dispatch table
+        overlay_table_size = max(Int32(4), next_pow2_for_load(length(user_entries)))
+        overlay_dt = DispatchTable(
+            func_ref, dt.arity, user_entries,
+            overlay_table_size, overlay_table_size - Int32(1),
+            UInt32(0), UInt32(0), UInt32(0), UInt32(0), UInt32(0), UInt32(0),
+            dt.result_wasm_type
+        )
+
+        overlay_reg.overlays[func_ref] = overlay_dt
+        overlay_reg.bases[func_ref] = base_dt
+    end
+
+    return overlay_reg
+end
+
+"""Next power of 2 with load factor ≤ 0.75."""
+function next_pow2_for_load(n_entries::Int)::Int32
+    min_size = ceil(Int, n_entries / 0.75)
+    table_size = Int32(1)
+    while table_size < min_size
+        table_size *= Int32(2)
+    end
+    return table_size
+end
+
+"""
+Emit metadata for overlay dispatch tables (separate from base tables).
+Creates the overlay's globals (keys/values/typeids arrays) and funcref table.
+"""
+function emit_overlay_metadata!(mod::WasmModule,
+                                 type_registry::TypeRegistry,
+                                 overlay_reg::OverlayRegistry)
+    isempty(overlay_reg.overlays) && return
+
+    i32_array_idx = if type_registry.string_array_idx !== nothing
+        type_registry.string_array_idx
+    else
+        add_array_type!(mod, I32, true)
+    end
+
+    # Emit metadata for overlay tables
+    for (func_ref, overlay_dt) in overlay_reg.overlays
+        overlay_dt.i32_array_type_idx = i32_array_idx
+
+        # Create dispatch signature (same as base — anyref params, same result type)
+        param_types = fill(AnyRef, Int(overlay_dt.arity))
+        is_numeric = overlay_dt.result_wasm_type in (I32, I64, F32, F64)
+        is_anyref = overlay_dt.result_wasm_type == AnyRef
+        result_types = if is_numeric
+            WasmValType[overlay_dt.result_wasm_type]
+        elseif is_anyref
+            WasmValType[AnyRef]
+        else
+            WasmValType[]
+        end
+        dispatch_sig_idx = add_type!(mod, FuncType(param_types, result_types))
+        overlay_dt.dispatch_sig_idx = dispatch_sig_idx
+
+        # Create funcref table for overlay wrappers
+        table_idx = add_table!(mod, FuncRef, UInt32(length(overlay_dt.entries)))
+        overlay_dt.func_table_idx = table_idx
+
+        # Build hash table and emit as globals
+        keys, values, type_ids_flat = resolve_table_layout(overlay_dt)
+
+        keys_init = emit_i32_array_init(i32_array_idx, keys)
+        overlay_dt.keys_global_idx = add_global_ref!(mod, i32_array_idx, false, keys_init; nullable=false)
+
+        values_init = emit_i32_array_init(i32_array_idx, values)
+        overlay_dt.values_global_idx = add_global_ref!(mod, i32_array_idx, false, values_init; nullable=false)
+
+        typeids_init = emit_i32_array_init(i32_array_idx, type_ids_flat)
+        overlay_dt.typeids_global_idx = add_global_ref!(mod, i32_array_idx, false, typeids_init; nullable=false)
+    end
+
+    # Emit metadata for base tables (if they don't already have it)
+    for (func_ref, base_dt) in overlay_reg.bases
+        base_dt.i32_array_type_idx = i32_array_idx
+
+        param_types = fill(AnyRef, Int(base_dt.arity))
+        is_numeric = base_dt.result_wasm_type in (I32, I64, F32, F64)
+        is_anyref = base_dt.result_wasm_type == AnyRef
+        result_types = if is_numeric
+            WasmValType[base_dt.result_wasm_type]
+        elseif is_anyref
+            WasmValType[AnyRef]
+        else
+            WasmValType[]
+        end
+        dispatch_sig_idx = add_type!(mod, FuncType(param_types, result_types))
+        base_dt.dispatch_sig_idx = dispatch_sig_idx
+
+        table_idx = add_table!(mod, FuncRef, UInt32(length(base_dt.entries)))
+        base_dt.func_table_idx = table_idx
+
+        keys, values, type_ids_flat = resolve_table_layout(base_dt)
+
+        keys_init = emit_i32_array_init(i32_array_idx, keys)
+        base_dt.keys_global_idx = add_global_ref!(mod, i32_array_idx, false, keys_init; nullable=false)
+
+        values_init = emit_i32_array_init(i32_array_idx, values)
+        base_dt.values_global_idx = add_global_ref!(mod, i32_array_idx, false, values_init; nullable=false)
+
+        typeids_init = emit_i32_array_init(i32_array_idx, type_ids_flat)
+        base_dt.typeids_global_idx = add_global_ref!(mod, i32_array_idx, false, typeids_init; nullable=false)
+    end
+end
+
+"""
+Emit wrapper functions for overlay dispatch tables.
+Called AFTER all actual functions are added to the module.
+"""
+function emit_overlay_wrappers!(mod::WasmModule,
+                                 type_registry::TypeRegistry,
+                                 overlay_reg::OverlayRegistry)
+    isempty(overlay_reg.overlays) && return
+
+    # Emit wrappers for overlay tables
+    for (func_ref, overlay_dt) in overlay_reg.overlays
+        _emit_table_wrappers!(mod, type_registry, overlay_dt)
+    end
+
+    # Emit wrappers for base tables
+    for (func_ref, base_dt) in overlay_reg.bases
+        _emit_table_wrappers!(mod, type_registry, base_dt)
+    end
+end
+
+"""Internal helper: emit wrapper functions and element segment for a dispatch table."""
+function _emit_table_wrappers!(mod::WasmModule,
+                                type_registry::TypeRegistry,
+                                dt::DispatchTable)
+    param_types = fill(AnyRef, Int(dt.arity))
+    is_numeric_return = dt.result_wasm_type in (I32, I64, F32, F64)
+    is_anyref_return = dt.result_wasm_type == AnyRef
+    result_types = if is_numeric_return
+        WasmValType[dt.result_wasm_type]
+    elseif is_anyref_return
+        WasmValType[AnyRef]
+    else
+        WasmValType[]
+    end
+
+    wrapper_indices = UInt32[]
+    for (entry_i, entry) in enumerate(dt.entries)
+        body = UInt8[]
+
+        # For each parameter: local.get + unbox/cast to concrete type
+        for (j, tid) in enumerate(entry.type_ids)
+            concrete_type = nothing
+            for (T, id) in type_registry.type_ids
+                if id == tid
+                    concrete_type = T
+                    break
+                end
+            end
+
+            push!(body, Opcode.LOCAL_GET)
+            append!(body, encode_leb128_unsigned(UInt32(j - 1)))
+
+            if concrete_type !== nothing
+                arg_wasm_type = julia_to_wasm_type(concrete_type)
+                if arg_wasm_type in (I32, I64, F32, F64) && haskey(type_registry.numeric_boxes, arg_wasm_type)
+                    box_idx = type_registry.numeric_boxes[arg_wasm_type]
+                    push!(body, Opcode.GC_PREFIX)
+                    push!(body, Opcode.REF_CAST)
+                    append!(body, encode_leb128_signed(Int64(box_idx)))
+                    push!(body, Opcode.GC_PREFIX)
+                    push!(body, Opcode.STRUCT_GET)
+                    append!(body, encode_leb128_unsigned(box_idx))
+                    append!(body, encode_leb128_unsigned(UInt32(1)))
+                elseif haskey(type_registry.structs, concrete_type)
+                    struct_info = type_registry.structs[concrete_type]
+                    push!(body, Opcode.GC_PREFIX)
+                    push!(body, Opcode.REF_CAST)
+                    append!(body, encode_leb128_signed(Int64(struct_info.wasm_type_idx)))
+                end
+            end
+        end
+
+        push!(body, Opcode.CALL)
+        append!(body, encode_leb128_unsigned(entry.target_idx))
+
+        # Box numeric results when dispatch table uses anyref return
+        if is_anyref_return
+            entry_wasm_type = julia_to_wasm_type(entry.return_type)
+            if entry_wasm_type in (I32, I64, F32, F64)
+                box_idx = get_numeric_box_type!(mod, type_registry, entry_wasm_type)
+                push!(body, Opcode.LOCAL_SET)
+                append!(body, encode_leb128_unsigned(UInt32(Int(dt.arity))))
+                push!(body, Opcode.I32_CONST)
+                push!(body, 0x00)
+                push!(body, Opcode.LOCAL_GET)
+                append!(body, encode_leb128_unsigned(UInt32(Int(dt.arity))))
+                push!(body, Opcode.GC_PREFIX)
+                push!(body, Opcode.STRUCT_NEW)
+                append!(body, encode_leb128_unsigned(box_idx))
+            end
+        end
+
+        push!(body, Opcode.END)
+
+        wrapper_locals = WasmValType[]
+        if is_anyref_return
+            entry_wasm_type = julia_to_wasm_type(entry.return_type)
+            if entry_wasm_type in (I32, I64, F32, F64)
+                push!(wrapper_locals, entry_wasm_type)
+            end
+        end
+
+        wrapper_idx = add_function!(mod, param_types, result_types, wrapper_locals, body)
+        push!(wrapper_indices, wrapper_idx)
+
+        dt.entries[entry_i] = DispatchEntry(
+            entry.type_ids, entry.hash, entry.target_idx, wrapper_idx, entry.return_type
+        )
+    end
+
+    add_elem_segment!(mod, dt.func_table_idx, 0, wrapper_indices)
+end
+
+"""
+Emit overlay dispatch call at a call site.
+Probes the overlay table first; on miss, probes the base table.
+This ensures user-defined methods take priority over frozen Base methods.
+
+Structure:
+  block \$done (result <return_type>)
+    ;; --- Overlay probe ---
+    block \$overlay_miss
+      loop \$overlay_probe
+        ... probe overlay table ...
+        br \$done on match
+        br \$overlay_miss on empty slot
+        br \$overlay_probe to continue probing
+      end
+    end
+    ;; --- Base fallback ---
+    block \$base_miss
+      loop \$base_probe
+        ... probe base table ...
+        br \$done on match
+        br \$base_miss on empty slot
+        br \$base_probe to continue probing
+      end
+    end
+    unreachable
+  end
+"""
+function emit_overlay_dispatch_call!(bytes::Vector{UInt8},
+                                      overlay_dt::DispatchTable,
+                                      base_dt::DispatchTable,
+                                      arg_locals::Vector{UInt32},
+                                      base_struct_idx::UInt32,
+                                      extra_locals::Vector{UInt32})
+    arity = Int(overlay_dt.arity)
+    @assert length(extra_locals) >= arity + 4 "Need $(arity + 4) dispatch locals, got $(length(extra_locals))"
+
+    type_id_locals = extra_locals[1:arity]
+    hash_local = extra_locals[arity + 1]
+    slot_local = extra_locals[arity + 2]
+    key_local = extra_locals[arity + 3]
+    func_idx_local = extra_locals[arity + 4]
+
+    # --- Step 1: Extract typeIds from arguments ---
+    for (j, arg_local) in enumerate(arg_locals)
+        push!(bytes, Opcode.LOCAL_GET)
+        append!(bytes, encode_leb128_unsigned(arg_local))
+        emit_typeof!(bytes, base_struct_idx)
+        push!(bytes, Opcode.LOCAL_SET)
+        append!(bytes, encode_leb128_unsigned(type_id_locals[j]))
+    end
+
+    # --- Step 2: FNV-1a hash ---
+    push!(bytes, Opcode.I32_CONST)
+    append!(bytes, encode_leb128_signed(reinterpret(Int32, FNV_OFFSET_BASIS)))
+    for j in 1:arity
+        push!(bytes, Opcode.LOCAL_GET)
+        append!(bytes, encode_leb128_unsigned(type_id_locals[j]))
+        push!(bytes, Opcode.I32_XOR)
+        push!(bytes, Opcode.I32_CONST)
+        append!(bytes, encode_leb128_signed(reinterpret(Int32, FNV_PRIME)))
+        push!(bytes, Opcode.I32_MUL)
+    end
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(hash_local))
+
+    # --- Determine result block type ---
+    result_block_type = overlay_dt.result_wasm_type
+
+    # block $done (result <return_type>)
+    push!(bytes, Opcode.BLOCK)
+    _emit_block_type!(bytes, result_block_type)
+
+    # ======== OVERLAY PROBE ========
+    # block $overlay_miss
+    push!(bytes, Opcode.BLOCK)
+    push!(bytes, 0x40)  # void
+
+    # slot = hash & overlay_mask
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(hash_local))
+    push!(bytes, Opcode.I32_CONST)
+    append!(bytes, encode_leb128_signed(overlay_dt.mask))
+    push!(bytes, Opcode.I32_AND)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(slot_local))
+
+    # loop $overlay_probe
+    push!(bytes, Opcode.LOOP)
+    push!(bytes, 0x40)  # void
+
+    # Load key: global.get overlay_keys, local.get slot, array.get
+    _emit_table_probe_body!(bytes, overlay_dt, type_id_locals, hash_local,
+                             slot_local, key_local, func_idx_local, arg_locals,
+                             arity,
+                             3,  # br depth to $done (past: overlay_probe, overlay_miss, done)
+                             1)  # br depth to $overlay_miss (past: overlay_probe)
+
+    # Next slot: (slot + 1) & mask
+    _emit_next_slot!(bytes, slot_local, overlay_dt.mask)
+
+    # br $overlay_probe (label 0: loop)
+    push!(bytes, Opcode.BR)
+    append!(bytes, encode_leb128_unsigned(UInt32(0)))
+
+    push!(bytes, Opcode.END)  # end loop $overlay_probe
+    push!(bytes, Opcode.END)  # end block $overlay_miss
+
+    # ======== BASE FALLBACK PROBE ========
+    # block $base_miss
+    push!(bytes, Opcode.BLOCK)
+    push!(bytes, 0x40)  # void
+
+    # slot = hash & base_mask
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(hash_local))
+    push!(bytes, Opcode.I32_CONST)
+    append!(bytes, encode_leb128_signed(base_dt.mask))
+    push!(bytes, Opcode.I32_AND)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(slot_local))
+
+    # loop $base_probe
+    push!(bytes, Opcode.LOOP)
+    push!(bytes, 0x40)  # void
+
+    _emit_table_probe_body!(bytes, base_dt, type_id_locals, hash_local,
+                             slot_local, key_local, func_idx_local, arg_locals,
+                             arity,
+                             3,  # br depth to $done (past: base_probe, base_miss, done)
+                             1)  # br depth to $base_miss (past: base_probe)
+
+    _emit_next_slot!(bytes, slot_local, base_dt.mask)
+
+    push!(bytes, Opcode.BR)
+    append!(bytes, encode_leb128_unsigned(UInt32(0)))
+
+    push!(bytes, Opcode.END)  # end loop $base_probe
+    push!(bytes, Opcode.END)  # end block $base_miss
+
+    # Both tables missed — unreachable
+    push!(bytes, Opcode.UNREACHABLE)
+
+    push!(bytes, Opcode.END)  # end block $done
+end
+
+"""Emit block type byte for a given WasmValType."""
+function _emit_block_type!(bytes::Vector{UInt8}, wasm_type::WasmValType)
+    if wasm_type == I32
+        push!(bytes, 0x7F)
+    elseif wasm_type == I64
+        push!(bytes, 0x7E)
+    elseif wasm_type == F32
+        push!(bytes, 0x7D)
+    elseif wasm_type == F64
+        push!(bytes, 0x7C)
+    elseif wasm_type == AnyRef
+        push!(bytes, 0x6E)
+    else
+        push!(bytes, 0x40)  # void
+    end
+end
+
+"""Emit the probe body for one table (used by both overlay and base probes)."""
+function _emit_table_probe_body!(bytes::Vector{UInt8},
+                                   dt::DispatchTable,
+                                   type_id_locals::Vector{UInt32},
+                                   hash_local::UInt32,
+                                   slot_local::UInt32,
+                                   key_local::UInt32,
+                                   func_idx_local::UInt32,
+                                   arg_locals::Vector{UInt32},
+                                   arity::Int,
+                                   br_done_depth::UInt32,
+                                   br_miss_depth::UInt32)
+    # Load key at slot
+    push!(bytes, Opcode.GLOBAL_GET)
+    append!(bytes, encode_leb128_unsigned(dt.keys_global_idx))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_GET)
+    append!(bytes, encode_leb128_unsigned(dt.i32_array_type_idx))
+    push!(bytes, Opcode.LOCAL_TEE)
+    append!(bytes, encode_leb128_unsigned(key_local))
+
+    # Empty slot → br $miss
+    push!(bytes, Opcode.I32_EQZ)
+    push!(bytes, Opcode.BR_IF)
+    append!(bytes, encode_leb128_unsigned(br_miss_depth))
+
+    # Check key matches hash
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(key_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(hash_local))
+    push!(bytes, Opcode.I32_EQ)
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)  # void
+
+    # Verify typeIds match
+    for j in 1:arity
+        push!(bytes, Opcode.GLOBAL_GET)
+        append!(bytes, encode_leb128_unsigned(dt.typeids_global_idx))
+        push!(bytes, Opcode.LOCAL_GET)
+        append!(bytes, encode_leb128_unsigned(slot_local))
+        if arity > 1
+            push!(bytes, Opcode.I32_CONST)
+            append!(bytes, encode_leb128_signed(dt.arity))
+            push!(bytes, Opcode.I32_MUL)
+            push!(bytes, Opcode.I32_CONST)
+            append!(bytes, encode_leb128_signed(Int32(j - 1)))
+            push!(bytes, Opcode.I32_ADD)
+        end
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_GET)
+        append!(bytes, encode_leb128_unsigned(dt.i32_array_type_idx))
+        push!(bytes, Opcode.LOCAL_GET)
+        append!(bytes, encode_leb128_unsigned(type_id_locals[j]))
+        push!(bytes, Opcode.I32_EQ)
+        if j > 1
+            push!(bytes, Opcode.I32_AND)
+        end
+    end
+
+    # If all typeIds match: load func_idx, push args, call_indirect, br $done
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)  # void
+
+    push!(bytes, Opcode.GLOBAL_GET)
+    append!(bytes, encode_leb128_unsigned(dt.values_global_idx))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_GET)
+    append!(bytes, encode_leb128_unsigned(dt.i32_array_type_idx))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(func_idx_local))
+
+    # Push args
+    for arg_local in arg_locals
+        push!(bytes, Opcode.LOCAL_GET)
+        append!(bytes, encode_leb128_unsigned(arg_local))
+    end
+
+    # Push funcref table element index
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(func_idx_local))
+
+    # call_indirect type_idx table_idx
+    push!(bytes, Opcode.CALL_INDIRECT)
+    append!(bytes, encode_leb128_unsigned(dt.dispatch_sig_idx))
+    append!(bytes, encode_leb128_unsigned(dt.func_table_idx))
+
+    # br $done (needs to account for: typeIds-if, hash-if, loop, miss-block, done)
+    push!(bytes, Opcode.BR)
+    append!(bytes, encode_leb128_unsigned(br_done_depth + UInt32(1)))  # +1 for the two inner if blocks
+
+    push!(bytes, Opcode.END)  # end typeIds match if
+    push!(bytes, Opcode.END)  # end hash match if
+end
+
+"""Emit slot increment: slot = (slot + 1) & mask."""
+function _emit_next_slot!(bytes::Vector{UInt8}, slot_local::UInt32, mask::Int32)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(slot_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.I32_CONST)
+    append!(bytes, encode_leb128_signed(mask))
+    push!(bytes, Opcode.I32_AND)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(slot_local))
+end
+
+"""
+Generate a complete function body for an overlay dispatch caller.
+Probes the overlay table first, then the base table.
+"""
+function generate_overlay_dispatch_caller_body(overlay_dt::DispatchTable,
+                                                base_dt::DispatchTable,
+                                                n_params::Int,
+                                                base_struct_idx::UInt32,
+                                                type_registry)
+    body = UInt8[]
+    locals = WasmValType[]
+    arity = Int(overlay_dt.arity)
+
+    # Allocate anyref locals for storing arguments
+    arg_locals = UInt32[]
+    for j in 1:arity
+        local_idx = UInt32(n_params + length(locals))
+        push!(locals, AnyRef)
+        push!(arg_locals, local_idx)
+    end
+
+    # Store params as anyref
+    for (j, arg_local) in enumerate(arg_locals)
+        push!(body, Opcode.LOCAL_GET)
+        append!(body, encode_leb128_unsigned(UInt32(j - 1)))
+        push!(body, Opcode.LOCAL_SET)
+        append!(body, encode_leb128_unsigned(arg_local))
+    end
+
+    # Allocate i32 locals for dispatch (typeIds + hash/slot/key/func_idx)
+    dispatch_locals = UInt32[]
+    for _ in 1:(arity + 4)
+        local_idx = UInt32(n_params + length(locals))
+        push!(locals, I32)
+        push!(dispatch_locals, local_idx)
+    end
+
+    # Emit dual-probe: overlay → base
+    emit_overlay_dispatch_call!(body, overlay_dt, base_dt, arg_locals,
+                                 base_struct_idx, dispatch_locals)
+
+    push!(body, Opcode.RETURN)
+    push!(body, Opcode.END)
+
+    return (body, locals)
+end
+
+"""
+Check if a CodeInfo body calls a function with an overlay dispatch table.
+Returns (overlay_dt, base_dt) if found, (nothing, nothing) otherwise.
+"""
+function find_overlay_dispatch_call(code_info::Core.CodeInfo,
+                                     overlay_reg::OverlayRegistry)
+    for stmt in code_info.code
+        if stmt isa Expr && stmt.head === :call
+            callee = stmt.args[1]
+            if callee isa GlobalRef
+                callee_func = try
+                    getfield(callee.mod, callee.name)
+                catch
+                    nothing
+                end
+                if callee_func !== nothing && has_overlay(overlay_reg, callee_func)
+                    return get_overlay_pair(overlay_reg, callee_func)
+                end
+            end
+        end
+    end
+    return (nothing, nothing)
+end
+
+"""
+Load base dispatch metadata from a serialized Dict (from dispatch-tables.json).
+Returns a Dict mapping function name → metadata for overlay table construction.
+"""
+function load_dispatch_metadata(data::Vector)::Dict{String, Dict{String, Any}}
+    result = Dict{String, Dict{String, Any}}()
+    for table_data in data
+        func_name = table_data["function"]
+        result[func_name] = table_data
+    end
+    return result
+end
