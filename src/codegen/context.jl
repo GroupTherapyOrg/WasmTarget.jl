@@ -494,6 +494,11 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
             if all_numeric_u
                 # Numeric-only union: use widest numeric type (no struct boxing needed).
                 # PURE-325: resolve_union_type handles Int128/BigInt/UInt128 unions correctly.
+                # PURE-9030: Mixed int/float unions (e.g., Union{Int32, Float64}) need AnyRef
+                # for runtime dispatch via ref.test/ref.cast. Don't downgrade to ExternRef.
+                if needs_anyref_boxing(T)
+                    return AnyRef
+                end
                 result = julia_to_wasm_type(T)
                 # PURE-908: Never return AnyRef for locals — use ExternRef instead
                 return result === AnyRef ? ExternRef : result

@@ -86,7 +86,12 @@ function _compile_function_legacy(f, arg_types::Tuple, func_name::String)::WasmM
     param_types = WasmValType[]
     for (i, T) in enumerate(arg_types)
         if !(i in global_args)
-            push!(param_types, get_concrete_wasm_type(T, mod, type_registry))
+            # PURE-9030: Union params with mixed int/float need anyref for runtime dispatch
+            if T isa Union && needs_anyref_boxing(T)
+                push!(param_types, AnyRef)
+            else
+                push!(param_types, get_concrete_wasm_type(T, mod, type_registry))
+            end
         end
     end
     result_types = (return_type === Nothing || return_type === Union{}) ? WasmValType[] : WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
@@ -1484,7 +1489,12 @@ function compile_module(functions::Vector;
         param_types = WasmValType[]
         for (j, T) in enumerate(arg_types)
             if !(j in global_args)
-                push!(param_types, get_concrete_wasm_type(T, mod, type_registry))
+                # PURE-9030: Union params with mixed int/float need anyref for runtime dispatch
+                if T isa Union && needs_anyref_boxing(T)
+                    push!(param_types, AnyRef)
+                else
+                    push!(param_types, get_concrete_wasm_type(T, mod, type_registry))
+                end
             end
         end
         result_types = (return_type === Nothing || return_type === Union{}) ? WasmValType[] : WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
@@ -1634,7 +1644,12 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
         # Get param/result types
         param_types = WasmValType[]
         for (j, T) in enumerate(arg_types)
-            push!(param_types, get_concrete_wasm_type(T, mod, type_registry))
+            # PURE-9030: Union params with mixed int/float need anyref for runtime dispatch
+            if T isa Union && needs_anyref_boxing(T)
+                push!(param_types, AnyRef)
+            else
+                push!(param_types, get_concrete_wasm_type(T, mod, type_registry))
+            end
         end
         result_types = (return_type === Nothing || return_type === Union{}) ? WasmValType[] : WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
 

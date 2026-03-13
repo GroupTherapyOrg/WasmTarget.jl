@@ -425,12 +425,7 @@ function find_common_wasm_type(types::Vector)::WasmValType
                          t === Int || t === Bool || t === Int8 || t === UInt8 ||
                          t === Int16 || t === UInt16, types)
 
-        # PURE-9030: Mixed int+float unions need anyref boxing for runtime dispatch.
-        # Widening Int32→Float64 loses type identity, breaking isa() checks.
-        # Same-category unions (all int or all float) can still widen safely.
-        if has_float && has_int
-            return AnyRef
-        elseif has_float
+        if has_float
             return has_f64 ? F64 : F32
         elseif has_i64
             return I64
@@ -459,6 +454,30 @@ function find_common_wasm_type(types::Vector)::WasmValType
     # Heterogeneous union (mix of primitives, strings, structs, etc.)
     # PURE-9020: Use anyref as the universal boxed value type (supports ref.cast/ref.test)
     return AnyRef
+end
+
+"""
+    needs_anyref_boxing(T::Union)::Bool
+
+PURE-9030: Check if a Union type needs anyref boxing for runtime dispatch.
+Returns true when the union has members with incompatible Wasm types (e.g., Int32+Float64),
+meaning widening loses type identity and isa() checks can't work.
+Used to override parameter types to anyref in function signatures.
+"""
+function needs_anyref_boxing(T::Union)::Bool
+    types = Base.uniontypes(T)
+    non_nothing = filter(t -> t !== Nothing, types)
+    length(non_nothing) < 2 && return false
+    # Check if all are numeric
+    all(t -> t <: Number, non_nothing) || return false
+    # Check if they have mixed Wasm categories (int vs float)
+    wasm_types = Set{WasmValType}()
+    for t in non_nothing
+        push!(wasm_types, julia_to_wasm_type(t))
+    end
+    has_int = any(w -> w === I32 || w === I64, wasm_types)
+    has_float = any(w -> w === F32 || w === F64, wasm_types)
+    return has_int && has_float
 end
 
 """
