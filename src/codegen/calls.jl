@@ -411,21 +411,21 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, Opcode.I64_EXTEND_I32_S)
             return bytes
         elseif arg_type <: AbstractVector
-            # For Vector, length is v.size[1] (logical size from struct field 1)
-            # Vector is now a struct with (ref, size) where size is Tuple{Int64}
+            # For Vector, length is v.size[1] (logical size from struct field 2)
+            # Vector is now a struct with (typeId, ref, size) where size is Tuple{Int64}
             if haskey(ctx.type_registry.structs, arg_type)
                 info = ctx.type_registry.structs[arg_type]
 
                 # Get the vector struct
                 append!(bytes, compile_value(arg, ctx))
 
-                # Get field 1 (size tuple)
+                # Get field 2 (size tuple; field 0 = typeId, field 1 = ref)
                 push!(bytes, Opcode.GC_PREFIX)
                 push!(bytes, Opcode.STRUCT_GET)
                 append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
-                append!(bytes, encode_leb128_unsigned(1))  # Field 1 = size tuple
+                append!(bytes, encode_leb128_unsigned(2))  # Field 2 = size tuple (0=typeId, 1=ref)
 
-                # Get field 0 of the size tuple (the Int64 value)
+                # Get field 1 of the size tuple (the Int64 value; field 0 = typeId)
                 # Size tuple is Tuple{Int64}
                 size_tuple_type = Tuple{Int64}
                 if haskey(ctx.type_registry.structs, size_tuple_type)
@@ -433,7 +433,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     push!(bytes, Opcode.GC_PREFIX)
                     push!(bytes, Opcode.STRUCT_GET)
                     append!(bytes, encode_leb128_unsigned(size_info.wasm_type_idx))
-                    append!(bytes, encode_leb128_unsigned(0))  # Field 0 of tuple
+                    append!(bytes, encode_leb128_unsigned(1))  # Field 1 of tuple (0=typeId)
                 end
                 return bytes
             end
@@ -505,17 +505,17 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, Opcode.LOCAL_TEE)
             append!(bytes, encode_leb128_unsigned(vec_local))
 
-            # Get size tuple (field 1)
+            # Get size tuple (field 2; field 0 = typeId, field 1 = ref)
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.STRUCT_GET)
             append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
-            append!(bytes, encode_leb128_unsigned(1))
+            append!(bytes, encode_leb128_unsigned(2))  # Field 2 = size tuple (0=typeId, 1=ref)
 
-            # Get size value (field 0 of tuple)
+            # Get size value (field 1 of tuple; field 0 = typeId)
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.STRUCT_GET)
             append!(bytes, encode_leb128_unsigned(size_info.wasm_type_idx))
-            append!(bytes, encode_leb128_unsigned(0))
+            append!(bytes, encode_leb128_unsigned(1))  # Field 1 of tuple (0=typeId)
 
             # Add 1 to get new size
             push!(bytes, Opcode.I64_CONST)
@@ -523,11 +523,15 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, Opcode.I64_ADD)
 
             # Store new_size in local
-            push!(bytes, Opcode.LOCAL_TEE)
+            push!(bytes, Opcode.LOCAL_SET)
             append!(bytes, encode_leb128_unsigned(size_local))
 
             # Create new size tuple with new_size
-            # struct.new for Tuple{Int64}
+            # struct.new for Tuple{Int64} (typeId=0, then value)
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x00)  # typeId
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(size_local))
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.STRUCT_NEW)
             append!(bytes, encode_leb128_unsigned(size_info.wasm_type_idx))
@@ -546,16 +550,16 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.STRUCT_SET)
             append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
-            append!(bytes, encode_leb128_unsigned(1))  # Field 1 = size
+            append!(bytes, encode_leb128_unsigned(2))  # Field 2 = size (0=typeId, 1=ref)
 
             # Now set the element at index new_size
-            # Get ref (field 0 of vec)
+            # Get ref (field 1 of vec; field 0 = typeId)
             push!(bytes, Opcode.LOCAL_GET)
             append!(bytes, encode_leb128_unsigned(vec_local))
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.STRUCT_GET)
             append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
-            append!(bytes, encode_leb128_unsigned(0))  # Field 0 = ref (array)
+            append!(bytes, encode_leb128_unsigned(1))  # Field 1 = ref/data array (0=typeId)
 
             # Index: new_size - 1 (convert to 0-based)
             push!(bytes, Opcode.LOCAL_GET)
@@ -678,30 +682,30 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, Opcode.LOCAL_TEE)
             append!(bytes, encode_leb128_unsigned(vec_local))
 
-            # Get size tuple (field 1)
+            # Get size tuple (field 2; field 0 = typeId, field 1 = ref)
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.STRUCT_GET)
             append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
-            append!(bytes, encode_leb128_unsigned(1))
+            append!(bytes, encode_leb128_unsigned(2))  # Field 2 = size tuple (0=typeId, 1=ref)
 
-            # Get size value (field 0 of tuple)
+            # Get size value (field 1 of tuple; field 0 = typeId)
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.STRUCT_GET)
             append!(bytes, encode_leb128_unsigned(size_info.wasm_type_idx))
-            append!(bytes, encode_leb128_unsigned(0))
+            append!(bytes, encode_leb128_unsigned(1))  # Field 1 of tuple (0=typeId)
 
             # Store size in local
             push!(bytes, Opcode.LOCAL_TEE)
             append!(bytes, encode_leb128_unsigned(size_local))
 
             # Get element at index size (1-based, so we use size-1 for 0-based)
-            # First get ref
+            # First get ref (field 1; field 0 = typeId)
             push!(bytes, Opcode.LOCAL_GET)
             append!(bytes, encode_leb128_unsigned(vec_local))
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.STRUCT_GET)
             append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
-            append!(bytes, encode_leb128_unsigned(0))  # Field 0 = ref
+            append!(bytes, encode_leb128_unsigned(1))  # Field 1 = ref/data array (0=typeId)
 
             # Index: size - 1 (convert to 0-based)
             push!(bytes, Opcode.LOCAL_GET)
@@ -727,7 +731,16 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, 0x01)
             push!(bytes, Opcode.I64_SUB)
 
-            # Create new size tuple
+            # Save new_size, push typeId first, then new_size for struct.new
+            _pop_newsize_local = allocate_local!(ctx, Int64)
+            push!(bytes, Opcode.LOCAL_SET)
+            append!(bytes, encode_leb128_unsigned(_pop_newsize_local))
+
+            # Create new size tuple (typeId=0, then value)
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x00)  # typeId
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(_pop_newsize_local))
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.STRUCT_NEW)
             append!(bytes, encode_leb128_unsigned(size_info.wasm_type_idx))
@@ -745,7 +758,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.STRUCT_SET)
             append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
-            append!(bytes, encode_leb128_unsigned(1))  # Field 1 = size
+            append!(bytes, encode_leb128_unsigned(2))  # Field 2 = size (0=typeId, 1=ref)
 
             # Return the element
             push!(bytes, Opcode.LOCAL_GET)
@@ -816,18 +829,18 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             end
 
             if field_sym === :ref
-                # :ref returns the underlying array reference (field 0 of struct)
+                # :ref returns the underlying array reference (field 1 of struct; field 0 = typeId)
                 append!(bytes, compile_value(obj_arg, ctx))
                 push!(bytes, Opcode.GC_PREFIX)
                 push!(bytes, Opcode.STRUCT_GET)
                 if haskey(ctx.type_registry.structs, obj_type)
                     info = ctx.type_registry.structs[obj_type]
                     append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
-                    append!(bytes, encode_leb128_unsigned(0))  # Field 0 = data array
+                    append!(bytes, encode_leb128_unsigned(1))  # Field 1 = data array (0=typeId)
                 end
                 return bytes
             elseif field_sym === :size
-                # :size returns a Tuple containing the dimensions (field 1 of struct)
+                # :size returns a Tuple containing the dimensions (field 2 of struct; field 0 = typeId)
                 # For Vector: Tuple{Int64}, for Matrix: Tuple{Int64, Int64}, etc.
                 append!(bytes, compile_value(obj_arg, ctx))
                 push!(bytes, Opcode.GC_PREFIX)
@@ -835,7 +848,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 if haskey(ctx.type_registry.structs, obj_type)
                     info = ctx.type_registry.structs[obj_type]
                     append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
-                    append!(bytes, encode_leb128_unsigned(1))  # Field 1 = size tuple
+                    append!(bytes, encode_leb128_unsigned(2))  # Field 2 = size tuple (0=typeId, 1=ref)
                 end
                 return bytes
             end
@@ -1013,14 +1026,14 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                         push!(bytes, Opcode.LOCAL_SET)
                         append!(bytes, encode_leb128_unsigned(tuple_local))
 
-                        # Push all fields onto stack
+                        # Push all fields onto stack (account for typeId at field 0)
                         for i in 0:(length(elem_types)-1)
                             push!(bytes, Opcode.LOCAL_GET)
                             append!(bytes, encode_leb128_unsigned(tuple_local))
                             push!(bytes, Opcode.GC_PREFIX)
                             push!(bytes, Opcode.STRUCT_GET)
                             append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
-                            append!(bytes, encode_leb128_unsigned(i))
+                            append!(bytes, encode_leb128_unsigned(i + Int(info.field_offset)))  # skip typeId
                         end
 
                         # Create array from fields
@@ -1502,6 +1515,10 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         if haskey(ctx.type_registry.structs, tuple_type)
             info = ctx.type_registry.structs[tuple_type]
 
+            # Push typeId for tuple struct (field 0 = typeId)
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x00)  # typeId
+
             # Push all tuple elements with type safety for externref fields
             # PURE-142: Core.tuple args may be phi locals typed as i64 but
             # struct field expects externref (Any-typed tuple element)
@@ -1509,8 +1526,11 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             for (fi, arg) in enumerate(args)
                 arg_bytes = compile_value(arg, ctx)
                 expected_wasm = nothing
-                if struct_type_def isa StructType && fi <= length(struct_type_def.fields)
-                    expected_wasm = struct_type_def.fields[fi].valtype
+                # Account for typeId at field 0: struct_type_def.fields is 1-indexed,
+                # wasm field for Julia field fi is at position fi + field_offset
+                local wasm_fi = fi + Int(info.field_offset)
+                if struct_type_def isa StructType && wasm_fi <= length(struct_type_def.fields)
+                    expected_wasm = struct_type_def.fields[wasm_fi].valtype
                 end
                 if expected_wasm === ExternRef
                     # Check if arg_bytes is a numeric value (i32/i64 const or numeric local)
@@ -1650,7 +1670,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
             if field_sym === :ref && haskey(ctx.type_registry.structs, obj_type)
                 # PURE-325: setfield!(vector, :ref, new_memref) — update data array
-                # :ref is field index 0 in the Vector struct
+                # :ref is field index 1 in the Vector struct (field 0 = typeId)
                 # Guard: only handle if value_arg has a local (skip multi-arg memoryrefnew)
                 value_has_local = false
                 if value_arg isa Core.SSAValue && haskey(ctx.ssa_locals, value_arg.id)
@@ -1673,7 +1693,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     push!(bytes, Opcode.GC_PREFIX)
                     push!(bytes, Opcode.STRUCT_SET)
                     append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
-                    append!(bytes, encode_leb128_unsigned(0))  # Field 0 = data array ref
+                    append!(bytes, encode_leb128_unsigned(1))  # Field 1 = data array ref (0=typeId)
                     push!(bytes, Opcode.LOCAL_GET)
                     append!(bytes, encode_leb128_unsigned(temp_local))
                     return bytes
@@ -1681,7 +1701,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 # Fall through to generic handling for multi-arg memoryrefnew values
             elseif field_sym === :size && haskey(ctx.type_registry.structs, obj_type)
                 info = ctx.type_registry.structs[obj_type]
-                # :size is field index 2 (1-indexed), so 1 in 0-indexed
+                # :size is field index 2 (0=typeId, 1=ref, 2=size)
                 # struct.set expects: [ref, value]
 
                 # IMPORTANT: The value_arg might be an SSA that was just computed and
@@ -1709,7 +1729,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 push!(bytes, Opcode.GC_PREFIX)
                 push!(bytes, Opcode.STRUCT_SET)
                 append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
-                append!(bytes, encode_leb128_unsigned(1))  # Field 1 = size tuple
+                append!(bytes, encode_leb128_unsigned(2))  # Field 2 = size tuple (0=typeId, 1=ref)
 
                 # setfield! returns the value, so push it again
                 push!(bytes, Opcode.LOCAL_GET)
@@ -2067,7 +2087,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.STRUCT_GET)
             append!(bytes, encode_leb128_unsigned(box_type))
-            append!(bytes, encode_leb128_unsigned(UInt32(0)))
+            append!(bytes, encode_leb128_unsigned(UInt32(1)))  # Field 1 = value (0=typeId)
         end
     end
 
@@ -2182,7 +2202,14 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, Opcode.LOCAL_GET)
             append!(bytes, encode_leb128_unsigned(local_b))
             push!(bytes, is_32bit ? Opcode.I32_MUL : Opcode.I64_MUL)
-            push!(bytes, Opcode.LOCAL_TEE)
+            push!(bytes, Opcode.LOCAL_SET)
+            append!(bytes, encode_leb128_unsigned(local_result))
+
+            # Push typeId for Tuple struct (field 0 = typeId)
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x00)  # typeId
+            # Push result back for tuple field 1
+            push!(bytes, Opcode.LOCAL_GET)
             append!(bytes, encode_leb128_unsigned(local_result))
 
             if is_32bit
@@ -2294,7 +2321,14 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, Opcode.LOCAL_GET)
             append!(bytes, encode_leb128_unsigned(local_b))
             push!(bytes, is_32bit ? Opcode.I32_ADD : Opcode.I64_ADD)
-            push!(bytes, Opcode.LOCAL_TEE)
+            push!(bytes, Opcode.LOCAL_SET)
+            append!(bytes, encode_leb128_unsigned(local_result))
+
+            # Push typeId for Tuple struct (field 0 = typeId)
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x00)  # typeId
+            # Push result back for tuple field 1
+            push!(bytes, Opcode.LOCAL_GET)
             append!(bytes, encode_leb128_unsigned(local_result))
 
             # Result is on stack — extend to i64 for tuple if needed
@@ -2368,7 +2402,14 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, Opcode.LOCAL_GET)
             append!(bytes, encode_leb128_unsigned(local_b))
             push!(bytes, is_32bit ? Opcode.I32_SUB : Opcode.I64_SUB)
-            push!(bytes, Opcode.LOCAL_TEE)
+            push!(bytes, Opcode.LOCAL_SET)
+            append!(bytes, encode_leb128_unsigned(local_result))
+
+            # Push typeId for Tuple struct (field 0 = typeId)
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x00)  # typeId
+            # Push result back for tuple field 1
+            push!(bytes, Opcode.LOCAL_GET)
             append!(bytes, encode_leb128_unsigned(local_result))
 
             if is_32bit
@@ -2537,7 +2578,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.STRUCT_GET)
             append!(bytes, encode_leb128_unsigned(type_idx))
-            append!(bytes, encode_leb128_unsigned(1))  # hi field
+            append!(bytes, encode_leb128_unsigned(2))  # Field 2 = hi (0=typeId, 1=lo)
 
             # Check if negative (hi < 0)
             push!(bytes, Opcode.I64_CONST)
@@ -2926,19 +2967,19 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     for fi in 1:n_fields
                         local egal_ft = egal_info.field_types[fi]
                         local egal_wt = julia_to_wasm_type(egal_ft)
-                        # Get field fi-1 (0-indexed) from both structs
+                        # Get wasm field index (accounts for typeId at field 0)
                         push!(bytes, Opcode.LOCAL_GET)
                         append!(bytes, encode_leb128_unsigned(egal_local1))
                         push!(bytes, Opcode.GC_PREFIX)
                         push!(bytes, Opcode.STRUCT_GET)
                         append!(bytes, encode_leb128_unsigned(egal_type_idx))
-                        append!(bytes, encode_leb128_unsigned(fi - 1))
+                        append!(bytes, encode_leb128_unsigned(wasm_field_idx(egal_info, fi)))
                         push!(bytes, Opcode.LOCAL_GET)
                         append!(bytes, encode_leb128_unsigned(egal_local2))
                         push!(bytes, Opcode.GC_PREFIX)
                         push!(bytes, Opcode.STRUCT_GET)
                         append!(bytes, encode_leb128_unsigned(egal_type_idx))
-                        append!(bytes, encode_leb128_unsigned(fi - 1))
+                        append!(bytes, encode_leb128_unsigned(wasm_field_idx(egal_info, fi)))
                         # Compare with type-appropriate opcode
                         if egal_wt === I32
                             push!(bytes, Opcode.I32_EQ)
@@ -3560,7 +3601,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 push!(bytes, Opcode.I64_EXTEND_I32_S)
             end
         elseif target_type === Int128 || target_type === UInt128
-            # Sign-extending to 128-bit - create struct with (lo=value, hi=sign_extension)
+            # Sign-extending to 128-bit - create struct with (typeId, lo=value, hi=sign_extension)
             # The value is already on the stack (i64)
             source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
 
@@ -3585,20 +3626,22 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, 0x3f)  # 63
             push!(bytes, Opcode.I64_SHR_S)
 
-            # Stack: [hi]. Need [lo, hi] for struct.new
-            # Save hi to scratch, then push lo, then hi
+            # Stack: [hi]. Need [typeId, lo, hi] for struct.new
+            # Save hi to scratch, then push typeId, lo, hi
             scratch2_idx = ctx.n_params + length(ctx.locals)
             push!(ctx.locals, I64)
             push!(bytes, Opcode.LOCAL_SET)
             append!(bytes, encode_leb128_unsigned(scratch2_idx))
 
-            # Stack: [] — push in struct field order: lo first, then hi
+            # Stack: [] — push in struct field order: typeId, lo, hi
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x00)  # typeId
             push!(bytes, Opcode.LOCAL_GET)
             append!(bytes, encode_leb128_unsigned(scratch_idx))
             push!(bytes, Opcode.LOCAL_GET)
             append!(bytes, encode_leb128_unsigned(scratch2_idx))
 
-            # Create the 128-bit struct (lo, hi)
+            # Create the 128-bit struct (typeId, lo, hi)
             type_idx = get_int128_type!(ctx.mod, ctx.type_registry, target_type)
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.STRUCT_NEW)
@@ -3627,7 +3670,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 push!(bytes, Opcode.I64_EXTEND_I32_U)
             end
         elseif target_type === Int128 || target_type === UInt128
-            # Extending to 128-bit - create struct with (lo=value, hi=0)
+            # Extending to 128-bit - create struct with (typeId, lo=value, hi=0)
             # The value is already on the stack (i64), need to create 128-bit struct
             source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : UInt64
 
@@ -3638,11 +3681,20 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             end
 
             # Now we have i64 on stack (the lo part)
+            # Save lo to scratch, push typeId, restore lo, then push hi=0
+            _zext_scratch = length(ctx.locals) + ctx.n_params
+            push!(ctx.locals, I64)
+            push!(bytes, Opcode.LOCAL_SET)
+            append!(bytes, encode_leb128_unsigned(_zext_scratch))
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x00)  # typeId
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(_zext_scratch))
             # Push 0 for hi part
             push!(bytes, Opcode.I64_CONST)
             push!(bytes, 0x00)
 
-            # Create the 128-bit struct (lo, hi)
+            # Create the 128-bit struct (typeId, lo, hi)
             type_idx = get_int128_type!(ctx.mod, ctx.type_registry, target_type)
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.STRUCT_NEW)
@@ -3686,7 +3738,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.STRUCT_GET)
             append!(bytes, encode_leb128_unsigned(source_type_idx))
-            append!(bytes, encode_leb128_unsigned(0))  # Field 0 = lo
+            append!(bytes, encode_leb128_unsigned(1))  # Field 1 = lo (0=typeId)
 
             # Now we have i64, may need to wrap to i32
             if target_is_32bit
@@ -4354,6 +4406,15 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                             # PURE-9022: Numeric value to anyref — box via struct_new (no extern.convert needed)
                             # struct_new produces a GC ref which is a subtype of anyref
                             local box_type_idx_any = get_numeric_box_type!(ctx.mod, ctx.type_registry, actual_wasm)
+                            # Save value, push typeId, restore value, then struct_new
+                            local _box_scratch_any = length(ctx.locals) + ctx.n_params
+                            push!(ctx.locals, actual_wasm)
+                            push!(bytes, Opcode.LOCAL_SET)
+                            append!(bytes, encode_leb128_unsigned(_box_scratch_any))
+                            push!(bytes, Opcode.I32_CONST)
+                            push!(bytes, 0x00)  # typeId
+                            push!(bytes, Opcode.LOCAL_GET)
+                            append!(bytes, encode_leb128_unsigned(_box_scratch_any))
                             push!(bytes, Opcode.GC_PREFIX)
                             push!(bytes, Opcode.STRUCT_NEW)
                             append!(bytes, encode_leb128_unsigned(box_type_idx_any))
@@ -4362,6 +4423,15 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                             # This happens when a function expects Any (externref) but the actual value is numeric
                             # (e.g., Int64 → externref for cross-function calls with abstract signatures).
                             local box_type_idx_arg = get_numeric_box_type!(ctx.mod, ctx.type_registry, actual_wasm)
+                            # Save value, push typeId, restore value, then struct_new
+                            local _box_scratch_ext = length(ctx.locals) + ctx.n_params
+                            push!(ctx.locals, actual_wasm)
+                            push!(bytes, Opcode.LOCAL_SET)
+                            append!(bytes, encode_leb128_unsigned(_box_scratch_ext))
+                            push!(bytes, Opcode.I32_CONST)
+                            push!(bytes, 0x00)  # typeId
+                            push!(bytes, Opcode.LOCAL_GET)
+                            append!(bytes, encode_leb128_unsigned(_box_scratch_ext))
                             push!(bytes, Opcode.GC_PREFIX)
                             push!(bytes, Opcode.STRUCT_NEW)
                             append!(bytes, encode_leb128_unsigned(box_type_idx_arg))
@@ -4535,6 +4605,10 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                             push!(bytes, Opcode.LOCAL_SET)
                             append!(bytes, encode_leb128_unsigned(tuple_local))
 
+                            # Push typeId for NamedTuple struct (field 0 = typeId)
+                            push!(bytes, Opcode.I32_CONST)
+                            push!(bytes, 0x00)  # typeId
+
                             # Extract each field from tuple and push for struct.new
                             for (i, (name, vtype)) in enumerate(zip(names, value_types))
                                 push!(bytes, Opcode.LOCAL_GET)
@@ -4542,7 +4616,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                                 push!(bytes, Opcode.GC_PREFIX)
                                 push!(bytes, Opcode.STRUCT_GET)
                                 append!(bytes, encode_leb128_unsigned(tuple_info.wasm_type_idx))
-                                append!(bytes, encode_leb128_unsigned(i - 1))  # 0-indexed field
+                                append!(bytes, encode_leb128_unsigned(wasm_field_idx(tuple_info, i)))  # account for typeId
                             end
 
                             # Create the NamedTuple struct
@@ -4684,7 +4758,9 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, Opcode.LOCAL_SET)
             append!(bytes, encode_leb128_unsigned(data_arr_local))
 
-            # Step 3: Create Tuple{Int64} for size → local
+            # Step 3: Create Tuple{Int64} for size → local (typeId, then value)
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x00)  # typeId
             push!(bytes, Opcode.I64_CONST)
             append!(bytes, encode_leb128_signed(Int64(n_expr_args)))
             push!(bytes, Opcode.GC_PREFIX)
@@ -4695,10 +4771,15 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             append!(bytes, encode_leb128_unsigned(size_local))
 
             # Step 4: Assemble Expr struct
-            # Push head (Expr field 0)
+            # Push typeId for Expr struct (field 0 = typeId)
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x00)  # typeId
+            # Push head (Expr field 1)
             push!(bytes, Opcode.LOCAL_GET)
             append!(bytes, encode_leb128_unsigned(head_local))
-            # Create Vector{Any} inline (Expr field 1): push data_array, size_tuple, struct.new
+            # Create Vector{Any} inline (Expr field 2): push typeId, data_array, size_tuple, struct.new
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x00)  # typeId for Vector{Any}
             push!(bytes, Opcode.LOCAL_GET)
             append!(bytes, encode_leb128_unsigned(data_arr_local))
             push!(bytes, Opcode.LOCAL_GET)
@@ -4706,7 +4787,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.STRUCT_NEW)
             append!(bytes, encode_leb128_unsigned(vec_any_info.wasm_type_idx))
-            # struct.new Expr with (head, vector)
+            # struct.new Expr with (typeId, head, vector)
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.STRUCT_NEW)
             append!(bytes, encode_leb128_unsigned(expr_info.wasm_type_idx))

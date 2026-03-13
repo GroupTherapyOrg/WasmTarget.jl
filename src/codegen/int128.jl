@@ -50,7 +50,7 @@ function emit_int128_add(ctx, result_type::Type)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(type_idx))
-    append!(bytes, encode_leb128_unsigned(0))  # lo field
+    append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
     push!(bytes, Opcode.LOCAL_SET)
     append!(bytes, encode_leb128_unsigned(a_lo_local))
 
@@ -59,7 +59,7 @@ function emit_int128_add(ctx, result_type::Type)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(type_idx))
-    append!(bytes, encode_leb128_unsigned(1))  # hi field
+    append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
     push!(bytes, Opcode.LOCAL_SET)
     append!(bytes, encode_leb128_unsigned(a_hi_local))
 
@@ -69,7 +69,7 @@ function emit_int128_add(ctx, result_type::Type)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(type_idx))
-    append!(bytes, encode_leb128_unsigned(0))  # lo field
+    append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
     push!(bytes, Opcode.LOCAL_SET)
     append!(bytes, encode_leb128_unsigned(b_lo_local))
 
@@ -78,7 +78,7 @@ function emit_int128_add(ctx, result_type::Type)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(type_idx))
-    append!(bytes, encode_leb128_unsigned(1))  # hi field
+    append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
     push!(bytes, Opcode.LOCAL_SET)
     append!(bytes, encode_leb128_unsigned(b_hi_local))
 
@@ -113,7 +113,9 @@ function emit_int128_add(ctx, result_type::Type)::Vector{UInt8}
     push!(bytes, Opcode.LOCAL_SET)
     append!(bytes, encode_leb128_unsigned(hi_local))
 
-    # Stack: [] — push in struct field order: lo first, then hi
+    # Stack: [] — push in struct field order: typeId first, then lo, then hi
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)  # typeId = 0
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(result_lo_local))
     push!(bytes, Opcode.LOCAL_GET)
@@ -172,7 +174,7 @@ function emit_int128_sub(ctx, result_type::Type)::Vector{UInt8}
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_GET)
         append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(0))
+        append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
         push!(bytes, Opcode.LOCAL_SET)
         append!(bytes, encode_leb128_unsigned(lo_local))
 
@@ -181,7 +183,7 @@ function emit_int128_sub(ctx, result_type::Type)::Vector{UInt8}
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_GET)
         append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(1))
+        append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
         push!(bytes, Opcode.LOCAL_SET)
         append!(bytes, encode_leb128_unsigned(hi_local))
     end
@@ -217,7 +219,9 @@ function emit_int128_sub(ctx, result_type::Type)::Vector{UInt8}
     push!(bytes, Opcode.LOCAL_SET)
     append!(bytes, encode_leb128_unsigned(result_hi_local))
 
-    # Create result struct: (result_lo, result_hi)
+    # Create result struct: (typeId, result_lo, result_hi)
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)  # typeId = 0
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(result_lo_local))
     push!(bytes, Opcode.LOCAL_GET)
@@ -269,7 +273,7 @@ function emit_int128_mul(ctx, result_type::Type)::Vector{UInt8}
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_GET)
         append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(0))
+        append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
         push!(bytes, Opcode.LOCAL_SET)
         append!(bytes, encode_leb128_unsigned(lo_local))
 
@@ -278,7 +282,7 @@ function emit_int128_mul(ctx, result_type::Type)::Vector{UInt8}
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_GET)
         append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(1))
+        append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
         push!(bytes, Opcode.LOCAL_SET)
         append!(bytes, encode_leb128_unsigned(hi_local))
     end
@@ -323,6 +327,8 @@ function emit_int128_mul(ctx, result_type::Type)::Vector{UInt8}
     append!(bytes, encode_leb128_unsigned(result_hi_local))
 
     # Create result struct
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)  # typeId = 0
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(result_lo_local))
     push!(bytes, Opcode.LOCAL_GET)
@@ -360,7 +366,7 @@ function emit_int128_neg(ctx, result_type::Type)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(type_idx))
-    append!(bytes, encode_leb128_unsigned(0))  # lo
+    append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
     push!(bytes, Opcode.LOCAL_SET)
     append!(bytes, encode_leb128_unsigned(x_lo_local))
 
@@ -369,7 +375,7 @@ function emit_int128_neg(ctx, result_type::Type)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(type_idx))
-    append!(bytes, encode_leb128_unsigned(1))  # hi
+    append!(bytes, encode_leb128_unsigned(2))  # hi (offset by 1 for typeId at field 0)
     push!(bytes, Opcode.LOCAL_SET)
     append!(bytes, encode_leb128_unsigned(x_hi_local))
 
@@ -415,6 +421,8 @@ function emit_int128_neg(ctx, result_type::Type)::Vector{UInt8}
     append!(bytes, encode_leb128_unsigned(result_hi_local))
 
     # Create result struct
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)  # typeId = 0
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(result_lo_local))
     push!(bytes, Opcode.LOCAL_GET)
@@ -463,7 +471,7 @@ function emit_int128_slt(ctx, arg_type::Type)::Vector{UInt8}
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_GET)
         append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(0))
+        append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
         push!(bytes, Opcode.LOCAL_SET)
         append!(bytes, encode_leb128_unsigned(lo_local))
 
@@ -472,7 +480,7 @@ function emit_int128_slt(ctx, arg_type::Type)::Vector{UInt8}
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_GET)
         append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(1))
+        append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
         push!(bytes, Opcode.LOCAL_SET)
         append!(bytes, encode_leb128_unsigned(hi_local))
     end
@@ -552,7 +560,7 @@ function emit_int128_ult(ctx, arg_type::Type)::Vector{UInt8}
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_GET)
         append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(0))
+        append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
         push!(bytes, Opcode.LOCAL_SET)
         append!(bytes, encode_leb128_unsigned(lo_local))
 
@@ -561,7 +569,7 @@ function emit_int128_ult(ctx, arg_type::Type)::Vector{UInt8}
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_GET)
         append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(1))
+        append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
         push!(bytes, Opcode.LOCAL_SET)
         append!(bytes, encode_leb128_unsigned(hi_local))
     end
@@ -717,7 +725,7 @@ function emit_int128_shl(ctx, result_type::Type)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(type_idx))
-    append!(bytes, encode_leb128_unsigned(0))
+    append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
     push!(bytes, Opcode.LOCAL_SET)
     append!(bytes, encode_leb128_unsigned(x_lo_local))
 
@@ -726,7 +734,7 @@ function emit_int128_shl(ctx, result_type::Type)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(type_idx))
-    append!(bytes, encode_leb128_unsigned(1))
+    append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
     push!(bytes, Opcode.LOCAL_SET)
     append!(bytes, encode_leb128_unsigned(x_hi_local))
 
@@ -760,6 +768,8 @@ function emit_int128_shl(ctx, result_type::Type)::Vector{UInt8}
     append!(bytes, encode_leb128_unsigned(result_hi_local))
 
     # Create result struct
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)  # typeId = 0
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(result_lo_local))
     push!(bytes, Opcode.LOCAL_GET)
@@ -807,7 +817,7 @@ function emit_int128_lshr(ctx, result_type::Type)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(type_idx))
-    append!(bytes, encode_leb128_unsigned(0))
+    append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
     push!(bytes, Opcode.LOCAL_SET)
     append!(bytes, encode_leb128_unsigned(x_lo_local))
 
@@ -816,7 +826,7 @@ function emit_int128_lshr(ctx, result_type::Type)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(type_idx))
-    append!(bytes, encode_leb128_unsigned(1))
+    append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
     push!(bytes, Opcode.LOCAL_SET)
     append!(bytes, encode_leb128_unsigned(x_hi_local))
 
@@ -854,6 +864,8 @@ function emit_int128_lshr(ctx, result_type::Type)::Vector{UInt8}
     append!(bytes, encode_leb128_unsigned(result_lo_local))
 
     # Create result struct
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)  # typeId = 0
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(result_lo_local))
     push!(bytes, Opcode.LOCAL_GET)
@@ -891,7 +903,7 @@ function emit_int128_ctlz(ctx, arg_type::Type)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(type_idx))
-    append!(bytes, encode_leb128_unsigned(0))
+    append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
     push!(bytes, Opcode.LOCAL_SET)
     append!(bytes, encode_leb128_unsigned(x_lo_local))
 
@@ -900,7 +912,7 @@ function emit_int128_ctlz(ctx, arg_type::Type)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(type_idx))
-    append!(bytes, encode_leb128_unsigned(1))
+    append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
     push!(bytes, Opcode.LOCAL_SET)
     append!(bytes, encode_leb128_unsigned(x_hi_local))
 
@@ -962,7 +974,7 @@ function emit_int128_ctlz(ctx, arg_type::Type)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(type_idx))
-    append!(bytes, encode_leb128_unsigned(0))
+    append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
     push!(bytes, Opcode.LOCAL_SET)
     append!(bytes, encode_leb128_unsigned(x_lo_local))
 
@@ -971,7 +983,7 @@ function emit_int128_ctlz(ctx, arg_type::Type)::Vector{UInt8}
     push!(bytes, Opcode.GC_PREFIX)
     push!(bytes, Opcode.STRUCT_GET)
     append!(bytes, encode_leb128_unsigned(type_idx))
-    append!(bytes, encode_leb128_unsigned(1))
+    append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
     push!(bytes, Opcode.LOCAL_SET)
     append!(bytes, encode_leb128_unsigned(x_hi_local))
 
@@ -1016,7 +1028,9 @@ function emit_int128_ctlz(ctx, arg_type::Type)::Vector{UInt8}
     push!(bytes, Opcode.LOCAL_SET)
     append!(bytes, encode_leb128_unsigned(result_local))
 
-    # Create UInt128 struct: (lo=clz_result, hi=0)
+    # Create UInt128 struct: (typeId=0, lo=clz_result, hi=0)
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)  # typeId = 0
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(result_local))  # lo = clz_result
     push!(bytes, Opcode.I64_CONST)
@@ -1065,7 +1079,7 @@ function emit_int128_and(ctx, result_type::Type)::Vector{UInt8}
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_GET)
         append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(0))
+        append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
         push!(bytes, Opcode.LOCAL_SET)
         append!(bytes, encode_leb128_unsigned(lo_local))
 
@@ -1074,10 +1088,14 @@ function emit_int128_and(ctx, result_type::Type)::Vector{UInt8}
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_GET)
         append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(1))
+        append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
         push!(bytes, Opcode.LOCAL_SET)
         append!(bytes, encode_leb128_unsigned(hi_local))
     end
+
+    # typeId for struct
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)  # typeId = 0
 
     # result_lo = a_lo & b_lo
     push!(bytes, Opcode.LOCAL_GET)
@@ -1138,7 +1156,7 @@ function emit_int128_or(ctx, result_type::Type)::Vector{UInt8}
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_GET)
         append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(0))
+        append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
         push!(bytes, Opcode.LOCAL_SET)
         append!(bytes, encode_leb128_unsigned(lo_local))
 
@@ -1147,10 +1165,14 @@ function emit_int128_or(ctx, result_type::Type)::Vector{UInt8}
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_GET)
         append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(1))
+        append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
         push!(bytes, Opcode.LOCAL_SET)
         append!(bytes, encode_leb128_unsigned(hi_local))
     end
+
+    # typeId for struct
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)  # typeId = 0
 
     # result_lo = a_lo | b_lo
     push!(bytes, Opcode.LOCAL_GET)
@@ -1211,7 +1233,7 @@ function emit_int128_xor(ctx, result_type::Type)::Vector{UInt8}
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_GET)
         append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(0))
+        append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
         push!(bytes, Opcode.LOCAL_SET)
         append!(bytes, encode_leb128_unsigned(lo_local))
 
@@ -1220,10 +1242,14 @@ function emit_int128_xor(ctx, result_type::Type)::Vector{UInt8}
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_GET)
         append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(1))
+        append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
         push!(bytes, Opcode.LOCAL_SET)
         append!(bytes, encode_leb128_unsigned(hi_local))
     end
+
+    # typeId for struct
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)  # typeId = 0
 
     # result_lo = a_lo ^ b_lo
     push!(bytes, Opcode.LOCAL_GET)
@@ -1284,7 +1310,7 @@ function emit_int128_eq(ctx, arg_type::Type)::Vector{UInt8}
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_GET)
         append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(0))
+        append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
         push!(bytes, Opcode.LOCAL_SET)
         append!(bytes, encode_leb128_unsigned(lo_local))
 
@@ -1293,7 +1319,7 @@ function emit_int128_eq(ctx, arg_type::Type)::Vector{UInt8}
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_GET)
         append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(1))
+        append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
         push!(bytes, Opcode.LOCAL_SET)
         append!(bytes, encode_leb128_unsigned(hi_local))
     end
@@ -1353,7 +1379,7 @@ function emit_int128_ne(ctx, arg_type::Type)::Vector{UInt8}
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_GET)
         append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(0))
+        append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
         push!(bytes, Opcode.LOCAL_SET)
         append!(bytes, encode_leb128_unsigned(lo_local))
 
@@ -1362,7 +1388,7 @@ function emit_int128_ne(ctx, arg_type::Type)::Vector{UInt8}
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_GET)
         append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(1))
+        append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
         push!(bytes, Opcode.LOCAL_SET)
         append!(bytes, encode_leb128_unsigned(hi_local))
     end
