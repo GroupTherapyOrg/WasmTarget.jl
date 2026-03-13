@@ -2648,7 +2648,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
             push!(bytes, 0x01)
             push!(bytes, Opcode.I32_SUB)  # 0-based index
             push!(bytes, Opcode.GC_PREFIX)
-            push!(bytes, Opcode.ARRAY_GET)
+            push!(bytes, Opcode.ARRAY_GET_U)
             append!(bytes, encode_leb128_unsigned(str_arr_type))
 
             #     if array[idx] == byte, found!

@@ -261,7 +261,7 @@ function compile_string_equal(str1, str2, ctx::CompilationContext)::Vector{UInt8
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(i_local))
     push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_GET)
+    push!(bytes, Opcode.ARRAY_GET_U)
     append!(bytes, encode_leb128_unsigned(str_type_idx))
 
     push!(bytes, Opcode.LOCAL_GET)
@@ -269,7 +269,7 @@ function compile_string_equal(str1, str2, ctx::CompilationContext)::Vector{UInt8
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(i_local))
     push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_GET)
+    push!(bytes, Opcode.ARRAY_GET_U)
     append!(bytes, encode_leb128_unsigned(str_type_idx))
 
     push!(bytes, Opcode.I32_NE)

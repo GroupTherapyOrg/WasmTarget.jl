@@ -1963,7 +1963,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, Opcode.I32_SUB)
             string_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
             push!(bytes, Opcode.GC_PREFIX)
-            push!(bytes, Opcode.ARRAY_GET)
+            push!(bytes, Opcode.ARRAY_GET_U)
             append!(bytes, encode_leb128_unsigned(string_arr_type))
         else
             push!(bytes, Opcode.UNREACHABLE)
@@ -4150,10 +4150,10 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, Opcode.I32_CONST)
             push!(bytes, 0x01)
             push!(bytes, Opcode.I32_SUB)
-            # array.get on string type (array<i32> = type 1)
+            # array.get_u on string type (packed i8 array)
             string_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
             push!(bytes, Opcode.GC_PREFIX)
-            push!(bytes, Opcode.ARRAY_GET)
+            push!(bytes, Opcode.ARRAY_GET_U)
             append!(bytes, encode_leb128_unsigned(string_arr_type))
         else
             # PURE-908: Clear pre-pushed args

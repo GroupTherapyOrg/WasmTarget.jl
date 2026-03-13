@@ -468,22 +468,23 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         end
 
     elseif val isa Symbol
-        # Symbol constant - represent as string (byte array of its name)
+        # Symbol constant - represent as string (UTF-8 byte array of its name)
         # Uses same representation as String constants
         type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
         name_str = String(val)
 
-        # Push each character as an i32 (same as String compilation)
-        for c in name_str
+        # Push each UTF-8 byte as i32 (truncated to i8 by packed array)
+        n_bytes = ncodeunits(name_str)
+        for i in 1:n_bytes
             push!(bytes, Opcode.I32_CONST)
-            append!(bytes, encode_leb128_signed(Int32(c)))
+            append!(bytes, encode_leb128_signed(Int32(codeunit(name_str, i))))
         end
 
         # array.new_fixed $type_idx $length
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.ARRAY_NEW_FIXED)
         append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(length(name_str)))
+        append!(bytes, encode_leb128_unsigned(n_bytes))
 
     elseif typeof(val) <: Tuple
         # Tuple constant - create it with struct.new

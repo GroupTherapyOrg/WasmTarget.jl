@@ -684,9 +684,9 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         push!(bytes, Opcode.I32_CONST)
         push!(bytes, 0x01)
         push!(bytes, Opcode.I32_SUB)
-        # array.get
+        # array.get_u (packed i8 → i32)
         push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_GET)
+        push!(bytes, Opcode.ARRAY_GET_U)
         append!(bytes, encode_leb128_unsigned(str_type_idx))
         push!(bytes, Opcode.END)
         return (bytes, extra_locals)
@@ -758,20 +758,20 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         push!(bytes, 0x02)  # br $exit (block depth 2: if=0, loop=1, block=2)
         push!(bytes, Opcode.END)  # end if
 
-        # Compare a[i] vs b[i]
+        # Compare a[i] vs b[i] (array.get_u for packed i8)
         push!(bytes, Opcode.LOCAL_GET)
         push!(bytes, 0x00)  # a
         push!(bytes, Opcode.LOCAL_GET)
         push!(bytes, 0x02)  # i
         push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_GET)
+        push!(bytes, Opcode.ARRAY_GET_U)
         append!(bytes, encode_leb128_unsigned(str_type_idx))
         push!(bytes, Opcode.LOCAL_GET)
         push!(bytes, 0x01)  # b
         push!(bytes, Opcode.LOCAL_GET)
         push!(bytes, 0x02)  # i
         push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_GET)
+        push!(bytes, Opcode.ARRAY_GET_U)
         append!(bytes, encode_leb128_unsigned(str_type_idx))
         push!(bytes, Opcode.I32_NE)
         push!(bytes, Opcode.IF)

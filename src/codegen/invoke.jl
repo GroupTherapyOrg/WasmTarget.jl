@@ -952,7 +952,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 push!(bytes, Opcode.LOCAL_GET)
                 append!(bytes, encode_leb128_unsigned(i_local))
                 push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_GET)
+                push!(bytes, Opcode.ARRAY_GET_U)
                 append!(bytes, encode_leb128_unsigned(str_type_idx))
                 push!(bytes, Opcode.I32_OR)
                 push!(bytes, Opcode.LOCAL_SET)
@@ -1009,7 +1009,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
 
                 # array.get
                 push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_GET)
+                push!(bytes, Opcode.ARRAY_GET_U)
                 append!(bytes, encode_leb128_unsigned(str_type_idx))
 
             # WasmTarget string operations - str_setchar!(s, i, c) -> Nothing
@@ -1259,7 +1259,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 push!(bytes, Opcode.LOCAL_GET)
                 append!(bytes, encode_leb128_unsigned(i_local))
                 push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_GET)
+                push!(bytes, Opcode.ARRAY_GET_U)
                 append!(bytes, encode_leb128_unsigned(str_type_idx))
 
                 push!(bytes, Opcode.I32_ADD)
@@ -1443,7 +1443,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 push!(bytes, 0x01)
                 push!(bytes, Opcode.I32_SUB)  # i + j - 1 for 0-based
                 push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_GET)
+                push!(bytes, Opcode.ARRAY_GET_U)
                 append!(bytes, encode_leb128_unsigned(str_type_idx))
 
                 push!(bytes, Opcode.LOCAL_GET)
@@ -1451,7 +1451,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 push!(bytes, Opcode.LOCAL_GET)
                 append!(bytes, encode_leb128_unsigned(j_local))
                 push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_GET)
+                push!(bytes, Opcode.ARRAY_GET_U)
                 append!(bytes, encode_leb128_unsigned(str_type_idx))
 
                 push!(bytes, Opcode.I32_NE)
@@ -1657,7 +1657,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 append!(bytes, encode_leb128_unsigned(j_local))
                 push!(bytes, Opcode.I32_ADD)
                 push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_GET)
+                push!(bytes, Opcode.ARRAY_GET_U)
                 append!(bytes, encode_leb128_unsigned(str_type_idx))
 
                 push!(bytes, Opcode.LOCAL_GET)
@@ -1665,7 +1665,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 push!(bytes, Opcode.LOCAL_GET)
                 append!(bytes, encode_leb128_unsigned(j_local))
                 push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_GET)
+                push!(bytes, Opcode.ARRAY_GET_U)
                 append!(bytes, encode_leb128_unsigned(str_type_idx))
 
                 push!(bytes, Opcode.I32_NE)
@@ -1813,7 +1813,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 push!(bytes, Opcode.LOCAL_GET)
                 append!(bytes, encode_leb128_unsigned(i_local))
                 push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_GET)
+                push!(bytes, Opcode.ARRAY_GET_U)
                 append!(bytes, encode_leb128_unsigned(str_type_idx))
 
                 push!(bytes, Opcode.LOCAL_GET)
@@ -1821,7 +1821,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 push!(bytes, Opcode.LOCAL_GET)
                 append!(bytes, encode_leb128_unsigned(i_local))
                 push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_GET)
+                push!(bytes, Opcode.ARRAY_GET_U)
                 append!(bytes, encode_leb128_unsigned(str_type_idx))
 
                 push!(bytes, Opcode.I32_NE)
@@ -1953,7 +1953,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 append!(bytes, encode_leb128_unsigned(i_local))
                 push!(bytes, Opcode.I32_ADD)
                 push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_GET)
+                push!(bytes, Opcode.ARRAY_GET_U)
                 append!(bytes, encode_leb128_unsigned(str_type_idx))
 
                 push!(bytes, Opcode.LOCAL_GET)
@@ -1961,7 +1961,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 push!(bytes, Opcode.LOCAL_GET)
                 append!(bytes, encode_leb128_unsigned(i_local))
                 push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_GET)
+                push!(bytes, Opcode.ARRAY_GET_U)
                 append!(bytes, encode_leb128_unsigned(str_type_idx))
 
                 push!(bytes, Opcode.I32_NE)
@@ -2058,7 +2058,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 push!(bytes, Opcode.LOCAL_GET)
                 append!(bytes, encode_leb128_unsigned(i_local))
                 push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_GET)
+                push!(bytes, Opcode.ARRAY_GET_U)
                 append!(bytes, encode_leb128_unsigned(str_type_idx))
                 push!(bytes, Opcode.LOCAL_SET)
                 append!(bytes, encode_leb128_unsigned(c_local))
@@ -2183,7 +2183,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 push!(bytes, Opcode.LOCAL_GET)
                 append!(bytes, encode_leb128_unsigned(i_local))
                 push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_GET)
+                push!(bytes, Opcode.ARRAY_GET_U)
                 append!(bytes, encode_leb128_unsigned(str_type_idx))
                 push!(bytes, Opcode.LOCAL_SET)
                 append!(bytes, encode_leb128_unsigned(c_local))
@@ -2326,7 +2326,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 push!(bytes, Opcode.LOCAL_GET)
                 append!(bytes, encode_leb128_unsigned(start_local))
                 push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_GET)
+                push!(bytes, Opcode.ARRAY_GET_U)
                 append!(bytes, encode_leb128_unsigned(str_type_idx))
                 push!(bytes, Opcode.LOCAL_SET)
                 append!(bytes, encode_leb128_unsigned(c_local))
@@ -2416,7 +2416,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 push!(bytes, Opcode.LOCAL_GET)
                 append!(bytes, encode_leb128_unsigned(end_local))
                 push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_GET)
+                push!(bytes, Opcode.ARRAY_GET_U)
                 append!(bytes, encode_leb128_unsigned(str_type_idx))
                 push!(bytes, Opcode.LOCAL_SET)
                 append!(bytes, encode_leb128_unsigned(c_local))
