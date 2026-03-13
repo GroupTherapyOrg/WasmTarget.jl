@@ -423,10 +423,11 @@ function types_equal(a::FuncType, b::FuncType)
     a.params == b.params && a.results == b.results
 end
 
-function types_equal(a::StructType, b::StructType)
-    length(a.fields) == length(b.fields) &&
-    all(fields_equal(af, bf) for (af, bf) in zip(a.fields, b.fields))
-end
+# PURE-9032: WasmGC struct types use NOMINAL typing — two structs with identical
+# field layouts are still distinct types. Never deduplicate struct types.
+# This is critical for isa checks: ErrorException and ArgumentError have the same
+# field layout (i32 + arrayref) but must be distinct types for ref.test to work.
+types_equal(a::StructType, b::StructType) = false
 
 function types_equal(a::ArrayType, b::ArrayType)
     fields_equal(a.elem, b.elem)

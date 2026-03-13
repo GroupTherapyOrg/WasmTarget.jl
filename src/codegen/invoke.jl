@@ -3064,16 +3064,62 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 append!(bytes, compile_value(args[1], ctx))
 
             # ================================================================
-            # Error constructors - these are typically followed by throw
-            # In WASM we just emit unreachable
+            # PURE-9032: Error constructors — create proper exception struct
+            # These are typically followed by throw(). The constructor produces
+            # the exception object, leaving the struct ref on the stack.
             # ================================================================
             elseif name === :BoundsError || name === :ArgumentError || name === :TypeError ||
                    name === :DomainError || name === :OverflowError || name === :DivideError ||
-                   name === :InexactError
-                # Error constructors - emit unreachable
-                bytes = UInt8[]  # Clear any pushed args
-                push!(bytes, Opcode.UNREACHABLE)
-                ctx.last_stmt_was_stub = true  # PURE-908
+                   name === :InexactError || name === :ErrorException || name === :KeyError ||
+                   name === :MethodError || name === :AssertionError || name === :AssertionError
+                bytes = UInt8[]  # Clear pre-compiled args (we re-compile below for correct field order)
+                local _ctor_type = nothing
+                if name === :BoundsError; _ctor_type = BoundsError
+                elseif name === :ArgumentError; _ctor_type = ArgumentError
+                elseif name === :TypeError; _ctor_type = TypeError
+                elseif name === :DomainError; _ctor_type = DomainError
+                elseif name === :OverflowError; _ctor_type = OverflowError
+                elseif name === :DivideError; _ctor_type = DivideError
+                elseif name === :InexactError; _ctor_type = InexactError
+                elseif name === :ErrorException; _ctor_type = ErrorException
+                elseif name === :KeyError; _ctor_type = KeyError
+                elseif name === :MethodError; _ctor_type = MethodError
+                end
+                local _ctor_info = _ctor_type !== nothing ? register_struct_type!(ctx.mod, ctx.type_registry, _ctor_type) : nothing
+                if _ctor_info !== nothing
+                    # Push typeId (field 0)
+                    emit_type_id!(bytes, ctx.type_registry, _ctor_type)
+                    # Push remaining fields: for msg-based exceptions, compile the msg arg as string array
+                    nfields = length(fieldnames(_ctor_type))
+                    for fi in 1:nfields
+                        if fi <= length(args)
+                            append!(bytes, compile_value(args[fi], ctx))
+                        else
+                            # Default: push null ref for ref fields, 0 for i32/i64
+                            local _ft = fieldtype(_ctor_type, fi)
+                            if _ft <: AbstractString || _ft === Any || _ft === Symbol || isabstracttype(_ft)
+                                push!(bytes, Opcode.REF_NULL)
+                                push!(bytes, UInt8(AnyRef))
+                            elseif _ft === Int32 || _ft === Bool
+                                push!(bytes, Opcode.I32_CONST, 0x00)
+                            elseif _ft === Int64
+                                push!(bytes, Opcode.I64_CONST, 0x00)
+                            else
+                                push!(bytes, Opcode.REF_NULL)
+                                push!(bytes, UInt8(AnyRef))
+                            end
+                        end
+                    end
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.STRUCT_NEW)
+                    append!(bytes, encode_leb128_unsigned(_ctor_info.wasm_type_idx))
+                else
+                    # Fallback: can't register type, create a dummy anyref (ref.null any)
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, UInt8(AnyRef))
+                end
+                # NOTE: Do NOT throw here and do NOT set last_stmt_was_stub.
+                # The IR has a separate throw() call that consumes this value.
 
             # ================================================================
             # PURE-322: SubString — create proper SubString struct
