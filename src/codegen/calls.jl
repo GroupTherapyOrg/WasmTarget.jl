@@ -4217,6 +4217,12 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                         isa3_local_idx = _idx3
                     end
                 end
+            elseif value_arg isa Core.Argument
+                # Also detect param type for Argument values
+                local _arg_idx3 = ctx.is_compiled_closure ? value_arg.n : value_arg.n - 1
+                if _arg_idx3 >= 1 && _arg_idx3 <= length(ctx.arg_types)
+                    isa3_val_wasm = get_concrete_wasm_type(ctx.arg_types[_arg_idx3], ctx.mod, ctx.type_registry)
+                end
             end
             local _wasm_julia = Dict{WasmValType,Type}(I64=>Int64, I32=>Int32, F64=>Float64, F32=>Float32)
             if isa3_val_wasm !== nothing && (isa3_val_wasm === I64 || isa3_val_wasm === I32 || isa3_val_wasm === F64 || isa3_val_wasm === F32)
@@ -4246,6 +4252,38 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                         append!(bytes, encode_leb128_signed(Int64(box_idx)))
                         i > 1 && push!(bytes, Opcode.I32_OR)
                     end
+                end
+            elseif (isa3_val_wasm === AnyRef || isa3_val_wasm isa ConcreteRef || isa3_val_wasm === StructRef) &&
+                   ctx.type_registry.base_struct_idx !== nothing
+                # PURE-9027: DFS range check for anyref/structref polymorphic values
+                # Value is on stack (anyref/structref) — extract typeId, check low <= id <= high
+                local _range = get_type_range(ctx.type_registry, check_type)
+                if _range !== nothing
+                    local _low, _high = _range
+                    local _base_idx = ctx.type_registry.base_struct_idx
+                    # Value is on stack — emit typeof to get typeId (i32)
+                    emit_typeof!(bytes, _base_idx)
+                    # Store typeId in a temp local for the two comparisons
+                    local _tid_local = allocate_local!(ctx, I32)
+                    push!(bytes, Opcode.LOCAL_TEE)
+                    append!(bytes, encode_leb128_unsigned(_tid_local))
+                    # low <= typeId: i32.const low; i32.le_s (low <= typeId)
+                    push!(bytes, Opcode.I32_CONST)
+                    append!(bytes, encode_leb128_signed(Int64(_low)))
+                    push!(bytes, Opcode.I32_GE_S)  # typeId >= low
+                    # typeId <= high
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(_tid_local))
+                    push!(bytes, Opcode.I32_CONST)
+                    append!(bytes, encode_leb128_signed(Int64(_high)))
+                    push!(bytes, Opcode.I32_LE_S)  # typeId <= high
+                    # AND both conditions
+                    push!(bytes, Opcode.I32_AND)
+                else
+                    # No DFS range for this abstract type — return false
+                    push!(bytes, Opcode.DROP)
+                    push!(bytes, Opcode.I32_CONST)
+                    push!(bytes, 0x00)
                 end
             else
                 push!(bytes, Opcode.DROP)
