@@ -40,7 +40,8 @@ include("runtime/tokenizer.jl")
 export compile, compile_multi, compile_from_codeinfo, optimize, WasmModule, to_bytes
 export WasmGlobal, global_index, global_eltype
 # Therapy.jl integration - direct IR compilation for reactive handlers
-export compile_handler, compile_closure_body, DOMBindingSpec, TypeRegistry
+export compile_handler, compile_closure_body, DOMBindingSpec, TypeRegistry, FunctionRegistry
+export serialize_type_registry, serialize_function_table, serialize_type_ids
 export add_import!, add_global!, add_global_export!, add_function!, add_export!
 export I32, I64, F32, F64, NumType, Opcode, ExternRef
 
@@ -91,12 +92,24 @@ wasm_bytes = compile_multi([
 
 Functions can call each other within the module.
 """
-function compile_multi(functions::Vector; optimize=false, stub_names::Set{String}=Set{String}())::Vector{UInt8}
-    mod = compile_module(functions; stub_names=stub_names)
-    bytes = to_bytes(mod)
-    optimize === false && return bytes
-    level = optimize === true ? :size : optimize
-    return WasmTarget.optimize(bytes; level=level)
+function compile_multi(functions::Vector; optimize=false, stub_names::Set{String}=Set{String}(),
+                       return_registries::Bool=false)
+    result = compile_module(functions; stub_names=stub_names, return_registries=return_registries)
+    if return_registries
+        mod, type_registry, func_registry = result
+        bytes = to_bytes(mod)
+        if optimize !== false
+            level = optimize === true ? :size : optimize
+            bytes = WasmTarget.optimize(bytes; level=level)
+        end
+        return (bytes, type_registry, func_registry)
+    else
+        mod = result
+        bytes = to_bytes(mod)
+        optimize === false && return bytes
+        level = optimize === true ? :size : optimize
+        return WasmTarget.optimize(bytes; level=level)
+    end
 end
 
 """

@@ -199,13 +199,13 @@ if !isempty(skipped)
     end
 end
 
-# ── Phase 2: Build base.wasm from validated functions ─────────
+# ── Phase 2: Build base.wasm with registries ──────────────────
 println()
 println("Phase 2: Building base.wasm from $(length(validated)) validated functions...")
 println("=" ^ 60)
 
 t = @elapsed begin
-    bytes = compile_multi(validated)
+    bytes, type_registry, func_registry = compile_multi(validated; return_registries=true)
 end
 
 size_kb = round(length(bytes) / 1024, digits=1)
@@ -229,3 +229,51 @@ catch
     println("  ✗ base.wasm fails validation — trying to identify bad functions in multi-module...")
     println("  (Individual functions validated, but compile_multi may introduce type conflicts)")
 end
+
+# ── Phase 4: Serialize type registry and function table ───────
+println()
+println("Phase 4: Serializing metadata...")
+
+# Simple JSON serializer (no dependency needed)
+function to_json(x, indent=0)
+    pad = "  " ^ indent
+    if x isa Dict
+        pairs = sort(collect(x), by=first)
+        isempty(pairs) && return "{}"
+        lines = ["$pad  $(to_json(string(k))): $(to_json(v, indent+1))" for (k,v) in pairs]
+        return "{\n" * join(lines, ",\n") * "\n$pad}"
+    elseif x isa Vector
+        isempty(x) && return "[]"
+        lines = ["$pad  $(to_json(v, indent+1))" for v in x]
+        return "[\n" * join(lines, ",\n") * "\n$pad]"
+    elseif x isa AbstractString
+        return "\"$(escape_string(x))\""
+    elseif x isa Number
+        return string(x)
+    elseif x isa Bool
+        return x ? "true" : "false"
+    else
+        return "\"$(escape_string(string(x)))\""
+    end
+end
+
+# Serialize type registry
+type_reg_data = serialize_type_registry(type_registry)
+type_reg_path = joinpath(dirname(@__DIR__), "type-registry.json")
+open(type_reg_path, "w") do io
+    write(io, to_json(type_reg_data))
+    write(io, "\n")
+end
+println("  ✓ type-registry.json ($(filesize(type_reg_path)) bytes)")
+
+# Serialize function table
+func_table_data = serialize_function_table(func_registry)
+func_table_path = joinpath(dirname(@__DIR__), "function-table.json")
+open(func_table_path, "w") do io
+    write(io, to_json(func_table_data))
+    write(io, "\n")
+end
+println("  ✓ function-table.json ($(length(func_table_data)) entries, $(filesize(func_table_path)) bytes)")
+
+println()
+println("Build complete: base.wasm + type-registry.json + function-table.json")

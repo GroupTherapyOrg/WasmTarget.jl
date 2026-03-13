@@ -1251,8 +1251,9 @@ Functions can call each other within the module.
 function compile_module(functions::Vector;
                         stub_names::Set{String}=Set{String}(),
                         existing_module::Union{WasmModule, Nothing}=nothing,
-                        import_stubs::Vector=[]
-                        )::WasmModule
+                        import_stubs::Vector=[],
+                        return_registries::Bool=false
+                        )
     # WASM-057: Auto-discover function dependencies
     functions = discover_dependencies(functions)
 
@@ -1583,6 +1584,9 @@ function compile_module(functions::Vector;
     clear_rng_globals!()
     clear_perf_now!()
 
+    if return_registries
+        return (mod, type_registry, func_registry)
+    end
     return mod
 end
 

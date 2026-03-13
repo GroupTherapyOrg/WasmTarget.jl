@@ -229,6 +229,38 @@ function serialize_type_ids(registry::TypeRegistry)::Dict{String, Any}
 end
 
 """
+    serialize_type_registry(registry::TypeRegistry) -> Dict{String, Any}
+
+Serialize the full type registry to a Dict suitable for JSON output.
+Includes type_ids, type_ranges, structs, and arrays.
+"""
+function serialize_type_registry(registry::TypeRegistry)::Dict{String, Any}
+    result = serialize_type_ids(registry)
+
+    # Struct types
+    structs = Dict{String, Any}[]
+    for (T, info) in sort(collect(registry.structs), by=x->x[2].wasm_type_idx)
+        push!(structs, Dict{String, Any}(
+            "julia_type" => string(T),
+            "wasm_type_idx" => Int(info.wasm_type_idx),
+            "field_names" => [string(f) for f in info.field_names],
+            "field_types" => [string(f) for f in info.field_types],
+            "field_offset" => Int(info.field_offset),
+        ))
+    end
+    result["structs"] = structs
+
+    # Array types
+    arrays = Dict{String, Int}()
+    for (T, idx) in registry.arrays
+        arrays[string(T)] = Int(idx)
+    end
+    result["arrays"] = arrays
+
+    return result
+end
+
+"""
     emit_type_id!(bytes::Vector{UInt8}, registry::TypeRegistry, T::Type)
 
 Emit `i32.const <typeId>` bytecode for type T.
@@ -378,6 +410,25 @@ mutable struct FunctionRegistry
 end
 
 FunctionRegistry() = FunctionRegistry(Dict{String, FunctionInfo}(), Dict{Any, Vector{FunctionInfo}}())
+
+"""
+    serialize_function_table(registry::FunctionRegistry) -> Vector{Dict{String, Any}}
+
+Serialize the function table to a list of Dicts suitable for JSON output.
+Each entry has: name, arg_types, return_type, wasm_idx.
+"""
+function serialize_function_table(registry::FunctionRegistry)::Vector{Dict{String, Any}}
+    entries = Dict{String, Any}[]
+    for (name, info) in sort(collect(registry.functions), by=x->x[2].wasm_idx)
+        push!(entries, Dict{String, Any}(
+            "name" => info.name,
+            "arg_types" => [string(T) for T in info.arg_types],
+            "return_type" => string(info.return_type),
+            "wasm_idx" => Int(info.wasm_idx),
+        ))
+    end
+    return entries
+end
 
 """
 Register a function in the registry.
