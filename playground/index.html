@@ -123,6 +123,7 @@
     import {keymap} from "https://esm.sh/@codemirror/view@6.36.8";
     import {EditorState} from "https://esm.sh/@codemirror/state@6.5.2";
     import {oneDark} from "https://esm.sh/@codemirror/theme-one-dark@6.1.2";
+    import {linter, lintGutter} from "https://esm.sh/@codemirror/lint@6.8.4";
 
     // Julia language support
     let juliaLang;
@@ -152,9 +153,22 @@ println("Hello from Julia!")
 println("1 + 1 = ", 1 + 1)
 `;
 
+    // Lint: compile errors shown as red underlines + gutter icons
+    let currentDiagnostics = [];
+    const juliaLinter = linter(() => currentDiagnostics);
+
+    function setDiagnostics(diags) {
+      currentDiagnostics = diags;
+      // Force lint refresh by dispatching a reconfigure
+      const tr = editor.state.update({});
+      editor.dispatch(tr);
+    }
+
     const extensions = [
       basicSetup,
       oneDark,
+      juliaLinter,
+      lintGutter(),
       keymap.of([{
         key: "Ctrl-Enter",
         mac: "Cmd-Enter",
@@ -201,6 +215,7 @@ println("1 + 1 = ", 1 + 1)
 
       cleanupWorker();
       outputEl.innerHTML = "";
+      setDiagnostics([]);  // Clear previous errors
       runBtn.disabled = true;
       statusEl.textContent = "Compiling...";
 
@@ -217,6 +232,21 @@ println("1 + 1 = ", 1 + 1)
           const err = await resp.json();
           statusEl.textContent = "Compile error";
           appendOutput("Compile error: " + (err.error || err.message || "Unknown error"), "error");
+
+          // Show inline error in editor if line info available
+          if (err.line) {
+            const doc = editor.state.doc;
+            const lineNum = Math.min(err.line, doc.lines);
+            const line = doc.line(lineNum);
+            const from = err.column ? line.from + (err.column - 1) : line.from;
+            const to = line.to;
+            setDiagnostics([{
+              from, to,
+              severity: "error",
+              message: err.error || "Compile error",
+            }]);
+          }
+
           runBtn.disabled = false;
           return;
         }

@@ -130,10 +130,21 @@ function handle_request(req::HTTP.Request)::HTTP.Response
         catch e
             msg = sprint(showerror, e)
             @warn "Compile error: $msg"
+            # Try to extract line number from error message
+            err_obj = Dict{String,Any}("error" => msg)
+            m = match(r"@ (?:none|Main\.anonymous):(\d+)", msg)
+            if m !== nothing
+                err_obj["line"] = parse(Int, m.captures[1])
+            end
+            m2 = match(r"Error @ none:(\d+):(\d+)", msg)
+            if m2 !== nothing
+                err_obj["line"] = parse(Int, m2.captures[1])
+                err_obj["column"] = parse(Int, m2.captures[2])
+            end
             return HTTP.Response(400, [
                 "Content-Type" => "application/json",
                 "Access-Control-Allow-Origin" => "*",
-            ], body="""{"error":$(repr(msg))}""")
+            ], body=JSON.json(err_obj))
         end
     end
 
