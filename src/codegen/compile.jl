@@ -103,8 +103,7 @@ function _compile_function_legacy(f, arg_types::Tuple, func_name::String)::WasmM
 
     if intrinsic_body !== nothing
         # Use the intrinsic body directly
-        body = intrinsic_body
-        locals = WasmValType[]  # Intrinsics don't need additional locals
+        body, locals = intrinsic_body
     else
         # Generate function body with the function reference for self-call detection
         ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
@@ -182,6 +181,8 @@ function discover_dependencies(functions::Vector)::Vector
     # Queue of functions to scan (using Any-typed vector)
     to_scan = Vector{Tuple{Any, Tuple, String}}(normalized)
 
+    skipped = Vector{Tuple{String, Any}}()  # (name, exception) pairs
+
     while !isempty(to_scan)
         f, arg_types, name = popfirst!(to_scan)
 
@@ -189,8 +190,10 @@ function discover_dependencies(functions::Vector)::Vector
         code_info = try
             ir, _ = Base.code_ircode(f, arg_types)[1]
             ir
-        catch
-            continue  # Skip if we can't get IR
+        catch e
+            @warn "discover_dependencies: skipping $name($(join(arg_types, ", "))) — $e"
+            push!(skipped, (name, e))
+            continue
         end
 
         # Verify we got IRCode (not Method or other types)
@@ -205,6 +208,10 @@ function discover_dependencies(functions::Vector)::Vector
                 scan_expr_for_deps!(stmt, seen_funcs, to_add, to_scan, code_info, stmt_idx, arg_types)
             end
         end
+    end
+
+    if !isempty(skipped)
+        @warn "discover_dependencies: discovered $(length(normalized) + length(to_add)) functions, skipped $(length(skipped)) (see warnings above)"
     end
 
     # Add discovered dependencies to the function list
@@ -652,13 +659,14 @@ Generate intrinsic function body for WasmTarget runtime functions.
 These functions have special WASM implementations that differ from their Julia fallbacks.
 Returns the function body bytes, or nothing if not an intrinsic.
 """
-function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_registry::TypeRegistry)::Union{Vector{UInt8}, Nothing}
+function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_registry::TypeRegistry)::Union{Tuple{Vector{UInt8}, Vector{WasmValType}}, Nothing}
     # Only functions can have intrinsic bodies
     if !(f isa Function)
         return nothing
     end
     fname = nameof(f)
     bytes = UInt8[]
+    extra_locals = WasmValType[]
 
     # Get string array type for string operations
     str_type_idx = get_string_array_type!(mod, type_registry)
@@ -681,7 +689,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         push!(bytes, Opcode.ARRAY_GET)
         append!(bytes, encode_leb128_unsigned(str_type_idx))
         push!(bytes, Opcode.END)
-        return bytes
+        return (bytes, extra_locals)
 
     elseif fname === :str_len
         # str_len(s::String)::Int32
@@ -693,21 +701,107 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.ARRAY_LEN)
         push!(bytes, Opcode.END)
-        return bytes
+        return (bytes, extra_locals)
 
     elseif fname === :str_eq
         # str_eq(a::String, b::String)::Bool
-        # Compare two strings character by character
-        # This is complex - we need a loop
-        # For now, return a simple stub
-        # TODO: Implement proper string comparison loop
+        # Element-by-element comparison (not ref.eq identity check)
+        # local 0 = a (array ref), local 1 = b (array ref), local 2 = i (loop counter)
+        push!(extra_locals, I32)  # local 2: loop counter i
+
+        # Compare lengths first: if a.len != b.len, return false
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x00)  # a
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_LEN)
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x01)  # b
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_LEN)
+        push!(bytes, Opcode.I32_NE)
+        push!(bytes, Opcode.IF)
+        push!(bytes, UInt8(I32))  # result type i32
+        # Lengths differ → return 0 (false)
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x00)
+        push!(bytes, Opcode.ELSE)
+
+        # Lengths equal — loop to compare elements
+        # i = 0
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x00)
+        push!(bytes, Opcode.LOCAL_SET)
+        push!(bytes, 0x02)  # i = 0
+
+        # block $exit (result i32) — for early return of false
+        push!(bytes, Opcode.BLOCK)
+        push!(bytes, UInt8(I32))  # result type i32
+
+        # loop $loop (void)
+        push!(bytes, Opcode.LOOP)
+        push!(bytes, 0x40)  # void block type
+
+        # if i >= a.len → break out with true (all matched)
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x02)  # i
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x00)  # a
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_LEN)
+        push!(bytes, Opcode.I32_GE_U)
+        push!(bytes, Opcode.IF)
+        push!(bytes, 0x40)  # void
+        # Done — push 1 (true) and break out of block
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x01)
+        push!(bytes, Opcode.BR)
+        push!(bytes, 0x02)  # br $exit (block depth 2: if=0, loop=1, block=2)
+        push!(bytes, Opcode.END)  # end if
+
+        # Compare a[i] vs b[i]
         push!(bytes, Opcode.LOCAL_GET)
         push!(bytes, 0x00)  # a
         push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x02)  # i
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_GET)
+        append!(bytes, encode_leb128_unsigned(str_type_idx))
+        push!(bytes, Opcode.LOCAL_GET)
         push!(bytes, 0x01)  # b
-        push!(bytes, Opcode.REF_EQ)
-        push!(bytes, Opcode.END)
-        return bytes
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x02)  # i
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_GET)
+        append!(bytes, encode_leb128_unsigned(str_type_idx))
+        push!(bytes, Opcode.I32_NE)
+        push!(bytes, Opcode.IF)
+        push!(bytes, 0x40)  # void
+        # Mismatch — push 0 (false) and break out of block
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x00)
+        push!(bytes, Opcode.BR)
+        push!(bytes, 0x02)  # br $exit (block depth 2: if=0, loop=1, block=2)
+        push!(bytes, Opcode.END)  # end if
+
+        # i++
+        push!(bytes, Opcode.LOCAL_GET)
+        push!(bytes, 0x02)  # i
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x01)
+        push!(bytes, Opcode.I32_ADD)
+        push!(bytes, Opcode.LOCAL_SET)
+        push!(bytes, 0x02)  # i = i + 1
+
+        # br $loop (continue)
+        push!(bytes, Opcode.BR)
+        push!(bytes, 0x00)  # br to loop (depth 0 from here)
+        push!(bytes, Opcode.END)  # end loop
+        push!(bytes, Opcode.UNREACHABLE)  # all loop paths branch — unreachable
+        push!(bytes, Opcode.END)  # end block
+
+        push!(bytes, Opcode.END)  # end if/else (lengths equal)
+        push!(bytes, Opcode.END)  # end function
+        return (bytes, extra_locals)
 
     elseif fname === :str_new
         # str_new(len::Int32)::String
@@ -718,7 +812,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
         append!(bytes, encode_leb128_unsigned(str_type_idx))
         push!(bytes, Opcode.END)
-        return bytes
+        return (bytes, extra_locals)
 
     elseif fname === :str_setchar!
         # str_setchar!(s::String, i::Int32, c::Int32)::Nothing
@@ -738,7 +832,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         push!(bytes, Opcode.ARRAY_SET)
         append!(bytes, encode_leb128_unsigned(str_type_idx))
         push!(bytes, Opcode.END)
-        return bytes
+        return (bytes, extra_locals)
 
     elseif fname === :str_substr
         # str_substr(s::String, start::Int32, len::Int32)::String
@@ -756,7 +850,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         push!(bytes, Opcode.LOCAL_GET)
         push!(bytes, 0x00)  # return source string as placeholder
         push!(bytes, Opcode.END)
-        return bytes
+        return (bytes, extra_locals)
     end
 
     return nothing
@@ -992,8 +1086,7 @@ function compile_module(functions::Vector;
             locals = WasmValType[]
         elseif intrinsic_body !== nothing
             # Use the intrinsic body directly
-            body = intrinsic_body
-            locals = WasmValType[]  # Intrinsics don't need additional locals
+            body, locals = intrinsic_body
         else
             # Generate function body from Julia IR
             ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;

@@ -843,6 +843,8 @@ function discover_dependencies(functions::Vector)::Vector
     # Queue of functions to scan (using Any-typed vector)
     to_scan = Vector{Tuple{Any, Tuple, String}}(normalized)
 
+    skipped = Vector{Tuple{String, Any}}()  # (name, exception) pairs
+
     while !isempty(to_scan)
         f, arg_types, name = popfirst!(to_scan)
 
@@ -850,8 +852,10 @@ function discover_dependencies(functions::Vector)::Vector
         code_info = try
             ir, _ = Base.code_ircode(f, arg_types)[1]
             ir
-        catch
-            continue  # Skip if we can't get IR
+        catch e
+            @warn "discover_dependencies: skipping $name($(join(arg_types, ", "))) — $e"
+            push!(skipped, (name, e))
+            continue
         end
 
         # Verify we got IRCode (not Method or other types)
@@ -866,6 +870,10 @@ function discover_dependencies(functions::Vector)::Vector
                 scan_expr_for_deps!(stmt, seen_funcs, to_add, to_scan, code_info, stmt_idx, arg_types)
             end
         end
+    end
+
+    if !isempty(skipped)
+        @warn "discover_dependencies: discovered $(length(normalized) + length(to_add)) functions, skipped $(length(skipped)) (see warnings above)"
     end
 
     # Add discovered dependencies to the function list
