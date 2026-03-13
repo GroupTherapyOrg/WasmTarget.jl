@@ -40,6 +40,7 @@ struct DispatchEntry
     hash::UInt32              # FNV-1a hash of type_ids
     target_idx::UInt32        # Wasm func index of actual specialization
     wrapper_idx::UInt32       # Wasm func index of anyref wrapper (filled later)
+    return_type::Type         # Julia return type of this specialization
 end
 
 """
@@ -143,16 +144,13 @@ function build_dispatch_tables(func_registry::FunctionRegistry,
         end
         arity = first(arities)
 
-        # All specializations must return the same Wasm type
+        # Determine return type — if mixed, use AnyRef (boxed dispatch)
         return_types = Set{Type}()
         for info in infos
             push!(return_types, info.return_type)
         end
-        if length(return_types) != 1
-            @warn "PURE-9060: Skipping dispatch table for $(func_ref): mixed return types $(return_types)"
-            continue
-        end
-        return_type = first(return_types)
+        mixed_returns = length(return_types) != 1
+        return_type = mixed_returns ? Any : first(return_types)
 
         # Build entries with type IDs
         entries = DispatchEntry[]
@@ -171,7 +169,7 @@ function build_dispatch_tables(func_registry::FunctionRegistry,
             all_valid || continue
 
             h = fnv1a_hash(type_ids)
-            push!(entries, DispatchEntry(type_ids, h, info.wasm_idx, UInt32(0)))
+            push!(entries, DispatchEntry(type_ids, h, info.wasm_idx, UInt32(0), info.return_type))
         end
 
         length(entries) < threshold && continue
@@ -183,7 +181,7 @@ function build_dispatch_tables(func_registry::FunctionRegistry,
             table_size *= Int32(2)
         end
 
-        result_wasm = julia_to_wasm_type(return_type)
+        result_wasm = mixed_returns ? AnyRef : julia_to_wasm_type(return_type)
 
         dt = DispatchTable(
             func_ref, Int32(arity), entries,
@@ -221,9 +219,15 @@ function emit_dispatch_metadata!(mod::WasmModule,
 
         # --- 1. Create dispatch signature type ---
         param_types = fill(AnyRef, Int(dt.arity))
-        result_types = dt.result_wasm_type == I32 || dt.result_wasm_type == I64 ||
-                       dt.result_wasm_type == F32 || dt.result_wasm_type == F64 ?
-                       WasmValType[dt.result_wasm_type] : WasmValType[]
+        is_numeric = dt.result_wasm_type in (I32, I64, F32, F64)
+        is_anyref = dt.result_wasm_type == AnyRef
+        result_types = if is_numeric
+            WasmValType[dt.result_wasm_type]
+        elseif is_anyref
+            WasmValType[AnyRef]
+        else
+            WasmValType[]
+        end
         dispatch_sig_idx = add_type!(mod, FuncType(param_types, result_types))
         dt.dispatch_sig_idx = dispatch_sig_idx
 
@@ -257,19 +261,23 @@ function emit_dispatch_wrappers!(mod::WasmModule,
 
     for (func_ref, dt) in dt_registry.tables
         param_types = fill(AnyRef, Int(dt.arity))
-        result_types = dt.result_wasm_type == I32 || dt.result_wasm_type == I64 ||
-                       dt.result_wasm_type == F32 || dt.result_wasm_type == F64 ?
-                       WasmValType[dt.result_wasm_type] : WasmValType[]
+        # Dispatch signature result type
+        is_numeric_return = dt.result_wasm_type in (I32, I64, F32, F64)
+        is_anyref_return = dt.result_wasm_type == AnyRef
+        result_types = if is_numeric_return
+            WasmValType[dt.result_wasm_type]
+        elseif is_anyref_return
+            WasmValType[AnyRef]
+        else
+            WasmValType[]
+        end
 
         wrapper_indices = UInt32[]
         for (entry_i, entry) in enumerate(dt.entries)
             body = UInt8[]
 
-            # For each parameter: local.get + ref.cast to concrete type
+            # For each parameter: local.get + unbox/cast to concrete type
             for (j, tid) in enumerate(entry.type_ids)
-                push!(body, Opcode.LOCAL_GET)
-                append!(body, encode_leb128_unsigned(UInt32(j - 1)))
-
                 # Find the concrete Julia type for this typeId
                 concrete_type = nothing
                 for (T, id) in type_registry.type_ids
@@ -279,11 +287,28 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                     end
                 end
 
-                if concrete_type !== nothing && haskey(type_registry.structs, concrete_type)
-                    struct_info = type_registry.structs[concrete_type]
-                    push!(body, Opcode.GC_PREFIX)
-                    push!(body, Opcode.REF_CAST)
-                    append!(body, encode_leb128_signed(Int64(struct_info.wasm_type_idx)))
+                push!(body, Opcode.LOCAL_GET)
+                append!(body, encode_leb128_unsigned(UInt32(j - 1)))
+
+                if concrete_type !== nothing
+                    arg_wasm_type = julia_to_wasm_type(concrete_type)
+                    if arg_wasm_type in (I32, I64, F32, F64) && haskey(type_registry.numeric_boxes, arg_wasm_type)
+                        # Unbox: ref.cast to box struct, struct.get field 1 (the numeric value)
+                        box_idx = type_registry.numeric_boxes[arg_wasm_type]
+                        push!(body, Opcode.GC_PREFIX)
+                        push!(body, Opcode.REF_CAST)
+                        append!(body, encode_leb128_signed(Int64(box_idx)))
+                        push!(body, Opcode.GC_PREFIX)
+                        push!(body, Opcode.STRUCT_GET)
+                        append!(body, encode_leb128_unsigned(box_idx))
+                        append!(body, encode_leb128_unsigned(UInt32(1)))  # field 1 = value
+                    elseif haskey(type_registry.structs, concrete_type)
+                        # Cast to concrete struct type
+                        struct_info = type_registry.structs[concrete_type]
+                        push!(body, Opcode.GC_PREFIX)
+                        push!(body, Opcode.REF_CAST)
+                        append!(body, encode_leb128_signed(Int64(struct_info.wasm_type_idx)))
+                    end
                 end
             end
 
@@ -291,13 +316,43 @@ function emit_dispatch_wrappers!(mod::WasmModule,
             push!(body, Opcode.CALL)
             append!(body, encode_leb128_unsigned(entry.target_idx))
 
+            # PURE-9061: Box numeric results when dispatch table uses anyref return
+            if is_anyref_return
+                entry_wasm_type = julia_to_wasm_type(entry.return_type)
+                if entry_wasm_type in (I32, I64, F32, F64)
+                    # Box numeric result into a WasmGC struct: (struct (field typeId:i32) (field val:T))
+                    box_idx = get_numeric_box_type!(mod, type_registry, entry_wasm_type)
+                    # Stack has the numeric value; emit struct.new with typeId=0 + value
+                    # Need to reorder: value is on stack, but struct.new expects (typeId, value)
+                    # Use a local to save the value
+                    push!(body, Opcode.LOCAL_SET)
+                    append!(body, encode_leb128_unsigned(UInt32(Int(dt.arity))))  # first extra local
+                    push!(body, Opcode.I32_CONST)
+                    push!(body, 0x00)  # typeId = 0 (generic box)
+                    push!(body, Opcode.LOCAL_GET)
+                    append!(body, encode_leb128_unsigned(UInt32(Int(dt.arity))))
+                    push!(body, Opcode.GC_PREFIX)
+                    push!(body, Opcode.STRUCT_NEW)
+                    append!(body, encode_leb128_unsigned(box_idx))
+                end
+            end
+
             push!(body, Opcode.END)
 
-            wrapper_idx = add_function!(mod, param_types, result_types, WasmValType[], body)
+            # Wrapper needs an extra local for boxing when mixed returns
+            wrapper_locals = WasmValType[]
+            if is_anyref_return
+                entry_wasm_type = julia_to_wasm_type(entry.return_type)
+                if entry_wasm_type in (I32, I64, F32, F64)
+                    push!(wrapper_locals, entry_wasm_type)
+                end
+            end
+
+            wrapper_idx = add_function!(mod, param_types, result_types, wrapper_locals, body)
             push!(wrapper_indices, wrapper_idx)
 
             dt.entries[entry_i] = DispatchEntry(
-                entry.type_ids, entry.hash, entry.target_idx, wrapper_idx
+                entry.type_ids, entry.hash, entry.target_idx, wrapper_idx, entry.return_type
             )
         end
 
@@ -444,6 +499,8 @@ function emit_dispatch_call!(bytes::Vector{UInt8},
         push!(bytes, 0x7D)  # f32
     elseif result_block_type == F64
         push!(bytes, 0x7C)  # f64
+    elseif result_block_type == AnyRef
+        push!(bytes, 0x6E)  # anyref
     else
         push!(bytes, 0x40)  # void
     end
