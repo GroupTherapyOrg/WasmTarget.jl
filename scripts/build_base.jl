@@ -9,18 +9,44 @@ using WasmTarget
 
 # All candidate functions: (function, arg_types, export_name)
 const ALL_FUNCTIONS = [
-    # ── Arithmetic ──────────────────────────────────────────
+    # ── Arithmetic (expanded for Tier 2 dispatch tables) ────
+    # PURE-9061: 9+ specializations per key function → triggers hash dispatch
     (+, (Int64, Int64), "add_i64"),
     (+, (Float64, Float64), "add_f64"),
     (+, (Int32, Int32), "add_i32"),
     (+, (Int64, Float64), "add_i64_f64"),
+    (+, (Float64, Int64), "add_f64_i64"),
+    (+, (Int32, Int64), "add_i32_i64"),
+    (+, (Int64, Int32), "add_i64_i32"),
+    (+, (Float32, Float32), "add_f32"),
+    (+, (Float32, Float64), "add_f32_f64"),
+    (+, (Float64, Float32), "add_f64_f32"),
+    (+, (Int32, Float64), "add_i32_f64"),
+    (+, (Float64, Int32), "add_f64_i32"),
     (-, (Int64, Int64), "sub_i64"),
     (-, (Float64, Float64), "sub_f64"),
     (-, (Int32, Int32), "sub_i32"),
+    (-, (Int64, Float64), "sub_i64_f64"),
+    (-, (Float64, Int64), "sub_f64_i64"),
+    (-, (Int32, Int64), "sub_i32_i64"),
+    (-, (Int64, Int32), "sub_i64_i32"),
+    (-, (Float32, Float32), "sub_f32"),
+    (-, (Float32, Float64), "sub_f32_f64"),
+    (-, (Float64, Float32), "sub_f64_f32"),
+    (-, (Int32, Float64), "sub_i32_f64"),
+    (-, (Float64, Int32), "sub_f64_i32"),
     (*, (Int64, Int64), "mul_i64"),
     (*, (Float64, Float64), "mul_f64"),
     (*, (Int64, Float64), "mul_i64_f64"),
     (*, (Int32, Int32), "mul_i32"),
+    (*, (Float64, Int64), "mul_f64_i64"),
+    (*, (Int32, Int64), "mul_i32_i64"),
+    (*, (Int64, Int32), "mul_i64_i32"),
+    (*, (Float32, Float32), "mul_f32"),
+    (*, (Float32, Float64), "mul_f32_f64"),
+    (*, (Float64, Float32), "mul_f64_f32"),
+    (*, (Int32, Float64), "mul_i32_f64"),
+    (*, (Float64, Int32), "mul_f64_i32"),
     (/, (Float64, Float64), "div_f64"),
     (div, (Int64, Int64), "div_i64"),
     (rem, (Int64, Int64), "rem_i64"),
@@ -205,7 +231,7 @@ println("Phase 2: Building base.wasm from $(length(validated)) validated functio
 println("=" ^ 60)
 
 t = @elapsed begin
-    bytes, type_registry, func_registry = compile_multi(validated; return_registries=true)
+    bytes, type_registry, func_registry, dispatch_registry = compile_multi(validated; return_registries=true)
 end
 
 size_kb = round(length(bytes) / 1024, digits=1)
@@ -275,5 +301,16 @@ open(func_table_path, "w") do io
 end
 println("  ✓ function-table.json ($(length(func_table_data)) entries, $(filesize(func_table_path)) bytes)")
 
+# PURE-9061: Serialize dispatch tables (frozen, immutable at runtime)
+dispatch_data = serialize_dispatch_tables(dispatch_registry, type_registry)
+dispatch_path = joinpath(dirname(@__DIR__), "dispatch-tables.json")
+open(dispatch_path, "w") do io
+    write(io, to_json(dispatch_data))
+    write(io, "\n")
+end
+n_tables = length(dispatch_data)
+n_total_entries = sum(d["num_entries"] for d in dispatch_data; init=0)
+println("  ✓ dispatch-tables.json ($n_tables tables, $n_total_entries entries, $(filesize(dispatch_path)) bytes)")
+
 println()
-println("Build complete: base.wasm + type-registry.json + function-table.json")
+println("Build complete: base.wasm + type-registry.json + function-table.json + dispatch-tables.json")

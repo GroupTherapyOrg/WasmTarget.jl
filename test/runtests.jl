@@ -4839,8 +4839,7 @@ struct DispS10 x::Int32 end
                 (disp_val, (DispS7,)),  (disp_val, (DispS8,)),
                 (disp_val, (DispS9,)),  (disp_val, (DispS10,)),
             ]
-            mod, type_registry, func_registry = compile_module(functions; return_registries=true)
-            dt_registry = WasmTarget.build_dispatch_tables(func_registry, type_registry)
+            mod, type_registry, func_registry, dt_registry = compile_module(functions; return_registries=true)
             @test length(dt_registry.tables) == 1  # one table for disp_val
             dt = first(values(dt_registry.tables))
             @test length(dt.entries) == 10

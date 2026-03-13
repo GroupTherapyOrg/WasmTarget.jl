@@ -647,3 +647,46 @@ function find_dispatch_call(code_info::Core.CodeInfo,
     end
     return nothing
 end
+
+# ==================== Serialization ====================
+
+"""
+Serialize dispatch tables to a Dict suitable for JSON output.
+Each table entry records: function name, arity, entries (typeIds + hash + target),
+table layout (keys, values), and table size.
+
+This metadata is written alongside base.wasm so that user code compilation
+can reference Base dispatch tables.
+"""
+function serialize_dispatch_tables(dt_registry::DispatchTableRegistry,
+                                    type_registry::TypeRegistry)::Vector{Dict{String, Any}}
+    tables = Dict{String, Any}[]
+    for (func_ref, dt) in dt_registry.tables
+        func_name = string(func_ref)
+        entries_data = Dict{String, Any}[]
+        for entry in dt.entries
+            push!(entries_data, Dict{String, Any}(
+                "type_ids" => Int[tid for tid in entry.type_ids],
+                "hash" => Int(entry.hash),
+                "target_idx" => Int(entry.target_idx),
+                "wrapper_idx" => Int(entry.wrapper_idx),
+            ))
+        end
+
+        keys, values, type_ids_flat = resolve_table_layout(dt)
+        push!(tables, Dict{String, Any}(
+            "function" => func_name,
+            "arity" => Int(dt.arity),
+            "table_size" => Int(dt.table_size),
+            "mask" => Int(dt.mask),
+            "num_entries" => length(dt.entries),
+            "entries" => entries_data,
+            "keys_global_idx" => Int(dt.keys_global_idx),
+            "values_global_idx" => Int(dt.values_global_idx),
+            "typeids_global_idx" => Int(dt.typeids_global_idx),
+            "func_table_idx" => Int(dt.func_table_idx),
+            "dispatch_sig_idx" => Int(dt.dispatch_sig_idx),
+        ))
+    end
+    return tables
+end

@@ -1608,7 +1608,7 @@ function compile_module(functions::Vector;
     clear_perf_now!()
 
     if return_registries
-        return (mod, type_registry, func_registry)
+        return (mod, type_registry, func_registry, dispatch_registry)
     end
     return mod
 end
