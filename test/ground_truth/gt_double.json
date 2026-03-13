@@ -1,6 +1,6 @@
 {
   "name": "gt_double",
-  "julia_version": "1.12.4",
+  "julia_version": "1.11.7",
   "entries": [
     {
       "expected": 6,
@@ -21,5 +21,5 @@
       ]
     }
   ],
-  "generated": "2026-03-12T21:28:14.906"
+  "generated": "2026-03-12T22:34:10.800"
 }
