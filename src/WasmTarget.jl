@@ -11,6 +11,7 @@ include("compiler/ir.jl")
 
 # Codegen - Julia IR to Wasm bytecode (split from compiler/codegen.jl)
 include("codegen/types.jl")
+include("codegen/dispatch.jl")
 include("codegen/compile.jl")
 include("codegen/structs.jl")
 include("codegen/unions.jl")
@@ -27,7 +28,6 @@ include("codegen/invoke.jl")
 include("codegen/helpers.jl")
 include("codegen/strings.jl")
 include("codegen/dicts.jl")
-include("codegen/dispatch.jl")
 
 # Runtime - Intrinsics and stdlib mapping
 include("runtime/intrinsics.jl")

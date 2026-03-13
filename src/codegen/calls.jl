@@ -4813,21 +4813,81 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     end
                 end
             else
-                # No matching signature - likely dead code from Union type branches
-                # Emit unreachable instead of error (the branch won't be taken at runtime)
-                # PURE-605: Suppress warning for known-safe dynamic dispatch paths where
-                # Julia couldn't specialize (arg types contain Any/abstract types).
-                # These are dead code branches in WasmGC context (we compile with concrete types).
-                _has_abstract = any(t -> t === Any || !isconcretetype(t), call_arg_types)
-                @warn "CROSS-CALL UNREACHABLE: $(func) with arg types $(call_arg_types) (in func_$(ctx.func_idx))$((_has_abstract ? " [abstract-suppressed]" : ""))"
-                # PURE-908: Clear pre-pushed args before emitting UNREACHABLE.
-                # The generic arg pre-push loop (line ~19103) pushes args when
-                # get_function returns nothing (no matching signature). Those args
-                # are now on the stack inside typed blocks, causing "values remaining
-                # on stack" validation errors.
-                bytes = UInt8[]
-                push!(bytes, Opcode.UNREACHABLE)
-                ctx.last_stmt_was_stub = true  # PURE-908
+                # PURE-9060: Check if this function has a hash dispatch table
+                _dispatch_emitted = false
+                if ctx.dispatch_registry !== nothing && called_func !== nothing
+                    _dt = get_dispatch_table(ctx.dispatch_registry, called_func)
+                    if _dt !== nothing && ctx.type_registry.base_struct_idx !== nothing
+                        # Emit hash-based dispatch: typeId extraction → FNV-1a → probe → call_indirect
+                        bytes = UInt8[]  # Clear any pre-pushed args
+
+                        # Allocate locals for arguments (store them as anyref for dispatch)
+                        _arg_locals = UInt32[]
+                        for (j, arg) in enumerate(args)
+                            # Compile argument value
+                            arg_bytes = compile_value(arg, ctx)
+                            arg_type = infer_value_type(arg, ctx)
+                            arg_wasm = get_concrete_wasm_type(arg_type, ctx.mod, ctx.type_registry)
+
+                            # Need argument as anyref — box if numeric
+                            _arg_local = UInt32(length(ctx.locals) + ctx.n_params)
+                            push!(ctx.locals, AnyRef)
+                            append!(bytes, arg_bytes)
+
+                            # Convert to anyref if needed
+                            if arg_wasm === I32 || arg_wasm === I64 || arg_wasm === F32 || arg_wasm === F64
+                                # Box numeric to anyref via struct_new
+                                _box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, arg_wasm)
+                                _box_scratch = UInt32(length(ctx.locals) + ctx.n_params)
+                                push!(ctx.locals, arg_wasm)
+                                push!(bytes, Opcode.LOCAL_SET)
+                                append!(bytes, encode_leb128_unsigned(_box_scratch))
+                                emit_box_type_id!(bytes, ctx.type_registry, arg_wasm)
+                                push!(bytes, Opcode.LOCAL_GET)
+                                append!(bytes, encode_leb128_unsigned(_box_scratch))
+                                push!(bytes, Opcode.GC_PREFIX)
+                                push!(bytes, Opcode.STRUCT_NEW)
+                                append!(bytes, encode_leb128_unsigned(_box_idx))
+                            elseif arg_wasm === ExternRef
+                                # Convert externref to anyref
+                                push!(bytes, Opcode.GC_PREFIX)
+                                push!(bytes, Opcode.ANY_CONVERT_EXTERN)
+                            elseif arg_wasm isa ConcreteRef
+                                # ConcreteRef is already a subtype of anyref — no conversion needed
+                            end
+
+                            push!(bytes, Opcode.LOCAL_SET)
+                            append!(bytes, encode_leb128_unsigned(_arg_local))
+                            push!(_arg_locals, _arg_local)
+                        end
+
+                        # Allocate dispatch scratch locals: typeId per arg + hash + slot + key + func_idx
+                        _dispatch_locals = UInt32[]
+                        for _ in 1:(Int(_dt.arity) + 4)
+                            _dl = UInt32(length(ctx.locals) + ctx.n_params)
+                            push!(ctx.locals, I32)
+                            push!(_dispatch_locals, _dl)
+                        end
+
+                        # Emit the hash dispatch code
+                        emit_dispatch_call!(bytes, _dt, _arg_locals, ctx.type_registry.base_struct_idx, _dispatch_locals)
+                        _dispatch_emitted = true
+                    end
+                end
+
+                if !_dispatch_emitted
+                    # No matching signature - likely dead code from Union type branches
+                    # Emit unreachable instead of error (the branch won't be taken at runtime)
+                    # PURE-605: Suppress warning for known-safe dynamic dispatch paths where
+                    # Julia couldn't specialize (arg types contain Any/abstract types).
+                    # These are dead code branches in WasmGC context (we compile with concrete types).
+                    _has_abstract = any(t -> t === Any || !isconcretetype(t), call_arg_types)
+                    @warn "CROSS-CALL UNREACHABLE: $(func) with arg types $(call_arg_types) (in func_$(ctx.func_idx))$((_has_abstract ? " [abstract-suppressed]" : ""))"
+                    # PURE-908: Clear pre-pushed args before emitting UNREACHABLE.
+                    bytes = UInt8[]
+                    push!(bytes, Opcode.UNREACHABLE)
+                    ctx.last_stmt_was_stub = true  # PURE-908
+                end
             end
         else
             error("Unsupported function call: $func (type: $(typeof(func)))")

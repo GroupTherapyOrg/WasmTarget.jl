@@ -48,6 +48,8 @@ mutable struct CompilationContext
     # Maps SlotNumber.id -> WASM local index. Slot 1 = self, Slot 2 = arg1, etc.
     # Slots > n_params+1 are local variables assigned with Expr(:(=), SlotNumber, rhs).
     slot_locals::Dict{Int, Int}
+    # PURE-9060: Tier 2 hash dispatch tables for megamorphic calls
+    dispatch_registry::Union{Nothing, DispatchTableRegistry}
 end
 
 function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
@@ -57,7 +59,8 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
                            is_compiled_closure::Bool=false,
                            captured_signal_fields::Dict{Symbol, Tuple{Bool, UInt32}}=Dict{Symbol, Tuple{Bool, UInt32}}(),
                            dom_bindings::Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}=Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}(),
-                           module_globals::Dict{Tuple{Module, Symbol}, UInt32}=Dict{Tuple{Module, Symbol}, UInt32}())
+                           module_globals::Dict{Tuple{Module, Symbol}, UInt32}=Dict{Tuple{Module, Symbol}, UInt32}(),
+                           dispatch_registry::Union{Nothing, DispatchTableRegistry}=nothing)
     # Calculate n_params excluding WasmGlobal arguments (they're phantom)
     n_real_params = count(i -> !(i in global_args), 1:length(arg_types))
     ctx = CompilationContext(
@@ -86,7 +89,8 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         Dict{Int, Any}(),       # memoryref_offsets (populated during compilation)
         WasmStackValidator(enabled=true, func_name="func_$(func_idx)"),  # PURE-414: stack validator
         false,                  # last_stmt_was_stub (PURE-908)
-        Dict{Int, Int}()        # slot_locals (PURE-6024: unoptimized IR slot variables)
+        Dict{Int, Int}(),       # slot_locals (PURE-6024: unoptimized IR slot variables)
+        dispatch_registry       # PURE-9060: Tier 2 hash dispatch
     )
     # Analyze SSA types and allocate locals for multi-use SSAs
     analyze_ssa_types!(ctx)

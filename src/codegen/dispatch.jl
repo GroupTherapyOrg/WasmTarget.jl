@@ -334,7 +334,9 @@ function emit_i32_array_init(array_type_idx::UInt32, values::AbstractVector)::Ve
         # array.new_fixed: push all elements, then array.new_fixed type_idx count
         for v in values
             push!(bytes, Opcode.I32_CONST)
-            append!(bytes, encode_leb128_signed(Int32(reinterpret(Int32, UInt32(v)))))
+            # Safely convert to signed i32 for LEB128 encoding (handles UInt32 > 2^31)
+            signed_v = reinterpret(Int32, UInt32(v & 0xFFFFFFFF))
+            append!(bytes, encode_leb128_signed(signed_v))
         end
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.ARRAY_NEW_FIXED)

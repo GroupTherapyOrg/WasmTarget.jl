@@ -1517,6 +1517,12 @@ function compile_module(functions::Vector;
         register_function!(func_registry, name, f, arg_types, func_idx, return_type)
     end
 
+    # PURE-9060: Build dispatch tables for megamorphic functions (>8 specializations)
+    dispatch_registry = build_dispatch_tables(func_registry, type_registry)
+    if !isempty(dispatch_registry.tables)
+        emit_dispatch_tables!(mod, type_registry, dispatch_registry)
+    end
+
     # Track export names to avoid duplicates (WASM requires unique export names)
     export_name_counts = Dict{String, Int}()
 
@@ -1543,7 +1549,8 @@ function compile_module(functions::Vector;
             ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
                                     func_registry=func_registry, func_idx=func_idx, func_ref=f,
                                     global_args=global_args, is_compiled_closure=is_closure,
-                                    module_globals=module_globals)
+                                    module_globals=module_globals,
+                                    dispatch_registry=dispatch_registry)
             body = generate_body(ctx)
             locals = ctx.locals
         end
