@@ -110,9 +110,8 @@ function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::
         return
     end
     # Box: compile value → struct_new(box_type) → extern_convert_any
-    # PURE-9024: Push typeId:i32 = 0 as field 0 before the value
-    push!(target_bytes, Opcode.I32_CONST)
-    push!(target_bytes, 0x00)
+    # PURE-9028: Push correct DFS typeId as field 0 before the value
+    emit_box_type_id!(target_bytes, ctx.type_registry, val_wasm)
     append!(target_bytes, compile_value(val, ctx))
     box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
     push!(target_bytes, Opcode.GC_PREFIX)
@@ -383,9 +382,8 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                             # (already externref — don't try to box it as numeric)
                                             _pvb_is_ref_null = length(_pvb) >= 1 && _pvb[1] == Opcode.REF_NULL
                                             if !_pvb_boxed && !_pvb_is_ref_null
-                                                # PURE-9024: Push typeId:i32 = 0 as field 0 before the value
-                                                push!(block_bytes, Opcode.I32_CONST)
-                                                push!(block_bytes, 0x00)
+                                                # PURE-9028: Push correct DFS typeId as field 0 before the value
+                                                emit_box_type_id!(block_bytes, ctx.type_registry, edge_val_type)
                                                 append!(block_bytes, _pvb)
                                                 _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
                                                 push!(block_bytes, Opcode.GC_PREFIX)
@@ -816,9 +814,8 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                         append!(result, encode_leb128_unsigned(local_idx))
                     elseif phi_local_wasm_type === ExternRef && (ssa_local_type === I32 || ssa_local_type === I64 || ssa_local_type === F32 || ssa_local_type === F64)
                         # PURE-325: Box numeric local for ExternRef phi
-                        # PURE-9024: Push typeId:i32 = 0 as field 0 before the value
-                        push!(result, Opcode.I32_CONST)
-                        push!(result, 0x00)
+                        # PURE-9028: Push correct DFS typeId as field 0
+                        emit_box_type_id!(result, ctx.type_registry, ssa_local_type)
                         push!(result, Opcode.LOCAL_GET)
                         append!(result, encode_leb128_unsigned(local_idx))
                         _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, ssa_local_type)
@@ -848,9 +845,8 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, src_local_type)
                     if phi_local_wasm_type === ExternRef && (src_local_type === I32 || src_local_type === I64 || src_local_type === F32 || src_local_type === F64)
                         # PURE-325: Box numeric phi-to-phi for ExternRef
-                        # PURE-9024: Push typeId:i32 = 0 as field 0 before the value
-                        push!(result, Opcode.I32_CONST)
-                        push!(result, 0x00)
+                        # PURE-9028: Push correct DFS typeId as field 0
+                        emit_box_type_id!(result, ctx.type_registry, src_local_type)
                         push!(result, Opcode.LOCAL_GET)
                         append!(result, encode_leb128_unsigned(local_idx))
                         _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, src_local_type)
@@ -888,9 +884,8 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_wasm_type) && !(phi_local_wasm_type === I64 && ssa_wasm_type === I32)
                     if phi_local_wasm_type === ExternRef && (ssa_wasm_type === I32 || ssa_wasm_type === I64 || ssa_wasm_type === F32 || ssa_wasm_type === F64)
                         # PURE-325: Box recomputed numeric SSA for ExternRef phi
-                        # PURE-9024: Push typeId:i32 = 0 as field 0 before the value
-                        push!(result, Opcode.I32_CONST)
-                        push!(result, 0x00)
+                        # PURE-9028: Push correct DFS typeId as field 0
+                        emit_box_type_id!(result, ctx.type_registry, ssa_wasm_type)
                         if stmt !== nothing && !(stmt isa Core.PhiNode)
                             append!(result, compile_statement(stmt, val.id, ctx))
                         else
@@ -982,9 +977,8 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type) && !(phi_local_type === I64 && edge_val_type === I32)
                     if phi_local_type === ExternRef && (edge_val_type === I32 || edge_val_type === I64 || edge_val_type === F32 || edge_val_type === F64)
                         # PURE-325: Box numeric non-SSA value for ExternRef phi
-                        # PURE-9024: Push typeId:i32 = 0 as field 0 before the value
-                        push!(result, Opcode.I32_CONST)
-                        push!(result, 0x00)
+                        # PURE-9028: Push correct DFS typeId as field 0
+                        emit_box_type_id!(result, ctx.type_registry, edge_val_type)
                         append!(result, compile_value(val, ctx))
                         _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
                         push!(result, Opcode.GC_PREFIX)
@@ -1221,9 +1215,8 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                             # PURE-602: compile_phi_value may return ref.null extern for nothing values
                                             _pvb2_is_ref_null = length(_pvb2) >= 1 && _pvb2[1] == Opcode.REF_NULL
                                             if !_pvb2_boxed && !_pvb2_is_ref_null
-                                                # PURE-9024: Push typeId:i32 = 0 as field 0 before the value
-                                                push!(bytes, Opcode.I32_CONST)
-                                                push!(bytes, 0x00)
+                                                # PURE-9028: Push correct DFS typeId as field 0
+                                                emit_box_type_id!(bytes, ctx.type_registry, edge_val_type)
                                                 append!(bytes, _pvb2)
                                                 _box_t2 = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
                                                 push!(bytes, Opcode.GC_PREFIX)
@@ -1546,9 +1539,8 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                                             # PURE-602: compile_phi_value may return ref.null extern for nothing values
                                             _pvb3_is_ref_null = length(_pvb3) >= 1 && _pvb3[1] == Opcode.REF_NULL
                                             if !_pvb3_boxed && !_pvb3_is_ref_null
-                                                # PURE-9024: Push typeId:i32 = 0 as field 0 before the value
-                                                push!(block_bytes, Opcode.I32_CONST)
-                                                push!(block_bytes, 0x00)
+                                                # PURE-9028: Push correct DFS typeId as field 0
+                                                emit_box_type_id!(block_bytes, ctx.type_registry, edge_val_type)
                                                 append!(block_bytes, _pvb3)
                                                 _box_t3 = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
                                                 push!(block_bytes, Opcode.GC_PREFIX)

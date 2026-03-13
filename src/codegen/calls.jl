@@ -4546,8 +4546,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                             push!(ctx.locals, actual_wasm)
                             push!(bytes, Opcode.LOCAL_SET)
                             append!(bytes, encode_leb128_unsigned(_box_scratch_any))
-                            push!(bytes, Opcode.I32_CONST)
-                            push!(bytes, 0x00)  # typeId
+                            # PURE-9028: Push correct DFS typeId as field 0
+                            emit_box_type_id!(bytes, ctx.type_registry, actual_wasm)
                             push!(bytes, Opcode.LOCAL_GET)
                             append!(bytes, encode_leb128_unsigned(_box_scratch_any))
                             push!(bytes, Opcode.GC_PREFIX)
@@ -4563,8 +4563,8 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                             push!(ctx.locals, actual_wasm)
                             push!(bytes, Opcode.LOCAL_SET)
                             append!(bytes, encode_leb128_unsigned(_box_scratch_ext))
-                            push!(bytes, Opcode.I32_CONST)
-                            push!(bytes, 0x00)  # typeId
+                            # PURE-9028: Push correct DFS typeId as field 0
+                            emit_box_type_id!(bytes, ctx.type_registry, actual_wasm)
                             push!(bytes, Opcode.LOCAL_GET)
                             append!(bytes, encode_leb128_unsigned(_box_scratch_ext))
                             push!(bytes, Opcode.GC_PREFIX)

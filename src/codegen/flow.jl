@@ -494,8 +494,8 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::C
             # a phi node assignment. Numeric values must be boxed to externref.
             value_bytes = compile_value(val, ctx)
             if !isempty(value_bytes)
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)  # typeId
+                # PURE-9028: Push correct DFS typeId as field 0
+                emit_box_type_id!(bytes, ctx.type_registry, edge_val_type)
                 append!(bytes, value_bytes)
                 box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
                 push!(bytes, Opcode.GC_PREFIX)
@@ -577,8 +577,8 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::C
                         # PURE-325: Box numeric SSA local for ExternRef phi local
                         vb = compile_value(val, ctx)
                         if !isempty(vb)
-                            push!(bytes, Opcode.I32_CONST)
-                            push!(bytes, 0x00)  # typeId
+                            # PURE-9028: Push correct DFS typeId as field 0
+                            emit_box_type_id!(bytes, ctx.type_registry, val_local_type)
                             append!(bytes, vb)
                             box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_local_type)
                             push!(bytes, Opcode.GC_PREFIX)
@@ -726,8 +726,8 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::C
                     # Handled below by F32_CONVERT_I64_S / F32_CONVERT_I32_S
                 elseif phi_local_type === ExternRef && (actual_val_type === I32 || actual_val_type === I64 || actual_val_type === F32 || actual_val_type === F64)
                     # PURE-325: Box numeric local.get for ExternRef phi local
-                    push!(bytes, Opcode.I32_CONST)
-                    push!(bytes, 0x00)  # typeId
+                    # PURE-9028: Push correct DFS typeId as field 0
+                    emit_box_type_id!(bytes, ctx.type_registry, actual_val_type)
                     append!(bytes, value_bytes)
                     box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, actual_val_type)
                     push!(bytes, Opcode.GC_PREFIX)

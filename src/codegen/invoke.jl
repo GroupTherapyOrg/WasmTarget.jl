@@ -373,18 +373,22 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                         push!(bytes, Opcode.ANY_CONVERT_EXTERN)
                     elseif expected_wasm === AnyRef && (actual_wasm === I32 || actual_wasm === I64 || actual_wasm === F32 || actual_wasm === F64)
                         # PURE-9022: Numeric value to anyref — box via struct_new (no extern.convert needed)
-                        # Insert typeId (i32.const 0) before the value already on the stack
+                        # PURE-9028: Insert correct DFS typeId before the value already on the stack
                         local box_insert_pos_any = length(bytes) - length(arg_bytes) + 1
-                        splice!(bytes, box_insert_pos_any:box_insert_pos_any-1, [Opcode.I32_CONST, 0x00])
+                        local _tid_bytes_any = UInt8[]
+                        emit_box_type_id!(_tid_bytes_any, ctx.type_registry, actual_wasm)
+                        splice!(bytes, box_insert_pos_any:box_insert_pos_any-1, _tid_bytes_any)
                         local box_type_idx_any = get_numeric_box_type!(ctx.mod, ctx.type_registry, actual_wasm)
                         push!(bytes, Opcode.GC_PREFIX)
                         push!(bytes, Opcode.STRUCT_NEW)
                         append!(bytes, encode_leb128_unsigned(box_type_idx_any))
                     elseif expected_wasm === ExternRef && (actual_wasm === I32 || actual_wasm === I64 || actual_wasm === F32 || actual_wasm === F64)
                         # PURE-6025: Numeric value to externref — box via struct_new then extern.convert_any.
-                        # Insert typeId (i32.const 0) before the value already on the stack
+                        # PURE-9028: Insert correct DFS typeId before the value already on the stack
                         local box_insert_pos_inv = length(bytes) - length(arg_bytes) + 1
-                        splice!(bytes, box_insert_pos_inv:box_insert_pos_inv-1, [Opcode.I32_CONST, 0x00])
+                        local _tid_bytes_inv = UInt8[]
+                        emit_box_type_id!(_tid_bytes_inv, ctx.type_registry, actual_wasm)
+                        splice!(bytes, box_insert_pos_inv:box_insert_pos_inv-1, _tid_bytes_inv)
                         local box_type_idx_inv = get_numeric_box_type!(ctx.mod, ctx.type_registry, actual_wasm)
                         push!(bytes, Opcode.GC_PREFIX)
                         push!(bytes, Opcode.STRUCT_NEW)

@@ -237,6 +237,28 @@ function emit_type_id!(bytes::Vector{UInt8}, registry::TypeRegistry, T::Type)
 end
 
 """
+    emit_box_type_id!(bytes::Vector{UInt8}, registry::TypeRegistry, wasm_type::WasmValType)
+
+PURE-9028: Emit `i32.const <typeId>` for a boxed primitive value.
+Maps WasmValType → default Julia type → DFS typeId.
+Used at boxing sites where only the Wasm type is known.
+"""
+function emit_box_type_id!(bytes::Vector{UInt8}, registry::TypeRegistry, wasm_type::WasmValType)
+    julia_type = if wasm_type === I32
+        Int32
+    elseif wasm_type === I64
+        Int64
+    elseif wasm_type === F32
+        Float32
+    elseif wasm_type === F64
+        Float64
+    else
+        Any
+    end
+    emit_type_id!(bytes, registry, julia_type)
+end
+
+"""
     get_base_struct_type!(mod::WasmModule, registry::TypeRegistry) -> UInt32
 
 Get or create the base struct type \$JlBase = (struct (field i32)).

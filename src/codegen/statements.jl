@@ -1897,9 +1897,8 @@ function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt
                     elseif actual_field_wasm === ExternRef
                         # PURE-6024: Box numeric local → struct_new → extern_convert_any
                         # (was: emit_numeric_to_externref! with undefined vars stmt/val_wasm)
-                        # PURE-9024: Push typeId before the numeric value for box struct
-                        push!(bytes, Opcode.I32_CONST)
-                        push!(bytes, 0x00)  # typeId = 0
+                        # PURE-9028: Push correct DFS typeId before the numeric value for box struct
+                        emit_box_type_id!(bytes, ctx.type_registry, src_type)
                         append!(bytes, field_bytes)
                         _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, src_type)
                         push!(bytes, Opcode.GC_PREFIX)
