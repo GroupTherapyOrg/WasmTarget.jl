@@ -4345,6 +4345,18 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                             # Concrete or abstract ref to externref — insert extern.convert_any
                             push!(bytes, Opcode.GC_PREFIX)
                             push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        elseif expected_wasm === AnyRef && actual_wasm === ExternRef
+                            # PURE-9022: externref to anyref — insert any.convert_extern
+                            # Occurs when JS import returns externref but internal code expects anyref
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.ANY_CONVERT_EXTERN)
+                        elseif expected_wasm === AnyRef && (actual_wasm === I32 || actual_wasm === I64 || actual_wasm === F32 || actual_wasm === F64)
+                            # PURE-9022: Numeric value to anyref — box via struct_new (no extern.convert needed)
+                            # struct_new produces a GC ref which is a subtype of anyref
+                            local box_type_idx_any = get_numeric_box_type!(ctx.mod, ctx.type_registry, actual_wasm)
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.STRUCT_NEW)
+                            append!(bytes, encode_leb128_unsigned(box_type_idx_any))
                         elseif expected_wasm === ExternRef && (actual_wasm === I32 || actual_wasm === I64 || actual_wasm === F32 || actual_wasm === F64)
                             # PURE-6025: Numeric value to externref — box via struct_new then extern.convert_any.
                             # This happens when a function expects Any (externref) but the actual value is numeric
