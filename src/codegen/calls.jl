@@ -4198,6 +4198,42 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     push!(bytes, Opcode.REF_IS_NULL)
                     push!(bytes, Opcode.I32_EQZ)
                 end
+            elseif isa2_val_wasm === AnyRef || isa2_val_wasm isa ConcreteRef || isa2_val_wasm === StructRef
+                # PURE-9030: anyref/structref value — use ref.test to check concrete box type.
+                # This handles Union{Int32, Float64} where the value is boxed in anyref.
+                local target_wasm_isa = get_concrete_wasm_type(check_type, ctx.mod, ctx.type_registry)
+                if check_type <: Number && !(check_type <: Int128) && !(check_type <: UInt128)
+                    # Numeric type: test against the numeric box struct
+                    local _box_wasm = julia_to_wasm_type(check_type)
+                    if haskey(ctx.type_registry.numeric_boxes, _box_wasm)
+                        local _box_idx = ctx.type_registry.numeric_boxes[_box_wasm]
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.REF_TEST)
+                        append!(bytes, encode_leb128_signed(Int64(_box_idx)))
+                    else
+                        # Box type not registered yet — register it
+                        local _box_idx2 = get_numeric_box_type!(ctx.mod, ctx.type_registry, _box_wasm)
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.REF_TEST)
+                        append!(bytes, encode_leb128_signed(Int64(_box_idx2)))
+                    end
+                elseif target_wasm_isa isa ConcreteRef
+                    # Struct type: test against the concrete struct type
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.REF_TEST)
+                    append!(bytes, encode_leb128_signed(Int64(target_wasm_isa.type_idx)))
+                elseif check_type === String || check_type === Symbol || check_type <: AbstractString
+                    # String/Symbol: test against the string array type
+                    local _str_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.REF_TEST)
+                    append!(bytes, encode_leb128_signed(Int64(_str_idx)))
+                else
+                    # Unknown concrete type — can't test, return false
+                    push!(bytes, Opcode.DROP)
+                    push!(bytes, Opcode.I32_CONST)
+                    push!(bytes, 0x00)
+                end
             else
                 # For Union{Nothing, T}, checking isa(x, T) is equivalent to !isnull
                 push!(bytes, Opcode.REF_IS_NULL)

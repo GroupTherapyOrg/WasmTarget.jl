@@ -133,6 +133,30 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                         push!(bytes, Opcode.STRUCT_GET)
                         append!(bytes, encode_leb128_unsigned(box_type_idx))
                         append!(bytes, encode_leb128_unsigned(UInt32(1)))  # field 1 (0=typeId, 1=value)
+                    # PURE-9030: PiNode narrowing from AnyRef → numeric (I64/I32/F64/F32).
+                    # The anyref holds a boxed numeric value (WasmGC struct with typeId + value).
+                    # Unbox via ref.cast to box type + struct_get field 1.
+                    # This handles Union{Int32, Float64} dispatch where the param is anyref.
+                    elseif !is_multi_value_src && val_wasm_type === AnyRef && (pi_local_type === I64 || pi_local_type === I32 || pi_local_type === F64 || pi_local_type === F32)
+                        val_bytes = compile_value(stmt.val, ctx)
+                        append!(bytes, val_bytes)
+                        local box_type_idx_any = get_numeric_box_type!(ctx.mod, ctx.type_registry, pi_local_type)
+                        # anyref → ref.cast (ref $BoxedXxx) → struct.get field 1
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.REF_CAST)  # non-null cast (inside isa-guarded branch)
+                        append!(bytes, encode_leb128_signed(Int64(box_type_idx_any)))
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.STRUCT_GET)
+                        append!(bytes, encode_leb128_unsigned(box_type_idx_any))
+                        append!(bytes, encode_leb128_unsigned(UInt32(1)))  # field 1 (0=typeId, 1=value)
+                    # PURE-9030: PiNode narrowing from AnyRef → ConcreteRef.
+                    # Example: anyref → String, anyref → MyStruct
+                    elseif !is_multi_value_src && val_wasm_type === AnyRef && pi_local_type isa ConcreteRef
+                        val_bytes = compile_value(stmt.val, ctx)
+                        append!(bytes, val_bytes)
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.REF_CAST_NULL)
+                        append!(bytes, encode_leb128_signed(Int64(pi_local_type.type_idx)))
                     # PURE-321: PiNode narrowing from ExternRef → ConcreteRef means the value
                     # IS available as externref and just needs conversion (not ref.null).
                     # Example: PiNode(%198, String) narrows Any (externref) → String (array<i32>).

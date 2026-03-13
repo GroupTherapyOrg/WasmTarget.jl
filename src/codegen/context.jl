@@ -1092,15 +1092,27 @@ function allocate_ssa_locals!(ctx::CompilationContext)
                 elseif !(narrowed_wasm isa ConcreteRef) && narrowed_wasm !== StructRef && narrowed_wasm !== ArrayRef && narrowed_wasm !== AnyRef
                     # Numeric PiNode — use the value's type for the local since
                     # the Wasm representation is the same (i32/i64/f32/f64)
+                    # PURE-9030: But NOT when the source is anyref (Union boxing).
+                    # PiNode π(x::Union{Int32,Float64}, Int32) should allocate I32,
+                    # not the Union's type. The unboxing in compile_statement extracts
+                    # the concrete numeric value from the anyref box.
+                    local _pi_src_val_wasm = nothing
                     if stmt.val isa Core.SSAValue
                         val_type = get(ctx.ssa_types, stmt.val.id, nothing)
                         if val_type !== nothing
-                            effective_type = val_type
+                            _pi_src_val_wasm = julia_to_wasm_type(val_type)
+                            if _pi_src_val_wasm !== AnyRef
+                                effective_type = val_type
+                            end
                         end
                     elseif stmt.val isa Core.Argument
                         arg_idx = stmt.val.n
                         if arg_idx <= length(ctx.code_info.slottypes)
-                            effective_type = ctx.code_info.slottypes[arg_idx]
+                            local _slot_type = ctx.code_info.slottypes[arg_idx]
+                            _pi_src_val_wasm = julia_to_wasm_type(_slot_type)
+                            if _pi_src_val_wasm !== AnyRef
+                                effective_type = _slot_type
+                            end
                         end
                     end
                 end

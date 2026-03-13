@@ -421,8 +421,16 @@ function find_common_wasm_type(types::Vector)::WasmValType
         has_f64 = any(t -> t === Float64, types)
         has_f32 = any(t -> t === Float32, types)
         has_float = has_f64 || has_f32
+        has_int = any(t -> t === Int32 || t === UInt32 || t === Int64 || t === UInt64 ||
+                         t === Int || t === Bool || t === Int8 || t === UInt8 ||
+                         t === Int16 || t === UInt16, types)
 
-        if has_float
+        # PURE-9030: Mixed int+float unions need anyref boxing for runtime dispatch.
+        # Widening Int32→Float64 loses type identity, breaking isa() checks.
+        # Same-category unions (all int or all float) can still widen safely.
+        if has_float && has_int
+            return AnyRef
+        elseif has_float
             return has_f64 ? F64 : F32
         elseif has_i64
             return I64

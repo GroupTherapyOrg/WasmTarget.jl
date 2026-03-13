@@ -275,6 +275,34 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
                     # Non-Nothing PiNode without local: re-emit the underlying value.
                     # Can't assume it's on the stack since block boundaries clear the stack.
                     append!(bytes, compile_value(stmt.val, ctx))
+                    # PURE-9030: Unbox from anyref to numeric type when PiNode narrows
+                    # a Union-typed anyref value to a concrete numeric type.
+                    # e.g., π(x::Union{Int32,Float64}, Int32) → ref.cast $BoxedInt32 + struct.get 1
+                    local _pi_target_wasm = julia_to_wasm_type(pi_type)
+                    if (_pi_target_wasm === I32 || _pi_target_wasm === I64 || _pi_target_wasm === F32 || _pi_target_wasm === F64)
+                        # Check if the underlying value is anyref (boxed)
+                        local _pi_src_wasm = nothing
+                        if stmt.val isa Core.Argument
+                            local _pi_arg_idx = ctx.is_compiled_closure ? stmt.val.n : stmt.val.n - 1
+                            if _pi_arg_idx >= 1 && _pi_arg_idx <= length(ctx.arg_types)
+                                _pi_src_wasm = get_concrete_wasm_type(ctx.arg_types[_pi_arg_idx], ctx.mod, ctx.type_registry)
+                            end
+                        elseif stmt.val isa Core.SSAValue
+                            local _pi_src_type = get(ctx.ssa_types, stmt.val.id, Any)
+                            _pi_src_wasm = get_concrete_wasm_type(_pi_src_type, ctx.mod, ctx.type_registry)
+                        end
+                        if _pi_src_wasm === AnyRef || _pi_src_wasm === StructRef || _pi_src_wasm isa ConcreteRef
+                            # Value is boxed in anyref — unbox via ref.cast + struct.get
+                            local _box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, _pi_target_wasm)
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.REF_CAST)  # non-null cast (inside isa-guarded branch)
+                            append!(bytes, encode_leb128_signed(Int64(_box_idx)))
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.STRUCT_GET)
+                            append!(bytes, encode_leb128_unsigned(_box_idx))
+                            append!(bytes, encode_leb128_unsigned(1))  # field 1 = value (field 0 = typeId)
+                        end
+                    end
                 end
             else
                 # Non-PiNode SSA without local: re-compile the statement to reproduce its value.
