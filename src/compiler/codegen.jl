@@ -15,7 +15,20 @@ struct StructInfo
     wasm_type_idx::UInt32
     field_names::Vector{Symbol}
     field_types::Vector{Type}  # Can include Union types
+    field_offset::UInt32  # PURE-9024: offset for typeId field (1 if typeId present, 0 otherwise)
 end
+
+# Backward-compatible constructor (field_offset defaults to 0)
+StructInfo(julia_type::Type, wasm_type_idx::UInt32, field_names::Vector{Symbol}, field_types::Vector) =
+    StructInfo(julia_type, wasm_type_idx, field_names, convert(Vector{Type}, field_types), UInt32(0))
+
+"""
+    wasm_field_idx(info::StructInfo, julia_field_idx::Int) -> UInt32
+
+Convert a Julia 1-based field index to the Wasm 0-based field index,
+accounting for the typeId field offset (PURE-9024).
+"""
+wasm_field_idx(info::StructInfo, julia_field_idx::Int) = UInt32(julia_field_idx - 1 + info.field_offset)
 
 """
 Maps Julia Union types to their WasmGC tagged union representation.
