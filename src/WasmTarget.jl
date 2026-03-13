@@ -27,6 +27,7 @@ include("codegen/invoke.jl")
 include("codegen/helpers.jl")
 include("codegen/strings.jl")
 include("codegen/dicts.jl")
+include("codegen/dispatch.jl")
 
 # Runtime - Intrinsics and stdlib mapping
 include("runtime/intrinsics.jl")
