@@ -5011,7 +5011,7 @@ struct DispOverlay2 x::Int32 end
                 js_path = joinpath(dirname(wasm_path), "test.mjs")
                 write(js_path, js_code)
 
-                node_cmd = NEEDS_EXPERIMENTAL_FLAG ? `\$NODE_CMD --experimental-wasm-gc \$js_path` : `\$NODE_CMD \$js_path`
+                node_cmd = NEEDS_EXPERIMENTAL_FLAG ? `$NODE_CMD --experimental-wasm-gc $js_path` : `$NODE_CMD $js_path`
                 output = strip(read(node_cmd, String))
                 results = JSON.parse(output)
 
