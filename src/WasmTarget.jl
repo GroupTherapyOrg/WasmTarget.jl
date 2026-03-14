@@ -30,6 +30,7 @@ include("codegen/strings.jl")
 include("codegen/dicts.jl")
 include("codegen/sourcemap.jl")
 include("codegen/cache.jl")
+include("codegen/packages.jl")
 
 # Runtime - Intrinsics and stdlib mapping
 include("runtime/intrinsics.jl")
@@ -43,6 +44,8 @@ include("runtime/tokenizer.jl")
 export compile, compile_multi, compile_from_codeinfo, compile_with_base, optimize, WasmModule, to_bytes
 export compile_with_sourcemap, compile_multi_with_sourcemap
 export compile_cached, compile_multi_cached, enable_cache!, disable_cache!, clear_cache!, cache_stats
+export register_package!, list_packages, package_functions, precompile_package
+export compile_with_packages, detect_using_statements, register_builtin_packages!
 export WasmGlobal, global_index, global_eltype
 # Therapy.jl integration - direct IR compilation for reactive handlers
 export compile_handler, compile_closure_body, DOMBindingSpec, TypeRegistry, FunctionRegistry
