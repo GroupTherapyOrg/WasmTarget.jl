@@ -5167,4 +5167,134 @@ struct TypeHierS2 x::Int32 end
 
     end
 
+    # ========================================================================
+    # Phase 37: Subtype Checking (PURE-9064)
+    # ========================================================================
+    @testset "Phase 37: Subtype Checking (PURE-9064)" begin
+
+        include("../src/typeinf/subtype.jl")
+
+        @testset "wasm_subtype compiles for concrete DataType pairs" begin
+            # Test wrapper functions that call _datatype_subtype
+            function ws_int_num()::Int32
+                return _datatype_subtype(Int64, Number) ? Int32(1) : Int32(0)
+            end
+            function ws_int_str()::Int32
+                return _datatype_subtype(Int64, AbstractString) ? Int32(1) : Int32(0)
+            end
+            function ws_int_int()::Int32
+                return _datatype_subtype(Int64, Int64) ? Int32(1) : Int32(0)
+            end
+            function ws_f64_num()::Int32
+                return _datatype_subtype(Float64, Number) ? Int32(1) : Int32(0)
+            end
+            function ws_int_signed()::Int32
+                return _datatype_subtype(Int64, Signed) ? Int32(1) : Int32(0)
+            end
+            function ws_bool_int()::Int32
+                return _datatype_subtype(Bool, Integer) ? Int32(1) : Int32(0)
+            end
+
+            bytes = WasmTarget.compile_multi([
+                (ws_int_num, ()),
+                (ws_int_str, ()),
+                (ws_int_int, ()),
+                (ws_f64_num, ()),
+                (ws_int_signed, ()),
+                (ws_bool_int, ()),
+                (_datatype_subtype, (DataType, DataType)),
+            ])
+
+            @test length(bytes) > 0
+            valid = try run(`$(first(NODE_CMD)) -e "1"`) !== nothing; true catch; false end
+            if valid
+                @test run_wasm(bytes, "ws_int_num") == 1        # Int64 <: Number
+                @test run_wasm(bytes, "ws_int_str") == 0        # Int64 !<: AbstractString
+                @test run_wasm(bytes, "ws_int_int") == 1        # Int64 <: Int64
+                @test run_wasm(bytes, "ws_f64_num") == 1        # Float64 <: Number
+                @test run_wasm(bytes, "ws_int_signed") == 1     # Int64 <: Signed
+                @test run_wasm(bytes, "ws_bool_int") == 1       # Bool <: Integer
+            end
+        end
+
+        @testset "SVec parameter access on DataType" begin
+            function svec_len_int64()::Int32
+                params = Base.getfield(Int64, :parameters)
+                return Int32(Core._svec_len(params))
+            end
+            function svec_len_vec()::Int32
+                params = Base.getfield(Vector{Int64}, :parameters)
+                return Int32(Core._svec_len(params))
+            end
+
+            bytes = WasmTarget.compile_multi([
+                (svec_len_int64, ()),
+                (svec_len_vec, ()),
+                (_datatype_subtype, (DataType, DataType)),
+            ])
+
+            @test length(bytes) > 0
+            valid = try run(`$(first(NODE_CMD)) -e "1"`) !== nothing; true catch; false end
+            if valid
+                @test run_wasm(bytes, "svec_len_int64") == 0    # Int64.parameters is empty
+                @test run_wasm(bytes, "svec_len_vec") == 2      # Vector{Int64}.parameters has 2 elements
+            end
+        end
+
+        @testset "Full wasm_subtype chain compiles and validates" begin
+            funcs = [
+                (wasm_subtype, (DataType, DataType)),
+                (_subtype, (Any, Any, SubtypeEnv, Int64)),
+                (_subtype_datatypes, (DataType, DataType, SubtypeEnv, Int64)),
+                (_datatype_subtype, (DataType, DataType)),
+                (_forall_exists_equal, (Any, Any, SubtypeEnv)),
+                (lookup, (SubtypeEnv, TypeVar)),
+                (_subtype_unionall, (Any, UnionAll, SubtypeEnv, Bool, Int64)),
+            ]
+
+            bytes = WasmTarget.compile_multi(funcs)
+            @test length(bytes) > 0
+
+            # Write and validate
+            tmpfile = tempname() * ".wasm"
+            write(tmpfile, bytes)
+            result = try read(`wasm-tools validate $tmpfile`, String); "VALID" catch e; string(e) end
+            @test result == "VALID"
+            rm(tmpfile; force=true)
+        end
+
+        @testset "_forall_exists_equal standalone" begin
+            function test_fee_eq()::Int32
+                env = SubtypeEnv()
+                return _forall_exists_equal(Int64, Int64, env) ? Int32(1) : Int32(0)
+            end
+            function test_fee_neq()::Int32
+                env = SubtypeEnv()
+                return _forall_exists_equal(Int64, Number, env) ? Int32(1) : Int32(0)
+            end
+
+            funcs = [
+                (test_fee_eq, ()),
+                (test_fee_neq, ()),
+                (_forall_exists_equal, (Any, Any, SubtypeEnv)),
+                (_subtype, (Any, Any, SubtypeEnv, Int64)),
+                (_subtype_datatypes, (DataType, DataType, SubtypeEnv, Int64)),
+                (_datatype_subtype, (DataType, DataType)),
+                (lookup, (SubtypeEnv, TypeVar)),
+                (_subtype_unionall, (Any, UnionAll, SubtypeEnv, Bool, Int64)),
+                (wasm_subtype, (DataType, DataType)),
+            ]
+
+            bytes = WasmTarget.compile_multi(funcs)
+            @test length(bytes) > 0
+
+            valid = try run(`$(first(NODE_CMD)) -e "1"`) !== nothing; true catch; false end
+            if valid
+                @test run_wasm(bytes, "test_fee_eq") == 1     # Int64 ≡ Int64 (invariant)
+                @test run_wasm(bytes, "test_fee_neq") == 0    # Int64 ≢ Number (invariant)
+            end
+        end
+
+    end
+
 end
