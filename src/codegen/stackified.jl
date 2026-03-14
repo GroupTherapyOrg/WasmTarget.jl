@@ -1508,6 +1508,7 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
         # block must not cascade. Without this, compile_statement emits unreachable on
         # valid fall-through paths after br_if (e.g., _next_token codepoint check).
         ctx.last_stmt_was_stub = false
+        _block_is_dead = false  # PURE-9066: Track dead code within a block
         for i in block.start_idx:block.end_idx
             # Skip dead statements
             if i in dead_regions
@@ -1515,6 +1516,12 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
             end
             if i in boundscheck_jumps
                 continue  # This GotoIfNot always jumps - skip it (handled below)
+            end
+            # PURE-9066: Skip statements after unreachable/stub within same block.
+            # After throw/error, remaining statements in the block are dead code.
+            # Compiling them would place unreachable opcodes in the wrong block.
+            if _block_is_dead
+                continue
             end
 
             stmt = code[i]
@@ -1715,10 +1722,14 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
                 stmt_bytes = compile_statement(stmt, i, ctx)
                 append!(block_bytes, stmt_bytes)
 
-                # PURE-6024: Skip remaining statements after unreachable.
+                # PURE-9066: After unreachable/stub, mark dead code within block.
+                # Previous `break` exited the block loop, causing subsequent dead
+                # statements to be placed in the wrong block. Now we mark dead code
+                # and skip remaining statements with `continue` at the top of the loop.
                 stmt_type2 = get(ctx.ssa_types, i, Any)
                 if stmt_type2 === Union{} || ctx.last_stmt_was_stub
-                    break
+                    _block_is_dead = true
+                    continue  # Skip drop/local checks but stay in block
                 end
 
                 if !haskey(ctx.ssa_locals, i)
