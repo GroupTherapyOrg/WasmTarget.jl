@@ -6,7 +6,7 @@
 #
 # Route: /manual/strings
 
-import Suite
+const Suite = Base.require(Main, :Suite)
 
 # =============================================================================
 # Strings Chapter Page

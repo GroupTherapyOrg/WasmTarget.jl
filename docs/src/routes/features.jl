@@ -3,7 +3,7 @@
 # Uses Suite.jl components for visual presentation.
 # All 4 WASM demos REMOVED (W4 cleanup) — replaced with static Suite.CodeBlock.
 
-import Suite
+const Suite = Base.require(Main, :Suite)
 
 function Features()
     Div(

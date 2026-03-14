@@ -7,7 +7,7 @@
 #
 # Route: /manual/integers-floats
 
-import Suite
+const Suite = Base.require(Main, :Suite)
 
 # =============================================================================
 # Integers and Floating-Point Numbers Chapter Page

@@ -7,7 +7,7 @@
 #
 # Route: /manual/tuples
 
-import Suite
+const Suite = Base.require(Main, :Suite)
 
 # =============================================================================
 # Tuples Chapter Page

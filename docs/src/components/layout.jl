@@ -3,7 +3,7 @@
 # Uses Suite.jl SiteNav for shared navbar pattern, SiteFooter, Separator,
 # Toaster. Uses WasmTarget.jl accent colors (Purple primary, Red secondary).
 
-import Suite
+const Suite = Base.require(Main, :Suite)
 
 # --- Logo ---
 
@@ -98,6 +98,27 @@ function Layout(children...; title="WasmTarget.jl")
         ),
 
         # Toast notification container
-        Suite.Toaster()
+        Suite.Toaster(),
+
+        # SPA playground initializer — watches for #pg-editor after navigation
+        Script(raw"""
+        (function() {
+          var observer = new MutationObserver(function() {
+            var el = document.getElementById("pg-editor");
+            if (el && !el._pgInit) {
+              el._pgInit = true;
+              // Find and execute the playground script
+              var scripts = document.querySelectorAll("#page-content script");
+              scripts.forEach(function(s) {
+                var ns = document.createElement("script");
+                ns.textContent = s.textContent;
+                s.parentNode.replaceChild(ns, s);
+              });
+            }
+          });
+          var target = document.getElementById("page-content") || document.body;
+          observer.observe(target, { childList: true, subtree: true });
+        })();
+        """)
     )
 end

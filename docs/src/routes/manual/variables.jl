@@ -6,7 +6,7 @@
 #
 # Route: /manual/variables
 
-import Suite
+const Suite = Base.require(Main, :Suite)
 
 # =============================================================================
 # Variables Chapter Page

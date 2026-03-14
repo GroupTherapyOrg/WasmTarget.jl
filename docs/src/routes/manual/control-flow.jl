@@ -10,7 +10,7 @@
 # Control Flow Chapter Page
 # =============================================================================
 
-import Suite
+const Suite = Base.require(Main, :Suite)
 
 """
 Control Flow chapter for the Julia Manual.

@@ -10,7 +10,7 @@
 # Methods Chapter Page
 # =============================================================================
 
-import Suite
+const Suite = Base.require(Main, :Suite)
 
 """
 Methods chapter for the Julia Manual.

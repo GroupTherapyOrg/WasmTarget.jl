@@ -7,3 +7,5 @@ docs/dist/
 
 # OS files
 .DS_Store
+docs/cm-bundle/node_modules/
+docs/dist/

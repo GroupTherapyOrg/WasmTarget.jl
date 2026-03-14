@@ -10,7 +10,7 @@
 # Arrays Chapter Page
 # =============================================================================
 
-import Suite
+const Suite = Base.require(Main, :Suite)
 
 """
 Arrays chapter for the Julia Manual.

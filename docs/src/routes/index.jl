@@ -3,7 +3,7 @@
 # Uses Suite.jl components for visual presentation.
 # JuliaPlayground REMOVED (W4 cleanup) — replaced with static intro.
 
-import Suite
+const Suite = Base.require(Main, :Suite)
 
 function Index()
     Div(:class => "py-8",

@@ -6,7 +6,7 @@
 #
 # Route: /manual/math-operations
 
-import Suite
+const Suite = Base.require(Main, :Suite)
 
 # =============================================================================
 # Mathematical Operations Chapter Page

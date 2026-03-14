@@ -1696,6 +1696,8 @@ function compile_module(functions::Vector;
     clear_io_imports!()
     clear_rng_globals!()
     clear_perf_now!()
+    clear_char_array_type!()
+    clear_utf8_to_js_func!()
 
     if return_registries
         return (mod, type_registry, func_registry, dispatch_registry)

@@ -3,7 +3,7 @@
 # Uses Suite.jl components: Card, CodeBlock, Badge, Table, Separator, Button.
 # Organized into sections: High-Level API, Low-Level Builder, Types, Opcodes
 
-import Suite
+const Suite = Base.require(Main, :Suite)
 
 function Api()
     Div(

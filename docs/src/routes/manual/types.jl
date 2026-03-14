@@ -10,7 +10,7 @@
 # Types Chapter Page
 # =============================================================================
 
-import Suite
+const Suite = Base.require(Main, :Suite)
 
 """
 Types chapter for the Julia Manual.

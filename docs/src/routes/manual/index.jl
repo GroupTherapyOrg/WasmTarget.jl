@@ -2,7 +2,7 @@
 #
 # Not yet implemented. Placeholder page to avoid misleading visitors.
 
-import Suite
+const Suite = Base.require(Main, :Suite)
 
 function ManualIndex()
     ManualLayout(chapter_id="", chapter_title=nothing,

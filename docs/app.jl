@@ -24,8 +24,15 @@ local_therapy = joinpath(dirname(@__DIR__), "..", "Therapy.jl")
 if isdir(local_therapy)
     push!(LOAD_PATH, local_therapy)
 end
+# Suite.jl is used by docs layout/components (not a source dep of WasmTarget.jl)
+local_suite = joinpath(dirname(@__DIR__), "..", "Suite.jl")
+if isdir(local_suite)
+    push!(LOAD_PATH, local_suite)
+end
 push!(LOAD_PATH, dirname(@__DIR__))  # Always add WasmTarget.jl itself
 
+# Pre-load Suite.jl in Main so `import Suite` works in component contexts
+using Suite
 using Therapy
 
 # Change to docs directory for relative paths

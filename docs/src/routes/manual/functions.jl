@@ -6,7 +6,7 @@
 #
 # Route: /manual/functions
 
-import Suite
+const Suite = Base.require(Main, :Suite)
 
 # =============================================================================
 # Functions Chapter Page

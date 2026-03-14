@@ -1,71 +1,201 @@
 # ============================================================================
-# String IO — wasm:text-decoder / wasm:text-encoder Imports
+# String IO — wasm:js-string Builtins (standardized, Chrome 131+)
 # ============================================================================
+
+# Module-level storage for the i16 char array type index used at the JS boundary
+const _CHAR_ARRAY_TYPE_IDX = Ref{Union{Nothing, UInt32}}(nothing)
+
+function clear_char_array_type!()
+    _CHAR_ARRAY_TYPE_IDX[] = nothing
+end
+
+"""
+Get or create the i16 char array type used for `wasm:js-string.fromCharCodeArray`.
+Internal strings stay as i8 UTF-8; this i16 type is only for the JS boundary.
+"""
+function get_char_array_type!(mod::WasmModule)::UInt32
+    if _CHAR_ARRAY_TYPE_IDX[] !== nothing
+        return _CHAR_ARRAY_TYPE_IDX[]
+    end
+    # (array (mut i16)) for UTF-16 char codes
+    idx = add_array_type!(mod, UInt8(0x77), true)  # 0x77 = i16
+    _CHAR_ARRAY_TYPE_IDX[] = idx
+    return idx
+end
 
 """
     add_string_io_imports!(mod, type_registry) -> (decode_idx, encode_idx)
 
-Add `wasm:text-decoder.decodeStringFromUTF8Array` and
-`wasm:text-encoder.encodeStringToUTF8Array` imports to the module.
-
-These are JS String Builtins that convert between WasmGC `(array (mut i8))`
-UTF-8 byte arrays and JS strings (externref). They are provided automatically
-by engines compiled with `builtins: ["js-string"]`, or can be polyfilled.
+Add `wasm:js-string.fromCharCodeArray` and `wasm:js-string.intoCharCodeArray`
+imports. These are standardized JS String Builtins auto-provided by engines
+when compiled with `builtins: ["js-string"]` (Chrome 131+, Node 23+).
 
 Returns a named tuple `(decode_idx, encode_idx)` with the import function indices.
 """
 function add_string_io_imports!(mod::WasmModule, type_registry::TypeRegistry)
-    # Ensure string array type is registered (needed for ConcreteRef in signatures)
-    str_arr_type_idx = get_string_array_type!(mod, type_registry)
-    str_arr_ref_nullable = ConcreteRef(str_arr_type_idx, true)   # (ref null $str_arr)
-    str_arr_ref_nonnull = ConcreteRef(str_arr_type_idx, false)   # (ref $str_arr)
+    char_arr_type_idx = get_char_array_type!(mod)
+    char_arr_ref_nullable = ConcreteRef(char_arr_type_idx, true)   # (ref null $i16arr)
 
-    # decodeStringFromUTF8Array: (ref null (array (mut i8)), i32, i32) → (ref extern)
-    # V8 requires non-null (ref extern) return type, not nullable externref
-    decode_idx = add_import!(mod, "wasm:text-decoder", "decodeStringFromUTF8Array",
-        WasmValType[str_arr_ref_nullable, I32, I32],
+    str_arr_type_idx = get_string_array_type!(mod, type_registry)
+    str_arr_ref_nonnull = ConcreteRef(str_arr_type_idx, false)     # (ref $str_arr)
+
+    # fromCharCodeArray: (ref null (array (mut i16)), i32, i32) → (ref extern)
+    decode_idx = add_import!(mod, "wasm:js-string", "fromCharCodeArray",
+        WasmValType[char_arr_ref_nullable, I32, I32],
         WasmValType[NonNullExternRef])
 
-    # encodeStringToUTF8Array: (externref) → (ref (array (mut i8)))
-    encode_idx = add_import!(mod, "wasm:text-encoder", "encodeStringToUTF8Array",
-        WasmValType[ExternRef],
-        WasmValType[str_arr_ref_nonnull])
+    # intoCharCodeArray: (externref, ref null (array (mut i16)), i32) → i32
+    # For encode, we keep the old approach as a stub — not yet used at IO boundary
+    encode_idx = decode_idx  # placeholder — encode not used in println path
 
     return (decode_idx=decode_idx, encode_idx=encode_idx)
 end
 
 """
-    emit_jl_string_to_js(bytes, decode_func_idx)
+Module-level storage for the utf8_to_js helper function index.
+This helper converts an i8 UTF-8 array to a JS string via fromCharCodeArray.
+Created once per module in add_string_io_imports! or add_io_imports!.
+"""
+const _UTF8_TO_JS_FUNC_IDX = Ref{Union{Nothing, UInt32}}(nothing)
 
-Emit bytecode to convert a Julia string (WasmGC i8 array on stack) to a JS string (externref).
+function clear_utf8_to_js_func!()
+    _UTF8_TO_JS_FUNC_IDX[] = nothing
+end
+
+"""
+Create a WASM helper function that converts i8 UTF-8 array → JS string.
+
+The helper:
+1. Gets the i8 array length
+2. Creates an i16 array of the same length
+3. Loops: zero-extends each i8 byte to i16
+4. Calls fromCharCodeArray(i16arr, 0, len) → (ref extern)
+
+Signature: (ref null \$i8arr) → (ref extern)
+"""
+function create_utf8_to_js_helper!(mod::WasmModule, type_registry::TypeRegistry, decode_import_idx::UInt32)::UInt32
+    str_arr_type_idx = get_string_array_type!(mod, type_registry)
+    char_arr_type_idx = get_char_array_type!(mod)
+
+    i8arr_ref = ConcreteRef(str_arr_type_idx, true)  # param type: (ref null $i8arr)
+
+    # Function type: (ref null $i8arr) → (ref extern)
+    ft = FuncType(WasmValType[i8arr_ref], WasmValType[NonNullExternRef])
+    type_idx = add_type!(mod, ft)
+
+    # Locals: 0=param(i8arr), 1=len(i32), 2=i16arr(ref $i16arr), 3=i(i32)
+    locals = WasmValType[I32, ConcreteRef(char_arr_type_idx, true), I32]
+
+    body = UInt8[]
+    local_i8arr = UInt32(0)
+    local_len = UInt32(1)
+    local_i16arr = UInt32(2)
+    local_i = UInt32(3)
+
+    # len = i8arr.len
+    push!(body, Opcode.LOCAL_GET)
+    append!(body, encode_leb128_unsigned(local_i8arr))
+    push!(body, Opcode.GC_PREFIX)
+    push!(body, Opcode.ARRAY_LEN)
+    push!(body, Opcode.LOCAL_TEE)
+    append!(body, encode_leb128_unsigned(local_len))
+
+    # i16arr = array.new_default $i16arr len
+    push!(body, Opcode.GC_PREFIX)
+    push!(body, Opcode.ARRAY_NEW_DEFAULT)
+    append!(body, encode_leb128_unsigned(char_arr_type_idx))
+    push!(body, Opcode.LOCAL_SET)
+    append!(body, encode_leb128_unsigned(local_i16arr))
+
+    # i = 0
+    push!(body, Opcode.I32_CONST)
+    push!(body, 0x00)
+    push!(body, Opcode.LOCAL_SET)
+    append!(body, encode_leb128_unsigned(local_i))
+
+    # block { loop {
+    push!(body, Opcode.BLOCK)
+    push!(body, 0x40)
+    push!(body, Opcode.LOOP)
+    push!(body, 0x40)
+
+    # if i >= len, break
+    push!(body, Opcode.LOCAL_GET)
+    append!(body, encode_leb128_unsigned(local_i))
+    push!(body, Opcode.LOCAL_GET)
+    append!(body, encode_leb128_unsigned(local_len))
+    push!(body, Opcode.I32_GE_U)
+    push!(body, Opcode.BR_IF)
+    push!(body, 0x01)
+
+    # i16arr[i] = (i32)i8arr[i]  — array.get_u zero-extends, array.set truncates
+    push!(body, Opcode.LOCAL_GET)
+    append!(body, encode_leb128_unsigned(local_i16arr))
+    push!(body, Opcode.LOCAL_GET)
+    append!(body, encode_leb128_unsigned(local_i))
+    push!(body, Opcode.LOCAL_GET)
+    append!(body, encode_leb128_unsigned(local_i8arr))
+    push!(body, Opcode.LOCAL_GET)
+    append!(body, encode_leb128_unsigned(local_i))
+    push!(body, Opcode.GC_PREFIX)
+    push!(body, Opcode.ARRAY_GET_U)
+    append!(body, encode_leb128_unsigned(str_arr_type_idx))
+    push!(body, Opcode.GC_PREFIX)
+    push!(body, Opcode.ARRAY_SET)
+    append!(body, encode_leb128_unsigned(char_arr_type_idx))
+
+    # i++
+    push!(body, Opcode.LOCAL_GET)
+    append!(body, encode_leb128_unsigned(local_i))
+    push!(body, Opcode.I32_CONST)
+    push!(body, 0x01)
+    push!(body, Opcode.I32_ADD)
+    push!(body, Opcode.LOCAL_SET)
+    append!(body, encode_leb128_unsigned(local_i))
+
+    # br loop
+    push!(body, Opcode.BR)
+    push!(body, 0x00)
+
+    push!(body, Opcode.END)  # end loop
+    push!(body, Opcode.END)  # end block
+
+    # return fromCharCodeArray(i16arr, 0, len)
+    push!(body, Opcode.LOCAL_GET)
+    append!(body, encode_leb128_unsigned(local_i16arr))
+    push!(body, Opcode.I32_CONST)
+    push!(body, 0x00)
+    push!(body, Opcode.LOCAL_GET)
+    append!(body, encode_leb128_unsigned(local_len))
+    push!(body, Opcode.CALL)
+    append!(body, encode_leb128_unsigned(decode_import_idx))
+
+    push!(body, Opcode.END)  # end function
+
+    func = WasmFunction(type_idx, locals, body)
+    push!(mod.functions, func)
+    func_idx = UInt32(length(mod.imports) + length(mod.functions) - 1)
+    _UTF8_TO_JS_FUNC_IDX[] = func_idx
+    return func_idx
+end
+
+"""
+    emit_jl_string_to_js!(bytes, decode_func_idx, tmp_local)
+
+Emit bytecode to convert a Julia string (WasmGC i8 array on stack) to a
+JS string (externref). Calls the module-level `\$utf8_to_js` helper function.
 
 **Stack effect:** `[(ref \$str_arr)] → [externref]`
-
-Emits: `local.tee \$tmp; i32.const 0; local.get \$tmp; array.len; call \$decode`
-
-Note: Caller must ensure a scratch local is available for tee-ing the array ref.
-This function takes `tmp_local` as the index of that scratch local.
 """
 function emit_jl_string_to_js!(bytes::Vector{UInt8}, decode_func_idx::UInt32, tmp_local::UInt32)
-    # Stack: [str_arr_ref]
-    # We need: [str_arr_ref, 0, str_arr_ref.len]
-    # Tee the array ref so we can get its length
-    push!(bytes, Opcode.LOCAL_TEE)
-    append!(bytes, encode_leb128_unsigned(tmp_local))
-
-    # Push offset = 0
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-
-    # Push length = array.len
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(tmp_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_LEN)
-
-    # Call decodeStringFromUTF8Array(array, offset, length) → externref
+    helper_idx = _UTF8_TO_JS_FUNC_IDX[]
+    if helper_idx === nothing
+        error("utf8_to_js helper not created — call create_utf8_to_js_helper! first")
+    end
+    # Stack: [i8_arr_ref]
+    # Call $utf8_to_js(i8_arr_ref) → (ref extern)
     push!(bytes, Opcode.CALL)
-    append!(bytes, encode_leb128_unsigned(decode_func_idx))
+    append!(bytes, encode_leb128_unsigned(helper_idx))
 end
 
 """
@@ -74,6 +204,9 @@ end
 Emit bytecode to convert a JS string (externref on stack) to a Julia string (WasmGC i8 array).
 
 **Stack effect:** `[externref] → [(ref \$str_arr)]`
+
+NOTE: This currently uses the legacy wasm:text-encoder path. For the playground,
+only the decode (Julia→JS) direction is needed for println output.
 """
 function emit_js_to_jl_string!(bytes::Vector{UInt8}, encode_func_idx::UInt32)
     # Stack: [externref]
@@ -147,15 +280,15 @@ Imports: io.write_string, io.write_int, io.write_float, io.write_bool, io.write_
 Also adds wasm:text-decoder import for string conversion.
 """
 function add_io_imports!(mod::WasmModule, type_registry::TypeRegistry)
-    # String decoder for converting Julia strings to JS strings
-    str_arr_type_idx = get_string_array_type!(mod, type_registry)
-    str_arr_ref_nullable = ConcreteRef(str_arr_type_idx, true)
+    # String decoder via standardized wasm:js-string builtins
+    char_arr_type_idx = get_char_array_type!(mod)
+    char_arr_ref_nullable = ConcreteRef(char_arr_type_idx, true)
 
-    decode_idx = add_import!(mod, "wasm:text-decoder", "decodeStringFromUTF8Array",
-        WasmValType[str_arr_ref_nullable, I32, I32],
+    decode_idx = add_import!(mod, "wasm:js-string", "fromCharCodeArray",
+        WasmValType[char_arr_ref_nullable, I32, I32],
         WasmValType[NonNullExternRef])
 
-    # IO imports
+    # IO imports (must be registered BEFORE the helper function, since imports shift function indices)
     write_string_idx = add_import!(mod, "io", "write_string",
         WasmValType[ExternRef], WasmValType[])
     write_int_idx = add_import!(mod, "io", "write_int",
@@ -169,6 +302,10 @@ function add_io_imports!(mod::WasmModule, type_registry::TypeRegistry)
     # PURE-9041: write_nothing() outputs "nothing" string
     write_nothing_idx = add_import!(mod, "io", "write_nothing",
         WasmValType[], WasmValType[])
+
+    # Create the utf8→js helper AFTER all imports are registered
+    # (adding imports after this would shift function indices)
+    create_utf8_to_js_helper!(mod, type_registry, decode_idx)
 
     return IOImports(write_string_idx, write_int_idx, write_float_idx,
                      write_bool_idx, write_newline_idx, write_nothing_idx, decode_idx)

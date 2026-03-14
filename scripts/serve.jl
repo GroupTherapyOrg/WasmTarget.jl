@@ -1,12 +1,16 @@
 #!/usr/bin/env julia
-# Compile server: POST /compile → compiled Wasm bytes
-# Run: julia +1.12 --project=. scripts/serve.jl [port]
+# WasmTarget.jl — Compile server + docs site
+#
+# Serves the docs site (static files) and compile API from the same origin.
+#
+# Usage:
+#   julia +1.12 --project=. scripts/serve.jl [port]
 #
 # Endpoints:
-#   POST /compile  — Compile Julia code to Wasm, merge with base.wasm
-#                    Body: Julia source code (text/plain or application/json with "code" field)
-#                    Returns: application/wasm bytes
-#   GET  /health   — Health check
+#   GET  /             — Docs site (from docs/dist/)
+#   POST /compile      — Compile Julia code to Wasm (merged with base.wasm)
+#   GET  /base.wasm    — Pre-compiled base runtime
+#   GET  /health       — Health check
 
 using WasmTarget
 using HTTP
@@ -15,11 +19,16 @@ using SHA
 
 const PORT = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 8080
 const BASE_WASM = joinpath(dirname(@__DIR__), "base.wasm")
+const DOCS_DIR = joinpath(dirname(@__DIR__), "docs", "dist")
 
 # Verify base.wasm exists
 if !isfile(BASE_WASM)
     @error "base.wasm not found at $BASE_WASM. Run: julia --project=. scripts/build_base.jl"
     exit(1)
+end
+
+if !isdir(DOCS_DIR)
+    @warn "docs/dist/ not found — static site serving disabled. Build with: julia --project=../Therapy.jl docs/app.jl build"
 end
 
 const BASE_WASM_BYTES = read(BASE_WASM)
@@ -63,7 +72,7 @@ end
 const RATE_LIMIT_WINDOW = 60  # seconds
 const RATE_LIMIT_MAX = 10     # requests per window
 const CODE_SIZE_LIMIT = 10_000  # bytes
-const COMPILE_TIMEOUT = 30.0    # seconds
+const COMPILE_TIMEOUT = 120.0   # seconds (first compile needs JIT warmup)
 const rate_limits = Dict{String, Vector{Float64}}()  # IP → timestamps
 const rate_lock = ReentrantLock()
 
@@ -83,6 +92,7 @@ end
 
 println("WasmTarget Compile Server")
 println("  base.wasm: $BASE_WASM ($(length(BASE_WASM_BYTES)) bytes)")
+println("  docs dir:  $DOCS_DIR $(isdir(DOCS_DIR) ? "(ready)" : "(not built)")")
 println("  Port: $PORT")
 
 """
@@ -102,68 +112,54 @@ function parse_code(req::HTTP.Request)::String
 end
 
 """
-Check if code defines any functions (heuristic: contains `function` keyword or `f(args) =` pattern).
+Compile Julia code to Wasm bytes.
+Always wraps in main()::Nothing so bare expressions just work.
 """
-function _has_function_defs(code::String)::Bool
-    return occursin(r"^\s*(function\s|[a-zA-Z_]\w*\s*\([^)]*\)\s*=)"m, code)
-end
-
-"""
-Compile Julia code string to Wasm bytes.
-If code defines functions, compiles them directly.
-If code is bare expressions (e.g. `println(1+1)`), wraps in a `main()` function.
-Merges result with base.wasm.
-"""
-function _discover_and_compile(temp_mod::Module, has_funcs::Bool)::Vector{UInt8}
-    if has_funcs
-        functions = []
-        skip_names = Set([:eval, :include, nameof(temp_mod)])
-        for name in names(temp_mod; all=true)
-            name in skip_names && continue
-            startswith(string(name), '#') && continue
-            isdefined(temp_mod, name) || continue
-            f = getfield(temp_mod, name)
-            if f isa Function
-                for m in methods(f)
-                    sig = m.sig
-                    if sig isa DataType && sig <: Tuple
-                        arg_types = Tuple(sig.parameters[2:end])
-                        push!(functions, (f, arg_types, string(name)))
-                    end
-                end
-            end
-        end
-        isempty(functions) && error("Code appears to define functions but none were found. Check syntax.")
-        return compile_with_base(functions; base_wasm_path=BASE_WASM)
-    else
-        main_fn = getfield(temp_mod, :main)
-        return compile_with_base([(main_fn, (), "main")]; base_wasm_path=BASE_WASM)
-    end
-end
-
 function compile_code(code::String)::Vector{UInt8}
     temp_mod = Module()
-    has_funcs = _has_function_defs(code)
-
-    # Step 1: eval creates bindings (bumps world age)
-    if has_funcs
-        Base.eval(temp_mod, Meta.parse("begin\n$code\nend"))
-    else
-        wrapped = "function main()::Nothing\n$code\nreturn nothing\nend"
-        Base.eval(temp_mod, Meta.parse(wrapped))
+    wrapped = "function main()::Nothing\n$code\nreturn nothing\nend"
+    Base.eval(temp_mod, Meta.parse(wrapped))
+    return Base.invokelatest() do
+        main_fn = getfield(temp_mod, :main)
+        compile(main_fn, ())
     end
+end
 
-    # Step 2: invokelatest accesses bindings in latest world age
-    return Base.invokelatest(_discover_and_compile, temp_mod, has_funcs)
+# MIME types for static file serving
+const MIME_TYPES = Dict(
+    ".html" => "text/html; charset=utf-8",
+    ".css"  => "text/css; charset=utf-8",
+    ".js"   => "application/javascript; charset=utf-8",
+    ".json" => "application/json",
+    ".wasm" => "application/wasm",
+    ".svg"  => "image/svg+xml",
+    ".png"  => "image/png",
+    ".jpg"  => "image/jpeg",
+    ".ico"  => "image/x-icon",
+    ".woff" => "font/woff",
+    ".woff2" => "font/woff2",
+    ".ttf"  => "font/ttf",
+    ".txt"  => "text/plain",
+)
+
+function get_mime(path::String)::String
+    ext = lowercase(splitext(path)[2])
+    return get(MIME_TYPES, ext, "application/octet-stream")
 end
 
 function handle_request(req::HTTP.Request)::HTTP.Response
+    # Redirect bare root to base_path
+    if req.method == "GET" && req.target == "/"
+        return HTTP.Response(302, ["Location" => "/WasmTarget.jl/"])
+    end
+
+    # --- API endpoints ---
+
     if req.method == "GET" && req.target == "/health"
         return HTTP.Response(200, ["Content-Type" => "application/json"],
                              body="""{"status":"ok","base_functions":108}""")
     end
 
-    # Serve base.wasm with long cache (V8 code caching requires stable GET URL + Cache-Control)
     if req.method == "GET" && req.target == "/base.wasm"
         return HTTP.Response(200, [
             "Content-Type" => "application/wasm",
@@ -226,7 +222,6 @@ function handle_request(req::HTTP.Request)::HTTP.Response
             end
 
             wasm_bytes = fetch(compile_task)
-            t = 0.0  # timing not easily available from async; use X-Cache: miss
             @info "Compiled $(length(wasm_bytes)) bytes"
 
             # Store in cache
@@ -267,29 +262,66 @@ function handle_request(req::HTTP.Request)::HTTP.Response
         ])
     end
 
-    # Serve playground static files
-    if req.method == "GET"
-        playground_dir = joinpath(dirname(@__DIR__), "playground")
-        path = req.target == "/" ? "/index.html" : req.target
-        filepath = joinpath(playground_dir, lstrip(path, '/'))
-        filepath = realpath(filepath)  # resolve symlinks
-        if startswith(filepath, playground_dir) && isfile(filepath)
-            content_type = endswith(filepath, ".html") ? "text/html" :
-                           endswith(filepath, ".js") ? "application/javascript" :
-                           endswith(filepath, ".css") ? "text/css" :
-                           "application/octet-stream"
-            return HTTP.Response(200, ["Content-Type" => content_type], body=read(filepath))
+    # --- Static file serving (docs/dist/) ---
+
+    if req.method == "GET" && isdir(DOCS_DIR)
+        # Parse path, strip query string
+        path = split(req.target, "?")[1]
+        path = HTTP.URIs.unescapeuri(path)
+
+        # Strip base_path prefix (/WasmTarget.jl) so GitHub Pages builds work locally
+        base_prefix = "/WasmTarget.jl"
+        if startswith(path, base_prefix)
+            path = path[length(base_prefix)+1:end]
+            isempty(path) && (path = "/")
+        end
+
+        # Try exact file, then path/index.html for directory-style routes
+        candidates = [
+            joinpath(DOCS_DIR, lstrip(path, '/')),
+            joinpath(DOCS_DIR, lstrip(path, '/'), "index.html"),
+        ]
+
+        for filepath in candidates
+            isfile(filepath) || continue
+            # Path traversal protection
+            real = realpath(filepath)
+            startswith(real, realpath(DOCS_DIR)) || continue
+            return HTTP.Response(200, [
+                "Content-Type" => get_mime(real),
+                "Cache-Control" => endswith(real, ".html") ? "no-cache" : "public, max-age=3600",
+            ], body=read(filepath))
         end
     end
 
-    return HTTP.Response(404, body="Not found")
+    return HTTP.Response(404, ["Content-Type" => "text/html"],
+                         body="<h1>404 Not Found</h1><p>$(req.target)</p>")
 end
 
-const PLAYGROUND_DIR = joinpath(dirname(@__DIR__), "playground")
+println()
 println("  Listening on http://localhost:$PORT")
-println("  GET  /         — playground UI ($(PLAYGROUND_DIR))")
-println("  POST /compile  — compile Julia code to Wasm")
-println("  GET  /health   — health check")
+println()
+println("  Endpoints:")
+println("    GET  /           — docs site ($(DOCS_DIR))")
+println("    POST /compile    — compile Julia → Wasm")
+println("    GET  /base.wasm  — pre-compiled base runtime")
+println("    GET  /health     — health check")
+println()
+if isdir(DOCS_DIR)
+    println("  Playground: http://localhost:$PORT/WasmTarget.jl/playground/")
+else
+    println("  ⚠  Build docs first: julia --project=../Therapy.jl docs/app.jl build")
+end
+println()
+
+# Warmup compile — JIT-compile WasmTarget.jl so first browser request is fast
+print("  Warming up compiler...")
+try
+    warmup_t = @elapsed compile_code("_warmup(x::Int32)::Int32 = x + Int32(1)")
+    println(" done ($(round(warmup_t, digits=1))s)")
+catch e
+    println(" failed: $(sprint(showerror, e))")
+end
 println()
 
 HTTP.serve(handle_request, "0.0.0.0", PORT)
