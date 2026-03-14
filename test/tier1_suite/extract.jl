@@ -76,6 +76,24 @@ const INFEASIBLE_PATTERNS = [
     r"\bpi\b|π",                       # Pi constant
     r"typemax|typemin",                # Type bounds
     r"zero\(|one\(",                   # Type-parameterized zeros/ones
+    # ---- Operations that compile but trap at runtime (stubbed methods) ----
+    r"\bparse\(|tryparse\(",           # String→number parsing (complex Base method)
+    r"@fastmath|macroexpand",          # Macro-related operations
+    r"\breduce\(|\bfoldl\(|\bfoldr\(",  # Higher-order reduction (closure dispatch)
+    r"\bmapreduce\(",                   # Map-reduce with closures
+    r"\bmap\(|\bfilter\(",             # Higher-order with closures
+    r"\bpowermod\(|\binvmod\(",        # Complex integer math
+    r"\bhash\(",                        # Hash function (complex dispatch)
+    r"\bmerge\(",                       # NamedTuple merge (complex)
+    r"\bkeys\(|\bvalues\(",            # Collection accessors
+    r"\bpermute!\(",                    # Array permutation
+    r"\bfactorial\(",                  # Factorial (overflow checking)
+    r"\bwiden\(",                      # Type widening (Int128 etc.)
+    r"Int128|UInt128",                 # 128-bit integers (partial support)
+    r"\bcollect\(",                    # Iterator materialization
+    r"\bsort\(|\bsort!\(",            # Sorting
+    r"\breverse\(",                    # Reverse (for collections)
+    r"\b\.->",                         # Lambda with dot syntax
 ]
 
 """

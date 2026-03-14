@@ -64,18 +64,13 @@ function run_quick(n::Int)
             actual = run_wasm(bytes, fname)
             if actual == 1
                 correct += 1
-                if i <= 30
-                    println("  ✓ $(t.file):$(t.line) $(t.expr[1:min(60,length(t.expr))])")
-                end
             else
-                println("  ✗ MISMATCH $(t.file):$(t.line) got=$actual $(t.expr[1:min(50,length(t.expr))])")
+                println("  ✗ MISMATCH $(t.file):$(t.line) got=$actual $(t.expr[1:min(60,length(t.expr))])")
             end
         catch e
             exec_fail += 1
-            if i <= 30
-                msg = string(e)[1:min(60, length(string(e)))]
-                println("  ⊘ EXEC_FAIL $(t.file):$(t.line) $msg")
-            end
+            msg = string(e)[1:min(60, length(string(e)))]
+            println("  ⊘ EXEC_FAIL $(t.file):$(t.line) $msg")
         end
 
         if i % 100 == 0
