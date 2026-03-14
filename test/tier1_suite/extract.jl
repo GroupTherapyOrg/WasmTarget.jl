@@ -230,8 +230,8 @@ function run_extraction()
         println(io)
         println(io, "const EXTRACTED_TESTS = [")
         for (i, t) in enumerate(all_tests)
-            # Escape the expression string for inclusion
-            expr_escaped = replace(t.expr_str, "\"" => "\\\"", "\\" => "\\\\")
+            # Escape \, ", and $ for inclusion in string literals
+            expr_escaped = replace(t.expr_str, "\\" => "\\\\", "\"" => "\\\"", "\$" => "\\\$")
             println(io, "    (file=\"$(t.file)\", line=$(t.line), expr=\"$(expr_escaped)\"),")
         end
         println(io, "]")
@@ -293,7 +293,8 @@ function verify_native(tests)
         println(io)
         println(io, "const VERIFIED_TESTS = [")
         for t in verified
-            expr_escaped = replace(t.expr_str, "\"" => "\\\"", "\\" => "\\\\")
+            # Must escape \, ", and $ to prevent interpolation
+            expr_escaped = replace(t.expr_str, "\\" => "\\\\", "\"" => "\\\"", "\$" => "\\\$")
             println(io, "    (file=\"$(t.file)\", line=$(t.line), expr=\"$(expr_escaped)\"),")
         end
         println(io, "]")

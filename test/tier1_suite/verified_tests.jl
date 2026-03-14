@@ -1,5 +1,5 @@
 # Verified Tier 1 tests — pass in native Julia 1.12.4
-# Generated: 2026-03-13T22:57:06.646
+# Generated: 2026-03-13T22:59:33.507
 # 848 tests from 2166 extracted
 
 const VERIFIED_TESTS = [
@@ -166,7 +166,7 @@ const VERIFIED_TESTS = [
     (file="parse.jl", line=210, expr="parse(Int,\"-0x1234\") == -Int(0x1234)"),
     (file="parse.jl", line=211, expr="parse(Int,\"-0o1234\") == -Int(0o1234)"),
     (file="parse.jl", line=212, expr="parse(Int,\"-0b1011\") == -Int(0b1011)"),
-    (file="functional.jl", line=6, expr="isequal(map((x)->\"$x\"[end:end], 9:11), [\"9\", \"0\", \"1\"])"),
+    (file="functional.jl", line=6, expr="isequal(map((x)->\"\$x\"[end:end], 9:11), [\"9\", \"0\", \"1\"])"),
     (file="functional.jl", line=27, expr="map((x,y)->x+y,(1,2,3),(4,5,6)) == (5,7,9)"),
     (file="functional.jl", line=33, expr="map((c)->Char(c+1), \"abcDEF\") == \"bcdEFG\""),
     (file="functional.jl", line=43, expr="isequal(filter(x->(x>1), [0 1 2 3 2 1 0]), [2, 3, 2])"),
@@ -746,13 +746,13 @@ const VERIFIED_TESTS = [
     (file="reduce.jl", line=34, expr="Base.mapfoldr(abs2, -, 2:5) == -14"),
     (file="reduce.jl", line=35, expr="Base.mapfoldr(abs2, -, 2:5; init=10) == -4"),
     (file="reduce.jl", line=43, expr="foldr((x, y) -> ('⟨' * x * '|' * y * '⟩'), \"λ 🐨.α\") == \"⟨λ|⟨ |⟨🐨|⟨.|α⟩⟩⟩⟩\" # issue #31780"),
-    (file="reduce.jl", line=52, expr="reduce((x,y)->\"($x+$y)\", 9:11) == \"((9+10)+11)\""),
+    (file="reduce.jl", line=52, expr="reduce((x,y)->\"(\$x+\$y)\", 9:11) == \"((9+10)+11)\""),
     (file="reduce.jl", line=53, expr="reduce(max, [8 6 7 5 3 0 9]) == 9"),
     (file="reduce.jl", line=54, expr="reduce(+, 1:5; init=1000) == (1000 + 1 + 2 + 3 + 4 + 5)"),
     (file="reduce.jl", line=55, expr="reduce(+, 1) == 1"),
     (file="reduce.jl", line=60, expr="mapreduce(-, +, [-10 -9 -3]) == ((10 + 9) + 3)"),
-    (file="reduce.jl", line=61, expr="mapreduce((x)->x[1:3], (x,y)->\"($x+$y)\", [\"abcd\", \"efgh\", \"01234\"]) == \"((abc+efg)+012)\""),
-    (file="reduce.jl", line=66, expr="mapreduce(*, (x,y)->\"($x+$y)\", [\"a\", \"b\", \"c\"], [\"d\", \"e\", \"f\"]) == \"((ad+be)+cf)\""),
+    (file="reduce.jl", line=61, expr="mapreduce((x)->x[1:3], (x,y)->\"(\$x+\$y)\", [\"abcd\", \"efgh\", \"01234\"]) == \"((abc+efg)+012)\""),
+    (file="reduce.jl", line=66, expr="mapreduce(*, (x,y)->\"(\$x+\$y)\", [\"a\", \"b\", \"c\"], [\"d\", \"e\", \"f\"]) == \"((ad+be)+cf)\""),
     (file="reduce.jl", line=70, expr="mapreduce(*, +, [2, 3], [4, 5]) == 23"),
     (file="reduce.jl", line=71, expr="mapreduce(*, +, [2, 3], [4, 5]; init = 2) == 25"),
     (file="reduce.jl", line=72, expr="mapreduce(*, +, [2, 3], [4, 5]; dims = 1) == [23]"),
