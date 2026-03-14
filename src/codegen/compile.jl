@@ -1522,11 +1522,38 @@ function compile_module(functions::Vector;
         set_struct_supertypes!(mod, type_registry.base_struct_idx; registry=type_registry)
     end
 
-    # Calculate function indices (accounting for imports)
-    # Functions are added in order, so index = n_imports + position - 1
+    # PURE-9065: Pre-create string hash helper function if any function uses memhash.
+    # This must happen BEFORE function index assignment, because adding functions during
+    # body compilation would shift indices and break cross-function calls.
+    needs_string_hash = false
+    for (_, _, _, code_info, _, _, _) in function_data
+        if code_info !== nothing
+            for stmt in code_info.code
+                if stmt isa Expr && stmt.head === :foreigncall && length(stmt.args) >= 1
+                    fc_name = stmt.args[1]
+                    fc_sym = if fc_name isa QuoteNode; fc_name.value
+                    elseif fc_name isa Symbol; fc_name
+                    elseif fc_name isa GlobalRef; fc_name.name
+                    else nothing end
+                    if fc_sym === :memhash
+                        needs_string_hash = true
+                        break
+                    end
+                end
+            end
+        end
+        needs_string_hash && break
+    end
+    if needs_string_hash
+        get_or_create_string_hash_func!(mod, type_registry)
+    end
+
+    # Calculate function indices (accounting for imports + pre-created helper functions)
+    # Functions are added in order, so index = n_imports + n_existing + position - 1
     n_imports = length(mod.imports)
+    n_existing = length(mod.functions)  # PURE-9065: includes pre-created helper functions
     for (i, (f, arg_types, name, _, return_type, _, _)) in enumerate(function_data)
-        func_idx = UInt32(n_imports + i - 1)
+        func_idx = UInt32(n_imports + n_existing + i - 1)
         register_function!(func_registry, name, f, arg_types, func_idx, return_type)
     end
 
@@ -1570,7 +1597,7 @@ function compile_module(functions::Vector;
 
     # Second pass: compile function bodies
     for (i, (f, arg_types, name, code_info, return_type, global_args, is_closure)) in enumerate(function_data)
-        func_idx = UInt32(n_imports + i - 1)
+        func_idx = UInt32(n_imports + n_existing + i - 1)
         # Check if this is an intrinsic function that needs special code generation
         intrinsic_body = is_intrinsic_function(f) ? generate_intrinsic_body(f, arg_types, mod, type_registry) : nothing
 

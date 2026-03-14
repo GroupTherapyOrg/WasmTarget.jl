@@ -2272,6 +2272,9 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
             name_arg.value
         elseif name_arg isa Symbol
             name_arg
+        elseif name_arg isa GlobalRef
+            # PURE-9065: Handle GlobalRef names like Base.memhash
+            name_arg.name
         else
             nothing
         end
@@ -2984,6 +2987,60 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
         push!(bytes, 0xFC)  # saturating truncation prefix
         push!(bytes, 0x07)  # i64.trunc_sat_f64_u
         return bytes
+    end
+
+    # PURE-9065: Base.memhash(ptr, len, seed) → UInt64 string hash
+    # Used by Dict{String,...} for key hashing. In WasmGC, we hash the byte array
+    # directly using FNV-1a instead of going through C memhash.
+    if name === :memhash
+        # Trace the pointer argument back to jl_string_ptr to find the original string
+        str_arg = nothing
+        if length(expr.args) >= 6
+            ptr_arg = expr.args[6]
+            if ptr_arg isa Core.SSAValue
+                ptr_stmt = ctx.code_info.code[ptr_arg.id]
+                if ptr_stmt isa Expr && ptr_stmt.head === :foreigncall
+                    ptr_name_arg = length(ptr_stmt.args) >= 1 ? ptr_stmt.args[1] : nothing
+                    ptr_name = if ptr_name_arg isa QuoteNode; ptr_name_arg.value
+                    elseif ptr_name_arg isa Symbol; ptr_name_arg
+                    elseif ptr_name_arg isa GlobalRef; ptr_name_arg.name
+                    else nothing end
+                    if ptr_name === :jl_string_ptr && length(ptr_stmt.args) >= 6
+                        str_arg = ptr_stmt.args[6]  # The original string argument
+                    end
+                end
+            end
+        end
+
+        if str_arg !== nothing
+            # Get or create the string hash helper function
+            hash_func_idx = get_or_create_string_hash_func!(ctx.mod, ctx.type_registry)
+            # Push args: string array ref, length (i64), seed (i32)
+            append!(bytes, compile_value(str_arg, ctx))  # string array ref
+            if length(expr.args) >= 7
+                len_arg = expr.args[7]
+                append!(bytes, compile_value(len_arg, ctx))  # length as i64
+            else
+                push!(bytes, Opcode.I64_CONST)
+                push!(bytes, 0x00)
+            end
+            if length(expr.args) >= 8
+                seed_arg = expr.args[8]
+                append!(bytes, compile_value(seed_arg, ctx))  # seed as i32
+                # seed may be i64 from SSA — wrap to i32
+                seed_type = infer_value_type(seed_arg, ctx)
+                if seed_type === UInt64 || seed_type === Int64 || seed_type === Int
+                    push!(bytes, Opcode.I32_WRAP_I64)
+                end
+            else
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+            end
+            push!(bytes, Opcode.CALL)
+            append!(bytes, encode_leb128_unsigned(hash_func_idx))
+            return bytes
+        end
+        # If we can't trace the string, fall through to unreachable
     end
 
     # Unknown foreigncall - emit unreachable.

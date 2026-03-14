@@ -76,6 +76,8 @@ mutable struct TypeRegistry
     jl_typevar_idx::Union{Nothing, UInt32}    # $JlTypeVar (sub $JlType) — bound variable
     jl_typename_idx::Union{Nothing, UInt32}   # $JlTypeName — identity token
     jl_svec_idx::Union{Nothing, UInt32}       # $JlSVec = (array (mut (ref null $JlType)))
+    # PURE-9065: String hash helper function index for Dict{String,...} support
+    string_hash_func_idx::Union{Nothing, UInt32}
 end
 
 TypeRegistry() = TypeRegistry(
@@ -84,7 +86,8 @@ TypeRegistry() = TypeRegistry(
     Dict{Type, UInt32}(), Dict{Core.TypeName, UInt32}(),
     Dict{Type, Int32}(), Dict{Type, Tuple{Int32, Int32}}(),
     nothing, nothing, nothing, nothing, nothing,
-    nothing, nothing, nothing, nothing, nothing, nothing, nothing
+    nothing, nothing, nothing, nothing, nothing, nothing, nothing,
+    nothing  # string_hash_func_idx
 )
 
 """
@@ -783,6 +786,138 @@ function get_string_array_type!(mod::WasmModule, registry::TypeRegistry)::UInt32
         registry.string_array_idx = add_array_type!(mod, UInt8(0x78), true)
     end
     return registry.string_array_idx
+end
+
+"""
+    get_or_create_string_hash_func!(mod, registry) → UInt32
+
+PURE-9065: Lazily create a Wasm helper function that computes FNV-1a hash
+over a byte array (string). Used by Dict{String,...} to replace the C memhash
+foreigncall. Returns the function index.
+
+Signature: (ref null \$str_arr, i64 len, i32 seed) → i64
+Algorithm: FNV-1a with offset_basis XOR seed, iterating min(len, array.len) bytes.
+"""
+function get_or_create_string_hash_func!(mod::WasmModule, registry::TypeRegistry)::UInt32
+    if registry.string_hash_func_idx !== nothing
+        return registry.string_hash_func_idx
+    end
+
+    str_type_idx = get_string_array_type!(mod, registry)
+
+    # Function params: (ref null $str_arr, i64, i32) → (i64)
+    params = WasmValType[ConcreteRef(str_type_idx, true), I64, I32]
+    results = WasmValType[I64]
+    # Extra locals: 0=hash(i64), 1=i(i32), 2=array_len(i32)
+    locals = WasmValType[I64, I32, I32]
+
+    body = UInt8[]
+
+    # FNV-1a offset basis: 14695981039346656037 (0xcbf29ce484222325)
+    # FNV-1a prime: 1099511628211 (0x00000100000001b3)
+
+    # hash = FNV_OFFSET_BASIS XOR (i64.extend_i32_u seed)
+    push!(body, Opcode.I64_CONST)
+    append!(body, encode_leb128_signed(Int64(-3750763034362895579)))  # 14695981039346656037 as signed
+    push!(body, Opcode.LOCAL_GET)
+    append!(body, encode_leb128_unsigned(UInt32(2)))  # param 2 = seed (i32)
+    push!(body, Opcode.I64_EXTEND_I32_U)
+    push!(body, Opcode.I64_XOR)
+    push!(body, Opcode.LOCAL_SET)
+    append!(body, encode_leb128_unsigned(UInt32(3)))  # local 0 (offset 3) = hash
+
+    # array_len = array.len(arr)
+    push!(body, Opcode.LOCAL_GET)
+    append!(body, encode_leb128_unsigned(UInt32(0)))  # param 0 = arr
+    push!(body, Opcode.GC_PREFIX)
+    push!(body, Opcode.ARRAY_LEN)
+    push!(body, Opcode.LOCAL_SET)
+    append!(body, encode_leb128_unsigned(UInt32(5)))  # local 2 (offset 5) = array_len
+
+    # Clamp array_len to min(len, array_len)
+    # if len < array_len (as unsigned): array_len = i32.wrap(len)
+    push!(body, Opcode.LOCAL_GET)
+    append!(body, encode_leb128_unsigned(UInt32(1)))  # param 1 = len (i64)
+    push!(body, Opcode.LOCAL_GET)
+    append!(body, encode_leb128_unsigned(UInt32(5)))  # array_len
+    push!(body, Opcode.I64_EXTEND_I32_U)
+    push!(body, Opcode.I64_LT_U)
+    push!(body, Opcode.IF)
+    push!(body, 0x40)  # void block
+    push!(body, Opcode.LOCAL_GET)
+    append!(body, encode_leb128_unsigned(UInt32(1)))  # len
+    push!(body, Opcode.I32_WRAP_I64)
+    push!(body, Opcode.LOCAL_SET)
+    append!(body, encode_leb128_unsigned(UInt32(5)))  # array_len = i32(len)
+    push!(body, Opcode.END)
+
+    # i = 0
+    push!(body, Opcode.I32_CONST)
+    push!(body, 0x00)
+    push!(body, Opcode.LOCAL_SET)
+    append!(body, encode_leb128_unsigned(UInt32(4)))  # local 1 (offset 4) = i
+
+    # block $break
+    push!(body, Opcode.BLOCK)
+    push!(body, 0x40)  # void
+
+    # loop $continue
+    push!(body, Opcode.LOOP)
+    push!(body, 0x40)  # void
+
+    # if i >= array_len: br $break (label 1)
+    push!(body, Opcode.LOCAL_GET)
+    append!(body, encode_leb128_unsigned(UInt32(4)))  # i
+    push!(body, Opcode.LOCAL_GET)
+    append!(body, encode_leb128_unsigned(UInt32(5)))  # array_len
+    push!(body, Opcode.I32_GE_U)
+    push!(body, Opcode.BR_IF)
+    append!(body, encode_leb128_unsigned(UInt32(1)))  # br to block (break)
+
+    # byte = array.get_u(arr, i)
+    push!(body, Opcode.LOCAL_GET)
+    append!(body, encode_leb128_unsigned(UInt32(0)))  # arr
+    push!(body, Opcode.LOCAL_GET)
+    append!(body, encode_leb128_unsigned(UInt32(4)))  # i
+    push!(body, Opcode.GC_PREFIX)
+    push!(body, Opcode.ARRAY_GET_U)
+    append!(body, encode_leb128_unsigned(str_type_idx))
+
+    # hash = (hash XOR byte) * FNV_PRIME
+    push!(body, Opcode.I64_EXTEND_I32_U)  # byte → i64
+    push!(body, Opcode.LOCAL_GET)
+    append!(body, encode_leb128_unsigned(UInt32(3)))  # hash
+    push!(body, Opcode.I64_XOR)
+    push!(body, Opcode.I64_CONST)
+    append!(body, encode_leb128_signed(Int64(1099511628211)))  # FNV prime
+    push!(body, Opcode.I64_MUL)
+    push!(body, Opcode.LOCAL_SET)
+    append!(body, encode_leb128_unsigned(UInt32(3)))  # hash = result
+
+    # i++
+    push!(body, Opcode.LOCAL_GET)
+    append!(body, encode_leb128_unsigned(UInt32(4)))  # i
+    push!(body, Opcode.I32_CONST)
+    push!(body, 0x01)
+    push!(body, Opcode.I32_ADD)
+    push!(body, Opcode.LOCAL_SET)
+    append!(body, encode_leb128_unsigned(UInt32(4)))  # i = i + 1
+
+    # br $continue (label 0 = loop)
+    push!(body, Opcode.BR)
+    append!(body, encode_leb128_unsigned(UInt32(0)))  # continue loop
+
+    push!(body, Opcode.END)  # end loop
+    push!(body, Opcode.END)  # end block
+
+    # return hash
+    push!(body, Opcode.LOCAL_GET)
+    append!(body, encode_leb128_unsigned(UInt32(3)))  # hash
+    push!(body, Opcode.END)  # end function
+
+    func_idx = add_function!(mod, params, results, locals, body)
+    registry.string_hash_func_idx = func_idx
+    return func_idx
 end
 
 """
