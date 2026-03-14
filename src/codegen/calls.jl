@@ -4562,24 +4562,45 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 if _range !== nothing
                     local _low, _high = _range
                     local _base_idx = ctx.type_registry.base_struct_idx
-                    # Value is on stack — emit typeof to get typeId (i32)
-                    emit_typeof!(bytes, _base_idx)
-                    # Store typeId in a temp local for the two comparisons
-                    local _tid_local = allocate_local!(ctx, I32)
+                    # PURE-9064: Guard against JlType hierarchy refs.
+                    # emit_typeof! does ref.cast (ref $JlBase) which traps on $JlType
+                    # hierarchy structs ($JlDataType, $JlUnion, etc.) since they don't
+                    # inherit from $JlBase. Use ref.test first; if not $JlBase, return false.
+                    local _isa_guard_local = allocate_local!(ctx, AnyRef)
                     push!(bytes, Opcode.LOCAL_TEE)
-                    append!(bytes, encode_leb128_unsigned(_tid_local))
-                    # low <= typeId: i32.const low; i32.le_s (low <= typeId)
-                    push!(bytes, Opcode.I32_CONST)
-                    append!(bytes, encode_leb128_signed(Int64(_low)))
-                    push!(bytes, Opcode.I32_GE_S)  # typeId >= low
-                    # typeId <= high
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(_tid_local))
-                    push!(bytes, Opcode.I32_CONST)
-                    append!(bytes, encode_leb128_signed(Int64(_high)))
-                    push!(bytes, Opcode.I32_LE_S)  # typeId <= high
-                    # AND both conditions
-                    push!(bytes, Opcode.I32_AND)
+                    append!(bytes, encode_leb128_unsigned(_isa_guard_local))
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.REF_TEST)  # ref.test (ref $JlBase)
+                    append!(bytes, encode_leb128_signed(Int64(_base_idx)))
+                    push!(bytes, Opcode.I32_EQZ)
+                    # if NOT a $JlBase struct → push 0 (false)
+                    local _isa_guard_block = UInt8[]
+                    push!(_isa_guard_block, Opcode.I32_CONST)
+                    push!(_isa_guard_block, 0x00)
+                    # else → do the DFS range check
+                    local _isa_dfs_block = UInt8[]
+                    push!(_isa_dfs_block, Opcode.LOCAL_GET)
+                    append!(_isa_dfs_block, encode_leb128_unsigned(_isa_guard_local))
+                    emit_typeof!(_isa_dfs_block, _base_idx)
+                    local _tid_local2 = allocate_local!(ctx, I32)
+                    push!(_isa_dfs_block, Opcode.LOCAL_TEE)
+                    append!(_isa_dfs_block, encode_leb128_unsigned(_tid_local2))
+                    push!(_isa_dfs_block, Opcode.I32_CONST)
+                    append!(_isa_dfs_block, encode_leb128_signed(Int64(_low)))
+                    push!(_isa_dfs_block, Opcode.I32_GE_S)
+                    push!(_isa_dfs_block, Opcode.LOCAL_GET)
+                    append!(_isa_dfs_block, encode_leb128_unsigned(_tid_local2))
+                    push!(_isa_dfs_block, Opcode.I32_CONST)
+                    append!(_isa_dfs_block, encode_leb128_signed(Int64(_high)))
+                    push!(_isa_dfs_block, Opcode.I32_LE_S)
+                    push!(_isa_dfs_block, Opcode.I32_AND)
+                    # Emit if-else: if (not $JlBase) { 0 } else { dfs_check }
+                    push!(bytes, Opcode.IF)
+                    push!(bytes, Opcode.BLOCK_I32)
+                    append!(bytes, _isa_guard_block)
+                    push!(bytes, Opcode.ELSE)
+                    append!(bytes, _isa_dfs_block)
+                    push!(bytes, Opcode.END)
                 else
                     # No DFS range for this abstract type — return false
                     push!(bytes, Opcode.DROP)
