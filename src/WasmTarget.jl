@@ -29,6 +29,7 @@ include("codegen/helpers.jl")
 include("codegen/strings.jl")
 include("codegen/dicts.jl")
 include("codegen/sourcemap.jl")
+include("codegen/cache.jl")
 
 # Runtime - Intrinsics and stdlib mapping
 include("runtime/intrinsics.jl")
@@ -41,6 +42,7 @@ include("runtime/tokenizer.jl")
 # Main API
 export compile, compile_multi, compile_from_codeinfo, compile_with_base, optimize, WasmModule, to_bytes
 export compile_with_sourcemap, compile_multi_with_sourcemap
+export compile_cached, compile_multi_cached, enable_cache!, disable_cache!, clear_cache!, cache_stats
 export WasmGlobal, global_index, global_eltype
 # Therapy.jl integration - direct IR compilation for reactive handlers
 export compile_handler, compile_closure_body, DOMBindingSpec, TypeRegistry, FunctionRegistry
