@@ -16464,6 +16464,12 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
             # Exception handling: Pop exception from handler stack
             # For now, skip - full implementation requires exnref handling
             # TODO: Implement proper exception value handling
+        elseif stmt.head === :gc_preserve_begin
+            # PURE-9066: GC preservation — no-op in WasmGC (browser GC handles this)
+        elseif stmt.head === :gc_preserve_end
+            # PURE-9066: GC preservation end — no-op in WasmGC
+        elseif stmt.head === :loopinfo
+            # PURE-9066: Loop optimization hint (e.g., @simd) — no-op in Wasm
         end
 
         # PURE-908: Check if compile_call/compile_invoke emitted a stub UNREACHABLE.
@@ -18834,11 +18840,33 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
                 push!(bytes, Opcode.I32_CONST, 0x01)
                 push!(bytes, Opcode.I32_SUB)
             end
-            # count (convert from bytes to elements — for UInt8/i32 arrays, count = n_bytes)
+            # count (convert from bytes to elements)
+            # PURE-9066: memmove passes byte count, but array.copy needs element count.
+            _elem_size = 1
+            if dest_arr_ssa isa Core.SSAValue
+                _mem_type = get(ctx.ssa_types, dest_arr_ssa.id, Any)
+                _el_type = nothing
+                if _mem_type isa DataType
+                    _tname = _mem_type.name.name
+                    if (_tname === :GenericMemoryRef || _tname === :GenericMemory) && length(_mem_type.parameters) >= 2
+                        _el_type = _mem_type.parameters[2]
+                    elseif (_tname === :MemoryRef || _tname === :Memory) && !isempty(_mem_type.parameters)
+                        _el_type = _mem_type.parameters[1]
+                    end
+                end
+                if _el_type !== nothing && _el_type isa DataType
+                    try; _elem_size = sizeof(_el_type); catch; end
+                end
+            end
             append!(bytes, compile_value(nbytes_arg, ctx))
             nbytes_type = infer_value_type(nbytes_arg, ctx)
             if nbytes_type === Int64 || nbytes_type === Int || nbytes_type === UInt64
                 push!(bytes, Opcode.I32_WRAP_I64)
+            end
+            if _elem_size > 1
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int64(_elem_size)))
+                push!(bytes, Opcode.I32_DIV_U)
             end
             # emit array.copy
             push!(bytes, Opcode.GC_PREFIX)
@@ -19017,6 +19045,7 @@ function _trace_memmove_array(ptr_ssa, code, ctx::CompilationContext)
     memref_stmt = code[memref_ssa.id]
 
     # Should be memoryrefnew(base) or memoryrefnew(base, offset, boundscheck)
+    # or getfield(vector, :ref) — broadcast pattern
     if memref_stmt isa Expr && memref_stmt.head === :call
         fn = memref_stmt.args[1]
         if fn isa GlobalRef && fn.name === :memoryrefnew
@@ -19032,6 +19061,15 @@ function _trace_memmove_array(ptr_ssa, code, ctx::CompilationContext)
                 base_ssa = memref_stmt.args[2]
                 arr_ssa = _resolve_memref_to_array(base_ssa, code)
                 return (arr_ssa !== nothing ? arr_ssa : base_ssa, nothing)
+            end
+        elseif fn isa GlobalRef && fn.name === :getfield && length(memref_stmt.args) >= 3
+            # PURE-9066: getfield(vector, :ref) — MemoryRef obtained directly from Vector
+            # instead of via memoryrefnew. Common in broadcasting copy paths.
+            field_ref = memref_stmt.args[3]
+            field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
+            if field_sym === :ref
+                arr_ssa = _resolve_memref_to_array(memref_ssa, code)
+                return (arr_ssa !== nothing ? arr_ssa : memref_ssa, nothing)
             end
         end
     end

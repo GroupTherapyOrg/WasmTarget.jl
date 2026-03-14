@@ -5679,4 +5679,58 @@ struct TypeHierS2 x::Int32 end
 
     end
 
+    # Phase 39: Broadcasting (PURE-9066)
+    # Tests .+, .*, .-, ./ operators on arrays
+    @testset "Phase 39: Broadcasting (PURE-9066)" begin
+
+        @testset "Int32 .+ vector" begin
+            function bc_add_i32()::Int32
+                a = Int32[1, 2, 3]; b = Int32[4, 5, 6]; c = a .+ b
+                return c[1] + c[2] + c[3]  # 5+7+9 = 21
+            end
+            @test compare_julia_wasm(bc_add_i32).pass
+        end
+
+        @testset "Int32 .* scalar" begin
+            function bc_mul_scalar_i32()::Int32
+                a = Int32[1, 2, 3]; c = a .* Int32(2)
+                return c[1] + c[2] + c[3]  # 2+4+6 = 12
+            end
+            @test compare_julia_wasm(bc_mul_scalar_i32).pass
+        end
+
+        @testset "Int32 .- vector" begin
+            function bc_sub_i32()::Int32
+                a = Int32[10, 20, 30]; b = Int32[1, 2, 3]; c = a .- b
+                return c[1] + c[2] + c[3]  # 9+18+27 = 54
+            end
+            @test compare_julia_wasm(bc_sub_i32).pass
+        end
+
+        @testset "Float64 .+ vector" begin
+            function bc_add_f64()::Float64
+                a = Float64[1.0, 2.0, 3.0]; b = Float64[0.5, 1.5, 2.5]; c = a .+ b
+                return c[1] + c[2] + c[3]  # 1.5+3.5+5.5 = 10.5
+            end
+            @test compare_julia_wasm(bc_add_f64).pass
+        end
+
+        @testset "Float64 ./ scalar" begin
+            function bc_div_f64()::Float64
+                a = Float64[10.0, 20.0, 30.0]; c = a ./ 2.0
+                return c[2]  # 10.0
+            end
+            @test compare_julia_wasm(bc_div_f64).pass
+        end
+
+        @testset "Int64 .+ vector" begin
+            function bc_add_i64()::Int64
+                a = Int64[10, 20, 30]; b = Int64[1, 2, 3]; c = a .+ b
+                return c[1] + c[2] + c[3]  # 11+22+33 = 66
+            end
+            @test compare_julia_wasm(bc_add_i64).pass
+        end
+
+    end
+
 end
