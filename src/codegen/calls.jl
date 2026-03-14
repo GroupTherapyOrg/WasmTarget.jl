@@ -1058,13 +1058,25 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             end
         end
 
-        # Handle struct field access by name
-        if is_struct_type(obj_type)
-            # Register the struct type on-demand if not already registered
-            if !haskey(ctx.type_registry.structs, obj_type)
-                register_struct_type!(ctx.mod, ctx.type_registry, obj_type)
+        # PURE-9064: Handle Type{T} constants for DataType field access.
+        # When a DataType constant (e.g., Vector{Int64}) appears in IR, infer_value_type
+        # returns Type{Vector{Int64}}. Unwrap to DataType for struct field access, since
+        # DataType is registered in the JlType hierarchy with fields like :name, :parameters.
+        effective_obj_type = obj_type
+        if obj_type isa DataType && obj_type <: Type && obj_type !== DataType
+            # Type{X} where X is a DataType — unwrap to DataType
+            if haskey(ctx.type_registry.structs, DataType)
+                effective_obj_type = DataType
             end
-            info = ctx.type_registry.structs[obj_type]
+        end
+
+        # Handle struct field access by name
+        if is_struct_type(effective_obj_type) || haskey(ctx.type_registry.structs, effective_obj_type)
+            # Register the struct type on-demand if not already registered
+            if !haskey(ctx.type_registry.structs, effective_obj_type)
+                register_struct_type!(ctx.mod, ctx.type_registry, effective_obj_type)
+            end
+            info = ctx.type_registry.structs[effective_obj_type]
 
             field_sym = if field_ref isa QuoteNode
                 field_ref.value
