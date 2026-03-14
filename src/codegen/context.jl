@@ -1080,6 +1080,19 @@ function allocate_ssa_locals!(ctx::CompilationContext)
                 end
             end
 
+            # PURE-9064: _svec_ref results — Julia infers return type as SimpleVector,
+            # but the actual WasmGC type is (ref null $JlType) (element of SVec array).
+            # Override to AnyRef so the local matches what array.get actually produces.
+            if stmt isa Expr && stmt.head === :call && ssa_type === Core.SimpleVector
+                func = stmt.args[1]
+                is_svec_ref = (func isa GlobalRef && func.name === :_svec_ref && func.mod === Core) ||
+                              (isdefined(Core, :_svec_ref) && func === Core._svec_ref)
+                if is_svec_ref
+                    ssa_type = Any
+                    ctx.ssa_types[ssa_id] = Any
+                end
+            end
+
             # PURE-913: compilerbarrier(:type, value)::Any — use inner value's type
             # Runtime intrinsics use @noinline + inferencebarrier, which inserts
             # compilerbarrier(:type, value)::Any. The SSA type is Any → ExternRef,
@@ -1388,7 +1401,7 @@ function allocate_ssa_locals!(ctx::CompilationContext)
             # PURE-6021c DEBUG: Trace externref allocations for diagnostics
             if get(ENV, "WASMTARGET_DEBUG_LOCALS", "") == "1"
                 n_stmts = length(ctx.code_info.code)
-                @warn "ALLOC SSA local $local_idx type=$(wasm_type) for SSA $ssa_id (stmts=$n_stmts, n_params=$(ctx.n_params))" maxlog=200
+                @warn "ALLOC SSA local $local_idx type=$(wasm_type) effective=$(effective_type) ssa_type=$(ssa_type) for SSA $ssa_id (stmts=$n_stmts, n_params=$(ctx.n_params))" maxlog=200
             end
             # PURE-908: normalize AnyRef → ExternRef for SSA locals
             # PURE-9064: Exception — keep AnyRef when $JlType hierarchy is active
