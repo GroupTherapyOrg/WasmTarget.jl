@@ -1268,6 +1268,26 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
             append!(bytes, stmt_bytes)
         end
 
+        # PURE-9065: Drop orphaned multi-arg memoryrefnew values for Nothing-typed memory.
+        # When MemoryRef{Nothing} is created but never consumed (e.g., rehash! reads keys
+        # but skips vals), the [array_ref, i32_index] pair stays on the stack.
+        if !is_orphaned_multi_value && !haskey(ctx.ssa_locals, idx) && !isempty(stmt_bytes) &&
+           stmt isa Expr && stmt.head === :call && length(stmt.args) >= 3
+            call_func = stmt.args[1]
+            if (call_func isa GlobalRef && call_func.name === :memoryrefnew) ||
+               (call_func === :(Base.memoryrefnew))
+                # Multi-arg memoryrefnew with no SSA local — check if result is unused
+                ssa_type = get(ctx.ssa_types, idx, Any)
+                is_nothing_ref = ssa_type isa DataType && (
+                    (ssa_type.name.name === :MemoryRef && length(ssa_type.parameters) >= 1 && ssa_type.parameters[1] === Nothing) ||
+                    (ssa_type.name.name === :GenericMemoryRef && length(ssa_type.parameters) >= 2 && ssa_type.parameters[2] === Nothing))
+                if is_nothing_ref
+                    push!(bytes, Opcode.DROP)  # drop i32_index
+                    push!(bytes, Opcode.DROP)  # drop array_ref
+                end
+            end
+        end
+
         # If the statement type is Union{} (bottom/never returns), emit unreachable
         # This handles calls to error/throw functions that have void return type in wasm
         # The unreachable instruction is polymorphic and satisfies any type expectation

@@ -1227,6 +1227,20 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         ref_arg = args[1]
         ref_type = infer_value_type(ref_arg, ctx)
 
+        # PURE-9065: Nothing-typed memory — always returns nothing (i32.const 0).
+        # Consume the [array_ref, i32_index] stack pair from memoryrefnew, then push 0.
+        if ref_type isa DataType && (
+            (ref_type.name.name === :MemoryRef && length(ref_type.parameters) >= 1 && ref_type.parameters[1] === Nothing) ||
+            (ref_type.name.name === :GenericMemoryRef && length(ref_type.parameters) >= 2 && ref_type.parameters[2] === Nothing))
+            # Compile ref_arg to push [array_ref, i32_index], then drop both
+            append!(bytes, compile_value(ref_arg, ctx))
+            push!(bytes, Opcode.DROP)  # drop i32_index
+            push!(bytes, Opcode.DROP)  # drop array_ref
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x00)
+            return bytes
+        end
+
         # Extract element type from MemoryRef{T}, GenericMemoryRef{atomicity, T, addrspace},
         # Memory{T}, or GenericMemory{atomicity, T, addrspace}
         # PURE-045: Also handle Memory types for direct array access patterns
@@ -1312,6 +1326,18 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         ref_arg = args[1]
         value_arg = args[2]
         ref_type = infer_value_type(ref_arg, ctx)
+
+        # PURE-9065: Nothing-typed memory — storing nothing is a no-op.
+        # Consume the [array_ref, i32_index] stack pair from memoryrefnew, then done.
+        # Don't push a result — Nothing has no Wasm representation to keep on the stack.
+        if ref_type isa DataType && (
+            (ref_type.name.name === :MemoryRef && length(ref_type.parameters) >= 1 && ref_type.parameters[1] === Nothing) ||
+            (ref_type.name.name === :GenericMemoryRef && length(ref_type.parameters) >= 2 && ref_type.parameters[2] === Nothing))
+            append!(bytes, compile_value(ref_arg, ctx))
+            push!(bytes, Opcode.DROP)  # drop i32_index
+            push!(bytes, Opcode.DROP)  # drop array_ref
+            return bytes
+        end
 
         # Extract element type from MemoryRef{T}, GenericMemoryRef{atomicity, T, addrspace},
         # Memory{T}, or GenericMemory{atomicity, T, addrspace}
@@ -1600,6 +1626,33 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
 
             # Record the offset for this MemoryRef SSA so memoryrefoffset can use it
             ctx.memoryref_offsets[idx] = index
+
+            # PURE-9065: For Nothing-typed MemoryRef, check if result is used.
+            # If the SSA has no local and no subsequent statement references it,
+            # skip bytecode to avoid orphaning [array_ref, i32_index] on the stack.
+            ssa_type_mr = get(ctx.ssa_types, idx, Any)
+            is_nothing_ref_mr = ssa_type_mr isa DataType && (
+                (ssa_type_mr.name.name === :MemoryRef && length(ssa_type_mr.parameters) >= 1 && ssa_type_mr.parameters[1] === Nothing) ||
+                (ssa_type_mr.name.name === :GenericMemoryRef && length(ssa_type_mr.parameters) >= 2 && ssa_type_mr.parameters[2] === Nothing))
+            if is_nothing_ref_mr && !haskey(ctx.ssa_locals, idx)
+                # Check if any subsequent statement uses this SSA
+                ssa_used = false
+                for j in (idx+1):length(ctx.code_info.code)
+                    s = ctx.code_info.code[j]
+                    if s isa Expr
+                        for a in s.args
+                            if a isa Core.SSAValue && a.id == idx
+                                ssa_used = true
+                                break
+                            end
+                        end
+                    end
+                    ssa_used && break
+                end
+                if !ssa_used
+                    return bytes  # Skip — orphaned MemoryRef{Nothing}
+                end
+            end
 
             # Compile the base array reference
             append!(bytes, compile_value(base_ref, ctx))
