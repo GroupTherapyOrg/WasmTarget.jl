@@ -136,15 +136,41 @@
     }
 
     const COMPILE_URL = (new URLSearchParams(window.location.search)).get("server") || "http://localhost:8080";
+    const OFFLINE_MODE = (new URLSearchParams(window.location.search)).get("offline") === "true";
+
+    // Binaryen.js for offline mode
+    let binaryenMerger = null;
+    async function initBinaryen() {
+      try {
+        const { BinaryenMerger } = await import("./binaryen-merge.js");
+        binaryenMerger = new BinaryenMerger();
+        const ok = await binaryenMerger.init();
+        if (ok) {
+          console.log("[Playground] Binaryen.js available for offline mode");
+        }
+        return ok;
+      } catch (e) {
+        console.warn("[Playground] Binaryen.js not available:", e.message);
+        return false;
+      }
+    }
 
     // Pre-load base.wasm via compileStreaming (benefits from V8 code caching on second load)
     let baseModule = null;
+    let serverAvailable = !OFFLINE_MODE;
+
     WebAssembly.compileStreaming(fetch(COMPILE_URL + "/base.wasm"))
       .then(mod => {
         baseModule = mod;
+        serverAvailable = true;
         console.log("base.wasm pre-compiled (" + (baseModule ? "cached" : "fresh") + ")");
       })
-      .catch(e => console.warn("base.wasm pre-load failed:", e));
+      .catch(e => {
+        console.warn("base.wasm pre-load failed:", e);
+        serverAvailable = false;
+        // Try loading Binaryen.js for offline mode
+        initBinaryen();
+      });
 
     const defaultCode = `# Julia Playground — powered by WasmTarget.jl
 # Your code is compiled to WebAssembly and executed in the browser.
@@ -220,38 +246,73 @@ println("1 + 1 = ", 1 + 1)
       statusEl.textContent = "Compiling...";
 
       try {
-        // Step 1: Compile on server
+        // Step 1: Compile — try server first, fall back to offline message
         const t0 = performance.now();
-        const resp = await fetch(COMPILE_URL + "/compile", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ code }),
-        });
+        let wasmBytes;
+        let compileMode = "server";
 
-        if (!resp.ok) {
-          const err = await resp.json();
-          statusEl.textContent = "Compile error";
-          appendOutput("Compile error: " + (err.error || err.message || "Unknown error"), "error");
+        if (serverAvailable && !OFFLINE_MODE) {
+          try {
+            const resp = await fetch(COMPILE_URL + "/compile", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ code }),
+            });
 
-          // Show inline error in editor if line info available
-          if (err.line) {
-            const doc = editor.state.doc;
-            const lineNum = Math.min(err.line, doc.lines);
-            const line = doc.line(lineNum);
-            const from = err.column ? line.from + (err.column - 1) : line.from;
-            const to = line.to;
-            setDiagnostics([{
-              from, to,
-              severity: "error",
-              message: err.error || "Compile error",
-            }]);
+            if (!resp.ok) {
+              const err = await resp.json();
+              statusEl.textContent = "Compile error";
+              appendOutput("Compile error: " + (err.error || err.message || "Unknown error"), "error");
+
+              if (err.line) {
+                const doc = editor.state.doc;
+                const lineNum = Math.min(err.line, doc.lines);
+                const line = doc.line(lineNum);
+                const from = err.column ? line.from + (err.column - 1) : line.from;
+                const to = line.to;
+                setDiagnostics([{
+                  from, to,
+                  severity: "error",
+                  message: err.error || "Compile error",
+                }]);
+              }
+
+              runBtn.disabled = false;
+              return;
+            }
+
+            wasmBytes = await resp.arrayBuffer();
+          } catch (fetchErr) {
+            // Server unreachable — try offline mode
+            console.warn("[Playground] Server unreachable, trying offline:", fetchErr.message);
+            serverAvailable = false;
+            compileMode = "offline";
+          }
+        } else {
+          compileMode = "offline";
+        }
+
+        // Offline mode: inform user that server compilation is required
+        if (compileMode === "offline" && !wasmBytes) {
+          // Try to init Binaryen for validation/optimization
+          if (!binaryenMerger) {
+            await initBinaryen();
           }
 
+          if (binaryenMerger && binaryenMerger.isAvailable()) {
+            statusEl.textContent = "Offline — Binaryen.js loaded (server needed for compilation)";
+            appendOutput("[Offline mode] Binaryen.js is available for validation and optimization.\n", "info");
+            appendOutput("[Offline mode] Julia compilation requires a server. Start one with:\n", "info");
+            appendOutput("  julia +1.12 --project=. scripts/serve.jl\n", "info");
+          } else {
+            statusEl.textContent = "Offline — no server available";
+            appendOutput("[Offline mode] Compilation server is not available.\n", "error");
+            appendOutput("Start the server: julia +1.12 --project=. scripts/serve.jl\n", "info");
+          }
           runBtn.disabled = false;
           return;
         }
 
-        const wasmBytes = await resp.arrayBuffer();
         const compileTime = performance.now() - t0;
         statusEl.textContent = `Compiled (${(compileTime / 1000).toFixed(2)}s, ${(wasmBytes.byteLength / 1024).toFixed(1)} KB)`;
         appendOutput(`[Compiled ${(wasmBytes.byteLength / 1024).toFixed(1)} KB in ${(compileTime / 1000).toFixed(2)}s]\n`, "info");
