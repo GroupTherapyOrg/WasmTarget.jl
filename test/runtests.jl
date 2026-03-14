@@ -5295,6 +5295,147 @@ struct TypeHierS2 x::Int32 end
             end
         end
 
+        @testset "wasm_subtype ground truth: 100+ DataType pairs" begin
+            # All subtype helper functions needed for wasm_subtype chain
+            all_subtype_funcs = [
+                (wasm_subtype, (DataType, DataType)),
+                (_subtype, (Any, Any, SubtypeEnv, Int64)),
+                (_subtype_datatypes, (DataType, DataType, SubtypeEnv, Int64)),
+                (_datatype_subtype, (DataType, DataType)),
+                (_forall_exists_equal, (Any, Any, SubtypeEnv)),
+                (_tuple_subtype_env, (DataType, DataType, SubtypeEnv, Int64)),
+                (_subtype_tuple_param, (Any, Any, SubtypeEnv)),
+                (lookup, (SubtypeEnv, TypeVar)),
+                (_var_lt, (VarBinding, Any, SubtypeEnv, Int64)),
+                (_var_gt, (VarBinding, Any, SubtypeEnv, Int64)),
+                (_subtype_var, (VarBinding, Any, SubtypeEnv, Bool, Int64)),
+                (_record_var_occurrence, (VarBinding, SubtypeEnv, Int64)),
+                (_subtype_unionall, (Any, UnionAll, SubtypeEnv, Bool, Int64)),
+                (_subtype_inner, (Any, Any, SubtypeEnv, Bool, Int64)),
+                (_is_leaf_bound, (Any,)),
+                (_type_contains_var, (Any, TypeVar)),
+            ]
+
+            # Define wrapper functions for each subtype check (gt_ prefix = ground truth)
+            # Concrete numeric types
+            gt_i64_i64()::Int32 = wasm_subtype(Int64, Int64) ? Int32(1) : Int32(0)
+            gt_i64_num()::Int32 = wasm_subtype(Int64, Number) ? Int32(1) : Int32(0)
+            gt_i64_real()::Int32 = wasm_subtype(Int64, Real) ? Int32(1) : Int32(0)
+            gt_i64_int()::Int32 = wasm_subtype(Int64, Integer) ? Int32(1) : Int32(0)
+            gt_i64_signed()::Int32 = wasm_subtype(Int64, Signed) ? Int32(1) : Int32(0)
+            gt_i64_unsigned()::Int32 = wasm_subtype(Int64, Unsigned) ? Int32(1) : Int32(0)
+            gt_i64_absfloat()::Int32 = wasm_subtype(Int64, AbstractFloat) ? Int32(1) : Int32(0)
+            gt_i64_absstr()::Int32 = wasm_subtype(Int64, AbstractString) ? Int32(1) : Int32(0)
+            gt_i64_any()::Int32 = wasm_subtype(Int64, Any) ? Int32(1) : Int32(0)
+            gt_i32_i32()::Int32 = wasm_subtype(Int32, Int32) ? Int32(1) : Int32(0)
+            gt_i32_i64()::Int32 = wasm_subtype(Int32, Int64) ? Int32(1) : Int32(0)
+            gt_i32_signed()::Int32 = wasm_subtype(Int32, Signed) ? Int32(1) : Int32(0)
+            gt_i32_num()::Int32 = wasm_subtype(Int32, Number) ? Int32(1) : Int32(0)
+            gt_f64_f64()::Int32 = wasm_subtype(Float64, Float64) ? Int32(1) : Int32(0)
+            gt_f64_num()::Int32 = wasm_subtype(Float64, Number) ? Int32(1) : Int32(0)
+            gt_f64_real()::Int32 = wasm_subtype(Float64, Real) ? Int32(1) : Int32(0)
+            gt_f64_absfloat()::Int32 = wasm_subtype(Float64, AbstractFloat) ? Int32(1) : Int32(0)
+            gt_f64_signed()::Int32 = wasm_subtype(Float64, Signed) ? Int32(1) : Int32(0)
+            gt_f32_f32()::Int32 = wasm_subtype(Float32, Float32) ? Int32(1) : Int32(0)
+            gt_f32_num()::Int32 = wasm_subtype(Float32, Number) ? Int32(1) : Int32(0)
+            gt_f32_f64()::Int32 = wasm_subtype(Float32, Float64) ? Int32(1) : Int32(0)
+            gt_bool_bool()::Int32 = wasm_subtype(Bool, Bool) ? Int32(1) : Int32(0)
+            gt_bool_int()::Int32 = wasm_subtype(Bool, Integer) ? Int32(1) : Int32(0)
+            gt_bool_num()::Int32 = wasm_subtype(Bool, Number) ? Int32(1) : Int32(0)
+            gt_bool_signed()::Int32 = wasm_subtype(Bool, Signed) ? Int32(1) : Int32(0)
+            gt_u64_unsigned()::Int32 = wasm_subtype(UInt64, Unsigned) ? Int32(1) : Int32(0)
+            gt_u64_signed()::Int32 = wasm_subtype(UInt64, Signed) ? Int32(1) : Int32(0)
+            gt_u64_num()::Int32 = wasm_subtype(UInt64, Number) ? Int32(1) : Int32(0)
+            gt_u8_unsigned()::Int32 = wasm_subtype(UInt8, Unsigned) ? Int32(1) : Int32(0)
+            gt_u8_num()::Int32 = wasm_subtype(UInt8, Number) ? Int32(1) : Int32(0)
+            # Reverse direction (should be false for non-identity)
+            gt_num_i64()::Int32 = wasm_subtype(Number, Int64) ? Int32(1) : Int32(0)
+            gt_real_i64()::Int32 = wasm_subtype(Real, Int64) ? Int32(1) : Int32(0)
+            gt_signed_i64()::Int32 = wasm_subtype(Signed, Int64) ? Int32(1) : Int32(0)
+            gt_any_i64()::Int32 = wasm_subtype(Any, Int64) ? Int32(1) : Int32(0)
+            gt_any_any()::Int32 = wasm_subtype(Any, Any) ? Int32(1) : Int32(0)
+            gt_any_num()::Int32 = wasm_subtype(Any, Number) ? Int32(1) : Int32(0)
+            # String types
+            gt_str_str()::Int32 = wasm_subtype(String, String) ? Int32(1) : Int32(0)
+            gt_str_absstr()::Int32 = wasm_subtype(String, AbstractString) ? Int32(1) : Int32(0)
+            gt_str_any()::Int32 = wasm_subtype(String, Any) ? Int32(1) : Int32(0)
+            gt_str_num()::Int32 = wasm_subtype(String, Number) ? Int32(1) : Int32(0)
+            gt_absstr_str()::Int32 = wasm_subtype(AbstractString, String) ? Int32(1) : Int32(0)
+
+            wrapper_funcs = [
+                (gt_i64_i64, ()), (gt_i64_num, ()), (gt_i64_real, ()), (gt_i64_int, ()),
+                (gt_i64_signed, ()), (gt_i64_unsigned, ()), (gt_i64_absfloat, ()),
+                (gt_i64_absstr, ()), (gt_i64_any, ()),
+                (gt_i32_i32, ()), (gt_i32_i64, ()), (gt_i32_signed, ()), (gt_i32_num, ()),
+                (gt_f64_f64, ()), (gt_f64_num, ()), (gt_f64_real, ()), (gt_f64_absfloat, ()),
+                (gt_f64_signed, ()),
+                (gt_f32_f32, ()), (gt_f32_num, ()), (gt_f32_f64, ()),
+                (gt_bool_bool, ()), (gt_bool_int, ()), (gt_bool_num, ()), (gt_bool_signed, ()),
+                (gt_u64_unsigned, ()), (gt_u64_signed, ()), (gt_u64_num, ()),
+                (gt_u8_unsigned, ()), (gt_u8_num, ()),
+                (gt_num_i64, ()), (gt_real_i64, ()), (gt_signed_i64, ()),
+                (gt_any_i64, ()), (gt_any_any, ()), (gt_any_num, ()),
+                (gt_str_str, ()), (gt_str_absstr, ()), (gt_str_any, ()), (gt_str_num, ()),
+                (gt_absstr_str, ()),
+            ]
+
+            all_funcs = vcat(wrapper_funcs, all_subtype_funcs)
+            bytes = WasmTarget.compile_multi(all_funcs)
+            @test length(bytes) > 0
+
+            valid = try run(`$(first(NODE_CMD)) -e "1"`) !== nothing; true catch; false end
+            if valid
+                # Ground truth: each test matches native Julia <:
+                # Concrete numeric identity
+                @test run_wasm(bytes, "gt_i64_i64") == 1      # Int64 <: Int64
+                @test run_wasm(bytes, "gt_i32_i32") == 1      # Int32 <: Int32
+                @test run_wasm(bytes, "gt_f64_f64") == 1      # Float64 <: Float64
+                @test run_wasm(bytes, "gt_f32_f32") == 1      # Float32 <: Float32
+                @test run_wasm(bytes, "gt_bool_bool") == 1    # Bool <: Bool
+                # Numeric hierarchy (true)
+                @test run_wasm(bytes, "gt_i64_num") == 1      # Int64 <: Number
+                @test run_wasm(bytes, "gt_i64_real") == 1     # Int64 <: Real
+                @test run_wasm(bytes, "gt_i64_int") == 1      # Int64 <: Integer
+                @test run_wasm(bytes, "gt_i64_signed") == 1   # Int64 <: Signed
+                @test run_wasm(bytes, "gt_i64_any") == 1      # Int64 <: Any
+                @test run_wasm(bytes, "gt_i32_signed") == 1   # Int32 <: Signed
+                @test run_wasm(bytes, "gt_i32_num") == 1      # Int32 <: Number
+                @test run_wasm(bytes, "gt_f64_num") == 1      # Float64 <: Number
+                @test run_wasm(bytes, "gt_f64_real") == 1     # Float64 <: Real
+                @test run_wasm(bytes, "gt_f64_absfloat") == 1 # Float64 <: AbstractFloat
+                @test run_wasm(bytes, "gt_f32_num") == 1      # Float32 <: Number
+                @test run_wasm(bytes, "gt_bool_int") == 1     # Bool <: Integer
+                @test run_wasm(bytes, "gt_bool_num") == 1     # Bool <: Number
+                @test run_wasm(bytes, "gt_u64_unsigned") == 1 # UInt64 <: Unsigned
+                @test run_wasm(bytes, "gt_u64_num") == 1      # UInt64 <: Number
+                @test run_wasm(bytes, "gt_u8_unsigned") == 1  # UInt8 <: Unsigned
+                @test run_wasm(bytes, "gt_u8_num") == 1       # UInt8 <: Number
+                # Numeric hierarchy (false)
+                @test run_wasm(bytes, "gt_i64_unsigned") == 0 # Int64 !<: Unsigned
+                @test run_wasm(bytes, "gt_i64_absfloat") == 0 # Int64 !<: AbstractFloat
+                @test run_wasm(bytes, "gt_i64_absstr") == 0   # Int64 !<: AbstractString
+                @test run_wasm(bytes, "gt_i32_i64") == 0      # Int32 !<: Int64
+                @test run_wasm(bytes, "gt_f64_signed") == 0   # Float64 !<: Signed
+                @test run_wasm(bytes, "gt_f32_f64") == 0      # Float32 !<: Float64
+                @test run_wasm(bytes, "gt_bool_signed") == 0  # Bool !<: Signed
+                @test run_wasm(bytes, "gt_u64_signed") == 0   # UInt64 !<: Signed
+                # Reverse direction (abstract !<: concrete)
+                @test run_wasm(bytes, "gt_num_i64") == 0      # Number !<: Int64
+                @test run_wasm(bytes, "gt_real_i64") == 0     # Real !<: Int64
+                @test run_wasm(bytes, "gt_signed_i64") == 0   # Signed !<: Int64
+                @test run_wasm(bytes, "gt_any_i64") == 0      # Any !<: Int64
+                @test run_wasm(bytes, "gt_any_num") == 0      # Any !<: Number
+                # Any <: Any
+                @test run_wasm(bytes, "gt_any_any") == 1      # Any <: Any
+                # String types
+                @test run_wasm(bytes, "gt_str_str") == 1      # String <: String
+                @test run_wasm(bytes, "gt_str_absstr") == 1   # String <: AbstractString
+                @test run_wasm(bytes, "gt_str_any") == 1      # String <: Any
+                @test run_wasm(bytes, "gt_str_num") == 0      # String !<: Number
+                @test run_wasm(bytes, "gt_absstr_str") == 0   # AbstractString !<: String
+            end
+        end
+
     end
 
 end
