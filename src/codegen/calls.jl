@@ -4596,7 +4596,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     push!(_isa_dfs_block, Opcode.I32_AND)
                     # Emit if-else: if (not $JlBase) { 0 } else { dfs_check }
                     push!(bytes, Opcode.IF)
-                    push!(bytes, Opcode.BLOCK_I32)
+                    push!(bytes, 0x7F)  # i32 result type
                     append!(bytes, _isa_guard_block)
                     push!(bytes, Opcode.ELSE)
                     append!(bytes, _isa_dfs_block)
