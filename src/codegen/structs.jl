@@ -139,10 +139,16 @@ function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataT
     # Register it as an externref array type so _svec_len and _svec_ref work.
     # SimpleVector elements are Any-typed, mapping to externref in WasmGC.
     if T === Core.SimpleVector
-        # Create an externref/anyref array type
-        # PURE-9064: Use AnyRef when JlType hierarchy is active
-        local svec_elem_type = registry.jl_type_idx !== nothing ? AnyRef : ExternRef
-        arr_idx = add_array_type!(mod, svec_elem_type, true)
+        # PURE-9064: When JlType hierarchy is active, reuse the $JlSVec array type
+        # (array (mut (ref null $JlType))). Previously this created a separate
+        # (array (mut anyref)) which caused type mismatch: struct.get on $JlDataType.parameters
+        # returns (ref null $JlSVec) but the local was typed with a different array type index.
+        if registry.jl_svec_idx !== nothing
+            arr_idx = registry.jl_svec_idx
+        else
+            local svec_elem_type = ExternRef
+            arr_idx = add_array_type!(mod, svec_elem_type, true)
+        end
         # Register as a "struct" with 0 Julia fields but backed by an array type
         info = StructInfo(T, arr_idx, Symbol[], DataType[], UInt32(0))  # SimpleVector is an array type, no typeId
         registry.structs[T] = info
@@ -907,6 +913,19 @@ that were registered before the hierarchy existed. Fixes two issues:
 """
 function patch_any_fields_for_jltype_hierarchy!(mod::WasmModule, registry::TypeRegistry)
     registry.jl_type_idx === nothing && return
+
+    # PURE-9064: Patch SimpleVector StructInfo to use $JlSVec array type from hierarchy.
+    # SimpleVector may have been registered before the hierarchy existed, creating a
+    # duplicate (array (mut anyref)) type instead of reusing (array (mut (ref null $JlType))).
+    if registry.jl_svec_idx !== nothing && haskey(registry.structs, Core.SimpleVector)
+        old_info = registry.structs[Core.SimpleVector]
+        if old_info.wasm_type_idx != registry.jl_svec_idx
+            registry.structs[Core.SimpleVector] = StructInfo(
+                Core.SimpleVector, registry.jl_svec_idx,
+                old_info.field_names, old_info.field_types, old_info.field_offset
+            )
+        end
+    end
 
     for (T, info) in registry.structs
         type_idx = info.wasm_type_idx
