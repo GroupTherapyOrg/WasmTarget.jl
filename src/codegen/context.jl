@@ -2117,6 +2117,19 @@ function statement_produces_wasm_value(stmt::Expr, idx::Int, ctx::CompilationCon
         if _f isa GlobalRef && _f.name === :memoryrefset!
             return false
         end
+        # PURE-9065: Nothing-typed multi-arg memoryrefnew produces empty bytes
+        # when unused (skipped by PURE-9065 in compile_call). Return false to
+        # prevent flow.jl from adding a spurious DROP on empty stack.
+        if _f isa GlobalRef && _f.name === :memoryrefnew && length(stmt.args) >= 4
+            _mr_type = get(ctx.ssa_types, idx, Any)
+            if _mr_type isa DataType && (
+                (_mr_type.name.name === :MemoryRef && length(_mr_type.parameters) >= 1 && _mr_type.parameters[1] === Nothing) ||
+                (_mr_type.name.name === :GenericMemoryRef && length(_mr_type.parameters) >= 2 && _mr_type.parameters[2] === Nothing))
+                if !haskey(ctx.ssa_locals, idx)
+                    return false
+                end
+            end
+        end
     end
 
     # Get the SSA type first

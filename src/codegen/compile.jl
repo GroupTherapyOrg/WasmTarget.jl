@@ -306,6 +306,8 @@ to WasmGC rather than intercepting with workarounds.
 """
 const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     :setindex!, :getindex, :ht_keyindex, :ht_keyindex2_shorthash!, :rehash!,
+    # PURE-9065: Dict/Set operations
+    :delete!, :union!, :get, :pop!, :empty!, :push!, :in,
     # PURE-325: String replace operations needed by parse_int_literal
     :_replace_, :_replace_init, :_replace_finish, :take!, :findnext, :unsafe_write,
     # PURE-325: String search operations needed by findnext/replace
