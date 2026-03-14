@@ -5608,4 +5608,75 @@ struct TypeHierS2 x::Int32 end
 
     end
 
+    # ========================================================================
+    # Phase 38: Dict/Set from Base (PURE-9065)
+    # ========================================================================
+    @testset "Phase 38: Dict/Set from Base (PURE-9065)" begin
+
+        @testset "Dict{Int64,Int64} basic operations" begin
+            function dict_int_create()::Int64
+                d = Dict{Int64, Int64}()
+                d[1] = 10
+                d[2] = 20
+                d[3] = 30
+                return d[1] + d[2] + d[3]
+            end
+            bytes = compile(dict_int_create, ())
+            @test bytes !== nothing
+            @test run_wasm(bytes, "dict_int_create") == 60
+
+            function dict_int_haskey()::Int64
+                d = Dict{Int64, Int64}()
+                d[1] = 10
+                d[2] = 20
+                has1 = haskey(d, 1)
+                has3 = haskey(d, 3)
+                len = length(d)
+                return Int64(has1) * 100 + Int64(has3) * 10 + len
+            end
+            bytes2 = compile(dict_int_haskey, ())
+            @test bytes2 !== nothing
+            @test run_wasm(bytes2, "dict_int_haskey") == 102
+        end
+
+        @testset "Dict{String,Int64} operations" begin
+            function dict_str_create()::Int64
+                d = Dict{String, Int64}()
+                d["a"] = Int64(1)
+                d["b"] = Int64(2)
+                return d["a"] + d["b"]
+            end
+            bytes = compile(dict_str_create, ())
+            @test bytes !== nothing
+            @test run_wasm(bytes, "dict_str_create") == 3
+        end
+
+        @testset "Dict delete!" begin
+            function dict_delete_test()::Int64
+                d = Dict{Int64, Int64}()
+                d[1] = 10
+                d[2] = 20
+                d[3] = 30
+                delete!(d, 2)
+                len = length(d)
+                has2 = haskey(d, 2)
+                return len * 10 + Int64(has2)
+            end
+            bytes = compile(dict_delete_test, ())
+            @test bytes !== nothing
+            @test run_wasm(bytes, "dict_delete_test") == 20
+        end
+
+        @testset "Set{Int64} operations" begin
+            function set_create_test()::Int64
+                s = Set{Int64}([1, 2, 3])
+                return Int64(length(s)) * 100 + Int64(2 in s) * 10 + Int64(5 in s)
+            end
+            bytes = compile(set_create_test, ())
+            @test bytes !== nothing
+            @test run_wasm(bytes, "set_create_test") == 310
+        end
+
+    end
+
 end
