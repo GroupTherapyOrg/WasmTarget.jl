@@ -1379,11 +1379,61 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         # Compile the value to store - we need it twice (for array.set and return)
         # First compile gets the value on stack for array.set
         local mset_val_bytes = compile_value(value_arg, ctx)
-        # If array element type is externref (elem_type is Any OR abstract type), convert ref→externref
+        # If array element type is anyref/externref (elem_type is Any OR abstract type), box numeric values
         # PURE-045: Check the actual wasm element type, not just elem_type === Any
         # Abstract types like CallInfo also map to ExternRef
+        # PHASE-1-004: AnyRef arrays (Memory{Any}) need numeric→anyref boxing via struct.new
         local wasm_elem_type = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
-        if wasm_elem_type === ExternRef
+        if wasm_elem_type === AnyRef
+            # AnyRef array element — box numeric values to anyref via struct.new
+            local mset_src_wasm_any = nothing
+            if length(mset_val_bytes) >= 2 && mset_val_bytes[1] == Opcode.LOCAL_GET
+                local src_idx_a = 0
+                local shift_a = 0
+                local pos_a = 2
+                while pos_a <= length(mset_val_bytes)
+                    b = mset_val_bytes[pos_a]
+                    src_idx_a |= (Int(b & 0x7f) << shift_a)
+                    shift_a += 7
+                    pos_a += 1
+                    (b & 0x80) == 0 && break
+                end
+                if pos_a - 1 == length(mset_val_bytes)
+                    if src_idx_a >= ctx.n_params
+                        local arr_idx_a = src_idx_a - ctx.n_params + 1
+                        if arr_idx_a >= 1 && arr_idx_a <= length(ctx.locals)
+                            mset_src_wasm_any = ctx.locals[arr_idx_a]
+                        end
+                    elseif src_idx_a < ctx.n_params && src_idx_a + 1 <= length(ctx.arg_types)
+                        mset_src_wasm_any = get_concrete_wasm_type(ctx.arg_types[src_idx_a + 1], ctx.mod, ctx.type_registry)
+                    end
+                end
+            elseif length(mset_val_bytes) >= 1 && (mset_val_bytes[1] == Opcode.I32_CONST || mset_val_bytes[1] == Opcode.I64_CONST || mset_val_bytes[1] == Opcode.F32_CONST || mset_val_bytes[1] == Opcode.F64_CONST)
+                if !has_ref_producing_gc_op(mset_val_bytes)
+                    # Detect actual constant type from opcode
+                    if mset_val_bytes[1] == Opcode.I64_CONST
+                        mset_src_wasm_any = I64
+                    elseif mset_val_bytes[1] == Opcode.F32_CONST
+                        mset_src_wasm_any = F32
+                    elseif mset_val_bytes[1] == Opcode.F64_CONST
+                        mset_src_wasm_any = F64
+                    else
+                        mset_src_wasm_any = I32
+                    end
+                end
+            end
+            local is_numeric_mset_any = mset_src_wasm_any === I64 || mset_src_wasm_any === I32 || mset_src_wasm_any === F64 || mset_src_wasm_any === F32
+            local is_already_anyref = mset_src_wasm_any === AnyRef || mset_src_wasm_any === StructRef || mset_src_wasm_any isa ConcreteRef
+            if is_numeric_mset_any
+                emit_numeric_to_anyref!(bytes, value_arg, mset_src_wasm_any, ctx)
+            else
+                append!(bytes, mset_val_bytes)
+                if !is_already_anyref && mset_src_wasm_any === ExternRef
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.ANY_CONVERT_EXTERN)
+                end
+            end
+        elseif wasm_elem_type === ExternRef
             # Determine source value's wasm type to decide conversion
             local mset_src_wasm = nothing  # will be set if we can determine it
             if length(mset_val_bytes) >= 2 && mset_val_bytes[1] == Opcode.LOCAL_GET
