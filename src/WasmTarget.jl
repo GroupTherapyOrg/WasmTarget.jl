@@ -42,6 +42,7 @@ include("runtime/tokenizer.jl")
 
 # Main API
 export compile, compile_multi, compile_from_codeinfo, compile_with_base, optimize, WasmModule, to_bytes
+export FrozenCompilationState, build_frozen_state, compile_module_from_ir_frozen
 export compile_with_sourcemap, compile_multi_with_sourcemap
 export compile_cached, compile_multi_cached, enable_cache!, disable_cache!, clear_cache!, cache_stats
 export register_package!, list_packages, package_functions, precompile_package

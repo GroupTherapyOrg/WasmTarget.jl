@@ -2057,3 +2057,287 @@ function compile_closure_body(
     return (body, ctx.locals)
 end
 
+# ============================================================================
+# Frozen Compilation State — Phase 1-mini self-hosting support
+# ============================================================================
+
+"""
+    FrozenCompilationState
+
+Snapshot of WasmModule + TypeRegistry after all setup (type registration, hierarchy,
+box types, etc.) but BEFORE function body compilation. This allows Phase 1-mini to
+pre-compute the Dict-heavy setup at build time and ship only the pure codegen to WASM.
+
+The frozen state captures everything needed to compile function bodies without
+re-running any Dict-based setup code.
+"""
+struct FrozenCompilationState
+    mod::WasmModule
+    type_registry::TypeRegistry
+end
+
+"""
+    build_frozen_state(ir_entries::Vector) -> FrozenCompilationState
+
+Run the SETUP portion of compile_module_from_ir for representative functions,
+capturing the resulting WasmModule and TypeRegistry state. The frozen state can
+then be used by compile_module_from_ir_frozen to skip all Dict-heavy setup.
+
+Each entry is (code_info::CodeInfo, return_type::Type, arg_types::Tuple, name::String).
+"""
+function build_frozen_state(ir_entries::Vector)::FrozenCompilationState
+    mod = WasmModule()
+    type_registry = TypeRegistry()
+    func_registry = FunctionRegistry()
+
+    # ---- SETUP (same as compile_module_from_ir lines 1722-1824) ----
+
+    # Add Math.pow import
+    add_import!(mod, "Math", "pow", NumType[F64, F64], NumType[F64])
+
+    # Create base struct type FIRST
+    get_base_struct_type!(mod, type_registry)
+
+    # Pre-register numeric box types
+    for nt in (I32, I64, F32, F64)
+        get_numeric_box_type!(mod, type_registry, nt)
+    end
+    # Pre-register BoxedNothing type
+    get_nothing_box_type!(mod, type_registry)
+
+    # Build function_data from pre-computed IR
+    function_data = []
+    for (code_info, return_type, arg_types, name) in ir_entries
+        global_args = Set{Int}()
+
+        # Register types used in parameters
+        for (i, T) in enumerate(arg_types)
+            if T === Symbol
+                get_string_array_type!(mod, type_registry)
+            elseif is_struct_type(T)
+                register_struct_type!(mod, type_registry, T)
+            elseif T <: Array
+                register_vector_type!(mod, type_registry, T)
+            elseif T === String
+                get_string_array_type!(mod, type_registry)
+            end
+        end
+
+        # Register return type
+        if is_struct_type(return_type)
+            register_struct_type!(mod, type_registry, return_type)
+        elseif return_type !== Union{} && return_type <: Array
+            register_vector_type!(mod, type_registry, return_type)
+        elseif return_type === String
+            get_string_array_type!(mod, type_registry)
+        end
+
+        push!(function_data, (nothing, arg_types, name, code_info, return_type, global_args, false))
+    end
+
+    # Scan for GlobalRef to mutable structs
+    for (_, _, _, code_info, _, _, _) in function_data
+        for stmt in code_info.code
+            if stmt isa GlobalRef
+                try
+                    actual_val = getfield(stmt.mod, stmt.name)
+                    T = typeof(actual_val)
+                    if ismutabletype(T) && !isa(actual_val, Type) && !isa(actual_val, Function) && !isa(actual_val, Module)
+                        info = register_struct_type!(mod, type_registry, T)
+                    end
+                catch
+                end
+            end
+        end
+    end
+
+    # Pre-register all core exception types for DFS typeIds
+    for _exn_T in (ErrorException, ArgumentError, OverflowError, DivideError,
+                   StackOverflowError, OutOfMemoryError)
+        register_struct_type!(mod, type_registry, _exn_T)
+    end
+
+    # Assign DFS type IDs after all types are registered
+    assign_type_ids!(type_registry)
+
+    # Create BoxedNothing singleton global
+    get_nothing_global!(mod, type_registry)
+
+    # Create $JlType hierarchy types
+    create_jl_type_hierarchy!(mod, type_registry)
+
+    # Patch struct types registered before JlType hierarchy existed
+    patch_any_fields_for_jltype_hierarchy!(mod, type_registry)
+
+    # Create DataType globals for ALL types with DFS IDs + type lookup table
+    ensure_all_type_globals!(mod, type_registry)
+    create_type_lookup_table!(mod, type_registry)
+
+    # Set all struct types as subtypes of $JlBase for typeof(x)
+    if type_registry.base_struct_idx !== nothing
+        set_struct_supertypes!(mod, type_registry.base_struct_idx; registry=type_registry)
+    end
+
+    return FrozenCompilationState(mod, type_registry)
+end
+
+"""
+    copy_wasm_module(src::WasmModule) -> WasmModule
+
+Create a shallow copy of a WasmModule. Each vector field is copied so that
+appending to the copy doesn't mutate the original. The elements themselves
+(immutable structs) are shared safely.
+"""
+function copy_wasm_module(src::WasmModule)::WasmModule
+    WasmModule(
+        copy(src.types),
+        [copy(rg) for rg in src.rec_groups],
+        copy(src.imports),
+        copy(src.functions),
+        copy(src.tables),
+        copy(src.memories),
+        copy(src.globals),
+        copy(src.exports),
+        copy(src.elem_segments),
+        copy(src.data_segments),
+        copy(src.tags),
+        src.start_function
+    )
+end
+
+"""
+    copy_type_registry(src::TypeRegistry) -> TypeRegistry
+
+Create a copy of a TypeRegistry. Dict fields get new Dict instances (shallow copy —
+keys and values are immutable or shared safely). Scalar fields are copied directly.
+"""
+function copy_type_registry(src::TypeRegistry)::TypeRegistry
+    TypeRegistry(
+        copy(src.structs),
+        copy(src.arrays),
+        src.string_array_idx,
+        copy(src.unions),
+        copy(src.numeric_boxes),
+        copy(src.type_constant_globals),
+        copy(src.typename_constant_globals),
+        copy(src.type_ids),
+        copy(src.type_ranges),
+        src.base_struct_idx,
+        src.nothing_box_idx,
+        src.nothing_global_idx,
+        src.type_lookup_array_idx,
+        src.type_lookup_global,
+        src.jl_type_idx,
+        src.jl_datatype_idx,
+        src.jl_union_idx,
+        src.jl_unionall_idx,
+        src.jl_typevar_idx,
+        src.jl_typename_idx,
+        src.jl_svec_idx,
+        src.string_hash_func_idx
+    )
+end
+
+"""
+    compile_module_from_ir_frozen(ir_entries::Vector, frozen::FrozenCompilationState)::WasmModule
+
+Compile pre-computed IR entries using a pre-built frozen state, skipping all Dict-heavy
+setup code. This is the Phase 1-mini compilation path: the frozen state was built at
+native Julia build time, and this function only runs the pure codegen (generate_body,
+compile_statement, etc.).
+
+Each entry is (code_info::CodeInfo, return_type::Type, arg_types::Tuple, name::String).
+"""
+function compile_module_from_ir_frozen(ir_entries::Vector, frozen::FrozenCompilationState)::WasmModule
+    # Copy the frozen state so we don't mutate the original
+    mod = copy_wasm_module(frozen.mod)
+    type_registry = copy_type_registry(frozen.type_registry)
+    func_registry = FunctionRegistry()
+
+    # Build function_data (lightweight — no type registration needed)
+    function_data = []
+    module_globals = Dict{Tuple{Module, Symbol}, UInt32}()
+    for (code_info, return_type, arg_types, name) in ir_entries
+        global_args = Set{Int}()
+
+        # Scan for GlobalRef to mutable structs (need globals for these)
+        for stmt in code_info.code
+            if stmt isa GlobalRef
+                try
+                    actual_val = getfield(stmt.mod, stmt.name)
+                    T = typeof(actual_val)
+                    if ismutabletype(T) && !isa(actual_val, Type) && !isa(actual_val, Function) && !isa(actual_val, Module)
+                        key = (stmt.mod, stmt.name)
+                        if !haskey(module_globals, key)
+                            info = register_struct_type!(mod, type_registry, T)
+                            type_idx = info.wasm_type_idx
+                            init_bytes = UInt8[]
+                            # Field 0: typeId (i32) - type discriminant
+                            push!(init_bytes, Opcode.I32_CONST)
+                            push!(init_bytes, 0x00)
+                            for field_name in fieldnames(T)
+                                field_val = getfield(actual_val, field_name)
+                                append!(init_bytes, compile_const_value(field_val, mod, type_registry))
+                            end
+                            push!(init_bytes, Opcode.GC_PREFIX)
+                            push!(init_bytes, Opcode.STRUCT_NEW)
+                            append!(init_bytes, encode_leb128_unsigned(type_idx))
+                            global_idx = add_global_ref!(mod, type_idx, true, init_bytes; nullable=false)
+                            module_globals[key] = global_idx
+                        end
+                    end
+                catch
+                end
+            end
+        end
+
+        push!(function_data, (nothing, arg_types, name, code_info, return_type, global_args, false))
+    end
+
+    # Calculate function indices
+    n_imports = length(mod.imports)
+    for (i, (f, arg_types, name, _, return_type, _, _)) in enumerate(function_data)
+        func_idx = UInt32(n_imports + i - 1)
+        register_function!(func_registry, name, f, arg_types, func_idx, return_type)
+    end
+
+    # Compile function bodies (the PURE CODEGEN path)
+    export_name_counts = Dict{String, Int}()
+    for (i, (f, arg_types, name, code_info, return_type, global_args, is_closure)) in enumerate(function_data)
+        func_idx = UInt32(n_imports + i - 1)
+
+        ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
+                                func_registry=func_registry, func_idx=func_idx, func_ref=nothing,
+                                global_args=global_args, is_compiled_closure=false,
+                                module_globals=module_globals)
+        body = generate_body(ctx)
+        locals = ctx.locals
+
+        # Get param/result types
+        param_types = WasmValType[]
+        for (j, T) in enumerate(arg_types)
+            if T isa Union && needs_anyref_boxing(T)
+                push!(param_types, AnyRef)
+            else
+                push!(param_types, get_concrete_wasm_type(T, mod, type_registry))
+            end
+        end
+        result_types = (return_type === Nothing || return_type === Union{}) ? WasmValType[] : WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
+
+        # Add function to module
+        actual_idx = add_function!(mod, param_types, result_types, locals, body)
+
+        # Export
+        export_name = name
+        count = get(export_name_counts, name, 0)
+        if count > 0
+            export_name = "$(name)_$(count)"
+        end
+        export_name_counts[name] = count + 1
+        add_export!(mod, export_name, 0, actual_idx)
+    end
+
+    populate_type_constant_globals!(mod, type_registry)
+    return mod
+end
+
