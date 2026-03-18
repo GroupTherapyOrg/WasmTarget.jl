@@ -6,7 +6,10 @@
 # and records: method signature count, intersection cache size, top-20 method families.
 
 using WasmTarget
-using JSON3
+using JSON, Dates
+
+# Load typeinf infrastructure (not part of WasmTarget module — standalone)
+include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "dict_method_table.jl"))
 
 println("=" ^ 60)
 println("PHASE-1-001: Measuring method table via populate_transitive")
@@ -31,13 +34,16 @@ println("Code statements: $(length(ci.code))")
 #                        func_name::String, arg_types::Tuple; optimize=false)
 compile_sig = Tuple{typeof(WasmTarget.compile_from_codeinfo),
                     Core.CodeInfo, Type, String, Tuple}
+# Also try the inner compile_module_from_ir which is the main compilation function
+compile_module_sig = Tuple{typeof(WasmTarget.compile_module_from_ir), Vector}
 
 println("\n--- Running populate_transitive ---")
-println("Entry signature: $compile_sig")
+println("Entry signature 1: $compile_sig")
+println("Entry signature 2: $compile_module_sig")
 
-# Step 3: Run populate_transitive
+# Step 3: Run populate_transitive with both signatures
 t0 = time()
-table = WasmTarget.populate_transitive([compile_sig])
+table = populate_transitive([compile_sig, compile_module_sig])
 elapsed = time() - t0
 
 println("Elapsed: $(round(elapsed, digits=2))s")
@@ -117,12 +123,11 @@ results = Dict(
     "acceptance" => n_methods >= 1000 && n_methods <= 10000 ? "PASS" : (n_methods > 0 ? "PARTIAL" : "FAIL")
 )
 
-using Dates
 results["timestamp"] = string(Dates.now())
 
 output_path = joinpath(@__DIR__, "method_table_results.json")
 open(output_path, "w") do io
-    JSON3.pretty(io, results)
+    JSON.print(io, results, 2)
 end
 
 println("\n--- Results saved to $output_path ---")

@@ -7,7 +7,7 @@
 # Identifies the "pure codegen" subset that avoids Dict/Vector{Any}.
 
 using WasmTarget
-using JSON3, Dates
+using JSON, Dates
 
 println("=" ^ 60)
 println("PHASE-1M-001: Profiling compile_from_codeinfo call graph")
@@ -163,7 +163,7 @@ for fname in ["compile.jl", "generate.jl", "statements.jl", "values.jl",
     fpath = joinpath(codegen_dir, fname)
     if isfile(fpath)
         lines = countlines(fpath)
-        total_lines += lines
+        global total_lines += lines
 
         # Check for Dict/Vector{Any} usage
         content = read(fpath, String)
@@ -171,10 +171,10 @@ for fname in ["compile.jl", "generate.jl", "statements.jl", "values.jl",
         has_vector_any = occursin("Vector{Any}", content)
 
         if has_dict || has_vector_any
-            dict_lines += lines
+            global dict_lines += lines
             println("  $fname: $lines lines [USES Dict/Vector{Any}]")
         else
-            pure_lines += lines
+            global pure_lines += lines
             println("  $fname: $lines lines [PURE]")
         end
     end
@@ -186,8 +186,8 @@ for fname in ["types.jl", "writer.jl", "instructions.jl", "validator.jl"]
     fpath = joinpath(builder_dir, fname)
     if isfile(fpath)
         lines = countlines(fpath)
-        total_lines += lines
-        pure_lines += lines
+        global total_lines += lines
+        global pure_lines += lines
         println("  builder/$fname: $lines lines [PURE]")
     end
 end
@@ -228,7 +228,7 @@ results = Dict(
 
 output_path = joinpath(@__DIR__, "codegen_profile_results.json")
 open(output_path, "w") do io
-    JSON3.pretty(io, results)
+    JSON.print(io, results, 2)
 end
 
 println("\n--- Results saved to $output_path ---")

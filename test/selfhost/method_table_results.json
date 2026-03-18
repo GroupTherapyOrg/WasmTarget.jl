@@ -1,0 +1,218 @@
+{
+  "intersection_with_env_count": 0,
+  "top20_families": [
+    {
+      "name": "typeof(iterate)",
+      "count": 857
+    },
+    {
+      "name": "typeof(getproperty)",
+      "count": 707
+    },
+    {
+      "name": "typeof(getindex)",
+      "count": 678
+    },
+    {
+      "name": "typeof(Base.indexed_iterate)",
+      "count": 390
+    },
+    {
+      "name": "typeof(length)",
+      "count": 338
+    },
+    {
+      "name": "typeof(setindex!)",
+      "count": 293
+    },
+    {
+      "name": "typeof(isempty)",
+      "count": 245
+    },
+    {
+      "name": "typeof(Base._setindex!)",
+      "count": 229
+    },
+    {
+      "name": "typeof(setproperty!)",
+      "count": 220
+    },
+    {
+      "name": "typeof(Core.Typeof)",
+      "count": 217
+    },
+    {
+      "name": "typeof(Core._typeof_captured_variable)",
+      "count": 207
+    },
+    {
+      "name": "typeof(convert)",
+      "count": 200
+    },
+    {
+      "name": "typeof(Core.kwcall)",
+      "count": 200
+    },
+    {
+      "name": "typeof(memoryref)",
+      "count": 190
+    },
+    {
+      "name": "typeof(==)",
+      "count": 177
+    },
+    {
+      "name": "typeof(Base.argtail)",
+      "count": 165
+    },
+    {
+      "name": "typeof(Base.Sort._sort!)",
+      "count": 164
+    },
+    {
+      "name": "typeof(Base.tail)",
+      "count": 163
+    },
+    {
+      "name": "Type{BoundsError}",
+      "count": 134
+    },
+    {
+      "name": "typeof(hash)",
+      "count": 129
+    }
+  ],
+  "method_signature_count": 17171,
+  "module_distribution": [
+    {
+      "module_name": "Base",
+      "count": 13022
+    },
+    {
+      "module_name": "Core",
+      "count": 2519
+    },
+    {
+      "module_name": "WasmTarget",
+      "count": 670
+    },
+    {
+      "module_name": "Base.Sort",
+      "count": 376
+    },
+    {
+      "module_name": "Base.Iterators",
+      "count": 250
+    },
+    {
+      "module_name": "Base.Filesystem",
+      "count": 68
+    },
+    {
+      "module_name": "Base.Broadcast",
+      "count": 55
+    },
+    {
+      "module_name": "Base.Order",
+      "count": 37
+    },
+    {
+      "module_name": "Base.PCRE",
+      "count": 18
+    },
+    {
+      "module_name": "Base.StackTraces",
+      "count": 16
+    },
+    {
+      "module_name": "Base.GMP.MPZ",
+      "count": 16
+    },
+    {
+      "module_name": "Base.Math",
+      "count": 13
+    },
+    {
+      "module_name": "Base.Threads",
+      "count": 12
+    },
+    {
+      "module_name": "Base.CoreLogging",
+      "count": 12
+    },
+    {
+      "module_name": "Base.Partr",
+      "count": 10
+    },
+    {
+      "module_name": "Base.Unicode",
+      "count": 10
+    },
+    {
+      "module_name": "Base.Enums",
+      "count": 7
+    },
+    {
+      "module_name": "Base.Compiler.IRShow",
+      "count": 7
+    },
+    {
+      "module_name": "Compiler",
+      "count": 7
+    },
+    {
+      "module_name": "Base.IteratorsMD",
+      "count": 7
+    },
+    {
+      "module_name": "Base.SimdLoop",
+      "count": 6
+    },
+    {
+      "module_name": "Base.HashArrayMappedTries",
+      "count": 6
+    },
+    {
+      "module_name": "Base.Checked",
+      "count": 5
+    },
+    {
+      "module_name": "Base.GMP",
+      "count": 5
+    },
+    {
+      "module_name": "Base.AnnotatedDisplay",
+      "count": 5
+    },
+    {
+      "module_name": "Base.GC",
+      "count": 4
+    },
+    {
+      "module_name": "Base.Libc",
+      "count": 3
+    },
+    {
+      "module_name": "Base.Sys",
+      "count": 2
+    },
+    {
+      "module_name": "LinearAlgebra",
+      "count": 1
+    },
+    {
+      "module_name": "Base.ScopedValues",
+      "count": 1
+    },
+    {
+      "module_name": "Core.OptimizedGenerics.KeyValue",
+      "count": 1
+    }
+  ],
+  "entry_signature": "Tuple{typeof(compile_from_codeinfo), Core.CodeInfo, Type, String, Tuple}",
+  "acceptance": "PARTIAL",
+  "timestamp": "2026-03-18T14:06:41.755",
+  "story": "PHASE-1-001",
+  "elapsed_seconds": 116.6,
+  "intersection_count": 5783
+}

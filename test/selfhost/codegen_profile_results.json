@@ -1,0 +1,63 @@
+{
+  "source_analysis": {
+    "pure_lines": 7275,
+    "pure_percentage": 18.5,
+    "total_lines": 39411,
+    "dict_lines": 32136
+  },
+  "acceptance": "PASS",
+  "function_categories": {
+    "setup_count": 16,
+    "mixed_functions": [
+      "to_bytes",
+      "add_function!",
+      "add_export!"
+    ],
+    "codegen_functions": [
+      "get_concrete_wasm_type",
+      "compile_call",
+      "compile_return",
+      "CompilationContext()",
+      "compile_gotoifnot",
+      "compile_value",
+      "compile_const_value",
+      "analyze_phi_nodes",
+      "allocate_ssa_locals",
+      "analyze_basic_blocks",
+      "compile_statement",
+      "generate_body",
+      "compile_invoke",
+      "analyze_loop_headers"
+    ],
+    "codegen_count": 14,
+    "setup_functions": [
+      "patch_any_fields_for_jltype_hierarchy!",
+      "TypeRegistry()",
+      "register_function!",
+      "get_numeric_box_type!",
+      "populate_type_constant_globals!",
+      "register_vector_type!",
+      "get_string_array_type!",
+      "get_nothing_box_type!",
+      "FunctionRegistry()",
+      "register_struct_type!",
+      "create_jl_type_hierarchy!",
+      "get_base_struct_type!",
+      "create_type_lookup_table!",
+      "set_struct_supertypes!",
+      "ensure_all_type_globals!",
+      "assign_type_ids!"
+    ],
+    "mixed_count": 3
+  },
+  "compilation_profile": {
+    "test_loop_bytes": 4500,
+    "test_f_bytes": 4443,
+    "test_cond_ms": 83.2,
+    "test_loop_ms": 327.2,
+    "test_cond_bytes": 4469,
+    "test_f_ms": 28692.8
+  },
+  "timestamp": "2026-03-18T14:03:43.925",
+  "story": "PHASE-1M-001"
+}
