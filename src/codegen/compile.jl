@@ -2058,6 +2058,113 @@ function compile_closure_body(
 end
 
 # ============================================================================
+# GlobalRef Pre-Resolution — Self-hosting support
+# ============================================================================
+
+"""
+    collect_globalrefs(code_info::Core.CodeInfo) -> Set{GlobalRef}
+
+Walk a CodeInfo and collect all unique GlobalRef values from statements
+and expression arguments. Used at build time to discover all module-level
+references that need to be pre-resolved for self-hosting.
+"""
+function collect_globalrefs(code_info::Core.CodeInfo)
+    refs = Set{GlobalRef}()
+    for stmt in code_info.code
+        _scan_globalrefs!(refs, stmt)
+    end
+    return refs
+end
+
+function _scan_globalrefs!(refs::Set{GlobalRef}, val)
+    if val isa GlobalRef
+        push!(refs, val)
+    elseif val isa Expr
+        for arg in val.args
+            _scan_globalrefs!(refs, arg)
+        end
+    end
+end
+
+"""
+    resolve_globalrefs(refs::Set{GlobalRef}) -> Dict{GlobalRef, Any}
+
+Resolve each GlobalRef to its build-time value using getfield.
+Unresolvable refs are skipped (they may be forward declarations, etc).
+"""
+function resolve_globalrefs(refs::Set{GlobalRef})
+    resolved = Dict{GlobalRef, Any}()
+    for ref in refs
+        try
+            resolved[ref] = getfield(ref.mod, ref.name)
+        catch
+            # Skip unresolvable refs
+        end
+    end
+    return resolved
+end
+
+"""
+    collect_and_resolve_all_globalrefs(ir_entries::Vector) -> Dict{GlobalRef, Any}
+
+Collect and resolve ALL GlobalRefs across multiple IR entries at build time.
+This is the main entry point for Phase 1 self-hosting: eliminates all
+getfield(Module, Symbol) calls from the CodeInfo before it's sent to the browser.
+"""
+function collect_and_resolve_all_globalrefs(ir_entries::Vector)
+    all_refs = Set{GlobalRef}()
+    for entry in ir_entries
+        code_info = entry[1]  # First element is CodeInfo
+        union!(all_refs, collect_globalrefs(code_info))
+    end
+    return resolve_globalrefs(all_refs)
+end
+
+"""
+    substitute_globalrefs(code_info::Core.CodeInfo, resolved::Dict{GlobalRef, Any}) -> Core.CodeInfo
+
+Create a copy of CodeInfo with all GlobalRef values replaced by their
+pre-resolved values. After substitution, the CodeInfo contains no
+module-level references and can be compiled without access to Julia modules.
+"""
+function substitute_globalrefs(code_info::Core.CodeInfo, resolved::Dict{GlobalRef, Any})
+    new_ci = copy(code_info)
+    new_code = Any[]
+    for stmt in new_ci.code
+        push!(new_code, _substitute_globalref(stmt, resolved))
+    end
+    new_ci.code = new_code
+    return new_ci
+end
+
+function _substitute_globalref(val, resolved::Dict{GlobalRef, Any})
+    if val isa GlobalRef
+        return get(resolved, val, val)
+    elseif val isa Expr
+        new_args = Any[_substitute_globalref(arg, resolved) for arg in val.args]
+        return Expr(val.head, new_args...)
+    end
+    return val
+end
+
+"""
+    preprocess_ir_entries(ir_entries::Vector) -> Vector
+
+Pre-resolve all GlobalRefs in IR entries. Returns new entries with substituted
+CodeInfo that contain no module-level references. This is the build-time
+preprocessing step for self-hosted compilation.
+"""
+function preprocess_ir_entries(ir_entries::Vector)
+    resolved = collect_and_resolve_all_globalrefs(ir_entries)
+    result = []
+    for (code_info, return_type, arg_types, name) in ir_entries
+        sub_ci = substitute_globalrefs(code_info, resolved)
+        push!(result, (sub_ci, return_type, arg_types, name))
+    end
+    return result
+end
+
+# ============================================================================
 # Frozen Compilation State — Phase 1-mini self-hosting support
 # ============================================================================
 
