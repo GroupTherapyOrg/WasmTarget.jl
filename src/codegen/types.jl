@@ -1185,7 +1185,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
                 else
                     # Unknown parameter type → null ref
                     push!(body, Opcode.REF_NULL)
-                    append!(body, encode_leb128_unsigned(jl_type_idx))
+                    append!(body, encode_leb128_signed(Int64(jl_type_idx)))
                 end
             end
             push!(body, Opcode.GC_PREFIX)

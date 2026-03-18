@@ -2125,7 +2125,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     # Type not in globals — return null ref
                     dt_type_idx = get_datatype_type_idx(ctx.type_registry)
                     push!(bytes, Opcode.REF_NULL)
-                    append!(bytes, encode_leb128_unsigned(dt_type_idx))
+                    append!(bytes, encode_leb128_signed(Int64(dt_type_idx)))
                 end
             else
                 # Polymorphic value — extract typeId, look up in type table
@@ -2139,7 +2139,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                 else
                     dt_type_idx = get_datatype_type_idx(ctx.type_registry)
                     push!(bytes, Opcode.REF_NULL)
-                    append!(bytes, encode_leb128_unsigned(dt_type_idx))
+                    append!(bytes, encode_leb128_signed(Int64(dt_type_idx)))
                 end
             end
         else
@@ -2209,7 +2209,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     else
                         dt_type_idx = get_datatype_type_idx(ctx.type_registry)
                         push!(bytes, Opcode.REF_NULL)
-                        append!(bytes, encode_leb128_unsigned(dt_type_idx))
+                        append!(bytes, encode_leb128_signed(Int64(dt_type_idx)))
                     end
                 else
                     append!(bytes, compile_value(args[2], ctx))  # emits typeof → DataType ref
@@ -2220,7 +2220,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                     else
                         dt_type_idx = get_datatype_type_idx(ctx.type_registry)
                         push!(bytes, Opcode.REF_NULL)
-                        append!(bytes, encode_leb128_unsigned(dt_type_idx))
+                        append!(bytes, encode_leb128_signed(Int64(dt_type_idx)))
                     end
                 end
                 push!(bytes, Opcode.REF_EQ)
