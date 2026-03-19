@@ -134,12 +134,78 @@ for f in g_failures
     println("    - $f")
 end
 
+# ─── Step 5: Assemble multi-function module ───────────────────────────────────
+
+println("\n=== Step 5: Assemble multi-function typeinf module ===")
+
+# Collect all functions that compiled individually and try to compile them together
+module_functions = []
+for entry in code_typed_results
+    push!(module_functions, (entry.ci, entry.ret, entry.atypes, entry.name))
+end
+# Add deeper targets that compiled
+for (f, atypes, name) in deeper_targets
+    try
+        ci_pair = only(Base.code_typed(f, atypes; optimize=false))
+        push!(module_functions, (ci_pair[1], ci_pair[2], atypes, name))
+    catch
+    end
+end
+
+println("  Attempting to compile $(length(module_functions)) functions into one module...")
+module_compiled = false
+module_bytes = UInt8[]
+try
+    mod = WasmTarget.compile_module_from_ir(module_functions)
+    global module_bytes = WasmTarget.to_bytes(mod)
+    global module_compiled = true
+    println("  ✓ Module compiled: $(length(module_bytes)) bytes, $(length(module_functions)) functions")
+catch e
+    emsg = string(e)[1:min(200, end)]
+    println("  ✗ Module compilation failed: $emsg")
+end
+
+# Validate if compiled
+if module_compiled
+    tmpfile = joinpath(tempdir(), "test_typeinf_module.wasm")
+    write(tmpfile, module_bytes)
+    validate_ok = try
+        run(pipeline(`wasm-tools validate --features=gc $tmpfile`, stderr=devnull, stdout=devnull))
+        true
+    catch
+        false
+    end
+    println("  wasm-tools validate: $(validate_ok ? "PASS" : "FAIL")")
+
+    # Try loading in Node.js
+    js_code = """
+    const fs = require('fs');
+    const bytes = fs.readFileSync('$tmpfile');
+    WebAssembly.compile(bytes).then(m => {
+        console.log("OK: loaded");
+    }).catch(e => {
+        console.error("FAIL:", e.message);
+        process.exit(1);
+    });
+    """
+    tmpjs = joinpath(tempdir(), "test_typeinf_load.cjs")
+    write(tmpjs, js_code)
+    load_output = try
+        strip(read(`node $tmpjs`, String))
+    catch e
+        "ERROR: $e"
+    end
+    println("  Node.js load: $load_output")
+end
+
 @testset "Typeinf compilation probe" begin
     @test success == true
     @test result.result == Int64
     @test length(code_typed_results) >= 3
-    # At least some functions should compile
-    @test g_compiled >= 0
+    @test g_compiled >= 8
+    if module_compiled
+        @test length(module_bytes) > 0
+    end
 end
 
 println("\n=== PHASE-2A-006: typeinf compilation probe complete ===")
