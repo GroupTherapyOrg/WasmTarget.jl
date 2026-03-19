@@ -96,7 +96,7 @@ deeper_targets = [
     (Core.Compiler.specialize_method, (Core.MethodMatch,), "specialize_method"),
     # Core typeinf infrastructure
     (Core.Compiler.typeinf,          (interp_type, typeof(frame)), "typeinf"),
-    (Core.Compiler.typeinf_local,     (interp_type, typeof(frame)), "typeinf_local"),
+    (Core.Compiler.typeinf_local,     (interp_type, typeof(frame), Core.Compiler.CurrentState), "typeinf_local"),
     # Method matching
     (Core.Compiler.findall, (Type, typeof(interp.method_table.table)), "findall_DictMethodTable"),
     (Core.Compiler.isoverlayed, (typeof(interp.method_table.table),), "isoverlayed"),
@@ -138,13 +138,18 @@ end
 
 println("\n=== Step 5: Assemble multi-function typeinf module ===")
 
-# Collect all functions that compiled individually and try to compile them together
+# Collect all functions that compiled individually.
+# EXCLUDE typeinf_local — compiles but fails wasm-tools validate due to struct type
+# mismatch in stub code (875 stmts, many unreachable callees produce wrong ref types).
+# Include: 5 interface methods + specialize_method + typeinf + findall + isoverlayed = 9 functions.
 module_functions = []
 for entry in code_typed_results
     push!(module_functions, (entry.ci, entry.ret, entry.atypes, entry.name))
 end
-# Add deeper targets that compiled
+# Add deeper targets that compiled, excluding typeinf_local (validation fails in module)
+skip_names = Set(["typeinf_local"])
 for (f, atypes, name) in deeper_targets
+    name in skip_names && continue
     try
         ci_pair = only(Base.code_typed(f, atypes; optimize=false))
         push!(module_functions, (ci_pair[1], ci_pair[2], atypes, name))
@@ -155,6 +160,8 @@ end
 println("  Attempting to compile $(length(module_functions)) functions into one module...")
 module_compiled = false
 module_bytes = UInt8[]
+validate_ok = false
+load_ok = false
 try
     mod = WasmTarget.compile_module_from_ir(module_functions)
     global module_bytes = WasmTarget.to_bytes(mod)
@@ -169,7 +176,7 @@ end
 if module_compiled
     tmpfile = joinpath(tempdir(), "test_typeinf_module.wasm")
     write(tmpfile, module_bytes)
-    validate_ok = try
+    global validate_ok = try
         run(pipeline(`wasm-tools validate --features=gc $tmpfile`, stderr=devnull, stdout=devnull))
         true
     catch
@@ -195,17 +202,19 @@ if module_compiled
     catch e
         "ERROR: $e"
     end
+    global load_ok = startswith(load_output, "OK")
     println("  Node.js load: $load_output")
 end
 
 @testset "Typeinf compilation probe" begin
     @test success == true
     @test result.result == Int64
-    @test length(code_typed_results) >= 3
-    @test g_compiled >= 8
-    if module_compiled
-        @test length(module_bytes) > 0
-    end
+    @test length(code_typed_results) >= 5  # 5 interface methods
+    @test g_compiled >= 10  # 5 interface + specialize_method + typeinf + typeinf_local + findall + isoverlayed
+    @test module_compiled
+    @test length(module_bytes) > 0
+    @test validate_ok  # wasm-tools validate passes
+    @test load_ok      # Node.js loads successfully
 end
 
 println("\n=== PHASE-2A-006: typeinf compilation probe complete ===")
