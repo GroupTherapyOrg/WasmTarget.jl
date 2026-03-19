@@ -1537,6 +1537,15 @@ function compile_module(functions::Vector;
                         break
                     end
                 end
+                # Julia 1.13: hash_bytes replaces memhash foreigncall
+                if stmt isa Expr && stmt.head === :invoke && length(stmt.args) >= 2
+                    callee = stmt.args[2]
+                    callee_name = callee isa GlobalRef ? callee.name : nothing
+                    if callee_name === :hash_bytes
+                        needs_string_hash = true
+                        break
+                    end
+                end
             end
         end
         needs_string_hash && break

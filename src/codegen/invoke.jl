@@ -4218,6 +4218,53 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
                 append!(bytes, encode_leb128_unsigned(0))
                 ctx.last_stmt_was_stub = true  # PURE-908
 
+            # Julia 1.13: hash_bytes(ptr, len, seed, secret) replaces memhash foreigncall
+            # Trace ptr back to jl_string_ptr to find original string, then use FNV-1a helper
+            elseif name === :hash_bytes
+                bytes = UInt8[]  # Clear pre-pushed args
+                str_arg = nothing
+                # args: [CodeInstance/MI, func_ref, ptr, len, seed, secret]
+                if length(expr.args) >= 3
+                    ptr_arg = expr.args[3]
+                    if ptr_arg isa Core.SSAValue
+                        ptr_stmt = ctx.code_info.code[ptr_arg.id]
+                        if ptr_stmt isa Expr && ptr_stmt.head === :foreigncall
+                            ptr_name = length(ptr_stmt.args) >= 1 ? extract_foreigncall_name(ptr_stmt.args[1]) : nothing
+                            if ptr_name === :jl_string_ptr && length(ptr_stmt.args) >= 6
+                                str_arg = ptr_stmt.args[6]
+                            end
+                        end
+                    end
+                end
+                if str_arg !== nothing
+                    hash_func_idx = get_or_create_string_hash_func!(ctx.mod, ctx.type_registry)
+                    append!(bytes, compile_value(str_arg, ctx))  # string array ref
+                    # len arg
+                    if length(expr.args) >= 4
+                        append!(bytes, compile_value(expr.args[4], ctx))  # length i64
+                    else
+                        push!(bytes, Opcode.I64_CONST)
+                        push!(bytes, 0x00)
+                    end
+                    # seed arg (UInt64 → i32)
+                    if length(expr.args) >= 5
+                        append!(bytes, compile_value(expr.args[5], ctx))
+                        seed_type = infer_value_type(expr.args[5], ctx)
+                        if seed_type === UInt64 || seed_type === Int64 || seed_type === Int
+                            push!(bytes, Opcode.I32_WRAP_I64)
+                        end
+                    else
+                        push!(bytes, Opcode.I32_CONST)
+                        push!(bytes, 0x00)
+                    end
+                    push!(bytes, Opcode.CALL)
+                    append!(bytes, encode_leb128_unsigned(hash_func_idx))
+                else
+                    # Can't trace string — fallback to constant hash
+                    push!(bytes, Opcode.I64_CONST)
+                    push!(bytes, 0x00)
+                end
+
             else
                 # Unknown method — emit unreachable (will trap at runtime)
                 # This allows compilation to succeed for code paths that
