@@ -370,6 +370,44 @@ function verify_store(store::TypeDataStore)
     return (n_ok=n_ok, n_fail=n_fail, failures=failures)
 end
 
+# ─── Runtime Extension ────────────────────────────────────────────────────────
+
+"""
+    register_runtime_types!(store, types...) → Vector{Int32}
+
+Register user-defined types at runtime by extending the TypeIDRegistry and
+TypeDataStore. Assigns TypeIDs to the given types AND all their related types
+(parameters, field types, supertypes, etc.) recursively. Returns the TypeIDs
+of the top-level types.
+
+This enables Phase 2b: the browser typeinf can handle user-defined struct types
+that weren't known at build time. TypeDataStore grows to include the new types'
+metadata (field types, supertype chain, flags, etc.).
+"""
+function register_runtime_types!(store::TypeDataStore, @nospecialize(types...))
+    registry = store.registry
+
+    # Phase 1: Assign TypeIDs for all requested types
+    # safe_get_type_id recursively assigns IDs for parameters, fields, etc.
+    ids = Int32[safe_get_type_id(registry, t) for t in types]
+
+    # Phase 2: Build TypeData entries for ALL newly assigned types.
+    # extract_type_data may assign more types (via safe_get_type_id for
+    # parameters, field types, supertypes), so loop until stable.
+    while length(store.data) < length(registry.id_to_type)
+        batch_end = length(registry.id_to_type)
+        for i in (length(store.data) + 1):batch_end
+            type_id = Int32(i - 1)
+            t = registry.id_to_type[i]
+            td = extract_type_data(registry, t, type_id)
+            push!(store.data, td)
+        end
+        # extract_type_data may have added more types via safe_get_type_id
+    end
+
+    return ids
+end
+
 # ─── Statistics ───────────────────────────────────────────────────────────────
 
 function store_stats(store::TypeDataStore)
