@@ -92,5 +92,6 @@
     "Float64",
     "Float64"
   ],
-  "wasm_sha256": "51f222f40d4f1f25523d9e7353bb0dba9ac1e2d549f0a80a130efd121c43fbf0"
+  "wasm_sha256": "51f222f40d4f1f25523d9e7353bb0dba9ac1e2d549f0a80a130efd121c43fbf0",
+  "julia_version": "1.13"
 }

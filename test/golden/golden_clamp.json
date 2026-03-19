@@ -152,5 +152,6 @@
   "arg_types": [
     "Int64"
   ],
-  "wasm_sha256": "ab3a657b7e121182f1fbb73e2dd20d2207b432ab3ea2bbcc02ecf01d476c6ed4"
+  "wasm_sha256": "ab3a657b7e121182f1fbb73e2dd20d2207b432ab3ea2bbcc02ecf01d476c6ed4",
+  "julia_version": "1.13"
 }

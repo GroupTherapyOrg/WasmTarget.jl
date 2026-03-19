@@ -211,5 +211,6 @@
     "Int64",
     "Int64"
   ],
-  "wasm_sha256": "3bc584e69023bb9018b6ba0bd252b00f4a43bcb16c95c370c45096e7f3bacc32"
+  "wasm_sha256": "3bc584e69023bb9018b6ba0bd252b00f4a43bcb16c95c370c45096e7f3bacc32",
+  "julia_version": "1.13"
 }

@@ -148,6 +148,7 @@ for (name, f, arg_types, test_inputs_list) in GOLDEN_FUNCTIONS
         "wasm_size" => length(wasm_bytes),
         "wasm_sha256" => bytes2hex(SHA.sha256(wasm_bytes)),
         "test_cases" => expected_results,
+        "julia_version" => string(VERSION.major, ".", VERSION.minor),
     )
 
     filepath = joinpath(GOLDEN_DIR, "$name.json")

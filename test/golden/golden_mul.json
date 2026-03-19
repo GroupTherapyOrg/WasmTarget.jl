@@ -99,5 +99,6 @@
     "Int64",
     "Int64"
   ],
-  "wasm_sha256": "54cca1f6e08a0cf93bdd14c1b63eadcaa3c5e0e13bf6dd3481ba436d53e5e2a2"
+  "wasm_sha256": "54cca1f6e08a0cf93bdd14c1b63eadcaa3c5e0e13bf6dd3481ba436d53e5e2a2",
+  "julia_version": "1.13"
 }

@@ -80,5 +80,6 @@
   "arg_types": [
     "Int64"
   ],
-  "wasm_sha256": "6fa409ee8a5ee036de0f190870f7a7845096d5c9581e6eab107c1c80035b2b84"
+  "wasm_sha256": "6fa409ee8a5ee036de0f190870f7a7845096d5c9581e6eab107c1c80035b2b84",
+  "julia_version": "1.13"
 }

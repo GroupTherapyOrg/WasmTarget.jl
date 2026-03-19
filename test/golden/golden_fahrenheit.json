@@ -106,5 +106,6 @@
   "arg_types": [
     "Float64"
   ],
-  "wasm_sha256": "30eec54492771588c15a2b8813308dc0ca0c9ecfa279730bcf9fc7503eef0652"
+  "wasm_sha256": "30eec54492771588c15a2b8813308dc0ca0c9ecfa279730bcf9fc7503eef0652",
+  "julia_version": "1.13"
 }
