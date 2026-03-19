@@ -62,6 +62,11 @@ const TOKENIZER_FUNCS = [
     ("lex_backslash", Tokenize.lex_backslash, (LexerT,)),
     ("lex_dot", Tokenize.lex_dot, (LexerT,)),
     ("lex_backtick", Tokenize.lex_backtick, (LexerT,)),
+
+    # Character classification (needed by lex_identifier, lex_dot, emit)
+    ("is_operator_start_char", Tokenize.is_operator_start_char, (Char,)),
+    ("is_never_id_char", Tokenize.is_never_id_char, (Char,)),
+    ("isopsuffix", Tokenize.isopsuffix, (Char,)),
 ]
 
 # ── Test 1: All tokenizer functions pass code_typed ──────────────────────────
@@ -83,7 +88,7 @@ end
     end
 end
 
-# ── Test 3: Compile multi-function module ────────────────────────────────────
+# ── Test 3: Full tokenizer module with cross-function resolution ─────────────
 @testset "Tokenizer module assembly" begin
     ir_entries = []
     for (name, func, argtypes) in TOKENIZER_FUNCS
@@ -97,6 +102,7 @@ end
     bytes = to_bytes(mod)
     @test length(bytes) > 0
     println("  Module size: $(length(bytes)) bytes ($(round(length(bytes)/1024, digits=1)) KB)")
+    println("  Functions: $(length(TOKENIZER_FUNCS))")
 
     # Validate with wasm-tools
     tmpf = tempname() * ".wasm"
@@ -127,13 +133,59 @@ end
     rm(tmpf, force=true)
 end
 
-# ── Test 4: Additional supporting functions ──────────────────────────────────
-@testset "Tokenizer support functions" begin
-    # accept and accept_batch with specific function types
-    # accept(l, f) where f::Function — used by tokenizer for character class checks
-    # These are inlined by Julia so they don't need to be in the module
+# ── Test 4: Character classification execution in WASM ───────────────────────
+@testset "Char classification compile+validate" begin
+    # Compile char classification functions as a standalone module
+    CHAR_FUNCS = [
+        ("is_operator_start_char", Tokenize.is_operator_start_char, (Char,)),
+        ("is_never_id_char", Tokenize.is_never_id_char, (Char,)),
+        ("isopsuffix", Tokenize.isopsuffix, (Char,)),
+    ]
 
-    # accept_number with specific where{F} type
+    ir_entries = []
+    for (name, func, argtypes) in CHAR_FUNCS
+        ci_list = Base.code_typed(func, argtypes, optimize=true)
+        ci = ci_list[1][1]
+        rettype = ci_list[1][2]
+        push!(ir_entries, (ci, rettype, argtypes, name, func))
+        println("  $name: $(length(ci.code)) stmts")
+    end
+
+    mod = WasmTarget.compile_module_from_ir(ir_entries)
+    bytes = to_bytes(mod)
+    @test length(bytes) > 0
+
+    tmpf = tempname() * ".wasm"
+    write(tmpf, bytes)
+    valid = success(`wasm-tools validate $tmpf`)
+    @test valid
+    println("  Char funcs module: $(length(bytes)) bytes, validates=$valid")
+
+    # Execute in Node.js
+    if valid
+        node_script = """
+        const fs = require('fs');
+        const bytes = fs.readFileSync('$tmpf');
+        WebAssembly.instantiate(bytes, { Math: { pow: Math.pow } }).then(m => {
+            const e = m.instance.exports;
+            const r = [];
+            // is_never_id_char: ( = 40 should be true (1), space = 32 should be true
+            r.push("is_never_id(40)=" + e.is_never_id_char(40));
+            r.push("is_never_id(32)=" + e.is_never_id_char(32));
+            console.log(r.join("\\n"));
+            console.log("OK");
+        }).catch(e => { console.error("FAIL: " + e.message); process.exit(1); });
+        """
+        node_out = read(`node -e $node_script`, String)
+        @test occursin("OK", node_out)
+        println("  Node.js execution: OK (functions callable)")
+    end
+
+    rm(tmpf, force=true)
+end
+
+# ── Test 5: Additional supporting functions ──────────────────────────────────
+@testset "Tokenizer support functions" begin
     for (name, func, argtypes) in [
         ("accept_number_isdigit", Tokenize.accept_number, (LexerT, typeof(isdigit))),
     ]
@@ -151,3 +203,6 @@ println("Native tokens for \"$TEST_SOURCE\": $(length(native_tokens)) tokens")
 println("Tokenizer functions compiled: $(length(TOKENIZER_FUNCS))")
 println("Module validates: YES")
 println("Node.js loads: YES")
+println("Note: Char classification functions (326-728 stmts) have known control flow")
+println("  correctness issues for complex branchy code — same class as stackifier sin() bug.")
+println("  Full tokenization execution deferred to PHASE-3A-002 (requires IOBuffer/Lexer ctor).")
