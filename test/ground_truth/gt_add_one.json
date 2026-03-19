@@ -1,13 +1,25 @@
 {
-  "generated": "2026-03-19T02:39:55.707",
   "name": "gt_add_one",
+  "julia_version": "1.12.4",
   "entries": [
+    {
+      "expected": 1,
+      "args": [
+        0
+      ]
+    },
     {
       "expected": 6,
       "args": [
         5
       ]
+    },
+    {
+      "expected": 0,
+      "args": [
+        -1
+      ]
     }
   ],
-  "julia_version": "1.13.0-beta2"
+  "generated": "2026-03-19T03:04:38.393"
 }
