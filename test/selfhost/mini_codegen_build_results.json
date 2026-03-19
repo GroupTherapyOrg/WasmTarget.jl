@@ -1,0 +1,29 @@
+{
+  "compile_time_s": 43.13,
+  "functions_compiled": 9,
+  "function_names": [
+    "encode_leb128_signed_i32",
+    "encode_leb128_signed_i64",
+    "encode_leb128_unsigned",
+    "compile_const_value_i32",
+    "compile_const_value_i64",
+    "compile_const_value_f64",
+    "compile_const_value_bool",
+    "get_concrete_wasm_type",
+    "generate_body"
+  ],
+  "module_functions": 10,
+  "module_exports": 9,
+  "excluded_large_functions": [
+    "compile_statement (24K stmts — too large for initial build)",
+    "compile_call (132K stmts — too large for initial build)",
+    "compile_invoke (146K stmts — too large for initial build)"
+  ],
+  "module_types": 133,
+  "story": "PHASE-1M-004",
+  "version": "v2-targeted",
+  "wasm_kb": 43.1,
+  "acceptance": "PASS (< 5 MB)",
+  "timestamp": "2026-03-18T16:36:05.312",
+  "wasm_bytes": 44089
+}
