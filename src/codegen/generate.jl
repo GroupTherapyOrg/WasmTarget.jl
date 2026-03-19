@@ -171,8 +171,14 @@ function generate_body(ctx::CompilationContext)::Vector{UInt8}
     # with empty stack. Two patterns:
     # Pattern 1: [end] [return] [unreachable] [end] — dead return before unreachable
     # Pattern 2: [return] [end] [return] [end] — both if/else branches return
+    # IMPORTANT: 0x0b (END opcode) also appears as LEB128 operands (e.g., local index 11).
+    # To avoid false positives, verify that the preceding byte is NOT an instruction
+    # that takes a LEB128 operand (local.get=0x20, local.set=0x21, local.tee=0x22,
+    # global.get=0x23, global.set=0x24, br=0x0c, br_if=0x0d, call=0x10, etc.).
     if length(bytes) >= 4 && bytes[end] == Opcode.END
-        if bytes[end - 1] == 0x00 && bytes[end - 2] == Opcode.RETURN && bytes[end - 3] == Opcode.END
+        is_end3_real = bytes[end - 3] == Opcode.END && (length(bytes) < 5 ||
+            !(bytes[end - 4] in (0x20, 0x21, 0x22, 0x23, 0x24, 0x0c, 0x0d, 0x10, 0x11, 0x41, 0x42)))
+        if bytes[end - 1] == 0x00 && bytes[end - 2] == Opcode.RETURN && is_end3_real
             bytes[end - 2] = 0x00  # Replace RETURN with UNREACHABLE
         elseif bytes[end - 1] == Opcode.RETURN && bytes[end - 2] == Opcode.END && bytes[end - 3] == Opcode.RETURN
             bytes[end - 1] = 0x00  # Replace dead RETURN with UNREACHABLE
