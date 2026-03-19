@@ -2500,8 +2500,22 @@ function serialize_ir_value(val)
         return Dict("_t" => "type", "name" => serialize_type_name(val))
     elseif val isa Expr
         return serialize_ir_stmt(val)
-    elseif val isa Function || val isa Core.Builtin
+    elseif val isa Core.Builtin
         return Dict("_t" => "builtin", "name" => string(nameof(val)))
+    elseif val isa Function
+        mod = parentmodule(val)
+        return Dict("_t" => "function", "name" => string(nameof(val)), "mod" => string(mod))
+    elseif val isa Core.MethodInstance
+        sig = val.specTypes
+        func_name = string(sig.parameters[1].instance)
+        arg_types = [serialize_type_name(p) for p in sig.parameters[2:end]]
+        return Dict("_t" => "method_instance", "func" => func_name, "sig" => arg_types)
+    elseif isdefined(Core, :CodeInstance) && val isa Core.CodeInstance
+        mi = val.def
+        sig = mi.specTypes
+        func_name = string(sig.parameters[1].instance)
+        arg_types = [serialize_type_name(p) for p in sig.parameters[2:end]]
+        return Dict("_t" => "code_instance", "func" => func_name, "sig" => arg_types)
     else
         return Dict("_t" => "opaque", "repr" => repr(val), "jt" => string(typeof(val)))
     end
@@ -2678,6 +2692,19 @@ function deserialize_ir_value(d)
         return getfield(Core.Intrinsics, Symbol(d["name"]))
     elseif tag == "builtin"
         return getfield(Core, Symbol(d["name"]))
+    elseif tag == "function"
+        mod_str = get(d, "mod", "Main")
+        mod = mod_str == "Core" ? Core : mod_str == "Base" ? Base : Main
+        name = Symbol(d["name"])
+        try
+            return getfield(mod, name)
+        catch
+            # Fallback: try Base then Main
+            for m in (Base, Main)
+                try return getfield(m, name) catch end
+            end
+            return GlobalRef(mod, name)
+        end
     elseif tag == "globalref"
         mod = d["mod"] == "Core" ? Core : d["mod"] == "Base" ? Base : Main
         return GlobalRef(mod, Symbol(d["name"]))
@@ -2704,6 +2731,25 @@ function deserialize_ir_value(d)
         return deserialize_ir_stmt(d)
     elseif tag == "slot"
         return Core.SlotNumber(d["id"])
+    elseif tag == "method_instance" || tag == "code_instance"
+        # Reconstruct MethodInstance from function name + arg types
+        func_name = d["func"]
+        arg_types = Tuple(deserialize_type_name.(d["sig"]))
+        try
+            func = Core.eval(Main, Meta.parse(func_name))
+            sig = Tuple{typeof(func), arg_types...}
+            mi = Base.method_instances(func, arg_types)[1]
+            if tag == "code_instance" && isdefined(Core, :CodeInstance)
+                # For CodeInstance, wrap the MI
+                ci_typed = Base.code_typed(func, arg_types)[1]
+                # Just return the MI — the codegen handles both MI and CI
+                return mi
+            end
+            return mi
+        catch
+            # If we can't reconstruct the MI, return nothing — codegen will handle
+            return nothing
+        end
     elseif tag == "undef"
         return nothing
     else
