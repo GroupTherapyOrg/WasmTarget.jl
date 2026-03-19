@@ -1817,9 +1817,13 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
                         end
                     end
                 elseif expected_wasm isa ConcreteRef || expected_wasm === StructRef || expected_wasm === ArrayRef || expected_wasm === AnyRef
-                    # Ref-typed field: check for numeric local mismatch
+                    # Ref-typed field: check for numeric local or constant mismatch
                     is_numeric_arg = false
-                    if length(arg_bytes) >= 2 && arg_bytes[1] == 0x20
+                    # SELFHOST-008: Check for numeric constants (i32.const 0 from nothing, etc.)
+                    ends_with_ref_producing_gc = has_ref_producing_gc_op(arg_bytes)
+                    if length(arg_bytes) >= 1 && (arg_bytes[1] == 0x41 || arg_bytes[1] == 0x42 || arg_bytes[1] == 0x43 || arg_bytes[1] == 0x44) && !ends_with_ref_producing_gc
+                        is_numeric_arg = true
+                    elseif length(arg_bytes) >= 2 && arg_bytes[1] == 0x20
                         src_idx = 0; shift = 0; leb_end = 0
                         for bi in 2:length(arg_bytes)
                             b = arg_bytes[bi]

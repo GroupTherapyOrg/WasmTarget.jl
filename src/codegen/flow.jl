@@ -513,6 +513,32 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::C
                 return true
             end
             return false
+        elseif phi_local_type === AnyRef && (edge_val_type === I32 || edge_val_type === I64 || edge_val_type === F32 || edge_val_type === F64)
+            # SELFHOST-008: Box numeric value for AnyRef phi local (Union{Nothing,T}).
+            # When nothing is compiled as i32.const 0 but the phi local is anyref,
+            # we need ref.null any for nothing, or boxing for real numeric values.
+            if (val === nothing || (val isa GlobalRef && val.name === :nothing))
+                # nothing → ref.null any
+                push!(bytes, Opcode.REF_NULL)
+                push!(bytes, UInt8(AnyRef))
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(local_idx))
+                return true
+            end
+            # Real numeric value → box to anyref via struct.new
+            value_bytes = compile_value(val, ctx)
+            if !isempty(value_bytes)
+                emit_box_type_id!(bytes, ctx.type_registry, edge_val_type)
+                append!(bytes, value_bytes)
+                box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.STRUCT_NEW)
+                append!(bytes, encode_leb128_unsigned(box_type))
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(local_idx))
+                return true
+            end
+            return false
         elseif phi_local_type === ExternRef && (edge_val_type isa ConcreteRef || edge_val_type === StructRef || edge_val_type === ArrayRef || edge_val_type === AnyRef)
             # PURE-3113: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion
             # Mirrors the handling in set_phi_locals_for_edge! (line 10213) and compile_phi_value (line 9825)
