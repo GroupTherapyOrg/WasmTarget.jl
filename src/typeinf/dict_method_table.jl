@@ -27,16 +27,42 @@ struct DictMethodTable <: MethodTableView
     world::UInt64
     intersections::Dict{Tuple{Any,Any}, Any}           # (a, b) → typeintersect(a, b)
     intersections_with_env::Dict{Tuple{Any,Any}, Any}   # (a, b) → SimpleVector[result, env]
+    missing_sigs::Vector{Any}                            # PHASE-2-INT-003: diagnostic log of misses
 end
 
 function DictMethodTable(world::UInt64)
     DictMethodTable(Dict{Any, MethodLookupResult}(), world,
                     Dict{Tuple{Any,Any}, Any}(),
-                    Dict{Tuple{Any,Any}, Any}())
+                    Dict{Tuple{Any,Any}, Any}(),
+                    Any[])
 end
 
 function Core.Compiler.findall(sig::Type, table::DictMethodTable; limit::Int=Int(typemax(Int32)))
-    return get(table.methods, sig, nothing)
+    result = get(table.methods, sig, nothing)
+    if result === nothing
+        push!(table.missing_sigs, sig)
+    end
+    return result
+end
+
+"""
+    report_missing_signatures(table::DictMethodTable; verbose=false)
+
+Report signatures that were looked up but not found in the method table.
+Returns a Dict mapping missing sigs to their lookup count.
+"""
+function report_missing_signatures(table::DictMethodTable; verbose::Bool=false)
+    counts = Dict{Any, Int}()
+    for sig in table.missing_sigs
+        counts[sig] = get(counts, sig, 0) + 1
+    end
+    if verbose && !isempty(counts)
+        println("⚠ $(length(counts)) missing method signatures ($(length(table.missing_sigs)) total lookups):")
+        for (sig, count) in sort(collect(counts); by=last, rev=true)
+            println("  [$count×] $sig")
+        end
+    end
+    return counts
 end
 
 # Required MethodTableView interface — DictMethodTable is NOT an overlay
@@ -378,6 +404,7 @@ function populate_transitive(signatures::Vector; world::UInt64=Base.get_world_co
     for sig in signatures
         lookup = Core.Compiler.findall(sig, native_mt; limit=3)
         lookup === nothing && continue
+        isempty(lookup.matches) && continue
         mi = Core.Compiler.specialize_method(first(lookup.matches))
         src = Core.Compiler.retrieve_code_info(mi, world)
         src === nothing && continue
