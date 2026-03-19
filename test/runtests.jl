@@ -5905,4 +5905,28 @@ struct TypeHierS2 x::Int32 end
         end
     end
 
+    # Phase 42: Full Self-Hosting Parity (PHASE-3-T02)
+    # Runs parity_50.jl — 50 functions compiled via server path, 86 test cases
+    @testset "Phase 42: Self-Hosting Parity (50 functions)" begin
+        parity_script = joinpath(@__DIR__, "selfhost", "parity_50.jl")
+        if isfile(parity_script)
+            julia_cmd = Base.julia_cmd()
+            output = try
+                read(`$julia_cmd --project=. $parity_script`, String)
+            catch e
+                "SUBPROCESS FAILED: $(sprint(showerror, e))"
+            end
+            # Check for success: "Results: N/N CORRECT (0 failed)"
+            result_match = match(r"Results: (\d+)/(\d+) CORRECT \((\d+) failed\)", output)
+            all_correct = result_match !== nothing && result_match[1] == result_match[2] && result_match[3] == "0"
+
+            @test all_correct
+            if !all_correct
+                println("  Subprocess output (last 500 chars): ", output[max(1,end-499):end])
+            end
+        else
+            @test_broken false  # parity_50.jl not found
+        end
+    end
+
 end
