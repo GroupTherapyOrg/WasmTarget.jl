@@ -5877,4 +5877,32 @@ struct TypeHierS2 x::Int32 end
 
     end
 
+    # Phase 41: Browser TypeInf Path (PHASE-2-T03)
+    # Runs as subprocess because typeinf overrides are irreversible
+    # (Base._methods_by_ftype + Base.typeintersect are overridden globally)
+    @testset "Phase 41: Browser TypeInf Path (subprocess)" begin
+        regression_script = joinpath(@__DIR__, "selfhost", "regression_typeinf.jl")
+        if isfile(regression_script)
+            julia_cmd = Base.julia_cmd()
+            output = try
+                read(`$julia_cmd --project=. $regression_script`, String)
+            catch e
+                "SUBPROCESS FAILED: $(sprint(showerror, e))"
+            end
+            # Check for key success indicators
+            has_typeinf_match = occursin("Typeinf match: 20/20", output)
+            has_exec_correct = occursin(r"Execution: \d+/\d+ correct", output)
+            exec_match = match(r"Execution: (\d+)/(\d+) correct", output)
+            all_exec_correct = exec_match !== nothing && exec_match[1] == exec_match[2]
+
+            @test has_typeinf_match
+            @test all_exec_correct
+            if !has_typeinf_match || !all_exec_correct
+                println("  Subprocess output (last 500 chars): ", output[max(1,end-499):end])
+            end
+        else
+            @test_broken false  # regression_typeinf.jl not found
+        end
+    end
+
 end
