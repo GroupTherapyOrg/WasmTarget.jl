@@ -705,3 +705,110 @@ function hexdump(bytes::Vector{UInt8}; columns=16)
         println()
     end
 end
+
+# ============================================================================
+# Dual-Path Comparison — Self-Hosting Verification (PHASE-1M-T01, PHASE-1-T01)
+# ============================================================================
+
+"""
+    compare_server_vs_mini(f, arg_types; test_args=nothing, func_name=nothing) -> NamedTuple
+
+Compare server-compiled (compile()) vs mini/frozen-compiled path.
+The mini path uses: code_typed → preprocess → serialize → deserialize → compile_module_from_ir.
+
+Compares RESULTS (not bytes) since the mini path may produce different binary layout.
+
+Returns (pass, native, server, transport, server_size, transport_size).
+"""
+function compare_server_vs_mini(f, arg_types::Tuple; test_args=nothing, func_name=nothing)
+    if func_name === nothing
+        func_name = string(nameof(f))
+    end
+    if test_args === nothing
+        # Generate default test args: zeros of the right types
+        test_args = Tuple(zero(T) for T in arg_types)
+    end
+
+    # Native Julia result
+    native = f(test_args...)
+
+    # Server path: compile() directly
+    server_bytes = WasmTarget.compile(f, arg_types)
+    server_result = nothing
+    try
+        server_result = run_wasm(server_bytes, func_name, test_args...)
+    catch e
+        server_result = "ERROR: $e"
+    end
+
+    # Transport/mini path: code_typed → preprocess → serialize → deserialize → compile
+    ci, rt = Base.code_typed(f, arg_types; optimize=true)[1]
+    entries = [(ci, rt, arg_types, func_name)]
+    preprocessed = WasmTarget.preprocess_ir_entries(entries)
+    json_str = WasmTarget.serialize_ir_entries(preprocessed)
+    received = WasmTarget.deserialize_ir_entries(json_str)
+    transport_bytes = WasmTarget.to_bytes(WasmTarget.compile_module_from_ir(received))
+    transport_result = nothing
+    try
+        transport_result = run_wasm(transport_bytes, func_name, test_args...)
+    catch e
+        transport_result = "ERROR: $e"
+    end
+
+    # Compare results (not bytes)
+    pass = (server_result == native) && (transport_result == native)
+
+    return (pass=pass, native=native, server=server_result, transport=transport_result,
+            server_size=length(server_bytes), transport_size=length(transport_bytes))
+end
+
+"""
+    compare_server_vs_selfhosted(f, arg_types; test_args=nothing, func_name=nothing) -> NamedTuple
+
+Compare server-compiled (compile()) vs self-hosted transport path.
+The self-hosted path uses: code_typed → preprocess → serialize → deserialize → compile_module_from_ir.
+
+Compares both BYTES (should be identical) and RESULTS.
+
+Returns (pass, bytes_identical, native, server, transport, server_size, transport_size).
+"""
+function compare_server_vs_selfhosted(f, arg_types::Tuple; test_args=nothing, func_name=nothing)
+    if func_name === nothing
+        func_name = string(nameof(f))
+    end
+    if test_args === nothing
+        test_args = Tuple(zero(T) for T in arg_types)
+    end
+
+    native = f(test_args...)
+
+    # Server path
+    server_bytes = WasmTarget.compile(f, arg_types)
+    server_result = nothing
+    try
+        server_result = run_wasm(server_bytes, func_name, test_args...)
+    catch e
+        server_result = "ERROR: $e"
+    end
+
+    # Self-hosted path: code_typed → preprocess → serialize → deserialize → compile_module_from_ir
+    ci, rt = Base.code_typed(f, arg_types; optimize=true)[1]
+    entries = [(ci, rt, arg_types, func_name)]
+    preprocessed = WasmTarget.preprocess_ir_entries(entries)
+    json_str = WasmTarget.serialize_ir_entries(preprocessed)
+    received = WasmTarget.deserialize_ir_entries(json_str)
+    transport_bytes = WasmTarget.to_bytes(WasmTarget.compile_module_from_ir(received))
+    transport_result = nothing
+    try
+        transport_result = run_wasm(transport_bytes, func_name, test_args...)
+    catch e
+        transport_result = "ERROR: $e"
+    end
+
+    bytes_identical = server_bytes == transport_bytes
+    pass = bytes_identical && (server_result == native) && (transport_result == native)
+
+    return (pass=pass, bytes_identical=bytes_identical, native=native,
+            server=server_result, transport=transport_result,
+            server_size=length(server_bytes), transport_size=length(transport_bytes))
+end
