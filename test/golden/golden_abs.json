@@ -1,0 +1,124 @@
+{
+  "name": "golden_abs",
+  "wasm_size": 4471,
+  "wasm_sha256": "b42dbc32708be73095d03b32f3e91d99fa92aa10beeb008102acb9af353605e9",
+  "arg_types": [
+    "Int64"
+  ],
+  "test_cases": [
+    {
+      "expected": 42,
+      "args": [
+        -42
+      ]
+    },
+    {
+      "expected": 42,
+      "args": [
+        42
+      ]
+    },
+    {
+      "expected": 0,
+      "args": [
+        0
+      ]
+    }
+  ],
+  "return_type": "Int64",
+  "codeinfo": {
+    "entries": [
+      {
+        "name": "golden_abs",
+        "slotflags": [
+          0,
+          8
+        ],
+        "slotnames": [
+          "#self#",
+          "x"
+        ],
+        "ssaflags": [
+          9336,
+          132136,
+          9336,
+          132136,
+          132136
+        ],
+        "slottypes": [
+          "typeof(golden_abs)",
+          "Int64"
+        ],
+        "arg_types": [
+          "Int64"
+        ],
+        "code": [
+          {
+            "_t": "expr",
+            "head": "call",
+            "args": [
+              {
+                "_t": "intrinsic",
+                "name": "slt_int"
+              },
+              {
+                "_t": "arg",
+                "n": 2
+              },
+              {
+                "_t": "lit",
+                "v": 0,
+                "jt": "Int64"
+              }
+            ]
+          },
+          {
+            "_t": "gotoifnot",
+            "cond": {
+              "_t": "ssa",
+              "id": 1
+            },
+            "dest": 5
+          },
+          {
+            "_t": "expr",
+            "head": "call",
+            "args": [
+              {
+                "_t": "intrinsic",
+                "name": "neg_int"
+              },
+              {
+                "_t": "arg",
+                "n": 2
+              }
+            ]
+          },
+          {
+            "_t": "return",
+            "val": {
+              "_t": "ssa",
+              "id": 3
+            }
+          },
+          {
+            "_t": "return",
+            "val": {
+              "_t": "arg",
+              "n": 2
+            }
+          }
+        ],
+        "ssavaluetypes": [
+          "Bool",
+          "Any",
+          "Int64",
+          "Any",
+          "Any"
+        ],
+        "return_type": "Int64"
+      }
+    ],
+    "version": 1
+  }
+}

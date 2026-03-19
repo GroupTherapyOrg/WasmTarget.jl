@@ -1,0 +1,206 @@
+{
+  "name": "golden_sum_to",
+  "wasm_size": 4508,
+  "wasm_sha256": "a8c478eb13e2e1f19e6fdaeeddd9c1f2860bc5c56446e433ad164d1f0fa74e39",
+  "arg_types": [
+    "Int64"
+  ],
+  "test_cases": [
+    {
+      "expected": 55,
+      "args": [
+        10
+      ]
+    },
+    {
+      "expected": 5050,
+      "args": [
+        100
+      ]
+    },
+    {
+      "expected": 0,
+      "args": [
+        0
+      ]
+    },
+    {
+      "expected": 1,
+      "args": [
+        1
+      ]
+    }
+  ],
+  "return_type": "Int64",
+  "codeinfo": {
+    "entries": [
+      {
+        "name": "golden_sum_to",
+        "slotflags": [
+          0,
+          8
+        ],
+        "slotnames": [
+          "#self#",
+          "n"
+        ],
+        "ssaflags": [
+          9336,
+          1144,
+          1144,
+          9336,
+          132136,
+          9336,
+          9336,
+          132136,
+          9336,
+          9336,
+          132136
+        ],
+        "slottypes": [
+          "typeof(golden_sum_to)",
+          "Int64"
+        ],
+        "arg_types": [
+          "Int64"
+        ],
+        "code": [
+          {
+            "_t": "nothing"
+          },
+          {
+            "_t": "phi",
+            "values": [
+              {
+                "_t": "lit",
+                "v": 1,
+                "jt": "Int64"
+              },
+              {
+                "_t": "ssa",
+                "id": 7
+              }
+            ],
+            "edges": [
+              1,
+              8
+            ]
+          },
+          {
+            "_t": "phi",
+            "values": [
+              {
+                "_t": "lit",
+                "v": 0,
+                "jt": "Int64"
+              },
+              {
+                "_t": "ssa",
+                "id": 6
+              }
+            ],
+            "edges": [
+              1,
+              8
+            ]
+          },
+          {
+            "_t": "expr",
+            "head": "call",
+            "args": [
+              {
+                "_t": "intrinsic",
+                "name": "sle_int"
+              },
+              {
+                "_t": "ssa",
+                "id": 2
+              },
+              {
+                "_t": "arg",
+                "n": 2
+              }
+            ]
+          },
+          {
+            "_t": "gotoifnot",
+            "cond": {
+              "_t": "ssa",
+              "id": 4
+            },
+            "dest": 9
+          },
+          {
+            "_t": "expr",
+            "head": "call",
+            "args": [
+              {
+                "_t": "intrinsic",
+                "name": "add_int"
+              },
+              {
+                "_t": "ssa",
+                "id": 3
+              },
+              {
+                "_t": "ssa",
+                "id": 2
+              }
+            ]
+          },
+          {
+            "_t": "expr",
+            "head": "call",
+            "args": [
+              {
+                "_t": "intrinsic",
+                "name": "add_int"
+              },
+              {
+                "_t": "ssa",
+                "id": 2
+              },
+              {
+                "_t": "lit",
+                "v": 1,
+                "jt": "Int64"
+              }
+            ]
+          },
+          {
+            "_t": "goto",
+            "label": 2
+          },
+          {
+            "_t": "nothing"
+          },
+          {
+            "_t": "nothing"
+          },
+          {
+            "_t": "return",
+            "val": {
+              "_t": "ssa",
+              "id": 3
+            }
+          }
+        ],
+        "ssavaluetypes": [
+          "Nothing",
+          "Int64",
+          "Int64",
+          "Bool",
+          "Any",
+          "Int64",
+          "Int64",
+          "Any",
+          "Nothing",
+          "Nothing",
+          "Any"
+        ],
+        "return_type": "Int64"
+      }
+    ],
+    "version": 1
+  }
+}

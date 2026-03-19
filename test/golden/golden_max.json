@@ -1,0 +1,122 @@
+{
+  "name": "golden_max",
+  "wasm_size": 4460,
+  "wasm_sha256": "b78a0257866099dea0690aff8020caf5795164bf064267efb75d8fb00eba736a",
+  "arg_types": [
+    "Int64",
+    "Int64"
+  ],
+  "test_cases": [
+    {
+      "expected": 20,
+      "args": [
+        10,
+        20
+      ]
+    },
+    {
+      "expected": 20,
+      "args": [
+        20,
+        10
+      ]
+    },
+    {
+      "expected": -3,
+      "args": [
+        -5,
+        -3
+      ]
+    },
+    {
+      "expected": 0,
+      "args": [
+        0,
+        0
+      ]
+    }
+  ],
+  "return_type": "Int64",
+  "codeinfo": {
+    "entries": [
+      {
+        "name": "golden_max",
+        "slotflags": [
+          0,
+          8,
+          8
+        ],
+        "slotnames": [
+          "#self#",
+          "x",
+          "y"
+        ],
+        "ssaflags": [
+          9336,
+          132136,
+          132136,
+          132136
+        ],
+        "slottypes": [
+          "typeof(golden_max)",
+          "Int64",
+          "Int64"
+        ],
+        "arg_types": [
+          "Int64",
+          "Int64"
+        ],
+        "code": [
+          {
+            "_t": "expr",
+            "head": "call",
+            "args": [
+              {
+                "_t": "intrinsic",
+                "name": "slt_int"
+              },
+              {
+                "_t": "arg",
+                "n": 3
+              },
+              {
+                "_t": "arg",
+                "n": 2
+              }
+            ]
+          },
+          {
+            "_t": "gotoifnot",
+            "cond": {
+              "_t": "ssa",
+              "id": 1
+            },
+            "dest": 4
+          },
+          {
+            "_t": "return",
+            "val": {
+              "_t": "arg",
+              "n": 2
+            }
+          },
+          {
+            "_t": "return",
+            "val": {
+              "_t": "arg",
+              "n": 3
+            }
+          }
+        ],
+        "ssavaluetypes": [
+          "Bool",
+          "Any",
+          "Any",
+          "Any"
+        ],
+        "return_type": "Int64"
+      }
+    ],
+    "version": 1
+  }
+}

@@ -1,0 +1,242 @@
+{
+  "name": "golden_branch_compute",
+  "wasm_size": 4542,
+  "wasm_sha256": "7ecada4bf96596f8c0fcd8ff89398e723fe0127065fe640f0c584fc8d9c00a16",
+  "arg_types": [
+    "Int64"
+  ],
+  "test_cases": [
+    {
+      "expected": 10,
+      "args": [
+        5
+      ]
+    },
+    {
+      "expected": 20,
+      "args": [
+        15
+      ]
+    },
+    {
+      "expected": 40,
+      "args": [
+        25
+      ]
+    }
+  ],
+  "return_type": "Int64",
+  "codeinfo": {
+    "entries": [
+      {
+        "name": "golden_branch_compute",
+        "slotflags": [
+          0,
+          8
+        ],
+        "slotnames": [
+          "#self#",
+          "x"
+        ],
+        "ssaflags": [
+          9336,
+          132136,
+          9336,
+          132136,
+          9336,
+          1144,
+          9336,
+          132136,
+          9336,
+          9336,
+          132136,
+          9336,
+          9336,
+          132136
+        ],
+        "slottypes": [
+          "typeof(golden_branch_compute)",
+          "Int64"
+        ],
+        "arg_types": [
+          "Int64"
+        ],
+        "code": [
+          {
+            "_t": "expr",
+            "head": "call",
+            "args": [
+              {
+                "_t": "intrinsic",
+                "name": "slt_int"
+              },
+              {
+                "_t": "lit",
+                "v": 10,
+                "jt": "Int64"
+              },
+              {
+                "_t": "arg",
+                "n": 2
+              }
+            ]
+          },
+          {
+            "_t": "gotoifnot",
+            "cond": {
+              "_t": "ssa",
+              "id": 1
+            },
+            "dest": 5
+          },
+          {
+            "_t": "expr",
+            "head": "call",
+            "args": [
+              {
+                "_t": "intrinsic",
+                "name": "mul_int"
+              },
+              {
+                "_t": "arg",
+                "n": 2
+              },
+              {
+                "_t": "lit",
+                "v": 2,
+                "jt": "Int64"
+              }
+            ]
+          },
+          {
+            "_t": "goto",
+            "label": 6
+          },
+          {
+            "_t": "expr",
+            "head": "call",
+            "args": [
+              {
+                "_t": "intrinsic",
+                "name": "add_int"
+              },
+              {
+                "_t": "arg",
+                "n": 2
+              },
+              {
+                "_t": "lit",
+                "v": 5,
+                "jt": "Int64"
+              }
+            ]
+          },
+          {
+            "_t": "phi",
+            "values": [
+              {
+                "_t": "ssa",
+                "id": 3
+              },
+              {
+                "_t": "ssa",
+                "id": 5
+              }
+            ],
+            "edges": [
+              4,
+              5
+            ]
+          },
+          {
+            "_t": "expr",
+            "head": "call",
+            "args": [
+              {
+                "_t": "intrinsic",
+                "name": "slt_int"
+              },
+              {
+                "_t": "lit",
+                "v": 20,
+                "jt": "Int64"
+              },
+              {
+                "_t": "ssa",
+                "id": 6
+              }
+            ]
+          },
+          {
+            "_t": "gotoifnot",
+            "cond": {
+              "_t": "ssa",
+              "id": 7
+            },
+            "dest": 12
+          },
+          {
+            "_t": "expr",
+            "head": "call",
+            "args": [
+              {
+                "_t": "intrinsic",
+                "name": "sub_int"
+              },
+              {
+                "_t": "ssa",
+                "id": 6
+              },
+              {
+                "_t": "lit",
+                "v": 10,
+                "jt": "Int64"
+              }
+            ]
+          },
+          {
+            "_t": "nothing"
+          },
+          {
+            "_t": "return",
+            "val": {
+              "_t": "ssa",
+              "id": 9
+            }
+          },
+          {
+            "_t": "nothing"
+          },
+          {
+            "_t": "nothing"
+          },
+          {
+            "_t": "return",
+            "val": {
+              "_t": "ssa",
+              "id": 6
+            }
+          }
+        ],
+        "ssavaluetypes": [
+          "Bool",
+          "Any",
+          "Int64",
+          "Any",
+          "Int64",
+          "Int64",
+          "Bool",
+          "Any",
+          "Int64",
+          "Nothing",
+          "Any",
+          "Nothing",
+          "Nothing",
+          "Any"
+        ],
+        "return_type": "Int64"
+      }
+    ],
+    "version": 1
+  }
+}

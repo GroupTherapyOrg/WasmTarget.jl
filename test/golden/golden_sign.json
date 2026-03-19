@@ -1,0 +1,181 @@
+{
+  "name": "golden_sign",
+  "wasm_size": 4479,
+  "wasm_sha256": "6a3b6912f1439f39daff7ee808fb183a96a3fc81f7b1c6cbe42cd0402e46009a",
+  "arg_types": [
+    "Int64"
+  ],
+  "test_cases": [
+    {
+      "expected": 1,
+      "args": [
+        42
+      ]
+    },
+    {
+      "expected": -1,
+      "args": [
+        -7
+      ]
+    },
+    {
+      "expected": 0,
+      "args": [
+        0
+      ]
+    }
+  ],
+  "return_type": "Int64",
+  "codeinfo": {
+    "entries": [
+      {
+        "name": "golden_sign",
+        "slotflags": [
+          0,
+          8
+        ],
+        "slotnames": [
+          "#self#",
+          "x"
+        ],
+        "ssaflags": [
+          9336,
+          132136,
+          9336,
+          9336,
+          132136,
+          9336,
+          132136,
+          9336,
+          9336,
+          132136,
+          9336,
+          9336,
+          132136
+        ],
+        "slottypes": [
+          "typeof(golden_sign)",
+          "Int64"
+        ],
+        "arg_types": [
+          "Int64"
+        ],
+        "code": [
+          {
+            "_t": "expr",
+            "head": "call",
+            "args": [
+              {
+                "_t": "intrinsic",
+                "name": "slt_int"
+              },
+              {
+                "_t": "lit",
+                "v": 0,
+                "jt": "Int64"
+              },
+              {
+                "_t": "arg",
+                "n": 2
+              }
+            ]
+          },
+          {
+            "_t": "gotoifnot",
+            "cond": {
+              "_t": "ssa",
+              "id": 1
+            },
+            "dest": 6
+          },
+          {
+            "_t": "nothing"
+          },
+          {
+            "_t": "nothing"
+          },
+          {
+            "_t": "return",
+            "val": {
+              "_t": "lit",
+              "v": 1,
+              "jt": "Int64"
+            }
+          },
+          {
+            "_t": "expr",
+            "head": "call",
+            "args": [
+              {
+                "_t": "intrinsic",
+                "name": "slt_int"
+              },
+              {
+                "_t": "arg",
+                "n": 2
+              },
+              {
+                "_t": "lit",
+                "v": 0,
+                "jt": "Int64"
+              }
+            ]
+          },
+          {
+            "_t": "gotoifnot",
+            "cond": {
+              "_t": "ssa",
+              "id": 6
+            },
+            "dest": 11
+          },
+          {
+            "_t": "nothing"
+          },
+          {
+            "_t": "nothing"
+          },
+          {
+            "_t": "return",
+            "val": {
+              "_t": "lit",
+              "v": -1,
+              "jt": "Int64"
+            }
+          },
+          {
+            "_t": "nothing"
+          },
+          {
+            "_t": "nothing"
+          },
+          {
+            "_t": "return",
+            "val": {
+              "_t": "lit",
+              "v": 0,
+              "jt": "Int64"
+            }
+          }
+        ],
+        "ssavaluetypes": [
+          "Bool",
+          "Any",
+          "Nothing",
+          "Nothing",
+          "Any",
+          "Bool",
+          "Any",
+          "Nothing",
+          "Nothing",
+          "Any",
+          "Nothing",
+          "Nothing",
+          "Any"
+        ],
+        "return_type": "Int64"
+      }
+    ],
+    "version": 1
+  }
+}

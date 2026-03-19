@@ -1,0 +1,84 @@
+{
+  "name": "golden_neg",
+  "wasm_size": 4454,
+  "wasm_sha256": "6b60f17a73f2c9f0ea2116230ad4731c51b111fe53343426b1b3e8d67462432d",
+  "arg_types": [
+    "Int64"
+  ],
+  "test_cases": [
+    {
+      "expected": -42,
+      "args": [
+        42
+      ]
+    },
+    {
+      "expected": 0,
+      "args": [
+        0
+      ]
+    },
+    {
+      "expected": 99,
+      "args": [
+        -99
+      ]
+    }
+  ],
+  "return_type": "Int64",
+  "codeinfo": {
+    "entries": [
+      {
+        "name": "golden_neg",
+        "slotflags": [
+          0,
+          8
+        ],
+        "slotnames": [
+          "#self#",
+          "x"
+        ],
+        "ssaflags": [
+          9336,
+          132136
+        ],
+        "slottypes": [
+          "typeof(golden_neg)",
+          "Int64"
+        ],
+        "arg_types": [
+          "Int64"
+        ],
+        "code": [
+          {
+            "_t": "expr",
+            "head": "call",
+            "args": [
+              {
+                "_t": "intrinsic",
+                "name": "neg_int"
+              },
+              {
+                "_t": "arg",
+                "n": 2
+              }
+            ]
+          },
+          {
+            "_t": "return",
+            "val": {
+              "_t": "ssa",
+              "id": 1
+            }
+          }
+        ],
+        "ssavaluetypes": [
+          "Int64",
+          "Any"
+        ],
+        "return_type": "Int64"
+      }
+    ],
+    "version": 1
+  }
+}

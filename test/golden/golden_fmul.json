@@ -1,0 +1,96 @@
+{
+  "name": "golden_fmul",
+  "wasm_size": 4448,
+  "wasm_sha256": "1b78b576da71ab585e692ebb89754d2f9089b4034a6a84552bfb4d1931a029b3",
+  "arg_types": [
+    "Float64",
+    "Float64"
+  ],
+  "test_cases": [
+    {
+      "expected": 12.0,
+      "args": [
+        3.0,
+        4.0
+      ]
+    },
+    {
+      "expected": 1.0,
+      "args": [
+        0.5,
+        2.0
+      ]
+    },
+    {
+      "expected": -3.0,
+      "args": [
+        -1.0,
+        3.0
+      ]
+    }
+  ],
+  "return_type": "Float64",
+  "codeinfo": {
+    "entries": [
+      {
+        "name": "golden_fmul",
+        "slotflags": [
+          0,
+          8,
+          8
+        ],
+        "slotnames": [
+          "#self#",
+          "x",
+          "y"
+        ],
+        "ssaflags": [
+          9336,
+          132136
+        ],
+        "slottypes": [
+          "typeof(golden_fmul)",
+          "Float64",
+          "Float64"
+        ],
+        "arg_types": [
+          "Float64",
+          "Float64"
+        ],
+        "code": [
+          {
+            "_t": "expr",
+            "head": "call",
+            "args": [
+              {
+                "_t": "intrinsic",
+                "name": "mul_float"
+              },
+              {
+                "_t": "arg",
+                "n": 2
+              },
+              {
+                "_t": "arg",
+                "n": 3
+              }
+            ]
+          },
+          {
+            "_t": "return",
+            "val": {
+              "_t": "ssa",
+              "id": 1
+            }
+          }
+        ],
+        "ssavaluetypes": [
+          "Float64",
+          "Any"
+        ],
+        "return_type": "Float64"
+      }
+    ],
+    "version": 1
+  }
+}

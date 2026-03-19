@@ -1,0 +1,103 @@
+{
+  "name": "golden_mul",
+  "wasm_size": 4452,
+  "wasm_sha256": "1fd91393ee85b5b5d42e6d7bd858d39c5a390627852b967e83fa641f8df6ef45",
+  "arg_types": [
+    "Int64",
+    "Int64"
+  ],
+  "test_cases": [
+    {
+      "expected": 42,
+      "args": [
+        6,
+        7
+      ]
+    },
+    {
+      "expected": 0,
+      "args": [
+        0,
+        99
+      ]
+    },
+    {
+      "expected": -12,
+      "args": [
+        -3,
+        4
+      ]
+    },
+    {
+      "expected": 10000,
+      "args": [
+        100,
+        100
+      ]
+    }
+  ],
+  "return_type": "Int64",
+  "codeinfo": {
+    "entries": [
+      {
+        "name": "golden_mul",
+        "slotflags": [
+          0,
+          8,
+          8
+        ],
+        "slotnames": [
+          "#self#",
+          "x",
+          "y"
+        ],
+        "ssaflags": [
+          9336,
+          132136
+        ],
+        "slottypes": [
+          "typeof(golden_mul)",
+          "Int64",
+          "Int64"
+        ],
+        "arg_types": [
+          "Int64",
+          "Int64"
+        ],
+        "code": [
+          {
+            "_t": "expr",
+            "head": "call",
+            "args": [
+              {
+                "_t": "intrinsic",
+                "name": "mul_int"
+              },
+              {
+                "_t": "arg",
+                "n": 2
+              },
+              {
+                "_t": "arg",
+                "n": 3
+              }
+            ]
+          },
+          {
+            "_t": "return",
+            "val": {
+              "_t": "ssa",
+              "id": 1
+            }
+          }
+        ],
+        "ssavaluetypes": [
+          "Int64",
+          "Any"
+        ],
+        "return_type": "Int64"
+      }
+    ],
+    "version": 1
+  }
+}

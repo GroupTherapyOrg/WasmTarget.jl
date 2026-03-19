@@ -1,0 +1,110 @@
+{
+  "name": "golden_fahrenheit",
+  "wasm_size": 4486,
+  "wasm_sha256": "70c0086a1b1ac46168c27d3a20ff9ee9bf58bc844fa26d049365d4ae36e5edbf",
+  "arg_types": [
+    "Float64"
+  ],
+  "test_cases": [
+    {
+      "expected": 32.0,
+      "args": [
+        0.0
+      ]
+    },
+    {
+      "expected": 212.0,
+      "args": [
+        100.0
+      ]
+    },
+    {
+      "expected": -40.0,
+      "args": [
+        -40.0
+      ]
+    }
+  ],
+  "return_type": "Float64",
+  "codeinfo": {
+    "entries": [
+      {
+        "name": "golden_fahrenheit",
+        "slotflags": [
+          0,
+          8
+        ],
+        "slotnames": [
+          "#self#",
+          "c"
+        ],
+        "ssaflags": [
+          9336,
+          9336,
+          132136
+        ],
+        "slottypes": [
+          "typeof(golden_fahrenheit)",
+          "Float64"
+        ],
+        "arg_types": [
+          "Float64"
+        ],
+        "code": [
+          {
+            "_t": "expr",
+            "head": "call",
+            "args": [
+              {
+                "_t": "intrinsic",
+                "name": "mul_float"
+              },
+              {
+                "_t": "arg",
+                "n": 2
+              },
+              {
+                "_t": "lit",
+                "v": 1.8,
+                "jt": "Float64"
+              }
+            ]
+          },
+          {
+            "_t": "expr",
+            "head": "call",
+            "args": [
+              {
+                "_t": "intrinsic",
+                "name": "add_float"
+              },
+              {
+                "_t": "ssa",
+                "id": 1
+              },
+              {
+                "_t": "lit",
+                "v": 32.0,
+                "jt": "Float64"
+              }
+            ]
+          },
+          {
+            "_t": "return",
+            "val": {
+              "_t": "ssa",
+              "id": 2
+            }
+          }
+        ],
+        "ssavaluetypes": [
+          "Float64",
+          "Float64",
+          "Any"
+        ],
+        "return_type": "Float64"
+      }
+    ],
+    "version": 1
+  }
+}

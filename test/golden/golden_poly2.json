@@ -1,0 +1,156 @@
+{
+  "name": "golden_poly2",
+  "wasm_size": 4476,
+  "wasm_sha256": "f7d70b7ad7c0c7fc510313af153f9332a1b276564288b43363991aef8646d71d",
+  "arg_types": [
+    "Int64"
+  ],
+  "test_cases": [
+    {
+      "expected": 1,
+      "args": [
+        0
+      ]
+    },
+    {
+      "expected": 4,
+      "args": [
+        1
+      ]
+    },
+    {
+      "expected": 36,
+      "args": [
+        5
+      ]
+    },
+    {
+      "expected": 121,
+      "args": [
+        10
+      ]
+    }
+  ],
+  "return_type": "Int64",
+  "codeinfo": {
+    "entries": [
+      {
+        "name": "golden_poly2",
+        "slotflags": [
+          0,
+          8
+        ],
+        "slotnames": [
+          "#self#",
+          "x"
+        ],
+        "ssaflags": [
+          9336,
+          9336,
+          9336,
+          9336,
+          132136
+        ],
+        "slottypes": [
+          "typeof(golden_poly2)",
+          "Int64"
+        ],
+        "arg_types": [
+          "Int64"
+        ],
+        "code": [
+          {
+            "_t": "expr",
+            "head": "call",
+            "args": [
+              {
+                "_t": "intrinsic",
+                "name": "mul_int"
+              },
+              {
+                "_t": "arg",
+                "n": 2
+              },
+              {
+                "_t": "arg",
+                "n": 2
+              }
+            ]
+          },
+          {
+            "_t": "expr",
+            "head": "call",
+            "args": [
+              {
+                "_t": "intrinsic",
+                "name": "mul_int"
+              },
+              {
+                "_t": "lit",
+                "v": 2,
+                "jt": "Int64"
+              },
+              {
+                "_t": "arg",
+                "n": 2
+              }
+            ]
+          },
+          {
+            "_t": "expr",
+            "head": "call",
+            "args": [
+              {
+                "_t": "intrinsic",
+                "name": "add_int"
+              },
+              {
+                "_t": "ssa",
+                "id": 1
+              },
+              {
+                "_t": "ssa",
+                "id": 2
+              }
+            ]
+          },
+          {
+            "_t": "expr",
+            "head": "call",
+            "args": [
+              {
+                "_t": "intrinsic",
+                "name": "add_int"
+              },
+              {
+                "_t": "ssa",
+                "id": 3
+              },
+              {
+                "_t": "lit",
+                "v": 1,
+                "jt": "Int64"
+              }
+            ]
+          },
+          {
+            "_t": "return",
+            "val": {
+              "_t": "ssa",
+              "id": 4
+            }
+          }
+        ],
+        "ssavaluetypes": [
+          "Int64",
+          "Int64",
+          "Int64",
+          "Int64",
+          "Any"
+        ],
+        "return_type": "Int64"
+      }
+    ],
+    "version": 1
+  }
+}

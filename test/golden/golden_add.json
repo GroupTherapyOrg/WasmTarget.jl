@@ -1,0 +1,103 @@
+{
+  "name": "golden_add",
+  "wasm_size": 4452,
+  "wasm_sha256": "c3353e3d50365e357a0bcd8c74cbd30ac82632193b9a07e0b941923b69ff08b8",
+  "arg_types": [
+    "Int64",
+    "Int64"
+  ],
+  "test_cases": [
+    {
+      "expected": 7,
+      "args": [
+        3,
+        4
+      ]
+    },
+    {
+      "expected": 0,
+      "args": [
+        0,
+        0
+      ]
+    },
+    {
+      "expected": 0,
+      "args": [
+        -1,
+        1
+      ]
+    },
+    {
+      "expected": 300,
+      "args": [
+        100,
+        200
+      ]
+    }
+  ],
+  "return_type": "Int64",
+  "codeinfo": {
+    "entries": [
+      {
+        "name": "golden_add",
+        "slotflags": [
+          0,
+          8,
+          8
+        ],
+        "slotnames": [
+          "#self#",
+          "x",
+          "y"
+        ],
+        "ssaflags": [
+          9336,
+          132136
+        ],
+        "slottypes": [
+          "typeof(golden_add)",
+          "Int64",
+          "Int64"
+        ],
+        "arg_types": [
+          "Int64",
+          "Int64"
+        ],
+        "code": [
+          {
+            "_t": "expr",
+            "head": "call",
+            "args": [
+              {
+                "_t": "intrinsic",
+                "name": "add_int"
+              },
+              {
+                "_t": "arg",
+                "n": 2
+              },
+              {
+                "_t": "arg",
+                "n": 3
+              }
+            ]
+          },
+          {
+            "_t": "return",
+            "val": {
+              "_t": "ssa",
+              "id": 1
+            }
+          }
+        ],
+        "ssavaluetypes": [
+          "Int64",
+          "Any"
+        ],
+        "return_type": "Int64"
+      }
+    ],
+    "version": 1
+  }
+}
