@@ -2538,6 +2538,14 @@ function serialize_ir_stmt(stmt)
     elseif stmt isa Core.PiNode
         return Dict("_t" => "pi", "val" => serialize_ir_value(stmt.val),
                      "typ" => serialize_type_name(stmt.typ))
+    elseif stmt isa Core.NewvarNode
+        return Dict("_t" => "newvar", "slot" => stmt.slot.id)
+    elseif stmt isa GlobalRef
+        # PHASE-2-INT-001: GlobalRef appears as standalone stmt in lowered IR
+        return Dict("_t" => "globalref_stmt", "mod" => string(stmt.mod), "name" => string(stmt.name))
+    elseif stmt isa Core.SlotNumber
+        # PHASE-2-INT-001: SlotNumber appears as standalone stmt in lowered IR
+        return Dict("_t" => "slot", "id" => stmt.id)
     elseif stmt === nothing
         return Dict("_t" => "nothing")
     else
@@ -2610,7 +2618,10 @@ function serialize_ir_entries(ir_entries::Vector)::String
             "arg_types" => [serialize_type_name(T) for T in arg_types],
             "return_type" => serialize_type_name(return_type),
             "code" => [serialize_ir_stmt(stmt) for stmt in code_info.code],
-            "ssavaluetypes" => [serialize_ssa_type(t) for t in code_info.ssavaluetypes],
+            # PHASE-2-INT-001: Handle lowered IR where ssavaluetypes is an Int (count)
+            "ssavaluetypes" => code_info.ssavaluetypes isa Integer ?
+                code_info.ssavaluetypes :
+                [serialize_ssa_type(t) for t in code_info.ssavaluetypes],
             "slottypes" => code_info.slottypes !== nothing ?
                 [serialize_ssa_type(t) for t in code_info.slottypes] : nothing,
             "slotnames" => [string(s) for s in code_info.slotnames],
@@ -2724,6 +2735,15 @@ function deserialize_ir_stmt(d::Dict)
     elseif tag == "pi"
         return Core.PiNode(deserialize_ir_value(d["val"]),
                            deserialize_type_name(d["typ"]))
+    elseif tag == "newvar"
+        return Core.NewvarNode(Core.SlotNumber(d["slot"]))
+    elseif tag == "globalref_stmt"
+        # PHASE-2-INT-001: GlobalRef as standalone stmt (lowered IR)
+        mod = d["mod"] == "Core" ? Core : d["mod"] == "Base" ? Base : Main
+        return GlobalRef(mod, Symbol(d["name"]))
+    elseif tag == "slot"
+        # PHASE-2-INT-001: SlotNumber as standalone stmt (lowered IR)
+        return Core.SlotNumber(d["id"])
     elseif tag == "nothing"
         return nothing
     else
@@ -2777,7 +2797,12 @@ function deserialize_ir_entries(json_str::String)
     for entry in data["entries"]
         ci = copy(template)
         ci.code = Any[deserialize_ir_stmt(s) for s in entry["code"]]
-        ci.ssavaluetypes = Any[deserialize_ssa_type(t) for t in entry["ssavaluetypes"]]
+        # PHASE-2-INT-001: Handle lowered IR where ssavaluetypes is an Int (count)
+        if entry["ssavaluetypes"] isa Integer
+            ci.ssavaluetypes = entry["ssavaluetypes"]
+        else
+            ci.ssavaluetypes = Any[deserialize_ssa_type(t) for t in entry["ssavaluetypes"]]
+        end
         if entry["slottypes"] !== nothing
             ci.slottypes = Any[deserialize_ssa_type(t) for t in entry["slottypes"]]
         end
