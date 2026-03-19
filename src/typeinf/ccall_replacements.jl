@@ -2065,7 +2065,7 @@ end
 # time via preexpand_generated!() and stored in PreDecompressedCodeInfo.
 #
 # The overrides (in dict_method_table.jl):
-#   - Base._methods_by_ftype → DictMethodTable lookup when _WASM_METHOD_TABLE is set
+#   - Base._methods_by_ftype → wasm_matching_methods (always reimpl, PHASE-2B-006)
 #   - Core.Compiler.get_staged → PreDecompressedCodeInfo lookup when _WASM_CODE_CACHE is set
 #
 # Functions unblocked (2): may_invoke_generator, get_staged
@@ -2134,14 +2134,12 @@ function verify_phase_d2()
         failed += 1
     end
 
-    # Our override via DictMethodTable
+    # Our override via reimplementation (always on — PHASE-2B-006)
     interp = build_wasm_interpreter([(+, (Int64, Int64))])
     table = interp.method_table.table
-    _WASM_METHOD_TABLE[] = table
     override_result = Base._methods_by_ftype(Tuple{typeof(+), Int64, Int64}, nothing,
         1, table.world, false,
         Ref{UInt}(typemin(UInt)), Ref{UInt}(typemax(UInt)), Ref{Int32}(0))
-    _WASM_METHOD_TABLE[] = nothing
     if override_result isa Vector && length(override_result) >= 1
         passed += 1
     else
@@ -2179,10 +2177,8 @@ function verify_phase_d2()
     # For non-@generated, retrieve_code_info should return CodeInfo via def.source
     mi_plus = Core.Compiler.specialize_method(first(methods(+, (Int64, Int64))),
         Tuple{typeof(+), Int64, Int64}, Core.svec())
-    _WASM_METHOD_TABLE[] = table
     _WASM_CODE_CACHE[] = interp.code_info_cache
     ci = Core.Compiler.retrieve_code_info(mi_plus, table.world)
-    _WASM_METHOD_TABLE[] = nothing
     _WASM_CODE_CACHE[] = nothing
     if ci isa Core.CodeInfo
         passed += 1

@@ -621,10 +621,8 @@ function _pre_resolve_full(sig, world::UInt64)
     interp = _wasm_make_interp(world, table)
     ci_raw = _CC_retrieve_code_info(mi, world)
     interp.code_info_cache.cache[mi] = ci_raw
-    _WASM_USE_REIMPL[] = true
     _WASM_CODE_CACHE[] = interp.code_info_cache
     inf_frame = _CC_typeinf_frame(interp, mi, false)
-    _WASM_USE_REIMPL[] = false
     _WASM_CODE_CACHE[] = nothing
     result_ci = inf_frame.result.src
     rt = _CC_widenconst(inf_frame.result.result)

@@ -208,77 +208,30 @@ Core.Compiler.may_discard_trees(interp::_TracingInterpreter) = false
 const _TRACING_INTERSECTIONS = Ref{Union{Nothing, Dict{Tuple{Any,Any}, Any}}}(nothing)
 const _TRACING_INTERSECTIONS_WITH_ENV = Ref{Union{Nothing, Dict{Tuple{Any,Any}, Any}}}(nothing)
 
-# ─── Reimplementation mode flag (Phase 2d) ───────────────────────────────────
-# When true, overrides use Julia reimplementations (wasm_type_intersection,
-# wasm_matching_methods) instead of ccall or pre-computed Dict lookups.
-# This is the REAL path — works for ANY types including user-defined at runtime.
+# ─── Code cache global ───────────────────────────────────────────────────────
+# _WASM_CODE_CACHE: Needed for @generated function pre-expansion (data access, not algorithm)
 
-const _WASM_USE_REIMPL = Ref{Bool}(false)
-
-# ─── Pre-computed intersection lookup (LEGACY — Phase 2b) ────────────────────
-# These are kept for backward compatibility with tracing infrastructure.
-# When _WASM_USE_REIMPL is true, these are NOT used (reimplementations are used instead).
-
-const _WASM_INTERSECTIONS = Ref{Union{Nothing, Dict{Tuple{Any,Any}, Any}}}(nothing)
-const _WASM_INTERSECTIONS_WITH_ENV = Ref{Union{Nothing, Dict{Tuple{Any,Any}, Any}}}(nothing)
-
-# ─── Method table + code cache globals ───────────────────────────────────────
-# _WASM_METHOD_TABLE: LEGACY (Phase 2b Dict lookup) — NOT used when _WASM_USE_REIMPL is true
-# _WASM_CODE_CACHE: Still needed for @generated function pre-expansion (data access, not algorithm)
-
-const _WASM_METHOD_TABLE = Ref{Union{Nothing, DictMethodTable}}(nothing)
 const _WASM_CODE_CACHE = Ref{Union{Nothing, PreDecompressedCodeInfo}}(nothing)
 
-# Override _methods_by_ftype to use reimplementations or DictMethodTable in Wasm mode.
-# This replaces ccall(:jl_matching_methods) for may_invoke_generator and other direct callers.
+# Override _methods_by_ftype to always use reimplementation (PHASE-2B-006).
+# PURE-8001: Use positional-only version to avoid kwargs recursion in WASM.
 function Base._methods_by_ftype(@nospecialize(t), mt::Union{Core.MethodTable, Nothing},
                                  lim::Int, world::UInt, ambig::Bool,
                                  min::Ref{UInt}, max::Ref{UInt}, has_ambig::Ref{Int32})
-    # Reimplementation mode (Phase 2d): use wasm_matching_methods
-    # PURE-8001: Use positional-only version to avoid kwargs recursion in WASM.
-    # The kwargs version (wasm_matching_methods(t; limit=lim)) causes infinite recursion:
-    # kwcall dispatch → _methods_by_ftype → wasm_matching_methods → kwcall → ...
-    if _WASM_USE_REIMPL[]
-        result = _wasm_matching_methods_positional(t, lim)
-        if result === nothing
-            return nothing
-        end
-        # Set world range
-        if min isa Base.RefValue
-            min[] = result.valid_worlds.min_world
-        end
-        if max isa Base.RefValue
-            max[] = result.valid_worlds.max_world
-        end
-        if has_ambig isa Base.RefValue
-            has_ambig[] = result.ambig ? Int32(1) : Int32(0)
-        end
-        return result.matches
+    result = _wasm_matching_methods_positional(t, lim)
+    if result === nothing
+        return nothing
     end
-
-    # Legacy Dict mode (Phase 2b): use DictMethodTable
-    wasm_mt = _WASM_METHOD_TABLE[]
-    if wasm_mt !== nothing
-        result = Core.Compiler.findall(t, wasm_mt; limit=lim)
-        if result === nothing
-            return nothing
-        end
-        if min isa Base.RefValue
-            min[] = result.valid_worlds.min_world
-        end
-        if max isa Base.RefValue
-            max[] = result.valid_worlds.max_world
-        end
-        if has_ambig isa Base.RefValue
-            has_ambig[] = result.ambig ? Int32(1) : Int32(0)
-        end
-        return result.matches
+    if min isa Base.RefValue
+        min[] = result.valid_worlds.min_world
     end
-
-    # Normal mode: use real ccall
-    return ccall(:jl_matching_methods, Any,
-        (Any, Any, Cint, Cint, UInt, Ptr{UInt}, Ptr{UInt}, Ptr{Int32}),
-        t, mt, lim, ambig, world, min, max, has_ambig)::Union{Vector{Any},Nothing}
+    if max isa Base.RefValue
+        max[] = result.valid_worlds.max_world
+    end
+    if has_ambig isa Base.RefValue
+        has_ambig[] = result.ambig ? Int32(1) : Int32(0)
+    end
+    return result.matches
 end
 
 # Override get_staged to use PreDecompressedCodeInfo in Wasm mode.
@@ -309,30 +262,9 @@ function Core.Compiler.get_staged(mi::Core.MethodInstance, world::UInt)
     end
 end
 
-# Override typeintersect to use reimplementations, pre-computed results, or native ccall
+# Override typeintersect to always use reimplementation (PHASE-2B-006).
 function Base.typeintersect(@nospecialize(a::Type), @nospecialize(b::Type))
-    # Reimplementation mode (Phase 2d): use wasm_type_intersection
-    if _WASM_USE_REIMPL[]
-        return wasm_type_intersection(a, b)
-    end
-
-    # Legacy Dict mode (Phase 2b): check pre-computed Dict
-    wasm_dict = _WASM_INTERSECTIONS[]
-    if wasm_dict !== nothing
-        key = (a, b)
-        result = get(wasm_dict, key, nothing)
-        if result !== nothing
-            return result
-        end
-        # Also try (b, a) since intersection is commutative
-        result = get(wasm_dict, (b, a), nothing)
-        if result !== nothing
-            return result
-        end
-    end
-
-    # Compute using real ccall
-    result = ccall(:jl_type_intersection, Any, (Any, Any), a, b)
+    result = wasm_type_intersection(a, b)
 
     # If tracing, record the result
     tracing = _TRACING_INTERSECTIONS[]
@@ -345,35 +277,19 @@ end
 
 # Pure Julia replacement for ccall(:jl_type_intersection_with_env, ...)
 # Returns a SimpleVector [intersection_result, type_env_bindings]
-# Used inline in abstract_call_method, abstract_call_opaque_closure, normalize_typevars
+# Always uses reimplementation (PHASE-2B-006).
 function _type_intersection_with_env(@nospecialize(a::Type), @nospecialize(b::Type))
-    # Reimplementation mode (Phase 2d): compute using Julia reimplementations
-    if _WASM_USE_REIMPL[]
-        ti = wasm_type_intersection(a, b)
-        env = _extract_sparams(a, b)
-        return Core.svec(ti, env)
-    end
+    ti = wasm_type_intersection(a, b)
+    env = _extract_sparams(a, b)
 
-    # Legacy Dict mode (Phase 2b): check pre-computed Dict
-    wasm_dict = _WASM_INTERSECTIONS_WITH_ENV[]
-    if wasm_dict !== nothing
-        key = (a, b)
-        result = get(wasm_dict, key, nothing)
-        if result !== nothing
-            return result
-        end
-    end
-
-    # Compute using real ccall
-    result = ccall(:jl_type_intersection_with_env, Any, (Any, Any), a, b)::Core.SimpleVector
-
-    # If tracing, record the result
+    # If tracing, record native ccall result for method table building
     tracing = _TRACING_INTERSECTIONS_WITH_ENV[]
     if tracing !== nothing
-        tracing[(a, b)] = result
+        native_result = ccall(:jl_type_intersection_with_env, Any, (Any, Any), a, b)::Core.SimpleVector
+        tracing[(a, b)] = native_result
     end
 
-    return result
+    return Core.svec(ti, env)
 end
 
 # Override normalize_typevars to use pure Julia intersection_with_env
@@ -525,15 +441,13 @@ function verify_typeinf(f, argtypes::Tuple;
     interp = build_wasm_interpreter([sig]; world=world)
 
     # Step 3: Run typeinf with WasmInterpreter
-    # Activate reimplementation mode — use Julia reimplementations for intersection + matching
-    _WASM_USE_REIMPL[] = true
+    # Reimplementation mode is always on (PHASE-2B-006)
     _WASM_CODE_CACHE[] = interp.code_info_cache
 
     # Use the same MethodInstance that code_typed used, to ensure we're comparing the same method
     mi = native_ci.parent
     src = Core.Compiler.retrieve_code_info(mi, world)
     if src === nothing
-        _WASM_USE_REIMPL[] = false
         _WASM_CODE_CACHE[] = nothing
         return (pass=false, reason="retrieve_code_info returned nothing for $mi")
     end
@@ -542,8 +456,6 @@ function verify_typeinf(f, argtypes::Tuple;
     try
         Core.Compiler.typeinf(interp, frame)
     finally
-        # Deactivate reimplementation mode — MUST happen even on exception
-        _WASM_USE_REIMPL[] = false
         _WASM_CODE_CACHE[] = nothing
     end
 

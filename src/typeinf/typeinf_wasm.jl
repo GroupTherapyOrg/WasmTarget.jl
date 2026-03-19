@@ -7,8 +7,8 @@
 #   4. dict_method_table.jl — DictMethodTable, WasmInterpreter, overrides
 #   5. ccall_replacements.jl — Phase B-D: remaining ccall replacements
 #
-# After loading, set _WASM_USE_REIMPL[] = true to use Julia reimplementations
-# instead of pre-computed Dict lookups for type intersection and method matching.
+# Reimplementation mode is always on (PHASE-2B-006): Julia reimplementations
+# are used unconditionally for type intersection and method matching.
 #
 # Usage:
 #   julia +1.12 --project=. -e '
@@ -22,15 +22,13 @@ include(joinpath(@__DIR__, "ccall_stubs.jl"))
 include(joinpath(@__DIR__, "subtype.jl"))
 include(joinpath(@__DIR__, "matching.jl"))
 
-# Load DictMethodTable + overrides (uses wasm_type_intersection/wasm_matching_methods
-# when _WASM_USE_REIMPL is true)
+# Load DictMethodTable + overrides (always uses wasm_type_intersection/wasm_matching_methods)
 include(joinpath(@__DIR__, "dict_method_table.jl"))
 
 # Load Phase B-D ccall replacements
 include(joinpath(@__DIR__, "ccall_replacements.jl"))
 
-println("typeinf_wasm.jl loaded — reimplementation mode available")
-println("  Set _WASM_USE_REIMPL[] = true to use Julia reimplementations")
+println("typeinf_wasm.jl loaded — reimplementation mode always on")
 println("  wasm_subtype: ", @isdefined(wasm_subtype) ? "loaded" : "MISSING")
 println("  wasm_type_intersection: ", @isdefined(wasm_type_intersection) ? "loaded" : "MISSING")
 println("  wasm_matching_methods: ", @isdefined(wasm_matching_methods) ? "loaded" : "MISSING")

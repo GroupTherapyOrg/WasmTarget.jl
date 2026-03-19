@@ -30,13 +30,11 @@ native_mt = Core.Compiler.InternalMethodTable(world)
 lkup = Core.Compiler.findall(sig, native_mt; limit=3)
 mi = Core.Compiler.specialize_method(first(lkup.matches))
 
-_WASM_USE_REIMPL[] = true
 _WASM_CODE_CACHE[] = interp.code_info_cache
 local inf_frame
 try
     inf_frame = Core.Compiler.typeinf_frame(interp, mi, false)
 finally
-    _WASM_USE_REIMPL[] = false
     _WASM_CODE_CACHE[] = nothing
 end
 

@@ -348,7 +348,7 @@ end
 println("=" ^ 80)
 println("PURE-4141: Full Typeinf — Julia Reimplementations (Phase 2d)")
 println("Testing $(length(ORIGINAL_TEST_CASES)) original + $(length(NOVEL_TEST_CASES)) novel = $(length(ORIGINAL_TEST_CASES) + length(NOVEL_TEST_CASES)) total")
-println("Reimplementation mode: _WASM_USE_REIMPL = true (real Julia reimpl)")
+println("Reimplementation mode: always on (PHASE-2B-006)")
 println("=" ^ 80)
 println()
 
