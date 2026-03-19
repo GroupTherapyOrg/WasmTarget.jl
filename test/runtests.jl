@@ -5733,4 +5733,114 @@ struct TypeHierS2 x::Int32 end
 
     end
 
+    # ========================================================================
+    # Phase 40: Self-Hosted Codegen — Transport Path Verification (PHASE-1-T03)
+    # ========================================================================
+    # Verifies that the self-hosting transport path (code_typed → preprocess →
+    # serialize → deserialize → compile_module_from_ir) produces correct results.
+
+    @testset "Phase 40: Self-Hosted Codegen (Transport Path)" begin
+
+        @testset "Transport roundtrip — arithmetic" begin
+            sh_add(x::Int64, y::Int64) = x + y
+            sh_sub(x::Int64, y::Int64) = x - y
+            sh_mul(x::Int64, y::Int64) = x * y
+            sh_neg(x::Int64) = -x
+
+            for (f, atypes, args, expected) in [
+                (sh_add, (Int64, Int64), (3, 4), 7),
+                (sh_sub, (Int64, Int64), (10, 3), 7),
+                (sh_mul, (Int64, Int64), (6, 7), 42),
+                (sh_neg, (Int64,), (-99,), 99),
+            ]
+                ci, rt = Base.code_typed(f, atypes; optimize=true)[1]
+                entries = [(ci, rt, atypes, string(nameof(f)))]
+                prep = WasmTarget.preprocess_ir_entries(entries)
+                json = WasmTarget.serialize_ir_entries(prep)
+                recv = WasmTarget.deserialize_ir_entries(json)
+                bytes_orig = WasmTarget.to_bytes(WasmTarget.compile_module_from_ir(prep))
+                bytes_rt = WasmTarget.to_bytes(WasmTarget.compile_module_from_ir(recv))
+                @test bytes_orig == bytes_rt
+                result = run_wasm(bytes_rt, string(nameof(f)), args...)
+                result !== nothing && @test result == expected
+            end
+        end
+
+        @testset "Transport roundtrip — conditionals" begin
+            sh_max(x::Int64, y::Int64) = x > y ? x : y
+            sh_abs(x::Int64) = x < Int64(0) ? -x : x
+
+            for (f, atypes, args, expected) in [
+                (sh_max, (Int64, Int64), (10, 20), 20),
+                (sh_max, (Int64, Int64), (-5, -3), -3),
+                (sh_abs, (Int64,), (-42,), 42),
+                (sh_abs, (Int64,), (42,), 42),
+            ]
+                ci, rt = Base.code_typed(f, atypes; optimize=true)[1]
+                entries = [(ci, rt, atypes, string(nameof(f)))]
+                prep = WasmTarget.preprocess_ir_entries(entries)
+                json = WasmTarget.serialize_ir_entries(prep)
+                recv = WasmTarget.deserialize_ir_entries(json)
+                bytes = WasmTarget.to_bytes(WasmTarget.compile_module_from_ir(recv))
+                result = run_wasm(bytes, string(nameof(f)), args...)
+                result !== nothing && @test result == expected
+            end
+        end
+
+        @testset "Transport roundtrip — while loops" begin
+            function sh_sum(n::Int64)::Int64
+                s = Int64(0); i = Int64(1)
+                while i <= n; s += i; i += Int64(1); end
+                return s
+            end
+
+            ci, rt = Base.code_typed(sh_sum, (Int64,); optimize=true)[1]
+            prep = WasmTarget.preprocess_ir_entries([(ci, rt, (Int64,), "sh_sum")])
+            json = WasmTarget.serialize_ir_entries(prep)
+            recv = WasmTarget.deserialize_ir_entries(json)
+            bytes = WasmTarget.to_bytes(WasmTarget.compile_module_from_ir(recv))
+            result = run_wasm(bytes, "sh_sum", Int64(100))
+            result !== nothing && @test result == 5050
+        end
+
+        @testset "Transport roundtrip — floats" begin
+            sh_circle(r::Float64) = 3.14159265358979 * r * r
+            sh_f2c(f::Float64) = (f - 32.0) / 1.8
+
+            for (f, atypes, args, expected) in [
+                (sh_circle, (Float64,), (2.0,), sh_circle(2.0)),
+                (sh_f2c, (Float64,), (212.0,), 100.0),
+            ]
+                ci, rt = Base.code_typed(f, atypes; optimize=true)[1]
+                entries = [(ci, rt, atypes, string(nameof(f)))]
+                prep = WasmTarget.preprocess_ir_entries(entries)
+                json = WasmTarget.serialize_ir_entries(prep)
+                recv = WasmTarget.deserialize_ir_entries(json)
+                bytes = WasmTarget.to_bytes(WasmTarget.compile_module_from_ir(recv))
+                result = run_wasm(bytes, string(nameof(f)), args...)
+                result !== nothing && @test result ≈ expected atol=1e-10
+            end
+        end
+
+        @testset "Transport roundtrip — golden file verification" begin
+            golden_dir = joinpath(@__DIR__, "golden")
+            if isdir(golden_dir)
+                golden_files = filter(f -> startswith(f, "golden_") && endswith(f, ".json"),
+                                       readdir(golden_dir))
+                @test length(golden_files) >= 20
+                verified = 0
+                for gf in golden_files
+                    data = JSON.parsefile(joinpath(golden_dir, gf))
+                    codeinfo_json = JSON.json(data["codeinfo"])
+                    ir_entries = WasmTarget.deserialize_ir_entries(codeinfo_json)
+                    bytes = WasmTarget.to_bytes(WasmTarget.compile_module_from_ir(ir_entries))
+                    @test length(bytes) == data["wasm_size"]
+                    verified += 1
+                end
+                @test verified == length(golden_files)
+            end
+        end
+
+    end
+
 end
