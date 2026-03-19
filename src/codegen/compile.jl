@@ -1344,8 +1344,7 @@ function compile_module(functions::Vector;
             ci, _ = get_typed_ir(f, arg_types)
             for stmt in ci.code
                 if stmt isa Expr && stmt.head === :foreigncall
-                    fc_name = stmt.args[1]
-                    fc_name_sym = fc_name isa QuoteNode ? fc_name.value : fc_name
+                    fc_name_sym = extract_foreigncall_name(stmt.args[1])
                     if fc_name_sym === :jl_get_current_task
                         needs_rng = true
                         break
@@ -1532,11 +1531,7 @@ function compile_module(functions::Vector;
         if code_info !== nothing
             for stmt in code_info.code
                 if stmt isa Expr && stmt.head === :foreigncall && length(stmt.args) >= 1
-                    fc_name = stmt.args[1]
-                    fc_sym = if fc_name isa QuoteNode; fc_name.value
-                    elseif fc_name isa Symbol; fc_name
-                    elseif fc_name isa GlobalRef; fc_name.name
-                    else nothing end
+                    fc_sym = extract_foreigncall_name(stmt.args[1])
                     if fc_sym === :memhash
                         needs_string_hash = true
                         break

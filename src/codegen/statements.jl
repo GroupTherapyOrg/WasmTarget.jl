@@ -3,6 +3,36 @@
 # ============================================================================
 
 """
+    extract_foreigncall_name(name_arg) -> Union{Symbol, Nothing}
+
+Extract the symbol name from a :foreigncall expression's first argument.
+Handles format differences between Julia versions:
+- Julia 1.12: QuoteNode(:name) or bare :name
+- Julia 1.13: QuoteNode((:name,)) — tuple wrapping the symbol
+Also handles GlobalRef (e.g., Base.memhash).
+"""
+function extract_foreigncall_name(name_arg)::Union{Symbol, Nothing}
+    val = if name_arg isa QuoteNode
+        name_arg.value
+    elseif name_arg isa Symbol
+        name_arg
+    elseif name_arg isa GlobalRef
+        name_arg.name
+    elseif name_arg isa Expr && name_arg.head === :tuple && length(name_arg.args) >= 1
+        # Julia 1.13+: foreigncall names wrapped in tuple Expr: Expr(:tuple, QuoteNode(:name))
+        inner = name_arg.args[1]
+        inner isa QuoteNode ? inner.value : (inner isa Symbol ? inner : nothing)
+    else
+        nothing
+    end
+    # Handle case where value is a Tuple (shouldn't happen with Expr handling above, but defensive)
+    if val isa Tuple && length(val) >= 1 && val[1] isa Symbol
+        return val[1]
+    end
+    return val isa Symbol ? val : nothing
+end
+
+"""
 Compile a single IR statement to Wasm bytecode.
 """
 function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt8}
@@ -2307,17 +2337,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
     #   args[8] = length
 
     if length(expr.args) >= 1
-        name_arg = expr.args[1]
-        name = if name_arg isa QuoteNode
-            name_arg.value
-        elseif name_arg isa Symbol
-            name_arg
-        elseif name_arg isa GlobalRef
-            # PURE-9065: Handle GlobalRef names like Base.memhash
-            name_arg.name
-        else
-            nothing
-        end
+        name = extract_foreigncall_name(expr.args[1])
 
         if name === :jl_alloc_genericmemory
             # Extract element type from return type
@@ -3065,11 +3085,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vec
             if ptr_arg isa Core.SSAValue
                 ptr_stmt = ctx.code_info.code[ptr_arg.id]
                 if ptr_stmt isa Expr && ptr_stmt.head === :foreigncall
-                    ptr_name_arg = length(ptr_stmt.args) >= 1 ? ptr_stmt.args[1] : nothing
-                    ptr_name = if ptr_name_arg isa QuoteNode; ptr_name_arg.value
-                    elseif ptr_name_arg isa Symbol; ptr_name_arg
-                    elseif ptr_name_arg isa GlobalRef; ptr_name_arg.name
-                    else nothing end
+                    ptr_name = length(ptr_stmt.args) >= 1 ? extract_foreigncall_name(ptr_stmt.args[1]) : nothing
                     if ptr_name === :jl_string_ptr && length(ptr_stmt.args) >= 6
                         str_arg = ptr_stmt.args[6]  # The original string argument
                     end
@@ -3147,8 +3163,7 @@ function _trace_string_ptr(ptr_ssa, code)
         if inner isa Core.SSAValue
             inner_stmt = code[inner.id]
             if inner_stmt isa Expr && inner_stmt.head === :foreigncall
-                fname = inner_stmt.args[1]
-                fname_val = fname isa QuoteNode ? fname.value : fname
+                fname_val = extract_foreigncall_name(inner_stmt.args[1])
                 if fname_val === :jl_string_ptr && length(inner_stmt.args) >= 6
                     # Found it! Return (string_arg, index_arg)
                     return (inner_stmt.args[6], args[2])
@@ -3211,8 +3226,7 @@ function _trace_ptr_to_data(ptr_val, ctx::CompilationContext)
                 end
             elseif stmt.head === :foreigncall
                 # May be jl_string_ptr or similar — check
-                name_arg = stmt.args[1]
-                fname = name_arg isa QuoteNode ? name_arg.value : name_arg
+                fname = extract_foreigncall_name(stmt.args[1])
                 if fname === :jl_string_ptr && length(stmt.args) >= 6
                     # jl_string_ptr(s) — the string IS the data in WasmGC
                     return stmt.args[6]
@@ -3333,8 +3347,7 @@ function _resolve_memref_to_array(ssa, code)
             end
         end
     elseif stmt.head === :foreigncall
-        name_arg = stmt.args[1]
-        fname = name_arg isa QuoteNode ? name_arg.value : name_arg
+        fname = extract_foreigncall_name(stmt.args[1])
         if fname === :jl_string_to_genericmemory && length(stmt.args) >= 6
             # In WasmGC, jl_string_to_genericmemory returns the String which IS the array
             return stmt.args[6]

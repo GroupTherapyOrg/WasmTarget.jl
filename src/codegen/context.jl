@@ -1058,8 +1058,7 @@ function allocate_ssa_locals!(ctx::CompilationContext)
             # Task values are phantom — rngState fields map to Wasm globals
             stmt = ctx.code_info.code[ssa_id]
             if stmt isa Expr && stmt.head === :foreigncall
-                fc_name = stmt.args[1]
-                fc_name_sym = fc_name isa QuoteNode ? fc_name.value : fc_name
+                fc_name_sym = extract_foreigncall_name(stmt.args[1])
                 if fc_name_sym === :jl_get_current_task
                     continue
                 end
