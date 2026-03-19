@@ -2469,6 +2469,8 @@ function serialize_ir_value(val)
         return Dict("_t" => "ssa", "id" => val.id)
     elseif val isa Core.Argument
         return Dict("_t" => "arg", "n" => val.n)
+    elseif val isa Core.SlotNumber
+        return Dict("_t" => "slot", "id" => val.id)
     elseif val isa Core.IntrinsicFunction
         return Dict("_t" => "intrinsic", "name" => string(nameof(val)))
     elseif val isa GlobalRef
@@ -2700,6 +2702,8 @@ function deserialize_ir_value(d)
         return deserialize_type_name(d["name"])
     elseif tag == "expr"
         return deserialize_ir_stmt(d)
+    elseif tag == "slot"
+        return Core.SlotNumber(d["id"])
     elseif tag == "undef"
         return nothing
     else
