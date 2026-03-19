@@ -48,6 +48,20 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
         stmt = stmt.args[2]  # Unwrap to inner expression
     end
 
+    # PURE-6024b: When a slot assignment RHS is a bare value (SlotNumber, SSAValue, literal,
+    # GlobalRef), it won't match any Expr/Return/Goto handler below. Compile it directly
+    # as a value so the slot LOCAL_SET at the bottom of this function has something on the stack.
+    if _slot_assign_id > 0 && !(stmt isa Expr) && !(stmt isa Core.ReturnNode) &&
+       !(stmt isa Core.GotoNode) && !(stmt isa Core.GotoIfNot) && !(stmt isa Core.PhiNode) &&
+       !(stmt isa Core.PhiCNode) && !(stmt isa Core.UpsilonNode) && !(stmt isa Core.NewvarNode)
+        if haskey(ctx.slot_locals, _slot_assign_id)
+            append!(bytes, compile_value(stmt, ctx))
+            push!(bytes, Opcode.LOCAL_SET)
+            append!(bytes, encode_leb128_unsigned(ctx.slot_locals[_slot_assign_id]))
+        end
+        return bytes
+    end
+
     if stmt isa Core.ReturnNode
         # DEBUG: Trace compile_statement ReturnNode handler
         if isdefined(stmt, :val)
