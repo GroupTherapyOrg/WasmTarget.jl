@@ -90,7 +90,7 @@ end
         ci_list = Base.code_typed(func, argtypes, optimize=true)
         ci = ci_list[1][1]
         rettype = ci_list[1][2]
-        push!(ir_entries, (code_info=ci, return_type=rettype, arg_types=argtypes, name=name))
+        push!(ir_entries, (ci, rettype, argtypes, name, func))
     end
 
     mod = WasmTarget.compile_module_from_ir(ir_entries)
