@@ -1,6 +1,6 @@
 # ccall_stubs.jl — No-op stubs for timing/debug/cache ccalls
 #
-# These stubs replace 12 ccall-wrapping functions that are NOT needed for
+# These stubs replace ccall-wrapping functions that are NOT needed for
 # single-shot typeinf in Wasm:
 #   - Timing: jl_hrtime (via _time_ns)
 #   - Debug output: jl_uv_puts, jl_uv_putb, jl_string_ptr (via print/println)
@@ -9,6 +9,12 @@
 #   - JIT engine: jl_engine_reserve, jl_engine_fulfill
 #   - Debug assertions: jl_is_assertsbuild
 #   - BigFloat timer: mpfr_greater_p
+#   - Phase 2a stubs (PHASE-2-PREP-002):
+#     - jl_apply_cmpswap_type (atomic pointer type construction)
+#     - jl_get_module_max_methods (module method limit)
+#     - jl_maybe_add_binding_backedge (invalidation tracking)
+#     - jl_method_table_add_backedge (invalidation tracking)
+#     - jl_method_instance_add_backedge (invalidation tracking)
 #
 # Loading this file OVERRIDES the ccall-wrapping functions in Core.Compiler
 # with pure Julia equivalents. This makes 21 C_DEPENDENT functions compilable.
@@ -47,6 +53,12 @@ const TYPEINF_SKIP_FOREIGNCALLS = Set{Symbol}([
     :jl_update_codeinst,     # cache update — Cvoid no-op
     :jl_compress_ir,         # IR compression — not needed (may_compress=false)
     :jl_add_codeinst_to_jit, # JIT compilation — Cvoid no-op
+    # Phase 2a stubs (PHASE-2-PREP-002):
+    :jl_apply_cmpswap_type,       # atomic pointer type — return Any
+    :jl_get_module_max_methods,   # module method limit — return Cint
+    :jl_maybe_add_binding_backedge, # invalidation — Cvoid no-op
+    :jl_method_table_add_backedge,  # invalidation — Cvoid no-op
+    :jl_method_instance_add_backedge, # invalidation — Cvoid no-op
 ])
 
 # Map foreigncall names to their return type defaults (for non-Cvoid returns)
@@ -56,6 +68,9 @@ const TYPEINF_SKIP_RETURN_DEFAULTS = Dict{Symbol, Any}(
     :jl_engine_reserve => Any,     # returns CodeInstance (externref)
     :jl_is_assertsbuild => Cint,   # returns Cint(0) — i32 zero
     :jl_compress_ir => String,     # returns String (externref)
+    :jl_apply_cmpswap_type => Any, # returns type for cmpswap (externref)
+    :jl_get_module_max_methods => Cint, # returns Cint — i32 zero (no limit)
+    :jl_maybe_add_binding_backedge => Cint, # returns Cint — i32 zero (unused)
 )
 
 # ─── Simple wrapper overrides ─────────────────────────────────────────────────
@@ -94,6 +109,28 @@ function Core.Compiler.setindex!(cache::InternalCodeCache, ci::CodeInstance, mi:
     # Skip both jl_push_newly_inferred and jl_mi_cache_insert
     # For single-shot typeinf in Wasm, we don't need global caching
     return cache
+end
+
+# ─── Phase 2a stubs (PHASE-2-PREP-002) ───────────────────────────────────────
+# These 5 ccalls are needed by the typeinf path but not for single-shot Wasm.
+
+# get_max_methods_for_module: wraps ccall(:jl_get_module_max_methods, Cint, (Any,), mod)
+# Used in inferencestate.jl to limit method resolution. Return typemax(Int) = no limit.
+function Core.Compiler.get_max_methods_for_module(mod::Module)
+    return typemax(Int)
+end
+
+# store_backedges: contains jl_method_table_add_backedge and jl_method_instance_add_backedge.
+# For single-shot typeinf, invalidation tracking is not needed — override the whole function.
+function Core.Compiler.store_backedges(caller::CodeInstance, edges::Core.SimpleVector)
+    # No-op: backedges are for incremental recompilation, not needed in Wasm single-shot.
+    return nothing
+end
+
+# maybe_add_binding_backedge!: wraps ccall(:jl_maybe_add_binding_backedge, Cint, (Any,Any,Any))
+# Used in invalidation.jl. No-op for single-shot.
+function Base.maybe_add_binding_backedge!(b::Core.Binding, edge::Union{Method, CodeInstance})
+    return nothing
 end
 
 # ─── Verification ─────────────────────────────────────────────────────────────
@@ -145,11 +182,11 @@ function verify_stubs()
         failed += 1
     end
 
-    # Test TYPEINF_SKIP_FOREIGNCALLS has at least the Phase A entries (15 base, more after B1/B2)
-    if length(TYPEINF_SKIP_FOREIGNCALLS) >= 15
+    # Test TYPEINF_SKIP_FOREIGNCALLS has all entries (15 base + 5 Phase 2a = 20)
+    if length(TYPEINF_SKIP_FOREIGNCALLS) >= 20
         passed += 1
     else
-        println("FAIL: TYPEINF_SKIP_FOREIGNCALLS has $(length(TYPEINF_SKIP_FOREIGNCALLS)) entries, expected >= 15")
+        println("FAIL: TYPEINF_SKIP_FOREIGNCALLS has $(length(TYPEINF_SKIP_FOREIGNCALLS)) entries, expected >= 20")
         failed += 1
     end
 
@@ -160,6 +197,43 @@ function verify_stubs()
     else
         println("FAIL: engine_reserve(MethodInstance, Any) method not found")
         failed += 1
+    end
+
+    # Phase 2a stubs (PHASE-2-PREP-002):
+
+    # Test get_max_methods_for_module returns typemax(Int)
+    max_m = Core.Compiler.get_max_methods_for_module(Main)
+    if max_m === typemax(Int)
+        passed += 1
+    else
+        println("FAIL: get_max_methods_for_module(Main) returned $max_m, expected $(typemax(Int))")
+        failed += 1
+    end
+
+    # Test store_backedges is a no-op (doesn't throw)
+    try
+        m = methods(Core.Compiler.store_backedges, (CodeInstance, Core.SimpleVector))
+        if length(m) > 0
+            passed += 1
+        else
+            println("FAIL: store_backedges method not found")
+            failed += 1
+        end
+    catch e
+        println("FAIL: store_backedges check threw: $e")
+        failed += 1
+    end
+
+    # Test new foreigncall entries are in the skip set
+    for sym in [:jl_apply_cmpswap_type, :jl_get_module_max_methods,
+                :jl_maybe_add_binding_backedge, :jl_method_table_add_backedge,
+                :jl_method_instance_add_backedge]
+        if sym in TYPEINF_SKIP_FOREIGNCALLS
+            passed += 1
+        else
+            println("FAIL: $sym not in TYPEINF_SKIP_FOREIGNCALLS")
+            failed += 1
+        end
     end
 
     println("Stubs verification: $passed passed, $failed failed")
