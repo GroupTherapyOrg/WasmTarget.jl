@@ -168,6 +168,62 @@ function fnv1a_hash(id::Int32)::UInt32
 end
 
 """
+    emit_hash_table_data_segment!(emitter) → (segment_idx, data_size)
+
+Serialize the hash table as a passive data segment for use with array.new_data.
+The data segment contains alternating (key: i32, value: i32) pairs in little-endian.
+Empty slots have key = -1.
+
+Returns the data segment index and the byte size.
+"""
+function emit_hash_table_data_segment!(emitter::MethodTableEmitter)
+    # Serialize as flat byte array: [key0_le, val0_le, key1_le, val1_le, ...]
+    n_bytes = emitter.hash_table_size * 8  # 4 bytes key + 4 bytes value per slot
+    data = Vector{UInt8}(undef, n_bytes)
+
+    for (i, (key, val)) in enumerate(emitter.hash_table)
+        offset = (i - 1) * 8
+        # Little-endian i32 for key
+        data[offset + 1] = UInt8(key & 0xFF)
+        data[offset + 2] = UInt8((key >> 8) & 0xFF)
+        data[offset + 3] = UInt8((key >> 16) & 0xFF)
+        data[offset + 4] = UInt8((key >> 24) & 0xFF)
+        # Little-endian i32 for value
+        data[offset + 5] = UInt8(val & 0xFF)
+        data[offset + 6] = UInt8((val >> 8) & 0xFF)
+        data[offset + 7] = UInt8((val >> 16) & 0xFF)
+        data[offset + 8] = UInt8((val >> 24) & 0xFF)
+    end
+
+    using_mod = emitter.mod
+    seg_idx = WasmTarget.add_passive_data_segment!(using_mod, data)
+    return (seg_idx, n_bytes)
+end
+
+"""
+    lookup_hash_table(emitter, type_id) → Int32
+
+Look up a TypeID in the hash table. Returns the global index, or -1 if not found.
+This is the Julia-side equivalent of the WasmGC lookup function.
+"""
+function lookup_hash_table(emitter::MethodTableEmitter, type_id::Int32)::Int32
+    if emitter.hash_table_size == 0
+        return Int32(-1)
+    end
+    h = fnv1a_hash(type_id) % emitter.hash_table_size
+    for _ in 1:emitter.hash_table_size
+        key, val = emitter.hash_table[h + 1]
+        if key == type_id
+            return val
+        elseif key == Int32(-1)
+            return Int32(-1)  # Empty slot = not found
+        end
+        h = (h + 1) % emitter.hash_table_size
+    end
+    return Int32(-1)
+end
+
+"""
     get_emit_stats(emitter) → NamedTuple
 
 Return statistics about the emitted method table.

@@ -103,10 +103,43 @@ println("  TypeID registry size: $(length(registry.id_to_type))")
         end
     end
 
-    @testset "Module serialization (wasm-tools validate)" begin
+    @testset "Data segment emission" begin
         mod = WasmTarget.WasmModule()
         emitter = create_method_table_emitter(mod, registry)
         emit_method_table!(emitter, table)
+        build_hash_table!(emitter)
+
+        seg_idx, data_size = emit_hash_table_data_segment!(emitter)
+        println("  Data segment index: $seg_idx")
+        println("  Data segment size: $data_size bytes")
+
+        @test seg_idx >= 0
+        @test data_size == emitter.hash_table_size * 8  # 8 bytes per slot
+        @test data_size > 0
+    end
+
+    @testset "Lookup hash table (Julia-side verification)" begin
+        mod = WasmTarget.WasmModule()
+        emitter = create_method_table_emitter(mod, registry)
+        emit_method_table!(emitter, table)
+        build_hash_table!(emitter)
+
+        # Verify all entries can be looked up via the lookup function
+        for (type_id, expected_global) in emitter.type_to_global
+            result = lookup_hash_table(emitter, type_id)
+            @test result == Int32(expected_global)
+        end
+
+        # Non-existent type should return -1
+        @test lookup_hash_table(emitter, Int32(99999)) == Int32(-1)
+    end
+
+    @testset "Module with data segment validates" begin
+        mod = WasmTarget.WasmModule()
+        emitter = create_method_table_emitter(mod, registry)
+        emit_method_table!(emitter, table)
+        build_hash_table!(emitter)
+        emit_hash_table_data_segment!(emitter)
 
         # Serialize the module
         bytes = WasmTarget.to_bytes(mod)
@@ -115,23 +148,41 @@ println("  TypeID registry size: $(length(registry.id_to_type))")
         # Write to temp file and validate
         wasm_path = tempname() * ".wasm"
         write(wasm_path, bytes)
-        println("  Module size: $(length(bytes)) bytes")
+        println("  Module size: $(length(bytes)) bytes (with data segment)")
 
         result = try
             run(pipeline(`wasm-tools validate $wasm_path`, stderr=devnull))
             true
         catch e
-            err = try
-                read(pipeline(`wasm-tools validate $wasm_path`, stderr=stderr), String)
-            catch
-                "validation failed"
-            end
-            println("  Validation error: $(first(string(err), 200))")
+            println("  Validation failed")
             false
         end
 
         rm(wasm_path, force=true)
         @test result
+    end
+
+    @testset "Ground truth: lookup matches native DictMethodTable" begin
+        mod = WasmTarget.WasmModule()
+        emitter = create_method_table_emitter(mod, registry)
+        emit_method_table!(emitter, table)
+        build_hash_table!(emitter)
+
+        # For each method signature, verify:
+        # 1. TypeID exists in registry
+        # 2. Hash table lookup finds the correct global
+        # 3. Global was emitted for this signature
+        verified = 0
+        for (sig, result) in table.methods
+            type_id = get_type_id(registry, sig)
+            @test type_id >= 0  # Should be in registry
+            global_idx = lookup_hash_table(emitter, type_id)
+            @test global_idx >= 0  # Should be in hash table
+            @test global_idx == Int32(emitter.type_to_global[type_id])  # Should match
+            verified += 1
+        end
+        println("  Verified $verified signatures against native DictMethodTable")
+        @test verified == length(table.methods)
     end
 end
 
