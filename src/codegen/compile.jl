@@ -2446,5 +2446,352 @@ function compile_module_from_ir_frozen(ir_entries::Vector, frozen::FrozenCompila
 
     populate_type_constant_globals!(mod, type_registry)
     return mod
+end  # compile_module_from_ir_frozen
+
+# ============================================================================
+# CodeInfo Transport — Phase 1 self-hosting (PHASE-1-009)
+# ============================================================================
+# Serialize CodeInfo + metadata to JSON for server→browser transport.
+# The browser deserializes and passes to compile_module_from_ir to produce WASM.
+#
+# Flow: server code_typed → preprocess_ir_entries → serialize → HTTP →
+#       browser deserialize → compile_module_from_ir → to_bytes → execute
+
+import JSON
+
+"""
+    serialize_ir_value(val) -> Any
+
+Serialize a single IR value (Expr arg, PhiNode value, etc.) to a JSON-safe Dict.
+"""
+function serialize_ir_value(val)
+    if val isa Core.SSAValue
+        return Dict("_t" => "ssa", "id" => val.id)
+    elseif val isa Core.Argument
+        return Dict("_t" => "arg", "n" => val.n)
+    elseif val isa Core.IntrinsicFunction
+        return Dict("_t" => "intrinsic", "name" => string(nameof(val)))
+    elseif val isa GlobalRef
+        return Dict("_t" => "globalref", "mod" => string(val.mod), "name" => string(val.name))
+    elseif val isa QuoteNode
+        return Dict("_t" => "quote", "value" => serialize_ir_value(val.value))
+    elseif val isa Symbol
+        return Dict("_t" => "symbol", "name" => string(val))
+    elseif val isa Bool
+        # Bool before Int because Bool <: Integer
+        return Dict("_t" => "lit", "jt" => "Bool", "v" => val)
+    elseif val isa Int64
+        return Dict("_t" => "lit", "jt" => "Int64", "v" => val)
+    elseif val isa Int32
+        return Dict("_t" => "lit", "jt" => "Int32", "v" => Int64(val))
+    elseif val isa UInt64
+        return Dict("_t" => "lit", "jt" => "UInt64", "v" => Int64(val))
+    elseif val isa UInt32
+        return Dict("_t" => "lit", "jt" => "UInt32", "v" => Int64(val))
+    elseif val isa Float64
+        return Dict("_t" => "lit", "jt" => "Float64", "v" => val)
+    elseif val isa Float32
+        return Dict("_t" => "lit", "jt" => "Float32", "v" => Float64(val))
+    elseif val === nothing
+        return Dict("_t" => "nothing")
+    elseif val isa Type
+        return Dict("_t" => "type", "name" => serialize_type_name(val))
+    elseif val isa Expr
+        return serialize_ir_stmt(val)
+    elseif val isa Function || val isa Core.Builtin
+        return Dict("_t" => "builtin", "name" => string(nameof(val)))
+    else
+        return Dict("_t" => "opaque", "repr" => repr(val), "jt" => string(typeof(val)))
+    end
+end
+
+"""
+    serialize_ir_stmt(stmt) -> Any
+
+Serialize a single IR statement to a JSON-safe structure.
+"""
+function serialize_ir_stmt(stmt)
+    if stmt isa Expr
+        return Dict("_t" => "expr", "head" => string(stmt.head),
+                     "args" => [serialize_ir_value(a) for a in stmt.args])
+    elseif stmt isa Core.ReturnNode
+        if isdefined(stmt, :val)
+            return Dict("_t" => "return", "val" => serialize_ir_value(stmt.val))
+        else
+            return Dict("_t" => "return")
+        end
+    elseif stmt isa Core.GotoNode
+        return Dict("_t" => "goto", "label" => stmt.label)
+    elseif stmt isa Core.GotoIfNot
+        return Dict("_t" => "gotoifnot", "cond" => serialize_ir_value(stmt.cond),
+                     "dest" => stmt.dest)
+    elseif stmt isa Core.PhiNode
+        vals = []
+        for i in 1:length(stmt.values)
+            if isassigned(stmt.values, i)
+                push!(vals, serialize_ir_value(stmt.values[i]))
+            else
+                push!(vals, Dict("_t" => "undef"))
+            end
+        end
+        return Dict("_t" => "phi", "edges" => Int64.(stmt.edges), "values" => vals)
+    elseif stmt isa Core.PiNode
+        return Dict("_t" => "pi", "val" => serialize_ir_value(stmt.val),
+                     "typ" => serialize_type_name(stmt.typ))
+    elseif stmt === nothing
+        return Dict("_t" => "nothing")
+    else
+        return Dict("_t" => "opaque", "repr" => repr(stmt), "jt" => string(typeof(stmt)))
+    end
+end
+
+"""
+    serialize_type_name(T) -> String
+
+Convert a Julia type to a string representation for JSON transport.
+"""
+function serialize_type_name(T)
+    T === Int64 && return "Int64"
+    T === Int32 && return "Int32"
+    T === UInt64 && return "UInt64"
+    T === UInt32 && return "UInt32"
+    T === Float64 && return "Float64"
+    T === Float32 && return "Float32"
+    T === Bool && return "Bool"
+    T === Nothing && return "Nothing"
+    T === String && return "String"
+    T === Symbol && return "Symbol"
+    T === Any && return "Any"
+    T === Union{} && return "Union{}"
+    return string(T)
+end
+
+"""
+    serialize_ssa_type(t) -> Any
+
+Serialize an SSA value type or slot type entry (may be Type or Core.Const).
+"""
+function serialize_ssa_type(t)
+    if t isa Core.Const
+        val = t.val
+        if val isa Core.IntrinsicFunction
+            return Dict("_t" => "const", "val" => Dict("_t" => "intrinsic", "name" => string(nameof(val))),
+                         "jt" => "Core.IntrinsicFunction")
+        elseif val isa Core.Builtin
+            return Dict("_t" => "const", "val" => Dict("_t" => "builtin", "name" => string(nameof(val))),
+                         "jt" => "Core.Builtin")
+        elseif val isa Function
+            # User-defined functions: store just the type (codegen only needs the type)
+            return serialize_type_name(typeof(val))
+        else
+            return Dict("_t" => "const", "val" => serialize_ir_value(val),
+                         "jt" => serialize_type_name(typeof(val)))
+        end
+    elseif t isa Type
+        return serialize_type_name(t)
+    else
+        return Dict("_t" => "opaque_type", "repr" => repr(t))
+    end
+end
+
+"""
+    serialize_ir_entries(ir_entries::Vector) -> String
+
+Serialize preprocessed IR entries to a JSON string for transport.
+Each entry is (code_info, return_type, arg_types, func_name).
+
+Call preprocess_ir_entries FIRST to resolve GlobalRefs before serialization.
+"""
+function serialize_ir_entries(ir_entries::Vector)::String
+    entries = []
+    for (code_info, return_type, arg_types, name) in ir_entries
+        entry = Dict(
+            "name" => name,
+            "arg_types" => [serialize_type_name(T) for T in arg_types],
+            "return_type" => serialize_type_name(return_type),
+            "code" => [serialize_ir_stmt(stmt) for stmt in code_info.code],
+            "ssavaluetypes" => [serialize_ssa_type(t) for t in code_info.ssavaluetypes],
+            "slottypes" => code_info.slottypes !== nothing ?
+                [serialize_ssa_type(t) for t in code_info.slottypes] : nothing,
+            "slotnames" => [string(s) for s in code_info.slotnames],
+            "ssaflags" => Int64.(code_info.ssaflags),
+            "slotflags" => Int64.(code_info.slotflags),
+        )
+        push!(entries, entry)
+    end
+    return JSON.json(Dict("version" => 1, "entries" => entries))
+end
+
+# ---- Deserialization ----
+
+const _TYPE_MAP = Dict{String, Type}(
+    "Int64" => Int64, "Int32" => Int32, "UInt64" => UInt64, "UInt32" => UInt32,
+    "Float64" => Float64, "Float32" => Float32, "Bool" => Bool,
+    "Nothing" => Nothing, "String" => String, "Symbol" => Symbol,
+    "Any" => Any, "Union{}" => Union{},
+)
+
+"""
+    deserialize_type_name(s::AbstractString) -> Type
+
+Reconstruct a Julia type from its serialized string name.
+"""
+function deserialize_type_name(s::AbstractString)::Type
+    haskey(_TYPE_MAP, s) && return _TYPE_MAP[s]
+    try
+        return Core.eval(Main, Meta.parse(s))
+    catch
+        return Any
+    end
+end
+
+"""
+    deserialize_ir_value(d) -> Any
+
+Reconstruct a Julia IR value from its JSON representation.
+"""
+function deserialize_ir_value(d)
+    d isa Bool && return d
+    d isa AbstractString && return d
+    d isa Number && return d
+    !isa(d, Dict) && return d
+
+    tag = get(d, "_t", "")
+    if tag == "ssa"
+        return Core.SSAValue(d["id"])
+    elseif tag == "arg"
+        return Core.Argument(d["n"])
+    elseif tag == "intrinsic"
+        return getfield(Core.Intrinsics, Symbol(d["name"]))
+    elseif tag == "builtin"
+        return getfield(Core, Symbol(d["name"]))
+    elseif tag == "globalref"
+        mod = d["mod"] == "Core" ? Core : d["mod"] == "Base" ? Base : Main
+        return GlobalRef(mod, Symbol(d["name"]))
+    elseif tag == "quote"
+        return QuoteNode(deserialize_ir_value(d["value"]))
+    elseif tag == "symbol"
+        return Symbol(d["name"])
+    elseif tag == "lit"
+        jt = d["jt"]
+        v = d["v"]
+        jt == "Int64" && return Int64(v)
+        jt == "Int32" && return Int32(v)
+        jt == "UInt64" && return UInt64(v)
+        jt == "UInt32" && return UInt32(v)
+        jt == "Float64" && return Float64(v)
+        jt == "Float32" && return Float32(v)
+        jt == "Bool" && return Bool(v)
+        return v
+    elseif tag == "nothing"
+        return nothing
+    elseif tag == "type"
+        return deserialize_type_name(d["name"])
+    elseif tag == "expr"
+        return deserialize_ir_stmt(d)
+    elseif tag == "undef"
+        return nothing
+    else
+        error("Unknown IR value tag: $tag")
+    end
+end
+
+"""
+    deserialize_ir_stmt(d::Dict) -> Any
+
+Reconstruct a Julia IR statement from its JSON representation.
+"""
+function deserialize_ir_stmt(d::Dict)
+    tag = d["_t"]
+    if tag == "expr"
+        head = Symbol(d["head"])
+        args = Any[deserialize_ir_value(a) for a in d["args"]]
+        return Expr(head, args...)
+    elseif tag == "return"
+        if haskey(d, "val")
+            return Core.ReturnNode(deserialize_ir_value(d["val"]))
+        else
+            return Core.ReturnNode()
+        end
+    elseif tag == "goto"
+        return Core.GotoNode(d["label"])
+    elseif tag == "gotoifnot"
+        return Core.GotoIfNot(deserialize_ir_value(d["cond"]), d["dest"])
+    elseif tag == "phi"
+        edges = Int32.(d["edges"])
+        vals = Any[deserialize_ir_value(v) for v in d["values"]]
+        return Core.PhiNode(edges, vals)
+    elseif tag == "pi"
+        return Core.PiNode(deserialize_ir_value(d["val"]),
+                           deserialize_type_name(d["typ"]))
+    elseif tag == "nothing"
+        return nothing
+    else
+        error("Unknown IR statement tag: $tag")
+    end
+end
+
+"""
+    deserialize_ssa_type(d) -> Any
+
+Reconstruct an SSA/slot type entry from its JSON representation.
+"""
+function deserialize_ssa_type(d)
+    if d isa AbstractString
+        return deserialize_type_name(d)
+    elseif d isa Dict
+        tag = get(d, "_t", "")
+        if tag == "const"
+            val = deserialize_ir_value(d["val"])
+            return Core.Const(val)
+        end
+    end
+    return Any
+end
+
+"""
+    _make_template_codeinfo() -> Core.CodeInfo
+
+Get a template CodeInfo that can be copied and modified for deserialization.
+"""
+function _make_template_codeinfo()
+    _noop() = nothing
+    ci, _ = Base.code_typed(_noop, (); optimize=true)[1]
+    return ci
+end
+
+"""
+    deserialize_ir_entries(json_str::String) -> Vector{Tuple}
+
+Deserialize a JSON string back to IR entries for compile_module_from_ir.
+Returns Vector of (CodeInfo, return_type, arg_types, name) tuples.
+"""
+function deserialize_ir_entries(json_str::String)
+    data = JSON.parse(json_str)
+    version = get(data, "version", 0)
+    version == 1 || error("Unsupported CodeInfo transport version: $version")
+
+    template = _make_template_codeinfo()
+    result = []
+
+    for entry in data["entries"]
+        ci = copy(template)
+        ci.code = Any[deserialize_ir_stmt(s) for s in entry["code"]]
+        ci.ssavaluetypes = Any[deserialize_ssa_type(t) for t in entry["ssavaluetypes"]]
+        if entry["slottypes"] !== nothing
+            ci.slottypes = Any[deserialize_ssa_type(t) for t in entry["slottypes"]]
+        end
+        ci.slotnames = Symbol[Symbol(s) for s in entry["slotnames"]]
+        ci.ssaflags = UInt32.(entry["ssaflags"])
+        ci.slotflags = UInt8.(entry["slotflags"])
+
+        return_type = deserialize_type_name(entry["return_type"])
+        arg_types = Tuple(deserialize_type_name.(entry["arg_types"]))
+        name = entry["name"]
+
+        push!(result, (ci, return_type, arg_types, name))
+    end
+
+    return result
 end
 
