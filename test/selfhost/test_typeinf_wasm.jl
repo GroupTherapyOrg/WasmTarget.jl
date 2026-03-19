@@ -91,10 +91,15 @@ end
 println("\n=== Step 4: Probe deeper typeinf functions ===")
 
 # These are key functions called during typeinf
+# Phase 1 learned: manual function listing is more reliable than transitive discovery.
 deeper_targets = [
-    # findall is already compiled as WasmGC function (PHASE-2A-005)
-    # These are functions typeinf calls after getting a method match
     (Core.Compiler.specialize_method, (Core.MethodMatch,), "specialize_method"),
+    # Core typeinf infrastructure
+    (Core.Compiler.typeinf,          (interp_type, typeof(frame)), "typeinf"),
+    (Core.Compiler.typeinf_local,     (interp_type, typeof(frame)), "typeinf_local"),
+    # Method matching
+    (Core.Compiler.findall, (Type, typeof(interp.method_table.table)), "findall_DictMethodTable"),
+    (Core.Compiler.isoverlayed, (typeof(interp.method_table.table),), "isoverlayed"),
 ]
 
 for (f, atypes, name) in deeper_targets
