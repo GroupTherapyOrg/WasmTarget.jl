@@ -1714,6 +1714,7 @@ end
 
 Compile pre-computed typed CodeInfo entries to a WasmModule, bypassing Base.code_typed().
 Each entry is (code_info::CodeInfo, return_type::Type, arg_types::Tuple, name::String).
+Optionally a 5th element func_ref can be provided for cross-function call resolution.
 
 This is the entry point for the eval_julia pipeline where type inference has already been run.
 Unlike compile_module, this does NOT call get_typed_ir() or discover_dependencies().
@@ -1738,7 +1739,10 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
 
     # Build function_data from pre-computed IR (no get_typed_ir call)
     function_data = []
-    for (code_info, return_type, arg_types, name) in ir_entries
+    for entry in ir_entries
+        code_info, return_type, arg_types, name = entry[1], entry[2], entry[3], entry[4]
+        # Optional 5th element: func_ref for cross-function call resolution
+        func_ref = length(entry) >= 5 ? entry[5] : nothing
         global_args = Set{Int}()
 
         # Register types used in parameters
@@ -1763,7 +1767,7 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
             get_string_array_type!(mod, type_registry)
         end
 
-        push!(function_data, (nothing, arg_types, name, code_info, return_type, global_args, false))
+        push!(function_data, (func_ref, arg_types, name, code_info, return_type, global_args, false))
     end
 
     # Scan for GlobalRef to mutable structs (same as compile_module)
