@@ -812,3 +812,175 @@ function compare_server_vs_selfhosted(f, arg_types::Tuple; test_args=nothing, fu
             server=server_result, transport=transport_result,
             server_size=length(server_bytes), transport_size=length(transport_bytes))
 end
+
+# ============================================================================
+# Browser TypeInf Comparison — Phase 2 (PHASE-2-T01)
+# ============================================================================
+
+# Global state: typeinf overrides loaded flag
+const _TYPEINF_OVERRIDES_LOADED = Ref{Bool}(false)
+
+"""
+    compare_server_vs_browser_typeinf(functions::Vector; world=nothing) -> Vector{NamedTuple}
+
+Batch three-way comparison: server typeinf vs browser (WasmInterpreter) typeinf vs native.
+
+Each element of `functions` is a tuple: `(f, arg_types, name, test_args_list)` where
+`test_args_list` is a vector of argument tuples.
+
+For each function, compares:
+1. Server: code_typed → return type
+2. Browser: WasmInterpreter typeinf → return type (must match server)
+3. Execution: compile → run in Node.js → result must match native Julia
+
+IMPORTANT: This function loads typeinf overrides on first call. These overrides are
+IRREVERSIBLE — Base._methods_by_ftype and Base.typeintersect are overridden globally.
+ALL code_typed/code_lowered/methods()/process spawning MUST happen before overrides load.
+Call this ONCE per process with all functions to compare.
+
+Returns a vector of NamedTuples, one per function.
+"""
+function compare_server_vs_browser_typeinf(functions::Vector; world::Union{Nothing,UInt64}=nothing)
+    if world === nothing
+        world = Base.get_world_counter()
+    end
+
+    if _TYPEINF_OVERRIDES_LOADED[]
+        error("Typeinf overrides already loaded. compare_server_vs_browser_typeinf can only be called ONCE per process (before overrides).")
+    end
+
+    native_mt = Core.Compiler.InternalMethodTable(world)
+
+    # Common callee signatures (arithmetic, comparison ops)
+    callee_sigs = [
+        Tuple{typeof(+), Int64, Int64}, Tuple{typeof(-), Int64, Int64},
+        Tuple{typeof(*), Int64, Int64}, Tuple{typeof(+), Float64, Float64},
+        Tuple{typeof(-), Float64, Float64}, Tuple{typeof(*), Float64, Float64},
+        Tuple{typeof(<), Float64, Float64}, Tuple{typeof(>), Float64, Float64},
+        Tuple{typeof(>=), Int64, Int64}, Tuple{typeof(<=), Int64, Int64},
+        Tuple{typeof(>), Int64, Int64}, Tuple{typeof(<), Int64, Int64},
+        Tuple{typeof(÷), Int64, Int64}, Tuple{typeof(%), Int64, Int64},
+        Tuple{typeof(⊻), Int64, Int64},
+    ]
+
+    # ── Phase A: Pre-compute ALL data BEFORE loading overrides ──
+    precomputed = []
+    shared_methods = Dict{Any, Core.Compiler.MethodLookupResult}()
+
+    # Pre-compute callee methods
+    for csig in callee_sigs
+        r = Core.Compiler.findall(csig, native_mt; limit=3)
+        if r !== nothing
+            shared_methods[csig] = r
+        end
+    end
+
+    for (f, arg_types, name, test_args_list) in functions
+        sig = Tuple{typeof(f), arg_types...}
+
+        # Server typeinf
+        server_ci, server_ret = Base.code_typed(f, arg_types)[1]
+
+        # Method table entry
+        r = Core.Compiler.findall(sig, native_mt; limit=3)
+        if r !== nothing
+            shared_methods[sig] = r
+        end
+
+        # MethodInstance + CodeInfo for WasmInterpreter
+        mi = Core.Compiler.specialize_method(
+            first(methods(f, arg_types)),
+            sig, Core.svec()
+        )
+        src = Core.Compiler.retrieve_code_info(mi, world)
+
+        # Compile + execute for each test case
+        exec_results = []
+        try
+            bytes = WasmTarget.compile(f, arg_types)
+            for args in test_args_list
+                native = f(args...)
+                wasm = nothing
+                try
+                    wasm = run_wasm(bytes, name, args...)
+                catch e
+                    wasm = "ERROR: $e"
+                end
+                push!(exec_results, (args=args, native=native, wasm=wasm,
+                    pass=(native isa Float64 ? (wasm isa Number && abs(Float64(wasm) - native) < 1e-10) : wasm == native)))
+            end
+        catch e
+            push!(exec_results, (args=(), native=nothing, wasm="COMPILE ERROR: $e", pass=false))
+        end
+
+        push!(precomputed, (name=name, server_ret=server_ret, mi=mi, src=src,
+                           exec_results=exec_results))
+    end
+
+    # ── Phase B: Load overrides (once, irreversible) ──
+    typeinf_dir = joinpath(@__DIR__, "..", "src", "typeinf")
+    include(joinpath(typeinf_dir, "ccall_stubs.jl"))
+    include(joinpath(typeinf_dir, "subtype.jl"))
+    include(joinpath(typeinf_dir, "matching.jl"))
+    include(joinpath(typeinf_dir, "ccall_replacements.jl"))
+    include(joinpath(typeinf_dir, "dict_method_table.jl"))
+    _TYPEINF_OVERRIDES_LOADED[] = true
+
+    # ── Phase C: Browser typeinf via WasmInterpreter ──
+    results = NamedTuple[]
+    for pc in precomputed
+        browser_ret = nothing
+        try
+            browser_ret = @invokelatest _run_browser_typeinf(pc.mi, pc.src, world, shared_methods)
+        catch e
+            browser_ret = "ERROR: $(sprint(showerror, e))"
+        end
+
+        types_match = pc.server_ret == browser_ret
+        exec_pass = all(r -> r.pass, pc.exec_results)
+        pass = types_match && exec_pass
+
+        push!(results, (name=pc.name, pass=pass,
+            server_type=pc.server_ret, browser_type=browser_ret,
+            types_match=types_match, exec_results=pc.exec_results))
+    end
+
+    return results
+end
+
+# Single-function convenience wrapper
+function compare_server_vs_browser_typeinf(f, arg_types::Tuple;
+                                            test_args=nothing, func_name=nothing)
+    if func_name === nothing
+        func_name = string(nameof(f))
+    end
+    if test_args === nothing
+        test_args = Tuple(zero(T) for T in arg_types)
+    end
+    results = compare_server_vs_browser_typeinf(
+        [(f, arg_types, func_name, [test_args])]
+    )
+    r = first(results)
+    er = first(r.exec_results)
+    return (pass=r.pass, server_type=r.server_type, browser_type=r.browser_type,
+            types_match=r.types_match, native=er.native, server_wasm=er.wasm)
+end
+
+"""
+    _run_browser_typeinf(mi, src, world, method_entries) -> Any
+
+Internal helper. Runs WasmInterpreter typeinf in the new world context.
+Must be called via @invokelatest to see dynamically loaded method definitions.
+"""
+function _run_browser_typeinf(mi::Core.MethodInstance, src::Core.CodeInfo,
+                               world::UInt64, method_entries::Dict)
+    table = DictMethodTable(world)
+    for (k, v) in method_entries
+        table.methods[k] = v
+    end
+    interp = WasmInterpreter(world, table)
+    result = Core.Compiler.InferenceResult(mi)
+    frame = Core.Compiler.InferenceState(result, src, :no, interp)
+    Core.Compiler.typeinf(interp, frame)
+    return result.result
+end
