@@ -1,17 +1,11 @@
 {
-  "generated": "2026-03-19T01:33:08.931",
+  "generated": "2026-03-19T02:39:55.904",
   "name": "gt_negate",
   "entries": [
     {
-      "expected": -5,
+      "expected": -3,
       "args": [
-        5
-      ]
-    },
-    {
-      "expected": 3,
-      "args": [
-        -3
+        3
       ]
     }
   ],

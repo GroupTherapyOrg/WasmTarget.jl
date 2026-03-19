@@ -1,11 +1,5 @@
 {
-  "name": "golden_fadd",
-  "wasm_size": 4448,
-  "wasm_sha256": "72a1cf9d0612691532a1e233e4099ade25d446c2ffc98956078b803ba177aee1",
-  "arg_types": [
-    "Float64",
-    "Float64"
-  ],
+  "return_type": "Float64",
   "test_cases": [
     {
       "expected": 4.0,
@@ -29,15 +23,26 @@
       ]
     }
   ],
-  "return_type": "Float64",
+  "wasm_size": 4449,
   "codeinfo": {
+    "version": 1,
     "entries": [
       {
-        "name": "golden_fadd",
+        "return_type": "Float64",
+        "slottypes": [
+          "typeof(golden_fadd)",
+          "Float64",
+          "Float64"
+        ],
         "slotflags": [
           0,
           8,
           8
+        ],
+        "name": "golden_fadd",
+        "ssavaluetypes": [
+          "Float64",
+          "Any"
         ],
         "slotnames": [
           "#self#",
@@ -48,11 +53,6 @@
           9336,
           132136
         ],
-        "slottypes": [
-          "typeof(golden_fadd)",
-          "Float64",
-          "Float64"
-        ],
         "arg_types": [
           "Float64",
           "Float64"
@@ -60,21 +60,21 @@
         "code": [
           {
             "_t": "expr",
-            "head": "call",
             "args": [
               {
-                "_t": "intrinsic",
-                "name": "add_float"
+                "name": "add_float",
+                "_t": "intrinsic"
               },
               {
-                "_t": "arg",
-                "n": 2
+                "n": 2,
+                "_t": "arg"
               },
               {
-                "_t": "arg",
-                "n": 3
+                "n": 3,
+                "_t": "arg"
               }
-            ]
+            ],
+            "head": "call"
           },
           {
             "_t": "return",
@@ -83,14 +83,14 @@
               "id": 1
             }
           }
-        ],
-        "ssavaluetypes": [
-          "Float64",
-          "Any"
-        ],
-        "return_type": "Float64"
+        ]
       }
-    ],
-    "version": 1
-  }
+    ]
+  },
+  "name": "golden_fadd",
+  "arg_types": [
+    "Float64",
+    "Float64"
+  ],
+  "wasm_sha256": "a90701d8e89c6c5511e19072ef605e61b0537b2d5a77a0c48ade19eb32747413"
 }

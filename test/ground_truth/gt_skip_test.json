@@ -1,11 +1,11 @@
 {
-  "generated": "2026-03-19T01:33:09.308",
+  "generated": "2026-03-19T02:39:55.909",
   "name": "gt_skip_test",
   "entries": [
     {
-      "expected": 1,
+      "expected": 42,
       "args": [
-        1
+        42
       ]
     }
   ],

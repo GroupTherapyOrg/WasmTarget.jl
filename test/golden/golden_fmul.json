@@ -1,11 +1,5 @@
 {
-  "name": "golden_fmul",
-  "wasm_size": 4448,
-  "wasm_sha256": "1b78b576da71ab585e692ebb89754d2f9089b4034a6a84552bfb4d1931a029b3",
-  "arg_types": [
-    "Float64",
-    "Float64"
-  ],
+  "return_type": "Float64",
   "test_cases": [
     {
       "expected": 12.0,
@@ -29,15 +23,26 @@
       ]
     }
   ],
-  "return_type": "Float64",
+  "wasm_size": 4449,
   "codeinfo": {
+    "version": 1,
     "entries": [
       {
-        "name": "golden_fmul",
+        "return_type": "Float64",
+        "slottypes": [
+          "typeof(golden_fmul)",
+          "Float64",
+          "Float64"
+        ],
         "slotflags": [
           0,
           8,
           8
+        ],
+        "name": "golden_fmul",
+        "ssavaluetypes": [
+          "Float64",
+          "Any"
         ],
         "slotnames": [
           "#self#",
@@ -48,11 +53,6 @@
           9336,
           132136
         ],
-        "slottypes": [
-          "typeof(golden_fmul)",
-          "Float64",
-          "Float64"
-        ],
         "arg_types": [
           "Float64",
           "Float64"
@@ -60,21 +60,21 @@
         "code": [
           {
             "_t": "expr",
-            "head": "call",
             "args": [
               {
-                "_t": "intrinsic",
-                "name": "mul_float"
+                "name": "mul_float",
+                "_t": "intrinsic"
               },
               {
-                "_t": "arg",
-                "n": 2
+                "n": 2,
+                "_t": "arg"
               },
               {
-                "_t": "arg",
-                "n": 3
+                "n": 3,
+                "_t": "arg"
               }
-            ]
+            ],
+            "head": "call"
           },
           {
             "_t": "return",
@@ -83,14 +83,14 @@
               "id": 1
             }
           }
-        ],
-        "ssavaluetypes": [
-          "Float64",
-          "Any"
-        ],
-        "return_type": "Float64"
+        ]
       }
-    ],
-    "version": 1
-  }
+    ]
+  },
+  "name": "golden_fmul",
+  "arg_types": [
+    "Float64",
+    "Float64"
+  ],
+  "wasm_sha256": "51f222f40d4f1f25523d9e7353bb0dba9ac1e2d549f0a80a130efd121c43fbf0"
 }

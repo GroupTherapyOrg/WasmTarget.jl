@@ -1,10 +1,5 @@
 {
-  "name": "golden_clamp",
-  "wasm_size": 4483,
-  "wasm_sha256": "0486a04c330727e9e06c0cbabab13b2cf67a2306ff8e1310aeb25bb9cc50ab96",
-  "arg_types": [
-    "Int64"
-  ],
+  "return_type": "Int64",
   "test_cases": [
     {
       "expected": 0,
@@ -31,14 +26,29 @@
       ]
     }
   ],
-  "return_type": "Int64",
+  "wasm_size": 4484,
   "codeinfo": {
+    "version": 1,
     "entries": [
       {
-        "name": "golden_clamp",
+        "return_type": "Int64",
+        "slottypes": [
+          "typeof(golden_clamp)",
+          "Int64"
+        ],
         "slotflags": [
           0,
           8
+        ],
+        "name": "golden_clamp",
+        "ssavaluetypes": [
+          "Bool",
+          "Any",
+          "Any",
+          "Bool",
+          "Any",
+          "Any",
+          "Any"
         ],
         "slotnames": [
           "#self#",
@@ -53,104 +63,94 @@
           132136,
           132136
         ],
-        "slottypes": [
-          "typeof(golden_clamp)",
-          "Int64"
-        ],
         "arg_types": [
           "Int64"
         ],
         "code": [
           {
             "_t": "expr",
-            "head": "call",
             "args": [
               {
-                "_t": "intrinsic",
-                "name": "slt_int"
+                "name": "slt_int",
+                "_t": "intrinsic"
               },
               {
-                "_t": "arg",
-                "n": 2
+                "n": 2,
+                "_t": "arg"
               },
               {
-                "_t": "lit",
                 "v": 0,
+                "_t": "lit",
                 "jt": "Int64"
               }
-            ]
+            ],
+            "head": "call"
           },
           {
-            "_t": "gotoifnot",
             "cond": {
               "_t": "ssa",
               "id": 1
             },
-            "dest": 4
+            "dest": 4,
+            "_t": "gotoifnot"
           },
           {
             "_t": "return",
             "val": {
-              "_t": "lit",
               "v": 0,
+              "_t": "lit",
               "jt": "Int64"
             }
           },
           {
             "_t": "expr",
-            "head": "call",
             "args": [
               {
-                "_t": "intrinsic",
-                "name": "slt_int"
+                "name": "slt_int",
+                "_t": "intrinsic"
               },
               {
-                "_t": "lit",
                 "v": 100,
+                "_t": "lit",
                 "jt": "Int64"
               },
               {
-                "_t": "arg",
-                "n": 2
+                "n": 2,
+                "_t": "arg"
               }
-            ]
+            ],
+            "head": "call"
           },
           {
-            "_t": "gotoifnot",
             "cond": {
               "_t": "ssa",
               "id": 4
             },
-            "dest": 7
+            "dest": 7,
+            "_t": "gotoifnot"
           },
           {
             "_t": "return",
             "val": {
-              "_t": "lit",
               "v": 100,
+              "_t": "lit",
               "jt": "Int64"
             }
           },
           {
             "_t": "return",
             "val": {
-              "_t": "arg",
-              "n": 2
+              "n": 2,
+              "_t": "arg"
             }
           }
-        ],
-        "ssavaluetypes": [
-          "Bool",
-          "Any",
-          "Any",
-          "Bool",
-          "Any",
-          "Any",
-          "Any"
-        ],
-        "return_type": "Int64"
+        ]
       }
-    ],
-    "version": 1
-  }
+    ]
+  },
+  "name": "golden_clamp",
+  "arg_types": [
+    "Int64"
+  ],
+  "wasm_sha256": "ab3a657b7e121182f1fbb73e2dd20d2207b432ab3ea2bbcc02ecf01d476c6ed4"
 }

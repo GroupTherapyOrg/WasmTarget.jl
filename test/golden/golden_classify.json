@@ -1,10 +1,5 @@
 {
-  "name": "golden_classify",
-  "wasm_size": 4510,
-  "wasm_sha256": "36a218030c5f34e298673fb9b82c24be2951db7e842313fd3935935926410f97",
-  "arg_types": [
-    "Int64"
-  ],
+  "return_type": "Int64",
   "test_cases": [
     {
       "expected": 3,
@@ -31,14 +26,40 @@
       ]
     }
   ],
-  "return_type": "Int64",
+  "wasm_size": 4511,
   "codeinfo": {
+    "version": 1,
     "entries": [
       {
-        "name": "golden_classify",
+        "return_type": "Int64",
+        "slottypes": [
+          "typeof(golden_classify)",
+          "Int64"
+        ],
         "slotflags": [
           0,
           8
+        ],
+        "name": "golden_classify",
+        "ssavaluetypes": [
+          "Bool",
+          "Any",
+          "Nothing",
+          "Nothing",
+          "Any",
+          "Bool",
+          "Any",
+          "Nothing",
+          "Nothing",
+          "Any",
+          "Bool",
+          "Any",
+          "Nothing",
+          "Nothing",
+          "Any",
+          "Nothing",
+          "Nothing",
+          "Any"
         ],
         "slotnames": [
           "#self#",
@@ -64,40 +85,36 @@
           9336,
           132136
         ],
-        "slottypes": [
-          "typeof(golden_classify)",
-          "Int64"
-        ],
         "arg_types": [
           "Int64"
         ],
         "code": [
           {
             "_t": "expr",
-            "head": "call",
             "args": [
               {
-                "_t": "intrinsic",
-                "name": "slt_int"
+                "name": "slt_int",
+                "_t": "intrinsic"
               },
               {
-                "_t": "lit",
                 "v": 100,
+                "_t": "lit",
                 "jt": "Int64"
               },
               {
-                "_t": "arg",
-                "n": 2
+                "n": 2,
+                "_t": "arg"
               }
-            ]
+            ],
+            "head": "call"
           },
           {
-            "_t": "gotoifnot",
             "cond": {
               "_t": "ssa",
               "id": 1
             },
-            "dest": 6
+            "dest": 6,
+            "_t": "gotoifnot"
           },
           {
             "_t": "nothing"
@@ -108,37 +125,37 @@
           {
             "_t": "return",
             "val": {
-              "_t": "lit",
               "v": 3,
+              "_t": "lit",
               "jt": "Int64"
             }
           },
           {
             "_t": "expr",
-            "head": "call",
             "args": [
               {
-                "_t": "intrinsic",
-                "name": "slt_int"
+                "name": "slt_int",
+                "_t": "intrinsic"
               },
               {
-                "_t": "lit",
                 "v": 0,
+                "_t": "lit",
                 "jt": "Int64"
               },
               {
-                "_t": "arg",
-                "n": 2
+                "n": 2,
+                "_t": "arg"
               }
-            ]
+            ],
+            "head": "call"
           },
           {
-            "_t": "gotoifnot",
             "cond": {
               "_t": "ssa",
               "id": 6
             },
-            "dest": 11
+            "dest": 11,
+            "_t": "gotoifnot"
           },
           {
             "_t": "nothing"
@@ -149,37 +166,37 @@
           {
             "_t": "return",
             "val": {
-              "_t": "lit",
               "v": 2,
+              "_t": "lit",
               "jt": "Int64"
             }
           },
           {
             "_t": "expr",
-            "head": "call",
             "args": [
               {
-                "_t": "builtin",
-                "name": "==="
+                "name": "===",
+                "_t": "builtin"
               },
               {
-                "_t": "arg",
-                "n": 2
+                "n": 2,
+                "_t": "arg"
               },
               {
-                "_t": "lit",
                 "v": 0,
+                "_t": "lit",
                 "jt": "Int64"
               }
-            ]
+            ],
+            "head": "call"
           },
           {
-            "_t": "gotoifnot",
             "cond": {
               "_t": "ssa",
               "id": 11
             },
-            "dest": 16
+            "dest": 16,
+            "_t": "gotoifnot"
           },
           {
             "_t": "nothing"
@@ -190,8 +207,8 @@
           {
             "_t": "return",
             "val": {
-              "_t": "lit",
               "v": 1,
+              "_t": "lit",
               "jt": "Int64"
             }
           },
@@ -204,35 +221,18 @@
           {
             "_t": "return",
             "val": {
-              "_t": "lit",
               "v": 0,
+              "_t": "lit",
               "jt": "Int64"
             }
           }
-        ],
-        "ssavaluetypes": [
-          "Bool",
-          "Any",
-          "Nothing",
-          "Nothing",
-          "Any",
-          "Bool",
-          "Any",
-          "Nothing",
-          "Nothing",
-          "Any",
-          "Bool",
-          "Any",
-          "Nothing",
-          "Nothing",
-          "Any",
-          "Nothing",
-          "Nothing",
-          "Any"
-        ],
-        "return_type": "Int64"
+        ]
       }
-    ],
-    "version": 1
-  }
+    ]
+  },
+  "name": "golden_classify",
+  "arg_types": [
+    "Int64"
+  ],
+  "wasm_sha256": "a459de409399ce923c7011543b3428127681844ef5eb9dbe06155c18cf63c0b6"
 }

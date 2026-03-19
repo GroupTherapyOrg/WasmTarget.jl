@@ -1,10 +1,5 @@
 {
-  "name": "golden_poly3",
-  "wasm_size": 4483,
-  "wasm_sha256": "8558d3e56524ba01907b97e46aa68aa1f410a33b3a768d3249796e58c059206b",
-  "arg_types": [
-    "Int64"
-  ],
+  "return_type": "Int64",
   "test_cases": [
     {
       "expected": 2,
@@ -31,14 +26,28 @@
       ]
     }
   ],
-  "return_type": "Int64",
+  "wasm_size": 4484,
   "codeinfo": {
+    "version": 1,
     "entries": [
       {
-        "name": "golden_poly3",
+        "return_type": "Int64",
+        "slottypes": [
+          "typeof(golden_poly3)",
+          "Int64"
+        ],
         "slotflags": [
           0,
           8
+        ],
+        "name": "golden_poly3",
+        "ssavaluetypes": [
+          "Int64",
+          "Int64",
+          "Int64",
+          "Int64",
+          "Int64",
+          "Any"
         ],
         "slotnames": [
           "#self#",
@@ -52,76 +61,71 @@
           9336,
           132136
         ],
-        "slottypes": [
-          "typeof(golden_poly3)",
-          "Int64"
-        ],
         "arg_types": [
           "Int64"
         ],
         "code": [
           {
             "_t": "expr",
-            "head": "call",
             "args": [
               {
-                "_t": "intrinsic",
-                "name": "mul_int"
+                "name": "mul_int",
+                "_t": "intrinsic"
               },
               {
-                "_t": "arg",
-                "n": 2
+                "n": 2,
+                "_t": "arg"
               },
               {
-                "_t": "arg",
-                "n": 2
+                "n": 2,
+                "_t": "arg"
               }
-            ]
+            ],
+            "head": "call"
           },
           {
             "_t": "expr",
-            "head": "call",
             "args": [
               {
-                "_t": "intrinsic",
-                "name": "mul_int"
+                "name": "mul_int",
+                "_t": "intrinsic"
               },
               {
                 "_t": "ssa",
                 "id": 1
               },
               {
-                "_t": "arg",
-                "n": 2
+                "n": 2,
+                "_t": "arg"
               }
-            ]
+            ],
+            "head": "call"
           },
           {
             "_t": "expr",
-            "head": "call",
             "args": [
               {
-                "_t": "intrinsic",
-                "name": "mul_int"
+                "name": "mul_int",
+                "_t": "intrinsic"
               },
               {
-                "_t": "lit",
                 "v": 3,
+                "_t": "lit",
                 "jt": "Int64"
               },
               {
-                "_t": "arg",
-                "n": 2
+                "n": 2,
+                "_t": "arg"
               }
-            ]
+            ],
+            "head": "call"
           },
           {
             "_t": "expr",
-            "head": "call",
             "args": [
               {
-                "_t": "intrinsic",
-                "name": "sub_int"
+                "name": "sub_int",
+                "_t": "intrinsic"
               },
               {
                 "_t": "ssa",
@@ -131,26 +135,27 @@
                 "_t": "ssa",
                 "id": 3
               }
-            ]
+            ],
+            "head": "call"
           },
           {
             "_t": "expr",
-            "head": "call",
             "args": [
               {
-                "_t": "intrinsic",
-                "name": "add_int"
+                "name": "add_int",
+                "_t": "intrinsic"
               },
               {
                 "_t": "ssa",
                 "id": 4
               },
               {
-                "_t": "lit",
                 "v": 2,
+                "_t": "lit",
                 "jt": "Int64"
               }
-            ]
+            ],
+            "head": "call"
           },
           {
             "_t": "return",
@@ -159,18 +164,13 @@
               "id": 5
             }
           }
-        ],
-        "ssavaluetypes": [
-          "Int64",
-          "Int64",
-          "Int64",
-          "Int64",
-          "Int64",
-          "Any"
-        ],
-        "return_type": "Int64"
+        ]
       }
-    ],
-    "version": 1
-  }
+    ]
+  },
+  "name": "golden_poly3",
+  "arg_types": [
+    "Int64"
+  ],
+  "wasm_sha256": "ecbf25d4226ef8c7db7b5a23e4b849c92dbfdc44e012fac5d4e08b54a2168cbf"
 }

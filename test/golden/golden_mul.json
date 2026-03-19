@@ -1,11 +1,5 @@
 {
-  "name": "golden_mul",
-  "wasm_size": 4452,
-  "wasm_sha256": "1fd91393ee85b5b5d42e6d7bd858d39c5a390627852b967e83fa641f8df6ef45",
-  "arg_types": [
-    "Int64",
-    "Int64"
-  ],
+  "return_type": "Int64",
   "test_cases": [
     {
       "expected": 42,
@@ -36,15 +30,26 @@
       ]
     }
   ],
-  "return_type": "Int64",
+  "wasm_size": 4453,
   "codeinfo": {
+    "version": 1,
     "entries": [
       {
-        "name": "golden_mul",
+        "return_type": "Int64",
+        "slottypes": [
+          "typeof(golden_mul)",
+          "Int64",
+          "Int64"
+        ],
         "slotflags": [
           0,
           8,
           8
+        ],
+        "name": "golden_mul",
+        "ssavaluetypes": [
+          "Int64",
+          "Any"
         ],
         "slotnames": [
           "#self#",
@@ -55,11 +60,6 @@
           9336,
           132136
         ],
-        "slottypes": [
-          "typeof(golden_mul)",
-          "Int64",
-          "Int64"
-        ],
         "arg_types": [
           "Int64",
           "Int64"
@@ -67,21 +67,21 @@
         "code": [
           {
             "_t": "expr",
-            "head": "call",
             "args": [
               {
-                "_t": "intrinsic",
-                "name": "mul_int"
+                "name": "mul_int",
+                "_t": "intrinsic"
               },
               {
-                "_t": "arg",
-                "n": 2
+                "n": 2,
+                "_t": "arg"
               },
               {
-                "_t": "arg",
-                "n": 3
+                "n": 3,
+                "_t": "arg"
               }
-            ]
+            ],
+            "head": "call"
           },
           {
             "_t": "return",
@@ -90,14 +90,14 @@
               "id": 1
             }
           }
-        ],
-        "ssavaluetypes": [
-          "Int64",
-          "Any"
-        ],
-        "return_type": "Int64"
+        ]
       }
-    ],
-    "version": 1
-  }
+    ]
+  },
+  "name": "golden_mul",
+  "arg_types": [
+    "Int64",
+    "Int64"
+  ],
+  "wasm_sha256": "54cca1f6e08a0cf93bdd14c1b63eadcaa3c5e0e13bf6dd3481ba436d53e5e2a2"
 }

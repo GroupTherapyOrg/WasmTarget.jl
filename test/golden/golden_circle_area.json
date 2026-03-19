@@ -1,10 +1,5 @@
 {
-  "name": "golden_circle_area",
-  "wasm_size": 4481,
-  "wasm_sha256": "69d8e624154498dcd654aaad9c5a27773efd30f8264cd7cba53b74dba026e293",
-  "arg_types": [
-    "Float64"
-  ],
+  "return_type": "Float64",
   "test_cases": [
     {
       "expected": 3.14159265358979,
@@ -25,14 +20,25 @@
       ]
     }
   ],
-  "return_type": "Float64",
+  "wasm_size": 4482,
   "codeinfo": {
+    "version": 1,
     "entries": [
       {
-        "name": "golden_circle_area",
+        "return_type": "Float64",
+        "slottypes": [
+          "typeof(golden_circle_area)",
+          "Float64"
+        ],
         "slotflags": [
           0,
           8
+        ],
+        "name": "golden_circle_area",
+        "ssavaluetypes": [
+          "Float64",
+          "Float64",
+          "Any"
         ],
         "slotnames": [
           "#self#",
@@ -43,50 +49,46 @@
           9336,
           132136
         ],
-        "slottypes": [
-          "typeof(golden_circle_area)",
-          "Float64"
-        ],
         "arg_types": [
           "Float64"
         ],
         "code": [
           {
             "_t": "expr",
-            "head": "call",
             "args": [
               {
-                "_t": "intrinsic",
-                "name": "mul_float"
+                "name": "mul_float",
+                "_t": "intrinsic"
               },
               {
-                "_t": "lit",
                 "v": 3.14159265358979,
+                "_t": "lit",
                 "jt": "Float64"
               },
               {
-                "_t": "arg",
-                "n": 2
+                "n": 2,
+                "_t": "arg"
               }
-            ]
+            ],
+            "head": "call"
           },
           {
             "_t": "expr",
-            "head": "call",
             "args": [
               {
-                "_t": "intrinsic",
-                "name": "mul_float"
+                "name": "mul_float",
+                "_t": "intrinsic"
               },
               {
                 "_t": "ssa",
                 "id": 1
               },
               {
-                "_t": "arg",
-                "n": 2
+                "n": 2,
+                "_t": "arg"
               }
-            ]
+            ],
+            "head": "call"
           },
           {
             "_t": "return",
@@ -95,15 +97,13 @@
               "id": 2
             }
           }
-        ],
-        "ssavaluetypes": [
-          "Float64",
-          "Float64",
-          "Any"
-        ],
-        "return_type": "Float64"
+        ]
       }
-    ],
-    "version": 1
-  }
+    ]
+  },
+  "name": "golden_circle_area",
+  "arg_types": [
+    "Float64"
+  ],
+  "wasm_sha256": "441a962c29746ad02a672ba9a03fc7ac27833b9316b204ea02a1b903353aea62"
 }

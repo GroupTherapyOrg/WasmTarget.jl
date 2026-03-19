@@ -1,10 +1,5 @@
 {
-  "name": "golden_fahrenheit",
-  "wasm_size": 4486,
-  "wasm_sha256": "70c0086a1b1ac46168c27d3a20ff9ee9bf58bc844fa26d049365d4ae36e5edbf",
-  "arg_types": [
-    "Float64"
-  ],
+  "return_type": "Float64",
   "test_cases": [
     {
       "expected": 32.0,
@@ -25,14 +20,25 @@
       ]
     }
   ],
-  "return_type": "Float64",
+  "wasm_size": 4487,
   "codeinfo": {
+    "version": 1,
     "entries": [
       {
-        "name": "golden_fahrenheit",
+        "return_type": "Float64",
+        "slottypes": [
+          "typeof(golden_fahrenheit)",
+          "Float64"
+        ],
         "slotflags": [
           0,
           8
+        ],
+        "name": "golden_fahrenheit",
+        "ssavaluetypes": [
+          "Float64",
+          "Float64",
+          "Any"
         ],
         "slotnames": [
           "#self#",
@@ -43,51 +49,47 @@
           9336,
           132136
         ],
-        "slottypes": [
-          "typeof(golden_fahrenheit)",
-          "Float64"
-        ],
         "arg_types": [
           "Float64"
         ],
         "code": [
           {
             "_t": "expr",
-            "head": "call",
             "args": [
               {
-                "_t": "intrinsic",
-                "name": "mul_float"
+                "name": "mul_float",
+                "_t": "intrinsic"
               },
               {
-                "_t": "arg",
-                "n": 2
+                "n": 2,
+                "_t": "arg"
               },
               {
-                "_t": "lit",
                 "v": 1.8,
+                "_t": "lit",
                 "jt": "Float64"
               }
-            ]
+            ],
+            "head": "call"
           },
           {
             "_t": "expr",
-            "head": "call",
             "args": [
               {
-                "_t": "intrinsic",
-                "name": "add_float"
+                "name": "add_float",
+                "_t": "intrinsic"
               },
               {
                 "_t": "ssa",
                 "id": 1
               },
               {
-                "_t": "lit",
                 "v": 32.0,
+                "_t": "lit",
                 "jt": "Float64"
               }
-            ]
+            ],
+            "head": "call"
           },
           {
             "_t": "return",
@@ -96,15 +98,13 @@
               "id": 2
             }
           }
-        ],
-        "ssavaluetypes": [
-          "Float64",
-          "Float64",
-          "Any"
-        ],
-        "return_type": "Float64"
+        ]
       }
-    ],
-    "version": 1
-  }
+    ]
+  },
+  "name": "golden_fahrenheit",
+  "arg_types": [
+    "Float64"
+  ],
+  "wasm_sha256": "30eec54492771588c15a2b8813308dc0ca0c9ecfa279730bcf9fc7503eef0652"
 }
