@@ -1,0 +1,249 @@
+{
+  "combined_top20": [
+    {
+      "name": "typeof(getproperty)",
+      "count": 316
+    },
+    {
+      "name": "typeof(getindex)",
+      "count": 312
+    },
+    {
+      "name": "typeof(iterate)",
+      "count": 266
+    },
+    {
+      "name": "typeof(setindex!)",
+      "count": 243
+    },
+    {
+      "name": "typeof(Core._typeof_captured_variable)",
+      "count": 199
+    },
+    {
+      "name": "typeof(Core.Typeof)",
+      "count": 188
+    },
+    {
+      "name": "typeof(length)",
+      "count": 179
+    },
+    {
+      "name": "typeof(Base.indexed_iterate)",
+      "count": 178
+    },
+    {
+      "name": "typeof(memoryref)",
+      "count": 150
+    },
+    {
+      "name": "Type{Compiler.CallMeta}",
+      "count": 132
+    },
+    {
+      "name": "typeof(push!)",
+      "count": 119
+    },
+    {
+      "name": "Type{Compiler.NewInstruction}",
+      "count": 97
+    },
+    {
+      "name": "typeof(Base.__safe_setindex!)",
+      "count": 95
+    },
+    {
+      "name": "typeof(Core.kwcall)",
+      "count": 88
+    },
+    {
+      "name": "typeof(Core.print)",
+      "count": 74
+    },
+    {
+      "name": "Type{BoundsError}",
+      "count": 70
+    },
+    {
+      "name": "typeof(Compiler.:⊑)",
+      "count": 67
+    },
+    {
+      "name": "Type{Compiler.Future{Compiler.CallMeta}}",
+      "count": 66
+    },
+    {
+      "name": "typeof(Base.throw_boundserror)",
+      "count": 66
+    },
+    {
+      "name": "typeof(keys)",
+      "count": 63
+    }
+  ],
+  "new_families_top20": [
+    {
+      "name": "typeof(getproperty)",
+      "count": 259
+    },
+    {
+      "name": "typeof(getindex)",
+      "count": 244
+    },
+    {
+      "name": "typeof(setindex!)",
+      "count": 222
+    },
+    {
+      "name": "typeof(iterate)",
+      "count": 202
+    },
+    {
+      "name": "typeof(Core.Typeof)",
+      "count": 188
+    },
+    {
+      "name": "typeof(Core._typeof_captured_variable)",
+      "count": 186
+    },
+    {
+      "name": "typeof(Base.indexed_iterate)",
+      "count": 140
+    },
+    {
+      "name": "typeof(length)",
+      "count": 135
+    },
+    {
+      "name": "Type{Compiler.CallMeta}",
+      "count": 132
+    },
+    {
+      "name": "typeof(memoryref)",
+      "count": 129
+    },
+    {
+      "name": "typeof(push!)",
+      "count": 108
+    },
+    {
+      "name": "Type{Compiler.NewInstruction}",
+      "count": 97
+    },
+    {
+      "name": "typeof(Base.__safe_setindex!)",
+      "count": 87
+    },
+    {
+      "name": "typeof(Core.kwcall)",
+      "count": 80
+    },
+    {
+      "name": "typeof(Core.print)",
+      "count": 74
+    },
+    {
+      "name": "typeof(Compiler.:⊑)",
+      "count": 67
+    },
+    {
+      "name": "Type{BoundsError}",
+      "count": 67
+    },
+    {
+      "name": "Type{Compiler.Future{Compiler.CallMeta}}",
+      "count": 66
+    },
+    {
+      "name": "typeof(keys)",
+      "count": 59
+    },
+    {
+      "name": "typeof(Base.throw_boundserror)",
+      "count": 59
+    }
+  ],
+  "combined": {
+    "compiler_related_count": 4074,
+    "intersections": 3601,
+    "method_signatures": 10251,
+    "elapsed_seconds": 131.37,
+    "intersections_with_env": 0
+  },
+  "combined_modules": [
+    {
+      "module_name": "Base",
+      "count": 4590
+    },
+    {
+      "module_name": "Compiler",
+      "count": 3080
+    },
+    {
+      "module_name": "Core",
+      "count": 2338
+    },
+    {
+      "module_name": "Base.Compiler.EscapeAnalysis",
+      "count": 77
+    },
+    {
+      "module_name": "Base.Iterators",
+      "count": 76
+    },
+    {
+      "module_name": "Base.Order",
+      "count": 36
+    },
+    {
+      "module_name": "WasmTarget",
+      "count": 28
+    },
+    {
+      "module_name": "Main",
+      "count": 10
+    },
+    {
+      "module_name": "Base.HashArrayMappedTries",
+      "count": 9
+    },
+    {
+      "module_name": "Base.ScopedValues",
+      "count": 2
+    },
+    {
+      "module_name": "Core.OptimizedGenerics.KeyValue",
+      "count": 2
+    },
+    {
+      "module_name": "Base.MPFR",
+      "count": 1
+    },
+    {
+      "module_name": "Base.IteratorsMD",
+      "count": 1
+    },
+    {
+      "module_name": "Base.Rounding",
+      "count": 1
+    }
+  ],
+  "codegen_only": {
+    "intersections": 5783,
+    "method_signatures": 17171,
+    "matches_phase1": true,
+    "elapsed_seconds": 170.37
+  },
+  "phase1_baseline": {
+    "intersections": 5783,
+    "method_signatures": 17171
+  },
+  "timestamp": "2026-03-18T23:08:55.010",
+  "story": "PHASE-2-PREP-001",
+  "delta": {
+    "unique_to_typeinf": 9145,
+    "new_signatures": -6920,
+    "pct_growth": -40.3,
+    "new_intersections": -2182
+  }
+}
