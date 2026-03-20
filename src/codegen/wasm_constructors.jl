@@ -552,3 +552,36 @@ function wasm_compile_flat(instrs::Vector{Int32}, n_params::Int32)::Vector{UInt8
 
     return result
 end
+
+# ============================================================================
+# WasmGC String constructors — F-004
+# ============================================================================
+# Enable JS to build WasmGC Strings (i32 arrays) for passing to WASM functions.
+#
+# In WasmTarget.jl, String compiles to a WasmGC i32 array. These constructors
+# use Vector{Int32} as the creation type (same WASM representation) so that
+# array operations compile cleanly. Architecture B (F-007) will bridge the
+# Vector{Int32} ↔ String gap when wiring compile_source.
+#
+# JS flow: create_wasm_string(len) → set chars → pass to WASM functions
+
+"""Create a WasmGC string-compatible i32 array of given length, initialized to zeros."""
+function create_wasm_string(len::Int32)::Vector{Int32}
+    return zeros(Int32, len)
+end
+
+"""Set character at position i (1-based) to the given Unicode codepoint."""
+function set_string_char!(s::Vector{Int32}, i::Int32, codepoint::Int32)::Nothing
+    s[i] = codepoint
+    return nothing
+end
+
+"""Get character codepoint at position i (1-based)."""
+function get_string_char(s::Vector{Int32}, i::Int32)::Int32
+    return s[i]
+end
+
+"""Get the length of a WasmGC string as Int32."""
+function wasm_string_length(s::Vector{Int32})::Int32
+    return Int32(length(s))
+end

@@ -24,6 +24,7 @@ println("=" ^ 60)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 all_functions = [
+    # --- IR constructors ---
     (WasmTarget.wasm_create_i32_vector, (Int32,), "wasm_create_i32_vector"),
     (WasmTarget.wasm_set_i32!, (Vector{Int32}, Int32, Int32), "wasm_set_i32"),
     (WasmTarget.wasm_i32_vector_length, (Vector{Int32},), "wasm_i32_vector_length"),
@@ -37,10 +38,24 @@ all_functions = [
     (WasmTarget.wasm_set_any_arg!, (Vector{Any}, Int32, Int32), "wasm_set_any_arg"),
     (WasmTarget.wasm_set_any_i64!, (Vector{Any}, Int32, Int64), "wasm_set_any_i64"),
     (WasmTarget.wasm_symbol_call, (), "wasm_symbol_call"),
+    # --- Type inference ---
     (composite_hash, (Int32, Vector{Int32}), "composite_hash"),
     (lookup_return_type, (Vector{Int32}, UInt32), "lookup_return_type"),
     (wasm_resolve_val_typeid, (Any, Vector{Int32}, Vector{Int32}, Int32, Int32, Int32, Int32), "wasm_resolve_val_typeid"),
     (wasm_thin_typeinf, (Vector{Any}, Vector{Int32}, Vector{Int32}, Vector{Int32}, Int32, Int32, Int32, Int32), "wasm_thin_typeinf"),
+    # --- S-003: WASM codegen (wasm_compile_flat + helpers + byte accessors) ---
+    (WasmTarget._fb!, (Vector{UInt8}, UInt8), "_fb!"),
+    (WasmTarget._fa!, (Vector{UInt8}, Vector{UInt8}), "_fa!"),
+    (WasmTarget._flu, (UInt32,), "_flu"),
+    (WasmTarget._fls, (Int64,), "_fls"),
+    (WasmTarget._flen, (Vector{UInt8},), "_flen"),
+    (WasmTarget._emit_local_get!, (Vector{UInt8}, UInt32), "_emit_local_get!"),
+    (WasmTarget._emit_local_set!, (Vector{UInt8}, UInt32), "_emit_local_set!"),
+    (WasmTarget._emit_i64_const!, (Vector{UInt8}, Int64), "_emit_i64_const!"),
+    (WasmTarget._emit_section!, (Vector{UInt8}, UInt8, Vector{UInt8}), "_emit_section!"),
+    (WasmTarget.wasm_compile_flat, (Vector{Int32}, Int32), "wasm_compile_flat"),
+    (WasmTarget.wasm_bytes_length, (Vector{UInt8},), "wasm_bytes_length"),
+    (WasmTarget.wasm_bytes_get, (Vector{UInt8}, Int32), "wasm_bytes_get"),
 ]
 
 println("\n--- Step 1: code_typed $(length(all_functions)) functions ---")
@@ -103,63 +118,12 @@ open(script_path, "w") do f
 const fs = require('fs');
 const path = require('path');
 
-function leb128_unsigned(n) {
-    const bytes = [];
-    do { let b = n & 0x7f; n >>>= 7; if (n !== 0) b |= 0x80; bytes.push(b); } while (n !== 0);
-    return bytes;
-}
-
-function leb128_signed(n) {
-    const bytes = [];
-    let more = true;
-    while (more) {
-        let b = n & 0x7f; n >>= 7;
-        if ((n === 0 && (b & 0x40) === 0) || (n === -1 && (b & 0x40) !== 0)) more = false;
-        else b |= 0x80;
-        bytes.push(b);
-    }
-    return bytes;
-}
-
-function buildWasmModule(funcBody, nParams) {
-    const out = [];
-    out.push(0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00);
-    const paramTypes = new Array(nParams).fill(0x7e);
-    const typePayload = [0x01, 0x60, ...leb128_unsigned(nParams), ...paramTypes, 0x01, 0x7e];
-    out.push(0x01, ...leb128_unsigned(typePayload.length), ...typePayload);
-    out.push(0x03, 0x02, 0x01, 0x00);
-    const nameBytes = [0x66];
-    const exportPayload = [0x01, ...leb128_unsigned(nameBytes.length), ...nameBytes, 0x00, 0x00];
-    out.push(0x07, ...leb128_unsigned(exportPayload.length), ...exportPayload);
-    const bodyBytes = [];
-    let localIdx = nParams;  // locals start after params
-    for (const stmt of funcBody) {
-        if (stmt.type === 'call') {
-            for (const arg of stmt.args) {
-                if (arg.type === 'arg') bodyBytes.push(0x20, ...leb128_unsigned(arg.index));
-                else if (arg.type === 'ssa') bodyBytes.push(0x20, ...leb128_unsigned(arg.local));
-                else if (arg.type === 'i64') bodyBytes.push(0x42, ...leb128_signed(Number(arg.value)));
-            }
-            bodyBytes.push(stmt.opcode);
-            bodyBytes.push(0x21, ...leb128_unsigned(localIdx));  // local.set → store result
-            localIdx++;
-        } else if (stmt.type === 'return') {
-            if (stmt.arg.type === 'ssa') bodyBytes.push(0x20, ...leb128_unsigned(stmt.arg.local));
-            else if (stmt.arg.type === 'arg') bodyBytes.push(0x20, ...leb128_unsigned(stmt.arg.index));
-        }
-    }
-    const nLocals = funcBody.filter(s => s.type === 'call').length;
-    const localDecl = nLocals > 0 ? [0x01, ...leb128_unsigned(nLocals), 0x7e] : [0x00];
-    const funcPayload = [...localDecl, ...bodyBytes, 0x0b];
-    const funcWithSize = [...leb128_unsigned(funcPayload.length), ...funcPayload];
-    const codePayload = [0x01, ...funcWithSize];
-    out.push(0x0a, ...leb128_unsigned(codePayload.length), ...codePayload);
-    return new Uint8Array(out);
-}
+// Intrinsic name → WASM i64 opcode (same as Arch A)
+const OPCODES = { mul_int: 0x7e, add_int: 0x7c, sub_int: 0x7d };
 
 async function main() {
-    console.log('Architecture C E2E Demo');
-    console.log('Server parse+lower -> Browser WASM thin_typeinf -> compile -> execute');
+    console.log('Architecture C E2E Demo (S-003: WASM codegen, no JS binary assembly)');
+    console.log('Server parse+lower -> Browser WASM thin_typeinf -> WASM wasm_compile_flat -> execute');
     console.log();
 
     // TypeID constants (baked from native Julia)
@@ -167,7 +131,7 @@ async function main() {
     const TID_MUL_INT = $(tid_mul_int), TID_ADD_INT = $(tid_add_int);
     const RT_DATA = [$(rt_table_str)];
 
-    // 1. Load thin_typeinf WASM module
+    // 1. Load WASM module (thin_typeinf + wasm_compile_flat + byte accessors)
     const wasmPath = process.argv[2] || path.join(__dirname, '..', 'arch-c-e2e.wasm');
     const wasmBytes = fs.readFileSync(wasmPath);
     const wasmMod = await WebAssembly.compile(wasmBytes);
@@ -178,7 +142,7 @@ async function main() {
     }
     const inst = await WebAssembly.instantiate(wasmMod, stubs);
     const e = inst.exports;
-    console.log('1. Loaded thin_typeinf module: ' + Object.keys(e).length + ' exports');
+    console.log('1. Loaded module: ' + Object.keys(e).length + ' exports');
 
     // 2. Build IR for f(x::Int64) = x * x + 1 — "server sends UNTYPED CodeInfo"
     const code = e.wasm_create_any_vector(3);
@@ -204,14 +168,25 @@ async function main() {
     const ssa_types = e.wasm_thin_typeinf(code, callee_typeids, arg_typeids, rt_table, TID_I64, TID_I32, TID_F64, TID_BOOL);
     console.log('3. Browser WASM thin_typeinf: ' + e.wasm_i32_vector_length(ssa_types) + ' SSA types inferred');
 
-    // 4. Compile to WASM binary (JS mini-compiler)
-    const funcBody = [
-        { type: 'call', opcode: 0x7e, args: [{ type: 'arg', index: 0 }, { type: 'arg', index: 0 }] },
-        { type: 'call', opcode: 0x7c, args: [{ type: 'ssa', local: 1 }, { type: 'i64', value: 1n }] },
-        { type: 'return', arg: { type: 'ssa', local: 2 } },
+    // 4. Compile via WASM wasm_compile_flat (ZERO JS binary assembly)
+    // Build flat Int32 instruction buffer (data translation only, NOT compilation)
+    // f(x) = x*x+1 → mul_int(arg0, arg0), add_int(ssa0, 1), return ssa1
+    const flatData = [
+        0, OPCODES.mul_int, 2, 0, 0, 0, 0,     // call mul_int(param0, param0)
+        0, OPCODES.add_int, 2, 1, 0, 2, 1,      // call add_int(ssa0, const 1)
+        1, 1, 1,                                  // return ssa1
     ];
-    const userBytes = buildWasmModule(funcBody, 1);
-    console.log('4. Compiled: ' + userBytes.length + ' bytes');
+    const instrs = e.wasm_create_i32_vector(flatData.length);
+    for (let i = 0; i < flatData.length; i++) e.wasm_set_i32(instrs, i + 1, flatData[i]);
+
+    // Compile IN WASM via wasm_compile_flat
+    const wasmResult = e.wasm_compile_flat(instrs, 1);
+    const len = e.wasm_bytes_length(wasmResult);
+    console.log('4. WASM wasm_compile_flat: ' + len + ' bytes (ZERO JS compilation)');
+
+    // Extract bytes from WasmGC Vector{UInt8}
+    const userBytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) userBytes[i] = e.wasm_bytes_get(wasmResult, i + 1);
 
     // 5. Execute
     const userMod = await WebAssembly.compile(userBytes);
@@ -229,7 +204,8 @@ async function main() {
 
     console.log();
     console.log(allPass ? 'ARCHITECTURE C E2E: PASS' : 'ARCHITECTURE C E2E: FAIL');
-    console.log('Server does ZERO type inference. f(5n) === 26n via browser WASM thin_typeinf.');
+    console.log('Server: ZERO type inference. Browser: WASM thin_typeinf + WASM wasm_compile_flat.');
+    console.log('ZERO JS compilation or binary assembly — ALL compilation in WASM.');
     if (!allPass) process.exit(1);
 }
 
