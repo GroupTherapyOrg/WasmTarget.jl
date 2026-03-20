@@ -171,3 +171,128 @@ function _resolve_globalref_typeid(gr::GlobalRef, registry::TypeIDRegistry)::Int
 
     return Int32(-1)
 end
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# WASM-compilable thin_typeinf — no Dict, no Module.getfield, no TypeIDRegistry
+# ═══════════════════════════════════════════════════════════════════════════════
+
+"""
+    wasm_resolve_val_typeid(val, arg_typeids, ssa_types, typeid_i64, typeid_i32, typeid_f64, typeid_bool) → Int32
+
+WASM-compilable value TypeID resolver. Uses Int32 constants instead of TypeIDRegistry.
+"""
+function wasm_resolve_val_typeid(
+    @nospecialize(val),
+    arg_typeids::Vector{Int32},
+    ssa_types::Vector{Int32},
+    typeid_i64::Int32, typeid_i32::Int32, typeid_f64::Int32, typeid_bool::Int32
+)::Int32
+    if val isa Core.SSAValue
+        return ssa_types[val.id]
+    elseif val isa Core.Argument
+        n = Int32(val.n)
+        if n >= Int32(1) && n <= Int32(length(arg_typeids))
+            return arg_typeids[n]
+        end
+        return Int32(-1)
+    elseif val isa Int64
+        return typeid_i64
+    elseif val isa Int32
+        return typeid_i32
+    elseif val isa Float64
+        return typeid_f64
+    elseif val isa Bool
+        return typeid_bool
+    else
+        return Int32(-1)
+    end
+end
+
+"""
+    wasm_thin_typeinf(code, callee_typeids, arg_typeids, rt_table,
+                      typeid_i64, typeid_i32, typeid_f64, typeid_bool) → Vector{Int32}
+
+WASM-compilable type inference. No Dict, no GlobalRef resolution, no TypeIDRegistry.
+
+# Arguments
+- `code::Vector{Any}`: CodeInfo.code statements
+- `callee_typeids::Vector{Int32}`: Pre-resolved callee TypeID for each statement.
+  For call/invoke stmts, the TypeID of the callee function. -1 for non-call stmts.
+  Built by JS deserializer from intrinsic names or function TypeIDs.
+- `arg_typeids::Vector{Int32}`: TypeIDs for each slot (1-based, slot 1 = #self#)
+- `rt_table::Vector{Int32}`: Return type hash table
+- `typeid_i64`, `typeid_i32`, `typeid_f64`, `typeid_bool`: TypeID constants for literal dispatch
+"""
+function wasm_thin_typeinf(
+    code::Vector{Any},
+    callee_typeids::Vector{Int32},
+    arg_typeids::Vector{Int32},
+    rt_table::Vector{Int32},
+    typeid_i64::Int32, typeid_i32::Int32, typeid_f64::Int32, typeid_bool::Int32
+)::Vector{Int32}
+    n = Int32(length(code))
+    ssa_types = Vector{Int32}(undef, Int(n))
+    i = Int32(1)
+    while i <= n
+        ssa_types[i] = Int32(-1)
+        i = i + Int32(1)
+    end
+
+    i = Int32(1)
+    while i <= n
+        stmt = code[i]
+
+        if stmt isa Expr && stmt.head === :call
+            # callee TypeID is pre-resolved in callee_typeids[i]
+            callee_tid = callee_typeids[i]
+            args = stmt.args
+            nargs = Int32(length(args))
+            arg_tids = Vector{Int32}(undef, Int(nargs - Int32(1)))
+            j = Int32(2)
+            while j <= nargs
+                arg_tids[j - Int32(1)] = wasm_resolve_val_typeid(
+                    args[j], arg_typeids, ssa_types,
+                    typeid_i64, typeid_i32, typeid_f64, typeid_bool)
+                j = j + Int32(1)
+            end
+            h = composite_hash(callee_tid, arg_tids)
+            ssa_types[i] = lookup_return_type(rt_table, h)
+
+        elseif stmt isa Expr && stmt.head === :invoke
+            callee_tid = callee_typeids[i]
+            args = stmt.args
+            nargs = Int32(length(args))
+            arg_tids = Vector{Int32}(undef, Int(nargs - Int32(2)))
+            j = Int32(3)
+            while j <= nargs
+                arg_tids[j - Int32(2)] = wasm_resolve_val_typeid(
+                    args[j], arg_typeids, ssa_types,
+                    typeid_i64, typeid_i32, typeid_f64, typeid_bool)
+                j = j + Int32(1)
+            end
+            h = composite_hash(callee_tid, arg_tids)
+            ssa_types[i] = lookup_return_type(rt_table, h)
+
+        elseif stmt isa Core.ReturnNode
+            # ReturnNode.val — use SSAValue resolution
+            # Note: ReturnNode without val (unreachable return) stays -1
+            ret_val = stmt.val
+            ssa_types[i] = wasm_resolve_val_typeid(
+                ret_val, arg_typeids, ssa_types,
+                typeid_i64, typeid_i32, typeid_f64, typeid_bool)
+
+        elseif stmt isa Core.GotoNode || stmt isa Core.GotoIfNot
+            ssa_types[i] = Int32(-1)
+
+        else
+            # Literals and other values
+            ssa_types[i] = wasm_resolve_val_typeid(
+                stmt, arg_typeids, ssa_types,
+                typeid_i64, typeid_i32, typeid_f64, typeid_bool)
+        end
+
+        i = i + Int32(1)
+    end
+
+    return ssa_types
+end
