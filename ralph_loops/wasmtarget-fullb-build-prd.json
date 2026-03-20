@@ -1,0 +1,65 @@
+{
+  "project": "WasmTarget.jl Architecture B — Full Zero-Server Build",
+  "goal": "Julia source string → browser parses → lowers → type-infers → codegen → executes, ZERO server",
+  "stories": [
+    {
+      "id": "PREP-001",
+      "title": "Audit unified module exports for Arch B pipeline gaps",
+      "priority": 0,
+      "status": "done",
+      "description": "Audited all WASM modules. Key finding: browser/eval_julia.wasm (2.2MB, 217 exports) IS the Arch B entry point. Supports binary arithmetic via pre-baked compile_from_codeinfo."
+    },
+    {
+      "id": "PREP-002",
+      "title": "Audit parser entry point — can we parse a source string from JS?",
+      "priority": 0,
+      "status": "done",
+      "description": "eval_julia_wasm takes WasmGC string, dispatches by byte pattern. ParseStream creation works but parse_stmts hits unreachable for multiplicative precedence. Full JuliaSyntax parse not available via eval_julia_wasm yet."
+    },
+    {
+      "id": "WIRE-001",
+      "title": "Build Architecture B E2E demo (e2e_demo_arch_b.cjs)",
+      "priority": 1,
+      "status": "done",
+      "description": "Built and verified. 10/10 binary ops pass. ZERO server dependency."
+    },
+    {
+      "id": "TEST-001",
+      "title": "Build Architecture B regression suite (20 groups, 100 cases)",
+      "priority": 2,
+      "status": "done",
+      "description": "Built run_arch_b_tests.cjs + e2e_arch_b_tests.jl. 20/20 groups, 100/100 test cases ALL PASS."
+    },
+    {
+      "id": "PARSE-001",
+      "title": "Fix parse_stmts unreachable for multiplicative precedence",
+      "priority": 1,
+      "status": "pending",
+      "description": "parse_stmts hits unreachable when * or / operators are in the source string due to stubbed functions in parse_unary path. Need to identify and implement missing stubs."
+    },
+    {
+      "id": "PARSE-002",
+      "title": "Add multi-statement expression support to eval_julia",
+      "priority": 1,
+      "status": "pending",
+      "depends_on": "PARSE-001",
+      "description": "Extend eval_julia_to_bytes_vec to handle expressions like x*x+1 via full JuliaSyntax parse rather than byte-level pattern matching."
+    },
+    {
+      "id": "FUNC-001",
+      "title": "Add function definition parsing + lowering",
+      "priority": 1,
+      "status": "pending",
+      "depends_on": "PARSE-002",
+      "description": "Handle function definitions like f(x::Int64)=x*x+1 — parse → lower to CodeInfo → typeinf → codegen. This enables the same 20 functions as Arch A/C."
+    },
+    {
+      "id": "WIRE-002",
+      "title": "Build full Arch B demo: f(5n)===26n from source string",
+      "priority": 2,
+      "status": "pending",
+      "depends_on": "FUNC-001",
+      "description": "Source string 'f(x::Int64) = x*x + Int64(1)' → browser WASM compile → f(5n)===26n. The ultimate Arch B acceptance gate."
+    }
+  ]
+}
