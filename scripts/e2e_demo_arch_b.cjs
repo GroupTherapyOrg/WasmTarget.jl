@@ -73,6 +73,33 @@ async function main() {
 
     console.log();
     console.log(`   Results: ${passCount}/${test_cases.length} passed`);
+
+    // --- Direct pipeline demo: compile + instantiate + execute ---
+    console.log();
+    console.log('3. Direct pipeline demo (no evalJulia wrapper)...');
+    console.log('   Source: "1*1" → eval_julia_wasm → WASM bytes → instantiate → execute');
+
+    const wasmStr = await rt.jsToWasmString('1*1');
+    const vecRef = e.eval_julia_wasm(wasmStr);
+    const len = e.eval_julia_result_length(vecRef);
+    const innerBytes = new Uint8Array(len);
+    for (let i = 1; i <= len; i++) innerBytes[i - 1] = e.eval_julia_result_byte(vecRef, i);
+
+    console.log(`   eval_julia_wasm produced ${len} bytes`);
+    console.log(`   WASM magic: ${innerBytes[0] === 0 && innerBytes[1] === 0x61 ? 'valid' : 'INVALID'}`);
+
+    const innerInst = await rt.load(innerBytes.buffer);
+    const mulFn = innerInst.exports['*'];
+    const directTests = [[5n, 5n, 25n], [6n, 7n, 42n], [0n, 100n, 0n], [-3n, 4n, -12n]];
+    let directPass = true;
+    for (const [a, b, expected] of directTests) {
+        const result = mulFn(a, b);
+        const ok = result === expected;
+        console.log(`   ${a} * ${b} = ${result} ${ok ? 'PASS' : 'FAIL'}`);
+        if (!ok) directPass = false;
+    }
+    allPass = allPass && directPass;
+
     console.log();
 
     if (allPass) {
