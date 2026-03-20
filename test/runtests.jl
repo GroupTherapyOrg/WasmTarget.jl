@@ -5929,4 +5929,44 @@ struct TypeHierS2 x::Int32 end
         end
     end
 
+    # Phase 43: E2E Self-Hosting (Architecture A + C)
+    # Runs 20 functions through full E2E pipelines as subprocesses
+    @testset "Phase 43: E2E Self-Hosting (Architecture A + C)" begin
+        julia_cmd = Base.julia_cmd()
+
+        # Architecture A: server CodeInfo → browser JS codegen → execute
+        arch_a_script = joinpath(@__DIR__, "selfhost", "e2e_arch_a_tests.jl")
+        if isfile(arch_a_script)
+            output_a = try
+                read(`$julia_cmd --project=. $arch_a_script`, String)
+            catch e
+                "SUBPROCESS FAILED: $(sprint(showerror, e))"
+            end
+            arch_a_pass = occursin("ALL PASS", output_a)
+            @test arch_a_pass
+            if !arch_a_pass
+                println("  Arch A output (last 500 chars): ", output_a[max(1,end-499):end])
+            end
+        else
+            @test_broken false  # e2e_arch_a_tests.jl not found
+        end
+
+        # Architecture C: server parse+lower → browser WASM typeinf + codegen → execute
+        arch_c_script = joinpath(@__DIR__, "selfhost", "e2e_arch_c_tests.jl")
+        if isfile(arch_c_script)
+            output_c = try
+                read(`$julia_cmd --project=. $arch_c_script`, String)
+            catch e
+                "SUBPROCESS FAILED: $(sprint(showerror, e))"
+            end
+            arch_c_pass = occursin("ALL PASS", output_c)
+            @test arch_c_pass
+            if !arch_c_pass
+                println("  Arch C output (last 500 chars): ", output_c[max(1,end-499):end])
+            end
+        else
+            @test_broken false  # e2e_arch_c_tests.jl not found
+        end
+    end
+
 end
