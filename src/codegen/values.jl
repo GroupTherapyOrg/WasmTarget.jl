@@ -378,8 +378,9 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         push!(bytes, val ? 0x01 : 0x00)
 
     elseif val isa Char
-        # PURE-9015: Char stored as Unicode codepoint (not Julia's UInt32 encoding)
+        # Char stored as Unicode codepoint in WASM.
         # 'A' → 65, 'é' → 233, '😀' → 128512
+        # bitcast(UInt32, Char) adds codepoint→rawbits conversion (see calls.jl).
         # Fallback to raw bits for invalid chars (e.g., EOF_CHAR 0xFFFFFFFF in JuliaSyntax)
         codepoint = try
             Int32(val)
