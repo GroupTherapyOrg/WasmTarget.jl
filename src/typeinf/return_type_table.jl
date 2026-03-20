@@ -146,6 +146,194 @@ function build_return_type_table(table, registry::TypeIDRegistry;
 end
 
 """
+    _insert_hash_entry!(ht, table_size, hash, value)
+
+Insert a (hash_key, value) pair into the hash table using linear probing.
+"""
+function _insert_hash_entry!(ht::Vector{Int32}, table_size::Int, hash::UInt32, value::Int32)
+    hash_key = reinterpret(Int32, hash)
+    slot = hash % UInt32(table_size)
+    for _ in 1:table_size
+        idx = Int(slot) * 2
+        if ht[idx + 1] == Int32(-1)
+            ht[idx + 1] = hash_key
+            ht[idx + 2] = value
+            return
+        end
+        slot = (slot + UInt32(1)) % UInt32(table_size)
+    end
+end
+
+# ─── Intrinsic return type registration ──────────────────────────────────────
+
+# Intrinsics in optimized IR: GlobalRef(Base, :mul_int) etc.
+# Each intrinsic function value gets its own TypeID since typeof(mul_int) == typeof(add_int).
+# Return types are known at build time: arithmetic → same type, comparison → Bool.
+
+# (intrinsic_function, [(arg_types..., return_type), ...])
+const _INTRINSIC_RETURN_TYPES = [
+    # Arithmetic: T × T → T (for Int64, Int32, Float64, Float32)
+    (:mul_int,  [(Int64, Int64, Int64), (Int32, Int32, Int32)]),
+    (:add_int,  [(Int64, Int64, Int64), (Int32, Int32, Int32)]),
+    (:sub_int,  [(Int64, Int64, Int64), (Int32, Int32, Int32)]),
+    (:neg_int,  [(Int64, Int64), (Int32, Int32)]),
+    (:and_int,  [(Int64, Int64, Int64), (Int32, Int32, Int32)]),
+    (:or_int,   [(Int64, Int64, Int64), (Int32, Int32, Int32)]),
+    (:xor_int,  [(Int64, Int64, Int64), (Int32, Int32, Int32)]),
+    (:shl_int,  [(Int64, Int64, Int64), (Int32, Int32, Int32)]),
+    (:lshr_int, [(Int64, Int64, Int64), (Int32, Int32, Int32)]),
+    (:ashr_int, [(Int64, Int64, Int64), (Int32, Int32, Int32)]),
+    (:sdiv_int, [(Int64, Int64, Int64), (Int32, Int32, Int32)]),
+    (:srem_int, [(Int64, Int64, Int64), (Int32, Int32, Int32)]),
+    (:udiv_int, [(Int64, Int64, Int64), (Int32, Int32, Int32)]),
+    (:urem_int, [(Int64, Int64, Int64), (Int32, Int32, Int32)]),
+    # Float arithmetic
+    (:mul_float, [(Float64, Float64, Float64), (Float32, Float32, Float32)]),
+    (:add_float, [(Float64, Float64, Float64), (Float32, Float32, Float32)]),
+    (:sub_float, [(Float64, Float64, Float64), (Float32, Float32, Float32)]),
+    (:div_float, [(Float64, Float64, Float64), (Float32, Float32, Float32)]),
+    (:neg_float, [(Float64, Float64), (Float32, Float32)]),
+    # Comparisons → Bool
+    (:slt_int,  [(Int64, Int64, Bool), (Int32, Int32, Bool)]),
+    (:sle_int,  [(Int64, Int64, Bool), (Int32, Int32, Bool)]),
+    (:ult_int,  [(Int64, Int64, Bool), (Int32, Int32, Bool)]),
+    (:eq_int,   [(Int64, Int64, Bool), (Int32, Int32, Bool)]),
+    (:ne_int,   [(Int64, Int64, Bool), (Int32, Int32, Bool)]),
+    (:eq_float, [(Float64, Float64, Bool), (Float32, Float32, Bool)]),
+    (:lt_float, [(Float64, Float64, Bool), (Float32, Float32, Bool)]),
+    (:le_float, [(Float64, Float64, Bool), (Float32, Float32, Bool)]),
+    # Conversions
+    (:sitofp,   [(Type{Float64}, Int64, Float64), (Type{Float32}, Int32, Float32)]),
+    (:fptosi,   [(Type{Int64}, Float64, Int64), (Type{Int32}, Float32, Int32)]),
+    (:sext_int, [(Type{Int64}, Int32, Int64)]),
+    (:trunc_int,[(Type{Int32}, Int64, Int32), (Type{Bool}, Int64, Bool)]),
+    (:zext_int, [(Type{Int64}, Int32, Int64), (Type{Int64}, Bool, Int64)]),
+    # Not
+    (:not_int,  [(Int64, Int64), (Int32, Int32), (Bool, Bool)]),
+]
+
+"""
+    register_intrinsic_return_types!(registry::TypeIDRegistry) → Vector{Pair{UInt32, Int32}}
+
+Register intrinsic function values in the TypeID registry and return
+hash table entries for their return types. Each intrinsic gets a unique TypeID.
+"""
+function register_intrinsic_return_types!(registry::TypeIDRegistry)::Vector{Pair{UInt32, Int32}}
+    entries = Pair{UInt32, Int32}[]
+
+    for (name, signatures) in _INTRINSIC_RETURN_TYPES
+        # Resolve intrinsic function value
+        func = try
+            getfield(Base, name)
+        catch
+            try
+                getfield(Core.Intrinsics, name)
+            catch
+                continue
+            end
+        end
+
+        # Register the function value (not its type) to get a unique TypeID
+        callee_tid = assign_type!(registry, func)
+
+        for sig in signatures
+            # Last element is return type, rest are arg types
+            ret_type = sig[end]
+            arg_types = sig[1:end-1]
+
+            arg_tids = Int32[]
+            all_known = true
+            for at in arg_types
+                tid = get_type_id(registry, at)
+                if tid < 0
+                    tid = assign_type!(registry, at)
+                end
+                push!(arg_tids, tid)
+            end
+
+            ret_tid = get_type_id(registry, ret_type)
+            if ret_tid < 0
+                ret_tid = assign_type!(registry, ret_type)
+            end
+
+            ch = composite_hash(callee_tid, arg_tids)
+            push!(entries, ch => ret_tid)
+        end
+    end
+
+    return entries
+end
+
+"""
+    build_return_type_table_with_intrinsics(table, registry; world) → Vector{Int32}
+
+Like build_return_type_table but also includes intrinsic return type entries.
+This is the table thin_typeinf needs for optimized IR where callees are
+intrinsics (Base.mul_int etc.) rather than user-visible functions (Base.*).
+"""
+function build_return_type_table_with_intrinsics(table, registry::TypeIDRegistry;
+                                                   world::UInt64=table.world)::Vector{Int32}
+    entries = Pair{UInt32, Int32}[]
+
+    # 1. Add intrinsic entries (registers function values as TypeIDs)
+    intrinsic_entries = register_intrinsic_return_types!(registry)
+    append!(entries, intrinsic_entries)
+
+    # 2. Add DictMethodTable entries (user functions + Base methods)
+    for (sig, _result) in table.methods
+        if !(sig isa DataType && sig <: Tuple)
+            continue
+        end
+        params = sig.parameters
+        length(params) < 1 && continue
+
+        callee_type = params[1]
+        callee_tid = get_type_id(registry, callee_type)
+        callee_tid < 0 && continue
+
+        arg_tids = Int32[]
+        all_known = true
+        for i in 2:length(params)
+            tid = get_type_id(registry, params[i])
+            if tid < 0
+                all_known = false
+                break
+            end
+            push!(arg_tids, tid)
+        end
+        all_known || continue
+
+        ret_type = try
+            Core.Compiler.return_type(sig, world)
+        catch
+            nothing
+        end
+        if ret_type === nothing || ret_type === Union{}
+            continue
+        end
+
+        ret_tid = get_type_id(registry, ret_type)
+        if ret_tid < 0
+            ret_tid = assign_type!(registry, ret_type)
+        end
+
+        ch = composite_hash(callee_tid, arg_tids)
+        push!(entries, ch => ret_tid)
+    end
+
+    # Build hash table
+    n_entries = length(entries)
+    table_size = max(16, nextpow(2, n_entries * 2))
+    ht = fill(Int32(-1), table_size * 2)
+
+    for (hash, ret_tid) in entries
+        _insert_hash_entry!(ht, table_size, hash, ret_tid)
+    end
+
+    return ht
+end
+
+"""
     return_type_table_stats(table::Vector{Int32}) → NamedTuple
 
 Return statistics about a return type hash table.
