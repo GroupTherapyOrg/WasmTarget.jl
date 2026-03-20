@@ -213,25 +213,41 @@ const _TRACING_INTERSECTIONS_WITH_ENV = Ref{Union{Nothing, Dict{Tuple{Any,Any}, 
 
 const _WASM_CODE_CACHE = Ref{Union{Nothing, PreDecompressedCodeInfo}}(nothing)
 
+# Reentrancy guard: _wasm_matching_methods_positional calls methods() which
+# calls _methods_by_ftype. Without this guard, loading matching.jl before
+# dict_method_table.jl causes infinite recursion.
+const _IN_WASM_METHOD_LOOKUP = Ref(false)
+
 # Override _methods_by_ftype to always use reimplementation (PHASE-2B-006).
 # PURE-8001: Use positional-only version to avoid kwargs recursion in WASM.
 function Base._methods_by_ftype(@nospecialize(t), mt::Union{Core.MethodTable, Nothing},
                                  lim::Int, world::UInt, ambig::Bool,
                                  min::Ref{UInt}, max::Ref{UInt}, has_ambig::Ref{Int32})
-    result = _wasm_matching_methods_positional(t, lim)
-    if result === nothing
-        return nothing
+    # Reentrancy guard: fall back to native ccall if already inside our override.
+    # _wasm_matching_methods_positional → _get_all_methods → methods() → _methods_by_ftype
+    if _IN_WASM_METHOD_LOOKUP[]
+        return ccall(:jl_matching_methods, Any, (Any, Any, Cint, Cint, UInt, Ptr{UInt}, Ptr{UInt}, Ptr{Int32}),
+                     t, nothing, lim, ambig, world, min, max, has_ambig)::Union{Nothing, Vector}
     end
-    if min isa Base.RefValue
-        min[] = result.valid_worlds.min_world
+    _IN_WASM_METHOD_LOOKUP[] = true
+    try
+        result = _wasm_matching_methods_positional(t, lim)
+        if result === nothing
+            return nothing
+        end
+        if min isa Base.RefValue
+            min[] = result.valid_worlds.min_world
+        end
+        if max isa Base.RefValue
+            max[] = result.valid_worlds.max_world
+        end
+        if has_ambig isa Base.RefValue
+            has_ambig[] = result.ambig ? Int32(1) : Int32(0)
+        end
+        return result.matches
+    finally
+        _IN_WASM_METHOD_LOOKUP[] = false
     end
-    if max isa Base.RefValue
-        max[] = result.valid_worlds.max_world
-    end
-    if has_ambig isa Base.RefValue
-        has_ambig[] = result.ambig ? Int32(1) : Int32(0)
-    end
-    return result.matches
 end
 
 # Override get_staged to use PreDecompressedCodeInfo in Wasm mode.
