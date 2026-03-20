@@ -31,7 +31,7 @@ mutable struct CompilationContext
     dom_bindings::Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}
     # Module-level globals: maps (Module, Symbol) -> Wasm global index
     # Used for const mutable struct instances that should be shared across functions
-    module_globals::Dict{Tuple{Module, Symbol}, UInt32}
+    module_globals::Vector{Tuple{Tuple{Module, Symbol}, UInt32}}
     # Scratch local indices for string operations (fixed at allocation time)
     # Tuple of (result_local, str1_local, str2_local, len1_local, i_local) or nothing
     scratch_locals::Union{Nothing, NTuple{5, Int}}
@@ -61,7 +61,7 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
                            is_compiled_closure::Bool=false,
                            captured_signal_fields::Dict{Symbol, Tuple{Bool, UInt32}}=Dict{Symbol, Tuple{Bool, UInt32}}(),
                            dom_bindings::Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}=Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}(),
-                           module_globals::Dict{Tuple{Module, Symbol}, UInt32}=Dict{Tuple{Module, Symbol}, UInt32}(),
+                           module_globals::Vector{Tuple{Tuple{Module, Symbol}, UInt32}}=Tuple{Tuple{Module, Symbol}, UInt32}[],
                            dispatch_registry::Union{Nothing, DispatchTableRegistry}=nothing)
     # Calculate n_params excluding WasmGlobal arguments (they're phantom)
     n_real_params = count(i -> !(i in global_args), 1:length(arg_types))
@@ -103,6 +103,18 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
     allocate_ssa_locals!(ctx)
     allocate_scratch_locals!(ctx)  # Extra locals for complex operations
     return ctx
+end
+
+"""
+    _lookup_module_global(globals, key) -> Union{UInt32, Nothing}
+
+Linear scan lookup for module globals stored as Vector{Tuple{Tuple{Module,Symbol}, UInt32}}.
+"""
+function _lookup_module_global(globals::Vector{Tuple{Tuple{Module, Symbol}, UInt32}}, key::Tuple{Module, Symbol})::Union{UInt32, Nothing}
+    for (k, v) in globals
+        k === key && return v
+    end
+    return nothing
 end
 
 """

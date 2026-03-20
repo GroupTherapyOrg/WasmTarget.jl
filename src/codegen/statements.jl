@@ -469,9 +469,8 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
     elseif stmt isa GlobalRef
         # GlobalRef statement - check if it's a module-level global first
         key = (stmt.mod, stmt.name)
-        if haskey(ctx.module_globals, key)
-            # Emit global.get for module-level mutable struct instances
-            global_idx = ctx.module_globals[key]
+        global_idx = _lookup_module_global(ctx.module_globals, key)
+        if global_idx !== nothing
             push!(bytes, Opcode.GLOBAL_GET)
             append!(bytes, encode_leb128_unsigned(global_idx))
 

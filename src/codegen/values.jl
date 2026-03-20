@@ -474,9 +474,8 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
     elseif val isa GlobalRef
         # Check if this GlobalRef is a module-level global (mutable struct instance)
         key = (val.mod, val.name)
-        if haskey(ctx.module_globals, key)
-            # Emit global.get instead of creating a new struct instance
-            global_idx = ctx.module_globals[key]
+        global_idx = _lookup_module_global(ctx.module_globals, key)
+        if global_idx !== nothing
             push!(bytes, Opcode.GLOBAL_GET)
             append!(bytes, encode_leb128_unsigned(global_idx))
         else

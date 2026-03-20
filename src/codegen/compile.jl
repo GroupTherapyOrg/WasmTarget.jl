@@ -1452,7 +1452,7 @@ function compile_module(functions::Vector;
 
     # Scan all function IR for GlobalRef to mutable structs (module-level globals)
     # These need to be shared across all functions as WASM globals
-    module_globals = Dict{Tuple{Module, Symbol}, UInt32}()
+    module_globals = Tuple{Tuple{Module, Symbol}, UInt32}[]
     for (f, arg_types, name, code_info, return_type, global_args, is_closure) in function_data
         for stmt in code_info.code
             if stmt isa GlobalRef
@@ -1463,7 +1463,7 @@ function compile_module(functions::Vector;
                     # Check if it's a mutable struct (but not a type, function, or module)
                     if ismutabletype(T) && !isa(actual_val, Type) && !isa(actual_val, Function) && !isa(actual_val, Module)
                         key = (stmt.mod, stmt.name)
-                        if !haskey(module_globals, key)
+                        if _lookup_module_global(module_globals, key) === nothing
                             # Register the struct type first
                             info = register_struct_type!(mod, type_registry, T)
                             type_idx = info.wasm_type_idx
@@ -1483,7 +1483,7 @@ function compile_module(functions::Vector;
 
                             # Add global with reference type
                             global_idx = add_global_ref!(mod, type_idx, true, init_bytes; nullable=false)
-                            module_globals[key] = global_idx
+                            push!(module_globals, (key, global_idx))
                         end
                     end
                 catch
@@ -1771,7 +1771,7 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
     end
 
     # Scan for GlobalRef to mutable structs (same as compile_module)
-    module_globals = Dict{Tuple{Module, Symbol}, UInt32}()
+    module_globals = Tuple{Tuple{Module, Symbol}, UInt32}[]
     for (_, _, _, code_info, _, _, _) in function_data
         for stmt in code_info.code
             if stmt isa GlobalRef
@@ -1780,7 +1780,7 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
                     T = typeof(actual_val)
                     if ismutabletype(T) && !isa(actual_val, Type) && !isa(actual_val, Function) && !isa(actual_val, Module)
                         key = (stmt.mod, stmt.name)
-                        if !haskey(module_globals, key)
+                        if _lookup_module_global(module_globals, key) === nothing
                             info = register_struct_type!(mod, type_registry, T)
                             type_idx = info.wasm_type_idx
                             init_bytes = UInt8[]
@@ -1795,7 +1795,7 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
                             push!(init_bytes, Opcode.STRUCT_NEW)
                             append!(init_bytes, encode_leb128_unsigned(type_idx))
                             global_idx = add_global_ref!(mod, type_idx, true, init_bytes; nullable=false)
-                            module_globals[key] = global_idx
+                            push!(module_globals, (key, global_idx))
                         end
                     end
                 catch
@@ -2371,7 +2371,7 @@ function compile_module_from_ir_frozen(ir_entries::Vector, frozen::FrozenCompila
 
     # Build function_data (lightweight — no type registration needed)
     function_data = []
-    module_globals = Dict{Tuple{Module, Symbol}, UInt32}()
+    module_globals = Tuple{Tuple{Module, Symbol}, UInt32}[]
     for (code_info, return_type, arg_types, name) in ir_entries
         global_args = Set{Int}()
 
@@ -2383,7 +2383,7 @@ function compile_module_from_ir_frozen(ir_entries::Vector, frozen::FrozenCompila
                     T = typeof(actual_val)
                     if ismutabletype(T) && !isa(actual_val, Type) && !isa(actual_val, Function) && !isa(actual_val, Module)
                         key = (stmt.mod, stmt.name)
-                        if !haskey(module_globals, key)
+                        if _lookup_module_global(module_globals, key) === nothing
                             info = register_struct_type!(mod, type_registry, T)
                             type_idx = info.wasm_type_idx
                             init_bytes = UInt8[]
@@ -2398,7 +2398,7 @@ function compile_module_from_ir_frozen(ir_entries::Vector, frozen::FrozenCompila
                             push!(init_bytes, Opcode.STRUCT_NEW)
                             append!(init_bytes, encode_leb128_unsigned(type_idx))
                             global_idx = add_global_ref!(mod, type_idx, true, init_bytes; nullable=false)
-                            module_globals[key] = global_idx
+                            push!(module_globals, (key, global_idx))
                         end
                     end
                 catch
@@ -2417,7 +2417,7 @@ function compile_module_from_ir_frozen(ir_entries::Vector, frozen::FrozenCompila
     end
 
     # Compile function bodies (the PURE CODEGEN path)
-    export_name_counts = Dict{String, Int}()
+    export_name_counts = Tuple{String, Int}[]
     for (i, (f, arg_types, name, code_info, return_type, global_args, is_closure)) in enumerate(function_data)
         func_idx = UInt32(n_imports + i - 1)
 
@@ -2442,19 +2442,50 @@ function compile_module_from_ir_frozen(ir_entries::Vector, frozen::FrozenCompila
         # Add function to module
         actual_idx = add_function!(mod, param_types, result_types, locals, body)
 
-        # Export
+        # Export (Dict-free name deduplication)
         export_name = name
-        count = get(export_name_counts, name, 0)
+        count = 0
+        for (n, c) in export_name_counts
+            if n == name
+                count = c
+                break
+            end
+        end
         if count > 0
             export_name = "$(name)_$(count)"
         end
-        export_name_counts[name] = count + 1
+        # Update or add count
+        found = false
+        for j in 1:length(export_name_counts)
+            if export_name_counts[j][1] == name
+                export_name_counts[j] = (name, count + 1)
+                found = true
+                break
+            end
+        end
+        if !found
+            push!(export_name_counts, (name, 1))
+        end
         add_export!(mod, export_name, 0, actual_idx)
     end
 
     populate_type_constant_globals!(mod, type_registry)
     return mod
 end  # compile_module_from_ir_frozen
+
+"""
+    compile_module_from_ir_frozen_no_dict(ir_entries::Vector, frozen::FrozenCompilationState)::Vector{UInt8}
+
+Dict-free variant of compile_module_from_ir_frozen + to_bytes_no_dict, suitable for
+compilation to WASM. Returns the compiled WASM bytes directly (no Dict/Set in any
+top-level code path). For MVP: simple arithmetic functions (no GlobalRef, no closures).
+
+Each entry is (code_info::CodeInfo, return_type::Type, arg_types::Tuple, name::String).
+"""
+function compile_module_from_ir_frozen_no_dict(ir_entries::Vector, frozen::FrozenCompilationState)::Vector{UInt8}
+    mod = compile_module_from_ir_frozen(ir_entries, frozen)
+    return to_bytes_no_dict(mod)
+end
 
 # ============================================================================
 # CodeInfo Transport — Phase 1 self-hosting (PHASE-1-009)

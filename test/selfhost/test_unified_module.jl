@@ -375,9 +375,9 @@ for (ci, rt, argtypes, name, f) in all_entries
         bytes = WasmTarget.compile_from_codeinfo(ci, rt, name, argtypes)
         tmppath = joinpath(tempdir(), "unified_$(name).wasm")
         write(tmppath, bytes)
-        result = try read(`wasm-tools validate $tmppath`, String) catch e; "error" end
+        local wasm_result = try read(`wasm-tools validate $tmppath`, String) catch e; "error" end
         rm(tmppath, force=true)
-        if isempty(result)
+        if isempty(wasm_result)
             push!(valid_entries, (ci, rt, argtypes, name, f))
         end
     catch; end
@@ -419,7 +419,7 @@ if module_compiled
     output_path = joinpath(@__DIR__, "..", "..", "unified-module.wasm")
     write(output_path, module_bytes)
 
-    validate_ok = try
+    global validate_ok = try
         run(pipeline(`wasm-tools validate --features=gc $output_path`, stderr=devnull, stdout=devnull))
         println("  ✓ wasm-tools validate PASSED")
         true
@@ -442,9 +442,9 @@ if module_compiled
                 process.exit(1);
             });
             """
-            result = read(`node -e $node_script`, String)
-            println("  ✓ Node.js: $result")
-            load_ok = true
+            local node_result = read(`node -e $node_script`, String)
+            println("  ✓ Node.js: $node_result")
+            global load_ok = true
         catch e
             println("  ✗ Node.js load failed: $(string(e)[1:min(200,end)])")
         end
