@@ -2488,6 +2488,32 @@ function compile_module_from_ir_frozen_no_dict(ir_entries::Vector, frozen::Froze
 end
 
 # ============================================================================
+# Byte Extraction — GAMMA-004
+# ============================================================================
+# WasmGC arrays are opaque to JavaScript. These accessor functions allow JS to
+# read individual bytes from a compiled Vector{UInt8} (the WASM binary output).
+
+"""
+    wasm_bytes_length(v::Vector{UInt8})::Int32
+
+Return the length of a Vector{UInt8} as Int32. Used by JS glue to determine
+how many bytes to extract from the compiled WASM output.
+"""
+function wasm_bytes_length(v::Vector{UInt8})::Int32
+    return Int32(length(v))
+end
+
+"""
+    wasm_bytes_get(v::Vector{UInt8}, i::Int32)::Int32
+
+Return the byte at 1-based index `i` as Int32. Used by JS glue to extract
+individual bytes from the compiled WASM output.
+"""
+function wasm_bytes_get(v::Vector{UInt8}, i::Int32)::Int32
+    return Int32(v[i])
+end
+
+# ============================================================================
 # CodeInfo Transport — Phase 1 self-hosting (PHASE-1-009)
 # ============================================================================
 # Serialize CodeInfo + metadata to JSON for server→browser transport.

@@ -60,6 +60,10 @@ all_functions = [
     (compile_module_from_ir_frozen_no_dict, (Vector, FrozenCompilationState), "frozen_no_dict"),
     (WasmTarget.to_bytes_no_dict, (WasmModule,), "to_bytes_no_dict"),
     (WasmTarget.copy_type_registry, (TypeRegistry,), "copy_type_registry"),
+
+    # Level 7: Byte extraction (GAMMA-004)
+    (WasmTarget.wasm_bytes_length, (Vector{UInt8},), "wasm_bytes_length"),
+    (WasmTarget.wasm_bytes_get, (Vector{UInt8}, Int32), "wasm_bytes_get"),
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════════
