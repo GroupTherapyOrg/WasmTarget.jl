@@ -504,6 +504,8 @@ function wasm_compile_flat(instrs::Vector{Int32}, n_params::Int32)::Vector{UInt8
                 _emit_local_get!(body, UInt32(val))
             elseif kind == Int32(1)  # ssa
                 _emit_local_get!(body, UInt32(n_params + val))
+            elseif kind == Int32(2)  # i64 const
+                _emit_i64_const!(body, Int64(val))
             end
         end
     end
@@ -991,13 +993,154 @@ function wasm_compile_source(src::Vector{Int32}, slen::Int32)::Vector{UInt8}
     instrs[ni + Int32(3)] = vv
     n_instrs_ref[Int32(1)] = ni + Int32(3)
 
-    # --- Trim instruction buffer to actual size ---
+    # --- Build WASM binary using pre-allocated buffers (no push!/append!) ---
     actual_len = n_instrs_ref[Int32(1)]
-    trimmed = zeros(Int32, actual_len)
-    for i in Int32(1):actual_len
-        trimmed[i] = instrs[i]
+    n_ssa = ssa_counter[Int32(1)]
+    return _wasm_build_binary(instrs, actual_len, n_params, n_ssa)
+end
+
+"""Write a byte to buffer at position wp, return new wp."""
+@noinline function _bw_byte!(buf::Vector{UInt8}, wp::Int32, b::UInt8)::Int32
+    wp += Int32(1); buf[wp] = b; return wp
+end
+
+"""Write unsigned LEB128 to buffer at position wp, return new wp."""
+@noinline function _bw_leb_u!(buf::Vector{UInt8}, wp::Int32, val::UInt32)::Int32
+    v = val
+    while true
+        b = UInt8(v & 0x7f); v >>= 7
+        if v != UInt32(0); b |= UInt8(0x80); end
+        wp += Int32(1); buf[wp] = b
+        if v == UInt32(0); break; end
+    end
+    return wp
+end
+
+"""Write signed LEB128 (i64) to buffer at position wp, return new wp."""
+@noinline function _bw_leb_s!(buf::Vector{UInt8}, wp::Int32, val::Int64)::Int32
+    v = val; more = true
+    while more
+        b = UInt8(v & 0x7f); v >>= 7
+        if (v == Int64(0) && (b & UInt8(0x40)) == UInt8(0)) ||
+           (v == Int64(-1) && (b & UInt8(0x40)) != UInt8(0))
+            more = false
+        else; b |= UInt8(0x80); end
+        wp += Int32(1); buf[wp] = b
+    end
+    return wp
+end
+
+"""Write local.get(idx) to buffer."""
+@noinline function _bw_local_get!(buf::Vector{UInt8}, wp::Int32, idx::UInt32)::Int32
+    wp = _bw_byte!(buf, wp, 0x20)
+    return _bw_leb_u!(buf, wp, idx)
+end
+
+"""Write local.set(idx) to buffer."""
+@noinline function _bw_local_set!(buf::Vector{UInt8}, wp::Int32, idx::UInt32)::Int32
+    wp = _bw_byte!(buf, wp, 0x21)
+    return _bw_leb_u!(buf, wp, idx)
+end
+
+"""Write i64.const(val) to buffer."""
+@noinline function _bw_i64_const!(buf::Vector{UInt8}, wp::Int32, val::Int64)::Int32
+    wp = _bw_byte!(buf, wp, 0x42)
+    return _bw_leb_s!(buf, wp, val)
+end
+
+"""Emit an operand (param/ssa/const) into body buffer."""
+@noinline function _bw_operand!(buf::Vector{UInt8}, wp::Int32, kind::Int32, val::Int32, n_params::Int32)::Int32
+    if kind == Int32(0)  # param
+        return _bw_local_get!(buf, wp, UInt32(val))
+    elseif kind == Int32(1)  # ssa
+        return _bw_local_get!(buf, wp, UInt32(n_params + val))
+    else  # const
+        return _bw_i64_const!(buf, wp, Int64(val))
+    end
+end
+
+"""Build WASM binary from flat instruction buffer using pre-allocated arrays only."""
+@noinline function _wasm_build_binary(instrs::Vector{Int32}, actual_len::Int32,
+                                       n_params::Int32, n_ssa::Int32)::Vector{UInt8}
+    body_buf = zeros(UInt8, Int32(512))
+    bp = Int32(0)
+    out = zeros(UInt8, Int32(512))
+    wp = Int32(0)
+
+    # --- Build function body ---
+    if n_ssa > Int32(0)
+        bp = _bw_byte!(body_buf, bp, 0x01)
+        bp = _bw_leb_u!(body_buf, bp, UInt32(n_ssa))
+        bp = _bw_byte!(body_buf, bp, 0x7e)
+    else
+        bp = _bw_byte!(body_buf, bp, 0x00)
     end
 
-    # --- Compile to WASM via wasm_compile_flat ---
-    return wasm_compile_flat(trimmed, n_params)
+    # Emit instructions
+    pos = Int32(1)
+    ssa_idx = Int32(0)
+    while pos <= actual_len
+        stype = instrs[pos]
+        if stype == Int32(0)  # call
+            opcode = instrs[pos + Int32(1)]
+            n_operands = instrs[pos + Int32(2)]
+            pos += Int32(3)
+            for _ in Int32(1):n_operands
+                kind = instrs[pos]; val = instrs[pos + Int32(1)]; pos += Int32(2)
+                bp = _bw_operand!(body_buf, bp, kind, val, n_params)
+            end
+            bp = _bw_byte!(body_buf, bp, UInt8(opcode & Int32(0xFF)))
+            bp = _bw_local_set!(body_buf, bp, UInt32(n_params + ssa_idx))
+            ssa_idx += Int32(1)
+        else  # return
+            kind = instrs[pos + Int32(1)]; val = instrs[pos + Int32(2)]; pos += Int32(3)
+            bp = _bw_operand!(body_buf, bp, kind, val, n_params)
+        end
+    end
+    bp = _bw_byte!(body_buf, bp, 0x0b)  # end
+
+    # Compute LEB128 sizes
+    body_leb = zeros(UInt8, Int32(5))
+    bsl = _bw_leb_u!(body_leb, Int32(0), UInt32(bp))
+    code_section_size = UInt32(1) + UInt32(bsl) + UInt32(bp)
+    cs_leb = zeros(UInt8, Int32(5))
+    csl = _bw_leb_u!(cs_leb, Int32(0), code_section_size)
+
+    # --- Assemble WASM module ---
+    # Magic + version
+    wp = _bw_byte!(out, wp, 0x00); wp = _bw_byte!(out, wp, 0x61)
+    wp = _bw_byte!(out, wp, 0x73); wp = _bw_byte!(out, wp, 0x6d)
+    wp = _bw_byte!(out, wp, 0x01); wp = _bw_byte!(out, wp, 0x00)
+    wp = _bw_byte!(out, wp, 0x00); wp = _bw_byte!(out, wp, 0x00)
+
+    # Type section
+    wp = _bw_byte!(out, wp, 0x01)
+    type_size = UInt32(5) + UInt32(n_params)
+    wp = _bw_leb_u!(out, wp, type_size)
+    wp = _bw_byte!(out, wp, 0x01); wp = _bw_byte!(out, wp, 0x60)
+    wp = _bw_leb_u!(out, wp, UInt32(n_params))
+    for _ in Int32(1):n_params; wp = _bw_byte!(out, wp, 0x7e); end
+    wp = _bw_byte!(out, wp, 0x01); wp = _bw_byte!(out, wp, 0x7e)
+
+    # Function section
+    wp = _bw_byte!(out, wp, 0x03); wp = _bw_byte!(out, wp, 0x02)
+    wp = _bw_byte!(out, wp, 0x01); wp = _bw_byte!(out, wp, 0x00)
+
+    # Export section
+    wp = _bw_byte!(out, wp, 0x07); wp = _bw_byte!(out, wp, 0x05)
+    wp = _bw_byte!(out, wp, 0x01); wp = _bw_byte!(out, wp, 0x01)
+    wp = _bw_byte!(out, wp, UInt8('f'))
+    wp = _bw_byte!(out, wp, 0x00); wp = _bw_byte!(out, wp, 0x00)
+
+    # Code section
+    wp = _bw_byte!(out, wp, 0x0a)
+    for i in Int32(1):csl; wp = _bw_byte!(out, wp, cs_leb[i]); end
+    wp = _bw_byte!(out, wp, 0x01)
+    for i in Int32(1):bsl; wp = _bw_byte!(out, wp, body_leb[i]); end
+    for i in Int32(1):bp; wp = _bw_byte!(out, wp, body_buf[i]); end
+
+    # Trim
+    result = zeros(UInt8, wp)
+    for i in Int32(1):wp; result[i] = out[i]; end
+    return result
 end
