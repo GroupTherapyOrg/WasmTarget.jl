@@ -1297,7 +1297,7 @@ end
 Check if this code contains a loop (has backward jumps).
 """
 function has_loop(ctx::CompilationContext)
-    return !isempty(ctx.loop_headers)
+    return any(ctx.loop_headers)
 end
 
 """
@@ -1306,12 +1306,12 @@ This pattern requires special handling (generate_complex_flow instead of generat
 Example: if/else where each branch has its own loop (like float_to_string).
 """
 function has_branch_past_first_loop(ctx::CompilationContext, code)
-    if isempty(ctx.loop_headers)
+    if !any(ctx.loop_headers)
         return false
     end
 
     # Find first loop header and its back-edge
-    first_header = minimum(ctx.loop_headers)
+    first_header = findfirst(ctx.loop_headers)
     back_edge_idx = nothing
     for (i, stmt) in enumerate(code)
         if stmt isa Core.GotoNode && stmt.label == first_header

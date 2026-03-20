@@ -11,10 +11,10 @@ mutable struct CompilationContext
     return_type::Type
     n_params::Int
     locals::Vector{WasmValType}  # Additional locals beyond params (supports refs)
-    ssa_types::Dict{Int, Type}   # SSA value -> Julia type
-    ssa_locals::Dict{Int, Int}   # SSA value -> local index (for multi-use SSAs)
-    phi_locals::Dict{Int, Int}   # PhiNode SSA -> local index
-    loop_headers::Set{Int}       # Line numbers that are loop headers (targets of backward jumps)
+    ssa_types::IntKeyMap{Type}   # SSA value -> Julia type
+    ssa_locals::IntKeyMap{Int}   # SSA value -> local index (for multi-use SSAs)
+    phi_locals::IntKeyMap{Int}   # PhiNode SSA -> local index
+    loop_headers::Vector{Bool}   # Line numbers that are loop headers (bitmap)
     mod::WasmModule              # The module being built
     type_registry::TypeRegistry  # Struct type mappings
     func_registry::Union{FunctionRegistry, Nothing}  # Function mappings for cross-calls
@@ -71,10 +71,10 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         return_type,
         n_real_params,
         WasmValType[],
-        Dict{Int, Type}(),
-        Dict{Int, Int}(),
-        Dict{Int, Int}(),
-        Set{Int}(),
+        IntKeyMap{Type}(length(code_info.code)),
+        IntKeyMap{Int}(length(code_info.code)),
+        IntKeyMap{Int}(length(code_info.code)),
+        fill(false, length(code_info.code)),
         mod,
         type_registry,
         func_registry,
@@ -607,7 +607,7 @@ function analyze_control_flow!(ctx::CompilationContext)
         if stmt isa Core.GotoNode
             target = stmt.label
             if target < i  # Backward jump = loop
-                push!(ctx.loop_headers, target)
+                ctx.loop_headers[target] = true
             end
         elseif stmt isa Core.GotoIfNot
             # GotoIfNot jumps forward (to exit), but check anyway
@@ -617,7 +617,7 @@ function analyze_control_flow!(ctx::CompilationContext)
     # Find goto statements that jump backward (unconditional loop back)
     for (i, stmt) in enumerate(code)
         if stmt isa Core.GotoNode && stmt.label < i
-            push!(ctx.loop_headers, stmt.label)
+            ctx.loop_headers[stmt.label] = true
         end
     end
 
@@ -1524,7 +1524,8 @@ function needs_local(ctx::CompilationContext, ssa_id::Int)
 
     # If SSA is defined inside a loop and there are conditionals in the loop,
     # we need a local to ensure stack balance across control flow
-    for header in ctx.loop_headers
+    for header in 1:length(ctx.loop_headers)
+        ctx.loop_headers[header] || continue
         # Find corresponding back-edge
         back_edge = nothing
         for (i, stmt) in enumerate(code)
@@ -1799,9 +1800,9 @@ function analyze_ssa_types!(ctx::CompilationContext)
                         func_ref = stmt.args[2]
                         if func_ref isa GlobalRef
                             func = try getfield(func_ref.mod, func_ref.name) catch; nothing end
-                            if func !== nothing && ctx.func_registry !== nothing && haskey(ctx.func_registry.by_ref, func)
+                            if func !== nothing && ctx.func_registry !== nothing && has_func_ref(ctx.func_registry, func)
                                 # Look up in registry by function reference
-                                infos = ctx.func_registry.by_ref[func]
+                                infos = get_func_ref_infos(ctx.func_registry, func)
                                 if !isempty(infos)
                                     # Use the first matching function's return type
                                     ctx.ssa_types[i] = infos[1].return_type
@@ -2186,7 +2187,7 @@ function statement_produces_wasm_value(stmt::Expr, idx::Int, ctx::CompilationCon
 
         if called_func !== nothing && call_arg_types !== nothing
             # Only look up if the function is in our registry
-            if haskey(ctx.func_registry.by_ref, called_func)
+            if has_func_ref(ctx.func_registry, called_func)
                 try
                     target_info = get_function(ctx.func_registry, called_func, call_arg_types)
                     if target_info !== nothing
@@ -2254,7 +2255,7 @@ function statement_produces_wasm_value(stmt::Expr, idx::Int, ctx::CompilationCon
                     catch
                         nothing
                     end
-                    if called_func !== nothing && haskey(ctx.func_registry.by_ref, called_func)
+                    if called_func !== nothing && has_func_ref(ctx.func_registry, called_func)
                         return true  # Function is compiled in this module, produces a value
                     end
                 end
@@ -2272,7 +2273,7 @@ function statement_produces_wasm_value(stmt::Expr, idx::Int, ctx::CompilationCon
                 catch
                     nothing
                 end
-                if called_func !== nothing && haskey(ctx.func_registry.by_ref, called_func)
+                if called_func !== nothing && has_func_ref(ctx.func_registry, called_func)
                     # Look up the specific method to check return type
                     call_arg_types = tuple([infer_value_type(arg, ctx) for arg in stmt.args[2:end]]...)
                     target_info = get_function(ctx.func_registry, called_func, call_arg_types)

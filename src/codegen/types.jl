@@ -586,11 +586,11 @@ end
 Registry for functions within a module, enabling cross-function calls.
 """
 mutable struct FunctionRegistry
-    functions::Dict{String, FunctionInfo}       # name -> info
-    by_ref::Dict{Any, Vector{FunctionInfo}}     # func_ref -> infos (for dispatch)
+    functions::Vector{Tuple{String, FunctionInfo}}       # name -> info (linear scan)
+    by_ref::Vector{Tuple{Any, Vector{FunctionInfo}}}     # func_ref -> infos (linear scan)
 end
 
-FunctionRegistry() = FunctionRegistry(Dict{String, FunctionInfo}(), Dict{Any, Vector{FunctionInfo}}())
+FunctionRegistry() = FunctionRegistry(Tuple{String, FunctionInfo}[], Tuple{Any, Vector{FunctionInfo}}[])
 
 """
     serialize_function_table(registry::FunctionRegistry) -> Vector{Dict{String, Any}}
@@ -600,7 +600,8 @@ Each entry has: name, arg_types, return_type, wasm_idx.
 """
 function serialize_function_table(registry::FunctionRegistry)::Vector{Dict{String, Any}}
     entries = Dict{String, Any}[]
-    for (name, info) in sort(collect(registry.functions), by=x->x[2].wasm_idx)
+    sorted = sort(registry.functions, by=x->x[2].wasm_idx)
+    for (name, info) in sorted
         push!(entries, Dict{String, Any}(
             "name" => info.name,
             "arg_types" => [string(T) for T in info.arg_types],
@@ -616,13 +617,32 @@ Register a function in the registry.
 """
 function register_function!(registry::FunctionRegistry, name::String, func_ref, arg_types::Tuple, wasm_idx::UInt32, return_type::Type=Any)
     info = FunctionInfo(name, func_ref, arg_types, wasm_idx, return_type)
-    registry.functions[name] = info
 
-    # Also index by function reference for dispatch
-    if !haskey(registry.by_ref, func_ref)
-        registry.by_ref[func_ref] = FunctionInfo[]
+    # Update or add in functions list (linear scan)
+    found = false
+    for i in 1:length(registry.functions)
+        if registry.functions[i][1] == name
+            registry.functions[i] = (name, info)
+            found = true
+            break
+        end
     end
-    push!(registry.by_ref[func_ref], info)
+    if !found
+        push!(registry.functions, (name, info))
+    end
+
+    # Also index by function reference for dispatch (linear scan)
+    ref_found = false
+    for i in 1:length(registry.by_ref)
+        if registry.by_ref[i][1] === func_ref
+            push!(registry.by_ref[i][2], info)
+            ref_found = true
+            break
+        end
+    end
+    if !ref_found
+        push!(registry.by_ref, (func_ref, FunctionInfo[info]))
+    end
 
     return info
 end
@@ -631,14 +651,23 @@ end
 Look up a function by name.
 """
 function get_function(registry::FunctionRegistry, name::String)::Union{FunctionInfo, Nothing}
-    return get(registry.functions, name, nothing)
+    for (n, info) in registry.functions
+        n == name && return info
+    end
+    return nothing
 end
 
 """
 Look up a function by reference and argument types (for dispatch).
 """
 function get_function(registry::FunctionRegistry, func_ref, arg_types::Tuple)::Union{FunctionInfo, Nothing}
-    infos = get(registry.by_ref, func_ref, nothing)
+    infos = nothing
+    for (ref, v) in registry.by_ref
+        if ref === func_ref
+            infos = v
+            break
+        end
+    end
     infos === nothing && return nothing
 
     # Find matching signature (exact match for now)
@@ -682,6 +711,26 @@ function get_function(registry::FunctionRegistry, func_ref, arg_types::Tuple)::U
         end
     end
 
+    return nothing
+end
+
+"""
+Check if a function reference is registered (for by_ref linear scan).
+"""
+function has_func_ref(registry::FunctionRegistry, func_ref)::Bool
+    for (ref, _) in registry.by_ref
+        ref === func_ref && return true
+    end
+    return false
+end
+
+"""
+Get infos for a function reference (for by_ref linear scan). Returns nothing if not found.
+"""
+function get_func_ref_infos(registry::FunctionRegistry, func_ref)::Union{Vector{FunctionInfo}, Nothing}
+    for (ref, v) in registry.by_ref
+        ref === func_ref && return v
+    end
     return nothing
 end
 

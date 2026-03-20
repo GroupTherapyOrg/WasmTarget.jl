@@ -1520,7 +1520,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
                 push!(bytes, 0x00)
             end
         elseif stmt isa Core.GotoNode
-            if stmt.label in ctx.loop_headers
+            if stmt.label >= 1 && stmt.label <= length(ctx.loop_headers) && ctx.loop_headers[stmt.label]
                 # This is the loop-back jump
                 # First update phi locals with their iteration values
                 for (j, phi_stmt) in enumerate(code)

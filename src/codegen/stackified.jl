@@ -10,7 +10,7 @@ function generate_complex_flow(ctx::CompilationContext, blocks::Vector{BasicBloc
     # PURE-314: Void functions WITH loops must use generate_stackified_flow because
     # generate_void_flow doesn't handle pre-loop phi initialization (single-edge phis
     # after if-then-else merge points stay at default 0, causing array bounds errors).
-    if ctx.return_type === Nothing && isempty(ctx.loop_headers)
+    if ctx.return_type === Nothing && !any(ctx.loop_headers)
         append!(bytes, generate_void_flow(ctx, blocks, code))
         return bytes
     end
@@ -23,7 +23,7 @@ function generate_complex_flow(ctx::CompilationContext, blocks::Vector{BasicBloc
     # but loops and multi-conditional patterns with phi nodes require the stackifier's
     # approach of emitting loop/br for backedges and storing to phi locals at each branch.
     has_phi_nodes = any(stmt isa Core.PhiNode for stmt in code)
-    has_loops = !isempty(ctx.loop_headers)
+    has_loops = any(ctx.loop_headers)
     if has_loops || length(conditionals) > 2 || (length(conditionals) >= 2 && has_phi_nodes)
         return generate_stackified_flow(ctx, blocks, code)
     end
