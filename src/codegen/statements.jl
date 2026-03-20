@@ -608,8 +608,8 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                         src_wasm_type = ctx.locals[src_array_idx]
                         if !wasm_types_compatible(local_wasm_type, src_wasm_type)
                             # Check if this is abstract ref → concrete ref (can be cast, not replaced)
-                            if (src_wasm_type === StructRef || src_wasm_type === ArrayRef) && local_wasm_type isa ConcreteRef
-                                # Abstract ref can be downcast to concrete ref with ref.cast
+                            if (src_wasm_type === StructRef || src_wasm_type === ArrayRef || src_wasm_type === AnyRef) && local_wasm_type isa ConcreteRef
+                                # Abstract ref (including anyref) can be downcast to concrete ref with ref.cast
                                 needs_ref_cast_local = local_wasm_type
                             elseif src_wasm_type === ExternRef && local_wasm_type isa ConcreteRef
                                 # PURE-036bj: externref local → concrete ref requires any_convert_extern first
@@ -628,7 +628,8 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                         src_wasm_type = get_concrete_wasm_type(param_julia_type, ctx.mod, ctx.type_registry)
                         if src_wasm_type !== nothing && !wasm_types_compatible(local_wasm_type, src_wasm_type)
                             # Check if this is abstract ref → concrete ref (can be cast, not replaced)
-                            if (src_wasm_type === StructRef || src_wasm_type === ArrayRef) && local_wasm_type isa ConcreteRef
+                            if (src_wasm_type === StructRef || src_wasm_type === ArrayRef || src_wasm_type === AnyRef) && local_wasm_type isa ConcreteRef
+                                # Abstract ref (including anyref) can be downcast to concrete ref with ref.cast
                                 needs_ref_cast_local = local_wasm_type
                             elseif src_wasm_type === ExternRef && local_wasm_type isa ConcreteRef
                                 # PURE-036bj: externref param → concrete ref requires any_convert_extern first
@@ -803,7 +804,7 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                                             # externref param → concrete ref requires any_convert_extern + ref.cast
                                             needs_any_convert_extern = true
                                             needs_ref_cast_local = local_wasm_type
-                                        elseif (tlg_type === StructRef || tlg_type === ArrayRef) && local_wasm_type isa ConcreteRef
+                                        elseif (tlg_type === StructRef || tlg_type === ArrayRef || tlg_type === AnyRef) && local_wasm_type isa ConcreteRef
                                             needs_ref_cast_local = local_wasm_type
                                         else
                                             resize!(stmt_bytes, si - 1)

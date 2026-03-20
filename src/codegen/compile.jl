@@ -1845,7 +1845,7 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
 
         # Generate function body from Julia IR (no intrinsic check — pre-computed IR is always normal code)
         ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
-                                func_registry=func_registry, func_idx=func_idx, func_ref=nothing,
+                                func_registry=func_registry, func_idx=func_idx, func_ref=f,
                                 global_args=global_args, is_compiled_closure=false,
                                 module_globals=module_globals)
         body = generate_body(ctx)
@@ -2422,7 +2422,7 @@ function compile_module_from_ir_frozen(ir_entries::Vector, frozen::FrozenCompila
         func_idx = UInt32(n_imports + i - 1)
 
         ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
-                                func_registry=func_registry, func_idx=func_idx, func_ref=nothing,
+                                func_registry=func_registry, func_idx=func_idx, func_ref=f,
                                 global_args=global_args, is_compiled_closure=false,
                                 module_globals=module_globals)
         body = generate_body(ctx)

@@ -1,7 +1,7 @@
 # WebAssembly Instructions and Opcodes
 # Reference: https://webassembly.github.io/spec/core/binary/instructions.html
 
-export Opcode, WasmModule, WasmImport, WasmTable, WasmMemory, WasmDataSegment, WasmTag, add_function!, add_import!, add_export!, add_struct_type!, add_array_type!, add_rec_group!, add_table!, add_table_export!, add_elem_segment!, add_memory!, add_memory_export!, add_data_segment!, add_tag!, add_start_function!, add_global_ref!, to_bytes
+export Opcode, WasmModule, WasmImport, WasmTable, WasmMemory, WasmDataSegment, WasmTag, add_function!, add_import!, add_export!, add_struct_type!, add_array_type!, add_rec_group!, add_table!, add_table_export!, add_elem_segment!, add_memory!, add_memory_export!, add_data_segment!, add_tag!, add_start_function!, add_global_ref!, to_bytes, to_bytes_no_dict
 
 # ============================================================================
 # Opcodes (Section 5.4)
@@ -1037,6 +1037,305 @@ function to_bytes(mod::WasmModule)::Vector{UInt8}
         write_u32!(custom_section, length(subsection.buffer))
         append!(custom_section.buffer, subsection.buffer)
         # Write custom section size then content
+        write_u32!(w, length(custom_section.buffer))
+        append!(w.buffer, custom_section.buffer)
+    end
+
+    return bytes(w)
+end
+
+"""
+    to_bytes_no_dict(mod::WasmModule) -> Vector{UInt8}
+
+Dict-free variant of to_bytes(). Replaces Dict/Set in type section and name section
+with Vector{Bool} and Vector{Tuple}. Produces byte-identical output to to_bytes().
+Compiles to WasmGC for self-hosted codegen.
+"""
+function to_bytes_no_dict(mod::WasmModule)::Vector{UInt8}
+    w = WasmWriter()
+
+    # Magic number and version
+    write_bytes!(w, WASM_MAGIC...)
+    write_bytes!(w, WASM_VERSION...)
+
+    # Type section — Dict-free using Vector{Bool}
+    if !isempty(mod.types)
+        write_section!(w, SECTION_TYPE) do section
+            n = length(mod.types)
+            written = Vector{Bool}(undef, n)
+            for i in 1:n; written[i] = false; end
+
+            # Count entries: each rec group = 1, each ungrouped type = 1
+            entry_count = 0
+            for group in mod.rec_groups
+                entry_count += 1
+                for ti in group
+                    written[ti + 1] = true
+                end
+            end
+            for i in 1:n
+                if !written[i]; entry_count += 1; end
+            end
+            # Reset written flags
+            for i in 1:n; written[i] = false; end
+
+            write_u32!(section, entry_count)
+
+            # Write types in order, grouping rec groups together
+            for (i, ct) in enumerate(mod.types)
+                ti = UInt32(i - 1)
+                written[i] && continue
+
+                # Check if this type belongs to a rec group
+                found_group = false
+                for group in mod.rec_groups
+                    for gti in group
+                        if gti == ti
+                            found_group = true
+                            break
+                        end
+                    end
+                    if found_group
+                        # Write the whole rec group
+                        write_byte!(section, REC_BYTE)
+                        write_u32!(section, length(group))
+                        for gti in group
+                            write_composite_type!(section, mod.types[gti + 1])
+                            written[gti + 1] = true
+                        end
+                        break
+                    end
+                end
+                if !found_group
+                    # Write single type
+                    write_composite_type!(section, ct)
+                    written[i] = true
+                end
+            end
+        end
+    end
+
+    # Import section (Dict-free)
+    if !isempty(mod.imports)
+        write_section!(w, SECTION_IMPORT) do section
+            write_u32!(section, length(mod.imports))
+            for imp in mod.imports
+                write_name!(section, imp.module_name)
+                write_name!(section, imp.field_name)
+                write_byte!(section, imp.kind)
+                write_u32!(section, imp.type_idx)
+            end
+        end
+    end
+
+    # Function section
+    if !isempty(mod.functions)
+        write_section!(w, SECTION_FUNCTION) do section
+            write_u32!(section, length(mod.functions))
+            for func in mod.functions
+                write_u32!(section, func.type_idx)
+            end
+        end
+    end
+
+    # Table section
+    if !isempty(mod.tables)
+        write_section!(w, SECTION_TABLE) do section
+            write_u32!(section, length(mod.tables))
+            for table in mod.tables
+                write_valtype!(section, table.reftype)
+                if table.max === nothing
+                    write_byte!(section, 0x00)
+                    write_u32!(section, table.min)
+                else
+                    write_byte!(section, 0x01)
+                    write_u32!(section, table.min)
+                    write_u32!(section, table.max)
+                end
+            end
+        end
+    end
+
+    # Memory section
+    if !isempty(mod.memories)
+        write_section!(w, SECTION_MEMORY) do section
+            write_u32!(section, length(mod.memories))
+            for mem in mod.memories
+                if mem.max === nothing
+                    write_byte!(section, 0x00)
+                    write_u32!(section, mem.min)
+                else
+                    write_byte!(section, 0x01)
+                    write_u32!(section, mem.min)
+                    write_u32!(section, mem.max)
+                end
+            end
+        end
+    end
+
+    # Tag section
+    if !isempty(mod.tags)
+        write_section!(w, SECTION_TAG) do section
+            write_u32!(section, length(mod.tags))
+            for tag in mod.tags
+                write_byte!(section, 0x00)
+                write_u32!(section, tag.type_idx)
+            end
+        end
+    end
+
+    # Global section
+    if !isempty(mod.globals)
+        write_section!(w, SECTION_GLOBAL) do section
+            write_u32!(section, length(mod.globals))
+            for g in mod.globals
+                write_valtype!(section, g.valtype)
+                write_byte!(section, g.mutable_ ? 0x01 : 0x00)
+                append!(section.buffer, g.init)
+            end
+        end
+    end
+
+    # Export section
+    if !isempty(mod.exports)
+        write_section!(w, SECTION_EXPORT) do section
+            write_u32!(section, length(mod.exports))
+            for exp in mod.exports
+                write_name!(section, exp.name)
+                write_byte!(section, exp.kind)
+                write_u32!(section, exp.idx)
+            end
+        end
+    end
+
+    # Start section
+    if mod.start_function !== nothing
+        write_section!(w, SECTION_START) do section
+            write_u32!(section, mod.start_function)
+        end
+    end
+
+    # Element section
+    if !isempty(mod.elem_segments)
+        write_section!(w, SECTION_ELEMENT) do section
+            write_u32!(section, length(mod.elem_segments))
+            for elem in mod.elem_segments
+                if elem.table_idx == UInt32(0)
+                    write_byte!(section, 0x00)
+                else
+                    write_byte!(section, 0x02)
+                    write_u32!(section, elem.table_idx)
+                end
+                push!(section.buffer, Opcode.I32_CONST)
+                append!(section.buffer, encode_leb128_signed(Int32(elem.offset)))
+                push!(section.buffer, Opcode.END)
+                if elem.table_idx != UInt32(0)
+                    write_byte!(section, 0x00)
+                end
+                write_u32!(section, length(elem.func_indices))
+                for func_idx in elem.func_indices
+                    write_u32!(section, func_idx)
+                end
+            end
+        end
+    end
+
+    # Data count section
+    if !isempty(mod.data_segments)
+        write_section!(w, SECTION_DATACOUNT) do section
+            write_u32!(section, length(mod.data_segments))
+        end
+    end
+
+    # Code section
+    if !isempty(mod.functions)
+        write_section!(w, SECTION_CODE) do section
+            write_u32!(section, length(mod.functions))
+            for func in mod.functions
+                body_writer = WasmWriter()
+                if isempty(func.locals)
+                    write_u32!(body_writer, 0)
+                else
+                    local_groups = group_locals(func.locals)
+                    write_u32!(body_writer, length(local_groups))
+                    for (count, valtype) in local_groups
+                        write_u32!(body_writer, count)
+                        write_valtype!(body_writer, valtype)
+                    end
+                end
+                append!(body_writer.buffer, func.body)
+                write_u32!(section, length(body_writer.buffer))
+                append!(section.buffer, body_writer.buffer)
+            end
+        end
+    end
+
+    # Data section
+    if !isempty(mod.data_segments)
+        write_section!(w, SECTION_DATA) do section
+            write_u32!(section, length(mod.data_segments))
+            for data in mod.data_segments
+                if data.passive
+                    write_byte!(section, 0x01)
+                    write_u32!(section, length(data.data))
+                    append!(section.buffer, data.data)
+                else
+                    write_byte!(section, 0x00)
+                    push!(section.buffer, Opcode.I32_CONST)
+                    append!(section.buffer, encode_leb128_signed(Int32(data.offset)))
+                    push!(section.buffer, Opcode.END)
+                    write_u32!(section, length(data.data))
+                    append!(section.buffer, data.data)
+                end
+            end
+        end
+    end
+
+    # Name section — Dict-free using Vector{Tuple} + insertion sort
+    func_names = Vector{Tuple{UInt32, String}}()
+    func_idx = UInt32(0)
+    for imp in mod.imports
+        if imp.kind == 0x00
+            push!(func_names, (func_idx, "$(imp.module_name).$(imp.field_name)"))
+            func_idx += 1
+        end
+    end
+    for exp in mod.exports
+        if exp.kind == 0x00
+            push!(func_names, (exp.idx, exp.name))
+        end
+    end
+    if !isempty(func_names)
+        # Insertion sort by index
+        for i in 2:length(func_names)
+            j = i
+            while j > 1 && func_names[j][1] < func_names[j-1][1]
+                func_names[j], func_names[j-1] = func_names[j-1], func_names[j]
+                j -= 1
+            end
+        end
+        # Deduplicate: keep last entry per idx (export overrides import)
+        unique_names = Vector{Tuple{UInt32, String}}()
+        for (idx, name) in func_names
+            if !isempty(unique_names) && unique_names[end][1] == idx
+                unique_names[end] = (idx, name)
+            else
+                push!(unique_names, (idx, name))
+            end
+        end
+        # Write custom section
+        write_byte!(w, 0x00)
+        custom_section = WasmWriter()
+        write_name!(custom_section, "name")
+        subsection = WasmWriter()
+        write_u32!(subsection, length(unique_names))
+        for (idx, name) in unique_names
+            write_u32!(subsection, idx)
+            write_name!(subsection, name)
+        end
+        write_byte!(custom_section, 0x01)
+        write_u32!(custom_section, length(subsection.buffer))
+        append!(custom_section.buffer, subsection.buffer)
         write_u32!(w, length(custom_section.buffer))
         append!(w.buffer, custom_section.buffer)
     end

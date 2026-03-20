@@ -264,7 +264,7 @@ for (phase_name, funcs) in all_funcs_by_phase
             result = try read(`wasm-tools validate $tmppath`, String) catch e; "error" end
             rm(tmppath, force=true)
             if isempty(result)
-                push!(valid_entries, (ci, rettype, argtypes, name))
+                push!(valid_entries, (ci, rettype, argtypes, name, f))
                 validated += 1
             end
         catch; end

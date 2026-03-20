@@ -10,6 +10,7 @@ include("builder/validator.jl")
 include("compiler/ir.jl")
 
 # Codegen - Julia IR to Wasm bytecode (split from compiler/codegen.jl)
+include("codegen/int_key_map.jl")
 include("codegen/types.jl")
 include("codegen/dispatch.jl")
 include("codegen/compile.jl")

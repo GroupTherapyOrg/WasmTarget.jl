@@ -67,7 +67,7 @@ failed = []
 for (f, arg_types, name) in codegen_functions
     try
         ci, rt = Base.code_typed(f, arg_types)[1]
-        push!(ir_entries, (ci, rt, arg_types, name))
+        push!(ir_entries, (ci, rt, arg_types, name, f))
         println("  ✓ $name: $(length(ci.code)) stmts → $rt")
     catch e
         push!(failed, (name, e))
@@ -82,7 +82,7 @@ println("\n  $(length(ir_entries)) succeeded, $(length(failed)) failed")
 println("\n--- Step 3: Individual compilation test ---")
 individual_results = Dict{String, Any}()
 
-for (ci, rt, arg_types, name) in ir_entries
+for (ci, rt, arg_types, name, f) in ir_entries
     try
         mod = compile_module_from_ir([(ci, rt, arg_types, name)])
         bytes = to_bytes(mod)
@@ -116,9 +116,9 @@ println("\n--- Step 4: Multi-function assembly ---")
 
 # Use only functions that validated individually
 valid_entries = []
-for (ci, rt, arg_types, name) in ir_entries
+for (ci, rt, arg_types, name, f) in ir_entries
     if haskey(individual_results, name) && individual_results[name].valid
-        push!(valid_entries, (ci, rt, arg_types, name))
+        push!(valid_entries, (ci, rt, arg_types, name, f))
     end
 end
 

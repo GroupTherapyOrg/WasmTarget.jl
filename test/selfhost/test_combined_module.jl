@@ -73,7 +73,7 @@ all_targets = vcat(interface_targets, typeinf_targets, codeinfo_targets)
 for (f, atypes, name) in all_targets
     try
         ci_pair = only(Base.code_typed(f, atypes; optimize=false))
-        push!(all_functions, (ci_pair[1], ci_pair[2], atypes, name))
+        push!(all_functions, (ci_pair[1], ci_pair[2], atypes, name, f))
         push!(compiled_names, name)
         println("  ✓ $name ($(length(ci_pair[1].code)) stmts)")
     catch e
