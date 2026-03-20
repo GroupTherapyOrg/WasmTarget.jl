@@ -102,6 +102,7 @@ all_functions = [
     (WasmTarget.wasm_symbol_new, (), "wasm_symbol_new"),
     (WasmTarget.wasm_symbol_boundscheck, (), "wasm_symbol_boundscheck"),
     (WasmTarget.wasm_symbol_foreigncall, (), "wasm_symbol_foreigncall"),
+
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════════

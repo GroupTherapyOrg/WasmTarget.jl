@@ -204,3 +204,190 @@ end
 function wasm_symbol_foreigncall()::Symbol
     return :foreigncall
 end
+
+# ============================================================================
+# Mini-compiler — GAMMA-003
+# ============================================================================
+# Self-contained compiler for simple i64 arithmetic functions.
+# Does NOT depend on WasmModule, TypeRegistry, CompilationContext, or Dict.
+# Produces a complete WASM binary from IR components.
+#
+# Intrinsic functions are represented as Int64 IDs in the Expr args[1] position
+# (JS deserializer maps globalref/intrinsic names to these IDs).
+#
+# Intrinsic ID mapping:
+#   1=mul_int, 2=add_int, 3=sub_int, 4=neg_int,
+#   5=slt_int, 6=sle_int, 7=eq_int, 8=ne_int,
+#   9=and_int, 10=or_int, 11=xor_int,
+#   12=sdiv_int, 13=srem_int, 14=sgt_int, 15=sge_int
+
+"""
+Compile a simple i64→i64 function from IR components to WASM bytes.
+
+code: Vector{Any} of IR statements
+  - Expr(:call, [Int64(intrinsic_id), args...]) for intrinsic calls
+  - ReturnNode(SSAValue(n)) for returns
+ssavaluetypes: Vector{Any} of types (reserved for future use)
+nargs: number of Julia args including #self#
+
+Returns: Vector{UInt8} containing a valid WASM binary.
+"""
+function wasm_compile_i64_to_i64(code::Vector{Any}, ssavaluetypes::Vector{Any},
+                                  nargs::Int32)::Vector{UInt8}
+    n_params = Int(nargs) - 1  # Subtract #self#
+    n_stmts = length(code)
+
+    # Count SSA values that need locals (all non-return, non-goto statements)
+    n_ssa = Int32(0)
+    for i in 1:n_stmts
+        stmt = code[i]
+        if stmt isa Expr
+            n_ssa += Int32(1)
+        end
+    end
+
+    # Generate function body bytecode
+    body = UInt8[]
+    for i in 1:n_stmts
+        stmt = code[i]
+        if stmt isa Expr && stmt.head === :call
+            # args[1] = intrinsic ID (Int64), args[2:] = values
+            for j in 2:length(stmt.args)
+                _mini_emit_value!(body, stmt.args[j], Int32(n_params))
+            end
+            intrinsic_id = stmt.args[1]
+            if intrinsic_id isa Int64
+                _mini_emit_intrinsic!(body, Int32(intrinsic_id))
+            end
+            # Store result in SSA local
+            local_idx = UInt32(n_params + i - 1)
+            push!(body, 0x21)  # local.set
+            append!(body, encode_leb128_unsigned(local_idx))
+        elseif stmt isa Core.ReturnNode
+            if isdefined(stmt, :val)
+                _mini_emit_value!(body, stmt.val, Int32(n_params))
+            end
+            # Value is on stack; function end returns it
+        end
+    end
+
+    return _mini_build_wasm(body, Int32(n_params), n_ssa)
+end
+
+"""Emit WASM opcodes for an IR value onto the stack."""
+function _mini_emit_value!(bytes::Vector{UInt8}, val, n_params::Int32)::Nothing
+    if val isa Core.Argument
+        # Argument(2) = first real param = local 0
+        local_idx = UInt32(val.n - 2)
+        push!(bytes, 0x20)  # local.get
+        append!(bytes, encode_leb128_unsigned(local_idx))
+    elseif val isa Core.SSAValue
+        # SSAValue(k) = local (n_params + k - 1)
+        local_idx = UInt32(Int(n_params) + val.id - 1)
+        push!(bytes, 0x20)  # local.get
+        append!(bytes, encode_leb128_unsigned(local_idx))
+    elseif val isa Int64
+        push!(bytes, 0x42)  # i64.const
+        append!(bytes, encode_leb128_signed(val))
+    end
+    return nothing
+end
+
+"""Emit WASM opcode for an i64 intrinsic by ID."""
+function _mini_emit_intrinsic!(bytes::Vector{UInt8}, id::Int32)::Nothing
+    if id == Int32(1)       # mul_int
+        push!(bytes, 0x7e)
+    elseif id == Int32(2)   # add_int
+        push!(bytes, 0x7c)
+    elseif id == Int32(3)   # sub_int
+        push!(bytes, 0x7d)
+    elseif id == Int32(5)   # slt_int
+        push!(bytes, 0x53)
+    elseif id == Int32(6)   # sle_int
+        push!(bytes, 0x57)
+    elseif id == Int32(7)   # eq_int
+        push!(bytes, 0x51)
+    elseif id == Int32(8)   # ne_int
+        push!(bytes, 0x52)
+    elseif id == Int32(9)   # and_int
+        push!(bytes, 0x83)
+    elseif id == Int32(10)  # or_int
+        push!(bytes, 0x84)
+    elseif id == Int32(11)  # xor_int
+        push!(bytes, 0x85)
+    elseif id == Int32(12)  # sdiv_int
+        push!(bytes, 0x7f)
+    elseif id == Int32(13)  # srem_int
+        push!(bytes, 0x81)
+    elseif id == Int32(14)  # sgt_int
+        push!(bytes, 0x55)
+    elseif id == Int32(15)  # sge_int
+        push!(bytes, 0x59)
+    end
+    return nothing
+end
+
+"""Build a minimal WASM binary for an i64 function."""
+function _mini_build_wasm(body::Vector{UInt8}, n_params::Int32, n_locals::Int32)::Vector{UInt8}
+    result = UInt8[]
+
+    # WASM magic + version
+    append!(result, UInt8[0x00, 0x61, 0x73, 0x6d])
+    append!(result, UInt8[0x01, 0x00, 0x00, 0x00])
+
+    # === Type section (id=1): func type (n_params × i64) → (i64) ===
+    type_content = UInt8[]
+    push!(type_content, 0x01)  # 1 type
+    push!(type_content, 0x60)  # func type
+    append!(type_content, encode_leb128_unsigned(UInt32(n_params)))
+    for _ in 1:n_params
+        push!(type_content, 0x7e)  # i64
+    end
+    push!(type_content, 0x01)  # 1 result
+    push!(type_content, 0x7e)  # i64
+    _mini_emit_section!(result, UInt8(0x01), type_content)
+
+    # === Function section (id=3): 1 function, type 0 ===
+    _mini_emit_section!(result, UInt8(0x03), UInt8[0x01, 0x00])
+
+    # === Export section (id=7): "f" → function 0 ===
+    export_content = UInt8[]
+    push!(export_content, 0x01)       # 1 export
+    push!(export_content, 0x01)       # name length = 1
+    push!(export_content, UInt8('f')) # name = "f"
+    push!(export_content, 0x00)       # export kind = function
+    push!(export_content, 0x00)       # function index = 0
+    _mini_emit_section!(result, UInt8(0x07), export_content)
+
+    # === Code section (id=10): 1 function body ===
+    func_body = UInt8[]
+    if n_locals > Int32(0)
+        push!(func_body, 0x01)  # 1 local type entry
+        append!(func_body, encode_leb128_unsigned(UInt32(n_locals)))
+        push!(func_body, 0x7e)  # i64
+    else
+        push!(func_body, 0x00)  # no locals
+    end
+    append!(func_body, body)
+    push!(func_body, 0x0b)  # end
+
+    # Body with length prefix
+    body_with_len = UInt8[]
+    append!(body_with_len, encode_leb128_unsigned(UInt32(length(func_body))))
+    append!(body_with_len, func_body)
+
+    code_content = UInt8[]
+    push!(code_content, 0x01)  # 1 function body
+    append!(code_content, body_with_len)
+    _mini_emit_section!(result, UInt8(0x0a), code_content)
+
+    return result
+end
+
+"""Emit a WASM section with id and content."""
+function _mini_emit_section!(result::Vector{UInt8}, id::UInt8, content::Vector{UInt8})::Nothing
+    push!(result, id)
+    append!(result, encode_leb128_unsigned(UInt32(length(content))))
+    append!(result, content)
+    return nothing
+end
