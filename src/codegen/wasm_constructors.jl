@@ -391,3 +391,164 @@ function _mini_emit_section!(result::Vector{UInt8}, id::UInt8, content::Vector{U
     append!(result, content)
     return nothing
 end
+
+# ============================================================================
+# Flat mini-compiler — ARCHB G-005
+# ============================================================================
+# WASM-compilation-friendly mini-compiler that uses ONLY Int32/UInt8 arrays.
+# No Vector{Any}, no type dispatch, no Expr/Symbol handling.
+# Uses @noinline helpers to prevent IR explosion from inlining.
+#
+# Instruction encoding in flat Int32 vector:
+#   Call:   [0, wasm_opcode, n_operands, kind1, val1, kind2, val2, ...]
+#   Return: [1, kind, val]
+#   Operand kinds: 0=param(local_idx), 1=ssa(ssa_idx_0based), 2=i64_const(value)
+
+# --- @noinline helpers to prevent IR explosion ---
+@noinline function _fb!(v::Vector{UInt8}, b::UInt8)::Vector{UInt8}
+    push!(v, b)
+    return v
+end
+@noinline function _fa!(v::Vector{UInt8}, b::Vector{UInt8})::Vector{UInt8}
+    return append!(v, b)
+end
+@noinline function _flu(n::UInt32)::Vector{UInt8}
+    return encode_leb128_unsigned(n)
+end
+@noinline function _fls(n::Int64)::Vector{UInt8}
+    return encode_leb128_signed(n)
+end
+@noinline function _flen(v::Vector{UInt8})::Int32
+    return Int32(length(v))
+end
+
+"""Emit a local.get instruction into the byte vector."""
+@noinline function _emit_local_get!(v::Vector{UInt8}, idx::UInt32)::Nothing
+    _fb!(v, 0x20)
+    _fa!(v, _flu(idx))
+    return nothing
+end
+
+"""Emit a local.set instruction into the byte vector."""
+@noinline function _emit_local_set!(v::Vector{UInt8}, idx::UInt32)::Nothing
+    _fb!(v, 0x21)
+    _fa!(v, _flu(idx))
+    return nothing
+end
+
+"""Emit an i64.const instruction into the byte vector."""
+@noinline function _emit_i64_const!(v::Vector{UInt8}, val::Int64)::Nothing
+    _fb!(v, 0x42)
+    _fa!(v, _fls(val))
+    return nothing
+end
+
+"""Emit a WASM section (id + leb128(len) + content) into result."""
+@noinline function _emit_section!(result::Vector{UInt8}, id::UInt8, content::Vector{UInt8})::Nothing
+    _fb!(result, id)
+    _fa!(result, _flu(UInt32(_flen(content))))
+    _fa!(result, content)
+    return nothing
+end
+
+"""
+Compile a simple i64→i64 function from a flat Int32 instruction buffer.
+Returns a complete, valid WASM binary as Vector{UInt8}.
+"""
+function wasm_compile_flat(instrs::Vector{Int32}, n_params::Int32)::Vector{UInt8}
+    # --- First pass: count SSA locals ---
+    n_ssa = Int32(0)
+    pos = Int32(1)
+    n_instrs = Int32(length(instrs))
+    while pos <= n_instrs
+        stype = instrs[pos]
+        if stype == Int32(0)  # call
+            n_operands = instrs[pos + Int32(2)]
+            n_ssa += Int32(1)
+            pos += Int32(3) + n_operands * Int32(2)
+        else  # return
+            pos += Int32(3)
+        end
+    end
+
+    # --- Second pass: emit function body bytecode ---
+    body = UInt8[]
+    pos = Int32(1)
+    ssa_idx = Int32(0)
+    while pos <= n_instrs
+        stype = instrs[pos]
+        if stype == Int32(0)  # call intrinsic
+            opcode = instrs[pos + Int32(1)]
+            n_operands = instrs[pos + Int32(2)]
+            pos += Int32(3)
+            for _ in Int32(1):n_operands
+                kind = instrs[pos]
+                val = instrs[pos + Int32(1)]
+                pos += Int32(2)
+                if kind == Int32(0)  # param → local.get
+                    _emit_local_get!(body, UInt32(val))
+                elseif kind == Int32(1)  # ssa → local.get(n_params + ssa_idx)
+                    _emit_local_get!(body, UInt32(n_params + val))
+                else  # i64 const
+                    _emit_i64_const!(body, Int64(val))
+                end
+            end
+            _fb!(body, UInt8(opcode & Int32(0xFF)))
+            _emit_local_set!(body, UInt32(n_params + ssa_idx))
+            ssa_idx += Int32(1)
+        else  # return
+            kind = instrs[pos + Int32(1)]
+            val = instrs[pos + Int32(2)]
+            pos += Int32(3)
+            if kind == Int32(0)  # param
+                _emit_local_get!(body, UInt32(val))
+            elseif kind == Int32(1)  # ssa
+                _emit_local_get!(body, UInt32(n_params + val))
+            end
+        end
+    end
+
+    # --- Build complete WASM module ---
+    result = UInt8[]
+
+    # Magic + version
+    _fb!(result, 0x00); _fb!(result, 0x61); _fb!(result, 0x73); _fb!(result, 0x6d)
+    _fb!(result, 0x01); _fb!(result, 0x00); _fb!(result, 0x00); _fb!(result, 0x00)
+
+    # Type section (id=1): func (i64^n_params → i64)
+    tp = UInt8[]
+    _fb!(tp, 0x01); _fb!(tp, 0x60)  # 1 type, func
+    _fa!(tp, _flu(UInt32(n_params)))
+    for _ in Int32(1):n_params; _fb!(tp, 0x7e); end  # i64 params
+    _fb!(tp, 0x01); _fb!(tp, 0x7e)  # 1 result, i64
+    _emit_section!(result, 0x01, tp)
+
+    # Function section (id=3): 1 func → type 0
+    _fb!(result, 0x03); _fb!(result, 0x02); _fb!(result, 0x01); _fb!(result, 0x00)
+
+    # Export section (id=7): "f" → func 0
+    ep = UInt8[]
+    _fb!(ep, 0x01); _fb!(ep, 0x01); _fb!(ep, UInt8('f'))  # 1 export, name "f"
+    _fb!(ep, 0x00); _fb!(ep, 0x00)  # func kind, idx 0
+    _emit_section!(result, 0x07, ep)
+
+    # Code section (id=10): 1 function body
+    fb = UInt8[]
+    if n_ssa > Int32(0)
+        _fb!(fb, 0x01)  # 1 local entry
+        _fa!(fb, _flu(UInt32(n_ssa)))
+        _fb!(fb, 0x7e)  # i64
+    else
+        _fb!(fb, 0x00)  # no locals
+    end
+    _fa!(fb, body)
+    _fb!(fb, 0x0b)  # end
+
+    cp = UInt8[]
+    _fb!(cp, 0x01)  # 1 func body
+    _fa!(cp, _flu(UInt32(_flen(fb))))
+    _fa!(cp, fb)
+    _emit_section!(result, 0x0a, cp)
+
+    return result
+end

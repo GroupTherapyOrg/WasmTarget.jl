@@ -103,6 +103,19 @@ all_functions = [
     (WasmTarget.wasm_symbol_boundscheck, (), "wasm_symbol_boundscheck"),
     (WasmTarget.wasm_symbol_foreigncall, (), "wasm_symbol_foreigncall"),
 
+    # Level 9: Flat mini-compiler (ARCHB G-005)
+    # @noinline helpers — keep as separate functions for cross-call
+    (WasmTarget._fb!, (Vector{UInt8}, UInt8), "_fb"),
+    (WasmTarget._fa!, (Vector{UInt8}, Vector{UInt8}), "_fa"),
+    (WasmTarget._flu, (UInt32,), "_flu"),
+    (WasmTarget._fls, (Int64,), "_fls"),
+    (WasmTarget._flen, (Vector{UInt8},), "_flen"),
+    (WasmTarget._emit_local_get!, (Vector{UInt8}, UInt32), "_emit_local_get"),
+    (WasmTarget._emit_local_set!, (Vector{UInt8}, UInt32), "_emit_local_set"),
+    (WasmTarget._emit_i64_const!, (Vector{UInt8}, Int64), "_emit_i64_const"),
+    (WasmTarget._emit_section!, (Vector{UInt8}, UInt8, Vector{UInt8}), "_emit_section"),
+    # Main compiler function
+    (WasmTarget.wasm_compile_flat, (Vector{Int32}, Int32), "wasm_compile_flat"),
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════════
