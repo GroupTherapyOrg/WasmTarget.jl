@@ -32,6 +32,7 @@ include("codegen/dicts.jl")
 include("codegen/sourcemap.jl")
 include("codegen/cache.jl")
 include("codegen/packages.jl")
+include("codegen/wasm_constructors.jl")
 
 # Runtime - Intrinsics and stdlib mapping
 include("runtime/intrinsics.jl")
@@ -45,6 +46,17 @@ include("runtime/tokenizer.jl")
 export compile, compile_multi, compile_from_codeinfo, compile_with_base, optimize, WasmModule, to_bytes
 export FrozenCompilationState, build_frozen_state, compile_module_from_ir_frozen, compile_module_from_ir_frozen_no_dict
 export wasm_bytes_length, wasm_bytes_get
+export wasm_create_ssa_value, wasm_create_argument, wasm_create_goto_node
+export wasm_create_goto_if_not, wasm_create_return_node, wasm_create_return_node_nothing
+export wasm_create_phi_node, wasm_create_expr, wasm_set_code_info!
+export wasm_create_any_vector, wasm_set_any_ssa!, wasm_set_any_arg!, wasm_set_any_i64!
+export wasm_set_any_expr!, wasm_set_any_return!, wasm_set_any_gotoifnot!
+export wasm_set_any_goto!, wasm_set_any_phi!
+export wasm_get_ssa_id, wasm_get_gotoifnot_dest, wasm_any_vector_length
+export wasm_create_i32_vector, wasm_set_i32!, wasm_i32_vector_length
+export wasm_create_ssatypes_all_i64
+export wasm_symbol_call, wasm_symbol_invoke, wasm_symbol_new
+export wasm_symbol_boundscheck, wasm_symbol_foreigncall
 export collect_globalrefs, resolve_globalrefs, substitute_globalrefs, preprocess_ir_entries
 export compile_with_sourcemap, compile_multi_with_sourcemap
 export compile_cached, compile_multi_cached, enable_cache!, disable_cache!, clear_cache!, cache_stats

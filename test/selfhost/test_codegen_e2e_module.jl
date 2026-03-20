@@ -64,6 +64,44 @@ all_functions = [
     # Level 7: Byte extraction (GAMMA-004)
     (WasmTarget.wasm_bytes_length, (Vector{UInt8},), "wasm_bytes_length"),
     (WasmTarget.wasm_bytes_get, (Vector{UInt8}, Int32), "wasm_bytes_get"),
+
+    # Level 8: WASM constructors for CodeInfo types (GAMMA-002)
+    # IR node constructors
+    (WasmTarget.wasm_create_ssa_value, (Int32,), "wasm_create_ssa_value"),
+    (WasmTarget.wasm_create_argument, (Int32,), "wasm_create_argument"),
+    (WasmTarget.wasm_create_goto_node, (Int32,), "wasm_create_goto_node"),
+    (WasmTarget.wasm_create_goto_if_not, (Int32, Int32), "wasm_create_goto_if_not"),
+    (WasmTarget.wasm_create_return_node, (Int32,), "wasm_create_return_node"),
+    (WasmTarget.wasm_create_return_node_nothing, (), "wasm_create_return_node_nothing"),
+    (WasmTarget.wasm_create_phi_node, (Vector{Int32}, Vector{Any}), "wasm_create_phi_node"),
+    (WasmTarget.wasm_create_expr, (Symbol, Vector{Any}), "wasm_create_expr"),
+    (WasmTarget.wasm_set_code_info!, (Core.CodeInfo, Vector{Any}, Vector{Any}, Int32), "wasm_set_code_info"),
+    # Vector builders
+    (WasmTarget.wasm_create_any_vector, (Int32,), "wasm_create_any_vector"),
+    (WasmTarget.wasm_set_any_ssa!, (Vector{Any}, Int32, Int32), "wasm_set_any_ssa"),
+    (WasmTarget.wasm_set_any_arg!, (Vector{Any}, Int32, Int32), "wasm_set_any_arg"),
+    (WasmTarget.wasm_set_any_i64!, (Vector{Any}, Int32, Int64), "wasm_set_any_i64"),
+    (WasmTarget.wasm_set_any_expr!, (Vector{Any}, Int32, Expr), "wasm_set_any_expr"),
+    (WasmTarget.wasm_set_any_return!, (Vector{Any}, Int32, Core.ReturnNode), "wasm_set_any_return"),
+    (WasmTarget.wasm_set_any_gotoifnot!, (Vector{Any}, Int32, Core.GotoIfNot), "wasm_set_any_gotoifnot"),
+    (WasmTarget.wasm_set_any_goto!, (Vector{Any}, Int32, Core.GotoNode), "wasm_set_any_goto"),
+    (WasmTarget.wasm_set_any_phi!, (Vector{Any}, Int32, Core.PhiNode), "wasm_set_any_phi"),
+    # Verification accessors
+    (WasmTarget.wasm_get_ssa_id, (Core.SSAValue,), "wasm_get_ssa_id"),
+    (WasmTarget.wasm_get_gotoifnot_dest, (Core.GotoIfNot,), "wasm_get_gotoifnot_dest"),
+    (WasmTarget.wasm_any_vector_length, (Vector{Any},), "wasm_any_vector_length"),
+    # Int32 vector builders (for PhiNode edges)
+    (WasmTarget.wasm_create_i32_vector, (Int32,), "wasm_create_i32_vector"),
+    (WasmTarget.wasm_set_i32!, (Vector{Int32}, Int32, Int32), "wasm_set_i32"),
+    (WasmTarget.wasm_i32_vector_length, (Vector{Int32},), "wasm_i32_vector_length"),
+    # SSA type utilities
+    (WasmTarget.wasm_create_ssatypes_all_i64, (Int32,), "wasm_create_ssatypes_all_i64"),
+    # Symbol constructors (for Expr heads)
+    (WasmTarget.wasm_symbol_call, (), "wasm_symbol_call"),
+    (WasmTarget.wasm_symbol_invoke, (), "wasm_symbol_invoke"),
+    (WasmTarget.wasm_symbol_new, (), "wasm_symbol_new"),
+    (WasmTarget.wasm_symbol_boundscheck, (), "wasm_symbol_boundscheck"),
+    (WasmTarget.wasm_symbol_foreigncall, (), "wasm_symbol_foreigncall"),
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════════
