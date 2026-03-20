@@ -5969,4 +5969,43 @@ struct TypeHierS2 x::Int32 end
         end
     end
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Phase 44: Architecture B — Zero-Server WASM Compilation
+    # ═══════════════════════════════════════════════════════════════════════════
+    @testset "Phase 44: Architecture B Zero-Server (subprocess)" begin
+        archb_wasm = joinpath(@__DIR__, "..", "archb-compiler.wasm")
+        archb_regression = joinpath(@__DIR__, "..", "scripts", "run_archb_regression.cjs")
+        archb_e2e = joinpath(@__DIR__, "..", "scripts", "e2e_archb_final.cjs")
+
+        if isfile(archb_wasm) && isfile(archb_regression)
+            output = try
+                read(`node $archb_regression $archb_wasm`, String)
+            catch e
+                "SUBPROCESS FAILED: $(sprint(showerror, e))"
+            end
+            regression_pass = occursin("30/30 passed", output)
+            @test regression_pass
+            if !regression_pass
+                println("  Arch B regression output (last 500 chars): ", output[max(1,end-499):end])
+            end
+        else
+            @test_broken false  # archb-compiler.wasm or regression script not found
+        end
+
+        if isfile(archb_wasm) && isfile(archb_e2e)
+            output = try
+                read(`node $archb_e2e $archb_wasm`, String)
+            catch e
+                "SUBPROCESS FAILED: $(sprint(showerror, e))"
+            end
+            e2e_pass = occursin("10/10 tests passed", output)
+            @test e2e_pass
+            if !e2e_pass
+                println("  Arch B E2E output (last 500 chars): ", output[max(1,end-499):end])
+            end
+        else
+            @test_broken false  # archb files not found
+        end
+    end
+
 end
