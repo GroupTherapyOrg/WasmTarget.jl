@@ -45,7 +45,7 @@ include("runtime/tokenizer.jl")
 # Main API
 export compile, compile_multi, compile_from_codeinfo, compile_with_base, optimize, WasmModule, to_bytes
 export FrozenCompilationState, build_frozen_state, compile_module_from_ir_frozen, compile_module_from_ir_frozen_no_dict
-export wasm_bytes_length, wasm_bytes_get
+export wasm_bytes_length, wasm_bytes_get, wasm_compile_source, wasm_compile_flat
 export wasm_create_ssa_value, wasm_create_argument, wasm_create_goto_node
 export wasm_create_goto_if_not, wasm_create_return_node, wasm_create_return_node_nothing
 export wasm_create_phi_node, wasm_create_expr, wasm_set_code_info!

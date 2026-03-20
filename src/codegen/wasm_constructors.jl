@@ -585,3 +585,419 @@ end
 function wasm_string_length(s::Vector{Int32})::Int32
     return Int32(length(s))
 end
+
+# ============================================================================
+# WASM-native Mini-Parser — F-002 + F-003 + F-006
+# ============================================================================
+# Parses MVP Julia expressions and compiles to WASM in one pass.
+# Input: source string as Vector{Int32} (Unicode codepoints)
+# Output: complete WASM binary as Vector{UInt8}
+#
+# Supported syntax:
+#   f(x::Int64) = x*x+1
+#   g(x::Int64, y::Int64) = x+y*2
+#   h(x::Int64) = (x+1)*(x-1)
+#
+# All parameters and return type are Int64.
+# NO Dict, NO String, NO complex types — fully WASM-compilable.
+
+# --- Token kinds ---
+const _TK_IDENT  = Int32(1)
+const _TK_INT    = Int32(2)
+const _TK_PLUS   = Int32(3)
+const _TK_MINUS  = Int32(4)
+const _TK_STAR   = Int32(5)
+const _TK_SLASH  = Int32(6)
+const _TK_LPAREN = Int32(7)
+const _TK_RPAREN = Int32(8)
+const _TK_EQ     = Int32(9)
+const _TK_DCOLON = Int32(10)
+const _TK_COMMA  = Int32(11)
+const _TK_EOF    = Int32(12)
+
+# --- Value kinds (for expression results, matches wasm_compile_flat format) ---
+const _VK_PARAM = Int32(0)
+const _VK_SSA   = Int32(1)
+const _VK_CONST = Int32(2)
+
+# --- Operator opcodes (i64 WASM opcodes) ---
+const _OP_ADD = Int32(0x7c)  # i64.add
+const _OP_SUB = Int32(0x7d)  # i64.sub
+const _OP_MUL = Int32(0x7e)  # i64.mul
+const _OP_DIV = Int32(0x7f)  # i64.div_s
+
+# ── Tokenizer ─────────────────────────────────────────────────────────────────
+
+@noinline function _is_alpha(c::Int32)::Bool
+    return (c >= Int32('a') && c <= Int32('z')) ||
+           (c >= Int32('A') && c <= Int32('Z')) ||
+           c == Int32('_')
+end
+
+@noinline function _is_digit(c::Int32)::Bool
+    return c >= Int32('0') && c <= Int32('9')
+end
+
+@noinline function _is_alnum(c::Int32)::Bool
+    return _is_alpha(c) || _is_digit(c)
+end
+
+@noinline function _is_space(c::Int32)::Bool
+    return c == Int32(' ') || c == Int32('\t') || c == Int32('\n') || c == Int32('\r')
+end
+
+"""
+Tokenize source into flat token array.
+Each token = 4 Int32: [kind, start_pos, end_pos, int_value]
+Returns (tokens::Vector{Int32}, n_tokens::Int32).
+"""
+@noinline function _mp_tokenize!(tokens::Vector{Int32}, src::Vector{Int32}, slen::Int32)::Int32
+    pos = Int32(1)
+    n_tok = Int32(0)
+
+    while pos <= slen
+        c = src[pos]
+
+        # Skip whitespace
+        if _is_space(c)
+            pos += Int32(1)
+            continue
+        end
+
+        # Identifier or keyword
+        if _is_alpha(c)
+            start = pos
+            while pos <= slen && _is_alnum(src[pos])
+                pos += Int32(1)
+            end
+            n_tok += Int32(1)
+            idx = (n_tok - Int32(1)) * Int32(4)
+            tokens[idx + Int32(1)] = _TK_IDENT
+            tokens[idx + Int32(2)] = start
+            tokens[idx + Int32(3)] = pos   # exclusive end
+            tokens[idx + Int32(4)] = Int32(0)
+            continue
+        end
+
+        # Integer literal
+        if _is_digit(c)
+            start = pos
+            val = Int32(0)
+            while pos <= slen && _is_digit(src[pos])
+                val = val * Int32(10) + (src[pos] - Int32('0'))
+                pos += Int32(1)
+            end
+            n_tok += Int32(1)
+            idx = (n_tok - Int32(1)) * Int32(4)
+            tokens[idx + Int32(1)] = _TK_INT
+            tokens[idx + Int32(2)] = start
+            tokens[idx + Int32(3)] = pos
+            tokens[idx + Int32(4)] = val
+            continue
+        end
+
+        # :: (two-char token)
+        if c == Int32(':') && pos + Int32(1) <= slen && src[pos + Int32(1)] == Int32(':')
+            n_tok += Int32(1)
+            idx = (n_tok - Int32(1)) * Int32(4)
+            tokens[idx + Int32(1)] = _TK_DCOLON
+            tokens[idx + Int32(2)] = pos
+            tokens[idx + Int32(3)] = pos + Int32(2)
+            tokens[idx + Int32(4)] = Int32(0)
+            pos += Int32(2)
+            continue
+        end
+
+        # Single-char tokens
+        kind = Int32(0)
+        if c == Int32('+');     kind = _TK_PLUS
+        elseif c == Int32('-'); kind = _TK_MINUS
+        elseif c == Int32('*'); kind = _TK_STAR
+        elseif c == Int32('/'); kind = _TK_SLASH
+        elseif c == Int32('('); kind = _TK_LPAREN
+        elseif c == Int32(')'); kind = _TK_RPAREN
+        elseif c == Int32('='); kind = _TK_EQ
+        elseif c == Int32(','); kind = _TK_COMMA
+        end
+
+        if kind != Int32(0)
+            n_tok += Int32(1)
+            idx = (n_tok - Int32(1)) * Int32(4)
+            tokens[idx + Int32(1)] = kind
+            tokens[idx + Int32(2)] = pos
+            tokens[idx + Int32(3)] = pos + Int32(1)
+            tokens[idx + Int32(4)] = Int32(0)
+            pos += Int32(1)
+            continue
+        end
+
+        # Unknown character — skip
+        pos += Int32(1)
+    end
+
+    # EOF token
+    n_tok += Int32(1)
+    idx = (n_tok - Int32(1)) * Int32(4)
+    tokens[idx + Int32(1)] = _TK_EOF
+    tokens[idx + Int32(2)] = pos
+    tokens[idx + Int32(3)] = pos
+    tokens[idx + Int32(4)] = Int32(0)
+
+    return n_tok
+end
+
+# ── Token access helpers ──────────────────────────────────────────────────────
+
+@noinline function _tok_kind(tokens::Vector{Int32}, i::Int32)::Int32
+    return tokens[(i - Int32(1)) * Int32(4) + Int32(1)]
+end
+
+@noinline function _tok_start(tokens::Vector{Int32}, i::Int32)::Int32
+    return tokens[(i - Int32(1)) * Int32(4) + Int32(2)]
+end
+
+@noinline function _tok_end(tokens::Vector{Int32}, i::Int32)::Int32
+    return tokens[(i - Int32(1)) * Int32(4) + Int32(3)]
+end
+
+@noinline function _tok_intval(tokens::Vector{Int32}, i::Int32)::Int32
+    return tokens[(i - Int32(1)) * Int32(4) + Int32(4)]
+end
+
+"""Check if two identifier tokens in the source refer to the same name."""
+@noinline function _ident_eq(src::Vector{Int32}, s1::Int32, e1::Int32,
+                              s2::Int32, e2::Int32)::Bool
+    len1 = e1 - s1
+    len2 = e2 - s2
+    if len1 != len2
+        return false
+    end
+    for i in Int32(0):(len1 - Int32(1))
+        if src[s1 + i] != src[s2 + i]
+            return false
+        end
+    end
+    return true
+end
+
+"""Find parameter index (0-based) for an identifier. Returns -1 if not found."""
+@noinline function _find_param(src::Vector{Int32},
+                                param_starts::Vector{Int32}, param_ends::Vector{Int32},
+                                n_params::Int32,
+                                ident_start::Int32, ident_end::Int32)::Int32
+    for i in Int32(1):n_params
+        if _ident_eq(src, param_starts[i], param_ends[i], ident_start, ident_end)
+            return i - Int32(1)  # 0-based
+        end
+    end
+    return Int32(-1)
+end
+
+# ── Expression parser (recursive descent with precedence) ─────────────────────
+# Returns: (value_kind::Int32, value_val::Int32, new_tok_pos::Int32)
+# Modifies instrs/n_instrs in-place.
+
+"""Parse an atom: integer literal, identifier, or parenthesized expression."""
+@noinline function _parse_atom(src::Vector{Int32}, tokens::Vector{Int32}, tpos::Int32,
+                                instrs::Vector{Int32}, n_instrs_ref::Vector{Int32},
+                                param_starts::Vector{Int32}, param_ends::Vector{Int32},
+                                n_params::Int32, ssa_counter::Vector{Int32})::Tuple{Int32, Int32, Int32}
+    kind = _tok_kind(tokens, tpos)
+
+    if kind == _TK_INT
+        val = _tok_intval(tokens, tpos)
+        return (_VK_CONST, val, tpos + Int32(1))
+    end
+
+    if kind == _TK_IDENT
+        s = _tok_start(tokens, tpos)
+        e = _tok_end(tokens, tpos)
+        pidx = _find_param(src, param_starts, param_ends, n_params, s, e)
+        if pidx >= Int32(0)
+            return (_VK_PARAM, pidx, tpos + Int32(1))
+        end
+        # Unknown identifier — treat as 0
+        return (_VK_CONST, Int32(0), tpos + Int32(1))
+    end
+
+    if kind == _TK_LPAREN
+        # Parenthesized expression
+        vk, vv, next = _parse_additive(src, tokens, tpos + Int32(1), instrs,
+                                         n_instrs_ref, param_starts, param_ends,
+                                         n_params, ssa_counter)
+        # Skip closing paren
+        if _tok_kind(tokens, next) == _TK_RPAREN
+            next += Int32(1)
+        end
+        return (vk, vv, next)
+    end
+
+    # Fallback
+    return (_VK_CONST, Int32(0), tpos + Int32(1))
+end
+
+"""Emit a binary operation instruction, return the SSA index."""
+@noinline function _emit_binop!(instrs::Vector{Int32}, n_instrs_ref::Vector{Int32},
+                                 ssa_counter::Vector{Int32},
+                                 opcode::Int32,
+                                 lk::Int32, lv::Int32, rk::Int32, rv::Int32)::Int32
+    ni = n_instrs_ref[Int32(1)]
+    instrs[ni + Int32(1)] = Int32(0)    # stmt_type = call
+    instrs[ni + Int32(2)] = opcode
+    instrs[ni + Int32(3)] = Int32(2)    # n_operands
+    instrs[ni + Int32(4)] = lk          # left kind
+    instrs[ni + Int32(5)] = lv          # left value
+    instrs[ni + Int32(6)] = rk          # right kind
+    instrs[ni + Int32(7)] = rv          # right value
+    n_instrs_ref[Int32(1)] = ni + Int32(7)
+    ssa_idx = ssa_counter[Int32(1)]
+    ssa_counter[Int32(1)] = ssa_idx + Int32(1)
+    return ssa_idx
+end
+
+"""Parse multiplicative expression: atom (* or /) atom ..."""
+@noinline function _parse_multiplicative(src::Vector{Int32}, tokens::Vector{Int32}, tpos::Int32,
+                                          instrs::Vector{Int32}, n_instrs_ref::Vector{Int32},
+                                          param_starts::Vector{Int32}, param_ends::Vector{Int32},
+                                          n_params::Int32, ssa_counter::Vector{Int32})::Tuple{Int32, Int32, Int32}
+    lk, lv, next = _parse_atom(src, tokens, tpos, instrs, n_instrs_ref,
+                                param_starts, param_ends, n_params, ssa_counter)
+
+    while true
+        op = _tok_kind(tokens, next)
+        if op == _TK_STAR
+            opcode = _OP_MUL
+        elseif op == _TK_SLASH
+            opcode = _OP_DIV
+        else
+            break
+        end
+        rk, rv, next = _parse_atom(src, tokens, next + Int32(1), instrs, n_instrs_ref,
+                                    param_starts, param_ends, n_params, ssa_counter)
+        ssa_idx = _emit_binop!(instrs, n_instrs_ref, ssa_counter, opcode, lk, lv, rk, rv)
+        lk = _VK_SSA
+        lv = ssa_idx
+    end
+
+    return (lk, lv, next)
+end
+
+"""Parse additive expression: multiplicative (+ or -) multiplicative ..."""
+@noinline function _parse_additive(src::Vector{Int32}, tokens::Vector{Int32}, tpos::Int32,
+                                    instrs::Vector{Int32}, n_instrs_ref::Vector{Int32},
+                                    param_starts::Vector{Int32}, param_ends::Vector{Int32},
+                                    n_params::Int32, ssa_counter::Vector{Int32})::Tuple{Int32, Int32, Int32}
+    lk, lv, next = _parse_multiplicative(src, tokens, tpos, instrs, n_instrs_ref,
+                                          param_starts, param_ends, n_params, ssa_counter)
+
+    while true
+        op = _tok_kind(tokens, next)
+        if op == _TK_PLUS
+            opcode = _OP_ADD
+        elseif op == _TK_MINUS
+            opcode = _OP_SUB
+        else
+            break
+        end
+        rk, rv, next = _parse_multiplicative(src, tokens, next + Int32(1), instrs, n_instrs_ref,
+                                              param_starts, param_ends, n_params, ssa_counter)
+        ssa_idx = _emit_binop!(instrs, n_instrs_ref, ssa_counter, opcode, lk, lv, rk, rv)
+        lk = _VK_SSA
+        lv = ssa_idx
+    end
+
+    return (lk, lv, next)
+end
+
+# ── Main entry point ──────────────────────────────────────────────────────────
+
+"""
+Compile a Julia source string to WASM bytes. Zero server, all in WASM.
+
+Input: source as Vector{Int32} (codepoints), slen
+Output: complete WASM binary as Vector{UInt8}
+
+Parses MVP Julia expressions (function definitions with arithmetic),
+produces flat instruction buffer, calls wasm_compile_flat.
+"""
+function wasm_compile_source(src::Vector{Int32}, slen::Int32)::Vector{UInt8}
+    # --- Tokenize ---
+    max_tokens = slen + Int32(1)  # worst case: each char is a token
+    tokens = zeros(Int32, max_tokens * Int32(4))
+    n_tokens = _mp_tokenize!(tokens, src, slen)
+
+    # --- Parse function signature: name(param1::Type1, ...) = body ---
+    tpos = Int32(1)  # current token position
+
+    # Skip function name
+    if _tok_kind(tokens, tpos) == _TK_IDENT
+        tpos += Int32(1)
+    end
+
+    # Parse parameter list
+    param_starts = zeros(Int32, Int32(8))  # max 8 params
+    param_ends = zeros(Int32, Int32(8))
+    n_params = Int32(0)
+
+    if _tok_kind(tokens, tpos) == _TK_LPAREN
+        tpos += Int32(1)  # skip (
+
+        while _tok_kind(tokens, tpos) != _TK_RPAREN && _tok_kind(tokens, tpos) != _TK_EOF
+            # Expect identifier (parameter name)
+            if _tok_kind(tokens, tpos) == _TK_IDENT
+                n_params += Int32(1)
+                param_starts[n_params] = _tok_start(tokens, tpos)
+                param_ends[n_params] = _tok_end(tokens, tpos)
+                tpos += Int32(1)
+
+                # Skip optional ::Type
+                if _tok_kind(tokens, tpos) == _TK_DCOLON
+                    tpos += Int32(1)  # skip ::
+                    if _tok_kind(tokens, tpos) == _TK_IDENT
+                        tpos += Int32(1)  # skip type name
+                    end
+                end
+            end
+
+            # Skip comma
+            if _tok_kind(tokens, tpos) == _TK_COMMA
+                tpos += Int32(1)
+            end
+        end
+
+        if _tok_kind(tokens, tpos) == _TK_RPAREN
+            tpos += Int32(1)  # skip )
+        end
+    end
+
+    # Skip '='
+    if _tok_kind(tokens, tpos) == _TK_EQ
+        tpos += Int32(1)
+    end
+
+    # --- Parse body expression ---
+    max_instrs = slen * Int32(8)  # generous buffer
+    instrs = zeros(Int32, max_instrs)
+    n_instrs_ref = Int32[Int32(0)]  # mutable counter (write position in instrs)
+    ssa_counter = Int32[Int32(0)]   # mutable SSA index counter
+
+    vk, vv, next = _parse_additive(src, tokens, tpos, instrs, n_instrs_ref,
+                                    param_starts, param_ends, n_params, ssa_counter)
+
+    # Emit return statement
+    ni = n_instrs_ref[Int32(1)]
+    instrs[ni + Int32(1)] = Int32(1)  # stmt_type = return
+    instrs[ni + Int32(2)] = vk
+    instrs[ni + Int32(3)] = vv
+    n_instrs_ref[Int32(1)] = ni + Int32(3)
+
+    # --- Trim instruction buffer to actual size ---
+    actual_len = n_instrs_ref[Int32(1)]
+    trimmed = zeros(Int32, actual_len)
+    for i in Int32(1):actual_len
+        trimmed[i] = instrs[i]
+    end
+
+    # --- Compile to WASM via wasm_compile_flat ---
+    return wasm_compile_flat(trimmed, n_params)
+end
