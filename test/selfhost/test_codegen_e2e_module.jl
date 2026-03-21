@@ -116,6 +116,12 @@ all_functions = [
     (WasmTarget._emit_section!, (Vector{UInt8}, UInt8, Vector{UInt8}), "_emit_section"),
     # Main compiler function
     (WasmTarget.wasm_compile_flat, (Vector{Int32}, Int32), "wasm_compile_flat"),
+
+    # Level 10: Mini-compiler for IR-based compilation (OPT-002)
+    (WasmTarget._mini_emit_value!, (Vector{UInt8}, Any, Int32), "_mini_emit_value"),
+    (WasmTarget._mini_emit_intrinsic!, (Vector{UInt8}, Int32), "_mini_emit_intrinsic"),
+    (WasmTarget._mini_build_wasm, (Vector{UInt8}, Int32, Int32), "_mini_build_wasm"),
+    (WasmTarget._mini_emit_section!, (Vector{UInt8}, UInt8, Vector{UInt8}), "_mini_emit_section"),
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════════
