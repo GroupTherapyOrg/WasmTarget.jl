@@ -7,10 +7,10 @@
 
 Compile a Julia function to a WebAssembly module.
 """
-function compile_function(f, arg_types::Tuple, func_name::String)::WasmModule
+function compile_function(f, arg_types::Tuple, func_name::String; optimize_ir::Bool=true)::WasmModule
     # Use compile_module for single functions too, enabling auto-discovery of dependencies
     # This ensures that cross-function calls work correctly
-    return compile_module([(f, arg_types, func_name)])
+    return compile_module([(f, arg_types, func_name)]; optimize_ir=optimize_ir)
 end
 
 # Legacy implementation kept for reference - now unused
@@ -1255,7 +1255,8 @@ function compile_module(functions::Vector;
                         existing_module::Union{WasmModule, Nothing}=nothing,
                         import_stubs::Vector=[],
                         return_registries::Bool=false,
-                        overlay_entries::Set=Set{Tuple{Any,Tuple}}()
+                        overlay_entries::Set=Set{Tuple{Any,Tuple}}(),
+                        optimize_ir::Bool=true
                         )
     # WASM-057: Auto-discover function dependencies
     functions = discover_dependencies(functions)
@@ -1315,7 +1316,7 @@ function compile_module(functions::Vector;
     needs_io = false
     for (f, arg_types, fname) in normalized
         try
-            ci, _ = get_typed_ir(f, arg_types)
+            ci, _ = get_typed_ir(f, arg_types; optimize=optimize_ir)
             for stmt in ci.code
                 if stmt isa Expr && (stmt.head === :invoke || stmt.head === :call)
                     func_arg = stmt.head === :invoke ? stmt.args[2] : stmt.args[1]
@@ -1341,7 +1342,7 @@ function compile_module(functions::Vector;
     needs_rng = false
     for (f, arg_types, fname) in normalized
         try
-            ci, _ = get_typed_ir(f, arg_types)
+            ci, _ = get_typed_ir(f, arg_types; optimize=optimize_ir)
             for stmt in ci.code
                 if stmt isa Expr && stmt.head === :foreigncall
                     fc_name_sym = extract_foreigncall_name(stmt.args[1])
@@ -1378,7 +1379,7 @@ function compile_module(functions::Vector;
         end
 
         # Get typed IR
-        code_info, return_type = get_typed_ir(f, arg_types)
+        code_info, return_type = get_typed_ir(f, arg_types; optimize=optimize_ir)
 
         # Detect WasmGlobal arguments
         global_args = Set{Int}()

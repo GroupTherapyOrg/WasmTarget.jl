@@ -78,12 +78,12 @@ Returns a valid WebAssembly binary that can be instantiated and executed.
 Set `optimize=true` for size-optimized output (default `-Os` like dart2wasm),
 `optimize=:speed` for `-O3`, or `optimize=:debug` for `-O1` without `--traps-never-happen`.
 """
-function compile(f, arg_types::Tuple; optimize=false)::Vector{UInt8}
+function compile(f, arg_types::Tuple; optimize=false, optimize_ir::Bool=true)::Vector{UInt8}
     # Get function name for export
     func_name = string(nameof(f))
 
     # Compile to WasmModule
-    mod = compile_function(f, arg_types, func_name)
+    mod = compile_function(f, arg_types, func_name; optimize_ir=optimize_ir)
 
     # Serialize to bytes
     bytes = to_bytes(mod)
@@ -93,7 +93,7 @@ function compile(f, arg_types::Tuple; optimize=false)::Vector{UInt8}
 end
 
 # Convenience method for single argument type
-compile(f, arg_type::Type; optimize=false) = compile(f, (arg_type,); optimize=optimize)
+compile(f, arg_type::Type; optimize=false, optimize_ir::Bool=true) = compile(f, (arg_type,); optimize=optimize, optimize_ir=optimize_ir)
 
 """
     compile_multi(functions; optimize=false) -> Vector{UInt8}
@@ -117,8 +117,8 @@ wasm_bytes = compile_multi([
 Functions can call each other within the module.
 """
 function compile_multi(functions::Vector; optimize=false, stub_names::Set{String}=Set{String}(),
-                       return_registries::Bool=false)
-    result = compile_module(functions; stub_names=stub_names, return_registries=return_registries)
+                       return_registries::Bool=false, optimize_ir::Bool=true)
+    result = compile_module(functions; stub_names=stub_names, return_registries=return_registries, optimize_ir=optimize_ir)
     if return_registries
         mod, type_registry, func_registry, dispatch_registry = result
         bytes = to_bytes(mod)
