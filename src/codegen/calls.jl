@@ -437,6 +437,1204 @@ function emit_char_rawbits_to_codepoint(ctx::CompilationContext)::Vector{UInt8}
 end
 
 """
+    _compile_call_checked_mul(func, args, bytes, ctx, is_128bit, is_32bit)
+
+Extracted handler for checked_smul_int / checked_umul_int.
+Modifies `bytes` in-place.
+"""
+function _compile_call_checked_mul(func, args, bytes::Vector{UInt8}, ctx::CompilationContext, is_128bit::Bool, is_32bit::Bool)::Nothing
+    if is_128bit
+        # 128-bit checked mul: not supported, emit unreachable
+        # PURE-908: Clear pre-pushed args
+        empty!(bytes)
+        push!(bytes, Opcode.UNREACHABLE)
+        ctx.last_stmt_was_stub = true  # PURE-908
+    else
+        is_signed = is_func(func, :checked_smul_int)
+        local_type = is_32bit ? I32 : I64
+        local_a = allocate_local!(ctx, local_type)
+        local_b = allocate_local!(ctx, local_type)
+        local_result = allocate_local!(ctx, local_type)
+
+        # Save b, save a, compute a*b, save result
+        push!(bytes, Opcode.LOCAL_SET)
+        append!(bytes, encode_leb128_unsigned(local_b))
+        push!(bytes, Opcode.LOCAL_TEE)
+        append!(bytes, encode_leb128_unsigned(local_a))
+        push!(bytes, Opcode.LOCAL_GET)
+        append!(bytes, encode_leb128_unsigned(local_b))
+        push!(bytes, is_32bit ? Opcode.I32_MUL : Opcode.I64_MUL)
+        push!(bytes, Opcode.LOCAL_SET)
+        append!(bytes, encode_leb128_unsigned(local_result))
+
+        # Push typeId for Tuple struct (field 0 = typeId)
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x00)  # typeId
+        # Push result back for tuple field 1
+        push!(bytes, Opcode.LOCAL_GET)
+        append!(bytes, encode_leb128_unsigned(local_result))
+
+        if is_32bit
+            push!(bytes, Opcode.I64_EXTEND_I32_S)
+        end
+
+        # Overflow detection for mul
+        if is_signed
+            # Signed mul overflow: if a==0: false; if a==-1: b==MIN; else: result/a != b
+            # Use if/else chain: a.eqz ? 0 : (a==-1 ? (b==MIN) : (result/a != b))
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(local_a))
+            push!(bytes, is_32bit ? Opcode.I32_EQZ : Opcode.I64_EQZ)
+            push!(bytes, Opcode.IF)
+            push!(bytes, UInt8(I32))  # result type i32
+            # a == 0 → no overflow
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x00)
+            push!(bytes, Opcode.ELSE)
+            # Check a == -1
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(local_a))
+            if is_32bit
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(-1))
+                push!(bytes, Opcode.I32_EQ)
+            else
+                push!(bytes, Opcode.I64_CONST)
+                append!(bytes, encode_leb128_signed(-1))
+                push!(bytes, Opcode.I64_EQ)
+            end
+            push!(bytes, Opcode.IF)
+            push!(bytes, UInt8(I32))  # result type i32
+            # a == -1 → overflow iff b == MIN_INT
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(local_b))
+            if is_32bit
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(typemin(Int32)))
+                push!(bytes, Opcode.I32_EQ)
+            else
+                push!(bytes, Opcode.I64_CONST)
+                append!(bytes, encode_leb128_signed(typemin(Int64)))
+                push!(bytes, Opcode.I64_EQ)
+            end
+            push!(bytes, Opcode.ELSE)
+            # General case: overflow = result / a != b
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(local_result))
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(local_a))
+            push!(bytes, is_32bit ? Opcode.I32_DIV_S : Opcode.I64_DIV_S)
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(local_b))
+            push!(bytes, is_32bit ? Opcode.I32_NE : Opcode.I64_NE)
+            push!(bytes, Opcode.END)  # end inner if/else
+            push!(bytes, Opcode.END)  # end outer if/else
+        else
+            # Unsigned mul overflow: if a==0: false; else: result/a != b
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(local_a))
+            push!(bytes, is_32bit ? Opcode.I32_EQZ : Opcode.I64_EQZ)
+            push!(bytes, Opcode.IF)
+            push!(bytes, UInt8(I32))  # result type i32
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x00)
+            push!(bytes, Opcode.ELSE)
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(local_result))
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(local_a))
+            push!(bytes, is_32bit ? Opcode.I32_DIV_U : Opcode.I64_DIV_U)
+            push!(bytes, Opcode.LOCAL_GET)
+            append!(bytes, encode_leb128_unsigned(local_b))
+            push!(bytes, is_32bit ? Opcode.I32_NE : Opcode.I64_NE)
+            push!(bytes, Opcode.END)  # end if/else
+        end
+
+        tuple_type = Tuple{Int64, Bool}
+        if !haskey(ctx.type_registry.structs, tuple_type)
+            register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
+        end
+        tuple_info = ctx.type_registry.structs[tuple_type]
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.STRUCT_NEW)
+        append!(bytes, encode_leb128_unsigned(tuple_info.wasm_type_idx))
+    end
+    return nothing
+end
+
+"""
+    _compile_call_flipsign(args, bytes, ctx, is_128bit, is_32bit, arg_type)
+
+Extracted handler for flipsign_int.
+Modifies `bytes` in-place.
+"""
+function _compile_call_flipsign(args, bytes::Vector{UInt8}, ctx::CompilationContext, is_128bit::Bool, is_32bit::Bool, arg_type)::Nothing
+    # flipsign_int(x, y) returns -x if y < 0, otherwise x
+    # Formula: (x xor signbit) - signbit where signbit = y >> 63 (all 1s if negative)
+    # We need both x and y on stack, but they've been pushed as: [x, y]
+
+    if is_128bit
+        # For 128-bit, check if y's hi word is negative
+        # flipsign_int(x, y) = y < 0 ? -x : x
+        type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
+
+        # Pop y struct to local
+        y_struct_local = length(ctx.locals) + ctx.n_params
+        push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
+        push!(bytes, Opcode.LOCAL_SET)
+        append!(bytes, encode_leb128_unsigned(y_struct_local))
+
+        # Pop x struct to local
+        x_struct_local = length(ctx.locals) + ctx.n_params
+        push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
+        push!(bytes, Opcode.LOCAL_SET)
+        append!(bytes, encode_leb128_unsigned(x_struct_local))
+
+        # Get y's hi part to check sign
+        push!(bytes, Opcode.LOCAL_GET)
+        append!(bytes, encode_leb128_unsigned(y_struct_local))
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.STRUCT_GET)
+        append!(bytes, encode_leb128_unsigned(type_idx))
+        append!(bytes, encode_leb128_unsigned(2))  # Field 2 = hi (0=typeId, 1=lo)
+
+        # Check if negative (hi < 0)
+        push!(bytes, Opcode.I64_CONST)
+        push!(bytes, 0x00)
+        push!(bytes, Opcode.I64_LT_S)
+
+        # Store condition
+        is_neg_local = length(ctx.locals) + ctx.n_params
+        push!(ctx.locals, I32)
+        push!(bytes, Opcode.LOCAL_SET)
+        append!(bytes, encode_leb128_unsigned(is_neg_local))
+
+        # Compute -x using emit_int128_neg
+        push!(bytes, Opcode.LOCAL_GET)
+        append!(bytes, encode_leb128_unsigned(x_struct_local))
+        append!(bytes, emit_int128_neg(ctx, arg_type))
+
+        # Store negated x
+        neg_x_local = length(ctx.locals) + ctx.n_params
+        push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
+        push!(bytes, Opcode.LOCAL_SET)
+        append!(bytes, encode_leb128_unsigned(neg_x_local))
+
+        # Allocate result local
+        result_local = length(ctx.locals) + ctx.n_params
+        push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
+
+        # if is_neg { result = neg_x } else { result = x }
+        push!(bytes, Opcode.LOCAL_GET)
+        append!(bytes, encode_leb128_unsigned(is_neg_local))
+        push!(bytes, Opcode.IF)
+        push!(bytes, 0x40)  # void
+
+        push!(bytes, Opcode.LOCAL_GET)
+        append!(bytes, encode_leb128_unsigned(neg_x_local))
+        push!(bytes, Opcode.LOCAL_SET)
+        append!(bytes, encode_leb128_unsigned(result_local))
+
+        push!(bytes, Opcode.ELSE)
+
+        push!(bytes, Opcode.LOCAL_GET)
+        append!(bytes, encode_leb128_unsigned(x_struct_local))
+        push!(bytes, Opcode.LOCAL_SET)
+        append!(bytes, encode_leb128_unsigned(result_local))
+
+        push!(bytes, Opcode.END)
+
+        # Push result
+        push!(bytes, Opcode.LOCAL_GET)
+        append!(bytes, encode_leb128_unsigned(result_local))
+
+    else
+        # Pop y to local, check sign, conditionally negate x
+        y_local = length(ctx.locals) + ctx.n_params
+        push!(ctx.locals, is_32bit ? I32 : I64)
+        push!(bytes, Opcode.LOCAL_SET)
+        append!(bytes, encode_leb128_unsigned(y_local))
+
+        x_local = length(ctx.locals) + ctx.n_params
+        push!(ctx.locals, is_32bit ? I32 : I64)
+        push!(bytes, Opcode.LOCAL_SET)
+        append!(bytes, encode_leb128_unsigned(x_local))
+
+        # Compute signbit = y >> (bits-1) (arithmetic shift gives all 1s if negative)
+        push!(bytes, Opcode.LOCAL_GET)
+        append!(bytes, encode_leb128_unsigned(y_local))
+        if is_32bit
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 31)
+            push!(bytes, Opcode.I32_SHR_S)
+        else
+            push!(bytes, Opcode.I64_CONST)
+            push!(bytes, 63)
+            push!(bytes, Opcode.I64_SHR_S)
+        end
+
+        signbit_local = length(ctx.locals) + ctx.n_params
+        push!(ctx.locals, is_32bit ? I32 : I64)
+        push!(bytes, Opcode.LOCAL_SET)
+        append!(bytes, encode_leb128_unsigned(signbit_local))
+
+        # result = (x xor signbit) - signbit
+        push!(bytes, Opcode.LOCAL_GET)
+        append!(bytes, encode_leb128_unsigned(x_local))
+        push!(bytes, Opcode.LOCAL_GET)
+        append!(bytes, encode_leb128_unsigned(signbit_local))
+        push!(bytes, is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
+        push!(bytes, Opcode.LOCAL_GET)
+        append!(bytes, encode_leb128_unsigned(signbit_local))
+        push!(bytes, is_32bit ? Opcode.I32_SUB : Opcode.I64_SUB)
+    end
+    return nothing
+end
+
+"""
+    _compile_call_egaleq(args, bytes, ctx, is_128bit, is_32bit, arg_type)
+
+Extracted handler for :(===) identity comparison (the post-arg-push branch).
+Modifies `bytes` in-place.
+"""
+function _compile_call_egaleq(args, bytes::Vector{UInt8}, ctx::CompilationContext, is_128bit::Bool, is_32bit::Bool, arg_type)::Nothing
+    if is_128bit
+        append!(bytes, emit_int128_eq(ctx, arg_type))
+    elseif arg_type === Float64
+        push!(bytes, Opcode.F64_EQ)
+    elseif arg_type === Float32
+        push!(bytes, Opcode.F32_EQ)
+    else
+        local arg2_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
+        local arg1_is_ref = is_ref_type_or_union(arg_type) && arg_type !== Nothing
+        local arg2_is_ref = is_ref_type_or_union(arg2_type) && arg2_type !== Nothing
+
+        # Quick check: if one arg is ref-typed and other is Nothing (compiles to i32),
+        # they can't be equal via ref.eq OR i32/i64 eq. Drop both and return false.
+        if (arg1_is_ref && arg2_type === Nothing) || (arg2_is_ref && arg_type === Nothing)
+            push!(bytes, Opcode.DROP)
+            push!(bytes, Opcode.DROP)
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x00)
+            return nothing
+        end
+
+        # Special case: both args are Nothing-typed. Need to check actual Wasm representation
+        # because Nothing can compile to either ref.null OR i32.const depending on context.
+        if arg_type === Nothing && arg2_type === Nothing
+            # Re-compile to check Wasm types
+            local arg1_bytes_chk = compile_value(args[1], ctx)
+            local arg2_bytes_chk = compile_value(args[2], ctx)
+            local a1_is_ref = length(arg1_bytes_chk) >= 1 && (arg1_bytes_chk[1] == Opcode.REF_NULL ||
+                (arg1_bytes_chk[1] == Opcode.LOCAL_GET && length(arg1_bytes_chk) >= 2))
+            local a2_is_ref = length(arg2_bytes_chk) >= 1 && (arg2_bytes_chk[1] == Opcode.REF_NULL ||
+                (arg2_bytes_chk[1] == Opcode.LOCAL_GET && length(arg2_bytes_chk) >= 2))
+            local a1_is_anyref_fp = false
+            local a2_is_anyref_fp = false
+            local a1_is_externref_fp = false
+            local a2_is_externref_fp = false
+            # Check local types for LOCAL_GET
+            if arg1_bytes_chk[1] == Opcode.LOCAL_GET && length(arg1_bytes_chk) >= 2
+                local idx1 = 0
+                local sh1 = 0
+                local p1 = 2
+                while p1 <= length(arg1_bytes_chk)
+                    b = arg1_bytes_chk[p1]
+                    idx1 |= (Int(b & 0x7f) << sh1)
+                    sh1 += 7
+                    p1 += 1
+                    (b & 0x80) == 0 && break
+                end
+                local off1 = idx1 - ctx.n_params
+                if off1 >= 0 && off1 < length(ctx.locals)
+                    local lt1 = ctx.locals[off1 + 1]
+                    a1_is_ref = lt1 isa ConcreteRef || lt1 === StructRef || lt1 === ArrayRef || lt1 === ExternRef || lt1 === AnyRef
+                    a1_is_anyref_fp = (lt1 === AnyRef)
+                    a1_is_externref_fp = (lt1 === ExternRef)
+                else
+                    a1_is_ref = false
+                end
+            end
+            if arg2_bytes_chk[1] == Opcode.LOCAL_GET && length(arg2_bytes_chk) >= 2
+                local idx2 = 0
+                local sh2 = 0
+                local p2 = 2
+                while p2 <= length(arg2_bytes_chk)
+                    b = arg2_bytes_chk[p2]
+                    idx2 |= (Int(b & 0x7f) << sh2)
+                    sh2 += 7
+                    p2 += 1
+                    (b & 0x80) == 0 && break
+                end
+                local off2 = idx2 - ctx.n_params
+                if off2 >= 0 && off2 < length(ctx.locals)
+                    local lt2 = ctx.locals[off2 + 1]
+                    a2_is_ref = lt2 isa ConcreteRef || lt2 === StructRef || lt2 === ArrayRef || lt2 === ExternRef || lt2 === AnyRef
+                    a2_is_anyref_fp = (lt2 === AnyRef)
+                    a2_is_externref_fp = (lt2 === ExternRef)
+                else
+                    a2_is_ref = false
+                end
+            end
+            # If Wasm types mismatch (one ref, one not), drop both and return false
+            if a1_is_ref != a2_is_ref
+                push!(bytes, Opcode.DROP)
+                push!(bytes, Opcode.DROP)
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+                return nothing
+            elseif a1_is_ref && a2_is_ref
+                # Both refs - need ref.eq, but anyref/externref require casting to eqref first
+                if a1_is_anyref_fp && a2_is_anyref_fp
+                    # Both anyref: cast both to eqref
+                    local _fp_tmp = allocate_local!(ctx, EqRef)
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(_fp_tmp))
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(_fp_tmp))
+                elseif a1_is_externref_fp && a2_is_externref_fp
+                    # Both externref: convert to anyref then cast to eqref
+                    local _fp_tmp2 = allocate_local!(ctx, EqRef)
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(_fp_tmp2))
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(_fp_tmp2))
+                elseif a1_is_anyref_fp
+                    # arg1 anyref, arg2 concrete/eqref: save arg2, cast arg1, restore
+                    local _fp_tmp3 = allocate_local!(ctx, EqRef)
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(_fp_tmp3))
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(_fp_tmp3))
+                elseif a2_is_anyref_fp
+                    # arg2 anyref: cast to eqref
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                elseif a1_is_externref_fp
+                    # arg1 externref: save arg2, convert+cast arg1, restore
+                    local _fp_tmp4 = allocate_local!(ctx, EqRef)
+                    push!(bytes, Opcode.LOCAL_SET)
+                    append!(bytes, encode_leb128_unsigned(_fp_tmp4))
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(_fp_tmp4))
+                elseif a2_is_externref_fp
+                    # arg2 externref: convert+cast
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                end
+                push!(bytes, Opcode.REF_EQ)
+                return nothing
+            end
+            # Both numeric - fall through to normal handling
+        end
+
+        # Check if args were actually compiled as refs (Nothing can compile to ref.null OR i32.const 0)
+        # The bytes already have [arg1_bytes..., arg2_bytes...]
+        # Check last pushed arg (arg2) - if it starts with REF_NULL (0xD0), it's a ref
+        # Also check for local.get of ref-typed local
+        local arg1_wasm_is_ref = arg1_is_ref
+        local arg2_wasm_is_ref = arg2_is_ref
+        # PURE-9064: Detect anyref/externref from actual wasm type, not just arg_type === Any.
+        # Abstract types like Type, DataType etc. also map to AnyRef.
+        local _arg1_wasm = julia_to_wasm_type(arg_type)
+        local _arg2_wasm = julia_to_wasm_type(arg2_type)
+        local arg1_is_externref = (_arg1_wasm === ExternRef)
+        local arg2_is_externref = (_arg2_wasm === ExternRef)
+        local arg1_is_anyref = (_arg1_wasm === AnyRef)
+        local arg2_is_anyref = (_arg2_wasm === AnyRef)
+        # anyref/externref types are always ref types
+        if arg1_is_anyref || arg1_is_externref
+            arg1_wasm_is_ref = true
+        end
+        if arg2_is_anyref || arg2_is_externref
+            arg2_wasm_is_ref = true
+        end
+        # Check Wasm representation for any potentially mixed comparison
+        # (when one arg is ref-typed or Nothing, verify actual Wasm types)
+        if arg_type === Nothing || arg2_type === Nothing || arg1_is_ref || arg2_is_ref
+            # Re-compile args to check their Wasm representation
+            # arg1 first, arg2 second on stack
+            # For Nothing-typed args, check actual Wasm representation
+            # (Nothing can compile to ref.null OR i32.const 0 depending on context)
+            # Check arg1's Wasm type when:
+            # - arg_type === Nothing (need to verify if it's actually ref.null or i32)
+            # - arg2_type === Nothing (need to know if arg1 is ref to do proper comparison)
+            # - arg_type === Any (PURE-046: Any maps to externref, must check actual local type)
+            if length(args) >= 1 && (arg_type === Nothing || arg2_type === Nothing || arg_type === Any || arg1_is_ref)
+                local arg1_bytes = compile_value(args[1], ctx)
+                if length(arg1_bytes) >= 1
+                    if arg1_bytes[1] == Opcode.REF_NULL
+                        arg1_wasm_is_ref = true
+                    elseif arg1_bytes[1] == Opcode.I32_CONST || arg1_bytes[1] == Opcode.I64_CONST ||
+                           arg1_bytes[1] == Opcode.F32_CONST || arg1_bytes[1] == Opcode.F64_CONST
+                        # Numeric constant — definitely NOT a ref, regardless of Julia type
+                        arg1_wasm_is_ref = false
+                    elseif arg1_bytes[1] == Opcode.LOCAL_GET && length(arg1_bytes) >= 2
+                        local local_idx_1 = 0
+                        local shift_1 = 0
+                        local pos_1 = 2
+                        while pos_1 <= length(arg1_bytes)
+                            b = arg1_bytes[pos_1]
+                            local_idx_1 |= (Int(b & 0x7f) << shift_1)
+                            shift_1 += 7
+                            pos_1 += 1
+                            (b & 0x80) == 0 && break
+                        end
+                        # ctx.locals doesn't include params, so adjust index
+                        local local_offset_1 = local_idx_1 - ctx.n_params
+                        if local_offset_1 >= 0 && local_offset_1 < length(ctx.locals)
+                            local ltype_1 = ctx.locals[local_offset_1 + 1]
+                            arg1_wasm_is_ref = ltype_1 isa ConcreteRef || ltype_1 === StructRef ||
+                                               ltype_1 === ArrayRef || ltype_1 === ExternRef || ltype_1 === AnyRef
+                            arg1_is_externref = (ltype_1 === ExternRef)
+                        elseif local_idx_1 < ctx.n_params && local_idx_1 < length(ctx.arg_types)
+                            local ptype_1 = ctx.arg_types[local_idx_1 + 1]
+                            local pwasm_1 = julia_to_wasm_type_concrete(ptype_1, ctx)
+                            arg1_is_externref = (pwasm_1 === ExternRef)
+                        end
+                    end
+                end
+                # PURE-046/9064: Override local type check if Julia type maps to anyref/externref
+                if arg1_is_anyref || arg1_is_externref
+                    arg1_wasm_is_ref = true
+                end
+            end
+            # Check arg2's Wasm type when:
+            # - arg2_type === Nothing (need to verify if it's actually ref.null or i32)
+            # - arg_type === Nothing (need to know if arg2 is ref to do proper comparison)
+            # - arg2_type === Any (PURE-046: Any maps to externref, must check actual local type)
+            if length(args) >= 2 && (arg2_type === Nothing || arg_type === Nothing || arg2_type === Any || arg2_is_ref)
+                local arg2_bytes = compile_value(args[2], ctx)
+                if length(arg2_bytes) >= 1
+                    if arg2_bytes[1] == Opcode.REF_NULL
+                        arg2_wasm_is_ref = true
+                    elseif arg2_bytes[1] == Opcode.I32_CONST || arg2_bytes[1] == Opcode.I64_CONST ||
+                           arg2_bytes[1] == Opcode.F32_CONST || arg2_bytes[1] == Opcode.F64_CONST
+                        # Numeric constant — definitely NOT a ref
+                        arg2_wasm_is_ref = false
+                    elseif arg2_bytes[1] == Opcode.LOCAL_GET && length(arg2_bytes) >= 2
+                        local local_idx_2 = 0
+                        local shift_2 = 0
+                        local pos_2 = 2
+                        while pos_2 <= length(arg2_bytes)
+                            b = arg2_bytes[pos_2]
+                            local_idx_2 |= (Int(b & 0x7f) << shift_2)
+                            shift_2 += 7
+                            pos_2 += 1
+                            (b & 0x80) == 0 && break
+                        end
+                        # ctx.locals doesn't include params, so adjust index
+                        local local_offset_2 = local_idx_2 - ctx.n_params
+                        if local_offset_2 >= 0 && local_offset_2 < length(ctx.locals)
+                            local ltype_2 = ctx.locals[local_offset_2 + 1]
+                            arg2_wasm_is_ref = ltype_2 isa ConcreteRef || ltype_2 === StructRef ||
+                                               ltype_2 === ArrayRef || ltype_2 === ExternRef || ltype_2 === AnyRef
+                            arg2_is_externref = (ltype_2 === ExternRef)
+                        elseif local_idx_2 < ctx.n_params && local_idx_2 < length(ctx.arg_types)
+                            local ptype_2 = ctx.arg_types[local_idx_2 + 1]
+                            local pwasm_2 = julia_to_wasm_type_concrete(ptype_2, ctx)
+                            arg2_is_externref = (pwasm_2 === ExternRef)
+                        end
+                    end
+                end
+                # PURE-046/9064: Override local type check if Julia type maps to anyref/externref
+                if arg2_is_anyref || arg2_is_externref
+                    arg2_wasm_is_ref = true
+                end
+            end
+        end
+        if arg1_wasm_is_ref && arg2_wasm_is_ref
+            # PURE-324: For immutable structs, === means VALUE equality (field-by-field),
+            # not identity. WasmGC ref.eq is identity comparison, so we must emit
+            # struct.get for each field and compare with the appropriate opcode.
+            local _do_struct_egal = false
+            local _egal_struct_info = nothing
+            if !arg1_is_externref && !arg2_is_externref &&
+               arg_type isa DataType && arg_type === arg2_type &&
+               is_struct_type(arg_type) && !ismutabletype(arg_type) &&
+               haskey(ctx.type_registry.structs, arg_type)
+                _egal_struct_info = ctx.type_registry.structs[arg_type]
+                _do_struct_egal = true
+            end
+            if _do_struct_egal
+                # Immutable struct === : field-by-field value comparison
+                local egal_info = _egal_struct_info
+                local egal_type_idx = egal_info.wasm_type_idx
+                local egal_wasm_type = ConcreteRef(egal_type_idx, true)
+                # Save both args to locals (arg2 is on top, arg1 below)
+                local egal_local2 = allocate_local!(ctx, egal_wasm_type)
+                local egal_local1 = allocate_local!(ctx, egal_wasm_type)
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(egal_local2))
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(egal_local1))
+                local n_fields = length(egal_info.field_types)
+                for fi in 1:n_fields
+                    local egal_ft = egal_info.field_types[fi]
+                    local egal_wt = julia_to_wasm_type(egal_ft)
+                    # Get wasm field index (accounts for typeId at field 0)
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(egal_local1))
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.STRUCT_GET)
+                    append!(bytes, encode_leb128_unsigned(egal_type_idx))
+                    append!(bytes, encode_leb128_unsigned(wasm_field_idx(egal_info, fi)))
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(egal_local2))
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.STRUCT_GET)
+                    append!(bytes, encode_leb128_unsigned(egal_type_idx))
+                    append!(bytes, encode_leb128_unsigned(wasm_field_idx(egal_info, fi)))
+                    # Compare with type-appropriate opcode
+                    if egal_wt === I32
+                        push!(bytes, Opcode.I32_EQ)
+                    elseif egal_wt === I64
+                        push!(bytes, Opcode.I64_EQ)
+                    elseif egal_wt === F32
+                        push!(bytes, Opcode.F32_EQ)
+                    elseif egal_wt === F64
+                        push!(bytes, Opcode.F64_EQ)
+                    elseif egal_wt === ExternRef
+                        # PURE-6024: externref fields need conversion to eqref for ref.eq
+                        local egal_tmp = allocate_local!(ctx, EqRef)
+                        push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+                        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                        push!(bytes, Opcode.LOCAL_SET)
+                        append!(bytes, encode_leb128_unsigned(egal_tmp))
+                        push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+                        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                        push!(bytes, Opcode.LOCAL_GET)
+                        append!(bytes, encode_leb128_unsigned(egal_tmp))
+                        push!(bytes, Opcode.REF_EQ)
+                    else
+                        # Ref-typed field (nested struct, string, etc.): use ref.eq
+                        push!(bytes, Opcode.REF_EQ)
+                    end
+                    # AND with previous field results (skip for first field)
+                    if fi > 1
+                        push!(bytes, Opcode.I32_AND)
+                    end
+                end
+                # Handle zero-field structs (singleton types): always equal
+                if n_fields == 0
+                    push!(bytes, Opcode.I32_CONST)
+                    push!(bytes, 0x01)
+                end
+            elseif arg1_is_anyref && arg2_is_anyref
+                # PURE-9064: Both anyref — cast to eqref before ref.eq
+                # anyref is supertype of eqref, so ref.cast works directly (no any.convert_extern)
+                local tmp_eq_a = allocate_local!(ctx, EqRef)
+                push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(tmp_eq_a))
+                push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(tmp_eq_a))
+                push!(bytes, Opcode.REF_EQ)
+            elseif arg1_is_externref && arg2_is_externref
+                # ref.eq requires eqref operands. externref is NOT eqref.
+                # Convert externref → anyref → eqref before ref.eq
+                # Both externref: convert arg2 (top), save, convert arg1, restore
+                local tmp_eq = allocate_local!(ctx, EqRef)
+                push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+                push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(tmp_eq))
+                # Now arg1 (externref) is on top
+                push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+                push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(tmp_eq))
+                push!(bytes, Opcode.REF_EQ)
+            elseif arg1_is_externref
+                # arg1 is externref (under arg2 on stack): save arg2, convert arg1, restore arg2
+                local tmp_eq2 = allocate_local!(ctx, EqRef)
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(tmp_eq2))
+                push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+                push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(tmp_eq2))
+                push!(bytes, Opcode.REF_EQ)
+            elseif arg2_is_externref
+                # arg2 is externref (top of stack): just convert it
+                push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+                push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                push!(bytes, Opcode.REF_EQ)
+            elseif arg1_is_anyref
+                # PURE-9064: arg1 anyref (under arg2 on stack): save arg2, cast arg1, restore
+                local tmp_eq_a2 = allocate_local!(ctx, EqRef)
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(tmp_eq_a2))
+                push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                push!(bytes, Opcode.LOCAL_GET)
+                append!(bytes, encode_leb128_unsigned(tmp_eq_a2))
+                push!(bytes, Opcode.REF_EQ)
+            elseif arg2_is_anyref
+                # PURE-9064: arg2 anyref (top of stack): cast to eqref
+                push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                push!(bytes, Opcode.REF_EQ)
+            else
+                # Both are non-externref, non-anyref refs (mutable structs, arrays, etc.): identity comparison
+                push!(bytes, Opcode.REF_EQ)
+            end
+        elseif arg1_wasm_is_ref && !arg2_wasm_is_ref
+            # Comparing ref with non-ref: type mismatch, drop both and push false
+            push!(bytes, Opcode.DROP)
+            push!(bytes, Opcode.DROP)
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x00)
+        elseif !arg1_wasm_is_ref && arg2_wasm_is_ref
+            # Comparing non-ref with ref: type mismatch, drop both and push false
+            push!(bytes, Opcode.DROP)
+            push!(bytes, Opcode.DROP)
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x00)
+        else
+            # Both args are numeric. Check actual Wasm types to select correct opcode.
+            # Julia type inference (is_32bit) may differ from actual Wasm local types.
+            local arg1_actual_32bit = is_32bit
+            local arg2_actual_32bit = arg2_type === Nothing || arg2_type === Bool ||
+                                      arg2_type === Int32 || arg2_type === UInt32 ||
+                                      arg2_type === Int16 || arg2_type === UInt16 ||
+                                      arg2_type === Int8 || arg2_type === UInt8 || arg2_type === Char
+
+            # Check arg1's actual Wasm local type (may differ from Julia type inference)
+            local _arg1_local_is_ref = false  # true if arg1's local is ref-typed (not numeric)
+            if length(args) >= 1
+                local arg1_chk = compile_value(args[1], ctx)
+                if length(arg1_chk) >= 2 && arg1_chk[1] == Opcode.LOCAL_GET
+                    local idx_chk = 0
+                    local sh_chk = 0
+                    local p_chk = 2
+                    while p_chk <= length(arg1_chk)
+                        b = arg1_chk[p_chk]
+                        idx_chk |= (Int(b & 0x7f) << sh_chk)
+                        sh_chk += 7
+                        p_chk += 1
+                        (b & 0x80) == 0 && break
+                    end
+                    local off_chk = idx_chk - ctx.n_params
+                    if off_chk >= 0 && off_chk < length(ctx.locals)
+                        local lt_chk = ctx.locals[off_chk + 1]
+                        arg1_actual_32bit = (lt_chk === I32)
+                        # Detect ref-typed locals masquerading as numeric (e.g. Core.IntrinsicFunction
+                        # is stored as ExternRef because julia_to_wasm_type returns ExternRef via
+                        # T<:Function branch, but is_ref_type_or_union returns false for it)
+                        if lt_chk === ExternRef || lt_chk === AnyRef || lt_chk === EqRef ||
+                           lt_chk === StructRef || lt_chk === ArrayRef || lt_chk isa ConcreteRef
+                            _arg1_local_is_ref = true
+                        end
+                    elseif idx_chk < ctx.n_params && idx_chk < length(ctx.arg_types)
+                        # Function parameter - check arg_types
+                        local ptype = ctx.arg_types[idx_chk + 1]
+                        local pwasm = julia_to_wasm_type_concrete(ptype, ctx)
+                        arg1_actual_32bit = (pwasm === I32)
+                        if pwasm === ExternRef || pwasm === AnyRef || pwasm === EqRef ||
+                           pwasm === StructRef || pwasm === ArrayRef || pwasm isa ConcreteRef
+                            _arg1_local_is_ref = true
+                        end
+                    end
+                elseif length(arg1_chk) >= 1 && arg1_chk[1] == Opcode.I32_CONST
+                    arg1_actual_32bit = true
+                elseif length(arg1_chk) >= 1 && arg1_chk[1] == Opcode.I64_CONST
+                    arg1_actual_32bit = false
+                end
+            end
+
+            # Check arg2's actual Wasm type (may differ from Julia type inference)
+            if length(args) >= 2
+                local arg2_chk = compile_value(args[2], ctx)
+                if length(arg2_chk) >= 2 && arg2_chk[1] == Opcode.LOCAL_GET
+                    local idx2_chk = 0
+                    local sh2_chk = 0
+                    local p2_chk = 2
+                    while p2_chk <= length(arg2_chk)
+                        b = arg2_chk[p2_chk]
+                        idx2_chk |= (Int(b & 0x7f) << sh2_chk)
+                        sh2_chk += 7
+                        p2_chk += 1
+                        (b & 0x80) == 0 && break
+                    end
+                    local off2_chk = idx2_chk - ctx.n_params
+                    if off2_chk >= 0 && off2_chk < length(ctx.locals)
+                        local lt2_chk = ctx.locals[off2_chk + 1]
+                        arg2_actual_32bit = (lt2_chk === I32)
+                    elseif idx2_chk < ctx.n_params && idx2_chk < length(ctx.arg_types)
+                        # Function parameter - check arg_types
+                        local ptype2 = ctx.arg_types[idx2_chk + 1]
+                        local pwasm2 = julia_to_wasm_type_concrete(ptype2, ctx)
+                        arg2_actual_32bit = (pwasm2 === I32)
+                    end
+                elseif length(arg2_chk) >= 1 && arg2_chk[1] == Opcode.I32_CONST
+                    arg2_actual_32bit = true
+                elseif length(arg2_chk) >= 1 && arg2_chk[1] == Opcode.I64_CONST
+                    arg2_actual_32bit = false
+                end
+            end
+
+            # Select opcode based on actual Wasm types
+            if _arg1_local_is_ref
+                # arg1 is a ref type but Julia treated it as numeric (e.g. Core.IntrinsicFunction
+                # stored as ExternRef). A ref value can never equal a numeric constant, so drop
+                # both args and return false.
+                push!(bytes, Opcode.DROP)
+                push!(bytes, Opcode.DROP)
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+            elseif arg1_actual_32bit && arg2_actual_32bit
+                # Both i32 - use i32_eq
+                push!(bytes, Opcode.I32_EQ)
+            elseif arg1_actual_32bit && !arg2_actual_32bit
+                # arg1 is i32, arg2 is i64 - extend arg1 to i64
+                # But arg1 is already on stack below arg2. We need to swap and extend.
+                # Simpler: just compare as i32 if we can truncate arg2
+                # Since arg2 is on top of stack, wrap it to i32
+                push!(bytes, Opcode.I32_WRAP_I64)
+                push!(bytes, Opcode.I32_EQ)
+            elseif !arg1_actual_32bit && arg2_actual_32bit
+                # arg1 is i64, arg2 is i32 - extend arg2 (on top of stack) to i64
+                push!(bytes, Opcode.I64_EXTEND_I32_S)
+                push!(bytes, Opcode.I64_EQ)
+            else
+                # Both i64 - use i64_eq
+                push!(bytes, Opcode.I64_EQ)
+            end
+        end
+    end
+    return nothing
+end
+
+"""
+    _compile_call_fpext(args, bytes, ctx)
+
+Extracted handler for fpext (float precision extension).
+Modifies `bytes` in-place.
+"""
+function _compile_call_fpext(args, bytes::Vector{UInt8}, ctx::CompilationContext)::Nothing
+    # fpext(TargetType, value) - extend to Float64
+    source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Float32
+    if source_type === Float16
+        # Float16 (i32 on stack) → Float64
+        # Convert Float16 bit pattern to Float32 bit pattern using integer ops,
+        # then reinterpret as f32 and promote to f64.
+        # Float16: 1 sign, 5 exp, 10 mantissa
+        # Float32: 1 sign, 8 exp, 23 mantissa
+        # For normalized: f32_bits = (sign<<31) | ((exp+112)<<23) | (mant<<13)
+        # For zero: f32_bits = sign<<31
+        # For inf/nan: f32_bits = (sign<<31) | (0xff<<23) | (mant<<13)
+        #
+        # We use a branchless approach for normalized values with special-case
+        # handling for zero and inf/nan via select.
+        #
+        # Stack: [i32 = Float16 bits]
+        # Strategy: extract sign, exp, mant; build f32 bits; reinterpret; promote
+
+        # Save the Float16 bits to a temp local
+        local_idx = length(ctx.locals) + ctx.n_params
+        push!(ctx.locals, I32)
+        h_local = local_idx
+        push!(bytes, Opcode.LOCAL_TEE)
+        append!(bytes, encode_leb128_unsigned(UInt64(h_local)))
+
+        # Extract sign: (h >> 15) << 31
+        push!(bytes, Opcode.LOCAL_GET)
+        append!(bytes, encode_leb128_unsigned(UInt64(h_local)))
+        push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(15)))
+        push!(bytes, Opcode.I32_SHR_U)
+        push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(31)))
+        push!(bytes, Opcode.I32_SHL)
+        # Stack: [h, sign_bit]
+
+        # Extract exp: (h >> 10) & 0x1f
+        local_idx2 = length(ctx.locals) + ctx.n_params
+        push!(ctx.locals, I32)
+        sign_local = local_idx2
+        push!(bytes, Opcode.LOCAL_SET)
+        append!(bytes, encode_leb128_unsigned(UInt64(sign_local)))
+
+        push!(bytes, Opcode.LOCAL_GET)
+        append!(bytes, encode_leb128_unsigned(UInt64(h_local)))
+        push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(10)))
+        push!(bytes, Opcode.I32_SHR_U)
+        push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(0x1f)))
+        push!(bytes, Opcode.I32_AND)
+
+        local_idx3 = length(ctx.locals) + ctx.n_params
+        push!(ctx.locals, I32)
+        exp_local = local_idx3
+        push!(bytes, Opcode.LOCAL_SET)
+        append!(bytes, encode_leb128_unsigned(UInt64(exp_local)))
+
+        # Extract mant: h & 0x3ff
+        push!(bytes, Opcode.LOCAL_GET)
+        append!(bytes, encode_leb128_unsigned(UInt64(h_local)))
+        push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(0x3ff)))
+        push!(bytes, Opcode.I32_AND)
+
+        local_idx4 = length(ctx.locals) + ctx.n_params
+        push!(ctx.locals, I32)
+        mant_local = local_idx4
+        push!(bytes, Opcode.LOCAL_SET)
+        append!(bytes, encode_leb128_unsigned(UInt64(mant_local)))
+
+        # Build f32 bits for normalized case:
+        # sign_bit | ((exp + 112) << 23) | (mant << 13)
+        push!(bytes, Opcode.LOCAL_GET)
+        append!(bytes, encode_leb128_unsigned(UInt64(sign_local)))
+
+        push!(bytes, Opcode.LOCAL_GET)
+        append!(bytes, encode_leb128_unsigned(UInt64(exp_local)))
+        push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(112)))
+        push!(bytes, Opcode.I32_ADD)
+        push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(23)))
+        push!(bytes, Opcode.I32_SHL)
+        push!(bytes, Opcode.I32_OR)
+
+        push!(bytes, Opcode.LOCAL_GET)
+        append!(bytes, encode_leb128_unsigned(UInt64(mant_local)))
+        push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(13)))
+        push!(bytes, Opcode.I32_SHL)
+        push!(bytes, Opcode.I32_OR)
+        # Stack: [normalized_f32_bits]
+
+        # Handle zero case: if exp==0 && mant==0, use sign_bit only
+        # Handle inf/nan: if exp==0x1f, use sign|(0xff<<23)|(mant<<13)
+        # For simplicity in codegen context (timing values are always small
+        # positive normalized floats), the normalized formula works.
+        # Zero maps to exp+112=112 which is a tiny denormal in f32 ≈ 0.
+        # This is acceptable for validation and practical correctness.
+
+        # Reinterpret i32 → f32, then promote f32 → f64
+        push!(bytes, Opcode.F32_REINTERPRET_I32)  # 0xBE
+        push!(bytes, 0xBB)  # f64.promote_f32
+    else
+        # Float32 → Float64 (standard case)
+        push!(bytes, 0xBB)  # f64.promote_f32
+    end
+    return nothing
+end
+
+"""
+    _compile_call_isa(args, bytes, ctx)
+
+Extracted handler for isa() type checking.
+Modifies `bytes` in-place.
+"""
+function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::CompilationContext)::Nothing
+    # isa(value, Type) - check if value is of given type
+    # Supports both Union{Nothing, T} (via ref.is_null) and tagged unions
+    value_arg = args[1]
+    type_arg = args[2]
+
+    # Get the type being checked
+    check_type = if type_arg isa Type
+        type_arg
+    elseif type_arg isa GlobalRef
+        Core.eval(type_arg.mod, type_arg.name)
+    else
+        nothing
+    end
+
+    # Get the type of the value being checked (for detecting tagged unions)
+    value_type = get_ssa_type(ctx, value_arg)
+
+    # Check if this is a tagged union check
+    # NOTE: The value argument is already on the stack from the loop that pushes all args
+    if value_type isa Union && needs_tagged_union(value_type) && haskey(ctx.type_registry.unions, value_type)
+        # Tagged union: check the tag field
+        union_info = ctx.type_registry.unions[value_type]
+        expected_tag = get(union_info.tag_map, check_type, Int32(-1))
+
+        if expected_tag >= 0
+            # Value is already on stack (tagged union struct)
+            # PURE-701: Value may be structref if from a union-typed local.
+            # Insert ref.cast null to narrow before struct_get.
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.REF_CAST_NULL)
+            append!(bytes, encode_leb128_signed(Int64(union_info.wasm_type_idx)))
+            # Get the tag field (PURE-9024: field 1 due to typeId at field 0)
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.STRUCT_GET)
+            append!(bytes, encode_leb128_unsigned(union_info.wasm_type_idx))
+            append!(bytes, encode_leb128_unsigned(1))  # field 1 is tag (0=typeId, 1=tag, 2=value)
+            # Compare tag to expected value
+            push!(bytes, Opcode.I32_CONST)
+            append!(bytes, encode_leb128_signed(Int64(expected_tag)))
+            push!(bytes, Opcode.I32_EQ)
+        else
+            # Type not in this union - drop value and return false
+            push!(bytes, Opcode.DROP)
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x00)
+        end
+    elseif check_type === Nothing
+        # isa(x, Nothing) -> ref.is_null
+        # Value is already on stack — check if it's actually a ref type
+        local isa_val_wasm = nothing
+        if value_arg isa Core.SSAValue
+            local isa_local_idx = get(ctx.ssa_locals, value_arg.id, nothing)
+            # Fix: isa_local_idx includes n_params, but ctx.locals only has non-param locals
+            if isa_local_idx !== nothing
+                local local_offset = isa_local_idx - ctx.n_params
+                if local_offset >= 0 && local_offset < length(ctx.locals)
+                    isa_val_wasm = ctx.locals[local_offset + 1]
+                end
+            end
+        end
+        if isa_val_wasm !== nothing && (isa_val_wasm === I64 || isa_val_wasm === I32 || isa_val_wasm === F64 || isa_val_wasm === F32)
+            # Numeric value on stack — can never be Nothing. Drop + push false.
+            push!(bytes, Opcode.DROP)
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x00)
+        else
+            push!(bytes, Opcode.REF_IS_NULL)
+        end
+    elseif check_type !== nothing && isconcretetype(check_type)
+        # isa(x, ConcreteType) -> type check
+        # Value is already on stack — check if it's actually a ref type
+        local isa2_val_wasm = nothing
+        if value_arg isa Core.SSAValue
+            local isa2_local_idx = get(ctx.ssa_locals, value_arg.id, nothing)
+            # Fix: isa2_local_idx includes n_params, but ctx.locals only has non-param locals
+            if isa2_local_idx !== nothing
+                local local_offset = isa2_local_idx - ctx.n_params
+                if local_offset >= 0 && local_offset < length(ctx.locals)
+                    isa2_val_wasm = ctx.locals[local_offset + 1]
+                end
+            end
+        elseif value_arg isa Core.Argument
+            # PURE-325: Also handle function parameters (not just SSA values)
+            # Core.Argument(1) is the function object for non-closures, so
+            # actual args start at Argument(2) → arg_types[1].
+            local arg_idx_isa = ctx.is_compiled_closure ? value_arg.n : value_arg.n - 1
+            if arg_idx_isa >= 1 && arg_idx_isa <= length(ctx.arg_types)
+                local _arg_jtype = ctx.arg_types[arg_idx_isa]
+                # PURE-9030: Check if this param was promoted to anyref for Union dispatch
+                if _arg_jtype isa Union && needs_anyref_boxing(_arg_jtype)
+                    isa2_val_wasm = AnyRef
+                else
+                    isa2_val_wasm = get_concrete_wasm_type(_arg_jtype, ctx.mod, ctx.type_registry)
+                end
+            end
+        end
+        if isa2_val_wasm !== nothing && (isa2_val_wasm === I64 || isa2_val_wasm === I32 || isa2_val_wasm === F64 || isa2_val_wasm === F32)
+            # Numeric value on stack — can never be Nothing, so isa(x, T) is true. Drop + push true.
+            push!(bytes, Opcode.DROP)
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x01)
+        elseif isa2_val_wasm === ExternRef
+            # PURE-324: Value is externref (Any-typed field). Need proper type check.
+            # PURE-9032: For Exception subtypes with DFS typeIds, use typeId comparison
+            # instead of ref.test (which can't distinguish structurally identical types
+            # due to Wasm type canonicalization).
+            local _isa2_check_tid = get_type_id(ctx.type_registry, check_type)
+            if _isa2_check_tid > 0 && check_type <: Exception && ctx.type_registry.base_struct_idx !== nothing
+                # typeId-based check: extract typeId from exception struct + compare
+                append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                emit_typeof!(bytes, ctx.type_registry.base_struct_idx)
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int64(_isa2_check_tid)))
+                push!(bytes, Opcode.I32_EQ)
+            else
+                local target_wasm = get_concrete_wasm_type(check_type, ctx.mod, ctx.type_registry)
+                if target_wasm isa ConcreteRef
+                    append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                    push!(bytes, Opcode.GC_PREFIX)
+                    # PURE-325: Use REF_TEST (non-nullable) instead of REF_TEST_NULL.
+                    push!(bytes, Opcode.REF_TEST)
+                    append!(bytes, encode_leb128_signed(Int64(target_wasm.type_idx)))
+                elseif haskey(ctx.type_registry.numeric_boxes, target_wasm)
+                    local box_type_idx = ctx.type_registry.numeric_boxes[target_wasm]
+                    append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.REF_TEST)
+                    append!(bytes, encode_leb128_signed(Int64(box_type_idx)))
+                else
+                    # Fallback: non-null check for non-concrete wasm types
+                    push!(bytes, Opcode.REF_IS_NULL)
+                    push!(bytes, Opcode.I32_EQZ)
+                end
+            end
+        elseif isa2_val_wasm === AnyRef || isa2_val_wasm isa ConcreteRef || isa2_val_wasm === StructRef
+            # PURE-9030: anyref/structref value — use ref.test to check concrete box type.
+            # This handles Union{Int32, Float64} where the value is boxed in anyref.
+            local target_wasm_isa = get_concrete_wasm_type(check_type, ctx.mod, ctx.type_registry)
+            if check_type <: Number && !(check_type <: Int128) && !(check_type <: UInt128)
+                # Numeric type: test against the numeric box struct
+                local _box_wasm = julia_to_wasm_type(check_type)
+                if haskey(ctx.type_registry.numeric_boxes, _box_wasm)
+                    local _box_idx = ctx.type_registry.numeric_boxes[_box_wasm]
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.REF_TEST)
+                    append!(bytes, encode_leb128_signed(Int64(_box_idx)))
+                else
+                    # Box type not registered yet — register it
+                    local _box_idx2 = get_numeric_box_type!(ctx.mod, ctx.type_registry, _box_wasm)
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.REF_TEST)
+                    append!(bytes, encode_leb128_signed(Int64(_box_idx2)))
+                end
+            elseif target_wasm_isa isa ConcreteRef
+                # Struct type: test against the concrete struct type
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.REF_TEST)
+                append!(bytes, encode_leb128_signed(Int64(target_wasm_isa.type_idx)))
+            elseif check_type === String || check_type === Symbol || check_type <: AbstractString
+                # String/Symbol: test against the string array type
+                local _str_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.REF_TEST)
+                append!(bytes, encode_leb128_signed(Int64(_str_idx)))
+            else
+                # Unknown concrete type — can't test, return false
+                push!(bytes, Opcode.DROP)
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+            end
+        else
+            # For Union{Nothing, T}, checking isa(x, T) is equivalent to !isnull
+            push!(bytes, Opcode.REF_IS_NULL)
+            push!(bytes, Opcode.I32_EQZ)  # negate: 1->0, 0->1
+        end
+    elseif check_type !== nothing && !isconcretetype(check_type)
+        # Abstract type check (e.g. Integer, AbstractFloat, Number, Real)
+        # Determine value's WASM local type and local index for re-loading
+        local isa3_val_wasm = nothing
+        local isa3_local_idx = nothing
+        if value_arg isa Core.SSAValue
+            local _idx3 = get(ctx.ssa_locals, value_arg.id, nothing)
+            if _idx3 !== nothing
+                local _off3 = _idx3 - ctx.n_params
+                if _off3 >= 0 && _off3 < length(ctx.locals)
+                    isa3_val_wasm = ctx.locals[_off3 + 1]
+                    isa3_local_idx = _idx3
+                end
+            end
+        elseif value_arg isa Core.Argument
+            # Also detect param type for Argument values
+            local _arg_idx3 = ctx.is_compiled_closure ? value_arg.n : value_arg.n - 1
+            if _arg_idx3 >= 1 && _arg_idx3 <= length(ctx.arg_types)
+                isa3_val_wasm = get_concrete_wasm_type(ctx.arg_types[_arg_idx3], ctx.mod, ctx.type_registry)
+            end
+        end
+        local _wasm_julia = Dict{WasmValType,Type}(I64=>Int64, I32=>Int32, F64=>Float64, F32=>Float32)
+        if isa3_val_wasm !== nothing && (isa3_val_wasm === I64 || isa3_val_wasm === I32 || isa3_val_wasm === F64 || isa3_val_wasm === F32)
+            # Unboxed numeric — check if representative Julia type is a subtype
+            local _jt = get(_wasm_julia, isa3_val_wasm, nothing)
+            push!(bytes, Opcode.DROP)
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, (_jt !== nothing && _jt <: check_type) ? 0x01 : 0x00)
+        elseif isa3_val_wasm === ExternRef && isa3_local_idx !== nothing
+            # Boxed externref — test each numeric box type that is a subtype of check_type
+            local _boxes = UInt32[]
+            for (wt, box_idx) in ctx.type_registry.numeric_boxes
+                local _jt2 = get(_wasm_julia, wt, nothing)
+                _jt2 !== nothing && _jt2 <: check_type && push!(_boxes, box_idx)
+            end
+            push!(bytes, Opcode.DROP)
+            if isempty(_boxes)
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+            else
+                for (i, box_idx) in enumerate(_boxes)
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(UInt32(isa3_local_idx)))
+                    append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.REF_TEST)
+                    append!(bytes, encode_leb128_signed(Int64(box_idx)))
+                    i > 1 && push!(bytes, Opcode.I32_OR)
+                end
+            end
+        elseif (isa3_val_wasm === AnyRef || isa3_val_wasm isa ConcreteRef || isa3_val_wasm === StructRef) &&
+               ctx.type_registry.base_struct_idx !== nothing
+            # PURE-9027: DFS range check for anyref/structref polymorphic values
+            # Value is on stack (anyref/structref) — extract typeId, check low <= id <= high
+            local _range = get_type_range(ctx.type_registry, check_type)
+            if _range !== nothing
+                local _low, _high = _range
+                local _base_idx = ctx.type_registry.base_struct_idx
+                # PURE-9064: Guard against JlType hierarchy refs.
+                # emit_typeof! does ref.cast (ref $JlBase) which traps on $JlType
+                # hierarchy structs ($JlDataType, $JlUnion, etc.) since they don't
+                # inherit from $JlBase. Use ref.test first; if not $JlBase, return false.
+                local _isa_guard_local = allocate_local!(ctx, AnyRef)
+                push!(bytes, Opcode.LOCAL_TEE)
+                append!(bytes, encode_leb128_unsigned(_isa_guard_local))
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.REF_TEST)  # ref.test (ref $JlBase)
+                append!(bytes, encode_leb128_signed(Int64(_base_idx)))
+                push!(bytes, Opcode.I32_EQZ)
+                # if NOT a $JlBase struct → push 0 (false)
+                local _isa_guard_block = UInt8[]
+                push!(_isa_guard_block, Opcode.I32_CONST)
+                push!(_isa_guard_block, 0x00)
+                # else → do the DFS range check
+                local _isa_dfs_block = UInt8[]
+                push!(_isa_dfs_block, Opcode.LOCAL_GET)
+                append!(_isa_dfs_block, encode_leb128_unsigned(_isa_guard_local))
+                emit_typeof!(_isa_dfs_block, _base_idx)
+                local _tid_local2 = allocate_local!(ctx, I32)
+                push!(_isa_dfs_block, Opcode.LOCAL_TEE)
+                append!(_isa_dfs_block, encode_leb128_unsigned(_tid_local2))
+                push!(_isa_dfs_block, Opcode.I32_CONST)
+                append!(_isa_dfs_block, encode_leb128_signed(Int64(_low)))
+                push!(_isa_dfs_block, Opcode.I32_GE_S)
+                push!(_isa_dfs_block, Opcode.LOCAL_GET)
+                append!(_isa_dfs_block, encode_leb128_unsigned(_tid_local2))
+                push!(_isa_dfs_block, Opcode.I32_CONST)
+                append!(_isa_dfs_block, encode_leb128_signed(Int64(_high)))
+                push!(_isa_dfs_block, Opcode.I32_LE_S)
+                push!(_isa_dfs_block, Opcode.I32_AND)
+                # Emit if-else: if (not $JlBase) { 0 } else { dfs_check }
+                push!(bytes, Opcode.IF)
+                push!(bytes, 0x7F)  # i32 result type
+                append!(bytes, _isa_guard_block)
+                push!(bytes, Opcode.ELSE)
+                append!(bytes, _isa_dfs_block)
+                push!(bytes, Opcode.END)
+            else
+                # No DFS range for this abstract type — return false
+                push!(bytes, Opcode.DROP)
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, 0x00)
+            end
+        else
+            push!(bytes, Opcode.DROP)
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, 0x00)
+        end
+    else
+        # Unknown type - drop value and return false
+        push!(bytes, Opcode.DROP)
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x00)
+    end
+    return nothing
+end
+
+"""
+    _compile_call_symbol(args, bytes, ctx)
+
+Extracted handler for Symbol(x) conversion.
+Modifies `bytes` in-place.
+"""
+function _compile_call_symbol(args, bytes::Vector{UInt8}, ctx::CompilationContext)::Nothing
+    # Compile the argument — it's already a string array in WasmGC
+    append!(bytes, compile_value(args[1], ctx))
+    return nothing
+end
+
+"""
 Compile a function call expression.
 """
 function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt8}
@@ -2905,122 +4103,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
     # PURE-9003: checked_smul_int(a, b) -> Tuple{T, Bool} (result, overflow_flag)
     # Overflow detection via division check: if a != 0 && a != -1: overflow = result/a != b
     elseif is_func(func, :checked_smul_int) || is_func(func, :checked_umul_int)
-        if is_128bit
-            # 128-bit checked mul: not supported, emit unreachable
-            # PURE-908: Clear pre-pushed args
-            bytes = UInt8[]
-            push!(bytes, Opcode.UNREACHABLE)
-            ctx.last_stmt_was_stub = true  # PURE-908
-        else
-            is_signed = is_func(func, :checked_smul_int)
-            local_type = is_32bit ? I32 : I64
-            local_a = allocate_local!(ctx, local_type)
-            local_b = allocate_local!(ctx, local_type)
-            local_result = allocate_local!(ctx, local_type)
-
-            # Save b, save a, compute a*b, save result
-            push!(bytes, Opcode.LOCAL_SET)
-            append!(bytes, encode_leb128_unsigned(local_b))
-            push!(bytes, Opcode.LOCAL_TEE)
-            append!(bytes, encode_leb128_unsigned(local_a))
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(local_b))
-            push!(bytes, is_32bit ? Opcode.I32_MUL : Opcode.I64_MUL)
-            push!(bytes, Opcode.LOCAL_SET)
-            append!(bytes, encode_leb128_unsigned(local_result))
-
-            # Push typeId for Tuple struct (field 0 = typeId)
-            push!(bytes, Opcode.I32_CONST)
-            push!(bytes, 0x00)  # typeId
-            # Push result back for tuple field 1
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(local_result))
-
-            if is_32bit
-                push!(bytes, Opcode.I64_EXTEND_I32_S)
-            end
-
-            # Overflow detection for mul
-            if is_signed
-                # Signed mul overflow: if a==0: false; if a==-1: b==MIN; else: result/a != b
-                # Use if/else chain: a.eqz ? 0 : (a==-1 ? (b==MIN) : (result/a != b))
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(local_a))
-                push!(bytes, is_32bit ? Opcode.I32_EQZ : Opcode.I64_EQZ)
-                push!(bytes, Opcode.IF)
-                push!(bytes, UInt8(I32))  # result type i32
-                # a == 0 → no overflow
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
-                push!(bytes, Opcode.ELSE)
-                # Check a == -1
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(local_a))
-                if is_32bit
-                    push!(bytes, Opcode.I32_CONST)
-                    append!(bytes, encode_leb128_signed(-1))
-                    push!(bytes, Opcode.I32_EQ)
-                else
-                    push!(bytes, Opcode.I64_CONST)
-                    append!(bytes, encode_leb128_signed(-1))
-                    push!(bytes, Opcode.I64_EQ)
-                end
-                push!(bytes, Opcode.IF)
-                push!(bytes, UInt8(I32))  # result type i32
-                # a == -1 → overflow iff b == MIN_INT
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(local_b))
-                if is_32bit
-                    push!(bytes, Opcode.I32_CONST)
-                    append!(bytes, encode_leb128_signed(typemin(Int32)))
-                    push!(bytes, Opcode.I32_EQ)
-                else
-                    push!(bytes, Opcode.I64_CONST)
-                    append!(bytes, encode_leb128_signed(typemin(Int64)))
-                    push!(bytes, Opcode.I64_EQ)
-                end
-                push!(bytes, Opcode.ELSE)
-                # General case: overflow = result / a != b
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(local_result))
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(local_a))
-                push!(bytes, is_32bit ? Opcode.I32_DIV_S : Opcode.I64_DIV_S)
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(local_b))
-                push!(bytes, is_32bit ? Opcode.I32_NE : Opcode.I64_NE)
-                push!(bytes, Opcode.END)  # end inner if/else
-                push!(bytes, Opcode.END)  # end outer if/else
-            else
-                # Unsigned mul overflow: if a==0: false; else: result/a != b
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(local_a))
-                push!(bytes, is_32bit ? Opcode.I32_EQZ : Opcode.I64_EQZ)
-                push!(bytes, Opcode.IF)
-                push!(bytes, UInt8(I32))  # result type i32
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
-                push!(bytes, Opcode.ELSE)
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(local_result))
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(local_a))
-                push!(bytes, is_32bit ? Opcode.I32_DIV_U : Opcode.I64_DIV_U)
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(local_b))
-                push!(bytes, is_32bit ? Opcode.I32_NE : Opcode.I64_NE)
-                push!(bytes, Opcode.END)  # end if/else
-            end
-
-            tuple_type = Tuple{Int64, Bool}
-            if !haskey(ctx.type_registry.structs, tuple_type)
-                register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
-            end
-            tuple_info = ctx.type_registry.structs[tuple_type]
-            push!(bytes, Opcode.GC_PREFIX)
-            push!(bytes, Opcode.STRUCT_NEW)
-            append!(bytes, encode_leb128_unsigned(tuple_info.wasm_type_idx))
-        end
+        _compile_call_checked_mul(func, args, bytes, ctx, is_128bit, is_32bit)
 
     # PURE-9003: checked_sadd_int(a, b) -> Tuple{T, Bool} (result, overflow_flag)
     # Overflow detection: ((a ^ result) & (b ^ result)) has sign bit set
@@ -3277,125 +4360,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         end
 
     elseif is_func(func, :flipsign_int)
-        # flipsign_int(x, y) returns -x if y < 0, otherwise x
-        # Formula: (x xor signbit) - signbit where signbit = y >> 63 (all 1s if negative)
-        # We need both x and y on stack, but they've been pushed as: [x, y]
-
-        if is_128bit
-            # For 128-bit, check if y's hi word is negative
-            # flipsign_int(x, y) = y < 0 ? -x : x
-            type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
-
-            # Pop y struct to local
-            y_struct_local = length(ctx.locals) + ctx.n_params
-            push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
-            push!(bytes, Opcode.LOCAL_SET)
-            append!(bytes, encode_leb128_unsigned(y_struct_local))
-
-            # Pop x struct to local
-            x_struct_local = length(ctx.locals) + ctx.n_params
-            push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
-            push!(bytes, Opcode.LOCAL_SET)
-            append!(bytes, encode_leb128_unsigned(x_struct_local))
-
-            # Get y's hi part to check sign
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(y_struct_local))
-            push!(bytes, Opcode.GC_PREFIX)
-            push!(bytes, Opcode.STRUCT_GET)
-            append!(bytes, encode_leb128_unsigned(type_idx))
-            append!(bytes, encode_leb128_unsigned(2))  # Field 2 = hi (0=typeId, 1=lo)
-
-            # Check if negative (hi < 0)
-            push!(bytes, Opcode.I64_CONST)
-            push!(bytes, 0x00)
-            push!(bytes, Opcode.I64_LT_S)
-
-            # Store condition
-            is_neg_local = length(ctx.locals) + ctx.n_params
-            push!(ctx.locals, I32)
-            push!(bytes, Opcode.LOCAL_SET)
-            append!(bytes, encode_leb128_unsigned(is_neg_local))
-
-            # Compute -x using emit_int128_neg
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(x_struct_local))
-            append!(bytes, emit_int128_neg(ctx, arg_type))
-
-            # Store negated x
-            neg_x_local = length(ctx.locals) + ctx.n_params
-            push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
-            push!(bytes, Opcode.LOCAL_SET)
-            append!(bytes, encode_leb128_unsigned(neg_x_local))
-
-            # Allocate result local
-            result_local = length(ctx.locals) + ctx.n_params
-            push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
-
-            # if is_neg { result = neg_x } else { result = x }
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(is_neg_local))
-            push!(bytes, Opcode.IF)
-            push!(bytes, 0x40)  # void
-
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(neg_x_local))
-            push!(bytes, Opcode.LOCAL_SET)
-            append!(bytes, encode_leb128_unsigned(result_local))
-
-            push!(bytes, Opcode.ELSE)
-
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(x_struct_local))
-            push!(bytes, Opcode.LOCAL_SET)
-            append!(bytes, encode_leb128_unsigned(result_local))
-
-            push!(bytes, Opcode.END)
-
-            # Push result
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(result_local))
-
-        else
-            # Pop y to local, check sign, conditionally negate x
-            y_local = length(ctx.locals) + ctx.n_params
-            push!(ctx.locals, is_32bit ? I32 : I64)
-            push!(bytes, Opcode.LOCAL_SET)
-            append!(bytes, encode_leb128_unsigned(y_local))
-
-            x_local = length(ctx.locals) + ctx.n_params
-            push!(ctx.locals, is_32bit ? I32 : I64)
-            push!(bytes, Opcode.LOCAL_SET)
-            append!(bytes, encode_leb128_unsigned(x_local))
-
-            # Compute signbit = y >> (bits-1) (arithmetic shift gives all 1s if negative)
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(y_local))
-            if is_32bit
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 31)
-                push!(bytes, Opcode.I32_SHR_S)
-            else
-                push!(bytes, Opcode.I64_CONST)
-                push!(bytes, 63)
-                push!(bytes, Opcode.I64_SHR_S)
-            end
-
-            signbit_local = length(ctx.locals) + ctx.n_params
-            push!(ctx.locals, is_32bit ? I32 : I64)
-            push!(bytes, Opcode.LOCAL_SET)
-            append!(bytes, encode_leb128_unsigned(signbit_local))
-
-            # result = (x xor signbit) - signbit
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(x_local))
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(signbit_local))
-            push!(bytes, is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(signbit_local))
-            push!(bytes, is_32bit ? Opcode.I32_SUB : Opcode.I64_SUB)
-        end
+        _compile_call_flipsign(args, bytes, ctx, is_128bit, is_32bit, arg_type)
 
     # Comparison operations
     elseif is_func(func, :slt_int)  # signed less than
@@ -3461,518 +4426,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
 
     # Identity comparison (=== for integers is same as ==, for floats use float eq)
     elseif is_func(func, :(===))
-        if is_128bit
-            append!(bytes, emit_int128_eq(ctx, arg_type))
-        elseif arg_type === Float64
-            push!(bytes, Opcode.F64_EQ)
-        elseif arg_type === Float32
-            push!(bytes, Opcode.F32_EQ)
-        else
-            local arg2_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
-            local arg1_is_ref = is_ref_type_or_union(arg_type) && arg_type !== Nothing
-            local arg2_is_ref = is_ref_type_or_union(arg2_type) && arg2_type !== Nothing
-
-            # Quick check: if one arg is ref-typed and other is Nothing (compiles to i32),
-            # they can't be equal via ref.eq OR i32/i64 eq. Drop both and return false.
-            if (arg1_is_ref && arg2_type === Nothing) || (arg2_is_ref && arg_type === Nothing)
-                push!(bytes, Opcode.DROP)
-                push!(bytes, Opcode.DROP)
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
-                return bytes
-            end
-
-            # Special case: both args are Nothing-typed. Need to check actual Wasm representation
-            # because Nothing can compile to either ref.null OR i32.const depending on context.
-            if arg_type === Nothing && arg2_type === Nothing
-                # Re-compile to check Wasm types
-                local arg1_bytes_chk = compile_value(args[1], ctx)
-                local arg2_bytes_chk = compile_value(args[2], ctx)
-                local a1_is_ref = length(arg1_bytes_chk) >= 1 && (arg1_bytes_chk[1] == Opcode.REF_NULL ||
-                    (arg1_bytes_chk[1] == Opcode.LOCAL_GET && length(arg1_bytes_chk) >= 2))
-                local a2_is_ref = length(arg2_bytes_chk) >= 1 && (arg2_bytes_chk[1] == Opcode.REF_NULL ||
-                    (arg2_bytes_chk[1] == Opcode.LOCAL_GET && length(arg2_bytes_chk) >= 2))
-                local a1_is_anyref_fp = false
-                local a2_is_anyref_fp = false
-                local a1_is_externref_fp = false
-                local a2_is_externref_fp = false
-                # Check local types for LOCAL_GET
-                if arg1_bytes_chk[1] == Opcode.LOCAL_GET && length(arg1_bytes_chk) >= 2
-                    local idx1 = 0
-                    local sh1 = 0
-                    local p1 = 2
-                    while p1 <= length(arg1_bytes_chk)
-                        b = arg1_bytes_chk[p1]
-                        idx1 |= (Int(b & 0x7f) << sh1)
-                        sh1 += 7
-                        p1 += 1
-                        (b & 0x80) == 0 && break
-                    end
-                    local off1 = idx1 - ctx.n_params
-                    if off1 >= 0 && off1 < length(ctx.locals)
-                        local lt1 = ctx.locals[off1 + 1]
-                        a1_is_ref = lt1 isa ConcreteRef || lt1 === StructRef || lt1 === ArrayRef || lt1 === ExternRef || lt1 === AnyRef
-                        a1_is_anyref_fp = (lt1 === AnyRef)
-                        a1_is_externref_fp = (lt1 === ExternRef)
-                    else
-                        a1_is_ref = false
-                    end
-                end
-                if arg2_bytes_chk[1] == Opcode.LOCAL_GET && length(arg2_bytes_chk) >= 2
-                    local idx2 = 0
-                    local sh2 = 0
-                    local p2 = 2
-                    while p2 <= length(arg2_bytes_chk)
-                        b = arg2_bytes_chk[p2]
-                        idx2 |= (Int(b & 0x7f) << sh2)
-                        sh2 += 7
-                        p2 += 1
-                        (b & 0x80) == 0 && break
-                    end
-                    local off2 = idx2 - ctx.n_params
-                    if off2 >= 0 && off2 < length(ctx.locals)
-                        local lt2 = ctx.locals[off2 + 1]
-                        a2_is_ref = lt2 isa ConcreteRef || lt2 === StructRef || lt2 === ArrayRef || lt2 === ExternRef || lt2 === AnyRef
-                        a2_is_anyref_fp = (lt2 === AnyRef)
-                        a2_is_externref_fp = (lt2 === ExternRef)
-                    else
-                        a2_is_ref = false
-                    end
-                end
-                # If Wasm types mismatch (one ref, one not), drop both and return false
-                if a1_is_ref != a2_is_ref
-                    push!(bytes, Opcode.DROP)
-                    push!(bytes, Opcode.DROP)
-                    push!(bytes, Opcode.I32_CONST)
-                    push!(bytes, 0x00)
-                    return bytes
-                elseif a1_is_ref && a2_is_ref
-                    # Both refs - need ref.eq, but anyref/externref require casting to eqref first
-                    if a1_is_anyref_fp && a2_is_anyref_fp
-                        # Both anyref: cast both to eqref
-                        local _fp_tmp = allocate_local!(ctx, EqRef)
-                        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                        push!(bytes, Opcode.LOCAL_SET)
-                        append!(bytes, encode_leb128_unsigned(_fp_tmp))
-                        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                        push!(bytes, Opcode.LOCAL_GET)
-                        append!(bytes, encode_leb128_unsigned(_fp_tmp))
-                    elseif a1_is_externref_fp && a2_is_externref_fp
-                        # Both externref: convert to anyref then cast to eqref
-                        local _fp_tmp2 = allocate_local!(ctx, EqRef)
-                        push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
-                        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                        push!(bytes, Opcode.LOCAL_SET)
-                        append!(bytes, encode_leb128_unsigned(_fp_tmp2))
-                        push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
-                        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                        push!(bytes, Opcode.LOCAL_GET)
-                        append!(bytes, encode_leb128_unsigned(_fp_tmp2))
-                    elseif a1_is_anyref_fp
-                        # arg1 anyref, arg2 concrete/eqref: save arg2, cast arg1, restore
-                        local _fp_tmp3 = allocate_local!(ctx, EqRef)
-                        push!(bytes, Opcode.LOCAL_SET)
-                        append!(bytes, encode_leb128_unsigned(_fp_tmp3))
-                        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                        push!(bytes, Opcode.LOCAL_GET)
-                        append!(bytes, encode_leb128_unsigned(_fp_tmp3))
-                    elseif a2_is_anyref_fp
-                        # arg2 anyref: cast to eqref
-                        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                    elseif a1_is_externref_fp
-                        # arg1 externref: save arg2, convert+cast arg1, restore
-                        local _fp_tmp4 = allocate_local!(ctx, EqRef)
-                        push!(bytes, Opcode.LOCAL_SET)
-                        append!(bytes, encode_leb128_unsigned(_fp_tmp4))
-                        push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
-                        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                        push!(bytes, Opcode.LOCAL_GET)
-                        append!(bytes, encode_leb128_unsigned(_fp_tmp4))
-                    elseif a2_is_externref_fp
-                        # arg2 externref: convert+cast
-                        push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
-                        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                    end
-                    push!(bytes, Opcode.REF_EQ)
-                    return bytes
-                end
-                # Both numeric - fall through to normal handling
-            end
-
-            # Check if args were actually compiled as refs (Nothing can compile to ref.null OR i32.const 0)
-            # The bytes already have [arg1_bytes..., arg2_bytes...]
-            # Check last pushed arg (arg2) - if it starts with REF_NULL (0xD0), it's a ref
-            # Also check for local.get of ref-typed local
-            local arg1_wasm_is_ref = arg1_is_ref
-            local arg2_wasm_is_ref = arg2_is_ref
-            # PURE-9064: Detect anyref/externref from actual wasm type, not just arg_type === Any.
-            # Abstract types like Type, DataType etc. also map to AnyRef.
-            local _arg1_wasm = julia_to_wasm_type(arg_type)
-            local _arg2_wasm = julia_to_wasm_type(arg2_type)
-            local arg1_is_externref = (_arg1_wasm === ExternRef)
-            local arg2_is_externref = (_arg2_wasm === ExternRef)
-            local arg1_is_anyref = (_arg1_wasm === AnyRef)
-            local arg2_is_anyref = (_arg2_wasm === AnyRef)
-            # anyref/externref types are always ref types
-            if arg1_is_anyref || arg1_is_externref
-                arg1_wasm_is_ref = true
-            end
-            if arg2_is_anyref || arg2_is_externref
-                arg2_wasm_is_ref = true
-            end
-            # Check Wasm representation for any potentially mixed comparison
-            # (when one arg is ref-typed or Nothing, verify actual Wasm types)
-            if arg_type === Nothing || arg2_type === Nothing || arg1_is_ref || arg2_is_ref
-                # Re-compile args to check their Wasm representation
-                # arg1 first, arg2 second on stack
-                # For Nothing-typed args, check actual Wasm representation
-                # (Nothing can compile to ref.null OR i32.const 0 depending on context)
-                # Check arg1's Wasm type when:
-                # - arg_type === Nothing (need to verify if it's actually ref.null or i32)
-                # - arg2_type === Nothing (need to know if arg1 is ref to do proper comparison)
-                # - arg_type === Any (PURE-046: Any maps to externref, must check actual local type)
-                if length(args) >= 1 && (arg_type === Nothing || arg2_type === Nothing || arg_type === Any || arg1_is_ref)
-                    local arg1_bytes = compile_value(args[1], ctx)
-                    if length(arg1_bytes) >= 1
-                        if arg1_bytes[1] == Opcode.REF_NULL
-                            arg1_wasm_is_ref = true
-                        elseif arg1_bytes[1] == Opcode.I32_CONST || arg1_bytes[1] == Opcode.I64_CONST ||
-                               arg1_bytes[1] == Opcode.F32_CONST || arg1_bytes[1] == Opcode.F64_CONST
-                            # Numeric constant — definitely NOT a ref, regardless of Julia type
-                            arg1_wasm_is_ref = false
-                        elseif arg1_bytes[1] == Opcode.LOCAL_GET && length(arg1_bytes) >= 2
-                            local local_idx_1 = 0
-                            local shift_1 = 0
-                            local pos_1 = 2
-                            while pos_1 <= length(arg1_bytes)
-                                b = arg1_bytes[pos_1]
-                                local_idx_1 |= (Int(b & 0x7f) << shift_1)
-                                shift_1 += 7
-                                pos_1 += 1
-                                (b & 0x80) == 0 && break
-                            end
-                            # ctx.locals doesn't include params, so adjust index
-                            local local_offset_1 = local_idx_1 - ctx.n_params
-                            if local_offset_1 >= 0 && local_offset_1 < length(ctx.locals)
-                                local ltype_1 = ctx.locals[local_offset_1 + 1]
-                                arg1_wasm_is_ref = ltype_1 isa ConcreteRef || ltype_1 === StructRef ||
-                                                   ltype_1 === ArrayRef || ltype_1 === ExternRef || ltype_1 === AnyRef
-                                arg1_is_externref = (ltype_1 === ExternRef)
-                            elseif local_idx_1 < ctx.n_params && local_idx_1 < length(ctx.arg_types)
-                                local ptype_1 = ctx.arg_types[local_idx_1 + 1]
-                                local pwasm_1 = julia_to_wasm_type_concrete(ptype_1, ctx)
-                                arg1_is_externref = (pwasm_1 === ExternRef)
-                            end
-                        end
-                    end
-                    # PURE-046/9064: Override local type check if Julia type maps to anyref/externref
-                    if arg1_is_anyref || arg1_is_externref
-                        arg1_wasm_is_ref = true
-                    end
-                end
-                # Check arg2's Wasm type when:
-                # - arg2_type === Nothing (need to verify if it's actually ref.null or i32)
-                # - arg_type === Nothing (need to know if arg2 is ref to do proper comparison)
-                # - arg2_type === Any (PURE-046: Any maps to externref, must check actual local type)
-                if length(args) >= 2 && (arg2_type === Nothing || arg_type === Nothing || arg2_type === Any || arg2_is_ref)
-                    local arg2_bytes = compile_value(args[2], ctx)
-                    if length(arg2_bytes) >= 1
-                        if arg2_bytes[1] == Opcode.REF_NULL
-                            arg2_wasm_is_ref = true
-                        elseif arg2_bytes[1] == Opcode.I32_CONST || arg2_bytes[1] == Opcode.I64_CONST ||
-                               arg2_bytes[1] == Opcode.F32_CONST || arg2_bytes[1] == Opcode.F64_CONST
-                            # Numeric constant — definitely NOT a ref
-                            arg2_wasm_is_ref = false
-                        elseif arg2_bytes[1] == Opcode.LOCAL_GET && length(arg2_bytes) >= 2
-                            local local_idx_2 = 0
-                            local shift_2 = 0
-                            local pos_2 = 2
-                            while pos_2 <= length(arg2_bytes)
-                                b = arg2_bytes[pos_2]
-                                local_idx_2 |= (Int(b & 0x7f) << shift_2)
-                                shift_2 += 7
-                                pos_2 += 1
-                                (b & 0x80) == 0 && break
-                            end
-                            # ctx.locals doesn't include params, so adjust index
-                            local local_offset_2 = local_idx_2 - ctx.n_params
-                            if local_offset_2 >= 0 && local_offset_2 < length(ctx.locals)
-                                local ltype_2 = ctx.locals[local_offset_2 + 1]
-                                arg2_wasm_is_ref = ltype_2 isa ConcreteRef || ltype_2 === StructRef ||
-                                                   ltype_2 === ArrayRef || ltype_2 === ExternRef || ltype_2 === AnyRef
-                                arg2_is_externref = (ltype_2 === ExternRef)
-                            elseif local_idx_2 < ctx.n_params && local_idx_2 < length(ctx.arg_types)
-                                local ptype_2 = ctx.arg_types[local_idx_2 + 1]
-                                local pwasm_2 = julia_to_wasm_type_concrete(ptype_2, ctx)
-                                arg2_is_externref = (pwasm_2 === ExternRef)
-                            end
-                        end
-                    end
-                    # PURE-046/9064: Override local type check if Julia type maps to anyref/externref
-                    if arg2_is_anyref || arg2_is_externref
-                        arg2_wasm_is_ref = true
-                    end
-                end
-            end
-            if arg1_wasm_is_ref && arg2_wasm_is_ref
-                # PURE-324: For immutable structs, === means VALUE equality (field-by-field),
-                # not identity. WasmGC ref.eq is identity comparison, so we must emit
-                # struct.get for each field and compare with the appropriate opcode.
-                local _do_struct_egal = false
-                local _egal_struct_info = nothing
-                if !arg1_is_externref && !arg2_is_externref &&
-                   arg_type isa DataType && arg_type === arg2_type &&
-                   is_struct_type(arg_type) && !ismutabletype(arg_type) &&
-                   haskey(ctx.type_registry.structs, arg_type)
-                    _egal_struct_info = ctx.type_registry.structs[arg_type]
-                    _do_struct_egal = true
-                end
-                if _do_struct_egal
-                    # Immutable struct === : field-by-field value comparison
-                    local egal_info = _egal_struct_info
-                    local egal_type_idx = egal_info.wasm_type_idx
-                    local egal_wasm_type = ConcreteRef(egal_type_idx, true)
-                    # Save both args to locals (arg2 is on top, arg1 below)
-                    local egal_local2 = allocate_local!(ctx, egal_wasm_type)
-                    local egal_local1 = allocate_local!(ctx, egal_wasm_type)
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(egal_local2))
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(egal_local1))
-                    local n_fields = length(egal_info.field_types)
-                    for fi in 1:n_fields
-                        local egal_ft = egal_info.field_types[fi]
-                        local egal_wt = julia_to_wasm_type(egal_ft)
-                        # Get wasm field index (accounts for typeId at field 0)
-                        push!(bytes, Opcode.LOCAL_GET)
-                        append!(bytes, encode_leb128_unsigned(egal_local1))
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.STRUCT_GET)
-                        append!(bytes, encode_leb128_unsigned(egal_type_idx))
-                        append!(bytes, encode_leb128_unsigned(wasm_field_idx(egal_info, fi)))
-                        push!(bytes, Opcode.LOCAL_GET)
-                        append!(bytes, encode_leb128_unsigned(egal_local2))
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.STRUCT_GET)
-                        append!(bytes, encode_leb128_unsigned(egal_type_idx))
-                        append!(bytes, encode_leb128_unsigned(wasm_field_idx(egal_info, fi)))
-                        # Compare with type-appropriate opcode
-                        if egal_wt === I32
-                            push!(bytes, Opcode.I32_EQ)
-                        elseif egal_wt === I64
-                            push!(bytes, Opcode.I64_EQ)
-                        elseif egal_wt === F32
-                            push!(bytes, Opcode.F32_EQ)
-                        elseif egal_wt === F64
-                            push!(bytes, Opcode.F64_EQ)
-                        elseif egal_wt === ExternRef
-                            # PURE-6024: externref fields need conversion to eqref for ref.eq
-                            local egal_tmp = allocate_local!(ctx, EqRef)
-                            push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
-                            push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                            push!(bytes, Opcode.LOCAL_SET)
-                            append!(bytes, encode_leb128_unsigned(egal_tmp))
-                            push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
-                            push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                            push!(bytes, Opcode.LOCAL_GET)
-                            append!(bytes, encode_leb128_unsigned(egal_tmp))
-                            push!(bytes, Opcode.REF_EQ)
-                        else
-                            # Ref-typed field (nested struct, string, etc.): use ref.eq
-                            push!(bytes, Opcode.REF_EQ)
-                        end
-                        # AND with previous field results (skip for first field)
-                        if fi > 1
-                            push!(bytes, Opcode.I32_AND)
-                        end
-                    end
-                    # Handle zero-field structs (singleton types): always equal
-                    if n_fields == 0
-                        push!(bytes, Opcode.I32_CONST)
-                        push!(bytes, 0x01)
-                    end
-                elseif arg1_is_anyref && arg2_is_anyref
-                    # PURE-9064: Both anyref — cast to eqref before ref.eq
-                    # anyref is supertype of eqref, so ref.cast works directly (no any.convert_extern)
-                    local tmp_eq_a = allocate_local!(ctx, EqRef)
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(tmp_eq_a))
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(tmp_eq_a))
-                    push!(bytes, Opcode.REF_EQ)
-                elseif arg1_is_externref && arg2_is_externref
-                    # ref.eq requires eqref operands. externref is NOT eqref.
-                    # Convert externref → anyref → eqref before ref.eq
-                    # Both externref: convert arg2 (top), save, convert arg1, restore
-                    local tmp_eq = allocate_local!(ctx, EqRef)
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(tmp_eq))
-                    # Now arg1 (externref) is on top
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(tmp_eq))
-                    push!(bytes, Opcode.REF_EQ)
-                elseif arg1_is_externref
-                    # arg1 is externref (under arg2 on stack): save arg2, convert arg1, restore arg2
-                    local tmp_eq2 = allocate_local!(ctx, EqRef)
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(tmp_eq2))
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(tmp_eq2))
-                    push!(bytes, Opcode.REF_EQ)
-                elseif arg2_is_externref
-                    # arg2 is externref (top of stack): just convert it
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                    push!(bytes, Opcode.REF_EQ)
-                elseif arg1_is_anyref
-                    # PURE-9064: arg1 anyref (under arg2 on stack): save arg2, cast arg1, restore
-                    local tmp_eq_a2 = allocate_local!(ctx, EqRef)
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(tmp_eq_a2))
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(tmp_eq_a2))
-                    push!(bytes, Opcode.REF_EQ)
-                elseif arg2_is_anyref
-                    # PURE-9064: arg2 anyref (top of stack): cast to eqref
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                    push!(bytes, Opcode.REF_EQ)
-                else
-                    # Both are non-externref, non-anyref refs (mutable structs, arrays, etc.): identity comparison
-                    push!(bytes, Opcode.REF_EQ)
-                end
-            elseif arg1_wasm_is_ref && !arg2_wasm_is_ref
-                # Comparing ref with non-ref: type mismatch, drop both and push false
-                push!(bytes, Opcode.DROP)
-                push!(bytes, Opcode.DROP)
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
-            elseif !arg1_wasm_is_ref && arg2_wasm_is_ref
-                # Comparing non-ref with ref: type mismatch, drop both and push false
-                push!(bytes, Opcode.DROP)
-                push!(bytes, Opcode.DROP)
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
-            else
-                # Both args are numeric. Check actual Wasm types to select correct opcode.
-                # Julia type inference (is_32bit) may differ from actual Wasm local types.
-                local arg1_actual_32bit = is_32bit
-                local arg2_actual_32bit = arg2_type === Nothing || arg2_type === Bool ||
-                                          arg2_type === Int32 || arg2_type === UInt32 ||
-                                          arg2_type === Int16 || arg2_type === UInt16 ||
-                                          arg2_type === Int8 || arg2_type === UInt8 || arg2_type === Char
-
-                # Check arg1's actual Wasm local type (may differ from Julia type inference)
-                local _arg1_local_is_ref = false  # true if arg1's local is ref-typed (not numeric)
-                if length(args) >= 1
-                    local arg1_chk = compile_value(args[1], ctx)
-                    if length(arg1_chk) >= 2 && arg1_chk[1] == Opcode.LOCAL_GET
-                        local idx_chk = 0
-                        local sh_chk = 0
-                        local p_chk = 2
-                        while p_chk <= length(arg1_chk)
-                            b = arg1_chk[p_chk]
-                            idx_chk |= (Int(b & 0x7f) << sh_chk)
-                            sh_chk += 7
-                            p_chk += 1
-                            (b & 0x80) == 0 && break
-                        end
-                        local off_chk = idx_chk - ctx.n_params
-                        if off_chk >= 0 && off_chk < length(ctx.locals)
-                            local lt_chk = ctx.locals[off_chk + 1]
-                            arg1_actual_32bit = (lt_chk === I32)
-                            # Detect ref-typed locals masquerading as numeric (e.g. Core.IntrinsicFunction
-                            # is stored as ExternRef because julia_to_wasm_type returns ExternRef via
-                            # T<:Function branch, but is_ref_type_or_union returns false for it)
-                            if lt_chk === ExternRef || lt_chk === AnyRef || lt_chk === EqRef ||
-                               lt_chk === StructRef || lt_chk === ArrayRef || lt_chk isa ConcreteRef
-                                _arg1_local_is_ref = true
-                            end
-                        elseif idx_chk < ctx.n_params && idx_chk < length(ctx.arg_types)
-                            # Function parameter - check arg_types
-                            local ptype = ctx.arg_types[idx_chk + 1]
-                            local pwasm = julia_to_wasm_type_concrete(ptype, ctx)
-                            arg1_actual_32bit = (pwasm === I32)
-                            if pwasm === ExternRef || pwasm === AnyRef || pwasm === EqRef ||
-                               pwasm === StructRef || pwasm === ArrayRef || pwasm isa ConcreteRef
-                                _arg1_local_is_ref = true
-                            end
-                        end
-                    elseif length(arg1_chk) >= 1 && arg1_chk[1] == Opcode.I32_CONST
-                        arg1_actual_32bit = true
-                    elseif length(arg1_chk) >= 1 && arg1_chk[1] == Opcode.I64_CONST
-                        arg1_actual_32bit = false
-                    end
-                end
-
-                # Check arg2's actual Wasm type (may differ from Julia type inference)
-                if length(args) >= 2
-                    local arg2_chk = compile_value(args[2], ctx)
-                    if length(arg2_chk) >= 2 && arg2_chk[1] == Opcode.LOCAL_GET
-                        local idx2_chk = 0
-                        local sh2_chk = 0
-                        local p2_chk = 2
-                        while p2_chk <= length(arg2_chk)
-                            b = arg2_chk[p2_chk]
-                            idx2_chk |= (Int(b & 0x7f) << sh2_chk)
-                            sh2_chk += 7
-                            p2_chk += 1
-                            (b & 0x80) == 0 && break
-                        end
-                        local off2_chk = idx2_chk - ctx.n_params
-                        if off2_chk >= 0 && off2_chk < length(ctx.locals)
-                            local lt2_chk = ctx.locals[off2_chk + 1]
-                            arg2_actual_32bit = (lt2_chk === I32)
-                        elseif idx2_chk < ctx.n_params && idx2_chk < length(ctx.arg_types)
-                            # Function parameter - check arg_types
-                            local ptype2 = ctx.arg_types[idx2_chk + 1]
-                            local pwasm2 = julia_to_wasm_type_concrete(ptype2, ctx)
-                            arg2_actual_32bit = (pwasm2 === I32)
-                        end
-                    elseif length(arg2_chk) >= 1 && arg2_chk[1] == Opcode.I32_CONST
-                        arg2_actual_32bit = true
-                    elseif length(arg2_chk) >= 1 && arg2_chk[1] == Opcode.I64_CONST
-                        arg2_actual_32bit = false
-                    end
-                end
-
-                # Select opcode based on actual Wasm types
-                if _arg1_local_is_ref
-                    # arg1 is a ref type but Julia treated it as numeric (e.g. Core.IntrinsicFunction
-                    # stored as ExternRef). A ref value can never equal a numeric constant, so drop
-                    # both args and return false.
-                    push!(bytes, Opcode.DROP)
-                    push!(bytes, Opcode.DROP)
-                    push!(bytes, Opcode.I32_CONST)
-                    push!(bytes, 0x00)
-                elseif arg1_actual_32bit && arg2_actual_32bit
-                    # Both i32 - use i32_eq
-                    push!(bytes, Opcode.I32_EQ)
-                elseif arg1_actual_32bit && !arg2_actual_32bit
-                    # arg1 is i32, arg2 is i64 - extend arg1 to i64
-                    # But arg1 is already on stack below arg2. We need to swap and extend.
-                    # Simpler: just compare as i32 if we can truncate arg2
-                    # Since arg2 is on top of stack, wrap it to i32
-                    push!(bytes, Opcode.I32_WRAP_I64)
-                    push!(bytes, Opcode.I32_EQ)
-                elseif !arg1_actual_32bit && arg2_actual_32bit
-                    # arg1 is i64, arg2 is i32 - extend arg2 (on top of stack) to i64
-                    push!(bytes, Opcode.I64_EXTEND_I32_S)
-                    push!(bytes, Opcode.I64_EQ)
-                else
-                    # Both i64 - use i64_eq
-                    push!(bytes, Opcode.I64_EQ)
-                end
-            end
-        end
+        _compile_call_egaleq(args, bytes, ctx, is_128bit, is_32bit, arg_type)
 
     elseif is_func(func, :(!==))
         if is_128bit
@@ -4602,106 +5056,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         end
 
     elseif is_func(func, :fpext)  # Float precision extension
-        # fpext(TargetType, value) - extend to Float64
-        source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Float32
-        if source_type === Float16
-            # Float16 (i32 on stack) → Float64
-            # Convert Float16 bit pattern to Float32 bit pattern using integer ops,
-            # then reinterpret as f32 and promote to f64.
-            # Float16: 1 sign, 5 exp, 10 mantissa
-            # Float32: 1 sign, 8 exp, 23 mantissa
-            # For normalized: f32_bits = (sign<<31) | ((exp+112)<<23) | (mant<<13)
-            # For zero: f32_bits = sign<<31
-            # For inf/nan: f32_bits = (sign<<31) | (0xff<<23) | (mant<<13)
-            #
-            # We use a branchless approach for normalized values with special-case
-            # handling for zero and inf/nan via select.
-            #
-            # Stack: [i32 = Float16 bits]
-            # Strategy: extract sign, exp, mant; build f32 bits; reinterpret; promote
-
-            # Save the Float16 bits to a temp local
-            local_idx = length(ctx.locals) + ctx.n_params
-            push!(ctx.locals, I32)
-            h_local = local_idx
-            push!(bytes, Opcode.LOCAL_TEE)
-            append!(bytes, encode_leb128_unsigned(UInt64(h_local)))
-
-            # Extract sign: (h >> 15) << 31
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(UInt64(h_local)))
-            push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(15)))
-            push!(bytes, Opcode.I32_SHR_U)
-            push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(31)))
-            push!(bytes, Opcode.I32_SHL)
-            # Stack: [h, sign_bit]
-
-            # Extract exp: (h >> 10) & 0x1f
-            local_idx2 = length(ctx.locals) + ctx.n_params
-            push!(ctx.locals, I32)
-            sign_local = local_idx2
-            push!(bytes, Opcode.LOCAL_SET)
-            append!(bytes, encode_leb128_unsigned(UInt64(sign_local)))
-
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(UInt64(h_local)))
-            push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(10)))
-            push!(bytes, Opcode.I32_SHR_U)
-            push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(0x1f)))
-            push!(bytes, Opcode.I32_AND)
-
-            local_idx3 = length(ctx.locals) + ctx.n_params
-            push!(ctx.locals, I32)
-            exp_local = local_idx3
-            push!(bytes, Opcode.LOCAL_SET)
-            append!(bytes, encode_leb128_unsigned(UInt64(exp_local)))
-
-            # Extract mant: h & 0x3ff
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(UInt64(h_local)))
-            push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(0x3ff)))
-            push!(bytes, Opcode.I32_AND)
-
-            local_idx4 = length(ctx.locals) + ctx.n_params
-            push!(ctx.locals, I32)
-            mant_local = local_idx4
-            push!(bytes, Opcode.LOCAL_SET)
-            append!(bytes, encode_leb128_unsigned(UInt64(mant_local)))
-
-            # Build f32 bits for normalized case:
-            # sign_bit | ((exp + 112) << 23) | (mant << 13)
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(UInt64(sign_local)))
-
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(UInt64(exp_local)))
-            push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(112)))
-            push!(bytes, Opcode.I32_ADD)
-            push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(23)))
-            push!(bytes, Opcode.I32_SHL)
-            push!(bytes, Opcode.I32_OR)
-
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(UInt64(mant_local)))
-            push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(13)))
-            push!(bytes, Opcode.I32_SHL)
-            push!(bytes, Opcode.I32_OR)
-            # Stack: [normalized_f32_bits]
-
-            # Handle zero case: if exp==0 && mant==0, use sign_bit only
-            # Handle inf/nan: if exp==0x1f, use sign|(0xff<<23)|(mant<<13)
-            # For simplicity in codegen context (timing values are always small
-            # positive normalized floats), the normalized formula works.
-            # Zero maps to exp+112=112 which is a tiny denormal in f32 ≈ 0.
-            # This is acceptable for validation and practical correctness.
-
-            # Reinterpret i32 → f32, then promote f32 → f64
-            push!(bytes, Opcode.F32_REINTERPRET_I32)  # 0xBE
-            push!(bytes, 0xBB)  # f64.promote_f32
-        else
-            # Float32 → Float64 (standard case)
-            push!(bytes, 0xBB)  # f64.promote_f32
-        end
+        _compile_call_fpext(args, bytes, ctx)
 
     elseif is_func(func, :fptrunc)  # Float precision truncation (Float64 → Float32)
         # fptrunc(TargetType, value) - truncate Float64 to Float32
@@ -4778,295 +5133,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
 
     # isa() - type checking for Union discrimination
     elseif is_func(func, :isa) && length(args) >= 2
-        # isa(value, Type) - check if value is of given type
-        # Supports both Union{Nothing, T} (via ref.is_null) and tagged unions
-        value_arg = args[1]
-        type_arg = args[2]
-
-        # Get the type being checked
-        check_type = if type_arg isa Type
-            type_arg
-        elseif type_arg isa GlobalRef
-            Core.eval(type_arg.mod, type_arg.name)
-        else
-            nothing
-        end
-
-        # Get the type of the value being checked (for detecting tagged unions)
-        value_type = get_ssa_type(ctx, value_arg)
-
-        # Check if this is a tagged union check
-        # NOTE: The value argument is already on the stack from the loop that pushes all args
-        if value_type isa Union && needs_tagged_union(value_type) && haskey(ctx.type_registry.unions, value_type)
-            # Tagged union: check the tag field
-            union_info = ctx.type_registry.unions[value_type]
-            expected_tag = get(union_info.tag_map, check_type, Int32(-1))
-
-            if expected_tag >= 0
-                # Value is already on stack (tagged union struct)
-                # PURE-701: Value may be structref if from a union-typed local.
-                # Insert ref.cast null to narrow before struct_get.
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.REF_CAST_NULL)
-                append!(bytes, encode_leb128_signed(Int64(union_info.wasm_type_idx)))
-                # Get the tag field (PURE-9024: field 1 due to typeId at field 0)
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.STRUCT_GET)
-                append!(bytes, encode_leb128_unsigned(union_info.wasm_type_idx))
-                append!(bytes, encode_leb128_unsigned(1))  # field 1 is tag (0=typeId, 1=tag, 2=value)
-                # Compare tag to expected value
-                push!(bytes, Opcode.I32_CONST)
-                append!(bytes, encode_leb128_signed(Int64(expected_tag)))
-                push!(bytes, Opcode.I32_EQ)
-            else
-                # Type not in this union - drop value and return false
-                push!(bytes, Opcode.DROP)
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
-            end
-        elseif check_type === Nothing
-            # isa(x, Nothing) -> ref.is_null
-            # Value is already on stack — check if it's actually a ref type
-            local isa_val_wasm = nothing
-            if value_arg isa Core.SSAValue
-                local isa_local_idx = get(ctx.ssa_locals, value_arg.id, nothing)
-                # Fix: isa_local_idx includes n_params, but ctx.locals only has non-param locals
-                if isa_local_idx !== nothing
-                    local local_offset = isa_local_idx - ctx.n_params
-                    if local_offset >= 0 && local_offset < length(ctx.locals)
-                        isa_val_wasm = ctx.locals[local_offset + 1]
-                    end
-                end
-            end
-            if isa_val_wasm !== nothing && (isa_val_wasm === I64 || isa_val_wasm === I32 || isa_val_wasm === F64 || isa_val_wasm === F32)
-                # Numeric value on stack — can never be Nothing. Drop + push false.
-                push!(bytes, Opcode.DROP)
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
-            else
-                push!(bytes, Opcode.REF_IS_NULL)
-            end
-        elseif check_type !== nothing && isconcretetype(check_type)
-            # isa(x, ConcreteType) -> type check
-            # Value is already on stack — check if it's actually a ref type
-            local isa2_val_wasm = nothing
-            if value_arg isa Core.SSAValue
-                local isa2_local_idx = get(ctx.ssa_locals, value_arg.id, nothing)
-                # Fix: isa2_local_idx includes n_params, but ctx.locals only has non-param locals
-                if isa2_local_idx !== nothing
-                    local local_offset = isa2_local_idx - ctx.n_params
-                    if local_offset >= 0 && local_offset < length(ctx.locals)
-                        isa2_val_wasm = ctx.locals[local_offset + 1]
-                    end
-                end
-            elseif value_arg isa Core.Argument
-                # PURE-325: Also handle function parameters (not just SSA values)
-                # Core.Argument(1) is the function object for non-closures, so
-                # actual args start at Argument(2) → arg_types[1].
-                local arg_idx_isa = ctx.is_compiled_closure ? value_arg.n : value_arg.n - 1
-                if arg_idx_isa >= 1 && arg_idx_isa <= length(ctx.arg_types)
-                    local _arg_jtype = ctx.arg_types[arg_idx_isa]
-                    # PURE-9030: Check if this param was promoted to anyref for Union dispatch
-                    if _arg_jtype isa Union && needs_anyref_boxing(_arg_jtype)
-                        isa2_val_wasm = AnyRef
-                    else
-                        isa2_val_wasm = get_concrete_wasm_type(_arg_jtype, ctx.mod, ctx.type_registry)
-                    end
-                end
-            end
-            if isa2_val_wasm !== nothing && (isa2_val_wasm === I64 || isa2_val_wasm === I32 || isa2_val_wasm === F64 || isa2_val_wasm === F32)
-                # Numeric value on stack — can never be Nothing, so isa(x, T) is true. Drop + push true.
-                push!(bytes, Opcode.DROP)
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x01)
-            elseif isa2_val_wasm === ExternRef
-                # PURE-324: Value is externref (Any-typed field). Need proper type check.
-                # PURE-9032: For Exception subtypes with DFS typeIds, use typeId comparison
-                # instead of ref.test (which can't distinguish structurally identical types
-                # due to Wasm type canonicalization).
-                local _isa2_check_tid = get_type_id(ctx.type_registry, check_type)
-                if _isa2_check_tid > 0 && check_type <: Exception && ctx.type_registry.base_struct_idx !== nothing
-                    # typeId-based check: extract typeId from exception struct + compare
-                    append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
-                    emit_typeof!(bytes, ctx.type_registry.base_struct_idx)
-                    push!(bytes, Opcode.I32_CONST)
-                    append!(bytes, encode_leb128_signed(Int64(_isa2_check_tid)))
-                    push!(bytes, Opcode.I32_EQ)
-                else
-                    local target_wasm = get_concrete_wasm_type(check_type, ctx.mod, ctx.type_registry)
-                    if target_wasm isa ConcreteRef
-                        append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
-                        push!(bytes, Opcode.GC_PREFIX)
-                        # PURE-325: Use REF_TEST (non-nullable) instead of REF_TEST_NULL.
-                        push!(bytes, Opcode.REF_TEST)
-                        append!(bytes, encode_leb128_signed(Int64(target_wasm.type_idx)))
-                    elseif haskey(ctx.type_registry.numeric_boxes, target_wasm)
-                        local box_type_idx = ctx.type_registry.numeric_boxes[target_wasm]
-                        append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.REF_TEST)
-                        append!(bytes, encode_leb128_signed(Int64(box_type_idx)))
-                    else
-                        # Fallback: non-null check for non-concrete wasm types
-                        push!(bytes, Opcode.REF_IS_NULL)
-                        push!(bytes, Opcode.I32_EQZ)
-                    end
-                end
-            elseif isa2_val_wasm === AnyRef || isa2_val_wasm isa ConcreteRef || isa2_val_wasm === StructRef
-                # PURE-9030: anyref/structref value — use ref.test to check concrete box type.
-                # This handles Union{Int32, Float64} where the value is boxed in anyref.
-                local target_wasm_isa = get_concrete_wasm_type(check_type, ctx.mod, ctx.type_registry)
-                if check_type <: Number && !(check_type <: Int128) && !(check_type <: UInt128)
-                    # Numeric type: test against the numeric box struct
-                    local _box_wasm = julia_to_wasm_type(check_type)
-                    if haskey(ctx.type_registry.numeric_boxes, _box_wasm)
-                        local _box_idx = ctx.type_registry.numeric_boxes[_box_wasm]
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.REF_TEST)
-                        append!(bytes, encode_leb128_signed(Int64(_box_idx)))
-                    else
-                        # Box type not registered yet — register it
-                        local _box_idx2 = get_numeric_box_type!(ctx.mod, ctx.type_registry, _box_wasm)
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.REF_TEST)
-                        append!(bytes, encode_leb128_signed(Int64(_box_idx2)))
-                    end
-                elseif target_wasm_isa isa ConcreteRef
-                    # Struct type: test against the concrete struct type
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.REF_TEST)
-                    append!(bytes, encode_leb128_signed(Int64(target_wasm_isa.type_idx)))
-                elseif check_type === String || check_type === Symbol || check_type <: AbstractString
-                    # String/Symbol: test against the string array type
-                    local _str_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.REF_TEST)
-                    append!(bytes, encode_leb128_signed(Int64(_str_idx)))
-                else
-                    # Unknown concrete type — can't test, return false
-                    push!(bytes, Opcode.DROP)
-                    push!(bytes, Opcode.I32_CONST)
-                    push!(bytes, 0x00)
-                end
-            else
-                # For Union{Nothing, T}, checking isa(x, T) is equivalent to !isnull
-                push!(bytes, Opcode.REF_IS_NULL)
-                push!(bytes, Opcode.I32_EQZ)  # negate: 1->0, 0->1
-            end
-        elseif check_type !== nothing && !isconcretetype(check_type)
-            # Abstract type check (e.g. Integer, AbstractFloat, Number, Real)
-            # Determine value's WASM local type and local index for re-loading
-            local isa3_val_wasm = nothing
-            local isa3_local_idx = nothing
-            if value_arg isa Core.SSAValue
-                local _idx3 = get(ctx.ssa_locals, value_arg.id, nothing)
-                if _idx3 !== nothing
-                    local _off3 = _idx3 - ctx.n_params
-                    if _off3 >= 0 && _off3 < length(ctx.locals)
-                        isa3_val_wasm = ctx.locals[_off3 + 1]
-                        isa3_local_idx = _idx3
-                    end
-                end
-            elseif value_arg isa Core.Argument
-                # Also detect param type for Argument values
-                local _arg_idx3 = ctx.is_compiled_closure ? value_arg.n : value_arg.n - 1
-                if _arg_idx3 >= 1 && _arg_idx3 <= length(ctx.arg_types)
-                    isa3_val_wasm = get_concrete_wasm_type(ctx.arg_types[_arg_idx3], ctx.mod, ctx.type_registry)
-                end
-            end
-            local _wasm_julia = Dict{WasmValType,Type}(I64=>Int64, I32=>Int32, F64=>Float64, F32=>Float32)
-            if isa3_val_wasm !== nothing && (isa3_val_wasm === I64 || isa3_val_wasm === I32 || isa3_val_wasm === F64 || isa3_val_wasm === F32)
-                # Unboxed numeric — check if representative Julia type is a subtype
-                local _jt = get(_wasm_julia, isa3_val_wasm, nothing)
-                push!(bytes, Opcode.DROP)
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, (_jt !== nothing && _jt <: check_type) ? 0x01 : 0x00)
-            elseif isa3_val_wasm === ExternRef && isa3_local_idx !== nothing
-                # Boxed externref — test each numeric box type that is a subtype of check_type
-                local _boxes = UInt32[]
-                for (wt, box_idx) in ctx.type_registry.numeric_boxes
-                    local _jt2 = get(_wasm_julia, wt, nothing)
-                    _jt2 !== nothing && _jt2 <: check_type && push!(_boxes, box_idx)
-                end
-                push!(bytes, Opcode.DROP)
-                if isempty(_boxes)
-                    push!(bytes, Opcode.I32_CONST)
-                    push!(bytes, 0x00)
-                else
-                    for (i, box_idx) in enumerate(_boxes)
-                        push!(bytes, Opcode.LOCAL_GET)
-                        append!(bytes, encode_leb128_unsigned(UInt32(isa3_local_idx)))
-                        append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.REF_TEST)
-                        append!(bytes, encode_leb128_signed(Int64(box_idx)))
-                        i > 1 && push!(bytes, Opcode.I32_OR)
-                    end
-                end
-            elseif (isa3_val_wasm === AnyRef || isa3_val_wasm isa ConcreteRef || isa3_val_wasm === StructRef) &&
-                   ctx.type_registry.base_struct_idx !== nothing
-                # PURE-9027: DFS range check for anyref/structref polymorphic values
-                # Value is on stack (anyref/structref) — extract typeId, check low <= id <= high
-                local _range = get_type_range(ctx.type_registry, check_type)
-                if _range !== nothing
-                    local _low, _high = _range
-                    local _base_idx = ctx.type_registry.base_struct_idx
-                    # PURE-9064: Guard against JlType hierarchy refs.
-                    # emit_typeof! does ref.cast (ref $JlBase) which traps on $JlType
-                    # hierarchy structs ($JlDataType, $JlUnion, etc.) since they don't
-                    # inherit from $JlBase. Use ref.test first; if not $JlBase, return false.
-                    local _isa_guard_local = allocate_local!(ctx, AnyRef)
-                    push!(bytes, Opcode.LOCAL_TEE)
-                    append!(bytes, encode_leb128_unsigned(_isa_guard_local))
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.REF_TEST)  # ref.test (ref $JlBase)
-                    append!(bytes, encode_leb128_signed(Int64(_base_idx)))
-                    push!(bytes, Opcode.I32_EQZ)
-                    # if NOT a $JlBase struct → push 0 (false)
-                    local _isa_guard_block = UInt8[]
-                    push!(_isa_guard_block, Opcode.I32_CONST)
-                    push!(_isa_guard_block, 0x00)
-                    # else → do the DFS range check
-                    local _isa_dfs_block = UInt8[]
-                    push!(_isa_dfs_block, Opcode.LOCAL_GET)
-                    append!(_isa_dfs_block, encode_leb128_unsigned(_isa_guard_local))
-                    emit_typeof!(_isa_dfs_block, _base_idx)
-                    local _tid_local2 = allocate_local!(ctx, I32)
-                    push!(_isa_dfs_block, Opcode.LOCAL_TEE)
-                    append!(_isa_dfs_block, encode_leb128_unsigned(_tid_local2))
-                    push!(_isa_dfs_block, Opcode.I32_CONST)
-                    append!(_isa_dfs_block, encode_leb128_signed(Int64(_low)))
-                    push!(_isa_dfs_block, Opcode.I32_GE_S)
-                    push!(_isa_dfs_block, Opcode.LOCAL_GET)
-                    append!(_isa_dfs_block, encode_leb128_unsigned(_tid_local2))
-                    push!(_isa_dfs_block, Opcode.I32_CONST)
-                    append!(_isa_dfs_block, encode_leb128_signed(Int64(_high)))
-                    push!(_isa_dfs_block, Opcode.I32_LE_S)
-                    push!(_isa_dfs_block, Opcode.I32_AND)
-                    # Emit if-else: if (not $JlBase) { 0 } else { dfs_check }
-                    push!(bytes, Opcode.IF)
-                    push!(bytes, 0x7F)  # i32 result type
-                    append!(bytes, _isa_guard_block)
-                    push!(bytes, Opcode.ELSE)
-                    append!(bytes, _isa_dfs_block)
-                    push!(bytes, Opcode.END)
-                else
-                    # No DFS range for this abstract type — return false
-                    push!(bytes, Opcode.DROP)
-                    push!(bytes, Opcode.I32_CONST)
-                    push!(bytes, 0x00)
-                end
-            else
-                push!(bytes, Opcode.DROP)
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
-            end
-        else
-            # Unknown type - drop value and return false
-            push!(bytes, Opcode.DROP)
-            push!(bytes, Opcode.I32_CONST)
-            push!(bytes, 0x00)
-        end
+        _compile_call_isa(args, bytes, ctx)
 
     # throw() - compile to WASM throw instruction
     elseif func isa GlobalRef && func.name === :throw
@@ -5227,8 +5294,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
     # PURE-604: Symbol(x) — in WasmGC, Symbol IS String (both are byte arrays).
     # The argument is already compiled as a string array — just pass through.
     elseif is_func(func, :Symbol) && func isa GlobalRef && length(args) == 1
-        # Compile the argument — it's already a string array in WasmGC
-        append!(bytes, compile_value(args[1], ctx))
+        _compile_call_symbol(args, bytes, ctx)
 
     # Cross-function call via GlobalRef (dynamic dispatch when Julia can't specialize)
     # PURE-325: Skip cross-call lookup for Core._expr — it's a builtin that has a
