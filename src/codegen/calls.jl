@@ -3248,15 +3248,9 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             push!(bytes, Opcode.I32_REINTERPRET_F32)
         elseif (source_type === Int32 || source_type === UInt32) && target_type === Float32
             push!(bytes, Opcode.F32_REINTERPRET_I32)
-        elseif source_type === Char && (target_type === UInt32 || target_type === Int32)
-            # Char is stored as codepoint in WASM, but bitcast(UInt32, Char) in Julia
-            # returns the RAW bits (UTF-8 encoding in high bytes of UInt32).
-            # Convert codepoint → raw bits to match Julia semantics.
-            append!(bytes, emit_char_codepoint_to_rawbits(ctx))
-        elseif (source_type === UInt32 || source_type === Int32) && target_type === Char
-            # Reverse: bitcast(Char, UInt32) — convert raw bits → codepoint
-            append!(bytes, emit_char_rawbits_to_codepoint(ctx))
         end
+        # STACK-003: Char is stored as Julia's internal representation (UTF-8 packed UInt32),
+        # so bitcast(UInt32, Char) and bitcast(Char, UInt32) are no-ops (same as Int32<->UInt32).
         # For other cases (Int64<->UInt64, Int32<->UInt32, Int128<->UInt128),
         # bitcast is a no-op in Wasm (same representation)
 

@@ -378,17 +378,14 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
         push!(bytes, val ? 0x01 : 0x00)
 
     elseif val isa Char
-        # Char stored as Unicode codepoint in WASM.
-        # 'A' → 65, 'é' → 233, '😀' → 128512
-        # bitcast(UInt32, Char) adds codepoint→rawbits conversion (see calls.jl).
-        # Fallback to raw bits for invalid chars (e.g., EOF_CHAR 0xFFFFFFFF in JuliaSyntax)
-        codepoint = try
-            Int32(val)
-        catch
-            reinterpret(Int32, reinterpret(UInt32, val))
-        end
+        # STACK-003: Char stored as Julia's internal representation (UTF-8 encoding
+        # left-packed in UInt32). This matches Julia IR semantics where
+        # bitcast(UInt32, c::Char) is a no-op reinterpret of the raw bytes.
+        # '+' (U+002B) → 0x2b000000, 'é' (U+00E9) → 0xc3a90000
+        # JS callers must convert codepoints to Julia encoding before passing.
+        raw = reinterpret(Int32, reinterpret(UInt32, val))
         push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(codepoint))
+        append!(bytes, encode_leb128_signed(raw))
 
     elseif val isa Int8 || val isa UInt8 || val isa Int16 || val isa UInt16
         # Small integers - stored as i32 in WASM
