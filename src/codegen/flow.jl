@@ -905,7 +905,7 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
     end
 
     # Find loop bounds (header to back-edge)
-    first_header = minimum(ctx.loop_headers)
+    first_header = findfirst(ctx.loop_headers)
     back_edge_idx = nothing
     for (i, stmt) in enumerate(code)
         if stmt isa Core.GotoNode && stmt.label == first_header
