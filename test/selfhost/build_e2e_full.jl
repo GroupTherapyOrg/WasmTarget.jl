@@ -1,14 +1,14 @@
-# build_e2e_full.jl — Build E2E module: wasm_compile_baked + ALL codegen callees
+# build_e2e_full.jl — Build E2E module: compile_from_ir_prebaked + ALL codegen callees
 #
 # This builds a WASM module that can compile f(x::Int64)=x*x+1 entirely in WASM.
-# Key insight: compile_from_ir_inplace avoids Dict (uses TypeRegistry_minimal)
-# and avoids copy_wasm_module/copy_type_registry (no FrozenCompilationState).
+# Key insight: compile_from_ir_prebaked uses InplaceCompilationContext (Dict-free)
+# and takes pre-baked WasmModule + TypeRegistry to avoid Dict construction in WASM.
 #
 # Run: julia +1.12 --project=. test/selfhost/build_e2e_full.jl
 
 using WasmTarget
-using WasmTarget: compile_module_from_ir, compile_from_ir_inplace,
-                  CompilationContext, WasmModule, TypeRegistry, FunctionRegistry,
+using WasmTarget: compile_module_from_ir, compile_from_ir_inplace, compile_from_ir_prebaked,
+                  CompilationContext, InplaceCompilationContext, WasmModule, TypeRegistry, FunctionRegistry,
                   WasmValType, BasicBlock,
                   compile_const_value, get_concrete_wasm_type,
                   encode_leb128_signed, encode_leb128_unsigned,
@@ -29,52 +29,56 @@ function wasm_compile_baked()::Vector{UInt8}
 end
 
 # ═══════════════════════════════════════════════════════════════════
-# Function list: wasm_compile_baked (opt=true) + callees (opt varies)
+# Function list: compile_from_ir_prebaked + callees
+# Uses InplaceCompilationContext for all codegen function specializations
 # ═══════════════════════════════════════════════════════════════════
 
-all_functions = Tuple{Any, Tuple, String, Bool}[
-    # ── Entry point: baked compiler ──
-    (wasm_compile_baked, (), "wasm_compile_baked", false),
+# Alias for readability
+const ICtx = InplaceCompilationContext
 
-    # ── Level 1: Direct callees of compile_from_ir_inplace ──
+all_functions = Tuple{Any, Tuple, String, Bool}[
+    # ── Entry point: compile_from_ir_prebaked (opt=true — 753 stmts) ──
+    (compile_from_ir_prebaked, (Vector, WasmModule, TypeRegistry), "compile_from_ir_prebaked", false),
+
+    # ── Level 1: Direct callees of compile_from_ir_prebaked ──
     (get_concrete_wasm_type, (Type, WasmModule, TypeRegistry), "get_concrete_wasm_type", false),
     (WasmTarget.needs_anyref_boxing, (Union,), "needs_anyref_boxing", false),
     (WasmTarget.populate_type_constant_globals!, (WasmModule, TypeRegistry), "populate_type_constant_globals!", false),
 
-    # ── Level 2: Code generation core ──
-    (WasmTarget.generate_body, (CompilationContext,), "generate_body", false),
-    (WasmTarget.generate_structured, (CompilationContext, Vector{BasicBlock}), "generate_structured", false),
-    (WasmTarget.generate_block_code, (CompilationContext, BasicBlock), "generate_block_code", false),
+    # ── Level 2: Code generation core (InplaceCompilationContext specializations) ──
+    (WasmTarget.generate_body, (ICtx,), "generate_body", false),
+    (WasmTarget.generate_structured, (ICtx, Vector{BasicBlock}), "generate_structured", false),
+    (WasmTarget.generate_block_code, (ICtx, BasicBlock), "generate_block_code", false),
     (WasmTarget.analyze_blocks, (Vector{Any},), "analyze_blocks", false),
 
-    # ── Level 3: Statement compilation (opt=false — large) ──
-    (WasmTarget.compile_statement, (Expr, Int64, CompilationContext), "compile_statement", true),
+    # ── Level 3: Statement compilation (opt=false — large, ICtx specialization) ──
+    (WasmTarget.compile_statement, (Expr, Int64, ICtx), "compile_statement", true),
 
-    # ── Level 4: Call/invoke dispatchers (opt=false — large) ──
-    (WasmTarget.compile_call, (Expr, Int64, CompilationContext), "compile_call", true),
-    (WasmTarget.compile_invoke, (Expr, Int64, CompilationContext), "compile_invoke", true),
-    (WasmTarget.compile_value, (Any, CompilationContext), "compile_value", true),
-    (WasmTarget.compile_new, (Expr, Int64, CompilationContext), "compile_new", true),
-    (WasmTarget.compile_foreigncall, (Expr, Int64, CompilationContext), "compile_foreigncall", true),
+    # ── Level 4: Call/invoke dispatchers (opt=false — large, ICtx specializations) ──
+    (WasmTarget.compile_call, (Expr, Int64, ICtx), "compile_call", true),
+    (WasmTarget.compile_invoke, (Expr, Int64, ICtx), "compile_invoke", true),
+    (WasmTarget.compile_value, (Any, ICtx), "compile_value", true),
+    (WasmTarget.compile_new, (Expr, Int64, ICtx), "compile_new", true),
+    (WasmTarget.compile_foreigncall, (Expr, Int64, ICtx), "compile_foreigncall", true),
 
-    # ── Level 5: Extracted handlers from compile_call ──
-    (WasmTarget._compile_call_checked_mul, (Any, Any, Vector{UInt8}, CompilationContext, Bool, Bool), "_compile_call_checked_mul", false),
-    (WasmTarget._compile_call_flipsign, (Any, Vector{UInt8}, CompilationContext, Bool, Bool, Any), "_compile_call_flipsign", false),
-    (WasmTarget._compile_call_egaleq, (Any, Vector{UInt8}, CompilationContext, Bool, Bool, Any), "_compile_call_egaleq", false),
-    (WasmTarget._compile_call_fpext, (Any, Vector{UInt8}, CompilationContext), "_compile_call_fpext", false),
-    (WasmTarget._compile_call_isa, (Any, Vector{UInt8}, CompilationContext), "_compile_call_isa", false),
-    (WasmTarget._compile_call_symbol, (Any, Vector{UInt8}, CompilationContext), "_compile_call_symbol", false),
+    # ── Level 5: Extracted handlers from compile_call (ICtx specializations) ──
+    (WasmTarget._compile_call_checked_mul, (Any, Any, Vector{UInt8}, ICtx, Bool, Bool), "_compile_call_checked_mul", false),
+    (WasmTarget._compile_call_flipsign, (Any, Vector{UInt8}, ICtx, Bool, Bool, Any), "_compile_call_flipsign", false),
+    (WasmTarget._compile_call_egaleq, (Any, Vector{UInt8}, ICtx, Bool, Bool, Any), "_compile_call_egaleq", false),
+    (WasmTarget._compile_call_fpext, (Any, Vector{UInt8}, ICtx), "_compile_call_fpext", false),
+    (WasmTarget._compile_call_isa, (Any, Vector{UInt8}, ICtx), "_compile_call_isa", false),
+    (WasmTarget._compile_call_symbol, (Any, Vector{UInt8}, ICtx), "_compile_call_symbol", false),
 
-    # ── Level 6: Extracted handlers from compile_invoke ──
-    (WasmTarget._compile_invoke_str_hash, (Any, CompilationContext), "_compile_invoke_str_hash", false),
-    (WasmTarget._compile_invoke_str_find, (Any, CompilationContext), "_compile_invoke_str_find", false),
-    (WasmTarget._compile_invoke_str_contains, (Any, CompilationContext), "_compile_invoke_str_contains", false),
-    (WasmTarget._compile_invoke_str_startswith, (Any, CompilationContext), "_compile_invoke_str_startswith", false),
-    (WasmTarget._compile_invoke_str_endswith, (Any, CompilationContext), "_compile_invoke_str_endswith", false),
-    (WasmTarget._compile_invoke_str_uppercase, (Any, CompilationContext), "_compile_invoke_str_uppercase", false),
-    (WasmTarget._compile_invoke_str_lowercase, (Any, CompilationContext), "_compile_invoke_str_lowercase", false),
-    (WasmTarget._compile_invoke_str_trim, (Any, CompilationContext), "_compile_invoke_str_trim", false),
-    (WasmTarget._compile_invoke_print, (Symbol, Any, CompilationContext), "_compile_invoke_print", false),
+    # ── Level 6: Extracted handlers from compile_invoke (ICtx specializations) ──
+    (WasmTarget._compile_invoke_str_hash, (Any, ICtx), "_compile_invoke_str_hash", false),
+    (WasmTarget._compile_invoke_str_find, (Any, ICtx), "_compile_invoke_str_find", false),
+    (WasmTarget._compile_invoke_str_contains, (Any, ICtx), "_compile_invoke_str_contains", false),
+    (WasmTarget._compile_invoke_str_startswith, (Any, ICtx), "_compile_invoke_str_startswith", false),
+    (WasmTarget._compile_invoke_str_endswith, (Any, ICtx), "_compile_invoke_str_endswith", false),
+    (WasmTarget._compile_invoke_str_uppercase, (Any, ICtx), "_compile_invoke_str_uppercase", false),
+    (WasmTarget._compile_invoke_str_lowercase, (Any, ICtx), "_compile_invoke_str_lowercase", false),
+    (WasmTarget._compile_invoke_str_trim, (Any, ICtx), "_compile_invoke_str_trim", false),
+    (WasmTarget._compile_invoke_print, (Symbol, Any, ICtx), "_compile_invoke_print", false),
 
     # ── Level 7: Bytecode post-processing ──
     (WasmTarget.fix_broken_select_instructions, (Vector{UInt8},), "fix_broken_select_instructions", false),

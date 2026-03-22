@@ -2566,13 +2566,13 @@ function compile_from_ir_prebaked(ir_entries::Vector, mod::WasmModule, type_regi
         found = false
         for j in 1:length(export_name_counts)
             if export_name_counts[j][1] == name
-                export_name_counts[j] = (name, count + 1)
+                export_name_counts[j] = (name::String, count + 1)
                 found = true
                 break
             end
         end
         if !found
-            push!(export_name_counts, (name, 1))
+            push!(export_name_counts, (name::String, 1))
         end
         add_export!(mod, export_name, 0, actual_idx)
     end
