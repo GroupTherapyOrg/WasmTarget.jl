@@ -2353,9 +2353,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             push!(bytes, Opcode.I64_SUB)
             push!(bytes, Opcode.I32_WRAP_I64)
 
-            # array.get
+            # array.get (use ARRAY_GET_U for packed i8 arrays like UInt8)
             push!(bytes, Opcode.GC_PREFIX)
-            push!(bytes, Opcode.ARRAY_GET)
+            push!(bytes, elem_type === UInt8 ? Opcode.ARRAY_GET_U : Opcode.ARRAY_GET)
             append!(bytes, encode_leb128_unsigned(arr_type_idx))
 
             # Store element in local
@@ -2726,13 +2726,13 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                         push!(bytes, Opcode.LOCAL_SET)
                         append!(bytes, encode_leb128_unsigned(idx_local))
 
-                        # Access array: array.get
+                        # Access array: array.get (use ARRAY_GET_U for packed i8 arrays)
                         push!(bytes, Opcode.LOCAL_GET)
                         append!(bytes, encode_leb128_unsigned(array_local))
                         push!(bytes, Opcode.LOCAL_GET)
                         append!(bytes, encode_leb128_unsigned(idx_local))
                         push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.ARRAY_GET)
+                        push!(bytes, elem_type === UInt8 ? Opcode.ARRAY_GET_U : Opcode.ARRAY_GET)
                         append!(bytes, encode_leb128_unsigned(array_type_idx))
 
                         # PURE-036bc: If array element type is ExternRef (e.g., elem_type=Any),
@@ -2822,7 +2822,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         append!(bytes, compile_value(ref_arg, ctx))
 
         push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_GET)
+        push!(bytes, elem_type === UInt8 ? Opcode.ARRAY_GET_U : Opcode.ARRAY_GET)
         append!(bytes, encode_leb128_unsigned(array_type_idx))
 
         # Note: if elem_type is Any, array.get returns externref and the SSA local

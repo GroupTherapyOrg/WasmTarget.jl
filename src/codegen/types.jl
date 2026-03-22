@@ -804,6 +804,15 @@ function get_array_type!(mod::WasmModule, registry::TypeRegistry, elem_type::Typ
         return registry.arrays[elem_type]
     end
 
+    # UInt8 arrays share the packed i8 type with String — this ensures array.copy
+    # between Vector{UInt8}/Memory{UInt8} and String works (same WasmGC element type).
+    # Reading from packed i8 arrays requires ARRAY_GET_U instead of ARRAY_GET.
+    if elem_type === UInt8
+        type_idx = get_string_array_type!(mod, registry)
+        registry.arrays[elem_type] = type_idx
+        return type_idx
+    end
+
     # Create the array type
     # Check if element type is currently being registered (self-referential)
     local wasm_elem_type

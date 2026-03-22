@@ -1502,7 +1502,7 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
                 push!(bytes, Opcode.LOCAL_GET)
                 append!(bytes, encode_leb128_unsigned(i_local))
                 push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_GET)
+                push!(bytes, elem_type === UInt8 ? Opcode.ARRAY_GET_U : Opcode.ARRAY_GET)
                 append!(bytes, encode_leb128_unsigned(data_array_idx))
 
                 # Display element based on element type
@@ -2964,9 +2964,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 push!(bytes, 0x01)
                 push!(bytes, Opcode.I32_SUB)  # index - 1
 
-                # array.get
+                # array.get (use ARRAY_GET_U for packed i8 arrays like UInt8)
                 push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_GET)
+                push!(bytes, elem_type === UInt8 ? Opcode.ARRAY_GET_U : Opcode.ARRAY_GET)
                 append!(bytes, encode_leb128_unsigned(arr_type_idx))
 
             # arr_set!(arr, i, val) -> Nothing

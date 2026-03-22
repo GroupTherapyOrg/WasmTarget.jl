@@ -827,6 +827,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         elseif wasm_type === AnyRef
             push!(result, Opcode.REF_NULL)
             push!(result, UInt8(AnyRef))
+        elseif wasm_type === EqRef
+            push!(result, Opcode.REF_NULL)
+            push!(result, UInt8(EqRef))
         elseif wasm_type === I64
             push!(result, Opcode.I64_CONST)
             push!(result, 0x00)
