@@ -416,7 +416,11 @@ function add_type!(mod::WasmModule, ct::CompositeType)::UInt32
         end
     end
     push!(mod.types, ct)
-    return UInt32(length(mod.types) - 1)
+    idx = UInt32(length(mod.types) - 1)
+    if idx == 190 && ct isa StructType
+        @warn "TRUE-PARSE-002-DBG: add_type! created StructType at idx=190 fields=$([(f.valtype, f.mutable_) for f in ct.fields])" stacktrace()[1:min(8, end)]
+    end
+    return idx
 end
 
 function types_equal(a::FuncType, b::FuncType)

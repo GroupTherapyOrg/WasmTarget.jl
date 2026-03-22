@@ -650,6 +650,10 @@ function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T:
     # Add struct type to module
     type_idx = add_struct_type!(mod, wasm_fields)
 
+    if type_idx == 190
+        @warn "TRUE-PARSE-002-DBG: _register_struct_type_impl! Julia type=$T → type_idx=190 field_types=$field_types"
+    end
+
     # Record mapping (PURE-9024: field_offset=1 for typeId prefix)
     info = StructInfo(T, type_idx, field_names, field_types, UInt32(1))
     registry.structs[T] = info

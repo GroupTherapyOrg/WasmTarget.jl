@@ -3319,6 +3319,15 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                                 if src_type === I32 || src_type === I64 || src_type === F32 || src_type === F64
                                     is_numeric_arg = true
                                 end
+                            elseif src_idx < ctx.n_params
+                                # TRUE-PARSE-002: Check function parameter types
+                                param_idx = src_idx + 1
+                                if param_idx >= 1 && param_idx <= length(ctx.arg_types)
+                                    src_type = get_concrete_wasm_type(ctx.arg_types[param_idx], ctx.mod, ctx.type_registry)
+                                    if src_type === I32 || src_type === I64 || src_type === F32 || src_type === F64
+                                        is_numeric_arg = true
+                                    end
+                                end
                             end
                         end
                     end
@@ -3357,6 +3366,8 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 elseif expected_wasm isa ConcreteRef || expected_wasm === StructRef || expected_wasm === ArrayRef || expected_wasm === AnyRef
                     # Ref-typed field: check for numeric local or constant mismatch
                     is_numeric_arg = false
+                    is_numeric_local = false  # TRUE-PARSE-002: distinguish local_get from constant
+                    numeric_src_type = nothing  # TRUE-PARSE-002: for boxing
                     # SELFHOST-008: Check for numeric constants (i32.const 0 from nothing, etc.)
                     ends_with_ref_producing_gc = has_ref_producing_gc_op(arg_bytes)
                     if length(arg_bytes) >= 1 && (arg_bytes[1] == 0x41 || arg_bytes[1] == 0x42 || arg_bytes[1] == 0x43 || arg_bytes[1] == 0x44) && !ends_with_ref_producing_gc
@@ -3375,12 +3386,34 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                                 src_type = ctx.locals[arr_idx]
                                 if src_type === I32 || src_type === I64 || src_type === F32 || src_type === F64
                                     is_numeric_arg = true
+                                    is_numeric_local = true
+                                    numeric_src_type = src_type
+                                end
+                            elseif src_idx < ctx.n_params
+                                # TRUE-PARSE-002: Check function parameter types
+                                param_idx = src_idx + 1
+                                if param_idx >= 1 && param_idx <= length(ctx.arg_types)
+                                    src_type = get_concrete_wasm_type(ctx.arg_types[param_idx], ctx.mod, ctx.type_registry)
+                                    if src_type === I32 || src_type === I64 || src_type === F32 || src_type === F64
+                                        is_numeric_arg = true
+                                        is_numeric_local = true
+                                        numeric_src_type = src_type
+                                    end
                                 end
                             end
                         end
                     end
                     if is_numeric_arg
-                        if expected_wasm isa ConcreteRef
+                        if is_numeric_local && expected_wasm === AnyRef && numeric_src_type !== nothing
+                            # TRUE-PARSE-002: Box numeric local → struct_new for anyref field
+                            # (same pattern as compile_new in statements.jl)
+                            emit_box_type_id!(bytes, ctx.type_registry, numeric_src_type)
+                            append!(bytes, arg_bytes)
+                            _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, numeric_src_type)
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.STRUCT_NEW)
+                            append!(bytes, encode_leb128_unsigned(_box_t))
+                        elseif expected_wasm isa ConcreteRef
                             push!(bytes, Opcode.REF_NULL)
                             append!(bytes, encode_leb128_signed(Int64(expected_wasm.type_idx)))
                         else
