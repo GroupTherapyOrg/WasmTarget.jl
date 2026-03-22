@@ -53,7 +53,7 @@ export wasm_create_any_vector, wasm_set_any_ssa!, wasm_set_any_arg!, wasm_set_an
 export wasm_set_any_expr!, wasm_set_any_return!, wasm_set_any_gotoifnot!
 export wasm_set_any_goto!, wasm_set_any_phi!
 export wasm_get_ssa_id, wasm_get_gotoifnot_dest, wasm_any_vector_length
-export wasm_create_i32_vector, wasm_set_i32!, wasm_i32_vector_length
+export wasm_create_i32_vector, wasm_set_i32!, wasm_get_i32, wasm_i32_vector_length
 export wasm_create_ssatypes_all_i64
 export wasm_symbol_call, wasm_symbol_invoke, wasm_symbol_new
 export wasm_symbol_boundscheck, wasm_symbol_foreigncall

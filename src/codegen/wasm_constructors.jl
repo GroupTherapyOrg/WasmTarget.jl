@@ -164,6 +164,11 @@ function wasm_set_i32!(v::Vector{Int32}, i::Int32, val::Int32)::Nothing
     return nothing
 end
 
+"""Get element i (1-based) of Vector{Int32}."""
+function wasm_get_i32(v::Vector{Int32}, i::Int32)::Int32
+    return v[i]
+end
+
 # --- Type constructors for ssavaluetypes ---
 # ssavaluetypes entries are Julia Type objects. For MVP, we only need a few.
 
