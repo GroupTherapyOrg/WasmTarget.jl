@@ -517,8 +517,17 @@ function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
         # Handle Union types
         inner_type = get_nullable_inner_type(T)
         if inner_type !== nothing
-            # Union{Nothing, T} -> use T's concrete type (nullable reference)
-            return julia_to_wasm_type_concrete(inner_type, ctx)
+            # Union{Nothing, T} → check if inner type is a ref type
+            inner_wasm = julia_to_wasm_type_concrete(inner_type, ctx)
+            if inner_wasm isa ConcreteRef
+                # CG-003d RC1: Union{Nothing, T} where T is a struct/array ref type.
+                # Use EqRef (not T's concrete ref) because the Nothing path may produce
+                # struct_new of the base tagged struct or ref.null, which is NOT a subtype
+                # of ConcreteRef(T). EqRef is the common supertype of all struct/array refs.
+                # _narrow_generic_local! handles downcasting to concrete type when reading.
+                return EqRef
+            end
+            return inner_wasm
         else
             # Multi-variant union (2+ non-Nothing types).
             # Check if all non-Nothing variants are numeric (no tagged struct needed).
@@ -681,7 +690,7 @@ function analyze_control_flow!(ctx::CompilationContext)
                                   func_ret_wasm === F32 || func_ret_wasm === F64
             is_phi_ref = phi_wasm_type isa ConcreteRef || phi_wasm_type === StructRef ||
                          phi_wasm_type === ArrayRef || phi_wasm_type === AnyRef ||
-                         phi_wasm_type === ExternRef
+                         phi_wasm_type === ExternRef || phi_wasm_type === EqRef
 
             if is_func_ret_numeric && is_phi_ref
                 # Check if this phi is used in a ReturnNode
@@ -709,7 +718,7 @@ function analyze_control_flow!(ctx::CompilationContext)
             # stay as ConcreteRef — the boolean ops receive extracted fields via struct_get.
             is_phi_any_ref = phi_wasm_type isa ConcreteRef || phi_wasm_type === StructRef ||
                              phi_wasm_type === ArrayRef || phi_wasm_type === AnyRef ||
-                             phi_wasm_type === ExternRef
+                             phi_wasm_type === ExternRef || phi_wasm_type === EqRef
             is_wasm_struct_numeric = phi_julia_type in (Int128, UInt128)
             if is_phi_any_ref && !is_wasm_struct_numeric
                 phi_ssa_val = Core.SSAValue(i)
@@ -2081,13 +2090,19 @@ function _narrow_generic_local!(bytes::Vector{UInt8}, local_idx::Integer, ssa_id
         return
     end
     local_wasm_type = ctx.locals[arr_idx]
-    if !(local_wasm_type === AnyRef || local_wasm_type === StructRef || local_wasm_type === ExternRef)
+    if !(local_wasm_type === AnyRef || local_wasm_type === StructRef || local_wasm_type === ExternRef || local_wasm_type === EqRef)
         return  # Local is already concrete — no narrowing needed
     end
     # Look up the SSA's Julia type to find a concrete Wasm type
     ssa_julia_type = get(ctx.ssa_types, ssa_id, Any)
     if ssa_julia_type === Any || ssa_julia_type === Union{}
         return  # Can't narrow — don't know the concrete type
+    end
+    # CG-003d: Don't narrow Union{Nothing, T} types — the value may be Nothing,
+    # and downstream code (e.g., === nothing comparison) needs the unnarrowed type.
+    # Narrowing happens via PiNode after the null check succeeds.
+    if ssa_julia_type isa Union
+        return
     end
     concrete_wasm = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
     if concrete_wasm isa ConcreteRef

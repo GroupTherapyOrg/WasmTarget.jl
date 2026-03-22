@@ -1161,8 +1161,8 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
         # but they're NOT directly compatible for local.set
         local_is_numeric = local_type === I32 || local_type === I64 || local_type === F32 || local_type === F64
         value_is_numeric = value_type === I32 || value_type === I64 || value_type === F32 || value_type === F64
-        local_is_ref = local_type isa ConcreteRef || local_type === StructRef || local_type === ArrayRef || local_type === ExternRef || local_type === AnyRef
-        value_is_ref = value_type isa ConcreteRef || value_type === StructRef || value_type === ArrayRef || value_type === ExternRef || value_type === AnyRef
+        local_is_ref = local_type isa ConcreteRef || local_type === StructRef || local_type === ArrayRef || local_type === ExternRef || local_type === AnyRef || local_type === EqRef
+        value_is_ref = value_type isa ConcreteRef || value_type === StructRef || value_type === ArrayRef || value_type === ExternRef || value_type === AnyRef || value_type === EqRef
         # Numeric and ref are never compatible
         if local_is_numeric && value_is_ref
             return false
@@ -1178,16 +1178,16 @@ function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicB
         if local_type isa ConcreteRef && value_type isa ConcreteRef && local_type.type_idx != value_type.type_idx
             return false
         end
-        # Abstract ref (StructRef/ArrayRef) is NOT directly compatible with ConcreteRef
+        # Abstract ref (StructRef/ArrayRef/EqRef) is NOT directly compatible with ConcreteRef
         # (requires ref.cast to downcast from abstract to concrete)
-        if local_type isa ConcreteRef && (value_type === StructRef || value_type === ArrayRef)
+        if local_type isa ConcreteRef && (value_type === StructRef || value_type === ArrayRef || value_type === EqRef)
             return false
         end
-        # ExternRef is NOT compatible with ConcreteRef/StructRef/ArrayRef/AnyRef
-        if local_type === ExternRef && (value_type isa ConcreteRef || value_type === StructRef || value_type === ArrayRef || value_type === AnyRef)
+        # ExternRef is NOT compatible with ConcreteRef/StructRef/ArrayRef/AnyRef/EqRef
+        if local_type === ExternRef && (value_type isa ConcreteRef || value_type === StructRef || value_type === ArrayRef || value_type === AnyRef || value_type === EqRef)
             return false
         end
-        if value_type === ExternRef && (local_type isa ConcreteRef || local_type === StructRef || local_type === ArrayRef || local_type === AnyRef)
+        if value_type === ExternRef && (local_type isa ConcreteRef || local_type === StructRef || local_type === ArrayRef || local_type === AnyRef || local_type === EqRef)
             return false
         end
         return true

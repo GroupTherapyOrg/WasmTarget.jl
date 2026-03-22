@@ -390,7 +390,7 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                     # or local.get of numeric local) but pi_local_type is a ref type,
                     # emit ref.null instead. This happens when val_wasm_type is nothing
                     # (can't determine source type) but the PiNode's target local is ref-typed.
-                    elseif pi_local_type !== nothing && (pi_local_type isa ConcreteRef || pi_local_type === StructRef || pi_local_type === ArrayRef || pi_local_type === ExternRef || pi_local_type === AnyRef)
+                    elseif pi_local_type !== nothing && (pi_local_type isa ConcreteRef || pi_local_type === StructRef || pi_local_type === ArrayRef || pi_local_type === ExternRef || pi_local_type === AnyRef || pi_local_type === EqRef)
                         is_numeric_val = false
                         if !isempty(val_bytes)
                             first_op = val_bytes[1]
@@ -433,6 +433,9 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                             elseif pi_local_type === AnyRef
                                 push!(bytes, Opcode.REF_NULL)
                                 push!(bytes, UInt8(AnyRef))
+                            elseif pi_local_type === EqRef
+                                push!(bytes, Opcode.REF_NULL)
+                                push!(bytes, UInt8(EqRef))
                             else
                                 push!(bytes, Opcode.REF_NULL)
                                 push!(bytes, UInt8(StructRef))
@@ -486,6 +489,47 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
             try
                 val = getfield(stmt.mod, stmt.name)
                 value_bytes = compile_value(val, ctx)
+
+                # CG-003d: Safety check for Nothing/numeric values stored to ref-typed locals.
+                # compile_value(nothing) → i32_const 0, which is incompatible with ref locals
+                # (EqRef, ConcreteRef, StructRef, etc.). Replace with ref.null of correct type.
+                if !isempty(value_bytes) && haskey(ctx.ssa_locals, idx)
+                    local_idx = ctx.ssa_locals[idx]
+                    local_array_idx = local_idx - ctx.n_params + 1
+                    if local_array_idx >= 1 && local_array_idx <= length(ctx.locals)
+                        local_wasm_type = ctx.locals[local_array_idx]
+                        first_byte = value_bytes[1]
+                        is_numeric_value = (first_byte == Opcode.I32_CONST || first_byte == Opcode.I64_CONST ||
+                                           first_byte == Opcode.F32_CONST || first_byte == Opcode.F64_CONST)
+                        local_is_ref = (local_wasm_type isa ConcreteRef || local_wasm_type === StructRef ||
+                                       local_wasm_type === ArrayRef || local_wasm_type === ExternRef ||
+                                       local_wasm_type === AnyRef || local_wasm_type === EqRef)
+                        if is_numeric_value && local_is_ref
+                            # Replace numeric value with ref.null of the correct type
+                            empty!(value_bytes)
+                            if local_wasm_type isa ConcreteRef
+                                push!(value_bytes, Opcode.REF_NULL)
+                                append!(value_bytes, encode_leb128_signed(Int64(local_wasm_type.type_idx)))
+                            elseif local_wasm_type === EqRef
+                                push!(value_bytes, Opcode.REF_NULL)
+                                push!(value_bytes, UInt8(EqRef))
+                            elseif local_wasm_type === StructRef
+                                push!(value_bytes, Opcode.REF_NULL)
+                                push!(value_bytes, UInt8(StructRef))
+                            elseif local_wasm_type === ArrayRef
+                                push!(value_bytes, Opcode.REF_NULL)
+                                push!(value_bytes, UInt8(ArrayRef))
+                            elseif local_wasm_type === AnyRef
+                                push!(value_bytes, Opcode.REF_NULL)
+                                push!(value_bytes, UInt8(AnyRef))
+                            elseif local_wasm_type === ExternRef
+                                push!(value_bytes, Opcode.REF_NULL)
+                                push!(value_bytes, UInt8(ExternRef))
+                            end
+                        end
+                    end
+                end
+
                 append!(bytes, value_bytes)
 
                 # If this SSA value needs a local, store it (only if we actually pushed a value)
@@ -607,14 +651,14 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                         src_wasm_type = ctx.locals[src_array_idx]
                         if !wasm_types_compatible(local_wasm_type, src_wasm_type)
                             # Check if this is abstract ref → concrete ref (can be cast, not replaced)
-                            if (src_wasm_type === StructRef || src_wasm_type === ArrayRef || src_wasm_type === AnyRef) && local_wasm_type isa ConcreteRef
-                                # Abstract ref (including anyref) can be downcast to concrete ref with ref.cast
+                            if (src_wasm_type === StructRef || src_wasm_type === ArrayRef || src_wasm_type === AnyRef || src_wasm_type === EqRef) && local_wasm_type isa ConcreteRef
+                                # Abstract ref (including anyref/eqref) can be downcast to concrete ref with ref.cast
                                 needs_ref_cast_local = local_wasm_type
                             elseif src_wasm_type === ExternRef && local_wasm_type isa ConcreteRef
                                 # PURE-036bj: externref local → concrete ref requires any_convert_extern first
                                 needs_any_convert_extern = true
                                 needs_ref_cast_local = local_wasm_type
-                            elseif (src_wasm_type isa ConcreteRef || src_wasm_type === StructRef || src_wasm_type === ArrayRef || src_wasm_type === AnyRef) && local_wasm_type === ExternRef
+                            elseif (src_wasm_type isa ConcreteRef || src_wasm_type === StructRef || src_wasm_type === ArrayRef || src_wasm_type === AnyRef || src_wasm_type === EqRef) && local_wasm_type === ExternRef
                                 # PURE-913: concrete/abstract ref → externref requires extern_convert_any
                                 needs_extern_convert_any = true
                             else
@@ -627,14 +671,14 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                         src_wasm_type = get_concrete_wasm_type(param_julia_type, ctx.mod, ctx.type_registry)
                         if src_wasm_type !== nothing && !wasm_types_compatible(local_wasm_type, src_wasm_type)
                             # Check if this is abstract ref → concrete ref (can be cast, not replaced)
-                            if (src_wasm_type === StructRef || src_wasm_type === ArrayRef || src_wasm_type === AnyRef) && local_wasm_type isa ConcreteRef
-                                # Abstract ref (including anyref) can be downcast to concrete ref with ref.cast
+                            if (src_wasm_type === StructRef || src_wasm_type === ArrayRef || src_wasm_type === AnyRef || src_wasm_type === EqRef) && local_wasm_type isa ConcreteRef
+                                # Abstract ref (including anyref/eqref) can be downcast to concrete ref with ref.cast
                                 needs_ref_cast_local = local_wasm_type
                             elseif src_wasm_type === ExternRef && local_wasm_type isa ConcreteRef
                                 # PURE-036bj: externref param → concrete ref requires any_convert_extern first
                                 needs_any_convert_extern = true
                                 needs_ref_cast_local = local_wasm_type
-                            elseif (src_wasm_type isa ConcreteRef || src_wasm_type === StructRef || src_wasm_type === ArrayRef || src_wasm_type === AnyRef) && local_wasm_type === ExternRef
+                            elseif (src_wasm_type isa ConcreteRef || src_wasm_type === StructRef || src_wasm_type === ArrayRef || src_wasm_type === AnyRef || src_wasm_type === EqRef) && local_wasm_type === ExternRef
                                 # PURE-913: concrete/abstract ref param → externref requires extern_convert_any
                                 needs_extern_convert_any = true
                             else
@@ -652,7 +696,8 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                     is_call_result = stmt isa Expr && (stmt.head === :invoke || stmt.head === :call || stmt.head === :new || stmt.head === :foreigncall)
                     if !is_call_result &&
                        (local_wasm_type isa ConcreteRef || local_wasm_type === StructRef ||
-                        local_wasm_type === ArrayRef || local_wasm_type === ExternRef || local_wasm_type === AnyRef)
+                        local_wasm_type === ArrayRef || local_wasm_type === ExternRef || local_wasm_type === AnyRef ||
+                        local_wasm_type === EqRef)
                         needs_type_safe_default = true
                     end
                 end
@@ -691,7 +736,8 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                 if !needs_type_safe_default && !ssa_is_128bit && !has_gc_prefix && length(stmt_bytes) >= 3 &&
                    stmt_bytes[1] == 0x20 &&  # starts with local.get
                    (local_wasm_type isa ConcreteRef || local_wasm_type === StructRef ||
-                    local_wasm_type === ArrayRef || local_wasm_type === ExternRef || local_wasm_type === AnyRef)
+                    local_wasm_type === ArrayRef || local_wasm_type === ExternRef || local_wasm_type === AnyRef ||
+                    local_wasm_type === EqRef)
                     last_byte = stmt_bytes[end]
                     # PURE-220: Check that the last byte is NOT an operand of a
                     # trailing instruction with LEB128 immediate.
@@ -890,7 +936,8 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                 # with the local. This catches calls, invokes, and compound expressions
                 # that produce numeric/externref/abstract ref but get stored in a ref-typed local.
                 local_is_ref = local_wasm_type isa ConcreteRef || local_wasm_type === StructRef ||
-                               local_wasm_type === ArrayRef || local_wasm_type === ExternRef || local_wasm_type === AnyRef
+                               local_wasm_type === ArrayRef || local_wasm_type === ExternRef || local_wasm_type === AnyRef ||
+                               local_wasm_type === EqRef
                 if !needs_type_safe_default && needs_ref_cast_local === nothing && !struct_get_type_ok && local_is_ref
                     ssa_julia_type = get(ctx.ssa_types, idx, nothing)
                     if ssa_julia_type !== nothing
@@ -1164,6 +1211,9 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                     elseif local_wasm_type === AnyRef
                         push!(bytes, Opcode.REF_NULL)
                         push!(bytes, UInt8(AnyRef))
+                    elseif local_wasm_type === EqRef
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(EqRef))
                     elseif local_wasm_type === I64
                         push!(bytes, Opcode.I64_CONST)
                         push!(bytes, 0x00)
@@ -1247,6 +1297,9 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                             elseif local_wasm_type === AnyRef
                                 push!(bytes, Opcode.REF_NULL)
                                 push!(bytes, UInt8(AnyRef))
+                            elseif local_wasm_type === EqRef
+                                push!(bytes, Opcode.REF_NULL)
+                                push!(bytes, UInt8(EqRef))
                             elseif local_wasm_type === I64
                                 push!(bytes, Opcode.I64_CONST)
                                 push!(bytes, 0x00)
