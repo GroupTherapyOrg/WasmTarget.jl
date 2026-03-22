@@ -2329,6 +2329,24 @@ function statement_produces_wasm_value(stmt::Expr, idx::Int, ctx::AbstractCompil
 end
 
 # ============================================================================
+# SimpleCodeInfo — lightweight CodeInfo for WASM self-hosting
+# ============================================================================
+
+"""
+Lightweight replacement for Core.CodeInfo that can be constructed in WASM.
+Core.CodeInfo has complex fields (DebugInfo, MethodInstance) that can't be
+serialized as WasmGC constants. SimpleCodeInfo has only the fields needed
+for compilation: code, ssavaluetypes, ssaflags, slottypes, nargs.
+"""
+struct SimpleCodeInfo
+    code::Vector{Any}
+    ssavaluetypes::Vector{Any}
+    ssaflags::Vector{UInt32}
+    slottypes::Any  # Nothing for MVP
+    nargs::UInt64
+end
+
+# ============================================================================
 # InplaceCompilationContext — Dict-free context for WASM self-hosting
 # ============================================================================
 
@@ -2337,9 +2355,10 @@ Dict-free compilation context for WASM self-hosting.
 Same field names as CompilationContext but Dict fields replaced with Nothing.
 Julia specializes codegen functions for this type, producing Dict-free IR.
 For MVP (Int64 arithmetic): Dict fields are never accessed, so Nothing is safe.
+code_info is Any to support both Core.CodeInfo and SimpleCodeInfo.
 """
 mutable struct InplaceCompilationContext <: AbstractCompilationContext
-    code_info::Core.CodeInfo
+    code_info::Any  # Core.CodeInfo or SimpleCodeInfo
     arg_types::Tuple
     return_type::Type
     n_params::Int

@@ -48,7 +48,8 @@ export FrozenCompilationState, build_frozen_state, compile_module_from_ir_frozen
 export wasm_bytes_length, wasm_bytes_get, wasm_compile_source, wasm_compile_flat
 export wasm_create_ssa_value, wasm_create_argument, wasm_create_goto_node
 export wasm_create_goto_if_not, wasm_create_return_node, wasm_create_return_node_nothing
-export wasm_create_phi_node, wasm_create_expr, wasm_set_code_info!
+export wasm_create_phi_node, wasm_create_expr, wasm_set_code_info!, wasm_create_simple_codeinfo
+export SimpleCodeInfo
 export wasm_create_any_vector, wasm_set_any_ssa!, wasm_set_any_arg!, wasm_set_any_i64!
 export wasm_set_any_expr!, wasm_set_any_return!, wasm_set_any_gotoifnot!
 export wasm_set_any_goto!, wasm_set_any_phi!

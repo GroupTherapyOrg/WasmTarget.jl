@@ -73,6 +73,21 @@ function wasm_set_code_info!(template::Core.CodeInfo,
     return template
 end
 
+"""
+    wasm_create_simple_codeinfo(code, ssavaluetypes, nargs) → SimpleCodeInfo
+
+Create a SimpleCodeInfo (lightweight CodeInfo for WASM self-hosting).
+Unlike Core.CodeInfo, this can be constructed in WASM without complex
+dependencies (no DebugInfo, no MethodInstance).
+"""
+function wasm_create_simple_codeinfo(code::Vector{Any},
+                                     ssavaluetypes::Vector{Any},
+                                     nargs::Int32)::SimpleCodeInfo
+    n = length(code)
+    ssaflags = zeros(UInt32, n)
+    return SimpleCodeInfo(code, ssavaluetypes, ssaflags, nothing, UInt64(nargs))
+end
+
 # --- Vector{Any} builders ---
 # WasmGC arrays are opaque to JS. These let JS build Vector{Any} element-by-element.
 
