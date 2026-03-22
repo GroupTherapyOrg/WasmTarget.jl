@@ -8,7 +8,7 @@
 PURE-904: Check if a value (Argument or SSAValue) produces externref on the Wasm stack.
 Used by numeric intrinsic handlers to detect when unboxing is needed.
 """
-function _is_externref_value(val, ctx::CompilationContext)::Bool
+function _is_externref_value(val, ctx::AbstractCompilationContext)::Bool
     if val isa Core.Argument
         arg_idx = ctx.is_compiled_closure ? val.n : val.n - 1
         if arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
@@ -42,7 +42,7 @@ end
 
 PURE-9026: Check if a value is an SSAValue whose defining statement is a typeof() call.
 """
-function _is_typeof_ssa(val, ctx::CompilationContext)::Bool
+function _is_typeof_ssa(val, ctx::AbstractCompilationContext)::Bool
     if !(val isa Core.SSAValue)
         return false
     end
@@ -63,7 +63,7 @@ end
 PURE-9026: If val is a Type constant (GlobalRef to a type, or a direct Type value),
 return the DataType. Otherwise return nothing.
 """
-function _resolve_type_const(val, ctx::CompilationContext)::Union{DataType, Nothing}
+function _resolve_type_const(val, ctx::AbstractCompilationContext)::Union{DataType, Nothing}
     if val isa Type && isconcretetype(val)
         return val
     end
@@ -85,7 +85,7 @@ end
 PURE-9063: Allocate (or return cached) a scratch i32 local for typeof struct lookups.
 The local stores the typeId temporarily while the lookup array ref is pushed.
 """
-function _ensure_typeof_scratch_local!(ctx::CompilationContext)::UInt32
+function _ensure_typeof_scratch_local!(ctx::AbstractCompilationContext)::UInt32
     if ctx.typeof_scratch_local !== nothing
         return ctx.typeof_scratch_local
     end
@@ -105,7 +105,7 @@ Julia stores Char as UTF-8 bytes in the high positions of a UInt32:
   4-byte '😀' (cp=128512): raw=0xF09F9880
 Assumes codepoint i32 is on top of the stack. Leaves raw bits i32 on stack.
 """
-function emit_char_codepoint_to_rawbits(ctx::CompilationContext)::Vector{UInt8}
+function emit_char_codepoint_to_rawbits(ctx::AbstractCompilationContext)::Vector{UInt8}
     bytes = UInt8[]
     cp_local = UInt32(allocate_local!(ctx, I32))
     result_local = UInt32(allocate_local!(ctx, I32))
@@ -285,7 +285,7 @@ end
 Emit WASM instructions to convert Julia's raw UInt32 Char bits (on stack) to a codepoint.
 Reverse of emit_char_codepoint_to_rawbits.
 """
-function emit_char_rawbits_to_codepoint(ctx::CompilationContext)::Vector{UInt8}
+function emit_char_rawbits_to_codepoint(ctx::AbstractCompilationContext)::Vector{UInt8}
     bytes = UInt8[]
     raw_local = UInt32(allocate_local!(ctx, I32))
     result_local = UInt32(allocate_local!(ctx, I32))
@@ -442,7 +442,7 @@ end
 Extracted handler for checked_smul_int / checked_umul_int.
 Modifies `bytes` in-place.
 """
-function _compile_call_checked_mul(func, args, bytes::Vector{UInt8}, ctx::CompilationContext, is_128bit::Bool, is_32bit::Bool)::Nothing
+function _compile_call_checked_mul(func, args, bytes::Vector{UInt8}, ctx::AbstractCompilationContext, is_128bit::Bool, is_32bit::Bool)::Nothing
     if is_128bit
         # 128-bit checked mul: not supported, emit unreachable
         # PURE-908: Clear pre-pushed args
@@ -568,7 +568,7 @@ end
 Extracted handler for flipsign_int.
 Modifies `bytes` in-place.
 """
-function _compile_call_flipsign(args, bytes::Vector{UInt8}, ctx::CompilationContext, is_128bit::Bool, is_32bit::Bool, arg_type)::Nothing
+function _compile_call_flipsign(args, bytes::Vector{UInt8}, ctx::AbstractCompilationContext, is_128bit::Bool, is_32bit::Bool, arg_type)::Nothing
     # flipsign_int(x, y) returns -x if y < 0, otherwise x
     # Formula: (x xor signbit) - signbit where signbit = y >> 63 (all 1s if negative)
     # We need both x and y on stack, but they've been pushed as: [x, y]
@@ -697,7 +697,7 @@ end
 Extracted handler for :(===) identity comparison (the post-arg-push branch).
 Modifies `bytes` in-place.
 """
-function _compile_call_egaleq(args, bytes::Vector{UInt8}, ctx::CompilationContext, is_128bit::Bool, is_32bit::Bool, arg_type)::Nothing
+function _compile_call_egaleq(args, bytes::Vector{UInt8}, ctx::AbstractCompilationContext, is_128bit::Bool, is_32bit::Bool, arg_type)::Nothing
     if is_128bit
         append!(bytes, emit_int128_eq(ctx, arg_type))
     elseif arg_type === Float64
@@ -1219,7 +1219,7 @@ end
 Extracted handler for fpext (float precision extension).
 Modifies `bytes` in-place.
 """
-function _compile_call_fpext(args, bytes::Vector{UInt8}, ctx::CompilationContext)::Nothing
+function _compile_call_fpext(args, bytes::Vector{UInt8}, ctx::AbstractCompilationContext)::Nothing
     # fpext(TargetType, value) - extend to Float64
     source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Float32
     if source_type === Float16
@@ -1329,7 +1329,7 @@ end
 Extracted handler for isa() type checking.
 Modifies `bytes` in-place.
 """
-function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::CompilationContext)::Nothing
+function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationContext)::Nothing
     # isa(value, Type) - check if value is of given type
     # Supports both Union{Nothing, T} (via ref.is_null) and tagged unions
     value_arg = args[1]
@@ -1628,7 +1628,7 @@ end
 Extracted handler for Symbol(x) conversion.
 Modifies `bytes` in-place.
 """
-function _compile_call_symbol(args, bytes::Vector{UInt8}, ctx::CompilationContext)::Nothing
+function _compile_call_symbol(args, bytes::Vector{UInt8}, ctx::AbstractCompilationContext)::Nothing
     # Compile the argument — it's already a string array in WasmGC
     append!(bytes, compile_value(args[1], ctx))
     return nothing
@@ -1637,7 +1637,7 @@ end
 """
 Compile a function call expression.
 """
-function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt8}
+function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
     bytes = UInt8[]
     func = expr.args[1]
     args = expr.args[2:end]
@@ -1695,7 +1695,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         append!(bytes, encode_leb128_unsigned(global_idx))
 
         # Inject DOM update calls for this signal (Therapy.jl reactive updates)
-        if ctx.dom_bindings !== nothing && haskey(ctx.dom_bindings, global_idx)
+        if haskey(ctx.dom_bindings, global_idx)
             # Get global's type for conversion
             global_type = ctx.mod.globals[global_idx + 1].valtype
 
@@ -1744,7 +1744,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             append!(bytes, encode_leb128_unsigned(global_idx))
 
             # Inject DOM update calls for this signal (Therapy.jl reactive updates)
-            if ctx.dom_bindings !== nothing && haskey(ctx.dom_bindings, global_idx)
+            if haskey(ctx.dom_bindings, global_idx)
                 # Get global's type for conversion
                 global_type = ctx.mod.globals[global_idx + 1].valtype
 
@@ -1787,7 +1787,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         if is_closure_self
             # This is accessing a field of the closure
             field_name = field_ref isa QuoteNode ? field_ref.value : field_ref
-            if field_name isa Symbol && ctx.captured_signal_fields !== nothing && haskey(ctx.captured_signal_fields, field_name)
+            if field_name isa Symbol && haskey(ctx.captured_signal_fields, field_name)
                 # Skip - this produces a getter/setter function reference
                 return bytes
             end

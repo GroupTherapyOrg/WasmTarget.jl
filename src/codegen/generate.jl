@@ -11,7 +11,7 @@ Runs in parallel with bytecode emission (doesn't modify bytes, just tracks stack
 
 Skips unknown multi-byte sequences silently — later passes will add more coverage.
 """
-function validate_emitted_bytes!(ctx::CompilationContext, bytes::Vector{UInt8}, stmt_idx::Int)
+function validate_emitted_bytes!(ctx::AbstractCompilationContext, bytes::Vector{UInt8}, stmt_idx::Int)
     ctx.validator.enabled || return
     v = ctx.validator
     # Reset stack for each statement in the minimal first pass.
@@ -114,7 +114,7 @@ end
 Get the Wasm type of a local variable by its index. Parameters come first,
 then additional locals from ctx.locals.
 """
-function _get_local_type(ctx::CompilationContext, local_idx::Int)::Union{WasmValType, Nothing}
+function _get_local_type(ctx::AbstractCompilationContext, local_idx::Int)::Union{WasmValType, Nothing}
     if local_idx < ctx.n_params
         # It's a parameter — get type from arg_types (skip WasmGlobal args)
         param_count = 0
@@ -142,7 +142,7 @@ end
 Generate Wasm bytecode from Julia CodeInfo.
 Uses a block-based translation for control flow.
 """
-function generate_body(ctx::CompilationContext)::Vector{UInt8}
+function generate_body(ctx::AbstractCompilationContext)::Vector{UInt8}
     code = ctx.code_info.code
     n = length(code)
 
@@ -1332,7 +1332,7 @@ end
 """
 Check if this code contains a loop (has backward jumps).
 """
-function has_loop(ctx::CompilationContext)
+function has_loop(ctx::AbstractCompilationContext)
     return any(ctx.loop_headers)
 end
 
@@ -1341,7 +1341,7 @@ Check if there's a conditional BEFORE the first loop that jumps PAST the first l
 This pattern requires special handling (generate_complex_flow instead of generate_loop_code).
 Example: if/else where each branch has its own loop (like float_to_string).
 """
-function has_branch_past_first_loop(ctx::CompilationContext, code)
+function has_branch_past_first_loop(ctx::AbstractCompilationContext, code)
     if !any(ctx.loop_headers)
         return false
     end
@@ -1523,7 +1523,7 @@ Structure:
   end
   ; catch handler code (pop_exception skipped, returns -1 or similar)
 """
-function generate_try_catch_stackified(ctx::CompilationContext, blocks::Vector{BasicBlock}, code, region::TryRegion)::Vector{UInt8}
+function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code, region::TryRegion)::Vector{UInt8}
     bytes = UInt8[]
     catch_dest = region.catch_dest
 
@@ -1568,7 +1568,7 @@ function generate_try_catch_stackified(ctx::CompilationContext, blocks::Vector{B
     return bytes
 end
 
-function generate_try_catch(ctx::CompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
+function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
     bytes = UInt8[]
     regions = find_try_regions(code)
 
@@ -1938,7 +1938,7 @@ end
 # PURE-9033: Generate sequential (non-nested) try/catch regions.
 # Each region gets its own try_table block structure, processed in order.
 # Example: two sequential try/catch blocks in one function.
-function generate_sequential_try_catch(ctx::CompilationContext, blocks::Vector{BasicBlock},
+function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
                                        code, regions::Vector{TryRegion})::Vector{UInt8}
     bytes = UInt8[]
 
@@ -2201,7 +2201,7 @@ end
 #   end                                       ; outer_catch_land
 #   ; outer catch handler
 #
-function generate_nested_try_catch_2(ctx::CompilationContext, blocks::Vector{BasicBlock},
+function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
                                      code, outer::TryRegion, inner::TryRegion)::Vector{UInt8}
     bytes = UInt8[]
 
@@ -2391,7 +2391,7 @@ function generate_nested_try_catch_2(ctx::CompilationContext, blocks::Vector{Bas
 end
 
 # PURE-9031: Helper — compile a GotoIfNot inside the try body
-function _compile_try_body_gotoifnot(stmt::Core.GotoIfNot, i::Int, leave_idx::Int, code, ctx::CompilationContext)::Vector{UInt8}
+function _compile_try_body_gotoifnot(stmt::Core.GotoIfNot, i::Int, leave_idx::Int, code, ctx::AbstractCompilationContext)::Vector{UInt8}
     bytes = UInt8[]
     else_target = stmt.dest
 

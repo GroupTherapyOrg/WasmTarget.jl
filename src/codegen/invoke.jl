@@ -1,7 +1,7 @@
 """
 Extract: str_hash(s) -> Int32. Compute string hash using Java-style: h = 31 * h + char[i].
 """
-function _compile_invoke_str_hash(args, ctx::CompilationContext)::Vector{UInt8}
+function _compile_invoke_str_hash(args, ctx::AbstractCompilationContext)::Vector{UInt8}
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
 
     bytes = UInt8[]
@@ -109,7 +109,7 @@ end
 """
 Extract: str_find(haystack, needle) -> Int32. Returns 1-based position or 0 if not found.
 """
-function _compile_invoke_str_find(args, ctx::CompilationContext)::Vector{UInt8}
+function _compile_invoke_str_find(args, ctx::AbstractCompilationContext)::Vector{UInt8}
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
     bytes = UInt8[]
 
@@ -333,7 +333,7 @@ end
 """
 Extract: str_contains(haystack, needle) -> Bool. Returns true if needle is found in haystack.
 """
-function _compile_invoke_str_contains(args, ctx::CompilationContext)::Vector{UInt8}
+function _compile_invoke_str_contains(args, ctx::AbstractCompilationContext)::Vector{UInt8}
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
     bytes = UInt8[]
 
@@ -548,7 +548,7 @@ end
 """
 Extract: str_startswith(s, prefix) -> Bool.
 """
-function _compile_invoke_str_startswith(args, ctx::CompilationContext)::Vector{UInt8}
+function _compile_invoke_str_startswith(args, ctx::AbstractCompilationContext)::Vector{UInt8}
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
     bytes = UInt8[]
 
@@ -679,7 +679,7 @@ end
 """
 Extract: str_endswith(s, suffix) -> Bool.
 """
-function _compile_invoke_str_endswith(args, ctx::CompilationContext)::Vector{UInt8}
+function _compile_invoke_str_endswith(args, ctx::AbstractCompilationContext)::Vector{UInt8}
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
     bytes = UInt8[]
 
@@ -824,7 +824,7 @@ end
 """
 Extract: str_uppercase(s) -> String. Convert lowercase ASCII letters to uppercase.
 """
-function _compile_invoke_str_uppercase(args, ctx::CompilationContext)::Vector{UInt8}
+function _compile_invoke_str_uppercase(args, ctx::AbstractCompilationContext)::Vector{UInt8}
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
     bytes = UInt8[]
 
@@ -953,7 +953,7 @@ end
 """
 Extract: str_lowercase(s) -> String. Convert uppercase ASCII letters to lowercase.
 """
-function _compile_invoke_str_lowercase(args, ctx::CompilationContext)::Vector{UInt8}
+function _compile_invoke_str_lowercase(args, ctx::AbstractCompilationContext)::Vector{UInt8}
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
     bytes = UInt8[]
 
@@ -1082,7 +1082,7 @@ end
 """
 Extract: str_trim(s) -> String. Remove leading and trailing ASCII whitespace.
 """
-function _compile_invoke_str_trim(args, ctx::CompilationContext)::Vector{UInt8}
+function _compile_invoke_str_trim(args, ctx::AbstractCompilationContext)::Vector{UInt8}
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
     bytes = UInt8[]
 
@@ -1351,7 +1351,7 @@ end
 """
 Extract: println/print handler. Emits JS IO bridge imports.
 """
-function _compile_invoke_print(name::Symbol, args, ctx::CompilationContext)::Vector{UInt8}
+function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationContext)::Vector{UInt8}
     io = get_io_imports()
     if io !== nothing
         bytes = UInt8[]
@@ -1653,7 +1653,7 @@ end
 """
 Compile an invoke expression (method invocation).
 """
-function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt8}
+function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
     bytes = UInt8[]
     args = expr.args[3:end]
 
@@ -1680,7 +1680,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
             append!(bytes, encode_leb128_unsigned(global_idx))
 
             # Inject DOM update calls for this signal (Therapy.jl reactive updates)
-            if ctx.dom_bindings !== nothing && haskey(ctx.dom_bindings, global_idx)
+            if haskey(ctx.dom_bindings, global_idx)
                 # Get global's type for conversion
                 global_type = ctx.mod.globals[global_idx + 1].valtype
 

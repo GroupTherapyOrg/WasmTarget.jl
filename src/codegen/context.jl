@@ -3,9 +3,16 @@
 # ============================================================================
 
 """
+Abstract supertype for compilation contexts.
+CompilationContext (Dict-based) for normal compilation.
+InplaceCompilationContext (Dict-free) for WASM self-hosting.
+"""
+abstract type AbstractCompilationContext end
+
+"""
 Tracks state during compilation of a single function.
 """
-mutable struct CompilationContext
+mutable struct CompilationContext <: AbstractCompilationContext
     code_info::Core.CodeInfo
     arg_types::Tuple
     return_type::Type
@@ -20,15 +27,15 @@ mutable struct CompilationContext
     func_registry::Union{FunctionRegistry, Nothing}  # Function mappings for cross-calls
     func_idx::UInt32             # Index of the function being compiled (for recursion)
     func_ref::Any                # Reference to original function (for self-call detection)
-    global_args::BitSet           # Argument indices (1-based) that are WasmGlobal (phantom params)
+    global_args::Set{Int}        # Argument indices (1-based) that are WasmGlobal (phantom params)
     is_compiled_closure::Bool    # True if function being compiled is itself a closure
     # Signal substitution for Therapy.jl closures
-    signal_ssa_getters::IntKeyMap{UInt32}   # SSA id (from getfield) -> Wasm global index
-    signal_ssa_setters::IntKeyMap{UInt32}   # SSA id (from getfield) -> Wasm global index
-    captured_signal_fields::Union{Nothing, Dict{Symbol, Tuple{Bool, UInt32}}}  # field_name -> (is_getter, global_idx)
+    signal_ssa_getters::Dict{Int, UInt32}   # SSA id (from getfield) -> Wasm global index
+    signal_ssa_setters::Dict{Int, UInt32}   # SSA id (from getfield) -> Wasm global index
+    captured_signal_fields::Dict{Symbol, Tuple{Bool, UInt32}}  # field_name -> (is_getter, global_idx)
     # DOM bindings for Therapy.jl - emit DOM update calls after signal writes
     # Maps global_idx -> [(import_idx, [hk_arg, ...]), ...]
-    dom_bindings::Union{Nothing, Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}}
+    dom_bindings::Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}
     # Module-level globals: maps (Module, Symbol) -> Wasm global index
     # Used for const mutable struct instances that should be shared across functions
     module_globals::Vector{Tuple{Tuple{Module, Symbol}, UInt32}}
@@ -37,7 +44,7 @@ mutable struct CompilationContext
     scratch_locals::Union{Nothing, NTuple{5, Int}}
     # MemoryRef offset tracking: maps SSA id -> index SSA/value for memoryrefnew(ref, index, bc)
     # Used by memoryrefoffset to get the offset. Fresh refs (not in this map) have offset 1.
-    memoryref_offsets::IntKeyMap{Any}
+    memoryref_offsets::Dict{Int, Any}
     # Stack validator: tracks value stack types during bytecode emission (PURE-414)
     # Advisory only — warns on type mismatches but doesn't prevent compilation
     validator::WasmStackValidator
@@ -47,7 +54,7 @@ mutable struct CompilationContext
     # PURE-6024: Slot variable locals for unoptimized IR (may_optimize=false).
     # Maps SlotNumber.id -> WASM local index. Slot 1 = self, Slot 2 = arg1, etc.
     # Slots > n_params+1 are local variables assigned with Expr(:(=), SlotNumber, rhs).
-    slot_locals::IntKeyMap{Int}
+    slot_locals::Dict{Int, Int}
     # PURE-9060: Tier 2 hash dispatch tables for megamorphic calls
     dispatch_registry::Union{Nothing, DispatchTableRegistry}
     # PURE-9063: Scratch i32 local for typeof struct lookup (cached)
@@ -57,10 +64,10 @@ end
 function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
                            func_registry::Union{FunctionRegistry, Nothing}=nothing,
                            func_idx::UInt32=UInt32(0), func_ref=nothing,
-                           global_args::BitSet=BitSet(),
+                           global_args::Set{Int}=Set{Int}(),
                            is_compiled_closure::Bool=false,
-                           captured_signal_fields::Union{Nothing, Dict{Symbol, Tuple{Bool, UInt32}}}=nothing,
-                           dom_bindings::Union{Nothing, Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}}=nothing,
+                           captured_signal_fields::Dict{Symbol, Tuple{Bool, UInt32}}=Dict{Symbol, Tuple{Bool, UInt32}}(),
+                           dom_bindings::Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}=Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}(),
                            module_globals::Vector{Tuple{Tuple{Module, Symbol}, UInt32}}=Tuple{Tuple{Module, Symbol}, UInt32}[],
                            dispatch_registry::Union{Nothing, DispatchTableRegistry}=nothing)
     # Calculate n_params excluding WasmGlobal arguments (they're phantom)
@@ -82,16 +89,16 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         func_ref,
         global_args,
         is_compiled_closure,    # Is this function itself a closure?
-        IntKeyMap{UInt32}(length(code_info.code)),  # signal_ssa_getters
-        IntKeyMap{UInt32}(length(code_info.code)),  # signal_ssa_setters
+        Dict{Int, UInt32}(),    # signal_ssa_getters
+        Dict{Int, UInt32}(),    # signal_ssa_setters
         captured_signal_fields, # captured signal field mappings
         dom_bindings,           # DOM bindings for Therapy.jl
         module_globals,         # Module-level globals (const mutable structs)
         nothing,                # scratch_locals (set by allocate_scratch_locals!)
-        IntKeyMap{Any}(length(code_info.code)),     # memoryref_offsets (populated during compilation)
+        Dict{Int, Any}(),       # memoryref_offsets (populated during compilation)
         WasmStackValidator(enabled=true, func_name="func_$(func_idx)"),  # PURE-414: stack validator
         false,                  # last_stmt_was_stub (PURE-908)
-        IntKeyMap{Int}(length(code_info.code)),      # slot_locals (PURE-6024: unoptimized IR slot variables)
+        Dict{Int, Int}(),       # slot_locals (PURE-6024: unoptimized IR slot variables)
         dispatch_registry,      # PURE-9060: Tier 2 hash dispatch
         nothing                 # PURE-9063: typeof scratch local (allocated on demand)
     )
@@ -127,8 +134,8 @@ For CompilableSignal/CompilableSetter pattern:
 - getfield(Signal, :value) -> actual value read (substitutes to global.get)
 - setfield!(Signal, :value, x) -> value write (substitutes to global.set)
 """
-function analyze_signal_captures!(ctx::CompilationContext)
-    (ctx.captured_signal_fields === nothing || isempty(ctx.captured_signal_fields)) && return
+function analyze_signal_captures!(ctx::AbstractCompilationContext)
+    isempty(ctx.captured_signal_fields) && return
 
     code = ctx.code_info.code
 
@@ -274,7 +281,7 @@ Allocate scratch locals for complex operations like string concatenation.
 These are extra locals beyond what SSA analysis requires.
 Stores the indices in ctx.scratch_locals for later use.
 """
-function allocate_scratch_locals!(ctx::CompilationContext)
+function allocate_scratch_locals!(ctx::AbstractCompilationContext)
     # Check if any SSA type is String or Symbol - if so, we need scratch locals
     # Symbol uses same array<i32> representation as String and needs element-wise comparison
     needs_string_scratch = false
@@ -331,14 +338,14 @@ end
 Allocate a new local variable of the given Julia type and return its index.
 The index is relative to the function's locals, accounting for parameters.
 """
-function allocate_local!(ctx::CompilationContext, T::Type)::Int
+function allocate_local!(ctx::AbstractCompilationContext, T::Type)::Int
     wasm_type = julia_to_wasm_type_concrete(T, ctx)
     local_idx = ctx.n_params + length(ctx.locals)
     push!(ctx.locals, wasm_type)
     return local_idx
 end
 
-function allocate_local!(ctx::CompilationContext, wasm_type::WasmValType)::Int
+function allocate_local!(ctx::AbstractCompilationContext, wasm_type::WasmValType)::Int
     local_idx = ctx.n_params + length(ctx.locals)
     # PURE-908: normalize AnyRef → ExternRef to avoid type hierarchy mismatches
     # PURE-9064: Exception — keep AnyRef when $JlType hierarchy is active
@@ -354,7 +361,7 @@ end
 Convert a Julia type to a WasmValType, using concrete references for struct/array types.
 This is like `julia_to_wasm_type` but returns `ConcreteRef` for registered types.
 """
-function julia_to_wasm_type_concrete(T, ctx::CompilationContext)::WasmValType
+function julia_to_wasm_type_concrete(T, ctx::AbstractCompilationContext)::WasmValType
     # Vararg is a type modifier, not a proper type
     # PURE-908: Use ExternRef instead of AnyRef for locals to avoid externref↔anyref
     # mismatches. In WasmGC, anyref and externref are separate type hierarchies.
@@ -620,7 +627,7 @@ end
 """
 Analyze control flow to find loops and handle phi nodes.
 """
-function analyze_control_flow!(ctx::CompilationContext)
+function analyze_control_flow!(ctx::AbstractCompilationContext)
     code = ctx.code_info.code
 
     # Find loop headers (targets of backward jumps)
@@ -827,7 +834,7 @@ We need locals when:
 3. An SSA value is used in a multi-arg call where a sibling arg has a local
 4. An SSA value is defined inside a loop but used outside (e.g., in return)
 """
-function allocate_ssa_locals!(ctx::CompilationContext)
+function allocate_ssa_locals!(ctx::AbstractCompilationContext)
     code = ctx.code_info.code
 
     # Count uses of each SSA value
@@ -1449,7 +1456,7 @@ Slots > n_params+1 are local variables that need dedicated WASM locals.
 This function scans for slot assignments, determines their types from ssavaluetypes,
 and allocates WASM locals. The slot_locals dict maps SlotNumber.id → WASM local index.
 """
-function allocate_slot_locals!(ctx::CompilationContext)
+function allocate_slot_locals!(ctx::AbstractCompilationContext)
     code = ctx.code_info.code
     n_arg_slots = length(ctx.arg_types) + 1  # slot 1 = self, slot 2..n+1 = args
 
@@ -1478,7 +1485,7 @@ end
 """
 Check if an SSA value needs a local (e.g., not used immediately or used after other stack-producing operations).
 """
-function needs_local(ctx::CompilationContext, ssa_id::Int)
+function needs_local(ctx::AbstractCompilationContext, ssa_id::Int)
     code = ctx.code_info.code
 
     # Find where this SSA is used
@@ -1601,7 +1608,7 @@ Examples:
 - Core.memoryref(memory) via :invoke - also a passthrough
 Note: Vector{T} is NO LONGER a passthrough - it's now a struct with (ref, size) fields.
 """
-function is_passthrough_statement(stmt, ctx::CompilationContext)
+function is_passthrough_statement(stmt, ctx::AbstractCompilationContext)
     if !(stmt isa Expr)
         return false
     end
@@ -1692,7 +1699,7 @@ end
 Get the Julia type of an SSA value or other value reference.
 Used for type checking (e.g., in isa() calls).
 """
-function get_ssa_type(ctx::CompilationContext, val)::Type
+function get_ssa_type(ctx::AbstractCompilationContext, val)::Type
     if val isa Core.SSAValue
         return get(ctx.ssa_types, val.id, Any)
     elseif val isa Core.Argument
@@ -1717,7 +1724,7 @@ end
 Analyze the IR to determine types of SSA values.
 Uses CodeInfo.ssavaluetypes for accurate type information.
 """
-function analyze_ssa_types!(ctx::CompilationContext)
+function analyze_ssa_types!(ctx::AbstractCompilationContext)
     # Use Julia's type inference results when available
     ssatypes = ctx.code_info.ssavaluetypes
     if ssatypes isa Vector
@@ -1837,7 +1844,7 @@ function analyze_ssa_types!(ctx::CompilationContext)
     end
 end
 
-function infer_call_type(expr::Expr, ctx::CompilationContext)
+function infer_call_type(expr::Expr, ctx::AbstractCompilationContext)
     func = expr.args[1]
     args = expr.args[2:end]
 
@@ -1886,7 +1893,7 @@ function infer_call_type(expr::Expr, ctx::CompilationContext)
     return Any  # Safe default — maps to ExternRef
 end
 
-function infer_value_type(val, ctx::CompilationContext)
+function infer_value_type(val, ctx::AbstractCompilationContext)
     if val isa Core.Argument
         # For closures being compiled, _1 is the closure object (arg_types[1])
         # For regular functions, arguments start at _2 (arg_types[1])
@@ -1990,7 +1997,7 @@ end
 Check if `val` will produce `structref` on the Wasm stack (due to union-typed local),
 and if so, append `ref.cast null \$target_type_idx` to narrow it for struct_get.
 """
-function emit_ref_cast_if_structref!(bytes::Vector{UInt8}, val, target_type_idx::Integer, ctx::CompilationContext)
+function emit_ref_cast_if_structref!(bytes::Vector{UInt8}, val, target_type_idx::Integer, ctx::AbstractCompilationContext)
     local_wasm_type = nothing
     if val isa Core.SSAValue
         local_idx = get(ctx.ssa_locals, val.id, nothing)
@@ -2028,7 +2035,7 @@ PURE-6025: Get the Wasm type of the value that `compiled_bytes` pushes onto the 
 Checks SSA locals, phi locals, and parameter types. Returns the local's Wasm type
 or nothing if it can't be determined.
 """
-function _get_local_wasm_type(val, compiled_bytes::Vector{UInt8}, ctx::CompilationContext)
+function _get_local_wasm_type(val, compiled_bytes::Vector{UInt8}, ctx::AbstractCompilationContext)
     # Check via val (SSA or Argument)
     if val isa Core.SSAValue
         local_idx = get(ctx.ssa_locals, val.id, nothing)
@@ -2084,7 +2091,7 @@ on the stack. This ensures downstream struct_get/array_get see the correct type.
 This is safe because ref.cast null on the correct type is a no-op at runtime,
 and on the wrong type it traps (which indicates a real codegen bug).
 """
-function _narrow_generic_local!(bytes::Vector{UInt8}, local_idx::Integer, ssa_id::Integer, ctx::CompilationContext)
+function _narrow_generic_local!(bytes::Vector{UInt8}, local_idx::Integer, ssa_id::Integer, ctx::AbstractCompilationContext)
     arr_idx = local_idx - ctx.n_params + 1
     if arr_idx < 1 || arr_idx > length(ctx.locals)
         return
@@ -2121,7 +2128,7 @@ end
 Extract the global index from a WasmGlobal type.
 The index is stored as a type parameter, so we extract it from the type.
 """
-function get_wasm_global_idx(val, ctx::CompilationContext)::Union{Int, Nothing}
+function get_wasm_global_idx(val, ctx::AbstractCompilationContext)::Union{Int, Nothing}
     val_type = infer_value_type(val, ctx)
     if val_type <: WasmGlobal
         # Extract IDX from WasmGlobal{T, IDX}
@@ -2135,7 +2142,7 @@ Check if a call/invoke statement produces a value on the WASM stack.
 Returns false for calls to functions that return Nothing (void).
 This checks the function registry first (most reliable), then MethodInstance return type.
 """
-function statement_produces_wasm_value(stmt::Expr, idx::Int, ctx::CompilationContext)::Bool
+function statement_produces_wasm_value(stmt::Expr, idx::Int, ctx::AbstractCompilationContext)::Bool
     # PURE-6024: memoryrefset! compiles to array.set (void in WASM).
     # The handler manages its own return value emission when an SSA local exists,
     # so this function must return false to prevent spurious DROP on empty stack.
@@ -2319,5 +2326,72 @@ function statement_produces_wasm_value(stmt::Expr, idx::Int, ctx::CompilationCon
 
     # For other types (concrete types that aren't Nothing), value is produced
     return true
+end
+
+# ============================================================================
+# InplaceCompilationContext — Dict-free context for WASM self-hosting
+# ============================================================================
+
+"""
+Dict-free compilation context for WASM self-hosting.
+Same field names as CompilationContext but Dict fields replaced with Nothing.
+Julia specializes codegen functions for this type, producing Dict-free IR.
+For MVP (Int64 arithmetic): Dict fields are never accessed, so Nothing is safe.
+"""
+mutable struct InplaceCompilationContext <: AbstractCompilationContext
+    code_info::Core.CodeInfo
+    arg_types::Tuple
+    return_type::Type
+    n_params::Int
+    locals::Vector{WasmValType}
+    ssa_types::IntKeyMap{Type}
+    ssa_locals::IntKeyMap{Int}
+    phi_locals::IntKeyMap{Int}
+    loop_headers::Vector{Bool}
+    mod::WasmModule
+    type_registry::TypeRegistry  # Normal TypeRegistry with empty Dicts (never accessed for MVP)
+    func_registry::Union{FunctionRegistry, Nothing}
+    func_idx::UInt32
+    func_ref::Any
+    global_args::Set{Int}        # Same as CompilationContext
+    is_compiled_closure::Bool
+    # Dict fields replaced with Nothing for WASM constructability
+    signal_ssa_getters::Nothing
+    signal_ssa_setters::Nothing
+    captured_signal_fields::Nothing
+    dom_bindings::Nothing
+    module_globals::Vector{Tuple{Tuple{Module, Symbol}, UInt32}}
+    scratch_locals::Nothing
+    memoryref_offsets::Nothing
+    validator::WasmStackValidator
+    last_stmt_was_stub::Bool
+    slot_locals::Nothing
+    dispatch_registry::Nothing
+    typeof_scratch_local::Nothing
+end
+
+function InplaceCompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
+                                  func_registry::Union{FunctionRegistry, Nothing}=nothing,
+                                  func_idx::UInt32=UInt32(0), func_ref=nothing)
+    n_real_params = length(arg_types)
+    ctx = InplaceCompilationContext(
+        code_info, arg_types, return_type, n_real_params,
+        WasmValType[],
+        IntKeyMap{Type}(length(code_info.code)),
+        IntKeyMap{Int}(length(code_info.code)),
+        IntKeyMap{Int}(length(code_info.code)),
+        fill(false, length(code_info.code)),
+        mod, type_registry, func_registry, func_idx, func_ref,
+        Set{Int}(), false,         # global_args, is_compiled_closure
+        nothing, nothing, nothing, nothing,  # signal_ssa_getters/setters, captured_signal_fields, dom_bindings
+        Tuple{Tuple{Module, Symbol}, UInt32}[],  # module_globals
+        nothing, nothing,          # scratch_locals, memoryref_offsets
+        WasmStackValidator(enabled=true, func_name="func_$(func_idx)"),
+        false, nothing, nothing, nothing  # last_stmt_was_stub, slot_locals, dispatch_registry, typeof_scratch_local
+    )
+    analyze_ssa_types!(ctx)
+    analyze_control_flow!(ctx)
+    allocate_ssa_locals!(ctx)
+    return ctx
 end
 

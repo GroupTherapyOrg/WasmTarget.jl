@@ -2,7 +2,7 @@
 Generate code for more complex control flow patterns.
 Uses nested blocks with br instructions.
 """
-function generate_complex_flow(ctx::CompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
+function generate_complex_flow(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
     bytes = UInt8[]
 
     # For void return types WITHOUT loops (like event handlers), use a simpler approach:
@@ -102,7 +102,7 @@ If `val` is a non-nothing numeric value, compiles + boxes it.
 
 `target_bytes` is the byte vector to append to (may be `bytes` or `inner_bytes`).
 """
-function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::WasmValType, ctx::CompilationContext)
+function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
     if is_nothing_value(val, ctx)
         # return nothing → ref.null extern
         push!(target_bytes, Opcode.REF_NULL)
@@ -148,7 +148,7 @@ end
 Like emit_numeric_to_externref! but produces anyref (no extern_convert_any).
 Used when storing into AnyRef-typed struct fields (JlType hierarchy active).
 """
-function emit_numeric_to_anyref!(target_bytes::Vector{UInt8}, val, val_wasm::WasmValType, ctx::CompilationContext)
+function emit_numeric_to_anyref!(target_bytes::Vector{UInt8}, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
     if is_nothing_value(val, ctx)
         push!(target_bytes, Opcode.REF_NULL)
         push!(target_bytes, 0x6E)  # any heap type
@@ -180,7 +180,7 @@ function emit_numeric_to_anyref!(target_bytes::Vector{UInt8}, val, val_wasm::Was
     return  # No extern_convert_any — struct ref is already anyref
 end
 
-function generate_stackified_flow(ctx::CompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
+function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
     # ========================================================================
     # STEP 0: BOUNDSCHECK PATTERN DETECTION
     # ========================================================================

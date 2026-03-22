@@ -2,7 +2,7 @@
 Generate code using Wasm's structured control flow.
 For simple if-then-else patterns, we use the `if` instruction.
 """
-function generate_structured(ctx::CompilationContext, blocks::Vector{BasicBlock})::Vector{UInt8}
+function generate_structured(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock})::Vector{UInt8}
     bytes = UInt8[]
     code = ctx.code_info.code
     # Check for try/catch first
@@ -50,7 +50,7 @@ Structure:
     ; second branch code (with loop 2)
   end
 """
-function generate_branched_loops(ctx::CompilationContext, first_header::Int, first_back_edge::Int,
+function generate_branched_loops(ctx::AbstractCompilationContext, first_header::Int, first_back_edge::Int,
                                   cond_idx::Int, second_branch_start::Int,
                                   ssa_use_count::Dict{Int, Int})::Vector{UInt8}
     bytes = UInt8[]
@@ -330,7 +330,7 @@ Following dart2wasm patterns for inner conditionals:
 Determine the Wasm type that a phi edge value will produce on the stack.
 Used to check compatibility before storing to a phi local.
 """
-function get_phi_edge_wasm_type(val, ctx::CompilationContext)::Union{WasmValType, Nothing}
+function get_phi_edge_wasm_type(val, ctx::AbstractCompilationContext)::Union{WasmValType, Nothing}
     # PURE-036ai: Handle nothing literal - compile_value(nothing) emits i32_const 0
     if val === nothing
         return I32
@@ -476,7 +476,7 @@ the store is skipped (these represent unreachable code paths in Union types).
 If the edge value is i32 but the local is i64, adds I64_EXTEND_I32_S.
 Returns true if the store was emitted, false if skipped.
 """
-function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::CompilationContext)::Bool
+function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::AbstractCompilationContext)::Bool
     if !haskey(ctx.phi_locals, phi_ssa_idx)
         return false
     end
@@ -894,7 +894,7 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::C
     return true
 end
 
-function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
+function generate_loop_code(ctx::AbstractCompilationContext)::Vector{UInt8}
     bytes = UInt8[]
     code = ctx.code_info.code
 
@@ -1892,7 +1892,7 @@ end
 Generate code for a simple if-then-else pattern.
 Handles both return-based patterns and phi node patterns (ternary expressions).
 """
-function generate_if_then_else(ctx::CompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
+function generate_if_then_else(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
     bytes = UInt8[]
     # For void return types (like event handlers), delegate to generate_void_flow
     # which properly handles if blocks with void block type (0x40) instead of trying
@@ -2393,7 +2393,7 @@ Compile a nested if/else inside a return-based pattern.
 This handles the case where there's a GotoIfNot inside an else branch
 that creates a nested conditional, each branch ending with a return.
 """
-function compile_nested_if_else(ctx::CompilationContext, code, goto_idx::Int, compiled::Set{Int}, ssa_use_count::Dict{Int,Int})::Vector{UInt8}
+function compile_nested_if_else(ctx::AbstractCompilationContext, code, goto_idx::Int, compiled::Set{Int}, ssa_use_count::Dict{Int,Int})::Vector{UInt8}
     bytes = UInt8[]
 
     goto_if_not = code[goto_idx]::Core.GotoIfNot

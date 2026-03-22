@@ -9,7 +9,7 @@ Returns: positive if found, negative if insert location, 0 if full.
 Algorithm: Linear probing with hash = (key * 31) & 0x7FFFFFFF % capacity + 1
 Slot states: 0=empty, 1=occupied, 2=deleted
 """
-function compile_sd_find_slot(args, ctx::CompilationContext)::Vector{UInt8}
+function compile_sd_find_slot(args, ctx::AbstractCompilationContext)::Vector{UInt8}
     bytes = UInt8[]
 
     # Register SimpleDict type
@@ -251,7 +251,7 @@ end
 Set key=value in SimpleDict.
 Uses find_slot logic then updates or inserts.
 """
-function compile_sd_set(args, ctx::CompilationContext)::Vector{UInt8}
+function compile_sd_set(args, ctx::AbstractCompilationContext)::Vector{UInt8}
     bytes = UInt8[]
 
     # Register SimpleDict type
@@ -615,7 +615,7 @@ Returns: positive if found, negative if insert location, 0 if full.
 
 Uses str_hash for hashing and string comparison for key matching.
 """
-function compile_sdict_find_slot(args, ctx::CompilationContext)::Vector{UInt8}
+function compile_sdict_find_slot(args, ctx::AbstractCompilationContext)::Vector{UInt8}
     bytes = UInt8[]
 
     # Register StringDict type and get indices
@@ -913,7 +913,7 @@ end
 Inline string equality comparison.
 Compares two string locals and leaves 0 or 1 on stack.
 """
-function compile_string_eq_inline(str1_local::Int, str2_local::Int, str_type_idx::UInt32, ctx::CompilationContext)::Vector{UInt8}
+function compile_string_eq_inline(str1_local::Int, str2_local::Int, str_type_idx::UInt32, ctx::AbstractCompilationContext)::Vector{UInt8}
     bytes = UInt8[]
 
     # Allocate locals for comparison
@@ -1031,7 +1031,7 @@ end
 """
 Set key=value in StringDict.
 """
-function compile_sdict_set(args, ctx::CompilationContext)::Vector{UInt8}
+function compile_sdict_set(args, ctx::AbstractCompilationContext)::Vector{UInt8}
     bytes = UInt8[]
 
     # Register types

@@ -6,7 +6,7 @@
 Get the Wasm type that compile_value will push on the stack for a given value.
 Used to detect type mismatches at return sites.
 """
-function infer_value_wasm_type(val, ctx::CompilationContext)::WasmValType
+function infer_value_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
     # PURE-036af: Handle nothing specially - compile_value(nothing) produces i32_const 0
     if val === nothing
         return I32
@@ -147,7 +147,7 @@ When the condition SSA value has an anyref/externref local (because Julia typed 
 the raw compile_value would push anyref, but i32.eqz needs i32. This helper unboxes via
 ref.cast + struct.get when needed.
 """
-function compile_condition_to_i32(cond, ctx::CompilationContext)::Vector{UInt8}
+function compile_condition_to_i32(cond, ctx::AbstractCompilationContext)::Vector{UInt8}
     bytes = compile_value(cond, ctx)
     # Check if the condition value is in a non-i32 local
     if cond isa Core.SSAValue
@@ -213,7 +213,7 @@ end
 """
 Compile a value reference (SSA, Argument, or Literal).
 """
-function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
+function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
     bytes = UInt8[]
 
     # PURE-6022: If we're in dead code (previous sub-call was a stub), don't compile

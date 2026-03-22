@@ -35,7 +35,7 @@ end
 """
 Compile a single IR statement to Wasm bytecode.
 """
-function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt8}
+function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
     bytes = UInt8[]
 
     # PURE-6027: Reset dead code guard at basic block boundaries.
@@ -1508,7 +1508,7 @@ end
 """
 Compile a struct construction expression (%new).
 """
-function compile_new(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt8}
+function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
     bytes = UInt8[]
 
     # expr.args[1] is the type, rest are field values
@@ -2388,7 +2388,7 @@ end
 Compile a foreign call expression.
 Handles specific patterns like jl_alloc_genericmemory for Vector allocation.
 """
-function compile_foreigncall(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UInt8}
+function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
     bytes = UInt8[]
 
     # foreigncall format: Expr(:foreigncall, name, return_type, arg_types, nreq, calling_conv, args...)
@@ -3252,7 +3252,7 @@ The typical IR pattern is:
 
 We trace from %ptr2 back to %data (the Memory reference).
 """
-function _trace_ptr_to_data(ptr_val, ctx::CompilationContext)
+function _trace_ptr_to_data(ptr_val, ctx::AbstractCompilationContext)
     code = ctx.code_info.code
     # Walk backwards through SSA values
     current = ptr_val
@@ -3313,7 +3313,7 @@ IR pattern:
   %159 = getfield(%144, :ptr_or_offset)  — i64.const 0 in WasmGC
   memmove(%159, ...)
 """
-function _trace_memmove_array(ptr_ssa, code, ctx::CompilationContext)
+function _trace_memmove_array(ptr_ssa, code, ctx::AbstractCompilationContext)
     if !(ptr_ssa isa Core.SSAValue)
         return nothing
     end

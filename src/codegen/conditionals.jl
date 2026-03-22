@@ -3,7 +3,7 @@ Generate code for complex functions using a block-based approach.
 Compiles each basic block exactly once using structured control flow.
 This is a simpler approach than full Stackifier, suitable for moderate complexity.
 """
-function generate_linear_flow(ctx::CompilationContext, blocks::Vector{BasicBlock}, code, conditionals)::Vector{UInt8}
+function generate_linear_flow(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code, conditionals)::Vector{UInt8}
     bytes = UInt8[]
     result_type = julia_to_wasm_type_concrete(ctx.return_type, ctx)
 
@@ -178,7 +178,7 @@ end
 Generate code for void functions (no return value).
 Compiles all statements sequentially, using structured control flow for conditionals.
 """
-function generate_void_flow(ctx::CompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
+function generate_void_flow(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
     bytes = UInt8[]
 
     # Track which statements we've already compiled
@@ -598,7 +598,7 @@ Compiles to:
     end
   end
 """
-function compile_void_nested_conditional(ctx::CompilationContext, code, start_idx::Int, compiled::Set{Int}, ssa_use_count::Dict{Int,Int})::Vector{UInt8}
+function compile_void_nested_conditional(ctx::AbstractCompilationContext, code, start_idx::Int, compiled::Set{Int}, ssa_use_count::Dict{Int,Int})::Vector{UInt8}
     bytes = UInt8[]
 
     goto_if_not = code[start_idx]::Core.GotoIfNot
@@ -727,7 +727,7 @@ end
 Compile a ternary expression (if-then-else with phi) that produces a value.
 Returns bytecode that computes the ternary and stores to the phi local.
 """
-function compile_ternary_for_phi(ctx::CompilationContext, code, cond_idx::Int, compiled::Set{Int})::Vector{UInt8}
+function compile_ternary_for_phi(ctx::AbstractCompilationContext, code, cond_idx::Int, compiled::Set{Int})::Vector{UInt8}
     bytes = UInt8[]
 
     goto_if_not = code[cond_idx]::Core.GotoIfNot
@@ -939,7 +939,7 @@ Uses block/br_if structure:
     <else_code>
   end
 """
-function generate_and_pattern(ctx::CompilationContext, blocks, code, conditionals, result_type, else_target, ssa_use_count)::Vector{UInt8}
+function generate_and_pattern(ctx::AbstractCompilationContext, blocks, code, conditionals, result_type, else_target, ssa_use_count)::Vector{UInt8}
     bytes = UInt8[]
 
     # Outer block for result
@@ -1286,7 +1286,7 @@ end
 Generate code for switch pattern using nested if-else with proper stack handling.
 Each case returns independently, so we don't need phi handling for the switch itself.
 """
-function generate_switch_pattern(ctx::CompilationContext, blocks, code, conditionals, result_type, switch_pattern, ssa_use_count)::Vector{UInt8}
+function generate_switch_pattern(ctx::AbstractCompilationContext, blocks, code, conditionals, result_type, switch_pattern, ssa_use_count)::Vector{UInt8}
     bytes = UInt8[]
     switch_value_ssa, cases = switch_pattern
 
@@ -1563,7 +1563,7 @@ end
 Generate code for OR pattern (a || b || c producing boolean phi).
 Creates nested if-else structure that evaluates each condition.
 """
-function generate_or_pattern(ctx::CompilationContext, blocks, code, conditionals, result_type, or_pattern, ssa_use_count)::Vector{UInt8}
+function generate_or_pattern(ctx::AbstractCompilationContext, blocks, code, conditionals, result_type, or_pattern, ssa_use_count)::Vector{UInt8}
     bytes = UInt8[]
     phi_idx, cond_infos, next_cond_idx = or_pattern
     phi_stmt = code[phi_idx]::Core.PhiNode
@@ -1672,7 +1672,7 @@ end
 """
 Generate code for remaining conditionals after OR pattern.
 """
-function generate_remaining_conditionals(ctx::CompilationContext, blocks, code, remaining_conds, result_type, ssa_use_count)::Vector{UInt8}
+function generate_remaining_conditionals(ctx::AbstractCompilationContext, blocks, code, remaining_conds, result_type, ssa_use_count)::Vector{UInt8}
     bytes = UInt8[]
 
     if isempty(remaining_conds)
@@ -1764,7 +1764,7 @@ end
 """
 Generate nested if-else for multiple conditionals.
 """
-function generate_nested_conditionals(ctx::CompilationContext, blocks, code, conditionals)::Vector{UInt8}
+function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, code, conditionals)::Vector{UInt8}
     bytes = UInt8[]
     result_type = julia_to_wasm_type_concrete(ctx.return_type, ctx)
 
@@ -3260,7 +3260,7 @@ end
 """
 Generate code for a single basic block.
 """
-function generate_block_code(ctx::CompilationContext, block::BasicBlock)::Vector{UInt8}
+function generate_block_code(ctx::AbstractCompilationContext, block::BasicBlock)::Vector{UInt8}
     bytes = UInt8[]
     code = ctx.code_info.code
 

@@ -468,7 +468,7 @@ Compile string concatenation (str1 * str2).
 Creates a new string array with combined contents.
 Uses locals for intermediate values.
 """
-function compile_string_concat(str1, str2, ctx::CompilationContext)::Vector{UInt8}
+function compile_string_concat(str1, str2, ctx::AbstractCompilationContext)::Vector{UInt8}
     bytes = UInt8[]
 
     # Get string array type index
@@ -546,7 +546,7 @@ end
 String concatenation implementation using explicit locals.
 Uses scratch locals allocated by allocate_scratch_locals!.
 """
-function compile_string_concat_with_locals(str1, str2, ctx::CompilationContext)::Vector{UInt8}
+function compile_string_concat_with_locals(str1, str2, ctx::AbstractCompilationContext)::Vector{UInt8}
     bytes = UInt8[]
 
     str_type_idx = ctx.type_registry.string_array_idx
@@ -640,7 +640,7 @@ Compile string equality comparison (str1 == str2).
 Returns i32 (0 or 1).
 Uses scratch locals allocated by allocate_scratch_locals!.
 """
-function compile_string_equal(str1, str2, ctx::CompilationContext)::Vector{UInt8}
+function compile_string_equal(str1, str2, ctx::AbstractCompilationContext)::Vector{UInt8}
     bytes = UInt8[]
 
     str_type_idx = ctx.type_registry.string_array_idx

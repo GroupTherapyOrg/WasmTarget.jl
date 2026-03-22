@@ -41,7 +41,7 @@ end
 Check if a value is known to be boolean (0 or 1).
 This is true for comparison results, Bool literals, and phi nodes with Bool type.
 """
-function is_boolean_value(val, ctx::CompilationContext)::Bool
+function is_boolean_value(val, ctx::AbstractCompilationContext)::Bool
     if val isa Core.SSAValue
         # Check if the SSA value is from a comparison
         # PURE-6021: Guard against out-of-bounds SSAValue IDs

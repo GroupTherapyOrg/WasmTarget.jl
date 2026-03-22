@@ -34,7 +34,7 @@ function _compile_function_legacy(f, arg_types::Tuple, func_name::String)::WasmM
     end
 
     # Detect WasmGlobal arguments (phantom params that map to Wasm globals)
-    global_args = BitSet()
+    global_args = Set{Int}()
     for (i, T) in enumerate(arg_types)
         if T <: WasmGlobal
             push!(global_args, i)
@@ -1382,7 +1382,7 @@ function compile_module(functions::Vector;
         code_info, return_type = get_typed_ir(f, arg_types; optimize=optimize_ir)
 
         # Detect WasmGlobal arguments
-        global_args = BitSet()
+        global_args = Set{Int}()
         for (i, T) in enumerate(arg_types)
             if T <: WasmGlobal
                 push!(global_args, i)
@@ -1744,7 +1744,7 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
         code_info, return_type, arg_types, name = entry[1], entry[2], entry[3], entry[4]
         # Optional 5th element: func_ref for cross-function call resolution
         func_ref = length(entry) >= 5 ? entry[5] : nothing
-        global_args = BitSet()
+        global_args = Set{Int}()
 
         # Register types used in parameters
         for (i, T) in enumerate(arg_types)
@@ -2224,7 +2224,7 @@ function build_frozen_state(ir_entries::Vector)::FrozenCompilationState
     # Build function_data from pre-computed IR
     function_data = []
     for (code_info, return_type, arg_types, name) in ir_entries
-        global_args = BitSet()
+        global_args = Set{Int}()
 
         # Register types used in parameters
         for (i, T) in enumerate(arg_types)
@@ -2374,7 +2374,7 @@ function compile_module_from_ir_frozen(ir_entries::Vector, frozen::FrozenCompila
     function_data = []
     module_globals = Tuple{Tuple{Module, Symbol}, UInt32}[]
     for (code_info, return_type, arg_types, name) in ir_entries
-        global_args = BitSet()
+        global_args = Set{Int}()
 
         # Scan for GlobalRef to mutable structs (need globals for these)
         for stmt in code_info.code
@@ -2491,43 +2491,49 @@ end
 """
     compile_from_ir_inplace(ir_entries::Vector)::Vector{UInt8}
 
-Dict-free compilation path for WASM self-hosting. Creates WasmModule and
-TypeRegistry_minimal from scratch (no Dict, no FrozenCompilationState, no copy).
+Dict-free compilation path for WASM self-hosting. Convenience wrapper that creates
+WasmModule and TypeRegistry, then delegates to the prebaked version.
+"""
+function compile_from_ir_inplace(ir_entries::Vector)::Vector{UInt8}
+    return compile_from_ir_prebaked(ir_entries, WasmModule(), TypeRegistry())
+end
+
+"""
+    compile_from_ir_prebaked(ir_entries::Vector, mod::WasmModule, type_registry::TypeRegistry)::Vector{UInt8}
+
+Dict-free compilation path for WASM self-hosting. Uses InplaceCompilationContext
+(no Dict fields) so Julia specializes codegen functions without Dict dependencies.
 Uses the REAL codegen pipeline: generate_body → compile_statement → compile_call.
+
+Takes pre-baked WasmModule and TypeRegistry as arguments — avoids constructing
+Dict-dependent objects in WASM. For WASM self-hosting, these are embedded as globals.
 
 For MVP: Int64 arithmetic functions only (no structs, no closures, no exceptions).
 Each entry is (code_info::CodeInfo, return_type::Type, arg_types::Tuple, name::String).
 """
-function compile_from_ir_inplace(ir_entries::Vector)::Vector{UInt8}
-    # Create WasmModule and TypeRegistry from scratch — NO Dict dependencies
-    mod = WasmModule()
-    type_registry = TypeRegistry_minimal()
+function compile_from_ir_prebaked(ir_entries::Vector, mod::WasmModule, type_registry::TypeRegistry)::Vector{UInt8}
     func_registry = FunctionRegistry()
 
     # Build function_data
     function_data = []
-    module_globals = Tuple{Tuple{Module, Symbol}, UInt32}[]
     for (code_info, return_type, arg_types, name) in ir_entries
-        global_args = BitSet()
-        push!(function_data, (nothing, arg_types, name, code_info, return_type, global_args, false))
+        push!(function_data, (nothing, arg_types, name, code_info, return_type))
     end
 
     # Calculate function indices
     n_imports = length(mod.imports)
-    for (i, (f, arg_types, name, _, return_type, _, _)) in enumerate(function_data)
+    for (i, (f, arg_types, name, _, return_type)) in enumerate(function_data)
         func_idx = UInt32(n_imports + i - 1)
         register_function!(func_registry, name, f, arg_types, func_idx, return_type)
     end
 
-    # Compile function bodies (the REAL codegen)
+    # Compile function bodies using InplaceCompilationContext (Dict-free)
     export_name_counts = Tuple{String, Int}[]
-    for (i, (f, arg_types, name, code_info, return_type, global_args, is_closure)) in enumerate(function_data)
+    for (i, (f, arg_types, name, code_info, return_type)) in enumerate(function_data)
         func_idx = UInt32(n_imports + i - 1)
 
-        ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
-                                func_registry=func_registry, func_idx=func_idx, func_ref=f,
-                                global_args=global_args, is_compiled_closure=false,
-                                module_globals=module_globals)
+        ctx = InplaceCompilationContext(code_info, arg_types, return_type, mod, type_registry;
+                                       func_registry=func_registry, func_idx=func_idx, func_ref=f)
         body = generate_body(ctx)
         locals = ctx.locals
 
@@ -2560,13 +2566,13 @@ function compile_from_ir_inplace(ir_entries::Vector)::Vector{UInt8}
         found = false
         for j in 1:length(export_name_counts)
             if export_name_counts[j][1] == name
-                export_name_counts[j] = (name::String, count + 1)
+                export_name_counts[j] = (name, count + 1)
                 found = true
                 break
             end
         end
         if !found
-            push!(export_name_counts, (name::String, 1))
+            push!(export_name_counts, (name, 1))
         end
         add_export!(mod, export_name, 0, actual_idx)
     end
