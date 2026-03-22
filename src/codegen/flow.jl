@@ -556,6 +556,25 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
                 return true
             end
             return false
+        elseif phi_local_type isa ConcreteRef && (edge_val_type === AnyRef || edge_val_type === EqRef || edge_val_type === StructRef || edge_val_type === ArrayRef)
+            # AnyRef/EqRef/StructRef/ArrayRef → ConcreteRef: narrow with ref.cast_nullable
+            value_bytes = compile_value(val, ctx)
+            if !isempty(value_bytes)
+                if value_bytes[1] == Opcode.REF_NULL
+                    # ref.null can't be cast — emit type-appropriate null instead
+                    push!(bytes, Opcode.REF_NULL)
+                    append!(bytes, encode_leb128_signed(Int64(phi_local_type.type_idx)))
+                else
+                    append!(bytes, value_bytes)
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.REF_CAST_NULL)
+                    append!(bytes, encode_leb128_unsigned(phi_local_type.type_idx))
+                end
+                push!(bytes, Opcode.LOCAL_SET)
+                append!(bytes, encode_leb128_unsigned(local_idx))
+                return true
+            end
+            return false
         else
             # PURE-6025: Type mismatch — emit type-safe default instead of skipping.
             # Skipping leaves the local uninitialized, but we need a valid value

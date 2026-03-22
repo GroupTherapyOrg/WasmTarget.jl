@@ -5689,7 +5689,11 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             push!(bytes, Opcode.LOCAL_SET)
             append!(bytes, encode_leb128_unsigned(head_local))
 
-            # Step 2: Create data array (array<externref>) → local
+            # Step 2: Create data array (array<anyref>) → local
+            # Any maps to AnyRef — GC refs are subtypes of anyref (no conversion needed).
+            # ExternRef values need any_convert_extern. Numeric values need ref.null any placeholder.
+            wasm_elem_type = get_concrete_wasm_type(Any, ctx.mod, ctx.type_registry)
+            is_anyref_array = (wasm_elem_type === AnyRef)
             if n_expr_args == 0
                 push!(bytes, Opcode.I32_CONST)
                 push!(bytes, 0x00)
@@ -5697,7 +5701,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
                 append!(bytes, encode_leb128_unsigned(any_array_type_idx))
             else
-                # Push each arg as externref, then array_new_fixed
+                # Push each arg, then array_new_fixed
                 for ea in expr_args
                     ea_bytes = compile_value(ea, ctx)
                     is_numeric = false
@@ -5731,30 +5735,60 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                         end
                     end
                     if is_numeric
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ExternRef))
+                        if is_anyref_array
+                            push!(bytes, Opcode.REF_NULL)
+                            push!(bytes, 0x6E)  # any heap type
+                        else
+                            push!(bytes, Opcode.REF_NULL)
+                            push!(bytes, UInt8(ExternRef))
+                        end
                     else
                         append!(bytes, ea_bytes)
-                        is_extern = false
-                        if length(ea_bytes) >= 2 && ea_bytes[1] == Opcode.LOCAL_GET
-                            src_idx2 = 0; shift2 = 0
-                            for bi in 2:length(ea_bytes)
-                                b = ea_bytes[bi]
-                                src_idx2 |= (Int(b & 0x7f) << shift2)
-                                shift2 += 7
-                                (b & 0x80) == 0 && break
+                        if is_anyref_array
+                            # For anyref arrays: GC refs are already subtypes of anyref.
+                            # Only externref locals need conversion (any_convert_extern).
+                            is_extern = false
+                            if length(ea_bytes) >= 2 && ea_bytes[1] == Opcode.LOCAL_GET
+                                src_idx2 = 0; shift2 = 0
+                                for bi in 2:length(ea_bytes)
+                                    b = ea_bytes[bi]
+                                    src_idx2 |= (Int(b & 0x7f) << shift2)
+                                    shift2 += 7
+                                    (b & 0x80) == 0 && break
+                                end
+                                arr_idx2 = src_idx2 - ctx.n_params + 1
+                                if arr_idx2 >= 1 && arr_idx2 <= length(ctx.locals)
+                                    is_extern = (ctx.locals[arr_idx2] === ExternRef)
+                                elseif src_idx2 < ctx.n_params && src_idx2 < length(ctx.arg_types)
+                                    is_extern = (julia_to_wasm_type(ctx.arg_types[src_idx2 + 1]) === ExternRef)
+                                end
                             end
-                            arr_idx2 = src_idx2 - ctx.n_params + 1
-                            if arr_idx2 >= 1 && arr_idx2 <= length(ctx.locals)
-                                is_extern = (ctx.locals[arr_idx2] === ExternRef)
-                            elseif src_idx2 < ctx.n_params && src_idx2 < length(ctx.arg_types)
-                                # PURE-6022: Check if parameter is already externref
-                                is_extern = (julia_to_wasm_type(ctx.arg_types[src_idx2 + 1]) === ExternRef)
+                            if is_extern
+                                push!(bytes, Opcode.GC_PREFIX)
+                                push!(bytes, Opcode.ANY_CONVERT_EXTERN)
                             end
-                        end
-                        if !is_extern
-                            push!(bytes, Opcode.GC_PREFIX)
-                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        else
+                            # For externref arrays: GC refs need extern_convert_any.
+                            is_extern = false
+                            if length(ea_bytes) >= 2 && ea_bytes[1] == Opcode.LOCAL_GET
+                                src_idx2 = 0; shift2 = 0
+                                for bi in 2:length(ea_bytes)
+                                    b = ea_bytes[bi]
+                                    src_idx2 |= (Int(b & 0x7f) << shift2)
+                                    shift2 += 7
+                                    (b & 0x80) == 0 && break
+                                end
+                                arr_idx2 = src_idx2 - ctx.n_params + 1
+                                if arr_idx2 >= 1 && arr_idx2 <= length(ctx.locals)
+                                    is_extern = (ctx.locals[arr_idx2] === ExternRef)
+                                elseif src_idx2 < ctx.n_params && src_idx2 < length(ctx.arg_types)
+                                    is_extern = (julia_to_wasm_type(ctx.arg_types[src_idx2 + 1]) === ExternRef)
+                                end
+                            end
+                            if !is_extern
+                                push!(bytes, Opcode.GC_PREFIX)
+                                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                            end
                         end
                     end
                 end

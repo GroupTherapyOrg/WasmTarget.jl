@@ -84,7 +84,14 @@ function has_ref_producing_gc_op(val_bytes::Vector{UInt8})::Bool
     for scan_i in scan_start:(length(val_bytes)-1)
         if val_bytes[scan_i] == 0xFB
             gc_op = val_bytes[scan_i + 1]
-            if gc_op == 0x00 || gc_op == 0x08 || gc_op == 0x1A || gc_op == 0x1B
+            # All ref-producing GC ops: struct.new (0x00), struct.new_default (0x01),
+            # array.new (0x06), array.new_default (0x07), array.new_fixed (0x08),
+            # array.new_data (0x09), array.new_elem (0x0A),
+            # ref.cast (0x14), ref.cast_null (0x17),
+            # any_convert_extern (0x1A), extern_convert_any (0x1B)
+            if gc_op == 0x00 || gc_op == 0x01 || gc_op == 0x06 || gc_op == 0x07 ||
+               gc_op == 0x08 || gc_op == 0x09 || gc_op == 0x0A ||
+               gc_op == 0x14 || gc_op == 0x17 || gc_op == 0x1A || gc_op == 0x1B
                 return true
             end
         end
@@ -1181,9 +1188,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         if local_type isa ConcreteRef && value_type isa ConcreteRef && local_type.type_idx != value_type.type_idx
             return false
         end
-        # Abstract ref (StructRef/ArrayRef/EqRef) is NOT directly compatible with ConcreteRef
-        # (requires ref.cast to downcast from abstract to concrete)
-        if local_type isa ConcreteRef && (value_type === StructRef || value_type === ArrayRef || value_type === EqRef)
+        # Abstract ref (StructRef/ArrayRef/AnyRef/EqRef) is NOT directly compatible with ConcreteRef
+        # (requires ref.cast to downcast from abstract/super to concrete)
+        if local_type isa ConcreteRef && (value_type === StructRef || value_type === ArrayRef || value_type === AnyRef || value_type === EqRef)
             return false
         end
         # ExternRef is NOT compatible with ConcreteRef/StructRef/ArrayRef/AnyRef/EqRef
@@ -1398,6 +1405,18 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                             if !_is_ref_null2
                                                 push!(bytes, Opcode.GC_PREFIX)
                                                 push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                            end
+                                        elseif phi_local_type isa ConcreteRef && (actual_val_type === AnyRef || actual_val_type === EqRef || actual_val_type === StructRef || actual_val_type === ArrayRef)
+                                            # AnyRef/EqRef/StructRef/ArrayRef → ConcreteRef: narrow with ref.cast_nullable
+                                            _is_ref_null_cast = length(phi_value_bytes) >= 1 && phi_value_bytes[1] == Opcode.REF_NULL
+                                            if _is_ref_null_cast
+                                                # ref.null can't be cast — emit type-appropriate null instead
+                                                append!(bytes, emit_phi_type_default(phi_local_type))
+                                            else
+                                                append!(bytes, phi_value_bytes)
+                                                push!(bytes, Opcode.GC_PREFIX)
+                                                push!(bytes, Opcode.REF_CAST_NULL)
+                                                append!(bytes, encode_leb128_unsigned(phi_local_type.type_idx))
                                             end
                                         else
                                             # Type mismatch detected at emit point: replace with default

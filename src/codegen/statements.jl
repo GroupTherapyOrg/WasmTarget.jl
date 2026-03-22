@@ -2161,7 +2161,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                     end
                 end
                 if src_type !== nothing && (src_type === I64 || src_type === I32 || src_type === F32 || src_type === F64)
-                    # Source local is numeric but field expects ref — emit ref.null
+                    # Source local is numeric but field expects ref — box or emit ref.null
                     # Use the ACTUAL field type from the struct definition
                     if actual_field_wasm isa ConcreteRef
                         push!(bytes, Opcode.REF_NULL)
@@ -2169,6 +2169,14 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                     elseif actual_field_wasm === ArrayRef
                         push!(bytes, Opcode.REF_NULL)
                         push!(bytes, UInt8(ArrayRef))
+                    elseif actual_field_wasm === AnyRef
+                        # Box numeric local → struct_new for anyref field
+                        emit_box_type_id!(bytes, ctx.type_registry, src_type)
+                        append!(bytes, field_bytes)
+                        _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, src_type)
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.STRUCT_NEW)
+                        append!(bytes, encode_leb128_unsigned(_box_t))
                     elseif actual_field_wasm === ExternRef
                         # PURE-6024: Box numeric local → struct_new → extern_convert_any
                         # (was: emit_numeric_to_externref! with undefined vars stmt/val_wasm)
