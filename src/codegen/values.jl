@@ -1060,9 +1060,6 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         end
 
         # Create the struct
-        if type_idx == 190
-            @warn "TRUE-PARSE-002-DBG: compile_value CONSTANT struct_new 190 for T=$T"
-        end
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_NEW)
         append!(bytes, encode_leb128_unsigned(type_idx))

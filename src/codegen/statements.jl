@@ -562,12 +562,6 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
             stmt_bytes = compile_invoke(stmt, idx, ctx)
         elseif stmt.head === :new
             # Struct construction: %new(Type, args...)
-            # TRUE-PARSE-002 DEBUG: Log every :new statement
-            _new_type_ref = length(stmt.args) >= 1 ? stmt.args[1] : nothing
-            _new_resolved = _new_type_ref isa GlobalRef ? try getfield(_new_type_ref.mod, _new_type_ref.name) catch; nothing end : (_new_type_ref isa DataType ? _new_type_ref : nothing)
-            if _new_resolved !== nothing && _new_resolved <: Exception
-                @warn "TRUE-PARSE-002-DBG: compile_statement :new Exception type=$_new_resolved idx=$idx type_ref=$_new_type_ref"
-            end
             stmt_bytes = compile_new(stmt, idx, ctx)
         elseif stmt.head === :boundscheck
             # Bounds check - we can skip this as Wasm has its own bounds checking
@@ -1790,7 +1784,6 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
     # error types like ArgumentError have AbstractString fields that can receive LazyString
     # (a struct ref) where ArrayRef is expected, causing type mismatches.
     if struct_type <: Exception
-        @warn "TRUE-PARSE-002-DBG: compile_new Exception path: struct_type=$struct_type idx=$idx"
         push!(bytes, Opcode.UNREACHABLE)
         return bytes
     end
@@ -2328,30 +2321,6 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                     field_bytes = UInt8[]  # Don't append original
                 end
             end
-            # TRUE-PARSE-002 DEBUG: Detect numeric field_bytes going into anyref/structref/arrayref field
-            if actual_field_wasm !== nothing && (actual_field_wasm === AnyRef || actual_field_wasm === StructRef || actual_field_wasm === ArrayRef || actual_field_wasm isa ConcreteRef) && !isempty(field_bytes)
-                if length(field_bytes) >= 1 && (field_bytes[1] == 0x41 || field_bytes[1] == 0x42 || field_bytes[1] == 0x43 || field_bytes[1] == 0x44) && !has_ref_producing_gc_op(field_bytes)
-                    @warn "TRUE-PARSE-002: Numeric constant going into ref field! struct_type=$struct_type field_idx=$i actual_field_wasm=$actual_field_wasm field_bytes=$(field_bytes[1:min(8,end)])"
-                elseif length(field_bytes) >= 2 && field_bytes[1] == 0x20
-                    _dbg_idx = 0; _dbg_shift = 0
-                    for bi in 2:length(field_bytes)
-                        b = field_bytes[bi]
-                        _dbg_idx |= (Int(b & 0x7f) << _dbg_shift)
-                        _dbg_shift += 7
-                        (b & 0x80) == 0 && break
-                    end
-                    _dbg_arr = _dbg_idx - ctx.n_params + 1
-                    _dbg_src = nothing
-                    if _dbg_arr >= 1 && _dbg_arr <= length(ctx.locals)
-                        _dbg_src = ctx.locals[_dbg_arr]
-                    elseif _dbg_idx < ctx.n_params && _dbg_idx + 1 <= length(ctx.arg_types)
-                        _dbg_src = get_concrete_wasm_type(ctx.arg_types[_dbg_idx + 1], ctx.mod, ctx.type_registry)
-                    end
-                    if _dbg_src !== nothing && (_dbg_src === I64 || _dbg_src === I32 || _dbg_src === F32 || _dbg_src === F64)
-                        @warn "TRUE-PARSE-002: Numeric local going into ref field UNBOXED! struct_type=$struct_type field_idx=$i actual_field_wasm=$actual_field_wasm src_type=$_dbg_src local_idx=$_dbg_idx n_params=$(ctx.n_params)"
-                    end
-                end
-            end
             append!(bytes, field_bytes)
         end
     end
@@ -2413,10 +2382,6 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 push!(bytes, 0x00)
             end
         end
-    end
-
-    if info.wasm_type_idx == 190
-        @warn "TRUE-PARSE-002-DBG: compile_new EMITTING struct_new 190 for struct_type=$struct_type idx=$idx n_field_values=$(length(field_values))"
     end
 
     # struct.new type_idx

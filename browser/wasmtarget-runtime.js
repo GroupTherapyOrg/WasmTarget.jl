@@ -10,9 +10,9 @@
  *   console.log(Object.keys(mod.exports));
  */
 
-// Embedded string bridge module (164 bytes, compiled by WasmTarget.jl).
-// Exports: str_new(i32)->array<i32>, str_setchar!(array,i32,i32), str_char(array,i32)->i32, str_len(array)->i32
-const STRING_BRIDGE_BASE64 = "AGFzbQEAAAABJgZgAnx8AXxPAF5/AWABfwFjAWADYwF/fwBgAmMBfwF/YAFjAQF/AgwBBE1hdGgDcG93AAADBQQCAwQFBy8EB3N0cl9uZXcAAQxzdHJfc2V0Y2hhciEAAghzdHJfY2hhcgADB3N0cl9sZW4ABAosBAcAIAD7BwELDgAgACABQQFrIAL7DgELDAAgACABQQFr+wsBCwYAIAD7Dws=";
+// Embedded string bridge module — packed i8 array (matches WasmTarget.jl PURE-9010/9011 string format).
+// Exports: str_new(i32)->array<i8>, str_setbyte!(array,i32,i32), str_byte(array,i32)->i32, str_len(array)->i32
+const STRING_BRIDGE_BASE64 = "AGFzbQEAAAABHgVeeAFgAX8BZABgA2QAf38AYAJkAH8Bf2ABZAABfwMFBAECAwQHLwQHc3RyX25ldwAADHN0cl9zZXRieXRlIQABCHN0cl9ieXRlAAIHc3RyX2xlbgADCiYEBwAgAPsHAAsLACAAIAEgAvsOAAsJACAAIAH7DQALBgAgAPsPCwA+BG5hbWUCLAQAAQADbGVuAQMAA2FycgEDaWR4AgN2YWwCAgADYXJyAQNpZHgDAQADYXJyBAkBAAZzdHJpbmc=";
 
 class WasmTargetRuntime {
     constructor() {
@@ -109,9 +109,9 @@ class WasmTargetRuntime {
 
     /**
      * Initialize the string bridge module (lazy, called automatically).
-     * The bridge provides str_new, str_setchar!, str_char, str_len as Wasm exports
-     * that create and manipulate WasmGC array<i32> strings compatible with all
-     * WasmTarget-compiled modules (structural typing).
+     * The bridge provides str_new, str_setbyte!, str_byte, str_len as Wasm exports
+     * that create and manipulate WasmGC array<i8> strings compatible with all
+     * WasmTarget-compiled modules (structural typing, packed i8 format).
      *
      * @returns {Promise<void>}
      */
@@ -136,40 +136,43 @@ class WasmTargetRuntime {
     }
 
     /**
-     * Convert a JavaScript string to a WasmGC array<i32> (one codepoint per element).
+     * Convert a JavaScript string to a WasmGC array<i8> (UTF-8 encoded bytes).
      * Handles full Unicode including emoji and supplementary plane characters.
      *
      * @param {string} str - The JavaScript string to convert
-     * @returns {Promise<object>} A WasmGC array<i32> ref usable as a string argument
+     * @returns {Promise<object>} A WasmGC array<i8> ref usable as a string argument
      */
     async jsToWasmString(str) {
         await this._initStringBridge();
-        const { str_new, "str_setchar!": str_setchar } = this._stringBridge;
+        const { str_new, "str_setbyte!": str_setbyte } = this._stringBridge;
 
-        const codepoints = [...str]; // Iterate by codepoint, not UTF-16 code unit
-        const wasmStr = str_new(codepoints.length);
-        for (let i = 0; i < codepoints.length; i++) {
-            str_setchar(wasmStr, i + 1, codepoints[i].codePointAt(0)); // 1-based index
+        // Encode to UTF-8 bytes
+        const encoder = new TextEncoder();
+        const utf8 = encoder.encode(str);
+        const wasmStr = str_new(utf8.length);
+        for (let i = 0; i < utf8.length; i++) {
+            str_setbyte(wasmStr, i, utf8[i]); // 0-based index
         }
         return wasmStr;
     }
 
     /**
-     * Convert a WasmGC array<i32> string back to a JavaScript string.
+     * Convert a WasmGC array<i8> string back to a JavaScript string.
      *
-     * @param {object} wasmStr - A WasmGC array<i32> ref (from jsToWasmString or module output)
+     * @param {object} wasmStr - A WasmGC array<i8> ref (from jsToWasmString or module output)
      * @returns {Promise<string>} The JavaScript string
      */
     async wasmToJsString(wasmStr) {
         await this._initStringBridge();
-        const { str_char, str_len } = this._stringBridge;
+        const { str_byte, str_len } = this._stringBridge;
 
         const len = str_len(wasmStr);
-        let result = "";
+        const bytes = new Uint8Array(len);
         for (let i = 0; i < len; i++) {
-            result += String.fromCodePoint(str_char(wasmStr, i + 1)); // 1-based index
+            bytes[i] = str_byte(wasmStr, i); // 0-based index
         }
-        return result;
+        const decoder = new TextDecoder();
+        return decoder.decode(bytes);
     }
 
     /**
