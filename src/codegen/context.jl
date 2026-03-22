@@ -23,12 +23,12 @@ mutable struct CompilationContext
     global_args::Set{Int}        # Argument indices (1-based) that are WasmGlobal (phantom params)
     is_compiled_closure::Bool    # True if function being compiled is itself a closure
     # Signal substitution for Therapy.jl closures
-    signal_ssa_getters::Dict{Int, UInt32}   # SSA id (from getfield) -> Wasm global index
-    signal_ssa_setters::Dict{Int, UInt32}   # SSA id (from getfield) -> Wasm global index
-    captured_signal_fields::Dict{Symbol, Tuple{Bool, UInt32}}  # field_name -> (is_getter, global_idx)
+    signal_ssa_getters::IntKeyMap{UInt32}   # SSA id (from getfield) -> Wasm global index
+    signal_ssa_setters::IntKeyMap{UInt32}   # SSA id (from getfield) -> Wasm global index
+    captured_signal_fields::Union{Nothing, Dict{Symbol, Tuple{Bool, UInt32}}}  # field_name -> (is_getter, global_idx)
     # DOM bindings for Therapy.jl - emit DOM update calls after signal writes
     # Maps global_idx -> [(import_idx, [hk_arg, ...]), ...]
-    dom_bindings::Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}
+    dom_bindings::Union{Nothing, Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}}
     # Module-level globals: maps (Module, Symbol) -> Wasm global index
     # Used for const mutable struct instances that should be shared across functions
     module_globals::Vector{Tuple{Tuple{Module, Symbol}, UInt32}}
@@ -37,7 +37,7 @@ mutable struct CompilationContext
     scratch_locals::Union{Nothing, NTuple{5, Int}}
     # MemoryRef offset tracking: maps SSA id -> index SSA/value for memoryrefnew(ref, index, bc)
     # Used by memoryrefoffset to get the offset. Fresh refs (not in this map) have offset 1.
-    memoryref_offsets::Dict{Int, Any}
+    memoryref_offsets::IntKeyMap{Any}
     # Stack validator: tracks value stack types during bytecode emission (PURE-414)
     # Advisory only — warns on type mismatches but doesn't prevent compilation
     validator::WasmStackValidator
@@ -47,7 +47,7 @@ mutable struct CompilationContext
     # PURE-6024: Slot variable locals for unoptimized IR (may_optimize=false).
     # Maps SlotNumber.id -> WASM local index. Slot 1 = self, Slot 2 = arg1, etc.
     # Slots > n_params+1 are local variables assigned with Expr(:(=), SlotNumber, rhs).
-    slot_locals::Dict{Int, Int}
+    slot_locals::IntKeyMap{Int}
     # PURE-9060: Tier 2 hash dispatch tables for megamorphic calls
     dispatch_registry::Union{Nothing, DispatchTableRegistry}
     # PURE-9063: Scratch i32 local for typeof struct lookup (cached)
@@ -59,8 +59,8 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
                            func_idx::UInt32=UInt32(0), func_ref=nothing,
                            global_args::Set{Int}=Set{Int}(),
                            is_compiled_closure::Bool=false,
-                           captured_signal_fields::Dict{Symbol, Tuple{Bool, UInt32}}=Dict{Symbol, Tuple{Bool, UInt32}}(),
-                           dom_bindings::Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}=Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}(),
+                           captured_signal_fields::Union{Nothing, Dict{Symbol, Tuple{Bool, UInt32}}}=nothing,
+                           dom_bindings::Union{Nothing, Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}}=nothing,
                            module_globals::Vector{Tuple{Tuple{Module, Symbol}, UInt32}}=Tuple{Tuple{Module, Symbol}, UInt32}[],
                            dispatch_registry::Union{Nothing, DispatchTableRegistry}=nothing)
     # Calculate n_params excluding WasmGlobal arguments (they're phantom)
@@ -82,16 +82,16 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         func_ref,
         global_args,
         is_compiled_closure,    # Is this function itself a closure?
-        Dict{Int, UInt32}(),    # signal_ssa_getters
-        Dict{Int, UInt32}(),    # signal_ssa_setters
+        IntKeyMap{UInt32}(length(code_info.code)),  # signal_ssa_getters
+        IntKeyMap{UInt32}(length(code_info.code)),  # signal_ssa_setters
         captured_signal_fields, # captured signal field mappings
         dom_bindings,           # DOM bindings for Therapy.jl
         module_globals,         # Module-level globals (const mutable structs)
         nothing,                # scratch_locals (set by allocate_scratch_locals!)
-        Dict{Int, Any}(),       # memoryref_offsets (populated during compilation)
+        IntKeyMap{Any}(length(code_info.code)),     # memoryref_offsets (populated during compilation)
         WasmStackValidator(enabled=true, func_name="func_$(func_idx)"),  # PURE-414: stack validator
         false,                  # last_stmt_was_stub (PURE-908)
-        Dict{Int, Int}(),       # slot_locals (PURE-6024: unoptimized IR slot variables)
+        IntKeyMap{Int}(length(code_info.code)),      # slot_locals (PURE-6024: unoptimized IR slot variables)
         dispatch_registry,      # PURE-9060: Tier 2 hash dispatch
         nothing                 # PURE-9063: typeof scratch local (allocated on demand)
     )
@@ -128,7 +128,7 @@ For CompilableSignal/CompilableSetter pattern:
 - setfield!(Signal, :value, x) -> value write (substitutes to global.set)
 """
 function analyze_signal_captures!(ctx::CompilationContext)
-    isempty(ctx.captured_signal_fields) && return
+    (ctx.captured_signal_fields === nothing || isempty(ctx.captured_signal_fields)) && return
 
     code = ctx.code_info.code
 

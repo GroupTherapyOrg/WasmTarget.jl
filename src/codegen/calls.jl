@@ -1695,7 +1695,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         append!(bytes, encode_leb128_unsigned(global_idx))
 
         # Inject DOM update calls for this signal (Therapy.jl reactive updates)
-        if haskey(ctx.dom_bindings, global_idx)
+        if ctx.dom_bindings !== nothing && haskey(ctx.dom_bindings, global_idx)
             # Get global's type for conversion
             global_type = ctx.mod.globals[global_idx + 1].valtype
 
@@ -1744,7 +1744,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
             append!(bytes, encode_leb128_unsigned(global_idx))
 
             # Inject DOM update calls for this signal (Therapy.jl reactive updates)
-            if haskey(ctx.dom_bindings, global_idx)
+            if ctx.dom_bindings !== nothing && haskey(ctx.dom_bindings, global_idx)
                 # Get global's type for conversion
                 global_type = ctx.mod.globals[global_idx + 1].valtype
 
@@ -1787,7 +1787,7 @@ function compile_call(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{UIn
         if is_closure_self
             # This is accessing a field of the closure
             field_name = field_ref isa QuoteNode ? field_ref.value : field_ref
-            if field_name isa Symbol && haskey(ctx.captured_signal_fields, field_name)
+            if field_name isa Symbol && ctx.captured_signal_fields !== nothing && haskey(ctx.captured_signal_fields, field_name)
                 # Skip - this produces a getter/setter function reference
                 return bytes
             end

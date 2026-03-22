@@ -1680,7 +1680,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::CompilationContext)::Vector{U
             append!(bytes, encode_leb128_unsigned(global_idx))
 
             # Inject DOM update calls for this signal (Therapy.jl reactive updates)
-            if haskey(ctx.dom_bindings, global_idx)
+            if ctx.dom_bindings !== nothing && haskey(ctx.dom_bindings, global_idx)
                 # Get global's type for conversion
                 global_type = ctx.mod.globals[global_idx + 1].valtype
 
