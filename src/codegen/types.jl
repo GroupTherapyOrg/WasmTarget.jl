@@ -46,20 +46,20 @@ end
 Registry for struct and array type mappings within a module.
 """
 mutable struct TypeRegistry
-    structs::Dict{Type, StructInfo}  # DataType or UnionAll for parametric types
-    arrays::Dict{Type, UInt32}  # Element type -> array type index
+    structs::Union{Nothing, Dict{Type, StructInfo}}  # DataType or UnionAll for parametric types
+    arrays::Union{Nothing, Dict{Type, UInt32}}  # Element type -> array type index
     string_array_idx::Union{Nothing, UInt32}  # Index of i8 array type for strings
-    unions::Dict{Union, UnionInfo}  # Union type -> tagged union info
-    numeric_boxes::Dict{WasmValType, UInt32}  # PURE-325: box types for numeric→externref returns
+    unions::Union{Nothing, Dict{Union, UnionInfo}}  # Union type -> tagged union info
+    numeric_boxes::Union{Nothing, Dict{WasmValType, UInt32}}  # PURE-325: box types for numeric→externref returns
     # PURE-4151: Type constant globals — each unique Type value gets a unique Wasm global
     # so that ref.eq distinguishes different Types (e.g., Int64 !== String)
-    type_constant_globals::Dict{Type, UInt32}  # Type value -> Wasm global index
+    type_constant_globals::Union{Nothing, Dict{Type, UInt32}}  # Type value -> Wasm global index
     # PURE-4149: TypeName constant globals — each unique TypeName gets a unique Wasm global
     # so that t.name === s.name identity comparison works via ref.eq
-    typename_constant_globals::Dict{Core.TypeName, UInt32}  # TypeName -> Wasm global index
+    typename_constant_globals::Union{Nothing, Dict{Core.TypeName, UInt32}}  # TypeName -> Wasm global index
     # PURE-9025: DFS type ID assignment for runtime dispatch
-    type_ids::Dict{Type, Int32}  # Concrete type -> unique DFS integer ID
-    type_ranges::Dict{Type, Tuple{Int32, Int32}}  # Abstract/concrete type -> [low, high] DFS range
+    type_ids::Union{Nothing, Dict{Type, Int32}}  # Concrete type -> unique DFS integer ID
+    type_ranges::Union{Nothing, Dict{Type, Tuple{Int32, Int32}}}  # Abstract/concrete type -> [low, high] DFS range
     # PURE-9026: Base struct type index for typeof(x) extraction
     base_struct_idx::Union{Nothing, UInt32}  # Index of $JlBase = (struct (field i32))
     # PURE-9028: BoxedNothing struct type and singleton global
@@ -85,6 +85,19 @@ TypeRegistry() = TypeRegistry(
     Dict{Union, UnionInfo}(), Dict{WasmValType, UInt32}(),
     Dict{Type, UInt32}(), Dict{Core.TypeName, UInt32}(),
     Dict{Type, Int32}(), Dict{Type, Tuple{Int32, Int32}}(),
+    nothing, nothing, nothing, nothing, nothing,
+    nothing, nothing, nothing, nothing, nothing, nothing, nothing,
+    nothing  # string_hash_func_idx
+)
+
+# TRUE-INT-002: Dict-free constructor for WASM self-hosting.
+# All Dict fields are nothing — safe for MVP Int64 arithmetic where
+# no struct/array/union type registration is needed.
+TypeRegistry(::Val{:minimal}) = TypeRegistry(
+    nothing, nothing, nothing,  # structs, arrays, string_array_idx
+    nothing, nothing,            # unions, numeric_boxes
+    nothing, nothing,            # type_constant_globals, typename_constant_globals
+    nothing, nothing,            # type_ids, type_ranges
     nothing, nothing, nothing, nothing, nothing,
     nothing, nothing, nothing, nothing, nothing, nothing, nothing,
     nothing  # string_hash_func_idx
@@ -1144,7 +1157,8 @@ And \$JlTypeName fields: name_str, module_name_str, wrapper
 Legacy path: populates Julia DataType/TypeName struct fields via wasm_field_idx.
 """
 function populate_type_constant_globals!(mod::WasmModule, registry::TypeRegistry)
-    isempty(registry.type_constant_globals) && return
+    # TRUE-INT-002: Guard for Dict-free TypeRegistry (minimal constructor)
+    (registry.type_constant_globals === nothing || isempty(registry.type_constant_globals)) && return
 
     # PURE-9063: Use $JlDataType/$JlTypeName when hierarchy is available
     use_jl_hierarchy = registry.jl_datatype_idx !== nothing

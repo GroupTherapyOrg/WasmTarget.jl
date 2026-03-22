@@ -2495,7 +2495,7 @@ Dict-free compilation path for WASM self-hosting. Convenience wrapper that creat
 WasmModule and TypeRegistry, then delegates to the prebaked version.
 """
 function compile_from_ir_inplace(ir_entries::Vector)::Vector{UInt8}
-    return compile_from_ir_prebaked(ir_entries, WasmModule(), TypeRegistry())
+    return compile_from_ir_prebaked(ir_entries, WasmModule(), TypeRegistry(Val(:minimal)))
 end
 
 """
