@@ -279,6 +279,15 @@ function compile_statement(stmt, idx::Int, ctx::CompilationContext)::Vector{UInt
                         push!(bytes, Opcode.GC_PREFIX)
                         push!(bytes, Opcode.REF_CAST_NULL)
                         append!(bytes, encode_leb128_signed(Int64(pi_local_type.type_idx)))
+                    # CG-003d: PiNode narrowing from EqRef → ConcreteRef.
+                    # Example: Union{Nothing, TestNode} (eqref local) → TestNode after null check.
+                    # This occurs because Union{Nothing, T} locals use EqRef (RC1 fix).
+                    elseif !is_multi_value_src && val_wasm_type === EqRef && pi_local_type isa ConcreteRef
+                        val_bytes = compile_value(stmt.val, ctx)
+                        append!(bytes, val_bytes)
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.REF_CAST_NULL)
+                        append!(bytes, encode_leb128_signed(Int64(pi_local_type.type_idx)))
                     # PURE-6024: Tagged union unwrapping — PiNode narrows Union{A,B} to variant.
                     # Source is a ConcreteRef (tagged union struct), target is the extracted variant.
                     # Example: π(%53::Union{AbstractString,Symbol}, Symbol) needs struct.get + cast.

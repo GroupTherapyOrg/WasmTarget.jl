@@ -310,6 +310,33 @@ function compile_value(val, ctx::CompilationContext)::Vector{UInt8}
                             append!(bytes, encode_leb128_unsigned(_box_idx))
                             append!(bytes, encode_leb128_unsigned(1))  # field 1 = value (field 0 = typeId)
                         end
+                    else
+                        # CG-003d: PiNode narrows to a struct/ref type (not numeric).
+                        # Source value may be EqRef/StructRef/AnyRef (from Union{Nothing, T} local).
+                        # Add ref.cast_null to narrow to the concrete type so struct.get works.
+                        local _pi_concrete = julia_to_wasm_type_concrete(pi_type, ctx)
+                        if _pi_concrete isa ConcreteRef
+                            # Check if the source is a generic ref type that needs casting
+                            local _pi_src_wasm2 = nothing
+                            if stmt.val isa Core.SSAValue
+                                local _pi_src_type2 = get(ctx.ssa_types, stmt.val.id, Any)
+                                _pi_src_wasm2 = julia_to_wasm_type_concrete(_pi_src_type2, ctx)
+                            elseif stmt.val isa Core.Argument
+                                local _pi_arg_idx2 = ctx.is_compiled_closure ? stmt.val.n : stmt.val.n - 1
+                                if _pi_arg_idx2 >= 1 && _pi_arg_idx2 <= length(ctx.arg_types)
+                                    _pi_src_wasm2 = julia_to_wasm_type_concrete(ctx.arg_types[_pi_arg_idx2], ctx)
+                                end
+                            end
+                            if _pi_src_wasm2 === EqRef || _pi_src_wasm2 === StructRef || _pi_src_wasm2 === AnyRef || _pi_src_wasm2 === ExternRef
+                                if _pi_src_wasm2 === ExternRef
+                                    push!(bytes, Opcode.GC_PREFIX)
+                                    push!(bytes, Opcode.ANY_CONVERT_EXTERN)
+                                end
+                                push!(bytes, Opcode.GC_PREFIX)
+                                push!(bytes, Opcode.REF_CAST_NULL)
+                                append!(bytes, encode_leb128_signed(Int64(_pi_concrete.type_idx)))
+                            end
+                        end
                     end
                 end
             else
