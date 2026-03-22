@@ -20,7 +20,7 @@ mutable struct CompilationContext
     func_registry::Union{FunctionRegistry, Nothing}  # Function mappings for cross-calls
     func_idx::UInt32             # Index of the function being compiled (for recursion)
     func_ref::Any                # Reference to original function (for self-call detection)
-    global_args::Set{Int}        # Argument indices (1-based) that are WasmGlobal (phantom params)
+    global_args::BitSet           # Argument indices (1-based) that are WasmGlobal (phantom params)
     is_compiled_closure::Bool    # True if function being compiled is itself a closure
     # Signal substitution for Therapy.jl closures
     signal_ssa_getters::IntKeyMap{UInt32}   # SSA id (from getfield) -> Wasm global index
@@ -57,7 +57,7 @@ end
 function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
                            func_registry::Union{FunctionRegistry, Nothing}=nothing,
                            func_idx::UInt32=UInt32(0), func_ref=nothing,
-                           global_args::Set{Int}=Set{Int}(),
+                           global_args::BitSet=BitSet(),
                            is_compiled_closure::Bool=false,
                            captured_signal_fields::Union{Nothing, Dict{Symbol, Tuple{Bool, UInt32}}}=nothing,
                            dom_bindings::Union{Nothing, Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}}=nothing,
