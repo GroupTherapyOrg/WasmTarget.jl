@@ -923,11 +923,12 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         info = register_struct_type!(ctx.mod, ctx.type_registry, T)
         type_idx = info.wasm_type_idx
 
-        # Check for undefined fields before attempting to compile struct constant
-        # Core types like TypeName often have undefined fields (e.g., partial)
-        has_undefined = any(!isdefined(val, fn) for fn in fieldnames(T))
-        if has_undefined
-            # Struct has undefined fields - emit ref.null for the struct type
+        # Check for undefined fields — if ALL fields are undefined, emit ref.null.
+        # If only SOME fields are undefined, emit default values for those and still
+        # construct the struct (TRUE-TI-001: enables Method objects with optional fields).
+        n_undefined = count(!isdefined(val, fn) for fn in fieldnames(T))
+        if n_undefined == length(fieldnames(T))
+            # Fully undefined struct - emit ref.null
             push!(bytes, Opcode.REF_NULL)
             append!(bytes, encode_leb128_signed(Int64(type_idx)))
             return bytes
@@ -938,8 +939,82 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
         emit_type_id!(bytes, ctx.type_registry, T)
         for (fi, field_name) in enumerate(fieldnames(T))
+            # TRUE-TI-001: Handle undefined fields with type-correct defaults
+            if !isdefined(val, field_name)
+                local _undef_wasm_fi = fi + Int(info.field_offset)
+                if struct_type_def isa StructType && _undef_wasm_fi <= length(struct_type_def.fields)
+                    undef_field_type = struct_type_def.fields[_undef_wasm_fi].valtype
+                    if undef_field_type isa ConcreteRef
+                        push!(bytes, Opcode.REF_NULL)
+                        append!(bytes, encode_leb128_signed(Int64(undef_field_type.type_idx)))
+                    elseif undef_field_type === AnyRef
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(AnyRef))
+                    elseif undef_field_type === EqRef
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(EqRef))
+                    elseif undef_field_type === ExternRef
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(ExternRef))
+                    elseif undef_field_type === StructRef
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(StructRef))
+                    elseif undef_field_type === ArrayRef
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(ArrayRef))
+                    elseif undef_field_type === I32
+                        push!(bytes, Opcode.I32_CONST)
+                        push!(bytes, 0x00)
+                    elseif undef_field_type === I64
+                        push!(bytes, Opcode.I64_CONST)
+                        push!(bytes, 0x00)
+                    elseif undef_field_type === F32
+                        push!(bytes, Opcode.F32_CONST)
+                        append!(bytes, reinterpret(UInt8, [Float32(0.0)]))
+                    elseif undef_field_type === F64
+                        push!(bytes, Opcode.F64_CONST)
+                        append!(bytes, reinterpret(UInt8, [Float64(0.0)]))
+                    else
+                        # Fallback: try ref.null with the generic type
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(AnyRef))
+                    end
+                else
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, UInt8(AnyRef))
+                end
+                continue
+            end
             field_val = getfield(val, field_name)
             field_val_bytes = compile_value(field_val, ctx)
+            # TRUE-TI-001: If compile_value produced no bytes (e.g., Module, Function),
+            # emit ref.null for the field's expected type
+            if isempty(field_val_bytes)
+                local _empty_fi = fi + Int(info.field_offset)
+                if struct_type_def isa StructType && _empty_fi <= length(struct_type_def.fields)
+                    empty_field_type = struct_type_def.fields[_empty_fi].valtype
+                    if empty_field_type isa ConcreteRef
+                        push!(bytes, Opcode.REF_NULL)
+                        append!(bytes, encode_leb128_signed(Int64(empty_field_type.type_idx)))
+                    elseif empty_field_type === AnyRef
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(AnyRef))
+                    elseif empty_field_type === ExternRef
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(ExternRef))
+                    elseif empty_field_type === I32
+                        push!(bytes, Opcode.I32_CONST)
+                        push!(bytes, 0x00)
+                    elseif empty_field_type === I64
+                        push!(bytes, Opcode.I64_CONST)
+                        push!(bytes, 0x00)
+                    else
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(AnyRef))
+                    end
+                    continue
+                end
+            end
             # Check field type compatibility
             replaced = false
             local _wasm_fi = fi + Int(info.field_offset)  # PURE-9024: skip typeId
