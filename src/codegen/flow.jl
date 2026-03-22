@@ -1613,15 +1613,16 @@ function generate_loop_code(ctx::CompilationContext)::Vector{UInt8}
             append!(bytes, compiled_stmt_bytes)
 
             # Drop unused values from calls (prevents stack pollution in loops)
-            if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
+            # PURE-6027c: Skip DROP if the statement was a stub (ended in unreachable).
+            # After a stub, the stack is polymorphic/dead — emitting DROP can cause
+            # "nothing on stack" validation errors when the stub doesn't actually push a value.
+            if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke) && !ctx.last_stmt_was_stub
                 # PURE-220: Skip if compile_statement already emitted a DROP
                 # PURE-6006: Guard against false positive where call function_index=0x1a (26)
                 # matches DROP opcode. Call instruction is [0x10, LEB128(func_idx)]; if func_idx
                 # fits in 1 byte as 0x1a, the last byte == DROP but it's an operand, not DROP.
                 already_dropped = !isempty(compiled_stmt_bytes) && compiled_stmt_bytes[end] == Opcode.DROP &&
                                   !(length(compiled_stmt_bytes) >= 2 && compiled_stmt_bytes[end-1] == Opcode.CALL)
-                # Use statement_produces_wasm_value for consistent handling
-                # This checks the function registry for accurate return type info
                 # Use statement_produces_wasm_value for consistent handling
                 # This checks the function registry for accurate return type info
                 if !already_dropped && statement_produces_wasm_value(stmt, i, ctx)

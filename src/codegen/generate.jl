@@ -439,13 +439,18 @@ function fix_i32_wrap_after_i32_ops(bytes::Vector{UInt8})::Vector{UInt8}
 end
 
 """
-PURE-6027: Insert i32_wrap_i64 when an i64-typed local feeds into i32 binary operations.
+PURE-6027: Insert i32_wrap_i64 when an i64-typed value feeds into i32 binary operations.
 
-Pattern: local_get <idx> (where local is i64), followed by i32_const, then i32 binary op
-(i32_add 0x6a through i32_rotr 0x78). This happens when the codegen determines is_32bit=true
-from Julia type inference but the actual SSA local was allocated as i64 (e.g., phi nodes that
-merge values from branches with different type contexts, or code exposed by dead code guard
-scoping). Fix: insert i32_wrap_i64 (0xa7) after the local_get.
+Patterns handled:
+1. local_get <idx> (i64 local), i32_const, i32_binary_op → wrap after local_get
+2. local_get <idx> (i64 local), directly i32_binary_op → wrap after local_get
+3. i64_const <value>, i32_binary_op → wrap after i64_const
+4. local_get <idx> (i64 local), local_get <any>, i32_binary_op → wrap after first local_get
+
+This happens when the codegen determines is_32bit=true from Julia type inference but the actual
+value is i64 (e.g., phi nodes allocated as i64, or Int64 literal constants in invoke arithmetic
+where is_32bit is determined from the first arg but the second arg is an Int64 literal).
+Fix: insert i32_wrap_i64 (0xa7) after the i64 value.
 """
 function fix_i64_local_in_i32_ops(bytes::Vector{UInt8}, all_local_types::Vector{WasmValType})::Vector{UInt8}
     result = UInt8[]
@@ -460,7 +465,6 @@ function fix_i64_local_in_i32_ops(bytes::Vector{UInt8}, all_local_types::Vector{
             i += 1
             local_idx = 0
             shift = 0
-            leb_start = length(result) + 1
             while i <= length(bytes)
                 b = bytes[i]
                 push!(result, b)
@@ -471,9 +475,9 @@ function fix_i64_local_in_i32_ops(bytes::Vector{UInt8}, all_local_types::Vector{
             end
             # Check if this local is i64-typed
             if local_idx + 1 <= length(all_local_types) && all_local_types[local_idx + 1] === I64
-                # Look ahead: is next instruction i32_const followed by i32 binary op?
                 j = i
                 if j <= length(bytes) && bytes[j] == 0x41  # i32_const
+                    # Pattern 1: local_get(i64), i32_const, i32_op
                     # Skip i32_const LEB128 operand
                     k = j + 1
                     while k <= length(bytes)
@@ -481,12 +485,44 @@ function fix_i64_local_in_i32_ops(bytes::Vector{UInt8}, all_local_types::Vector{
                         k += 1
                     end
                     k += 1  # past last LEB byte
-                    # Check if next byte is an i32 binary op (0x6a-0x78)
+                    if k <= length(bytes) && bytes[k] >= 0x6a && bytes[k] <= 0x78
+                        push!(result, 0xa7)  # i32_wrap_i64
+                        fixes += 1
+                    end
+                elseif j <= length(bytes) && bytes[j] >= 0x6a && bytes[j] <= 0x78
+                    # Pattern 2: local_get(i64) directly before i32 binary op
+                    push!(result, 0xa7)  # i32_wrap_i64
+                    fixes += 1
+                elseif j <= length(bytes) && bytes[j] == 0x20  # another local_get
+                    # Pattern 4: local_get(i64), local_get(?), i32_op
+                    # Skip second local_get + its LEB128 operand
+                    k = j + 1
+                    while k <= length(bytes)
+                        (bytes[k] & 0x80) == 0 && break
+                        k += 1
+                    end
+                    k += 1  # past last LEB byte
                     if k <= length(bytes) && bytes[k] >= 0x6a && bytes[k] <= 0x78
                         push!(result, 0xa7)  # i32_wrap_i64
                         fixes += 1
                     end
                 end
+            end
+        elseif op == 0x42  # i64_const
+            # Pattern 3: i64_const <value>, i32_binary_op
+            # Copy i64_const opcode and LEB128 value
+            push!(result, op)
+            i += 1
+            while i <= length(bytes)
+                b = bytes[i]
+                push!(result, b)
+                i += 1
+                (b & 0x80) == 0 && break
+            end
+            # Check if next is i32 binary op (0x6a-0x78)
+            if i <= length(bytes) && bytes[i] >= 0x6a && bytes[i] <= 0x78
+                push!(result, 0xa7)  # i32_wrap_i64
+                fixes += 1
             end
         else
             push!(result, op)
