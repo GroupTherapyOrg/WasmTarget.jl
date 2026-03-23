@@ -9,3 +9,4 @@ docs/dist/
 .DS_Store
 docs/cm-bundle/node_modules/
 docs/dist/
+.claude/worktrees/
