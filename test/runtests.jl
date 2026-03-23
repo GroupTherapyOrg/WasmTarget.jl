@@ -6008,4 +6008,76 @@ struct TypeHierS2 x::Int32 end
         end
     end
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Phase 45: TRUE Self-Hosting — WASM Codegen Producing WASM (INT-003/INT-004)
+    # ═══════════════════════════════════════════════════════════════════════════
+    @testset "Phase 45: TRUE Self-Hosting (WASM-in-WASM)" begin
+        selfhost_final = joinpath(@__DIR__, "selfhost", "selfhost-final.wasm")
+        selfhost_regression = joinpath(@__DIR__, "selfhost", "selfhost-regression.wasm")
+        regression_script = joinpath(@__DIR__, "..", "scripts", "run_true_selfhost_tests.cjs")
+
+        # --- 45a: E2E self-hosting — f(5n)===26n via WASM codegen ---
+        @testset "E2E: f(5n)===26n via WASM codegen" begin
+            if isfile(selfhost_final)
+                node_script = """
+                const fs = require('fs');
+                const bytes = fs.readFileSync(process.argv[2]);
+                WebAssembly.instantiate(bytes, { Math: { pow: Math.pow } }).then(async m => {
+                    const e = m.instance.exports;
+                    const result = e.run();
+                    const len = e.wasm_bytes_length(result);
+                    const arr = new Uint8Array(len);
+                    for (let i = 0; i < len; i++) arr[i] = e.wasm_bytes_get(result, i + 1);
+                    const m2 = await WebAssembly.instantiate(arr);
+                    const r = m2.instance.exports.f(5n);
+                    console.log(r === 26n ? 'E2E_PASS' : 'E2E_FAIL:' + String(r));
+                    process.exit(r === 26n ? 0 : 1);
+                }).catch(err => { console.log('E2E_FAIL:' + err.message); process.exit(1); });
+                """
+                script_path = tempname() * ".cjs"
+                write(script_path, node_script)
+                output = try
+                    read(`node $script_path $selfhost_final`, String)
+                catch e
+                    "E2E_FAIL: $(sprint(showerror, e))"
+                end
+                rm(script_path, force=true)
+                @test occursin("E2E_PASS", output)
+                if !occursin("E2E_PASS", output)
+                    println("  E2E output: ", strip(output))
+                end
+
+                # Document binary size
+                sz = filesize(selfhost_final)
+                println("  selfhost-final.wasm: $(sz) bytes ($(round(sz/1024, digits=1)) KB)")
+            else
+                @test_broken false  # selfhost-final.wasm not built
+            end
+        end
+
+        # --- 45b: 11-function regression suite ---
+        @testset "Regression suite: 11 functions via WASM codegen" begin
+            if isfile(selfhost_regression) && isfile(regression_script)
+                output = try
+                    read(`node $regression_script $selfhost_regression`, String)
+                catch e
+                    "SUBPROCESS FAILED: $(sprint(showerror, e))"
+                end
+                # Script prints "SUCCESS: TRUE self-hosting regression suite PASSED"
+                regression_pass = occursin("SUCCESS", output) && occursin("regression suite PASSED", output)
+                @test regression_pass
+                if !regression_pass
+                    println("  Regression output (last 500 chars): ", output[max(1,end-499):end])
+                end
+
+                # Document binary size
+                sz = filesize(selfhost_regression)
+                println("  selfhost-regression.wasm: $(sz) bytes ($(round(sz/1024, digits=1)) KB)")
+            else
+                @test_broken false  # selfhost-regression.wasm or test script not built
+            end
+        end
+
+    end
+
 end
