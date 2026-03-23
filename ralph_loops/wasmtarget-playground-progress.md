@@ -151,3 +151,37 @@ Same fix in `infer_value_wasm_type` for type inference.
 - Valid WASM binary (magic number + version)
 
 **Test suite**: 962 passed, 0 failed, 2 errored (pre-existing), 6 broken — zero regressions
+
+### 2026-03-23: Session 7 — E2E-001 (f(x)=x*x+1 via REAL codegen in WASM)
+
+**Goal**: Compile REAL codegen (e2e_run + e2e_compile_stmt + e2e_emit_val + e2e_emit_op) to WASM. Feed it IR for f(x)=x*x+1. It produces a valid inner .wasm module. f(5n)===26n.
+
+**Status**: DONE
+
+**Bugs found and fixed**:
+
+1. **Struct refs in Any-typed fields replaced with ref.null** (values.jl line 1077)
+   - Root cause: type compatibility check in struct constant emission treated AnyRef fields with struct.new values as "incompatible" and replaced with `ref.null struct`
+   - Fix: Removed `expected_wasm === AnyRef` from the need_replace condition. A WasmGC struct ref is a valid subtype of anyref — no replacement needed.
+
+2. **isa on same-layout types uses ref.test which can't distinguish them** (calls.jl line 1486)
+   - Root cause: `add_type!` deduplicates types with identical WasmGC structure. IRRef, IRArg, IRConst all have layout `(i32 typeId, i64 field)`, so ref.test matches all three.
+   - Fix: When `is_shared_wasm_type()` detects multiple Julia types share a WasmGC index, isa emits typeId-based dispatch instead of bare ref.test:
+     ```
+     local.tee $tmp → ref.test (ref $shared) → if (i32) →
+       local.get $tmp → ref.cast → struct.get 0 → i32.const <typeId> → i32.eq
+     → else → i32.const 0 → end
+     ```
+   - Added `ensure_type_id!()` for on-demand typeId assignment so types registered after `assign_type_ids!()` still get unique IDs.
+   - Changed `emit_type_id!()` to use `ensure_type_id!()` so struct constants match isa checks.
+
+**Runtime results**:
+| Test | Expected | Actual | Pattern |
+|------|----------|--------|---------|
+| Native e2e_run() | f(5)=26 | 26 | Direct Julia execution |
+| Outer WASM valid | magic bytes | ✓ | Valid binary |
+| Inner WASM len | 52 | 52 | Matches native |
+| f(5n) via WASM-in-WASM | 26n | 26n | E2E_PASS |
+| WAT has ref.test | ≥1 | ✓ | Cheat-proof verified |
+
+**Test suite**: 969 passed, 0 failed, 2 errored (pre-existing), 6 broken — zero regressions

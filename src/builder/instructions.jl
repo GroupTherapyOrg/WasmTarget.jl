@@ -414,7 +414,7 @@ new_wasm_module() = WasmModule(CompositeType[], Vector{UInt32}[], WasmImport[], 
 Add a composite type (FuncType, StructType, or ArrayType) to the module and return its index.
 """
 function add_type!(mod::WasmModule, ct::CompositeType)::UInt32
-    # Check if type already exists
+    # Check if type already exists (structural deduplication)
     for (i, existing) in enumerate(mod.types)
         if types_equal(existing, ct)
             return UInt32(i - 1)
@@ -472,6 +472,42 @@ function add_rec_group!(mod::WasmModule, type_indices::Vector{UInt32})
     # Only add if not empty and not already a rec group
     if !isempty(type_indices)
         push!(mod.rec_groups, type_indices)
+    end
+end
+
+"""
+    ensure_nominal_struct_types!(mod)
+
+Group structurally-equivalent StructType entries into rec groups so they are
+nominally distinct for ref.test dispatch.  In WasmGC, types in separate
+singleton rec groups with identical structure are considered equivalent;
+placing them in the same rec group makes them distinct by position.
+"""
+function ensure_nominal_struct_types!(mod::WasmModule)
+    # Already-grouped type indices (skip them)
+    grouped = Set{UInt32}()
+    for g in mod.rec_groups
+        for ti in g
+            push!(grouped, ti)
+        end
+    end
+
+    # Build groups of struct types with identical layout
+    # Key: structural signature → list of type indices
+    buckets = Dict{Vector{Tuple{Any,Bool}}, Vector{UInt32}}()
+    for (i, ct) in enumerate(mod.types)
+        ti = UInt32(i - 1)
+        ti in grouped && continue
+        ct isa StructType || continue
+        sig = [(f.valtype, f.mutable_) for f in ct.fields]
+        bucket = get!(buckets, sig, UInt32[])
+        push!(bucket, ti)
+    end
+
+    # Create rec groups for buckets with 2+ types
+    for (_, indices) in buckets
+        length(indices) >= 2 || continue
+        push!(mod.rec_groups, indices)
     end
 end
 

@@ -1074,7 +1074,10 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                                         if bi == length(field_val_bytes)
                                             if expected_wasm isa ConcreteRef && sn_type_idx != expected_wasm.type_idx
                                                 need_replace = true
-                                            elseif expected_wasm === ArrayRef || expected_wasm === ExternRef || expected_wasm === AnyRef
+                                            elseif expected_wasm === ArrayRef || expected_wasm === ExternRef
+                                                # ArrayRef: struct is not an array
+                                                # ExternRef: struct ref needs extern.convert_any
+                                                # AnyRef/StructRef: struct refs are valid subtypes, no replace needed
                                                 need_replace = true
                                             end
                                         end

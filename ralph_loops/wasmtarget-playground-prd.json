@@ -75,9 +75,10 @@
       "id": "E2E-001",
       "title": "End-to-end: f(x)=x*x+1 via REAL codegen in WASM",
       "priority": 3,
-      "status": "pending",
+      "status": "done",
       "depends_on": ["D-007"],
-      "description": "Compile the REAL codegen to WASM. Feed it CodeInfo for f(x::Int64)=x*x+1. It produces a valid inner .wasm module. f(5)===26. NO hand-emitted opcodes."
+      "description": "Compile the REAL codegen to WASM. Feed it CodeInfo for f(x::Int64)=x*x+1. It produces a valid inner .wasm module. f(5)===26. NO hand-emitted opcodes.",
+      "completedNote": "Two compiler bugs fixed: (1) struct refs in Any-typed fields were replaced with ref.null by over-eager type compatibility check in values.jl; (2) isa checks on types with identical WasmGC layouts couldn't distinguish them because ref.test uses structural equivalence. Fixed via typeId-based dispatch: when multiple Julia types share a WasmGC type index, isa emits ref.test + if/else + struct.get typeId + i32.eq. On-demand typeId assignment ensures IDs are consistent between struct constants and isa checks. 969 tests pass, zero regressions."
     },
     {
       "id": "E2E-002",

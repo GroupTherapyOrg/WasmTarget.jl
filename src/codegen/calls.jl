@@ -1484,10 +1484,52 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
                     append!(bytes, encode_leb128_signed(Int64(_box_idx2)))
                 end
             elseif target_wasm_isa isa ConcreteRef
-                # Struct type: test against the concrete struct type
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.REF_TEST)
-                append!(bytes, encode_leb128_signed(Int64(target_wasm_isa.type_idx)))
+                # Struct type: test against the concrete struct type.
+                # E2E-001: When multiple Julia types share the same WasmGC type index
+                # (due to identical field layouts), ref.test can't distinguish them.
+                # Use typeId field comparison: save value → ref.test layout → if match,
+                # reload → ref.cast → struct.get typeId → compare with target's ID.
+                if is_shared_wasm_type(ctx.type_registry, target_wasm_isa.type_idx, check_type)
+                    local _tid = ensure_type_id!(ctx.type_registry, check_type)
+                    # Also ensure all types sharing this index get IDs
+                    for (_ot, _oi) in ctx.type_registry.structs
+                        if _oi.wasm_type_idx == target_wasm_isa.type_idx && _ot !== check_type
+                            ensure_type_id!(ctx.type_registry, _ot)
+                        end
+                    end
+                    # Allocate temp anyref local for saving the value
+                    local _tmp_idx = UInt32(length(ctx.locals) + ctx.n_params)
+                    push!(ctx.locals, AnyRef)
+                    # Emit: local.tee $tmp → ref.test → if (i32) → reload+cast+typeId check → else 0 → end
+                    push!(bytes, Opcode.LOCAL_TEE)
+                    append!(bytes, encode_leb128_unsigned(_tmp_idx))
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.REF_TEST)
+                    append!(bytes, encode_leb128_signed(Int64(target_wasm_isa.type_idx)))
+                    push!(bytes, Opcode.IF)
+                    push!(bytes, 0x7F)  # result type i32
+                    # Inside if-true: reload, cast, get typeId, compare
+                    push!(bytes, Opcode.LOCAL_GET)
+                    append!(bytes, encode_leb128_unsigned(_tmp_idx))
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.REF_CAST)
+                    append!(bytes, encode_leb128_signed(Int64(target_wasm_isa.type_idx)))
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.STRUCT_GET)
+                    append!(bytes, encode_leb128_unsigned(target_wasm_isa.type_idx))
+                    append!(bytes, encode_leb128_unsigned(UInt32(0)))  # field 0 = typeId
+                    push!(bytes, Opcode.I32_CONST)
+                    append!(bytes, encode_leb128_signed(Int64(_tid)))
+                    push!(bytes, Opcode.I32_EQ)
+                    push!(bytes, Opcode.ELSE)
+                    push!(bytes, Opcode.I32_CONST)
+                    push!(bytes, 0x00)  # false
+                    push!(bytes, Opcode.END)
+                else
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.REF_TEST)
+                    append!(bytes, encode_leb128_signed(Int64(target_wasm_isa.type_idx)))
+                end
             elseif check_type === String || check_type === Symbol || check_type <: AbstractString
                 # String/Symbol: test against the string array type
                 local _str_idx = get_string_array_type!(ctx.mod, ctx.type_registry)

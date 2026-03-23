@@ -249,6 +249,43 @@ function get_type_id(registry::TypeRegistry, T::Type)::Int32
 end
 
 """
+    is_shared_wasm_type(registry, wasm_type_idx, T) -> Bool
+
+Check if another Julia type in the registry shares the same WasmGC type index.
+When types share an index, ref.test can't distinguish them and typeId-based
+dispatch is needed.
+"""
+function is_shared_wasm_type(registry::TypeRegistry, wasm_type_idx::UInt32, T::Type)::Bool
+    registry.structs === nothing && return false
+    for (other_type, other_info) in registry.structs
+        if other_info.wasm_type_idx == wasm_type_idx && other_type !== T
+            return true
+        end
+    end
+    return false
+end
+
+"""
+    ensure_type_id!(registry, T) -> Int32
+
+Get or assign a unique typeId for type T. If T doesn't have one yet,
+assign the next available ID. Returns the typeId.
+"""
+function ensure_type_id!(registry::TypeRegistry, T::Type)::Int32
+    existing = get_type_id(registry, T)
+    existing > 0 && return existing
+    # Assign next available ID (find max + 1)
+    registry.type_ids === nothing && (registry.type_ids = Dict{Type, Int32}())
+    max_id = Int32(0)
+    for (_, id) in registry.type_ids
+        max_id = max(max_id, id)
+    end
+    new_id = max_id + Int32(1)
+    registry.type_ids[T] = new_id
+    return new_id
+end
+
+"""
     get_type_range(registry::TypeRegistry, T::Type) -> Union{Tuple{Int32, Int32}, Nothing}
 
 Return the DFS [low, high] range for an abstract type, or nothing if not assigned.
@@ -317,7 +354,10 @@ Emit `i32.const <typeId>` bytecode for type T.
 Uses the DFS-assigned type ID, or 0 if T has no assigned ID.
 """
 function emit_type_id!(bytes::Vector{UInt8}, registry::TypeRegistry, T::Type)
-    id = get_type_id(registry, T)
+    # E2E-001: Use ensure_type_id! so that types registered after assign_type_ids!()
+    # (e.g., types appearing only in isa checks or struct constants) still get unique
+    # typeIds that match between struct construction and isa dispatch.
+    id = ensure_type_id!(registry, T)
     push!(bytes, Opcode.I32_CONST)
     append!(bytes, encode_leb128_signed(Int64(id)))
 end
