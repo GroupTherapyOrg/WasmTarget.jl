@@ -5779,7 +5779,18 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                             end
                         end
                     end
-                    if is_numeric
+                    if isempty(ea_bytes)
+                        # TRUE-INT-002-impl2-impl: compile_value returned empty bytes
+                        # (e.g., QuoteNode wrapping an unserializable Core type).
+                        # Push ref.null as placeholder to maintain array_new_fixed stack balance.
+                        if is_anyref_array
+                            push!(bytes, Opcode.REF_NULL)
+                            push!(bytes, 0x6E)  # any heap type
+                        else
+                            push!(bytes, Opcode.REF_NULL)
+                            push!(bytes, UInt8(ExternRef))
+                        end
+                    elseif is_numeric
                         if is_anyref_array
                             push!(bytes, Opcode.REF_NULL)
                             push!(bytes, 0x6E)  # any heap type

@@ -872,7 +872,15 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                     push!(bytes, Opcode.EXTERN_CONVERT_ANY)
                 end
             else
-                append!(bytes, compile_value(val[i], ctx))
+                elem_bytes_plain = compile_value(val[i], ctx)
+                if isempty(elem_bytes_plain)
+                    # TRUE-INT-002-impl2-impl: compile_value returned empty bytes.
+                    # Push ref.null as placeholder to maintain array_new_fixed stack balance.
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, 0x6E)  # any heap type
+                else
+                    append!(bytes, elem_bytes_plain)
+                end
             end
             # PURE-6022: Check after each element in case compile_value hit a stub
             if ctx.last_stmt_was_stub

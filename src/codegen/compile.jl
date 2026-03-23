@@ -3001,6 +3001,81 @@ end
 # read individual bytes from a compiled Vector{UInt8} (the WASM binary output).
 
 """
+    run_selfhost()::Vector{UInt8}
+
+TRUE self-hosting: zero-arg function with entire codegen pipeline inline.
+Constructs IR for f(x::Int64)=x*x+1 inline (no CodeInfo constant reference).
+All external calls (analyze_blocks, generate_structured, fix_*, to_bytes_mvp)
+are :invoke stubs that get wired in the multi-function module.
+"""
+function run_selfhost()::Vector{UInt8}
+    # 1. Setup module infrastructure
+    mod = new_wasm_module()
+    reg = TypeRegistry(Val(:minimal))
+
+    # 2. Construct IR for f(x::Int64)=x*x+1 — 3 statements
+    # Use explicit Vector construction to avoid Julia's tuple-based Any[a,b,c]
+    # which creates Tuple{Expr,Expr,ReturnNode} with dynamic getfield (unsupported in WasmGC)
+    code = Vector{Any}(undef, 3)
+    code[1] = Expr(:call, Core.Intrinsics.mul_int, Core.Argument(2), Core.Argument(2))
+    code[2] = Expr(:call, Core.Intrinsics.add_int, Core.SSAValue(1), Int64(1))
+    code[3] = Core.ReturnNode(Core.SSAValue(2))
+
+    # 3. Pre-baked analysis for f(x::Int64)=x*x+1
+    ssa_types_data = Vector{Union{Nothing, Type}}(nothing, 3)
+    ssa_types_data[1] = Int64
+    ssa_types_data[2] = Int64
+    ssa_types = IntKeyMap{Type}(ssa_types_data)
+    ssa_locals_data = Vector{Union{Nothing, Int}}(nothing, 3)
+    ssa_locals_data[1] = 1
+    ssa_locals_data[2] = 2
+    ssa_locals = IntKeyMap{Int}(ssa_locals_data)
+    phi_locals_data = Vector{Union{Nothing, Int}}(nothing, 3)
+    phi_locals = IntKeyMap{Int}(phi_locals_data)
+    loop_headers = Bool[false, false, false]
+    locals = WasmValType[I64, I64]
+
+    # 4. Create context — SimpleIR wraps the code vector
+    ci = SimpleIR(code, Any[Int64, Int64, Any])
+    ctx = InplaceCompilationContext(
+        ci, (Int64,), Int64, 1, locals,
+        ssa_types, ssa_locals, phi_locals, loop_headers,
+        mod, reg, nothing, UInt32(0), nothing,
+        Int[], false,
+        nothing, nothing, nothing, nothing,
+        Tuple{Tuple{Module, Symbol}, UInt32}[],
+        nothing, nothing,
+        WasmStackValidator(enabled=true, func_name="func_0"),
+        false, nothing, nothing, nothing
+    )
+
+    # 5. Run codegen pipeline
+    blocks = analyze_blocks(code)
+    bytes = generate_structured(ctx, blocks)
+
+    # 6. Apply fix passes
+    bytes = fix_broken_select_instructions(bytes)
+    bytes = fix_numeric_to_ref_local_stores(bytes, ctx.locals, ctx.n_params)
+    bytes = fix_consecutive_local_sets(bytes)
+    bytes = strip_excess_after_function_end(bytes)
+
+    n_locals = length(ctx.locals)
+    all_local_types = Vector{WasmValType}(undef, 1 + n_locals)
+    all_local_types[1] = get_concrete_wasm_type(ctx.arg_types[1], ctx.mod, ctx.type_registry)
+    for i in 1:n_locals
+        all_local_types[1 + i] = ctx.locals[i]
+    end
+
+    bytes = fix_local_get_set_type_mismatch(bytes, all_local_types)
+    bytes = fix_array_len_wrap(bytes)
+    bytes = fix_i64_local_in_i32_ops(bytes, all_local_types)
+    bytes = fix_i32_wrap_after_i32_ops(bytes)
+
+    # 7. Serialize to WASM binary
+    return to_bytes_mvp(bytes, ctx.locals)
+end
+
+"""
     wasm_bytes_length(v::Vector{UInt8})::Int32
 
 Return the length of a Vector{UInt8} as Int32. Used by JS glue to determine
