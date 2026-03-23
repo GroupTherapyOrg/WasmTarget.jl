@@ -48,17 +48,19 @@
       "id": "D-005",
       "title": "Compile SSA local allocation and tracking",
       "priority": 1,
-      "status": "pending",
+      "status": "done",
       "depends_on": ["D-003"],
-      "description": "CompilationContext tracks SSA values that need locals. Multi-use SSAs get local.set/local.get. Single-use SSAs stay on stack."
+      "description": "CompilationContext tracks SSA values that need locals. Multi-use SSAs get local.set/local.get. Single-use SSAs stay on stack.",
+      "completedNote": "Multi-use SSA allocation works: x*x+x*x uses local for temp, s²+d² chains two multi-use values, nested reuse (x+1)*2+(x+1) all correct. 955 tests pass, zero regressions."
     },
     {
       "id": "D-006",
       "title": "Compile GotoNode + GotoIfNot + PhiNode control flow",
       "priority": 2,
-      "status": "pending",
+      "status": "done",
       "depends_on": ["D-003"],
-      "description": "Control flow compilation: GotoNode → br, GotoIfNot → br_if, PhiNode → local merge. Enables if/else and loops in compiled output."
+      "description": "Control flow compilation: GotoNode → br, GotoIfNot → br_if, PhiNode → local merge. Enables if/else and loops in compiled output.",
+      "completedNote": "if/else, while loops, phi node merges, and nested branches all work correctly. sum(1..10)=55 via loop, phi merge for conditional values, nested 2-level branching. 955 tests pass, zero regressions."
     },
     {
       "id": "D-007",

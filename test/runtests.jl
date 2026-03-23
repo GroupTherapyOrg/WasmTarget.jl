@@ -366,6 +366,60 @@ function test_combined_intrinsic(a::Int64, b::Int64)::Int64
     return (a + b) * (a - b)
 end
 
+# D-005: SSA local allocation — multi-use values need local.set/local.get
+function test_ssa_multi_use(x::Int64)::Int64
+    temp = x * x
+    return temp + temp
+end
+function test_ssa_chain(a::Int64, b::Int64)::Int64
+    s = a + b
+    d = a - b
+    return s * s + d * d
+end
+function test_ssa_nested(x::Int64)::Int64
+    a = x + Int64(1)
+    b = a * Int64(2)
+    c = b + a
+    return c
+end
+
+# D-006: Control flow — if/else, loops, phi nodes, nested branches
+function test_cf_if_else(x::Int64)::Int64
+    if x > Int64(0)
+        return x * Int64(2)
+    else
+        return x * Int64(-1)
+    end
+end
+function test_cf_loop(n::Int64)::Int64
+    sum = Int64(0)
+    i = Int64(1)
+    while i <= n
+        sum = sum + i
+        i = i + Int64(1)
+    end
+    return sum
+end
+function test_cf_phi(x::Int64)::Int64
+    result = if x > Int64(10)
+        x + Int64(100)
+    else
+        x + Int64(1)
+    end
+    return result
+end
+function test_cf_nested(a::Int64, b::Int64)::Int64
+    if a > Int64(0)
+        if b > Int64(0)
+            return a + b
+        else
+            return a - b
+        end
+    else
+        return Int64(0)
+    end
+end
+
 @testset "WasmTarget.jl" begin
 
     # ========================================================================
@@ -6382,6 +6436,72 @@ end
         # 48b: Real arithmetic intrinsics produce correct opcodes
         @testset "(5+3)*(5-3) = 16" begin
             @test run_wasm(d004_bytes, "test_combined_intrinsic", Int64(5), Int64(3)) == 16
+        end
+    end
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Phase 49: D-005 — SSA local allocation (multi-use values)
+    # ═══════════════════════════════════════════════════════════════════════════
+    @testset "Phase 49: SSA local allocation (D-005)" begin
+        d005_bytes = compile_multi([
+            (test_ssa_multi_use, (Int64,)),
+            (test_ssa_chain, (Int64, Int64)),
+            (test_ssa_nested, (Int64,)),
+        ])
+        @test length(d005_bytes) > 0
+
+        @testset "multi-use: x*x + x*x, x=5 → 50" begin
+            @test run_wasm(d005_bytes, "test_ssa_multi_use", Int64(5)) == 50
+        end
+        @testset "multi-use: x*x + x*x, x=7 → 98" begin
+            @test run_wasm(d005_bytes, "test_ssa_multi_use", Int64(7)) == 98
+        end
+        @testset "chain: s² + d², (5,3) → 68" begin
+            @test run_wasm(d005_bytes, "test_ssa_chain", Int64(5), Int64(3)) == 68
+        end
+        @testset "nested: (x+1)*2 + (x+1), x=5 → 18" begin
+            @test run_wasm(d005_bytes, "test_ssa_nested", Int64(5)) == 18
+        end
+    end
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Phase 50: D-006 — Control flow (if/else, loops, phi nodes)
+    # ═══════════════════════════════════════════════════════════════════════════
+    @testset "Phase 50: control flow (D-006)" begin
+        d006_bytes = compile_multi([
+            (test_cf_if_else, (Int64,)),
+            (test_cf_loop, (Int64,)),
+            (test_cf_phi, (Int64,)),
+            (test_cf_nested, (Int64, Int64)),
+        ])
+        @test length(d006_bytes) > 0
+
+        @testset "if/else: 5 → 10 (positive branch)" begin
+            @test run_wasm(d006_bytes, "test_cf_if_else", Int64(5)) == 10
+        end
+        @testset "if/else: -3 → 3 (negative branch)" begin
+            @test run_wasm(d006_bytes, "test_cf_if_else", Int64(-3)) == 3
+        end
+        @testset "loop: sum(1..10) = 55" begin
+            @test run_wasm(d006_bytes, "test_cf_loop", Int64(10)) == 55
+        end
+        @testset "loop: sum(1..0) = 0" begin
+            @test run_wasm(d006_bytes, "test_cf_loop", Int64(0)) == 0
+        end
+        @testset "phi: 15 → 115 (>10 branch)" begin
+            @test run_wasm(d006_bytes, "test_cf_phi", Int64(15)) == 115
+        end
+        @testset "phi: 5 → 6 (≤10 branch)" begin
+            @test run_wasm(d006_bytes, "test_cf_phi", Int64(5)) == 6
+        end
+        @testset "nested: (3,4) → 7" begin
+            @test run_wasm(d006_bytes, "test_cf_nested", Int64(3), Int64(4)) == 7
+        end
+        @testset "nested: (3,-4) → 7" begin
+            @test run_wasm(d006_bytes, "test_cf_nested", Int64(3), Int64(-4)) == 7
+        end
+        @testset "nested: (-1,5) → 0" begin
+            @test run_wasm(d006_bytes, "test_cf_nested", Int64(-1), Int64(5)) == 0
         end
     end
 

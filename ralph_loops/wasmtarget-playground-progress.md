@@ -122,3 +122,20 @@ Same fix in `infer_value_wasm_type` for type inference.
   `stmt isa Expr` → `head === :call` → match intrinsic name → emit opcode
 
 **Test suite**: 940 passed, 0 failed, 2 errored (pre-existing), 6 broken — zero regressions
+
+### 2026-03-23: Session 5 — D-005 + D-006 (SSA locals + control flow)
+
+**Status**: DONE
+
+**D-005 (SSA locals)**: Multi-use values get local.set/local.get correctly.
+- `x*x + x*x` (temp stored in local, used twice)
+- `s² + d²` (two multi-use chains)
+- `(x+1)*2 + (x+1)` (nested reuse)
+
+**D-006 (control flow)**: if/else, loops, phi nodes, nested branches all work.
+- if/else: positive/negative branch selection
+- while loop: sum(1..10) = 55
+- phi merge: conditional value selection
+- nested 2-level branching
+
+**Test suite**: 955 passed, 0 failed, 2 errored (pre-existing), 6 broken — zero regressions
