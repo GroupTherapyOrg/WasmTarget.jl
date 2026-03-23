@@ -88,8 +88,15 @@ function infer_value_wasm_type(val, ctx::AbstractCompilationContext)::WasmValTyp
         elseif val isa Float32
             return F32
         elseif val isa QuoteNode
-            # PURE-043: QuoteNode wraps a value - recursively determine its type
-            return infer_value_wasm_type(val.value, ctx)
+            # PURE-043: QuoteNode wraps a value - recursively determine its type.
+            # D-001: IR reference types inside QuoteNodes are literal structs, not IR refs.
+            inner = val.value
+            if inner isa Core.SSAValue || inner isa Core.Argument || inner isa Core.SlotNumber
+                T = typeof(inner)
+                info = register_struct_type!(ctx.mod, ctx.type_registry, T)
+                return ConcreteRef(info.wasm_type_idx, false)
+            end
+            return infer_value_wasm_type(inner, ctx)
         elseif val isa Symbol || val isa String
             # PURE-043: Symbol/String compile to array_new_fixed (ConcreteRef)
             str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
@@ -514,8 +521,31 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         end
 
     elseif val isa QuoteNode
-        # QuoteNode wraps a constant value - unwrap and compile
-        append!(bytes, compile_value(val.value, ctx))
+        # QuoteNode wraps a constant value - unwrap and compile.
+        # D-001: Core IR reference types (SSAValue, Argument, SlotNumber) inside QuoteNodes
+        # are LITERAL struct values, not IR references. compile_value would misinterpret them
+        # as SSA slot lookups / argument loads. Compile them as struct constants instead.
+        inner = val.value
+        if inner isa Core.SSAValue || inner isa Core.Argument || inner isa Core.SlotNumber
+            T = typeof(inner)
+            info = register_struct_type!(ctx.mod, ctx.type_registry, T)
+            type_idx = info.wasm_type_idx
+            emit_type_id!(bytes, ctx.type_registry, T)
+            for field_name in fieldnames(T)
+                field_val = getfield(inner, field_name)
+                if field_val isa Int
+                    push!(bytes, Opcode.I64_CONST)
+                    append!(bytes, encode_leb128_signed(Int64(field_val)))
+                else
+                    append!(bytes, compile_value(field_val, ctx))
+                end
+            end
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.STRUCT_NEW)
+            append!(bytes, encode_leb128_unsigned(type_idx))
+        else
+            append!(bytes, compile_value(inner, ctx))
+        end
 
     elseif isprimitivetype(typeof(val)) && !isa(val, Bool) && !isa(val, Char) &&
            !isa(val, Int8) && !isa(val, Int16) && !isa(val, Int32) && !isa(val, Int64) &&

@@ -1,0 +1,109 @@
+{
+  "project": "WasmTarget.jl Playground — REAL Codegen (no hand-emitted opcodes)",
+  "goal": "Julia source → browser parses → REAL compile_statement dispatch → executes, ZERO hand-emitted opcodes",
+  "milestones": {
+    "M1_dispatch": "IR type dispatch works in WASM via ref.test",
+    "M2_mini_codegen": "compile_statement compiles to WASM, handles basic IR",
+    "M3_full_pipeline": "Full source → parse → lower → typeinf → codegen → execute in browser"
+  },
+  "stories": [
+    {
+      "id": "D-001",
+      "title": "Register ~13 Core IR types as WasmGC structs for ref.test dispatch",
+      "priority": 0,
+      "status": "done",
+      "depends_on": [],
+      "description": "Ensure Core.ReturnNode, Core.GotoNode, Core.GotoIfNot, Core.SSAValue, Core.Argument, Core.PhiNode, Core.UpsilonNode, Core.PhiCNode, Core.PiNode, Core.NewvarNode, Core.SlotNumber, Expr, SimpleCodeInfo are all registered in TypeRegistry so that `stmt isa Core.ReturnNode` compiles to `ref.test $ReturnNodeStruct` when the codegen itself is compiled to WASM.",
+      "acceptance": "Compile a function that dispatches on IR node types from Vector{Any}. WAT output contains ref.test instructions for each IR struct type. All 914+ existing tests pass.",
+      "completedNote": "Fixed QuoteNode compilation for Core IR reference types (SSAValue, Argument, SlotNumber). These were being misinterpreted as IR references instead of literal structs. 7 ref.test instructions emitted for 7 isa checks. 914 tests pass, zero regressions."
+    },
+    {
+      "id": "D-002",
+      "title": "Compile compile_value to WASM — SSAValue/Argument/literal dispatch",
+      "priority": 1,
+      "status": "pending",
+      "depends_on": ["D-001"],
+      "description": "compile_value dispatches on SSAValue, Argument, Int64, Bool, etc. from Any-typed IR values. Must emit ref.test for each type and produce correct WASM bytecodes."
+    },
+    {
+      "id": "D-003",
+      "title": "Compile compile_statement to WASM — ReturnNode + Expr(:call) path",
+      "priority": 1,
+      "status": "pending",
+      "depends_on": ["D-001", "D-002"],
+      "description": "compile_statement handles ReturnNode and Expr with :call head. The Expr path dispatches on head symbol and calls compile_call. Must work with Vector{Any} IR code array."
+    },
+    {
+      "id": "D-004",
+      "title": "Compile intrinsic dispatch — mul_int, add_int, sub_int emit correct opcodes",
+      "priority": 1,
+      "status": "pending",
+      "depends_on": ["D-003"],
+      "description": "compile_call dispatches on GlobalRef intrinsic names. Each intrinsic emits the correct WASM opcode (i64.mul, i64.add, etc.) via the real Intrinsics.jl mapping."
+    },
+    {
+      "id": "D-005",
+      "title": "Compile SSA local allocation and tracking",
+      "priority": 1,
+      "status": "pending",
+      "depends_on": ["D-003"],
+      "description": "CompilationContext tracks SSA values that need locals. Multi-use SSAs get local.set/local.get. Single-use SSAs stay on stack."
+    },
+    {
+      "id": "D-006",
+      "title": "Compile GotoNode + GotoIfNot + PhiNode control flow",
+      "priority": 2,
+      "status": "pending",
+      "depends_on": ["D-003"],
+      "description": "Control flow compilation: GotoNode → br, GotoIfNot → br_if, PhiNode → local merge. Enables if/else and loops in compiled output."
+    },
+    {
+      "id": "D-007",
+      "title": "WASM module assembly — type/func/export/code sections from compiled functions",
+      "priority": 2,
+      "status": "pending",
+      "depends_on": ["D-004", "D-005"],
+      "description": "WasmModule serialization: assemble type section, function section, export section, code section from compiled function bodies. Produces valid .wasm binary."
+    },
+    {
+      "id": "E2E-001",
+      "title": "End-to-end: f(x)=x*x+1 via REAL codegen in WASM",
+      "priority": 3,
+      "status": "pending",
+      "depends_on": ["D-007"],
+      "description": "Compile the REAL codegen to WASM. Feed it CodeInfo for f(x::Int64)=x*x+1. It produces a valid inner .wasm module. f(5)===26. NO hand-emitted opcodes."
+    },
+    {
+      "id": "E2E-002",
+      "title": "End-to-end: 20-function regression suite via REAL codegen",
+      "priority": 3,
+      "status": "pending",
+      "depends_on": ["E2E-001", "D-006"],
+      "description": "All 20 test functions from Architecture A/C compile and execute correctly through the REAL codegen running in WASM."
+    },
+    {
+      "id": "P-001",
+      "title": "Wire parser (JuliaSyntax) to REAL codegen pipeline",
+      "priority": 4,
+      "status": "pending",
+      "depends_on": ["E2E-001"],
+      "description": "Source string → JuliaSyntax parse → lower → typeinf → REAL codegen → execute. Full zero-server pipeline."
+    },
+    {
+      "id": "P-002",
+      "title": "Browser playground UI with REAL codegen backend",
+      "priority": 4,
+      "status": "pending",
+      "depends_on": ["P-001"],
+      "description": "Update playground/index.html to use the REAL codegen WASM module instead of pre-baked eval_julia.wasm."
+    },
+    {
+      "id": "P-003",
+      "title": "Playground regression suite — 20+ functions from browser",
+      "priority": 4,
+      "status": "pending",
+      "depends_on": ["P-002"],
+      "description": "Full browser-based test suite. User types Julia code, playground compiles and executes via REAL codegen. 20+ functions pass."
+    }
+  ]
+}
