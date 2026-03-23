@@ -157,6 +157,15 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                 # PURE-207: If value is I32 but return is I64, extend
                 elseif val_wasm === I32 && func_ret_wasm === I64
                     push!(bytes, Opcode.I64_EXTEND_I32_S)
+                # PARSE-001: If function returns ConcreteRef but value is eqref/structref/anyref,
+                # cast to match the declared return type. This happens when Union{Nothing, T}
+                # phi nodes produce eqref but the return type is (ref null T_idx).
+                elseif func_ret_wasm isa ConcreteRef && !(val_wasm isa ConcreteRef)
+                    if val_wasm === EqRef || val_wasm === StructRef || val_wasm === AnyRef || val_wasm === ArrayRef
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.REF_CAST_NULL)
+                        append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                    end
                 end
             end
         end
