@@ -2582,6 +2582,115 @@ function compile_from_ir_prebaked(ir_entries::Vector, mod::WasmModule, type_regi
 end
 
 # ============================================================================
+# Minimal WASM Serializer — TRUE-INT-002
+# ============================================================================
+# Closure-free serializer for self-hosting MVP. Only writes sections needed
+# for a single i64→i64 function. The REAL codegen (generate_body) produces
+# the function body; this just frames it in the WASM binary format.
+
+"""
+    to_bytes_mvp(body::Vector{UInt8}, locals::Vector{WasmValType})::Vector{UInt8}
+
+Serialize a single i64→i64 function into a minimal valid WASM module.
+No closures, no WasmWriter, no callbacks — just direct byte construction.
+Uses the REAL function body from generate_body (the actual codegen output).
+"""
+function to_bytes_mvp(body::Vector{UInt8}, locals::Vector{WasmValType})::Vector{UInt8}
+    out = UInt8[]
+
+    # Magic number + version
+    append!(out, UInt8[0x00, 0x61, 0x73, 0x6d])  # \0asm
+    append!(out, UInt8[0x01, 0x00, 0x00, 0x00])  # version 1
+
+    # === Type Section (id=1): 1 functype [i64] → [i64] ===
+    type_payload = UInt8[]
+    append!(type_payload, encode_leb128_unsigned(1))   # 1 type
+    push!(type_payload, 0x60)                           # functype marker
+    append!(type_payload, encode_leb128_unsigned(1))   # 1 param
+    push!(type_payload, 0x7e)                           # i64
+    append!(type_payload, encode_leb128_unsigned(1))   # 1 result
+    push!(type_payload, 0x7e)                           # i64
+
+    push!(out, 0x01)  # section id: type
+    append!(out, encode_leb128_unsigned(length(type_payload)))
+    append!(out, type_payload)
+
+    # === Function Section (id=3): 1 function → type 0 ===
+    func_payload = UInt8[]
+    append!(func_payload, encode_leb128_unsigned(1))   # 1 function
+    append!(func_payload, encode_leb128_unsigned(0))   # type index 0
+
+    push!(out, 0x03)  # section id: function
+    append!(out, encode_leb128_unsigned(length(func_payload)))
+    append!(out, func_payload)
+
+    # === Export Section (id=7): export "f" → function 0 ===
+    export_payload = UInt8[]
+    append!(export_payload, encode_leb128_unsigned(1))   # 1 export
+    # name "f"
+    append!(export_payload, encode_leb128_unsigned(1))   # name length
+    push!(export_payload, UInt8('f'))                      # name bytes
+    push!(export_payload, 0x00)                            # export kind: func
+    append!(export_payload, encode_leb128_unsigned(0))   # function index 0
+
+    push!(out, 0x07)  # section id: export
+    append!(out, encode_leb128_unsigned(length(export_payload)))
+    append!(out, export_payload)
+
+    # === Code Section (id=10): 1 function body ===
+    # Build function body: locals + body bytes
+    func_body = UInt8[]
+
+    # Group locals by type
+    if isempty(locals)
+        append!(func_body, encode_leb128_unsigned(0))  # 0 local groups
+    else
+        # Group consecutive same-type locals
+        groups = Tuple{Int, UInt8}[]
+        current_count = 1
+        current_type = _wasm_valtype_byte(locals[1])
+        for i in 2:length(locals)
+            t = _wasm_valtype_byte(locals[i])
+            if t == current_type
+                current_count += 1
+            else
+                push!(groups, (current_count, current_type))
+                current_count = 1
+                current_type = t
+            end
+        end
+        push!(groups, (current_count, current_type))
+        append!(func_body, encode_leb128_unsigned(length(groups)))
+        for (count, typ) in groups
+            append!(func_body, encode_leb128_unsigned(count))
+            push!(func_body, typ)
+        end
+    end
+    append!(func_body, body)
+
+    # Wrap in code section
+    code_payload = UInt8[]
+    append!(code_payload, encode_leb128_unsigned(1))  # 1 function
+    append!(code_payload, encode_leb128_unsigned(length(func_body)))
+    append!(code_payload, func_body)
+
+    push!(out, 0x0a)  # section id: code
+    append!(out, encode_leb128_unsigned(length(code_payload)))
+    append!(out, code_payload)
+
+    return out
+end
+
+# Helper: convert WasmValType to its WASM byte encoding
+function _wasm_valtype_byte(t::WasmValType)::UInt8
+    t === I32 && return 0x7f
+    t === I64 && return 0x7e
+    t === F32 && return 0x7d
+    t === F64 && return 0x7c
+    return 0x6f  # externref fallback
+end
+
+# ============================================================================
 # Byte Extraction — GAMMA-004
 # ============================================================================
 # WasmGC arrays are opaque to JavaScript. These accessor functions allow JS to
