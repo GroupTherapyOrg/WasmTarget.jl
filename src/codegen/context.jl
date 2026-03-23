@@ -2358,7 +2358,7 @@ For MVP (Int64 arithmetic): Dict fields are never accessed, so Nothing is safe.
 code_info is Any to support both Core.CodeInfo and SimpleCodeInfo.
 """
 mutable struct InplaceCompilationContext <: AbstractCompilationContext
-    code_info::Any  # Core.CodeInfo or SimpleCodeInfo
+    code_info::SimpleIR  # Wraps code + ssavaluetypes for concrete field access
     arg_types::Tuple
     return_type::Type
     n_params::Int
@@ -2392,14 +2392,16 @@ end
 function InplaceCompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
                                   func_registry::Union{FunctionRegistry, Nothing}=nothing,
                                   func_idx::UInt32=UInt32(0), func_ref=nothing)
+    # Wrap code_info in SimpleIR if needed (Core.CodeInfo → SimpleIR for concrete field access)
+    ci = code_info isa SimpleIR ? code_info : SimpleIR(code_info.code, code_info.ssavaluetypes)
     n_real_params = length(arg_types)
     ctx = InplaceCompilationContext(
-        code_info, arg_types, return_type, n_real_params,
+        ci, arg_types, return_type, n_real_params,
         WasmValType[],
-        IntKeyMap{Type}(length(code_info.code)),
-        IntKeyMap{Int}(length(code_info.code)),
-        IntKeyMap{Int}(length(code_info.code)),
-        fill(false, length(code_info.code)),
+        IntKeyMap{Type}(length(ci.code)),
+        IntKeyMap{Int}(length(ci.code)),
+        IntKeyMap{Int}(length(ci.code)),
+        fill(false, length(ci.code)),
         mod, type_registry, func_registry, func_idx, func_ref,
         Int[], false,              # global_args (Vector{Int} — no Dict), is_compiled_closure
         nothing, nothing, nothing, nothing,  # signal_ssa_getters/setters, captured_signal_fields, dom_bindings

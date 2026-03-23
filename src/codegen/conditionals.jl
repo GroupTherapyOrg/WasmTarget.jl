@@ -3260,7 +3260,7 @@ end
 """
 Generate code for a single basic block.
 """
-function generate_block_code(ctx::AbstractCompilationContext, block::BasicBlock)::Vector{UInt8}
+@inline function generate_block_code(ctx::AbstractCompilationContext, block::BasicBlock)::Vector{UInt8}
     bytes = UInt8[]
     code = ctx.code_info.code
 
