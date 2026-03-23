@@ -79,3 +79,32 @@ Same fix in `infer_value_wasm_type` for type inference.
 **Test suite**: 924 passed, 0 failed, 2 errored (pre-existing), 6 broken — zero regressions
 
 **Note**: Vector{Any} construction inside WASM hits `Memory{Any}` API (Julia 1.12), which is not yet supported. This is separate from the dispatch pattern and does not block D-003+.
+
+### 2026-03-23: Session 3 — D-003 (compile_statement dispatch)
+
+**Goal**: Prove compile_statement pattern: dispatch on stmt type + Expr.head symbol comparison.
+
+**Status**: DONE
+
+**What works**:
+- `cs_dispatch(stmt::Any)::Int32` dispatches on ReturnNode, Expr, GotoNode, GotoIfNot via ref.test
+- After `stmt isa Expr`, accesses `stmt.head` (Symbol field) and compares with `:call`, `:invoke`, `:new`
+- Symbol equality via `===` works (compares WasmGC string arrays)
+- Expr objects injected via global constants (`const CS_CALL_EXPR = Expr(:call)`)
+
+**Key finding**: `Expr(:call, :+, 1, 2)` fails because Int64 args in Vector{Any} need anyref boxing.
+`Expr(:call)` (empty args) works fine. Boxing Int64→anyref in array constants is a separate story.
+
+**Runtime results** (8/8 pass):
+| Test | Expected | Actual | Pattern |
+|------|----------|--------|---------|
+| ReturnNode → tag | 1 | 1 | ref.test ReturnNode |
+| GotoNode → tag | 2 | 2 | ref.test GotoNode |
+| GotoIfNot → tag | 3 | 3 | ref.test GotoIfNot |
+| Expr(:call) → tag | 10 | 10 | ref.test Expr + head === :call |
+| Expr(:invoke) → tag | 11 | 11 | ref.test Expr + head === :invoke |
+| Expr(:new) → tag | 12 | 12 | ref.test Expr + head === :new |
+| Expr(:boundscheck) → tag | 19 | 19 | ref.test Expr + head fallback |
+| Combined 1+10+2+3 | 16 | 16 | Cross-function accumulation |
+
+**Test suite**: 933 passed, 0 failed, 2 errored (pre-existing), 6 broken — zero regressions

@@ -270,6 +270,63 @@ function test_cv_combined_tags()::Int32
     return t1 + t2 + t3 + t4
 end
 
+# D-003: compile_statement dispatch — ReturnNode + Expr(:call/:invoke/:new) + head comparison
+const CS_CALL_EXPR = Expr(:call)
+const CS_INVOKE_EXPR = Expr(:invoke)
+const CS_NEW_EXPR = Expr(:new)
+const CS_OTHER_EXPR = Expr(:boundscheck)
+
+@noinline function cs_dispatch(stmt::Any)::Int32
+    if stmt isa Core.ReturnNode
+        return Int32(1)
+    elseif stmt isa Expr
+        head = stmt.head
+        if head === :call
+            return Int32(10)
+        elseif head === :invoke
+            return Int32(11)
+        elseif head === :new
+            return Int32(12)
+        else
+            return Int32(19)
+        end
+    elseif stmt isa Core.GotoNode
+        return Int32(2)
+    elseif stmt isa Core.GotoIfNot
+        return Int32(3)
+    end
+    return Int32(0)
+end
+
+function test_cs_return()::Int32
+    return cs_dispatch(Core.ReturnNode(nothing))
+end
+function test_cs_goto()::Int32
+    return cs_dispatch(Core.GotoNode(5))
+end
+function test_cs_gotoifnot()::Int32
+    return cs_dispatch(Core.GotoIfNot(true, 10))
+end
+function test_cs_call_expr()::Int32
+    return cs_dispatch(CS_CALL_EXPR)
+end
+function test_cs_invoke_expr()::Int32
+    return cs_dispatch(CS_INVOKE_EXPR)
+end
+function test_cs_new_expr()::Int32
+    return cs_dispatch(CS_NEW_EXPR)
+end
+function test_cs_other_expr()::Int32
+    return cs_dispatch(CS_OTHER_EXPR)
+end
+function test_cs_combined()::Int32
+    r1 = cs_dispatch(Core.ReturnNode(nothing))
+    r2 = cs_dispatch(CS_CALL_EXPR)
+    r3 = cs_dispatch(Core.GotoNode(5))
+    r4 = cs_dispatch(Core.GotoIfNot(true, 10))
+    return r1 + r2 + r3 + r4
+end
+
 @testset "WasmTarget.jl" begin
 
     # ========================================================================
@@ -6200,6 +6257,54 @@ end
         # 46c: Combined — cross-function dispatch with accumulation
         @testset "Combined tags: 1+2+3+4 = 10" begin
             @test run_wasm(d002_bytes, "test_cv_combined_tags") == 10
+        end
+    end
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Phase 47: D-003 — compile_statement dispatch (ReturnNode + Expr head)
+    # ═══════════════════════════════════════════════════════════════════════════
+    @testset "Phase 47: compile_statement dispatch (D-003)" begin
+        d003_bytes = compile_multi([
+            (cs_dispatch, (Any,)),
+            (test_cs_return, ()),
+            (test_cs_goto, ()),
+            (test_cs_gotoifnot, ()),
+            (test_cs_call_expr, ()),
+            (test_cs_invoke_expr, ()),
+            (test_cs_new_expr, ()),
+            (test_cs_other_expr, ()),
+            (test_cs_combined, ()),
+        ])
+        @test length(d003_bytes) > 0
+
+        # 47a: IR node type dispatch
+        @testset "ReturnNode → 1" begin
+            @test run_wasm(d003_bytes, "test_cs_return") == 1
+        end
+        @testset "GotoNode → 2" begin
+            @test run_wasm(d003_bytes, "test_cs_goto") == 2
+        end
+        @testset "GotoIfNot → 3" begin
+            @test run_wasm(d003_bytes, "test_cs_gotoifnot") == 3
+        end
+
+        # 47b: Expr head symbol dispatch (stmt.head === :call etc.)
+        @testset "Expr(:call) → 10" begin
+            @test run_wasm(d003_bytes, "test_cs_call_expr") == 10
+        end
+        @testset "Expr(:invoke) → 11" begin
+            @test run_wasm(d003_bytes, "test_cs_invoke_expr") == 11
+        end
+        @testset "Expr(:new) → 12" begin
+            @test run_wasm(d003_bytes, "test_cs_new_expr") == 12
+        end
+        @testset "Expr(:boundscheck) → 19 (other)" begin
+            @test run_wasm(d003_bytes, "test_cs_other_expr") == 19
+        end
+
+        # 47c: Combined statement dispatch
+        @testset "Combined: 1+10+2+3 = 16" begin
+            @test run_wasm(d003_bytes, "test_cs_combined") == 16
         end
     end
 

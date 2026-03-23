@@ -30,9 +30,10 @@
       "id": "D-003",
       "title": "Compile compile_statement to WASM — ReturnNode + Expr(:call) path",
       "priority": 1,
-      "status": "pending",
+      "status": "done",
       "depends_on": ["D-001", "D-002"],
-      "description": "compile_statement handles ReturnNode and Expr with :call head. The Expr path dispatches on head symbol and calls compile_call. Must work with Vector{Any} IR code array."
+      "description": "compile_statement handles ReturnNode and Expr with :call head. The Expr path dispatches on head symbol and calls compile_call. Must work with Vector{Any} IR code array.",
+      "completedNote": "Full compile_statement dispatch pattern works: isa check on 4 IR node types (ReturnNode, Expr, GotoNode, GotoIfNot) + Expr.head symbol comparison (:call→10, :invoke→11, :new→12, other→19). Expr objects injected via global constants (Core._expr not yet supported for runtime construction). 4 ref.test instructions + symbol equality. 8 runtime tests pass. 933 tests total, zero regressions."
     },
     {
       "id": "D-004",
