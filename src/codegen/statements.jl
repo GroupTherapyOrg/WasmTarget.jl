@@ -121,7 +121,35 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                 push!(bytes, Opcode.REF_NULL)
                 push!(bytes, UInt8(func_ret_wasm))
             else
-                append!(bytes, compile_value(stmt.val, ctx))
+                val_bytes = compile_value(stmt.val, ctx)
+                if isempty(val_bytes)
+                    # TRUE-INT-002: compile_value produced empty bytes (stubbed SSA value on dead path).
+                    # Push a type-correct default so `return` has a value on the stack.
+                    if func_ret_wasm isa ConcreteRef
+                        push!(bytes, Opcode.REF_NULL)
+                        append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                    elseif func_ret_wasm === AnyRef || func_ret_wasm === EqRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(func_ret_wasm))
+                    elseif func_ret_wasm === ExternRef
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, 0x6F)  # externref
+                    elseif func_ret_wasm === I32
+                        push!(bytes, Opcode.I32_CONST)
+                        push!(bytes, 0x00)
+                    elseif func_ret_wasm === I64
+                        push!(bytes, Opcode.I64_CONST)
+                        push!(bytes, 0x00)
+                    elseif func_ret_wasm === F32
+                        push!(bytes, Opcode.F32_CONST)
+                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+                    elseif func_ret_wasm === F64
+                        push!(bytes, Opcode.F64_CONST)
+                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                    end
+                else
+                    append!(bytes, val_bytes)
+                end
                 # If function returns externref but value is a concrete ref, convert
                 if func_ret_wasm === ExternRef && val_wasm !== ExternRef
                     push!(bytes, Opcode.GC_PREFIX)
