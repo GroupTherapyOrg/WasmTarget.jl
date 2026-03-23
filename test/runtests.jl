@@ -205,6 +205,71 @@ struct TypeHierS2 x::Int32 end
 @noinline make_th_s1(v::Int32) = TypeHierS1(v)
 @noinline make_th_s2(v::Int32) = TypeHierS2(v)
 
+# D-002: compile_value dispatch — field access on narrowed IR types
+@noinline function cv_field_dispatch(val::Any)::Int64
+    if val isa Core.SSAValue
+        return Int64(val.id)
+    elseif val isa Core.Argument
+        return Int64(val.n)
+    elseif val isa Core.GotoNode
+        return Int64(val.label)
+    end
+    return Int64(-1)
+end
+
+# D-002: type-tag dispatch — 7 IR node types
+@noinline function cv_type_tag(val::Any)::Int32
+    if val isa Core.SSAValue
+        return Int32(1)
+    elseif val isa Core.Argument
+        return Int32(2)
+    elseif val isa Core.GotoNode
+        return Int32(3)
+    elseif val isa Core.ReturnNode
+        return Int32(4)
+    elseif val isa Core.GotoIfNot
+        return Int32(5)
+    elseif val isa Expr
+        return Int32(6)
+    elseif val isa Core.PhiNode
+        return Int32(7)
+    end
+    return Int32(0)
+end
+
+# D-002: Wrapper functions for runtime testing
+function test_cv_ssa_field()::Int64
+    return cv_field_dispatch(Core.SSAValue(42))
+end
+function test_cv_arg_field()::Int64
+    return cv_field_dispatch(Core.Argument(7))
+end
+function test_cv_goto_field()::Int64
+    return cv_field_dispatch(Core.GotoNode(99))
+end
+function test_cv_unknown_field()::Int64
+    return cv_field_dispatch(Core.ReturnNode(nothing))
+end
+function test_cv_tag_ssa()::Int32
+    return cv_type_tag(Core.SSAValue(1))
+end
+function test_cv_tag_arg()::Int32
+    return cv_type_tag(Core.Argument(1))
+end
+function test_cv_tag_goto()::Int32
+    return cv_type_tag(Core.GotoNode(1))
+end
+function test_cv_tag_return()::Int32
+    return cv_type_tag(Core.ReturnNode(nothing))
+end
+function test_cv_combined_tags()::Int32
+    t1 = cv_type_tag(Core.SSAValue(1))
+    t2 = cv_type_tag(Core.Argument(2))
+    t3 = cv_type_tag(Core.GotoNode(3))
+    t4 = cv_type_tag(Core.ReturnNode(nothing))
+    return t1 + t2 + t3 + t4
+end
+
 @testset "WasmTarget.jl" begin
 
     # ========================================================================
@@ -6078,6 +6143,64 @@ struct TypeHierS2 x::Int32 end
             end
         end
 
+    end
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Phase 46: D-002 — compile_value dispatch via ref.test + field access
+    # ═══════════════════════════════════════════════════════════════════════════
+    @testset "Phase 46: compile_value dispatch (D-002)" begin
+        # Compile all D-002 functions together
+        d002_bytes = compile_multi([
+            (cv_field_dispatch, (Any,)),
+            (cv_type_tag, (Any,)),
+            (test_cv_ssa_field, ()),
+            (test_cv_arg_field, ()),
+            (test_cv_goto_field, ()),
+            (test_cv_unknown_field, ()),
+            (test_cv_tag_ssa, ()),
+            (test_cv_tag_arg, ()),
+            (test_cv_tag_goto, ()),
+            (test_cv_tag_return, ()),
+            (test_cv_combined_tags, ()),
+        ])
+        @test length(d002_bytes) > 0
+
+        # 46a: Field access after isa-narrowing (PiNode → ref.cast → struct.get)
+        @testset "Field access: SSAValue.id" begin
+            result = run_wasm(d002_bytes, "test_cv_ssa_field")
+            @test result == 42
+        end
+        @testset "Field access: Argument.n" begin
+            result = run_wasm(d002_bytes, "test_cv_arg_field")
+            @test result == 7
+        end
+        @testset "Field access: GotoNode.label" begin
+            result = run_wasm(d002_bytes, "test_cv_goto_field")
+            @test result == 99
+        end
+        @testset "Field access: unknown type fallback" begin
+            result = run_wasm(d002_bytes, "test_cv_unknown_field")
+            @test result == -1
+        end
+
+        # 46b: Type tag dispatch — ref.test on 7 IR node types
+        @testset "Type tag: SSAValue → 1" begin
+            @test run_wasm(d002_bytes, "test_cv_tag_ssa") == 1
+        end
+        @testset "Type tag: Argument → 2" begin
+            @test run_wasm(d002_bytes, "test_cv_tag_arg") == 2
+        end
+        @testset "Type tag: GotoNode → 3" begin
+            @test run_wasm(d002_bytes, "test_cv_tag_goto") == 3
+        end
+        @testset "Type tag: ReturnNode → 4" begin
+            @test run_wasm(d002_bytes, "test_cv_tag_return") == 4
+        end
+
+        # 46c: Combined — cross-function dispatch with accumulation
+        @testset "Combined tags: 1+2+3+4 = 10" begin
+            @test run_wasm(d002_bytes, "test_cv_combined_tags") == 10
+        end
     end
 
 end

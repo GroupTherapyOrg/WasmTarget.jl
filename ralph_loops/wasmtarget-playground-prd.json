@@ -21,9 +21,10 @@
       "id": "D-002",
       "title": "Compile compile_value to WASM — SSAValue/Argument/literal dispatch",
       "priority": 1,
-      "status": "pending",
+      "status": "done",
       "depends_on": ["D-001"],
-      "description": "compile_value dispatches on SSAValue, Argument, Int64, Bool, etc. from Any-typed IR values. Must emit ref.test for each type and produce correct WASM bytecodes."
+      "description": "compile_value dispatches on SSAValue, Argument, Int64, Bool, etc. from Any-typed IR values. Must emit ref.test for each type and produce correct WASM bytecodes.",
+      "completedNote": "Field access dispatch on Any-typed IR values works: isa check → PiNode narrowing (ref.cast) → struct.get for field access. 10 ref.test instructions emitted for 7 IR type checks. 9 runtime tests pass (SSAValue.id=42, Argument.n=7, GotoNode.label=99, type tags 1-4, combined=10). Cross-function dispatch via compile_multi works. 924 tests pass, zero regressions."
     },
     {
       "id": "D-003",

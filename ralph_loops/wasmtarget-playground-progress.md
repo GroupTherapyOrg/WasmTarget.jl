@@ -50,3 +50,32 @@ Same fix in `infer_value_wasm_type` for type inference.
 | GotoIfNot | (i32, mut anyref, mut i64) | cond + dest |
 | Expr | (i32, mut ref i8_arr, mut ref vec) | head + args |
 | PhiNode | (i32, mut ref i32_vec, mut ref any_vec) | edges + values |
+
+### 2026-03-23: Session 2 — D-002 (compile_value dispatch + field access)
+
+**Goal**: Prove compile_value-style dispatch works in WASM: isa check → PiNode narrowing → field access.
+
+**Status**: DONE
+
+**What works**:
+- `cv_field_dispatch(val::Any)::Int64` — dispatches on SSAValue, Argument, GotoNode from Any-typed param
+- After `val isa Core.SSAValue` → PiNode inserts `ref.cast` → `struct.get` accesses `val.id`
+- 10 `ref.test` instructions emitted for 7 IR type checks in `cv_type_tag`
+- Cross-function dispatch via `compile_multi` with `@noinline` functions
+
+**Runtime results** (9/9 pass):
+| Test | Expected | Actual | Pattern |
+|------|----------|--------|---------|
+| SSAValue(42).id | 42 | 42 | isa → PiNode → struct.get field 1 |
+| Argument(7).n | 7 | 7 | isa → PiNode → struct.get field 1 |
+| GotoNode(99).label | 99 | 99 | isa → PiNode → struct.get field 1 |
+| ReturnNode(nothing) → fallback | -1 | -1 | No match → default return |
+| Type tag SSAValue | 1 | 1 | ref.test dispatch |
+| Type tag Argument | 2 | 2 | ref.test dispatch |
+| Type tag GotoNode | 3 | 3 | ref.test dispatch |
+| Type tag ReturnNode | 4 | 4 | ref.test dispatch |
+| Combined tags 1+2+3+4 | 10 | 10 | Cross-function accumulation |
+
+**Test suite**: 924 passed, 0 failed, 2 errored (pre-existing), 6 broken — zero regressions
+
+**Note**: Vector{Any} construction inside WASM hits `Memory{Any}` API (Julia 1.12), which is not yet supported. This is separate from the dispatch pattern and does not block D-003+.
