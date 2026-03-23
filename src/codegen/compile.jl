@@ -2582,6 +2582,17 @@ function compile_from_ir_prebaked(ir_entries::Vector, mod::WasmModule, type_regi
 end
 
 # ============================================================================
+# ICtx Constructor Wrapper — TRUE-INT-002-impl
+# ============================================================================
+# Simple wrapper around InplaceCompilationContext constructor.
+# Avoids the kwarg constructor's Type{T} parameter that compile_from_codeinfo
+# can't handle. Takes code_info + mod + reg, creates ICtx with analysis passes.
+
+function create_ictx(code_info, arg_types::Tuple, return_type, mod::WasmModule, reg::TypeRegistry)::InplaceCompilationContext
+    InplaceCompilationContext(code_info, arg_types, return_type, mod, reg)
+end
+
+# ============================================================================
 # Minimal WASM Serializer — TRUE-INT-002
 # ============================================================================
 # Closure-free serializer for self-hosting MVP. Only writes sections needed

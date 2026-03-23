@@ -2093,7 +2093,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
             # but the field expects a ref type, emit ref.null instead.
             # This happens when phi/PiNode locals are allocated as i64 (due to Union/Any
             # type inference) but the struct field requires a concrete ref.
-            field_bytes = compile_value(val, ctx)
+
             # Look up the actual Wasm field type from the module's type definition
             actual_field_wasm = nothing
             struct_type_def = ctx.mod.types[info.wasm_type_idx + 1]
@@ -2101,6 +2101,52 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
             if struct_type_def isa StructType && _wasm_fi2 <= length(struct_type_def.fields)
                 actual_field_wasm = struct_type_def.fields[_wasm_fi2].valtype
             end
+
+            # TRUE-INT-002: Handle `nothing` literal for ref-typed struct fields.
+            # compile_value(nothing) always emits i32_const 0, but ref-typed fields
+            # (AnyRef, EqRef, StructRef, etc.) need ref.null instead.
+            # This occurs for Nothing-typed fields (e.g., InplaceCompilationContext.signal_ssa_getters::Nothing)
+            # when register_struct_type! maps Nothing to AnyRef/EqRef.
+            # The `nothing` can appear as: literal, GlobalRef(:nothing), or SSAValue with Nothing type
+            # (from inlined kwarg constructor defaults).
+            is_literal_nothing_reg = val === nothing ||
+                (val isa GlobalRef && val.name === :nothing) ||
+                (val isa GlobalRef && (try getfield(val.mod, val.name) === nothing catch; false end)) ||
+                (val isa Core.SSAValue && 1 <= val.id <= length(ctx.code_info.ssavaluetypes) &&
+                    ctx.code_info.ssavaluetypes[val.id] === Nothing) ||
+                (val isa Core.SSAValue && 1 <= val.id <= length(ctx.code_info.code) && begin
+                    _ssa_stmt = ctx.code_info.code[val.id]
+                    _ssa_stmt === nothing ||
+                    (_ssa_stmt isa GlobalRef && _ssa_stmt.name === :nothing) ||
+                    (_ssa_stmt isa GlobalRef && (try getfield(_ssa_stmt.mod, _ssa_stmt.name) === nothing catch; false end))
+                end)
+            if is_literal_nothing_reg && actual_field_wasm !== nothing &&
+               (actual_field_wasm isa ConcreteRef || actual_field_wasm === StructRef ||
+                actual_field_wasm === ArrayRef || actual_field_wasm === AnyRef ||
+                actual_field_wasm === ExternRef || actual_field_wasm === EqRef)
+                if actual_field_wasm isa ConcreteRef
+                    push!(bytes, Opcode.REF_NULL)
+                    append!(bytes, encode_leb128_signed(Int64(actual_field_wasm.type_idx)))
+                elseif actual_field_wasm === AnyRef
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, 0x6E)  # any heap type
+                elseif actual_field_wasm === EqRef
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, 0x6D)  # eq heap type
+                elseif actual_field_wasm === ArrayRef
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, UInt8(ArrayRef))
+                elseif actual_field_wasm === ExternRef
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, UInt8(ExternRef))
+                else
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, UInt8(StructRef))
+                end
+                continue  # Skip to next field — ref.null already emitted
+            end
+
+            field_bytes = compile_value(val, ctx)
             # Safety: if field_bytes is empty (SSA without local, not re-compilable)
             # and the field expects a ref type, emit ref.null of the correct type.
             if isempty(field_bytes) && actual_field_wasm !== nothing &&

@@ -8,6 +8,7 @@ Compiles to WasmGC trivially (array.get/array.set/array.len).
 struct IntKeyMap{V}
     data::Vector{Union{Nothing, V}}
     IntKeyMap{V}(n::Int) where V = new{V}(fill(nothing, n))
+    IntKeyMap{V}(data::Vector{Union{Nothing, V}}) where V = new{V}(data)
 end
 
 Base.getindex(m::IntKeyMap{V}, k::Int) where V = m.data[k]::V
