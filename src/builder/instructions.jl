@@ -399,6 +399,11 @@ end
 
 WasmModule() = WasmModule(CompositeType[], Vector{UInt32}[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobalDef[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[], nothing)
 
+# TRUE-INT-002-impl2: Wrapper function for WASM self-hosting.
+# compile_invoke stubs WasmModule() (Type{T} dispatch) as unreachable.
+# This wrapper avoids the Type{T} pattern by being a regular function call.
+new_wasm_module() = WasmModule(CompositeType[], Vector{UInt32}[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobalDef[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[], nothing)
+
 # ============================================================================
 # Module Building API
 # ============================================================================

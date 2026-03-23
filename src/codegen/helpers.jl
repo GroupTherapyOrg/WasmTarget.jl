@@ -8,6 +8,9 @@ Check if func matches a given intrinsic name.
 function is_func(func, name::Symbol)::Bool
     if func isa GlobalRef
         return func.name === name
+    elseif hasproperty(func, :name) && func.name isa Symbol
+        # TRUE-INT-002-impl2: Handle FakeGlobalRef and similar structs with .name field
+        return func.name === name
     elseif func isa Core.IntrinsicFunction
         # Compare intrinsic by string representation
         return Symbol(func) === name

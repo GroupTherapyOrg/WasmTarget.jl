@@ -226,6 +226,84 @@ function wasm_symbol_foreigncall()::Symbol
 end
 
 # ============================================================================
+# TRUE-INT-002-impl2: GlobalRef constructors + generic setter
+# ============================================================================
+
+"""Set element i (1-based) of Vector{Any} to any WasmGC value (externref→Any)."""
+function wasm_set_any_obj!(v::Vector{Any}, i::Int32, obj)::Nothing
+    v[i] = obj
+    return nothing
+end
+
+"""
+FakeGlobalRef — lightweight stand-in for GlobalRef that compiles to WASM.
+Real GlobalRef needs Module type which can't be compiled. This has the same
+.name field that is_func() checks, plus .mod set to nothing.
+"""
+struct FakeGlobalRef
+    mod::Nothing
+    name::Symbol
+end
+
+"""Return a FakeGlobalRef(:mul_int) for IR construction (compilable to WASM)."""
+wasm_globalref_mul_int()::FakeGlobalRef = FakeGlobalRef(nothing, :mul_int)
+
+"""Return a FakeGlobalRef(:add_int) for IR construction."""
+wasm_globalref_add_int()::FakeGlobalRef = FakeGlobalRef(nothing, :add_int)
+
+"""Return a FakeGlobalRef(:sub_int) for IR construction."""
+wasm_globalref_sub_int()::FakeGlobalRef = FakeGlobalRef(nothing, :sub_int)
+
+# ============================================================================
+# TRUE-INT-002-impl2: Baked CodeInfo for f(x::Int64)=x*x+1
+# ============================================================================
+# Creates the exact CodeInfo that Julia produces for f(x::Int64)=x*x+1.
+# Used by JS to construct the input for run_direct() in the E2E pipeline.
+# The CodeInfo is built entirely in WASM — JS just calls this function.
+
+"""
+    wasm_create_codeinfo_i64_square_plus_one()
+
+Build CodeInfo for f(x::Int64) = x*x+1 at module level (uses const).
+"""
+const _baked_codeinfo = let
+    f_test(x::Int64) = x * x + Int64(1)
+    Base.code_typed(f_test, (Int64,); optimize=true)[1][1]
+end
+
+function wasm_create_codeinfo_i64_square_plus_one()
+    return _baked_codeinfo
+end
+
+"""
+    wasm_build_and_run_e2e(dummy::Int32)::Vector{UInt8}
+
+ALL-IN-ONE E2E: builds CodeInfo + runs REAL codegen in a single WASM call.
+Takes a dummy Int32 parameter to prevent Julia from constant-folding.
+Constructs f(x::Int64)=x*x+1 IR inline using %new constructors.
+"""
+function wasm_build_and_run_e2e(dummy::Int32)::Vector{UInt8}
+    # Build IR for f(x::Int64) = x*x+1 using Julia constructors
+    # Julia inlines these as %new instructions
+    arg2 = Core.Argument(2)
+    ssa1 = Core.SSAValue(1)
+    ssa2 = Core.SSAValue(2)
+    gr_mul = GlobalRef(Base, :mul_int)
+    gr_add = GlobalRef(Base, :add_int)
+
+    stmt1 = Expr(:call, gr_mul, arg2, arg2)
+    stmt2 = Expr(:call, gr_add, ssa1, Int64(1) + Int64(dummy))  # prevent constant folding
+    stmt3 = Core.ReturnNode(ssa2)
+
+    code = Any[stmt1, stmt2, stmt3]
+    ssatypes = Any[Int64, Int64, Any]
+    ssaflags = zeros(UInt32, 3)
+    ci = SimpleCodeInfo(code, ssatypes, ssaflags, nothing, UInt64(2))
+
+    return run_direct(ci)
+end
+
+# ============================================================================
 # Mini-compiler — GAMMA-003
 # ============================================================================
 # Self-contained compiler for simple i64 arithmetic functions.

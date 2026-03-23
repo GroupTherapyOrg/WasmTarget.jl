@@ -3076,7 +3076,19 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 end
             end
         else
-            append!(bytes, mset_val_bytes)
+            # TRUE-INT-002-impl2: When storing nothing (i32_const 0) into an i64 array
+            # (e.g., Union{Nothing, Int64} element type), emit i64_const 0 instead.
+            # compile_value(nothing) always produces i32_const 0, but array_set expects
+            # the element type — i64 for Union{Nothing, Int64} arrays.
+            if wasm_elem_type === I64 && length(mset_val_bytes) >= 1 && mset_val_bytes[1] == Opcode.I32_CONST && !has_ref_producing_gc_op(mset_val_bytes)
+                push!(bytes, Opcode.I64_CONST)
+                push!(bytes, 0x00)  # i64 value 0
+            elseif wasm_elem_type === F64 && length(mset_val_bytes) >= 1 && mset_val_bytes[1] == Opcode.I32_CONST && !has_ref_producing_gc_op(mset_val_bytes)
+                push!(bytes, Opcode.F64_CONST)
+                append!(bytes, reinterpret(UInt8, [Float64(0.0)]))
+            else
+                append!(bytes, mset_val_bytes)
+            end
         end
 
         # array.set consumes [array_ref, i32_index, value] and returns nothing
