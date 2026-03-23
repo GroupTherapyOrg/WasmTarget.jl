@@ -66,9 +66,10 @@
       "id": "D-007",
       "title": "WASM module assembly — type/func/export/code sections from compiled functions",
       "priority": 2,
-      "status": "pending",
+      "status": "done",
       "depends_on": ["D-004", "D-005"],
-      "description": "WasmModule serialization: assemble type section, function section, export section, code section from compiled function bodies. Produces valid .wasm binary."
+      "description": "WasmModule serialization: assemble type section, function section, export section, code section from compiled function bodies. Produces valid .wasm binary.",
+      "completedNote": "Multi-function, multi-type module assembly verified: 5 functions (i64, i32, f64), cross-function calls (helper called from square_double and sum_loop), all exports work. Valid WASM magic number. 962 tests pass, zero regressions."
     },
     {
       "id": "E2E-001",

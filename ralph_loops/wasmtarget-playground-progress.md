@@ -139,3 +139,15 @@ Same fix in `infer_value_wasm_type` for type inference.
 - nested 2-level branching
 
 **Test suite**: 955 passed, 0 failed, 2 errored (pre-existing), 6 broken — zero regressions
+
+### 2026-03-23: Session 6 — D-007 (WASM module assembly)
+
+**Status**: DONE
+
+**What works**: Multi-function, multi-type module assembly:
+- 5 functions with i64, i32, f64 parameter/return types
+- Cross-function calls (helper called from square_double and sum_loop)
+- All 5 functions exported and callable from JS
+- Valid WASM binary (magic number + version)
+
+**Test suite**: 962 passed, 0 failed, 2 errored (pre-existing), 6 broken — zero regressions

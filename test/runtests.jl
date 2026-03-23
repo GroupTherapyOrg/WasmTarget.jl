@@ -420,6 +420,30 @@ function test_cf_nested(a::Int64, b::Int64)::Int64
     end
 end
 
+# D-007: WASM module assembly — multi-function, multi-type, cross-call
+@noinline function d007_helper(x::Int64)::Int64
+    return x * Int64(2)
+end
+function d007_square_double(x::Int64)::Int64
+    sq = x * x
+    return d007_helper(sq)
+end
+function d007_sum_loop(n::Int64)::Int64
+    sum = Int64(0)
+    i = Int64(1)
+    while i <= n
+        sum = sum + d007_helper(i)
+        i = i + Int64(1)
+    end
+    return sum
+end
+function d007_i32_add(a::Int32, b::Int32)::Int32
+    return a + b
+end
+function d007_f64_mul(a::Float64, b::Float64)::Float64
+    return a * b
+end
+
 @testset "WasmTarget.jl" begin
 
     # ========================================================================
@@ -6502,6 +6526,38 @@ end
         end
         @testset "nested: (-1,5) → 0" begin
             @test run_wasm(d006_bytes, "test_cf_nested", Int64(-1), Int64(5)) == 0
+        end
+    end
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Phase 51: D-007 — WASM module assembly (multi-function, multi-type)
+    # ═══════════════════════════════════════════════════════════════════════════
+    @testset "Phase 51: WASM module assembly (D-007)" begin
+        d007_bytes = compile_multi([
+            (d007_helper, (Int64,)),
+            (d007_square_double, (Int64,)),
+            (d007_sum_loop, (Int64,)),
+            (d007_i32_add, (Int32, Int32)),
+            (d007_f64_mul, (Float64, Float64)),
+        ])
+        @test length(d007_bytes) > 0
+        # Valid WASM magic number
+        @test d007_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+
+        @testset "cross-call: helper(5) = 10" begin
+            @test run_wasm(d007_bytes, "d007_helper", Int64(5)) == 10
+        end
+        @testset "cross-call: square_double(4) = 32" begin
+            @test run_wasm(d007_bytes, "d007_square_double", Int64(4)) == 32
+        end
+        @testset "cross-call in loop: sum_loop(5) = 30" begin
+            @test run_wasm(d007_bytes, "d007_sum_loop", Int64(5)) == 30
+        end
+        @testset "i32 type: add(10,20) = 30" begin
+            @test run_wasm(d007_bytes, "d007_i32_add", Int32(10), Int32(20)) == 30
+        end
+        @testset "f64 type: mul(2.5,4.0) = 10.0" begin
+            @test run_wasm(d007_bytes, "d007_f64_mul", 2.5, 4.0) == 10.0
         end
     end
 
