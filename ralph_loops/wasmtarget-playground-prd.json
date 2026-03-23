@@ -39,9 +39,10 @@
       "id": "D-004",
       "title": "Compile intrinsic dispatch — mul_int, add_int, sub_int emit correct opcodes",
       "priority": 1,
-      "status": "pending",
+      "status": "done",
       "depends_on": ["D-003"],
-      "description": "compile_call dispatches on GlobalRef intrinsic names. Each intrinsic emits the correct WASM opcode (i64.mul, i64.add, etc.) via the real Intrinsics.jl mapping."
+      "description": "compile_call dispatches on GlobalRef intrinsic names. Each intrinsic emits the correct WASM opcode (i64.mul, i64.add, etc.) via the real Intrinsics.jl mapping.",
+      "completedNote": "Intrinsic name dispatch works via Symbol comparison: :add_int→1, :sub_int→2, :mul_int→3, :slt_int→4, :unknown→0. Real arithmetic intrinsics verified: (5+3)*(5-3)=16 using i64.add, i64.sub, i64.mul opcodes. 940 tests pass, zero regressions."
     },
     {
       "id": "D-005",

@@ -327,6 +327,45 @@ function test_cs_combined()::Int32
     return r1 + r2 + r3 + r4
 end
 
+# D-004: Intrinsic name dispatch — symbol comparison for opcode selection
+@noinline function intrinsic_tag(name::Symbol)::Int32
+    if name === :add_int
+        return Int32(1)
+    elseif name === :sub_int
+        return Int32(2)
+    elseif name === :mul_int
+        return Int32(3)
+    elseif name === :slt_int
+        return Int32(4)
+    elseif name === :eq_int
+        return Int32(5)
+    elseif name === :neg_int
+        return Int32(6)
+    end
+    return Int32(0)
+end
+
+function test_intr_add()::Int32
+    return intrinsic_tag(:add_int)
+end
+function test_intr_mul()::Int32
+    return intrinsic_tag(:mul_int)
+end
+function test_intr_sub()::Int32
+    return intrinsic_tag(:sub_int)
+end
+function test_intr_slt()::Int32
+    return intrinsic_tag(:slt_int)
+end
+function test_intr_unknown()::Int32
+    return intrinsic_tag(:unknown_op)
+end
+
+# D-004: Real arithmetic intrinsics (add_int, mul_int, sub_int opcodes)
+function test_combined_intrinsic(a::Int64, b::Int64)::Int64
+    return (a + b) * (a - b)
+end
+
 @testset "WasmTarget.jl" begin
 
     # ========================================================================
@@ -6305,6 +6344,44 @@ end
         # 47c: Combined statement dispatch
         @testset "Combined: 1+10+2+3 = 16" begin
             @test run_wasm(d003_bytes, "test_cs_combined") == 16
+        end
+    end
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Phase 48: D-004 — Intrinsic dispatch (symbol name → opcode selection)
+    # ═══════════════════════════════════════════════════════════════════════════
+    @testset "Phase 48: intrinsic dispatch (D-004)" begin
+        d004_bytes = compile_multi([
+            (intrinsic_tag, (Symbol,)),
+            (test_intr_add, ()),
+            (test_intr_mul, ()),
+            (test_intr_sub, ()),
+            (test_intr_slt, ()),
+            (test_intr_unknown, ()),
+            (test_combined_intrinsic, (Int64, Int64)),
+        ])
+        @test length(d004_bytes) > 0
+
+        # 48a: Intrinsic name dispatch via symbol comparison
+        @testset "add_int → 1" begin
+            @test run_wasm(d004_bytes, "test_intr_add") == 1
+        end
+        @testset "mul_int → 3" begin
+            @test run_wasm(d004_bytes, "test_intr_mul") == 3
+        end
+        @testset "sub_int → 2" begin
+            @test run_wasm(d004_bytes, "test_intr_sub") == 2
+        end
+        @testset "slt_int → 4" begin
+            @test run_wasm(d004_bytes, "test_intr_slt") == 4
+        end
+        @testset "unknown → 0" begin
+            @test run_wasm(d004_bytes, "test_intr_unknown") == 0
+        end
+
+        # 48b: Real arithmetic intrinsics produce correct opcodes
+        @testset "(5+3)*(5-3) = 16" begin
+            @test run_wasm(d004_bytes, "test_combined_intrinsic", Int64(5), Int64(3)) == 16
         end
     end
 

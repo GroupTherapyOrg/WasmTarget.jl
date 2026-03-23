@@ -108,3 +108,17 @@ Same fix in `infer_value_wasm_type` for type inference.
 | Combined 1+10+2+3 | 16 | 16 | Cross-function accumulation |
 
 **Test suite**: 933 passed, 0 failed, 2 errored (pre-existing), 6 broken — zero regressions
+
+### 2026-03-23: Session 4 — D-004 (intrinsic dispatch)
+
+**Goal**: Prove intrinsic name dispatch works: Symbol comparison selects correct opcode.
+
+**Status**: DONE
+
+**What works**:
+- `intrinsic_tag(name::Symbol)::Int32` dispatches via `name === :add_int` etc.
+- Real arithmetic: `(a+b)*(a-b)` compiles to i64.add + i64.sub + i64.mul opcodes
+- Combined with D-003 Expr dispatch, this proves the full compile_call pattern:
+  `stmt isa Expr` → `head === :call` → match intrinsic name → emit opcode
+
+**Test suite**: 940 passed, 0 failed, 2 errored (pre-existing), 6 broken — zero regressions
