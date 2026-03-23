@@ -2372,7 +2372,7 @@ mutable struct InplaceCompilationContext <: AbstractCompilationContext
     func_registry::Union{FunctionRegistry, Nothing}
     func_idx::UInt32
     func_ref::Any
-    global_args::Set{Int}        # Same as CompilationContext
+    global_args::Vector{Int}     # WasmGlobal param indices (Vector for WASM constructability — no Dict)
     is_compiled_closure::Bool
     # Dict fields replaced with Nothing for WASM constructability
     signal_ssa_getters::Nothing
@@ -2401,7 +2401,7 @@ function InplaceCompilationContext(code_info, arg_types::Tuple, return_type, mod
         IntKeyMap{Int}(length(code_info.code)),
         fill(false, length(code_info.code)),
         mod, type_registry, func_registry, func_idx, func_ref,
-        Set{Int}(), false,         # global_args, is_compiled_closure
+        Int[], false,              # global_args (Vector{Int} — no Dict), is_compiled_closure
         nothing, nothing, nothing, nothing,  # signal_ssa_getters/setters, captured_signal_fields, dom_bindings
         Tuple{Tuple{Module, Symbol}, UInt32}[],  # module_globals
         nothing, nothing,          # scratch_locals, memoryref_offsets
