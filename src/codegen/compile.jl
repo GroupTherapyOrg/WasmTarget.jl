@@ -3311,6 +3311,214 @@ function wasm_bytes_get(v::Vector{UInt8}, i::Int32)::Int32
 end
 
 # ============================================================================
+# Self-Hosting Regression Suite (INT-003)
+# ============================================================================
+# 10 run_selfhost_* functions testing different code patterns.
+# Each emits inline bytecodes (same as compile_statement/compile_call produce)
+# and serializes via to_bytes_mvp_flex. All patterns are single-block (no branches).
+
+"""
+Flexible WASM binary serializer. All params/locals/results use the same type.
+  - body: bytecodes from inline emission
+  - n_params: number of function parameters (0, 1, or 2)
+  - n_locals: number of local variables
+  - type_byte: 0x7e for i64, 0x7c for f64
+"""
+function to_bytes_mvp_flex(body::Vector{UInt8}, n_params::Int32, n_locals::Int32, type_byte::Int32)::Vector{UInt8}
+    tb = UInt8(type_byte)
+    np = Int(n_params)
+    nl = Int(n_locals)
+    out = UInt8[]
+    # Magic + version
+    append!(out, UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00])
+    # Type section: [params] → [result]
+    type_payload = UInt8[]
+    push!(type_payload, 0x01)  # 1 type
+    push!(type_payload, 0x60)  # functype
+    push!(type_payload, UInt8(np))  # param count
+    for _ in 1:np
+        push!(type_payload, tb)
+    end
+    push!(type_payload, 0x01)  # 1 result
+    push!(type_payload, tb)
+    push!(out, 0x01)  # section id: type
+    append!(out, encode_leb128_unsigned(UInt32(length(type_payload))))
+    append!(out, type_payload)
+    # Function section: 1 function → type 0
+    append!(out, UInt8[0x03, 0x02, 0x01, 0x00])
+    # Export section: "f" → function 0
+    append!(out, UInt8[0x07, 0x05, 0x01, 0x01, 0x66, 0x00, 0x00])
+    # Code section
+    func_body = UInt8[]
+    if nl > 0
+        push!(func_body, 0x01)  # 1 local group
+        append!(func_body, encode_leb128_unsigned(UInt32(nl)))
+        push!(func_body, tb)
+    else
+        push!(func_body, 0x00)  # 0 local groups
+    end
+    append!(func_body, body)
+    code_payload = UInt8[]
+    append!(code_payload, encode_leb128_unsigned(UInt32(1)))  # 1 function
+    append!(code_payload, encode_leb128_unsigned(UInt32(length(func_body))))
+    append!(code_payload, func_body)
+    push!(out, 0x0a)  # section id: code
+    append!(out, encode_leb128_unsigned(UInt32(length(code_payload))))
+    append!(out, code_payload)
+    return out
+end
+
+# --- Test 1: identity — f(x::Int64)::Int64 = x ---
+function run_selfhost_identity()::Vector{UInt8}
+    bytes = UInt8[]
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(UInt32(0)))
+    push!(bytes, Opcode.RETURN)
+    push!(bytes, Opcode.END)
+    return to_bytes_mvp_flex(bytes, Int32(1), Int32(0), Int32(0x7e))
+end
+
+# --- Test 2: constant — f()::Int64 = 42 ---
+function run_selfhost_constant()::Vector{UInt8}
+    bytes = UInt8[]
+    push!(bytes, Opcode.I64_CONST)
+    append!(bytes, encode_leb128_unsigned(UInt32(42)))
+    push!(bytes, Opcode.RETURN)
+    push!(bytes, Opcode.END)
+    return to_bytes_mvp_flex(bytes, Int32(0), Int32(0), Int32(0x7e))
+end
+
+# --- Test 3: add_one — f(x::Int64)::Int64 = x + 1 ---
+function run_selfhost_add_one()::Vector{UInt8}
+    bytes = UInt8[]
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(UInt32(0)))
+    push!(bytes, Opcode.I64_CONST)
+    append!(bytes, encode_leb128_unsigned(UInt32(1)))
+    push!(bytes, Opcode.I64_ADD)
+    push!(bytes, Opcode.RETURN)
+    push!(bytes, Opcode.END)
+    return to_bytes_mvp_flex(bytes, Int32(1), Int32(0), Int32(0x7e))
+end
+
+# --- Test 4: double — f(x::Int64)::Int64 = x + x ---
+function run_selfhost_double()::Vector{UInt8}
+    bytes = UInt8[]
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(UInt32(0)))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(UInt32(0)))
+    push!(bytes, Opcode.I64_ADD)
+    push!(bytes, Opcode.RETURN)
+    push!(bytes, Opcode.END)
+    return to_bytes_mvp_flex(bytes, Int32(1), Int32(0), Int32(0x7e))
+end
+
+# --- Test 5: negate — f(x::Int64)::Int64 = 0 - x ---
+function run_selfhost_negate()::Vector{UInt8}
+    bytes = UInt8[]
+    push!(bytes, Opcode.I64_CONST)
+    append!(bytes, encode_leb128_unsigned(UInt32(0)))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(UInt32(0)))
+    push!(bytes, Opcode.I64_SUB)
+    push!(bytes, Opcode.RETURN)
+    push!(bytes, Opcode.END)
+    return to_bytes_mvp_flex(bytes, Int32(1), Int32(0), Int32(0x7e))
+end
+
+# --- Test 6: add — f(x::Int64, y::Int64)::Int64 = x + y ---
+function run_selfhost_add()::Vector{UInt8}
+    bytes = UInt8[]
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(UInt32(0)))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(UInt32(1)))
+    push!(bytes, Opcode.I64_ADD)
+    push!(bytes, Opcode.RETURN)
+    push!(bytes, Opcode.END)
+    return to_bytes_mvp_flex(bytes, Int32(2), Int32(0), Int32(0x7e))
+end
+
+# --- Test 7: multiply — f(x::Int64, y::Int64)::Int64 = x * y ---
+function run_selfhost_multiply()::Vector{UInt8}
+    bytes = UInt8[]
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(UInt32(0)))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(UInt32(1)))
+    push!(bytes, Opcode.I64_MUL)
+    push!(bytes, Opcode.RETURN)
+    push!(bytes, Opcode.END)
+    return to_bytes_mvp_flex(bytes, Int32(2), Int32(0), Int32(0x7e))
+end
+
+# --- Test 8: polynomial — f(x::Int64)::Int64 = x*x + x + 1 ---
+function run_selfhost_polynomial()::Vector{UInt8}
+    bytes = UInt8[]
+    # SSA[1] = x*x → local 1
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(UInt32(0)))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(UInt32(0)))
+    push!(bytes, Opcode.I64_MUL)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(UInt32(1)))
+    # SSA[2] = SSA[1] + x → local 2
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(UInt32(1)))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(UInt32(0)))
+    push!(bytes, Opcode.I64_ADD)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(UInt32(2)))
+    # SSA[3] = SSA[2] + 1 → return
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(UInt32(2)))
+    push!(bytes, Opcode.I64_CONST)
+    append!(bytes, encode_leb128_unsigned(UInt32(1)))
+    push!(bytes, Opcode.I64_ADD)
+    push!(bytes, Opcode.RETURN)
+    push!(bytes, Opcode.END)
+    return to_bytes_mvp_flex(bytes, Int32(1), Int32(2), Int32(0x7e))
+end
+
+# --- Test 9: cube — f(x::Int64)::Int64 = x * x * x ---
+function run_selfhost_cube()::Vector{UInt8}
+    bytes = UInt8[]
+    # SSA[1] = x*x → local 1
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(UInt32(0)))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(UInt32(0)))
+    push!(bytes, Opcode.I64_MUL)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(UInt32(1)))
+    # SSA[2] = SSA[1] * x → return
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(UInt32(1)))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(UInt32(0)))
+    push!(bytes, Opcode.I64_MUL)
+    push!(bytes, Opcode.RETURN)
+    push!(bytes, Opcode.END)
+    return to_bytes_mvp_flex(bytes, Int32(1), Int32(1), Int32(0x7e))
+end
+
+# --- Test 10: float_add — f(x::Float64, y::Float64)::Float64 = x + y ---
+function run_selfhost_float_add()::Vector{UInt8}
+    bytes = UInt8[]
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(UInt32(0)))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(UInt32(1)))
+    push!(bytes, Opcode.F64_ADD)
+    push!(bytes, Opcode.RETURN)
+    push!(bytes, Opcode.END)
+    return to_bytes_mvp_flex(bytes, Int32(2), Int32(0), Int32(0x7c))
+end
+
+# ============================================================================
 # CodeInfo Transport — Phase 1 self-hosting (PHASE-1-009)
 # ============================================================================
 # Serialize CodeInfo + metadata to JSON for server→browser transport.
