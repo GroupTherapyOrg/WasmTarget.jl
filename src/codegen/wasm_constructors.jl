@@ -280,19 +280,23 @@ end
 
 ALL-IN-ONE E2E: builds CodeInfo + runs REAL codegen in a single WASM call.
 Takes a dummy Int32 parameter to prevent Julia from constant-folding.
-Constructs f(x::Int64)=x*x+1 IR inline using %new constructors.
+Constructs f(x::Int64)=x*x+1 IR inline using pre-computed GlobalRef constants.
+GlobalRef(Base, :mul_int) normally uses foreigncall(:jl_module_globalref) which is
+stubbed in WASM. Pre-computed constants avoid the foreigncall.
 """
+# Pre-compute GlobalRef constants at module load time (native Julia)
+const _gr_mul_int = GlobalRef(Base, :mul_int)
+const _gr_add_int = GlobalRef(Base, :add_int)
+
 function wasm_build_and_run_e2e(dummy::Int32)::Vector{UInt8}
     # Build IR for f(x::Int64) = x*x+1 using Julia constructors
-    # Julia inlines these as %new instructions
     arg2 = Core.Argument(2)
     ssa1 = Core.SSAValue(1)
     ssa2 = Core.SSAValue(2)
-    gr_mul = GlobalRef(Base, :mul_int)
-    gr_add = GlobalRef(Base, :add_int)
 
-    stmt1 = Expr(:call, gr_mul, arg2, arg2)
-    stmt2 = Expr(:call, gr_add, ssa1, Int64(1) + Int64(dummy))  # prevent constant folding
+    # Use pre-computed GlobalRef constants (avoid foreigncall in WASM)
+    stmt1 = Expr(:call, _gr_mul_int, arg2, arg2)
+    stmt2 = Expr(:call, _gr_add_int, ssa1, Int64(1) + Int64(dummy))
     stmt3 = Core.ReturnNode(ssa2)
 
     code = Any[stmt1, stmt2, stmt3]

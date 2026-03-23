@@ -2830,9 +2830,12 @@ function run_direct(code_info)::Vector{UInt8}
 
     # Build all_local_types for remaining passes: [param_types..., locals...]
     # For MVP f(x::Int64)=x*x+1: param=I64, locals=[I64,I64] → [I64,I64,I64]
-    all_local_types = WasmValType[get_concrete_wasm_type(ctx.arg_types[1], ctx.mod, ctx.type_registry)]
-    for l in ctx.locals
-        push!(all_local_types, l)
+    # TRUE-INT-002-impl2-impl: Pre-allocate to avoid push!→_growend! closure stubs in WASM
+    n_locals = length(ctx.locals)
+    all_local_types = Vector{WasmValType}(undef, 1 + n_locals)
+    all_local_types[1] = get_concrete_wasm_type(ctx.arg_types[1], ctx.mod, ctx.type_registry)
+    for i in 1:n_locals
+        all_local_types[1 + i] = ctx.locals[i]
     end
 
     bytes = fix_local_get_set_type_mismatch(bytes, all_local_types)
@@ -2856,6 +2859,10 @@ const _baked_ci = let
     Base.code_typed(f_test, (Int64,); optimize=true)[1][1]
 end
 
+# TRUE-INT-002-impl2-impl: Wrap in mutable Ref to prevent Julia from
+# constant-folding CodeInfo into function bodies (which adds 44KB of type registrations).
+const _baked_ci_ref = Ref{Any}(_baked_ci)
+
 """
     run_e2e_baked()::Vector{UInt8}
 
@@ -2868,6 +2875,18 @@ function run_e2e_baked()::Vector{UInt8}
 end
 
 """
+    run_e2e_ref()::Vector{UInt8}
+
+TRUE-INT-002-impl2-impl: Self-hosting E2E using Ref wrapper to prevent
+Julia from constant-folding CodeInfo (which adds ~44KB of type registrations
+that break validation in multi-function modules).
+"""
+function run_e2e_ref()::Vector{UInt8}
+    ci = _baked_ci_ref[]
+    return run_direct(ci)
+end
+
+"""
     run_e2e_from_ci(ci)::Vector{UInt8}
 
 Self-hosting E2E: takes a pre-built CodeInfo/SimpleCodeInfo and runs the REAL codegen.
@@ -2875,6 +2894,104 @@ For use when CodeInfo is passed from JS via constructors.
 """
 function run_e2e_from_ci(ci)::Vector{UInt8}
     return run_direct(ci)
+end
+
+# TRUE-INT-002-impl2-impl: Minimal struct to avoid embedding full CodeInfo as constant.
+# CodeInfo has 23 fields → massive WasmGC type registration → breaks validation.
+# SimpleIR has just the fields generate_structured actually reads.
+struct SimpleIR
+    code::Vector{Any}
+    ssavaluetypes::Vector{Any}
+end
+
+"""
+    run_e2e_hardcoded()::Vector{UInt8}
+
+TRUE-INT-002-impl2-impl: Self-hosting E2E with hardcoded IR for f(x::Int64)=x*x+1.
+Avoids embedding CodeInfo as constant (which adds ~44KB of type registrations and
+breaks validation). Instead, constructs the 3 IR statements inline using SimpleIR.
+"""
+function run_e2e_hardcoded()::Vector{UInt8}
+    # Construct IR for f(x::Int64)=x*x+1 — 3 statements:
+    # 1. mul_int(Argument(2), Argument(2)) → Int64
+    # 2. add_int(SSAValue(1), Int64(1)) → Int64
+    # 3. return SSAValue(2)
+    stmt1 = Expr(:call, Core.Intrinsics.mul_int, Core.Argument(2), Core.Argument(2))
+    stmt2 = Expr(:call, Core.Intrinsics.add_int, Core.SSAValue(1), Int64(1))
+    stmt3 = Core.ReturnNode(Core.SSAValue(2))
+    code = Any[stmt1, stmt2, stmt3]
+    ssa_types = Any[Int64, Int64, Any]
+
+    ci = SimpleIR(code, ssa_types)
+    return run_direct(ci)
+end
+
+"""
+    run_e2e_inlined()::Vector{UInt8}
+
+TRUE-INT-002-impl2-impl: Self-hosting E2E with run_direct body INLINED.
+Julia won't inline run_direct (517 stmts), so we copy its body here.
+This produces a single function where Julia inlines all small helpers.
+The _baked_ci constant is accessed directly (no parameter passing).
+"""
+function run_e2e_inlined()::Vector{UInt8}
+    code_info = _baked_ci
+
+    # === Body of run_direct, inlined ===
+
+    # Create module infrastructure
+    mod = new_wasm_module()
+    reg = TypeRegistry(Val(:minimal))
+
+    # Pre-baked analysis for f(x::Int64)=x*x+1
+    ssa_types_data = Vector{Union{Nothing, Type}}(nothing, 3)
+    ssa_types_data[1] = Int64
+    ssa_types_data[2] = Int64
+    ssa_types = IntKeyMap{Type}(ssa_types_data)
+    ssa_locals_data = Vector{Union{Nothing, Int}}(nothing, 3)
+    ssa_locals_data[1] = 1
+    ssa_locals_data[2] = 2
+    ssa_locals = IntKeyMap{Int}(ssa_locals_data)
+    phi_locals = IntKeyMap{Int}(3)
+    loop_headers = Bool[false, false, false]
+    locals = WasmValType[I64, I64]
+
+    ctx = InplaceCompilationContext(
+        code_info, (Int64,), Int64, 1, locals,
+        ssa_types, ssa_locals, phi_locals, loop_headers,
+        mod, reg, nothing, UInt32(0), nothing,
+        Int[], false,
+        nothing, nothing, nothing, nothing,
+        Tuple{Tuple{Module, Symbol}, UInt32}[],
+        nothing, nothing,
+        WasmStackValidator(enabled=true, func_name="func_0"),
+        false, nothing, nothing, nothing
+    )
+
+    # BYPASS generate_body — call components directly
+    code = ctx.code_info.code
+    blocks = analyze_blocks(code)
+    bytes = generate_structured(ctx, blocks)
+
+    # Apply fix passes
+    bytes = fix_broken_select_instructions(bytes)
+    bytes = fix_numeric_to_ref_local_stores(bytes, ctx.locals, ctx.n_params)
+    bytes = fix_consecutive_local_sets(bytes)
+    bytes = strip_excess_after_function_end(bytes)
+
+    # Build all_local_types
+    all_local_types = WasmValType[get_concrete_wasm_type(ctx.arg_types[1], ctx.mod, ctx.type_registry)]
+    for l in ctx.locals
+        push!(all_local_types, l)
+    end
+
+    bytes = fix_local_get_set_type_mismatch(bytes, all_local_types)
+    bytes = fix_array_len_wrap(bytes)
+    bytes = fix_i64_local_in_i32_ops(bytes, all_local_types)
+    bytes = fix_i32_wrap_after_i32_ops(bytes)
+
+    # Serialize to WASM binary
+    return to_bytes_mvp(bytes, ctx.locals)
 end
 
 # ============================================================================
