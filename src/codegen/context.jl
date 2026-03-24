@@ -554,12 +554,26 @@ function julia_to_wasm_type_concrete(T, ctx::AbstractCompilationContext)::WasmVa
                 end
                 return result
             else
-                # PURE-6021b: Non-numeric multi-variant union uses a tagged-union struct in WASM.
-                # The local must be ConcreteRef to the tagged union type, NOT ExternRef.
-                # Using ExternRef causes validation errors: "expected externref, found (ref null $type)"
-                # because struct.new $union_type_idx returns ConcreteRef, not externref.
-                union_info = get_union_type!(ctx.mod, ctx.type_registry, T)
-                return ConcreteRef(union_info.wasm_type_idx, true)
+                # Non-numeric multi-variant union.
+                # Check if all variants are WasmGC struct types — if so, use StructRef.
+                # This aligns with get_concrete_wasm_type which returns StructRef for
+                # all-struct unions via resolve_union_type → find_common_wasm_type.
+                # Using StructRef avoids the PiNode narrowing bug where a raw struct value
+                # (from a StructRef parameter) gets illegally cast to a tagged union type
+                # when Julia IR narrows Union{A,B,C} to Union{B,C} via PiNode.
+                # Tagged union ConcreteRef is only needed for heterogeneous unions
+                # (e.g., mix of structs and arrays/strings) where StructRef won't work.
+                is_all_struct = all(non_nothing_u) do t
+                    (isconcretetype(t) && isstructtype(t) && t !== String && t !== Symbol) || t <: Tuple
+                end
+                if is_all_struct
+                    return StructRef
+                else
+                    # PURE-6021b: Heterogeneous non-numeric union uses a tagged-union struct.
+                    # The local must be ConcreteRef to the tagged union type, NOT ExternRef.
+                    union_info = get_union_type!(ctx.mod, ctx.type_registry, T)
+                    return ConcreteRef(union_info.wasm_type_idx, true)
+                end
             end
         end
     else
