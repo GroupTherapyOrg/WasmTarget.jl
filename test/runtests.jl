@@ -7827,4 +7827,150 @@ console.log(JSON.stringify({cc:Number(cc),cd:Number(cd),ok}));
         end
     end
 
+    # Phase 24: Core IR Type Registration & Dispatch (JIB-IR001)
+    # Register Core IR types (ReturnNode, GotoNode, etc.) as WasmGC structs
+    # and verify isa dispatch via ref.test at runtime.
+
+    # Maker functions for Core IR types
+    function ir001_make_ssaval(id::Int64)::Core.SSAValue
+        return Core.SSAValue(id)
+    end
+    function ir001_make_gotonode(label::Int64)::Core.GotoNode
+        return Core.GotoNode(label)
+    end
+    function ir001_make_gotoifnot(dest::Int64)::Core.GotoIfNot
+        return Core.GotoIfNot(true, dest)
+    end
+    function ir001_make_returnnode(v::Int64)::Core.ReturnNode
+        return Core.ReturnNode(v)
+    end
+
+    # Dispatch function: isa checks on Core IR types
+    function ir001_dispatch(x::Union{Core.ReturnNode, Core.GotoNode, Core.GotoIfNot, Core.SSAValue})::Int32
+        if x isa Core.ReturnNode
+            return Int32(1)
+        elseif x isa Core.GotoNode
+            return Int32(2)
+        elseif x isa Core.GotoIfNot
+            return Int32(3)
+        elseif x isa Core.SSAValue
+            return Int32(4)
+        end
+        return Int32(0)
+    end
+
+    @testset "Phase 24: Core IR Type Registration (IR-001)" begin
+
+        # Test 1: Compile Core IR maker + dispatch functions
+        @testset "IR001-1: Core IR types compile and validate" begin
+            bytes = WasmTarget.compile_multi([
+                (ir001_make_ssaval, (Int64,)),
+                (ir001_make_gotonode, (Int64,)),
+                (ir001_make_gotoifnot, (Int64,)),
+                (ir001_make_returnnode, (Int64,)),
+                (ir001_dispatch, (Union{Core.ReturnNode, Core.GotoNode, Core.GotoIfNot, Core.SSAValue},)),
+            ])
+            @test length(bytes) > 0
+        end
+
+        # Test 2: WAT contains ref.test for dispatch
+        @testset "IR001-2: WAT contains ref.test for IR types" begin
+            bytes = WasmTarget.compile_multi([
+                (ir001_make_ssaval, (Int64,)),
+                (ir001_make_gotonode, (Int64,)),
+                (ir001_make_gotoifnot, (Int64,)),
+                (ir001_make_returnnode, (Int64,)),
+                (ir001_dispatch, (Union{Core.ReturnNode, Core.GotoNode, Core.GotoIfNot, Core.SSAValue},)),
+            ])
+            dir = mktempdir()
+            wasm_path = joinpath(dir, "ir001.wasm")
+            write(wasm_path, bytes)
+            wat = read(`wasm-tools print $wasm_path`, String)
+            # Dispatch on 4 types produces 3 ref.test (last type is fallthrough)
+            @test count("ref.test", wat) >= 3
+        end
+
+        # Test 3: Runtime dispatch via Node.js
+        @testset "IR001-3: Runtime isa dispatch on Core IR types" begin
+            bytes = WasmTarget.compile_multi([
+                (ir001_make_ssaval, (Int64,)),
+                (ir001_make_gotonode, (Int64,)),
+                (ir001_make_gotoifnot, (Int64,)),
+                (ir001_make_returnnode, (Int64,)),
+                (ir001_dispatch, (Union{Core.ReturnNode, Core.GotoNode, Core.GotoIfNot, Core.SSAValue},)),
+            ])
+            dir = mktempdir()
+            wasm_path = joinpath(dir, "test.wasm")
+            js_path = joinpath(dir, "test.mjs")
+            write(wasm_path, bytes)
+            write(js_path, """
+import fs from 'fs';
+const buf = fs.readFileSync('$(escape_string(wasm_path))');
+const { instance } = await WebAssembly.instantiate(buf, { Math: { pow: Math.pow } });
+const e = instance.exports;
+const rn = e.ir001_make_returnnode(99n);
+const gn = e.ir001_make_gotonode(10n);
+const gif = e.ir001_make_gotoifnot(5n);
+const ssa = e.ir001_make_ssaval(42n);
+const d_rn = e.ir001_dispatch(rn);
+const d_gn = e.ir001_dispatch(gn);
+const d_gif = e.ir001_dispatch(gif);
+const d_ssa = e.ir001_dispatch(ssa);
+console.log(JSON.stringify({
+    rn: Number(d_rn), gn: Number(d_gn),
+    gif: Number(d_gif), ssa: Number(d_ssa),
+    ok: Number(d_rn)===1 && Number(d_gn)===2 && Number(d_gif)===3 && Number(d_ssa)===4
+}));
+""")
+            node_cmd = NODE_CMD
+            if node_cmd !== nothing
+                output = strip(read(`$node_cmd $js_path`, String))
+                result = JSON.parse(output)
+                @test result["ok"] == true
+                @test result["rn"] == 1   # ReturnNode → 1
+                @test result["gn"] == 2   # GotoNode → 2
+                @test result["gif"] == 3  # GotoIfNot → 3
+                @test result["ssa"] == 4  # SSAValue → 4
+            end
+        end
+
+        # Test 4: register_ir_types=true pre-registers all 13 Core IR types
+        @testset "IR001-4: register_ir_types kwarg" begin
+            bytes = WasmTarget.compile_multi([
+                (ir001_make_ssaval, (Int64,)),
+                (ir001_dispatch, (Union{Core.ReturnNode, Core.GotoNode, Core.GotoIfNot, Core.SSAValue},)),
+            ]; register_ir_types=true)
+            @test length(bytes) > 0
+            # Validate the module
+            dir = mktempdir()
+            wasm_path = joinpath(dir, "ir001_reg.wasm")
+            write(wasm_path, bytes)
+            validate_output = read(`wasm-tools validate $wasm_path`, String)
+            @test isempty(validate_output)
+        end
+
+        # Test 5: WAT ref.test for Expr type (5-type dispatch including Expr)
+        @testset "IR001-5: Expr in isa dispatch produces ref.test" begin
+            function ir001_dispatch_with_expr(x::Union{Core.ReturnNode, Core.GotoNode, Core.GotoIfNot, Core.SSAValue, Expr})::Int32
+                if x isa Core.ReturnNode; return Int32(1)
+                elseif x isa Core.GotoNode; return Int32(2)
+                elseif x isa Core.GotoIfNot; return Int32(3)
+                elseif x isa Expr; return Int32(5)
+                elseif x isa Core.SSAValue; return Int32(4)
+                end
+                return Int32(0)
+            end
+            bytes = WasmTarget.compile_multi([
+                (ir001_dispatch_with_expr, (Union{Core.ReturnNode, Core.GotoNode, Core.GotoIfNot, Core.SSAValue, Expr},)),
+            ]; register_ir_types=true)
+            @test length(bytes) > 0
+            dir = mktempdir()
+            wasm_path = joinpath(dir, "ir001_expr.wasm")
+            write(wasm_path, bytes)
+            wat = read(`wasm-tools print $wasm_path`, String)
+            # 5-type dispatch produces 4 ref.test (last type is fallthrough)
+            @test count("ref.test", wat) >= 4
+        end
+    end
+
 end

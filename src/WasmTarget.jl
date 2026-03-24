@@ -118,8 +118,10 @@ wasm_bytes = compile_multi([
 Functions can call each other within the module.
 """
 function compile_multi(functions::Vector; optimize=false, stub_names::Set{String}=Set{String}(),
-                       return_registries::Bool=false, optimize_ir::Bool=true)
-    result = compile_module(functions; stub_names=stub_names, return_registries=return_registries, optimize_ir=optimize_ir)
+                       return_registries::Bool=false, optimize_ir::Bool=true,
+                       register_ir_types::Bool=false)
+    result = compile_module(functions; stub_names=stub_names, return_registries=return_registries,
+                           optimize_ir=optimize_ir, register_ir_types=register_ir_types)
     if return_registries
         mod, type_registry, func_registry, dispatch_registry = result
         bytes = to_bytes(mod)

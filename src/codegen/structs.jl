@@ -1002,3 +1002,18 @@ function patch_any_fields_for_jltype_hierarchy!(mod::WasmModule, registry::TypeR
     end
 end
 
+"""
+    register_core_ir_types!(mod, registry)
+
+Pre-register Core IR node types as WasmGC structs for self-hosting dispatch.
+These types are used in compile_statement's isa chain (ReturnNode, GotoNode, etc.).
+Registration order: dependencies first (SlotNumber before NewvarNode).
+"""
+function register_core_ir_types!(mod::WasmModule, registry::TypeRegistry)
+    for T in (Core.SlotNumber, Core.SSAValue, Core.Argument, Core.GotoNode,
+              Core.ReturnNode, Core.UpsilonNode, Core.PiNode, Core.GotoIfNot,
+              Core.EnterNode, Core.NewvarNode, Core.PhiNode, Core.PhiCNode, Expr)
+        register_struct_type!(mod, registry, T)
+    end
+end
+

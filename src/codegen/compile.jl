@@ -1256,7 +1256,8 @@ function compile_module(functions::Vector;
                         import_stubs::Vector=[],
                         return_registries::Bool=false,
                         overlay_entries::Set=Set{Tuple{Any,Tuple}}(),
-                        optimize_ir::Bool=true
+                        optimize_ir::Bool=true,
+                        register_ir_types::Bool=false
                         )
     # WASM-057: Auto-discover function dependencies
     functions = discover_dependencies(functions)
@@ -1499,6 +1500,11 @@ function compile_module(functions::Vector;
     for _exn_T in (ErrorException, ArgumentError, OverflowError, DivideError,
                    StackOverflowError, OutOfMemoryError)
         register_struct_type!(mod, type_registry, _exn_T)
+    end
+
+    # JIB-IR001: Pre-register Core IR types for self-hosting dispatch
+    if register_ir_types
+        register_core_ir_types!(mod, type_registry)
     end
 
     # PURE-9025: Assign DFS type IDs after all types are registered
