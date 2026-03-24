@@ -48,6 +48,37 @@
       font-size: 12px;
       color: #a6adc8;
     }
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 16px;
+      background: #181825;
+      border-bottom: 1px solid #313244;
+      font-size: 13px;
+      flex-wrap: wrap;
+    }
+    .toolbar label { color: #a6adc8; }
+    .toolbar select, .toolbar input[type="text"] {
+      background: #313244;
+      color: #cdd6f4;
+      border: 1px solid #45475a;
+      border-radius: 4px;
+      padding: 4px 8px;
+      font-size: 13px;
+      font-family: "JetBrains Mono", "Fira Code", monospace;
+    }
+    .toolbar select:focus, .toolbar input:focus { outline: 1px solid #89b4fa; }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge-wasm { background: #a6e3a1; color: #1e1e2e; }
+    .badge-server { background: #89b4fa; color: #1e1e2e; }
+    .badge-offline { background: #f38ba8; color: #1e1e2e; }
     .main {
       flex: 1;
       display: flex;
@@ -60,7 +91,7 @@
       min-height: 200px;
     }
     .output-pane {
-      height: 200px;
+      height: 240px;
       min-height: 80px;
       background: #11111b;
       border-top: 1px solid #313244;
@@ -88,6 +119,7 @@
     }
     #output .error { color: #f38ba8; }
     #output .info { color: #a6adc8; font-style: italic; }
+    #output .success { color: #a6e3a1; }
 
     /* CodeMirror theme overrides */
     .cm-editor { height: 100%; }
@@ -105,6 +137,26 @@
     </div>
   </header>
 
+  <div class="toolbar">
+    <label>Demo:</label>
+    <select id="demo-fn">
+      <option value="">Custom code</option>
+      <option value="p01" data-nargs="1" data-expr="x * x + 1">f(x) = x^2 + 1</option>
+      <option value="p02" data-nargs="2" data-expr="x + y">f(x,y) = x + y</option>
+      <option value="p03" data-nargs="1" data-expr="x * 3 - 7">f(x) = 3x - 7</option>
+      <option value="p04" data-nargs="2" data-expr="x * y + 10">f(x,y) = xy + 10</option>
+      <option value="p05" data-nargs="1" data-expr="x * x * x">f(x) = x^3</option>
+      <option value="p06" data-nargs="2" data-expr="x*x - y*y">f(x,y) = x^2 - y^2</option>
+      <option value="p07" data-nargs="1" data-expr="(x+1)*(x-1)">f(x) = (x+1)(x-1)</option>
+      <option value="p08" data-nargs="2" data-expr="2*x + 3*y">f(x,y) = 2x + 3y</option>
+      <option value="p09" data-nargs="1" data-expr="x">f(x) = x (identity)</option>
+      <option value="p10" data-nargs="3" data-expr="x + y + z">f(x,y,z) = x + y + z</option>
+    </select>
+    <label>Args:</label>
+    <input type="text" id="demo-args" placeholder="5" size="15" />
+    <span id="mode-badge"></span>
+  </div>
+
   <div class="main">
     <div class="editor-pane" id="editor"></div>
     <div class="output-pane">
@@ -112,111 +164,131 @@
         <span>Output</span>
         <button id="clear-btn" style="background:none;border:none;color:#a6adc8;cursor:pointer;font-size:12px;">Clear</button>
       </div>
-      <div id="output"><span class="info">Press Run or Ctrl+Enter to compile and execute.</span></div>
+      <div id="output"><span class="info">Select a demo function and press Run, or write custom Julia code.</span></div>
     </div>
   </div>
 
   <!-- CodeMirror 6 via CDN -->
   <script type="module">
-    // Import CodeMirror packages from esm.sh CDN
     import {EditorView, basicSetup} from "https://esm.sh/@codemirror/basic-setup@0.20.0";
     import {keymap} from "https://esm.sh/@codemirror/view@6.36.8";
     import {EditorState} from "https://esm.sh/@codemirror/state@6.5.2";
     import {oneDark} from "https://esm.sh/@codemirror/theme-one-dark@6.1.2";
     import {linter, lintGutter} from "https://esm.sh/@codemirror/lint@6.8.4";
 
-    // Julia language support
     let juliaLang;
     try {
       const mod = await import("https://esm.sh/@plutojl/lang-julia@0.2.1");
       juliaLang = mod.julia();
     } catch (e) {
-      console.warn("Julia language support not available, falling back to plain text:", e);
       juliaLang = null;
     }
 
+    // ── State ──
     const COMPILE_URL = (new URLSearchParams(window.location.search)).get("server") || "http://localhost:8080";
-    const OFFLINE_MODE = (new URLSearchParams(window.location.search)).get("offline") === "true";
+    let codegenInstance = null;  // WASM codegen module (local, no server needed)
+    let serverAvailable = false;
 
-    // Binaryen.js for offline mode
-    let binaryenMerger = null;
-    async function initBinaryen() {
-      try {
-        const { BinaryenMerger } = await import("./binaryen-merge.js");
-        binaryenMerger = new BinaryenMerger();
-        const ok = await binaryenMerger.init();
-        if (ok) {
-          console.log("[Playground] Binaryen.js available for offline mode");
-        }
-        return ok;
-      } catch (e) {
-        console.warn("[Playground] Binaryen.js not available:", e.message);
-        return false;
+    // ── Load codegen.wasm ──
+    try {
+      const resp = await fetch("codegen.wasm");
+      if (resp.ok) {
+        const bytes = await resp.arrayBuffer();
+        const {instance} = await WebAssembly.instantiate(bytes, {Math: {pow: Math.pow}});
+        codegenInstance = instance;
+        console.log("[Playground] codegen.wasm loaded — WASM demo mode available");
       }
+    } catch (e) {
+      console.warn("[Playground] codegen.wasm not available:", e.message);
     }
 
-    // Pre-load base.wasm via compileStreaming (benefits from V8 code caching on second load)
-    let baseModule = null;
-    let serverAvailable = !OFFLINE_MODE;
+    // ── Try server ──
+    try {
+      const resp = await fetch(COMPILE_URL + "/base.wasm", {method: "HEAD"});
+      if (resp.ok) serverAvailable = true;
+    } catch (e) { /* server offline */ }
 
-    WebAssembly.compileStreaming(fetch(COMPILE_URL + "/base.wasm"))
-      .then(mod => {
-        baseModule = mod;
-        serverAvailable = true;
-        console.log("base.wasm pre-compiled (" + (baseModule ? "cached" : "fresh") + ")");
-      })
-      .catch(e => {
-        console.warn("base.wasm pre-load failed:", e);
-        serverAvailable = false;
-        // Try loading Binaryen.js for offline mode
-        initBinaryen();
-      });
+    // ── Demo function metadata ──
+    const DEMOS = {
+      p01: {source: "f(x::Int64)::Int64 = x * x + Int64(1)", nargs: 1, desc: "x^2 + 1"},
+      p02: {source: "f(x::Int64, y::Int64)::Int64 = x + y", nargs: 2, desc: "x + y"},
+      p03: {source: "f(x::Int64)::Int64 = x * Int64(3) - Int64(7)", nargs: 1, desc: "3x - 7"},
+      p04: {source: "f(x::Int64, y::Int64)::Int64 = x * y + Int64(10)", nargs: 2, desc: "xy + 10"},
+      p05: {source: "f(x::Int64)::Int64 = x * x * x", nargs: 1, desc: "x^3"},
+      p06: {source: "f(x::Int64, y::Int64)::Int64 = x * x - y * y", nargs: 2, desc: "x^2 - y^2"},
+      p07: {source: "f(x::Int64)::Int64 = (x + Int64(1)) * (x - Int64(1))", nargs: 1, desc: "(x+1)(x-1)"},
+      p08: {source: "f(x::Int64, y::Int64)::Int64 = Int64(2) * x + Int64(3) * y", nargs: 2, desc: "2x + 3y"},
+      p09: {source: "f(x::Int64)::Int64 = x", nargs: 1, desc: "identity"},
+      p10: {source: "f(x::Int64, y::Int64, z::Int64)::Int64 = x + y + z", nargs: 3, desc: "x + y + z"},
+    };
 
-    const defaultCode = `# Julia Playground — powered by WasmTarget.jl
-# Your code is compiled to WebAssembly and executed in the browser.
-
-println("Hello from Julia!")
-println("1 + 1 = ", 1 + 1)
-`;
-
-    // Lint: compile errors shown as red underlines + gutter icons
+    // ── Editor setup ──
     let currentDiagnostics = [];
     const juliaLinter = linter(() => currentDiagnostics);
-
     function setDiagnostics(diags) {
       currentDiagnostics = diags;
-      // Force lint refresh by dispatching a reconfigure
-      const tr = editor.state.update({});
-      editor.dispatch(tr);
+      editor.dispatch(editor.state.update({}));
     }
 
+    const defaultCode = `# Julia Playground — powered by WasmTarget.jl
+# Select a demo function above, or write custom code.
+#
+# Demo functions are compiled via REAL codegen running in WASM:
+#   source -> Base.code_typed -> IR -> WASM codegen (ref.test dispatch) -> execute
+#
+# The codegen itself runs in WebAssembly — no server needed for demos.
+
+f(x::Int64)::Int64 = x * x + Int64(1)
+`;
+
     const extensions = [
-      basicSetup,
-      oneDark,
-      juliaLinter,
-      lintGutter(),
-      keymap.of([{
-        key: "Ctrl-Enter",
-        mac: "Cmd-Enter",
-        run: () => { runCode(); return true; }
-      }]),
+      basicSetup, oneDark, juliaLinter, lintGutter(),
+      keymap.of([{key: "Ctrl-Enter", mac: "Cmd-Enter", run: () => { runCode(); return true; }}]),
     ];
     if (juliaLang) extensions.push(juliaLang);
 
     const editor = new EditorView({
-      state: EditorState.create({
-        doc: defaultCode,
-        extensions,
-      }),
+      state: EditorState.create({doc: defaultCode, extensions}),
       parent: document.getElementById("editor"),
     });
 
+    // ── DOM refs ──
     const runBtn = document.getElementById("run-btn");
     const statusEl = document.getElementById("status");
     const outputEl = document.getElementById("output");
     const clearBtn = document.getElementById("clear-btn");
+    const demoFn = document.getElementById("demo-fn");
+    const demoArgs = document.getElementById("demo-args");
+    const modeBadge = document.getElementById("mode-badge");
 
     clearBtn.onclick = () => { outputEl.innerHTML = ""; };
+
+    // ── Update mode badge ──
+    function updateBadge() {
+      if (codegenInstance && demoFn.value) {
+        modeBadge.innerHTML = '<span class="badge badge-wasm">WASM</span>';
+      } else if (serverAvailable) {
+        modeBadge.innerHTML = '<span class="badge badge-server">Server</span>';
+      } else {
+        modeBadge.innerHTML = '<span class="badge badge-offline">Offline</span>';
+      }
+    }
+    updateBadge();
+
+    // ── Demo function selection ──
+    demoFn.onchange = () => {
+      const fn = demoFn.value;
+      if (fn && DEMOS[fn]) {
+        const demo = DEMOS[fn];
+        const doc = `# ${demo.desc}\n${demo.source}\n`;
+        editor.dispatch({changes: {from: 0, to: editor.state.doc.length, insert: doc}});
+        // Set default args
+        if (demo.nargs === 1) demoArgs.value = "5";
+        else if (demo.nargs === 2) demoArgs.value = "3, 4";
+        else demoArgs.value = "1, 2, 3";
+      }
+      updateBadge();
+    };
 
     function appendOutput(text, cls = "") {
       const span = document.createElement("span");
@@ -226,6 +298,44 @@ println("1 + 1 = ", 1 + 1)
       outputEl.scrollTop = outputEl.scrollHeight;
     }
 
+    // ── WASM-in-WASM execution (local, no server) ──
+    async function runWasmDemo(fn, argsStr) {
+      const e = codegenInstance.exports;
+      const demo = DEMOS[fn];
+
+      appendOutput(`[WASM codegen] Compiling ${demo.desc}...\n`, "info");
+      const t0 = performance.now();
+
+      // Step 1: Call entry point in outer WASM -> inner WASM bytes
+      const inner = e[fn]();
+      const len = e.blen(inner);
+      const arr = new Uint8Array(len);
+      for (let i = 0; i < len; i++) arr[i] = e.bget(inner, i + 1);
+
+      const compileMs = performance.now() - t0;
+      appendOutput(`[Compiled ${len} bytes of inner WASM in ${compileMs.toFixed(1)}ms]\n`, "info");
+
+      // Step 2: Instantiate inner WASM
+      const m2 = await WebAssembly.instantiate(arr);
+      const f = m2.instance.exports.f;
+
+      // Step 3: Parse args and execute
+      const args = argsStr.split(/[,\s]+/).filter(s => s).map(s => BigInt(parseInt(s)));
+      if (args.length !== demo.nargs) {
+        appendOutput(`Error: expected ${demo.nargs} argument(s), got ${args.length}\n`, "error");
+        return;
+      }
+
+      const t1 = performance.now();
+      const result = f(...args);
+      const execMs = performance.now() - t1;
+
+      appendOutput(`f(${args.join(", ")}) = ${result}\n`, "success");
+      appendOutput(`[Executed in ${execMs.toFixed(2)}ms]\n`, "info");
+      statusEl.textContent = `WASM demo: ${len}B compiled, f(${args.join(",")})=${result}`;
+    }
+
+    // ── Server-based execution ──
     const EXEC_TIMEOUT_MS = 5000;
     let activeWorker = null;
     let activeTimer = null;
@@ -235,135 +345,104 @@ println("1 + 1 = ", 1 + 1)
       if (activeWorker) { activeWorker.terminate(); activeWorker = null; }
     }
 
-    async function runCode() {
-      const code = editor.state.doc.toString();
-      if (!code.trim()) return;
-
-      cleanupWorker();
-      outputEl.innerHTML = "";
-      setDiagnostics([]);  // Clear previous errors
-      runBtn.disabled = true;
-      statusEl.textContent = "Compiling...";
+    async function runServer(code) {
+      const t0 = performance.now();
+      let wasmBytes;
 
       try {
-        // Step 1: Compile — try server first, fall back to offline message
-        const t0 = performance.now();
-        let wasmBytes;
-        let compileMode = "server";
+        const resp = await fetch(COMPILE_URL + "/compile", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({code}),
+        });
 
-        if (serverAvailable && !OFFLINE_MODE) {
-          try {
-            const resp = await fetch(COMPILE_URL + "/compile", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ code }),
-            });
-
-            if (!resp.ok) {
-              const err = await resp.json();
-              statusEl.textContent = "Compile error";
-              appendOutput("Compile error: " + (err.error || err.message || "Unknown error"), "error");
-
-              if (err.line) {
-                const doc = editor.state.doc;
-                const lineNum = Math.min(err.line, doc.lines);
-                const line = doc.line(lineNum);
-                const from = err.column ? line.from + (err.column - 1) : line.from;
-                const to = line.to;
-                setDiagnostics([{
-                  from, to,
-                  severity: "error",
-                  message: err.error || "Compile error",
-                }]);
-              }
-
-              runBtn.disabled = false;
-              return;
-            }
-
-            wasmBytes = await resp.arrayBuffer();
-          } catch (fetchErr) {
-            // Server unreachable — try offline mode
-            console.warn("[Playground] Server unreachable, trying offline:", fetchErr.message);
-            serverAvailable = false;
-            compileMode = "offline";
+        if (!resp.ok) {
+          const err = await resp.json();
+          statusEl.textContent = "Compile error";
+          appendOutput("Compile error: " + (err.error || err.message || "Unknown error") + "\n", "error");
+          if (err.line) {
+            const doc = editor.state.doc;
+            const lineNum = Math.min(err.line, doc.lines);
+            const line = doc.line(lineNum);
+            setDiagnostics([{from: line.from, to: line.to, severity: "error", message: err.error || "Compile error"}]);
           }
-        } else {
-          compileMode = "offline";
-        }
-
-        // Offline mode: inform user that server compilation is required
-        if (compileMode === "offline" && !wasmBytes) {
-          // Try to init Binaryen for validation/optimization
-          if (!binaryenMerger) {
-            await initBinaryen();
-          }
-
-          if (binaryenMerger && binaryenMerger.isAvailable()) {
-            statusEl.textContent = "Offline — Binaryen.js loaded (server needed for compilation)";
-            appendOutput("[Offline mode] Binaryen.js is available for validation and optimization.\n", "info");
-            appendOutput("[Offline mode] Julia compilation requires a server. Start one with:\n", "info");
-            appendOutput("  julia +1.12 --project=. scripts/serve.jl\n", "info");
-          } else {
-            statusEl.textContent = "Offline — no server available";
-            appendOutput("[Offline mode] Compilation server is not available.\n", "error");
-            appendOutput("Start the server: julia +1.12 --project=. scripts/serve.jl\n", "info");
-          }
-          runBtn.disabled = false;
           return;
         }
+        wasmBytes = await resp.arrayBuffer();
+      } catch (fetchErr) {
+        appendOutput("[Server unavailable] " + fetchErr.message + "\n", "error");
+        appendOutput("Start server: julia +1.12 --project=. scripts/serve.jl\n", "info");
+        return;
+      }
 
-        const compileTime = performance.now() - t0;
-        statusEl.textContent = `Compiled (${(compileTime / 1000).toFixed(2)}s, ${(wasmBytes.byteLength / 1024).toFixed(1)} KB)`;
-        appendOutput(`[Compiled ${(wasmBytes.byteLength / 1024).toFixed(1)} KB in ${(compileTime / 1000).toFixed(2)}s]\n`, "info");
+      const compileTime = performance.now() - t0;
+      appendOutput(`[Compiled ${(wasmBytes.byteLength / 1024).toFixed(1)} KB in ${(compileTime / 1000).toFixed(2)}s]\n`, "info");
 
-        // Step 2: Execute in Web Worker with timeout
-        statusEl.textContent += " | Executing...";
-        const worker = new Worker("worker.js");
-        activeWorker = worker;
+      // Execute in Worker
+      const worker = new Worker("worker.js");
+      activeWorker = worker;
+      activeTimer = setTimeout(() => {
+        worker.terminate(); activeWorker = null; activeTimer = null;
+        appendOutput("\n[Timed out after " + (EXEC_TIMEOUT_MS / 1000) + "s]\n", "error");
+        runBtn.disabled = false;
+      }, EXEC_TIMEOUT_MS);
 
-        activeTimer = setTimeout(() => {
-          worker.terminate();
-          activeWorker = null;
-          activeTimer = null;
-          appendOutput("\n[Execution timed out after " + (EXEC_TIMEOUT_MS / 1000) + "s]\n", "error");
-          statusEl.textContent += " | Timed out";
-          runBtn.disabled = false;
-        }, EXEC_TIMEOUT_MS);
-
-        worker.onmessage = (e) => {
-          const msg = e.data;
-          if (msg.type === "stdout") {
-            appendOutput(msg.data);
-          } else if (msg.type === "done") {
-            cleanupWorker();
-            appendOutput(`\n[Executed in ${msg.execTime.toFixed(1)}ms]\n`, "info");
-            statusEl.textContent += ` | Executed (${msg.execTime.toFixed(1)}ms)`;
-            runBtn.disabled = false;
-          } else if (msg.type === "error") {
-            cleanupWorker();
-            appendOutput("Runtime error: " + msg.error + "\n", "error");
-            statusEl.textContent = "Runtime error";
-            runBtn.disabled = false;
-          }
-        };
-
-        worker.onerror = (e) => {
+      worker.onmessage = (e) => {
+        const msg = e.data;
+        if (msg.type === "stdout") appendOutput(msg.data);
+        else if (msg.type === "done") {
           cleanupWorker();
-          appendOutput("Worker error: " + e.message + "\n", "error");
-          statusEl.textContent = "Worker error";
+          appendOutput(`\n[Executed in ${msg.execTime.toFixed(1)}ms]\n`, "info");
+          statusEl.textContent += ` | Executed (${msg.execTime.toFixed(1)}ms)`;
           runBtn.disabled = false;
-        };
+        } else if (msg.type === "error") {
+          cleanupWorker();
+          appendOutput("Runtime error: " + msg.error + "\n", "error");
+          runBtn.disabled = false;
+        }
+      };
 
-        // Transfer wasm bytes to worker (zero-copy)
-        worker.postMessage({ type: "run", wasm: wasmBytes }, [wasmBytes]);
+      worker.onerror = (e) => {
+        cleanupWorker();
+        appendOutput("Worker error: " + e.message + "\n", "error");
+        runBtn.disabled = false;
+      };
 
+      worker.postMessage({type: "run", wasm: wasmBytes}, [wasmBytes]);
+    }
+
+    // ── Main run handler ──
+    async function runCode() {
+      outputEl.innerHTML = "";
+      setDiagnostics([]);
+      runBtn.disabled = true;
+
+      const fn = demoFn.value;
+      const argsStr = demoArgs.value.trim();
+
+      try {
+        if (fn && codegenInstance && DEMOS[fn]) {
+          // Local WASM codegen demo
+          await runWasmDemo(fn, argsStr);
+        } else if (serverAvailable) {
+          // Server compilation
+          const code = editor.state.doc.toString();
+          await runServer(code);
+        } else {
+          appendOutput("[No compilation backend available]\n", "error");
+          if (codegenInstance) {
+            appendOutput("Select a demo function from the dropdown to use local WASM codegen.\n", "info");
+          } else {
+            appendOutput("Start server: julia +1.12 --project=. scripts/serve.jl\n", "info");
+            appendOutput("Or build codegen.wasm: julia +1.12 --project=. playground/build_codegen.jl\n", "info");
+          }
+        }
       } catch (e) {
         cleanupWorker();
         appendOutput("Error: " + e.message + "\n", "error");
-        statusEl.textContent = "Error";
-        runBtn.disabled = false;
       }
+
+      runBtn.disabled = false;
     }
 
     runBtn.onclick = runCode;

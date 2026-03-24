@@ -102,9 +102,10 @@
       "id": "P-002",
       "title": "Browser playground UI with REAL codegen backend",
       "priority": 4,
-      "status": "pending",
+      "status": "done",
       "depends_on": ["P-001"],
-      "description": "Update playground/index.html to use the REAL codegen WASM module instead of pre-baked eval_julia.wasm."
+      "description": "Update playground/index.html to use the REAL codegen WASM module instead of pre-baked eval_julia.wasm.",
+      "completedNote": "Playground loads codegen.wasm (32.9KB) for local WASM-in-WASM demo. 10 demo functions selectable via dropdown. WASM codegen compiles IR via ref.test dispatch, produces inner WASM, instantiates and executes — all in the browser, no server needed. Server mode preserved for custom code. Build script: playground/build_codegen.jl."
     },
     {
       "id": "P-003",

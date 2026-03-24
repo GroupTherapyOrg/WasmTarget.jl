@@ -273,3 +273,37 @@ Handler updated to accept both `Base` and `Core.Intrinsics` modules for intrinsi
 - Outer module: 33,687 bytes (32.9 KB)
 
 **Test suite**: 1088 passed, 0 failed, 2 errored (pre-existing), 6 broken — zero regressions
+
+### 2026-03-23: Session 10 — P-002 (Browser playground with REAL codegen)
+
+**Goal**: Update playground to use REAL codegen WASM module instead of server-only compilation.
+
+**Status**: DONE
+
+**What was built**:
+
+1. **`playground/build_codegen.jl`** — Build script that generates `codegen.wasm` (32.9 KB)
+   - Defines IR types, codegen dispatch functions, 10 source functions
+   - Auto-generates entry points from `Base.code_typed` (same pipeline as P-001)
+   - Single `compile_multi` call produces the outer WASM module
+
+2. **`playground/codegen.wasm`** — Pre-built WASM module with REAL codegen
+   - 10 demo functions (p01-p10) compiled via ref.test dispatch
+   - Helper exports: blen, bget for byte extraction
+   - 32.9 KB, loads instantly in browser
+
+3. **Updated `playground/index.html`** — Dual-mode playground UI
+   - **WASM mode** (no server): Select demo function from dropdown, enter args, run locally
+     - codegen.wasm loaded on page start
+     - WASM-in-WASM: outer WASM produces inner WASM → instantiate → execute
+     - Shows: compiled bytes, execution result, timing
+   - **Server mode**: Arbitrary Julia code compiled via server endpoint (preserved)
+   - Mode badge: green "WASM" / blue "Server" / red "Offline"
+   - CodeMirror editor with Julia syntax highlighting
+   - Demo function selector auto-fills editor with source code
+
+**Verified**: codegen.wasm produces correct results in Node.js:
+- p01: f(5) = 26, f(0) = 1 ✓
+- p07: f(5) = 24, f(0) = -1 ✓
+
+**Test suite**: 1088 passed, 0 failed, 2 errored (pre-existing), 6 broken — zero regressions
