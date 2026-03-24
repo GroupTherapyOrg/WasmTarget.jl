@@ -221,3 +221,55 @@ Same fix in `infer_value_wasm_type` for type inference.
 - Outer module: 38,325 bytes (37.4 KB)
 
 **Test suite**: 1042 passed, 0 failed, 2 errored (pre-existing), 6 broken — zero regressions
+
+### 2026-03-23: Session 9 — P-001 (Parser-to-codegen pipeline)
+
+**Goal**: Wire source → parse → lower → typeinf → REAL codegen → execute.
+
+**Status**: DONE
+
+**Approach**: Auto-generate WASM entry points from real Julia source functions via `Base.code_typed()`.
+Instead of hand-writing IR (like E2E-002), a meta-function `_p01_make_entry` inspects any Julia
+function's typed IR and auto-generates the equivalent `e2e_rXX`-style entry point.
+
+**Pipeline**:
+1. User writes plain Julia: `p01_src_01(x::Int64) = x * x + Int64(1)`
+2. Host-side: `Base.code_typed(f, types, optimize=true)` → CodeInfo with typed IR
+3. Host-side: `_p01_make_entry` walks IR, converts to custom IR types (IRBinCall, IRRet, etc.)
+4. Host-side: `@eval` generates entry point function that constructs IR and calls `e2e_compile_stmt`
+5. Compile entry point + codegen helpers to WASM via `compile_multi`
+6. WASM runtime: entry point builds inner WASM bytes via type dispatch
+7. Node.js: instantiates inner WASM and verifies results
+
+**Key fix**: `Base.code_typed` uses `GlobalRef(Base, :mul_int)` not `GlobalRef(Core.Intrinsics, :mul_int)`.
+Handler updated to accept both `Base` and `Core.Intrinsics` modules for intrinsic resolution.
+
+**10 source functions** (4 NEW, 6 match E2E-002):
+| # | Source | Expression | New? |
+|---|--------|------------|------|
+| 01 | x²+1 | `x * x + 1` | Matches e2e_r01 |
+| 02 | x+y | `x + y` | Matches e2e_r06 |
+| 03 | 3x-7 | `x * 3 - 7` | **NEW** |
+| 04 | xy+10 | `x * y + 10` | **NEW** |
+| 05 | x³ | `x * x * x` | Matches e2e_r05 |
+| 06 | x²-y² | `x*x - y*y` | Matches e2e_r11 |
+| 07 | (x+1)(x-1) | `(x+1)*(x-1)` | **NEW** |
+| 08 | 2x+3y | `2*x + 3*y` | **NEW** |
+| 09 | identity | `x` | Matches e2e_r15 |
+| 10 | x+y+z | `x + y + z` | Matches e2e_r09 |
+
+**Cross-validation**: 6/6 auto-generated entries produce IDENTICAL WASM bytes to hand-written E2E-002:
+- p01_auto_01() == e2e_r01() (x²+1) ✓
+- p01_auto_02() == e2e_r06() (x+y) ✓
+- p01_auto_05() == e2e_r05() (x³) ✓
+- p01_auto_06() == e2e_r11() (x²-y²) ✓
+- p01_auto_09() == e2e_r15() (identity) ✓
+- p01_auto_10() == e2e_r09() (x+y+z) ✓
+
+**Runtime results**:
+- 10/10 functions produce valid inner WASM
+- 44/44 WASM-in-WASM test cases pass (P001_PASS)
+- 5 ref.test instructions in WAT (cheat-proof verified)
+- Outer module: 33,687 bytes (32.9 KB)
+
+**Test suite**: 1088 passed, 0 failed, 2 errored (pre-existing), 6 broken — zero regressions

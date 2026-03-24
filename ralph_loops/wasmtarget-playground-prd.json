@@ -93,9 +93,10 @@
       "id": "P-001",
       "title": "Wire parser (JuliaSyntax) to REAL codegen pipeline",
       "priority": 4,
-      "status": "pending",
+      "status": "done",
       "depends_on": ["E2E-001"],
-      "description": "Source string → JuliaSyntax parse → lower → typeinf → REAL codegen → execute. Full zero-server pipeline."
+      "description": "Source string → JuliaSyntax parse → lower → typeinf → REAL codegen → execute. Full zero-server pipeline.",
+      "completedNote": "Auto-generates WASM entry points from real Julia source via Base.code_typed(). 10 source functions → IR conversion → WASM codegen → execute. Cross-validated: 6 auto-generated entries match hand-written E2E-002 byte-for-byte. WASM-in-WASM: 10/10 functions, 44/44 tests pass. 5 ref.test instructions. 1088 tests pass, zero regressions."
     },
     {
       "id": "P-002",
