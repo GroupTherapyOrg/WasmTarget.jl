@@ -7949,7 +7949,67 @@ console.log(JSON.stringify({
             @test isempty(validate_output)
         end
 
-        # Test 5: WAT ref.test for Expr type (5-type dispatch including Expr)
+        # Test 5: IR-002 — dispatch + PiNode narrowing + struct.get field access
+        @testset "IR002: compile_value dispatch + field access" begin
+            function ir002_make_ssaval(id::Int64)::Core.SSAValue
+                return Core.SSAValue(id)
+            end
+            function ir002_make_argument(n::Int64)::Core.Argument
+                return Core.Argument(n)
+            end
+            function ir002_make_gotonode(label::Int64)::Core.GotoNode
+                return Core.GotoNode(label)
+            end
+            function ir002_dispatch_field(x::Union{Core.SSAValue, Core.Argument, Core.GotoNode})::Int64
+                if x isa Core.SSAValue
+                    return x.id
+                elseif x isa Core.Argument
+                    return x.n
+                elseif x isa Core.GotoNode
+                    return x.label
+                end
+                return Int64(0)
+            end
+            bytes = WasmTarget.compile_multi([
+                (ir002_make_ssaval, (Int64,)),
+                (ir002_make_argument, (Int64,)),
+                (ir002_make_gotonode, (Int64,)),
+                (ir002_dispatch_field, (Union{Core.SSAValue, Core.Argument, Core.GotoNode},)),
+            ])
+            @test length(bytes) > 0
+
+            dir = mktempdir()
+            wasm_path = joinpath(dir, "test.wasm")
+            js_path = joinpath(dir, "test.mjs")
+            write(wasm_path, bytes)
+            write(js_path, """
+import fs from 'fs';
+const buf = fs.readFileSync('$(escape_string(wasm_path))');
+const { instance } = await WebAssembly.instantiate(buf, { Math: { pow: Math.pow } });
+const e = instance.exports;
+const ssa = e.ir002_make_ssaval(42n);
+const arg = e.ir002_make_argument(7n);
+const gn = e.ir002_make_gotonode(99n);
+const v_ssa = e.ir002_dispatch_field(ssa);
+const v_arg = e.ir002_dispatch_field(arg);
+const v_gn = e.ir002_dispatch_field(gn);
+console.log(JSON.stringify({
+    ssa: Number(v_ssa), arg: Number(v_arg), gn: Number(v_gn),
+    ok: v_ssa===42n && v_arg===7n && v_gn===99n
+}));
+""")
+            node_cmd = NODE_CMD
+            if node_cmd !== nothing
+                output = strip(read(`$node_cmd $js_path`, String))
+                result = JSON.parse(output)
+                @test result["ok"] == true
+                @test result["ssa"] == 42  # SSAValue(42).id
+                @test result["arg"] == 7   # Argument(7).n
+                @test result["gn"] == 99   # GotoNode(99).label
+            end
+        end
+
+        # Test 6: WAT ref.test for Expr type (5-type dispatch including Expr)
         @testset "IR001-5: Expr in isa dispatch produces ref.test" begin
             function ir001_dispatch_with_expr(x::Union{Core.ReturnNode, Core.GotoNode, Core.GotoIfNot, Core.SSAValue, Expr})::Int32
                 if x isa Core.ReturnNode; return Int32(1)
