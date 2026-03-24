@@ -8031,6 +8031,73 @@ console.log(JSON.stringify({
             # 5-type dispatch produces 4 ref.test (last type is fallthrough)
             @test count("ref.test", wat) >= 4
         end
+
+        # Test 7: IR-003 — Expr.head symbol dispatch via ===
+        @testset "IR003: Expr.head symbol dispatch" begin
+            function ir003_make_call_expr()::Expr
+                return Expr(:call)
+            end
+            function ir003_make_invoke_expr()::Expr
+                return Expr(:invoke)
+            end
+            function ir003_make_new_expr()::Expr
+                return Expr(:new)
+            end
+            function ir003_head_dispatch(e::Expr)::Int32
+                if e.head === :call
+                    return Int32(10)
+                elseif e.head === :invoke
+                    return Int32(11)
+                elseif e.head === :new
+                    return Int32(12)
+                end
+                return Int32(0)
+            end
+
+            # Compile
+            bytes = WasmTarget.compile_multi([
+                (ir003_make_call_expr, ()),
+                (ir003_make_invoke_expr, ()),
+                (ir003_make_new_expr, ()),
+                (ir003_head_dispatch, (Expr,)),
+            ]; register_ir_types=true)
+            @test length(bytes) > 0
+
+            # Validate
+            dir = mktempdir()
+            wasm_path = joinpath(dir, "ir003.wasm")
+            write(wasm_path, bytes)
+            validate_output = read(`wasm-tools validate $wasm_path`, String)
+            @test isempty(validate_output)
+
+            # Runtime dispatch via Node.js
+            js_path = joinpath(dir, "test.mjs")
+            write(js_path, """
+import fs from 'fs';
+const buf = fs.readFileSync('$(escape_string(wasm_path))');
+const { instance } = await WebAssembly.instantiate(buf, { Math: { pow: Math.pow } });
+const e = instance.exports;
+const call_expr = e.ir003_make_call_expr();
+const invoke_expr = e.ir003_make_invoke_expr();
+const new_expr = e.ir003_make_new_expr();
+const d_call = e.ir003_head_dispatch(call_expr);
+const d_invoke = e.ir003_head_dispatch(invoke_expr);
+const d_new = e.ir003_head_dispatch(new_expr);
+console.log(JSON.stringify({
+    call: d_call, invoke: d_invoke, new_: d_new,
+    ok: d_call===10 && d_invoke===11 && d_new===12
+}));
+""")
+            node_cmd = NODE_CMD
+            if node_cmd !== nothing
+                output = strip(read(`$node_cmd $js_path`, String))
+                result = JSON.parse(output)
+                @test result["ok"] == true
+                @test result["call"] == 10    # Expr(:call) → 10
+                @test result["invoke"] == 11  # Expr(:invoke) → 11
+                @test result["new_"] == 12    # Expr(:new) → 12
+            end
+        end
     end
 
 end
