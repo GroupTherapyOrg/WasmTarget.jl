@@ -157,6 +157,91 @@ end
     return dispatch_process(x) + Int64(1)
 end
 
+# TF-005: Structs for cross-function type-sharing regression tests
+mutable struct TF5_Alpha
+    val::Int32
+end
+
+mutable struct TF5_Beta
+    label::Int64
+end
+
+mutable struct TF5_Gamma
+    x::Int32
+    y::Int64
+end
+
+# TF-005 test 1: Simple struct create + isa
+@noinline function tf5_make_alpha(v::Int32)::TF5_Alpha
+    return TF5_Alpha(v)
+end
+
+@noinline function tf5_dispatch_ab(x::Union{TF5_Alpha, TF5_Beta})::Int32
+    if x isa TF5_Alpha
+        return x.val + Int32(100)
+    end
+    return Int32(-1)
+end
+
+# TF-005 test 2: Struct with multiple fields create + field access
+@noinline function tf5_make_gamma(x::Int32, y::Int64)::TF5_Gamma
+    return TF5_Gamma(x, y)
+end
+
+@noinline function tf5_get_gamma_x(g::TF5_Gamma)::Int32
+    return g.x
+end
+
+# TF-005 test 3: Union{Nothing, T} create + isa
+@noinline function tf5_check_nothing(x::Union{Nothing, TF5_Alpha})::Int32
+    if x isa TF5_Alpha
+        return x.val
+    end
+    return Int32(-1)
+end
+
+@noinline function tf5_make_alpha_for_nothing(v::Int32)::TF5_Alpha
+    return TF5_Alpha(v)
+end
+
+# TF-005 test 4: 3-type Union dispatch (THE fixed bug)
+@noinline function tf5_dispatch_3way(x::Union{TF5_Alpha, TF5_Beta, TF5_Gamma})::Int32
+    if x isa TF5_Alpha
+        return Int32(1)
+    elseif x isa TF5_Beta
+        return Int32(2)
+    end
+    return Int32(3)
+end
+
+@noinline function tf5_make_beta(l::Int64)::TF5_Beta
+    return TF5_Beta(l)
+end
+
+# TF-005 test 5: Two structurally-identical types (typeId disambiguation)
+mutable struct TF5_Cat
+    id::Int32
+end
+
+mutable struct TF5_Dog
+    id::Int32
+end
+
+@noinline function tf5_make_cat(id::Int32)::TF5_Cat
+    return TF5_Cat(id)
+end
+
+@noinline function tf5_make_dog(id::Int32)::TF5_Dog
+    return TF5_Dog(id)
+end
+
+@noinline function tf5_classify_pet(x::Union{TF5_Cat, TF5_Dog})::Int32
+    if x isa TF5_Cat
+        return Int32(1)
+    end
+    return Int32(2)
+end
+
 # PURE-9060: Tier 2 Dispatch test types (>8 to trigger megamorphic)
 struct DispS1  x::Int32 end
 struct DispS2  x::Int32 end
@@ -7611,6 +7696,134 @@ _p01_make_entry(:p03_auto_22, p03_src_22, (Int64, Int64, Int64))
             println("  P-003 playground: ", strip(output))
             @test occursin("22/22 functions", output)
             @test occursin("P003_PLAYGROUND_PASS", output)
+        end
+    end
+
+    # Phase 23: TF-005 Cross-function type-sharing regression tests
+    @testset "Phase 23: Cross-function Type Sharing (TF-005)" begin
+
+        # Test 1: Simple struct create + isa across compile_multi
+        @testset "TF5-1: Struct create + isa dispatch" begin
+            bytes = WasmTarget.compile_multi([
+                (tf5_make_alpha, (Int32,)),
+                (tf5_dispatch_ab, (Union{TF5_Alpha, TF5_Beta},)),
+            ])
+            @test length(bytes) > 0
+
+            # Cross-function test: make Alpha, then dispatch on it
+            dir = mktempdir()
+            wasm_path = joinpath(dir, "test.wasm")
+            js_path = joinpath(dir, "test.mjs")
+            write(wasm_path, bytes)
+            write(js_path, """
+import fs from 'fs';
+const buf = fs.readFileSync('$(escape_string(wasm_path))');
+const { instance } = await WebAssembly.instantiate(buf, { Math: { pow: Math.pow } });
+const e = instance.exports;
+const a = e.tf5_make_alpha(42);
+const r = e.tf5_dispatch_ab(a);
+console.log(JSON.stringify({result: Number(r)}));
+""")
+            node_cmd = NODE_CMD
+            if node_cmd !== nothing
+                output = strip(read(`$node_cmd $js_path`, String))
+                result = JSON.parse(output)
+                @test result["result"] == 142  # 42 + 100
+            end
+        end
+
+        # Test 2: Struct with multiple fields + field access across functions
+        @testset "TF5-2: Multi-field struct cross-function access" begin
+            bytes = WasmTarget.compile_multi([
+                (tf5_make_gamma, (Int32, Int64)),
+                (tf5_get_gamma_x, (TF5_Gamma,)),
+            ])
+            @test length(bytes) > 0
+        end
+
+        # Test 3: Union{Nothing, T} pattern across functions
+        @testset "TF5-3: Union{Nothing, T} cross-function" begin
+            bytes = WasmTarget.compile_multi([
+                (tf5_make_alpha_for_nothing, (Int32,)),
+                (tf5_check_nothing, (Union{Nothing, TF5_Alpha},)),
+            ])
+            @test length(bytes) > 0
+        end
+
+        # Test 4: 3-type Union dispatch (THE bug that was fixed)
+        @testset "TF5-4: 3-type Union dispatch (TF-004 fix)" begin
+            bytes = WasmTarget.compile_multi([
+                (tf5_make_alpha, (Int32,)),
+                (tf5_make_beta, (Int64,)),
+                (tf5_make_gamma, (Int32, Int64)),
+                (tf5_dispatch_3way, (Union{TF5_Alpha, TF5_Beta, TF5_Gamma},)),
+            ])
+            @test length(bytes) > 0
+
+            # Cross-function runtime test: create each type and dispatch
+            dir = mktempdir()
+            wasm_path = joinpath(dir, "test.wasm")
+            js_path = joinpath(dir, "test.mjs")
+            write(wasm_path, bytes)
+            write(js_path, """
+import fs from 'fs';
+const buf = fs.readFileSync('$(escape_string(wasm_path))');
+const { instance } = await WebAssembly.instantiate(buf, { Math: { pow: Math.pow } });
+const e = instance.exports;
+const a = e.tf5_make_alpha(42);
+const b = e.tf5_make_beta(10n);
+const g = e.tf5_make_gamma(1, 2n);
+const ca = e.tf5_dispatch_3way(a);
+const cb = e.tf5_dispatch_3way(b);
+const cg = e.tf5_dispatch_3way(g);
+const ok = Number(ca)===1 && Number(cb)===2 && Number(cg)===3;
+console.log(JSON.stringify({ca:Number(ca),cb:Number(cb),cg:Number(cg),ok}));
+""")
+            node_cmd = NODE_CMD
+            if node_cmd !== nothing
+                output = strip(read(`$node_cmd $js_path`, String))
+                result = JSON.parse(output)
+                @test result["ok"] == true
+                @test result["ca"] == 1
+                @test result["cb"] == 2
+                @test result["cg"] == 3
+            end
+        end
+
+        # Test 5: Structurally-identical types (typeId disambiguation)
+        @testset "TF5-5: Same-layout structs + typeId dispatch" begin
+            bytes = WasmTarget.compile_multi([
+                (tf5_make_cat, (Int32,)),
+                (tf5_make_dog, (Int32,)),
+                (tf5_classify_pet, (Union{TF5_Cat, TF5_Dog},)),
+            ])
+            @test length(bytes) > 0
+
+            # Cross-function runtime test
+            dir = mktempdir()
+            wasm_path = joinpath(dir, "test.wasm")
+            js_path = joinpath(dir, "test.mjs")
+            write(wasm_path, bytes)
+            write(js_path, """
+import fs from 'fs';
+const buf = fs.readFileSync('$(escape_string(wasm_path))');
+const { instance } = await WebAssembly.instantiate(buf, { Math: { pow: Math.pow } });
+const e = instance.exports;
+const cat = e.tf5_make_cat(10);
+const dog = e.tf5_make_dog(20);
+const cc = e.tf5_classify_pet(cat);
+const cd = e.tf5_classify_pet(dog);
+const ok = Number(cc)===1 && Number(cd)===2;
+console.log(JSON.stringify({cc:Number(cc),cd:Number(cd),ok}));
+""")
+            node_cmd = NODE_CMD
+            if node_cmd !== nothing
+                output = strip(read(`$node_cmd $js_path`, String))
+                result = JSON.parse(output)
+                @test result["ok"] == true
+                @test result["cc"] == 1
+                @test result["cd"] == 2
+            end
         end
     end
 
