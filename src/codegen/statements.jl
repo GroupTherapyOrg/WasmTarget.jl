@@ -1520,6 +1520,50 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     end
                     end  # close else from PURE-908 externref↔anyref check
                 end
+                # CS-004: Cross-function calls may return anyref/structref even when
+                # Julia's SSA type says ConcreteRef. Resolve the function reference
+                # (which may be an SSAValue pointing to a GlobalRef) and check
+                # the callee's wasm return type in the func_registry.
+                if (local_type isa ConcreteRef || local_type === StructRef) && ctx.func_registry !== nothing &&
+                   stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
+                    _cs4_func_ref = stmt.head === :invoke ? (length(stmt.args) >= 2 ? stmt.args[2] : nothing) : (length(stmt.args) >= 1 ? stmt.args[1] : nothing)
+                    # Dereference SSAValue to find the underlying GlobalRef
+                    if _cs4_func_ref isa Core.SSAValue
+                        _cs4_src = ctx.code_info.code[_cs4_func_ref.id]
+                        if _cs4_src isa GlobalRef
+                            _cs4_func_ref = _cs4_src
+                        end
+                    end
+                    if _cs4_func_ref isa GlobalRef
+                        try
+                            _cs4_func_val = getfield(_cs4_func_ref.mod, _cs4_func_ref.name)
+                            if haskey(ctx.func_registry.by_ref, _cs4_func_val)
+                                for _fi in ctx.func_registry.by_ref[_cs4_func_val]
+                                    _cs4_ret = julia_to_wasm_type(_fi.return_type)
+                                    if local_type isa ConcreteRef
+                                        if _cs4_ret === AnyRef || _cs4_ret === StructRef || _cs4_ret === ArrayRef
+                                            push!(bytes, Opcode.GC_PREFIX)
+                                            push!(bytes, Opcode.REF_CAST_NULL)
+                                            append!(bytes, encode_leb128_signed(Int64(local_type.type_idx)))
+                                        elseif _cs4_ret === ExternRef
+                                            append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                                            push!(bytes, Opcode.GC_PREFIX)
+                                            push!(bytes, Opcode.REF_CAST_NULL)
+                                            append!(bytes, encode_leb128_signed(Int64(local_type.type_idx)))
+                                        end
+                                    elseif local_type === StructRef && _cs4_ret === AnyRef
+                                        push!(bytes, Opcode.GC_PREFIX)
+                                        push!(bytes, Opcode.REF_CAST_NULL)
+                                        push!(bytes, 0x6B)  # structref heap type
+                                    end
+                                    break  # Use first matching overload
+                                end
+                            end
+                        catch
+                        end
+                    end
+                end
+
                 # PURE-6024: If this is a slot assignment, TEE to slot local first
                 # (leaves value on stack for the SSA local.set below)
                 if _slot_assign_id > 0 && haskey(ctx.slot_locals, _slot_assign_id)

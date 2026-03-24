@@ -1470,17 +1470,13 @@ function compile_module(functions::Vector;
                             info = register_struct_type!(mod, type_registry, T)
                             type_idx = info.wasm_type_idx
 
-                            # Build initialization expression: struct.new with default values
+                            # Build initialization expression: struct.new_default
+                            # Use struct_new_default to safely initialize all fields to defaults
+                            # (0 for numerics, null for refs). The global is mutable and gets
+                            # patched at runtime, so exact field values don't matter here.
                             init_bytes = UInt8[]
-                            # Field 0: typeId (i32) - type discriminant
-                            push!(init_bytes, Opcode.I32_CONST)
-                            push!(init_bytes, 0x00)
-                            for field_name in fieldnames(T)
-                                field_val = getfield(actual_val, field_name)
-                                append!(init_bytes, compile_const_value(field_val, mod, type_registry))
-                            end
                             push!(init_bytes, Opcode.GC_PREFIX)
-                            push!(init_bytes, Opcode.STRUCT_NEW)
+                            push!(init_bytes, Opcode.STRUCT_NEW_DEFAULT)
                             append!(init_bytes, encode_leb128_unsigned(type_idx))
 
                             # Add global with reference type
@@ -1791,14 +1787,8 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
                         info = register_struct_type!(mod, type_registry, T)
                         type_idx = info.wasm_type_idx
                         init_bytes = UInt8[]
-                        push!(init_bytes, Opcode.I32_CONST)
-                        push!(init_bytes, 0x00)
-                        for field_name in fieldnames(T)
-                            field_val = getfield(actual_val, field_name)
-                            append!(init_bytes, compile_const_value(field_val, mod, type_registry))
-                        end
                         push!(init_bytes, Opcode.GC_PREFIX)
-                        push!(init_bytes, Opcode.STRUCT_NEW)
+                        push!(init_bytes, Opcode.STRUCT_NEW_DEFAULT)
                         append!(init_bytes, encode_leb128_unsigned(type_idx))
                         global_idx = add_global_ref!(mod, type_idx, true, init_bytes; nullable=false)
                         push!(module_globals, (key, global_idx))
@@ -2401,15 +2391,8 @@ function compile_module_from_ir_frozen(ir_entries::Vector, frozen::FrozenCompila
                             info = register_struct_type!(mod, type_registry, T)
                             type_idx = info.wasm_type_idx
                             init_bytes = UInt8[]
-                            # Field 0: typeId (i32) - type discriminant
-                            push!(init_bytes, Opcode.I32_CONST)
-                            push!(init_bytes, 0x00)
-                            for field_name in fieldnames(T)
-                                field_val = getfield(actual_val, field_name)
-                                append!(init_bytes, compile_const_value(field_val, mod, type_registry))
-                            end
                             push!(init_bytes, Opcode.GC_PREFIX)
-                            push!(init_bytes, Opcode.STRUCT_NEW)
+                            push!(init_bytes, Opcode.STRUCT_NEW_DEFAULT)
                             append!(init_bytes, encode_leb128_unsigned(type_idx))
                             global_idx = add_global_ref!(mod, type_idx, true, init_bytes; nullable=false)
                             push!(module_globals, (key, global_idx))

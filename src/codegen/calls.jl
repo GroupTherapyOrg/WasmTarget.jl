@@ -5626,6 +5626,16 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                         elseif target_local_type === ExternRef && ret_wasm !== ExternRef && ret_wasm !== nothing
                             # Function returns concrete/struct/array ref, local expects externref
                             append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.EXTERN_CONVERT_ANY])
+                        elseif target_local_type isa ConcreteRef && (ret_wasm === AnyRef || ret_wasm === StructRef)
+                            # CS-004: Function returns anyref/structref, local expects concrete ref.
+                            # Insert ref.cast to narrow the type (traps at runtime if wrong type).
+                            append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.REF_CAST_NULL])
+                            append!(bytes, encode_leb128_signed(Int64(target_local_type.type_idx)))
+                        elseif target_local_type === StructRef && ret_wasm === AnyRef
+                            # CS-004: Function returns anyref, local expects structref.
+                            # Insert ref.cast to narrow anyref → structref.
+                            append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.REF_CAST_NULL])
+                            push!(bytes, 0x6B)  # structref heap type
                         end
                     end
                 end
