@@ -151,6 +151,18 @@
       <option value="p08" data-nargs="2" data-expr="2*x + 3*y">f(x,y) = 2x + 3y</option>
       <option value="p09" data-nargs="1" data-expr="x">f(x) = x (identity)</option>
       <option value="p10" data-nargs="3" data-expr="x + y + z">f(x,y,z) = x + y + z</option>
+      <option value="p11" data-nargs="1" data-expr="x + 1">f(x) = x + 1</option>
+      <option value="p12" data-nargs="1" data-expr="x * 2">f(x) = 2x</option>
+      <option value="p13" data-nargs="1" data-expr="x * x">f(x) = x^2</option>
+      <option value="p14" data-nargs="2" data-expr="x - y">f(x,y) = x - y</option>
+      <option value="p15" data-nargs="2" data-expr="x * y">f(x,y) = xy</option>
+      <option value="p16" data-nargs="1" data-expr="x*x + x + 1">f(x) = x^2 + x + 1</option>
+      <option value="p17" data-nargs="2" data-expr="x*y + x + y">f(x,y) = xy + x + y</option>
+      <option value="p18" data-nargs="1" data-expr="x + x + x">f(x) = 3x</option>
+      <option value="p19" data-nargs="1" data-expr="x*10 + 5">f(x) = 10x + 5</option>
+      <option value="p20" data-nargs="1" data-expr="42">f(x) = 42 (const)</option>
+      <option value="p21" data-nargs="1" data-expr="x - 1">f(x) = x - 1</option>
+      <option value="p22" data-nargs="3" data-expr="x*y + z">f(x,y,z) = xy + z</option>
     </select>
     <label>Args:</label>
     <input type="text" id="demo-args" placeholder="5" size="15" />
@@ -220,6 +232,18 @@
       p08: {source: "f(x::Int64, y::Int64)::Int64 = Int64(2) * x + Int64(3) * y", nargs: 2, desc: "2x + 3y"},
       p09: {source: "f(x::Int64)::Int64 = x", nargs: 1, desc: "identity"},
       p10: {source: "f(x::Int64, y::Int64, z::Int64)::Int64 = x + y + z", nargs: 3, desc: "x + y + z"},
+      p11: {source: "f(x::Int64)::Int64 = x + Int64(1)", nargs: 1, desc: "x + 1"},
+      p12: {source: "f(x::Int64)::Int64 = x * Int64(2)", nargs: 1, desc: "2x"},
+      p13: {source: "f(x::Int64)::Int64 = x * x", nargs: 1, desc: "x^2"},
+      p14: {source: "f(x::Int64, y::Int64)::Int64 = x - y", nargs: 2, desc: "x - y"},
+      p15: {source: "f(x::Int64, y::Int64)::Int64 = x * y", nargs: 2, desc: "xy"},
+      p16: {source: "f(x::Int64)::Int64 = x * x + x + Int64(1)", nargs: 1, desc: "x^2 + x + 1"},
+      p17: {source: "f(x::Int64, y::Int64)::Int64 = x * y + x + y", nargs: 2, desc: "xy + x + y"},
+      p18: {source: "f(x::Int64)::Int64 = x + x + x", nargs: 1, desc: "3x"},
+      p19: {source: "f(x::Int64)::Int64 = x * Int64(10) + Int64(5)", nargs: 1, desc: "10x + 5"},
+      p20: {source: "f(x::Int64)::Int64 = Int64(42)", nargs: 1, desc: "const 42"},
+      p21: {source: "f(x::Int64)::Int64 = x - Int64(1)", nargs: 1, desc: "x - 1"},
+      p22: {source: "f(x::Int64, y::Int64, z::Int64)::Int64 = x * y + z", nargs: 3, desc: "xy + z"},
     };
 
     // ── Editor setup ──

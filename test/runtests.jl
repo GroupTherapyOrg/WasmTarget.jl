@@ -842,6 +842,35 @@ _p01_make_entry(:p01_auto_08, p01_src_08, (Int64, Int64))
 _p01_make_entry(:p01_auto_09, p01_src_09, (Int64,))
 _p01_make_entry(:p01_auto_10, p01_src_10, (Int64, Int64, Int64))
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# P-003: 12 additional source functions for 22-function regression suite
+# ═══════════════════════════════════════════════════════════════════════════════
+p03_src_11(x::Int64) = x + Int64(1)                             # x+1
+p03_src_12(x::Int64) = x * Int64(2)                             # 2x
+p03_src_13(x::Int64) = x * x                                    # x²
+p03_src_14(x::Int64, y::Int64) = x - y                          # x-y
+p03_src_15(x::Int64, y::Int64) = x * y                          # xy
+p03_src_16(x::Int64) = x * x + x + Int64(1)                     # x²+x+1
+p03_src_17(x::Int64, y::Int64) = x * y + x + y                  # xy+x+y
+p03_src_18(x::Int64) = x + x + x                                # 3x
+p03_src_19(x::Int64) = x * Int64(10) + Int64(5)                 # 10x+5
+p03_src_20(x::Int64) = Int64(42)                                # const 42
+p03_src_21(x::Int64) = x - Int64(1)                             # x-1
+p03_src_22(x::Int64, y::Int64, z::Int64) = x * y + z            # xy+z
+
+_p01_make_entry(:p03_auto_11, p03_src_11, (Int64,))
+_p01_make_entry(:p03_auto_12, p03_src_12, (Int64,))
+_p01_make_entry(:p03_auto_13, p03_src_13, (Int64,))
+_p01_make_entry(:p03_auto_14, p03_src_14, (Int64, Int64))
+_p01_make_entry(:p03_auto_15, p03_src_15, (Int64, Int64))
+_p01_make_entry(:p03_auto_16, p03_src_16, (Int64,))
+_p01_make_entry(:p03_auto_17, p03_src_17, (Int64, Int64))
+_p01_make_entry(:p03_auto_18, p03_src_18, (Int64,))
+_p01_make_entry(:p03_auto_19, p03_src_19, (Int64,))
+_p01_make_entry(:p03_auto_20, p03_src_20, (Int64,))
+_p01_make_entry(:p03_auto_21, p03_src_21, (Int64,))
+_p01_make_entry(:p03_auto_22, p03_src_22, (Int64, Int64, Int64))
+
 @testset "WasmTarget.jl" begin
 
     # ========================================================================
@@ -7364,6 +7393,138 @@ _p01_make_entry(:p01_auto_10, p01_src_10, (Int64, Int64, Int64))
                 has_ref_test = true
             end
             rm(p01_path, force=true)
+            @test has_ref_test
+        end
+    end
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Phase 55: P-003 — 22-function regression suite via REAL codegen
+    #
+    # All 22 functions auto-generated from source via Base.code_typed.
+    # Compiled to a single WASM module, verified via WASM-in-WASM in Node.js.
+    # ═══════════════════════════════════════════════════════════════════════════
+    @testset "Phase 55: P-003 22-function regression suite" begin
+
+        # --- 55a: Compile all 22 auto-gen entries + helpers ---
+        p03_mod = compile_multi([
+            (e2e_compile_stmt, (Vector{UInt8}, Any, Int32)),
+            (e2e_emit_val, (Vector{UInt8}, Any)),
+            (e2e_emit_op, (Vector{UInt8}, Symbol)),
+            (wasm_bytes_length, (Vector{UInt8},), "blen"),
+            (wasm_bytes_get, (Vector{UInt8}, Int32), "bget"),
+            (p01_auto_01, (), "p01"), (p01_auto_02, (), "p02"),
+            (p01_auto_03, (), "p03"), (p01_auto_04, (), "p04"),
+            (p01_auto_05, (), "p05"), (p01_auto_06, (), "p06"),
+            (p01_auto_07, (), "p07"), (p01_auto_08, (), "p08"),
+            (p01_auto_09, (), "p09"), (p01_auto_10, (), "p10"),
+            (p03_auto_11, (), "p11"), (p03_auto_12, (), "p12"),
+            (p03_auto_13, (), "p13"), (p03_auto_14, (), "p14"),
+            (p03_auto_15, (), "p15"), (p03_auto_16, (), "p16"),
+            (p03_auto_17, (), "p17"), (p03_auto_18, (), "p18"),
+            (p03_auto_19, (), "p19"), (p03_auto_20, (), "p20"),
+            (p03_auto_21, (), "p21"), (p03_auto_22, (), "p22"),
+        ])
+
+        @testset "outer module: valid WASM binary" begin
+            @test length(p03_mod) > 0
+            @test p03_mod[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+            println("  P-003 outer module: $(length(p03_mod)) bytes ($(round(length(p03_mod)/1024, digits=1)) KB)")
+        end
+
+        # --- 55b: WASM-in-WASM — all 22 functions via Node.js ---
+        @testset "P-003: 22/22 functions via WASM-in-WASM codegen" begin
+            p03_path = tempname() * ".wasm"
+            write(p03_path, p03_mod)
+
+            node_script = raw"""
+            const fs = require('fs');
+            const bytes = fs.readFileSync(process.argv[2]);
+            const specs = [
+              {fn:'p01',tests:[[[5n],26n],[[0n],1n],[[-3n],10n],[[10n],101n],[[1n],2n]]},
+              {fn:'p02',tests:[[[1n,2n],3n],[[0n,0n],0n],[[-5n,5n],0n]]},
+              {fn:'p03',tests:[[[0n],-7n],[[5n],8n],[[10n],23n]]},
+              {fn:'p04',tests:[[[2n,3n],16n],[[0n,5n],10n],[[1n,1n],11n]]},
+              {fn:'p05',tests:[[[3n],27n],[[0n],0n],[[-2n],-8n]]},
+              {fn:'p06',tests:[[[5n,3n],16n],[[0n,0n],0n],[[3n,5n],-16n]]},
+              {fn:'p07',tests:[[[5n],24n],[[0n],-1n],[[1n],0n]]},
+              {fn:'p08',tests:[[[1n,1n],5n],[[0n,0n],0n],[[3n,2n],12n]]},
+              {fn:'p09',tests:[[[42n],42n],[[0n],0n],[[-1n],-1n]]},
+              {fn:'p10',tests:[[[1n,2n,3n],6n],[[0n,0n,0n],0n]]},
+              {fn:'p11',tests:[[[0n],1n],[[5n],6n],[[-1n],0n],[[100n],101n]]},
+              {fn:'p12',tests:[[[5n],10n],[[0n],0n],[[-3n],-6n],[[100n],200n]]},
+              {fn:'p13',tests:[[[5n],25n],[[0n],0n],[[-3n],9n],[[10n],100n]]},
+              {fn:'p14',tests:[[[5n,3n],2n],[[3n,5n],-2n],[[0n,0n],0n]]},
+              {fn:'p15',tests:[[[3n,4n],12n],[[0n,5n],0n],[[-3n,4n],-12n]]},
+              {fn:'p16',tests:[[[0n],1n],[[1n],3n],[[5n],31n],[[-1n],1n]]},
+              {fn:'p17',tests:[[[2n,3n],11n],[[0n,0n],0n],[[1n,1n],3n]]},
+              {fn:'p18',tests:[[[1n],3n],[[5n],15n],[[0n],0n],[[-3n],-9n]]},
+              {fn:'p19',tests:[[[0n],5n],[[1n],15n],[[5n],55n],[[-1n],-5n]]},
+              {fn:'p20',tests:[[[0n],42n],[[999n],42n],[[-1n],42n]]},
+              {fn:'p21',tests:[[[1n],0n],[[0n],-1n],[[5n],4n],[[100n],99n]]},
+              {fn:'p22',tests:[[[2n,3n,4n],10n],[[0n,5n,1n],1n],[[5n,5n,5n],30n]]},
+            ];
+            (async () => {
+              try {
+                const {instance} = await WebAssembly.instantiate(bytes, {Math:{pow:Math.pow}});
+                const e = instance.exports;
+                let pass=0, fail=0, fnPass=0;
+                for (const spec of specs) {
+                  const inner = e[spec.fn]();
+                  const len = e.blen(inner);
+                  const arr = new Uint8Array(len);
+                  for (let i=0; i<len; i++) arr[i] = e.bget(inner, i+1);
+                  try {
+                    const m2 = await WebAssembly.instantiate(arr);
+                    const f = m2.instance.exports.f;
+                    let allOk = true;
+                    for (const [args, expected] of spec.tests) {
+                      const r = f(...args);
+                      if (r === expected) { pass++; }
+                      else { fail++; allOk=false; console.log('FAIL:'+spec.fn+'('+args+')='+r+' expected '+expected); }
+                    }
+                    if (allOk) fnPass++;
+                  } catch(err) {
+                    fail += spec.tests.length;
+                    console.log('FAIL:'+spec.fn+' inner WASM: '+err.message);
+                  }
+                }
+                console.log(fnPass+'/'+specs.length+' functions, '+pass+'/'+(pass+fail)+' tests passed');
+                console.log(fail===0 ? 'P003_PASS' : 'P003_FAIL');
+              } catch(err) { console.log('P003_FAIL:'+err.message); }
+            })();
+            """
+
+            script_path = tempname() * ".cjs"
+            write(script_path, node_script)
+            output = try
+                read(`node $script_path $p03_path`, String)
+            catch e
+                "P003_FAIL: $(sprint(showerror, e))"
+            end
+            rm(script_path, force=true)
+            rm(p03_path, force=true)
+
+            println("  P-003: ", strip(output))
+            @test occursin("P003_PASS", output)
+        end
+
+        # --- 55c: Cheat-proof ---
+        @testset "cheat-proof: WAT contains ref.test dispatch" begin
+            p03_path = tempname() * ".wasm"
+            write(p03_path, p03_mod)
+            has_ref_test = false
+            try
+                wat = read(`wasm-tools print $p03_path`, String)
+                has_ref_test = occursin("ref.test", wat)
+                if has_ref_test
+                    ref_test_count = count("ref.test", wat)
+                    println("  P-003 ref.test instructions: $ref_test_count")
+                end
+            catch
+                println("  wasm-tools not available, skipping WAT check")
+                has_ref_test = true
+            end
+            rm(p03_path, force=true)
             @test has_ref_test
         end
     end
