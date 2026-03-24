@@ -7529,4 +7529,89 @@ _p01_make_entry(:p03_auto_22, p03_src_22, (Int64, Int64, Int64))
         end
     end
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Phase 56: P-003 — Playground regression suite (browser test via codegen.wasm)
+    #
+    # Loads the pre-built playground/codegen.wasm and runs all 22 demo functions
+    # with the SAME test cases as the browser "Run All Tests" button.
+    # ═══════════════════════════════════════════════════════════════════════════
+    @testset "Phase 56: P-003 Playground regression suite (codegen.wasm)" begin
+
+        codegen_path = joinpath(@__DIR__, "..", "playground", "codegen.wasm")
+        @test isfile(codegen_path)
+
+        @testset "P-003: 22/22 functions via playground codegen.wasm" begin
+            node_script = raw"""
+            const fs = require('fs');
+            const bytes = fs.readFileSync(process.argv[2]);
+            const specs = [
+              {fn:'p01',tests:[[[5n],26n],[[0n],1n],[[-3n],10n],[[10n],101n],[[1n],2n]]},
+              {fn:'p02',tests:[[[1n,2n],3n],[[0n,0n],0n],[[-5n,5n],0n]]},
+              {fn:'p03',tests:[[[0n],-7n],[[5n],8n],[[10n],23n]]},
+              {fn:'p04',tests:[[[2n,3n],16n],[[0n,5n],10n],[[1n,1n],11n]]},
+              {fn:'p05',tests:[[[3n],27n],[[0n],0n],[[-2n],-8n]]},
+              {fn:'p06',tests:[[[5n,3n],16n],[[0n,0n],0n],[[3n,5n],-16n]]},
+              {fn:'p07',tests:[[[5n],24n],[[0n],-1n],[[1n],0n]]},
+              {fn:'p08',tests:[[[1n,1n],5n],[[0n,0n],0n],[[3n,2n],12n]]},
+              {fn:'p09',tests:[[[42n],42n],[[0n],0n],[[-1n],-1n]]},
+              {fn:'p10',tests:[[[1n,2n,3n],6n],[[0n,0n,0n],0n]]},
+              {fn:'p11',tests:[[[0n],1n],[[5n],6n],[[-1n],0n],[[100n],101n]]},
+              {fn:'p12',tests:[[[5n],10n],[[0n],0n],[[-3n],-6n],[[100n],200n]]},
+              {fn:'p13',tests:[[[5n],25n],[[0n],0n],[[-3n],9n],[[10n],100n]]},
+              {fn:'p14',tests:[[[5n,3n],2n],[[3n,5n],-2n],[[0n,0n],0n]]},
+              {fn:'p15',tests:[[[3n,4n],12n],[[0n,5n],0n],[[-3n,4n],-12n]]},
+              {fn:'p16',tests:[[[0n],1n],[[1n],3n],[[5n],31n],[[-1n],1n]]},
+              {fn:'p17',tests:[[[2n,3n],11n],[[0n,0n],0n],[[1n,1n],3n]]},
+              {fn:'p18',tests:[[[1n],3n],[[5n],15n],[[0n],0n],[[-3n],-9n]]},
+              {fn:'p19',tests:[[[0n],5n],[[1n],15n],[[5n],55n],[[-1n],-5n]]},
+              {fn:'p20',tests:[[[0n],42n],[[999n],42n],[[-1n],42n]]},
+              {fn:'p21',tests:[[[1n],0n],[[0n],-1n],[[5n],4n],[[100n],99n]]},
+              {fn:'p22',tests:[[[2n,3n,4n],10n],[[0n,5n,1n],1n],[[5n,5n,5n],30n]]},
+            ];
+            (async () => {
+              try {
+                const {instance} = await WebAssembly.instantiate(bytes, {Math:{pow:Math.pow}});
+                const e = instance.exports;
+                let pass=0, fail=0, fnPass=0;
+                for (const spec of specs) {
+                  const inner = e[spec.fn]();
+                  const len = e.blen(inner);
+                  const arr = new Uint8Array(len);
+                  for (let i=0; i<len; i++) arr[i] = e.bget(inner, i+1);
+                  try {
+                    const m2 = await WebAssembly.instantiate(arr);
+                    const f = m2.instance.exports.f;
+                    let allOk = true;
+                    for (const [args, expected] of spec.tests) {
+                      const r = f(...args);
+                      if (r === expected) { pass++; }
+                      else { fail++; allOk=false; console.log('FAIL:'+spec.fn+'('+args+')='+r+' expected '+expected); }
+                    }
+                    if (allOk) fnPass++;
+                  } catch(err) {
+                    fail += spec.tests.length;
+                    console.log('FAIL:'+spec.fn+' inner WASM: '+err.message);
+                  }
+                }
+                console.log(fnPass+'/'+specs.length+' functions, '+pass+'/'+(pass+fail)+' tests passed');
+                console.log(fail===0 ? 'P003_PLAYGROUND_PASS' : 'P003_PLAYGROUND_FAIL');
+              } catch(err) { console.log('P003_PLAYGROUND_FAIL:'+err.message); }
+            })();
+            """
+
+            script_path = tempname() * ".cjs"
+            write(script_path, node_script)
+            output = try
+                read(`node $script_path $codegen_path`, String)
+            catch e
+                "P003_PLAYGROUND_FAIL: $(sprint(showerror, e))"
+            end
+            rm(script_path, force=true)
+
+            println("  P-003 playground: ", strip(output))
+            @test occursin("22/22 functions", output)
+            @test occursin("P003_PLAYGROUND_PASS", output)
+        end
+    end
+
 end

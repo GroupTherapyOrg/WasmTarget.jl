@@ -307,3 +307,31 @@ Handler updated to accept both `Base` and `Core.Intrinsics` modules for intrinsi
 - p07: f(5) = 24, f(0) = -1 ✓
 
 **Test suite**: 1088 passed, 0 failed, 2 errored (pre-existing), 6 broken — zero regressions
+
+### 2026-03-23: Session 11 — P-003 (Playground regression suite)
+
+**Goal**: Browser-based test suite — automated "Run All Tests" for 22+ functions.
+
+**Status**: DONE
+
+**What was built**:
+
+1. **"Run All Tests" button** in playground/index.html
+   - Iterates all 22 demo functions via WASM-in-WASM codegen
+   - Each function: compile via codegen.wasm → instantiate inner WASM → run test cases → verify
+   - Per-function pass/fail reporting with colored output
+   - Final summary: "22/22 functions, 74/74 tests passed"
+
+2. **Test cases added to DEMOS object**
+   - 74 test cases across 22 functions (matching Phase 55 Node.js specs exactly)
+   - Each test: [[args], expected] with Numbers converted to BigInt at runtime
+   - Covers: 1/2/3-param functions, positive/negative/zero args, identity, constants
+
+3. **Phase 56 test** in test/runtests.jl
+   - Loads pre-built playground/codegen.wasm
+   - Runs same 22-function, 74-test spec via Node.js (headless browser validation)
+   - Validates: 22/22 functions, 74/74 tests pass via P003_PLAYGROUND_PASS
+
+**Test suite**: 1095 passed, 0 failed, 2 errored (pre-existing), 6 broken — zero regressions
+
+**ALL 12 STORIES COMPLETE — RALPH_COMPLETE**

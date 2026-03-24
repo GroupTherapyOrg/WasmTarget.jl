@@ -111,9 +111,10 @@
       "id": "P-003",
       "title": "Playground regression suite — 20+ functions from browser",
       "priority": 4,
-      "status": "pending",
+      "status": "done",
       "depends_on": ["P-002"],
-      "description": "Full browser-based test suite. User types Julia code, playground compiles and executes via REAL codegen. 20+ functions pass."
+      "description": "Full browser-based test suite. User types Julia code, playground compiles and executes via REAL codegen. 20+ functions pass.",
+      "completedNote": "Browser 'Run All Tests' button added to playground. 22 demo functions with 74 test cases (matching Phase 55 specs). WASM-in-WASM: codegen.wasm compiles each function, instantiates inner WASM, verifies results. Phase 56 test validates via Node.js: 22/22 functions, 74/74 tests pass. 1095 tests total, zero regressions."
     }
   ]
 }
