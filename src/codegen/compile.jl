@@ -291,8 +291,8 @@ const SKIP_AUTODISCOVER_METHODS = Set([
     :_throw_argerror, :throw_boundserror,
     :_throw_not_readable, :_throw_not_writable,
     :throw_inexacterror,
-    # WBUILD-1013: Math domain error throws (auto-discovered from log/exp/log1p)
-    :throw_complex_domainerror, :throw_complex_domainerror_neg1,
+    # WBUILD-1013: Math domain error throws (auto-discovered from log/exp/log1p/pow)
+    :throw_complex_domainerror, :throw_complex_domainerror_neg1, :throw_exp_domainerror,
     # PURE-605: Builtins that return Method from code_typed, not CodeInfo
     :(===), :isa, :typeof, :ifelse, :throw_boundserror,
     # PURE-9040: IO functions handled via JS imports
@@ -319,6 +319,8 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     :iterate_continued, Symbol("#_thisind_continued#_thisind_str##0"),
     # WBUILD-1013: Software FMA needed by log/exp when have_fma=false
     :fma_emulated,
+    # WBUILD-1022: Float64 remainder (used by mod/rem)
+    :rem_internal,
 ])
 
 """

@@ -8078,4 +8078,97 @@ console.log(JSON.stringify({
         end
     end
 
+    # ========================================================================
+    # Phase 59 cont'd: Power/Hypot/Cbrt — WBUILD-1021
+    # ========================================================================
+    @testset "Phase 59 cont'd: Power/Hypot/Cbrt (WBUILD-1021)" begin
+        @testset "Float64^Float64 (WBUILD-1021)" begin
+            # pow_body auto-discovered but has invalid local index: 14247 bug
+            _t59_pow(x::Float64, y::Float64)::Float64 = x^y
+            @test_broken compare_julia_wasm(_t59_pow, 2.0, 3.0).pass
+        end
+
+        @testset "Float64^Int (WBUILD-1021)" begin
+            _t59_powi(x::Float64, n::Int64)::Float64 = x^n
+            @test_broken compare_julia_wasm(_t59_powi, 2.0, Int64(3)).pass
+        end
+
+        @testset "hypot(Float64, Float64) (WBUILD-1021)" begin
+            _t59_hypot(x::Float64, y::Float64)::Float64 = hypot(x, y)
+            @test compare_julia_wasm(_t59_hypot, 3.0, 4.0).pass
+            @test compare_julia_wasm(_t59_hypot, 1.0, 1.0).pass
+            @test compare_julia_wasm(_t59_hypot, 0.0, 5.0).pass
+            @test compare_julia_wasm(_t59_hypot, -3.0, 4.0).pass
+            @test compare_julia_wasm(_t59_hypot, 1e10, 1e10).pass
+        end
+
+        @testset "cbrt(Float64) (WBUILD-1021)" begin
+            _t59_cbrt(x::Float64)::Float64 = cbrt(x)
+            @test compare_julia_wasm(_t59_cbrt, 8.0).pass
+            @test compare_julia_wasm(_t59_cbrt, 27.0).pass
+            @test compare_julia_wasm(_t59_cbrt, -8.0).pass
+            @test compare_julia_wasm(_t59_cbrt, 1.0).pass
+            @test compare_julia_wasm(_t59_cbrt, 0.001).pass
+        end
+    end
+
+    # ========================================================================
+    # Phase 59 cont'd: Utility Math — WBUILD-1022
+    # ========================================================================
+    @testset "Phase 59 cont'd: Utility Math (WBUILD-1022)" begin
+        @testset "sign(Float64) (WBUILD-1022)" begin
+            _t59_sign(x::Float64)::Float64 = sign(x)
+            @test compare_julia_wasm(_t59_sign, 1.0).pass
+            @test compare_julia_wasm(_t59_sign, -1.0).pass
+            @test compare_julia_wasm(_t59_sign, 0.0).pass
+            @test compare_julia_wasm(_t59_sign, 100.0).pass
+            @test compare_julia_wasm(_t59_sign, -0.5).pass
+        end
+
+        @testset "signbit(Float64) (WBUILD-1022)" begin
+            _t59_signbit(x::Float64)::Int32 = Int32(signbit(x))
+            @test compare_julia_wasm(_t59_signbit, 1.0).pass
+            @test compare_julia_wasm(_t59_signbit, -1.0).pass
+            @test compare_julia_wasm(_t59_signbit, 0.0).pass
+            @test compare_julia_wasm(_t59_signbit, -0.0).pass
+            @test compare_julia_wasm(_t59_signbit, 100.0).pass
+        end
+
+        @testset "copysign(Float64) (WBUILD-1022)" begin
+            _t59_copysign(x::Float64, y::Float64)::Float64 = copysign(x, y)
+            @test compare_julia_wasm(_t59_copysign, 1.0, -1.0).pass
+            @test compare_julia_wasm(_t59_copysign, -1.0, 1.0).pass
+            @test compare_julia_wasm(_t59_copysign, 3.0, -2.0).pass
+            @test compare_julia_wasm(_t59_copysign, 0.0, -1.0).pass
+            @test compare_julia_wasm(_t59_copysign, 5.0, 5.0).pass
+        end
+
+        @testset "mod(Float64) (WBUILD-1022)" begin
+            _t59_mod(x::Float64, y::Float64)::Float64 = mod(x, y)
+            @test compare_julia_wasm(_t59_mod, 7.0, 3.0).pass
+            @test compare_julia_wasm(_t59_mod, -7.0, 3.0).pass
+            @test compare_julia_wasm(_t59_mod, 7.0, -3.0).pass
+            @test compare_julia_wasm(_t59_mod, 10.0, 2.5).pass
+            @test compare_julia_wasm(_t59_mod, 1.5, 0.7).pass
+        end
+
+        @testset "rem(Float64) (WBUILD-1022)" begin
+            _t59_rem(x::Float64, y::Float64)::Float64 = rem(x, y)
+            @test compare_julia_wasm(_t59_rem, 7.0, 3.0).pass
+            @test compare_julia_wasm(_t59_rem, -7.0, 3.0).pass
+            @test compare_julia_wasm(_t59_rem, 7.0, -3.0).pass
+            @test compare_julia_wasm(_t59_rem, 10.0, 2.5).pass
+            @test compare_julia_wasm(_t59_rem, 1.5, 0.7).pass
+        end
+
+        @testset "clamp(Float64) (WBUILD-1022)" begin
+            _t59_clamp(x::Float64)::Float64 = clamp(x, -1.0, 1.0)
+            @test compare_julia_wasm(_t59_clamp, -2.0).pass
+            @test compare_julia_wasm(_t59_clamp, -0.5).pass
+            @test compare_julia_wasm(_t59_clamp, 0.0).pass
+            @test compare_julia_wasm(_t59_clamp, 0.5).pass
+            @test compare_julia_wasm(_t59_clamp, 2.0).pass
+        end
+    end
+
 end
