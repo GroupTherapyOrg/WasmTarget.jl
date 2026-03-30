@@ -549,6 +549,36 @@ function fix_i64_local_in_i32_ops(bytes::Vector{UInt8}, all_local_types::Vector{
                     end
                 end
             end
+        elseif op == 0x44  # f64.const — 8 immediate bytes (IEEE 754)
+            push!(result, op)
+            i += 1
+            for _ in 1:8
+                if i <= length(bytes)
+                    push!(result, bytes[i])
+                    i += 1
+                end
+            end
+        elseif op == 0x43  # f32.const — 4 immediate bytes (IEEE 754)
+            push!(result, op)
+            i += 1
+            for _ in 1:4
+                if i <= length(bytes)
+                    push!(result, bytes[i])
+                    i += 1
+                end
+            end
+        elseif op in (0x41, 0x21, 0x22, 0x0c, 0x0d, 0x10, 0x23, 0x24)
+            # Instructions with 1 LEB128 operand:
+            # 0x41=i32.const, 0x21=local.set, 0x22=local.tee,
+            # 0x0c=br, 0x0d=br_if, 0x10=call, 0x23=global.get, 0x24=global.set
+            push!(result, op)
+            i += 1
+            while i <= length(bytes)
+                b = bytes[i]
+                push!(result, b)
+                i += 1
+                (b & 0x80) == 0 && break
+            end
         else
             push!(result, op)
             i += 1

@@ -8270,4 +8270,319 @@ console.log(JSON.stringify({
         end
     end
 
+    # ========================================================================
+    # Phase 60: Full Base.Math Coverage — WBUILD-1024
+    # ========================================================================
+    @testset "Phase 60: Base.Math Coverage (WBUILD-1024)" begin
+
+        @testset "Degree-based trig (WBUILD-1024)" begin
+            _t60_sind(x::Float64)::Float64 = sind(x)
+            @test compare_julia_wasm(_t60_sind, 0.0).pass
+            @test compare_julia_wasm(_t60_sind, 30.0).pass
+            @test compare_julia_wasm(_t60_sind, 45.0).pass
+            @test compare_julia_wasm(_t60_sind, 90.0).pass
+            @test compare_julia_wasm(_t60_sind, -45.0).pass
+
+            _t60_cosd(x::Float64)::Float64 = cosd(x)
+            @test compare_julia_wasm(_t60_cosd, 0.0).pass
+            @test compare_julia_wasm(_t60_cosd, 60.0).pass
+            @test compare_julia_wasm(_t60_cosd, 90.0).pass
+            @test compare_julia_wasm(_t60_cosd, 180.0).pass
+            @test compare_julia_wasm(_t60_cosd, -30.0).pass
+
+            _t60_tand(x::Float64)::Float64 = tand(x)
+            @test compare_julia_wasm(_t60_tand, 0.0).pass
+            @test compare_julia_wasm(_t60_tand, 30.0).pass
+            @test compare_julia_wasm(_t60_tand, 45.0).pass
+            @test compare_julia_wasm(_t60_tand, -45.0).pass
+            @test compare_julia_wasm(_t60_tand, 60.0).pass
+
+            _t60_asind(x::Float64)::Float64 = asind(x)
+            @test compare_julia_wasm(_t60_asind, 0.0).pass
+            @test compare_julia_wasm(_t60_asind, 0.5).pass
+            @test compare_julia_wasm(_t60_asind, 1.0).pass
+            @test compare_julia_wasm(_t60_asind, -0.5).pass
+            @test compare_julia_wasm(_t60_asind, -1.0).pass
+
+            _t60_acosd(x::Float64)::Float64 = acosd(x)
+            @test compare_julia_wasm(_t60_acosd, 0.0).pass
+            @test compare_julia_wasm(_t60_acosd, 0.5).pass
+            @test compare_julia_wasm(_t60_acosd, 1.0).pass
+            @test compare_julia_wasm(_t60_acosd, -0.5).pass
+            @test compare_julia_wasm(_t60_acosd, -1.0).pass
+
+            _t60_atand(x::Float64)::Float64 = atand(x)
+            @test compare_julia_wasm(_t60_atand, 0.0).pass
+            @test compare_julia_wasm(_t60_atand, 1.0).pass
+            @test compare_julia_wasm(_t60_atand, -1.0).pass
+            @test compare_julia_wasm(_t60_atand, 10.0).pass
+            @test compare_julia_wasm(_t60_atand, -10.0).pass
+        end
+
+        @testset "Pi-based trig (WBUILD-1024)" begin
+            _t60_sinpi(x::Float64)::Float64 = sinpi(x)
+            @test compare_julia_wasm(_t60_sinpi, 0.0).pass
+            @test compare_julia_wasm(_t60_sinpi, 0.25).pass
+            @test compare_julia_wasm(_t60_sinpi, 0.5).pass
+            @test compare_julia_wasm(_t60_sinpi, 1.0).pass
+            @test compare_julia_wasm(_t60_sinpi, -0.5).pass
+
+            _t60_cospi(x::Float64)::Float64 = cospi(x)
+            @test compare_julia_wasm(_t60_cospi, 0.0).pass
+            @test compare_julia_wasm(_t60_cospi, 0.25).pass
+            @test compare_julia_wasm(_t60_cospi, 0.5).pass
+            @test compare_julia_wasm(_t60_cospi, 1.0).pass
+            @test compare_julia_wasm(_t60_cospi, -0.5).pass
+
+            _t60_tanpi(x::Float64)::Float64 = tanpi(x)
+            @test compare_julia_wasm(_t60_tanpi, 0.0).pass
+            @test compare_julia_wasm(_t60_tanpi, 0.25).pass
+            @test compare_julia_wasm(_t60_tanpi, -0.25).pass
+            @test compare_julia_wasm(_t60_tanpi, 0.125).pass
+        end
+
+        @testset "Cofunctions (WBUILD-1024)" begin
+            _t60_sec(x::Float64)::Float64 = sec(x)
+            @test compare_julia_wasm(_t60_sec, 0.0).pass
+            @test compare_julia_wasm(_t60_sec, 0.5).pass
+            @test compare_julia_wasm(_t60_sec, 1.0).pass
+            @test compare_julia_wasm(_t60_sec, -1.0).pass
+
+            _t60_csc(x::Float64)::Float64 = csc(x)
+            @test compare_julia_wasm(_t60_csc, 0.5).pass
+            @test compare_julia_wasm(_t60_csc, 1.0).pass
+            @test compare_julia_wasm(_t60_csc, -1.0).pass
+            @test compare_julia_wasm(_t60_csc, 2.0).pass
+
+            _t60_cot(x::Float64)::Float64 = cot(x)
+            @test compare_julia_wasm(_t60_cot, 0.5).pass
+            @test compare_julia_wasm(_t60_cot, 1.0).pass
+            @test compare_julia_wasm(_t60_cot, -1.0).pass
+            @test compare_julia_wasm(_t60_cot, 2.0).pass
+
+            _t60_secd(x::Float64)::Float64 = secd(x)
+            @test compare_julia_wasm(_t60_secd, 0.0).pass
+            @test compare_julia_wasm(_t60_secd, 30.0).pass
+            @test compare_julia_wasm(_t60_secd, 45.0).pass
+            @test compare_julia_wasm(_t60_secd, 60.0).pass
+
+            _t60_cscd(x::Float64)::Float64 = cscd(x)
+            @test compare_julia_wasm(_t60_cscd, 30.0).pass
+            @test compare_julia_wasm(_t60_cscd, 45.0).pass
+            @test compare_julia_wasm(_t60_cscd, 90.0).pass
+            @test compare_julia_wasm(_t60_cscd, -90.0).pass
+
+            _t60_cotd(x::Float64)::Float64 = cotd(x)
+            @test compare_julia_wasm(_t60_cotd, 30.0).pass
+            @test compare_julia_wasm(_t60_cotd, 45.0).pass
+            @test compare_julia_wasm(_t60_cotd, 60.0).pass
+            @test compare_julia_wasm(_t60_cotd, -45.0).pass
+        end
+
+        @testset "Hyperbolic inverse (WBUILD-1024)" begin
+            _t60_asinh(x::Float64)::Float64 = asinh(x)
+            @test compare_julia_wasm(_t60_asinh, 0.0).pass
+            @test compare_julia_wasm(_t60_asinh, 1.0).pass
+            @test compare_julia_wasm(_t60_asinh, -1.0).pass
+            @test compare_julia_wasm(_t60_asinh, 10.0).pass
+
+            _t60_acosh(x::Float64)::Float64 = acosh(x)
+            @test compare_julia_wasm(_t60_acosh, 1.0).pass
+            @test compare_julia_wasm(_t60_acosh, 2.0).pass
+            @test compare_julia_wasm(_t60_acosh, 10.0).pass
+            @test compare_julia_wasm(_t60_acosh, 100.0).pass
+
+            _t60_atanh(x::Float64)::Float64 = atanh(x)
+            @test compare_julia_wasm(_t60_atanh, 0.0).pass
+            @test compare_julia_wasm(_t60_atanh, 0.5).pass
+            @test compare_julia_wasm(_t60_atanh, -0.5).pass
+            @test compare_julia_wasm(_t60_atanh, 0.9).pass
+        end
+
+        @testset "Other inverse trig (WBUILD-1024)" begin
+            _t60_acot(x::Float64)::Float64 = acot(x)
+            @test compare_julia_wasm(_t60_acot, 0.5).pass
+            @test compare_julia_wasm(_t60_acot, 1.0).pass
+            @test compare_julia_wasm(_t60_acot, -1.0).pass
+            @test compare_julia_wasm(_t60_acot, 10.0).pass
+
+            _t60_asec(x::Float64)::Float64 = asec(x)
+            @test compare_julia_wasm(_t60_asec, 1.5).pass
+            @test compare_julia_wasm(_t60_asec, 2.0).pass
+            @test compare_julia_wasm(_t60_asec, -2.0).pass
+            @test compare_julia_wasm(_t60_asec, 10.0).pass
+
+            _t60_acsc(x::Float64)::Float64 = acsc(x)
+            @test compare_julia_wasm(_t60_acsc, 1.5).pass
+            @test compare_julia_wasm(_t60_acsc, 2.0).pass
+            @test compare_julia_wasm(_t60_acsc, -2.0).pass
+            @test compare_julia_wasm(_t60_acsc, 10.0).pass
+
+            _t60_acotd(x::Float64)::Float64 = acotd(x)
+            @test compare_julia_wasm(_t60_acotd, 0.5).pass
+            @test compare_julia_wasm(_t60_acotd, 1.0).pass
+            @test compare_julia_wasm(_t60_acotd, -1.0).pass
+            @test compare_julia_wasm(_t60_acotd, 10.0).pass
+
+            _t60_asecd(x::Float64)::Float64 = asecd(x)
+            @test compare_julia_wasm(_t60_asecd, 1.5).pass
+            @test compare_julia_wasm(_t60_asecd, 2.0).pass
+            @test compare_julia_wasm(_t60_asecd, -2.0).pass
+            @test compare_julia_wasm(_t60_asecd, 10.0).pass
+
+            _t60_acscd(x::Float64)::Float64 = acscd(x)
+            @test compare_julia_wasm(_t60_acscd, 1.5).pass
+            @test compare_julia_wasm(_t60_acscd, 2.0).pass
+            @test compare_julia_wasm(_t60_acscd, -2.0).pass
+            @test compare_julia_wasm(_t60_acscd, 10.0).pass
+        end
+
+        @testset "Hyperbolic cofunctions (WBUILD-1024)" begin
+            _t60_sech(x::Float64)::Float64 = sech(x)
+            @test compare_julia_wasm(_t60_sech, 0.0).pass
+            @test compare_julia_wasm(_t60_sech, 1.0).pass
+            @test compare_julia_wasm(_t60_sech, -1.0).pass
+            @test compare_julia_wasm(_t60_sech, 5.0).pass
+
+            _t60_csch(x::Float64)::Float64 = csch(x)
+            @test compare_julia_wasm(_t60_csch, 0.5).pass
+            @test compare_julia_wasm(_t60_csch, 1.0).pass
+            @test compare_julia_wasm(_t60_csch, -1.0).pass
+            @test compare_julia_wasm(_t60_csch, 5.0).pass
+
+            _t60_coth(x::Float64)::Float64 = coth(x)
+            @test compare_julia_wasm(_t60_coth, 0.5).pass
+            @test compare_julia_wasm(_t60_coth, 1.0).pass
+            @test compare_julia_wasm(_t60_coth, -1.0).pass
+            @test compare_julia_wasm(_t60_coth, 5.0).pass
+
+            _t60_acsch(x::Float64)::Float64 = acsch(x)
+            @test compare_julia_wasm(_t60_acsch, 0.5).pass
+            @test compare_julia_wasm(_t60_acsch, 1.0).pass
+            @test compare_julia_wasm(_t60_acsch, -1.0).pass
+            @test compare_julia_wasm(_t60_acsch, 5.0).pass
+
+            _t60_asech(x::Float64)::Float64 = asech(x)
+            @test compare_julia_wasm(_t60_asech, 0.1).pass
+            @test compare_julia_wasm(_t60_asech, 0.5).pass
+            @test compare_julia_wasm(_t60_asech, 0.9).pass
+            @test compare_julia_wasm(_t60_asech, 1.0).pass
+
+            _t60_acoth(x::Float64)::Float64 = acoth(x)
+            @test compare_julia_wasm(_t60_acoth, 1.5).pass
+            @test compare_julia_wasm(_t60_acoth, 2.0).pass
+            @test compare_julia_wasm(_t60_acoth, -2.0).pass
+            @test compare_julia_wasm(_t60_acoth, 10.0).pass
+        end
+
+        @testset "Special functions (WBUILD-1024)" begin
+            _t60_sinc(x::Float64)::Float64 = sinc(x)
+            @test compare_julia_wasm(_t60_sinc, 0.0).pass
+            @test compare_julia_wasm(_t60_sinc, 0.5).pass
+            @test compare_julia_wasm(_t60_sinc, 1.0).pass
+            @test compare_julia_wasm(_t60_sinc, -1.0).pass
+            @test compare_julia_wasm(_t60_sinc, 3.14).pass
+
+            _t60_cosc(x::Float64)::Float64 = cosc(x)
+            @test compare_julia_wasm(_t60_cosc, 0.5).pass
+            @test compare_julia_wasm(_t60_cosc, 1.0).pass
+            @test compare_julia_wasm(_t60_cosc, -1.0).pass
+            @test compare_julia_wasm(_t60_cosc, 3.14).pass
+
+            _t60_sincos_s(x::Float64)::Float64 = sincos(x)[1]
+            @test compare_julia_wasm(_t60_sincos_s, 0.0).pass
+            @test compare_julia_wasm(_t60_sincos_s, 1.0).pass
+            @test compare_julia_wasm(_t60_sincos_s, Float64(pi)/4).pass
+
+            _t60_sincos_c(x::Float64)::Float64 = sincos(x)[2]
+            @test compare_julia_wasm(_t60_sincos_c, 0.0).pass
+            @test compare_julia_wasm(_t60_sincos_c, 1.0).pass
+            @test compare_julia_wasm(_t60_sincos_c, Float64(pi)/4).pass
+
+            _t60_modf_f(x::Float64)::Float64 = modf(x)[1]
+            @test compare_julia_wasm(_t60_modf_f, 3.7).pass
+            @test compare_julia_wasm(_t60_modf_f, -2.3).pass
+            @test compare_julia_wasm(_t60_modf_f, 0.0).pass
+
+            _t60_modf_i(x::Float64)::Float64 = modf(x)[2]
+            @test compare_julia_wasm(_t60_modf_i, 3.7).pass
+            @test compare_julia_wasm(_t60_modf_i, -2.3).pass
+            @test compare_julia_wasm(_t60_modf_i, 0.0).pass
+        end
+
+        @testset "Conversions and utility (WBUILD-1024)" begin
+            _t60_deg2rad(x::Float64)::Float64 = deg2rad(x)
+            @test compare_julia_wasm(_t60_deg2rad, 0.0).pass
+            @test compare_julia_wasm(_t60_deg2rad, 90.0).pass
+            @test compare_julia_wasm(_t60_deg2rad, 180.0).pass
+            @test compare_julia_wasm(_t60_deg2rad, 360.0).pass
+            @test compare_julia_wasm(_t60_deg2rad, -45.0).pass
+
+            _t60_rad2deg(x::Float64)::Float64 = rad2deg(x)
+            @test compare_julia_wasm(_t60_rad2deg, 0.0).pass
+            @test compare_julia_wasm(_t60_rad2deg, 1.5708).pass
+            @test compare_julia_wasm(_t60_rad2deg, 3.14159).pass
+            @test compare_julia_wasm(_t60_rad2deg, 6.28318).pass
+            @test compare_julia_wasm(_t60_rad2deg, -0.7854).pass
+
+            _t60_fourthroot(x::Float64)::Float64 = fourthroot(x)
+            @test compare_julia_wasm(_t60_fourthroot, 0.0).pass
+            @test compare_julia_wasm(_t60_fourthroot, 1.0).pass
+            @test compare_julia_wasm(_t60_fourthroot, 16.0).pass
+            @test compare_julia_wasm(_t60_fourthroot, 81.0).pass
+            @test compare_julia_wasm(_t60_fourthroot, 256.0).pass
+
+            _t60_mod2pi(x::Float64)::Float64 = mod2pi(x)
+            @test compare_julia_wasm(_t60_mod2pi, 0.0).pass
+            @test compare_julia_wasm(_t60_mod2pi, 3.14).pass
+            @test compare_julia_wasm(_t60_mod2pi, 6.28).pass
+            @test compare_julia_wasm(_t60_mod2pi, 10.0).pass
+            @test compare_julia_wasm(_t60_mod2pi, -1.0).pass
+        end
+
+        @testset "Two-arg functions (WBUILD-1024)" begin
+            _t60_max(x::Float64, y::Float64)::Float64 = max(x, y)
+            @test compare_julia_wasm(_t60_max, 1.0, 2.0).pass
+            @test compare_julia_wasm(_t60_max, -1.0, 1.0).pass
+            @test compare_julia_wasm(_t60_max, 3.0, 3.0).pass
+            @test compare_julia_wasm(_t60_max, -5.0, -3.0).pass
+
+            _t60_min(x::Float64, y::Float64)::Float64 = min(x, y)
+            @test compare_julia_wasm(_t60_min, 1.0, 2.0).pass
+            @test compare_julia_wasm(_t60_min, -1.0, 1.0).pass
+            @test compare_julia_wasm(_t60_min, 3.0, 3.0).pass
+            @test compare_julia_wasm(_t60_min, -5.0, -3.0).pass
+
+            _t60_minmax_lo(x::Float64, y::Float64)::Float64 = minmax(x, y)[1]
+            @test compare_julia_wasm(_t60_minmax_lo, 3.0, 1.0).pass
+            @test compare_julia_wasm(_t60_minmax_lo, -1.0, 5.0).pass
+
+            _t60_minmax_hi(x::Float64, y::Float64)::Float64 = minmax(x, y)[2]
+            @test compare_julia_wasm(_t60_minmax_hi, 3.0, 1.0).pass
+            @test compare_julia_wasm(_t60_minmax_hi, -1.0, 5.0).pass
+
+            _t60_ldexp(x::Float64, n::Int64)::Float64 = ldexp(x, Int(n))
+            @test compare_julia_wasm(_t60_ldexp, 0.5, Int64(3)).pass
+            @test compare_julia_wasm(_t60_ldexp, 1.0, Int64(0)).pass
+            @test compare_julia_wasm(_t60_ldexp, 1.0, Int64(-2)).pass
+            @test compare_julia_wasm(_t60_ldexp, 3.14, Int64(5)).pass
+        end
+
+        @testset "Floating-point inspection (WBUILD-1024)" begin
+            _t60_exponent(x::Float64)::Int64 = Int64(exponent(x))
+            @test compare_julia_wasm(_t60_exponent, 1.0).pass
+            @test compare_julia_wasm(_t60_exponent, 2.0).pass
+            @test compare_julia_wasm(_t60_exponent, 3.5).pass
+            @test compare_julia_wasm(_t60_exponent, 0.5).pass
+            @test compare_julia_wasm(_t60_exponent, 100.0).pass
+
+            _t60_significand(x::Float64)::Float64 = significand(x)
+            @test compare_julia_wasm(_t60_significand, 1.0).pass
+            @test compare_julia_wasm(_t60_significand, 2.0).pass
+            @test compare_julia_wasm(_t60_significand, 3.5).pass
+            @test compare_julia_wasm(_t60_significand, 0.5).pass
+            @test compare_julia_wasm(_t60_significand, 100.0).pass
+        end
+    end
+
 end
