@@ -918,7 +918,7 @@ function compare_server_vs_browser_typeinf(functions::Vector; world::Union{Nothi
     end
 
     # ── Phase B: Load overrides (once, irreversible) ──
-    typeinf_dir = joinpath(@__DIR__, "..", "src", "typeinf")
+    typeinf_dir = joinpath(@__DIR__, "..", "src", "selfhost", "typeinf")
     include(joinpath(typeinf_dir, "ccall_stubs.jl"))
     include(joinpath(typeinf_dir, "subtype.jl"))
     include(joinpath(typeinf_dir, "matching.jl"))

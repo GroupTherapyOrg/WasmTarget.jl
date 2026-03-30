@@ -14,8 +14,8 @@ using WasmTarget: compile_module_from_ir, to_bytes,
                   BasicBlock, WasmValType
 
 # Load return type table functions
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "typeid_registry.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "return_type_table.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "typeid_registry.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "return_type_table.jl"))
 
 println("=" ^ 60)
 println("METH-002: Return type table in codegen module")

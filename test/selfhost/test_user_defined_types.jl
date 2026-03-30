@@ -11,13 +11,13 @@ using Test
 using WasmTarget
 
 include(joinpath(@__DIR__, "..", "utils.jl"))
-include(joinpath(@__DIR__, "..", "..", "src", "typeinf", "ccall_stubs.jl"))
-include(joinpath(@__DIR__, "..", "..", "src", "typeinf", "subtype.jl"))
-include(joinpath(@__DIR__, "..", "..", "src", "typeinf", "matching.jl"))
-include(joinpath(@__DIR__, "..", "..", "src", "typeinf", "ccall_replacements.jl"))
-include(joinpath(@__DIR__, "..", "..", "src", "typeinf", "dict_method_table.jl"))
-include(joinpath(@__DIR__, "..", "..", "src", "typeinf", "typeid_registry.jl"))
-include(joinpath(@__DIR__, "..", "..", "src", "typeinf", "type_data_store.jl"))
+include(joinpath(@__DIR__, "..", "..", "src", "selfhost", "typeinf", "ccall_stubs.jl"))
+include(joinpath(@__DIR__, "..", "..", "src", "selfhost", "typeinf", "subtype.jl"))
+include(joinpath(@__DIR__, "..", "..", "src", "selfhost", "typeinf", "matching.jl"))
+include(joinpath(@__DIR__, "..", "..", "src", "selfhost", "typeinf", "ccall_replacements.jl"))
+include(joinpath(@__DIR__, "..", "..", "src", "selfhost", "typeinf", "dict_method_table.jl"))
+include(joinpath(@__DIR__, "..", "..", "src", "selfhost", "typeinf", "typeid_registry.jl"))
+include(joinpath(@__DIR__, "..", "..", "src", "selfhost", "typeinf", "type_data_store.jl"))
 
 # ─── User-defined structs (simulating what a user would define) ──────────────
 

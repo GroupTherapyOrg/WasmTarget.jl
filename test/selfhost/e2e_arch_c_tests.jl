@@ -10,9 +10,9 @@ using WasmTarget
 using WasmTarget: compile_module_from_ir, to_bytes, serialize_ir_entries
 
 # Load typeinf infrastructure (NO typeinf_wasm.jl yet — get IR first)
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "typeid_registry.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "return_type_table.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "thin_typeinf.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "typeid_registry.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "return_type_table.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "thin_typeinf.jl"))
 
 println("=" ^ 60)
 println("TEST-002: Architecture C Regression Tests — 20 functions")
@@ -144,7 +144,7 @@ json_str = serialize_ir_entries(collect(ir_entries))
 # Step 3: Build return type table and TypeID data (load typeinf AFTER code_typed)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "typeinf_wasm.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "typeinf_wasm.jl"))
 
 test_sigs = Any[
     Tuple{typeof(*), Int64, Int64},

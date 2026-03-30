@@ -13,8 +13,8 @@ using WasmTarget
 using JSON, Dates
 
 # Load stubs + replacements
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "ccall_stubs.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "ccall_replacements.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "ccall_stubs.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "ccall_replacements.jl"))
 
 println("=" ^ 70)
 println("PHASE-2-PREP-003: Validate ccall replacements compile to WasmGC")

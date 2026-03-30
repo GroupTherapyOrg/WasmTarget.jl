@@ -5923,7 +5923,7 @@ _p01_make_entry(:p03_auto_22, p03_src_22, (Int64, Int64, Int64))
     # ========================================================================
     @testset "Phase 37: Subtype Checking (PURE-9064)" begin
 
-        include("../src/typeinf/subtype.jl")
+        include("../src/selfhost/typeinf/subtype.jl")
 
         @testset "wasm_subtype compiles for concrete DataType pairs" begin
             # Test wrapper functions that call _datatype_subtype

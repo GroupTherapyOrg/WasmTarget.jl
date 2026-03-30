@@ -12,7 +12,7 @@ using JuliaSyntax
 using JSON, Dates
 
 # Load dict_method_table.jl (same as Phase 2 measurement)
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "dict_method_table.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "dict_method_table.jl"))
 
 println("=" ^ 60)
 println("PHASE-3-PREP-004: Measuring parser+lowerer+typeinf+codegen scope")

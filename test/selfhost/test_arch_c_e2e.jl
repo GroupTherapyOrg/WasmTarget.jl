@@ -11,9 +11,9 @@ using WasmTarget
 using WasmTarget: compile_module_from_ir, to_bytes
 
 # Load typeinf infrastructure (NO typeinf_wasm.jl yet — get IR first)
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "typeid_registry.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "return_type_table.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "thin_typeinf.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "typeid_registry.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "return_type_table.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "thin_typeinf.jl"))
 
 println("=" ^ 60)
 println("METH-005: Architecture C E2E Demo")
@@ -85,7 +85,7 @@ end
 # Step 2: Build test data (load typeinf AFTER code_typed)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "typeinf_wasm.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "typeinf_wasm.jl"))
 
 test_sigs = Any[
     Tuple{typeof(*), Int64, Int64},

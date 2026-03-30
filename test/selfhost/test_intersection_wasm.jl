@@ -10,7 +10,7 @@
 using Test
 using WasmTarget
 
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "subtype.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "subtype.jl"))
 
 @testset "PHASE-2B-003: wasm_type_intersection → WasmGC" begin
 

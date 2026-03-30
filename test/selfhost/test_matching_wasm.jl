@@ -7,8 +7,8 @@
 using Test
 using WasmTarget
 
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "subtype.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "matching.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "subtype.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "matching.jl"))
 
 @testset "PHASE-2B-002: wasm_matching_methods → WasmGC" begin
 

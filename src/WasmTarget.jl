@@ -37,8 +37,6 @@ include("runtime/intrinsics.jl")
 include("runtime/stringops.jl")
 include("runtime/arrayops.jl")
 include("runtime/simpledict.jl")
-include("runtime/bytebuffer.jl")
-include("runtime/tokenizer.jl")
 
 # Main API
 export compile, compile_multi, compile_from_codeinfo, compile_with_base, optimize, WasmModule, to_bytes

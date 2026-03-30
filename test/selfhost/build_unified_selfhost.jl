@@ -159,9 +159,9 @@ println("  Lowerer: $(length(lowerer_stage)) functions")
 # STAGE 3: Subtype + Matching
 # ═══════════════════════════════════════════════════════════════════════════════
 
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "ccall_stubs.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "subtype.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "matching.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "ccall_stubs.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "subtype.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "matching.jl"))
 
 subtype_stage = [
     ("VarBinding", VarBinding, (TypeVar, Bool)),
@@ -226,9 +226,9 @@ println("  Subtype+Matching: $(length(subtype_stage)) functions")
 # STAGE 4: Type Inference (unrolled_typeinf + helpers)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "typeid_registry.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "return_type_table.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "thin_typeinf.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "typeid_registry.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "return_type_table.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "thin_typeinf.jl"))
 
 # unrolled_typeinf: loop-free type inference for f(x::Int64)=x*x+1 (3 statements)
 function unrolled_typeinf(

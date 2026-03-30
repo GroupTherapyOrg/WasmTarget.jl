@@ -8,9 +8,9 @@ using Core.Compiler: InferenceState, InferenceResult, MethodLookupResult,
                      CachedMethodTable, AbstractInterpreter
 
 # Load typeinf infrastructure
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "ccall_stubs.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "ccall_replacements.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "dict_method_table.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "ccall_stubs.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "ccall_replacements.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "dict_method_table.jl"))
 
 println("=" ^ 70)
 println("PHASE-2-PREP-005: Profile typeinf call graph")

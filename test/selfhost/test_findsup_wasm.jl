@@ -8,8 +8,8 @@ using Test
 using WasmTarget
 using Core.Compiler: MethodMatch, MethodLookupResult, WorldRange
 
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "subtype.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "matching.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "subtype.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "matching.jl"))
 
 # Implement wasm_findsup
 function wasm_findsup(@nospecialize(sig))

@@ -159,9 +159,9 @@ phase3b_funcs = [
 # ── P2b: Subtype + Matching ────────────────────────────────────────────────
 
 # Load stubs + subtype + matching (but NOT ccall_replacements!)
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "ccall_stubs.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "subtype.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "matching.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "ccall_stubs.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "subtype.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "matching.jl"))
 
 phase2b_funcs = [
     ("VarBinding", VarBinding, (TypeVar, Bool)),
@@ -305,9 +305,9 @@ println("  Total clean: $(length(clean_entries)) functions")
 
 println("\n--- Step 2: Load ccall_replacements + code_typed P2a ---")
 
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "ccall_replacements.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "dict_method_table.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "typeid_registry.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "ccall_replacements.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "dict_method_table.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "typeid_registry.jl"))
 
 using Core.Compiler: InferenceResult, InferenceState
 

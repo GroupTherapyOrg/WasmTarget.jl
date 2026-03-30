@@ -6,10 +6,10 @@ using WasmTarget
 using Test
 
 # Load typeinf infrastructure via unified entry point
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "typeinf_wasm.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "typeid_registry.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "return_type_table.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "thin_typeinf.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "typeinf_wasm.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "typeid_registry.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "return_type_table.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "thin_typeinf.jl"))
 
 println("=" ^ 70)
 println("METH-003: thin_typeinf Tests")

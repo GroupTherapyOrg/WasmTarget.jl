@@ -14,9 +14,9 @@ using WasmTarget
 using WasmTarget: compile_module_from_ir, to_bytes
 
 # Load typeinf infrastructure BEFORE any overrides
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "typeid_registry.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "return_type_table.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "thin_typeinf.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "typeid_registry.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "return_type_table.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "thin_typeinf.jl"))
 
 println("=" ^ 60)
 println("TRUE-TI-003: Full thin_typeinf verification")
@@ -115,7 +115,7 @@ end
 # Step 2: Load typeinf infrastructure + build return type table
 # ═══════════════════════════════════════════════════════════════════════════════
 
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "typeinf_wasm.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "typeinf_wasm.jl"))
 
 test_sigs = Any[
     Tuple{typeof(*), Int64, Int64},

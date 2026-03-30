@@ -9,7 +9,7 @@ using WasmTarget
 using JSON, Dates
 
 # Load typeinf infrastructure (not part of WasmTarget module — standalone)
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "dict_method_table.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "dict_method_table.jl"))
 
 println("=" ^ 60)
 println("PHASE-1-001: Measuring method table via populate_transitive")

@@ -2,7 +2,7 @@
 # Includes Union, Tuple, Vararg, UnionAll, TypeVar, parametric, diagonal, and edge cases.
 # Zero tolerance for divergence. This is the GATE for M_SUBTYPE_IMPL.
 
-include(joinpath(@__DIR__, "..", "src", "typeinf", "subtype.jl"))
+include(joinpath(@__DIR__, "..", "src", "selfhost", "typeinf", "subtype.jl"))
 
 # Collect all type pairs and results
 passed = 0

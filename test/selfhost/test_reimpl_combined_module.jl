@@ -10,11 +10,11 @@ using WasmTarget
 using Core.Compiler: InferenceResult, InferenceState, MethodMatch,
                      MethodLookupResult, WorldRange
 
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "ccall_stubs.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "subtype.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "matching.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "ccall_replacements.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "dict_method_table.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "ccall_stubs.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "subtype.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "matching.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "ccall_replacements.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "dict_method_table.jl"))
 
 # ─── Setup types (no populate_method_table — avoids reimpl cycle) ─────────
 

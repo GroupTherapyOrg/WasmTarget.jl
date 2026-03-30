@@ -12,7 +12,7 @@
 #   julia +1.12 --project=WasmTarget.jl -e 'include("WasmTarget.jl/test/test_typeinf_reimpl.jl")'
 
 # Load the typeinf reimplementation stack
-include(joinpath(@__DIR__, "..", "src", "typeinf", "typeinf_wasm.jl"))
+include(joinpath(@__DIR__, "..", "src", "selfhost", "typeinf", "typeinf_wasm.jl"))
 
 using Test
 

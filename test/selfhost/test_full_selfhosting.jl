@@ -217,11 +217,11 @@ println("  Pre-computed method table ($(length(method_entries)) entries) + $(len
 
 # NOW load overrides (irreversible — breaks methods(), code_typed, etc.)
 # Order matters: ccall_replacements needs subtype+matching for wasm_type_intersection
-include(joinpath(@__DIR__, "..", "..", "src", "typeinf", "ccall_stubs.jl"))
-include(joinpath(@__DIR__, "..", "..", "src", "typeinf", "subtype.jl"))
-include(joinpath(@__DIR__, "..", "..", "src", "typeinf", "matching.jl"))
-include(joinpath(@__DIR__, "..", "..", "src", "typeinf", "ccall_replacements.jl"))
-include(joinpath(@__DIR__, "..", "..", "src", "typeinf", "dict_method_table.jl"))
+include(joinpath(@__DIR__, "..", "..", "src", "selfhost", "typeinf", "ccall_stubs.jl"))
+include(joinpath(@__DIR__, "..", "..", "src", "selfhost", "typeinf", "subtype.jl"))
+include(joinpath(@__DIR__, "..", "..", "src", "selfhost", "typeinf", "matching.jl"))
+include(joinpath(@__DIR__, "..", "..", "src", "selfhost", "typeinf", "ccall_replacements.jl"))
+include(joinpath(@__DIR__, "..", "..", "src", "selfhost", "typeinf", "dict_method_table.jl"))
 
 # Build DictMethodTable from pre-computed entries
 method_table = DictMethodTable(world)

@@ -4,7 +4,7 @@
 #           user-defined types, DictMethodTable-relevant cases.
 # Zero tolerance for divergence. 100% match rate required.
 
-include(joinpath(@__DIR__, "..", "src", "typeinf", "subtype.jl"))
+include(joinpath(@__DIR__, "..", "src", "selfhost", "typeinf", "subtype.jl"))
 
 # Collect all type pairs and results
 passed = 0

@@ -245,11 +245,11 @@ println("  $(ac_pass ? "✓ ACCEPTANCE PASS" : "✗ ACCEPTANCE FAIL"): Point(5.0
 # ══════════════════════════════════════════════════════════════════════════════
 
 println("\n--- Loading typeinf overrides ---")
-include(joinpath(@__DIR__, "..", "..", "src", "typeinf", "ccall_stubs.jl"))
-include(joinpath(@__DIR__, "..", "..", "src", "typeinf", "subtype.jl"))
-include(joinpath(@__DIR__, "..", "..", "src", "typeinf", "matching.jl"))
-include(joinpath(@__DIR__, "..", "..", "src", "typeinf", "ccall_replacements.jl"))
-include(joinpath(@__DIR__, "..", "..", "src", "typeinf", "dict_method_table.jl"))
+include(joinpath(@__DIR__, "..", "..", "src", "selfhost", "typeinf", "ccall_stubs.jl"))
+include(joinpath(@__DIR__, "..", "..", "src", "selfhost", "typeinf", "subtype.jl"))
+include(joinpath(@__DIR__, "..", "..", "src", "selfhost", "typeinf", "matching.jl"))
+include(joinpath(@__DIR__, "..", "..", "src", "selfhost", "typeinf", "ccall_replacements.jl"))
+include(joinpath(@__DIR__, "..", "..", "src", "selfhost", "typeinf", "dict_method_table.jl"))
 println("  All overrides loaded")
 
 # ══════════════════════════════════════════════════════════════════════════════

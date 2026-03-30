@@ -13,7 +13,7 @@ using WasmTarget
 using JSON, Dates
 
 # Load ONLY dict_method_table.jl (same as Phase 1 measurement)
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "dict_method_table.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "dict_method_table.jl"))
 
 println("=" ^ 60)
 println("PHASE-2-PREP-001: Measuring typeinf+codegen scope")

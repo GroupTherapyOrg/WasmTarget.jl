@@ -11,9 +11,9 @@ using WasmTarget: compile_module_from_ir, to_bytes, WasmModule, TypeRegistry
 # IMPORTANT: Load return_type_table.jl and thin_typeinf.jl WITHOUT loading
 # typeinf_wasm.jl first. typeinf_wasm.jl overrides Base._methods_by_ftype which
 # changes how Julia compiles zeros() — from 4 stmts to 56 stmts, causing WASM stubs.
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "typeid_registry.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "return_type_table.jl"))
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "thin_typeinf.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "typeid_registry.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "return_type_table.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "thin_typeinf.jl"))
 
 println("=" ^ 60)
 println("METH-004: thin_typeinf compiled to WASM")
@@ -69,7 +69,7 @@ end
 # Step 2: Load typeinf infrastructure for building test data (AFTER code_typed)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-include(joinpath(dirname(dirname(@__DIR__)), "src", "typeinf", "typeinf_wasm.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "src", "selfhost", "typeinf", "typeinf_wasm.jl"))
 
 test_sigs = Any[
     Tuple{typeof(*), Int64, Int64},

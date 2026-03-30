@@ -14,12 +14,12 @@ using Test
 using WasmTarget
 
 # Load typeinf infrastructure
-include(joinpath(@__DIR__, "..", "..", "src", "typeinf", "ccall_stubs.jl"))
-include(joinpath(@__DIR__, "..", "..", "src", "typeinf", "ccall_replacements.jl"))
-include(joinpath(@__DIR__, "..", "..", "src", "typeinf", "dict_method_table.jl"))
-include(joinpath(@__DIR__, "..", "..", "src", "typeinf", "typeid_registry.jl"))
-include(joinpath(@__DIR__, "..", "..", "src", "typeinf", "method_table_emit.jl"))
-include(joinpath(@__DIR__, "..", "..", "src", "typeinf", "minimal_method.jl"))
+include(joinpath(@__DIR__, "..", "..", "src", "selfhost", "typeinf", "ccall_stubs.jl"))
+include(joinpath(@__DIR__, "..", "..", "src", "selfhost", "typeinf", "ccall_replacements.jl"))
+include(joinpath(@__DIR__, "..", "..", "src", "selfhost", "typeinf", "dict_method_table.jl"))
+include(joinpath(@__DIR__, "..", "..", "src", "selfhost", "typeinf", "typeid_registry.jl"))
+include(joinpath(@__DIR__, "..", "..", "src", "selfhost", "typeinf", "method_table_emit.jl"))
+include(joinpath(@__DIR__, "..", "..", "src", "selfhost", "typeinf", "minimal_method.jl"))
 
 # ─── Build test data ──────────────────────────────────────────────────────────
 # Use a representative set of functions to populate a DictMethodTable
