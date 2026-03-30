@@ -7890,6 +7890,41 @@ console.log(JSON.stringify({
             end
             @test compare_julia_wasm(_wb_widemul, Int64(100), Int64(200)).pass
         end
+
+        @testset "cos(Float64) full input range (WBUILD-1013)" begin
+            _t58_cos(x::Float64)::Float64 = cos(x)
+            @test compare_julia_wasm(_t58_cos, 0.0).pass
+            @test compare_julia_wasm(_t58_cos, Float64(pi)/6).pass
+            @test compare_julia_wasm(_t58_cos, Float64(pi)/4).pass
+            @test compare_julia_wasm(_t58_cos, Float64(pi)/3).pass
+            @test compare_julia_wasm(_t58_cos, Float64(pi)/2).pass
+            @test compare_julia_wasm(_t58_cos, Float64(pi)).pass
+            @test compare_julia_wasm(_t58_cos, 3*Float64(pi)/2).pass
+            @test compare_julia_wasm(_t58_cos, 2*Float64(pi)).pass
+            @test compare_julia_wasm(_t58_cos, -Float64(pi)/4).pass
+            @test compare_julia_wasm(_t58_cos, 100.0).pass
+            @test compare_julia_wasm(_t58_cos, -100.0).pass
+            @test compare_julia_wasm(_t58_cos, 1e-10).pass
+        end
+
+        @testset "exp(Float64) full input range (WBUILD-1013)" begin
+            _t58_exp(x::Float64)::Float64 = exp(x)
+            @test compare_julia_wasm(_t58_exp, -10.0).pass
+            @test compare_julia_wasm(_t58_exp, -1.0).pass
+            @test compare_julia_wasm(_t58_exp, 0.0).pass
+            @test compare_julia_wasm(_t58_exp, 0.5).pass
+            @test compare_julia_wasm(_t58_exp, 1.0).pass
+            @test compare_julia_wasm(_t58_exp, 2.0).pass
+            @test compare_julia_wasm(_t58_exp, 5.0).pass
+            @test compare_julia_wasm(_t58_exp, 10.0).pass
+        end
+
+        @testset "log(Float64) (WBUILD-1013)" begin
+            # log(Float64) blocked by fma_emulated not compiled as cross-function call.
+            # Julia 1.12 log uses fma_emulated when have_fma() is false.
+            _t58_log(x::Float64)::Float64 = log(x)
+            @test_broken compare_julia_wasm(_t58_log, 1.0).pass
+        end
     end
 
 end
