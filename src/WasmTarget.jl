@@ -30,6 +30,10 @@ include("codegen/dicts.jl")
 include("codegen/sourcemap.jl")
 include("codegen/cache.jl")
 include("codegen/packages.jl")
+
+# Packages - Domain-specific extensions
+include("packages/statistics.jl")
+
 include("codegen/wasm_constructors.jl")
 
 # Runtime - Intrinsics and stdlib mapping
