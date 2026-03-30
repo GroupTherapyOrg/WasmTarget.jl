@@ -189,7 +189,7 @@ function generate_body(ctx::AbstractCompilationContext)::Vector{UInt8}
     # When a value feeds into multiple phi nodes, the codegen emits local_set for each
     # target. But local_set consumes the stack value, leaving nothing for subsequent sets.
     # Fix: convert local_set to local_tee when the next instruction is also local_set.
-    bytes = fix_consecutive_local_sets(bytes)
+    bytes = fix_consecutive_local_sets(bytes; local_types=ctx.locals, n_params=ctx.n_params)
 
     # PURE-6022: Strip excess bytes after the function body's closing `end`.
     # The flow generator may emit dead code (unreachable, br, etc.) after all blocks
@@ -545,7 +545,7 @@ also local_set. local_tee stores to the local but KEEPS the value on the stack.
 
 Handles chains of any length: tee tee tee ... set.
 """
-function fix_consecutive_local_sets(bytes::Vector{UInt8})::Vector{UInt8}
+function fix_consecutive_local_sets(bytes::Vector{UInt8}; local_types::Union{Nothing, Vector}=nothing, n_params::Int=0)::Vector{UInt8}
     result = UInt8[]
     sizehint!(result, length(bytes))
     i = 1
@@ -555,12 +555,43 @@ function fix_consecutive_local_sets(bytes::Vector{UInt8})::Vector{UInt8}
         if op == 0x21  # local_set
             # Peek past the LEB128 local index to find where next instruction starts
             j = i + 1
+            # Decode first local index
+            first_idx = 0; shift = 0
             while j <= length(bytes) && (bytes[j] & 0x80) != 0
+                first_idx |= (Int(bytes[j] & 0x7f) << shift)
+                shift += 7
                 j += 1
             end
             if j <= length(bytes)
+                first_idx |= (Int(bytes[j] & 0x7f) << shift)
                 j += 1  # Past the terminal LEB128 byte — j now points to next instruction
                 if j <= length(bytes) && bytes[j] == 0x21  # next is also local_set
+                    # Decode second local index to check type compatibility
+                    second_idx = 0; shift2 = 0; k2 = j + 1
+                    while k2 <= length(bytes) && (bytes[k2] & 0x80) != 0
+                        second_idx |= (Int(bytes[k2] & 0x7f) << shift2)
+                        shift2 += 7; k2 += 1
+                    end
+                    if k2 <= length(bytes)
+                        second_idx |= (Int(bytes[k2] & 0x7f) << shift2)
+                    end
+                    # WBUILD-1010: Only convert SET→TEE when both locals have the same
+                    # type. When they differ (e.g., i64 vs ref), the two local.set
+                    # instructions pop DIFFERENT values from the stack (not the same value
+                    # being saved to multiple phi locals).
+                    types_match = true
+                    if local_types !== nothing
+                        arr1 = first_idx - n_params + 1
+                        arr2 = second_idx - n_params + 1
+                        if arr1 >= 1 && arr1 <= length(local_types) && arr2 >= 1 && arr2 <= length(local_types)
+                            types_match = (local_types[arr1] == local_types[arr2])
+                        elseif first_idx < n_params && arr2 >= 1 && arr2 <= length(local_types)
+                            types_match = false  # comparing param to local — skip
+                        elseif arr1 >= 1 && arr1 <= length(local_types) && second_idx < n_params
+                            types_match = false
+                        end
+                    end
+                    if types_match
                     # Replace local_set with local_tee (keeps value on stack)
                     push!(result, 0x22)  # local_tee opcode
                     # Copy the LEB128 index bytes
@@ -570,6 +601,7 @@ function fix_consecutive_local_sets(bytes::Vector{UInt8})::Vector{UInt8}
                     i = j  # Skip to the next local_set instruction
                     fixes += 1
                     continue
+                    end  # types_match
                 end
             end
             # No fix needed — copy the ENTIRE local_set instruction (opcode + LEB128 index)

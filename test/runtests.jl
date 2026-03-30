@@ -7783,4 +7783,56 @@ console.log(JSON.stringify({
         end
     end
 
+    # ========================================================================
+    # Phase 57: Stackifier / Int128 — WBUILD-1010
+    # ========================================================================
+    # Root cause: fix_consecutive_local_sets converted local.set→local.tee
+    # for consecutive sets targeting locals of DIFFERENT types (i64 vs ref),
+    # corrupting the stack when Int128 emitters pop two distinct values.
+    @testset "Phase 57: Stackifier / Int128 (WBUILD-1010)" begin
+        @testset "UInt128 shl" begin
+            function _wb_uint128_shl(x::Int64)::Int64
+                a = Core.zext_int(UInt128, reinterpret(UInt64, x))
+                b = Base.shl_int(a, 0x0000000000000002)
+                c = Base.trunc_int(UInt64, b)
+                return reinterpret(Int64, c)
+            end
+            @test compare_julia_wasm(_wb_uint128_shl, Int64(42)).pass
+            @test compare_julia_wasm(_wb_uint128_shl, Int64(0)).pass
+            @test compare_julia_wasm(_wb_uint128_shl, Int64(1)).pass
+        end
+
+        @testset "UInt128 lshr" begin
+            function _wb_uint128_lshr(x::Int64)::Int64
+                a = Core.zext_int(UInt128, reinterpret(UInt64, x))
+                b = Base.lshr_int(a, 0x0000000000000002)
+                c = Base.trunc_int(UInt64, b)
+                return reinterpret(Int64, c)
+            end
+            @test compare_julia_wasm(_wb_uint128_lshr, Int64(168)).pass
+            @test compare_julia_wasm(_wb_uint128_lshr, Int64(0)).pass
+        end
+
+        @testset "UInt128 shl+lshr chain (within 64-bit)" begin
+            # Note: WASM i64 shifts are mod 64, so cross-64-bit shifts
+            # need special handling in the Int128 emitter (separate bug).
+            # This test stays within the lower 64 bits.
+            function _wb_uint128_chain(x::Int64)::Int64
+                a = Core.zext_int(UInt128, reinterpret(UInt64, x))
+                b = Base.shl_int(a, 0x0000000000000004)  # << 4
+                c = Base.lshr_int(b, 0x0000000000000002)  # >> 2
+                d = Base.trunc_int(UInt64, c)
+                return reinterpret(Int64, d)
+            end
+            @test compare_julia_wasm(_wb_uint128_chain, Int64(42)).pass
+            @test compare_julia_wasm(_wb_uint128_chain, Int64(1)).pass
+        end
+
+        @testset "exp(Float64) compiles and runs" begin
+            @test compare_julia_wasm(exp, 1.0).pass
+            @test compare_julia_wasm(exp, 0.0).pass
+            @test compare_julia_wasm(exp, -1.0).pass
+        end
+    end
+
 end

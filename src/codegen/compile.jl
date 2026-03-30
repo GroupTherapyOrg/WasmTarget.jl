@@ -2814,7 +2814,7 @@ function run_direct(code_info)::Vector{UInt8}
     # Apply fix passes (same as generate_body)
     bytes = fix_broken_select_instructions(bytes)
     bytes = fix_numeric_to_ref_local_stores(bytes, ctx.locals, ctx.n_params)
-    bytes = fix_consecutive_local_sets(bytes)
+    bytes = fix_consecutive_local_sets(bytes; local_types=ctx.locals, n_params=ctx.n_params)
     bytes = strip_excess_after_function_end(bytes)
 
     # Build all_local_types for remaining passes: [param_types..., locals...]
@@ -2965,7 +2965,7 @@ function run_e2e_inlined()::Vector{UInt8}
     # Apply fix passes
     bytes = fix_broken_select_instructions(bytes)
     bytes = fix_numeric_to_ref_local_stores(bytes, ctx.locals, ctx.n_params)
-    bytes = fix_consecutive_local_sets(bytes)
+    bytes = fix_consecutive_local_sets(bytes; local_types=ctx.locals, n_params=ctx.n_params)
     bytes = strip_excess_after_function_end(bytes)
 
     # Build all_local_types
@@ -3045,7 +3045,7 @@ function run_selfhost()::Vector{UInt8}
     # 6. Apply fix passes
     bytes = fix_broken_select_instructions(bytes)
     bytes = fix_numeric_to_ref_local_stores(bytes, ctx.locals, ctx.n_params)
-    bytes = fix_consecutive_local_sets(bytes)
+    bytes = fix_consecutive_local_sets(bytes; local_types=ctx.locals, n_params=ctx.n_params)
     bytes = strip_excess_after_function_end(bytes)
 
     n_locals = length(ctx.locals)
