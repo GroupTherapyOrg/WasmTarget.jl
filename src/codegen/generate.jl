@@ -185,11 +185,11 @@ function generate_body(ctx::AbstractCompilationContext)::Vector{UInt8}
         end
     end
 
-    # PURE-6022: Fix consecutive local_set instructions (multi-target phi assignments).
-    # When a value feeds into multiple phi nodes, the codegen emits local_set for each
-    # target. But local_set consumes the stack value, leaving nothing for subsequent sets.
-    # Fix: convert local_set to local_tee when the next instruction is also local_set.
-    bytes = fix_consecutive_local_sets(bytes; local_types=ctx.locals, n_params=ctx.n_params)
+    # WBUILD-1011: Disabled fix_consecutive_local_sets — it blindly converts adjacent
+    # local.set X; local.set Y to local.tee X; local.set Y, assuming both receive the
+    # same stack value. This is wrong when two DIFFERENT values are being popped (e.g.,
+    # Int128 emitters popping two struct refs). Phi locals are now handled by
+    # emit_phi_local_set! which independently pushes values before each LOCAL_SET.
 
     # PURE-6022: Strip excess bytes after the function body's closing `end`.
     # The flow generator may emit dead code (unreachable, br, etc.) after all blocks

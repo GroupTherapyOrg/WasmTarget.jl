@@ -7851,4 +7851,45 @@ console.log(JSON.stringify({
         end
     end
 
+    # ========================================================================
+    # Phase 58: Transcendental Math — WBUILD-1012
+    # ========================================================================
+    @testset "Phase 58: Transcendental Math (WBUILD-1012)" begin
+        @testset "sin(Float64) full input range" begin
+            _t58_sin(x::Float64)::Float64 = sin(x)
+            @test compare_julia_wasm(_t58_sin, 0.0).pass
+            @test compare_julia_wasm(_t58_sin, Float64(pi)/6).pass
+            @test compare_julia_wasm(_t58_sin, Float64(pi)/4).pass
+            @test compare_julia_wasm(_t58_sin, Float64(pi)/3).pass
+            @test compare_julia_wasm(_t58_sin, Float64(pi)/2).pass
+            @test compare_julia_wasm(_t58_sin, Float64(pi)).pass
+            @test compare_julia_wasm(_t58_sin, 3*Float64(pi)/2).pass
+            @test compare_julia_wasm(_t58_sin, 2*Float64(pi)).pass
+            @test compare_julia_wasm(_t58_sin, -Float64(pi)/4).pass
+            @test compare_julia_wasm(_t58_sin, 100.0).pass
+            @test compare_julia_wasm(_t58_sin, -100.0).pass
+            @test compare_julia_wasm(_t58_sin, 1e-10).pass
+            # 1e10 triggers paynehanek large-argument reduction which uses
+            # UInt128 ctlz_int (broken) and other 128-bit ops. Fix in M2.
+            @test_broken compare_julia_wasm(_t58_sin, 1e10).pass
+        end
+
+        @testset "Int128 add/mul (WBUILD-1011 fix)" begin
+            function _wb_uint128_add(a::Int64, b::Int64)::Int64
+                au = Core.zext_int(UInt128, reinterpret(UInt64, a))
+                bu = Core.zext_int(UInt128, reinterpret(UInt64, b))
+                r = Base.add_int(au, bu)
+                return reinterpret(Int64, Base.trunc_int(UInt64, r))
+            end
+            @test compare_julia_wasm(_wb_uint128_add, Int64(100), Int64(200)).pass
+            @test compare_julia_wasm(_wb_uint128_add, Int64(0), Int64(0)).pass
+
+            function _wb_widemul(a::Int64, b::Int64)::Int64
+                r = Base.widemul(reinterpret(UInt64, a), reinterpret(UInt64, b))
+                return reinterpret(Int64, Base.trunc_int(UInt64, r))
+            end
+            @test compare_julia_wasm(_wb_widemul, Int64(100), Int64(200)).pass
+        end
+    end
+
 end
