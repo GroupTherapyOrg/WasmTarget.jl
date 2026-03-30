@@ -8180,4 +8180,83 @@ console.log(JSON.stringify({
         end
     end
 
+    # ========================================================================
+    # Phase 59 cont'd: NaN/Inf/Subnormal Edge Cases — WBUILD-1023
+    # ========================================================================
+    @testset "Phase 59 cont'd: NaN/Inf/Subnormal (WBUILD-1023)" begin
+        @testset "NaN propagation (WBUILD-1023)" begin
+            # NaN == NaN is false in IEEE 754, so wrap with isnan check
+            _t59_isnan_sin(x::Float64)::Int32 = Int32(isnan(sin(x)))
+            @test compare_julia_wasm(_t59_isnan_sin, NaN).pass
+
+            _t59_isnan_exp(x::Float64)::Int32 = Int32(isnan(exp(x)))
+            @test compare_julia_wasm(_t59_isnan_exp, NaN).pass
+
+            _t59_isnan_log(x::Float64)::Int32 = Int32(isnan(log(x)))
+            @test compare_julia_wasm(_t59_isnan_log, NaN).pass
+
+            _t59_isnan_sqrt(x::Float64)::Int32 = Int32(isnan(sqrt(x)))
+            @test compare_julia_wasm(_t59_isnan_sqrt, NaN).pass
+            @test compare_julia_wasm(_t59_isnan_sqrt, -1.0).pass   # sqrt(-1) = NaN
+
+            _t59_isnan_pow(x::Float64, y::Float64)::Int32 = Int32(isnan(x^y))
+            @test compare_julia_wasm(_t59_isnan_pow, NaN, 2.0).pass
+            @test compare_julia_wasm(_t59_isnan_pow, 2.0, NaN).pass
+        end
+
+        @testset "Inf handling (WBUILD-1023)" begin
+            # JSON can't serialize Infinity, so use isinf/sign wrappers
+            _t59_isinf_div(x::Float64, y::Float64)::Int32 = Int32(isinf(x / y))
+            @test compare_julia_wasm(_t59_isinf_div, 1.0, 0.0).pass   # 1/0 = Inf
+            @test compare_julia_wasm(_t59_isinf_div, -1.0, 0.0).pass  # -1/0 = -Inf
+
+            _t59_isnan_div(x::Float64, y::Float64)::Int32 = Int32(isnan(x / y))
+            @test compare_julia_wasm(_t59_isnan_div, 0.0, 0.0).pass   # 0/0 = NaN
+
+            # Sign of Inf: 1/0 should be positive, -1/0 should be negative
+            _t59_sign_div(x::Float64, y::Float64)::Float64 = sign(x / y)
+            @test compare_julia_wasm(_t59_sign_div, 1.0, 0.0).pass
+            @test compare_julia_wasm(_t59_sign_div, -1.0, 0.0).pass
+        end
+
+        @testset "Subnormal inputs (WBUILD-1023)" begin
+            # Smallest subnormal: 5e-324
+            sub = 5.0e-324
+
+            _t59_sin(x::Float64)::Float64 = sin(x)
+            @test compare_julia_wasm(_t59_sin, sub).pass
+
+            _t59_exp(x::Float64)::Float64 = exp(x)
+            @test compare_julia_wasm(_t59_exp, sub).pass
+
+            _t59_sqrt(x::Float64)::Float64 = sqrt(x)
+            @test compare_julia_wasm(_t59_sqrt, sub).pass
+
+            _t59_abs(x::Float64)::Float64 = abs(x)
+            @test compare_julia_wasm(_t59_abs, sub).pass
+
+            _t59_cos(x::Float64)::Float64 = cos(x)
+            @test compare_julia_wasm(_t59_cos, sub).pass
+
+            # Small but not subnormal
+            _t59_log(x::Float64)::Float64 = log(x)
+            @test compare_julia_wasm(_t59_log, 1e-300).pass
+        end
+
+        @testset "Zero edge cases (WBUILD-1023)" begin
+            _t59_sin(x::Float64)::Float64 = sin(x)
+            @test compare_julia_wasm(_t59_sin, 0.0).pass
+            @test compare_julia_wasm(_t59_sin, -0.0).pass
+
+            _t59_cos(x::Float64)::Float64 = cos(x)
+            @test compare_julia_wasm(_t59_cos, 0.0).pass
+
+            _t59_exp(x::Float64)::Float64 = exp(x)
+            @test compare_julia_wasm(_t59_exp, 0.0).pass
+
+            _t59_sqrt(x::Float64)::Float64 = sqrt(x)
+            @test compare_julia_wasm(_t59_sqrt, 0.0).pass
+        end
+    end
+
 end
