@@ -1009,6 +1009,79 @@ end
     return Int64(1)
 end
 
+# Phase 61 helpers: filter (manual loop + push!)
+@inline function _t61_filter_i64_positive(v::Vector{Int64})::Vector{Int64}
+    result = Int64[]
+    for i in 1:length(v)
+        if v[i] > Int64(0)
+            push!(result, v[i])
+        end
+    end
+    return result
+end
+
+@inline function _t61_filter_i64_even(v::Vector{Int64})::Vector{Int64}
+    result = Int64[]
+    for i in 1:length(v)
+        if v[i] % Int64(2) == Int64(0)
+            push!(result, v[i])
+        end
+    end
+    return result
+end
+
+@inline function _t61_filter_f64_gt(v::Vector{Float64}, threshold::Float64)::Vector{Float64}
+    result = Float64[]
+    for i in 1:length(v)
+        if v[i] > threshold
+            push!(result, v[i])
+        end
+    end
+    return result
+end
+
+# Phase 61 helpers: map (in-place via similar)
+@inline function _t61_map_i64_double(v::Vector{Int64})::Vector{Int64}
+    result = similar(v)
+    for i in 1:length(v)
+        result[i] = v[i] * Int64(2)
+    end
+    return result
+end
+
+@inline function _t61_map_i64_square(v::Vector{Int64})::Vector{Int64}
+    result = similar(v)
+    for i in 1:length(v)
+        result[i] = v[i] * v[i]
+    end
+    return result
+end
+
+@inline function _t61_map_f64_square(v::Vector{Float64})::Vector{Float64}
+    result = similar(v)
+    for i in 1:length(v)
+        result[i] = v[i] * v[i]
+    end
+    return result
+end
+
+# Phase 61 helpers: sum (reduction)
+@inline function _t61_sum_i64(v::Vector{Int64})::Int64
+    s = Int64(0)
+    for i in 1:length(v)
+        s += v[i]
+    end
+    return s
+end
+
+@inline function _t61_sum_f64(v::Vector{Float64})::Float64
+    s = 0.0
+    for i in 1:length(v)
+        s += v[i]
+    end
+    return s
+end
+
 @testset "WasmTarget.jl" begin
 
     # ========================================================================
@@ -8828,6 +8901,205 @@ console.log(JSON.stringify({
                 @test compare_julia_wasm(_t61_sort_f64_param, 3.0, 2.0, 1.0).pass
                 @test compare_julia_wasm(_t61_sort_f64_param, -5.5, 0.0, 5.5).pass
                 @test compare_julia_wasm(_t61_sort_f64_param, 1.0, 1.0, 1.0).pass
+            end
+        end
+
+        # ──────────────────────────────────────────────────────────────────
+        # WBUILD-1041: filter(Vector{Int64}) and filter(Vector{Float64})
+        # ──────────────────────────────────────────────────────────────────
+        @testset "filter(Vector{Int64}) (WBUILD-1041)" begin
+
+            # 1. Filter positive values
+            @testset "filter positive" begin
+                _t61_filter_i64_pos_count()::Int64 = begin
+                    v = Int64[-3, 5, -1, 0, 2, -4, 7]
+                    result = _t61_filter_i64_positive(v)
+                    return Int64(length(result))  # 5, 2, 7 = 3
+                end
+                @test compare_julia_wasm(_t61_filter_i64_pos_count).pass
+            end
+
+            # 2. Filter even values
+            @testset "filter even" begin
+                _t61_filter_i64_even_count()::Int64 = begin
+                    v = Int64[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+                    result = _t61_filter_i64_even(v)
+                    return Int64(length(result))  # 2,4,6,8,10 = 5
+                end
+                @test compare_julia_wasm(_t61_filter_i64_even_count).pass
+            end
+
+            # 3. Filter even — sum of results
+            @testset "filter even sum" begin
+                _t61_filter_i64_even_sum()::Int64 = begin
+                    v = Int64[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+                    result = _t61_filter_i64_even(v)
+                    return _t61_sum_i64(result)  # 2+4+6+8+10 = 30
+                end
+                @test compare_julia_wasm(_t61_filter_i64_even_sum).pass
+            end
+
+            # 4. Filter empty result
+            @testset "filter none match" begin
+                _t61_filter_i64_none()::Int64 = begin
+                    v = Int64[-3, -1, -5]
+                    result = _t61_filter_i64_positive(v)
+                    return Int64(length(result))  # 0
+                end
+                @test compare_julia_wasm(_t61_filter_i64_none).pass
+            end
+
+            # 5. Filter all match
+            @testset "filter all match" begin
+                _t61_filter_i64_all()::Int64 = begin
+                    v = Int64[1, 2, 3, 4, 5]
+                    result = _t61_filter_i64_positive(v)
+                    return Int64(length(result))  # 5
+                end
+                @test compare_julia_wasm(_t61_filter_i64_all).pass
+            end
+
+            # 6. Filter empty input
+            @testset "filter empty" begin
+                _t61_filter_i64_empty()::Int64 = begin
+                    v = Int64[]
+                    result = _t61_filter_i64_positive(v)
+                    return Int64(length(result))  # 0
+                end
+                @test compare_julia_wasm(_t61_filter_i64_empty).pass
+            end
+        end
+
+        @testset "filter(Vector{Float64}) (WBUILD-1041)" begin
+
+            # 1. Filter values > threshold
+            @testset "filter gt threshold" begin
+                _t61_filter_f64_gt_count()::Int64 = begin
+                    v = Float64[1.5, 2.3, 0.5, 3.7, 1.0]
+                    result = _t61_filter_f64_gt(v, 1.5)
+                    return Int64(length(result))  # 2.3, 3.7 = 2
+                end
+                @test compare_julia_wasm(_t61_filter_f64_gt_count).pass
+            end
+
+            # 2. Filter and sum
+            @testset "filter gt sum" begin
+                _t61_filter_f64_gt_sum()::Float64 = begin
+                    v = Float64[1.0, 2.0, 3.0, 4.0, 5.0]
+                    result = _t61_filter_f64_gt(v, 2.5)
+                    return _t61_sum_f64(result)  # 3+4+5 = 12.0
+                end
+                @test compare_julia_wasm(_t61_filter_f64_gt_sum).pass
+            end
+
+            # 3. Filter negative → empty
+            @testset "filter none match" begin
+                _t61_filter_f64_none()::Int64 = begin
+                    v = Float64[1.0, 2.0, 3.0]
+                    result = _t61_filter_f64_gt(v, 10.0)
+                    return Int64(length(result))  # 0
+                end
+                @test compare_julia_wasm(_t61_filter_f64_none).pass
+            end
+        end
+
+        # ──────────────────────────────────────────────────────────────────
+        # WBUILD-1041: map(Vector{Int64}) and map(Vector{Float64})
+        # ──────────────────────────────────────────────────────────────────
+        @testset "map(Vector{Int64}) (WBUILD-1041)" begin
+
+            # 1. Map double
+            @testset "map double" begin
+                _t61_map_i64_double_sum()::Int64 = begin
+                    v = Int64[1, 2, 3, 4, 5]
+                    result = _t61_map_i64_double(v)
+                    return _t61_sum_i64(result)  # 2+4+6+8+10 = 30
+                end
+                @test compare_julia_wasm(_t61_map_i64_double_sum).pass
+            end
+
+            # 2. Map square
+            @testset "map square" begin
+                _t61_map_i64_square_sum()::Int64 = begin
+                    v = Int64[1, 2, 3, 4, 5]
+                    result = _t61_map_i64_square(v)
+                    return _t61_sum_i64(result)  # 1+4+9+16+25 = 55
+                end
+                @test compare_julia_wasm(_t61_map_i64_square_sum).pass
+            end
+
+            # 3. Map empty
+            @testset "map empty" begin
+                _t61_map_i64_empty()::Int64 = begin
+                    v = Int64[]
+                    result = _t61_map_i64_double(v)
+                    return Int64(length(result))  # 0
+                end
+                @test compare_julia_wasm(_t61_map_i64_empty).pass
+            end
+
+            # 4. Map single
+            @testset "map single" begin
+                _t61_map_i64_single()::Int64 = begin
+                    v = Int64[7]
+                    result = _t61_map_i64_double(v)
+                    return result[1]  # 14
+                end
+                @test compare_julia_wasm(_t61_map_i64_single).pass
+            end
+
+            # 5. Map preserves length
+            @testset "map preserves length" begin
+                _t61_map_i64_len()::Int64 = begin
+                    v = Int64[10, 20, 30, 40, 50]
+                    result = _t61_map_i64_square(v)
+                    return Int64(length(result))  # 5
+                end
+                @test compare_julia_wasm(_t61_map_i64_len).pass
+            end
+
+            # 6. Map with negative inputs
+            @testset "map negative inputs" begin
+                _t61_map_i64_neg()::Int64 = begin
+                    v = Int64[-3, -1, 0, 1, 3]
+                    result = _t61_map_i64_square(v)
+                    return _t61_sum_i64(result)  # 9+1+0+1+9 = 20
+                end
+                @test compare_julia_wasm(_t61_map_i64_neg).pass
+            end
+        end
+
+        @testset "map(Vector{Float64}) (WBUILD-1041)" begin
+
+            # 1. Map square
+            @testset "map f64 square" begin
+                _t61_map_f64_square_sum()::Float64 = begin
+                    v = Float64[1.0, 2.0, 3.0]
+                    result = _t61_map_f64_square(v)
+                    return _t61_sum_f64(result)  # 1+4+9 = 14.0
+                end
+                @test compare_julia_wasm(_t61_map_f64_square_sum).pass
+            end
+
+            # 2. Map with negative
+            @testset "map f64 negative" begin
+                _t61_map_f64_neg()::Float64 = begin
+                    v = Float64[-2.0, -1.0, 0.0, 1.0, 2.0]
+                    result = _t61_map_f64_square(v)
+                    return _t61_sum_f64(result)  # 4+1+0+1+4 = 10.0
+                end
+                @test compare_julia_wasm(_t61_map_f64_neg).pass
+            end
+
+            # 3. Map + filter chain
+            @testset "map then filter" begin
+                _t61_map_filter_chain()::Int64 = begin
+                    v = Int64[1, 2, 3, 4, 5]
+                    doubled = _t61_map_i64_double(v)     # [2,4,6,8,10]
+                    big = _t61_filter_i64_positive(doubled)  # all positive
+                    return _t61_sum_i64(big)  # 30
+                end
+                @test compare_julia_wasm(_t61_map_filter_chain).pass
             end
         end
     end
