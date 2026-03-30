@@ -1082,6 +1082,82 @@ end
     return s
 end
 
+# Phase 61 helpers: reduce/prod/any/all/count (WBUILD-1042)
+@inline function _t61_prod_i64(v::Vector{Int64})::Int64
+    p = Int64(1)
+    for i in 1:length(v)
+        p *= v[i]
+    end
+    return p
+end
+
+@inline function _t61_prod_f64(v::Vector{Float64})::Float64
+    p = 1.0
+    for i in 1:length(v)
+        p *= v[i]
+    end
+    return p
+end
+
+@inline function _t61_any_i64_positive(v::Vector{Int64})::Int64
+    for i in 1:length(v)
+        if v[i] > Int64(0)
+            return Int64(1)
+        end
+    end
+    return Int64(0)
+end
+
+@inline function _t61_all_i64_positive(v::Vector{Int64})::Int64
+    for i in 1:length(v)
+        if v[i] <= Int64(0)
+            return Int64(0)
+        end
+    end
+    return Int64(1)
+end
+
+@inline function _t61_count_i64_even(v::Vector{Int64})::Int64
+    c = Int64(0)
+    for i in 1:length(v)
+        if v[i] % Int64(2) == Int64(0)
+            c += Int64(1)
+        end
+    end
+    return c
+end
+
+@inline function _t61_reduce_i64_add(v::Vector{Int64})::Int64
+    if length(v) == 0
+        return Int64(0)
+    end
+    acc = v[1]
+    for i in 2:length(v)
+        acc += v[i]
+    end
+    return acc
+end
+
+@inline function _t61_reduce_i64_max(v::Vector{Int64})::Int64
+    acc = v[1]
+    for i in 2:length(v)
+        if v[i] > acc
+            acc = v[i]
+        end
+    end
+    return acc
+end
+
+@inline function _t61_reduce_i64_min(v::Vector{Int64})::Int64
+    acc = v[1]
+    for i in 2:length(v)
+        if v[i] < acc
+            acc = v[i]
+        end
+    end
+    return acc
+end
+
 @testset "WasmTarget.jl" begin
 
     # ========================================================================
@@ -9100,6 +9176,225 @@ console.log(JSON.stringify({
                     return _t61_sum_i64(big)  # 30
                 end
                 @test compare_julia_wasm(_t61_map_filter_chain).pass
+            end
+        end
+
+        # ──────────────────────────────────────────────────────────────────
+        # WBUILD-1042: reduce, sum, prod, any, all, count
+        # ──────────────────────────────────────────────────────────────────
+        @testset "reduce/sum (WBUILD-1042)" begin
+
+            # 1. Sum Int64
+            @testset "sum Int64" begin
+                _t61_sum_i64_test()::Int64 = begin
+                    v = Int64[1, 2, 3, 4, 5]
+                    return _t61_sum_i64(v)  # 15
+                end
+                @test compare_julia_wasm(_t61_sum_i64_test).pass
+            end
+
+            # 2. Sum Float64
+            @testset "sum Float64" begin
+                _t61_sum_f64_test()::Float64 = begin
+                    v = Float64[1.5, 2.5, 3.0]
+                    return _t61_sum_f64(v)  # 7.0
+                end
+                @test compare_julia_wasm(_t61_sum_f64_test).pass
+            end
+
+            # 3. Sum empty
+            @testset "sum empty" begin
+                _t61_sum_i64_empty()::Int64 = begin
+                    v = Int64[]
+                    return _t61_sum_i64(v)  # 0
+                end
+                @test compare_julia_wasm(_t61_sum_i64_empty).pass
+            end
+
+            # 4. Sum single
+            @testset "sum single" begin
+                _t61_sum_i64_single()::Int64 = begin
+                    v = Int64[42]
+                    return _t61_sum_i64(v)  # 42
+                end
+                @test compare_julia_wasm(_t61_sum_i64_single).pass
+            end
+
+            # 5. Sum negative
+            @testset "sum with negatives" begin
+                _t61_sum_i64_neg()::Int64 = begin
+                    v = Int64[-5, 3, -2, 8, -4]
+                    return _t61_sum_i64(v)  # 0
+                end
+                @test compare_julia_wasm(_t61_sum_i64_neg).pass
+            end
+
+            # 6. Reduce add (same as sum but explicit fold)
+            @testset "reduce add" begin
+                _t61_reduce_add_test()::Int64 = begin
+                    v = Int64[10, 20, 30, 40]
+                    return _t61_reduce_i64_add(v)  # 100
+                end
+                @test compare_julia_wasm(_t61_reduce_add_test).pass
+            end
+
+            # 7. Reduce max
+            @testset "reduce max" begin
+                _t61_reduce_max_test()::Int64 = begin
+                    v = Int64[3, 7, 1, 9, 4]
+                    return _t61_reduce_i64_max(v)  # 9
+                end
+                @test compare_julia_wasm(_t61_reduce_max_test).pass
+            end
+
+            # 8. Reduce min
+            @testset "reduce min" begin
+                _t61_reduce_min_test()::Int64 = begin
+                    v = Int64[3, 7, 1, 9, 4]
+                    return _t61_reduce_i64_min(v)  # 1
+                end
+                @test compare_julia_wasm(_t61_reduce_min_test).pass
+            end
+        end
+
+        @testset "prod (WBUILD-1042)" begin
+
+            # 1. Prod Int64
+            @testset "prod Int64" begin
+                _t61_prod_i64_test()::Int64 = begin
+                    v = Int64[1, 2, 3, 4, 5]
+                    return _t61_prod_i64(v)  # 120
+                end
+                @test compare_julia_wasm(_t61_prod_i64_test).pass
+            end
+
+            # 2. Prod Float64
+            @testset "prod Float64" begin
+                _t61_prod_f64_test()::Float64 = begin
+                    v = Float64[2.0, 3.0, 4.0]
+                    return _t61_prod_f64(v)  # 24.0
+                end
+                @test compare_julia_wasm(_t61_prod_f64_test).pass
+            end
+
+            # 3. Prod with zero
+            @testset "prod with zero" begin
+                _t61_prod_i64_zero()::Int64 = begin
+                    v = Int64[1, 2, 0, 4, 5]
+                    return _t61_prod_i64(v)  # 0
+                end
+                @test compare_julia_wasm(_t61_prod_i64_zero).pass
+            end
+
+            # 4. Prod single
+            @testset "prod single" begin
+                _t61_prod_i64_single()::Int64 = begin
+                    v = Int64[7]
+                    return _t61_prod_i64(v)  # 7
+                end
+                @test compare_julia_wasm(_t61_prod_i64_single).pass
+            end
+
+            # 5. Prod negative
+            @testset "prod negative" begin
+                _t61_prod_i64_neg()::Int64 = begin
+                    v = Int64[-1, 2, -3]
+                    return _t61_prod_i64(v)  # 6
+                end
+                @test compare_julia_wasm(_t61_prod_i64_neg).pass
+            end
+        end
+
+        @testset "any/all/count (WBUILD-1042)" begin
+
+            # any: some positive
+            @testset "any positive — yes" begin
+                _t61_any_pos_yes()::Int64 = begin
+                    v = Int64[-3, -1, 5]
+                    return _t61_any_i64_positive(v)  # 1
+                end
+                @test compare_julia_wasm(_t61_any_pos_yes).pass
+            end
+
+            # any: none positive
+            @testset "any positive — no" begin
+                _t61_any_pos_no()::Int64 = begin
+                    v = Int64[-3, -1, -5]
+                    return _t61_any_i64_positive(v)  # 0
+                end
+                @test compare_julia_wasm(_t61_any_pos_no).pass
+            end
+
+            # any: empty
+            @testset "any empty" begin
+                _t61_any_empty()::Int64 = begin
+                    v = Int64[]
+                    return _t61_any_i64_positive(v)  # 0
+                end
+                @test compare_julia_wasm(_t61_any_empty).pass
+            end
+
+            # all: all positive
+            @testset "all positive — yes" begin
+                _t61_all_pos_yes()::Int64 = begin
+                    v = Int64[1, 2, 3]
+                    return _t61_all_i64_positive(v)  # 1
+                end
+                @test compare_julia_wasm(_t61_all_pos_yes).pass
+            end
+
+            # all: not all positive
+            @testset "all positive — no" begin
+                _t61_all_pos_no()::Int64 = begin
+                    v = Int64[1, -2, 3]
+                    return _t61_all_i64_positive(v)  # 0
+                end
+                @test compare_julia_wasm(_t61_all_pos_no).pass
+            end
+
+            # all: empty (vacuously true)
+            @testset "all empty" begin
+                _t61_all_empty()::Int64 = begin
+                    v = Int64[]
+                    return _t61_all_i64_positive(v)  # 1
+                end
+                @test compare_julia_wasm(_t61_all_empty).pass
+            end
+
+            # count: even numbers
+            @testset "count even" begin
+                _t61_count_even_test()::Int64 = begin
+                    v = Int64[1, 2, 3, 4, 5, 6]
+                    return _t61_count_i64_even(v)  # 3
+                end
+                @test compare_julia_wasm(_t61_count_even_test).pass
+            end
+
+            # count: none match
+            @testset "count none" begin
+                _t61_count_none()::Int64 = begin
+                    v = Int64[1, 3, 5, 7]
+                    return _t61_count_i64_even(v)  # 0
+                end
+                @test compare_julia_wasm(_t61_count_none).pass
+            end
+
+            # count: all match
+            @testset "count all" begin
+                _t61_count_all()::Int64 = begin
+                    v = Int64[2, 4, 6, 8]
+                    return _t61_count_i64_even(v)  # 4
+                end
+                @test compare_julia_wasm(_t61_count_all).pass
+            end
+
+            # count: empty
+            @testset "count empty" begin
+                _t61_count_empty()::Int64 = begin
+                    v = Int64[]
+                    return _t61_count_i64_even(v)  # 0
+                end
+                @test compare_julia_wasm(_t61_count_empty).pass
             end
         end
     end
