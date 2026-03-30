@@ -291,8 +291,8 @@ const SKIP_AUTODISCOVER_METHODS = Set([
     :_throw_argerror, :throw_boundserror,
     :_throw_not_readable, :_throw_not_writable,
     :throw_inexacterror,
-    # WBUILD-1013: Math domain error throws (auto-discovered from log/exp)
-    :throw_complex_domainerror,
+    # WBUILD-1013: Math domain error throws (auto-discovered from log/exp/log1p)
+    :throw_complex_domainerror, :throw_complex_domainerror_neg1,
     # PURE-605: Builtins that return Method from code_typed, not CodeInfo
     :(===), :isa, :typeof, :ifelse, :throw_boundserror,
     # PURE-9040: IO functions handled via JS imports

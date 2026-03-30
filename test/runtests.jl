@@ -8019,4 +8019,63 @@ console.log(JSON.stringify({
         end
     end
 
+    # ========================================================================
+    # Phase 59: Extended Math — WBUILD-1020
+    # ========================================================================
+    @testset "Phase 59: Extended Math (WBUILD-1020)" begin
+        @testset "exp2(Float64) (WBUILD-1020)" begin
+            _t59_exp2(x::Float64)::Float64 = exp2(x)
+            @test compare_julia_wasm(_t59_exp2, 0.0).pass
+            @test compare_julia_wasm(_t59_exp2, 1.0).pass
+            @test compare_julia_wasm(_t59_exp2, -1.0).pass
+            @test compare_julia_wasm(_t59_exp2, 10.0).pass
+            @test compare_julia_wasm(_t59_exp2, 0.5).pass
+        end
+
+        @testset "exp10(Float64) (WBUILD-1020)" begin
+            _t59_exp10(x::Float64)::Float64 = exp10(x)
+            @test compare_julia_wasm(_t59_exp10, 0.0).pass
+            @test compare_julia_wasm(_t59_exp10, 1.0).pass
+            @test compare_julia_wasm(_t59_exp10, -1.0).pass
+            @test compare_julia_wasm(_t59_exp10, 2.0).pass
+            @test compare_julia_wasm(_t59_exp10, 0.5).pass
+        end
+
+        @testset "log2(Float64) (WBUILD-1020)" begin
+            _t59_log2(x::Float64)::Float64 = log2(x)
+            @test compare_julia_wasm(_t59_log2, 1.0).pass
+            @test compare_julia_wasm(_t59_log2, 2.0).pass
+            @test compare_julia_wasm(_t59_log2, 4.0).pass
+            @test compare_julia_wasm(_t59_log2, 0.5).pass
+            @test compare_julia_wasm(_t59_log2, 10.0).pass
+        end
+
+        @testset "log10(Float64) (WBUILD-1020)" begin
+            _t59_log10(x::Float64)::Float64 = log10(x)
+            @test compare_julia_wasm(_t59_log10, 1.0).pass
+            @test compare_julia_wasm(_t59_log10, 10.0).pass
+            @test compare_julia_wasm(_t59_log10, 100.0).pass
+            @test compare_julia_wasm(_t59_log10, 0.1).pass
+            @test compare_julia_wasm(_t59_log10, 0.01).pass
+        end
+
+        @testset "expm1(Float64) (WBUILD-1020)" begin
+            _t59_expm1(x::Float64)::Float64 = expm1(x)
+            @test compare_julia_wasm(_t59_expm1, 0.0).pass
+            @test compare_julia_wasm(_t59_expm1, 1.0).pass
+            @test compare_julia_wasm(_t59_expm1, -1.0).pass
+            @test compare_julia_wasm(_t59_expm1, 1e-10).pass
+            @test compare_julia_wasm(_t59_expm1, 0.5).pass
+        end
+
+        @testset "log1p(Float64) (WBUILD-1020)" begin
+            _t59_log1p(x::Float64)::Float64 = log1p(x)
+            @test compare_julia_wasm(_t59_log1p, 0.0).pass
+            @test compare_julia_wasm(_t59_log1p, 1.0).pass
+            @test compare_julia_wasm(_t59_log1p, -0.5).pass
+            @test compare_julia_wasm(_t59_log1p, 1e-10).pass
+            @test compare_julia_wasm(_t59_log1p, 10.0).pass
+        end
+    end
+
 end
