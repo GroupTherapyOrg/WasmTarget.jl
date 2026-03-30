@@ -3469,7 +3469,15 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     nfields = length(fieldnames(_ctor_type))
                     for fi in 1:nfields
                         if fi <= length(args)
-                            append!(bytes, compile_value(args[fi], ctx))
+                            local _ft_ctor = fieldtype(_ctor_type, fi)
+                            local _val_wasm = infer_value_wasm_type(args[fi], ctx)
+                            local _is_numeric_val = _val_wasm === I32 || _val_wasm === I64 || _val_wasm === F32 || _val_wasm === F64
+                            # WBUILD-1011: Box numeric values for Any/abstract-typed struct fields
+                            if _is_numeric_val && (_ft_ctor === Any || isabstracttype(_ft_ctor))
+                                emit_numeric_to_anyref!(bytes, args[fi], _val_wasm, ctx)
+                            else
+                                append!(bytes, compile_value(args[fi], ctx))
+                            end
                         else
                             # Default: push null ref for ref fields, 0 for i32/i64
                             local _ft = fieldtype(_ctor_type, fi)
