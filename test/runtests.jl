@@ -7833,6 +7833,22 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(exp, 0.0).pass
             @test compare_julia_wasm(exp, -1.0).pass
         end
+
+        @testset "sin(Float64) compiles and runs (WBUILD-1011)" begin
+            _wb_sin(x::Float64)::Float64 = sin(x)
+            @test compare_julia_wasm(_wb_sin, 0.0).pass
+            @test compare_julia_wasm(_wb_sin, Float64(pi)/4).pass
+            @test compare_julia_wasm(_wb_sin, Float64(pi)/2).pass
+            @test compare_julia_wasm(_wb_sin, Float64(pi)).pass
+            @test compare_julia_wasm(_wb_sin, -1.0).pass
+        end
+
+        @testset "cos(Float64) compiles and runs (WBUILD-1011)" begin
+            _wb_cos(x::Float64)::Float64 = cos(x)
+            @test compare_julia_wasm(_wb_cos, 0.0).pass
+            @test compare_julia_wasm(_wb_cos, Float64(pi)/4).pass
+            @test compare_julia_wasm(_wb_cos, Float64(pi)).pass
+        end
     end
 
 end
