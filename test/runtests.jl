@@ -8197,7 +8197,7 @@ console.log(JSON.stringify({
 
             _t59_isnan_sqrt(x::Float64)::Int32 = Int32(isnan(sqrt(x)))
             @test compare_julia_wasm(_t59_isnan_sqrt, NaN).pass
-            @test compare_julia_wasm(_t59_isnan_sqrt, -1.0).pass   # sqrt(-1) = NaN
+            # sqrt(-1.0) throws DomainError in Julia (not NaN), so not testable via compare_julia_wasm
 
             _t59_isnan_pow(x::Float64, y::Float64)::Int32 = Int32(isnan(x^y))
             @test compare_julia_wasm(_t59_isnan_pow, NaN, 2.0).pass
@@ -8217,6 +8217,17 @@ console.log(JSON.stringify({
             _t59_sign_div(x::Float64, y::Float64)::Float64 = sign(x / y)
             @test compare_julia_wasm(_t59_sign_div, 1.0, 0.0).pass
             @test compare_julia_wasm(_t59_sign_div, -1.0, 0.0).pass
+
+            # exp(large) = Inf, exp(-large) ≈ 0, log(0) = -Inf
+            # Note: sin(Inf) throws DomainError in Julia, not testable via compare_julia_wasm
+            _t59_isinf_exp(x::Float64)::Int32 = Int32(isinf(exp(x)))
+            @test compare_julia_wasm(_t59_isinf_exp, 1000.0).pass    # exp(1000) = Inf
+
+            _t59_exp_neginf(x::Float64)::Float64 = exp(-x * x)
+            @test compare_julia_wasm(_t59_exp_neginf, 100.0).pass    # exp(-10000) ≈ 0
+
+            _t59_isinf_log(x::Float64)::Int32 = Int32(isinf(log(x)))
+            @test compare_julia_wasm(_t59_isinf_log, 0.0).pass       # log(0) = -Inf (doesn't throw in Julia for 0.0)
         end
 
         @testset "Subnormal inputs (WBUILD-1023)" begin
