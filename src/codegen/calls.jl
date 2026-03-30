@@ -4043,7 +4043,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     # WASM f64.mul takes top 2 (b,c) giving a+b*c (WRONG). Reorder to
     # [c, a, b] so f64.mul takes (a,b) then f64.add takes (c, a*b) = a*b+c.
     _push_args = args
-    if is_func(func, :muladd_float) && length(args) == 3
+    if (is_func(func, :muladd_float) || is_func(func, :fma_float)) && length(args) == 3
         _push_args = Any[args[3], args[1], args[2]]
     end
     for arg in _push_args
@@ -4919,6 +4919,19 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # First multiply a*b, then add c
         push!(bytes, arg_type === Float32 ? Opcode.F32_MUL : Opcode.F64_MUL)
         push!(bytes, arg_type === Float32 ? Opcode.F32_ADD : Opcode.F64_ADD)
+
+    # fma_float: hardware FMA intrinsic. WASM has no scalar FMA instruction,
+    # so emit mul+add. This branch is dead code when have_fma returns false,
+    # but WASM requires structurally valid bytecode for both branches.
+    elseif is_func(func, :fma_float)
+        push!(bytes, arg_type === Float32 ? Opcode.F32_MUL : Opcode.F64_MUL)
+        push!(bytes, arg_type === Float32 ? Opcode.F32_ADD : Opcode.F64_ADD)
+
+    # have_fma: runtime FMA availability check. WASM has no scalar FMA,
+    # so always return false. The type argument (Float64) is not on the stack.
+    elseif is_func(func, :have_fma)
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x00)  # false — WASM has no hardware FMA
 
     # Type conversions
     elseif is_func(func, :sext_int)  # Sign extend

@@ -716,6 +716,14 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
             elem_type = eltype(ft)
             type_idx = get_array_type!(mod, registry, elem_type)
             ConcreteRef(type_idx, true)
+        elseif ft <: Tuple && isconcretetype(ft)
+            # Nested tuple - register and use concrete ref (WBUILD-1013)
+            nested_info = register_tuple_type!(mod, registry, ft)
+            if nested_info !== nothing
+                ConcreteRef(nested_info.wasm_type_idx, true)
+            else
+                julia_to_wasm_type(ft)
+            end
         elseif isconcretetype(ft) && isstructtype(ft) && !(ft <: Tuple)
             # Nested struct - register and use concrete ref
             nested_info = register_struct_type!(mod, registry, ft)

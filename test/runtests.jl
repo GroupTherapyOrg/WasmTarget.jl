@@ -7919,11 +7919,16 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_t58_exp, 10.0).pass
         end
 
-        @testset "log(Float64) (WBUILD-1013)" begin
-            # log(Float64) blocked by fma_emulated not compiled as cross-function call.
-            # Julia 1.12 log uses fma_emulated when have_fma() is false.
+        @testset "log(Float64) full input range (WBUILD-1013)" begin
             _t58_log(x::Float64)::Float64 = log(x)
-            @test_broken compare_julia_wasm(_t58_log, 1.0).pass
+            @test compare_julia_wasm(_t58_log, 0.001).pass
+            @test compare_julia_wasm(_t58_log, 0.1).pass
+            @test compare_julia_wasm(_t58_log, 0.5).pass
+            @test compare_julia_wasm(_t58_log, 1.0).pass
+            @test compare_julia_wasm(_t58_log, 2.718281828459045).pass
+            @test compare_julia_wasm(_t58_log, 10.0).pass
+            @test compare_julia_wasm(_t58_log, 100.0).pass
+            @test compare_julia_wasm(_t58_log, 1e6).pass
         end
     end
 
