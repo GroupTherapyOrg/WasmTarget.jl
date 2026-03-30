@@ -7930,6 +7930,93 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_t58_log, 100.0).pass
             @test compare_julia_wasm(_t58_log, 1e6).pass
         end
+
+        @testset "tan(Float64) (WBUILD-1014)" begin
+            _t58_tan(x::Float64)::Float64 = tan(x)
+            @test compare_julia_wasm(_t58_tan, 0.0).pass
+            @test compare_julia_wasm(_t58_tan, Float64(pi)/6).pass
+            @test compare_julia_wasm(_t58_tan, Float64(pi)/4).pass
+            @test compare_julia_wasm(_t58_tan, Float64(pi)/3).pass
+            @test compare_julia_wasm(_t58_tan, -Float64(pi)/4).pass
+            @test compare_julia_wasm(_t58_tan, 1.0).pass
+            @test compare_julia_wasm(_t58_tan, -1.0).pass
+        end
+
+        @testset "asin(Float64) (WBUILD-1014)" begin
+            _t58_asin(x::Float64)::Float64 = asin(x)
+            @test compare_julia_wasm(_t58_asin, 0.0).pass
+            @test compare_julia_wasm(_t58_asin, 0.5).pass
+            @test compare_julia_wasm(_t58_asin, -0.5).pass
+            @test compare_julia_wasm(_t58_asin, 1.0).pass
+            @test compare_julia_wasm(_t58_asin, -1.0).pass
+            @test compare_julia_wasm(_t58_asin, 0.25).pass
+            @test compare_julia_wasm(_t58_asin, 0.75).pass
+        end
+
+        @testset "acos(Float64) (WBUILD-1014)" begin
+            _t58_acos(x::Float64)::Float64 = acos(x)
+            @test compare_julia_wasm(_t58_acos, 0.0).pass
+            @test compare_julia_wasm(_t58_acos, 0.5).pass
+            @test compare_julia_wasm(_t58_acos, -0.5).pass
+            @test compare_julia_wasm(_t58_acos, 1.0).pass
+            @test compare_julia_wasm(_t58_acos, -1.0).pass
+            @test compare_julia_wasm(_t58_acos, 0.25).pass
+            @test compare_julia_wasm(_t58_acos, 0.75).pass
+        end
+
+        @testset "atan(Float64) (WBUILD-1014)" begin
+            _t58_atan(x::Float64)::Float64 = atan(x)
+            @test compare_julia_wasm(_t58_atan, 0.0).pass
+            @test compare_julia_wasm(_t58_atan, 1.0).pass
+            @test compare_julia_wasm(_t58_atan, -1.0).pass
+            @test compare_julia_wasm(_t58_atan, 10.0).pass
+            @test compare_julia_wasm(_t58_atan, -10.0).pass
+            @test compare_julia_wasm(_t58_atan, 0.1).pass
+            @test compare_julia_wasm(_t58_atan, 100.0).pass
+        end
+
+        @testset "atan(y, x) four quadrants (WBUILD-1014)" begin
+            _t58_atan2(y::Float64, x::Float64)::Float64 = atan(y, x)
+            @test compare_julia_wasm(_t58_atan2, 1.0, 1.0).pass
+            @test compare_julia_wasm(_t58_atan2, 1.0, -1.0).pass
+            @test compare_julia_wasm(_t58_atan2, -1.0, -1.0).pass
+            @test compare_julia_wasm(_t58_atan2, -1.0, 1.0).pass
+            @test compare_julia_wasm(_t58_atan2, 0.0, 1.0).pass
+            @test compare_julia_wasm(_t58_atan2, 1.0, 0.0).pass
+        end
+
+        @testset "sinh(Float64) (WBUILD-1014)" begin
+            _t58_sinh(x::Float64)::Float64 = sinh(x)
+            @test compare_julia_wasm(_t58_sinh, 0.0).pass
+            @test compare_julia_wasm(_t58_sinh, 1.0).pass
+            @test compare_julia_wasm(_t58_sinh, -1.0).pass
+            @test compare_julia_wasm(_t58_sinh, 2.0).pass
+            @test compare_julia_wasm(_t58_sinh, -2.0).pass
+            @test compare_julia_wasm(_t58_sinh, 5.0).pass
+            @test compare_julia_wasm(_t58_sinh, -5.0).pass
+        end
+
+        @testset "cosh(Float64) (WBUILD-1014)" begin
+            _t58_cosh(x::Float64)::Float64 = cosh(x)
+            @test compare_julia_wasm(_t58_cosh, 0.0).pass
+            @test compare_julia_wasm(_t58_cosh, 1.0).pass
+            @test compare_julia_wasm(_t58_cosh, -1.0).pass
+            @test compare_julia_wasm(_t58_cosh, 2.0).pass
+            @test compare_julia_wasm(_t58_cosh, -2.0).pass
+            @test compare_julia_wasm(_t58_cosh, 5.0).pass
+            @test compare_julia_wasm(_t58_cosh, -5.0).pass
+        end
+
+        @testset "tanh(Float64) (WBUILD-1014)" begin
+            _t58_tanh(x::Float64)::Float64 = tanh(x)
+            @test compare_julia_wasm(_t58_tanh, 0.0).pass
+            @test compare_julia_wasm(_t58_tanh, 1.0).pass
+            @test compare_julia_wasm(_t58_tanh, -1.0).pass
+            @test compare_julia_wasm(_t58_tanh, 2.0).pass
+            @test compare_julia_wasm(_t58_tanh, -2.0).pass
+            @test compare_julia_wasm(_t58_tanh, 5.0).pass
+            @test compare_julia_wasm(_t58_tanh, -5.0).pass
+        end
     end
 
 end
