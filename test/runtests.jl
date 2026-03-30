@@ -956,6 +956,59 @@ _p01_make_entry(:p03_auto_20, p03_src_20, (Int64,))
 _p01_make_entry(:p03_auto_21, p03_src_21, (Int64,))
 _p01_make_entry(:p03_auto_22, p03_src_22, (Int64, Int64, Int64))
 
+# ============================================================================
+# Phase 61 helpers: Pure-Julia sort (module-level to avoid closure issues)
+# ============================================================================
+# Base.sort IR is too complex (ScratchQuickSort, Missing, NamedTuple dispatch),
+# so we use pure-Julia insertion sort per PRD guidance.
+# @inline forces Julia to inline these into callers at code_typed time.
+
+@inline function _t61_isort_i64!(v::Vector{Int64})::Vector{Int64}
+    n = length(v)
+    for i in 2:n
+        key = v[i]
+        j = i - 1
+        while j >= 1 && v[j] > key
+            v[j + 1] = v[j]
+            j -= 1
+        end
+        v[j + 1] = key
+    end
+    return v
+end
+
+@inline function _t61_isort_f64!(v::Vector{Float64})::Vector{Float64}
+    n = length(v)
+    for i in 2:n
+        key = v[i]
+        j = i - 1
+        while j >= 1 && v[j] > key
+            v[j + 1] = v[j]
+            j -= 1
+        end
+        v[j + 1] = key
+    end
+    return v
+end
+
+@inline function _t61_is_sorted_i64(v::Vector{Int64})::Int64
+    for i in 2:length(v)
+        if v[i] < v[i-1]
+            return Int64(0)
+        end
+    end
+    return Int64(1)
+end
+
+@inline function _t61_is_sorted_f64(v::Vector{Float64})::Int64
+    for i in 2:length(v)
+        if v[i] < v[i-1]
+            return Int64(0)
+        end
+    end
+    return Int64(1)
+end
+
 @testset "WasmTarget.jl" begin
 
     # ========================================================================
@@ -8582,6 +8635,200 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_t60_significand, 3.5).pass
             @test compare_julia_wasm(_t60_significand, 0.5).pass
             @test compare_julia_wasm(_t60_significand, 100.0).pass
+        end
+    end
+
+    # ========================================================================
+    # Phase 61: Base.Collections — sort, filter, map, reduce (WBUILD-1040+)
+    # ========================================================================
+    # Base.sort IR is too complex (ScratchQuickSort, Missing, NamedTuple dispatch),
+    # so we use pure-Julia insertion sort / quicksort per PRD guidance.
+    # Tests use @inline to force Julia to inline the sort into the caller,
+    # since auto-discovery doesn't handle user-defined cross-function calls.
+    @testset "Phase 61: Collections (WBUILD-1040)" begin
+        # Sort helpers (_t61_isort_i64!, _t61_isort_f64!, _t61_is_sorted_i64,
+        # _t61_is_sorted_f64) defined at module level above @testset to avoid
+        # closure issues with compare_julia_wasm.
+
+        # ──────────────────────────────────────────────────────────────────
+        # WBUILD-1040: sort(Vector{Int64})
+        # ──────────────────────────────────────────────────────────────────
+        @testset "sort(Vector{Int64}) (WBUILD-1040)" begin
+
+            # 1. Empty vector
+            @testset "empty vector" begin
+                _t61_sort_i64_empty()::Int64 = begin
+                    v = Int64[]
+                    _t61_isort_i64!(v)
+                    return Int64(length(v))
+                end
+                @test compare_julia_wasm(_t61_sort_i64_empty).pass
+            end
+
+            # 2. Single element
+            @testset "single element" begin
+                _t61_sort_i64_single()::Int64 = begin
+                    v = Int64[42]
+                    _t61_isort_i64!(v)
+                    return v[1]
+                end
+                @test compare_julia_wasm(_t61_sort_i64_single).pass
+            end
+
+            # 3. Already sorted
+            @testset "already sorted" begin
+                _t61_sort_i64_sorted()::Int64 = begin
+                    v = Int64[1, 2, 3, 4, 5]
+                    _t61_isort_i64!(v)
+                    return v[1] * Int64(10000) + v[3] * Int64(100) + v[5] + _t61_is_sorted_i64(v)
+                end
+                @test compare_julia_wasm(_t61_sort_i64_sorted).pass
+            end
+
+            # 4. Reverse sorted
+            @testset "reverse sorted" begin
+                _t61_sort_i64_rev()::Int64 = begin
+                    v = Int64[5, 4, 3, 2, 1]
+                    _t61_isort_i64!(v)
+                    return v[1] * Int64(10000) + v[3] * Int64(100) + v[5] + _t61_is_sorted_i64(v)
+                end
+                @test compare_julia_wasm(_t61_sort_i64_rev).pass
+            end
+
+            # 5. Random 10 elements
+            @testset "random 10 elements" begin
+                _t61_sort_i64_rand10()::Int64 = begin
+                    v = Int64[7, 3, 9, 1, 5, 8, 2, 10, 4, 6]
+                    _t61_isort_i64!(v)
+                    # Encode: min + max*100 + is_sorted
+                    return v[1] + v[10] * Int64(100) + _t61_is_sorted_i64(v) * Int64(10000)
+                end
+                @test compare_julia_wasm(_t61_sort_i64_rand10).pass
+            end
+
+            # 6. Duplicates
+            @testset "duplicates" begin
+                _t61_sort_i64_dups()::Int64 = begin
+                    v = Int64[3, 1, 4, 1, 5, 9, 2, 6, 5, 3]
+                    _t61_isort_i64!(v)
+                    return v[1] + v[10] * Int64(100) + _t61_is_sorted_i64(v) * Int64(10000)
+                end
+                @test compare_julia_wasm(_t61_sort_i64_dups).pass
+            end
+
+            # 7. Negative values
+            @testset "negative values" begin
+                _t61_sort_i64_neg()::Int64 = begin
+                    v = Int64[-3, 5, -1, 0, 2, -4]
+                    _t61_isort_i64!(v)
+                    return v[1] + v[6] * Int64(100) + _t61_is_sorted_i64(v) * Int64(10000)
+                end
+                @test compare_julia_wasm(_t61_sort_i64_neg).pass
+            end
+
+            # 8. All same value
+            @testset "all same value" begin
+                _t61_sort_i64_same()::Int64 = begin
+                    v = Int64[7, 7, 7, 7]
+                    _t61_isort_i64!(v)
+                    return v[1] + v[4] * Int64(100) + _t61_is_sorted_i64(v) * Int64(10000)
+                end
+                @test compare_julia_wasm(_t61_sort_i64_same).pass
+            end
+
+            # 9. Parameterized (3-element sort via args)
+            @testset "parameterized sort" begin
+                _t61_sort_i64_param(a::Int64, b::Int64, c::Int64)::Int64 = begin
+                    v = Int64[a, b, c]
+                    _t61_isort_i64!(v)
+                    return v[1] * Int64(10000) + v[2] * Int64(100) + v[3]
+                end
+                @test compare_julia_wasm(_t61_sort_i64_param, Int64(3), Int64(1), Int64(2)).pass
+                @test compare_julia_wasm(_t61_sort_i64_param, Int64(1), Int64(2), Int64(3)).pass
+                @test compare_julia_wasm(_t61_sort_i64_param, Int64(3), Int64(2), Int64(1)).pass
+                @test compare_julia_wasm(_t61_sort_i64_param, Int64(-5), Int64(0), Int64(5)).pass
+                @test compare_julia_wasm(_t61_sort_i64_param, Int64(1), Int64(1), Int64(1)).pass
+            end
+        end
+
+        # ──────────────────────────────────────────────────────────────────
+        # WBUILD-1040: sort(Vector{Float64})
+        # ──────────────────────────────────────────────────────────────────
+        @testset "sort(Vector{Float64}) (WBUILD-1040)" begin
+
+            # 1. Single element
+            @testset "single element" begin
+                _t61_sort_f64_single()::Float64 = begin
+                    v = Float64[3.14]
+                    _t61_isort_f64!(v)
+                    return v[1]
+                end
+                @test compare_julia_wasm(_t61_sort_f64_single).pass
+            end
+
+            # 2. Already sorted
+            @testset "already sorted" begin
+                _t61_sort_f64_sorted()::Int64 = begin
+                    v = Float64[1.0, 2.0, 3.0, 4.0, 5.0]
+                    _t61_isort_f64!(v)
+                    return _t61_is_sorted_f64(v)
+                end
+                @test compare_julia_wasm(_t61_sort_f64_sorted).pass
+            end
+
+            # 3. Reverse sorted
+            @testset "reverse sorted" begin
+                _t61_sort_f64_rev()::Float64 = begin
+                    v = Float64[5.0, 4.0, 3.0, 2.0, 1.0]
+                    _t61_isort_f64!(v)
+                    return v[1]
+                end
+                @test compare_julia_wasm(_t61_sort_f64_rev).pass
+            end
+
+            # 4. Random floats
+            @testset "random floats" begin
+                _t61_sort_f64_rand()::Float64 = begin
+                    v = Float64[3.14, 1.41, 2.71, 0.57, 1.73]
+                    _t61_isort_f64!(v)
+                    return v[1]  # min = 0.57
+                end
+                @test compare_julia_wasm(_t61_sort_f64_rand).pass
+            end
+
+            # 5. Negative values
+            @testset "negative values" begin
+                _t61_sort_f64_neg()::Float64 = begin
+                    v = Float64[-3.5, 2.1, -1.0, 0.0, 4.2, -2.7]
+                    _t61_isort_f64!(v)
+                    return v[1]  # min = -3.5
+                end
+                @test compare_julia_wasm(_t61_sort_f64_neg).pass
+            end
+
+            # 6. Mixed with very small/large
+            @testset "wide range" begin
+                _t61_sort_f64_wide()::Int64 = begin
+                    v = Float64[1e10, 1e-10, -1e10, 0.0, 1.0, -1.0]
+                    _t61_isort_f64!(v)
+                    return _t61_is_sorted_f64(v)
+                end
+                @test compare_julia_wasm(_t61_sort_f64_wide).pass
+            end
+
+            # 7. Parameterized (3-element sort via args)
+            @testset "parameterized sort" begin
+                _t61_sort_f64_param(a::Float64, b::Float64, c::Float64)::Float64 = begin
+                    v = Float64[a, b, c]
+                    _t61_isort_f64!(v)
+                    return v[1]
+                end
+                @test compare_julia_wasm(_t61_sort_f64_param, 3.0, 1.0, 2.0).pass
+                @test compare_julia_wasm(_t61_sort_f64_param, 1.0, 2.0, 3.0).pass
+                @test compare_julia_wasm(_t61_sort_f64_param, 3.0, 2.0, 1.0).pass
+                @test compare_julia_wasm(_t61_sort_f64_param, -5.5, 0.0, 5.5).pass
+                @test compare_julia_wasm(_t61_sort_f64_param, 1.0, 1.0, 1.0).pass
+            end
         end
     end
 
