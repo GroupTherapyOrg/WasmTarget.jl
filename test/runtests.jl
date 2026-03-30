@@ -8083,14 +8083,23 @@ console.log(JSON.stringify({
     # ========================================================================
     @testset "Phase 59 cont'd: Power/Hypot/Cbrt (WBUILD-1021)" begin
         @testset "Float64^Float64 (WBUILD-1021)" begin
-            # pow_body auto-discovered but has invalid local index: 14247 bug
             _t59_pow(x::Float64, y::Float64)::Float64 = x^y
-            @test_broken compare_julia_wasm(_t59_pow, 2.0, 3.0).pass
+            @test compare_julia_wasm(_t59_pow, 2.0, 3.0).pass
+            @test compare_julia_wasm(_t59_pow, 2.0, 0.5).pass
+            @test compare_julia_wasm(_t59_pow, 3.0, 2.0).pass
+            @test compare_julia_wasm(_t59_pow, 10.0, 0.0).pass
+            @test compare_julia_wasm(_t59_pow, 2.5, 3.5).pass
+            @test compare_julia_wasm(_t59_pow, 0.5, 2.0).pass
+            @test compare_julia_wasm(_t59_pow, 100.0, 0.5).pass
         end
 
         @testset "Float64^Int (WBUILD-1021)" begin
             _t59_powi(x::Float64, n::Int64)::Float64 = x^n
-            @test_broken compare_julia_wasm(_t59_powi, 2.0, Int64(3)).pass
+            @test compare_julia_wasm(_t59_powi, 2.0, Int64(3)).pass
+            @test compare_julia_wasm(_t59_powi, 3.0, Int64(2)).pass
+            @test compare_julia_wasm(_t59_powi, 0.5, Int64(4)).pass
+            @test compare_julia_wasm(_t59_powi, 2.0, Int64(10)).pass
+            @test compare_julia_wasm(_t59_powi, 10.0, Int64(0)).pass
         end
 
         @testset "hypot(Float64, Float64) (WBUILD-1021)" begin

@@ -524,6 +524,31 @@ function fix_i64_local_in_i32_ops(bytes::Vector{UInt8}, all_local_types::Vector{
                 push!(result, 0xa7)  # i32_wrap_i64
                 fixes += 1
             end
+        elseif op == 0xfb  # GC prefix — skip sub-opcode + all LEB128 operands
+            push!(result, op)
+            i += 1
+            if i <= length(bytes)
+                sub_op = bytes[i]
+                push!(result, sub_op)
+                i += 1
+                # Determine number of LEB128 operands for each GC sub-opcode
+                n_leb = if sub_op in (0x00, 0x01, 0x06, 0x07, 0x0b, 0x0c, 0x0d, 0x0e,
+                                      0x14, 0x15, 0x16, 0x17)
+                    1  # type_idx only
+                elseif sub_op in (0x02, 0x03, 0x04, 0x05, 0x08, 0x09, 0x0a)
+                    2  # type_idx + field_idx/length/data_idx/elem_idx
+                else
+                    0  # array.len (0x0f), any.convert_extern (0x1a), extern.convert_any (0x1b), etc.
+                end
+                for _ in 1:n_leb
+                    while i <= length(bytes)
+                        b = bytes[i]
+                        push!(result, b)
+                        i += 1
+                        (b & 0x80) == 0 && break
+                    end
+                end
+            end
         else
             push!(result, op)
             i += 1
