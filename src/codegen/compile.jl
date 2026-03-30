@@ -321,6 +321,9 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     :fma_emulated,
     # WBUILD-1022: Float64 remainder (used by mod/rem)
     :rem_internal,
+    # WBUILD-1040: Collection operations (pure Julia in 1.12)
+    :reverse, Symbol("#sort#24"), :_sort!, :reverse!,
+    :filter, Symbol("#filter#460"), :_similar_or_copy,
 ])
 
 """
@@ -336,10 +339,13 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
     mod_name = nameof(mod)
     meth_name = meth.name
 
+    # Check if module is Base or a submodule of Base (e.g., Base.Sort, Base.Math)
+    _is_base_or_sub = mod === Base || (try parentmodule(mod) === Base catch; false end)
+
     # Skip core modules - these are handled specially
-    # BUT allow whitelisted Base methods (e.g., Dict operations) to be compiled
-    if mod_name in SKIP_AUTODISCOVER_MODULES || mod === Core || mod === Base
-        if !(mod === Base && meth_name in AUTODISCOVER_BASE_METHODS)
+    # BUT allow whitelisted Base methods (e.g., Dict operations, Sort) to be compiled
+    if mod_name in SKIP_AUTODISCOVER_MODULES || mod === Core || _is_base_or_sub
+        if !(_is_base_or_sub && meth_name in AUTODISCOVER_BASE_METHODS)
             return
         end
     end
@@ -392,7 +398,7 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
     _is_julias = nameof(mod) === :JuliaSyntax ||
                  (isdefined(mod, :parentmodule) && try nameof(parentmodule(mod)) === :JuliaSyntax catch; false end)
     _exempt_mod = mod === WasmTarget || _is_julias ||
-                  (mod === Base && meth_name in AUTODISCOVER_BASE_METHODS)
+                  (_is_base_or_sub && meth_name in AUTODISCOVER_BASE_METHODS)
     if !_exempt_mod
         for t in arg_types
             if t isa DataType && t <: Function && isconcretetype(t)
