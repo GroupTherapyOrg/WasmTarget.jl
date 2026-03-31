@@ -4136,6 +4136,22 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
             # 1. Allocate new array with 2x capacity
             # 2. Copy elements from old array using array.copy
             # 3. Update the vector's ref field
+            # WBUILD-3001: sizehint! is a memory optimization hint — no-op in WasmGC.
+            # WasmGC arrays have no capacity concept. Return the vector argument unchanged.
+            # sizehint!(v, n) → v; #sizehint!#81(shrink, first, sizehint!, v, n) → v
+            # Must be checked BEFORE the "#" closure handler below, since #sizehint!#81
+            # starts with "#" and would be incorrectly caught by the _growend! handler.
+            elseif name === :sizehint! || name === Symbol("#sizehint!#81")
+                bytes = UInt8[]
+                # The vector argument: for sizehint! it's args[1], for #sizehint!#81 it's args[4]
+                vec_arg = name === :sizehint! ? (length(args) >= 1 ? args[1] : nothing) :
+                          (length(args) >= 4 ? args[4] : nothing)
+                if vec_arg !== nothing
+                    append!(bytes, compile_value(vec_arg, ctx))
+                else
+                    push!(bytes, Opcode.UNREACHABLE)
+                end
+
             elseif meth.module === Base && startswith(string(name), "#")
                 # Clear any accumulated bytes from argument compilation
                 bytes = UInt8[]
@@ -4355,20 +4371,6 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     # Can't trace string — fallback to constant hash
                     push!(bytes, Opcode.I64_CONST)
                     push!(bytes, 0x00)
-                end
-
-            # WBUILD-3001: sizehint! is a memory optimization hint — no-op in WasmGC.
-            # WasmGC arrays have no capacity concept. Return the vector argument unchanged.
-            # sizehint!(v, n) → v; #sizehint!#81(shrink, first, sizehint!, v, n) → v
-            elseif name === :sizehint! || name === Symbol("#sizehint!#81")
-                @info "WBUILD-3001: sizehint! no-op handler reached" name=name nargs=length(args)
-                # The vector argument: for sizehint! it's args[1], for #sizehint!#81 it's args[4]
-                vec_arg = name === :sizehint! ? (length(args) >= 1 ? args[1] : nothing) :
-                          (length(args) >= 4 ? args[4] : nothing)
-                if vec_arg !== nothing
-                    append!(bytes, compile_value(vec_arg, ctx))
-                else
-                    push!(bytes, Opcode.UNREACHABLE)
                 end
 
             else

@@ -1265,6 +1265,8 @@ _p63_identity_i64(v::Vector{Int64})::Vector{Int64} = v
 _p63_identity_f64(v::Vector{Float64})::Vector{Float64} = v
 _p63_sort_i64(v::Vector{Int64})::Vector{Int64} = sort(v)
 _p63_sort_f64(v::Vector{Float64})::Vector{Float64} = sort(v)
+_p63_filter_even(v::Vector{Int64})::Vector{Int64} = filter(_p63_iseven, v)
+_p63_filter_positive(v::Vector{Int64})::Vector{Int64} = filter(_p63_ispositive, v)
 
 @testset "WasmTarget.jl" begin
 
@@ -9806,20 +9808,39 @@ console.log(JSON.stringify({
         end
 
         # ──────────────────────────────────────────────────────────────────
-        # WBUILD-2020: sort — known issue, stubs cause wrong results
+        # WBUILD-3002: sort — works for n≤40 and any sorted/reverse-sorted
+        # Radix sort path (n>40 unsorted large-range) still has issues
         # ──────────────────────────────────────────────────────────────────
-        @testset "Base.sort (WBUILD-2020)" begin
-            # sort compiles but internals (radix_sort!, partition!) still cause issues
-            @test_broken compare_julia_wasm_vec(_p63_sort_i64, Int64[3, 1, 2]).pass
+        @testset "Base.sort (WBUILD-3002)" begin
+            # Int64 sort — works for small arrays (InsertionSort path)
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[]).pass
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[1]).pass
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[3, 1, 2]).pass
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[5, 3, 1, 4, 2]).pass
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[10, 9, 8, 7, 6, 5, 4, 3, 2, 1]).pass
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[3, 1, 2, 1, 3, 2]).pass  # duplicates
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[-3, -1, -2, 0, 1]).pass   # negative
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[5, 5, 5, 5]).pass         # all same
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[typemax(Int64), typemin(Int64), 0]).pass
+            # Large sorted/reverse-sorted arrays (CheckSorted fast path)
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[i for i in 1:100]).pass       # already sorted
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[i for i in 100:-1:1]).pass    # reverse sorted
+            # Float64 sort — radix sort path issue (type mismatch in _sort!)
             @test_broken compare_julia_wasm_vec(_p63_sort_f64, Float64[3.0, 1.0, 2.0]).pass
         end
 
         # ──────────────────────────────────────────────────────────────────
-        # WBUILD-2021: filter — hits unreachable (bounds check or resize issue)
+        # WBUILD-3012: filter — FIXED (sizehint! handler moved above # closure check)
         # ──────────────────────────────────────────────────────────────────
-        @testset "Base.filter (WBUILD-2021)" begin
-            _p63_filter_even(v::Vector{Int64})::Vector{Int64} = filter(_p63_iseven, v)
-            @test_broken compare_julia_wasm_vec(_p63_filter_even, Int64[1, 2, 3, 4, 5, 6]).pass
+        @testset "Base.filter (WBUILD-3012)" begin
+            @test compare_julia_wasm_vec(_p63_filter_even, Int64[1, 2, 3, 4, 5, 6]).pass
+            @test compare_julia_wasm_vec(_p63_filter_even, Int64[2, 4, 6]).pass           # all match
+            @test compare_julia_wasm_vec(_p63_filter_even, Int64[1, 3, 5]).pass           # none match
+            @test compare_julia_wasm_vec(_p63_filter_even, Int64[]).pass                  # empty
+            @test compare_julia_wasm_vec(_p63_filter_even, Int64[2]).pass                 # single match
+            @test compare_julia_wasm_vec(_p63_filter_even, Int64[1]).pass                 # single no match
+            @test compare_julia_wasm_vec(_p63_filter_positive, Int64[-3, -1, 0, 1, 2, 3]).pass
+            @test compare_julia_wasm_vec(_p63_filter_even, Int64[i for i in 1:20]).pass   # larger array
         end
     end
 

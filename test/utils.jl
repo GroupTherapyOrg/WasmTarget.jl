@@ -169,6 +169,14 @@ function unmarshal_result(result)
         return [unmarshal_result(r) for r in result]
     elseif result isa Dict
         return Dict(k => unmarshal_result(v) for (k, v) in result)
+    elseif result isa AbstractString
+        # WBUILD-3000: BigInt values are serialized as strings to preserve Int64 precision
+        # (JavaScript Number loses precision for values > 2^53)
+        return try
+            Base.parse(Int64, result)
+        catch
+            result
+        end
     else
         return result
     end
@@ -782,7 +790,7 @@ function _generate_bridge_loader(wasm_path, func_name, args, arg_types, return_v
     if return_vec_eltype === Int64
         push!(lines, "    const len = Number(e._bv_i64_len(result));")
         push!(lines, "    const out = [];")
-        push!(lines, "    for (let i = 0; i < len; i++) out.push(Number(e._bv_i64_get(result, BigInt(i+1))));")
+        push!(lines, "    for (let i = 0; i < len; i++) out.push(e._bv_i64_get(result, BigInt(i+1)).toString());")
         push!(lines, "    console.log(JSON.stringify(out));")
     elseif return_vec_eltype === Float64
         push!(lines, "    const len = Number(e._bv_f64_len(result));")
