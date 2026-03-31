@@ -1,5 +1,7 @@
 # Build outputs
 docs/dist/
+docs/build/
+Manifest.toml
 
 # Julia artifacts
 *.jl.cov
@@ -7,6 +9,5 @@ docs/dist/
 
 # OS files
 .DS_Store
-docs/cm-bundle/node_modules/
 docs/dist/
 .claude/worktrees/
