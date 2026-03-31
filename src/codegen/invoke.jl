@@ -2911,6 +2911,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
             elseif name === :str_contains && length(args) == 2
                 bytes = _compile_invoke_str_contains(args, ctx)
 
+
             # str_startswith(s, prefix) -> Bool
             elseif name === :str_startswith && length(args) == 2
                 bytes = _compile_invoke_str_startswith(args, ctx)
@@ -2928,6 +2929,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
             # Convert uppercase ASCII letters to lowercase
             elseif name === :str_lowercase && length(args) == 1
                 bytes = _compile_invoke_str_lowercase(args, ctx)
+
 
             # str_trim(s) -> String
             # Remove leading and trailing ASCII whitespace
