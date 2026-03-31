@@ -9808,11 +9808,12 @@ console.log(JSON.stringify({
         end
 
         # ──────────────────────────────────────────────────────────────────
-        # WBUILD-3002: sort — works for n≤40 and any sorted/reverse-sorted
-        # Radix sort path (n>40 unsorted large-range) still has issues
+        # WBUILD-3002: sort — REAL Base.sort works for Int64 at any size
+        # InsertionSort (n≤40), full sort chain (n>40) all pass
+        # Float64 sort still broken (radix sort ReinterpretArray stubs)
         # ──────────────────────────────────────────────────────────────────
         @testset "Base.sort (WBUILD-3002)" begin
-            # Int64 sort — works for small arrays (InsertionSort path)
+            # Int64 sort — small arrays (InsertionSort path, n≤40)
             @test compare_julia_wasm_vec(_p63_sort_i64, Int64[]).pass
             @test compare_julia_wasm_vec(_p63_sort_i64, Int64[1]).pass
             @test compare_julia_wasm_vec(_p63_sort_i64, Int64[3, 1, 2]).pass
@@ -9825,6 +9826,20 @@ console.log(JSON.stringify({
             # Large sorted/reverse-sorted arrays (CheckSorted fast path)
             @test compare_julia_wasm_vec(_p63_sort_i64, Int64[i for i in 1:100]).pass       # already sorted
             @test compare_julia_wasm_vec(_p63_sort_i64, Int64[i for i in 100:-1:1]).pass    # reverse sorted
+            # Large shuffled arrays (full sort chain: n>40)
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[37, 12, 49, 3, 28, 41, 15, 8, 44, 22, 31, 5, 47, 19, 36, 2, 43, 10, 25, 48, 7, 33, 16, 39, 1, 45, 21, 34, 14, 46, 6, 30, 17, 42, 9, 26, 50, 11, 38, 4, 29, 20, 35, 13, 40, 24, 32, 18, 27, 23]).pass  # n=50 shuffled
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[67, 12, 89, 3, 45, 78, 23, 91, 34, 56, 1, 100, 42, 88, 15, 73, 9, 61, 37, 84, 27, 50, 6, 95, 18, 70, 43, 82, 31, 54, 14, 99, 8, 63, 29, 76, 47, 92, 21, 58, 4, 85, 36, 71, 16, 97, 52, 11, 66, 39, 80, 25, 93, 48, 7, 60, 33, 75, 19, 87, 2, 55, 41, 96, 13, 68, 30, 79, 22, 51, 5, 90, 38, 72, 17, 83, 46, 10, 64, 28, 77, 44, 98, 20, 57, 35, 81, 26, 94, 49, 69, 32, 86, 24, 59, 40, 74, 53, 62, 65]).pass  # n=100 shuffled
+            # Duplicate-heavy large arrays
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[3,1,4,1,5,9,2,6,5,3,5,8,9,7,9,3,2,3,8,4,6,2,6,4,3,3,8,3,2,7,9,5,0,2,8,8,4,1,9,7,1,6,9,3,9,5,1,0,5,8]).pass  # n=50 duplicates
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[i % 7 for i in 1:100]).pass  # n=100 mod-7 pattern
+            # Negative and mixed-sign large arrays
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[50 - i for i in 1:100]).pass  # n=100 negative to positive
+            # WBUILD-3003: Edge cases — stability, alternating, boundary values
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[2, 1]).pass                    # two elements
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2]).pass  # n=50 alternating (triggers full sort)
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[i for i in 200:-1:1]).pass     # n=200 descending
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[0 for _ in 1:100]).pass        # n=100 all zeros
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[typemax(Int64), typemin(Int64), typemax(Int64), typemin(Int64), 0, 0, typemax(Int64)]).pass  # boundary values repeated
             # Float64 sort — radix sort path issue (type mismatch in _sort!)
             @test_broken compare_julia_wasm_vec(_p63_sort_f64, Float64[3.0, 1.0, 2.0]).pass
         end
