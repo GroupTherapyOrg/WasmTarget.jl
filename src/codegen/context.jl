@@ -59,6 +59,9 @@ mutable struct CompilationContext <: AbstractCompilationContext
     dispatch_registry::Union{Nothing, DispatchTableRegistry}
     # PURE-9063: Scratch i32 local for typeof struct lookup (cached)
     typeof_scratch_local::Union{Nothing, UInt32}
+    # Skip statements: IR indices that should emit NOP instead of UNREACHABLE.
+    # Used by Therapy.jl to skip js() calls that are handled externally in JS.
+    skip_stmts::Set{Int}
 end
 
 function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
@@ -69,7 +72,8 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
                            captured_signal_fields::Dict{Symbol, Tuple{Bool, UInt32}}=Dict{Symbol, Tuple{Bool, UInt32}}(),
                            dom_bindings::Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}=Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}(),
                            module_globals::Vector{Tuple{Tuple{Module, Symbol}, UInt32}}=Tuple{Tuple{Module, Symbol}, UInt32}[],
-                           dispatch_registry::Union{Nothing, DispatchTableRegistry}=nothing)
+                           dispatch_registry::Union{Nothing, DispatchTableRegistry}=nothing,
+                           skip_stmts::Set{Int}=Set{Int}())
     # Calculate n_params excluding WasmGlobal arguments (they're phantom)
     n_real_params = count(i -> !(i in global_args), 1:length(arg_types))
     ctx = CompilationContext(
@@ -100,7 +104,8 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         false,                  # last_stmt_was_stub (PURE-908)
         Dict{Int, Int}(),       # slot_locals (PURE-6024: unoptimized IR slot variables)
         dispatch_registry,      # PURE-9060: Tier 2 hash dispatch
-        nothing                 # PURE-9063: typeof scratch local (allocated on demand)
+        nothing,                # PURE-9063: typeof scratch local (allocated on demand)
+        skip_stmts              # Skip statements (Therapy.jl js() interop)
     )
     # Analyze SSA types and allocate locals for multi-use SSAs
     analyze_ssa_types!(ctx)

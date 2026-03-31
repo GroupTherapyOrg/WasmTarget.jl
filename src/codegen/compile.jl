@@ -2086,6 +2086,7 @@ function compile_closure_body(
     mod::WasmModule,
     type_registry::TypeRegistry;
     dom_bindings::Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}} = Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}(),
+    skip_stmts::Set{Int} = Set{Int}(),
     void_return::Bool = false
 )
     # Get typed IR for the closure
@@ -2106,7 +2107,8 @@ function compile_closure_body(
         mod,
         type_registry;
         captured_signal_fields = captured_signal_fields,
-        dom_bindings = dom_bindings
+        dom_bindings = dom_bindings,
+        skip_stmts = skip_stmts
     )
 
     # Generate body

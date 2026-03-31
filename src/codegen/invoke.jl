@@ -4375,6 +4375,10 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     push!(bytes, 0x00)
                 end
 
+            elseif idx in ctx.skip_stmts
+                # Skipped statement — handled externally (e.g., Therapy.jl js() calls).
+                # Emit nothing (NOP) instead of UNREACHABLE.
+
             else
                 # Unknown method — emit unreachable (will trap at runtime)
                 # This allows compilation to succeed for code paths that
