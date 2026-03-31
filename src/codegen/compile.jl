@@ -322,6 +322,11 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     # PURE-325: Integer parsing needed by parse_int_literal
     :tryparse_internal, :parseint_preamble,
     :iterate_continued, Symbol("#_thisind_continued#_thisind_str##0"),
+    # WBUILD-1010: Transcendental math functions (sin/cos/tan/etc.) need auto-discovery
+    # when called through wrapper functions. These are large (600+ stmts) but compile
+    # correctly via the stackifier. Their only invokes are domain_error throws (handled).
+    :sin, :cos, :tan, :asin, :acos, :atan,
+    :sinh, :cosh, :tanh, :exp, :sinh_kernel,
     # WBUILD-1013: Software FMA needed by log/exp when have_fma=false
     :fma_emulated,
     # WBUILD-1022: Float64 remainder (used by mod/rem)

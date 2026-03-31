@@ -207,12 +207,10 @@ function emit_dispatch_metadata!(mod::WasmModule,
                                   dt_registry::DispatchTableRegistry)
     isempty(dt_registry.tables) && return
 
-    # Get or create i32 array type (reuse string array if available)
-    i32_array_idx = if type_registry.string_array_idx !== nothing
-        type_registry.string_array_idx
-    else
-        add_array_type!(mod, I32, true)
-    end
+    # Create a dedicated i32 array type for dispatch tables.
+    # IMPORTANT: Do NOT reuse string_array_idx — strings are packed i8 arrays,
+    # and array.get on packed types requires array.get_s/array.get_u (not array.get).
+    i32_array_idx = add_array_type!(mod, I32, true)
 
     for (func_ref, dt) in dt_registry.tables
         dt.i32_array_type_idx = i32_array_idx
@@ -882,11 +880,10 @@ function emit_overlay_metadata!(mod::WasmModule,
                                  overlay_reg::OverlayRegistry)
     isempty(overlay_reg.overlays) && return
 
-    i32_array_idx = if type_registry.string_array_idx !== nothing
-        type_registry.string_array_idx
-    else
-        add_array_type!(mod, I32, true)
-    end
+    # Create a dedicated i32 array type for overlay dispatch tables.
+    # IMPORTANT: Do NOT reuse string_array_idx — strings are packed i8 arrays,
+    # and array.get on packed types requires array.get_s/array.get_u (not array.get).
+    i32_array_idx = add_array_type!(mod, I32, true)
 
     # Emit metadata for overlay tables
     for (func_ref, overlay_dt) in overlay_reg.overlays
