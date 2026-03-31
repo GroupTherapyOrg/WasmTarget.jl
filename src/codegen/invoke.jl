@@ -2449,6 +2449,11 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
             elseif name === :+ || name === :add_int
                 push!(bytes, is_32bit ? Opcode.I32_ADD : Opcode.I64_ADD)
             elseif name === :- || name === :sub_int
+                if length(args) == 1
+                    # WBUILD-3001: Unary negation -(x) → 0 - x
+                    pushfirst!(bytes, is_32bit ? Opcode.I32_CONST : Opcode.I64_CONST)
+                    insert!(bytes, 2, 0x00)  # LEB128 for 0
+                end
                 push!(bytes, is_32bit ? Opcode.I32_SUB : Opcode.I64_SUB)
             elseif name === :* || name === :mul_int
                 push!(bytes, is_32bit ? Opcode.I32_MUL : Opcode.I64_MUL)

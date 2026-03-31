@@ -1977,6 +1977,12 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             dest_block = get(stmt_to_block, term.label, nothing)
             terminator_idx = block.end_idx
 
+            # WBUILD-3001: Resolve through dead boundscheck blocks to find real target.
+            # Same resolution as non_trivial_targets computation.
+            if dest_block !== nothing && dest_block in dead_blocks
+                dest_block = resolve_through_dead_boundscheck(dest_block)
+            end
+
             # Set all phi values before jumping
             # Pass the actual target statement to find phi nodes (might be inside the block)
             if dest_block !== nothing

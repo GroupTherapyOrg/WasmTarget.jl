@@ -3475,6 +3475,7 @@ function _trace_memmove_array(ptr_ssa, code, ctx::AbstractCompilationContext)
 
     # Should be memoryrefnew(base) or memoryrefnew(base, offset, boundscheck)
     # or getfield(vector, :ref) — broadcast pattern
+    # or PhiNode (sizehint! pattern where dest ref is selected via phi)
     if memref_stmt isa Expr && memref_stmt.head === :call
         fn = memref_stmt.args[1]
         if fn isa GlobalRef && fn.name === :memoryrefnew
@@ -3502,6 +3503,31 @@ function _trace_memmove_array(ptr_ssa, code, ctx::AbstractCompilationContext)
                 # Use _resolve_memref_to_array which handles getfield(..., :ref).
                 arr_ssa = _resolve_memref_to_array(memref_ssa, code)
                 return (arr_ssa !== nothing ? arr_ssa : memref_ssa, nothing)
+            end
+        end
+    elseif memref_stmt isa Core.PhiNode
+        # WBUILD-3001: PhiNode selecting between MemoryRef branches.
+        # Common in sizehint! where dest ref depends on shrink=true/false path.
+        # All phi branches typically reference the same underlying Memory.
+        # Trace each branch to find the base Memory (via _resolve_memref_to_array).
+        for val in memref_stmt.values
+            if val isa Core.SSAValue
+                branch_stmt = code[val.id]
+                if branch_stmt isa Expr && branch_stmt.head === :call
+                    fn2 = branch_stmt.args[1]
+                    if fn2 isa GlobalRef && fn2.name === :memoryrefnew
+                        # Trace memoryrefnew → base Memory
+                        base = length(branch_stmt.args) >= 2 ? branch_stmt.args[2] : nothing
+                        if base !== nothing
+                            arr_ssa = _resolve_memref_to_array(base, code)
+                            if arr_ssa !== nothing
+                                return (arr_ssa, nothing)
+                            end
+                            # Base is a Memory directly (from memorynew)
+                            return (base, nothing)
+                        end
+                    end
+                end
             end
         end
     end

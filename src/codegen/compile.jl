@@ -299,6 +299,8 @@ const SKIP_AUTODISCOVER_METHODS = Set([
     :println, :print,
     # PURE-9041: show/repr handled via JS imports
     :show,
+    # WBUILD-3001: Error constructors from sort/collections internals
+    :DimensionMismatch,
 ])
 
 """
@@ -329,6 +331,8 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     # WBUILD-2014: Unblock sort internals
     :log, Symbol("#_sort!#19"), :radix_chunk_size_heuristic,
     :radix_sort!, :partition!,
+    # WBUILD-3001: Unblock radix sort pass (uses ReinterpretArray, pure Julia)
+    :radix_sort_pass!, :_accumulate1!,
 ])
 
 """

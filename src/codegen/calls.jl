@@ -5138,7 +5138,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Float64
         source_is_f32 = source_type === Float32
 
-        if target_type === Int32
+        if target_type === Int32 || target_type === Int16 || target_type === Int8
             push!(bytes, source_is_f32 ? Opcode.I32_TRUNC_F32_S : Opcode.I32_TRUNC_F64_S)
         else  # Int64
             push!(bytes, source_is_f32 ? Opcode.I64_TRUNC_F32_S : Opcode.I64_TRUNC_F64_S)
@@ -5149,7 +5149,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Float64
         source_is_f32 = source_type === Float32
 
-        if target_type === UInt32
+        if target_type === UInt32 || target_type === UInt16 || target_type === UInt8
             push!(bytes, source_is_f32 ? Opcode.I32_TRUNC_F32_U : Opcode.I32_TRUNC_F64_U)
         else  # UInt64
             push!(bytes, source_is_f32 ? Opcode.I64_TRUNC_F32_U : Opcode.I64_TRUNC_F64_U)
