@@ -1655,6 +1655,14 @@ Compile an invoke expression (method invocation).
 """
 function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
     bytes = UInt8[]
+
+    # Early skip check — before compiling arguments.
+    # Skipped statements emit nothing (NOP). This prevents argument values
+    # (e.g., string constants for js() calls) from being compiled to WASM.
+    if idx in ctx.skip_stmts
+        return bytes
+    end
+
     args = expr.args[3:end]
 
 
@@ -4374,10 +4382,6 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     push!(bytes, Opcode.I64_CONST)
                     push!(bytes, 0x00)
                 end
-
-            elseif idx in ctx.skip_stmts
-                # Skipped statement — handled externally (e.g., Therapy.jl js() calls).
-                # Emit nothing (NOP) instead of UNREACHABLE.
 
             else
                 # Unknown method — emit unreachable (will trap at runtime)
