@@ -2,6 +2,23 @@
 
 This document provides comprehensive context for AI assistants working on WasmTarget.jl, including its purpose, architecture, development history, and future direction.
 
+## Julia Version Requirement: 1.12 ONLY
+
+**WasmTarget.jl requires Julia 1.12.** It will not work correctly on other versions.
+
+WasmTarget compiles Julia IR (`Base.code_typed()` output) to WebAssembly. The IR
+format, intrinsic representations, and internal data structures (e.g. GenericMemory
+for arrays) change between Julia versions. WasmTarget's codegen is written against
+1.12's specific IR patterns — different versions produce different IR that the
+compiler does not handle.
+
+**Known breakage on other versions:**
+- **Julia 1.13**: Broadcasting (`.+`, `.-`, `.*`, `./`) IR changed, breaking 6+ tests.
+  Other IR changes are likely but unaudited.
+- **Julia 1.11**: GenericMemory array internals differ. Untested.
+
+**Always use:** `julia +1.12 --project=. test/runtests.jl`
+
 ## Project Vision
 
 WasmTarget.jl is a Julia-to-WebAssembly compiler targeting WasmGC. It serves as the foundation for **Therapy.jl**, a planned reactive web framework that will bring Julia to the browser with a developer experience similar to React/SolidJS but with Julia's power and Leptos/Rust's performance characteristics.
