@@ -18,44 +18,34 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout WasmTarget.jl
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          path: WasmTarget.jl
-
-      - name: Checkout Therapy.jl
-        uses: actions/checkout@v4
-        with:
-          repository: GroupTherapyOrg/Therapy.jl
-          path: Therapy.jl
-          token: ${{ secrets.ORG_PAT }}
-
-      - name: Checkout Suite.jl
-        uses: actions/checkout@v4
-        with:
-          repository: GroupTherapyOrg/Suite.jl
-          path: Suite.jl
-          token: ${{ secrets.ORG_PAT }}
 
       - name: Setup Julia
         uses: julia-actions/setup-julia@v2
         with:
           version: '1.12'
 
-      - name: Install Therapy.jl dependencies
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install docs dependencies
         run: |
-          cd Therapy.jl
-          julia --project=. -e '
+          julia --project=docs -e '
             using Pkg
-            # Add WasmTarget.jl as a local dependency
-            Pkg.develop(path="../WasmTarget.jl")
+            Pkg.develop(path=".")
             Pkg.instantiate()
           '
 
+      - name: Build WASM examples
+        run: julia --project=docs docs/build_wasm_examples.jl
+
       - name: Build docs
-        run: |
-          cd WasmTarget.jl
-          julia --project=../Therapy.jl docs/app.jl build
+        run: julia --project=docs docs/make.jl
+        env:
+          CI: "true"
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
@@ -63,7 +53,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: WasmTarget.jl/docs/dist
+          path: docs/build
 
   deploy:
     environment:
