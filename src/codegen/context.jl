@@ -62,6 +62,10 @@ mutable struct CompilationContext <: AbstractCompilationContext
     # Skip statements: IR indices that should emit NOP instead of UNREACHABLE.
     # Used by Therapy.jl to skip js() calls that are handled externally in JS.
     skip_stmts::Set{Int}
+    # Invoke imports: IR indices that should emit CALL to a specific import function
+    # instead of normal compilation. Maps SSA index -> WASM import function index.
+    # Used by Therapy.jl to wire js() calls as WASM imports (Leptos pattern).
+    invoke_imports::Dict{Int, UInt32}
 end
 
 function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
@@ -73,7 +77,8 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
                            dom_bindings::Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}=Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}(),
                            module_globals::Vector{Tuple{Tuple{Module, Symbol}, UInt32}}=Tuple{Tuple{Module, Symbol}, UInt32}[],
                            dispatch_registry::Union{Nothing, DispatchTableRegistry}=nothing,
-                           skip_stmts::Set{Int}=Set{Int}())
+                           skip_stmts::Set{Int}=Set{Int}(),
+                           invoke_imports::Dict{Int, UInt32}=Dict{Int, UInt32}())
     # Calculate n_params excluding WasmGlobal arguments (they're phantom)
     n_real_params = count(i -> !(i in global_args), 1:length(arg_types))
     ctx = CompilationContext(
@@ -105,7 +110,8 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         Dict{Int, Int}(),       # slot_locals (PURE-6024: unoptimized IR slot variables)
         dispatch_registry,      # PURE-9060: Tier 2 hash dispatch
         nothing,                # PURE-9063: typeof scratch local (allocated on demand)
-        skip_stmts              # Skip statements (Therapy.jl js() interop)
+        skip_stmts,             # Skip statements (Therapy.jl js() interop)
+        invoke_imports          # Invoke imports (Therapy.jl js() as WASM imports)
     )
     # Analyze SSA types and allocate locals for multi-use SSAs
     analyze_ssa_types!(ctx)

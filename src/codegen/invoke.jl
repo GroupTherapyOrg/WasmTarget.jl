@@ -1663,6 +1663,15 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
         return bytes
     end
 
+    # Invoke import check — emit CALL to a WASM import function.
+    # Used by Therapy.jl to wire js() calls as WASM imports (Leptos pattern).
+    if haskey(ctx.invoke_imports, idx)
+        import_idx = ctx.invoke_imports[idx]
+        push!(bytes, Opcode.CALL)
+        append!(bytes, encode_leb128_unsigned(import_idx))
+        return bytes
+    end
+
     args = expr.args[3:end]
 
 

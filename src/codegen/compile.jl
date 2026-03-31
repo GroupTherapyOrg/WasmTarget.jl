@@ -2087,6 +2087,7 @@ function compile_closure_body(
     type_registry::TypeRegistry;
     dom_bindings::Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}} = Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}(),
     skip_stmts::Set{Int} = Set{Int}(),
+    invoke_imports::Dict{Int, UInt32} = Dict{Int, UInt32}(),
     void_return::Bool = false
 )
     # Get typed IR for the closure
@@ -2108,7 +2109,8 @@ function compile_closure_body(
         type_registry;
         captured_signal_fields = captured_signal_fields,
         dom_bindings = dom_bindings,
-        skip_stmts = skip_stmts
+        skip_stmts = skip_stmts,
+        invoke_imports = invoke_imports
     )
 
     # Generate body
