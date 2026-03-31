@@ -1158,6 +1158,80 @@ end
     return acc
 end
 
+# Phase 61 helpers: reverse, unique, findmax, findmin (WBUILD-1043)
+@inline function _t61_reverse_i64!(v::Vector{Int64})::Vector{Int64}
+    n = length(v)
+    for i in 1:(n ÷ 2)
+        v[i], v[n-i+1] = v[n-i+1], v[i]
+    end
+    return v
+end
+
+@inline function _t61_reverse_f64!(v::Vector{Float64})::Vector{Float64}
+    n = length(v)
+    for i in 1:(n ÷ 2)
+        v[i], v[n-i+1] = v[n-i+1], v[i]
+    end
+    return v
+end
+
+@inline function _t61_unique_i64(v::Vector{Int64})::Vector{Int64}
+    result = Int64[]
+    for i in 1:length(v)
+        found = false
+        for j in 1:length(result)
+            if result[j] == v[i]
+                found = true
+                break
+            end
+        end
+        if !found
+            push!(result, v[i])
+        end
+    end
+    return result
+end
+
+@inline function _t61_findmax_i64(v::Vector{Int64})::Int64
+    mx = v[1]; idx = Int64(1)
+    for i in 2:length(v)
+        if v[i] > mx
+            mx = v[i]; idx = Int64(i)
+        end
+    end
+    return mx * Int64(1000) + idx
+end
+
+@inline function _t61_findmin_i64(v::Vector{Int64})::Int64
+    mn = v[1]; idx = Int64(1)
+    for i in 2:length(v)
+        if v[i] < mn
+            mn = v[i]; idx = Int64(i)
+        end
+    end
+    return mn * Int64(1000) + idx
+end
+
+@inline function _t61_findmax_f64(v::Vector{Float64})::Float64
+    mx = v[1]
+    for i in 2:length(v)
+        if v[i] > mx
+            mx = v[i]
+        end
+    end
+    return mx
+end
+
+@inline function _t61_findmin_f64(v::Vector{Float64})::Float64
+    mn = v[1]
+    for i in 2:length(v)
+        if v[i] < mn
+            mn = v[i]
+        end
+    end
+    return mn
+end
+
 @testset "WasmTarget.jl" begin
 
     # ========================================================================
@@ -9395,6 +9469,183 @@ console.log(JSON.stringify({
                     return _t61_count_i64_even(v)  # 0
                 end
                 @test compare_julia_wasm(_t61_count_empty).pass
+            end
+        end
+
+        # ──────────────────────────────────────────────────────────────────
+        # WBUILD-1043: reverse, unique, findmax, findmin, argmax, argmin
+        # ──────────────────────────────────────────────────────────────────
+        @testset "reverse (WBUILD-1043)" begin
+
+            @testset "reverse Int64" begin
+                _t61_rev_i64_test()::Int64 = begin
+                    v = Int64[1, 2, 3, 4, 5]
+                    _t61_reverse_i64!(v)
+                    return v[1] * Int64(10000) + v[3] * Int64(100) + v[5]
+                end
+                @test compare_julia_wasm(_t61_rev_i64_test).pass  # 50301
+            end
+
+            @testset "reverse single" begin
+                _t61_rev_i64_single()::Int64 = begin
+                    v = Int64[42]
+                    _t61_reverse_i64!(v)
+                    return v[1]
+                end
+                @test compare_julia_wasm(_t61_rev_i64_single).pass
+            end
+
+            @testset "reverse two elements" begin
+                _t61_rev_i64_two()::Int64 = begin
+                    v = Int64[1, 2]
+                    _t61_reverse_i64!(v)
+                    return v[1] * Int64(10) + v[2]
+                end
+                @test compare_julia_wasm(_t61_rev_i64_two).pass  # 21
+            end
+
+            @testset "reverse Float64" begin
+                _t61_rev_f64_test()::Float64 = begin
+                    v = Float64[1.0, 2.0, 3.0]
+                    _t61_reverse_f64!(v)
+                    return v[1]
+                end
+                @test compare_julia_wasm(_t61_rev_f64_test).pass  # 3.0
+            end
+
+            @testset "reverse preserves elements" begin
+                _t61_rev_i64_sum()::Int64 = begin
+                    v = Int64[10, 20, 30, 40, 50]
+                    _t61_reverse_i64!(v)
+                    return _t61_sum_i64(v)  # 150 (same sum)
+                end
+                @test compare_julia_wasm(_t61_rev_i64_sum).pass
+            end
+        end
+
+        @testset "unique (WBUILD-1043)" begin
+
+            @testset "unique with duplicates" begin
+                _t61_unique_dups()::Int64 = begin
+                    v = Int64[3, 1, 4, 1, 5, 9, 2, 6, 5, 3]
+                    result = _t61_unique_i64(v)
+                    return Int64(length(result))  # 7
+                end
+                @test compare_julia_wasm(_t61_unique_dups).pass
+            end
+
+            @testset "unique all same" begin
+                _t61_unique_same()::Int64 = begin
+                    v = Int64[5, 5, 5, 5]
+                    result = _t61_unique_i64(v)
+                    return Int64(length(result))  # 1
+                end
+                @test compare_julia_wasm(_t61_unique_same).pass
+            end
+
+            @testset "unique all different" begin
+                _t61_unique_diff()::Int64 = begin
+                    v = Int64[1, 2, 3, 4, 5]
+                    result = _t61_unique_i64(v)
+                    return Int64(length(result))  # 5
+                end
+                @test compare_julia_wasm(_t61_unique_diff).pass
+            end
+
+            @testset "unique preserves order" begin
+                _t61_unique_order()::Int64 = begin
+                    v = Int64[3, 1, 3, 2, 1]
+                    result = _t61_unique_i64(v)
+                    # result should be [3, 1, 2]
+                    return result[1] * Int64(100) + result[2] * Int64(10) + result[3]
+                end
+                @test compare_julia_wasm(_t61_unique_order).pass  # 312
+            end
+
+            @testset "unique empty" begin
+                _t61_unique_empty()::Int64 = begin
+                    v = Int64[]
+                    result = _t61_unique_i64(v)
+                    return Int64(length(result))  # 0
+                end
+                @test compare_julia_wasm(_t61_unique_empty).pass
+            end
+        end
+
+        @testset "findmax/findmin (WBUILD-1043)" begin
+
+            @testset "findmax Int64" begin
+                _t61_findmax_test()::Int64 = begin
+                    v = Int64[3, 7, 1, 9, 4]
+                    return _t61_findmax_i64(v)  # 9*1000+4 = 9004
+                end
+                @test compare_julia_wasm(_t61_findmax_test).pass
+            end
+
+            @testset "findmin Int64" begin
+                _t61_findmin_test()::Int64 = begin
+                    v = Int64[3, 7, 1, 9, 4]
+                    return _t61_findmin_i64(v)  # 1*1000+3 = 1003
+                end
+                @test compare_julia_wasm(_t61_findmin_test).pass
+            end
+
+            @testset "findmax with negatives" begin
+                _t61_findmax_neg()::Int64 = begin
+                    v = Int64[-5, -1, -3, -2]
+                    return _t61_findmax_i64(v)  # -1*1000+2 = -998
+                end
+                @test compare_julia_wasm(_t61_findmax_neg).pass
+            end
+
+            @testset "findmin with negatives" begin
+                _t61_findmin_neg()::Int64 = begin
+                    v = Int64[-5, -1, -3, -2]
+                    return _t61_findmin_i64(v)  # -5*1000+1 = -4999
+                end
+                @test compare_julia_wasm(_t61_findmin_neg).pass
+            end
+
+            @testset "findmax Float64" begin
+                _t61_findmax_f64_test()::Float64 = begin
+                    v = Float64[1.5, 3.7, 2.1, 0.8]
+                    return _t61_findmax_f64(v)  # 3.7
+                end
+                @test compare_julia_wasm(_t61_findmax_f64_test).pass
+            end
+
+            @testset "findmin Float64" begin
+                _t61_findmin_f64_test()::Float64 = begin
+                    v = Float64[1.5, 3.7, 2.1, 0.8]
+                    return _t61_findmin_f64(v)  # 0.8
+                end
+                @test compare_julia_wasm(_t61_findmin_f64_test).pass
+            end
+
+            @testset "argmax (index of max)" begin
+                _t61_argmax_test()::Int64 = begin
+                    v = Int64[3, 7, 1, 9, 4]
+                    result = _t61_findmax_i64(v)
+                    return result % Int64(1000)  # index = 4
+                end
+                @test compare_julia_wasm(_t61_argmax_test).pass
+            end
+
+            @testset "argmin (index of min)" begin
+                _t61_argmin_test()::Int64 = begin
+                    v = Int64[3, 7, 1, 9, 4]
+                    result = _t61_findmin_i64(v)
+                    return result % Int64(1000)  # index = 3
+                end
+                @test compare_julia_wasm(_t61_argmin_test).pass
+            end
+
+            @testset "findmax single" begin
+                _t61_findmax_single()::Int64 = begin
+                    v = Int64[42]
+                    return _t61_findmax_i64(v)  # 42*1000+1 = 42001
+                end
+                @test compare_julia_wasm(_t61_findmax_single).pass
             end
         end
     end
