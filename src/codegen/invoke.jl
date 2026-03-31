@@ -2227,7 +2227,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
             # str_trim calls str_substr internally, so also broken when compiled standalone.
             # The inline handlers below (str_substr at line ~22446, str_trim at ~23572)
             # properly implement these using WasmGC array operations with caller scratch locals.
-            _skip_cross_call = name in (:str_substr, :str_trim)
+            _skip_cross_call = name in (:str_substr, :str_trim, :sizehint!, Symbol("#sizehint!#81"))
             if ctx.func_registry !== nothing && !is_self_call && !_skip_cross_call
                 # Try to find this function in our registry
                 called_func = nothing
@@ -4355,6 +4355,20 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     # Can't trace string — fallback to constant hash
                     push!(bytes, Opcode.I64_CONST)
                     push!(bytes, 0x00)
+                end
+
+            # WBUILD-3001: sizehint! is a memory optimization hint — no-op in WasmGC.
+            # WasmGC arrays have no capacity concept. Return the vector argument unchanged.
+            # sizehint!(v, n) → v; #sizehint!#81(shrink, first, sizehint!, v, n) → v
+            elseif name === :sizehint! || name === Symbol("#sizehint!#81")
+                @info "WBUILD-3001: sizehint! no-op handler reached" name=name nargs=length(args)
+                # The vector argument: for sizehint! it's args[1], for #sizehint!#81 it's args[4]
+                vec_arg = name === :sizehint! ? (length(args) >= 1 ? args[1] : nothing) :
+                          (length(args) >= 4 ? args[4] : nothing)
+                if vec_arg !== nothing
+                    append!(bytes, compile_value(vec_arg, ctx))
+                else
+                    push!(bytes, Opcode.UNREACHABLE)
                 end
 
             else

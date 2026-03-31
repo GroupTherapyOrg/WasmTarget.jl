@@ -301,6 +301,9 @@ const SKIP_AUTODISCOVER_METHODS = Set([
     :show,
     # WBUILD-3001: Error constructors from sort/collections internals
     :DimensionMismatch,
+    # WBUILD-3001: sizehint! is a memory optimization hint — no-op in WasmGC
+    # (WasmGC arrays have no capacity concept). Handled as identity in compile_invoke.
+    :sizehint!, Symbol("#sizehint!#81"),
 ])
 
 """
@@ -326,8 +329,10 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     # WBUILD-1040: Collection operations (pure Julia in 1.12)
     :reverse, Symbol("#sort#24"), :_sort!, :reverse!,
     :filter, Symbol("#filter#460"), :_similar_or_copy,
-    # WBUILD-2014: Unblock sum/reduce/prod for >15 elements + filter resize/sizehint
-    :mapreduce_impl, :resize!, :sizehint!, Symbol("#sizehint!#81"),
+    # WBUILD-2014: Unblock sum/reduce/prod for >15 elements + filter resize
+    :mapreduce_impl, :resize!,
+    # WBUILD-3001: unique(itr) at set.jl:224 needs Set, in!, push! — all compile cleanly
+    :unique,
     # WBUILD-2014: Unblock sort internals
     :log, Symbol("#_sort!#19"), :radix_chunk_size_heuristic,
     :radix_sort!, :partition!,
