@@ -1,13 +1,13 @@
 # Collections Coverage — WasmTarget.jl
 
-Updated: 2026-03-31 (M10-M11 completion)
+Updated: 2026-03-31 (M12 completion — Float64 sort fixed)
 
 ## Summary
 
 - **Phase 61**: 84 tests using @inline reimplementations (supplementary)
 - **Phase 62**: 10 bridge round-trip tests
-- **Phase 63**: 22 sort + 8 filter + 8 map + 6 sum + 2 reduce + 2 prod + 3 min + 3 max + 5 reverse + 3 any + 3 all + 3 count = **68 tests** using **REAL Base functions**
-- **11/12** Base collection functions work with real implementations
+- **Phase 63**: 86 tests using **REAL Base functions** (0 @test_broken)
+- **12/13** Base collection functions work with real implementations (unique deferred — needs Dict)
 - **Bridge**: dart2wasm-style Vector marshalling (create/get/set/len)
 
 ## Real Base Function Status
@@ -15,7 +15,7 @@ Updated: 2026-03-31 (M10-M11 completion)
 | Function | Status | Phase 63 Tests | Notes |
 |----------|--------|---------------|-------|
 | `sort(v)` Int64 | REAL_BASE | 21 | Any size incl. n=200, shuffled, duplicates, edge cases |
-| `sort(v)` Float64 | BROKEN | 1 (@test_broken) | ReinterpretArray stubs in radix sort path |
+| `sort(v)` Float64 | REAL_BASE | 17 | Any size, NaN→end, Inf/-Inf, -0.0/0.0 all correct |
 | `filter(pred, v)` | REAL_BASE | 8 | Any size, Int64 |
 | `map(f, v)` | REAL_BASE | 8 | Any size, Int64+Float64 |
 | `sum(v)` | REAL_BASE | 6 | 100+ elements (mapreduce_impl fixed) |
@@ -42,8 +42,18 @@ _bv_i64_len(v::Vector{Int64})::Int64 = Int64(length(v))
 
 ## Known Issues
 
-1. **sort(Float64)**: Compiles but radix sort path uses ReinterpretArray and `#send_to_end!#12` which are stubbed. Int64 sort works perfectly.
+1. **unique**: Requires Set{T}/Dict{T,Nothing} support. The dispatch chain: `unique(::Vector{Int64})` → AbstractArray method → `_unique_dims(A, :)` → `invoke(unique, Tuple{Any}, A)` → set.jl `unique(itr)` → creates `Set{T}()`. Dict is a major unimplemented feature (hash tables, probing, rehashing). Deferred until Dict support is added.
 
-2. **unique**: Infinite recursion in auto-discovery (resolves unique to itself). Even if fixed, requires Set{T}/Dict{T} support. Deferred.
+2. **Phase 61 reimplementations**: Still present as supplementary tests. They test WasmTarget's ability to compile Julia constructs (loops, push!, array access) but are not primary tests for any function that has a Phase 63 equivalent.
 
-3. **Phase 61 reimplementations**: Still present as supplementary tests. They test WasmTarget's ability to compile Julia constructs (loops, push!, array access) but are not primary tests for any function that has a Phase 63 equivalent.
+## Codegen Fixes for Float64 Sort (WBUILD-4000)
+
+Two changes enabled Float64 sort:
+- **values.jl**: `return_type_compatible` now allows EqRef/StructRef/AnyRef → ConcreteRef (needed for Union{Nothing,T} phi locals)
+- **stackified.jl**: Emit `ref.cast_null` when return value wasm type differs from function return type (needed for struct ref downcasting)
+
+## Harness Fixes for NaN/Inf (WBUILD-4002)
+
+- **utils.jl**: Float64 bridge serializes NaN→`NaN`, Inf→`Infinity`, -Inf→`-Infinity` in JS
+- **utils.jl**: JSON output uses string markers for NaN/Inf (JSON has no native representation)
+- **utils.jl**: `_parse_f64` unmarshals string markers back to Float64

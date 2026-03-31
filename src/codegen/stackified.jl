@@ -1877,6 +1877,15 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         push!(bytes, Opcode.F32_CONVERT_I64_S)
                     elseif val_wasm_type === I32 && func_ret_wasm === F32
                         push!(bytes, Opcode.F32_CONVERT_I32_S)
+                    # WBUILD-4000: Cast EqRef/StructRef to ConcreteRef for return
+                    elseif (val_wasm_type === EqRef || val_wasm_type === StructRef || val_wasm_type === AnyRef) && func_ret_wasm isa ConcreteRef
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.REF_CAST_NULL)
+                        append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                    elseif val_wasm_type isa ConcreteRef && func_ret_wasm isa ConcreteRef && val_wasm_type != func_ret_wasm
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.REF_CAST_NULL)
+                        append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
                     end
                     push!(bytes, Opcode.RETURN)
                 end

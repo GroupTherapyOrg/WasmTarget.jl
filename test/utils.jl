@@ -769,7 +769,8 @@ function _generate_bridge_loader(wasm_path, func_name, args, arg_types, return_v
             v = arg::Vector{Float64}
             push!(lines, "    const v$(i) = e._bv_f64_new($(length(v))n);")
             for (j, val) in enumerate(v)
-                push!(lines, "    e['_bv_f64_set!'](v$(i), $(j)n, $(val));")
+                js_val = isnan(val) ? "NaN" : isinf(val) ? (val > 0 ? "Infinity" : "-Infinity") : string(val)
+                push!(lines, "    e['_bv_f64_set!'](v$(i), $(j)n, $(js_val));")
             end
             push!(call_args, "v$(i)")
         elseif T === Int64 || T === Int
@@ -795,7 +796,13 @@ function _generate_bridge_loader(wasm_path, func_name, args, arg_types, return_v
     elseif return_vec_eltype === Float64
         push!(lines, "    const len = Number(e._bv_f64_len(result));")
         push!(lines, "    const out = [];")
-        push!(lines, "    for (let i = 0; i < len; i++) out.push(e._bv_f64_get(result, BigInt(i+1)));")
+        push!(lines, "    for (let i = 0; i < len; i++) {")
+        push!(lines, "      const v = e._bv_f64_get(result, BigInt(i+1));")
+        push!(lines, "      if (Number.isNaN(v)) out.push('NaN');")
+        push!(lines, "      else if (v === Infinity) out.push('Inf');")
+        push!(lines, "      else if (v === -Infinity) out.push('-Inf');")
+        push!(lines, "      else out.push(v);")
+        push!(lines, "    }")
         push!(lines, "    console.log(JSON.stringify(out));")
     else
         # Scalar result
@@ -896,10 +903,17 @@ function compare_julia_wasm_vec(f, args...)
             expected_nums = if eltype(expected) === Int64
                 [Int64(x) for x in expected]
             else
-                [Float64(x) for x in expected]
+                [_parse_f64(x) for x in expected]
             end
-            pass = actual isa Vector && length(actual) == length(expected_nums) &&
-                   all(i -> _approx_equal(actual[i], expected_nums[i]), 1:length(expected_nums))
+            actual_nums = if actual isa Vector && return_vec_eltype === Float64
+                [_parse_f64(x) for x in actual]
+            elseif actual isa Vector
+                actual
+            else
+                actual
+            end
+            pass = actual_nums isa Vector && length(actual_nums) == length(expected_nums) &&
+                   all(i -> _approx_equal(actual_nums[i], expected_nums[i]), 1:length(expected_nums))
         else
             pass = (expected == actual)
         end
@@ -911,6 +925,16 @@ function compare_julia_wasm_vec(f, args...)
         end
         rethrow()
     end
+end
+
+"""
+Parse a value to Float64, handling string markers for NaN/Inf.
+"""
+function _parse_f64(x)
+    x isa AbstractString && x == "NaN" && return NaN
+    x isa AbstractString && x == "Inf" && return Inf
+    x isa AbstractString && x == "-Inf" && return -Inf
+    return Float64(x)
 end
 
 """

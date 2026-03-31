@@ -9840,8 +9840,26 @@ console.log(JSON.stringify({
             @test compare_julia_wasm_vec(_p63_sort_i64, Int64[i for i in 200:-1:1]).pass     # n=200 descending
             @test compare_julia_wasm_vec(_p63_sort_i64, Int64[0 for _ in 1:100]).pass        # n=100 all zeros
             @test compare_julia_wasm_vec(_p63_sort_i64, Int64[typemax(Int64), typemin(Int64), typemax(Int64), typemin(Int64), 0, 0, typemax(Int64)]).pass  # boundary values repeated
-            # Float64 sort — radix sort path issue (type mismatch in _sort!)
-            @test_broken compare_julia_wasm_vec(_p63_sort_f64, Float64[3.0, 1.0, 2.0]).pass
+            # Float64 sort (WBUILD-4001) — fixed via ref.cast for return type + autodiscovery
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[3.0, 1.0, 2.0]).pass
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[5.5, 1.1, 3.3, 2.2, 4.4]).pass
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[1.0]).pass                    # single element
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[1.0, 2.0, 3.0]).pass          # already sorted
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[3.0, 2.0, 1.0]).pass          # reverse sorted
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[-3.5, -1.1, -2.2, 0.0, 1.5]).pass  # negatives + zero
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[-100.0, 50.5, -0.1, 0.1, 99.9, -99.9]).pass  # mixed
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[10.0, 9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0]).pass  # 10 desc
+            # Large arrays (trigger full sort chain, not just InsertionSort)
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[50.0 - i for i in 1:50]).pass   # n=50 descending
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[sin(Float64(i)) for i in 1:100]).pass  # n=100 sin wave
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[Float64(i % 7) + 0.1*i for i in 1:100]).pass  # n=100 mixed
+            # WBUILD-4002: NaN, Inf, -0.0 edge cases
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[3.0, NaN, 1.0, 2.0]).pass         # NaN sorted to end
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[NaN, 3.0, NaN, 1.0]).pass          # multiple NaN
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[Inf, 3.0, -Inf, 1.0, 0.0]).pass    # Inf/-Inf
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[-0.0, 0.0, -1.0, 1.0]).pass        # -0.0 and 0.0
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[NaN, Inf, -Inf, 0.0, -0.0]).pass   # all special values
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[5.0, NaN, -3.0, Inf, -Inf, 2.0, NaN, 0.0]).pass  # mixed
         end
 
         # ──────────────────────────────────────────────────────────────────

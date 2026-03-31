@@ -145,6 +145,19 @@ function return_type_compatible(value_type::WasmValType, return_type::WasmValTyp
     if value_type === I32 && return_type === I64
         return true
     end
+    # WBUILD-4000: EqRef/StructRef/AnyRef are compatible with ConcreteRef (needs ref.cast)
+    # This handles Union{Nothing, T} phi locals typed as EqRef when function returns ConcreteRef.
+    if return_type isa ConcreteRef
+        if value_type === EqRef || value_type === StructRef || value_type === AnyRef || value_type isa ConcreteRef
+            return true
+        end
+    end
+    # StructRef is compatible with ConcreteRef supertypes
+    if return_type === StructRef
+        if value_type === EqRef || value_type === AnyRef || value_type isa ConcreteRef
+            return true
+        end
+    end
     return false
 end
 
