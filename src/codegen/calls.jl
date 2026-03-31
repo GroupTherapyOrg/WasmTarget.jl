@@ -2090,9 +2090,12 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             # array.len returns i32, extend to i64 for Julia's Int
             push!(bytes, Opcode.I64_EXTEND_I32_S)
             return bytes
-        elseif arg_type <: AbstractVector
-            # For Vector, length is v.size[1] (logical size from struct field 2)
+        elseif arg_type <: Array
+            # For Vector/Array, length is v.size[1] (logical size from struct field 2)
             # Vector is now a struct with (typeId, ref, size) where size is Tuple{Int64}
+            # NOTE: Only matches Array{T,N} (Vector, Matrix), NOT other AbstractVector
+            # subtypes like StepRange, SubArray, ReinterpretArray — those fall through
+            # to cross-function call handling so their specific length() methods compile.
             if haskey(ctx.type_registry.structs, arg_type)
                 info = ctx.type_registry.structs[arg_type]
 
@@ -2117,12 +2120,6 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 end
                 return bytes
             end
-            # Fallback to array.len if struct not registered (shouldn't happen)
-            append!(bytes, compile_value(arg, ctx))
-            push!(bytes, Opcode.GC_PREFIX)
-            push!(bytes, Opcode.ARRAY_LEN)
-            push!(bytes, Opcode.I64_EXTEND_I32_S)
-            return bytes
         end
         # For other types, fall through to error
     end

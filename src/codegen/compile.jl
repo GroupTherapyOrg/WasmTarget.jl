@@ -338,6 +338,11 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     :radix_sort!, :partition!,
     # WBUILD-3001: Unblock radix sort pass (uses ReinterpretArray, pure Julia)
     :radix_sort_pass!, :_accumulate1!,
+    # WBUILD-4000: Unblock sort(Float64) — send_to_end! for NaN handling,
+    # copyto! for ReinterpretArray in radix sort, overflow_case for StepRange,
+    # length for non-Array AbstractVector (StepRange, SubArray, etc.)
+    :send_to_end!, Symbol("#send_to_end!#12"),
+    :copyto!, :overflow_case,
 ])
 
 """

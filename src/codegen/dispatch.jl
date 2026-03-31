@@ -319,7 +319,12 @@ function emit_dispatch_wrappers!(mod::WasmModule,
             # PURE-9061: Box numeric results when dispatch table uses anyref return
             if is_anyref_return
                 entry_wasm_type = julia_to_wasm_type(entry.return_type)
-                if entry_wasm_type in (I32, I64, F32, F64)
+                if entry.return_type === Nothing || entry.return_type === Union{}
+                    # WBUILD-4000: Target function returns void (Nothing/Union{}).
+                    # Push ref.null none as the anyref return value.
+                    push!(body, Opcode.REF_NULL)
+                    push!(body, UInt8(AnyRef))  # ref.null any → (ref null any) = anyref
+                elseif entry_wasm_type in (I32, I64, F32, F64)
                     # Box numeric result into a WasmGC struct: (struct (field typeId:i32) (field val:T))
                     box_idx = get_numeric_box_type!(mod, type_registry, entry_wasm_type)
                     # Stack has the numeric value; emit struct.new with typeId=0 + value
@@ -1029,7 +1034,11 @@ function _emit_table_wrappers!(mod::WasmModule,
         # Box numeric results when dispatch table uses anyref return
         if is_anyref_return
             entry_wasm_type = julia_to_wasm_type(entry.return_type)
-            if entry_wasm_type in (I32, I64, F32, F64)
+            if entry.return_type === Nothing || entry.return_type === Union{}
+                # WBUILD-4000: Target function returns void — push null anyref
+                push!(body, Opcode.REF_NULL)
+                push!(body, UInt8(AnyRef))
+            elseif entry_wasm_type in (I32, I64, F32, F64)
                 box_idx = get_numeric_box_type!(mod, type_registry, entry_wasm_type)
                 push!(body, Opcode.LOCAL_SET)
                 append!(body, encode_leb128_unsigned(UInt32(Int(dt.arity))))

@@ -2527,10 +2527,12 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     error("Unsupported power types: $(arg1_type) ^ $(arg2_type)")
                 end
 
-            elseif name === :length && (arg_type === String || arg_type <: AbstractVector || arg_type === Any || arg_type === Union{})
-                # String/array length - argument already pushed, emit array.len
-                # Only for types that are actually arrays in WasmGC (String, Vector, Any)
-                # SubString and other struct types must go through cross-function call
+            elseif name === :length && (arg_type === String || arg_type === Any || arg_type === Union{})
+                # String/Any length - argument already pushed, emit array.len
+                # Only for types that are actually WasmGC arrays (String, Any)
+                # Vector length is handled in calls.jl via struct_get on size field
+                # Other AbstractVector subtypes (StepRange, SubArray, ReinterpretArray)
+                # must go through cross-function call to their specific length() method
                 if arg_type === Any || arg_type === Union{}
                     push!(bytes, Opcode.GC_PREFIX)
                     push!(bytes, Opcode.ANY_CONVERT_EXTERN)  # externref → anyref
