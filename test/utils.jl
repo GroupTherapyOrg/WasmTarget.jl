@@ -676,6 +676,250 @@ function compare_against_ground_truth(name::String, f)
 end
 
 # ============================================================================
+# JS↔WasmGC Bridge — Vector Marshalling (dart2wasm pattern)
+# ============================================================================
+
+# Bridge functions for Vector{Int64}
+_bv_i64_new(n::Int64)::Vector{Int64} = Vector{Int64}(undef, n)
+_bv_i64_set!(v::Vector{Int64}, i::Int64, val::Int64)::Int64 = (v[i] = val; Int64(0))
+_bv_i64_get(v::Vector{Int64}, i::Int64)::Int64 = v[i]
+_bv_i64_len(v::Vector{Int64})::Int64 = Int64(length(v))
+
+# Bridge functions for Vector{Float64}
+_bv_f64_new(n::Int64)::Vector{Float64} = Vector{Float64}(undef, n)
+_bv_f64_set!(v::Vector{Float64}, i::Int64, val::Float64)::Int64 = (v[i] = val; Int64(0))
+_bv_f64_get(v::Vector{Float64}, i::Int64)::Float64 = v[i]
+_bv_f64_len(v::Vector{Float64})::Int64 = Int64(length(v))
+
+# Bridge function specs: (func, arg_types) tuples for compile_multi
+const BRIDGE_SPECS_I64 = [
+    (_bv_i64_new, (Int64,)),
+    (_bv_i64_set!, (Vector{Int64}, Int64, Int64)),
+    (_bv_i64_get, (Vector{Int64}, Int64)),
+    (_bv_i64_len, (Vector{Int64},)),
+]
+
+const BRIDGE_SPECS_F64 = [
+    (_bv_f64_new, (Int64,)),
+    (_bv_f64_set!, (Vector{Float64}, Int64, Float64)),
+    (_bv_f64_get, (Vector{Float64}, Int64)),
+    (_bv_f64_len, (Vector{Float64},)),
+]
+
+"""
+    _needs_bridge(arg_types) -> (needs_i64::Bool, needs_f64::Bool)
+
+Check if any argument types require the bridge for Vector marshalling.
+"""
+function _needs_bridge(arg_types)
+    needs_i64 = any(T -> T === Vector{Int64}, arg_types)
+    needs_f64 = any(T -> T === Vector{Float64}, arg_types)
+    return (needs_i64, needs_f64)
+end
+
+"""
+    _returns_vector(f, arg_types) -> Union{Nothing, Type}
+
+Check if function returns a Vector type. Returns the element type or nothing.
+"""
+function _returns_vector(f, arg_types)
+    ci, rt = Base.code_typed(f, arg_types; optimize=true)[1]
+    if rt <: Vector{Int64}
+        return Int64
+    elseif rt <: Vector{Float64}
+        return Float64
+    end
+    return nothing
+end
+
+"""
+    _generate_bridge_loader(func_name, args, arg_types, return_vec_eltype) -> String
+
+Generate JavaScript loader code that uses bridge functions to marshal Vector args.
+"""
+function _generate_bridge_loader(wasm_path, func_name, args, arg_types, return_vec_eltype)
+    lines = String[]
+    push!(lines, "import fs from 'fs';")
+    push!(lines, "const bytes = fs.readFileSync('$(escape_string(wasm_path))');")
+    push!(lines, "async function run() {")
+    push!(lines, "  try {")
+    push!(lines, "    const importObject = { Math: { pow: Math.pow } };")
+    push!(lines, "    const wasmModule = await WebAssembly.instantiate(bytes, importObject);")
+    push!(lines, "    const e = wasmModule.instance.exports;")
+
+    # Marshal each argument
+    call_args = String[]
+    for (i, (arg, T)) in enumerate(zip(args, arg_types))
+        if T === Vector{Int64}
+            v = arg::Vector{Int64}
+            push!(lines, "    const v$(i) = e._bv_i64_new($(length(v))n);")
+            for (j, val) in enumerate(v)
+                push!(lines, "    e['_bv_i64_set!'](v$(i), $(j)n, $(val)n);")
+            end
+            push!(call_args, "v$(i)")
+        elseif T === Vector{Float64}
+            v = arg::Vector{Float64}
+            push!(lines, "    const v$(i) = e._bv_f64_new($(length(v))n);")
+            for (j, val) in enumerate(v)
+                push!(lines, "    e['_bv_f64_set!'](v$(i), $(j)n, $(val));")
+            end
+            push!(call_args, "v$(i)")
+        elseif T === Int64 || T === Int
+            push!(call_args, "$(arg)n")
+        elseif T === Int32
+            push!(call_args, "$(arg)")
+        elseif T === Float64 || T === Float32
+            push!(call_args, "$(arg)")
+        else
+            push!(call_args, repr(arg))
+        end
+    end
+
+    # Call the function
+    push!(lines, "    const result = e['$(func_name)']($(join(call_args, ", ")));")
+
+    # Extract result
+    if return_vec_eltype === Int64
+        push!(lines, "    const len = Number(e._bv_i64_len(result));")
+        push!(lines, "    const out = [];")
+        push!(lines, "    for (let i = 0; i < len; i++) out.push(Number(e._bv_i64_get(result, BigInt(i+1))));")
+        push!(lines, "    console.log(JSON.stringify(out));")
+    elseif return_vec_eltype === Float64
+        push!(lines, "    const len = Number(e._bv_f64_len(result));")
+        push!(lines, "    const out = [];")
+        push!(lines, "    for (let i = 0; i < len; i++) out.push(e._bv_f64_get(result, BigInt(i+1)));")
+        push!(lines, "    console.log(JSON.stringify(out));")
+    else
+        # Scalar result
+        push!(lines, """    const serialized = JSON.stringify(result, (key, value) => {
+      if (typeof value === 'bigint') return { __bigint__: value.toString() };
+      return value;
+    });""")
+        push!(lines, "    console.log(serialized);")
+    end
+
+    push!(lines, "  } catch (e) {")
+    push!(lines, "    console.error('Wasm execution error:', e.message);")
+    push!(lines, "    process.exit(1);")
+    push!(lines, "  }")
+    push!(lines, "}")
+    push!(lines, "run();")
+
+    return join(lines, "\n")
+end
+
+"""
+    compare_julia_wasm_vec(f, args...) -> NamedTuple
+
+Like compare_julia_wasm but handles Vector{Int64} and Vector{Float64} arguments
+via the JS↔WasmGC bridge pattern (dart2wasm style).
+
+Bridge functions are compiled alongside `f` via compile_multi. The JS loader
+uses bridge.new/set to create WasmGC vectors from JS arrays, calls the real
+function, then uses bridge.get/len to extract results.
+
+# Example
+```julia
+f_sort(v::Vector{Int64})::Vector{Int64} = sort(v)
+r = compare_julia_wasm_vec(f_sort, Int64[3, 1, 2])
+@test r.pass  # expected=[1,2,3], actual=[1,2,3]
+```
+"""
+function compare_julia_wasm_vec(f, args...)
+    if NODE_CMD === nothing
+        expected = f(args...)
+        return (pass=true, expected=expected, actual=nothing, skipped=true)
+    end
+
+    # 1. Run natively in Julia
+    expected = f(args...)
+
+    # 2. Determine which bridges are needed
+    arg_types = map(typeof, args)
+    needs_i64, needs_f64 = _needs_bridge(arg_types)
+    return_vec_eltype = _returns_vector(f, Tuple(arg_types))
+
+    # Also need bridge for return type
+    if return_vec_eltype === Int64
+        needs_i64 = true
+    elseif return_vec_eltype === Float64
+        needs_f64 = true
+    end
+
+    # 3. Build compile_multi function list
+    func_list = Any[(f, Tuple(arg_types))]
+    if needs_i64
+        append!(func_list, BRIDGE_SPECS_I64)
+    end
+    if needs_f64
+        append!(func_list, BRIDGE_SPECS_F64)
+    end
+
+    # 4. Compile
+    bytes = WasmTarget.compile_multi(func_list)
+
+    # 5. Generate bridge-aware loader and run
+    func_name = string(nameof(f))
+    dir = mktempdir()
+    wasm_path = joinpath(dir, "module.wasm")
+    js_path = joinpath(dir, "loader.mjs")
+
+    write(wasm_path, bytes)
+    loader_code = _generate_bridge_loader(wasm_path, func_name, args, arg_types, return_vec_eltype)
+    open(js_path, "w") do io
+        print(io, loader_code)
+    end
+
+    # 6. Execute
+    try
+        node_cmd = NEEDS_EXPERIMENTAL_FLAG ? `$NODE_CMD --experimental-wasm-gc $js_path` : `$NODE_CMD $js_path`
+        output = read(pipeline(node_cmd; stderr=stderr), String)
+        output = strip(output)
+
+        if isempty(output)
+            return (pass=false, expected=expected, actual=nothing, skipped=false)
+        end
+
+        result = JSON.parse(output)
+        actual = unmarshal_result(result)
+
+        # For Vector returns, compare element-by-element
+        if expected isa Vector
+            expected_nums = if eltype(expected) === Int64
+                [Int64(x) for x in expected]
+            else
+                [Float64(x) for x in expected]
+            end
+            pass = actual isa Vector && length(actual) == length(expected_nums) &&
+                   all(i -> _approx_equal(actual[i], expected_nums[i]), 1:length(expected_nums))
+        else
+            pass = (expected == actual)
+        end
+
+        return (pass=pass, expected=expected, actual=actual, skipped=false)
+    catch e
+        if e isa ProcessFailedException
+            return (pass=false, expected=expected, actual="WASM_ERROR", skipped=false)
+        end
+        rethrow()
+    end
+end
+
+"""
+Approximate equality for float comparisons.
+"""
+function _approx_equal(a, b)
+    if a isa AbstractFloat || b isa AbstractFloat
+        fa, fb = Float64(a), Float64(b)
+        if isnan(fa) && isnan(fb)
+            return true
+        end
+        return isapprox(fa, fb; atol=1e-10, rtol=1e-10)
+    end
+    return a == b
+end
+
+# ============================================================================
 # Debug Utilities
 # ============================================================================
 

@@ -1232,6 +1232,40 @@ end
     return mn
 end
 
+# Phase 63 helpers: Real Base function wrappers (module-level to avoid closure issues)
+# These call REAL Base functions — NOT reimplementations.
+# They use compare_julia_wasm_vec for Vector marshalling via the bridge.
+
+# Predicates for filter/any/all/count (must be module-level for compile_multi)
+@inline _p63_iseven(x::Int64)::Bool = x % Int64(2) == Int64(0)
+@inline _p63_ispositive(x::Int64)::Bool = x > Int64(0)
+@inline _p63_double(x::Int64)::Int64 = x * Int64(2)
+@inline _p63_square(x::Int64)::Int64 = x * x
+@inline _p63_iseven_f64(x::Float64)::Bool = Float64(Int64(x)) == x && Int64(x) % Int64(2) == Int64(0)
+@inline _p63_double_f64(x::Float64)::Float64 = x * 2.0
+
+# Real Base function wrappers
+_p63_map_double(v::Vector{Int64})::Vector{Int64} = map(_p63_double, v)
+_p63_map_square(v::Vector{Int64})::Vector{Int64} = map(_p63_square, v)
+_p63_map_double_f64(v::Vector{Float64})::Vector{Float64} = map(_p63_double_f64, v)
+_p63_any_positive(v::Vector{Int64})::Int32 = Int32(any(_p63_ispositive, v))
+_p63_all_positive(v::Vector{Int64})::Int32 = Int32(all(_p63_ispositive, v))
+_p63_count_even(v::Vector{Int64})::Int64 = Int64(count(_p63_iseven, v))
+_p63_sum_i64(v::Vector{Int64})::Int64 = sum(v)
+_p63_sum_f64(v::Vector{Float64})::Float64 = sum(v)
+_p63_prod_i64(v::Vector{Int64})::Int64 = prod(v)
+_p63_reduce_plus(v::Vector{Int64})::Int64 = reduce(+, v)
+_p63_minimum_i64(v::Vector{Int64})::Int64 = minimum(v)
+_p63_maximum_i64(v::Vector{Int64})::Int64 = maximum(v)
+_p63_minimum_f64(v::Vector{Float64})::Float64 = minimum(v)
+_p63_maximum_f64(v::Vector{Float64})::Float64 = maximum(v)
+_p63_reverse_i64(v::Vector{Int64})::Vector{Int64} = reverse(v)
+_p63_reverse_f64(v::Vector{Float64})::Vector{Float64} = reverse(v)
+_p63_identity_i64(v::Vector{Int64})::Vector{Int64} = v
+_p63_identity_f64(v::Vector{Float64})::Vector{Float64} = v
+_p63_sort_i64(v::Vector{Int64})::Vector{Int64} = sort(v)
+_p63_sort_f64(v::Vector{Float64})::Vector{Float64} = sort(v)
+
 @testset "WasmTarget.jl" begin
 
     # ========================================================================
@@ -9647,6 +9681,145 @@ console.log(JSON.stringify({
                 end
                 @test compare_julia_wasm(_t61_findmax_single).pass
             end
+        end
+    end
+
+    # ========================================================================
+    # Phase 62: JS↔WasmGC Bridge Tests (WBUILD-2013)
+    # ========================================================================
+    # Tests the bridge infrastructure itself — Vector round-trips, edge cases.
+    # Uses compare_julia_wasm_vec which compiles bridge functions alongside user code.
+    @testset "Phase 62: Bridge Tests (WBUILD-2013)" begin
+
+        @testset "Vector{Int64} round-trip" begin
+            @test compare_julia_wasm_vec(_p63_identity_i64, Int64[1, 2, 3]).pass
+            @test compare_julia_wasm_vec(_p63_identity_i64, Int64[]).pass
+            @test compare_julia_wasm_vec(_p63_identity_i64, Int64[42]).pass
+            @test compare_julia_wasm_vec(_p63_identity_i64, Int64[-1, 0, 1]).pass
+            # Large vector
+            @test compare_julia_wasm_vec(_p63_identity_i64, collect(Int64, 1:100)).pass
+        end
+
+        @testset "Vector{Float64} round-trip" begin
+            @test compare_julia_wasm_vec(_p63_identity_f64, Float64[1.5, 2.5, 3.5]).pass
+            @test compare_julia_wasm_vec(_p63_identity_f64, Float64[]).pass
+            @test compare_julia_wasm_vec(_p63_identity_f64, Float64[42.0]).pass
+            @test compare_julia_wasm_vec(_p63_identity_f64, Float64[-1.1, 0.0, 1.1]).pass
+            @test compare_julia_wasm_vec(_p63_identity_f64, collect(Float64, 1.0:100.0)).pass
+        end
+    end
+
+    # ========================================================================
+    # Phase 63: Real Base Collections (WBUILD-2020+)
+    # ========================================================================
+    # Tests REAL Base functions via the bridge. NO reimplementations.
+    # Every function here calls the actual Base.sort/filter/map/etc.
+    @testset "Phase 63: Real Base Collections (WBUILD-2020)" begin
+
+        # ──────────────────────────────────────────────────────────────────
+        # WBUILD-2020: map (CLEAN — no stubs, works for any size)
+        # ──────────────────────────────────────────────────────────────────
+        @testset "Base.map (WBUILD-2020)" begin
+            @testset "map(double, Vector{Int64})" begin
+                @test compare_julia_wasm_vec(_p63_map_double, Int64[1, 2, 3]).pass
+                @test compare_julia_wasm_vec(_p63_map_double, Int64[]).pass
+                @test compare_julia_wasm_vec(_p63_map_double, Int64[-5, 0, 5]).pass
+                @test compare_julia_wasm_vec(_p63_map_double, collect(Int64, 1:50)).pass
+            end
+            @testset "map(square, Vector{Int64})" begin
+                @test compare_julia_wasm_vec(_p63_map_square, Int64[1, 2, 3, 4]).pass
+                @test compare_julia_wasm_vec(_p63_map_square, Int64[-3, -2, -1, 0]).pass
+            end
+            @testset "map(double, Vector{Float64})" begin
+                @test compare_julia_wasm_vec(_p63_map_double_f64, Float64[1.5, 2.5]).pass
+                @test compare_julia_wasm_vec(_p63_map_double_f64, Float64[-1.0, 0.0, 1.0]).pass
+            end
+        end
+
+        # ──────────────────────────────────────────────────────────────────
+        # WBUILD-2021: any/all/count (CLEAN — no stubs)
+        # ──────────────────────────────────────────────────────────────────
+        @testset "Base.any/all/count (WBUILD-2021)" begin
+            @testset "any(ispositive)" begin
+                @test compare_julia_wasm_vec(_p63_any_positive, Int64[-1, -2, 3]).pass
+                @test compare_julia_wasm_vec(_p63_any_positive, Int64[-1, -2, -3]).pass
+                @test compare_julia_wasm_vec(_p63_any_positive, Int64[1, 2, 3]).pass
+            end
+            @testset "all(ispositive)" begin
+                @test compare_julia_wasm_vec(_p63_all_positive, Int64[1, 2, 3]).pass
+                @test compare_julia_wasm_vec(_p63_all_positive, Int64[1, -1, 3]).pass
+                @test compare_julia_wasm_vec(_p63_all_positive, Int64[-1, -2, -3]).pass
+            end
+            @testset "count(iseven)" begin
+                @test compare_julia_wasm_vec(_p63_count_even, Int64[1, 2, 3, 4, 5, 6]).pass
+                @test compare_julia_wasm_vec(_p63_count_even, Int64[1, 3, 5]).pass
+                @test compare_julia_wasm_vec(_p63_count_even, Int64[2, 4, 6]).pass
+            end
+        end
+
+        # ──────────────────────────────────────────────────────────────────
+        # WBUILD-2022: sum/reduce/prod/minimum/maximum (≤15 elements)
+        # ──────────────────────────────────────────────────────────────────
+        @testset "Base.sum/reduce/prod (WBUILD-2022)" begin
+            @testset "sum(Vector{Int64})" begin
+                @test compare_julia_wasm_vec(_p63_sum_i64, Int64[1, 2, 3, 4, 5]).pass
+                @test compare_julia_wasm_vec(_p63_sum_i64, Int64[-10, 10]).pass
+                @test compare_julia_wasm_vec(_p63_sum_i64, Int64[0, 0, 0]).pass
+                @test compare_julia_wasm_vec(_p63_sum_i64, collect(Int64, 1:15)).pass
+                # Large arrays (>15 elements — uses mapreduce_impl, fixed by WBUILD-2014)
+                @test compare_julia_wasm_vec(_p63_sum_i64, collect(Int64, 1:16)).pass
+                @test compare_julia_wasm_vec(_p63_sum_i64, collect(Int64, 1:100)).pass
+            end
+            @testset "sum(Vector{Float64})" begin
+                @test compare_julia_wasm_vec(_p63_sum_f64, Float64[1.5, 2.5, 3.5]).pass
+                @test compare_julia_wasm_vec(_p63_sum_f64, Float64[-1.0, 1.0]).pass
+            end
+            @testset "reduce(+)" begin
+                @test compare_julia_wasm_vec(_p63_reduce_plus, Int64[1, 2, 3, 4, 5]).pass
+                @test compare_julia_wasm_vec(_p63_reduce_plus, Int64[10, 20, 30]).pass
+            end
+            @testset "prod" begin
+                @test compare_julia_wasm_vec(_p63_prod_i64, Int64[2, 3, 4, 5]).pass
+                @test compare_julia_wasm_vec(_p63_prod_i64, Int64[1, 1, 1]).pass
+            end
+            @testset "minimum/maximum Int64" begin
+                @test compare_julia_wasm_vec(_p63_minimum_i64, Int64[5, 3, 8, 1, 4]).pass
+                @test compare_julia_wasm_vec(_p63_maximum_i64, Int64[5, 3, 8, 1, 4]).pass
+                @test compare_julia_wasm_vec(_p63_minimum_i64, Int64[-10, -5, -20]).pass
+                @test compare_julia_wasm_vec(_p63_maximum_i64, Int64[-10, -5, -20]).pass
+            end
+            @testset "minimum/maximum Float64" begin
+                @test compare_julia_wasm_vec(_p63_minimum_f64, Float64[5.5, 1.1, 3.3]).pass
+                @test compare_julia_wasm_vec(_p63_maximum_f64, Float64[5.5, 1.1, 3.3]).pass
+            end
+        end
+
+        # ──────────────────────────────────────────────────────────────────
+        # WBUILD-2023: reverse (works for any size)
+        # ──────────────────────────────────────────────────────────────────
+        @testset "Base.reverse (WBUILD-2023)" begin
+            @test compare_julia_wasm_vec(_p63_reverse_i64, Int64[1, 2, 3, 4]).pass
+            @test compare_julia_wasm_vec(_p63_reverse_i64, Int64[42]).pass
+            @test compare_julia_wasm_vec(_p63_reverse_i64, Int64[-1, 0, 1]).pass
+            @test compare_julia_wasm_vec(_p63_reverse_f64, Float64[1.1, 2.2, 3.3]).pass
+            @test compare_julia_wasm_vec(_p63_reverse_f64, Float64[42.0]).pass
+        end
+
+        # ──────────────────────────────────────────────────────────────────
+        # WBUILD-2020: sort — known issue, stubs cause wrong results
+        # ──────────────────────────────────────────────────────────────────
+        @testset "Base.sort (WBUILD-2020)" begin
+            # sort compiles but internals (radix_sort!, partition!) still cause issues
+            @test_broken compare_julia_wasm_vec(_p63_sort_i64, Int64[3, 1, 2]).pass
+            @test_broken compare_julia_wasm_vec(_p63_sort_f64, Float64[3.0, 1.0, 2.0]).pass
+        end
+
+        # ──────────────────────────────────────────────────────────────────
+        # WBUILD-2021: filter — hits unreachable (bounds check or resize issue)
+        # ──────────────────────────────────────────────────────────────────
+        @testset "Base.filter (WBUILD-2021)" begin
+            _p63_filter_even(v::Vector{Int64})::Vector{Int64} = filter(_p63_iseven, v)
+            @test_broken compare_julia_wasm_vec(_p63_filter_even, Int64[1, 2, 3, 4, 5, 6]).pass
         end
     end
 
