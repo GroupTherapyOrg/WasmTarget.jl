@@ -21,16 +21,30 @@ end
 ## Importing JS Functions
 
 Use `add_import!` on a `WasmModule` to declare functions the host
-(JavaScript) must provide:
+(JavaScript) must provide.
+
+There are two overloads:
+
+- `add_import!(mod, module_name, field_name, params::Vector{NumType}, results::Vector{NumType})`
+  for pure numeric signatures (I32, I64, F32, F64 only).
+- `add_import!(mod, module_name, field_name, params::Vector{<:WasmValType}, results::Vector{<:WasmValType})`
+  for signatures that include reference types like `ExternRef`.
+
+Since `ExternRef` is a `RefType` (not a `NumType`), you must use the
+`WasmValType` overload when externref appears in the signature:
 
 ```julia
 mod = WasmModule()
 
 # Import: dom.set_text(element: externref, text: i32) -> void
-add_import!(mod, "dom", "set_text", [ExternRef, I32], [])
+# ExternRef is a RefType, so use WasmValType[...] to get the WasmValType overload
+add_import!(mod, "dom", "set_text", WasmValType[ExternRef, I32], WasmValType[])
 
 # Import: dom.get_value(element: externref) -> i32
-add_import!(mod, "dom", "get_value", [ExternRef], [I32])
+add_import!(mod, "dom", "get_value", WasmValType[ExternRef], WasmValType[I32])
+
+# Pure numeric imports can use plain NumType vectors
+add_import!(mod, "math", "add", [I32, I32], [I32])
 ```
 
 In JavaScript, provide the imports when instantiating:
@@ -96,36 +110,59 @@ Key properties:
 - **Julia-testable**: `g[] = x` and `g[]` work in Julia for testing.
 - **Shared state**: Multiple functions in the same `compile_multi` share globals.
 
-## The Bridge Pattern
+## Manual Vector Bridge (not auto-generated)
 
-For functions that operate on `Vector{T}`, the compiler exports factory
-and accessor functions alongside the main function:
+When a function operates on `Vector{T}`, JavaScript cannot directly
+create WasmGC array references.  You must **manually** compile bridge
+functions alongside your code using `compile_multi`.  The compiler does
+**not** auto-export `vec_new`/`vec_get`/`vec_set`/`vec_len`.
+
+Define bridge functions that create, read, and write vectors:
 
 ```julia
+# Your actual function
 my_sum(v::Vector{Float64})::Float64 = sum(v)
-bytes = compile(my_sum, (Vector{Float64},))
+
+# Bridge functions — you write these yourself
+bv_new(n::Int64)::Vector{Float64} = Vector{Float64}(undef, n)
+bv_set!(v::Vector{Float64}, i::Int64, val::Float64)::Int64 = (v[i] = val; Int64(0))
+bv_get(v::Vector{Float64}, i::Int64)::Float64 = v[i]
+bv_len(v::Vector{Float64})::Int64 = Int64(length(v))
+
+# Compile everything together so they share the same WasmGC type space
+bytes = compile_multi([
+    (my_sum,  (Vector{Float64},)),
+    (bv_new,  (Int64,)),
+    (bv_set!, (Vector{Float64}, Int64, Float64)),
+    (bv_get,  (Vector{Float64}, Int64)),
+    (bv_len,  (Vector{Float64},)),
+])
 ```
 
-The module exports:
+The module now exports all five functions:
 
 | Export | Signature | Purpose |
 |:-------|:----------|:--------|
 | `my_sum` | `(ref) -> f64` | The user function |
-| `vec_new` | `(i32) -> ref` | Create vector of given length |
-| `vec_get` | `(ref, i32) -> f64` | Get element at index |
-| `vec_set` | `(ref, i32, f64) -> void` | Set element at index |
-| `vec_len` | `(ref) -> i32` | Get vector length |
+| `bv_new` | `(i64) -> ref` | Create vector of given length |
+| `bv_get` | `(ref, i64) -> f64` | Get element at index |
+| `bv_set!` | `(ref, i64, f64) -> i64` | Set element at index |
+| `bv_len` | `(ref) -> i64` | Get vector length |
 
 JavaScript uses these to marshal arrays:
 
 ```javascript
-const { my_sum, vec_new, vec_get, vec_set } = instance.exports;
-const v = vec_new(3);
-vec_set(v, 0, 1.0);
-vec_set(v, 1, 2.0);
-vec_set(v, 2, 3.0);
-console.log(my_sum(v)); // 6.0
+const e = instance.exports;
+const v = e.bv_new(3n);        // BigInt for i64
+e["bv_set!"](v, 1n, 1.0);     // 1-based indexing (Julia)
+e["bv_set!"](v, 2n, 2.0);
+e["bv_set!"](v, 3n, 3.0);
+console.log(e.my_sum(v));      // 6.0
 ```
+
+This pattern comes from WasmTarget.jl's own test harness
+(`test/utils.jl`), which uses the same `compile_multi` approach to
+test functions that accept `Vector{Int64}` and `Vector{Float64}`.
 
 ## Tables and Indirect Calls
 
@@ -133,8 +170,14 @@ WASM tables (`funcref` / `externref`) enable dynamic dispatch:
 
 ```julia
 mod = WasmModule()
-add_table!(mod, :funcref, 10)  # Table of 10 function references
+add_table!(mod, FuncRef, 10)       # Table of 10 function references
+add_table!(mod, ExternRef, 5)      # Table of 5 externref slots
+add_table!(mod, FuncRef, 4, 16)    # min=4, max=16
 ```
+
+The signature is `add_table!(mod, reftype::RefType, min, max=nothing)`,
+where `reftype` is a `RefType` enum value (`FuncRef` or `ExternRef`),
+not a symbol.
 
 `call_indirect` looks up a function in the table at runtime.  This is
 the foundation for multiple dispatch in WASM.
