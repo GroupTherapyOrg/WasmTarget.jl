@@ -68,6 +68,7 @@ mutable struct TypeRegistry
     # PURE-9063: Type lookup table — typeId (i32) → DataType struct ref
     type_lookup_array_idx::Union{Nothing, UInt32}  # Array type: (array (mut (ref null $JlDataType)))
     type_lookup_global::Union{Nothing, UInt32}  # Global holding the lookup array
+    type_lookup_table_size::Int32  # WBUILD-4000: Table size at creation time (guards late-arriving types)
     # PURE-9063: $JlType hierarchy struct type indices
     jl_type_idx::Union{Nothing, UInt32}       # $JlType = (struct (field $kind i32))
     jl_datatype_idx::Union{Nothing, UInt32}   # $JlDataType (sub $JlType) — most Julia types
@@ -85,7 +86,7 @@ TypeRegistry() = TypeRegistry(
     Dict{Union, UnionInfo}(), Dict{WasmValType, UInt32}(),
     Dict{Type, UInt32}(), Dict{Core.TypeName, UInt32}(),
     Dict{Type, Int32}(), Dict{Type, Tuple{Int32, Int32}}(),
-    nothing, nothing, nothing, nothing, nothing,
+    nothing, nothing, nothing, nothing, nothing, Int32(0),
     nothing, nothing, nothing, nothing, nothing, nothing, nothing,
     nothing  # string_hash_func_idx
 )
@@ -1629,6 +1630,7 @@ function create_type_lookup_table!(mod::WasmModule, registry::TypeRegistry)
 
     global_idx = add_global_ref!(mod, arr_type_idx, true, init_bytes; nullable=false)
     registry.type_lookup_global = global_idx
+    registry.type_lookup_table_size = table_size  # WBUILD-4000: record for OOB guard
 end
 
 """
@@ -1650,10 +1652,16 @@ function populate_type_lookup_table!(body::Vector{UInt8}, registry::TypeRegistry
     table_global = registry.type_lookup_global
     arr_type_idx = registry.type_lookup_array_idx
 
+    # WBUILD-4000: Compute table size (must match create_type_lookup_table! sizing).
+    # Types registered after create_type_lookup_table! (via ensure_type_id! during body
+    # compilation) may have IDs exceeding the table size — skip those to avoid OOB.
+    table_size = registry.type_lookup_table_size
+
     # For each concrete type with a DFS ID and a DataType global, populate the table
     for (T, type_id) in registry.type_ids
         T isa DataType || continue
         haskey(registry.type_constant_globals, T) || continue
+        type_id >= table_size && continue  # Skip late-arriving types that exceed table bounds
         dt_global_idx = registry.type_constant_globals[T]
 
         # global.get $type_table

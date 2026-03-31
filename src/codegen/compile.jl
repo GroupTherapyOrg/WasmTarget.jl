@@ -342,7 +342,8 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     # copyto! for ReinterpretArray in radix sort, overflow_case for StepRange,
     # length for non-Array AbstractVector (StepRange, SubArray, etc.)
     :send_to_end!, Symbol("#send_to_end!#12"),
-    :copyto!, :overflow_case,
+    :copyto!, :overflow_case, :steprange_last,
+    :length,
 ])
 
 """
@@ -386,7 +387,14 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
             if func_type isa DataType && func_type <: Function
                 # Regular function call
                 # The function is stored in the Method's sig
-                func = getfield(mod, meth_name)
+                func = try
+                    getfield(mod, meth_name)
+                catch
+                    # WBUILD-4000: Inner functions (closures) aren't module-level bindings.
+                    # For singleton callable structs (zero-field closures like overflow_case),
+                    # use the type's singleton instance instead.
+                    try func_type.instance catch; nothing end
+                end
                 arg_types = Tuple(sig.parameters[2:end])
             elseif func_type isa DataType && func_type <: Type
                 # Constructor call - function is the type
@@ -424,6 +432,13 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
                 return
             end
         end
+    end
+
+    # WBUILD-4000: Skip length(Array) — handled inline via struct.get on size field.
+    # Only discover length() for non-Array AbstractVector types (StepRange, SubArray, etc.)
+    if meth_name === :length && arg_types !== nothing && length(arg_types) == 1 &&
+       arg_types[1] isa DataType && arg_types[1] <: Array
+        return
     end
 
     # Create a unique key for this function+types combination
