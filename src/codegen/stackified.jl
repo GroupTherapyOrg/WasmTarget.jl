@@ -1993,8 +1993,48 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # Forward jump
                 if dest_block in non_trivial_targets
                     label_depth = get_forward_label_depth(dest_block)
-                    push!(bytes, Opcode.BR)
-                    append!(bytes, encode_leb128_unsigned(label_depth))
+                    # WBUILD-3001: If the br exits ALL open blocks (outermost),
+                    # emit return instead to avoid falling through to unreachable.
+                    # The phi locals were just set by set_phi_locals_for_edge!.
+                    # Find the destination block's ReturnNode and its phi local.
+                    exits_outermost = (label_depth + 1 >= length(open_blocks) + length(open_loops))
+                    if exits_outermost && ctx.return_type !== Nothing
+                        func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+                        # Find the return phi local: look at the destination block
+                        # for a ReturnNode whose value is a phi with a phi_local.
+                        ret_local = nothing
+                        dest_start = blocks[dest_block].start_idx
+                        dest_end = blocks[dest_block].end_idx
+                        for di in dest_start:dest_end
+                            s = code[di]
+                            if s isa Core.ReturnNode && isdefined(s, :val) && s.val isa Core.SSAValue
+                                vid = s.val.id
+                                if haskey(ctx.phi_locals, vid)
+                                    ret_local = ctx.phi_locals[vid]
+                                    break
+                                elseif haskey(ctx.ssa_locals, vid)
+                                    ret_local = ctx.ssa_locals[vid]
+                                    break
+                                end
+                            end
+                        end
+                        if ret_local !== nothing
+                            push!(bytes, Opcode.LOCAL_GET)
+                            append!(bytes, encode_leb128_unsigned(ret_local))
+                            if func_ret_wasm isa ConcreteRef
+                                push!(bytes, Opcode.GC_PREFIX)
+                                push!(bytes, Opcode.REF_CAST_NULL)
+                                append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                            end
+                            push!(bytes, Opcode.RETURN)
+                        else
+                            push!(bytes, Opcode.BR)
+                            append!(bytes, encode_leb128_unsigned(label_depth))
+                        end
+                    else
+                        push!(bytes, Opcode.BR)
+                        append!(bytes, encode_leb128_unsigned(label_depth))
+                    end
                 end
                 # Otherwise, simple fall through - implicit
             elseif dest_block !== nothing && dest_block <= block_idx
@@ -2042,7 +2082,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         push!(bytes, Opcode.END)
     end
 
-    # The code should always end with a return, but add unreachable as safety
+    # WBUILD-3001: After all blocks close, control may reach here when a `br`
+    # exits the outermost block. For void functions: unreachable is fine.
+    # For functions with a return type: emit unreachable (WASM validation uses
+    # polymorphic stack after unreachable, so this validates). But we ALSO need
+    # to ensure br to the outermost block uses `return` instead of `br`.
     push!(bytes, Opcode.UNREACHABLE)
 
     return bytes
