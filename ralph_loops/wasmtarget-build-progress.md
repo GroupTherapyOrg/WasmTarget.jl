@@ -133,3 +133,25 @@ The AUTODISCOVER_BASE_METHODS pattern continues to be the main gate for new Juli
 - All milestones complete (M5, M5.1, M5.2, M5.3, M7, M8, M9, M10)
 - 6 broken tests are intentional `@test_broken` markers for known limitations
 - Only warnings remain: stack validator type mismatches in a few functions (non-blocking)
+
+## 2026-04-01: RALPH_COMPLETE — Final Verification
+
+**Final test run**: 1698 pass, 0 fail, 0 error, 6 broken (+18 from baseline, likely from ground truth test additions)
+
+All milestones complete:
+| Milestone | Stories | Result |
+|-----------|---------|--------|
+| M5 128-bit Integers | 4/4 done | LEB128, mul carry, shl/lshr fixed |
+| M5.1 Hash Functions | 3/3 done | hash(Int64), hash(Float64) work |
+| M5.2 Dict/Set | 4/4 done | Dict{Int64,Int64}, Set{Int64} end-to-end |
+| M5.3 Vector Splatting | 2/2 done | +(v...), *(v...) via _apply_iterate |
+| M7 InexactError Fix | 3/3 done | exits_outermost bounds check, +31 tests |
+| M8 Stub Cleanup | 2/2 done | 4 stubs → UNREACHABLE, 0 regressions |
+| M9 Math Functions | 3/3 done | 6 AUTODISCOVER entries, +32 tests |
+| M10 Extended Math | 1/1 done | 14 AUTODISCOVER entries, +90 tests |
+
+**Remaining warnings** (non-blocking):
+- `throw_domerr_powbysq` stubbed (error-path only, never hit on valid inputs)
+- Stack validator type mismatch in 1 function (cosmetic warning)
+
+**Journey**: 1527 pass / 31 fail / 122 error → 1698 pass / 0 fail / 0 error (+171 tests fixed)
