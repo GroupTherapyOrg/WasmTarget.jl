@@ -7967,6 +7967,51 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_t58_cos_5003, -1e15).pass
         end
 
+        @testset "hash() correctness (WBUILD-5102)" begin
+            # hash(Int64) — pure Julia bitwise mixer, should match exactly
+            _wb_hash_i64(x::Int64)::Int64 = reinterpret(Int64, hash(x))
+            @test compare_julia_wasm(_wb_hash_i64, Int64(0)).pass
+            @test compare_julia_wasm(_wb_hash_i64, Int64(1)).pass
+            @test compare_julia_wasm(_wb_hash_i64, Int64(42)).pass
+            @test compare_julia_wasm(_wb_hash_i64, Int64(-1)).pass
+            @test compare_julia_wasm(_wb_hash_i64, Int64(1000000)).pass
+            @test compare_julia_wasm(_wb_hash_i64, typemin(Int64)).pass
+            @test compare_julia_wasm(_wb_hash_i64, typemax(Int64)).pass
+
+            # Collision rate: 100 sequential ints should all produce different hashes
+            function _wb_hash_collision_check(n::Int64)::Int64
+                # Hash n sequential integers and count unique-by-proxy:
+                # XOR all hashes together — if all distinct this is very unlikely to be 0
+                acc = UInt64(0)
+                for i in Int64(1):n
+                    acc = xor(acc, hash(i))
+                end
+                return reinterpret(Int64, acc)
+            end
+            r_coll = compare_julia_wasm(_wb_hash_collision_check, Int64(100))
+            @test r_coll.pass
+
+            # hash(Float64) — should match Julia for finite values
+            _wb_hash_f64(x::Float64)::Int64 = reinterpret(Int64, hash(x))
+            @test compare_julia_wasm(_wb_hash_f64, 0.0).pass
+            @test compare_julia_wasm(_wb_hash_f64, 1.0).pass
+            @test compare_julia_wasm(_wb_hash_f64, -1.0).pass
+            @test compare_julia_wasm(_wb_hash_f64, 3.14).pass
+            @test compare_julia_wasm(_wb_hash_f64, 0.5).pass
+            @test compare_julia_wasm(_wb_hash_f64, 1e10).pass
+            @test compare_julia_wasm(_wb_hash_f64, NaN).pass
+
+            # hash(Int) == hash(Float) for integer-valued floats (Julia guarantee)
+            function _wb_hash_int_float_eq(x::Int64)::Int64
+                h_int = hash(x)
+                h_float = hash(Float64(x))
+                return Int64(h_int == h_float)
+            end
+            @test compare_julia_wasm(_wb_hash_int_float_eq, Int64(0)).pass
+            @test compare_julia_wasm(_wb_hash_int_float_eq, Int64(1)).pass
+            @test compare_julia_wasm(_wb_hash_int_float_eq, Int64(42)).pass
+        end
+
         @testset "cos(Float64) full input range (WBUILD-1013)" begin
             _t58_cos(x::Float64)::Float64 = cos(x)
             @test compare_julia_wasm(_t58_cos, 0.0).pass
