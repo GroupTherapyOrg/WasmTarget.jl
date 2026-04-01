@@ -1,7 +1,7 @@
 {
   "project": "WasmTarget.jl — Compiler Gap Closure",
   "goal": "Close remaining compiler gaps: type conversion chains, math functions, stub cleanup",
-  "baseline": "1558 pass, 0 fail, 122 error, 6 broken (2026-03-31)",
+  "baseline": "1590 pass, 0 fail, 90 error, 6 broken (2026-03-31)",
   "milestones": [
     {
       "id": "M7",
@@ -77,7 +77,8 @@
           "type": "DISCOVER",
           "title": "Categorize math failures: wrong values vs WASM trap",
           "priority": 0,
-          "status": "open",
+          "status": "done",
+          "completedNote": "Root cause: 6 math functions missing from AUTODISCOVER_BASE_METHODS list. log/atan already fixed by M7 exits_outermost fix.",
           "description": "log/atan return wrong values (stackifier SSA bug). exp2/log2/etc. produce invalid WASM (trap on instantiate). Different root causes.",
           "blockedBy": []
         },
@@ -86,7 +87,8 @@
           "type": "BUILD",
           "title": "Fix exp2/log2/exp10/log10 WASM validation errors",
           "priority": 1,
-          "status": "open",
+          "status": "done",
+          "completedNote": "Added log2, log10, log1p, exp2, exp10, expm1 to AUTODISCOVER_BASE_METHODS. +32 tests fixed.",
           "description": "These functions produce WASM that traps on instantiate — likely type mismatch in generated code.",
           "blockedBy": ["WBUILD-9000"]
         },
@@ -95,7 +97,8 @@
           "type": "BUILD",
           "title": "Fix log/atan wrong return values",
           "priority": 2,
-          "status": "open",
+          "status": "done",
+          "completedNote": "Already fixed by M7 (WBUILD-7001 exits_outermost fix). log and atan now return correct values.",
           "description": "These compile but return incorrect values — stackifier SSA value tracking issue.",
           "blockedBy": ["WBUILD-9000"]
         }
@@ -132,6 +135,11 @@
       "id": "M8",
       "title": "Stub Cleanup",
       "stories_done": ["WBUILD-8000", "WBUILD-8001"]
+    },
+    {
+      "id": "M9",
+      "title": "Math Function Fixes",
+      "stories_done": ["WBUILD-9000", "WBUILD-9001", "WBUILD-9002"]
     }
   ]
 }

@@ -84,5 +84,23 @@ Kept as-is: `jl_string_ptr` → i64.const 1 (intentional bridge for WasmGC memch
 
 **0 regressions** — none of the replaced stubs were hit by the test suite.
 
+## 2026-03-31: M9 Math Function Fixes
+
+### WBUILD-9000 (DISCOVER): Math failure categorization
+
+Two root causes found:
+1. **Missing AUTODISCOVER entries** (log2, log10, log1p, exp2, exp10, expm1): These functions weren't in AUTODISCOVER_BASE_METHODS, so the compiler stubbed them as "unsupported" and emitted UNREACHABLE. Simple fix: add to the list.
+2. **NTuple lookup tables** (exp2, exp10, expm1 use J_TABLE): These functions access `Base.Math.J_TABLE` (NTuple{256, UInt64}) via dynamic getfield. BUT the autodiscover fix compiles the entire function body (including table access), so they work now via the stackifier.
+
+All invokes in these functions are either:
+- `fma_emulated` (already supported)
+- Error-throwing (throw_inexacterror, throw_complex_domainerror) — handled
+
+### WBUILD-9001 (BUILD): Added 6 math functions to AUTODISCOVER
+
+Added to compile.jl: `:log2, :log10, :log1p, :expm1, :exp2, :exp10`
+
+Results: 1558 pass → 1590 pass (+32), 122 error → 90 error (-32), 0 regressions.
+
 ### Next Priority
-**WBUILD-9000** (M9): Categorize math failures.
+Check remaining 90 errors.

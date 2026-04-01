@@ -327,6 +327,8 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     # correctly via the stackifier. Their only invokes are domain_error throws (handled).
     :sin, :cos, :tan, :asin, :acos, :atan,
     :sinh, :cosh, :tanh, :exp, :sinh_kernel,
+    # WBUILD-9001: Additional math functions
+    :log2, :log10, :log1p, :expm1, :exp2, :exp10,
     # WBUILD-1013: Software FMA needed by log/exp when have_fma=false
     :fma_emulated,
     # WBUILD-1022: Float64 remainder (used by mod/rem)
