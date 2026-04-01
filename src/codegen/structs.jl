@@ -724,6 +724,10 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
             else
                 julia_to_wasm_type(ft)
             end
+        elseif ft === Int128 || ft === UInt128
+            # WBUILD-5401: 128-bit integers are WasmGC structs — use concrete ref
+            int128_info = register_int128_type!(mod, registry, ft)
+            ConcreteRef(int128_info.wasm_type_idx, true)
         elseif isconcretetype(ft) && isstructtype(ft) && !(ft <: Tuple)
             # Nested struct - register and use concrete ref
             nested_info = register_struct_type!(mod, registry, ft)

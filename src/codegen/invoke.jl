@@ -3388,10 +3388,11 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
 
             # ================================================================
             # WASM-055: Base.string dispatch to int_to_string
-            # Base.string(n::Int) internally calls Base.#string#530(base, pad, string, n)
+            # Base.string(n::Int) internally calls Base.#string#NNN(base, pad, string, n)
+            # where NNN is a version-dependent kwarg counter (530 in 1.11, 403 in 1.12).
             # We intercept this and redirect to WasmTarget.int_to_string
             # ================================================================
-            elseif name === Symbol("#string#530") && length(args) >= 4
+            elseif startswith(String(name), "#string#") && length(args) >= 4
                 # #string#530(base::Int64, pad::Int64, ::typeof(string), value)
                 # The actual value to convert is the last argument (args[4])
                 value_arg = args[4]
@@ -3712,44 +3713,36 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 end
 
             # ================================================================
-            # PURE-004: Base.string dispatch for Float32/Float64
-            # When Julia compiles string(x::Float32), it invokes the Ryu method
-            # We intercept and redirect to our simpler float_to_string
+            # WBUILD-5401: Base.string dispatch for single-arg types
+            # Float32/Float64 and Int types: handled by auto-discovery (early phase).
+            # If auto-discovery resolved string(), this intercept is never reached.
+            # This fallback handles cases where auto-discovery didn't fire.
             # ================================================================
             elseif name === :string && length(args) == 1
                 value_arg = args[1]
                 value_type = infer_value_type(value_arg, ctx)
 
                 if value_type === Float32 || value_type === Float64
-                    # Clear bytes - recompile the argument
-                    bytes = UInt8[]
-
-                    # Look up float_to_string in the function registry
+                    # WBUILD-5401: If we reach here, auto-discovery didn't pick up string(Float).
+                    # Fall back to float_to_string runtime if available.
                     float_to_string_info = nothing
                     if ctx.func_registry !== nothing
                         try
                             float_to_string_func = getfield(WasmTarget, :float_to_string)
                             float_to_string_info = get_function(ctx.func_registry, float_to_string_func, (Float32,))
-                        catch
-                            # Function not found
-                        end
+                        catch; end
                     end
-
                     if float_to_string_info !== nothing
-                        # Compile the value argument
+                        bytes = UInt8[]
                         append!(bytes, compile_value(value_arg, ctx))
-
-                        # Convert Float64 to Float32 if needed (our float_to_string takes Float32)
                         if value_type === Float64
                             push!(bytes, 0xB6)  # f32.demote_f64
                         end
-
-                        # Call float_to_string
                         push!(bytes, Opcode.CALL)
                         append!(bytes, encode_leb128_unsigned(float_to_string_info.wasm_idx))
                     else
-                        error("Base.string(::$(value_type)) requires float_to_string in compile_multi. " *
-                              "Add WasmTarget.float_to_string, WasmTarget.int_to_string, and WasmTarget.digit_to_str to your function list.")
+                        error("Base.string(::$(value_type)) requires either auto-discovery of Base.string " *
+                              "or float_to_string in compile_multi.")
                     end
                 elseif value_type === Int32 || value_type === Int64 ||
                        value_type === UInt32 || value_type === UInt64 ||

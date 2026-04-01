@@ -9056,4 +9056,46 @@ console.log(JSON.stringify({
         end
     end
 
+    # ========================================================================
+    # Phase 66: Base.string() — Real Base function compilation (WBUILD-5401)
+    # Tests string(Bool), string(Int32), string(Int64) via WASM-internal
+    # equality since String is a WasmGC i8 array opaque to JS.
+    # ========================================================================
+
+    # Phase 66 helper functions — test string conversion inside WASM
+    # string(Bool) — 3 stmts, trivial
+    _p66_string_true()::Bool = string(true) == "true"
+    _p66_string_false()::Bool = string(false) == "false"
+
+    # string(Int32) — inlined dec → ndigits0zpb + append_c_digits_fast (real Base)
+    _p66_string_i32_42()::Bool = string(Int32(42)) == "42"
+    _p66_string_i32_neg()::Bool = string(Int32(-7)) == "-7"
+    _p66_string_i32_zero()::Bool = string(Int32(0)) == "0"
+    _p66_string_i32_large()::Bool = string(Int32(12345)) == "12345"
+    _p66_string_i32_min()::Bool = string(Int32(-2147483648)) == "-2147483648"
+
+    # string(Int64) — same inlined path as Int32
+    _p66_string_i64_42()::Bool = string(Int64(42)) == "42"
+    _p66_string_i64_big()::Bool = string(Int64(9876543210)) == "9876543210"
+    _p66_string_i64_neg()::Bool = string(Int64(-999)) == "-999"
+
+    @testset "Phase 66: Base.string() (WBUILD-5401)" begin
+        @testset "string(Bool)" begin
+            @test compare_julia_wasm(_p66_string_true).pass
+            @test compare_julia_wasm(_p66_string_false).pass
+        end
+        @testset "string(Int32) — real Base path" begin
+            @test compare_julia_wasm(_p66_string_i32_42).pass
+            @test compare_julia_wasm(_p66_string_i32_neg).pass
+            @test compare_julia_wasm(_p66_string_i32_zero).pass
+            @test compare_julia_wasm(_p66_string_i32_large).pass
+            @test compare_julia_wasm(_p66_string_i32_min).pass
+        end
+        @testset "string(Int64) — real Base path" begin
+            @test compare_julia_wasm(_p66_string_i64_42).pass
+            @test compare_julia_wasm(_p66_string_i64_big).pass
+            @test compare_julia_wasm(_p66_string_i64_neg).pass
+        end
+    end
+
 end

@@ -357,6 +357,15 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     :send_to_end!, Symbol("#send_to_end!#12"),
     :copyto!, :overflow_case, :steprange_last,
     :length,
+    # WBUILD-5401: string(Int) compiles via real Base path: #string#NNN → dec → ndigits0zpb + append_c_digits_fast.
+    # #string#NNN is allowed by pattern match in check_and_add_external_method! (version-dependent name).
+    :dec, :append_c_digits_fast, :ndigits0zpb, :append_nine_digits, :append_c_digits,
+    # WBUILD-5401: string(Float64) via Ryu.writeshortest — DEFERRED.
+    # Ryu compiles (85KB) and validates but hits unreachable at runtime inside the
+    # 2489-stmt stackified writeshortest. Needs Int128 tuple type fix (done) plus
+    # stackifier debugging for the runtime path. Requires #power_by_squaring# kwarg
+    # pattern allowance + throw_domerr_powbysq skip. Keeping float_to_string fallback.
+    # :string, :writeshortest,
 ])
 
 """
@@ -377,8 +386,14 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
 
     # Skip core modules - these are handled specially
     # BUT allow whitelisted Base methods (e.g., Dict operations, Sort) to be compiled
+    # WBUILD-5401: Also allow #string#NNN and #power_by_squaring#NNN kwarg wrappers
+    # (version-dependent names for kwarg expansion methods)
     if mod_name in SKIP_AUTODISCOVER_MODULES || mod === Core || _is_base_or_sub
-        if !(_is_base_or_sub && meth_name in AUTODISCOVER_BASE_METHODS)
+        _meth_str = String(meth_name)
+        _is_allowed = _is_base_or_sub && (meth_name in AUTODISCOVER_BASE_METHODS ||
+                                           startswith(_meth_str, "#string#") ||
+                                           startswith(_meth_str, "#power_by_squaring#"))
+        if !_is_allowed
             return
         end
     end
@@ -438,7 +453,9 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
     _is_julias = nameof(mod) === :JuliaSyntax ||
                  (isdefined(mod, :parentmodule) && try nameof(parentmodule(mod)) === :JuliaSyntax catch; false end)
     _exempt_mod = mod === WasmTarget || _is_julias ||
-                  (_is_base_or_sub && meth_name in AUTODISCOVER_BASE_METHODS)
+                  (_is_base_or_sub && (meth_name in AUTODISCOVER_BASE_METHODS ||
+                                       startswith(String(meth_name), "#string#") ||
+                                       startswith(String(meth_name), "#power_by_squaring#")))
     if !_exempt_mod
         for t in arg_types
             if t isa DataType && t <: Function && isconcretetype(t)
