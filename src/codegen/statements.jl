@@ -3150,6 +3150,54 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
         dest_info = _trace_memmove_array(dest_ptr_arg, code, ctx)
         src_info = _trace_memmove_array(src_ptr_arg, code, ctx)
 
+        # WBUILD-5401: Fallback for Ryu pattern where pointers come from
+        # bitcast(Ptr{Nothing}, add_ptr(getfield(:mem), offset)) instead of
+        # getfield(:ptr_or_offset). In WasmGC, the pointer value IS the offset
+        # (base is always 0), so we trace to find the array and use pointer
+        # values directly as offsets.
+        if dest_info === nothing || src_info === nothing
+            arr_ssa = _trace_ptr_to_memory_array(dest_ptr_arg, code)
+            if arr_ssa === nothing
+                arr_ssa = _trace_ptr_to_memory_array(src_ptr_arg, code)
+            end
+            if arr_ssa !== nothing
+                # Found the array — use pointer values as offsets directly
+                # In WasmGC, ptr_or_offset = 0, so add_ptr(mem, off) = 0+off = off
+                # The compiled pointer SSA value is the offset.
+                arr_copy_type = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
+                # Dest array
+                append!(bytes, compile_value(arr_ssa, ctx))
+                # Dest offset: compile pointer value as i64, wrap to i32
+                append!(bytes, compile_value(dest_ptr_arg, ctx))
+                _dest_type = infer_value_type(dest_ptr_arg, ctx)
+                if _dest_type === Int64 || _dest_type === Int || _dest_type === UInt64 || _dest_type <: Ptr
+                    push!(bytes, Opcode.I32_WRAP_I64)
+                end
+                # Src array (same array)
+                append!(bytes, compile_value(arr_ssa, ctx))
+                # Src offset: compile pointer value as i64, wrap to i32
+                append!(bytes, compile_value(src_ptr_arg, ctx))
+                _src_type = infer_value_type(src_ptr_arg, ctx)
+                if _src_type === Int64 || _src_type === Int || _src_type === UInt64 || _src_type <: Ptr
+                    push!(bytes, Opcode.I32_WRAP_I64)
+                end
+                # Length
+                append!(bytes, compile_value(nbytes_arg, ctx))
+                _nbytes_type = infer_value_type(nbytes_arg, ctx)
+                if _nbytes_type === Int64 || _nbytes_type === Int || _nbytes_type === UInt64
+                    push!(bytes, Opcode.I32_WRAP_I64)
+                end
+                # Emit array.copy
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ARRAY_COPY)
+                append!(bytes, encode_leb128_unsigned(arr_copy_type))
+                append!(bytes, encode_leb128_unsigned(arr_copy_type))
+                # memmove returns dest ptr — push i64.const 0
+                push!(bytes, Opcode.I64_CONST, 0x00)
+                return bytes
+            end
+        end
+
         if dest_info !== nothing && src_info !== nothing
             dest_arr_ssa, dest_offset_ssa = dest_info
             src_arr_ssa, src_offset_ssa = src_info
@@ -3574,6 +3622,67 @@ function _resolve_memref_to_array(ssa, code)
         if fname === :jl_string_to_genericmemory && length(stmt.args) >= 6
             # In WasmGC, jl_string_to_genericmemory returns the String which IS the array
             return stmt.args[6]
+        end
+    end
+    return nothing
+end
+
+"""
+    _trace_ptr_to_memory_array(ptr_ssa, code)
+
+WBUILD-5401: Trace a pointer SSA back through bitcast/add_ptr/sub_ptr/getfield(:mem)
+to find the underlying Memory array SSA. Used as fallback for memmove when the pointer
+doesn't come from getfield(:ptr_or_offset) but from add_ptr on a Memory reference.
+
+Ryu pattern:
+  %mem = getfield(%memref, :mem)           → Memory{UInt8}
+  %off = bitcast(UInt64, %some_int)
+  %ptr = add_ptr(%mem, %off)               → Ptr at offset
+  %raw = bitcast(Ptr{Nothing}, %ptr)       → passed to memmove
+
+Returns the SSA that produces the Memory/array ref, or nothing.
+"""
+function _trace_ptr_to_memory_array(ptr_ssa, code)
+    if !(ptr_ssa isa Core.SSAValue)
+        return nothing
+    end
+    current = ptr_ssa
+    for _ in 1:15  # max depth
+        if !(current isa Core.SSAValue)
+            return nothing
+        end
+        stmt = code[current.id]
+        if !(stmt isa Expr && stmt.head === :call)
+            return nothing
+        end
+        func = stmt.args[1]
+        if !(func isa GlobalRef)
+            return nothing
+        end
+        fname = func.name
+        if fname === :bitcast && length(stmt.args) >= 3
+            current = stmt.args[3]
+        elseif fname === :add_ptr && length(stmt.args) >= 3
+            current = stmt.args[2]
+        elseif fname === :sub_ptr && length(stmt.args) >= 3
+            current = stmt.args[2]
+        elseif fname === :getfield && length(stmt.args) >= 3
+            field_ref = stmt.args[3]
+            field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
+            if field_sym === :mem
+                # getfield(memoryref, :mem) → Memory{T}
+                # In WasmGC, the MemoryRef IS the array. Return the memoryref.
+                return stmt.args[2]
+            elseif field_sym === :ref
+                return current
+            elseif field_sym === :ptr_or_offset || field_sym === :ptr
+                memref_ssa = stmt.args[2]
+                return _resolve_memref_to_array(memref_ssa, code)
+            else
+                return nothing
+            end
+        else
+            return nothing
         end
     end
     return nothing

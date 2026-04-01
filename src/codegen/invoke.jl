@@ -3714,37 +3714,17 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
 
             # ================================================================
             # WBUILD-5401: Base.string dispatch for single-arg types
-            # Float32/Float64 and Int types: handled by auto-discovery (early phase).
-            # If auto-discovery resolved string(), this intercept is never reached.
-            # This fallback handles cases where auto-discovery didn't fire.
+            # Float64 is handled via auto-discovery of Ryu.writeshortest.
+            # Int types fall back to int_to_string runtime if not auto-discovered.
             # ================================================================
-            elseif name === :string && length(args) == 1
+            elseif name === :string && length(args) == 1 &&
+                   let _vt = infer_value_type(args[1], ctx)
+                       _vt !== Float32 && _vt !== Float64
+                   end
                 value_arg = args[1]
                 value_type = infer_value_type(value_arg, ctx)
 
-                if value_type === Float32 || value_type === Float64
-                    # WBUILD-5401: If we reach here, auto-discovery didn't pick up string(Float).
-                    # Fall back to float_to_string runtime if available.
-                    float_to_string_info = nothing
-                    if ctx.func_registry !== nothing
-                        try
-                            float_to_string_func = getfield(WasmTarget, :float_to_string)
-                            float_to_string_info = get_function(ctx.func_registry, float_to_string_func, (Float32,))
-                        catch; end
-                    end
-                    if float_to_string_info !== nothing
-                        bytes = UInt8[]
-                        append!(bytes, compile_value(value_arg, ctx))
-                        if value_type === Float64
-                            push!(bytes, 0xB6)  # f32.demote_f64
-                        end
-                        push!(bytes, Opcode.CALL)
-                        append!(bytes, encode_leb128_unsigned(float_to_string_info.wasm_idx))
-                    else
-                        error("Base.string(::$(value_type)) requires either auto-discovery of Base.string " *
-                              "or float_to_string in compile_multi.")
-                    end
-                elseif value_type === Int32 || value_type === Int64 ||
+                if value_type === Int32 || value_type === Int64 ||
                        value_type === UInt32 || value_type === UInt64 ||
                        value_type === Int16 || value_type === UInt16 ||
                        value_type === Int8 || value_type === UInt8

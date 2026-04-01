@@ -9079,6 +9079,16 @@ console.log(JSON.stringify({
     _p66_string_i64_big()::Bool = string(Int64(9876543210)) == "9876543210"
     _p66_string_i64_neg()::Bool = string(Int64(-999)) == "-999"
 
+    # string(Float64) — real Base Ryu.writeshortest path (WBUILD-5401)
+    _p66_string_f64_1_5()::Bool = string(1.5) == "1.5"
+    _p66_string_f64_3_14()::Bool = string(3.14) == "3.14"
+    _p66_string_f64_0()::Bool = string(0.0) == "0.0"
+    _p66_string_f64_neg()::Bool = string(-2.5) == "-2.5"
+    _p66_string_f64_int()::Bool = string(42.0) == "42.0"
+    _p66_string_f64_small()::Bool = string(0.001) == "0.001"
+    _p66_string_f64_large()::Bool = string(1.0e10) == "1.0e10"
+    _p66_string_f64_neg_zero()::Bool = string(-0.0) == "-0.0"
+
     @testset "Phase 66: Base.string() (WBUILD-5401)" begin
         @testset "string(Bool)" begin
             @test compare_julia_wasm(_p66_string_true).pass
@@ -9095,6 +9105,16 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_p66_string_i64_42).pass
             @test compare_julia_wasm(_p66_string_i64_big).pass
             @test compare_julia_wasm(_p66_string_i64_neg).pass
+        end
+        @testset "string(Float64) — real Ryu.writeshortest path" begin
+            @test compare_julia_wasm(_p66_string_f64_1_5).pass
+            @test compare_julia_wasm(_p66_string_f64_3_14).pass
+            @test compare_julia_wasm(_p66_string_f64_0).pass
+            @test compare_julia_wasm(_p66_string_f64_neg).pass
+            @test compare_julia_wasm(_p66_string_f64_int).pass
+            @test compare_julia_wasm(_p66_string_f64_small).pass
+            @test compare_julia_wasm(_p66_string_f64_large).pass
+            @test compare_julia_wasm(_p66_string_f64_neg_zero).pass
         end
     end
 

@@ -360,12 +360,10 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     # WBUILD-5401: string(Int) compiles via real Base path: #string#NNN → dec → ndigits0zpb + append_c_digits_fast.
     # #string#NNN is allowed by pattern match in check_and_add_external_method! (version-dependent name).
     :dec, :append_c_digits_fast, :ndigits0zpb, :append_nine_digits, :append_c_digits,
-    # WBUILD-5401: string(Float64) via Ryu.writeshortest — DEFERRED.
-    # Ryu compiles (85KB) and validates but hits unreachable at runtime inside the
-    # 2489-stmt stackified writeshortest. Needs Int128 tuple type fix (done) plus
-    # stackifier debugging for the runtime path. Requires #power_by_squaring# kwarg
-    # pattern allowance + throw_domerr_powbysq skip. Keeping float_to_string fallback.
-    # :string, :writeshortest,
+    # WBUILD-5401: string(Float64) via Ryu.writeshortest.
+    # The memmove foreigncall in Ryu needed a pointer-chain tracer for the
+    # bitcast→add_ptr→getfield(:mem) pattern. Now handled by _trace_ptr_to_memory_array.
+    :string, :writeshortest,
 ])
 
 """
