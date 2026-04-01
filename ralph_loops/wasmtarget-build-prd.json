@@ -1,0 +1,122 @@
+{
+  "project": "WasmTarget.jl — Compiler Gap Closure",
+  "goal": "Close remaining compiler gaps: type conversion chains, math functions, stub cleanup",
+  "baseline": "1527 pass, 31 fail, 122 error, 6 broken (2026-03-31)",
+  "milestones": [
+    {
+      "id": "M7",
+      "title": "InexactError + Type Conversion Fix",
+      "description": "Fix InexactError invoke compilation so bounds-checked conversions (Int32(Float64(x)), round()) work correctly. Root cause of 3 pre-existing test failures.",
+      "stories": [
+        {
+          "id": "WBUILD-7000",
+          "type": "DISCOVER",
+          "title": "Trace InexactError invoke compilation path",
+          "priority": 0,
+          "status": "open",
+          "description": "The IR pattern: fptosi(Int32, %x) → goto happy_path, InexactError(:Int32, Int32, %x) → throw → unreachable. The fptosi SSA value returns 0 instead of the computed value. Trace through codegen to find where the local assignment breaks.",
+          "blockedBy": []
+        },
+        {
+          "id": "WBUILD-7001",
+          "type": "BUILD",
+          "title": "Fix InexactError invoke so fptosi SSA values survive",
+          "priority": 1,
+          "status": "open",
+          "description": "Fix the compiler so that SSA values defined in the happy path of bounds-checked conversions are properly stored in locals and available at merge points.",
+          "blockedBy": ["WBUILD-7000"]
+        },
+        {
+          "id": "WBUILD-7002",
+          "type": "VERIFY",
+          "title": "Verify type conversion chains + round() closures pass",
+          "priority": 2,
+          "status": "open",
+          "description": "Verify: Float32(Int32(Float64(x))), Int64(round(Float64(x)*2.0)), and the 3 pre-existing test failures now pass.",
+          "blockedBy": ["WBUILD-7001"]
+        }
+      ]
+    },
+    {
+      "id": "M8",
+      "title": "Stub Cleanup",
+      "description": "Replace fake return values with proper UNREACHABLE or real implementations.",
+      "stories": [
+        {
+          "id": "WBUILD-8000",
+          "type": "DISCOVER",
+          "title": "Audit all hardcoded-return stubs",
+          "priority": 0,
+          "status": "open",
+          "description": "parse_int_literal→0, str_substr→unchanged, Pointer.ptr→0, string field lookup→0. Determine which are hit by real code paths vs dead code.",
+          "blockedBy": []
+        },
+        {
+          "id": "WBUILD-8001",
+          "type": "BUILD",
+          "title": "Replace reachable stubs with UNREACHABLE or real impl",
+          "priority": 1,
+          "status": "open",
+          "description": "For each stub: if reachable in tests, implement properly. If dead code, replace with UNREACHABLE + comment.",
+          "blockedBy": ["WBUILD-8000"]
+        }
+      ]
+    },
+    {
+      "id": "M9",
+      "title": "Math Function Fixes (log, atan, exp2, etc.)",
+      "description": "Fix stackifier/codegen issues causing 150+ math test failures. Lower priority — not blocking Therapy.jl.",
+      "stories": [
+        {
+          "id": "WBUILD-9000",
+          "type": "DISCOVER",
+          "title": "Categorize math failures: wrong values vs WASM trap",
+          "priority": 0,
+          "status": "open",
+          "description": "log/atan return wrong values (stackifier SSA bug). exp2/log2/etc. produce invalid WASM (trap on instantiate). Different root causes.",
+          "blockedBy": []
+        },
+        {
+          "id": "WBUILD-9001",
+          "type": "BUILD",
+          "title": "Fix exp2/log2/exp10/log10 WASM validation errors",
+          "priority": 1,
+          "status": "open",
+          "description": "These functions produce WASM that traps on instantiate — likely type mismatch in generated code.",
+          "blockedBy": ["WBUILD-9000"]
+        },
+        {
+          "id": "WBUILD-9002",
+          "type": "BUILD",
+          "title": "Fix log/atan wrong return values",
+          "priority": 2,
+          "status": "open",
+          "description": "These compile but return incorrect values — stackifier SSA value tracking issue.",
+          "blockedBy": ["WBUILD-9000"]
+        }
+      ]
+    }
+  ],
+  "completed_milestones": [
+    {
+      "id": "M5",
+      "title": "128-bit Integers",
+      "stories_done": ["WBUILD-5000", "WBUILD-5001", "WBUILD-5002", "WBUILD-5003"]
+    },
+    {
+      "id": "M5.1",
+      "title": "Hash Functions",
+      "stories_done": ["WBUILD-5100", "WBUILD-5101", "WBUILD-5102"]
+    },
+    {
+      "id": "M5.2",
+      "title": "Dict{Int64,Int64} and Set{Int64}",
+      "stories_done": ["WBUILD-5200", "WBUILD-5201", "WBUILD-5202", "WBUILD-5204"]
+    },
+    {
+      "id": "M5.3",
+      "title": "Vector Splatting",
+      "stories_done": ["WBUILD-5300", "WBUILD-5301"]
+    }
+  ]
+}
