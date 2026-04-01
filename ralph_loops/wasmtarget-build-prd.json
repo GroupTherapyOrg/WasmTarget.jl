@@ -1,8 +1,25 @@
 {
   "project": "WasmTarget.jl — Compiler Gap Closure",
   "goal": "Close remaining compiler gaps: type conversion chains, math functions, stub cleanup",
-  "baseline": "1590 pass, 0 fail, 90 error, 6 broken (2026-03-31)",
+  "baseline": "1680 pass, 0 fail, 0 error, 6 broken (2026-04-01)",
   "milestones": [
+    {
+      "id": "M10",
+      "title": "Extended Math AUTODISCOVER",
+      "description": "Add 14 missing math methods to AUTODISCOVER_BASE_METHODS to fix all 90 remaining test errors.",
+      "stories": [
+        {
+          "id": "WBUILD-10000",
+          "type": "BUILD",
+          "title": "Add Phase 59/60 math functions to AUTODISCOVER list",
+          "priority": 0,
+          "status": "done",
+          "completedNote": "Added 14 methods: pow_body, _log_ext, _hypot, cbrt, sind, cosd, sinpi, cospi, tanpi, asinh, acosh, sincos, rem2pi, _cosc. 1590→1680 pass (+90), 90→0 errors, 0 regressions.",
+          "description": "All 90 errors caused by methods missing from AUTODISCOVER_BASE_METHODS. Add them.",
+          "blockedBy": []
+        }
+      ]
+    },
     {
       "id": "M7",
       "title": "InexactError + Type Conversion Fix",
@@ -106,6 +123,11 @@
     }
   ],
   "completed_milestones": [
+    {
+      "id": "M10",
+      "title": "Extended Math AUTODISCOVER",
+      "stories_done": ["WBUILD-10000"]
+    },
     {
       "id": "M5",
       "title": "128-bit Integers",

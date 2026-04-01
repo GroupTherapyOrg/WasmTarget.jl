@@ -104,3 +104,32 @@ Results: 1558 pass → 1590 pass (+32), 122 error → 90 error (-32), 0 regressi
 
 ### Next Priority
 Check remaining 90 errors.
+
+## 2026-04-01: M10 Extended Math AUTODISCOVER — COMPLETE
+
+### WBUILD-10000 (BUILD): Added 14 math methods to AUTODISCOVER
+
+**Root cause**: All 90 remaining errors were caused by methods missing from `AUTODISCOVER_BASE_METHODS`. When the compiler encounters an `:invoke` of a method not in this whitelist, it emits `unreachable` instead of compiling the method.
+
+**Fix**: Added 14 symbols to `AUTODISCOVER_BASE_METHODS` in compile.jl:
+
+```
+:pow_body, :_log_ext, :_hypot, :cbrt,
+:sind, :cosd, :sinpi, :cospi, :tanpi,
+:asinh, :acosh, :sincos, :rem2pi, :_cosc
+```
+
+**What these unblock**:
+- Phase 59: Float64^Int (pow_body, _log_ext), hypot (_hypot), cbrt — 14 errors fixed
+- Phase 60: Degree trig (sind, cosd), Pi trig (sinpi, cospi, tanpi), Hyperbolic inverse (asinh, acosh), Special (sincos, _cosc), Utility (rem2pi for mod2pi) — 76 errors fixed
+
+**Results**: 1590 pass → 1680 pass (+90), 90 error → 0 error, 0 regressions.
+
+### Key Learning
+The AUTODISCOVER_BASE_METHODS pattern continues to be the main gate for new Julia functions. When a function fails, the first thing to check is whether the methods it invokes are in the whitelist. All 14 new methods had their dependencies already satisfied (fma_emulated, rem_internal, log, log1p, sin, cos etc. were already whitelisted). No new codegen logic needed.
+
+### Current State
+- **1680 pass, 0 fail, 0 error, 6 broken**
+- All milestones complete (M5, M5.1, M5.2, M5.3, M7, M8, M9, M10)
+- 6 broken tests are intentional `@test_broken` markers for known limitations
+- Only warnings remain: stack validator type mismatches in a few functions (non-blocking)
