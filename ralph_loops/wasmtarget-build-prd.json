@@ -50,7 +50,8 @@
           "type": "DISCOVER",
           "title": "Audit all hardcoded-return stubs",
           "priority": 0,
-          "status": "open",
+          "status": "done",
+          "completedNote": "5 stubs found. 4 to replace with UNREACHABLE (parse_int_literal, parse_float_literal, str_substr intrinsic, getindex_continued). 1 is intentional bridge (jl_string_ptr base=1).",
           "description": "parse_int_literal→0, str_substr→unchanged, Pointer.ptr→0, string field lookup→0. Determine which are hit by real code paths vs dead code.",
           "blockedBy": []
         },
@@ -59,7 +60,8 @@
           "type": "BUILD",
           "title": "Replace reachable stubs with UNREACHABLE or real impl",
           "priority": 1,
-          "status": "open",
+          "status": "done",
+          "completedNote": "Replaced 4 stubs with UNREACHABLE: parse_int_literal, parse_float_literal, str_substr intrinsic, getindex_continued. Kept jl_string_ptr (intentional bridge). 0 regressions.",
           "description": "For each stub: if reachable in tests, implement properly. If dead code, replace with UNREACHABLE + comment.",
           "blockedBy": ["WBUILD-8000"]
         }
@@ -125,6 +127,11 @@
       "id": "M7",
       "title": "InexactError + Type Conversion Fix",
       "stories_done": ["WBUILD-7000", "WBUILD-7001", "WBUILD-7002"]
+    },
+    {
+      "id": "M8",
+      "title": "Stub Cleanup",
+      "stories_done": ["WBUILD-8000", "WBUILD-8001"]
     }
   ]
 }

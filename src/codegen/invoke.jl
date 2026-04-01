@@ -3896,15 +3896,13 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 # No-op: WasmGC arrays don't need explicit truncation
 
             # Handle getindex_continued (multi-byte string char access)
-            # In WasmGC, strings are array<i32> so indexing is direct
-            # getindex_continued(s, i, u) returns Char from byte continuation
-            # We just return the character value as i32
+            # WBUILD-8001: UTF-8 byte continuation not implemented.
+            # In WasmGC, strings are array<i32> (one codepoint per element),
+            # so multi-byte continuation shouldn't be needed. If hit, it means
+            # a code path assumes byte-level string access.
             elseif name === :getindex_continued
-                # Args: (string, index::Int64, partial_char::UInt32)
-                # Just return the partial char (u) as the character — simplified
-                # Drop string and index, keep u
-                bytes = UInt8[]
-                append!(bytes, compile_value(args[3], ctx))  # u::UInt32 is the char
+                push!(bytes, Opcode.UNREACHABLE)
+                ctx.last_stmt_was_stub = true
 
             # Handle print_to_string (used in string interpolation / error messages)
             # PURE-9016: Convert each arg to string and concatenate
@@ -4101,44 +4099,19 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
             # Handle JuliaSyntax internal functions that have complex implementations
             # These are intercepted and compiled as simplified stubs
             elseif name === :parse_float_literal
-                # PURE-5002: Float literal parsing returns Tuple{Float64, Symbol}.
-                # The original uses ccall(:jl_strtod_c) which can't compile to Wasm.
-                # Return (0.0, :ok) as a proper Tuple struct — AST structure is correct,
-                # float VALUES will be 0.0 (acceptable for Stage 1 parse verification).
-                bytes = UInt8[]
-                ret_type = Tuple{Float64, Symbol}
-                if !haskey(ctx.type_registry.structs, ret_type)
-                    register_tuple_type!(ctx.mod, ctx.type_registry, ret_type)
-                end
-                tuple_info = ctx.type_registry.structs[ret_type]
-                # Field 0: typeId = 0
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
-                # Field 1: Float64 = 0.0 (f64.const 0.0)
-                push!(bytes, Opcode.F64_CONST)
-                append!(bytes, reinterpret(UInt8, [Float64(0.0)]))
-                # Field 2: Symbol = :ok (empty string array as placeholder)
-                str_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
-                # Push ":ok" as byte array [0x6f, 0x6b]
-                push!(bytes, Opcode.I32_CONST)
-                append!(bytes, encode_leb128_signed(Int64(0x6f)))  # 'o'
-                push!(bytes, Opcode.I32_CONST)
-                append!(bytes, encode_leb128_signed(Int64(0x6b)))  # 'k'
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_NEW_FIXED)
-                append!(bytes, encode_leb128_unsigned(str_arr_type))
-                append!(bytes, encode_leb128_unsigned(2))  # 2 chars
-                # struct.new Tuple{Float64, Symbol}
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.STRUCT_NEW)
-                append!(bytes, encode_leb128_unsigned(tuple_info.wasm_type_idx))
+                # WBUILD-8001: Float literal parsing not implemented.
+                # Original uses ccall(:jl_strtod_c) which can't compile to Wasm.
+                # Deferred — not needed for Therapy.jl.
+                push!(bytes, Opcode.UNREACHABLE)
+                ctx.last_stmt_was_stub = true
 
             elseif name === :parse_int_literal ||
                    name === :parse_uint_literal
-                # Int/uint literal parsing — return a default value
-                # These parse strings to numeric values; simplified to return 0
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
+                # WBUILD-8001: Int/uint literal parsing not implemented.
+                # Requires compiling JuliaSyntax's string-to-integer logic.
+                # Deferred — not needed for Therapy.jl.
+                push!(bytes, Opcode.UNREACHABLE)
+                ctx.last_stmt_was_stub = true
 
             # Handle unalias — identity in WasmGC (arrays never alias)
             # unalias(dest, src) checks if dest and src share backing memory

@@ -1263,20 +1263,11 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         return (bytes, extra_locals)
 
     elseif fname === :str_substr
-        # str_substr(s::String, start::Int32, len::Int32)::String
-        # Extracts substring by creating new string and copying characters
-        # local 0 = source string (array ref)
-        # local 1 = start (1-based Int32)
-        # local 2 = len (Int32)
-
-        # NOTE: The inline version at call sites properly implements this using
-        # array.new + array.copy with scratch locals from the caller's context.
-        # This intrinsic body is only used when str_substr is called as a
-        # standalone function. We return a stub that returns the source string.
-        # The proper implementation requires extra locals which intrinsics don't support.
-
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x00)  # return source string as placeholder
+        # WBUILD-8001: str_substr intrinsic body not implemented.
+        # The inline version at call sites properly implements this using
+        # array.new + array.copy. This path is only hit when str_substr is
+        # called as a standalone function (not inlined at call site).
+        push!(bytes, Opcode.UNREACHABLE)
         push!(bytes, Opcode.END)
         return (bytes, extra_locals)
     end

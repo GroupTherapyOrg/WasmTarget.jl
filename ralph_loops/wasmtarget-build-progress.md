@@ -56,5 +56,33 @@ The fix resolved ALL 31 pre-existing test failures. The `exits_outermost` bug af
 ### Key Learning
 The `exits_outermost` optimization was introduced to avoid falling through to `unreachable` after all blocks close. But it incorrectly assumed SSA locals defined in the destination block were already computed. The fix is simple: check whether the SSA is defined inside or outside the destination block.
 
+## 2026-03-31: M8 Stub Cleanup
+
+### WBUILD-8000 (DISCOVER): Stub Audit Results
+
+Found 5 stubs. Classification:
+
+| Stub | Location | Fake Value | Hit by Tests? | Verdict |
+|------|----------|-----------|---------------|---------|
+| `parse_int_literal`/`parse_uint_literal` | invoke.jl:4136-4141 | i32.const 0 | No (JuliaSyntax only) | Replace with UNREACHABLE |
+| `parse_float_literal` | invoke.jl:4103-4134 | (0.0, :ok) tuple | No (JuliaSyntax only) | Replace with UNREACHABLE |
+| `str_substr` intrinsic body | compile.jl:1265-1281 | Returns source string | No (inline version used) | Replace with UNREACHABLE |
+| `jl_string_ptr` | statements.jl:2681-2690 | i64.const 1 | Indirectly (memchr) | **Keep** — intentional bridge (base=1 sentinel by design) |
+| `getindex_continued` | invoke.jl:3903-3908 | Returns arg3 | No direct tests | Replace with UNREACHABLE |
+
+**Key insight**: `jl_string_ptr` is NOT a stub — it's an intentional bridge pattern. The rest of the memchr/pointerref system is designed around base=1.
+
+### WBUILD-8001 (BUILD): Stubs replaced with UNREACHABLE
+
+Replaced 4 stubs:
+1. `parse_int_literal` / `parse_uint_literal` → UNREACHABLE (invoke.jl:4136)
+2. `parse_float_literal` → UNREACHABLE (invoke.jl:4103)
+3. `str_substr` intrinsic body → UNREACHABLE (compile.jl:1265)
+4. `getindex_continued` → UNREACHABLE (invoke.jl:3902)
+
+Kept as-is: `jl_string_ptr` → i64.const 1 (intentional bridge for WasmGC memchr pattern).
+
+**0 regressions** — none of the replaced stubs were hit by the test suite.
+
 ### Next Priority
-**WBUILD-8000** (M8): Audit hardcoded-return stubs.
+**WBUILD-9000** (M9): Categorize math failures.
