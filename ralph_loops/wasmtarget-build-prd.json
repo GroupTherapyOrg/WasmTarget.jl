@@ -1,7 +1,7 @@
 {
   "project": "WasmTarget.jl — Compiler Gap Closure",
   "goal": "Close remaining compiler gaps: type conversion chains, math functions, stub cleanup",
-  "baseline": "1527 pass, 31 fail, 122 error, 6 broken (2026-03-31)",
+  "baseline": "1558 pass, 0 fail, 122 error, 6 broken (2026-03-31)",
   "milestones": [
     {
       "id": "M7",
@@ -13,7 +13,8 @@
           "type": "DISCOVER",
           "title": "Trace InexactError invoke compilation path",
           "priority": 0,
-          "status": "open",
+          "status": "done",
+          "completedNote": "Root cause: exits_outermost optimization in stackified.jl GotoNode handler used ssa_locals for SSA values defined in destination block (uninitialized). Fix: check vid bounds before using ssa_local.",
           "description": "The IR pattern: fptosi(Int32, %x) → goto happy_path, InexactError(:Int32, Int32, %x) → throw → unreachable. The fptosi SSA value returns 0 instead of the computed value. Trace through codegen to find where the local assignment breaks.",
           "blockedBy": []
         },
@@ -22,7 +23,8 @@
           "type": "BUILD",
           "title": "Fix InexactError invoke so fptosi SSA values survive",
           "priority": 1,
-          "status": "open",
+          "status": "done",
+          "completedNote": "Added bounds check in stackified.jl:2024 — only use ssa_locals[vid] for return optimization when vid is defined outside destination block. +31 tests fixed.",
           "description": "Fix the compiler so that SSA values defined in the happy path of bounds-checked conversions are properly stored in locals and available at merge points.",
           "blockedBy": ["WBUILD-7000"]
         },
@@ -31,7 +33,8 @@
           "type": "VERIFY",
           "title": "Verify type conversion chains + round() closures pass",
           "priority": 2,
-          "status": "open",
+          "status": "done",
+          "completedNote": "1558 pass, 0 fail, 122 error, 6 broken. All 31 previously failing tests now pass. Zero regressions.",
           "description": "Verify: Float32(Int32(Float64(x))), Int64(round(Float64(x)*2.0)), and the 3 pre-existing test failures now pass.",
           "blockedBy": ["WBUILD-7001"]
         }
@@ -117,6 +120,11 @@
       "id": "M5.3",
       "title": "Vector Splatting",
       "stories_done": ["WBUILD-5300", "WBUILD-5301"]
+    },
+    {
+      "id": "M7",
+      "title": "InexactError + Type Conversion Fix",
+      "stories_done": ["WBUILD-7000", "WBUILD-7001", "WBUILD-7002"]
     }
   ]
 }

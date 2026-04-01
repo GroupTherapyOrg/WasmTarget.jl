@@ -2022,7 +2022,14 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                     ret_local = ctx.phi_locals[vid]
                                     break
                                 elseif haskey(ctx.ssa_locals, vid)
-                                    ret_local = ctx.ssa_locals[vid]
+                                    # WBUILD-7000: Only use ssa_local for return optimization
+                                    # if the SSA value is defined OUTSIDE the destination block.
+                                    # SSA values defined IN the destination block haven't been
+                                    # computed yet (the local is still 0), so we must use br
+                                    # to reach the block and let it compute the value.
+                                    if vid < dest_start || vid > dest_end
+                                        ret_local = ctx.ssa_locals[vid]
+                                    end
                                     break
                                 end
                             end
