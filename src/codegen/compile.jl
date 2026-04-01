@@ -338,6 +338,8 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     :mapreduce_impl, :resize!,
     # WBUILD-3001: unique(itr) at set.jl:224 needs Set, in!, push! — all compile cleanly
     :unique,
+    # WBUILD-5202: unique! needs issorted→Sort.Order (Union types) — deferred
+    # :unique!, :_unique!, Symbol("#issorted#1"), :ord, :_by, :_ord,
     # WBUILD-2014: Unblock sort internals
     :log, Symbol("#_sort!#19"), :radix_chunk_size_heuristic,
     :radix_sort!, :partition!,

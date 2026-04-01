@@ -992,6 +992,80 @@ _p63_sort_f64(v::Vector{Float64})::Vector{Float64} = sort(v)
 _p63_filter_even(v::Vector{Int64})::Vector{Int64} = filter(_p63_iseven, v)
 _p63_filter_positive(v::Vector{Int64})::Vector{Int64} = filter(_p63_ispositive, v)
 
+# Phase 64 helpers: Dict{Int64,Int64} and Set{Int64} — WBUILD-5200/5201/5202
+# These call REAL Base Dict/Set operations — NOT reimplementations.
+function _p64_dict_insert_get(key::Int64, val::Int64)::Int64
+    d = Dict{Int64,Int64}()
+    d[key] = val
+    return d[key]
+end
+function _p64_dict_multi(a::Int64, b::Int64, c::Int64)::Int64
+    d = Dict{Int64,Int64}()
+    d[Int64(1)] = a; d[Int64(2)] = b; d[Int64(3)] = c
+    return d[Int64(1)] + d[Int64(2)] + d[Int64(3)]
+end
+function _p64_dict_haskey_exists(k::Int64)::Int64
+    d = Dict{Int64,Int64}()
+    d[Int64(1)] = Int64(100); d[Int64(2)] = Int64(200)
+    return haskey(d, k) ? Int64(1) : Int64(0)
+end
+function _p64_dict_overwrite(k::Int64, v1::Int64, v2::Int64)::Int64
+    d = Dict{Int64,Int64}()
+    d[k] = v1; d[k] = v2
+    return d[k]
+end
+function _p64_dict_length(n::Int64)::Int64
+    d = Dict{Int64,Int64}()
+    for i in Int64(1):n
+        d[i] = i * Int64(2)
+    end
+    return Int64(length(d))
+end
+function _p64_dict_get_default(k::Int64)::Int64
+    d = Dict{Int64,Int64}()
+    d[Int64(1)] = Int64(42)
+    return get(d, k, Int64(-1))
+end
+function _p64_dict_delete(k::Int64)::Int64
+    d = Dict{Int64,Int64}()
+    d[Int64(1)] = Int64(10); d[Int64(2)] = Int64(20); d[Int64(3)] = Int64(30)
+    delete!(d, Int64(2))
+    return Int64(length(d))
+end
+function _p64_dict_large(n::Int64)::Int64
+    d = Dict{Int64,Int64}()
+    for i in Int64(1):n
+        d[i] = i * i
+    end
+    return d[Int64(1)] + d[n] + Int64(length(d))
+end
+function _p64_dict_negative_keys()::Int64
+    d = Dict{Int64,Int64}()
+    d[Int64(-1)] = Int64(10); d[Int64(-100)] = Int64(20); d[Int64(0)] = Int64(30)
+    return d[Int64(-1)] + d[Int64(-100)] + d[Int64(0)]
+end
+function _p64_dict_stress(n::Int64)::Int64
+    d = Dict{Int64,Int64}()
+    for i in Int64(1):n
+        d[i] = i * Int64(3)
+    end
+    total = Int64(0)
+    for i in Int64(1):n
+        total += d[i]
+    end
+    return total
+end
+function _p64_set_length(a::Int64, b::Int64, c::Int64)::Int64
+    s = Set{Int64}()
+    push!(s, a); push!(s, b); push!(s, c); push!(s, a)
+    return Int64(length(s))
+end
+function _p64_set_in(k::Int64)::Int64
+    s = Set{Int64}()
+    push!(s, Int64(10)); push!(s, Int64(20)); push!(s, Int64(30))
+    return k in s ? Int64(1) : Int64(0)
+end
+
 @testset "WasmTarget.jl" begin
 
     # ========================================================================
@@ -8894,6 +8968,50 @@ console.log(JSON.stringify({
             @test compare_julia_wasm_vec(_p63_filter_even, Int64[1]).pass                 # single no match
             @test compare_julia_wasm_vec(_p63_filter_positive, Int64[-3, -1, 0, 1, 2, 3]).pass
             @test compare_julia_wasm_vec(_p63_filter_even, Int64[i for i in 1:20]).pass   # larger array
+        end
+    end
+
+    # ========================================================================
+    # Phase 64: Dict{Int64,Int64} and Set{Int64} — WBUILD-5200/5201/5204
+    # Real Base Dict/Set operations compiled to WasmGC. Dict uses Memory{T}
+    # for slots/keys/vals, hash inlining, open addressing with linear probing.
+    # ========================================================================
+    @testset "Phase 64: Dict and Set (WBUILD-5204)" begin
+        @testset "Dict{Int64,Int64} basic operations" begin
+            @test compare_julia_wasm(_p64_dict_insert_get, Int64(42), Int64(100)).pass
+            @test compare_julia_wasm(_p64_dict_insert_get, Int64(0), Int64(0)).pass
+            @test compare_julia_wasm(_p64_dict_insert_get, Int64(-1), Int64(999)).pass
+            @test compare_julia_wasm(_p64_dict_multi, Int64(10), Int64(20), Int64(30)).pass
+            @test compare_julia_wasm(_p64_dict_overwrite, Int64(5), Int64(100), Int64(999)).pass
+        end
+        @testset "Dict{Int64,Int64} haskey" begin
+            @test compare_julia_wasm(_p64_dict_haskey_exists, Int64(1)).pass   # exists
+            @test compare_julia_wasm(_p64_dict_haskey_exists, Int64(2)).pass   # exists
+            @test compare_julia_wasm(_p64_dict_haskey_exists, Int64(99)).pass  # missing
+            @test compare_julia_wasm(_p64_dict_haskey_exists, Int64(0)).pass   # missing
+        end
+        @testset "Dict{Int64,Int64} get with default" begin
+            @test compare_julia_wasm(_p64_dict_get_default, Int64(1)).pass     # existing key
+            @test compare_julia_wasm(_p64_dict_get_default, Int64(99)).pass    # missing key → default
+        end
+        @testset "Dict{Int64,Int64} length + delete!" begin
+            @test compare_julia_wasm(_p64_dict_length, Int64(1)).pass
+            @test compare_julia_wasm(_p64_dict_length, Int64(5)).pass
+            @test compare_julia_wasm(_p64_dict_length, Int64(10)).pass
+            @test compare_julia_wasm(_p64_dict_delete, Int64(0)).pass
+        end
+        @testset "Dict{Int64,Int64} large + rehash" begin
+            @test compare_julia_wasm(_p64_dict_large, Int64(50)).pass          # triggers rehash
+            @test compare_julia_wasm(_p64_dict_large, Int64(100)).pass         # multiple rehashes
+            @test compare_julia_wasm(_p64_dict_negative_keys).pass
+            @test compare_julia_wasm(_p64_dict_stress, Int64(200)).pass        # 200 entries + verify all
+        end
+        @testset "Set{Int64} basic operations" begin
+            @test compare_julia_wasm(_p64_set_length, Int64(1), Int64(2), Int64(3)).pass  # 3 unique
+            @test compare_julia_wasm(_p64_set_length, Int64(1), Int64(1), Int64(1)).pass  # all same → 1
+            @test compare_julia_wasm(_p64_set_in, Int64(10)).pass    # exists
+            @test compare_julia_wasm(_p64_set_in, Int64(20)).pass    # exists
+            @test compare_julia_wasm(_p64_set_in, Int64(99)).pass    # missing
         end
     end
 
