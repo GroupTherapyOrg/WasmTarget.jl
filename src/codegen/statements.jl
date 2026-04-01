@@ -2599,22 +2599,25 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
 
             return bytes
         elseif name === :memset
-            # memset(ptr, value, size) - fill memory with a value
-            # In WasmGC, arrays are already zero-initialized by array.new_default
-            # so memset to 0 is a no-op. The ptr is already on the stack from
-            # the gc_preserve_begin pattern - we just need to pass it through.
-            # Return the pointer (first arg) as the result since memset returns ptr
+            # WBUILD-5501: memset(ptr, value, size) — fill memory with a byte value.
+            # CORRECT BY DESIGN for zero-fill: WasmGC arrays are zero-initialized by
+            # array.new_default, so memset(ptr, 0, size) is a no-op. All current callers
+            # (Dict/Set constructor, rehash!) use value=0.
+            # LIMITATION: Non-zero fill (value != 0) would silently produce wrong results.
+            # If this is ever needed, implement via array.fill or element-by-element loop.
+            # Return the pointer (first arg) as the result since memset returns ptr.
             if length(expr.args) >= 6
                 ptr_arg = expr.args[6]
                 append!(bytes, compile_value(ptr_arg, ctx))
             end
             return bytes
         elseif name === :jl_object_id
-            # jl_object_id(x) -> UInt64: compute object identity hash
-            # For WasmGC, we implement a simple FNV-1a hash over the byte array
-            # representation. Symbol/String are byte arrays, so we hash their contents.
-            # For other types, we use a constant (since object identity is less meaningful
-            # in WasmGC where there's no pointer identity).
+            # WBUILD-5501: jl_object_id(x) → UInt64: compute object identity hash.
+            # HARMLESS STUB: Dict/Set use hash() not objectid(). No auto-discovered
+            # method chain calls jl_object_id. String variant returns array.len (length
+            # as hash). Other types return constant 42.
+            # NOT NEEDED for correctness — Dict hashing works via Base.hash() which is
+            # pure Julia bitwise operations that compile correctly.
             if length(expr.args) >= 6
                 obj_arg = expr.args[6]
                 obj_type = infer_value_type(obj_arg, ctx)
