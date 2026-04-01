@@ -7905,9 +7905,9 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_t58_sin, 100.0).pass
             @test compare_julia_wasm(_t58_sin, -100.0).pass
             @test compare_julia_wasm(_t58_sin, 1e-10).pass
-            # 1e10 triggers paynehanek large-argument reduction which uses
-            # UInt128 ctlz_int (broken) and other 128-bit ops. Fix in M2.
-            @test_broken compare_julia_wasm(_t58_sin, 1e10).pass
+            # 1e10 triggers Payne-Hanek large-argument reduction (UInt128 ops)
+            # Fixed in WBUILD-5001: LEB128 encoding, mul carry, shl/lshr edge cases
+            @test compare_julia_wasm(_t58_sin, 1e10).pass
         end
 
         @testset "Int128 add/mul (WBUILD-1011 fix)" begin
@@ -7925,6 +7925,46 @@ console.log(JSON.stringify({
                 return reinterpret(Int64, Base.trunc_int(UInt64, r))
             end
             @test compare_julia_wasm(_wb_widemul, Int64(100), Int64(200)).pass
+        end
+
+        @testset "128-bit integer comprehensive (WBUILD-5003)" begin
+            # ctlz_int edge cases
+            _wb_ctlz(x::Int64)::Int64 = Int64(leading_zeros(UInt128(reinterpret(UInt64, x))))
+            @test compare_julia_wasm(_wb_ctlz, Int64(0)).pass           # 128 leading zeros
+            @test compare_julia_wasm(_wb_ctlz, Int64(1)).pass           # 127
+            @test compare_julia_wasm(_wb_ctlz, Int64(2)).pass           # 126
+            @test compare_julia_wasm(_wb_ctlz, Int64(255)).pass         # 120
+            @test compare_julia_wasm(_wb_ctlz, Int64(1) << 32).pass     # 95
+            @test compare_julia_wasm(_wb_ctlz, Int64(1) << 62).pass     # 65
+
+            # widemul hi word (carry from lo*lo)
+            function _wb_widemul_hi(a::Int64, b::Int64)::Int64
+                product = UInt128(reinterpret(UInt64, a)) * UInt128(reinterpret(UInt64, b))
+                return reinterpret(Int64, UInt64(product >> 64))
+            end
+            @test compare_julia_wasm(_wb_widemul_hi, Int64(100), Int64(200)).pass      # hi = 0
+            @test compare_julia_wasm(_wb_widemul_hi, Int64(-1), Int64(2)).pass         # hi = 1
+            @test compare_julia_wasm(_wb_widemul_hi, Int64(-1), Int64(-1)).pass        # hi = 0xFFFFFFFFFFFFFFFE
+
+            # shl/lshr by 64 (WASM mod-64 edge case)
+            function _wb_shl64_lshr64(x::Int64)::Int64
+                v = UInt128(reinterpret(UInt64, x)) << 64
+                return reinterpret(Int64, UInt64(v >> 64))
+            end
+            @test compare_julia_wasm(_wb_shl64_lshr64, Int64(42)).pass
+            @test compare_julia_wasm(_wb_shl64_lshr64, Int64(-1)).pass
+
+            # sin/cos for large arguments (Payne-Hanek reduction)
+            _t58_sin_5003(x::Float64)::Float64 = sin(x)
+            _t58_cos_5003(x::Float64)::Float64 = cos(x)
+            @test compare_julia_wasm(_t58_sin_5003, 1e10).pass
+            @test compare_julia_wasm(_t58_sin_5003, 1e15).pass
+            @test compare_julia_wasm(_t58_sin_5003, 1e20).pass
+            @test compare_julia_wasm(_t58_cos_5003, 1e10).pass
+            @test compare_julia_wasm(_t58_cos_5003, 1e15).pass
+            @test compare_julia_wasm(_t58_cos_5003, 1e20).pass
+            @test compare_julia_wasm(_t58_sin_5003, -1e10).pass
+            @test compare_julia_wasm(_t58_cos_5003, -1e15).pass
         end
 
         @testset "cos(Float64) full input range (WBUILD-1013)" begin
