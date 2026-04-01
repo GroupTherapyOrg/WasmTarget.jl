@@ -5373,8 +5373,43 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             push!(bytes, Opcode.ANY_CONVERT_EXTERN)
         end
 
-    # PURE-604: Core builtins (svec, _apply_iterate) — genuinely unsupported, trap
-    elseif func isa GlobalRef && func.name in (:svec, :_apply_iterate)
+    # Core._apply_iterate(Base.iterate, f, container...) — vector splatting.
+    # Tuple splatting is resolved by Julia at code_typed time (no _apply_iterate).
+    # Only runtime-length containers (Vector) produce this IR node.
+    # Handle the common case: binary reduce over a single Vector{T}.
+    elseif func isa GlobalRef && func.name === :_apply_iterate && func.mod === Core && length(args) >= 3
+        # args layout: [Base.iterate, target_func, container1, ...]
+        # Clear pre-pushed args (iterate ref, func ref, container ref are on stack)
+        bytes = UInt8[]
+        target_func = args[2]  # The function to apply (e.g., Base.:+)
+        container_arg = args[3]  # The container to iterate
+
+        # Get container Julia type
+        container_type = infer_value_type(container_arg, ctx)
+
+        # Only handle single-container Vector{T} splatting with known binary intrinsics
+        if length(args) == 3 && container_type <: Vector && container_type isa DataType
+            elem_type = eltype(container_type)
+            # Resolve target function to a WASM opcode for binary reduce
+            target_name = target_func isa GlobalRef ? target_func.name : nothing
+            reduce_op = _get_binary_reduce_opcode(target_name, elem_type)
+
+            if reduce_op !== nothing
+                # Emit inline reduce loop: acc = v[1]; for i in 2:length(v), acc = op(acc, v[i])
+                _emit_apply_iterate_reduce!(bytes, container_arg, container_type, elem_type, reduce_op, ctx)
+            else
+                # Unknown target function — can't reduce, trap
+                push!(bytes, Opcode.UNREACHABLE)
+                ctx.last_stmt_was_stub = true
+            end
+        else
+            # Multiple containers or non-Vector type — not supported yet, trap
+            push!(bytes, Opcode.UNREACHABLE)
+            ctx.last_stmt_was_stub = true
+        end
+
+    # Core.svec — genuinely unsupported, trap
+    elseif func isa GlobalRef && func.name === :svec && func.mod === Core
         # PURE-908: Clear pre-pushed args
         bytes = UInt8[]
         push!(bytes, Opcode.UNREACHABLE)
@@ -5966,5 +6001,202 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     end
 
     return bytes
+end
+
+# ============================================================================
+# _apply_iterate helpers (vector splatting)
+# ============================================================================
+
+"""
+Map a known binary function name to its WASM reduce opcode for the given element type.
+Returns nothing if the function is not a known binary reduce operation.
+"""
+function _get_binary_reduce_opcode(func_name::Union{Symbol, Nothing}, elem_type::Type)::Union{UInt8, Nothing}
+    func_name === nothing && return nothing
+    if elem_type === Int64 || elem_type === UInt64
+        func_name === :+ && return Opcode.I64_ADD
+        func_name === :add_int && return Opcode.I64_ADD
+        func_name === :* && return Opcode.I64_MUL
+        func_name === :mul_int && return Opcode.I64_MUL
+    elseif elem_type === Int32 || elem_type === UInt32
+        func_name === :+ && return Opcode.I32_ADD
+        func_name === :add_int && return Opcode.I32_ADD
+        func_name === :* && return Opcode.I32_MUL
+        func_name === :mul_int && return Opcode.I32_MUL
+    elseif elem_type === Float64
+        func_name === :+ && return Opcode.F64_ADD
+        func_name === :add_float && return Opcode.F64_ADD
+        func_name === :* && return Opcode.F64_MUL
+        func_name === :mul_float && return Opcode.F64_MUL
+        func_name === :min && return Opcode.F64_MIN
+        func_name === :max && return Opcode.F64_MAX
+    elseif elem_type === Float32
+        func_name === :+ && return Opcode.F32_ADD
+        func_name === :add_float && return Opcode.F32_ADD
+        func_name === :* && return Opcode.F32_MUL
+        func_name === :mul_float && return Opcode.F32_MUL
+        func_name === :min && return Opcode.F32_MIN
+        func_name === :max && return Opcode.F32_MAX
+    end
+    return nothing
+end
+
+"""
+Emit a reduce loop for _apply_iterate(iterate, binary_op, vec::Vector{T}).
+
+Generates WASM that computes: acc = v[0]; for i in 1..len-1: acc = op(acc, v[i]); return acc
+Uses WasmGC array access (no MemoryRef indirection — the compiler flattens Vector{T}
+to struct { typeId, data_array, size_tuple }).
+
+Allocates 5 temporary locals: vec_ref, arr_ref, len (i32), loop_i (i32), acc.
+"""
+function _emit_apply_iterate_reduce!(bytes::Vector{UInt8}, container_arg, container_type::DataType,
+                                      elem_type::Type, reduce_op::UInt8, ctx)
+    # Get WasmGC type indices for the vector struct and its fields
+    vec_info = get(ctx.type_registry.structs, container_type, nothing)
+    if vec_info === nothing
+        push!(bytes, Opcode.UNREACHABLE)
+        ctx.last_stmt_was_stub = true
+        return
+    end
+    vec_type_idx = vec_info.wasm_type_idx
+    field_offset = vec_info.field_offset  # usually 1 (after typeId)
+
+    # Data array type index
+    arr_type_idx = get(ctx.type_registry.arrays, elem_type, nothing)
+    if arr_type_idx === nothing
+        push!(bytes, Opcode.UNREACHABLE)
+        ctx.last_stmt_was_stub = true
+        return
+    end
+
+    # Size tuple type index (Tuple{Int64})
+    size_tuple_type = Tuple{Int64}
+    size_info = get(ctx.type_registry.structs, size_tuple_type, nothing)
+    if size_info === nothing
+        push!(bytes, Opcode.UNREACHABLE)
+        ctx.last_stmt_was_stub = true
+        return
+    end
+    size_type_idx = size_info.wasm_type_idx
+    size_field_offset = size_info.field_offset  # field 1 after typeId
+
+    # Determine the WASM element type for the accumulator local
+    elem_wasm_type = julia_to_wasm_type(elem_type)
+
+    # Allocate temporary locals
+    vec_ref_local = UInt32(ctx.n_params + length(ctx.locals))
+    push!(ctx.locals, ConcreteRef(vec_type_idx, true))
+
+    arr_ref_local = UInt32(ctx.n_params + length(ctx.locals))
+    push!(ctx.locals, ConcreteRef(arr_type_idx, true))
+
+    len_local = UInt32(ctx.n_params + length(ctx.locals))
+    push!(ctx.locals, I32)
+
+    loop_i_local = UInt32(ctx.n_params + length(ctx.locals))
+    push!(ctx.locals, I32)
+
+    acc_local = UInt32(ctx.n_params + length(ctx.locals))
+    push!(ctx.locals, elem_wasm_type)
+
+    # --- Emit WASM bytecode ---
+
+    # Step 1: Compile and store the container reference
+    append!(bytes, compile_value(container_arg, ctx))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(vec_ref_local))
+
+    # Step 2: Get the data array reference
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(vec_ref_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(vec_type_idx))
+    append!(bytes, encode_leb128_unsigned(field_offset))  # data array field
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(arr_ref_local))
+
+    # Step 3: Get the length (vec → size tuple → i64 length → i32)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(vec_ref_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(vec_type_idx))
+    append!(bytes, encode_leb128_unsigned(field_offset + 1))  # size tuple field
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(size_type_idx))
+    append!(bytes, encode_leb128_unsigned(size_field_offset))  # i64 length
+    push!(bytes, Opcode.I32_WRAP_I64)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(len_local))
+
+    # Step 4: Initialize accumulator = arr[0] (first element)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(arr_ref_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_GET)
+    append!(bytes, encode_leb128_unsigned(arr_type_idx))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(acc_local))
+
+    # Step 5: Initialize loop counter i = 1
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(loop_i_local))
+
+    # Step 6: block { loop { if i >= len: br 1; acc = op(acc, arr[i]); i++; br 0 } }
+    push!(bytes, Opcode.BLOCK)
+    push!(bytes, 0x40)  # void blocktype
+
+    push!(bytes, Opcode.LOOP)
+    push!(bytes, 0x40)  # void blocktype
+
+    # if i >= len, exit loop
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(loop_i_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(len_local))
+    push!(bytes, Opcode.I32_GE_S)
+    push!(bytes, Opcode.BR_IF)
+    append!(bytes, encode_leb128_unsigned(UInt32(1)))  # br 1 = exit block
+
+    # acc = op(acc, arr[i])
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(acc_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(arr_ref_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(loop_i_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_GET)
+    append!(bytes, encode_leb128_unsigned(arr_type_idx))
+    push!(bytes, reduce_op)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(acc_local))
+
+    # i++
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(loop_i_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(loop_i_local))
+
+    # br 0 = continue loop
+    push!(bytes, Opcode.BR)
+    append!(bytes, encode_leb128_unsigned(UInt32(0)))
+
+    push!(bytes, Opcode.END)  # end loop
+    push!(bytes, Opcode.END)  # end block
+
+    # Step 7: Push accumulator as result
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(acc_local))
 end
 

@@ -1066,6 +1066,21 @@ function _p64_set_in(k::Int64)::Int64
     return k in s ? Int64(1) : Int64(0)
 end
 
+# Phase 65 helpers: Vector splatting (_apply_iterate) — WBUILD-5301
+# These functions use real splatting syntax (v...) which produces Core._apply_iterate in IR
+function _p65_splat_sum_i64(v::Vector{Int64})::Int64
+    return +(v...)
+end
+function _p65_splat_prod_i64(v::Vector{Int64})::Int64
+    return *(v...)
+end
+function _p65_splat_sum_f64(v::Vector{Float64})::Float64
+    return +(v...)
+end
+function _p65_splat_prod_f64(v::Vector{Float64})::Float64
+    return *(v...)
+end
+
 @testset "WasmTarget.jl" begin
 
     # ========================================================================
@@ -9012,6 +9027,32 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_p64_set_in, Int64(10)).pass    # exists
             @test compare_julia_wasm(_p64_set_in, Int64(20)).pass    # exists
             @test compare_julia_wasm(_p64_set_in, Int64(99)).pass    # missing
+        end
+    end
+
+    # ========================================================================
+    # Phase 65: Vector Splatting (_apply_iterate) — WBUILD-5301
+    # ========================================================================
+    @testset "Phase 65: Vector Splatting (WBUILD-5301)" begin
+        @testset "+(vec...) Int64 — reduce via _apply_iterate" begin
+            @test compare_julia_wasm_vec(_p65_splat_sum_i64, Int64[1, 2, 3]).pass
+            @test compare_julia_wasm_vec(_p65_splat_sum_i64, Int64[10, 20, 30, 40]).pass
+            @test compare_julia_wasm_vec(_p65_splat_sum_i64, Int64[42]).pass  # single element
+            @test compare_julia_wasm_vec(_p65_splat_sum_i64, Int64[-5, 5, -10, 10]).pass  # negatives
+            @test compare_julia_wasm_vec(_p65_splat_sum_i64, collect(Int64, 1:100)).pass  # large (sum=5050)
+        end
+        @testset "*(vec...) Int64 — reduce via _apply_iterate" begin
+            @test compare_julia_wasm_vec(_p65_splat_prod_i64, Int64[2, 3, 4]).pass  # 24
+            @test compare_julia_wasm_vec(_p65_splat_prod_i64, Int64[1, 2, 3, 4, 5]).pass  # 120
+            @test compare_julia_wasm_vec(_p65_splat_prod_i64, Int64[7]).pass  # single
+        end
+        @testset "+(vec...) Float64 — reduce via _apply_iterate" begin
+            @test compare_julia_wasm_vec(_p65_splat_sum_f64, Float64[1.5, 2.5, 3.0]).pass
+            @test compare_julia_wasm_vec(_p65_splat_sum_f64, Float64[0.1, 0.2, 0.3, 0.4]).pass
+        end
+        @testset "*(vec...) Float64 — reduce via _apply_iterate" begin
+            @test compare_julia_wasm_vec(_p65_splat_prod_f64, Float64[2.0, 3.0, 4.0]).pass
+            @test compare_julia_wasm_vec(_p65_splat_prod_f64, Float64[0.5, 0.5, 0.5]).pass  # 0.125
         end
     end
 
