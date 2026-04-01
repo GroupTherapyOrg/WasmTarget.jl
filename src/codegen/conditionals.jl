@@ -2694,8 +2694,11 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                             push!(inner_bytes, UInt8(phi_wasm_type))
                         end
                     elseif !isempty(value_bytes) && (phi_wasm_type isa ConcreteRef || phi_wasm_type === StructRef || phi_wasm_type === ArrayRef || phi_wasm_type === AnyRef) &&
-                           (value_bytes[1] == Opcode.I32_CONST || value_bytes[1] == Opcode.I64_CONST || value_bytes[1] == Opcode.F32_CONST || value_bytes[1] == Opcode.F64_CONST)
+                           (value_bytes[1] == Opcode.I32_CONST || value_bytes[1] == Opcode.I64_CONST || value_bytes[1] == Opcode.F32_CONST || value_bytes[1] == Opcode.F64_CONST) &&
+                           !has_ref_producing_gc_op(value_bytes)
                         # PURE-6025: Numeric constant but phi expects ref type — emit ref.null
+                        # But NOT if the bytes contain a GC ref-producing op (e.g. array.new_data
+                        # for string constants — those start with i32.const for the offset operand)
                         if phi_wasm_type isa ConcreteRef
                             push!(inner_bytes, Opcode.REF_NULL)
                             append!(inner_bytes, encode_leb128_signed(Int64(phi_wasm_type.type_idx)))
@@ -2773,10 +2776,12 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                 push!(inner_bytes, UInt8(phi_wasm_type))
                             end
                         elseif !isempty(value_bytes) && (phi_wasm_type isa ConcreteRef || phi_wasm_type === StructRef || phi_wasm_type === ArrayRef || phi_wasm_type === AnyRef) &&
-                               (value_bytes[1] == Opcode.I32_CONST || value_bytes[1] == Opcode.I64_CONST || value_bytes[1] == Opcode.F32_CONST || value_bytes[1] == Opcode.F64_CONST)
+                               (value_bytes[1] == Opcode.I32_CONST || value_bytes[1] == Opcode.I64_CONST || value_bytes[1] == Opcode.F32_CONST || value_bytes[1] == Opcode.F64_CONST) &&
+                               !has_ref_producing_gc_op(value_bytes)
                             # PURE-6025: Numeric constant in else-branch but phi expects ref type.
                             # This happens when a Union{ConcreteRef, UInt8} phi has a UInt8 constant
                             # (like ExternRef=0x6f=111) compiled as i32_const. Replace with ref.null.
+                            # But NOT if the bytes contain a GC ref-producing op (e.g. array.new_data).
                             if phi_wasm_type isa ConcreteRef
                                 push!(inner_bytes, Opcode.REF_NULL)
                                 append!(inner_bytes, encode_leb128_signed(Int64(phi_wasm_type.type_idx)))
