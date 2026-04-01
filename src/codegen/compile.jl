@@ -1683,6 +1683,13 @@ function compile_module(functions::Vector;
             # PURE-6024: Emit unreachable stub for functions that should not be compiled
             body = UInt8[Opcode.UNREACHABLE, Opcode.END]
             locals = WasmValType[]
+        elseif return_type === Union{}
+            # PARSE-001: Auto-stub functions that always throw (return type Union{}).
+            # These are error/throw functions (e.g., _parser_stuck_error) whose bodies
+            # produce invalid WASM due to Union{}-typed values. Since they only throw,
+            # UNREACHABLE is the correct semantics.
+            body = UInt8[Opcode.UNREACHABLE, Opcode.END]
+            locals = WasmValType[]
         elseif intrinsic_body !== nothing
             # Use the intrinsic body directly
             body, locals = intrinsic_body
