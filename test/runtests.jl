@@ -6048,7 +6048,7 @@ end
     # ========================================================================
     @testset "Phase 37: Subtype Checking (PURE-9064)" begin
 
-        include("../src/selfhost/typeinf/subtype.jl")
+        include("helpers/subtype.jl")
 
         @testset "wasm_subtype compiles for concrete DataType pairs" begin
             # Test wrapper functions that call _datatype_subtype

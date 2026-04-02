@@ -1871,6 +1871,46 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
         end
     end
 
+    # ================================================================
+    # Early dispatch: Julia Base string operations → str_* intrinsics
+    # These must run BEFORE the pre-push loop to avoid side effects
+    # from compiling unwanted arguments (e.g., function singleton structs).
+    # ================================================================
+    if mi isa Core.MethodInstance
+        meth_early = mi.def
+        if meth_early isa Method
+            _name_early = meth_early.name
+            _spec_early = mi.specTypes
+
+            # map(typeof(lowercase), String) → str_lowercase
+            # map(typeof(uppercase), String) → str_uppercase
+            if _name_early === :map && length(args) == 2 &&
+               _spec_early isa DataType && _spec_early <: Tuple && length(_spec_early.parameters) >= 2
+                _func_param = _spec_early.parameters[2]
+                if _func_param === typeof(lowercase)
+                    @info "DISPATCH: map(lowercase, String) → str_lowercase" args_2=args[2] args_2_type=typeof(args[2])
+                    return _compile_invoke_str_lowercase([args[2]], ctx)
+                elseif _func_param === typeof(uppercase)
+                    return _compile_invoke_str_uppercase([args[2]], ctx)
+                end
+            end
+
+            # _searchindex(String, String, Int64) → str_find
+            if _name_early === :_searchindex && length(args) == 3
+                return _compile_invoke_str_find([args[1], args[2]], ctx)
+            end
+
+            # lstrip/rstrip(typeof(isspace), String) → str_trim
+            if (_name_early === :lstrip || _name_early === :rstrip) && length(args) == 2 &&
+               _spec_early isa DataType && _spec_early <: Tuple && length(_spec_early.parameters) >= 2
+                _func_param = _spec_early.parameters[2]
+                if _func_param === typeof(isspace)
+                    return _compile_invoke_str_trim([args[2]], ctx)
+                end
+            end
+        end
+    end
+
     # Push arguments (for non-signal calls)
     # PURE-044: Track which args had extern.convert_any emitted to avoid double conversion
     extern_convert_emitted_args = falses(length(args))

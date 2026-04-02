@@ -1,7 +1,12 @@
 # Build outputs
+*.wasm
+*.wat
 docs/dist/
 docs/build/
 Manifest.toml
+
+# Node
+node_modules/
 
 # Julia artifacts
 *.jl.cov
@@ -9,5 +14,6 @@ Manifest.toml
 
 # OS files
 .DS_Store
-docs/dist/
+
+# Claude Code
 .claude/worktrees/
