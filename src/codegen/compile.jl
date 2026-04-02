@@ -364,6 +364,14 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     # The memmove foreigncall in Ryu needed a pointer-chain tracer for the
     # bitcast→add_ptr→getfield(:mem) pattern. Now handled by _trace_ptr_to_memory_array.
     :string, :writeshortest,
+    # BF-2000: String operations — primary functions
+    :chomp, :chopprefix, :chopsuffix, :lowercasefirst, :uppercasefirst,
+    :prevind, :first,
+    # BF-2000: String operations — transitive deps
+    :SubString, :_thisind_continued, :_nextind_continued, :nextind,
+    :getindex_continued, :_string, :string_index_err,
+    # BF-6000: SizeUnknown collect (filtered comprehensions) + foldr
+    :grow_to!, :_foldl_impl,
 ])
 
 """
