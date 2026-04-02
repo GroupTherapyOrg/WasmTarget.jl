@@ -1908,6 +1908,16 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     return _compile_invoke_str_trim([args[2]], ctx)
                 end
             end
+
+            # startswith(String, String) → str_startswith
+            if _name_early === :startswith && length(args) == 2
+                return _compile_invoke_str_startswith([args[1], args[2]], ctx)
+            end
+
+            # endswith(String, String) → str_endswith
+            if _name_early === :endswith && length(args) == 2
+                return _compile_invoke_str_endswith([args[1], args[2]], ctx)
+            end
         end
     end
 

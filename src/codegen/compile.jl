@@ -2111,6 +2111,7 @@ function compile_closure_body(
     captured_signal_fields::Dict{Symbol, Tuple{Bool, UInt32}},
     mod::WasmModule,
     type_registry::TypeRegistry;
+    func_registry::Union{FunctionRegistry, Nothing} = nothing,
     dom_bindings::Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}} = Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}(),
     skip_stmts::Set{Int} = Set{Int}(),
     invoke_imports::Dict{Int, UInt32} = Dict{Int, UInt32}(),
@@ -2126,6 +2127,12 @@ function compile_closure_body(
     # For void handlers (like Therapy.jl event handlers), override return type
     return_type = void_return ? Nothing : inferred_return_type
 
+    # If func_registry provided, auto-discover dependencies from the closure's IR
+    # and compile them into the existing module (same as compile_module does)
+    if func_registry !== nothing
+        _autodiscover_closure_deps!(closure, code_info, mod, type_registry, func_registry)
+    end
+
     # Create compilation context
     ctx = CompilationContext(
         code_info,
@@ -2133,6 +2140,7 @@ function compile_closure_body(
         return_type,
         mod,
         type_registry;
+        func_registry = func_registry,
         captured_signal_fields = captured_signal_fields,
         dom_bindings = dom_bindings,
         skip_stmts = skip_stmts,
@@ -2143,6 +2151,115 @@ function compile_closure_body(
     body = generate_body(ctx)
 
     return (body, ctx.locals)
+end
+
+"""
+    _autodiscover_closure_deps!(closure, code_info, mod, type_registry, func_registry)
+
+Scan a closure's IR for method invocations that need to be compiled as separate
+functions in the module. This enables closures compiled via compile_closure_body
+to call filter(), map(), sort(), etc.
+
+Uses the same AUTODISCOVER_BASE_METHODS whitelist as compile_module's
+discover_dependencies path.
+"""
+function _autodiscover_closure_deps!(closure::Function, code_info::Core.CodeInfo,
+                                     mod::WasmModule, type_registry::TypeRegistry,
+                                     func_registry::FunctionRegistry)
+    # Collect all invoke targets from the closure's IR
+    deps = Vector{Tuple{Any, Tuple, String}}()
+    seen = Set{Tuple{Any, Tuple}}()
+
+    # Also collect from existing func_registry to avoid duplicates
+    for (name, infos) in func_registry.functions
+        for info in infos
+            push!(seen, (info.func_ref, info.arg_types))
+        end
+    end
+
+    for stmt in code_info.code
+        if stmt isa Expr && stmt.head === :invoke && length(stmt.args) >= 2
+            mi_or_ci = stmt.args[1]
+            mi = if mi_or_ci isa Core.MethodInstance
+                mi_or_ci
+            elseif isdefined(Core, :CodeInstance) && mi_or_ci isa Core.CodeInstance
+                mi_or_ci.def
+            else
+                nothing
+            end
+            mi === nothing && continue
+
+            meth = mi.def
+            meth isa Method || continue
+
+            meth_mod = meth.module
+            meth_name = meth.name
+            _is_base_or_sub = meth_mod === Base || (try parentmodule(meth_mod) === Base catch; false end)
+
+            # Only auto-discover whitelisted Base methods
+            if !(_is_base_or_sub && meth_name in AUTODISCOVER_BASE_METHODS)
+                continue
+            end
+
+            # Extract function + arg types from MethodInstance
+            sig = mi.specTypes
+            sig <: Tuple && length(sig.parameters) >= 1 || continue
+
+            func = try
+                func_type = sig.parameters[1]
+                if func_type isa DataType && func_type <: Function
+                    getfield(meth_mod, meth_name)
+                else
+                    nothing
+                end
+            catch
+                nothing
+            end
+            func === nothing && continue
+
+            arg_types = Tuple(sig.parameters[2:end])
+            key = (func, arg_types)
+            key in seen && continue
+            push!(seen, key)
+
+            name = string(meth_name)
+            push!(deps, (func, arg_types, name))
+        end
+    end
+
+    isempty(deps) && return
+
+    # Run full dependency discovery on the collected deps
+    all_deps = discover_dependencies(deps)
+
+    # Compile each dependency into the existing module
+    for (f, arg_types, name) in all_deps
+        key = (f, arg_types)
+        key in seen && continue
+        push!(seen, key)
+
+        try
+            typed_results = Base.code_typed(f, arg_types)
+            isempty(typed_results) && continue
+            dep_code_info, dep_return_type = typed_results[1]
+            dep_return_type === Union{} && continue
+
+            # Create context and compile
+            dep_ctx = CompilationContext(dep_code_info, arg_types, dep_return_type, mod, type_registry;
+                                         func_registry=func_registry)
+            dep_body = generate_body(dep_ctx)
+
+            # Get Wasm types
+            param_types = WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in arg_types]
+            result_types = dep_return_type === Nothing ? WasmValType[] : WasmValType[get_concrete_wasm_type(dep_return_type, mod, type_registry)]
+
+            # Add to module and registry
+            func_idx = add_function!(mod, param_types, result_types, dep_ctx.locals, dep_body)
+            register_function!(func_registry, name, f, arg_types, func_idx, dep_return_type)
+        catch e
+            @warn "compile_closure_body: skipping dependency $name — $e"
+        end
+    end
 end
 
 # ============================================================================

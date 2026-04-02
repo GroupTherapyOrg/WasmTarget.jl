@@ -2655,6 +2655,116 @@ end
             @test run_wasm(wasm_bytes, "test_char_comparison") == 1
         end
 
+        # ========================================================================
+        # Julia Base string dispatch → str_* intrinsics
+        # ========================================================================
+
+        @testset "Base.startswith dispatch" begin
+            function test_base_startswith_true()::Int32
+                if startswith("hello world", "hello")
+                    return Int32(1)
+                else
+                    return Int32(0)
+                end
+            end
+            wasm_bytes = WasmTarget.compile(test_base_startswith_true, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_base_startswith_true") == 1
+        end
+
+        @testset "Base.startswith dispatch - false" begin
+            function test_base_startswith_false()::Int32
+                if startswith("hello world", "xyz")
+                    return Int32(1)
+                else
+                    return Int32(0)
+                end
+            end
+            wasm_bytes = WasmTarget.compile(test_base_startswith_false, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_base_startswith_false") == 0
+        end
+
+        @testset "Base.endswith dispatch" begin
+            function test_base_endswith_true()::Int32
+                if endswith("hello world", "world")
+                    return Int32(1)
+                else
+                    return Int32(0)
+                end
+            end
+            wasm_bytes = WasmTarget.compile(test_base_endswith_true, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_base_endswith_true") == 1
+        end
+
+        @testset "Base.endswith dispatch - false" begin
+            function test_base_endswith_false()::Int32
+                if endswith("hello world", "hello")
+                    return Int32(1)
+                else
+                    return Int32(0)
+                end
+            end
+            wasm_bytes = WasmTarget.compile(test_base_endswith_false, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_base_endswith_false") == 0
+        end
+
+        @testset "Base.contains dispatch" begin
+            function test_base_contains_true()::Int32
+                if contains("hello world", "lo wo")
+                    return Int32(1)
+                else
+                    return Int32(0)
+                end
+            end
+            wasm_bytes = WasmTarget.compile(test_base_contains_true, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_base_contains_true") == 1
+        end
+
+        @testset "Base.contains dispatch - false" begin
+            function test_base_contains_false()::Int32
+                if contains("hello", "xyz")
+                    return Int32(1)
+                else
+                    return Int32(0)
+                end
+            end
+            wasm_bytes = WasmTarget.compile(test_base_contains_false, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_base_contains_false") == 0
+        end
+
+        @testset "Base.lowercase dispatch" begin
+            function test_base_lowercase()::Int32
+                result = lowercase("HELLO")
+                return str_char(result, Int32(1))
+            end
+            wasm_bytes = WasmTarget.compile(test_base_lowercase, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_base_lowercase") == 104  # 'h'
+        end
+
+        @testset "Base.uppercase dispatch" begin
+            function test_base_uppercase()::Int32
+                result = uppercase("hello")
+                return str_char(result, Int32(1))
+            end
+            wasm_bytes = WasmTarget.compile(test_base_uppercase, ())
+            @test length(wasm_bytes) > 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_base_uppercase") == 72  # 'H'
+        end
+
     end
 
     # ========================================================================
