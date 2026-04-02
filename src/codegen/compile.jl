@@ -2232,11 +2232,20 @@ function _autodiscover_closure_deps!(closure::Function, code_info::Core.CodeInfo
     # Run full dependency discovery on the collected deps
     all_deps = discover_dependencies(deps)
 
+    # Reset seen to only func_registry entries — direct deps added during collection
+    # must NOT be skipped here (that was the seen-set bug: BF1)
+    compiled = Set{Tuple{Any, Tuple}}()
+    for (_n, infos) in func_registry.functions
+        for info in infos
+            push!(compiled, (info.func_ref, info.arg_types))
+        end
+    end
+
     # Compile each dependency into the existing module
     for (f, arg_types, name) in all_deps
         key = (f, arg_types)
-        key in seen && continue
-        push!(seen, key)
+        key in compiled && continue
+        push!(compiled, key)
 
         try
             typed_results = Base.code_typed(f, arg_types)

@@ -1,0 +1,254 @@
+{
+  "project": "WasmTarget.jl — Gap Fix Build Loop",
+  "goal": "Close 12 shared blockers identified in gap analysis. Unblock ~40+ functions.",
+  "baseline": "1698 pass, 0 fail, 0 error, 6 broken (2026-04-01)",
+  "status": "in_progress",
+  "milestones": [
+    {
+      "id": "BF1",
+      "title": "Closure seen-set bug",
+      "description": "Fix _autodiscover_closure_deps! seen-set bug that skips direct deps (filter, sort, sum) during compilation. 5 LOC fix.",
+      "sprint": 1,
+      "est_loc": 5,
+      "stories": [
+        {
+          "id": "BF-1000",
+          "type": "DISCOVER",
+          "title": "Verify closure seen-set bug with reproduction test",
+          "priority": 0,
+          "status": "done",
+          "completedNote": "Bug confirmed: filter skipped during compilation, only resize! compiled. Shared seen set is root cause.",
+          "blockedBy": []
+        },
+        {
+          "id": "BF-1001",
+          "type": "BUILD",
+          "title": "Fix seen-set bug: separate compiled set from collection seen set",
+          "priority": 1,
+          "status": "done",
+          "completedNote": "7 LOC fix: fresh compiled set from func_registry before compilation loop. filter/sort/sum now compiled.",
+          "blockedBy": ["BF-1000"]
+        },
+        {
+          "id": "BF-1002",
+          "type": "VERIFY",
+          "title": "Verify filter/sort/sum closures pass end-to-end",
+          "priority": 2,
+          "status": "done",
+          "completedNote": "4 new tests in Phase 68. 1731 pass (+4), 0 regressions.",
+          "blockedBy": ["BF-1001"]
+        }
+      ]
+    },
+    {
+      "id": "BF3",
+      "title": "contains/occursin",
+      "description": "Wire contains/occursin to work via _searchindex autodiscovery or str_contains intrinsic. ~50 LOC.",
+      "sprint": 1,
+      "est_loc": 50,
+      "stories": [
+        {
+          "id": "BF-3000",
+          "type": "DISCOVER",
+          "title": "Trace contains compilation failure path",
+          "priority": 0,
+          "status": "open",
+          "blockedBy": []
+        },
+        {
+          "id": "BF-3001",
+          "type": "BUILD",
+          "title": "Implement contains/occursin fix",
+          "priority": 1,
+          "status": "open",
+          "blockedBy": ["BF-3000"]
+        }
+      ]
+    },
+    {
+      "id": "BF4",
+      "title": "String interpolation (_base dispatch)",
+      "description": "Wire _base in invoke.jl for string interpolation. ~10 LOC.",
+      "sprint": 1,
+      "est_loc": 10,
+      "stories": [
+        {
+          "id": "BF-4000",
+          "type": "BUILD",
+          "title": "Wire _base dispatch for string interpolation",
+          "priority": 0,
+          "status": "open",
+          "blockedBy": []
+        }
+      ]
+    },
+    {
+      "id": "BF5",
+      "title": "Dict loop insert codegen stack bug",
+      "description": "Fix stack balancing in Dict setindex! loop codegen. ~30 LOC.",
+      "sprint": 1,
+      "est_loc": 30,
+      "stories": [
+        {
+          "id": "BF-5000",
+          "type": "DISCOVER",
+          "title": "Trace Dict loop insert stack validation error",
+          "priority": 0,
+          "status": "open",
+          "blockedBy": []
+        },
+        {
+          "id": "BF-5001",
+          "type": "BUILD",
+          "title": "Fix Dict loop insert codegen",
+          "priority": 1,
+          "status": "open",
+          "blockedBy": ["BF-5000"]
+        }
+      ]
+    },
+    {
+      "id": "BF2",
+      "title": "Trivial dispatch wiring (10 functions)",
+      "description": "Wire 10 trivial string dispatch entries in invoke.jl. ~100 LOC.",
+      "sprint": 2,
+      "est_loc": 100,
+      "stories": [
+        {
+          "id": "BF-2000",
+          "type": "BUILD",
+          "title": "Wire chomp, repeat, lpad, rpad, first, chopprefix, chopsuffix, lowercasefirst, uppercasefirst, prevind",
+          "priority": 0,
+          "status": "open",
+          "blockedBy": []
+        },
+        {
+          "id": "BF-2001",
+          "type": "VERIFY",
+          "title": "Add compare_julia_wasm tests for all 10 functions",
+          "priority": 1,
+          "status": "open",
+          "blockedBy": ["BF-2000"]
+        }
+      ]
+    },
+    {
+      "id": "BF6",
+      "title": "SizeUnknown collect",
+      "description": "Wire _foldl_impl + grow_to! for filtered comprehensions. ~70 LOC.",
+      "sprint": 2,
+      "est_loc": 70,
+      "stories": [
+        {
+          "id": "BF-6000",
+          "type": "DISCOVER",
+          "title": "Trace SizeUnknown collect failure path",
+          "priority": 0,
+          "status": "open",
+          "blockedBy": []
+        },
+        {
+          "id": "BF-6001",
+          "type": "BUILD",
+          "title": "Implement SizeUnknown collect fix",
+          "priority": 1,
+          "status": "open",
+          "blockedBy": ["BF-6000"]
+        }
+      ]
+    },
+    {
+      "id": "BF7",
+      "title": "SubString ref cast",
+      "description": "Fix SubString WasmGC ref type codegen for lstrip/rstrip/strip. ~50 LOC.",
+      "sprint": 2,
+      "est_loc": 50,
+      "stories": [
+        {
+          "id": "BF-7000",
+          "type": "DISCOVER",
+          "title": "Trace SubString ref cast failure",
+          "priority": 0,
+          "status": "open",
+          "blockedBy": []
+        },
+        {
+          "id": "BF-7001",
+          "type": "BUILD",
+          "title": "Fix SubString ref cast codegen",
+          "priority": 1,
+          "status": "open",
+          "blockedBy": ["BF-7000"]
+        }
+      ]
+    },
+    {
+      "id": "BF8",
+      "title": "Small dispatch wiring (10 functions)",
+      "description": "Wire 10 small dispatch entries. ~150 LOC.",
+      "sprint": 3,
+      "est_loc": 150,
+      "stories": [
+        {
+          "id": "BF-8000",
+          "type": "BUILD",
+          "title": "Wire titlecase, findlast, findprev, foldr, sort(rev=true), findall, get!, intersect, setdiff, issubset",
+          "priority": 0,
+          "status": "open",
+          "blockedBy": []
+        }
+      ]
+    },
+    {
+      "id": "BF9",
+      "title": "Dict pair iteration",
+      "description": "Fix Dict pair iteration tuple destructure. ~30 LOC.",
+      "sprint": 3,
+      "est_loc": 30,
+      "stories": [
+        {
+          "id": "BF-9000",
+          "type": "BUILD",
+          "title": "Fix Dict pair iteration codegen",
+          "priority": 0,
+          "status": "open",
+          "blockedBy": ["BF-5001"]
+        }
+      ]
+    },
+    {
+      "id": "BF10",
+      "title": "JS bridges",
+      "description": "JS import bridges for parse(Float64), Regex. ~40 LOC.",
+      "sprint": 4,
+      "est_loc": 40,
+      "stories": [
+        {
+          "id": "BF-10000",
+          "type": "BUILD",
+          "title": "Implement parse(Float64) JS bridge",
+          "priority": 0,
+          "status": "open",
+          "blockedBy": []
+        }
+      ]
+    },
+    {
+      "id": "BF11",
+      "title": "IOBuffer",
+      "description": "IOBuffer compilation or bypass for join/replace/repr. 200+ LOC.",
+      "sprint": 4,
+      "est_loc": 200,
+      "stories": [
+        {
+          "id": "BF-11000",
+          "type": "DISCOVER",
+          "title": "Assess IOBuffer compilation feasibility",
+          "priority": 0,
+          "status": "open",
+          "blockedBy": []
+        }
+      ]
+    }
+  ]
+}

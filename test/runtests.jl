@@ -9264,4 +9264,42 @@ console.log(JSON.stringify({
         end
     end
 
+    # ========================================================================
+    # Phase 68: BF1 Closure Autodiscovery Fix
+    # Tests that _autodiscover_closure_deps! correctly compiles direct deps
+    # (filter, sort, sum) into func_registry, not just transitive deps.
+    # Bug: shared `seen` set caused direct deps to be skipped during compilation.
+    # ========================================================================
+
+    @testset "Phase 68: Closure Autodiscovery (BF1-FIX)" begin
+        function _bf1_test_autodiscovery(closure)
+            mod = WasmTarget.WasmModule()
+            type_registry = WasmTarget.TypeRegistry()
+            func_registry = WasmTarget.FunctionRegistry()
+            typed_results = Base.code_typed(closure, ())
+            code_info, _ = typed_results[1]
+            WasmTarget._autodiscover_closure_deps!(closure, code_info, mod, type_registry, func_registry)
+            return [n for (n, _) in func_registry.functions]
+        end
+
+        @testset "filter closure autodiscovery" begin
+            items = Int64[1, 2, 3, 4, 5]
+            funcs = _bf1_test_autodiscovery(() -> filter(iseven, items::Vector{Int64}))
+            @test "filter" in funcs
+            @test "resize!" in funcs  # transitive dep should also be present
+        end
+
+        @testset "sort closure autodiscovery" begin
+            items = Int64[3, 1, 2]
+            funcs = _bf1_test_autodiscovery(() -> sort(items::Vector{Int64}))
+            @test "#sort#24" in funcs
+        end
+
+        @testset "sum closure autodiscovery" begin
+            items = Int64[1, 2, 3]
+            funcs = _bf1_test_autodiscovery(() -> sum(items::Vector{Int64}))
+            @test "mapreduce_impl" in funcs
+        end
+    end
+
 end
