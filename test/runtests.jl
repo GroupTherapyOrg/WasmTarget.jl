@@ -9233,4 +9233,35 @@ console.log(JSON.stringify({
         end
     end
 
+    # ========================================================================
+    # Phase 67: Base.contains() / Base.occursin() (BF3-FIX)
+    # Tests real Base.contains/occursin via _searchindex → str_find dispatch.
+    # Uses Bool return inside WASM (no String crossing to JS).
+    # ========================================================================
+
+    # Phase 67 helper functions — contains/occursin with constant strings
+    _p67_contains_found()::Bool = contains("hello world", "world")
+    _p67_contains_not_found()::Bool = contains("hello world", "xyz")
+    _p67_contains_empty_needle()::Bool = contains("hello", "")
+    _p67_contains_at_start()::Bool = contains("hello world", "hello")
+    _p67_contains_single_char()::Bool = contains("abcdef", "d")
+    _p67_contains_full_match()::Bool = contains("hello", "hello")
+    _p67_occursin_found()::Bool = occursin("world", "hello world")
+    _p67_occursin_not_found()::Bool = occursin("xyz", "hello world")
+
+    @testset "Phase 67: Base.contains/occursin (BF3-FIX)" begin
+        @testset "contains" begin
+            @test compare_julia_wasm(_p67_contains_found).pass
+            @test compare_julia_wasm(_p67_contains_not_found).pass
+            @test compare_julia_wasm(_p67_contains_empty_needle).pass
+            @test compare_julia_wasm(_p67_contains_at_start).pass
+            @test compare_julia_wasm(_p67_contains_single_char).pass
+            @test compare_julia_wasm(_p67_contains_full_match).pass
+        end
+        @testset "occursin" begin
+            @test compare_julia_wasm(_p67_occursin_found).pass
+            @test compare_julia_wasm(_p67_occursin_not_found).pass
+        end
+    end
+
 end

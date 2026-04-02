@@ -301,7 +301,7 @@ function _compile_invoke_str_find(args, ctx::AbstractCompilationContext)::Vector
     push!(bytes, Opcode.LOCAL_SET)
     append!(bytes, encode_leb128_unsigned(result_local))
     push!(bytes, Opcode.BR)
-    push!(bytes, 0x01)  # break outer block
+    push!(bytes, 0x02)  # break outer block (depth: if=0, loop=1, block=2)
     push!(bytes, Opcode.END)
 
     # i++
@@ -517,7 +517,7 @@ function _compile_invoke_str_contains(args, ctx::AbstractCompilationContext)::Ve
     push!(bytes, Opcode.LOCAL_SET)
     append!(bytes, encode_leb128_unsigned(result_local))
     push!(bytes, Opcode.BR)
-    push!(bytes, 0x01)
+    push!(bytes, 0x02)  # break outer block (depth: if=0, loop=1, block=2)
     push!(bytes, Opcode.END)
 
     # i++
@@ -1895,9 +1895,11 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 end
             end
 
-            # _searchindex(String, String, Int64) → str_find
+            # _searchindex(String, String, Int64) → str_find (returns I32, widen to I64)
             if _name_early === :_searchindex && length(args) == 3
-                return _compile_invoke_str_find([args[1], args[2]], ctx)
+                bytes = _compile_invoke_str_find([args[1], args[2]], ctx)
+                push!(bytes, Opcode.I64_EXTEND_I32_S)
+                return bytes
             end
 
             # lstrip/rstrip(typeof(isspace), String) → str_trim
