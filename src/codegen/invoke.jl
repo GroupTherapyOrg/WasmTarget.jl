@@ -895,12 +895,12 @@ function _compile_invoke_str_uppercase(args, ctx::AbstractCompilationContext)::V
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(c_local))
     push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x61)  # 97 = 'a'
+    append!(bytes, encode_leb128_signed(97))  # 'a'
     push!(bytes, Opcode.I32_GE_S)
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(c_local))
     push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x7a)  # 122 = 'z'
+    append!(bytes, encode_leb128_signed(122))  # 'z'
     push!(bytes, Opcode.I32_LE_S)
     push!(bytes, Opcode.I32_AND)
     push!(bytes, Opcode.IF)
@@ -1024,12 +1024,12 @@ function _compile_invoke_str_lowercase(args, ctx::AbstractCompilationContext)::V
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(c_local))
     push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x41)  # 65 = 'A'
+    append!(bytes, encode_leb128_signed(65))  # 'A'
     push!(bytes, Opcode.I32_GE_S)
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(c_local))
     push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x5a)  # 90 = 'Z'
+    append!(bytes, encode_leb128_signed(90))  # 'Z'
     push!(bytes, Opcode.I32_LE_S)
     push!(bytes, Opcode.I32_AND)
     push!(bytes, Opcode.IF)
