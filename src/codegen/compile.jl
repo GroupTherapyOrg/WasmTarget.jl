@@ -2141,14 +2141,38 @@ function compile_closure_body(
         _autodiscover_closure_deps!(closure, code_info, mod, type_registry, func_registry)
     end
 
+    # Check if the closure captures non-signal fields (e.g., Vector{String} props).
+    # If so, pass the closure struct as parameter 0 (Leptos/dart2wasm pattern):
+    # the closure object IS the first WASM function argument, and getfield on
+    # Argument(1) compiles to struct.get on param 0.
+    closure_type = typeof(closure)
+    has_non_signal_captures = false
+    if is_closure_type(closure_type)
+        for fname in fieldnames(closure_type)
+            if !haskey(captured_signal_fields, fname)
+                has_non_signal_captures = true
+                break
+            end
+        end
+    end
+
+    arg_types = if has_non_signal_captures
+        # Register the closure struct type so getfield can compile to struct.get
+        register_closure_type!(mod, type_registry, closure_type)
+        (closure_type,)
+    else
+        ()
+    end
+
     # Create compilation context
     ctx = CompilationContext(
         code_info,
-        (),  # No explicit arguments
+        arg_types,
         return_type,
         mod,
         type_registry;
         func_registry = func_registry,
+        is_compiled_closure = has_non_signal_captures,
         captured_signal_fields = captured_signal_fields,
         dom_bindings = dom_bindings,
         skip_stmts = skip_stmts,

@@ -827,6 +827,54 @@ function compile_const_value(val, mod::WasmModule, registry::TypeRegistry)::Vect
         push!(bytes, Opcode.ARRAY_NEW_FIXED)
         append!(bytes, encode_leb128_unsigned(str_type_idx))
         append!(bytes, encode_leb128_unsigned(n_bytes))
+    elseif val isa Vector{String}
+        # Vector{String}: build the WasmGC struct { typeId:i32, data:ref(array), size:ref(tuple) }
+        # struct.new pops in field order: typeId first (bottom), data, size (top)
+        str_type_idx = get_string_array_type!(mod, registry)
+        arr_of_str_type_idx = get_array_type!(mod, registry, String)
+        vec_info = register_vector_type!(mod, registry, Vector{String})
+        n = length(val)
+
+        # Ensure size tuple type is registered
+        if !haskey(registry.structs, Tuple{Int64})
+            register_tuple_type!(mod, registry, Tuple{Int64})
+        end
+        size_tuple_idx = registry.structs[Tuple{Int64}].wasm_type_idx
+
+        # Field 0: typeId = 0
+        push!(bytes, Opcode.I32_CONST)
+        append!(bytes, encode_leb128_signed(Int32(0)))
+
+        # Field 1: data array — array of string refs
+        for s in val
+            nb = ncodeunits(s)
+            for i in 1:nb
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int32(codeunit(s, i))))
+            end
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ARRAY_NEW_FIXED)
+            append!(bytes, encode_leb128_unsigned(str_type_idx))
+            append!(bytes, encode_leb128_unsigned(nb))
+        end
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.ARRAY_NEW_FIXED)
+        append!(bytes, encode_leb128_unsigned(arr_of_str_type_idx))
+        append!(bytes, encode_leb128_unsigned(n))
+
+        # Field 2: size tuple struct { typeId:i32, dim1:i64 }
+        push!(bytes, Opcode.I32_CONST)
+        append!(bytes, encode_leb128_signed(Int32(0)))
+        push!(bytes, Opcode.I64_CONST)
+        append!(bytes, encode_leb128_signed(Int64(n)))
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.STRUCT_NEW)
+        append!(bytes, encode_leb128_unsigned(size_tuple_idx))
+
+        # struct.new Vector{String}
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.STRUCT_NEW)
+        append!(bytes, encode_leb128_unsigned(vec_info.wasm_type_idx))
     elseif val === nothing
         # For Nothing type, we use ref.null none (bottom of any hierarchy)
         push!(bytes, Opcode.REF_NULL)
