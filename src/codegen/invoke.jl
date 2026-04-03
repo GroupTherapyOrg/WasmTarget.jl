@@ -822,6 +822,373 @@ function _compile_invoke_str_endswith(args, ctx::AbstractCompilationContext)::Ve
 end
 
 """
+BF-2000: repeat(s, n) -> String. Repeat string s n times.
+Uses WasmGC array.new_default + loop with array.copy.
+"""
+function _compile_invoke_str_repeat(args, ctx::AbstractCompilationContext)::Vector{UInt8}
+    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+    bytes = UInt8[]
+
+    # Allocate locals
+    s_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, ConcreteRef(str_type_idx))
+    result_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, ConcreteRef(str_type_idx))
+    s_len_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+    n_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+    i_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+
+    # Store s and get its length
+    append!(bytes, compile_value(args[1], ctx))
+    push!(bytes, Opcode.LOCAL_TEE)
+    append!(bytes, encode_leb128_unsigned(s_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_LEN)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(s_len_local))
+
+    # Store n as i32
+    append!(bytes, compile_value(args[2], ctx))
+    n_type = infer_value_type(args[2], ctx)
+    if n_type === Int64 || n_type === Int
+        push!(bytes, Opcode.I32_WRAP_I64)
+    end
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(n_local))
+
+    # Create result array of size s_len * n
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(s_len_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(n_local))
+    push!(bytes, Opcode.I32_MUL)
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
+    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+
+    # i = 0
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(i_local))
+
+    # Loop: while i < n, copy s into result at offset i * s_len
+    push!(bytes, Opcode.BLOCK)
+    push!(bytes, 0x40)
+    push!(bytes, Opcode.LOOP)
+    push!(bytes, 0x40)
+
+    # if i >= n, break
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(i_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(n_local))
+    push!(bytes, Opcode.I32_GE_S)
+    push!(bytes, Opcode.BR_IF)
+    push!(bytes, 0x01)  # break to outer block
+
+    # array.copy: dst=result, dst_off=i*s_len, src=s, src_off=0, len=s_len
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+    # dst_off = i * s_len
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(i_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(s_len_local))
+    push!(bytes, Opcode.I32_MUL)
+    # src
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(s_local))
+    # src_off = 0
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)
+    # len = s_len
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(s_len_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_COPY)
+    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    append!(bytes, encode_leb128_unsigned(str_type_idx))
+
+    # i++
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(i_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x01)
+    push!(bytes, Opcode.I32_ADD)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(i_local))
+
+    push!(bytes, Opcode.BR)
+    push!(bytes, 0x00)  # continue loop
+
+    push!(bytes, Opcode.END)  # end loop
+    push!(bytes, Opcode.END)  # end block
+
+    # Return result
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+
+    return bytes
+end
+
+"""
+BF-2000: lpad(s, n, c) -> String. Left-pad string s to length n with char c.
+"""
+function _compile_invoke_str_lpad(args, ctx::AbstractCompilationContext)::Vector{UInt8}
+    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+    bytes = UInt8[]
+
+    # Allocate locals
+    s_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, ConcreteRef(str_type_idx))
+    result_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, ConcreteRef(str_type_idx))
+    s_len_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+    n_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+    pad_len_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+    c_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+    i_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+
+    # Store s and get its length
+    append!(bytes, compile_value(args[1], ctx))
+    push!(bytes, Opcode.LOCAL_TEE)
+    append!(bytes, encode_leb128_unsigned(s_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_LEN)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(s_len_local))
+
+    # Store n as i32
+    append!(bytes, compile_value(args[2], ctx))
+    n_type = infer_value_type(args[2], ctx)
+    if n_type === Int64 || n_type === Int
+        push!(bytes, Opcode.I32_WRAP_I64)
+    end
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(n_local))
+
+    # Store pad char as i32 (convert from Julia Char encoding to UTF-8 byte)
+    # Julia Char is UTF-8 left-packed in UInt32: ' ' = 0x20000000. Need byte = 0x20.
+    char_arg = args[3]
+    if char_arg isa Char
+        # Compile-time conversion: extract codepoint directly
+        push!(bytes, Opcode.I32_CONST)
+        append!(bytes, encode_leb128_signed(Int32(UInt32(char_arg))))
+    else
+        # Runtime: compile_value gives Julia encoding, shift right 24 for ASCII
+        append!(bytes, compile_value(char_arg, ctx))
+        push!(bytes, Opcode.I32_CONST)
+        append!(bytes, encode_leb128_signed(Int32(24)))
+        push!(bytes, Opcode.I32_SHR_U)
+    end
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(c_local))
+
+    # If s_len >= n, result = s (no padding)
+    # Else, create padded result
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(s_len_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(n_local))
+    push!(bytes, Opcode.I32_GE_S)
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)  # void
+
+    # result = s
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(s_local))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+
+    push!(bytes, Opcode.ELSE)
+
+    # pad_len = n - s_len
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(n_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(s_len_local))
+    push!(bytes, Opcode.I32_SUB)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(pad_len_local))
+
+    # Create result array of size n
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(n_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
+    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+
+    # Fill first pad_len chars with c using array.fill
+    # array.fill: [ref, offset, value, count]
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)  # offset = 0
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(c_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(pad_len_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_FILL)
+    append!(bytes, encode_leb128_unsigned(str_type_idx))
+
+    # Copy s into result at offset pad_len
+    # array.copy: [dst, dst_off, src, src_off, len]
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(pad_len_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(s_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)  # src_off = 0
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(s_len_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_COPY)
+    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    append!(bytes, encode_leb128_unsigned(str_type_idx))
+
+    push!(bytes, Opcode.END)  # end if/else
+
+    # Return result
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+
+    return bytes
+end
+
+"""
+BF-2000: rpad(s, n, c) -> String. Right-pad string s to length n with char c.
+"""
+function _compile_invoke_str_rpad(args, ctx::AbstractCompilationContext)::Vector{UInt8}
+    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+    bytes = UInt8[]
+
+    # Allocate locals
+    s_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, ConcreteRef(str_type_idx))
+    result_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, ConcreteRef(str_type_idx))
+    s_len_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+    n_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+    c_local = ctx.n_params + length(ctx.locals)
+    push!(ctx.locals, I32)
+
+    # Store s and get its length
+    append!(bytes, compile_value(args[1], ctx))
+    push!(bytes, Opcode.LOCAL_TEE)
+    append!(bytes, encode_leb128_unsigned(s_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_LEN)
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(s_len_local))
+
+    # Store n as i32
+    append!(bytes, compile_value(args[2], ctx))
+    n_type = infer_value_type(args[2], ctx)
+    if n_type === Int64 || n_type === Int
+        push!(bytes, Opcode.I32_WRAP_I64)
+    end
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(n_local))
+
+    # Store pad char as i32 (convert from Julia Char encoding to UTF-8 byte)
+    char_arg = args[3]
+    if char_arg isa Char
+        push!(bytes, Opcode.I32_CONST)
+        append!(bytes, encode_leb128_signed(Int32(UInt32(char_arg))))
+    else
+        append!(bytes, compile_value(char_arg, ctx))
+        push!(bytes, Opcode.I32_CONST)
+        append!(bytes, encode_leb128_signed(Int32(24)))
+        push!(bytes, Opcode.I32_SHR_U)
+    end
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(c_local))
+
+    # If s_len >= n, result = s (no padding)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(s_len_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(n_local))
+    push!(bytes, Opcode.I32_GE_S)
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)
+
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(s_local))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+
+    push!(bytes, Opcode.ELSE)
+
+    # Create result array of size n
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(n_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
+    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    push!(bytes, Opcode.LOCAL_SET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+
+    # Copy s into result at offset 0
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)  # dst_off = 0
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(s_local))
+    push!(bytes, Opcode.I32_CONST)
+    push!(bytes, 0x00)  # src_off = 0
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(s_len_local))
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_COPY)
+    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    append!(bytes, encode_leb128_unsigned(str_type_idx))
+
+    # Fill remaining with c: array.fill(result, s_len, c, n - s_len)
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(s_len_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(c_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(n_local))
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(s_len_local))
+    push!(bytes, Opcode.I32_SUB)
+    push!(bytes, Opcode.GC_PREFIX)
+    push!(bytes, Opcode.ARRAY_FILL)
+    append!(bytes, encode_leb128_unsigned(str_type_idx))
+
+    push!(bytes, Opcode.END)  # end if/else
+
+    # Return result
+    push!(bytes, Opcode.LOCAL_GET)
+    append!(bytes, encode_leb128_unsigned(result_local))
+
+    return bytes
+end
+
+"""
 Extract: str_uppercase(s) -> String. Convert lowercase ASCII letters to uppercase.
 """
 function _compile_invoke_str_uppercase(args, ctx::AbstractCompilationContext)::Vector{UInt8}
@@ -1954,6 +2321,21 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
             # endswith(String, String) → str_endswith
             if _name_early === :endswith && length(args) == 2
                 return _compile_invoke_str_endswith([args[1], args[2]], ctx)
+            end
+
+            # BF-2000: repeat(String, Int64) → str_repeat
+            if _name_early === :repeat && length(args) == 2
+                return _compile_invoke_str_repeat([args[1], args[2]], ctx)
+            end
+
+            # BF-2000: lpad(String, Int64, Char) → str_lpad
+            if _name_early === :lpad && length(args) == 3
+                return _compile_invoke_str_lpad([args[1], args[2], args[3]], ctx)
+            end
+
+            # BF-2000: rpad(String, Int64, Char) → str_rpad
+            if _name_early === :rpad && length(args) == 3
+                return _compile_invoke_str_rpad([args[1], args[2], args[3]], ctx)
             end
         end
     end

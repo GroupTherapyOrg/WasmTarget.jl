@@ -9394,4 +9394,94 @@ console.log(JSON.stringify({
         @test compare_julia_wasm(_bf4_str_max, Int64(9223372036854775807)).pass
     end
 
+    # ========================================================================
+    # Phase 71: BF2 Trivial String Dispatch (repeat, lpad, rpad, prevind)
+    # Tests that Base string functions compile and execute correctly
+    # via early dispatch entries in invoke.jl.
+    # NOTE: Helper and test functions defined at module level to avoid
+    # @testset closure capture (see CLAUDE.md).
+    # ========================================================================
+
+    @noinline _bf2_repeat(s::String, n::Int64)::String = repeat(s, n)
+    @noinline _bf2_lpad(s::String, n::Int64)::String = lpad(s, n)
+    @noinline _bf2_rpad(s::String, n::Int64)::String = rpad(s, n)
+
+    _bf2_test_repeat_basic()::Int32 = _bf2_repeat("abc", Int64(3)) == "abcabcabc" ? Int32(1) : Int32(0)
+    _bf2_test_repeat_char()::Int32 = _bf2_repeat("x", Int64(5)) == "xxxxx" ? Int32(1) : Int32(0)
+    _bf2_test_repeat_once()::Int32 = _bf2_repeat("hello", Int64(1)) == "hello" ? Int32(1) : Int32(0)
+    _bf2_test_lpad_basic()::Int32 = _bf2_lpad("hi", Int64(5)) == "   hi" ? Int32(1) : Int32(0)
+    _bf2_test_lpad_nopad()::Int32 = _bf2_lpad("hello", Int64(3)) == "hello" ? Int32(1) : Int32(0)
+    _bf2_test_lpad_exact()::Int32 = _bf2_lpad("abc", Int64(3)) == "abc" ? Int32(1) : Int32(0)
+    _bf2_test_rpad_basic()::Int32 = _bf2_rpad("hi", Int64(5)) == "hi   " ? Int32(1) : Int32(0)
+    _bf2_test_rpad_nopad()::Int32 = _bf2_rpad("hello", Int64(3)) == "hello" ? Int32(1) : Int32(0)
+    _bf2_test_rpad_exact()::Int32 = _bf2_rpad("abc", Int64(3)) == "abc" ? Int32(1) : Int32(0)
+    _bf2_test_prevind()::Int64 = prevind("hello", Int64(5))
+    _bf2_test_prevind_start()::Int64 = prevind("hello", Int64(1))
+    _bf2_test_prevind_mid()::Int64 = prevind("abcdef", Int64(3))
+
+    @testset "Phase 71: String Dispatch (BF2)" begin
+        @testset "repeat - basic" begin
+            bytes = compile(_bf2_test_repeat_basic, ())
+            @test validate_wasm(bytes)
+            @test run_wasm(bytes, "_bf2_test_repeat_basic") == 1
+        end
+
+        @testset "repeat - single char" begin
+            bytes = compile(_bf2_test_repeat_char, ())
+            @test run_wasm(bytes, "_bf2_test_repeat_char") == 1
+        end
+
+        @testset "repeat - once" begin
+            bytes = compile(_bf2_test_repeat_once, ())
+            @test run_wasm(bytes, "_bf2_test_repeat_once") == 1
+        end
+
+        @testset "lpad - basic" begin
+            bytes = compile_multi([(_bf2_test_lpad_basic, ()), (_bf2_lpad, (String, Int64))])
+            @test validate_wasm(bytes)
+            @test run_wasm(bytes, "_bf2_test_lpad_basic") == 1
+        end
+
+        @testset "lpad - no padding needed" begin
+            bytes = compile_multi([(_bf2_test_lpad_nopad, ()), (_bf2_lpad, (String, Int64))])
+            @test run_wasm(bytes, "_bf2_test_lpad_nopad") == 1
+        end
+
+        @testset "lpad - exact length" begin
+            bytes = compile_multi([(_bf2_test_lpad_exact, ()), (_bf2_lpad, (String, Int64))])
+            @test run_wasm(bytes, "_bf2_test_lpad_exact") == 1
+        end
+
+        @testset "rpad - basic" begin
+            bytes = compile_multi([(_bf2_test_rpad_basic, ()), (_bf2_rpad, (String, Int64))])
+            @test validate_wasm(bytes)
+            @test run_wasm(bytes, "_bf2_test_rpad_basic") == 1
+        end
+
+        @testset "rpad - no padding needed" begin
+            bytes = compile_multi([(_bf2_test_rpad_nopad, ()), (_bf2_rpad, (String, Int64))])
+            @test run_wasm(bytes, "_bf2_test_rpad_nopad") == 1
+        end
+
+        @testset "rpad - exact length" begin
+            bytes = compile_multi([(_bf2_test_rpad_exact, ()), (_bf2_rpad, (String, Int64))])
+            @test run_wasm(bytes, "_bf2_test_rpad_exact") == 1
+        end
+
+        @testset "prevind - basic" begin
+            r = compare_julia_wasm_manual(_bf2_test_prevind, (), prevind("hello", 5))
+            @test r.pass
+        end
+
+        @testset "prevind - at start" begin
+            r = compare_julia_wasm_manual(_bf2_test_prevind_start, (), prevind("hello", 1))
+            @test r.pass
+        end
+
+        @testset "prevind - middle" begin
+            r = compare_julia_wasm_manual(_bf2_test_prevind_mid, (), prevind("abcdef", 3))
+            @test r.pass
+        end
+    end
+
 end
