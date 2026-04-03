@@ -92,3 +92,54 @@ When the gap analysis says a function "COMPILES_WRONG", always verify with the c
 
 ---
 
+## 2026-04-02: BF4 String Interpolation — COMPLETE
+
+### BF-4000 (BUILD): Early dispatch for #string#403
+
+**Root cause**: `"$x"` and `string(x::Int64)` (variable arg) desugar to `#string#403(base=10, pad=1, typeof(string), x)`. This kwarg-expanded method:
+1. Has a `typeof(string)` phantom arg (singleton, never used in body)
+2. Branches to `dec` (base=10), `bin` (base=2), `oct` (base=8), `hex` (base=16), `_base` (other)
+3. Only `dec` is in the autodiscovery whitelist; `bin/oct/hex/_base` are stubbed
+4. The phantom `typeof(string)` arg caused cross-call type mismatches (ConcreteRef for singleton struct vs caller expectations)
+
+**Fix**: Added early dispatch in invoke.jl that intercepts `#string#403` and inlines the `dec` call:
+- Computes `abs(x)` using `i64.select(x, -x, x >= 0)` (no scratch locals needed)
+- Pushes `pad` from original args
+- Computes `x < 0` as i32 Bool
+- Calls `dec` via func_registry cross-call
+
+**File**: `src/codegen/invoke.jl`, ~25 LOC inserted after `_searchindex` early dispatch
+
+**Tests**: 5 new tests in Phase 70 (runtests.jl):
+- string(42), string(-999), string(0), string(1234567890), string(typemax(Int64))
+- All use variable args (not constants) to exercise the #string#403 path
+
+### Key Learning
+Kwarg-expanded methods (`#funcname#NNN`) have phantom `typeof(func)` args that are never used in the body. These cause cross-call type mismatches when compiled as separate functions. The fix pattern: intercept in early dispatch and redirect to the inner function (e.g., `dec`) directly.
+
+---
+
+## 2026-04-02: BF5 Dict Loop Insert — ALREADY FIXED
+
+### BF-5000 (DISCOVER): Bug does NOT exist
+
+**Finding**: Dict loop insertion with 5, 10, 20, and even 100 entries all compile and execute correctly. The gap analysis bug has been resolved by prior compiler work.
+
+**Verification**:
+- `dict_loop_insert(100)` → d[50] returns 500 ✅
+- `dict_loop_sum(10)` → sum of values 1..10 = 55 ✅
+- wasm-tools validates ✅
+- Runtime results match Julia ✅
+
+**Dict pair iteration (BF9) still fails**: `for (k,v) in d` produces "not enough arguments on the stack for drop" at runtime. This is a separate bug.
+
+---
+
+## 2026-04-02: BF3 contains/occursin Tests — ALREADY EXIST
+
+### BF-3001 (VERIFY): Tests already in Phase 69
+
+Phase 69 tests were added in a prior iteration. 8 tests covering contains/occursin with various edge cases.
+
+---
+

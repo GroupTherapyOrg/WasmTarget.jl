@@ -61,7 +61,8 @@
           "type": "VERIFY",
           "title": "Add contains/occursin tests to runtests.jl",
           "priority": 1,
-          "status": "open",
+          "status": "done",
+          "completedNote": "Tests already exist in Phase 69 (8 tests). contains/occursin verified working.",
           "blockedBy": ["BF-3000"]
         }
       ]
@@ -78,7 +79,8 @@
           "type": "BUILD",
           "title": "Wire _base dispatch for string interpolation",
           "priority": 0,
-          "status": "open",
+          "status": "done",
+          "completedNote": "25 LOC early dispatch for #string#403 → dec. Bypasses phantom typeof(string) arg. 5 new tests in Phase 70.",
           "blockedBy": []
         }
       ]
@@ -95,7 +97,8 @@
           "type": "DISCOVER",
           "title": "Trace Dict loop insert stack validation error",
           "priority": 0,
-          "status": "open",
+          "status": "done",
+          "completedNote": "Bug does NOT exist. Dict loop insert works correctly up to 100+ entries. Prior compiler work resolved this.",
           "blockedBy": []
         },
         {
@@ -103,7 +106,8 @@
           "type": "BUILD",
           "title": "Fix Dict loop insert codegen",
           "priority": 1,
-          "status": "open",
+          "status": "done",
+          "completedNote": "No fix needed — bug was already resolved by prior work.",
           "blockedBy": ["BF-5000"]
         }
       ]

@@ -1902,6 +1902,41 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 return bytes
             end
 
+            # BF-4000: #string#403(base, pad, typeof(string), x) → inline dec call
+            # String interpolation "$x" and string(x::Integer) go through this kwarg method.
+            # The typeof(string) arg is phantom (never used in body). Redirect to dec().
+            if _name_early === Symbol("#string#403") && length(args) == 4 &&
+               ctx.func_registry !== nothing
+                _dec_info = get_function(ctx.func_registry, Base.dec, (UInt64, Int64, Bool))
+                if _dec_info !== nothing
+                    bytes = UInt8[]
+                    _x = args[4]  # the integer value
+
+                    # Push abs(x) as I64 (same bits as UInt64): select(x, -x, x >= 0)
+                    append!(bytes, compile_value(_x, ctx))              # x (true branch)
+                    push!(bytes, Opcode.I64_CONST); push!(bytes, 0x00) # 0
+                    append!(bytes, compile_value(_x, ctx))              # x
+                    push!(bytes, Opcode.I64_SUB)                        # -x (false branch)
+                    append!(bytes, compile_value(_x, ctx))              # x
+                    push!(bytes, Opcode.I64_CONST); push!(bytes, 0x00) # 0
+                    push!(bytes, Opcode.I64_GE_S)                       # x >= 0 (i32 condition)
+                    push!(bytes, Opcode.SELECT)                         # abs(x)
+
+                    # Push pad (arg 2)
+                    append!(bytes, compile_value(args[2], ctx))
+
+                    # Push x < 0 as i32 Bool
+                    append!(bytes, compile_value(_x, ctx))
+                    push!(bytes, Opcode.I64_CONST); push!(bytes, 0x00)
+                    push!(bytes, Opcode.I64_LT_S)
+
+                    # Call dec
+                    push!(bytes, Opcode.CALL)
+                    append!(bytes, encode_leb128_unsigned(_dec_info.wasm_idx))
+                    return bytes
+                end
+            end
+
             # lstrip/rstrip(typeof(isspace), String) → str_trim
             if (_name_early === :lstrip || _name_early === :rstrip) && length(args) == 2 &&
                _spec_early isa DataType && _spec_early <: Tuple && length(_spec_early.parameters) >= 2

@@ -9374,4 +9374,24 @@ console.log(JSON.stringify({
         end
     end
 
+    # ========================================================================
+    # Phase 70: BF4 String interpolation / string(x) with variable args
+    # Tests that string(x::Int64) works when x is a runtime argument
+    # (goes through #string#403 → dec early dispatch, not constant inlining).
+    # ========================================================================
+
+    _bf4_str_pos(x::Int64)::Bool = string(x) == "42"
+    _bf4_str_neg(x::Int64)::Bool = string(x) == "-999"
+    _bf4_str_zero(x::Int64)::Bool = string(x) == "0"
+    _bf4_str_large(x::Int64)::Bool = string(x) == "1234567890"
+    _bf4_str_max(x::Int64)::Bool = string(x) == "9223372036854775807"
+
+    @testset "Phase 70: String Interpolation (BF4)" begin
+        @test compare_julia_wasm(_bf4_str_pos, Int64(42)).pass
+        @test compare_julia_wasm(_bf4_str_neg, Int64(-999)).pass
+        @test compare_julia_wasm(_bf4_str_zero, Int64(0)).pass
+        @test compare_julia_wasm(_bf4_str_large, Int64(1234567890)).pass
+        @test compare_julia_wasm(_bf4_str_max, Int64(9223372036854775807)).pass
+    end
+
 end
