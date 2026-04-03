@@ -52,13 +52,14 @@
           "type": "DISCOVER",
           "title": "Trace contains compilation failure path",
           "priority": 0,
-          "status": "open",
+          "status": "done",
+          "completedNote": "contains/occursin ALREADY WORK. Gap analysis misdiagnosed — test harness can't marshal JS strings to WasmGC refs. _searchindex early dispatch fires correctly.",
           "blockedBy": []
         },
         {
           "id": "BF-3001",
-          "type": "BUILD",
-          "title": "Implement contains/occursin fix",
+          "type": "VERIFY",
+          "title": "Add contains/occursin tests to runtests.jl",
           "priority": 1,
           "status": "open",
           "blockedBy": ["BF-3000"]

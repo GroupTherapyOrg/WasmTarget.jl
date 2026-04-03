@@ -65,3 +65,30 @@ The `seen` set pattern (use one set for both dedup and skip) is a common bug pat
 
 ---
 
+## 2026-04-02: BF3 contains/occursin — ALREADY WORKS
+
+### BF-3000 (DISCOVER): Bug does NOT exist
+
+**Finding**: `contains` and `occursin` compile and execute correctly. The gap analysis misdiagnosed this as broken.
+
+**Root cause of misdiagnosis**: The gap analysis tested `contains` by passing a Julia `String` argument from JS, which hits "type incompatibility when transforming from/to JS" at the Wasm boundary. WasmGC strings are `(ref null array_type)` refs — JS can't pass a JS string to this type. This is a test harness limitation, not a compiler bug.
+
+**What actually happens**:
+1. `contains(s, "hello")` IR: `_searchindex(s, "hello", 1)` then `%1 === 0` then `not_int`
+2. Early dispatch at invoke.jl:1899 matches `_searchindex(String, String, Int64)` → emits inline `str_find` + `I64_EXTEND_I32_S`
+3. The comparison and boolean inversion work correctly
+4. wasm-tools validates the binary OK (the internal stack validator warnings are false positives)
+
+**Verification**: All 7 edge cases pass (empty needle, empty haystack, both empty, same string, partial match, beginning match, end match).
+
+**How to test string functions**: Use no-argument wrapper functions with hardcoded string constants (the same pattern used by existing str_find/str_contains tests in Phase 18).
+
+### BF-3001 (BUILD): Reclassified — just add tests
+
+No compiler fix needed. BF-3001 should just add `compare_julia_wasm_manual` tests for `contains` and `occursin` using the wrapper pattern.
+
+### Key Learning
+When the gap analysis says a function "COMPILES_WRONG", always verify with the correct testing pattern before implementing a fix. String functions must be tested with hardcoded constants, not JS-marshalled string args.
+
+---
+

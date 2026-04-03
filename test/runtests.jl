@@ -9302,4 +9302,76 @@ console.log(JSON.stringify({
         end
     end
 
+    # ========================================================================
+    # Phase 69: BF3 contains/occursin
+    # Tests that Julia's Base.contains and Base.occursin compile and execute
+    # correctly via the _searchindex → str_find early dispatch.
+    # ========================================================================
+
+    @testset "Phase 69: contains/occursin (BF3)" begin
+        @testset "contains - found" begin
+            function _bf3_contains_found()::Int32
+                contains("hello world", "world") ? Int32(1) : Int32(0)
+            end
+            bytes = compile(_bf3_contains_found, ())
+            @test run_wasm(bytes, "_bf3_contains_found") == 1
+        end
+
+        @testset "contains - not found" begin
+            function _bf3_contains_notfound()::Int32
+                contains("hello world", "xyz") ? Int32(1) : Int32(0)
+            end
+            bytes = compile(_bf3_contains_notfound, ())
+            @test run_wasm(bytes, "_bf3_contains_notfound") == 0
+        end
+
+        @testset "contains - empty needle" begin
+            function _bf3_contains_empty_needle()::Int32
+                contains("hello", "") ? Int32(1) : Int32(0)
+            end
+            bytes = compile(_bf3_contains_empty_needle, ())
+            @test run_wasm(bytes, "_bf3_contains_empty_needle") == 1
+        end
+
+        @testset "contains - empty haystack" begin
+            function _bf3_contains_empty_haystack()::Int32
+                contains("", "hello") ? Int32(1) : Int32(0)
+            end
+            bytes = compile(_bf3_contains_empty_haystack, ())
+            @test run_wasm(bytes, "_bf3_contains_empty_haystack") == 0
+        end
+
+        @testset "contains - both empty" begin
+            function _bf3_contains_both_empty()::Int32
+                contains("", "") ? Int32(1) : Int32(0)
+            end
+            bytes = compile(_bf3_contains_both_empty, ())
+            @test run_wasm(bytes, "_bf3_contains_both_empty") == 1
+        end
+
+        @testset "contains - exact match" begin
+            function _bf3_contains_exact()::Int32
+                contains("hello", "hello") ? Int32(1) : Int32(0)
+            end
+            bytes = compile(_bf3_contains_exact, ())
+            @test run_wasm(bytes, "_bf3_contains_exact") == 1
+        end
+
+        @testset "occursin - found" begin
+            function _bf3_occursin_found()::Int32
+                occursin("world", "hello world") ? Int32(1) : Int32(0)
+            end
+            bytes = compile(_bf3_occursin_found, ())
+            @test run_wasm(bytes, "_bf3_occursin_found") == 1
+        end
+
+        @testset "occursin - not found" begin
+            function _bf3_occursin_notfound()::Int32
+                occursin("xyz", "hello world") ? Int32(1) : Int32(0)
+            end
+            bytes = compile(_bf3_occursin_notfound, ())
+            @test run_wasm(bytes, "_bf3_occursin_notfound") == 0
+        end
+    end
+
 end
