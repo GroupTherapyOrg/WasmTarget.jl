@@ -2186,6 +2186,69 @@ function compile_closure_body(
 end
 
 """
+    compile_function_into!(f, arg_types, mod, type_registry; export_name) -> UInt32
+
+Compile a standalone Julia function into an existing WASM module.
+Returns the function index. Used by Therapy.jl to add bridge functions
+(string/vector construction) to an island's shared module.
+
+Follows the same pattern as compile_multi's per-function compilation.
+"""
+function compile_function_into!(f::Function, arg_types::Tuple, mod::WasmModule,
+                                 type_registry::TypeRegistry;
+                                 export_name::Union{String, Nothing}=nothing)::UInt32
+    closure_type = typeof(f)
+    is_closure = is_closure_type(closure_type)
+    actual_arg_types = is_closure ? (closure_type, arg_types...) : arg_types
+
+    code_info, return_type = get_typed_ir(f, actual_arg_types)
+
+    # Register parameter types
+    for T in actual_arg_types
+        if is_closure_type(T)
+            register_closure_type!(mod, type_registry, T)
+        elseif T <: Array
+            register_vector_type!(mod, type_registry, T)
+        elseif is_struct_type(T)
+            register_struct_type!(mod, type_registry, T)
+        elseif T === String
+            get_string_array_type!(mod, type_registry)
+        end
+    end
+
+    # Register return type
+    if return_type !== Nothing && return_type !== Union{}
+        if return_type <: Array
+            register_vector_type!(mod, type_registry, return_type)
+        elseif is_struct_type(return_type)
+            register_struct_type!(mod, type_registry, return_type)
+        elseif return_type === String
+            get_string_array_type!(mod, type_registry)
+        end
+    end
+
+    # Reserve function index
+    func_idx = UInt32(length(mod.functions) + length(mod.imports))
+
+    # Compile body
+    ctx = CompilationContext(code_info, actual_arg_types, return_type, mod, type_registry;
+                            func_idx=func_idx, func_ref=f, is_compiled_closure=is_closure)
+    body = generate_body(ctx)
+    locals = ctx.locals
+
+    # Param/result types
+    param_types = WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in actual_arg_types]
+    result_types = (return_type === Nothing || return_type === Union{}) ?
+        WasmValType[] : WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
+
+    idx = add_function!(mod, param_types, result_types, locals, body)
+    if export_name !== nothing
+        add_export!(mod, export_name, 0, idx)
+    end
+    return idx
+end
+
+"""
     _autodiscover_closure_deps!(closure, code_info, mod, type_registry, func_registry)
 
 Scan a closure's IR for method invocations that need to be compiled as separate
