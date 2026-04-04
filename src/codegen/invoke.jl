@@ -4809,6 +4809,60 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     push!(bytes, 0x00)
                 end
 
+            # ================================================================
+            # Struct constructor via :invoke — immutable structs with only
+            # reference-type fields (e.g., all-String) use :invoke instead
+            # of :new.  Detect Type{T} as first specTypes parameter and
+            # emit struct.new with the pre-compiled field values.
+            # ================================================================
+            elseif mi !== nothing && begin
+                    local _sc_sig = mi.specTypes
+                    local _sc_ok = false
+                    if _sc_sig isa DataType && _sc_sig <: Tuple && length(_sc_sig.parameters) >= 1
+                        local _sc_fp = _sc_sig.parameters[1]
+                        if _sc_fp isa DataType && _sc_fp <: Type && length(_sc_fp.parameters) >= 1
+                            local _sc_tt = _sc_fp.parameters[1]
+                            _sc_ok = _sc_tt isa DataType && is_struct_type(_sc_tt) &&
+                                     (haskey(ctx.type_registry.structs, _sc_tt) ||
+                                      (isconcretetype(_sc_tt) && isstructtype(_sc_tt)))
+                        end
+                    end
+                    _sc_ok
+                end
+                # Extract target type from Type{T}
+                local _ctor_target = mi.specTypes.parameters[1].parameters[1]::DataType
+                # Clear pre-compiled args — we re-emit in correct order with typeId
+                bytes = UInt8[]
+                # Register struct type if not already registered
+                if !haskey(ctx.type_registry.structs, _ctor_target)
+                    register_struct_type!(ctx.mod, ctx.type_registry, _ctor_target)
+                end
+                local _ctor_sinfo = ctx.type_registry.structs[_ctor_target]
+                if _ctor_sinfo !== nothing
+                    # field 0: typeId (i32)
+                    emit_type_id!(bytes, ctx.type_registry, _ctor_target)
+                    # Compile each constructor argument as a struct field value
+                    for _fi in 1:length(args)
+                        local _ftype = _fi <= length(_ctor_sinfo.field_types) ? _ctor_sinfo.field_types[_fi] : Any
+                        local _fval_wasm = infer_value_wasm_type(args[_fi], ctx)
+                        local _fval_numeric = _fval_wasm === I32 || _fval_wasm === I64 || _fval_wasm === F32 || _fval_wasm === F64
+                        if _fval_numeric && (_ftype === Any || isabstracttype(_ftype))
+                            emit_numeric_to_anyref!(bytes, args[_fi], _fval_wasm, ctx)
+                        else
+                            append!(bytes, compile_value(args[_fi], ctx))
+                        end
+                    end
+                    # struct.new
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.STRUCT_NEW)
+                    append!(bytes, encode_leb128_unsigned(_ctor_sinfo.wasm_type_idx))
+                else
+                    # Registration failed — fallback to unreachable
+                    @warn "Struct constructor: failed to register $(_ctor_target)"
+                    push!(bytes, Opcode.UNREACHABLE)
+                    ctx.last_stmt_was_stub = true
+                end
+
             else
                 # Unknown method — emit unreachable (will trap at runtime)
                 # This allows compilation to succeed for code paths that
