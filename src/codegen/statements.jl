@@ -3372,12 +3372,29 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
         # If we can't trace the string, fall through to unreachable
     end
 
-    # Unknown foreigncall - emit unreachable.
-    # We cannot execute native C FFI in WebAssembly. Emitting unreachable:
-    # (1) Makes the wasm validator accept any stack type (polymorphic)
-    # (2) Correctly traps if this code path is reached at runtime
-    # (3) Enables then_ends_unreachable detection for IF block typing
-    push!(bytes, Opcode.UNREACHABLE)
+    # Unknown foreigncall — emit a default return value instead of unreachable.
+    # These stubs are dead code at runtime (WasmTarget handles them via intrinsics
+    # at a higher level), but emitting unreachable causes wasm-opt's
+    # --traps-never-happen to eliminate surrounding live code.
+    # Returning a type-appropriate default keeps the optimizer safe.
+    fc_return_type = length(expr.args) >= 2 ? expr.args[2] : Nothing
+    if fc_return_type === Int32 || fc_return_type === UInt32
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x00)
+    elseif fc_return_type === Int64 || fc_return_type === UInt64 || fc_return_type === Int
+        push!(bytes, Opcode.I64_CONST)
+        push!(bytes, 0x00)
+    elseif fc_return_type === Float64
+        append!(bytes, [Opcode.F64_CONST, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+    elseif fc_return_type === Float32
+        append!(bytes, [Opcode.F32_CONST, 0x00, 0x00, 0x00, 0x00])
+    elseif fc_return_type === Nothing || fc_return_type === Cvoid
+        # void return — no value needed
+    else
+        # For pointer types (Ptr{...}) and other unknowns, use i64 as a safe default
+        push!(bytes, Opcode.I64_CONST)
+        push!(bytes, 0x00)
+    end
     ctx.last_stmt_was_stub = true  # PURE-908
     return bytes
 end
