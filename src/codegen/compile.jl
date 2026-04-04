@@ -2130,8 +2130,9 @@ function compile_closure_body(
     invoke_imports::Dict{Int, UInt32} = Dict{Int, UInt32}(),
     void_return::Bool = false
 )
-    # Get typed IR for the closure
-    typed_results = Base.code_typed(closure, ())
+    # Get typed IR for the closure (using WasmInterpreter for overlays)
+    interp = get_wasm_interpreter()
+    typed_results = Base.code_typed(closure, (); interp=interp)
     if isempty(typed_results)
         error("Could not get typed IR for handler closure")
     end
