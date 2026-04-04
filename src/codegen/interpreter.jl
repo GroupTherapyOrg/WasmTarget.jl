@@ -45,6 +45,35 @@ Base.Experimental.@MethodTable(WASM_METHOD_TABLE)
     return v
 end
 
+# startswith/endswith overlays: Base versions use foreigncall :memcmp + :jl_string_ptr.
+# WASM can't call C — and stub return values (memcmp=0="equal") are semantically WRONG,
+# causing wasm-opt GUFA to propagate false "always equal" and eliminate live branches.
+# These overlays produce CORRECT results, making optimization safe.
+@overlay WASM_METHOD_TABLE function Base.startswith(a::String, b::String)
+    al = ncodeunits(a)
+    bl = ncodeunits(b)
+    bl > al && return false
+    i = 1
+    while i <= bl
+        codeunit(a, i) != codeunit(b, i) && return false
+        i += 1
+    end
+    return true
+end
+
+@overlay WASM_METHOD_TABLE function Base.endswith(a::String, b::String)
+    al = ncodeunits(a)
+    bl = ncodeunits(b)
+    bl > al && return false
+    offset = al - bl
+    i = 1
+    while i <= bl
+        codeunit(a, offset + i) != codeunit(b, i) && return false
+        i += 1
+    end
+    return true
+end
+
 # cmp overlay: Base.cmp for strings uses foreigncall :memcmp which can't
 # run in WASM. Replace with byte-by-byte comparison (pure Julia).
 @overlay WASM_METHOD_TABLE function Base.cmp(a::String, b::String)
