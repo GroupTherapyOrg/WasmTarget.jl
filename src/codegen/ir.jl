@@ -9,9 +9,11 @@ export get_typed_ir, IRStatement
 Get Julia's typed IR (SSA form) for a function with given argument types.
 Returns the CodeInfo object from code_typed.
 """
-function get_typed_ir(f, arg_types::Tuple; optimize::Bool=true)
+function get_typed_ir(f, arg_types::Tuple; optimize::Bool=true, interp=nothing)
     # Get the typed IR using Julia's introspection
-    results = Base.code_typed(f, arg_types; optimize=optimize)
+    # When interp is provided (WasmInterpreter), overlay methods are used
+    kwargs = interp !== nothing ? (; optimize=optimize, interp=interp) : (; optimize=optimize)
+    results = Base.code_typed(f, arg_types; kwargs...)
 
     if isempty(results)
         error("No method found for $f with types $arg_types")

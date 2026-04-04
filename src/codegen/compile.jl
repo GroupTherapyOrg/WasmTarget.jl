@@ -161,7 +161,7 @@ Returns an expanded function list with auto-discovered dependencies added.
 
 This enables calling runtime functions like str_eq without explicitly including them.
 """
-function discover_dependencies(functions::Vector)::Vector
+function discover_dependencies(functions::Vector; interp=nothing)::Vector
     # Normalize input first
     normalized = Vector{Tuple{Any, Tuple, String}}()
     for entry in functions
@@ -193,7 +193,8 @@ function discover_dependencies(functions::Vector)::Vector
 
         # Get IR for this function
         code_info = try
-            ir, _ = Base.code_ircode(f, arg_types)[1]
+            kwargs = interp !== nothing ? (; interp=interp) : (;)
+            ir, _ = Base.code_ircode(f, arg_types; kwargs...)[1]
             ir
         catch e
             @warn "discover_dependencies: skipping $name($(join(arg_types, ", "))) — $e"
@@ -1332,8 +1333,12 @@ function compile_module(functions::Vector;
                         optimize_ir::Bool=true,
                         register_ir_types::Bool=false
                         )
+    # Create WasmInterpreter with overlay method table (GPUCompiler pattern).
+    # Must be created here (after user functions exist) so world age is current.
+    interp = get_wasm_interpreter()
+
     # WASM-057: Auto-discover function dependencies
-    functions = discover_dependencies(functions)
+    functions = discover_dependencies(functions; interp=interp)
 
     # Filter out any discovered functions that are import stubs
     # (import stubs are registered in func_registry at their import indices, not compiled)
@@ -1390,7 +1395,7 @@ function compile_module(functions::Vector;
     needs_io = false
     for (f, arg_types, fname) in normalized
         try
-            ci, _ = get_typed_ir(f, arg_types; optimize=optimize_ir)
+            ci, _ = get_typed_ir(f, arg_types; optimize=optimize_ir, interp=interp)
             for stmt in ci.code
                 if stmt isa Expr && (stmt.head === :invoke || stmt.head === :call)
                     func_arg = stmt.head === :invoke ? stmt.args[2] : stmt.args[1]
@@ -1416,7 +1421,7 @@ function compile_module(functions::Vector;
     needs_rng = false
     for (f, arg_types, fname) in normalized
         try
-            ci, _ = get_typed_ir(f, arg_types; optimize=optimize_ir)
+            ci, _ = get_typed_ir(f, arg_types; optimize=optimize_ir, interp=interp)
             for stmt in ci.code
                 if stmt isa Expr && stmt.head === :foreigncall
                     fc_name_sym = extract_foreigncall_name(stmt.args[1])
@@ -1453,7 +1458,7 @@ function compile_module(functions::Vector;
         end
 
         # Get typed IR
-        code_info, return_type = get_typed_ir(f, arg_types; optimize=optimize_ir)
+        code_info, return_type = get_typed_ir(f, arg_types; optimize=optimize_ir, interp=interp)
 
         # Detect WasmGlobal arguments
         global_args = Set{Int}()
@@ -2196,12 +2201,13 @@ Follows the same pattern as compile_multi's per-function compilation.
 """
 function compile_function_into!(f::Function, arg_types::Tuple, mod::WasmModule,
                                  type_registry::TypeRegistry;
-                                 export_name::Union{String, Nothing}=nothing)::UInt32
+                                 export_name::Union{String, Nothing}=nothing,
+                                 interp=nothing)::UInt32
     closure_type = typeof(f)
     is_closure = is_closure_type(closure_type)
     actual_arg_types = is_closure ? (closure_type, arg_types...) : arg_types
 
-    code_info, return_type = get_typed_ir(f, actual_arg_types)
+    code_info, return_type = get_typed_ir(f, actual_arg_types; interp=interp)
 
     # Register parameter types
     for T in actual_arg_types

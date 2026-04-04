@@ -7,6 +7,7 @@ include("builder/instructions.jl")
 include("builder/validator.jl")
 
 # Codegen - Julia IR to Wasm bytecode
+include("codegen/interpreter.jl")
 include("codegen/ir.jl")
 include("codegen/int_key_map.jl")
 include("codegen/types.jl")
@@ -64,6 +65,8 @@ export compile_cached, compile_multi_cached, enable_cache!, disable_cache!, clea
 export register_package!, list_packages, package_functions, precompile_package
 export compile_with_packages, detect_using_statements, register_builtin_packages!
 export WasmGlobal, global_index, global_eltype
+# AbstractInterpreter with overlay method table (GPUCompiler pattern)
+export WasmInterpreter, get_wasm_interpreter, WASM_METHOD_TABLE
 # Therapy.jl integration - direct IR compilation for reactive handlers
 export compile_handler, compile_closure_body, DOMBindingSpec, TypeRegistry, FunctionRegistry
 export serialize_type_registry, serialize_function_table, serialize_type_ids, serialize_dispatch_tables
