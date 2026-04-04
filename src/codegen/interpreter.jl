@@ -45,6 +45,24 @@ Base.Experimental.@MethodTable(WASM_METHOD_TABLE)
     return v
 end
 
+# cmp overlay: Base.cmp for strings uses foreigncall :memcmp which can't
+# run in WASM. Replace with byte-by-byte comparison (pure Julia).
+@overlay WASM_METHOD_TABLE function Base.cmp(a::String, b::String)
+    al = ncodeunits(a)
+    bl = ncodeunits(b)
+    ml = al < bl ? al : bl
+    i = 1
+    while i <= ml
+        ca = codeunit(a, i)
+        cb = codeunit(b, i)
+        if ca != cb
+            return ca < cb ? -1 : 1
+        end
+        i += 1
+    end
+    return al < bl ? -1 : al > bl ? 1 : 0
+end
+
 # ─── WasmInterpreter ───────────────────────────────────────────────────────
 
 struct WasmInterpreter <: CC.AbstractInterpreter
