@@ -9636,4 +9636,223 @@ console.log(JSON.stringify({
         end
     end
 
+    # ========================================================================
+    # Phase 73: CF-2002 String Functions Build — Overlay E2E Tests
+    # ========================================================================
+    @testset "Phase 73: String Functions (CF-2002)" begin
+
+        # --- chop ---
+        @testset "chop" begin
+            chop_default()::Int64 = length(chop("hello"))
+            r = compare_julia_wasm(chop_default)
+            @test r.pass  # "hell" → 4
+
+            chop_head()::Int64 = length(chop("hello"; head=2, tail=0))
+            r = compare_julia_wasm(chop_head)
+            @test r.pass  # "llo" → 3
+
+            chop_both()::Int64 = length(chop("hello"; head=1, tail=2))
+            r = compare_julia_wasm(chop_both)
+            @test r.pass  # "ll" → 2
+
+            chop_all()::Int64 = length(chop("hi"; head=1, tail=1))
+            r = compare_julia_wasm(chop_all)
+            @test r.pass  # "" → 0
+
+            chop_over()::Int64 = length(chop("hi"; head=5, tail=5))
+            r = compare_julia_wasm(chop_over)
+            @test r.pass  # "" → 0
+        end
+
+        # --- last(String, Int) ---
+        @testset "last(String, Int)" begin
+            last_3()::Int64 = length(last("hello", 3))
+            r = compare_julia_wasm(last_3)
+            @test r.pass  # "llo" → 3
+
+            last_all()::Int64 = length(last("hello", 10))
+            r = compare_julia_wasm(last_all)
+            @test r.pass  # "hello" → 5
+
+            last_1()::Int64 = length(last("hello", 1))
+            r = compare_julia_wasm(last_1)
+            @test r.pass  # "o" → 1
+        end
+
+        # --- reverse(String) ---
+        @testset "reverse(String)" begin
+            rev_len()::Int64 = length(reverse("hello"))
+            r = compare_julia_wasm(rev_len)
+            @test r.pass  # 5
+
+            rev_single()::Int64 = length(reverse("x"))
+            r = compare_julia_wasm(rev_single)
+            @test r.pass  # 1
+
+            rev_empty()::Int64 = length(reverse(""))
+            r = compare_julia_wasm(rev_empty)
+            @test r.pass  # 0
+
+            # Verify reversal correctness via first char
+            rev_first_char()::Int64 = Int64(str_char(reverse("abcde"), Int32(1)))
+            r = compare_julia_wasm(rev_first_char)
+            @test r.pass  # 'e' = 101
+        end
+
+        # --- titlecase ---
+        @testset "titlecase" begin
+            tc_len()::Int64 = length(titlecase("hello world"))
+            r = compare_julia_wasm(tc_len)
+            @test r.pass  # 11
+
+            tc_first()::Int64 = Int64(str_char(titlecase("hello world"), Int32(1)))
+            r = compare_julia_wasm(tc_first)
+            @test r.pass  # 'H' = 72
+
+            tc_strict()::Int64 = Int64(str_char(titlecase("hELLO"), Int32(2)))
+            r = compare_julia_wasm(tc_strict)
+            @test r.pass  # strict=true by default → 'e' = 101
+
+            tc_empty()::Int64 = length(titlecase(""))
+            r = compare_julia_wasm(tc_empty)
+            @test r.pass  # 0
+        end
+
+        # --- lowercasefirst ---
+        @testset "lowercasefirst" begin
+            lcf_len()::Int64 = length(lowercasefirst("HELLO"))
+            r = compare_julia_wasm(lcf_len)
+            @test r.pass  # 5
+
+            lcf_first()::Int64 = Int64(str_char(lowercasefirst("HELLO"), Int32(1)))
+            r = compare_julia_wasm(lcf_first)
+            @test r.pass  # 'h' = 104
+
+            lcf_second()::Int64 = Int64(str_char(lowercasefirst("HELLO"), Int32(2)))
+            r = compare_julia_wasm(lcf_second)
+            @test r.pass  # 'E' = 69
+
+            lcf_empty()::Int64 = length(lowercasefirst(""))
+            r = compare_julia_wasm(lcf_empty)
+            @test r.pass  # 0
+        end
+
+        # --- uppercasefirst ---
+        @testset "uppercasefirst" begin
+            ucf_len()::Int64 = length(uppercasefirst("hello"))
+            r = compare_julia_wasm(ucf_len)
+            @test r.pass  # 5
+
+            ucf_first()::Int64 = Int64(str_char(uppercasefirst("hello"), Int32(1)))
+            r = compare_julia_wasm(ucf_first)
+            @test r.pass  # 'H' = 72
+
+            ucf_second()::Int64 = Int64(str_char(uppercasefirst("hello"), Int32(2)))
+            r = compare_julia_wasm(ucf_second)
+            @test r.pass  # 'e' = 101
+
+            ucf_empty()::Int64 = length(uppercasefirst(""))
+            r = compare_julia_wasm(ucf_empty)
+            @test r.pass  # 0
+        end
+
+        # --- strip ---
+        @testset "strip" begin
+            strip_basic()::Int64 = length(strip("  hello  "))
+            r = compare_julia_wasm(strip_basic)
+            @test r.pass  # 5
+
+            strip_tabs()::Int64 = length(strip("\thello\t"))
+            r = compare_julia_wasm(strip_tabs)
+            @test r.pass  # 5
+
+            strip_none()::Int64 = length(strip("hello"))
+            r = compare_julia_wasm(strip_none)
+            @test r.pass  # 5
+
+            strip_all()::Int64 = length(strip("   "))
+            r = compare_julia_wasm(strip_all)
+            @test r.pass  # 0
+        end
+
+        # --- lstrip ---
+        @testset "lstrip" begin
+            lstrip_basic()::Int64 = length(lstrip("  hello  "))
+            r = compare_julia_wasm(lstrip_basic)
+            @test r.pass  # 7
+
+            lstrip_none()::Int64 = length(lstrip("hello"))
+            r = compare_julia_wasm(lstrip_none)
+            @test r.pass  # 5
+        end
+
+        # --- rstrip ---
+        @testset "rstrip" begin
+            rstrip_basic()::Int64 = length(rstrip("  hello  "))
+            r = compare_julia_wasm(rstrip_basic)
+            @test r.pass  # 7
+
+            rstrip_none()::Int64 = length(rstrip("hello"))
+            r = compare_julia_wasm(rstrip_none)
+            @test r.pass  # 5
+        end
+
+        # --- replace ---
+        @testset "replace" begin
+            repl_match()::Int64 = length(replace("hello world", "world" => "julia"))
+            r = compare_julia_wasm(repl_match)
+            @test r.pass  # 11
+
+            repl_nomatch()::Int64 = length(replace("hello", "xyz" => "abc"))
+            r = compare_julia_wasm(repl_nomatch)
+            @test r.pass  # 5
+
+            repl_start()::Int64 = length(replace("hello", "hel" => "X"))
+            r = compare_julia_wasm(repl_start)
+            @test r.pass  # 3
+
+            repl_multi()::Int64 = length(replace("aXbXc", "X" => "YY"))
+            r = compare_julia_wasm(repl_multi)
+            @test r.pass  # 7
+
+            repl_to_empty()::Int64 = length(replace("hello", "ll" => ""))
+            r = compare_julia_wasm(repl_to_empty)
+            @test r.pass  # 3
+
+            repl_empty_input()::Int64 = length(replace("", "x" => "y"))
+            r = compare_julia_wasm(repl_empty_input)
+            @test r.pass  # 0
+        end
+
+        # --- split ---
+        @testset "split" begin
+            split_basic()::Int64 = length(split("a,b,c", ","))
+            r = compare_julia_wasm(split_basic)
+            @test r.pass  # 3
+
+            split_spaces()::Int64 = length(split("hello world foo", " "))
+            r = compare_julia_wasm(split_spaces)
+            @test r.pass  # 3
+
+            split_no_delim()::Int64 = length(split("hello", ","))
+            r = compare_julia_wasm(split_no_delim)
+            @test r.pass  # 1
+        end
+
+        # --- join ---
+        @testset "join" begin
+            join_len()::Int64 = length(join(["hello", "world"], " "))
+            r = compare_julia_wasm(join_len)
+            @test r.pass  # 11
+
+            join_no_delim()::Int64 = length(join(["a", "b", "c"]))
+            r = compare_julia_wasm(join_no_delim)
+            @test r.pass  # 3
+
+            join_comma()::Int64 = length(join(["x", "y", "z"], ", "))
+            r = compare_julia_wasm(join_comma)
+            @test r.pass  # 8 ("x, y, z")
+        end
+    end
+
 end

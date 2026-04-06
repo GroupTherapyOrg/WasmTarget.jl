@@ -108,14 +108,15 @@ end
 end
 
 # last(String, Int) overlay: Base.last uses SubString dispatch chains.
+# Always copies to avoid codegen null-ref phi bug on `return s`.
 @overlay WASM_METHOD_TABLE function Base.last(s::String, n::Int)
     len = str_len(s)
     n32 = Int32(n)
-    n32 >= len && return s
-    result = str_new(n32)
-    start = len - n32
+    take = n32 >= len ? len : n32
+    result = str_new(take)
+    start = len - take
     i = Int32(1)
-    while i <= n32
+    while i <= take
         str_setchar!(result, i, str_char(s, start + i))
         i = i + Int32(1)
     end
@@ -123,9 +124,9 @@ end
 end
 
 # reverse(String) overlay: Base.reverse uses GC.@preserve + pointer ops.
+# Always copies to avoid codegen null-ref phi bug on `return s`.
 @overlay WASM_METHOD_TABLE function Base.reverse(s::String)
     n = str_len(s)
-    n <= Int32(1) && return s
     result = str_new(n)
     i = Int32(1)
     while i <= n
@@ -249,34 +250,70 @@ end
 end
 
 # replace overlay: Base.replace uses SubString + Pair matching internally.
-# Simple single-pattern string replacement using str_find.
+# Two-pass approach: count matches first, then build result.
+# IMPORTANT: No early `return s` — codegen emits ref.null for string literals
+# in phi nodes on early-return paths, causing null pointer at runtime.
+# Instead, always build a copy (when count==0, out_len==slen, copies original).
 @overlay WASM_METHOD_TABLE function Base.replace(s::String, pair::Pair{String,String})
     pattern = pair.first
     replacement = pair.second
-    pat_len = str_len(pattern)
-    pat_len == Int32(0) && return s  # empty pattern → return original
+    slen = str_len(s)
+    plen = str_len(pattern)
+    rlen = plen > Int32(0) ? str_len(replacement) : Int32(0)
 
-    result = ""
-    remaining = s
-    while true
-        pos = str_find(remaining, pattern)
-        pos == Int32(0) && break
-        # Append everything before match + replacement
-        if pos > Int32(1)
-            result = str_concat(result, str_substr(remaining, Int32(1), pos - Int32(1)))
+    # Pass 1: count matches
+    count = Int32(0)
+    i = Int32(1)
+    while i <= slen - plen + Int32(1) && plen > Int32(0)
+        found = true
+        j = Int32(1)
+        while j <= plen
+            if str_char(s, i + j - Int32(1)) != str_char(pattern, j)
+                found = false
+                j = plen + Int32(1)  # break
+            else
+                j += Int32(1)
+            end
         end
-        result = str_concat(result, replacement)
-        # Advance past match
-        rem_len = str_len(remaining)
-        new_start = pos + pat_len
-        new_start > rem_len && begin remaining = ""; break end
-        remaining = str_substr(remaining, new_start, rem_len - new_start + Int32(1))
+        if found
+            count += Int32(1)
+            i += plen  # skip past match
+        else
+            i += Int32(1)
+        end
     end
-    # Append any remaining text
-    if str_len(remaining) > Int32(0)
-        result = str_concat(result, remaining)
+
+    # Pass 2: build result char by char (copies original when count==0)
+    out_len = slen - count * plen + count * rlen
+    result = str_new(out_len)
+    ri = Int32(1)
+    i = Int32(1)
+    while i <= slen
+        # Check for pattern match at position i
+        matched = plen > Int32(0) && i <= slen - plen + Int32(1)
+        j = Int32(1)
+        while j <= plen && matched
+            if str_char(s, i + j - Int32(1)) != str_char(pattern, j)
+                matched = false
+            end
+            j += Int32(1)
+        end
+        if matched
+            # Copy replacement
+            k = Int32(1)
+            while k <= rlen
+                str_setchar!(result, ri, str_char(replacement, k))
+                ri += Int32(1)
+                k += Int32(1)
+            end
+            i += plen
+        else
+            str_setchar!(result, ri, str_char(s, i))
+            ri += Int32(1)
+            i += Int32(1)
+        end
     end
-    return result
+    return Base.inferencebarrier(result)::String
 end
 
 # split overlay: Base.split returns Vector{SubString} which WasmTarget can't handle.
