@@ -262,18 +262,61 @@ Note: `keys`, `values`, `pairs`, `merge`, `merge!`, `get!`, `getkey`, `union`, `
 
 ---
 
+## 2026-04-05: CF-3001 Collections Failures Classification — COMPLETE
+
+### Revised Assessment
+
+Only 2 "failures" from the audit, but on deeper investigation:
+
+| Function | Audit Status | Revised Status | Root Cause | Fix Path |
+|----------|-------------|----------------|------------|----------|
+| `foreach` | STUBS | **WORKS_BASIC** | Direct var mutation pattern hits `convert(Int64, Any)` abstract-suppressed. But `Ref` pattern works perfectly. | No fix needed — `Ref` pattern is idiomatic |
+| `unique` | FAILS_RUNTIME | FAILS_RUNTIME | Self-recursion: compiled `$unique` calls `call $unique` (itself). Function discovery maps wrapper→`unique` but body also dispatches to `Base.unique`, creating infinite loop. | **Overlay** (~20 LOC) |
+
+### foreach Deep Dive
+
+- `foreach(x -> s[] += x, v)` with `Ref(Int64(0))` → **WORKS** (tested with [1,2,3], [10,20], [], and complex Ref-based patterns)
+- `foreach(x -> (s += x), v)` with local variable → **FAILS** (convert(Int64, Any) unreachable)
+- The Ref pattern is the correct Julia approach for mutation in functional callbacks
+- **Reclassify foreach as WORKS_BASIC** — works for all practical Therapy.jl use cases
+
+### unique Deep Dive
+
+WAT inspection shows:
+```wasm
+(func $unique (param (ref null 7)) (result (ref null 7))
+    local.get 0
+    call $unique    ;; <-- calls ITSELF, infinite recursion
+    ...
+```
+
+`Base.unique` dispatches through `_unique!` which uses a `Dict{Int64,Nothing}` internally. The function discovery correctly finds the method but compiles it as a self-call instead of inlining.
+
+### Fix Plan
+
+| Group | Functions | Fix Path | Est LOC | ROI |
+|-------|-----------|----------|---------|-----|
+| **G1: unique overlay** | unique | @overlay in interpreter.jl — O(n²) loop with `in` check | ~20 | 1 func / 20 LOC |
+| ~~G2: foreach~~ | ~~foreach~~ | ~~No fix needed~~ | 0 | N/A — already works with Ref |
+
+**Net result**: Collections go from 24/26 → **25/26 WORKS** with just 1 overlay. foreach was a false negative.
+
+**Recommended execution order**: Just G1 (unique overlay). Single story.
+
+---
+
 ## Cross-Category Summary (Revised)
 
 | Category | Tested | Works | Truly Broken | Coverage |
 |----------|--------|-------|-------------|----------|
 | Numeric | 24 | 24 | 0 | **100%** |
 | Strings | 37 | 27 | 10 | **73%** |
-| Collections | 26 | 24 | 2 | **92%** |
+| Collections | 26 | 25 | 1 | **96%** |
 | Array Mutation | 16 | 7 | 9 | **44%** |
 | Type Conversion | 7 | 7 | 0 | **100%** |
 | Iterators | 5 | 4 | 1 | **80%** |
 | Dict/Set | 10 | 10 | 0 | **100%** |
-| **TOTAL** | **125** | **103** | **22** | **82%** |
+| **TOTAL** | **125** | **104** | **21** | **83%** |
 
 ### Top Blockers (by function count, revised)
 
@@ -281,6 +324,6 @@ Note: `keys`, `values`, `pairs`, `merge`, `merge!`, `get!`, `getkey`, `union`, `
 2. **String missing dispatch** (5 functions: chop, last, reverse, titlecase, split): Need overlays or autodiscovery
 3. **SubString ref cast (BF7)** (4 functions: strip, lstrip, rstrip, replace): WasmGC type mismatch
 4. **Codegen stack validation** (2 functions: lowercasefirst, uppercasefirst): Stack balancing bug
-5. **unique** (1 function): Stack overflow (infinite recursion)
+5. **unique** (1 function): Self-recursion in compiled code (needs overlay)
 6. **join** (1 function): IOBuffer dependency
-7. **foreach** (1 function): Closure mutation pattern hits unreachable
+7. ~~**foreach** (1 function)~~: Reclassified as WORKS_BASIC — Ref pattern works

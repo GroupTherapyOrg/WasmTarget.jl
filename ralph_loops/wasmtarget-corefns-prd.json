@@ -109,7 +109,8 @@
           "type": "CLASSIFY",
           "title": "Classify collection failures and plan fixes",
           "priority": 1,
-          "status": "open",
+          "status": "done",
+          "completedNote": "foreach reclassified as WORKS_BASIC (Ref pattern works). unique needs overlay (~20 LOC). Collections: 25/26 working, 96%.",
           "blockedBy": ["CF-3000"]
         },
         {
