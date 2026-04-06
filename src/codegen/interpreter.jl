@@ -138,52 +138,56 @@ end
 
 # titlecase overlay: Base.titlecase uses Unicode tables and complex dispatch.
 # Simple ASCII version: uppercase first char of each word.
+# Uses flat if-then pattern (not nested if/elseif) to avoid codegen phi node bugs.
 @overlay WASM_METHOD_TABLE function Base.titlecase(s::String; wordsep=nothing, strict::Bool=true)
     n = str_len(s)
     n == Int32(0) && return s
     result = str_new(n)
-    prev_space = true
+    prev_space = Int32(1)
     i = Int32(1)
     while i <= n
         c = str_char(s, i)
-        if c == Int32(' ') || c == Int32('\t') || c == Int32('\n')
-            str_setchar!(result, i, c)
-            prev_space = true
-        elseif prev_space
-            # Uppercase: if lowercase a-z, subtract 32
-            if c >= _CHAR_A_LOWER && c <= _CHAR_Z_LOWER
-                str_setchar!(result, i, c - _CHAR_CASE_DIFF)
-            else
-                str_setchar!(result, i, c)
-            end
-            prev_space = false
-        elseif strict
-            # Lowercase: if uppercase A-Z, add 32
-            if c >= _CHAR_A_UPPER && c <= _CHAR_Z_UPPER
-                str_setchar!(result, i, c + _CHAR_CASE_DIFF)
-            else
-                str_setchar!(result, i, c)
-            end
+        new_c = c
+        new_prev = prev_space
+
+        is_ws = c == Int32(32) # space (simplified whitespace check)
+
+        if is_ws
+            new_prev = Int32(1)
         else
-            str_setchar!(result, i, c)
+            new_prev = Int32(0)
         end
+
+        # Uppercase if prev was space and char is lowercase a-z
+        if prev_space == Int32(1) && !is_ws && c >= _CHAR_A_LOWER && c <= _CHAR_Z_LOWER
+            new_c = c - _CHAR_CASE_DIFF
+        end
+
+        # Lowercase if prev was not space and char is uppercase A-Z (strict mode)
+        if strict && prev_space == Int32(0) && !is_ws && c >= _CHAR_A_UPPER && c <= _CHAR_Z_UPPER
+            new_c = c + _CHAR_CASE_DIFF
+        end
+
+        str_setchar!(result, i, new_c)
+        prev_space = new_prev
         i = i + Int32(1)
     end
     return Base.inferencebarrier(result)::String
 end
 
 # lowercasefirst overlay: Base version has complex SubString/GenericString dispatch.
+# Uses flat if-then pattern to avoid codegen phi node bugs with if/else before loops.
 @overlay WASM_METHOD_TABLE function Base.Unicode.lowercasefirst(s::String)
     n = str_len(s)
     n == Int32(0) && return s
     result = str_new(n)
-    # First char: lowercase
+    # First char: lowercase if uppercase, else keep as-is
     c = str_char(s, Int32(1))
+    new_c = c
     if c >= _CHAR_A_UPPER && c <= _CHAR_Z_UPPER
-        str_setchar!(result, Int32(1), c + _CHAR_CASE_DIFF)
-    else
-        str_setchar!(result, Int32(1), c)
+        new_c = c + _CHAR_CASE_DIFF
     end
+    str_setchar!(result, Int32(1), new_c)
     # Copy rest
     i = Int32(2)
     while i <= n
@@ -193,18 +197,18 @@ end
     return Base.inferencebarrier(result)::String
 end
 
-# uppercasefirst overlay: Same issue as lowercasefirst.
+# uppercasefirst overlay: Same pattern as lowercasefirst.
 @overlay WASM_METHOD_TABLE function Base.Unicode.uppercasefirst(s::String)
     n = str_len(s)
     n == Int32(0) && return s
     result = str_new(n)
-    # First char: uppercase
+    # First char: uppercase if lowercase, else keep as-is
     c = str_char(s, Int32(1))
+    new_c = c
     if c >= _CHAR_A_LOWER && c <= _CHAR_Z_LOWER
-        str_setchar!(result, Int32(1), c - _CHAR_CASE_DIFF)
-    else
-        str_setchar!(result, Int32(1), c)
+        new_c = c - _CHAR_CASE_DIFF
     end
+    str_setchar!(result, Int32(1), new_c)
     # Copy rest
     i = Int32(2)
     while i <= n
@@ -219,6 +223,15 @@ end
 # uses str_len which maps directly to array.len in WASM.
 @overlay WASM_METHOD_TABLE function Base.length(s::String)
     return Int(str_len(s))
+end
+
+# getindex(String, Int) overlay: Base version uses jl_string_ptr foreigncall +
+# pointerref for byte access, which doesn't work reliably in WasmGC.
+# Uses str_char (array.get_u on byte array) + Char construction.
+# NOTE: str_getchar would create a circular dependency (its fallback calls getindex).
+@overlay WASM_METHOD_TABLE function Base.getindex(s::String, i::Int)
+    b = codeunit(s, i)
+    return Char(UInt32(b))
 end
 
 # strip/lstrip/rstrip overlays: Base versions return SubString which causes WasmGC
@@ -352,11 +365,12 @@ end
         end
         start = abs_pos + dlen
     end
-    # Remaining
+    # Remaining piece (or empty string if nothing was processed)
     if start <= n
         push!(result, String(str_substr(s, start, n - start + Int32(1))))
-    elseif keepempty && start == n + Int32(1) && dlen > Int32(0)
-        # trailing delimiter: add empty if keepempty
+    elseif length(result) == 0 && keepempty
+        # Empty input with keepempty → return [""]
+        push!(result, "")
     end
     return result
 end
@@ -440,17 +454,14 @@ CC.get_inference_cache(interp::WasmInterpreter) = interp.inf_cache
 CC.cache_owner(::WasmInterpreter) = :wasm_target
 CC.method_table(interp::WasmInterpreter) = interp.method_table
 
-# Disable semi-concrete eval (broken with overlays — GPUCompiler pattern)
+# Disable concrete eval entirely (GPUCompiler pattern).
+# Without this, the compiler constant-folds calls like getindex("hello", 1)
+# using the Base implementation, bypassing overlays. This matters because
+# overlay-produced strings use WasmGC arrays, not the pointer-based Base layout.
 function CC.concrete_eval_eligible(interp::WasmInterpreter,
         @nospecialize(f), result::CC.MethodCallResult, arginfo::CC.ArgInfo,
         sv::Union{CC.InferenceState, CC.IRInterpretationState})
-    ret = @invoke CC.concrete_eval_eligible(interp::CC.AbstractInterpreter,
-        f::Any, result::CC.MethodCallResult, arginfo::CC.ArgInfo,
-        sv::Union{CC.InferenceState, CC.IRInterpretationState})
-    if ret === :semi_concrete_eval
-        return :none
-    end
-    return ret
+    return :none
 end
 
 """
