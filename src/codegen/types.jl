@@ -1805,7 +1805,6 @@ end
 
 """
 Get or create an array type that holds string references.
-Used for StringDict keys array.
 """
 function get_string_ref_array_type!(mod::WasmModule, registry::TypeRegistry)::UInt32
     # First ensure string array type exists

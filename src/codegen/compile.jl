@@ -147,10 +147,6 @@ const WASMTARGET_RUNTIME_FUNCTIONS = Set([
     :digit_to_str, :int_to_string,
     # Array operations (ArrayOps.jl)
     :arr_new, :arr_get, :arr_set!, :arr_len, :arr_fill!,
-    # SimpleDict operations
-    :sd_new, :sd_get, :sd_set!, :sd_haskey, :sd_length,
-    # StringDict operations
-    :sdict_new, :sdict_get, :sdict_set!, :sdict_haskey, :sdict_length,
 ])
 
 """
@@ -712,24 +708,6 @@ function infer_runtime_func_arg_types(name::Symbol)::Union{Tuple, Nothing}
         return nothing  # Can't infer element type
     elseif name in [:arr_set!]
         return nothing  # Can't infer element type
-    # SimpleDict operations
-    elseif name in [:sd_new]
-        return (Int32,)
-    elseif name in [:sd_get, :sd_haskey]
-        return nothing  # Need SimpleDict type
-    elseif name in [:sd_set!]
-        return nothing  # Need SimpleDict type
-    elseif name in [:sd_length]
-        return nothing  # Need SimpleDict type
-    # StringDict operations
-    elseif name in [:sdict_new]
-        return (Int32,)
-    elseif name in [:sdict_get, :sdict_haskey]
-        return nothing  # Need StringDict type
-    elseif name in [:sdict_set!]
-        return nothing  # Need StringDict type
-    elseif name in [:sdict_length]
-        return nothing  # Need StringDict type
     else
         return nothing
     end

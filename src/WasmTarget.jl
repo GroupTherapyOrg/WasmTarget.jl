@@ -27,7 +27,6 @@ include("codegen/calls.jl")
 include("codegen/invoke.jl")
 include("codegen/helpers.jl")
 include("codegen/strings.jl")
-include("codegen/dicts.jl")
 include("codegen/sourcemap.jl")
 include("codegen/cache.jl")
 include("codegen/packages.jl")
@@ -41,7 +40,6 @@ include("codegen/wasm_constructors.jl")
 include("runtime/intrinsics.jl")
 include("runtime/stringops.jl")
 include("runtime/arrayops.jl")
-include("runtime/simpledict.jl")
 
 # Main API
 export compile, compile_multi, compile_from_codeinfo, compile_with_base, optimize, WasmModule, to_bytes

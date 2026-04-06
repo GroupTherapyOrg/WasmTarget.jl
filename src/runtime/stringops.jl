@@ -224,8 +224,7 @@ Compute a hash value for the string.
 Uses Java-style hash: h = 31 * h + byte[i] for each UTF-8 byte.
 Result is masked to positive Int32 range.
 
-This is the same algorithm used by SimpleDict for Int32 keys,
-extended to work with strings. Iterates raw bytes, not codepoints.
+Uses Java-style hash iterating raw bytes, not codepoints.
 
 # Example
 ```julia
