@@ -305,18 +305,28 @@ WAT inspection shows:
 
 ---
 
+## 2026-04-05: CF-3002 Collections Build — COMPLETE
+
+Added `unique` overlay in interpreter.jl (~20 LOC). O(n²) with inline `==` check avoids Base's Dict-based `_unique!` which caused self-recursion. All edge cases pass: empty, single, all-same, all-unique, repeating patterns.
+
+**Collections: 26/26 WORKS (100%)** — foreach (Ref pattern) + unique (overlay).
+
+Suite: 1791 pass, 0 fail, 16 error, 7 broken. No regressions.
+
+---
+
 ## Cross-Category Summary (Revised)
 
 | Category | Tested | Works | Truly Broken | Coverage |
 |----------|--------|-------|-------------|----------|
 | Numeric | 24 | 24 | 0 | **100%** |
 | Strings | 37 | 27 | 10 | **73%** |
-| Collections | 26 | 25 | 1 | **96%** |
+| Collections | 26 | 26 | 0 | **100%** |
 | Array Mutation | 16 | 7 | 9 | **44%** |
 | Type Conversion | 7 | 7 | 0 | **100%** |
 | Iterators | 5 | 4 | 1 | **80%** |
 | Dict/Set | 10 | 10 | 0 | **100%** |
-| **TOTAL** | **125** | **104** | **21** | **83%** |
+| **TOTAL** | **125** | **105** | **20** | **84%** |
 
 ### Top Blockers (by function count, revised)
 
@@ -324,6 +334,6 @@ WAT inspection shows:
 2. **String missing dispatch** (5 functions: chop, last, reverse, titlecase, split): Need overlays or autodiscovery
 3. **SubString ref cast (BF7)** (4 functions: strip, lstrip, rstrip, replace): WasmGC type mismatch
 4. **Codegen stack validation** (2 functions: lowercasefirst, uppercasefirst): Stack balancing bug
-5. **unique** (1 function): Self-recursion in compiled code (needs overlay)
+5. ~~**unique** (1 function)~~: Fixed with overlay (CF-3002)
 6. **join** (1 function): IOBuffer dependency
 7. ~~**foreach** (1 function)~~: Reclassified as WORKS_BASIC — Ref pattern works

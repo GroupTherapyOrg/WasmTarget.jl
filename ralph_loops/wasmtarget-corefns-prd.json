@@ -118,7 +118,8 @@
           "type": "BUILD",
           "title": "Fix collection function failures",
           "priority": 2,
-          "status": "open",
+          "status": "done",
+          "completedNote": "unique overlay added (~20 LOC). Collections: 26/26 working (100%). foreach works with Ref pattern. Suite: 1791 pass, no regressions.",
           "blockedBy": ["CF-3001"]
         },
         {
