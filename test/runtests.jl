@@ -10146,6 +10146,236 @@ console.log(JSON.stringify({
                 @test compare_julia_wasm(iszero, 0.0).pass
                 @test compare_julia_wasm(isone, 1.0).pass
             end
+
+            # ============================================
+            # Extended abs edge cases
+            # ============================================
+            @testset "abs extended" begin
+                @test compare_julia_wasm(abs, Int64(1)).pass
+                @test compare_julia_wasm(abs, Int64(-1)).pass
+                @test compare_julia_wasm(abs, Int64(9223372036854775807)).pass  # typemax
+                @test compare_julia_wasm(abs, 1.0e300).pass
+                @test compare_julia_wasm(abs, -1.0e300).pass
+                @test compare_julia_wasm(abs, 1.0e-300).pass
+                @test compare_julia_wasm(abs, -1.0e-300).pass
+                @test compare_julia_wasm(abs, -0.0).pass
+                _cf1_abs_inf()::Float64 = abs(Inf)
+                _cf1_abs_neginf()::Float64 = abs(-Inf)
+                @test compare_julia_wasm(_cf1_abs_inf).pass
+                @test compare_julia_wasm(_cf1_abs_neginf).pass
+            end
+
+            # ============================================
+            # Extended sign edge cases
+            # ============================================
+            @testset "sign extended" begin
+                @test compare_julia_wasm(sign, Int64(1)).pass
+                @test compare_julia_wasm(sign, Int64(-1)).pass
+                @test compare_julia_wasm(sign, Int64(100)).pass
+                @test compare_julia_wasm(sign, Int64(-100)).pass
+                @test compare_julia_wasm(sign, 100.0).pass
+                @test compare_julia_wasm(sign, -100.0).pass
+                _cf1_sign_inf()::Float64 = sign(Inf)
+                _cf1_sign_neginf()::Float64 = sign(-Inf)
+                @test compare_julia_wasm(_cf1_sign_inf).pass
+                @test compare_julia_wasm(_cf1_sign_neginf).pass
+            end
+
+            # ============================================
+            # Extended signbit edge cases
+            # ============================================
+            @testset "signbit extended" begin
+                @test compare_julia_wasm(signbit, -0.0).pass   # true — key edge case
+                @test compare_julia_wasm(signbit, 1.0).pass
+                @test compare_julia_wasm(signbit, -1.0).pass
+                @test compare_julia_wasm(signbit, 1.0e300).pass
+                @test compare_julia_wasm(signbit, -1.0e300).pass
+                _cf1_signbit_inf()::Bool = signbit(Inf)
+                _cf1_signbit_neginf()::Bool = signbit(-Inf)
+                @test compare_julia_wasm(_cf1_signbit_inf).pass
+                @test compare_julia_wasm(_cf1_signbit_neginf).pass
+            end
+
+            # ============================================
+            # Extended clamp edge cases
+            # ============================================
+            @testset "clamp extended" begin
+                # Value at bounds
+                @test compare_julia_wasm(clamp, Int64(1), Int64(1), Int64(10)).pass
+                @test compare_julia_wasm(clamp, Int64(10), Int64(1), Int64(10)).pass
+                # Equal bounds
+                @test compare_julia_wasm(clamp, Int64(5), Int64(3), Int64(3)).pass
+                @test compare_julia_wasm(clamp, Int64(1), Int64(3), Int64(3)).pass
+                # Negative range
+                @test compare_julia_wasm(clamp, Int64(-5), Int64(-10), Int64(-1)).pass
+                @test compare_julia_wasm(clamp, Int64(0), Int64(-10), Int64(-1)).pass
+                # Float64
+                @test compare_julia_wasm(clamp, 0.5, 0.0, 1.0).pass
+                @test compare_julia_wasm(clamp, -0.5, 0.0, 1.0).pass
+                @test compare_julia_wasm(clamp, 1.5, 0.0, 1.0).pass
+            end
+
+            # ============================================
+            # Extended min/max edge cases
+            # ============================================
+            @testset "min extended" begin
+                @test compare_julia_wasm(min, Int64(5), Int64(5)).pass
+                @test compare_julia_wasm(min, Int64(-3), Int64(-7)).pass
+                @test compare_julia_wasm(min, Int64(0), Int64(-1)).pass
+                @test compare_julia_wasm(min, Int64(0), Int64(1)).pass
+                @test compare_julia_wasm(min, -1.5, 2.5).pass
+                @test compare_julia_wasm(min, 0.0, 1.0e300).pass
+            end
+
+            @testset "max extended" begin
+                @test compare_julia_wasm(max, Int64(5), Int64(5)).pass
+                @test compare_julia_wasm(max, Int64(-3), Int64(-7)).pass
+                @test compare_julia_wasm(max, Int64(0), Int64(-1)).pass
+                @test compare_julia_wasm(max, Int64(0), Int64(1)).pass
+                @test compare_julia_wasm(max, -1.5, 2.5).pass
+                @test compare_julia_wasm(max, 0.0, 1.0e300).pass
+            end
+
+            # ============================================
+            # Extended div/mod/rem edge cases
+            # ============================================
+            @testset "div extended" begin
+                @test compare_julia_wasm(div, Int64(-17), Int64(-5)).pass
+                @test compare_julia_wasm(div, Int64(1), Int64(1)).pass
+                @test compare_julia_wasm(div, Int64(100), Int64(3)).pass
+                @test compare_julia_wasm(div, Int64(7), Int64(7)).pass
+                @test compare_julia_wasm(div, Int64(1000000), Int64(7)).pass
+            end
+
+            @testset "mod extended" begin
+                @test compare_julia_wasm(mod, Int64(-17), Int64(-5)).pass
+                @test compare_julia_wasm(mod, Int64(10), Int64(10)).pass
+                @test compare_julia_wasm(mod, Int64(100), Int64(3)).pass
+                @test compare_julia_wasm(mod, Int64(7), Int64(3)).pass
+                @test compare_julia_wasm(mod, Int64(1), Int64(1000000)).pass
+            end
+
+            @testset "rem extended" begin
+                @test compare_julia_wasm(rem, Int64(-17), Int64(-5)).pass
+                @test compare_julia_wasm(rem, Int64(10), Int64(10)).pass
+                @test compare_julia_wasm(rem, Int64(100), Int64(3)).pass
+                @test compare_julia_wasm(rem, Int64(7), Int64(3)).pass
+                @test compare_julia_wasm(rem, Int64(1), Int64(1000000)).pass
+            end
+
+            # ============================================
+            # Extended gcd/lcm edge cases
+            # ============================================
+            @testset "gcd extended" begin
+                @test compare_julia_wasm(gcd, Int64(100), Int64(100)).pass
+                @test compare_julia_wasm(gcd, Int64(-12), Int64(8)).pass
+                @test compare_julia_wasm(gcd, Int64(12), Int64(-8)).pass
+                @test compare_julia_wasm(gcd, Int64(-12), Int64(-8)).pass
+                @test compare_julia_wasm(gcd, Int64(1), Int64(1000000)).pass
+                @test compare_julia_wasm(gcd, Int64(1000000), Int64(1)).pass
+            end
+
+            @testset "lcm extended" begin
+                @test compare_julia_wasm(lcm, Int64(1), Int64(1)).pass
+                @test compare_julia_wasm(lcm, Int64(5), Int64(5)).pass
+                @test compare_julia_wasm(lcm, Int64(12), Int64(8)).pass
+                @test compare_julia_wasm(lcm, Int64(7), Int64(11)).pass
+            end
+
+            # ============================================
+            # Extended iseven/isodd edge cases
+            # ============================================
+            @testset "iseven/isodd extended" begin
+                @test compare_julia_wasm(iseven, Int64(100)).pass
+                @test compare_julia_wasm(iseven, Int64(-100)).pass
+                @test compare_julia_wasm(iseven, Int64(1)).pass
+                @test compare_julia_wasm(iseven, Int64(-1)).pass
+                @test compare_julia_wasm(isodd, Int64(99)).pass
+                @test compare_julia_wasm(isodd, Int64(-99)).pass
+                @test compare_julia_wasm(isodd, Int64(100)).pass
+                @test compare_julia_wasm(isodd, Int64(0)).pass
+            end
+
+            # ============================================
+            # Extended isnan edge cases
+            # ============================================
+            @testset "isnan extended" begin
+                @test compare_julia_wasm(isnan, 0.0).pass
+                @test compare_julia_wasm(isnan, -0.0).pass
+                @test compare_julia_wasm(isnan, 1.0e300).pass
+                @test compare_julia_wasm(isnan, -1.0e300).pass
+                _cf1_isnan_inf()::Bool = isnan(Inf)
+                _cf1_isnan_neginf()::Bool = isnan(-Inf)
+                @test compare_julia_wasm(_cf1_isnan_inf).pass
+                @test compare_julia_wasm(_cf1_isnan_neginf).pass
+            end
+
+            # ============================================
+            # Extended isfinite edge cases
+            # ============================================
+            @testset "isfinite extended" begin
+                @test compare_julia_wasm(isfinite, 0.0).pass
+                @test compare_julia_wasm(isfinite, -0.0).pass
+                @test compare_julia_wasm(isfinite, 1.0e-300).pass
+                @test compare_julia_wasm(isfinite, -1.0).pass
+            end
+
+            # ============================================
+            # Extended iszero/isone edge cases
+            # ============================================
+            @testset "iszero extended" begin
+                @test compare_julia_wasm(iszero, Int64(-1)).pass
+                @test compare_julia_wasm(iszero, Int64(1)).pass
+                @test compare_julia_wasm(iszero, 0.0).pass
+                @test compare_julia_wasm(iszero, -0.0).pass
+                @test compare_julia_wasm(iszero, 1.0e-300).pass
+                @test compare_julia_wasm(iszero, 1.0).pass
+            end
+
+            @testset "isone extended" begin
+                @test compare_julia_wasm(isone, Int64(0)).pass
+                @test compare_julia_wasm(isone, Int64(-1)).pass
+                @test compare_julia_wasm(isone, Int64(2)).pass
+                @test compare_julia_wasm(isone, 0.0).pass
+                @test compare_julia_wasm(isone, 1.0).pass
+                @test compare_julia_wasm(isone, -1.0).pass
+            end
+
+            # ============================================
+            # Extended zero/one edge cases
+            # ============================================
+            @testset "zero/one extended" begin
+                @test compare_julia_wasm(zero, Int64(0)).pass
+                @test compare_julia_wasm(zero, Int64(-5)).pass
+                @test compare_julia_wasm(zero, -3.14).pass
+                @test compare_julia_wasm(one, Int64(0)).pass
+                @test compare_julia_wasm(one, Int64(-5)).pass
+                @test compare_julia_wasm(one, -3.14).pass
+            end
+
+            # ============================================
+            # Extended minmax edge cases
+            # ============================================
+            @testset "minmax extended" begin
+                _cf1_minmax_lo_f(a::Float64, b::Float64)::Float64 = minmax(a, b)[1]
+                _cf1_minmax_hi_f(a::Float64, b::Float64)::Float64 = minmax(a, b)[2]
+                @test compare_julia_wasm(_cf1_minmax_lo_f, 1.5, 3.7).pass
+                @test compare_julia_wasm(_cf1_minmax_hi_f, 1.5, 3.7).pass
+                @test compare_julia_wasm(_cf1_minmax_lo_f, -2.0, -5.0).pass
+                @test compare_julia_wasm(_cf1_minmax_hi_f, -2.0, -5.0).pass
+            end
+
+            # ============================================
+            # Extended divrem edge cases
+            # ============================================
+            @testset "divrem extended" begin
+                _cf1_divrem_q_neg(a::Int64, b::Int64)::Int64 = divrem(a, b)[1]
+                _cf1_divrem_r_neg(a::Int64, b::Int64)::Int64 = divrem(a, b)[2]
+                @test compare_julia_wasm(_cf1_divrem_q_neg, Int64(-17), Int64(-5)).pass
+                @test compare_julia_wasm(_cf1_divrem_r_neg, Int64(-17), Int64(-5)).pass
+                @test compare_julia_wasm(_cf1_divrem_q_neg, Int64(1), Int64(1)).pass
+                @test compare_julia_wasm(_cf1_divrem_r_neg, Int64(1), Int64(1)).pass
+            end
         end
 
         # ================================================================
