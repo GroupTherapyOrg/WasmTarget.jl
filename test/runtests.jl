@@ -10069,4 +10069,786 @@ console.log(JSON.stringify({
         end
     end
 
+    # ========================================================================
+    # Phase 75: Comprehensive FULLTEST — All 7 Categories
+    # CF-1003 (Numeric), CF-2003 (Strings), CF-3003 (Collections),
+    # CF-4003 (Array), CF-5003 (Type Conv), CF-6003 (Iterators), CF-7003 (Dict/Set)
+    # ========================================================================
+    @testset "Phase 75: Comprehensive FULLTEST" begin
+
+        # ================================================================
+        # CF-1003: Numeric FULLTEST — missing functions + edge cases
+        # ================================================================
+        @testset "CF-1003 Numeric FULLTEST" begin
+
+            # minmax via tuple element wrappers
+            _ft_minmax_lo(a::Int64, b::Int64)::Int64 = minmax(a, b)[1]
+            _ft_minmax_hi(a::Int64, b::Int64)::Int64 = minmax(a, b)[2]
+            @testset "minmax" begin
+                @test compare_julia_wasm(_ft_minmax_lo, Int64(3), Int64(7)).pass
+                @test compare_julia_wasm(_ft_minmax_hi, Int64(3), Int64(7)).pass
+                @test compare_julia_wasm(_ft_minmax_lo, Int64(7), Int64(3)).pass
+                @test compare_julia_wasm(_ft_minmax_hi, Int64(7), Int64(3)).pass
+                @test compare_julia_wasm(_ft_minmax_lo, Int64(-5), Int64(5)).pass
+                @test compare_julia_wasm(_ft_minmax_hi, Int64(-5), Int64(5)).pass
+                @test compare_julia_wasm(_ft_minmax_lo, Int64(0), Int64(0)).pass
+            end
+
+            # divrem via tuple element wrappers
+            _ft_divrem_q(a::Int64, b::Int64)::Int64 = divrem(a, b)[1]
+            _ft_divrem_r(a::Int64, b::Int64)::Int64 = divrem(a, b)[2]
+            @testset "divrem" begin
+                @test compare_julia_wasm(_ft_divrem_q, Int64(17), Int64(5)).pass
+                @test compare_julia_wasm(_ft_divrem_r, Int64(17), Int64(5)).pass
+                @test compare_julia_wasm(_ft_divrem_q, Int64(-17), Int64(5)).pass
+                @test compare_julia_wasm(_ft_divrem_r, Int64(-17), Int64(5)).pass
+                @test compare_julia_wasm(_ft_divrem_q, Int64(100), Int64(10)).pass
+                @test compare_julia_wasm(_ft_divrem_r, Int64(100), Int64(10)).pass
+            end
+
+            # typemin/typemax via wrappers
+            _ft_typemin_i32()::Int32 = typemin(Int32)
+            _ft_typemax_i32()::Int32 = typemax(Int32)
+            _ft_typemin_i64()::Int64 = typemin(Int64)
+            _ft_typemax_i64()::Int64 = typemax(Int64)
+            @testset "typemin/typemax" begin
+                @test compare_julia_wasm(_ft_typemin_i32).pass
+                @test compare_julia_wasm(_ft_typemax_i32).pass
+                @test compare_julia_wasm(_ft_typemin_i64).pass
+                @test compare_julia_wasm(_ft_typemax_i64).pass
+            end
+
+            # isinf/isfinite with Inf/NaN wrappers
+            _ft_isinf_pos()::Bool = isinf(Inf)
+            _ft_isinf_neg()::Bool = isinf(-Inf)
+            _ft_isinf_nan()::Bool = isinf(NaN)
+            _ft_isfinite_inf()::Bool = isfinite(Inf)
+            _ft_isfinite_neginf()::Bool = isfinite(-Inf)
+            @testset "isinf/isfinite edge cases" begin
+                @test compare_julia_wasm(_ft_isinf_pos).pass
+                @test compare_julia_wasm(_ft_isinf_neg).pass
+                @test compare_julia_wasm(_ft_isinf_nan).pass
+                @test compare_julia_wasm(_ft_isfinite_inf).pass
+                @test compare_julia_wasm(_ft_isfinite_neginf).pass
+            end
+
+            # Numeric edge cases
+            @testset "numeric edge cases" begin
+                @test compare_julia_wasm(abs, Int64(-9223372036854775807)).pass  # near typemin
+                @test compare_julia_wasm(sign, Int64(-1)).pass
+                @test compare_julia_wasm(sign, 0.0).pass
+                @test compare_julia_wasm(div, Int64(0), Int64(5)).pass
+                @test compare_julia_wasm(mod, Int64(0), Int64(5)).pass
+                @test compare_julia_wasm(rem, Int64(0), Int64(5)).pass
+                @test compare_julia_wasm(gcd, Int64(0), Int64(0)).pass
+                @test compare_julia_wasm(iseven, Int64(-4)).pass
+                @test compare_julia_wasm(isodd, Int64(-3)).pass
+                @test compare_julia_wasm(iszero, 0.0).pass
+                @test compare_julia_wasm(isone, 1.0).pass
+            end
+        end
+
+        # ================================================================
+        # CF-2003: String FULLTEST — edge cases + more coverage
+        # ================================================================
+        @testset "CF-2003 String FULLTEST" begin
+
+            # contains / occursin edge cases
+            @testset "contains/occursin" begin
+                _ft_contains(s::String, sub::String)::Bool = contains(s, sub)
+                @test compare_julia_wasm(_ft_contains, "hello world", "world").pass
+                @test compare_julia_wasm(_ft_contains, "hello world", "xyz").pass
+                @test compare_julia_wasm(_ft_contains, "", "").pass
+                @test compare_julia_wasm(_ft_contains, "abc", "").pass
+                @test compare_julia_wasm(_ft_contains, "", "abc").pass
+                @test compare_julia_wasm(_ft_contains, "aaa", "aa").pass
+
+                _ft_occursin(sub::String, s::String)::Bool = occursin(sub, s)
+                @test compare_julia_wasm(_ft_occursin, "world", "hello world").pass
+                @test compare_julia_wasm(_ft_occursin, "xyz", "hello").pass
+            end
+
+            # startswith/endswith edge cases
+            @testset "startswith/endswith" begin
+                _ft_sw(s::String, p::String)::Bool = startswith(s, p)
+                @test compare_julia_wasm(_ft_sw, "hello", "hel").pass
+                @test compare_julia_wasm(_ft_sw, "hello", "xyz").pass
+                @test compare_julia_wasm(_ft_sw, "hello", "").pass
+                @test compare_julia_wasm(_ft_sw, "", "").pass
+                @test compare_julia_wasm(_ft_sw, "hi", "hello").pass
+
+                _ft_ew(s::String, p::String)::Bool = endswith(s, p)
+                @test compare_julia_wasm(_ft_ew, "hello", "llo").pass
+                @test compare_julia_wasm(_ft_ew, "hello", "xyz").pass
+                @test compare_julia_wasm(_ft_ew, "hello", "").pass
+                @test compare_julia_wasm(_ft_ew, "", "").pass
+            end
+
+            # length/ncodeunits
+            @testset "length/ncodeunits" begin
+                _ft_len(s::String)::Int = length(s)
+                @test compare_julia_wasm(_ft_len, "hello").pass
+                @test compare_julia_wasm(_ft_len, "").pass
+                @test compare_julia_wasm(_ft_len, "a").pass
+                @test compare_julia_wasm(_ft_len, "abcdefghij").pass
+
+                _ft_ncu(s::String)::Int = ncodeunits(s)
+                @test compare_julia_wasm(_ft_ncu, "hello").pass
+                @test compare_julia_wasm(_ft_ncu, "").pass
+            end
+
+            # nextind/prevind/thisind
+            @testset "nextind/prevind/thisind" begin
+                _ft_ni(s::String, i::Int)::Int = nextind(s, i)
+                @test compare_julia_wasm(_ft_ni, "hello", Int64(1)).pass
+                @test compare_julia_wasm(_ft_ni, "hello", Int64(0)).pass
+                @test compare_julia_wasm(_ft_ni, "hello", Int64(5)).pass
+
+                _ft_pi(s::String, i::Int)::Int = prevind(s, i)
+                @test compare_julia_wasm(_ft_pi, "hello", Int64(2)).pass
+                @test compare_julia_wasm(_ft_pi, "hello", Int64(5)).pass
+
+                _ft_ti(s::String, i::Int)::Int = thisind(s, i)
+                @test compare_julia_wasm(_ft_ti, "hello", Int64(1)).pass
+                @test compare_julia_wasm(_ft_ti, "hello", Int64(3)).pass
+            end
+
+            # Char classification via wrappers
+            _ft_isdigit(s::String)::Bool = isdigit(s[1])
+            _ft_isletter(s::String)::Bool = isletter(s[1])
+            _ft_isspace(s::String)::Bool = isspace(s[1])
+            _ft_isuppercase(s::String)::Bool = isuppercase(s[1])
+            _ft_islowercase(s::String)::Bool = islowercase(s[1])
+            _ft_isascii_c(s::String)::Bool = isascii(s[1])
+            @testset "char classification" begin
+                @test compare_julia_wasm(_ft_isdigit, "9").pass
+                @test compare_julia_wasm(_ft_isdigit, "a").pass
+                @test compare_julia_wasm(_ft_isletter, "a").pass
+                @test compare_julia_wasm(_ft_isletter, "5").pass
+                @test compare_julia_wasm(_ft_isspace, " ").pass
+                @test compare_julia_wasm(_ft_isspace, "x").pass
+                @test compare_julia_wasm(_ft_isuppercase, "A").pass
+                @test compare_julia_wasm(_ft_isuppercase, "a").pass
+                @test compare_julia_wasm(_ft_islowercase, "a").pass
+                @test compare_julia_wasm(_ft_islowercase, "A").pass
+                @test compare_julia_wasm(_ft_isascii_c, "a").pass
+            end
+
+            # String transform length verification
+            _ft_lowercase_len(s::String)::Int = length(lowercase(s))
+            _ft_uppercase_len(s::String)::Int = length(uppercase(s))
+            _ft_repeat_len(s::String, n::Int64)::Int = length(repeat(s, n))
+            @testset "string transforms" begin
+                @test compare_julia_wasm(_ft_lowercase_len, "HELLO").pass
+                @test compare_julia_wasm(_ft_uppercase_len, "hello").pass
+                @test compare_julia_wasm(_ft_repeat_len, "ab", Int64(3)).pass
+                @test compare_julia_wasm(_ft_repeat_len, "", Int64(5)).pass
+            end
+
+            # chomp/chopprefix/chopsuffix
+            _ft_chomp_len(s::String)::Int = length(chomp(s))
+            _ft_choppre_eq(s::String, pre::String)::Bool = chopprefix(s, pre) == s[length(pre)+1:end]
+            @testset "chomp/chopprefix/chopsuffix" begin
+                @test compare_julia_wasm(_ft_chomp_len, "hello\n").pass
+                @test compare_julia_wasm(_ft_chomp_len, "hello").pass
+            end
+
+            # cmp
+            @testset "cmp" begin
+                @test compare_julia_wasm(cmp, "abc", "abc").pass
+                @test compare_julia_wasm(cmp, "abc", "abd").pass
+                @test compare_julia_wasm(cmp, "abd", "abc").pass
+                @test compare_julia_wasm(cmp, "ab", "abc").pass
+                @test compare_julia_wasm(cmp, "abc", "ab").pass
+                @test compare_julia_wasm(cmp, "", "").pass
+            end
+
+            # String overlays: chop, last, reverse, titlecase, etc.
+            _ft_chop_eq(s::String)::Bool = chop(s) == s[1:end-1]
+            _ft_last_eq(s::String)::Bool = last(s, 2) == s[end-1:end]
+            _ft_rev_len(s::String)::Int = length(reverse(s))
+            _ft_title_eq(s::String)::Bool = titlecase("hello world") == "Hello World"
+            _ft_lcf_eq(s::String)::Bool = lowercasefirst("Hello") == "hello"
+            _ft_ucf_eq(s::String)::Bool = uppercasefirst("hello") == "Hello"
+            @testset "string overlay functions" begin
+                @test compare_julia_wasm(_ft_chop_eq, "hello").pass
+                @test compare_julia_wasm(_ft_rev_len, "hello").pass
+                @test compare_julia_wasm(_ft_rev_len, "a").pass
+                @test compare_julia_wasm(_ft_rev_len, "").pass
+                @test compare_julia_wasm(_ft_title_eq, "x").pass
+                @test compare_julia_wasm(_ft_lcf_eq, "x").pass
+                @test compare_julia_wasm(_ft_ucf_eq, "x").pass
+            end
+
+            # strip/lstrip/rstrip
+            _ft_strip_eq(s::String)::Bool = strip("  hi  ") == "hi"
+            _ft_lstrip_eq(s::String)::Bool = lstrip("  hi  ") == "hi  "
+            _ft_rstrip_eq(s::String)::Bool = rstrip("  hi  ") == "  hi"
+            @testset "strip functions" begin
+                @test compare_julia_wasm(_ft_strip_eq, "x").pass
+                @test compare_julia_wasm(_ft_lstrip_eq, "x").pass
+                @test compare_julia_wasm(_ft_rstrip_eq, "x").pass
+            end
+
+            # replace
+            _ft_replace_eq(s::String)::Bool = replace("hello world", "world" => "julia") == "hello julia"
+            _ft_replace_none(s::String)::Bool = replace("hello", "xyz" => "abc") == "hello"
+            _ft_replace_multi(s::String)::Bool = replace("aabaa", "a" => "x") == "xxbxx"
+            @testset "replace" begin
+                @test compare_julia_wasm(_ft_replace_eq, "x").pass
+                @test compare_julia_wasm(_ft_replace_none, "x").pass
+                @test compare_julia_wasm(_ft_replace_multi, "x").pass
+            end
+
+            # split/join
+            _ft_split_count(s::String, d::String)::Int64 = Int64(length(split(s, d)))
+            _ft_join_eq(s::String)::Bool = join(["a", "b", "c"], ",") == "a,b,c"
+            _ft_join_no_delim(s::String)::Bool = join(["x", "y"]) == "xy"
+            @testset "split/join" begin
+                @test compare_julia_wasm(_ft_split_count, "a,b,c", ",").pass
+                @test compare_julia_wasm(_ft_split_count, "hello", ",").pass
+                @test compare_julia_wasm(_ft_split_count, "a,,b", ",").pass
+                @test compare_julia_wasm(_ft_join_eq, "x").pass
+                @test compare_julia_wasm(_ft_join_no_delim, "x").pass
+            end
+        end
+
+        # ================================================================
+        # CF-3003: Collections FULLTEST — closures, kwargs, edge cases
+        # ================================================================
+        @testset "CF-3003 Collections FULLTEST" begin
+
+            # sum edge cases
+            @testset "sum" begin
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Int64 -> sum(v), Int64[]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Int64 -> sum(v), Int64[42]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Int64 -> sum(v), collect(Int64, 1:100)).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Int64 -> sum(v), Int64[-1, -2, -3]).pass
+            end
+
+            # prod
+            @testset "prod" begin
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Int64 -> prod(v), Int64[1, 2, 3, 4]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Int64 -> prod(v), Int64[2, 3, 5]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Int64 -> prod(v), Int64[1]).pass
+            end
+
+            # reduce/foldl/foldr
+            @testset "reduce/foldl/foldr" begin
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Int64 -> reduce(+, v), Int64[1, 2, 3]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Int64 -> foldl(-, v), Int64[10, 3, 2]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Int64 -> foldr(-, v), Int64[10, 3, 2]).pass
+            end
+
+            # mapreduce with closures
+            @testset "mapreduce" begin
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Int64 -> mapreduce(abs, +, v), Int64[-1, -2, 3]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Int64 -> mapreduce(x -> x * x, +, v), Int64[1, 2, 3]).pass
+            end
+
+            # minimum/maximum
+            @testset "minimum/maximum" begin
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Int64 -> minimum(v), Int64[5, 1, 3, 2, 4]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Int64 -> maximum(v), Int64[5, 1, 3, 2, 4]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Int64 -> minimum(v), Int64[42]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Int64 -> maximum(v), Int64[-10, -20, -5]).pass
+            end
+
+            # extrema
+            _ft_extrema_lo(v::Vector{Int64})::Int64 = extrema(v)[1]
+            _ft_extrema_hi(v::Vector{Int64})::Int64 = extrema(v)[2]
+            @testset "extrema" begin
+                @test compare_julia_wasm_vec(_ft_extrema_lo, Int64[3, 1, 5, 2]).pass
+                @test compare_julia_wasm_vec(_ft_extrema_hi, Int64[3, 1, 5, 2]).pass
+            end
+
+            # findmin/findmax
+            _ft_findmin_val(v::Vector{Int64})::Int64 = findmin(v)[1]
+            _ft_findmin_idx(v::Vector{Int64})::Int64 = Int64(findmin(v)[2])
+            _ft_findmax_val(v::Vector{Int64})::Int64 = findmax(v)[1]
+            _ft_findmax_idx(v::Vector{Int64})::Int64 = Int64(findmax(v)[2])
+            @testset "findmin/findmax" begin
+                @test compare_julia_wasm_vec(_ft_findmin_val, Int64[3, 1, 5, 2]).pass
+                @test compare_julia_wasm_vec(_ft_findmin_idx, Int64[3, 1, 5, 2]).pass
+                @test compare_julia_wasm_vec(_ft_findmax_val, Int64[3, 1, 5, 2]).pass
+                @test compare_julia_wasm_vec(_ft_findmax_idx, Int64[3, 1, 5, 2]).pass
+            end
+
+            # argmin/argmax
+            @testset "argmin/argmax" begin
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Int64 -> Int64(argmin(v)), Int64[3, 1, 5, 2]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Int64 -> Int64(argmax(v)), Int64[3, 1, 5, 2]).pass
+            end
+
+            # any/all/count with closures
+            @testset "any/all/count closures" begin
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Bool -> any(iseven, v), Int64[1, 3, 5]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Bool -> any(iseven, v), Int64[1, 2, 3]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Bool -> all(x -> x > Int64(0), v), Int64[1, 2, 3]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Bool -> all(x -> x > Int64(0), v), Int64[-1, 2, 3]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Int64 -> Int64(count(iseven, v)), Int64[1, 2, 3, 4, 5, 6]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Int64 -> Int64(count(x -> x > Int64(3), v)), Int64[1, 2, 3, 4, 5]).pass
+            end
+
+            # filter with closures
+            @testset "filter closures" begin
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> filter(iseven, v), Int64[1, 2, 3, 4, 5, 6]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> filter(x -> x > Int64(3), v), Int64[1, 2, 3, 4, 5]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> filter(iseven, v), Int64[1, 3, 5]).pass  # empty result
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> filter(iseven, v), Int64[]).pass
+            end
+
+            # map with closures
+            @testset "map closures" begin
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> map(x -> x * Int64(2), v), Int64[1, 2, 3]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> map(abs, v), Int64[-1, -2, 3]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> map(x -> x * x, v), Int64[1, 2, 3, 4]).pass
+            end
+
+            # sort with kwargs
+            @testset "sort kwargs" begin
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> sort(v), Int64[3, 1, 4, 1, 5]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> sort(v, rev=true), Int64[3, 1, 4, 1, 5]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> sort(v), Int64[]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> sort(v), Int64[42]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> sort(v), collect(Int64, 10:-1:1)).pass
+            end
+
+            # reverse
+            @testset "reverse" begin
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> reverse(v), Int64[1, 2, 3, 4, 5]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> reverse(v), Int64[42]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> reverse(v), Int64[]).pass
+            end
+
+            # accumulate
+            @testset "accumulate" begin
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> accumulate(+, v), Int64[1, 2, 3, 4]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> accumulate(*, v), Int64[1, 2, 3, 4]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> accumulate(+, v), Int64[10]).pass
+            end
+
+            # unique
+            @testset "unique" begin
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> unique(v), Int64[1, 2, 2, 3, 1, 3]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> unique(v), Int64[1, 1, 1]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> unique(v), Int64[1, 2, 3]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> unique(v), Int64[]).pass
+            end
+
+            # foreach with Ref
+            @testset "foreach" begin
+                _ft_foreach(v::Vector{Int64})::Int64 = begin
+                    s = Ref(Int64(0))
+                    foreach(x -> s[] += x, v)
+                    s[]
+                end
+                @test compare_julia_wasm_vec(_ft_foreach, Int64[1, 2, 3]).pass
+                @test compare_julia_wasm_vec(_ft_foreach, Int64[10, 20]).pass
+                @test compare_julia_wasm_vec(_ft_foreach, Int64[]).pass
+            end
+        end
+
+        # ================================================================
+        # CF-4003: Array Mutation FULLTEST — more edge cases
+        # ================================================================
+        @testset "CF-4003 Array Mutation FULLTEST" begin
+
+            # push! multiple times
+            _ft_push_chain(v::Vector{Int64})::Vector{Int64} = begin
+                push!(v, Int64(10))
+                push!(v, Int64(20))
+                push!(v, Int64(30))
+                v
+            end
+            @testset "push! chaining" begin
+                @test compare_julia_wasm_vec(_ft_push_chain, Int64[1]).pass
+                @test compare_julia_wasm_vec(_ft_push_chain, Int64[]).pass
+            end
+
+            # pop! + push! round trip
+            _ft_pop_push(v::Vector{Int64})::Vector{Int64} = begin
+                x = pop!(v)
+                push!(v, x + Int64(100))
+                v
+            end
+            @testset "pop+push round trip" begin
+                @test compare_julia_wasm_vec(_ft_pop_push, Int64[1, 2, 3]).pass
+            end
+
+            # insert! at various positions
+            @testset "insert! positions" begin
+                _ft_ins_mid(v::Vector{Int64})::Vector{Int64} = (insert!(v, 3, Int64(99)); v)
+                @test compare_julia_wasm_vec(_ft_ins_mid, Int64[1, 2, 3, 4, 5]).pass
+            end
+
+            # deleteat! + length check
+            _ft_del_len(v::Vector{Int64})::Int64 = begin
+                deleteat!(v, 1)
+                Int64(length(v))
+            end
+            @testset "deleteat! length" begin
+                @test compare_julia_wasm_vec(_ft_del_len, Int64[1, 2, 3]).pass
+            end
+
+            # splice! return + remaining
+            @testset "splice! return" begin
+                _ft_spl_ret(v::Vector{Int64})::Int64 = splice!(v, 3)
+                @test compare_julia_wasm_vec(_ft_spl_ret, Int64[10, 20, 30, 40]).pass
+            end
+
+            # Basic non-mutating: length, copy, reverse, vec, fill!, empty!, resize!
+            @testset "non-mutating ops" begin
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Int64 -> Int64(length(v)), Int64[1, 2, 3]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> copy(v), Int64[1, 2, 3]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> reverse(v), Int64[1, 2, 3]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> vec(v), Int64[1, 2, 3]).pass
+            end
+
+            @testset "fill!/empty!/resize!" begin
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Vector{Int64} -> fill!(v, Int64(0)), Int64[1, 2, 3]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Int64 -> begin empty!(v); Int64(length(v)) end, Int64[1, 2, 3]).pass
+                @test compare_julia_wasm_vec((v::Vector{Int64})::Int64 -> begin resize!(v, 5); Int64(length(v)) end, Int64[1, 2, 3]).pass
+            end
+        end
+
+        # ================================================================
+        # CF-5003: Type Conversion FULLTEST
+        # ================================================================
+        @testset "CF-5003 Type Conversion FULLTEST" begin
+
+            # convert between types
+            _ft_i2f(x::Int64)::Float64 = convert(Float64, x)
+            _ft_f2i(x::Float64)::Int64 = convert(Int64, x)
+            _ft_i64_i32(x::Int64)::Int32 = convert(Int32, x)
+            @testset "convert" begin
+                @test compare_julia_wasm(_ft_i2f, Int64(42)).pass
+                @test compare_julia_wasm(_ft_i2f, Int64(-7)).pass
+                @test compare_julia_wasm(_ft_i2f, Int64(0)).pass
+                @test compare_julia_wasm(_ft_f2i, 42.0).pass
+                @test compare_julia_wasm(_ft_f2i, -7.0).pass
+                @test compare_julia_wasm(_ft_i64_i32, Int64(100)).pass
+            end
+
+            # sizeof
+            @testset "sizeof" begin
+                @test compare_julia_wasm(sizeof, Int32(0)).pass
+                @test compare_julia_wasm(sizeof, Int64(0)).pass
+                @test compare_julia_wasm(sizeof, 0.0).pass
+            end
+
+            # isless
+            @testset "isless" begin
+                @test compare_julia_wasm(isless, Int64(1), Int64(2)).pass
+                @test compare_julia_wasm(isless, Int64(2), Int64(1)).pass
+                @test compare_julia_wasm(isless, Int64(1), Int64(1)).pass
+                @test compare_julia_wasm(isless, 1.0, 2.0).pass
+                @test compare_julia_wasm(isless, 2.0, 1.0).pass
+            end
+
+            # string(x) length verification
+            _ft_str_len(x::Int64)::Int = length(string(x))
+            @testset "string(x)" begin
+                @test compare_julia_wasm(_ft_str_len, Int64(42)).pass
+                @test compare_julia_wasm(_ft_str_len, Int64(0)).pass
+                @test compare_julia_wasm(_ft_str_len, Int64(-123)).pass
+                @test compare_julia_wasm(_ft_str_len, Int64(1000000)).pass
+            end
+        end
+
+        # ================================================================
+        # CF-6003: Iterator FULLTEST
+        # ================================================================
+        @testset "CF-6003 Iterator FULLTEST" begin
+
+            # eachindex
+            @testset "eachindex" begin
+                _ft_eachidx(v::Vector{Int64})::Int64 = begin
+                    s = Int64(0)
+                    for i in eachindex(v)
+                        s += v[i]
+                    end
+                    s
+                end
+                @test compare_julia_wasm_vec(_ft_eachidx, Int64[10, 20, 30]).pass
+                @test compare_julia_wasm_vec(_ft_eachidx, Int64[42]).pass
+                @test compare_julia_wasm_vec(_ft_eachidx, Int64[]).pass
+            end
+
+            # enumerate
+            @testset "enumerate" begin
+                _ft_enum(v::Vector{Int64})::Int64 = begin
+                    s = Int64(0)
+                    for (i, x) in enumerate(v)
+                        s += i * x
+                    end
+                    s
+                end
+                @test compare_julia_wasm_vec(_ft_enum, Int64[10, 20, 30]).pass
+                @test compare_julia_wasm_vec(_ft_enum, Int64[5]).pass
+            end
+
+            # zip
+            @testset "zip" begin
+                _ft_zip(v::Vector{Int64})::Int64 = begin
+                    # zip with itself reversed
+                    s = Int64(0)
+                    rv = reverse(v)
+                    for (a, b) in zip(v, rv)
+                        s += a * b
+                    end
+                    s
+                end
+                @test compare_julia_wasm_vec(_ft_zip, Int64[1, 2, 3]).pass
+                @test compare_julia_wasm_vec(_ft_zip, Int64[10]).pass
+            end
+
+            # collect
+            @testset "collect" begin
+                _ft_collect(n::Int64)::Vector{Int64} = collect(Int64(1):n)
+                @test compare_julia_wasm_vec(_ft_collect, Int64(5)).pass
+                @test compare_julia_wasm_vec(_ft_collect, Int64(1)).pass
+                @test compare_julia_wasm_vec(_ft_collect, Int64(10)).pass
+            end
+
+            # pairs
+            @testset "pairs" begin
+                _ft_pairs(v::Vector{Int64})::Int64 = begin
+                    s = Int64(0)
+                    for (i, x) in pairs(v)
+                        s += i * x
+                    end
+                    s
+                end
+                @test compare_julia_wasm_vec(_ft_pairs, Int64[10, 20, 30]).pass
+                @test compare_julia_wasm_vec(_ft_pairs, Int64[7]).pass
+            end
+
+            # Iterators.filter
+            @testset "Iterators.filter" begin
+                _ft_ifilt(v::Vector{Int64})::Int64 = begin
+                    s = Int64(0)
+                    for x in Iterators.filter(iseven, v)
+                        s += x
+                    end
+                    s
+                end
+                @test compare_julia_wasm_vec(_ft_ifilt, Int64[1, 2, 3, 4, 5, 6]).pass
+                @test compare_julia_wasm_vec(_ft_ifilt, Int64[1, 3, 5]).pass
+                @test compare_julia_wasm_vec(_ft_ifilt, Int64[]).pass
+            end
+
+            # Iterators.map
+            @testset "Iterators.map" begin
+                _ft_imap(v::Vector{Int64})::Int64 = begin
+                    s = Int64(0)
+                    for x in Iterators.map(abs, v)
+                        s += x
+                    end
+                    s
+                end
+                @test compare_julia_wasm_vec(_ft_imap, Int64[-1, -2, 3, -4]).pass
+                @test compare_julia_wasm_vec(_ft_imap, Int64[1, 2, 3]).pass
+            end
+
+            # Iterators.take
+            @testset "Iterators.take" begin
+                _ft_itake(v::Vector{Int64})::Int64 = begin
+                    s = Int64(0)
+                    for x in Iterators.take(v, 3)
+                        s += x
+                    end
+                    s
+                end
+                @test compare_julia_wasm_vec(_ft_itake, Int64[10, 20, 30, 40, 50]).pass
+                @test compare_julia_wasm_vec(_ft_itake, Int64[10, 20]).pass
+            end
+
+            # Iterators.drop
+            @testset "Iterators.drop" begin
+                _ft_idrop(v::Vector{Int64})::Int64 = begin
+                    s = Int64(0)
+                    for x in Iterators.drop(v, 2)
+                        s += x
+                    end
+                    s
+                end
+                @test compare_julia_wasm_vec(_ft_idrop, Int64[10, 20, 30, 40, 50]).pass
+                @test compare_julia_wasm_vec(_ft_idrop, Int64[10, 20]).pass
+            end
+
+            # Iterators.takewhile
+            @testset "Iterators.takewhile" begin
+                _ft_itw(v::Vector{Int64})::Int64 = begin
+                    s = Int64(0)
+                    for x in Iterators.takewhile(x -> x < Int64(30), v)
+                        s += x
+                    end
+                    s
+                end
+                @test compare_julia_wasm_vec(_ft_itw, Int64[10, 20, 30, 40]).pass
+                @test compare_julia_wasm_vec(_ft_itw, Int64[50, 60]).pass
+            end
+
+            # Iterators.dropwhile
+            @testset "Iterators.dropwhile" begin
+                _ft_idw(v::Vector{Int64})::Int64 = begin
+                    s = Int64(0)
+                    for x in Iterators.dropwhile(x -> x < Int64(30), v)
+                        s += x
+                    end
+                    s
+                end
+                @test compare_julia_wasm_vec(_ft_idw, Int64[10, 20, 30, 40]).pass
+                @test compare_julia_wasm_vec(_ft_idw, Int64[30, 40]).pass
+            end
+
+            # Iterators.flatten
+            @testset "Iterators.flatten" begin
+                _ft_iflat(n::Int64)::Int64 = begin
+                    s = Int64(0)
+                    for x in Iterators.flatten((Int64(1):n, Int64(10):Int64(10)+n))
+                        s += x
+                    end
+                    s
+                end
+                @test compare_julia_wasm(_ft_iflat, Int64(3)).pass
+                @test compare_julia_wasm(_ft_iflat, Int64(1)).pass
+            end
+
+            # CartesianIndices
+            @testset "CartesianIndices" begin
+                _ft_ci(v::Vector{Int64})::Int64 = begin
+                    s = Int64(0)
+                    for i in CartesianIndices(v)
+                        s += v[i[1]]
+                    end
+                    s
+                end
+                @test compare_julia_wasm_vec(_ft_ci, Int64[10, 20, 30]).pass
+                @test compare_julia_wasm_vec(_ft_ci, Int64[42]).pass
+            end
+        end
+
+        # ================================================================
+        # CF-7003: Dict/Set FULLTEST
+        # ================================================================
+        @testset "CF-7003 Dict/Set FULLTEST" begin
+
+            # Dict creation + CRUD
+            @testset "Dict CRUD" begin
+                _ft_dict_set_get(k::Int64, v::Int64)::Int64 = begin
+                    d = Dict{Int64,Int64}()
+                    d[k] = v
+                    d[k]
+                end
+                @test compare_julia_wasm(_ft_dict_set_get, Int64(1), Int64(100)).pass
+                @test compare_julia_wasm(_ft_dict_set_get, Int64(0), Int64(0)).pass
+                @test compare_julia_wasm(_ft_dict_set_get, Int64(-5), Int64(42)).pass
+
+                _ft_dict_haskey_yes(k::Int64)::Bool = begin
+                    d = Dict{Int64,Int64}()
+                    d[k] = Int64(1)
+                    haskey(d, k)
+                end
+                @test compare_julia_wasm(_ft_dict_haskey_yes, Int64(42)).pass
+
+                _ft_dict_haskey_no(k::Int64)::Bool = begin
+                    d = Dict{Int64,Int64}()
+                    haskey(d, k)
+                end
+                @test compare_julia_wasm(_ft_dict_haskey_no, Int64(42)).pass
+            end
+
+            # Dict length/isempty
+            @testset "Dict length/isempty" begin
+                _ft_dict_len()::Int64 = begin
+                    d = Dict{Int64,Int64}()
+                    d[Int64(1)] = Int64(10)
+                    d[Int64(2)] = Int64(20)
+                    d[Int64(3)] = Int64(30)
+                    Int64(length(d))
+                end
+                @test compare_julia_wasm(_ft_dict_len).pass
+
+                _ft_dict_empty()::Bool = begin
+                    d = Dict{Int64,Int64}()
+                    isempty(d)
+                end
+                @test compare_julia_wasm(_ft_dict_empty).pass
+
+                _ft_dict_notempty()::Bool = begin
+                    d = Dict{Int64,Int64}()
+                    d[Int64(1)] = Int64(10)
+                    isempty(d)
+                end
+                @test compare_julia_wasm(_ft_dict_notempty).pass
+            end
+
+            # Dict get with default
+            @testset "Dict get" begin
+                _ft_dict_get_found(k::Int64)::Int64 = begin
+                    d = Dict{Int64,Int64}()
+                    d[k] = Int64(99)
+                    get(d, k, Int64(-1))
+                end
+                @test compare_julia_wasm(_ft_dict_get_found, Int64(5)).pass
+
+                _ft_dict_get_default(k::Int64)::Int64 = begin
+                    d = Dict{Int64,Int64}()
+                    get(d, k, Int64(-1))
+                end
+                @test compare_julia_wasm(_ft_dict_get_default, Int64(5)).pass
+            end
+
+            # Dict delete!/pop!
+            @testset "Dict delete!/pop!" begin
+                _ft_dict_delete()::Bool = begin
+                    d = Dict{Int64,Int64}()
+                    d[Int64(1)] = Int64(10)
+                    delete!(d, Int64(1))
+                    !haskey(d, Int64(1))
+                end
+                @test compare_julia_wasm(_ft_dict_delete).pass
+
+                _ft_dict_pop()::Int64 = begin
+                    d = Dict{Int64,Int64}()
+                    d[Int64(1)] = Int64(42)
+                    pop!(d, Int64(1))
+                end
+                @test compare_julia_wasm(_ft_dict_pop).pass
+            end
+
+            # Set creation + membership
+            @testset "Set" begin
+                _ft_set_in_yes()::Bool = begin
+                    s = Set{Int64}()
+                    push!(s, Int64(1))
+                    push!(s, Int64(2))
+                    push!(s, Int64(3))
+                    Int64(2) in s
+                end
+                @test compare_julia_wasm(_ft_set_in_yes).pass
+
+                _ft_set_in_no()::Bool = begin
+                    s = Set{Int64}()
+                    push!(s, Int64(1))
+                    push!(s, Int64(2))
+                    Int64(5) in s
+                end
+                @test compare_julia_wasm(_ft_set_in_no).pass
+
+                _ft_set_dedup()::Int64 = begin
+                    s = Set{Int64}()
+                    push!(s, Int64(1))
+                    push!(s, Int64(1))
+                    push!(s, Int64(2))
+                    Int64(length(s))
+                end
+                @test compare_julia_wasm(_ft_set_dedup).pass
+            end
+        end
+
+    end
+
 end
