@@ -9484,4 +9484,156 @@ console.log(JSON.stringify({
         end
     end
 
+    # ========================================================================
+    # Phase 72: CF-1003 Numeric Functions Full E2E
+    # ========================================================================
+    @testset "Phase 72: Numeric Functions (CF-1003)" begin
+
+        # --- abs ---
+        @testset "abs" begin
+            r = compare_julia_wasm(abs, Int64(5))
+            @test r.pass
+            r = compare_julia_wasm(abs, Int64(-5))
+            @test r.pass
+            r = compare_julia_wasm(abs, Int64(0))
+            @test r.pass
+            r = compare_julia_wasm(abs, -3.14)
+            @test r.pass
+            r = compare_julia_wasm(abs, 0.0)
+            @test r.pass
+        end
+
+        # --- sign ---
+        @testset "sign" begin
+            r = compare_julia_wasm(sign, Int64(42))
+            @test r.pass
+            r = compare_julia_wasm(sign, Int64(-42))
+            @test r.pass
+            r = compare_julia_wasm(sign, Int64(0))
+            @test r.pass
+            r = compare_julia_wasm(sign, -3.14)
+            @test r.pass
+            r = compare_julia_wasm(sign, 0.0)
+            @test r.pass
+        end
+
+        # --- signbit ---
+        @testset "signbit" begin
+            r = compare_julia_wasm(signbit, 3.14)
+            @test r.pass
+            r = compare_julia_wasm(signbit, -3.14)
+            @test r.pass
+            r = compare_julia_wasm(signbit, 0.0)
+            @test r.pass
+        end
+
+        # --- clamp ---
+        @testset "clamp" begin
+            r = compare_julia_wasm(clamp, Int64(5), Int64(1), Int64(10))
+            @test r.pass
+            r = compare_julia_wasm(clamp, Int64(-5), Int64(1), Int64(10))
+            @test r.pass
+            r = compare_julia_wasm(clamp, Int64(15), Int64(1), Int64(10))
+            @test r.pass
+            r = compare_julia_wasm(clamp, 3.14, 0.0, 1.0)
+            @test r.pass
+        end
+
+        # --- min/max ---
+        @testset "min/max" begin
+            r = compare_julia_wasm(min, Int64(3), Int64(7))
+            @test r.pass
+            r = compare_julia_wasm(max, Int64(3), Int64(7))
+            @test r.pass
+            r = compare_julia_wasm(min, 3.14, 2.71)
+            @test r.pass
+            r = compare_julia_wasm(max, 3.14, 2.71)
+            @test r.pass
+        end
+
+        # --- div/mod/rem ---
+        @testset "div/mod/rem" begin
+            r = compare_julia_wasm(div, Int64(17), Int64(5))
+            @test r.pass
+            r = compare_julia_wasm(div, Int64(-17), Int64(5))
+            @test r.pass
+            r = compare_julia_wasm(mod, Int64(17), Int64(5))
+            @test r.pass
+            r = compare_julia_wasm(mod, Int64(-17), Int64(5))
+            @test r.pass
+            r = compare_julia_wasm(rem, Int64(17), Int64(5))
+            @test r.pass
+            r = compare_julia_wasm(rem, Int64(-17), Int64(5))
+            @test r.pass
+        end
+
+        # --- gcd/lcm ---
+        @testset "gcd/lcm" begin
+            r = compare_julia_wasm(gcd, Int64(12), Int64(8))
+            @test r.pass
+            r = compare_julia_wasm(gcd, Int64(17), Int64(13))
+            @test r.pass
+            r = compare_julia_wasm(gcd, Int64(0), Int64(5))
+            @test r.pass
+            r = compare_julia_wasm(lcm, Int64(4), Int64(6))
+            @test r.pass
+            r = compare_julia_wasm(lcm, Int64(3), Int64(7))
+            @test r.pass
+        end
+
+        # --- iseven/isodd ---
+        @testset "iseven/isodd" begin
+            r = compare_julia_wasm(iseven, Int64(4))
+            @test r.pass
+            r = compare_julia_wasm(iseven, Int64(3))
+            @test r.pass
+            r = compare_julia_wasm(iseven, Int64(0))
+            @test r.pass
+            r = compare_julia_wasm(isodd, Int64(3))
+            @test r.pass
+            r = compare_julia_wasm(isodd, Int64(4))
+            @test r.pass
+            r = compare_julia_wasm(isodd, Int64(-7))
+            @test r.pass
+        end
+
+        # --- isnan/isinf/isfinite ---
+        @testset "isnan/isinf/isfinite" begin
+            r = compare_julia_wasm(isnan, 3.14)
+            @test r.pass
+            r = compare_julia_wasm(isnan, NaN)
+            @test r.pass
+            r = compare_julia_wasm(isinf, 3.14)
+            @test r.pass
+            r = compare_julia_wasm(isfinite, 3.14)
+            @test r.pass
+            r = compare_julia_wasm(isfinite, NaN)
+            @test r.pass
+        end
+
+        # --- iszero/isone ---
+        @testset "iszero/isone" begin
+            r = compare_julia_wasm(iszero, Int64(0))
+            @test r.pass
+            r = compare_julia_wasm(iszero, Int64(5))
+            @test r.pass
+            r = compare_julia_wasm(isone, Int64(1))
+            @test r.pass
+            r = compare_julia_wasm(isone, Int64(5))
+            @test r.pass
+        end
+
+        # --- zero/one ---
+        @testset "zero/one" begin
+            r = compare_julia_wasm(zero, Int64(42))
+            @test r.pass
+            r = compare_julia_wasm(one, Int64(42))
+            @test r.pass
+            r = compare_julia_wasm(zero, 3.14)
+            @test r.pass
+            r = compare_julia_wasm(one, 3.14)
+            @test r.pass
+        end
+    end
+
 end
