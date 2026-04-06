@@ -92,6 +92,127 @@ end
     return al < bl ? -1 : al > bl ? 1 : 0
 end
 
+# chop overlay: Base.chop calls #chop#418 which has complex kwarg dispatch.
+# Uses WasmTarget str_* primitives for WasmGC string construction.
+@overlay WASM_METHOD_TABLE function Base.chop(s::String; head::Int=0, tail::Int=1)
+    n = str_len(s)
+    new_len = n - Int32(head) - Int32(tail)
+    new_len <= Int32(0) && return ""
+    result = str_new(new_len)
+    i = Int32(1)
+    while i <= new_len
+        str_setchar!(result, i, str_char(s, i + Int32(head)))
+        i = i + Int32(1)
+    end
+    return Base.inferencebarrier(result)::String
+end
+
+# last(String, Int) overlay: Base.last uses SubString dispatch chains.
+@overlay WASM_METHOD_TABLE function Base.last(s::String, n::Int)
+    len = str_len(s)
+    n32 = Int32(n)
+    n32 >= len && return s
+    result = str_new(n32)
+    start = len - n32
+    i = Int32(1)
+    while i <= n32
+        str_setchar!(result, i, str_char(s, start + i))
+        i = i + Int32(1)
+    end
+    return Base.inferencebarrier(result)::String
+end
+
+# reverse(String) overlay: Base.reverse uses GC.@preserve + pointer ops.
+@overlay WASM_METHOD_TABLE function Base.reverse(s::String)
+    n = str_len(s)
+    n <= Int32(1) && return s
+    result = str_new(n)
+    i = Int32(1)
+    while i <= n
+        str_setchar!(result, n - i + Int32(1), str_char(s, i))
+        i = i + Int32(1)
+    end
+    return Base.inferencebarrier(result)::String
+end
+
+# titlecase overlay: Base.titlecase uses Unicode tables and complex dispatch.
+# Simple ASCII version: uppercase first char of each word.
+@overlay WASM_METHOD_TABLE function Base.titlecase(s::String; wordsep=nothing, strict::Bool=true)
+    n = str_len(s)
+    n == Int32(0) && return s
+    result = str_new(n)
+    prev_space = true
+    i = Int32(1)
+    while i <= n
+        c = str_char(s, i)
+        if c == Int32(' ') || c == Int32('\t') || c == Int32('\n')
+            str_setchar!(result, i, c)
+            prev_space = true
+        elseif prev_space
+            # Uppercase: if lowercase a-z, subtract 32
+            if c >= _CHAR_A_LOWER && c <= _CHAR_Z_LOWER
+                str_setchar!(result, i, c - _CHAR_CASE_DIFF)
+            else
+                str_setchar!(result, i, c)
+            end
+            prev_space = false
+        elseif strict
+            # Lowercase: if uppercase A-Z, add 32
+            if c >= _CHAR_A_UPPER && c <= _CHAR_Z_UPPER
+                str_setchar!(result, i, c + _CHAR_CASE_DIFF)
+            else
+                str_setchar!(result, i, c)
+            end
+        else
+            str_setchar!(result, i, c)
+        end
+        i = i + Int32(1)
+    end
+    return Base.inferencebarrier(result)::String
+end
+
+# lowercasefirst overlay: Base version has complex SubString/GenericString dispatch.
+@overlay WASM_METHOD_TABLE function Base.Unicode.lowercasefirst(s::String)
+    n = str_len(s)
+    n == Int32(0) && return s
+    result = str_new(n)
+    # First char: lowercase
+    c = str_char(s, Int32(1))
+    if c >= _CHAR_A_UPPER && c <= _CHAR_Z_UPPER
+        str_setchar!(result, Int32(1), c + _CHAR_CASE_DIFF)
+    else
+        str_setchar!(result, Int32(1), c)
+    end
+    # Copy rest
+    i = Int32(2)
+    while i <= n
+        str_setchar!(result, i, str_char(s, i))
+        i = i + Int32(1)
+    end
+    return Base.inferencebarrier(result)::String
+end
+
+# uppercasefirst overlay: Same issue as lowercasefirst.
+@overlay WASM_METHOD_TABLE function Base.Unicode.uppercasefirst(s::String)
+    n = str_len(s)
+    n == Int32(0) && return s
+    result = str_new(n)
+    # First char: uppercase
+    c = str_char(s, Int32(1))
+    if c >= _CHAR_A_LOWER && c <= _CHAR_Z_LOWER
+        str_setchar!(result, Int32(1), c - _CHAR_CASE_DIFF)
+    else
+        str_setchar!(result, Int32(1), c)
+    end
+    # Copy rest
+    i = Int32(2)
+    while i <= n
+        str_setchar!(result, i, str_char(s, i))
+        i = i + Int32(1)
+    end
+    return Base.inferencebarrier(result)::String
+end
+
 # ─── WasmInterpreter ───────────────────────────────────────────────────────
 
 struct WasmInterpreter <: CC.AbstractInterpreter
