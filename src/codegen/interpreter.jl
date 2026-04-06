@@ -398,6 +398,149 @@ end
     return Base.inferencebarrier(result)::String
 end
 
+# ─── Array Mutation Overlays ──────────────────────────────────────────────
+# Julia 1.12's array mutation IR uses low-level GC operations (atomic_pointerset,
+# _growat!, _deleteat!, memmove foreigncall) that are incompatible with WasmGC.
+# push!/pop! codegen in calls.jl also has a double-write bug.
+# These overlays use resize! + indexing which both compile correctly.
+# Can be removed when codegen handles the IR patterns natively.
+
+# All overlays use `similar(v, new_size)` to create a new backing array, then
+# manually copy elements and swap the vector's internal fields. This avoids:
+# 1. Base.resize! which inlines to 300+ stmt IR with _growend! closures and GC ops
+# 2. WasmTarget._resize! which uses arr_new (inline handler creates bare array, not Vector)
+# 3. copy() which fails at runtime in compile_multi context
+#
+# Pattern: create new_v via similar(), copy elements from v into new_v,
+# then setfield!(v, :ref/:size, ...) to swap v's internals to use new storage.
+
+@overlay WASM_METHOD_TABLE function Base.push!(v::Vector{T}, x) where T
+    n = length(v)
+    new_v = similar(v, n + 1)
+    i = 1
+    while i <= n
+        new_v[i] = v[i]
+        i += 1
+    end
+    new_v[n + 1] = convert(T, x)
+    setfield!(v, :ref, getfield(new_v, :ref))
+    setfield!(v, :size, getfield(new_v, :size))
+    return v
+end
+
+@overlay WASM_METHOD_TABLE function Base.pop!(v::Vector{T}) where T
+    n = length(v)
+    val = v[n]
+    new_v = similar(v, n - 1)
+    i = 1
+    while i < n
+        new_v[i] = v[i]
+        i += 1
+    end
+    setfield!(v, :ref, getfield(new_v, :ref))
+    setfield!(v, :size, getfield(new_v, :size))
+    return val
+end
+
+@overlay WASM_METHOD_TABLE function Base.pushfirst!(v::Vector{T}, x) where T
+    n = length(v)
+    new_v = similar(v, n + 1)
+    new_v[1] = convert(T, x)
+    i = 1
+    while i <= n
+        new_v[i + 1] = v[i]
+        i += 1
+    end
+    setfield!(v, :ref, getfield(new_v, :ref))
+    setfield!(v, :size, getfield(new_v, :size))
+    return v
+end
+
+@overlay WASM_METHOD_TABLE function Base.popfirst!(v::Vector{T}) where T
+    n = length(v)
+    val = v[1]
+    new_v = similar(v, n - 1)
+    i = 2
+    while i <= n
+        new_v[i - 1] = v[i]
+        i += 1
+    end
+    setfield!(v, :ref, getfield(new_v, :ref))
+    setfield!(v, :size, getfield(new_v, :size))
+    return val
+end
+
+@overlay WASM_METHOD_TABLE function Base.insert!(v::Vector{T}, i::Integer, x) where T
+    n = length(v)
+    idx = Int(i)
+    new_v = similar(v, n + 1)
+    j = 1
+    while j < idx
+        new_v[j] = v[j]
+        j += 1
+    end
+    new_v[idx] = convert(T, x)
+    j = idx
+    while j <= n
+        new_v[j + 1] = v[j]
+        j += 1
+    end
+    setfield!(v, :ref, getfield(new_v, :ref))
+    setfield!(v, :size, getfield(new_v, :size))
+    return v
+end
+
+@overlay WASM_METHOD_TABLE function Base.deleteat!(v::Vector{T}, i::Integer) where T
+    n = length(v)
+    idx = Int(i)
+    new_v = similar(v, n - 1)
+    j = 1
+    while j < idx
+        new_v[j] = v[j]
+        j += 1
+    end
+    j = idx + 1
+    while j <= n
+        new_v[j - 1] = v[j]
+        j += 1
+    end
+    setfield!(v, :ref, getfield(new_v, :ref))
+    setfield!(v, :size, getfield(new_v, :size))
+    return v
+end
+
+@overlay WASM_METHOD_TABLE function Base.append!(v::Vector{T}, w::AbstractVector) where T
+    for x in w
+        push!(v, x)
+    end
+    return v
+end
+
+@overlay WASM_METHOD_TABLE function Base.prepend!(v::Vector{T}, w::AbstractVector) where T
+    nw = length(w)
+    n = length(v)
+    new_v = similar(v, n + nw)
+    i = 1
+    while i <= nw
+        new_v[i] = w[i]
+        i += 1
+    end
+    i = 1
+    while i <= n
+        new_v[nw + i] = v[i]
+        i += 1
+    end
+    setfield!(v, :ref, getfield(new_v, :ref))
+    setfield!(v, :size, getfield(new_v, :size))
+    return v
+end
+
+@overlay WASM_METHOD_TABLE function Base.splice!(v::Vector{T}, i::Integer) where T
+    val = v[Int(i)]
+    deleteat!(v, i)
+    return val
+end
+
 # unique overlay: Base.unique dispatches through _unique! which uses Dict internally.
 # The compiled function ends up calling itself (self-recursion) due to name collision
 # in function discovery. Simple O(n²) implementation with `in` check avoids this.

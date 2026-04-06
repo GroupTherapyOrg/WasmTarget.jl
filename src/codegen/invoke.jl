@@ -2713,7 +2713,8 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
             # str_trim calls str_substr internally, so also broken when compiled standalone.
             # The inline handlers below (str_substr at line ~22446, str_trim at ~23572)
             # properly implement these using WasmGC array operations with caller scratch locals.
-            _skip_cross_call = name in (:str_substr, :str_trim, :sizehint!, Symbol("#sizehint!#81"))
+            _skip_cross_call = name in (:str_substr, :str_trim, :sizehint!, Symbol("#sizehint!#81"),
+                                     :arr_new, :arr_get, :arr_set!, :arr_len, :arr_fill!)
             if ctx.func_registry !== nothing && !is_self_call && !_skip_cross_call
                 # Try to find this function in our registry
                 called_func = nothing
