@@ -213,6 +213,140 @@ end
     return Base.inferencebarrier(result)::String
 end
 
+# length(String) overlay: Base.length(::String) uses Core.sizeof which returns byte
+# count. For WasmGC strings (i32 arrays), sizeof returns n*4 not n. This overlay
+# uses str_len which maps directly to array.len in WASM.
+@overlay WASM_METHOD_TABLE function Base.length(s::String)
+    return Int(str_len(s))
+end
+
+# strip/lstrip/rstrip overlays: Base versions return SubString which causes WasmGC
+# type mismatch (SubString ref vs String ref). These return new String via str_* ops.
+@overlay WASM_METHOD_TABLE function Base.strip(s::String)
+    return str_trim(s)
+end
+
+@overlay WASM_METHOD_TABLE function Base.lstrip(s::String)
+    n = str_len(s)
+    n == Int32(0) && return s
+    start = Int32(1)
+    while start <= n && _is_whitespace(str_char(s, start))
+        start += Int32(1)
+    end
+    start > n && return ""
+    return str_substr(s, start, n - start + Int32(1))
+end
+
+@overlay WASM_METHOD_TABLE function Base.rstrip(s::String)
+    n = str_len(s)
+    n == Int32(0) && return s
+    stop = n
+    while stop >= Int32(1) && _is_whitespace(str_char(s, stop))
+        stop -= Int32(1)
+    end
+    stop < Int32(1) && return ""
+    return str_substr(s, Int32(1), stop)
+end
+
+# replace overlay: Base.replace uses SubString + Pair matching internally.
+# Simple single-pattern string replacement using str_find.
+@overlay WASM_METHOD_TABLE function Base.replace(s::String, pair::Pair{String,String})
+    pattern = pair.first
+    replacement = pair.second
+    pat_len = str_len(pattern)
+    pat_len == Int32(0) && return s  # empty pattern → return original
+
+    result = ""
+    remaining = s
+    while true
+        pos = str_find(remaining, pattern)
+        pos == Int32(0) && break
+        # Append everything before match + replacement
+        if pos > Int32(1)
+            result = str_concat(result, str_substr(remaining, Int32(1), pos - Int32(1)))
+        end
+        result = str_concat(result, replacement)
+        # Advance past match
+        rem_len = str_len(remaining)
+        new_start = pos + pat_len
+        new_start > rem_len && begin remaining = ""; break end
+        remaining = str_substr(remaining, new_start, rem_len - new_start + Int32(1))
+    end
+    # Append any remaining text
+    if str_len(remaining) > Int32(0)
+        result = str_concat(result, remaining)
+    end
+    return result
+end
+
+# split overlay: Base.split returns Vector{SubString} which WasmTarget can't handle.
+# This returns Vector{String} with actual string copies.
+@overlay WASM_METHOD_TABLE function Base.split(s::String, delim::String;
+        limit::Int=0, keepempty::Bool=true)
+    result = String[]
+    n = str_len(s)
+    dlen = str_len(delim)
+    count = 0
+    start = Int32(1)
+
+    while start <= n
+        # Check limit (0 = no limit)
+        if limit > 0 && count >= limit - 1
+            # Last piece: take everything remaining
+            push!(result, String(str_substr(s, start, n - start + Int32(1))))
+            count += 1
+            start = n + Int32(1)
+            break
+        end
+        pos = str_find(str_substr(s, start, n - start + Int32(1)), delim)
+        if pos == Int32(0)
+            break
+        end
+        # pos is relative to start
+        abs_pos = start + pos - Int32(1)
+        piece_len = abs_pos - start
+        if piece_len > Int32(0) || keepempty
+            if piece_len > Int32(0)
+                push!(result, String(str_substr(s, start, piece_len)))
+            else
+                push!(result, "")
+            end
+            count += 1
+        end
+        start = abs_pos + dlen
+    end
+    # Remaining
+    if start <= n
+        push!(result, String(str_substr(s, start, n - start + Int32(1))))
+    elseif keepempty && start == n + Int32(1) && dlen > Int32(0)
+        # trailing delimiter: add empty if keepempty
+    end
+    return result
+end
+
+# join overlay: Base.join uses IOBuffer which is a deep dependency.
+# Simple concatenation with delimiter.
+@overlay WASM_METHOD_TABLE function Base.join(strings, delim::String)
+    result = ""
+    first = true
+    for s in strings
+        if !first
+            result = str_concat(result, delim)
+        end
+        result = str_concat(result, String(s))
+        first = false
+    end
+    return Base.inferencebarrier(result)::String
+end
+
+@overlay WASM_METHOD_TABLE function Base.join(strings)
+    result = ""
+    for s in strings
+        result = str_concat(result, String(s))
+    end
+    return Base.inferencebarrier(result)::String
+end
+
 # unique overlay: Base.unique dispatches through _unique! which uses Dict internally.
 # The compiled function ends up calling itself (self-recursion) due to name collision
 # in function discovery. Simple O(n²) implementation with `in` check avoids this.
