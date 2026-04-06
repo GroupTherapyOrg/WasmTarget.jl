@@ -213,6 +213,32 @@ end
     return Base.inferencebarrier(result)::String
 end
 
+# unique overlay: Base.unique dispatches through _unique! which uses Dict internally.
+# The compiled function ends up calling itself (self-recursion) due to name collision
+# in function discovery. Simple O(n²) implementation with `in` check avoids this.
+@overlay WASM_METHOD_TABLE function Base.unique(A::AbstractVector)
+    n = length(A)
+    result = similar(A, 0)
+    i = 1
+    while i <= n
+        val = A[i]
+        found = false
+        j = 1
+        while j <= length(result)
+            if result[j] == val
+                found = true
+                break
+            end
+            j += 1
+        end
+        if !found
+            push!(result, val)
+        end
+        i += 1
+    end
+    return result
+end
+
 # ─── WasmInterpreter ───────────────────────────────────────────────────────
 
 struct WasmInterpreter <: CC.AbstractInterpreter
