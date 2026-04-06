@@ -841,12 +841,17 @@ r = compare_julia_wasm_vec(f_sort, Int64[3, 1, 2])
 ```
 """
 function compare_julia_wasm_vec(f, args...)
+    # Deep-copy args before Julia reference call — mutating functions (push!, pop!, etc.)
+    # modify the input Vector in-place, which would corrupt the args used later for the
+    # WASM bridge if we don't copy first.
+    args_for_wasm = deepcopy(args)
+
     if NODE_CMD === nothing
         expected = f(args...)
         return (pass=true, expected=expected, actual=nothing, skipped=true)
     end
 
-    # 1. Run natively in Julia
+    # 1. Run natively in Julia (may mutate args)
     expected = f(args...)
 
     # 2. Determine which bridges are needed
@@ -880,7 +885,7 @@ function compare_julia_wasm_vec(f, args...)
     js_path = joinpath(dir, "loader.mjs")
 
     write(wasm_path, bytes)
-    loader_code = _generate_bridge_loader(wasm_path, func_name, args, arg_types, return_vec_eltype)
+    loader_code = _generate_bridge_loader(wasm_path, func_name, args_for_wasm, arg_types, return_vec_eltype)
     open(js_path, "w") do io
         print(io, loader_code)
     end

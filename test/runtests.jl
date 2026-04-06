@@ -9936,4 +9936,137 @@ console.log(JSON.stringify({
         end
     end
 
+    # ========================================================================
+    # Phase 74: Array Mutation Functions (CF-4002)
+    # Tests for push!, pop!, pushfirst!, popfirst!, insert!, deleteat!,
+    # append!, prepend!, splice! — all via overlays using similar+setfield!
+    # ========================================================================
+    @testset "Phase 74: Array Mutation Functions" begin
+
+        # --- push! ---
+        @testset "push!" begin
+            _p74_push42(v::Vector{Int64})::Vector{Int64} = (push!(v, Int64(42)); v)
+            @test compare_julia_wasm_vec(_p74_push42, Int64[1, 2, 3]).pass
+            @test compare_julia_wasm_vec(_p74_push42, Int64[]).pass
+            @test compare_julia_wasm_vec(_p74_push42, Int64[10]).pass
+            @test compare_julia_wasm_vec(_p74_push42, Int64[-1, 0, 1]).pass
+            @test compare_julia_wasm_vec(_p74_push42, collect(Int64, 1:20)).pass
+
+            _p74_push0(v::Vector{Int64})::Vector{Int64} = (push!(v, Int64(0)); v)
+            @test compare_julia_wasm_vec(_p74_push0, Int64[typemax(Int64), typemin(Int64)]).pass
+        end
+
+        # --- pop! ---
+        @testset "pop!" begin
+            _p74_pop(v::Vector{Int64})::Int64 = pop!(v)
+            @test compare_julia_wasm_vec(_p74_pop, Int64[1, 2, 3]).pass
+            @test compare_julia_wasm_vec(_p74_pop, Int64[42]).pass
+            @test compare_julia_wasm_vec(_p74_pop, Int64[-100, 200, -300]).pass
+            @test compare_julia_wasm_vec(_p74_pop, collect(Int64, 1:20)).pass
+
+            # Verify remaining vector after pop
+            _p74_pop_rest(v::Vector{Int64})::Vector{Int64} = (pop!(v); v)
+            @test compare_julia_wasm_vec(_p74_pop_rest, Int64[1, 2, 3]).pass
+            @test compare_julia_wasm_vec(_p74_pop_rest, Int64[10, 20]).pass
+        end
+
+        # --- pushfirst! ---
+        @testset "pushfirst!" begin
+            _p74_pushfirst0(v::Vector{Int64})::Vector{Int64} = (pushfirst!(v, Int64(0)); v)
+            @test compare_julia_wasm_vec(_p74_pushfirst0, Int64[1, 2, 3]).pass
+            @test compare_julia_wasm_vec(_p74_pushfirst0, Int64[]).pass
+            @test compare_julia_wasm_vec(_p74_pushfirst0, Int64[42]).pass
+            @test compare_julia_wasm_vec(_p74_pushfirst0, collect(Int64, 1:20)).pass
+
+            _p74_pushfirst99(v::Vector{Int64})::Vector{Int64} = (pushfirst!(v, Int64(99)); v)
+            @test compare_julia_wasm_vec(_p74_pushfirst99, Int64[-1, 0, 1]).pass
+        end
+
+        # --- popfirst! ---
+        @testset "popfirst!" begin
+            _p74_popfirst(v::Vector{Int64})::Int64 = popfirst!(v)
+            @test compare_julia_wasm_vec(_p74_popfirst, Int64[1, 2, 3]).pass
+            @test compare_julia_wasm_vec(_p74_popfirst, Int64[42]).pass
+            @test compare_julia_wasm_vec(_p74_popfirst, Int64[-100, 200]).pass
+            @test compare_julia_wasm_vec(_p74_popfirst, collect(Int64, 1:20)).pass
+
+            _p74_popfirst_rest(v::Vector{Int64})::Vector{Int64} = (popfirst!(v); v)
+            @test compare_julia_wasm_vec(_p74_popfirst_rest, Int64[1, 2, 3]).pass
+            @test compare_julia_wasm_vec(_p74_popfirst_rest, Int64[10, 20, 30]).pass
+        end
+
+        # --- insert! ---
+        @testset "insert!" begin
+            _p74_insert2(v::Vector{Int64})::Vector{Int64} = (insert!(v, 2, Int64(99)); v)
+            @test compare_julia_wasm_vec(_p74_insert2, Int64[1, 2, 3]).pass
+            @test compare_julia_wasm_vec(_p74_insert2, Int64[10, 20, 30, 40]).pass
+
+            _p74_insert1(v::Vector{Int64})::Vector{Int64} = (insert!(v, 1, Int64(0)); v)
+            @test compare_julia_wasm_vec(_p74_insert1, Int64[1, 2, 3]).pass
+            @test compare_julia_wasm_vec(_p74_insert1, Int64[42]).pass
+
+            # Insert at end
+            _p74_insert_end(v::Vector{Int64})::Vector{Int64} = (insert!(v, length(v) + 1, Int64(99)); v)
+            @test compare_julia_wasm_vec(_p74_insert_end, Int64[1, 2, 3]).pass
+        end
+
+        # --- deleteat! ---
+        @testset "deleteat!" begin
+            _p74_del2(v::Vector{Int64})::Vector{Int64} = (deleteat!(v, 2); v)
+            @test compare_julia_wasm_vec(_p74_del2, Int64[1, 2, 3]).pass
+            @test compare_julia_wasm_vec(_p74_del2, Int64[10, 20, 30, 40]).pass
+
+            _p74_del1(v::Vector{Int64})::Vector{Int64} = (deleteat!(v, 1); v)
+            @test compare_julia_wasm_vec(_p74_del1, Int64[1, 2, 3]).pass
+            @test compare_julia_wasm_vec(_p74_del1, Int64[42, 99]).pass
+
+            _p74_del_last(v::Vector{Int64})::Vector{Int64} = (deleteat!(v, length(v)); v)
+            @test compare_julia_wasm_vec(_p74_del_last, Int64[1, 2, 3]).pass
+        end
+
+        # --- append! ---
+        @testset "append!" begin
+            _p74_append(v::Vector{Int64})::Vector{Int64} = (append!(v, Int64[10, 20]); v)
+            @test compare_julia_wasm_vec(_p74_append, Int64[1, 2, 3]).pass
+            @test compare_julia_wasm_vec(_p74_append, Int64[]).pass
+            @test compare_julia_wasm_vec(_p74_append, Int64[42]).pass
+
+            _p74_append_large(v::Vector{Int64})::Vector{Int64} = (append!(v, collect(Int64, 100:110)); v)
+            @test compare_julia_wasm_vec(_p74_append_large, Int64[1, 2, 3]).pass
+        end
+
+        # --- prepend! ---
+        @testset "prepend!" begin
+            _p74_prepend(v::Vector{Int64})::Vector{Int64} = (prepend!(v, Int64[10, 20]); v)
+            @test compare_julia_wasm_vec(_p74_prepend, Int64[1, 2, 3]).pass
+            @test compare_julia_wasm_vec(_p74_prepend, Int64[]).pass
+            @test compare_julia_wasm_vec(_p74_prepend, Int64[42]).pass
+
+            _p74_prepend_large(v::Vector{Int64})::Vector{Int64} = (prepend!(v, collect(Int64, 100:110)); v)
+            @test compare_julia_wasm_vec(_p74_prepend_large, Int64[1, 2, 3]).pass
+        end
+
+        # --- splice! ---
+        @testset "splice!" begin
+            _p74_splice2(v::Vector{Int64})::Int64 = splice!(v, 2)
+            @test compare_julia_wasm_vec(_p74_splice2, Int64[1, 2, 3]).pass
+            @test compare_julia_wasm_vec(_p74_splice2, Int64[10, 20, 30]).pass
+
+            _p74_splice1(v::Vector{Int64})::Int64 = splice!(v, 1)
+            @test compare_julia_wasm_vec(_p74_splice1, Int64[42, 99, 7]).pass
+
+            # Verify remaining vector after splice
+            _p74_splice_rest(v::Vector{Int64})::Vector{Int64} = (splice!(v, 2); v)
+            @test compare_julia_wasm_vec(_p74_splice_rest, Int64[1, 2, 3]).pass
+            @test compare_julia_wasm_vec(_p74_splice_rest, Int64[10, 20, 30, 40]).pass
+        end
+
+        # --- fill (harness fix verification) ---
+        @testset "fill" begin
+            _p74_fill(v::Vector{Int64})::Vector{Int64} = fill!(v, Int64(7))
+            @test compare_julia_wasm_vec(_p74_fill, Int64[1, 2, 3]).pass
+            @test compare_julia_wasm_vec(_p74_fill, Int64[0, 0, 0, 0, 0]).pass
+        end
+    end
+
 end
