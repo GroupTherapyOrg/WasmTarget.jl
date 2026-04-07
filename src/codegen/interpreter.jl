@@ -50,8 +50,11 @@ end
 # Why: Base.sort uses internal copyto!/getindex with foreigncall(:memmove).
 #      Use our copy overlay + sort! overlay for a clean path.
 # Remove when: codegen handles foreigncall(:memmove) or Base.sort IR is simpler
-@overlay WASM_METHOD_TABLE function Base.sort(v::AbstractVector; kws...)
-    return sort!(copy(v); kws...)
+@overlay WASM_METHOD_TABLE function Base.sort(v::AbstractVector;
+        lt=isless, by=identity, rev::Bool=false,
+        alg::Base.Sort.Algorithm=Base.Sort.InsertionSort,
+        order::Base.Order.Ordering=Base.Order.Forward)
+    return sort!(copy(v); lt=lt, by=by, rev=rev, alg=alg, order=order)
 end
 
 # ─── String Concatenation Overlays ────────────────────────────────────────
@@ -203,11 +206,13 @@ end
     n == 0 && return s
     bytes = UInt8[]
     b = codeunit(s, 1)
-    if b >= UInt8('A') && b <= UInt8('Z')
-        push!(bytes, b + UInt8(32))
+    # Compute first byte outside push! to avoid branch+push! codegen bug
+    first_byte = if b >= UInt8('A') && b <= UInt8('Z')
+        b + UInt8(32)
     else
-        push!(bytes, b)
+        b
     end
+    push!(bytes, first_byte)
     i = 2
     while i <= n
         push!(bytes, codeunit(s, i))
@@ -225,11 +230,13 @@ end
     n == 0 && return s
     bytes = UInt8[]
     b = codeunit(s, 1)
-    if b >= UInt8('a') && b <= UInt8('z')
-        push!(bytes, b - UInt8(32))
+    # Compute first byte outside push! to avoid branch+push! codegen bug
+    first_byte = if b >= UInt8('a') && b <= UInt8('z')
+        b - UInt8(32)
     else
-        push!(bytes, b)
+        b
     end
+    push!(bytes, first_byte)
     i = 2
     while i <= n
         push!(bytes, codeunit(s, i))
