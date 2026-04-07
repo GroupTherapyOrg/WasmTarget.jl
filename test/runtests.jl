@@ -1434,15 +1434,43 @@ end
         end
 
         @testset "If-else blocks" begin
-            # TODO: Multi-branch if-elseif-else patterns require better SSA/stack management
-            # The basic two-branch if-else works (tested in ternary and max/min)
-            # But multi-branch patterns generate invalid stack states
-            @test_skip "Multi-branch if-else needs stack management improvements"
+            function multi_branch_ifelse(x::Int64)::Int64
+                if x > Int64(10)
+                    return Int64(3)
+                elseif x > Int64(5)
+                    return Int64(2)
+                elseif x > Int64(0)
+                    return Int64(1)
+                else
+                    return Int64(0)
+                end
+            end
+            @test compare_julia_wasm(multi_branch_ifelse, Int64(15)).pass
+            @test compare_julia_wasm(multi_branch_ifelse, Int64(7)).pass
+            @test compare_julia_wasm(multi_branch_ifelse, Int64(3)).pass
+            @test compare_julia_wasm(multi_branch_ifelse, Int64(-1)).pass
         end
 
         @testset "Nested conditionals" begin
-            # TODO: Same issue as if-else blocks - multi-branch patterns
-            @test_skip "Multi-branch conditionals need stack management improvements"
+            function nested_cond_test(x::Int64, y::Int64)::Int64
+                if x > Int64(0)
+                    if y > Int64(0)
+                        return Int64(1)
+                    else
+                        return Int64(2)
+                    end
+                else
+                    if y > Int64(0)
+                        return Int64(3)
+                    else
+                        return Int64(4)
+                    end
+                end
+            end
+            @test compare_julia_wasm(nested_cond_test, Int64(1), Int64(1)).pass
+            @test compare_julia_wasm(nested_cond_test, Int64(1), Int64(-1)).pass
+            @test compare_julia_wasm(nested_cond_test, Int64(-1), Int64(1)).pass
+            @test compare_julia_wasm(nested_cond_test, Int64(-1), Int64(-1)).pass
         end
 
     end
@@ -1501,11 +1529,20 @@ end
         end
 
         @testset "Shift operations" begin
-            # TODO: Shift operations with multi-statement IR require proper SSA local handling
-            # Currently skipped - tracked as future work for local variable management
-            # The issue is that SSA values on the stack may not be in the order expected
-            # by Wasm's shift instructions when there are intermediate computations.
-            @test_skip "Shifts need SSA local handling"
+            function shl_test(x::Int64, n::Int64)::Int64
+                return x << n
+            end
+            function shr_test(x::Int64, n::Int64)::Int64
+                return x >> n
+            end
+            function ushr_test(x::Int64, n::Int64)::Int64
+                return x >>> n
+            end
+            @test compare_julia_wasm(shl_test, Int64(1), Int64(4)).pass
+            @test compare_julia_wasm(shl_test, Int64(255), Int64(2)).pass
+            @test compare_julia_wasm(shr_test, Int64(16), Int64(2)).pass
+            @test compare_julia_wasm(shr_test, Int64(-8), Int64(1)).pass
+            @test compare_julia_wasm(ushr_test, Int64(-1), Int64(1)).pass
         end
 
     end
