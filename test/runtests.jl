@@ -2725,8 +2725,8 @@ end
             end
             wasm_bytes = WasmTarget.compile(test_base_contains_true, ())
             @test length(wasm_bytes) > 0
-            @test_broken validate_wasm(wasm_bytes)
-            @test_broken run_wasm(wasm_bytes, "test_base_contains_true") == 1
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_base_contains_true") == 1
         end
 
         @testset "Base.contains dispatch - false" begin
@@ -2739,8 +2739,8 @@ end
             end
             wasm_bytes = WasmTarget.compile(test_base_contains_false, ())
             @test length(wasm_bytes) > 0
-            @test_broken validate_wasm(wasm_bytes)
-            @test_broken run_wasm(wasm_bytes, "test_base_contains_false") == 0
+            @test validate_wasm(wasm_bytes)
+            @test run_wasm(wasm_bytes, "test_base_contains_false") == 0
         end
 
         @testset "Base.lowercase dispatch" begin
@@ -4431,7 +4431,7 @@ end
             @test compare_julia_wasm(() -> Int64(6) * Int64(5)).pass
             @test compare_julia_wasm(() -> Int64(10) - Int64(3)).pass
             @test compare_julia_wasm(() -> div(Int64(7), Int64(2))).pass
-            @test_broken compare_julia_wasm(() -> Int64(2) ^ Int64(10)).pass  # Int64 exponentiation hits unreachable
+            @test compare_julia_wasm(() -> Int64(2) ^ Int64(10)).pass  # Int64 exponentiation hits unreachable
         end
 
         @testset "Arithmetic — Float64" begin
@@ -4441,7 +4441,7 @@ end
         end
 
         @testset "Math functions" begin
-            @test_broken compare_julia_wasm(() -> sin(1.0)).pass
+            @test compare_julia_wasm(() -> sin(1.0)).pass
             @test compare_julia_wasm(() -> cos(0.0)).pass
             @test compare_julia_wasm(() -> sqrt(4.0)).pass
         end
@@ -4736,7 +4736,7 @@ end
                 end
                 d[Int64(3)]
             end
-            @test_broken compare_julia_wasm(f_dict, Int64(5)).pass
+            @test compare_julia_wasm(f_dict, Int64(5)).pass
         end
 
         @testset "String literals" begin
@@ -5650,7 +5650,7 @@ end
             end
             bytes = compile(dict_int_create, ())
             @test bytes !== nothing
-            @test_broken run_wasm(bytes, "dict_int_create") == 60
+            @test run_wasm(bytes, "dict_int_create") == 60
 
             function dict_int_haskey()::Int64
                 d = Dict{Int64, Int64}()
@@ -5663,7 +5663,7 @@ end
             end
             bytes2 = compile(dict_int_haskey, ())
             @test bytes2 !== nothing
-            @test_broken run_wasm(bytes2, "dict_int_haskey") == 102
+            @test run_wasm(bytes2, "dict_int_haskey") == 102
         end
 
         @testset "Dict{String,Int64} operations" begin
@@ -5675,7 +5675,7 @@ end
             end
             bytes = compile(dict_str_create, ())
             @test bytes !== nothing
-            @test_broken run_wasm(bytes, "dict_str_create") == 3
+            @test run_wasm(bytes, "dict_str_create") == 3
         end
 
         @testset "Dict delete!" begin
@@ -6098,7 +6098,7 @@ end
             rm(script_path, force=true)
             rm(e2e_path, force=true)
 
-            @test_broken occursin("E2E_PASS", output)
+            @test occursin("E2E_PASS", output)
             if !occursin("E2E_PASS", output)
                 println("  E2E output: ", strip(output))
             end
@@ -6265,7 +6265,7 @@ end
             rm(e2e_path, force=true)
 
             println("  E2E-002: ", strip(output))
-            @test_broken occursin("E2E_002_PASS", output)
+            @test occursin("E2E_002_PASS", output)
         end
 
         # --- 53d: Cheat-proof: WAT must contain ref.test ---
@@ -6417,7 +6417,7 @@ end
             rm(p01_path, force=true)
 
             println("  P-001: ", strip(output))
-            @test_broken occursin("P001_PASS", output)
+            @test occursin("P001_PASS", output)
         end
 
         # --- 54e: Cheat-proof: WAT must contain ref.test ---
@@ -6549,7 +6549,7 @@ end
             rm(p03_path, force=true)
 
             println("  P-003: ", strip(output))
-            @test_broken occursin("P003_PASS", output)
+            @test occursin("P003_PASS", output)
         end
 
         # --- 55c: Cheat-proof ---
@@ -7001,29 +7001,29 @@ console.log(JSON.stringify({
 
         @testset "Float64^Int (WBUILD-1021)" begin
             _t59_powi(x::Float64, n::Int64)::Float64 = x^n
-            @test_broken compare_julia_wasm(_t59_powi, 2.0, Int64(3)).pass
-            @test_broken compare_julia_wasm(_t59_powi, 3.0, Int64(2)).pass
-            @test_broken compare_julia_wasm(_t59_powi, 0.5, Int64(4)).pass
-            @test_broken compare_julia_wasm(_t59_powi, 2.0, Int64(10)).pass
-            @test_broken compare_julia_wasm(_t59_powi, 10.0, Int64(0)).pass
+            @test compare_julia_wasm(_t59_powi, 2.0, Int64(3)).pass
+            @test compare_julia_wasm(_t59_powi, 3.0, Int64(2)).pass
+            @test compare_julia_wasm(_t59_powi, 0.5, Int64(4)).pass
+            @test compare_julia_wasm(_t59_powi, 2.0, Int64(10)).pass
+            @test compare_julia_wasm(_t59_powi, 10.0, Int64(0)).pass
         end
 
         @testset "hypot(Float64, Float64) (WBUILD-1021)" begin
             _t59_hypot(x::Float64, y::Float64)::Float64 = hypot(x, y)
-            @test_broken compare_julia_wasm(_t59_hypot, 3.0, 4.0).pass
-            @test_broken compare_julia_wasm(_t59_hypot, 1.0, 1.0).pass
-            @test_broken compare_julia_wasm(_t59_hypot, 0.0, 5.0).pass
-            @test_broken compare_julia_wasm(_t59_hypot, -3.0, 4.0).pass
-            @test_broken compare_julia_wasm(_t59_hypot, 1e10, 1e10).pass
+            @test compare_julia_wasm(_t59_hypot, 3.0, 4.0).pass
+            @test compare_julia_wasm(_t59_hypot, 1.0, 1.0).pass
+            @test compare_julia_wasm(_t59_hypot, 0.0, 5.0).pass
+            @test compare_julia_wasm(_t59_hypot, -3.0, 4.0).pass
+            @test compare_julia_wasm(_t59_hypot, 1e10, 1e10).pass
         end
 
         @testset "cbrt(Float64) (WBUILD-1021)" begin
             _t59_cbrt(x::Float64)::Float64 = cbrt(x)
-            @test_broken compare_julia_wasm(_t59_cbrt, 8.0).pass
-            @test_broken compare_julia_wasm(_t59_cbrt, 27.0).pass
-            @test_broken compare_julia_wasm(_t59_cbrt, -8.0).pass
-            @test_broken compare_julia_wasm(_t59_cbrt, 1.0).pass
-            @test_broken compare_julia_wasm(_t59_cbrt, 0.001).pass
+            @test compare_julia_wasm(_t59_cbrt, 8.0).pass
+            @test compare_julia_wasm(_t59_cbrt, 27.0).pass
+            @test compare_julia_wasm(_t59_cbrt, -8.0).pass
+            @test compare_julia_wasm(_t59_cbrt, 1.0).pass
+            @test compare_julia_wasm(_t59_cbrt, 0.001).pass
         end
     end
 
@@ -7060,20 +7060,20 @@ console.log(JSON.stringify({
 
         @testset "mod(Float64) (WBUILD-1022)" begin
             _t59_mod(x::Float64, y::Float64)::Float64 = mod(x, y)
-            @test_broken compare_julia_wasm(_t59_mod, 7.0, 3.0).pass
-            @test_broken compare_julia_wasm(_t59_mod, -7.0, 3.0).pass
-            @test_broken compare_julia_wasm(_t59_mod, 7.0, -3.0).pass
-            @test_broken compare_julia_wasm(_t59_mod, 10.0, 2.5).pass
-            @test_broken compare_julia_wasm(_t59_mod, 1.5, 0.7).pass
+            @test compare_julia_wasm(_t59_mod, 7.0, 3.0).pass
+            @test compare_julia_wasm(_t59_mod, -7.0, 3.0).pass
+            @test compare_julia_wasm(_t59_mod, 7.0, -3.0).pass
+            @test compare_julia_wasm(_t59_mod, 10.0, 2.5).pass
+            @test compare_julia_wasm(_t59_mod, 1.5, 0.7).pass
         end
 
         @testset "rem(Float64) (WBUILD-1022)" begin
             _t59_rem(x::Float64, y::Float64)::Float64 = rem(x, y)
-            @test_broken compare_julia_wasm(_t59_rem, 7.0, 3.0).pass
-            @test_broken compare_julia_wasm(_t59_rem, -7.0, 3.0).pass
-            @test_broken compare_julia_wasm(_t59_rem, 7.0, -3.0).pass
-            @test_broken compare_julia_wasm(_t59_rem, 10.0, 2.5).pass
-            @test_broken compare_julia_wasm(_t59_rem, 1.5, 0.7).pass
+            @test compare_julia_wasm(_t59_rem, 7.0, 3.0).pass
+            @test compare_julia_wasm(_t59_rem, -7.0, 3.0).pass
+            @test compare_julia_wasm(_t59_rem, 7.0, -3.0).pass
+            @test compare_julia_wasm(_t59_rem, 10.0, 2.5).pass
+            @test compare_julia_wasm(_t59_rem, 1.5, 0.7).pass
         end
 
         @testset "clamp(Float64) (WBUILD-1022)" begin
@@ -7093,13 +7093,13 @@ console.log(JSON.stringify({
         @testset "NaN propagation (WBUILD-1023)" begin
             # NaN == NaN is false in IEEE 754, so wrap with isnan check
             _t59_isnan_sin(x::Float64)::Int32 = Int32(isnan(sin(x)))
-            @test_broken compare_julia_wasm(_t59_isnan_sin, NaN).pass
+            @test compare_julia_wasm(_t59_isnan_sin, NaN).pass
 
             _t59_isnan_exp(x::Float64)::Int32 = Int32(isnan(exp(x)))
-            @test_broken compare_julia_wasm(_t59_isnan_exp, NaN).pass
+            @test compare_julia_wasm(_t59_isnan_exp, NaN).pass
 
             _t59_isnan_log(x::Float64)::Int32 = Int32(isnan(log(x)))
-            @test_broken compare_julia_wasm(_t59_isnan_log, NaN).pass
+            @test compare_julia_wasm(_t59_isnan_log, NaN).pass
 
             _t59_isnan_sqrt(x::Float64)::Int32 = Int32(isnan(sqrt(x)))
             @test compare_julia_wasm(_t59_isnan_sqrt, NaN).pass
@@ -7127,13 +7127,13 @@ console.log(JSON.stringify({
             # exp(large) = Inf, exp(-large) ≈ 0, log(0) = -Inf
             # Note: sin(Inf) throws DomainError in Julia, not testable via compare_julia_wasm
             _t59_isinf_exp(x::Float64)::Int32 = Int32(isinf(exp(x)))
-            @test_broken compare_julia_wasm(_t59_isinf_exp, 1000.0).pass    # exp(1000) = Inf
+            @test compare_julia_wasm(_t59_isinf_exp, 1000.0).pass    # exp(1000) = Inf
 
             _t59_exp_neginf(x::Float64)::Float64 = exp(-x * x)
-            @test_broken compare_julia_wasm(_t59_exp_neginf, 100.0).pass    # exp(-10000) ≈ 0
+            @test compare_julia_wasm(_t59_exp_neginf, 100.0).pass    # exp(-10000) ≈ 0
 
             _t59_isinf_log(x::Float64)::Int32 = Int32(isinf(log(x)))
-            @test_broken compare_julia_wasm(_t59_isinf_log, 0.0).pass       # log(0) = -Inf (doesn't throw in Julia for 0.0)
+            @test compare_julia_wasm(_t59_isinf_log, 0.0).pass       # log(0) = -Inf (doesn't throw in Julia for 0.0)
         end
 
         @testset "Subnormal inputs (WBUILD-1023)" begin
@@ -7141,10 +7141,10 @@ console.log(JSON.stringify({
             sub = 5.0e-324
 
             _t59_sin(x::Float64)::Float64 = sin(x)
-            @test_broken compare_julia_wasm(_t59_sin, sub).pass
+            @test compare_julia_wasm(_t59_sin, sub).pass
 
             _t59_exp(x::Float64)::Float64 = exp(x)
-            @test_broken compare_julia_wasm(_t59_exp, sub).pass
+            @test compare_julia_wasm(_t59_exp, sub).pass
 
             _t59_sqrt(x::Float64)::Float64 = sqrt(x)
             @test compare_julia_wasm(_t59_sqrt, sub).pass
@@ -7153,23 +7153,23 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_t59_abs, sub).pass
 
             _t59_cos(x::Float64)::Float64 = cos(x)
-            @test_broken compare_julia_wasm(_t59_cos, sub).pass
+            @test compare_julia_wasm(_t59_cos, sub).pass
 
             # Small but not subnormal
             _t59_log(x::Float64)::Float64 = log(x)
-            @test_broken compare_julia_wasm(_t59_log, 1e-300).pass
+            @test compare_julia_wasm(_t59_log, 1e-300).pass
         end
 
         @testset "Zero edge cases (WBUILD-1023)" begin
             _t59_sin(x::Float64)::Float64 = sin(x)
-            @test_broken compare_julia_wasm(_t59_sin, 0.0).pass
-            @test_broken compare_julia_wasm(_t59_sin, -0.0).pass
+            @test compare_julia_wasm(_t59_sin, 0.0).pass
+            @test compare_julia_wasm(_t59_sin, -0.0).pass
 
             _t59_cos(x::Float64)::Float64 = cos(x)
-            @test_broken compare_julia_wasm(_t59_cos, 0.0).pass
+            @test compare_julia_wasm(_t59_cos, 0.0).pass
 
             _t59_exp(x::Float64)::Float64 = exp(x)
-            @test_broken compare_julia_wasm(_t59_exp, 0.0).pass
+            @test compare_julia_wasm(_t59_exp, 0.0).pass
 
             _t59_sqrt(x::Float64)::Float64 = sqrt(x)
             @test compare_julia_wasm(_t59_sqrt, 0.0).pass
@@ -7223,14 +7223,14 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_t60_cosc, 3.14).pass
 
             _t60_sincos_s(x::Float64)::Float64 = sincos(x)[1]
-            @test_broken compare_julia_wasm(_t60_sincos_s, 0.0).pass  # WASM execution error
-            @test_broken compare_julia_wasm(_t60_sincos_s, 1.0).pass
-            @test_broken compare_julia_wasm(_t60_sincos_s, Float64(pi)/4).pass
+            @test compare_julia_wasm(_t60_sincos_s, 0.0).pass  # WASM execution error
+            @test compare_julia_wasm(_t60_sincos_s, 1.0).pass
+            @test compare_julia_wasm(_t60_sincos_s, Float64(pi)/4).pass
 
             _t60_sincos_c(x::Float64)::Float64 = sincos(x)[2]
-            @test_broken compare_julia_wasm(_t60_sincos_c, 0.0).pass  # WASM execution error
-            @test_broken compare_julia_wasm(_t60_sincos_c, 1.0).pass
-            @test_broken compare_julia_wasm(_t60_sincos_c, Float64(pi)/4).pass
+            @test compare_julia_wasm(_t60_sincos_c, 0.0).pass  # WASM execution error
+            @test compare_julia_wasm(_t60_sincos_c, 1.0).pass
+            @test compare_julia_wasm(_t60_sincos_c, Float64(pi)/4).pass
 
             _t60_modf_f(x::Float64)::Float64 = modf(x)[1]
             @test compare_julia_wasm(_t60_modf_f, 3.7).pass
@@ -7266,11 +7266,11 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_t60_fourthroot, 256.0).pass
 
             _t60_mod2pi(x::Float64)::Float64 = mod2pi(x)
-            @test_broken compare_julia_wasm(_t60_mod2pi, 0.0).pass
-            @test_broken compare_julia_wasm(_t60_mod2pi, 3.14).pass
-            @test_broken compare_julia_wasm(_t60_mod2pi, 6.28).pass
-            @test_broken compare_julia_wasm(_t60_mod2pi, 10.0).pass
-            @test_broken compare_julia_wasm(_t60_mod2pi, -1.0).pass
+            @test compare_julia_wasm(_t60_mod2pi, 0.0).pass
+            @test compare_julia_wasm(_t60_mod2pi, 3.14).pass
+            @test compare_julia_wasm(_t60_mod2pi, 6.28).pass
+            @test compare_julia_wasm(_t60_mod2pi, 10.0).pass
+            @test compare_julia_wasm(_t60_mod2pi, -1.0).pass
         end
 
         @testset "Two-arg functions (WBUILD-1024)" begin
@@ -7295,10 +7295,10 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_t60_minmax_hi, -1.0, 5.0).pass
 
             _t60_ldexp(x::Float64, n::Int64)::Float64 = ldexp(x, Int(n))
-            @test_broken compare_julia_wasm(_t60_ldexp, 0.5, Int64(3)).pass
-            @test_broken compare_julia_wasm(_t60_ldexp, 1.0, Int64(0)).pass
-            @test_broken compare_julia_wasm(_t60_ldexp, 1.0, Int64(-2)).pass
-            @test_broken compare_julia_wasm(_t60_ldexp, 3.14, Int64(5)).pass
+            @test compare_julia_wasm(_t60_ldexp, 0.5, Int64(3)).pass
+            @test compare_julia_wasm(_t60_ldexp, 1.0, Int64(0)).pass
+            @test compare_julia_wasm(_t60_ldexp, 1.0, Int64(-2)).pass
+            @test compare_julia_wasm(_t60_ldexp, 3.14, Int64(5)).pass
         end
 
         # Floating-point inspection (WBUILD-1024) — REMOVED (placeholder @test_broken false stub)
@@ -7371,9 +7371,9 @@ console.log(JSON.stringify({
                 @test compare_julia_wasm_vec(_p63_all_positive, Int64[-1, -2, -3]).pass
             end
             @testset "count(iseven)" begin
-                @test_broken compare_julia_wasm_vec(_p63_count_even, Int64[1, 2, 3, 4, 5, 6]).pass
-                @test_broken compare_julia_wasm_vec(_p63_count_even, Int64[1, 3, 5]).pass
-                @test_broken compare_julia_wasm_vec(_p63_count_even, Int64[2, 4, 6]).pass
+                @test compare_julia_wasm_vec(_p63_count_even, Int64[1, 2, 3, 4, 5, 6]).pass
+                @test compare_julia_wasm_vec(_p63_count_even, Int64[1, 3, 5]).pass
+                @test compare_julia_wasm_vec(_p63_count_even, Int64[2, 4, 6]).pass
             end
         end
 
@@ -7433,49 +7433,49 @@ console.log(JSON.stringify({
         @testset "Base.sort (WBUILD-3002)" begin
             # Int64 sort — small arrays (InsertionSort path, n≤40)
             @test compare_julia_wasm_vec(_p63_sort_i64, Int64[]).pass
-            @test_broken compare_julia_wasm_vec(_p63_sort_i64, Int64[1]).pass
-            @test_broken compare_julia_wasm_vec(_p63_sort_i64, Int64[3, 1, 2]).pass
-            @test_broken compare_julia_wasm_vec(_p63_sort_i64, Int64[5, 3, 1, 4, 2]).pass
-            @test_broken compare_julia_wasm_vec(_p63_sort_i64, Int64[10, 9, 8, 7, 6, 5, 4, 3, 2, 1]).pass
-            @test_broken compare_julia_wasm_vec(_p63_sort_i64, Int64[3, 1, 2, 1, 3, 2]).pass  # duplicates
-            @test_broken compare_julia_wasm_vec(_p63_sort_i64, Int64[-3, -1, -2, 0, 1]).pass   # negative
-            @test_broken compare_julia_wasm_vec(_p63_sort_i64, Int64[5, 5, 5, 5]).pass         # all same
-            @test_broken compare_julia_wasm_vec(_p63_sort_i64, Int64[typemax(Int64), typemin(Int64), 0]).pass
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[1]).pass
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[3, 1, 2]).pass
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[5, 3, 1, 4, 2]).pass
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[10, 9, 8, 7, 6, 5, 4, 3, 2, 1]).pass
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[3, 1, 2, 1, 3, 2]).pass  # duplicates
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[-3, -1, -2, 0, 1]).pass   # negative
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[5, 5, 5, 5]).pass         # all same
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[typemax(Int64), typemin(Int64), 0]).pass
             # Large sorted/reverse-sorted arrays (CheckSorted fast path)
-            @test_broken compare_julia_wasm_vec(_p63_sort_i64, Int64[i for i in 1:100]).pass       # already sorted
-            @test_broken compare_julia_wasm_vec(_p63_sort_i64, Int64[i for i in 100:-1:1]).pass    # reverse sorted
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[i for i in 1:100]).pass       # already sorted
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[i for i in 100:-1:1]).pass    # reverse sorted
             # Large shuffled arrays (full sort chain: n>40)
-            @test_broken compare_julia_wasm_vec(_p63_sort_i64, Int64[37, 12, 49, 3, 28, 41, 15, 8, 44, 22, 31, 5, 47, 19, 36, 2, 43, 10, 25, 48, 7, 33, 16, 39, 1, 45, 21, 34, 14, 46, 6, 30, 17, 42, 9, 26, 50, 11, 38, 4, 29, 20, 35, 13, 40, 24, 32, 18, 27, 23]).pass  # n=50 shuffled
-            @test_broken compare_julia_wasm_vec(_p63_sort_i64, Int64[67, 12, 89, 3, 45, 78, 23, 91, 34, 56, 1, 100, 42, 88, 15, 73, 9, 61, 37, 84, 27, 50, 6, 95, 18, 70, 43, 82, 31, 54, 14, 99, 8, 63, 29, 76, 47, 92, 21, 58, 4, 85, 36, 71, 16, 97, 52, 11, 66, 39, 80, 25, 93, 48, 7, 60, 33, 75, 19, 87, 2, 55, 41, 96, 13, 68, 30, 79, 22, 51, 5, 90, 38, 72, 17, 83, 46, 10, 64, 28, 77, 44, 98, 20, 57, 35, 81, 26, 94, 49, 69, 32, 86, 24, 59, 40, 74, 53, 62, 65]).pass  # n=100 shuffled
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[37, 12, 49, 3, 28, 41, 15, 8, 44, 22, 31, 5, 47, 19, 36, 2, 43, 10, 25, 48, 7, 33, 16, 39, 1, 45, 21, 34, 14, 46, 6, 30, 17, 42, 9, 26, 50, 11, 38, 4, 29, 20, 35, 13, 40, 24, 32, 18, 27, 23]).pass  # n=50 shuffled
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[67, 12, 89, 3, 45, 78, 23, 91, 34, 56, 1, 100, 42, 88, 15, 73, 9, 61, 37, 84, 27, 50, 6, 95, 18, 70, 43, 82, 31, 54, 14, 99, 8, 63, 29, 76, 47, 92, 21, 58, 4, 85, 36, 71, 16, 97, 52, 11, 66, 39, 80, 25, 93, 48, 7, 60, 33, 75, 19, 87, 2, 55, 41, 96, 13, 68, 30, 79, 22, 51, 5, 90, 38, 72, 17, 83, 46, 10, 64, 28, 77, 44, 98, 20, 57, 35, 81, 26, 94, 49, 69, 32, 86, 24, 59, 40, 74, 53, 62, 65]).pass  # n=100 shuffled
             # Duplicate-heavy large arrays
-            @test_broken compare_julia_wasm_vec(_p63_sort_i64, Int64[3,1,4,1,5,9,2,6,5,3,5,8,9,7,9,3,2,3,8,4,6,2,6,4,3,3,8,3,2,7,9,5,0,2,8,8,4,1,9,7,1,6,9,3,9,5,1,0,5,8]).pass  # n=50 duplicates
-            @test_broken compare_julia_wasm_vec(_p63_sort_i64, Int64[i % 7 for i in 1:100]).pass  # n=100 mod-7 pattern
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[3,1,4,1,5,9,2,6,5,3,5,8,9,7,9,3,2,3,8,4,6,2,6,4,3,3,8,3,2,7,9,5,0,2,8,8,4,1,9,7,1,6,9,3,9,5,1,0,5,8]).pass  # n=50 duplicates
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[i % 7 for i in 1:100]).pass  # n=100 mod-7 pattern
             # Negative and mixed-sign large arrays
-            @test_broken compare_julia_wasm_vec(_p63_sort_i64, Int64[50 - i for i in 1:100]).pass  # n=100 negative to positive
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[50 - i for i in 1:100]).pass  # n=100 negative to positive
             # WBUILD-3003: Edge cases — stability, alternating, boundary values
-            @test_broken compare_julia_wasm_vec(_p63_sort_i64, Int64[2, 1]).pass                    # two elements
-            @test_broken compare_julia_wasm_vec(_p63_sort_i64, Int64[1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2]).pass  # n=50 alternating (triggers full sort)
-            @test_broken compare_julia_wasm_vec(_p63_sort_i64, Int64[i for i in 200:-1:1]).pass     # n=200 descending
-            @test_broken compare_julia_wasm_vec(_p63_sort_i64, Int64[0 for _ in 1:100]).pass        # n=100 all zeros
-            @test_broken compare_julia_wasm_vec(_p63_sort_i64, Int64[typemax(Int64), typemin(Int64), typemax(Int64), typemin(Int64), 0, 0, typemax(Int64)]).pass  # boundary values repeated
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[2, 1]).pass                    # two elements
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2]).pass  # n=50 alternating (triggers full sort)
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[i for i in 200:-1:1]).pass     # n=200 descending
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[0 for _ in 1:100]).pass        # n=100 all zeros
+            @test compare_julia_wasm_vec(_p63_sort_i64, Int64[typemax(Int64), typemin(Int64), typemax(Int64), typemin(Int64), 0, 0, typemax(Int64)]).pass  # boundary values repeated
             # Float64 sort (WBUILD-4001) — fixed via ref.cast for return type + autodiscovery
-            @test_broken compare_julia_wasm_vec(_p63_sort_f64, Float64[3.0, 1.0, 2.0]).pass
-            @test_broken compare_julia_wasm_vec(_p63_sort_f64, Float64[5.5, 1.1, 3.3, 2.2, 4.4]).pass
-            @test_broken compare_julia_wasm_vec(_p63_sort_f64, Float64[1.0]).pass                    # single element
-            @test_broken compare_julia_wasm_vec(_p63_sort_f64, Float64[1.0, 2.0, 3.0]).pass          # already sorted
-            @test_broken compare_julia_wasm_vec(_p63_sort_f64, Float64[3.0, 2.0, 1.0]).pass          # reverse sorted
-            @test_broken compare_julia_wasm_vec(_p63_sort_f64, Float64[-3.5, -1.1, -2.2, 0.0, 1.5]).pass  # negatives + zero
-            @test_broken compare_julia_wasm_vec(_p63_sort_f64, Float64[-100.0, 50.5, -0.1, 0.1, 99.9, -99.9]).pass  # mixed
-            @test_broken compare_julia_wasm_vec(_p63_sort_f64, Float64[10.0, 9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0]).pass  # 10 desc
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[3.0, 1.0, 2.0]).pass
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[5.5, 1.1, 3.3, 2.2, 4.4]).pass
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[1.0]).pass                    # single element
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[1.0, 2.0, 3.0]).pass          # already sorted
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[3.0, 2.0, 1.0]).pass          # reverse sorted
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[-3.5, -1.1, -2.2, 0.0, 1.5]).pass  # negatives + zero
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[-100.0, 50.5, -0.1, 0.1, 99.9, -99.9]).pass  # mixed
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[10.0, 9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0]).pass  # 10 desc
             # Large arrays (trigger full sort chain, not just InsertionSort)
-            @test_broken compare_julia_wasm_vec(_p63_sort_f64, Float64[50.0 - i for i in 1:50]).pass   # n=50 descending
-            @test_broken compare_julia_wasm_vec(_p63_sort_f64, Float64[sin(Float64(i)) for i in 1:100]).pass  # n=100 sin wave
-            @test_broken compare_julia_wasm_vec(_p63_sort_f64, Float64[Float64(i % 7) + 0.1*i for i in 1:100]).pass  # n=100 mixed
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[50.0 - i for i in 1:50]).pass   # n=50 descending
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[sin(Float64(i)) for i in 1:100]).pass  # n=100 sin wave
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[Float64(i % 7) + 0.1*i for i in 1:100]).pass  # n=100 mixed
             # WBUILD-4002: NaN, Inf, -0.0 edge cases
             @test_broken compare_julia_wasm_vec(_p63_sort_f64, Float64[3.0, NaN, 1.0, 2.0]).pass         # NaN sorted to end
             @test_broken compare_julia_wasm_vec(_p63_sort_f64, Float64[NaN, 3.0, NaN, 1.0]).pass          # multiple NaN
-            @test_broken compare_julia_wasm_vec(_p63_sort_f64, Float64[Inf, 3.0, -Inf, 1.0, 0.0]).pass    # Inf/-Inf
-            @test_broken compare_julia_wasm_vec(_p63_sort_f64, Float64[-0.0, 0.0, -1.0, 1.0]).pass        # -0.0 and 0.0
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[Inf, 3.0, -Inf, 1.0, 0.0]).pass    # Inf/-Inf
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[-0.0, 0.0, -1.0, 1.0]).pass        # -0.0 and 0.0
             @test_broken compare_julia_wasm_vec(_p63_sort_f64, Float64[NaN, Inf, -Inf, 0.0, -0.0]).pass   # all special values
             @test_broken compare_julia_wasm_vec(_p63_sort_f64, Float64[5.0, NaN, -3.0, Inf, -Inf, 2.0, NaN, 0.0]).pass  # mixed — sort codegen type mismatch
         end
@@ -7484,14 +7484,14 @@ console.log(JSON.stringify({
         # WBUILD-3012: filter — FIXED (sizehint! handler moved above # closure check)
         # ──────────────────────────────────────────────────────────────────
         @testset "Base.filter (WBUILD-3012)" begin
-            @test_broken compare_julia_wasm_vec(_p63_filter_even, Int64[1, 2, 3, 4, 5, 6]).pass
-            @test_broken compare_julia_wasm_vec(_p63_filter_even, Int64[2, 4, 6]).pass           # all match
-            @test_broken compare_julia_wasm_vec(_p63_filter_even, Int64[1, 3, 5]).pass           # none match
+            @test compare_julia_wasm_vec(_p63_filter_even, Int64[1, 2, 3, 4, 5, 6]).pass
+            @test compare_julia_wasm_vec(_p63_filter_even, Int64[2, 4, 6]).pass           # all match
+            @test compare_julia_wasm_vec(_p63_filter_even, Int64[1, 3, 5]).pass           # none match
             @test compare_julia_wasm_vec(_p63_filter_even, Int64[]).pass                  # empty
-            @test_broken compare_julia_wasm_vec(_p63_filter_even, Int64[2]).pass                 # single match
-            @test_broken compare_julia_wasm_vec(_p63_filter_even, Int64[1]).pass                 # single no match
-            @test_broken compare_julia_wasm_vec(_p63_filter_positive, Int64[-3, -1, 0, 1, 2, 3]).pass
-            @test_broken compare_julia_wasm_vec(_p63_filter_even, Int64[i for i in 1:20]).pass   # larger array
+            @test compare_julia_wasm_vec(_p63_filter_even, Int64[2]).pass                 # single match
+            @test compare_julia_wasm_vec(_p63_filter_even, Int64[1]).pass                 # single no match
+            @test compare_julia_wasm_vec(_p63_filter_positive, Int64[-3, -1, 0, 1, 2, 3]).pass
+            @test compare_julia_wasm_vec(_p63_filter_even, Int64[i for i in 1:20]).pass   # larger array
         end
     end
 
@@ -7838,11 +7838,11 @@ console.log(JSON.stringify({
 
         # --- gcd/lcm ---
         @testset "gcd/lcm" begin
-            @test_broken compare_julia_wasm(gcd, Int64(12), Int64(8)).pass
-            @test_broken compare_julia_wasm(gcd, Int64(17), Int64(13)).pass
+            @test compare_julia_wasm(gcd, Int64(12), Int64(8)).pass
+            @test compare_julia_wasm(gcd, Int64(17), Int64(13)).pass
             @test compare_julia_wasm(gcd, Int64(0), Int64(5)).pass
-            @test_broken compare_julia_wasm(lcm, Int64(4), Int64(6)).pass
-            @test_broken compare_julia_wasm(lcm, Int64(3), Int64(7)).pass
+            @test compare_julia_wasm(lcm, Int64(4), Int64(6)).pass
+            @test compare_julia_wasm(lcm, Int64(3), Int64(7)).pass
         end
 
         # --- iseven/isodd ---
@@ -8296,7 +8296,7 @@ console.log(JSON.stringify({
             @test compare_julia_wasm_vec(_p74_append, Int64[42]).pass
 
             _p74_append_large(v::Vector{Int64})::Vector{Int64} = (append!(v, collect(Int64, 100:110)); v)
-            @test_broken compare_julia_wasm_vec(_p74_append_large, Int64[1, 2, 3]).pass
+            @test compare_julia_wasm_vec(_p74_append_large, Int64[1, 2, 3]).pass
         end
 
         # --- prepend! ---
@@ -8307,7 +8307,7 @@ console.log(JSON.stringify({
             @test compare_julia_wasm_vec(_p74_prepend, Int64[42]).pass
 
             _p74_prepend_large(v::Vector{Int64})::Vector{Int64} = (prepend!(v, collect(Int64, 100:110)); v)
-            @test_broken compare_julia_wasm_vec(_p74_prepend_large, Int64[1, 2, 3]).pass
+            @test compare_julia_wasm_vec(_p74_prepend_large, Int64[1, 2, 3]).pass
         end
 
         # --- splice! ---
@@ -8531,19 +8531,19 @@ console.log(JSON.stringify({
             # Extended gcd/lcm edge cases
             # ============================================
             @testset "gcd extended" begin
-                @test_broken compare_julia_wasm(gcd, Int64(100), Int64(100)).pass
-                @test_broken compare_julia_wasm(gcd, Int64(-12), Int64(8)).pass
-                @test_broken compare_julia_wasm(gcd, Int64(12), Int64(-8)).pass
-                @test_broken compare_julia_wasm(gcd, Int64(-12), Int64(-8)).pass
-                @test_broken compare_julia_wasm(gcd, Int64(1), Int64(1000000)).pass
-                @test_broken compare_julia_wasm(gcd, Int64(1000000), Int64(1)).pass
+                @test compare_julia_wasm(gcd, Int64(100), Int64(100)).pass
+                @test compare_julia_wasm(gcd, Int64(-12), Int64(8)).pass
+                @test compare_julia_wasm(gcd, Int64(12), Int64(-8)).pass
+                @test compare_julia_wasm(gcd, Int64(-12), Int64(-8)).pass
+                @test compare_julia_wasm(gcd, Int64(1), Int64(1000000)).pass
+                @test compare_julia_wasm(gcd, Int64(1000000), Int64(1)).pass
             end
 
             @testset "lcm extended" begin
-                @test_broken compare_julia_wasm(lcm, Int64(1), Int64(1)).pass
-                @test_broken compare_julia_wasm(lcm, Int64(5), Int64(5)).pass
-                @test_broken compare_julia_wasm(lcm, Int64(12), Int64(8)).pass
-                @test_broken compare_julia_wasm(lcm, Int64(7), Int64(11)).pass
+                @test compare_julia_wasm(lcm, Int64(1), Int64(1)).pass
+                @test compare_julia_wasm(lcm, Int64(5), Int64(5)).pass
+                @test compare_julia_wasm(lcm, Int64(12), Int64(8)).pass
+                @test compare_julia_wasm(lcm, Int64(7), Int64(11)).pass
             end
 
             # ============================================
@@ -8745,10 +8745,10 @@ console.log(JSON.stringify({
             end
 
             @testset "argmin/argmax" begin
-                @test_broken compare_julia_wasm_vec(_ft_argmin, Int64[3, 1, 5, 2]).pass
-                @test_broken compare_julia_wasm_vec(_ft_argmax, Int64[3, 1, 5, 2]).pass
-                @test_broken compare_julia_wasm_vec(_ft_argmin, Int64[10, 20, 30]).pass
-                @test_broken compare_julia_wasm_vec(_ft_argmax, Int64[10, 20, 30]).pass
+                @test compare_julia_wasm_vec(_ft_argmin, Int64[3, 1, 5, 2]).pass
+                @test compare_julia_wasm_vec(_ft_argmax, Int64[3, 1, 5, 2]).pass
+                @test compare_julia_wasm_vec(_ft_argmin, Int64[10, 20, 30]).pass
+                @test compare_julia_wasm_vec(_ft_argmax, Int64[10, 20, 30]).pass
             end
 
             @testset "any/all/count closures" begin
@@ -8758,17 +8758,17 @@ console.log(JSON.stringify({
                 @test compare_julia_wasm_vec(_ft_all_pos, Int64[1, 2, 3]).pass
                 @test compare_julia_wasm_vec(_ft_all_pos, Int64[-1, 2, 3]).pass
                 @test compare_julia_wasm_vec(_ft_all_pos, Int64[]).pass
-                @test_broken compare_julia_wasm_vec(_ft_count_even, Int64[1, 2, 3, 4, 5, 6]).pass
-                @test_broken compare_julia_wasm_vec(_ft_count_gt3, Int64[1, 2, 3, 4, 5]).pass
-                @test_broken compare_julia_wasm_vec(_ft_count_even, Int64[]).pass
+                @test compare_julia_wasm_vec(_ft_count_even, Int64[1, 2, 3, 4, 5, 6]).pass
+                @test compare_julia_wasm_vec(_ft_count_gt3, Int64[1, 2, 3, 4, 5]).pass
+                @test compare_julia_wasm_vec(_ft_count_even, Int64[]).pass
             end
 
             @testset "filter closures" begin
-                @test_broken compare_julia_wasm_vec(_ft_filter_even, Int64[1, 2, 3, 4, 5, 6]).pass
-                @test_broken compare_julia_wasm_vec(_ft_filter_gt3, Int64[1, 2, 3, 4, 5]).pass
-                @test_broken compare_julia_wasm_vec(_ft_filter_even, Int64[1, 3, 5]).pass
+                @test compare_julia_wasm_vec(_ft_filter_even, Int64[1, 2, 3, 4, 5, 6]).pass
+                @test compare_julia_wasm_vec(_ft_filter_gt3, Int64[1, 2, 3, 4, 5]).pass
+                @test compare_julia_wasm_vec(_ft_filter_even, Int64[1, 3, 5]).pass
                 @test compare_julia_wasm_vec(_ft_filter_even, Int64[]).pass
-                @test_broken compare_julia_wasm_vec(_ft_filter_gt3, Int64[10, 20, 30]).pass
+                @test compare_julia_wasm_vec(_ft_filter_gt3, Int64[10, 20, 30]).pass
             end
 
             @testset "map closures" begin
@@ -8780,11 +8780,11 @@ console.log(JSON.stringify({
             end
 
             @testset "sort kwargs" begin
-                @test_broken compare_julia_wasm_vec(_ft_sort_asc, Int64[3, 1, 4, 1, 5]).pass
+                @test compare_julia_wasm_vec(_ft_sort_asc, Int64[3, 1, 4, 1, 5]).pass
                 @test_broken compare_julia_wasm_vec(_ft_sort_rev, Int64[3, 1, 4, 1, 5]).pass
                 @test compare_julia_wasm_vec(_ft_sort_asc, Int64[]).pass
-                @test_broken compare_julia_wasm_vec(_ft_sort_asc, Int64[42]).pass
-                @test_broken compare_julia_wasm_vec(_ft_sort_asc, collect(Int64, 10:-1:1)).pass
+                @test compare_julia_wasm_vec(_ft_sort_asc, Int64[42]).pass
+                @test compare_julia_wasm_vec(_ft_sort_asc, collect(Int64, 10:-1:1)).pass
                 @test_broken compare_julia_wasm_vec(_ft_sort_rev, Int64[-3, -1, -4]).pass
             end
 
@@ -8870,14 +8870,14 @@ console.log(JSON.stringify({
 
             @testset "non-mutating ops" begin
                 @test compare_julia_wasm_vec(_ft_arr_len, Int64[1, 2, 3]).pass
-                @test_broken compare_julia_wasm_vec(_ft_arr_copy, Int64[1, 2, 3]).pass  # returns wrong result
+                @test compare_julia_wasm_vec(_ft_arr_copy, Int64[1, 2, 3]).pass  # returns wrong result
                 @test compare_julia_wasm_vec(_ft_arr_rev, Int64[1, 2, 3]).pass
                 @test compare_julia_wasm_vec(_ft_arr_vec, Int64[1, 2, 3]).pass
             end
 
             @testset "fill!/empty!/resize!" begin
                 @test compare_julia_wasm_vec(_ft_arr_fill, Int64[1, 2, 3]).pass
-                @test_broken compare_julia_wasm_vec(_ft_arr_empty_len, Int64[1, 2, 3]).pass  # returns wrong result
+                @test compare_julia_wasm_vec(_ft_arr_empty_len, Int64[1, 2, 3]).pass  # returns wrong result
                 @test compare_julia_wasm_vec(_ft_arr_resize_len, Int64[1, 2, 3]).pass
             end
         end
@@ -8912,17 +8912,17 @@ console.log(JSON.stringify({
                 @test compare_julia_wasm(isless, Int64(1), Int64(2)).pass
                 @test compare_julia_wasm(isless, Int64(2), Int64(1)).pass
                 @test compare_julia_wasm(isless, Int64(1), Int64(1)).pass
-                @test_broken compare_julia_wasm(isless, 1.0, 2.0).pass
-                @test_broken compare_julia_wasm(isless, 2.0, 1.0).pass
+                @test compare_julia_wasm(isless, 1.0, 2.0).pass
+                @test compare_julia_wasm(isless, 2.0, 1.0).pass
             end
 
             # string(x) length verification
             _ft_str_len(x::Int64)::Int = length(string(x))
             @testset "string(x)" begin
-                @test_broken compare_julia_wasm(_ft_str_len, Int64(42)).pass
+                @test compare_julia_wasm(_ft_str_len, Int64(42)).pass
                 @test_broken compare_julia_wasm(_ft_str_len, Int64(0)).pass
-                @test_broken compare_julia_wasm(_ft_str_len, Int64(-123)).pass
-                @test_broken compare_julia_wasm(_ft_str_len, Int64(1000000)).pass
+                @test compare_julia_wasm(_ft_str_len, Int64(-123)).pass
+                @test compare_julia_wasm(_ft_str_len, Int64(1000000)).pass
             end
         end
 

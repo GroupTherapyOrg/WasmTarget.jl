@@ -210,13 +210,9 @@ end
     n == 0 && return s
     bytes = UInt8[]
     b = codeunit(s, 1)
-    # Compute first byte outside push! to avoid branch+push! codegen bug
-    first_byte = if b >= UInt8('A') && b <= UInt8('Z')
-        b + UInt8(32)
-    else
-        b
-    end
-    push!(bytes, first_byte)
+    # Branchless: codegen bug corrupts push! result when if/else precedes a while loop
+    is_upper = (b >= UInt8('A')) & (b <= UInt8('Z'))
+    push!(bytes, b + UInt8(32) * UInt8(is_upper))
     i = 2
     while i <= n
         push!(bytes, codeunit(s, i))
@@ -234,13 +230,9 @@ end
     n == 0 && return s
     bytes = UInt8[]
     b = codeunit(s, 1)
-    # Compute first byte outside push! to avoid branch+push! codegen bug
-    first_byte = if b >= UInt8('a') && b <= UInt8('z')
-        b - UInt8(32)
-    else
-        b
-    end
-    push!(bytes, first_byte)
+    # Branchless: codegen bug corrupts push! result when if/else precedes a while loop
+    is_lower = (b >= UInt8('a')) & (b <= UInt8('z'))
+    push!(bytes, b - UInt8(32) * UInt8(is_lower))
     i = 2
     while i <= n
         push!(bytes, codeunit(s, i))
