@@ -7472,12 +7472,12 @@ console.log(JSON.stringify({
             @test compare_julia_wasm_vec(_p63_sort_f64, Float64[sin(Float64(i)) for i in 1:100]).pass  # n=100 sin wave
             @test compare_julia_wasm_vec(_p63_sort_f64, Float64[Float64(i % 7) + 0.1*i for i in 1:100]).pass  # n=100 mixed
             # WBUILD-4002: NaN, Inf, -0.0 edge cases
-            @test_broken compare_julia_wasm_vec(_p63_sort_f64, Float64[3.0, NaN, 1.0, 2.0]).pass         # NaN sorted to end
-            @test_broken compare_julia_wasm_vec(_p63_sort_f64, Float64[NaN, 3.0, NaN, 1.0]).pass          # multiple NaN
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[3.0, NaN, 1.0, 2.0]).pass         # NaN sorted to end
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[NaN, 3.0, NaN, 1.0]).pass          # multiple NaN
             @test compare_julia_wasm_vec(_p63_sort_f64, Float64[Inf, 3.0, -Inf, 1.0, 0.0]).pass    # Inf/-Inf
             @test compare_julia_wasm_vec(_p63_sort_f64, Float64[-0.0, 0.0, -1.0, 1.0]).pass        # -0.0 and 0.0
-            @test_broken compare_julia_wasm_vec(_p63_sort_f64, Float64[NaN, Inf, -Inf, 0.0, -0.0]).pass   # all special values
-            @test_broken compare_julia_wasm_vec(_p63_sort_f64, Float64[5.0, NaN, -3.0, Inf, -Inf, 2.0, NaN, 0.0]).pass  # mixed — sort codegen type mismatch
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[NaN, Inf, -Inf, 0.0, -0.0]).pass   # all special values
+            @test compare_julia_wasm_vec(_p63_sort_f64, Float64[5.0, NaN, -3.0, Inf, -Inf, 2.0, NaN, 0.0]).pass  # mixed
         end
 
         # ──────────────────────────────────────────────────────────────────
@@ -7671,69 +7671,50 @@ console.log(JSON.stringify({
     _bf2_test_prevind_mid()::Int64 = prevind("abcdef", Int64(3))
 
     @testset "Phase 71: String Dispatch (BF2)" begin
-        # repeat/lpad/rpad: compile() can't resolve closure-captured function refs.
-        # Known codegen limitation — wrap in @test_broken to avoid Error count.
+        # repeat/lpad/rpad: use compile_multi to include helper function
         @testset "repeat - basic" begin
-            @test_broken begin
-                bytes = compile(_bf2_test_repeat_basic, ())
-                validate_wasm(bytes) && run_wasm(bytes, "_bf2_test_repeat_basic") == 1
-            end
+            bytes = compile_multi([(_bf2_test_repeat_basic, ()), (_bf2_repeat, (String, Int64))])
+            @test validate_wasm(bytes) && run_wasm(bytes, "_bf2_test_repeat_basic") == 1
         end
 
         @testset "repeat - single char" begin
-            @test_broken begin
-                bytes = compile(_bf2_test_repeat_char, ())
-                run_wasm(bytes, "_bf2_test_repeat_char") == 1
-            end
+            bytes = compile_multi([(_bf2_test_repeat_char, ()), (_bf2_repeat, (String, Int64))])
+            @test run_wasm(bytes, "_bf2_test_repeat_char") == 1
         end
 
         @testset "repeat - once" begin
-            @test_broken begin
-                bytes = compile(_bf2_test_repeat_once, ())
-                run_wasm(bytes, "_bf2_test_repeat_once") == 1
-            end
+            bytes = compile_multi([(_bf2_test_repeat_once, ()), (_bf2_repeat, (String, Int64))])
+            @test run_wasm(bytes, "_bf2_test_repeat_once") == 1
         end
 
         @testset "lpad - basic" begin
-            @test_broken begin
-                bytes = compile_multi([(_bf2_test_lpad_basic, ()), (_bf2_lpad, (String, Int64))])
-                validate_wasm(bytes) && run_wasm(bytes, "_bf2_test_lpad_basic") == 1
-            end
+            bytes = compile_multi([(_bf2_test_lpad_basic, ()), (_bf2_lpad, (String, Int64))])
+            @test validate_wasm(bytes) && run_wasm(bytes, "_bf2_test_lpad_basic") == 1
         end
 
         @testset "lpad - no padding needed" begin
-            @test_broken begin
-                bytes = compile_multi([(_bf2_test_lpad_nopad, ()), (_bf2_lpad, (String, Int64))])
-                run_wasm(bytes, "_bf2_test_lpad_nopad") == 1
-            end
+            bytes = compile_multi([(_bf2_test_lpad_nopad, ()), (_bf2_lpad, (String, Int64))])
+            @test run_wasm(bytes, "_bf2_test_lpad_nopad") == 1
         end
 
         @testset "lpad - exact length" begin
-            @test_broken begin
-                bytes = compile_multi([(_bf2_test_lpad_exact, ()), (_bf2_lpad, (String, Int64))])
-                run_wasm(bytes, "_bf2_test_lpad_exact") == 1
-            end
+            bytes = compile_multi([(_bf2_test_lpad_exact, ()), (_bf2_lpad, (String, Int64))])
+            @test run_wasm(bytes, "_bf2_test_lpad_exact") == 1
         end
 
         @testset "rpad - basic" begin
-            @test_broken begin
-                bytes = compile_multi([(_bf2_test_rpad_basic, ()), (_bf2_rpad, (String, Int64))])
-                validate_wasm(bytes) && run_wasm(bytes, "_bf2_test_rpad_basic") == 1
-            end
+            bytes = compile_multi([(_bf2_test_rpad_basic, ()), (_bf2_rpad, (String, Int64))])
+            @test validate_wasm(bytes) && run_wasm(bytes, "_bf2_test_rpad_basic") == 1
         end
 
         @testset "rpad - no padding needed" begin
-            @test_broken begin
-                bytes = compile_multi([(_bf2_test_rpad_nopad, ()), (_bf2_rpad, (String, Int64))])
-                run_wasm(bytes, "_bf2_test_rpad_nopad") == 1
-            end
+            bytes = compile_multi([(_bf2_test_rpad_nopad, ()), (_bf2_rpad, (String, Int64))])
+            @test run_wasm(bytes, "_bf2_test_rpad_nopad") == 1
         end
 
         @testset "rpad - exact length" begin
-            @test_broken begin
-                bytes = compile_multi([(_bf2_test_rpad_exact, ()), (_bf2_rpad, (String, Int64))])
-                run_wasm(bytes, "_bf2_test_rpad_exact") == 1
-            end
+            bytes = compile_multi([(_bf2_test_rpad_exact, ()), (_bf2_rpad, (String, Int64))])
+            @test run_wasm(bytes, "_bf2_test_rpad_exact") == 1
         end
 
         # prevind tests now pass — promote from @test_broken to @test
@@ -8425,8 +8406,8 @@ console.log(JSON.stringify({
                 @test compare_julia_wasm(abs, -0.0).pass
                 _cf1_abs_inf()::Float64 = abs(Inf)
                 _cf1_abs_neginf()::Float64 = abs(-Inf)
-                @test_broken compare_julia_wasm(_cf1_abs_inf).pass
-                @test_broken compare_julia_wasm(_cf1_abs_neginf).pass
+                @test compare_julia_wasm(_cf1_abs_inf).pass
+                @test compare_julia_wasm(_cf1_abs_neginf).pass
             end
 
             # ============================================
@@ -8920,7 +8901,7 @@ console.log(JSON.stringify({
             _ft_str_len(x::Int64)::Int = length(string(x))
             @testset "string(x)" begin
                 @test compare_julia_wasm(_ft_str_len, Int64(42)).pass
-                @test_broken compare_julia_wasm(_ft_str_len, Int64(0)).pass
+                @test compare_julia_wasm(_ft_str_len, Int64(0)).pass
                 @test compare_julia_wasm(_ft_str_len, Int64(-123)).pass
                 @test compare_julia_wasm(_ft_str_len, Int64(1000000)).pass
             end

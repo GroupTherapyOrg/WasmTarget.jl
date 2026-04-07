@@ -761,12 +761,17 @@ end
 #      through isnan checks and bitwise comparisons — triggers stackifier bug.
 # Remove when: stackifier handles 793-stmt functions correctly
 @overlay WASM_METHOD_TABLE function Base.isless(x::Float64, y::Float64)
-    # Handle NaN: NaN is less than everything (Julia convention)
+    # Julia convention: NaN sorts to end (isless(x, NaN)=true, isless(NaN, x)=false)
+    # Also: isless(-0.0, 0.0)=true
     if isnan(x)
-        return !isnan(y)
+        return false  # NaN is never less than anything
     end
     if isnan(y)
-        return false
+        return true   # everything is less than NaN
+    end
+    # Handle signed zero: -0.0 < 0.0
+    if x == y
+        return signbit(x) && !signbit(y)
     end
     return x < y
 end
@@ -814,16 +819,19 @@ end
 #      extraction works for all Int64 values.
 # Remove when: codegen handles the Ryu string conversion pipeline
 @overlay WASM_METHOD_TABLE function Base.string(x::Int64)
-    x == 0 && return "0"
     neg = x < 0
     # Work with positive value
     v = neg ? -x : x
-    # Extract digits in reverse
+    # Extract digits in reverse (handle v=0 explicitly to avoid empty digits)
     digits = UInt8[]
-    while v > 0
-        d = v - (v ÷ Int64(10)) * Int64(10)  # v % 10 without rem
-        push!(digits, UInt8(48 + d))  # '0' + d
-        v = v ÷ Int64(10)
+    if v == Int64(0)
+        push!(digits, UInt8(48))  # '0'
+    else
+        while v > 0
+            d = v - (v ÷ Int64(10)) * Int64(10)  # v % 10 without rem
+            push!(digits, UInt8(48 + d))  # '0' + d
+            v = v ÷ Int64(10)
+        end
     end
     # Build result in correct order
     bytes = UInt8[]

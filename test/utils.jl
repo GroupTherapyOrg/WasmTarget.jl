@@ -96,11 +96,16 @@ async function run() {
 
         const result = func($js_args);
 
-        // Handle BigInt serialization for JSON
+        // Handle BigInt and special float serialization for JSON
         const serialized = JSON.stringify(result, (key, value) => {
             if (typeof value === 'bigint') {
                 // Return as string with marker for parsing
                 return { __bigint__: value.toString() };
+            }
+            if (typeof value === 'number') {
+                if (value === Infinity) return "__Inf__";
+                if (value === -Infinity) return "__-Inf__";
+                if (Number.isNaN(value)) return "__NaN__";
             }
             return value;
         });
@@ -175,6 +180,10 @@ function unmarshal_result(result)
     elseif result isa Dict
         return Dict(k => unmarshal_result(v) for (k, v) in result)
     elseif result isa AbstractString
+        # Handle special float values from JSON serialization
+        result == "__Inf__" && return Inf
+        result == "__-Inf__" && return -Inf
+        result == "__NaN__" && return NaN
         # WBUILD-3000: BigInt values are serialized as strings to preserve Int64 precision
         # (JavaScript Number loses precision for values > 2^53)
         return try
@@ -248,10 +257,15 @@ async function run() {
 
         const result = func($js_args);
 
-        // Handle BigInt serialization for JSON
+        // Handle BigInt and special float serialization for JSON
         const serialized = JSON.stringify(result, (key, value) => {
             if (typeof value === 'bigint') {
                 return { __bigint__: value.toString() };
+            }
+            if (typeof value === 'number') {
+                if (value === Infinity) return "__Inf__";
+                if (value === -Infinity) return "__-Inf__";
+                if (Number.isNaN(value)) return "__NaN__";
             }
             return value;
         });
@@ -813,6 +827,11 @@ function _generate_bridge_loader(wasm_path, func_name, args, arg_types, return_v
         # Scalar result
         push!(lines, """    const serialized = JSON.stringify(result, (key, value) => {
       if (typeof value === 'bigint') return { __bigint__: value.toString() };
+      if (typeof value === 'number') {
+        if (value === Infinity) return "__Inf__";
+        if (value === -Infinity) return "__-Inf__";
+        if (Number.isNaN(value)) return "__NaN__";
+      }
       return value;
     });""")
         push!(lines, "    console.log(serialized);")
