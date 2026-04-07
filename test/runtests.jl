@@ -9713,4 +9713,170 @@ console.log(JSON.stringify({
         end
     end
 
+    # ================================================================
+    # STRESS-3000: 8-Deep Collection Chain
+    # ================================================================
+    # Tests: reverse → accumulate → map(abs) → filter(>0) → sort → unique → sum
+    # Verifies deep native+overlay composition with closures, both types.
+
+    @testset "STRESS-3000: 8-Deep Collection Chain" begin
+        # 8-deep: reverse → accumulate(+) → map(abs) → filter(>0) → sort → unique → sum
+        _s3000_deep_i64(v::Vector{Int64})::Int64 =
+            sum(unique(sort(filter(x -> x > Int64(0), map(abs, accumulate(+, reverse(v)))))))
+
+        _s3000_deep_f64(v::Vector{Float64})::Float64 =
+            sum(unique(sort(filter(x -> x > 0.0, map(abs, accumulate(+, reverse(v)))))))
+
+        # 5-deep: reverse → sort → unique → map(abs) → sum
+        _s3000_five_i64(v::Vector{Int64})::Int64 =
+            sum(map(abs, unique(sort(reverse(v)))))
+
+        # 6-deep Float64: reverse → sort → filter(>0) → map(*2) → sum
+        _s3000_six_f64(v::Vector{Float64})::Float64 =
+            sum(map(x -> x * 2.0, filter(x -> x > 0.0, sort(reverse(v)))))
+
+        @testset "Int64 chains" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s3000_deep_i64, Int64[3, -1, 4, -1, 5]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s3000_five_i64, Int64[-3, 1, -4, 1, -5, 9]; optimize=opt).pass
+            end
+        end
+
+        @testset "Float64 chains" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s3000_deep_f64, Float64[3.0, -1.0, 4.0, -1.0, 5.0]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s3000_six_f64, Float64[5.0, -3.0, 1.0, -7.0, 4.0]; optimize=opt).pass
+            end
+        end
+    end
+
+    # ================================================================
+    # STRESS-3001: String Operation Chain
+    # ================================================================
+    # Deep string chains mixing native + overlay. No vector args.
+
+    @testset "STRESS-3001: String Operation Chain" begin
+        # 5-deep: uppercase → strip → split(",") → join("-") → length
+        _s3001_chain1()::Int64 =
+            Int64(length(join(split(strip(uppercase("  hello,world,test  ")), ","), "-")))
+
+        # 3-deep: strip → uppercase → replace
+        _s3001_chain2()::Int32 =
+            replace(uppercase(strip("  hello  ")), "ELLO" => "I") == "HI" ? Int32(1) : Int32(0)
+
+        # 3-deep: lowercase → repeat → reverse → length
+        _s3001_chain3()::Int64 =
+            Int64(length(reverse(repeat(lowercase("ABC"), 3))))
+
+        # 4-deep: strip → uppercase → replace → startswith+contains
+        _s3001_chain4()::Int32 = begin
+            s = strip("  Hello World  ")
+            u = uppercase(s)
+            r = replace(u, " " => "_")
+            startswith(r, "HELLO") && contains(r, "_") ? Int32(1) : Int32(0)
+        end
+
+        for opt in [false, true]
+            @test compare_julia_wasm(_s3001_chain1; optimize=opt).pass
+            @test compare_julia_wasm(_s3001_chain2; optimize=opt).pass
+            @test compare_julia_wasm(_s3001_chain3; optimize=opt).pass
+            @test compare_julia_wasm(_s3001_chain4; optimize=opt).pass
+        end
+    end
+
+    # ================================================================
+    # STRESS-3002: Math × Collection Chain
+    # ================================================================
+    # Math functions applied over filtered vectors. Native + stackifier.
+
+    @testset "STRESS-3002: Math × Collection Chain" begin
+        # sqrt chain (WASM-native math)
+        _s3002_sqrt_chain(v::Vector{Float64})::Float64 =
+            sum(map(sqrt, filter(x -> x > 0.0, v)))
+
+        # floor+abs chain (WASM-native math)
+        _s3002_floor_chain(v::Vector{Float64})::Float64 =
+            sum(map(x -> floor(abs(x)), filter(x -> x > -10.0, v)))
+
+        # sin*cos chain (stackifier trig)
+        _s3002_trig_chain(v::Vector{Float64})::Float64 =
+            sum(map(x -> sin(x) * cos(x), filter(x -> x > 0.0, v)))
+
+        @testset "WASM-native math chains" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s3002_sqrt_chain, Float64[4.0, -1.0, 9.0, -4.0, 16.0]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s3002_floor_chain, Float64[3.7, -2.3, 4.1, -5.9]; optimize=opt).pass
+            end
+        end
+
+        @testset "trig math chain" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s3002_trig_chain, Float64[1.0, -2.0, 3.0, -4.0, 0.5]; optimize=opt).pass
+            end
+        end
+    end
+
+    # ================================================================
+    # STRESS-3003: Cross-Type Promotion Chain
+    # ================================================================
+    # Input Int64, intermediate/output Float64. Tests type conversion in chains.
+
+    @testset "STRESS-3003: Cross-Type Promotion Chain" begin
+        # Int64 → filter → map(abs) → sum → Float64 → sqrt
+        _s3003_cross(v::Vector{Int64})::Float64 =
+            sqrt(Float64(sum(map(abs, filter(x -> x > Int64(0), v)))))
+
+        # Int64 → filter → map(Float64 * 0.5) → sum → Float64
+        _s3003_conv(v::Vector{Int64})::Float64 =
+            sum(map(x -> Float64(x) * 0.5, filter(x -> x > Int64(0), v)))
+
+        for opt in [false, true]
+            @test compare_julia_wasm_vec(_s3003_cross, Int64[3, -1, 4, -1, 5]; optimize=opt).pass
+            @test compare_julia_wasm_vec(_s3003_conv, Int64[1, -2, 3, -4, 5]; optimize=opt).pass
+        end
+    end
+
+    # ================================================================
+    # STRESS-3004: Closure + Composition Chain
+    # ================================================================
+    # 3 named closures composed into a pipeline. Captures local variables.
+
+    @testset "STRESS-3004: Closure + Composition Chain" begin
+        # Named closures: transform + predicate + reducer
+        _s3004_pipeline(v::Vector{Int64})::Int64 = begin
+            transform = (x::Int64) -> x * Int64(2) + Int64(1)
+            predicate = (x::Int64) -> x > Int64(5)
+            reducer = (a::Int64, x::Int64) -> a + x
+            reduce(reducer, map(transform, filter(predicate, v)); init=Int64(0))
+        end
+
+        # Multi-capture: threshold + scale + offset all captured
+        _s3004_captures(v::Vector{Int64})::Int64 = begin
+            threshold = Int64(3)
+            scale = Int64(10)
+            offset = Int64(100)
+            reduce((a::Int64, x::Int64) -> a + x + offset, map(x -> x * scale, filter(x -> x > threshold, v)); init=Int64(0))
+        end
+
+        # Float64 closures with captures: accumulate → filter(>threshold) → map(*scale) → sum
+        _s3004_f64_cap(v::Vector{Float64})::Float64 = begin
+            threshold = 2.0
+            scale = 3.0
+            sum(map(x -> x * scale, filter(x -> x > threshold, accumulate(+, v))))
+        end
+
+        @testset "Int64 closure pipelines" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s3004_pipeline, Int64[1, 3, 5, 7, 9]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s3004_captures, Int64[1, 2, 3, 4, 5]; optimize=opt).pass
+            end
+        end
+
+        @testset "Float64 closure pipeline" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s3004_f64_cap, Float64[0.5, 1.5, 2.5, 3.5]; optimize=opt).pass
+            end
+        end
+    end
+
 end
