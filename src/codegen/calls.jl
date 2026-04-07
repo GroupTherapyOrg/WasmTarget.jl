@@ -474,10 +474,6 @@ function _compile_call_checked_mul(func, args, bytes::Vector{UInt8}, ctx::Abstra
         push!(bytes, Opcode.LOCAL_GET)
         append!(bytes, encode_leb128_unsigned(local_result))
 
-        if is_32bit
-            push!(bytes, Opcode.I64_EXTEND_I32_S)
-        end
-
         # Overflow detection for mul
         if is_signed
             # Signed mul overflow: if a==0: false; if a==-1: b==MIN; else: result/a != b
@@ -550,7 +546,7 @@ function _compile_call_checked_mul(func, args, bytes::Vector{UInt8}, ctx::Abstra
             push!(bytes, Opcode.END)  # end if/else
         end
 
-        tuple_type = Tuple{Int64, Bool}
+        tuple_type = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
         if !haskey(ctx.type_registry.structs, tuple_type)
             register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
         end
@@ -4233,11 +4229,6 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             push!(bytes, Opcode.LOCAL_GET)
             append!(bytes, encode_leb128_unsigned(local_result))
 
-            # Result is on stack — extend to i64 for tuple if needed
-            if is_32bit
-                push!(bytes, Opcode.I64_EXTEND_I32_S)
-            end
-
             # Compute overflow flag
             if is_signed
                 # Signed: overflow = ((a ^ result) & (b ^ result)) >> (bits-1)
@@ -4271,7 +4262,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 push!(bytes, is_32bit ? Opcode.I32_LT_U : Opcode.I64_LT_U)
             end
 
-            tuple_type = Tuple{Int64, Bool}
+            tuple_type = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
             if !haskey(ctx.type_registry.structs, tuple_type)
                 register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
             end
@@ -4314,10 +4305,6 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             push!(bytes, Opcode.LOCAL_GET)
             append!(bytes, encode_leb128_unsigned(local_result))
 
-            if is_32bit
-                push!(bytes, Opcode.I64_EXTEND_I32_S)
-            end
-
             if is_signed
                 # Signed: overflow = ((a ^ b) & (a ^ result)) >> (bits-1)
                 push!(bytes, Opcode.LOCAL_GET)
@@ -4350,7 +4337,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 push!(bytes, is_32bit ? Opcode.I32_LT_U : Opcode.I64_LT_U)
             end
 
-            tuple_type = Tuple{Int64, Bool}
+            tuple_type = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
             if !haskey(ctx.type_registry.structs, tuple_type)
                 register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
             end

@@ -9112,4 +9112,138 @@ console.log(JSON.stringify({
 
     end
 
+    # ================================================================
+    # STRESS-1000: Numeric Functions Type Matrix
+    # ================================================================
+    # Every numeric function × every applicable type, raw + binaryen.
+    # Fixes: lcm(Int32) checked_smul tuple type, Inf/NaN JS bridge.
+
+    @testset "STRESS-1000: Numeric Type Matrix" begin
+
+        # --- Single-arg: abs ---
+        @testset "abs type matrix" begin
+            @test compare_julia_wasm(abs, Int32(-5)).pass
+            @test compare_julia_wasm(abs, Int32(-5); optimize=true).pass
+            @test compare_julia_wasm(abs, Int64(-5)).pass
+            @test compare_julia_wasm(abs, Int64(-5); optimize=true).pass
+            @test compare_julia_wasm(abs, Float32(-3.14f0)).pass
+            @test compare_julia_wasm(abs, Float32(-3.14f0); optimize=true).pass
+            @test compare_julia_wasm(abs, Float64(-3.14)).pass
+            @test compare_julia_wasm(abs, Float64(-3.14); optimize=true).pass
+        end
+
+        # --- Single-arg: sign ---
+        @testset "sign type matrix" begin
+            @test compare_julia_wasm(sign, Int32(-5)).pass
+            @test compare_julia_wasm(sign, Int32(-5); optimize=true).pass
+            @test compare_julia_wasm(sign, Int64(-5)).pass
+            @test compare_julia_wasm(sign, Int64(-5); optimize=true).pass
+            @test compare_julia_wasm(sign, Float32(-3.14f0)).pass
+            @test compare_julia_wasm(sign, Float32(-3.14f0); optimize=true).pass
+            @test compare_julia_wasm(sign, Float64(-3.14)).pass
+            @test compare_julia_wasm(sign, Float64(-3.14); optimize=true).pass
+        end
+
+        # --- Single-arg: signbit ---
+        @testset "signbit type matrix" begin
+            @test compare_julia_wasm(signbit, Int32(-5)).pass
+            @test compare_julia_wasm(signbit, Int32(-5); optimize=true).pass
+            @test compare_julia_wasm(signbit, Int64(-5)).pass
+            @test compare_julia_wasm(signbit, Int64(-5); optimize=true).pass
+            @test compare_julia_wasm(signbit, UInt32(5)).pass
+            @test compare_julia_wasm(signbit, UInt32(5); optimize=true).pass
+            @test compare_julia_wasm(signbit, UInt64(5)).pass
+            @test compare_julia_wasm(signbit, UInt64(5); optimize=true).pass
+            @test compare_julia_wasm(signbit, Float32(-3.14f0)).pass
+            @test compare_julia_wasm(signbit, Float32(-3.14f0); optimize=true).pass
+            @test compare_julia_wasm(signbit, Float64(-3.14)).pass
+            @test compare_julia_wasm(signbit, Float64(-3.14); optimize=true).pass
+        end
+
+        # --- Single-arg: iseven/isodd ---
+        @testset "iseven/isodd type matrix" begin
+            for f in [iseven, isodd]
+                for T in [Int32, Int64, UInt32, UInt64]
+                    @test compare_julia_wasm(f, T(6)).pass
+                    @test compare_julia_wasm(f, T(6); optimize=true).pass
+                end
+            end
+        end
+
+        # --- Float predicates: isnan/isinf/isfinite ---
+        @testset "float predicates type matrix" begin
+            @test compare_julia_wasm(isnan, Float32(NaN32)).pass
+            @test compare_julia_wasm(isnan, Float32(NaN32); optimize=true).pass
+            @test compare_julia_wasm(isnan, Float64(NaN)).pass
+            @test compare_julia_wasm(isnan, Float64(NaN); optimize=true).pass
+            @test compare_julia_wasm(isinf, Float32(Inf32)).pass
+            @test compare_julia_wasm(isinf, Float32(Inf32); optimize=true).pass
+            @test compare_julia_wasm(isinf, Float64(Inf)).pass
+            @test compare_julia_wasm(isinf, Float64(Inf); optimize=true).pass
+            @test compare_julia_wasm(isfinite, Float32(1.0f0)).pass
+            @test compare_julia_wasm(isfinite, Float32(1.0f0); optimize=true).pass
+            @test compare_julia_wasm(isfinite, Float64(1.0)).pass
+            @test compare_julia_wasm(isfinite, Float64(1.0); optimize=true).pass
+        end
+
+        # --- Single-arg: iszero/isone/zero/one ---
+        @testset "iszero/isone/zero/one type matrix" begin
+            for f in [iszero, isone, zero, one]
+                for T in [Int32, Int64, UInt32, UInt64, Float32, Float64]
+                    val = f in [iszero, zero] ? T(0) : T(1)
+                    @test compare_julia_wasm(f, val).pass
+                    @test compare_julia_wasm(f, val; optimize=true).pass
+                end
+            end
+        end
+
+        # --- Single-arg: typemin/typemax (signed only — unsigned max is bridge limitation) ---
+        @testset "typemin/typemax type matrix" begin
+            for f in [typemin, typemax]
+                for T in [Int32, Int64]
+                    @test compare_julia_wasm(f, T(0)).pass
+                    @test compare_julia_wasm(f, T(0); optimize=true).pass
+                end
+            end
+        end
+
+        # --- Two-arg: min/max ---
+        @testset "min/max type matrix" begin
+            for f in [min, max]
+                for T in [Int32, Int64, UInt32, UInt64, Float32, Float64]
+                    @test compare_julia_wasm(f, T(3), T(7)).pass
+                    @test compare_julia_wasm(f, T(3), T(7); optimize=true).pass
+                end
+            end
+        end
+
+        # --- Two-arg: div/mod/rem ---
+        @testset "div/mod/rem type matrix" begin
+            for f in [div, mod, rem]
+                for T in [Int32, Int64]
+                    @test compare_julia_wasm(f, T(7), T(3)).pass
+                    @test compare_julia_wasm(f, T(7), T(3); optimize=true).pass
+                end
+            end
+        end
+
+        # --- Two-arg: gcd/lcm ---
+        @testset "gcd/lcm type matrix" begin
+            for f in [gcd, lcm]
+                for T in [Int32, Int64]
+                    @test compare_julia_wasm(f, T(12), T(8)).pass
+                    @test compare_julia_wasm(f, T(12), T(8); optimize=true).pass
+                end
+            end
+        end
+
+        # --- Three-arg: clamp ---
+        @testset "clamp type matrix" begin
+            for T in [Int32, Int64, Float32, Float64]
+                @test compare_julia_wasm(clamp, T(5), T(1), T(10)).pass
+                @test compare_julia_wasm(clamp, T(5), T(1), T(10); optimize=true).pass
+            end
+        end
+    end
+
 end

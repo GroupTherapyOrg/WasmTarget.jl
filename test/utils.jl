@@ -164,6 +164,11 @@ function format_js_arg(arg)
         # UInt32 maps to i32 in Wasm — pass as reinterpreted signed value
         return string(reinterpret(Int32, arg))
     elseif arg isa Float64 || arg isa Float32
+        isnan(arg) && return "NaN"
+        arg == Inf && return "Infinity"
+        arg == -Inf && return "-Infinity"
+        arg == Inf32 && return "Infinity"
+        arg == -Inf32 && return "-Infinity"
         return string(arg)
     elseif arg isa Char
         # Julia stores Char as UTF-8 bytes left-packed in UInt32.
