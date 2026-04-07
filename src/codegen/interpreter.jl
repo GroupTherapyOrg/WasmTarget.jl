@@ -207,49 +207,59 @@ end
 # ─── strip Overlay ─────────────────────────────────────────────────────────
 # Why: Base.strip uses SubString ref cast that codegen can't handle.
 #      Delegate to working lstrip + rstrip overlays.
-# Remove when: codegen handles SubString operations natively
+# Remove when: codegen stackifier handles inlined lstrip+rstrip (526 stmts)
+# Using @noinline to prevent Julia from inlining lstrip/rstrip into strip,
+# keeping each function's IR small enough for the stackifier.
 @overlay WASM_METHOD_TABLE function Base.strip(s::AbstractString)
-    return rstrip(lstrip(s))
+    return @noinline rstrip(@noinline lstrip(s))
 end
 
-# NOTE: lstrip/rstrip use single-loop patterns to avoid a codegen bug where
-# codeunit() in a first loop + push!() in a second loop corrupts local variables.
+# NOTE: lstrip/rstrip reuse chop()'s single-loop copy pattern to avoid a codegen
+# bug where two jl_string_ptr traces in separate loops cause null pointer errors.
+# Strategy: copy ALL bytes in a single loop, mark which to keep via counters,
+# then build result from the kept portion.
 @overlay WASM_METHOD_TABLE function Base.lstrip(s::String)
     n = ncodeunits(s)
     n == 0 && return s
+    # Single loop: copy all bytes, skipping leading spaces
     bytes = UInt8[]
-    found = false
+    skipping = true
     i = 1
     while i <= n
         b = codeunit(s, i)
-        if !found && b == UInt8(32)
-            # skip leading space
+        if skipping
+            if b != 0x20
+                skipping = false
+                push!(bytes, b)
+            end
         else
-            found = true
             push!(bytes, b)
         end
         i += 1
     end
-    length(bytes) == 0 && return ""
     return String(bytes)
 end
 
 @overlay WASM_METHOD_TABLE function Base.rstrip(s::String)
     n = ncodeunits(s)
     n == 0 && return s
-    # First pass: find last non-space position (no push! in this function)
-    # Copy all bytes then trim trailing spaces by rebuilding
+    # Single loop: copy all bytes, track last non-space position.
+    # Then pop! trailing spaces until we reach last non-space.
     bytes = UInt8[]
+    keep = 0
     i = 1
     while i <= n
-        push!(bytes, codeunit(s, i))
+        b = codeunit(s, i)
+        push!(bytes, b)
+        if b != 0x20
+            keep = i
+        end
         i += 1
     end
-    # Trim trailing spaces
-    while length(bytes) > 0 && bytes[length(bytes)] == UInt8(32)
+    # Pop trailing spaces
+    while length(bytes) > keep
         pop!(bytes)
     end
-    length(bytes) == 0 && return ""
     return String(bytes)
 end
 
@@ -682,6 +692,116 @@ end
         i += 1
     end
     return nothing
+end
+
+# ─── rem(Float64) Overlay ────────────────────────────────────────────────
+# Why: Base.rem calls rem_internal which triggers stackifier bug
+#      ("i64.sub expected i64, found anyref" — 100+ IR stmts with complex branches).
+#      IEEE 754 floating-point remainder is a - trunc(a/b)*b.
+# Remove when: stackifier correctly handles rem_internal's IR
+@overlay WASM_METHOD_TABLE function Base.rem(x::Float64, y::Float64)
+    return x - trunc(x / y) * y
+end
+
+# ─── mod(Float64) Overlay ────────────────────────────────────────────────
+# Why: Base.mod(Float64,Float64) calls rem which calls rem_internal (stackifier bug).
+#      IEEE 754 modulo is a - floor(a/b)*b.
+# Remove when: stackifier correctly handles rem_internal's IR
+@overlay WASM_METHOD_TABLE function Base.mod(x::Float64, y::Float64)
+    return x - floor(x / y) * y
+end
+
+# ─── isless(Float64) Overlay ────────────────────────────────────────────
+# Why: Base.isless(Float64,Float64) produces 793 IR stmts with complex dispatch
+#      through isnan checks and bitwise comparisons — triggers stackifier bug.
+# Remove when: stackifier handles 793-stmt functions correctly
+@overlay WASM_METHOD_TABLE function Base.isless(x::Float64, y::Float64)
+    # Handle NaN: NaN is less than everything (Julia convention)
+    if isnan(x)
+        return !isnan(y)
+    end
+    if isnan(y)
+        return false
+    end
+    return x < y
+end
+
+# ─── repeat(String) Overlay ─────────────────────────────────────────────
+# Why: Base.repeat(::String, ::Int) uses unsafe_copyto! with foreigncall(:memmove)
+#      for efficient string repetition. Pure Julia loop with codeunit works in WASM.
+# Remove when: codegen handles foreigncall(:memmove)
+@overlay WASM_METHOD_TABLE function Base.repeat(s::String, n::Int)
+    slen = ncodeunits(s)
+    slen == 0 && return ""
+    n <= 0 && return ""
+    bytes = UInt8[]
+    rep = 1
+    while rep <= n
+        i = 1
+        while i <= slen
+            push!(bytes, codeunit(s, i))
+            i += 1
+        end
+        rep += 1
+    end
+    return String(bytes)
+end
+
+# ─── first(String,Int) Overlay ──────────────────────────────────────────
+# Why: Base.first(::String, ::Int) uses nextind/SubString dispatch that triggers
+#      codegen failures. Simple codeunit copy suffices for ASCII strings.
+# Remove when: codegen handles SubString creation from nextind
+@overlay WASM_METHOD_TABLE function Base.first(s::String, n::Int)
+    slen = ncodeunits(s)
+    take = n >= slen ? slen : n
+    bytes = UInt8[]
+    i = 1
+    while i <= take
+        push!(bytes, codeunit(s, i))
+        i += 1
+    end
+    return String(bytes)
+end
+
+# ─── string(Int64) Overlay ──────────────────────────────────────────────
+# Why: Base.string(::Int64) uses Ryu.writeshortest / dec() with complex dispatch
+#      (hundreds of IR stmts, multiple autodiscover targets). Pure Julia digit
+#      extraction works for all Int64 values.
+# Remove when: codegen handles the Ryu string conversion pipeline
+@overlay WASM_METHOD_TABLE function Base.string(x::Int64)
+    x == 0 && return "0"
+    neg = x < 0
+    # Work with positive value
+    v = neg ? -x : x
+    # Extract digits in reverse
+    digits = UInt8[]
+    while v > 0
+        d = v - (v ÷ Int64(10)) * Int64(10)  # v % 10 without rem
+        push!(digits, UInt8(48 + d))  # '0' + d
+        v = v ÷ Int64(10)
+    end
+    # Build result in correct order
+    bytes = UInt8[]
+    if neg
+        push!(bytes, UInt8(45))  # '-'
+    end
+    i = length(digits)
+    while i >= 1
+        push!(bytes, digits[i])
+        i -= 1
+    end
+    return String(bytes)
+end
+
+# ─── empty!(Vector) Overlay ─────────────────────────────────────────────
+# Why: Base.empty! uses internal _deleteend! with foreigncall(:memmove) for
+#      clearing vector contents. Simple resize to 0 works in WASM.
+# Remove when: codegen handles _deleteend! foreigncalls
+@overlay WASM_METHOD_TABLE function Base.empty!(v::Vector{T}) where T
+    while length(v) > 0
+        pop!(v)
+    end
+    return v
 end
 
 # ─── WasmInterpreter ───────────────────────────────────────────────────────
