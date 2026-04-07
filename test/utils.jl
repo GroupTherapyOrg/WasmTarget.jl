@@ -154,6 +154,11 @@ function format_js_arg(arg)
         return string(arg)
     elseif arg isa Float64 || arg isa Float32
         return string(arg)
+    elseif arg isa Char
+        # Julia stores Char as UTF-8 bytes left-packed in UInt32.
+        # WASM expects this same representation as i32.
+        raw = reinterpret(Int32, reinterpret(UInt32, arg))
+        return string(raw)
     else
         return repr(arg)
     end

@@ -49,12 +49,16 @@ end
 # ─── sort Overlay (non-mutating) ──────────────────────────────────────────
 # Why: Base.sort uses internal copyto!/getindex with foreigncall(:memmove).
 #      Use our copy overlay + sort! overlay for a clean path.
+#      Kwargs NOT forwarded — Julia's kwarg dispatch (sym_in/kwerr) generates
+#      unreachable stubs. Default sort!(copy(v)) covers the common case.
 # Remove when: codegen handles foreigncall(:memmove) or Base.sort IR is simpler
 @overlay WASM_METHOD_TABLE function Base.sort(v::AbstractVector;
         lt=isless, by=identity, rev::Bool=false,
         alg::Base.Sort.Algorithm=Base.Sort.InsertionSort,
         order::Base.Order.Ordering=Base.Order.Forward)
-    return sort!(copy(v); lt=lt, by=by, rev=rev, alg=alg, order=order)
+    result = copy(v)
+    sort!(result)
+    return result
 end
 
 # ─── String Concatenation Overlays ────────────────────────────────────────
@@ -851,6 +855,87 @@ end
         pop!(v)
     end
     return v
+end
+
+# ─── reinterpret Overlay ──────────────────────────────────────────────────
+# Why: The WasmInterpreter resolves reinterpret(UInt64, x::Float64) through the
+#      full _reinterpret_padding path (type flags, padding checks, packedsize,
+#      mapfoldl/kwerr infrastructure) — 200+ IR stmts. The native compiler inlines
+#      it to Core.bitcast which is a single WASM instruction.
+# Remove when: WasmInterpreter inference matches native compiler's reinterpret inlining
+@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{UInt64}, x::Float64)
+    return Core.bitcast(UInt64, x)
+end
+@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Float64}, x::UInt64)
+    return Core.bitcast(Float64, x)
+end
+@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Int64}, x::Float64)
+    return Core.bitcast(Int64, x)
+end
+@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Float64}, x::Int64)
+    return Core.bitcast(Float64, x)
+end
+@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Int64}, x::UInt64)
+    return Core.bitcast(Int64, x)
+end
+@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{UInt64}, x::Int64)
+    return Core.bitcast(UInt64, x)
+end
+@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Int32}, x::UInt32)
+    return Core.bitcast(Int32, x)
+end
+@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{UInt32}, x::Int32)
+    return Core.bitcast(UInt32, x)
+end
+@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{UInt32}, x::Float32)
+    return Core.bitcast(UInt32, x)
+end
+@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Float32}, x::UInt32)
+    return Core.bitcast(Float32, x)
+end
+
+# ─── _reinterpret_padding Overlay ─────────────────────────────────────────
+# Why: Base._reinterpret_padding goes through pointer_from_objref + packedsize
+#      which generates 200+ IR stmts with mapfoldl/kwerr/fieldtype infrastructure.
+#      Core.bitcast is a direct WASM reinterpret instruction (no-op on same-size types).
+# Remove when: codegen handles the full reinterpret codepath natively
+@overlay WASM_METHOD_TABLE function Base._reinterpret_padding(::Type{UInt64}, x::Float64)
+    return Core.bitcast(UInt64, x)
+end
+
+@overlay WASM_METHOD_TABLE function Base._reinterpret_padding(::Type{Float64}, x::UInt64)
+    return Core.bitcast(Float64, x)
+end
+
+@overlay WASM_METHOD_TABLE function Base._reinterpret_padding(::Type{UInt32}, x::Float32)
+    return Core.bitcast(UInt32, x)
+end
+
+@overlay WASM_METHOD_TABLE function Base._reinterpret_padding(::Type{Float32}, x::UInt32)
+    return Core.bitcast(Float32, x)
+end
+
+@overlay WASM_METHOD_TABLE function Base._reinterpret_padding(::Type{Int64}, x::Float64)
+    return Core.bitcast(Int64, x)
+end
+
+@overlay WASM_METHOD_TABLE function Base._reinterpret_padding(::Type{Float64}, x::Int64)
+    return Core.bitcast(Float64, x)
+end
+
+# ─── table_unpack Overlay ─────────────────────────────────────────────────
+# Why: Base.Math.table_unpack indexes into J_TABLE::NTuple{256,UInt64} with a
+#      runtime index. NTuple dynamic indexing generates massive IR (mapfoldl/
+#      reduce_empty/fieldtype on all 256 fields). Vector indexing is O(1) in WASM.
+# Remove when: codegen handles NTuple dynamic indexing efficiently
+const _WASM_J_TABLE_VEC = UInt64[Base.Math.J_TABLE[i] for i in 1:256]
+
+@overlay WASM_METHOD_TABLE function Base.Math.table_unpack(ind::Int32)
+    i = Int64(ind & Int32(0xff)) + Int64(1)
+    entry = _WASM_J_TABLE_VEC[i]
+    jU = Core.bitcast(Float64, Base.Math.JU_CONST | (entry & Base.Math.JU_MASK))
+    jL = Core.bitcast(Float64, Base.Math.JL_CONST | (entry >> UInt64(0x08)))
+    return (jU, jL)
 end
 
 # ─── WasmInterpreter ───────────────────────────────────────────────────────
