@@ -20,7 +20,9 @@ Julia has a 4-stage compiler pipeline: parsing, lowering, type inference, and co
 Julia source → Julia compiler (parse, lower, infer) → Fully typed IR → WasmTarget → .wasm
 ```
 
-Julia's compiler does the hard work. WasmTarget gets fully type-inferred IR and translates it to Wasm instructions. Anything Julia can type-infer, WasmTarget can compile.
+Julia's compiler does the hard work — parsing, macro expansion, type inference, optimization. WasmTarget gets fully type-inferred IR and translates it to Wasm instructions. For functions where the IR is straightforward (arithmetic, control flow, structs, closures), compilation is direct. For functions with complex IR patterns (GC internals, C library calls, deep dispatch chains), WasmTarget provides [method overlays](https://github.com/JuliaGPU/GPUCompiler.jl) — the same pattern CUDA.jl uses — that give Julia's inference a simpler path to resolve before codegen runs.
+
+Coverage is growing. 176 core Base functions work today (see tables below). The goal is for any pure Julia function to compile — we're not there yet, but the foundation is solid.
 
 ## Quick Start
 
