@@ -8762,11 +8762,11 @@ console.log(JSON.stringify({
 
             @testset "sort kwargs" begin
                 @test compare_julia_wasm_vec(_ft_sort_asc, Int64[3, 1, 4, 1, 5]).pass
-                @test_broken compare_julia_wasm_vec(_ft_sort_rev, Int64[3, 1, 4, 1, 5]).pass
+                @test compare_julia_wasm_vec(_ft_sort_rev, Int64[3, 1, 4, 1, 5]).pass
                 @test compare_julia_wasm_vec(_ft_sort_asc, Int64[]).pass
                 @test compare_julia_wasm_vec(_ft_sort_asc, Int64[42]).pass
                 @test compare_julia_wasm_vec(_ft_sort_asc, collect(Int64, 10:-1:1)).pass
-                @test_broken compare_julia_wasm_vec(_ft_sort_rev, Int64[-3, -1, -4]).pass
+                @test compare_julia_wasm_vec(_ft_sort_rev, Int64[-3, -1, -4]).pass
             end
 
             @testset "reverse" begin

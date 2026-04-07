@@ -49,16 +49,16 @@ end
 # ─── sort Overlay (non-mutating) ──────────────────────────────────────────
 # Why: Base.sort uses internal copyto!/getindex with foreigncall(:memmove).
 #      Use our copy overlay + sort! overlay for a clean path.
-#      Kwargs NOT forwarded — Julia's kwarg dispatch (sym_in/kwerr) generates
-#      unreachable stubs. Default sort!(copy(v)) covers the common case.
-#      sort(v, rev=true) still broken due to kwarg dispatch codegen issues.
+#      Kwargs forwarded to sort! — the kwarg dispatch machinery
+#      (_apply_iterate(iterate, Core.tuple, vec) + isa(result, Tuple{}))
+#      is handled by the compiler's _apply_iterate handler (Core.tuple case).
 # Remove when: codegen handles foreigncall(:memmove) or Base.sort IR is simpler
 @overlay WASM_METHOD_TABLE function Base.sort(v::AbstractVector;
         lt=isless, by=identity, rev::Bool=false,
         alg::Base.Sort.Algorithm=Base.Sort.InsertionSort,
         order::Base.Order.Ordering=Base.Order.Forward)
     result = copy(v)
-    sort!(result)
+    sort!(result, rev=rev)
     return result
 end
 

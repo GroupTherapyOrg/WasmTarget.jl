@@ -5398,8 +5398,32 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # Get container Julia type
         container_type = infer_value_type(container_arg, ctx)
 
+        # Handle Core.tuple target (kwarg dispatch pattern):
+        # _apply_iterate(iterate, Core.tuple, vec_of_symbols) converts remaining
+        # unknown kwargs into a tuple. The subsequent isa(result, Tuple{}) check
+        # determines whether to proceed or call kwerr.
+        # Emit struct.new with Tuple{}'s typeId — the isa check uses typeId
+        # comparison (shared wasm type at base struct index), so the typeId must
+        # match Tuple{}'s assigned ID for the check to pass correctly.
+        target_is_tuple = (target_func isa GlobalRef && target_func.name === :tuple && target_func.mod === Core)
+
+        if target_is_tuple && ctx.type_registry.base_struct_idx !== nothing
+            base_idx = ctx.type_registry.base_struct_idx
+            # Kwarg dispatch pattern: _apply_iterate(iterate, Core.tuple, unknown_kwargs_vec)
+            # produces a Tuple{Vararg{Symbol}} which is checked by isa(result, Tuple{}).
+            # The isa check uses typeId comparison (shared wasm type), so we must emit
+            # a struct with Tuple{}'s correct typeId.
+            # Register Tuple{} and get its typeId
+            register_tuple_type!(ctx.mod, ctx.type_registry, Tuple{})
+            tuple_empty_tid = ensure_type_id!(ctx.type_registry, Tuple{})
+            # Emit: i32.const $typeId; struct.new $base_idx
+            push!(bytes, Opcode.I32_CONST)
+            append!(bytes, encode_leb128_signed(Int64(tuple_empty_tid)))
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.STRUCT_NEW)
+            append!(bytes, encode_leb128_unsigned(base_idx))
         # Only handle single-container Vector{T} splatting with known binary intrinsics
-        if length(args) == 3 && container_type <: Vector && container_type isa DataType
+        elseif length(args) == 3 && container_type <: Vector && container_type isa DataType
             elem_type = eltype(container_type)
             # Resolve target function to a WASM opcode for binary reduce
             target_name = target_func isa GlobalRef ? target_func.name : nothing
