@@ -456,13 +456,13 @@ r = compare_julia_wasm(x -> x + Int32(1), Int32(5))
 @assert r.pass "Expected \$(r.expected), got \$(r.actual)"
 ```
 """
-function compare_julia_wasm(f, args...)
+function compare_julia_wasm(f, args...; optimize::Bool=false)
     # 1. Run natively in Julia to get expected result
     expected = f(args...)
 
-    # 2. Compile to Wasm
+    # 2. Compile to Wasm (with optional binaryen optimization)
     arg_types = Tuple(map(typeof, args))
-    bytes = WasmTarget.compile(f, arg_types)
+    bytes = WasmTarget.compile(f, arg_types; optimize=optimize)
 
     # 3. Run in Node.js to get actual result (with standard Math imports)
     func_name = string(nameof(f))
@@ -471,10 +471,123 @@ function compare_julia_wasm(f, args...)
 
     # 4. Compare (skip if Node.js unavailable)
     if actual === nothing && NODE_CMD === nothing
-        return (pass=true, expected=expected, actual=nothing, skipped=true)
+        return (pass=true, expected=expected, actual=nothing, skipped=true, wasm_size=length(bytes))
     end
 
-    return (pass=(expected == actual), expected=expected, actual=actual, skipped=false)
+    return (pass=(expected == actual), expected=expected, actual=actual, skipped=false, wasm_size=length(bytes))
+end
+
+"""
+    compare_julia_wasm_both(f, args...) -> NamedTuple
+
+Test `f` with BOTH optimize=false (raw) and optimize=true (binaryen).
+Returns `(raw_pass, opt_pass, pass, raw_size, opt_size)`.
+`pass` is true only if BOTH raw and optimized produce correct results.
+"""
+function compare_julia_wasm_both(f, args...)
+    raw = compare_julia_wasm(f, args...; optimize=false)
+    opt = compare_julia_wasm(f, args...; optimize=true)
+    return (pass=raw.pass && opt.pass, raw_pass=raw.pass, opt_pass=opt.pass,
+            expected=raw.expected, raw_actual=raw.actual, opt_actual=opt.actual,
+            raw_size=raw.wasm_size, opt_size=opt.wasm_size)
+end
+
+"""
+    compare_julia_wasm_vec_both(f, args...) -> NamedTuple
+
+Test vector function `f` with BOTH optimize=false and optimize=true.
+Returns `(raw_pass, opt_pass, pass, raw_size, opt_size)`.
+"""
+function compare_julia_wasm_vec_both(f, args...)
+    raw = compare_julia_wasm_vec(f, deepcopy(args)...; optimize=false)
+    opt = compare_julia_wasm_vec(f, deepcopy(args)...; optimize=true)
+    return (pass=raw.pass && opt.pass, raw_pass=raw.pass, opt_pass=opt.pass,
+            expected=raw.expected, raw_actual=raw.actual, opt_actual=opt.actual,
+            raw_size=raw.wasm_size, opt_size=opt.wasm_size)
+end
+
+"""
+    test_type_matrix(f, types_and_args::Vector) -> Vector{NamedTuple}
+
+Test a scalar function across multiple type signatures, both raw and binaryen-optimized.
+Each element is a tuple of arguments to pass to `f` (the types are inferred).
+
+Returns a vector of `(args, raw_pass, opt_pass, pass, raw_size, opt_size, error)`.
+
+# Example
+```julia
+results = test_type_matrix(abs, [
+    (Int32(-5),),
+    (Int64(-5),),
+    (Float32(-3.14f0),),
+    (Float64(-3.14),),
+])
+for r in results
+    println("\$(typeof.(r.args)): raw=\$(r.raw_pass) opt=\$(r.opt_pass)")
+end
+```
+"""
+function test_type_matrix(f, types_and_args::Vector)
+    results = NamedTuple[]
+    for args_tuple in types_and_args
+        args = args_tuple isa Tuple ? args_tuple : (args_tuple,)
+        try
+            r = compare_julia_wasm_both(f, args...)
+            push!(results, (args=args, raw_pass=r.raw_pass, opt_pass=r.opt_pass,
+                           pass=r.pass, raw_size=r.raw_size, opt_size=r.opt_size, error=nothing))
+        catch e
+            push!(results, (args=args, raw_pass=false, opt_pass=false,
+                           pass=false, raw_size=0, opt_size=0, error=sprint(showerror, e)))
+        end
+    end
+    return results
+end
+
+"""
+    test_type_matrix_vec(f, types_and_args::Vector) -> Vector{NamedTuple}
+
+Like test_type_matrix but for vector functions using the bridge harness.
+Each element is a tuple of arguments (including Vector args) to pass to `f`.
+
+# Example
+```julia
+f_sort(v::Vector{Int64})::Vector{Int64} = sort(v)
+results = test_type_matrix_vec(f_sort, [
+    (Int64[3, 1, 2],),
+])
+```
+"""
+function test_type_matrix_vec(f, types_and_args::Vector)
+    results = NamedTuple[]
+    for args_tuple in types_and_args
+        args = args_tuple isa Tuple ? args_tuple : (args_tuple,)
+        try
+            r = compare_julia_wasm_vec_both(f, args...)
+            push!(results, (args=args, raw_pass=r.raw_pass, opt_pass=r.opt_pass,
+                           pass=r.pass, raw_size=r.raw_size, opt_size=r.opt_size, error=nothing))
+        catch e
+            push!(results, (args=args, raw_pass=false, opt_pass=false,
+                           pass=false, raw_size=0, opt_size=0, error=sprint(showerror, e)))
+        end
+    end
+    return results
+end
+
+"""
+    print_type_matrix(f_name::String, results::Vector)
+
+Pretty-print a type matrix result table.
+"""
+function print_type_matrix(f_name::String, results::Vector)
+    println("\n  Type Matrix: $f_name")
+    println("  ", "-"^70)
+    for r in results
+        types_str = join([string(typeof(a)) for a in r.args], ", ")
+        status = r.pass ? "✓" : (r.raw_pass ? "✓raw ✗opt" : "✗")
+        size_str = r.raw_size > 0 ? "$(r.raw_size)→$(r.opt_size)" : "N/A"
+        err_str = r.error !== nothing ? " ERR: $(first(r.error, 60))" : ""
+        println("  $status  ($types_str)  [$size_str]$err_str")
+    end
 end
 
 """
@@ -864,7 +977,7 @@ r = compare_julia_wasm_vec(f_sort, Int64[3, 1, 2])
 @test r.pass  # expected=[1,2,3], actual=[1,2,3]
 ```
 """
-function compare_julia_wasm_vec(f, args...)
+function compare_julia_wasm_vec(f, args...; optimize::Bool=false)
     # Deep-copy args before Julia reference call — mutating functions (push!, pop!, etc.)
     # modify the input Vector in-place, which would corrupt the args used later for the
     # WASM bridge if we don't copy first.
@@ -872,7 +985,7 @@ function compare_julia_wasm_vec(f, args...)
 
     if NODE_CMD === nothing
         expected = f(args...)
-        return (pass=true, expected=expected, actual=nothing, skipped=true)
+        return (pass=true, expected=expected, actual=nothing, skipped=true, wasm_size=0)
     end
 
     # 1. Run natively in Julia (may mutate args)
@@ -899,8 +1012,8 @@ function compare_julia_wasm_vec(f, args...)
         append!(func_list, BRIDGE_SPECS_F64)
     end
 
-    # 4. Compile
-    bytes = WasmTarget.compile_multi(func_list)
+    # 4. Compile (with optional binaryen optimization)
+    bytes = WasmTarget.compile_multi(func_list; optimize=optimize)
 
     # 5. Generate bridge-aware loader and run
     func_name = string(nameof(f))
@@ -921,7 +1034,7 @@ function compare_julia_wasm_vec(f, args...)
         output = strip(output)
 
         if isempty(output)
-            return (pass=false, expected=expected, actual=nothing, skipped=false)
+            return (pass=false, expected=expected, actual=nothing, skipped=false, wasm_size=length(bytes))
         end
 
         result = JSON.parse(output)
@@ -947,10 +1060,10 @@ function compare_julia_wasm_vec(f, args...)
             pass = (expected == actual)
         end
 
-        return (pass=pass, expected=expected, actual=actual, skipped=false)
+        return (pass=pass, expected=expected, actual=actual, skipped=false, wasm_size=length(bytes))
     catch e
         if e isa ProcessFailedException
-            return (pass=false, expected=expected, actual="WASM_ERROR", skipped=false)
+            return (pass=false, expected=expected, actual="WASM_ERROR", skipped=false, wasm_size=length(bytes))
         end
         rethrow()
     end
