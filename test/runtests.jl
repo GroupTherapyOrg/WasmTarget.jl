@@ -9324,4 +9324,124 @@ console.log(JSON.stringify({
         end
     end
 
+    # ================================================================
+    # STRESS-1002: Collection Functions Type Matrix
+    # ================================================================
+    # Vector{Int64} and Vector{Float64} for all collection functions, raw + binaryen.
+
+    @testset "STRESS-1002: Collection Type Matrix" begin
+
+        # --- Vector-returning functions ---
+        _s1002_sort_i64(v::Vector{Int64})::Vector{Int64} = sort(v)
+        _s1002_sort_f64(v::Vector{Float64})::Vector{Float64} = sort(v)
+        _s1002_rev_i64(v::Vector{Int64})::Vector{Int64} = reverse(v)
+        _s1002_rev_f64(v::Vector{Float64})::Vector{Float64} = reverse(v)
+        _s1002_uniq_i64(v::Vector{Int64})::Vector{Int64} = unique(v)
+        _s1002_uniq_f64(v::Vector{Float64})::Vector{Float64} = unique(v)
+        _s1002_filt_i64(v::Vector{Int64})::Vector{Int64} = filter(iseven, v)
+        _s1002_filt_f64(v::Vector{Float64})::Vector{Float64} = filter(x -> x > 0.0, v)
+        _s1002_map_i64(v::Vector{Int64})::Vector{Int64} = map(abs, v)
+        _s1002_map_f64(v::Vector{Float64})::Vector{Float64} = map(abs, v)
+        _s1002_acc_i64(v::Vector{Int64})::Vector{Int64} = accumulate(+, v)
+        _s1002_acc_f64(v::Vector{Float64})::Vector{Float64} = accumulate(+, v)
+
+        @testset "sort" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s1002_sort_i64, Int64[3,1,2]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1002_sort_f64, Float64[3.0,1.0,2.0]; optimize=opt).pass
+            end
+        end
+
+        @testset "reverse" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s1002_rev_i64, Int64[3,1,2]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1002_rev_f64, Float64[3.0,1.0,2.0]; optimize=opt).pass
+            end
+        end
+
+        @testset "unique" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s1002_uniq_i64, Int64[1,2,2,3,1]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1002_uniq_f64, Float64[1.0,2.0,2.0,3.0,1.0]; optimize=opt).pass
+            end
+        end
+
+        @testset "filter" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s1002_filt_i64, Int64[1,2,3,4,5,6]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1002_filt_f64, Float64[-1.0,2.0,-3.0,4.0]; optimize=opt).pass
+            end
+        end
+
+        @testset "map" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s1002_map_i64, Int64[-3,1,-2]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1002_map_f64, Float64[-3.0,1.0,-2.0]; optimize=opt).pass
+            end
+        end
+
+        @testset "accumulate" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s1002_acc_i64, Int64[1,2,3,4]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1002_acc_f64, Float64[1.0,2.0,3.0,4.0]; optimize=opt).pass
+            end
+        end
+
+        # --- Scalar-returning vector functions ---
+        _s1002_sum_i64(v::Vector{Int64})::Int64 = sum(v)
+        _s1002_sum_f64(v::Vector{Float64})::Float64 = sum(v)
+        _s1002_prod_i64(v::Vector{Int64})::Int64 = prod(v)
+        _s1002_prod_f64(v::Vector{Float64})::Float64 = prod(v)
+        _s1002_min_i64(v::Vector{Int64})::Int64 = minimum(v)
+        _s1002_max_i64(v::Vector{Int64})::Int64 = maximum(v)
+        _s1002_min_f64(v::Vector{Float64})::Float64 = minimum(v)
+        _s1002_max_f64(v::Vector{Float64})::Float64 = maximum(v)
+        _s1002_len_i64(v::Vector{Int64})::Int64 = Int64(length(v))
+        _s1002_count_i64(v::Vector{Int64})::Int64 = Int64(count(iseven, v))
+        _s1002_any_i64(v::Vector{Int64})::Int64 = any(iseven, v) ? Int64(1) : Int64(0)
+        _s1002_all_i64(v::Vector{Int64})::Int64 = all(iseven, v) ? Int64(1) : Int64(0)
+        _s1002_reduce_i64(v::Vector{Int64})::Int64 = reduce(+, v)
+
+        @testset "sum/prod" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s1002_sum_i64, Int64[1,2,3,4]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1002_sum_f64, Float64[1.0,2.0,3.0,4.0]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1002_prod_i64, Int64[1,2,3,4]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1002_prod_f64, Float64[1.0,2.0,3.0,4.0]; optimize=opt).pass
+            end
+        end
+
+        @testset "minimum/maximum" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s1002_min_i64, Int64[3,1,2]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1002_max_i64, Int64[3,1,2]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1002_min_f64, Float64[3.0,1.0,2.0]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1002_max_f64, Float64[3.0,1.0,2.0]; optimize=opt).pass
+            end
+        end
+
+        @testset "length/count/any/all/reduce" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s1002_len_i64, Int64[1,2,3]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1002_count_i64, Int64[1,2,3,4,5,6]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1002_any_i64, Int64[1,3,4]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1002_all_i64, Int64[2,4,6]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1002_reduce_i64, Int64[1,2,3,4]; optimize=opt).pass
+            end
+        end
+
+        # --- Compositions ---
+        _s1002_fms(v::Vector{Int64})::Int64 = sum(map(abs, filter(isodd, v)))
+        _s1002_usr(v::Vector{Int64})::Vector{Int64} = reverse(sort(unique(v)))
+        _s1002_af(v::Vector{Int64})::Vector{Int64} = filter(x -> x > Int64(5), accumulate(+, v))
+
+        @testset "compositions" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s1002_fms, Int64[-3, 2, -5, 4, 7]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1002_usr, Int64[3, 1, 2, 1, 3]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1002_af, Int64[1, 2, 3, 4]; optimize=opt).pass
+            end
+        end
+    end
+
 end
