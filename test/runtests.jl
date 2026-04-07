@@ -9536,4 +9536,112 @@ console.log(JSON.stringify({
         end
     end
 
+    # ================================================================
+    # STRESS-1004: String Functions Binaryen Verification
+    # ================================================================
+    # All 37 string functions already work — verify each with optimize=true.
+    # String functions use zero-arg wrappers (hardcode constants internally),
+    # so compare_julia_wasm works directly.
+
+    @testset "STRESS-1004: String Functions Binaryen" begin
+
+        # --- Basic string ops ---
+        _s1004_sizeof()::Int64 = sizeof("hello")
+        _s1004_length()::Int64 = length("hello")
+        _s1004_concat_len()::Int64 = length("hello" * " world")
+        _s1004_hash()::Int32 = str_hash("hello")
+        _s1004_char()::Int64 = Int64(str_char("hello", Int32(1)))
+
+        @testset "basic (sizeof/length/concat/hash/char)" begin
+            for opt in [false, true]
+                @test compare_julia_wasm(_s1004_sizeof; optimize=opt).pass
+                @test compare_julia_wasm(_s1004_length; optimize=opt).pass
+                @test compare_julia_wasm(_s1004_concat_len; optimize=opt).pass
+                @test compare_julia_wasm(_s1004_hash; optimize=opt).pass
+                @test compare_julia_wasm(_s1004_char; optimize=opt).pass
+            end
+        end
+
+        # --- Search ops ---
+        _s1004_contains_y()::Int32 = contains("hello world", "world") ? Int32(1) : Int32(0)
+        _s1004_contains_n()::Int32 = contains("hello", "xyz") ? Int32(1) : Int32(0)
+        _s1004_starts_y()::Int32 = startswith("hello", "hel") ? Int32(1) : Int32(0)
+        _s1004_ends_y()::Int32 = endswith("hello", "llo") ? Int32(1) : Int32(0)
+        _s1004_find()::Int64 = Int64(findfirst("world", "hello world").start)
+
+        @testset "search (contains/startswith/endswith/find)" begin
+            for opt in [false, true]
+                @test compare_julia_wasm(_s1004_contains_y; optimize=opt).pass
+                @test compare_julia_wasm(_s1004_contains_n; optimize=opt).pass
+                @test compare_julia_wasm(_s1004_starts_y; optimize=opt).pass
+                @test compare_julia_wasm(_s1004_ends_y; optimize=opt).pass
+                @test compare_julia_wasm(_s1004_find; optimize=opt).pass
+            end
+        end
+
+        # --- Case conversion ---
+        _s1004_upper()::Int64 = length(uppercase("hello"))
+        _s1004_lower()::Int64 = length(lowercase("HELLO"))
+        _s1004_tc()::Int32 = titlecase("hello world") == "Hello World" ? Int32(1) : Int32(0)
+        _s1004_lcf()::Int32 = lowercasefirst("Hello") == "hello" ? Int32(1) : Int32(0)
+        _s1004_ucf()::Int32 = uppercasefirst("hello") == "Hello" ? Int32(1) : Int32(0)
+
+        @testset "case (upper/lower/titlecase/lcf/ucf)" begin
+            for opt in [false, true]
+                @test compare_julia_wasm(_s1004_upper; optimize=opt).pass
+                @test compare_julia_wasm(_s1004_lower; optimize=opt).pass
+                @test compare_julia_wasm(_s1004_tc; optimize=opt).pass
+                @test compare_julia_wasm(_s1004_lcf; optimize=opt).pass
+                @test compare_julia_wasm(_s1004_ucf; optimize=opt).pass
+            end
+        end
+
+        # --- Trim ops ---
+        _s1004_strip()::Int32 = strip("  hello  ") == "hello" ? Int32(1) : Int32(0)
+        _s1004_lstrip()::Int64 = length(lstrip("  hello  "))
+        _s1004_rstrip()::Int64 = length(rstrip("  hello  "))
+
+        @testset "trim (strip/lstrip/rstrip)" begin
+            for opt in [false, true]
+                @test compare_julia_wasm(_s1004_strip; optimize=opt).pass
+                @test compare_julia_wasm(_s1004_lstrip; optimize=opt).pass
+                @test compare_julia_wasm(_s1004_rstrip; optimize=opt).pass
+            end
+        end
+
+        # --- Transform ops ---
+        _s1004_chop_len()::Int64 = length(chop("hello"))
+        _s1004_chop_eq()::Int32 = chop("hello") == "hell" ? Int32(1) : Int32(0)
+        _s1004_rev()::Int32 = reverse("hello") == "olleh" ? Int32(1) : Int32(0)
+        _s1004_last()::Int64 = length(last("hello", 3))
+        _s1004_repeat()::Int32 = repeat("ha", 3) == "hahaha" ? Int32(1) : Int32(0)
+        _s1004_lpad()::Int64 = length(lpad("hi", 5))
+        _s1004_rpad()::Int64 = length(rpad("hi", 5))
+
+        @testset "transform (chop/reverse/last/repeat/lpad/rpad)" begin
+            for opt in [false, true]
+                @test compare_julia_wasm(_s1004_chop_len; optimize=opt).pass
+                @test compare_julia_wasm(_s1004_chop_eq; optimize=opt).pass
+                @test compare_julia_wasm(_s1004_rev; optimize=opt).pass
+                @test compare_julia_wasm(_s1004_last; optimize=opt).pass
+                @test compare_julia_wasm(_s1004_repeat; optimize=opt).pass
+                @test compare_julia_wasm(_s1004_lpad; optimize=opt).pass
+                @test compare_julia_wasm(_s1004_rpad; optimize=opt).pass
+            end
+        end
+
+        # --- Replace/split/join ---
+        _s1004_replace()::Int32 = replace("hello", "l" => "r") == "herro" ? Int32(1) : Int32(0)
+        _s1004_split()::Int64 = length(split("a,b,c", ","))
+        _s1004_join()::Int32 = join(split("a,b,c", ","), "-") == "a-b-c" ? Int32(1) : Int32(0)
+
+        @testset "replace/split/join" begin
+            for opt in [false, true]
+                @test compare_julia_wasm(_s1004_replace; optimize=opt).pass
+                @test compare_julia_wasm(_s1004_split; optimize=opt).pass
+                @test compare_julia_wasm(_s1004_join; optimize=opt).pass
+            end
+        end
+    end
+
 end
