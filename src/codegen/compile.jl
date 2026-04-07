@@ -371,6 +371,10 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     :grow_to!, :_foldl_impl,
     # FOUND-5001: sym_in needed for kwarg validation in count/argmax/argmin/etc.
     :sym_in,
+    # FOUND-5001: unsigned overlay (bitcast) needed by gcd, lcm, strip, titlecase, etc.
+    :unsigned,
+    # FOUND-5001: copy overlay (element-by-element) needed by sort, filter, etc.
+    :copy,
 ])
 
 """

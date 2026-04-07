@@ -252,55 +252,55 @@ end
     return @noinline rstrip(@noinline lstrip(s))
 end
 
-# NOTE: lstrip/rstrip reuse chop()'s single-loop copy pattern to avoid a codegen
-# bug where two jl_string_ptr traces in separate loops cause null pointer errors.
-# Strategy: copy ALL bytes in a single loop, mark which to keep via counters,
-# then build result from the kept portion.
+# NOTE: Two-pass approach avoids codegen bug where `===` comparison combined with
+# push! in a loop produces wrong results. Pass 1 finds the boundary index, Pass 2
+# does an unconditional copy. Uses `length(s)` instead of `ncodeunits(s)` to avoid
+# a separate ncodeunits aliasing bug with String(bytes) results.
+# Handles space (0x20), tab (0x09), newline (0x0a), CR (0x0d), VT (0x0b), FF (0x0c)
 @noinline @overlay WASM_METHOD_TABLE function Base.lstrip(s::String)
-    n = ncodeunits(s)
+    n = length(s)
     n == 0 && return s
-    # Single loop: copy all bytes, skipping leading whitespace
-    # Handles space (0x20), tab (0x09), newline (0x0a), CR (0x0d), VT (0x0b), FF (0x0c)
-    bytes = UInt8[]
-    skipping = true
-    i = 1
-    while i <= n
-        b = codeunit(s, i)
-        if skipping
-            if b == 0x20 || b == 0x09 || b == 0x0a || b == 0x0d || b == 0x0b || b == 0x0c
-                # still skipping whitespace
-            else
-                skipping = false
-                push!(bytes, b)
-            end
-        else
-            push!(bytes, b)
+    # Pass 1: find first non-whitespace byte index
+    start = 1
+    while start <= n
+        bi = Int64(codeunit(s, start))
+        # Use Int64 != comparisons (avoids UInt8 === codegen bug)
+        if bi != Int64(0x20) && bi != Int64(0x09) && bi != Int64(0x0a) && bi != Int64(0x0d) && bi != Int64(0x0b) && bi != Int64(0x0c)
+            break
         end
+        start += 1
+    end
+    start > n && return ""
+    # Pass 2: unconditional copy from start to end
+    bytes = UInt8[]
+    i = start
+    while i <= n
+        push!(bytes, codeunit(s, i))
         i += 1
     end
     return String(bytes)
 end
 
 @noinline @overlay WASM_METHOD_TABLE function Base.rstrip(s::String)
-    n = ncodeunits(s)
+    n = length(s)
     n == 0 && return s
-    # Single loop: copy all bytes, track last non-whitespace position.
-    # Then pop! trailing whitespace until we reach last non-ws char.
-    # Handles space (0x20), tab (0x09), newline (0x0a), CR (0x0d), VT (0x0b), FF (0x0c)
-    bytes = UInt8[]
-    keep = 0
-    i = 1
-    while i <= n
-        b = codeunit(s, i)
-        push!(bytes, b)
-        if !(b == 0x20 || b == 0x09 || b == 0x0a || b == 0x0d || b == 0x0b || b == 0x0c)
-            keep = i
+    # Scan backward from end to find last non-whitespace
+    last_nws = n
+    while last_nws >= 1
+        bi = Int64(codeunit(s, last_nws))
+        if bi != Int64(0x20) && bi != Int64(0x09) && bi != Int64(0x0a) && bi != Int64(0x0d) && bi != Int64(0x0b) && bi != Int64(0x0c)
+            break
         end
-        i += 1
+        last_nws -= 1
     end
-    # Pop trailing whitespace
-    while length(bytes) > keep
-        pop!(bytes)
+    last_nws < 1 && return ""
+    last_nws == n && return s
+    # Copy 1..last_nws (single loop, no dependency on previous loop variable)
+    bytes = UInt8[]
+    i = 1
+    while i <= last_nws
+        push!(bytes, codeunit(s, i))
+        i += 1
     end
     return String(bytes)
 end
