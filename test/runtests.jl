@@ -9450,22 +9450,39 @@ console.log(JSON.stringify({
 
     @testset "STRESS-1003: Array Mutation Type Matrix" begin
 
+        # --- Int64 variants ---
         _s1003_push_i64(v::Vector{Int64})::Vector{Int64} = (push!(v, Int64(99)); v)
-        _s1003_push_f64(v::Vector{Float64})::Vector{Float64} = (push!(v, 99.0); v)
         _s1003_pop_i64(v::Vector{Int64})::Int64 = pop!(v)
-        _s1003_pop_f64(v::Vector{Float64})::Float64 = pop!(v)
         _s1003_pushf_i64(v::Vector{Int64})::Vector{Int64} = (pushfirst!(v, Int64(0)); v)
         _s1003_popf_i64(v::Vector{Int64})::Int64 = popfirst!(v)
         _s1003_ins_i64(v::Vector{Int64})::Vector{Int64} = (insert!(v, Int64(2), Int64(99)); v)
         _s1003_del_i64(v::Vector{Int64})::Vector{Int64} = (deleteat!(v, Int64(2)); v)
         _s1003_empty_i64(v::Vector{Int64})::Int64 = (empty!(v); Int64(length(v)))
         _s1003_sorti_i64(v::Vector{Int64})::Vector{Int64} = (sort!(v); v)
-        _s1003_sorti_f64(v::Vector{Float64})::Vector{Float64} = (sort!(v); v)
         _s1003_revi_i64(v::Vector{Int64})::Vector{Int64} = (reverse!(v); v)
         _s1003_resize_i64(v::Vector{Int64})::Int64 = (resize!(v, Int64(5)); Int64(length(v)))
         _s1003_splice_i64(v::Vector{Int64})::Int64 = splice!(v, Int64(2))
+        _s1003_append_i64(v::Vector{Int64})::Vector{Int64} = (append!(v, Int64[10,20]); v)
+        _s1003_prepend_i64(v::Vector{Int64})::Vector{Int64} = (prepend!(v, Int64[10,20]); v)
+        _s1003_fill_i64(v::Vector{Int64})::Vector{Int64} = fill!(v, Int64(7))
 
-        @testset "push!/pop!" begin
+        # --- Float64 variants ---
+        _s1003_push_f64(v::Vector{Float64})::Vector{Float64} = (push!(v, 99.0); v)
+        _s1003_pop_f64(v::Vector{Float64})::Float64 = pop!(v)
+        _s1003_pushf_f64(v::Vector{Float64})::Vector{Float64} = (pushfirst!(v, 0.0); v)
+        _s1003_popf_f64(v::Vector{Float64})::Float64 = popfirst!(v)
+        _s1003_ins_f64(v::Vector{Float64})::Vector{Float64} = (insert!(v, Int64(2), 99.0); v)
+        _s1003_del_f64(v::Vector{Float64})::Vector{Float64} = (deleteat!(v, Int64(2)); v)
+        _s1003_empty_f64(v::Vector{Float64})::Int64 = (empty!(v); Int64(length(v)))
+        _s1003_sorti_f64(v::Vector{Float64})::Vector{Float64} = (sort!(v); v)
+        _s1003_revi_f64(v::Vector{Float64})::Vector{Float64} = (reverse!(v); v)
+        _s1003_resize_f64(v::Vector{Float64})::Int64 = (resize!(v, Int64(5)); Int64(length(v)))
+        _s1003_splice_f64(v::Vector{Float64})::Float64 = splice!(v, Int64(2))
+        _s1003_append_f64(v::Vector{Float64})::Vector{Float64} = (append!(v, Float64[10.0,20.0]); v)
+        _s1003_prepend_f64(v::Vector{Float64})::Vector{Float64} = (prepend!(v, Float64[10.0,20.0]); v)
+        _s1003_fill_f64(v::Vector{Float64})::Vector{Float64} = fill!(v, 7.0)
+
+        @testset "push!/pop! (Int64 + Float64)" begin
             for opt in [false, true]
                 @test compare_julia_wasm_vec(_s1003_push_i64, Int64[1,2,3]; optimize=opt).pass
                 @test compare_julia_wasm_vec(_s1003_push_f64, Float64[1.0,2.0,3.0]; optimize=opt).pass
@@ -9474,28 +9491,47 @@ console.log(JSON.stringify({
             end
         end
 
-        @testset "pushfirst!/popfirst!" begin
+        @testset "pushfirst!/popfirst! (Int64 + Float64)" begin
             for opt in [false, true]
                 @test compare_julia_wasm_vec(_s1003_pushf_i64, Int64[1,2,3]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1003_pushf_f64, Float64[1.0,2.0,3.0]; optimize=opt).pass
                 @test compare_julia_wasm_vec(_s1003_popf_i64, Int64[1,2,3]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1003_popf_f64, Float64[1.0,2.0,3.0]; optimize=opt).pass
             end
         end
 
-        @testset "insert!/deleteat!/empty!" begin
+        @testset "insert!/deleteat!/empty! (Int64 + Float64)" begin
             for opt in [false, true]
                 @test compare_julia_wasm_vec(_s1003_ins_i64, Int64[1,2,3]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1003_ins_f64, Float64[1.0,2.0,3.0]; optimize=opt).pass
                 @test compare_julia_wasm_vec(_s1003_del_i64, Int64[1,2,3]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1003_del_f64, Float64[1.0,2.0,3.0]; optimize=opt).pass
                 @test compare_julia_wasm_vec(_s1003_empty_i64, Int64[1,2,3]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1003_empty_f64, Float64[1.0,2.0,3.0]; optimize=opt).pass
             end
         end
 
-        @testset "sort!/reverse!/resize!/splice!" begin
+        @testset "sort!/reverse!/resize!/splice! (Int64 + Float64)" begin
             for opt in [false, true]
                 @test compare_julia_wasm_vec(_s1003_sorti_i64, Int64[3,1,2]; optimize=opt).pass
                 @test compare_julia_wasm_vec(_s1003_sorti_f64, Float64[3.0,1.0,2.0]; optimize=opt).pass
                 @test compare_julia_wasm_vec(_s1003_revi_i64, Int64[1,2,3]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1003_revi_f64, Float64[1.0,2.0,3.0]; optimize=opt).pass
                 @test compare_julia_wasm_vec(_s1003_resize_i64, Int64[1,2,3]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1003_resize_f64, Float64[1.0,2.0,3.0]; optimize=opt).pass
                 @test compare_julia_wasm_vec(_s1003_splice_i64, Int64[10,20,30]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1003_splice_f64, Float64[10.0,20.0,30.0]; optimize=opt).pass
+            end
+        end
+
+        @testset "append!/prepend!/fill! (Int64 + Float64)" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s1003_append_i64, Int64[1,2,3]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1003_append_f64, Float64[1.0,2.0,3.0]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1003_prepend_i64, Int64[1,2,3]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1003_prepend_f64, Float64[1.0,2.0,3.0]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1003_fill_i64, Int64[1,2,3]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1003_fill_f64, Float64[1.0,2.0,3.0]; optimize=opt).pass
             end
         end
     end
