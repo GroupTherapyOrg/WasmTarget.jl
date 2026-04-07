@@ -155,8 +155,14 @@ function format_js_arg(arg)
         # Use BigInt with string argument to preserve precision
         # BigInt(number) loses precision for large numbers, but BigInt("string") doesn't
         return "BigInt(\"$(arg)\")"
+    elseif arg isa UInt64
+        # UInt64 maps to i64 in Wasm — pass as BigInt of the reinterpreted signed value
+        return "BigInt(\"$(reinterpret(Int64, arg))\")"
     elseif arg isa Int32
         return string(arg)
+    elseif arg isa UInt32
+        # UInt32 maps to i32 in Wasm — pass as reinterpreted signed value
+        return string(reinterpret(Int32, arg))
     elseif arg isa Float64 || arg isa Float32
         return string(arg)
     elseif arg isa Char
