@@ -54,6 +54,32 @@ end
     return sort!(copy(v); kws...)
 end
 
+# ─── String Concatenation Overlays ────────────────────────────────────────
+# Why: Base.*(::String, ::String) calls string() which uses print_to_string/IOBuffer
+#      with deep dispatch chains and foreigncalls. Pure Julia byte-copy works in WASM.
+# Remove when: codegen handles IOBuffer-based string construction
+
+@noinline @overlay WASM_METHOD_TABLE function Base.:*(a::String, b::String)
+    al = ncodeunits(a)
+    bl = ncodeunits(b)
+    bytes = UInt8[]
+    i = 1
+    while i <= al
+        push!(bytes, codeunit(a, i))
+        i += 1
+    end
+    i = 1
+    while i <= bl
+        push!(bytes, codeunit(b, i))
+        i += 1
+    end
+    return String(bytes)
+end
+
+@noinline @overlay WASM_METHOD_TABLE function Base.:*(a::String, b::String, c::String)
+    return (a * b) * c
+end
+
 # ─── String Comparison Overlays ────────────────────────────────────────────
 # Base implementations use foreigncall :memcmp which can't run in WASM.
 # Pure Julia byte-by-byte comparisons using ncodeunits + codeunit.
@@ -142,7 +168,7 @@ end
     return String(bytes)
 end
 
-@overlay WASM_METHOD_TABLE function Base.titlecase(s::String; wordsep=nothing, strict::Bool=true)
+@noinline function _wasm_titlecase_impl(s::String, strict::Bool)
     n = ncodeunits(s)
     n == 0 && return s
     bytes = UInt8[]
@@ -168,7 +194,11 @@ end
     return String(bytes)
 end
 
-@overlay WASM_METHOD_TABLE function Base.Unicode.lowercasefirst(s::String)
+@overlay WASM_METHOD_TABLE function Base.titlecase(s::String; wordsep=nothing, strict::Bool=true)
+    return _wasm_titlecase_impl(s, strict)
+end
+
+@noinline function _wasm_lowercasefirst_impl(s::String)
     n = ncodeunits(s)
     n == 0 && return s
     bytes = UInt8[]
@@ -186,7 +216,11 @@ end
     return String(bytes)
 end
 
-@overlay WASM_METHOD_TABLE function Base.Unicode.uppercasefirst(s::String)
+@overlay WASM_METHOD_TABLE function Base.Unicode.lowercasefirst(s::String)
+    return _wasm_lowercasefirst_impl(s)
+end
+
+@noinline function _wasm_uppercasefirst_impl(s::String)
     n = ncodeunits(s)
     n == 0 && return s
     bytes = UInt8[]
@@ -204,6 +238,10 @@ end
     return String(bytes)
 end
 
+@overlay WASM_METHOD_TABLE function Base.Unicode.uppercasefirst(s::String)
+    return _wasm_uppercasefirst_impl(s)
+end
+
 # ─── strip Overlay ─────────────────────────────────────────────────────────
 # Why: Base.strip uses SubString ref cast that codegen can't handle.
 #      Delegate to working lstrip + rstrip overlays.
@@ -218,17 +256,20 @@ end
 # bug where two jl_string_ptr traces in separate loops cause null pointer errors.
 # Strategy: copy ALL bytes in a single loop, mark which to keep via counters,
 # then build result from the kept portion.
-@overlay WASM_METHOD_TABLE function Base.lstrip(s::String)
+@noinline @overlay WASM_METHOD_TABLE function Base.lstrip(s::String)
     n = ncodeunits(s)
     n == 0 && return s
-    # Single loop: copy all bytes, skipping leading spaces
+    # Single loop: copy all bytes, skipping leading whitespace
+    # Handles space (0x20), tab (0x09), newline (0x0a), CR (0x0d), VT (0x0b), FF (0x0c)
     bytes = UInt8[]
     skipping = true
     i = 1
     while i <= n
         b = codeunit(s, i)
         if skipping
-            if b != 0x20
+            if b == 0x20 || b == 0x09 || b == 0x0a || b == 0x0d || b == 0x0b || b == 0x0c
+                # still skipping whitespace
+            else
                 skipping = false
                 push!(bytes, b)
             end
@@ -240,23 +281,24 @@ end
     return String(bytes)
 end
 
-@overlay WASM_METHOD_TABLE function Base.rstrip(s::String)
+@noinline @overlay WASM_METHOD_TABLE function Base.rstrip(s::String)
     n = ncodeunits(s)
     n == 0 && return s
-    # Single loop: copy all bytes, track last non-space position.
-    # Then pop! trailing spaces until we reach last non-space.
+    # Single loop: copy all bytes, track last non-whitespace position.
+    # Then pop! trailing whitespace until we reach last non-ws char.
+    # Handles space (0x20), tab (0x09), newline (0x0a), CR (0x0d), VT (0x0b), FF (0x0c)
     bytes = UInt8[]
     keep = 0
     i = 1
     while i <= n
         b = codeunit(s, i)
         push!(bytes, b)
-        if b != 0x20
+        if !(b == 0x20 || b == 0x09 || b == 0x0a || b == 0x0d || b == 0x0b || b == 0x0c)
             keep = i
         end
         i += 1
     end
-    # Pop trailing spaces
+    # Pop trailing whitespace
     while length(bytes) > keep
         pop!(bytes)
     end
