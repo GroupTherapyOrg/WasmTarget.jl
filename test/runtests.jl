@@ -9246,4 +9246,82 @@ console.log(JSON.stringify({
         end
     end
 
+    # ================================================================
+    # STRESS-1001: Math Functions Type Matrix
+    # ================================================================
+    # Float32 + Float64 for all math functions, raw + binaryen.
+
+    @testset "STRESS-1001: Math Type Matrix" begin
+
+        # --- WASM-native math (Float32 + Float64) ---
+        @testset "WASM-native math Float32/Float64" begin
+            for f in [sqrt, abs, floor, ceil, round, trunc]
+                @test compare_julia_wasm(f, Float32(4.0f0)).pass
+                @test compare_julia_wasm(f, Float32(4.0f0); optimize=true).pass
+                @test compare_julia_wasm(f, Float64(4.0)).pass
+                @test compare_julia_wasm(f, Float64(4.0); optimize=true).pass
+            end
+        end
+
+        # --- Float operations ---
+        @testset "copysign/flipsign/hypot Float32/Float64" begin
+            for f in [copysign, flipsign]
+                @test compare_julia_wasm(f, Float32(1.0f0), Float32(-1.0f0)).pass
+                @test compare_julia_wasm(f, Float32(1.0f0), Float32(-1.0f0); optimize=true).pass
+                @test compare_julia_wasm(f, Float64(1.0), Float64(-1.0)).pass
+                @test compare_julia_wasm(f, Float64(1.0), Float64(-1.0); optimize=true).pass
+            end
+            @test compare_julia_wasm(hypot, Float32(3.0f0), Float32(4.0f0)).pass
+            @test compare_julia_wasm(hypot, Float32(3.0f0), Float32(4.0f0); optimize=true).pass
+            @test compare_julia_wasm(hypot, Float64(3.0), Float64(4.0)).pass
+            @test compare_julia_wasm(hypot, Float64(3.0), Float64(4.0); optimize=true).pass
+        end
+
+        # --- fma/muladd ---
+        @testset "fma/muladd Float32/Float64" begin
+            for f in [fma, muladd]
+                @test compare_julia_wasm(f, Float32(2.0f0), Float32(3.0f0), Float32(1.0f0)).pass
+                @test compare_julia_wasm(f, Float32(2.0f0), Float32(3.0f0), Float32(1.0f0); optimize=true).pass
+                @test compare_julia_wasm(f, Float64(2.0), Float64(3.0), Float64(1.0)).pass
+                @test compare_julia_wasm(f, Float64(2.0), Float64(3.0), Float64(1.0); optimize=true).pass
+            end
+        end
+
+        # --- Type conversions ---
+        @testset "type conversions" begin
+            @test compare_julia_wasm(Float64, Int32(5)).pass
+            @test compare_julia_wasm(Float64, Int32(5); optimize=true).pass
+            @test compare_julia_wasm(Float64, Int64(5)).pass
+            @test compare_julia_wasm(Float64, Int64(5); optimize=true).pass
+            @test compare_julia_wasm(Float64, Float32(3.14f0)).pass
+            @test compare_julia_wasm(Float64, Float32(3.14f0); optimize=true).pass
+            @test compare_julia_wasm(Float32, Int32(5)).pass
+            @test compare_julia_wasm(Float32, Int32(5); optimize=true).pass
+            @test compare_julia_wasm(Int32, Int64(42)).pass
+            @test compare_julia_wasm(Int32, Int64(42); optimize=true).pass
+            @test compare_julia_wasm(Int64, Int32(42)).pass
+            @test compare_julia_wasm(Int64, Int32(42); optimize=true).pass
+        end
+
+        # --- Complex math (stackifier) ---
+        @testset "trig/exp/log Float64" begin
+            for f in [sin, cos, tan, exp, log, log2, log10, asin, acos, atan]
+                @test compare_julia_wasm(f, Float64(1.0)).pass
+                @test compare_julia_wasm(f, Float64(1.0); optimize=true).pass
+            end
+        end
+
+        @testset "trig/log Float32" begin
+            for f in [sin, cos, tan, log, log2, log10, asin, acos, atan]
+                @test compare_julia_wasm(f, Float32(1.0f0)).pass
+                @test compare_julia_wasm(f, Float32(1.0f0); optimize=true).pass
+            end
+        end
+
+        # exp(Float32) has a codegen type mismatch bug (i64 vs anyref in local)
+        @testset "exp(Float32) — known bug" begin
+            @test_broken compare_julia_wasm(exp, Float32(1.0f0)).pass
+        end
+    end
+
 end
