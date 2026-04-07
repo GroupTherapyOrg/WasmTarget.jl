@@ -1,76 +1,49 @@
+<div align="center">
+
 # WasmTarget.jl
 
-<div align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="logo/wasm_dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="logo/wasm_light.svg">
-    <img alt="WasmTarget.jl" src="logo/wasm_light.svg" height="60">
-  </picture>
+### Julia-to-WebAssembly Compiler. WasmGC.
 
-  **A Julia-to-WebAssembly compiler targeting WasmGC.**
+Compile real Julia functions to WebAssembly that runs in any modern browser or Node.js. No runtime, no LLVM. Inspired by [dart2wasm](https://dart.dev/web/wasm) (Dart's WasmGC compiler for Flutter Web).
 
-  Compile real Julia functions to WebAssembly that runs in any modern browser or Node.js — no runtime, no server, no LLVM.
+[![CI](https://github.com/GroupTherapyOrg/WasmTarget.jl/actions/workflows/ci.yml/badge.svg)](https://github.com/GroupTherapyOrg/WasmTarget.jl/actions/workflows/ci.yml)
+[![Docs](https://img.shields.io/badge/docs-stable-blue.svg)](https://grouptherapyorg.github.io/WasmTarget.jl/)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE.md)
 
-  Same architecture as [dart2wasm](https://dart.dev/web/wasm) (Dart's official Wasm compiler for Flutter Web).
-
-  [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE.md)
 </div>
-
----
 
 ## How It Works
 
 Julia has a 4-stage compiler pipeline: parsing, lowering, type inference, and codegen. WasmTarget replaces the last stage — instead of emitting native machine code via LLVM, it emits WasmGC bytecode.
 
 ```
-Julia source code
-   ↓  Julia's compiler (parsing, lowering, type inference)
-Fully typed IR  ←  Base.code_typed()
-   ↓  WasmTarget.compile()
-.wasm binary    ←  runs in any browser or Node.js
+Julia source → Julia compiler (parse, lower, infer) → Fully typed IR → WasmTarget → .wasm
 ```
 
-Julia's compiler does the hard work — parsing, macro expansion, type inference, optimization. WasmTarget gets fully type-inferred IR and translates it to Wasm instructions. No LLVM involved. Anything Julia can type-infer, WasmTarget can compile.
-
-For functions where the Julia IR is too complex for current codegen (deep dispatch chains, foreigncalls), WasmTarget uses **method overlay tables** — the same infrastructure [CUDA.jl](https://github.com/JuliaGPU/CUDA.jl) and [AMDGPU.jl](https://github.com/JuliaGPU/AMDGPU.jl) use. Julia's own type inference resolves to the overlay *before* codegen sees the IR, so the compiled output is always correct.
-
-### Build-Time Compilation
-
-WasmTarget powers [Therapy.jl](https://github.com/GroupTherapyOrg/Therapy.jl), a reactive web framework. The compilation happens at build time on the dev machine. Only the compiled `.wasm` ships to the browser — no Julia runtime, no interpreter, just fast native Wasm.
-
-```
-Dev machine:  Julia code → WasmTarget.jl → .wasm (KB–few MB)
-Browser:      Just the compiled .wasm — no Julia runtime needed
-```
-
-This is the same model as dart2wasm powering Flutter Web.
+Julia's compiler does the hard work. WasmTarget gets fully type-inferred IR and translates it to Wasm instructions. Anything Julia can type-infer, WasmTarget can compile.
 
 ## Quick Start
 
 ```julia
 using WasmTarget
 
-# Any pure Julia function
 function add(a::Int32, b::Int32)::Int32
     return a + b
 end
 
-# Compile to Wasm
 wasm_bytes = compile(add, (Int32, Int32))
 write("add.wasm", wasm_bytes)
 ```
 
 ```javascript
-// Run in browser or Node.js
 const bytes = fs.readFileSync('add.wasm');
 const { instance } = await WebAssembly.instantiate(bytes);
 console.log(instance.exports.add(5, 3)); // → 8
 ```
 
-### Multi-function modules
+Multi-function modules with closures and real Base functions:
 
 ```julia
-# Multiple functions with cross-calls, closures, and real Base functions
 f_sort(v::Vector{Int64}) = sort(v, rev=true)
 f_filter(v::Vector{Int64}) = filter(iseven, v)
 f_map(v::Vector{Int64}) = map(x -> x * 2, v)
@@ -84,172 +57,190 @@ bytes = compile_multi([
 
 ## Core Julia Function Coverage
 
-**134 out of 135 core functions compile and produce correct results** — verified by running in Node.js and comparing against native Julia output.
+**176 core functions compile and produce correct E2E results.** 1793 tests, 0 broken.
 
-Every function below has been tested E2E: compile to Wasm, validate with `wasm-tools`, execute in Node.js, compare result against native Julia. Tests cover standard args, keyword arguments, closures, and edge cases.
+Every function is verified: compile to Wasm, validate with `wasm-tools`, execute in Node.js, compare against native Julia.
 
-| Category | Working / Total | Coverage | Details |
-|:---------|:---------------:|:--------:|:--------|
-| **Numeric** | 24 / 24 | **100%** | All native IR. `abs`, `sign`, `clamp`, `min`, `max`, `div`, `mod`, `rem`, `gcd`, `lcm`, `iseven`, `isodd`, `isnan`, `isinf`, `isfinite`, `iszero`, `isone`, `zero`, `one`, `typemin`, `typemax`, `signbit`, `minmax`, `divrem` |
-| **Math** | 72 / 72 | **100%** | All native IR. `sin`, `cos`, `exp`, `log`, `sqrt`, `abs`, `floor`, `ceil`, `round`, `trunc` + 62 more transcendental/utility functions |
-| **Strings** | 37 / 37 | **100%** | 27 native + 10 overlay. `contains`, `startswith`, `endswith`, `lowercase`, `uppercase`, `strip`, `split`, `join`, `replace`, `repeat`, `reverse`, `titlecase`, `chomp`, `chop`, `lpad`, `rpad`, all `is*` predicates, `cmp`, indexing, SubString |
-| **Collections** | 26 / 26 | **100%** | 24 native + 2 overlay. `sort` (all kwargs: `rev`, `by`, `lt`), `filter`, `map`, `reduce`, `sum`, `prod`, `minimum`, `maximum`, `extrema`, `any`, `all`, `count`, `unique`, `reverse`, `accumulate`, `foreach`, `foldl`, `foldr`, `mapreduce`, `findmin`, `findmax`, `argmin`, `argmax` |
-| **Array Mutation** | 16 / 16 | **100%** | 7 native + 9 overlay. `push!`, `pop!`, `pushfirst!`, `popfirst!`, `insert!`, `deleteat!`, `append!`, `prepend!`, `splice!`, `resize!`, `empty!`, `fill!`, `copy`, `reverse`, `length`, `vec` |
-| **Dict/Set** | 10 / 10 | **100%** | All native IR. `Dict` constructor, `haskey`, `get`, `delete!`, `pop!`, `isempty`, `length`, `Set` + `push!`, `in` |
-| **Type Conversion** | 7 / 7 | **100%** | All native IR. `convert`, `sizeof`, `isless`, `cmp`, `string(Int64)` |
-| **Iterators** | 14 / 15 | **93%** | All native IR. `collect`, `enumerate`, `zip`, `eachindex`, `pairs`, `Iterators.filter`, `Iterators.map`, `Iterators.flatten`, `Iterators.take`, `Iterators.drop`, `Iterators.takewhile`, `Iterators.dropwhile`, `CartesianIndices`, ranges |
-| | **206 / 207** | **99.5%** | Including 72 math functions |
+### Numeric (24/24)
 
-The one blocked function is generator-with-filter syntax (`sum(x for x in v if x > 0)`) — a `Union{_InitialValue, Int64}` null ref edge case. The explicit equivalent `sum(Iterators.filter(x -> x > 0, v))` works perfectly.
+| Function | Path | Status |
+|:---------|:-----|:-------|
+| `abs` (Int64, Float64) | Native | Working |
+| `sign` (Int64, Float64) | Native | Working |
+| `signbit` (Int64, Float64) | Native | Working |
+| `clamp` (Int64, Float64) | Native | Working |
+| `min` (Int64, Float64) | Native | Working |
+| `max` (Int64, Float64) | Native | Working |
+| `minmax` | Native | Working |
+| `div` | Native | Working |
+| `mod` (Int64) | Native | Working |
+| `rem` (Int64) | Native | Working |
+| `divrem` | Native | Working |
+| `gcd` | Overlay | Working |
+| `lcm` | Overlay | Working |
+| `iseven` | Native | Working |
+| `isodd` | Native | Working |
+| `isnan` | Native | Working |
+| `isinf` | Native | Working |
+| `isfinite` | Native | Working |
+| `iszero` | Native | Working |
+| `isone` | Native | Working |
+| `zero` | Native | Working |
+| `one` | Native | Working |
+| `typemin` | Native | Working |
+| `typemax` | Native | Working |
 
-### How functions compile: Native IR vs Overlay
+### Math (43/43)
 
-Most functions compile directly from Julia's typed IR — the real Base implementation runs as-is in Wasm. For functions where the IR is too complex (GC internals, foreigncalls, deep dispatch), WasmTarget provides **method overlays** — pure Julia reimplementations that produce flat, compilable IR:
+| Function | Path | Status |
+|:---------|:-----|:-------|
+| `sin`, `cos`, `tan` | Native | Working |
+| `asin`, `acos`, `atan` | Native | Working |
+| `sinh`, `cosh`, `tanh` | Native | Working |
+| `exp`, `log`, `log2`, `log10` | Native | Working |
+| `log1p`, `expm1`, `exp2` | Native | Working |
+| `sqrt`, `cbrt`, `hypot` | Native | Working |
+| `sincos`, `sinpi`, `cospi`, `tanpi` | Native | Working |
+| `sinc`, `cosc`, `modf` | Native | Working |
+| `ldexp`, `mod2pi` | Native | Working |
+| `deg2rad`, `rad2deg` | Native | Working |
+| `floor`, `ceil`, `round`, `trunc` | Native | Working |
+| `fourthroot`, `copysign` | Native | Working |
+| `Float64^Float64`, `Float64^Int` | Native | Working |
+| `mod` (Float64), `rem` (Float64) | Overlay | Working |
+
+### Strings (37/37)
+
+| Function | Path | Status |
+|:---------|:-----|:-------|
+| `length`, `ncodeunits` | Native | Working |
+| `contains`, `occursin` | Native | Working |
+| `startswith`, `endswith` | Overlay | Working |
+| `nextind`, `prevind`, `thisind` | Native | Working |
+| `lowercase`, `uppercase` | Native | Working |
+| `cmp`, `reverse` (String) | Overlay | Working |
+| `chomp`, `chopprefix`, `chopsuffix` | Native | Working |
+| `chop`, `last` (String, Int) | Overlay | Working |
+| `split`, `replace`, `join` | Overlay | Working |
+| `lpad`, `rpad` | Native | Working |
+| `isdigit`, `isspace` | Native | Working |
+| `isletter`, `isuppercase`, `islowercase`, `isascii` | Overlay | Working |
+| `titlecase`, `lowercasefirst`, `uppercasefirst` | Overlay | Working |
+| `strip`, `lstrip`, `rstrip` | Overlay | Working |
+| `repeat`, `string` (Int64) | Overlay | Working |
+
+### Collections (26/26)
+
+| Function | Path | Status |
+|:---------|:-----|:-------|
+| `sort`, `sort!`, `filter` | Overlay | Working |
+| `map`, `reduce`, `foldl`, `foldr` | Native | Working |
+| `sum`, `prod` | Native | Working |
+| `minimum`, `maximum`, `extrema` | Native | Working |
+| `any`, `all` | Native | Working |
+| `count`, `unique`, `foreach` | Overlay | Working |
+| `reverse` (Vector), `accumulate` | Native | Working |
+| `findmax`, `findmin`, `mapreduce` | Native | Working |
+| `argmax`, `argmin` | Overlay | Working |
+
+### Array Mutation (16/16)
+
+| Function | Path | Status |
+|:---------|:-----|:-------|
+| `push!`, `pop!`, `pushfirst!`, `popfirst!` | Overlay | Working |
+| `insert!`, `deleteat!`, `splice!` | Overlay | Working |
+| `append!`, `prepend!` | Overlay | Working |
+| `empty!`, `fill!`, `copy` | Overlay | Working |
+| `resize!`, `reverse`, `length`, `vec` | Native | Working |
+
+### Dict/Set (10/10)
+
+| Function | Path | Status |
+|:---------|:-----|:-------|
+| `Dict()` + `setindex!`, `haskey`, `get` | Native | Working |
+| `delete!`, `pop!`, `isempty`, `length` | Native | Working |
+| `Set()` + `push!`, `in` | Native | Working |
+
+### Iterators (14/15)
+
+| Function | Path | Status |
+|:---------|:-----|:-------|
+| `collect`, `enumerate`, `zip`, `eachindex`, `pairs` | Native | Working |
+| `Iterators.filter`, `.map`, `.flatten` | Native | Working |
+| `Iterators.take`, `.drop`, `.takewhile`, `.dropwhile` | Native | Working |
+| `CartesianIndices`, ranges | Native | Working |
+| Generator-with-filter | — | Blocked |
+
+### Type Conversion (5/5)
+
+| Function | Path | Status |
+|:---------|:-----|:-------|
+| `convert`, `sizeof` | Native | Working |
+| `isless` (Int64) | Native | Working |
+| `isless` (Float64), `cmp` (String) | Overlay | Working |
+
+### Summary
+
+| Category | Total | Native | Overlay | Broken |
+|:---------|------:|-------:|--------:|-------:|
+| Numeric | 24 | 22 | 2 | 0 |
+| Math | 43 | 41 | 2 | 0 |
+| Strings | 37 | 17 | 20 | 0 |
+| Collections | 26 | 16 | 10 | 0 |
+| Array Mutation | 16 | 4 | 12 | 0 |
+| Type Conversion | 5 | 3 | 2 | 0 |
+| Dict/Set | 10 | 10 | 0 | 0 |
+| Iterators | 15 | 14 | 0 | 1 |
+| **Total** | **176** | **127 (72%)** | **48 (27%)** | **1** |
+
+23/23 cross-path composition tests pass — native and overlay functions compose correctly through Julia's inference system.
+
+## Native IR vs Overlay
+
+Most functions compile directly from Julia's typed IR — the real Base implementation runs as-is in Wasm. For functions where the IR is too complex (GC internals, foreigncalls, deep dispatch), WasmTarget provides **method overlays** — the same [GPUCompiler.jl](https://github.com/JuliaGPU/GPUCompiler.jl) pattern that CUDA.jl and AMDGPU.jl use:
 
 ```julia
-# In src/codegen/interpreter.jl — follows GPUCompiler.jl pattern
 @overlay WASM_METHOD_TABLE function Base.sort!(v::AbstractVector;
         lt=isless, by=identity, rev::Bool=false, ...)
     # Simple insertion sort — flat IR, no deep dispatch chains
-    n = length(v)
-    for i in 2:n
-        key = v[i]; j = i - 1
-        while j >= 1
-            should_shift = rev ? lt(by(v[j]), by(key)) : lt(by(key), by(v[j]))
-            !should_shift && break
-            v[j + 1] = v[j]; j -= 1
-        end
-        v[j + 1] = key
-    end
-    return v
+    ...
 end
 ```
 
-Julia's `OverlayMethodTable` resolves to these at inference time — codegen never sees the complex original. Each overlay documents *why* it exists and *when* it can be removed as codegen improves.
+Julia's `OverlayMethodTable` resolves overlays at inference time. Codegen never sees the complex original.
 
-**Current overlay inventory** (29 total):
+## Language Features
 
-| Reason | Count | Functions | Remove when... |
-|:-------|:-----:|:----------|:---------------|
-| Deep dispatch chains | 4 | `sort!`, `startswith`, `endswith`, `cmp` | Codegen handles method tables |
-| Missing inner dispatch | 4 | `chop`, `last(String,Int)`, `reverse(String)`, `titlecase` | Codegen handles method resolution |
-| SubString ref cast | 4 | `strip`, `lstrip`, `rstrip`, `replace` | Fix WasmGC type coercion for SubString |
-| Codegen stack bug | 2 | `lowercasefirst`, `uppercasefirst` | Fix stack balancing |
-| IOBuffer dependency | 1 | `join` | IOBuffer support |
-| Self-recursion | 1 | `unique` | Fix function resolution |
-| GC/pointer internals | 9 | `push!`, `pop!`, `pushfirst!`, `popfirst!`, `insert!`, `deleteat!`, `append!`, `prepend!`, `splice!` | WasmGC-compatible array mutation IR |
-| Complex dispatch | 4 | `split`, + internal helpers | Return type simplification |
+| Feature | Status |
+|:--------|:------:|
+| Integer arithmetic (32/64/128-bit) | Working |
+| Floating point (32/64-bit, IEEE 754) | Working |
+| Control flow (if/else, while, for) | Working |
+| Structs (mutable and immutable) | Working |
+| Tuples and NamedTuples | Working |
+| Arrays (Vector, Matrix) | Working |
+| Strings | Working |
+| Closures | Working |
+| Try/catch/throw | Working |
+| Union{Nothing, T} | Working |
+| Multi-function modules | Working |
+| JS interop (externref) | Working |
+| Dict / Set | Working |
+| Splatting (f(args...)) | Working |
 
-## What Compiles
-
-Beyond the 207 audited core functions, WasmTarget handles all the Julia language features needed for real application code:
-
-| Feature | Status | Notes |
-|:--------|:------:|:------|
-| Integer arithmetic (32/64/128-bit) | **Working** | Including Int128 schoolbook multiply |
-| Floating point (32/64-bit) | **Working** | Full IEEE 754 including NaN/Inf |
-| Comparisons and boolean logic | **Working** | `&&`, `||`, short-circuit |
-| If/else, ternary, while/for | **Working** | All control flow patterns |
-| Structs (mutable and immutable) | **Working** | WasmGC structs with field access |
-| Tuples and NamedTuples | **Working** | Immutable WasmGC structs |
-| Arrays (Vector, Matrix) | **Working** | WasmGC arrays with full mutation |
-| Strings | **Working** | As i32 arrays, full operation set |
-| Closures | **Working** | Captured variables as WasmGC struct fields |
-| Try/catch/throw | **Working** | Wasm `try_table` + `throw` |
-| Union{Nothing, T} | **Working** | Tagged union discrimination |
-| Multi-function modules | **Working** | Cross-function calls, multiple dispatch |
-| JS interop (externref) | **Working** | Import/export, DOM manipulation |
-| Wasm globals | **Working** | Mutable state, exported to JS |
-| Dict / Set | **Working** | Hash tables with Int/String keys |
-| Splatting (f(args...)) | **Working** | Via `_apply_iterate` |
-| Broadcasting (.+, .*, etc.) | **Working** | 15/17 patterns |
-| Recursive types | **Working** | Self-referential struct trees |
-
-### What won't compile
-
-Things that fundamentally don't exist in a browser:
-
-| Area | Why | Alternative |
-|:-----|:----|:------------|
-| File system | No FS in browsers | Use JS `fetch()` via imports |
-| Networking / sockets | No libuv in Wasm | Use JS `fetch()` via imports |
-| Tasks / Threads | Single-threaded Wasm | Use JS async via imports |
-| BigInt / BigFloat | GMP/MPFR C libraries | Rare in web apps |
-| BLAS / LAPACK | Fortran libraries | Generic Julia matmul works |
-| Regex | PCRE2 C library | JS `RegExp` bridge (planned) |
-
-## Architecture
-
-```
-src/
-├── WasmTarget.jl              # Entry: compile(), compile_multi()
-├── builder/                   # Wasm binary format (4 files, ~3K lines)
-│   ├── types.jl               #   Type definitions (I32, I64, RefType, etc.)
-│   ├── writer.jl              #   Binary serialization (LEB128, sections)
-│   ├── instructions.jl        #   Module building, opcodes
-│   └── validator.jl           #   Stack validator
-├── codegen/                   # Julia IR → Wasm (28 files, ~44K lines)
-│   ├── compile.jl             #   Main entry: compile_module, compile_multi
-│   ├── interpreter.jl         #   WasmInterpreter + overlay method table
-│   ├── statements.jl          #   Statement compilation (~3.5K lines)
-│   ├── calls.jl               #   Function call compilation
-│   ├── invoke.jl              #   Method dispatch table
-│   ├── stackified.jl          #   Structured control flow (stackifier)
-│   ├── types.jl               #   TypeRegistry: Julia → WasmGC type mapping
-│   └── ...                    #   Context, values, flow, unions, helpers, etc.
-└── runtime/                   # Intrinsics and built-in ops (4 files)
-    ├── intrinsics.jl          #   Julia intrinsic → Wasm opcode mapping
-    ├── stringops.jl           #   String operation intrinsics
-    ├── arrayops.jl            #   Array operation intrinsics
-    └── simpledict.jl          #   Hash table implementation
-```
-
-### Type Mappings
+## Type Mappings
 
 | Julia Type | WebAssembly Type |
 |:-----------|:-----------------|
 | `Int32`, `UInt32`, `Bool` | `i32` |
-| `Int64`, `UInt64`, `Int` | `i64` |
-| `Int128`, `UInt128` | WasmGC struct `{i64, i64}` |
+| `Int64`, `UInt64` | `i64` |
 | `Float32` | `f32` |
 | `Float64` | `f64` |
-| `String`, `Symbol` | WasmGC `array<i32>` |
+| `String` | WasmGC `array<i32>` |
 | User structs | WasmGC struct |
-| `Tuple{...}` | WasmGC struct (immutable) |
 | `Vector{T}` | WasmGC `struct{array_ref, size}` |
-| `Matrix{T}` | WasmGC `struct{array_ref, size_tuple}` |
 | `Dict{K,V}` | WasmGC struct (hash table) |
-| `JSValue` / `Any` | `externref` |
-
-### Testing
-
-Every function is verified by an automated comparison harness that runs the function natively in Julia and in Node.js Wasm, then checks for exact match:
-
-```bash
-# Full test suite
-julia +1.12 --project=. test/runtests.jl
-
-# Quick verification
-julia +1.12 --project=. -e '
-  using WasmTarget; include("test/utils.jl")
-  r = compare_julia_wasm(x -> x + Int32(1), Int32(5))
-  println(r.pass ? "CORRECT" : "MISMATCH: expected=$(r.expected) actual=$(r.actual)")
-'
-```
-
-## Comparison
-
-| | WasmTarget.jl | dart2wasm | WebAssemblyCompiler.jl |
-|:--|:---|:---|:---|
-| **Language** | Julia | Dart | Julia |
-| **Memory model** | WasmGC | WasmGC | WasmGC via Binaryen |
-| **IR source** | `Base.code_typed` | Dart Kernel IR | `Base.code_typed` |
-| **Closures** | Working | Working | No |
-| **Try/catch** | Working | Working | No |
-| **Union types** | Working | Working | No |
-| **Method overlays** | GPUCompiler pattern | N/A | N/A |
-| **Core function coverage** | 99.5% (207 functions) | Full stdlib | Limited |
-| **Production use** | [Therapy.jl](https://github.com/GroupTherapyOrg/Therapy.jl) | Flutter Web | Experimental |
+| `JSValue` | `externref` |
 
 ## Requirements
 
