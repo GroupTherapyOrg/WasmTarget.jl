@@ -369,6 +369,8 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     :getindex_continued, :_string, :string_index_err,
     # BF-6000: SizeUnknown collect (filtered comprehensions) + foldr
     :grow_to!, :_foldl_impl,
+    # FOUND-5001: sym_in needed for kwarg validation in count/argmax/argmin/etc.
+    :sym_in,
 ])
 
 """

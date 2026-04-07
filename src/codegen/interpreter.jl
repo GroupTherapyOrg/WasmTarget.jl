@@ -212,37 +212,44 @@ end
     return rstrip(lstrip(s))
 end
 
+# NOTE: lstrip/rstrip use single-loop patterns to avoid a codegen bug where
+# codeunit() in a first loop + push!() in a second loop corrupts local variables.
 @overlay WASM_METHOD_TABLE function Base.lstrip(s::String)
     n = ncodeunits(s)
     n == 0 && return s
-    start = 1
-    while start <= n && Int32(codeunit(s, start)) == Int32(32)
-        start += 1
-    end
-    start > n && return ""
     bytes = UInt8[]
-    i = start
+    found = false
+    i = 1
     while i <= n
-        push!(bytes, codeunit(s, i))
+        b = codeunit(s, i)
+        if !found && b == UInt8(32)
+            # skip leading space
+        else
+            found = true
+            push!(bytes, b)
+        end
         i += 1
     end
+    length(bytes) == 0 && return ""
     return String(bytes)
 end
 
 @overlay WASM_METHOD_TABLE function Base.rstrip(s::String)
     n = ncodeunits(s)
     n == 0 && return s
-    stop = n
-    while stop >= 1 && Int32(codeunit(s, stop)) == Int32(32)
-        stop -= 1
-    end
-    stop < 1 && return ""
+    # First pass: find last non-space position (no push! in this function)
+    # Copy all bytes then trim trailing spaces by rebuilding
     bytes = UInt8[]
     i = 1
-    while i <= stop
+    while i <= n
         push!(bytes, codeunit(s, i))
         i += 1
     end
+    # Trim trailing spaces
+    while length(bytes) > 0 && bytes[length(bytes)] == UInt8(32)
+        pop!(bytes)
+    end
+    length(bytes) == 0 && return ""
     return String(bytes)
 end
 
@@ -578,6 +585,103 @@ end
         i += 1
     end
     return result
+end
+
+# ─── Char Classification Overlays ─────────────────────────────────────────
+# Why: Base implementations use foreigncall(:utf8proc_category), foreigncall(:utf8proc_isupper),
+#      foreigncall(:utf8proc_islower) — C library calls that can't compile to WASM.
+#      These overlays handle ASCII range; non-ASCII returns false (sufficient for Therapy.jl).
+#      Uses Core.bitcast (2 IR stmts) instead of reinterpret (400+ IR stmts).
+# Remove when: codegen can link libutf8proc or a pure-Julia Unicode DB is available
+# Char internal: Core.bitcast(UInt32, 'A') = 0x41000000, 'Z' = 0x5a000000,
+#                'a' = 0x61000000, 'z' = 0x7a000000, ASCII < 0x80000000
+
+@overlay WASM_METHOD_TABLE function Base.isletter(c::Char)
+    raw = Core.bitcast(UInt32, c)
+    return (raw >= UInt32(0x41000000) && raw <= UInt32(0x5a000000)) ||
+           (raw >= UInt32(0x61000000) && raw <= UInt32(0x7a000000))
+end
+
+@overlay WASM_METHOD_TABLE function Base.isuppercase(c::Char)
+    raw = Core.bitcast(UInt32, c)
+    return raw >= UInt32(0x41000000) && raw <= UInt32(0x5a000000)
+end
+
+@overlay WASM_METHOD_TABLE function Base.islowercase(c::Char)
+    raw = Core.bitcast(UInt32, c)
+    return raw >= UInt32(0x61000000) && raw <= UInt32(0x7a000000)
+end
+
+@overlay WASM_METHOD_TABLE function Base.isascii(c::Char)
+    # Char stores UTF-8 bytes as UInt32. ASCII chars have top byte < 0x80.
+    raw = Core.bitcast(UInt32, c)
+    return raw < UInt32(0x80000000)
+end
+
+# ─── count Overlay ────────────────────────────────────────────────────────
+# Why: Base.count uses kwarg dispatch (init=0) that triggers sym_in/kwerr stubs,
+#      plus mapreduce infrastructure with 135+ IR stmts and codegen type mismatches.
+# Remove when: codegen handles kwarg dispatch patterns cleanly
+@overlay WASM_METHOD_TABLE function Base.count(f, v::Vector{T}) where T
+    n = length(v)
+    c = 0
+    i = 1
+    while i <= n
+        if f(v[i])
+            c += 1
+        end
+        i += 1
+    end
+    return c
+end
+
+# ─── argmax/argmin Overlays ──────────────────────────────────────────────
+# Why: Base implementations use complex dispatch through _findmax/_findmin
+#      with Pairs iterators and kwarg patterns that produce codegen errors.
+# Remove when: codegen handles Pairs iterators and kwarg dispatch
+@overlay WASM_METHOD_TABLE function Base.argmax(v::Vector{T}) where T
+    n = length(v)
+    n == 0 && throw(ArgumentError("collection must be non-empty"))
+    best_idx = 1
+    best_val = v[1]
+    i = 2
+    while i <= n
+        if v[i] > best_val
+            best_val = v[i]
+            best_idx = i
+        end
+        i += 1
+    end
+    return best_idx
+end
+
+@overlay WASM_METHOD_TABLE function Base.argmin(v::Vector{T}) where T
+    n = length(v)
+    n == 0 && throw(ArgumentError("collection must be non-empty"))
+    best_idx = 1
+    best_val = v[1]
+    i = 2
+    while i <= n
+        if v[i] < best_val
+            best_val = v[i]
+            best_idx = i
+        end
+        i += 1
+    end
+    return best_idx
+end
+
+# ─── foreach Overlay ─────────────────────────────────────────────────────
+# Why: Base.foreach uses Generator/iterate patterns with complex dispatch.
+# Remove when: codegen handles Generator iteration cleanly
+@overlay WASM_METHOD_TABLE function Base.foreach(f, v::Vector{T}) where T
+    n = length(v)
+    i = 1
+    while i <= n
+        f(v[i])
+        i += 1
+    end
+    return nothing
 end
 
 # ─── WasmInterpreter ───────────────────────────────────────────────────────
