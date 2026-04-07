@@ -9879,4 +9879,330 @@ console.log(JSON.stringify({
         end
     end
 
+    # ================================================================
+    # STRESS-5001: 20-Function Module Stress Test
+    # ================================================================
+    # 20 diverse functions (Int64 + Float64, 1-arg + 2-arg) in one compile_multi.
+
+    @testset "STRESS-5001: 20-Function Module" begin
+        _s5001_abs_i64(x::Int64)::Int64 = abs(x)
+        _s5001_sign_i64(x::Int64)::Int64 = sign(x)
+        _s5001_iseven_i64(x::Int64)::Int32 = iseven(x) ? Int32(1) : Int32(0)
+        _s5001_isodd_i64(x::Int64)::Int32 = isodd(x) ? Int32(1) : Int32(0)
+        _s5001_zero_i64(x::Int64)::Int64 = zero(x)
+        _s5001_one_i64(x::Int64)::Int64 = one(x)
+        _s5001_neg_i64(x::Int64)::Int64 = -x
+        _s5001_dbl_i64(x::Int64)::Int64 = x * Int64(2)
+        _s5001_sq_i64(x::Int64)::Int64 = x * x
+        _s5001_min_i64(x::Int64, y::Int64)::Int64 = min(x, y)
+        _s5001_max_i64(x::Int64, y::Int64)::Int64 = max(x, y)
+        _s5001_add_i64(x::Int64, y::Int64)::Int64 = x + y
+        _s5001_sub_i64(x::Int64, y::Int64)::Int64 = x - y
+        _s5001_mul_i64(x::Int64, y::Int64)::Int64 = x * y
+        _s5001_abs_f64(x::Float64)::Float64 = abs(x)
+        _s5001_sqrt_f64(x::Float64)::Float64 = sqrt(x)
+        _s5001_floor_f64(x::Float64)::Float64 = floor(x)
+        _s5001_ceil_f64(x::Float64)::Float64 = ceil(x)
+        _s5001_min_f64(x::Float64, y::Float64)::Float64 = min(x, y)
+        _s5001_max_f64(x::Float64, y::Float64)::Float64 = max(x, y)
+
+        funcs = [
+            (_s5001_abs_i64, (Int64,)), (_s5001_sign_i64, (Int64,)),
+            (_s5001_iseven_i64, (Int64,)), (_s5001_isodd_i64, (Int64,)),
+            (_s5001_zero_i64, (Int64,)), (_s5001_one_i64, (Int64,)),
+            (_s5001_neg_i64, (Int64,)), (_s5001_dbl_i64, (Int64,)),
+            (_s5001_sq_i64, (Int64,)), (_s5001_min_i64, (Int64, Int64)),
+            (_s5001_max_i64, (Int64, Int64)), (_s5001_add_i64, (Int64, Int64)),
+            (_s5001_sub_i64, (Int64, Int64)), (_s5001_mul_i64, (Int64, Int64)),
+            (_s5001_abs_f64, (Float64,)), (_s5001_sqrt_f64, (Float64,)),
+            (_s5001_floor_f64, (Float64,)), (_s5001_ceil_f64, (Float64,)),
+            (_s5001_min_f64, (Float64, Float64)), (_s5001_max_f64, (Float64, Float64)),
+        ]
+
+        for opt in [false, true]
+            @testset "20-func compile_multi (optimize=$opt)" begin
+                bytes = WasmTarget.compile_multi(funcs; optimize=opt)
+                @test length(bytes) > 0
+
+                # Single-arg Int64 functions
+                for (name, f, arg) in [
+                    ("_s5001_abs_i64", _s5001_abs_i64, Int64(-5)),
+                    ("_s5001_sign_i64", _s5001_sign_i64, Int64(-5)),
+                    ("_s5001_iseven_i64", _s5001_iseven_i64, Int64(4)),
+                    ("_s5001_isodd_i64", _s5001_isodd_i64, Int64(3)),
+                    ("_s5001_zero_i64", _s5001_zero_i64, Int64(7)),
+                    ("_s5001_one_i64", _s5001_one_i64, Int64(7)),
+                    ("_s5001_neg_i64", _s5001_neg_i64, Int64(-5)),
+                    ("_s5001_dbl_i64", _s5001_dbl_i64, Int64(6)),
+                    ("_s5001_sq_i64", _s5001_sq_i64, Int64(4)),
+                ]
+                    @test run_wasm(bytes, name, arg) == f(arg)
+                end
+
+                # Two-arg Int64 functions
+                for (name, f) in [
+                    ("_s5001_min_i64", _s5001_min_i64),
+                    ("_s5001_max_i64", _s5001_max_i64),
+                    ("_s5001_add_i64", _s5001_add_i64),
+                    ("_s5001_sub_i64", _s5001_sub_i64),
+                    ("_s5001_mul_i64", _s5001_mul_i64),
+                ]
+                    @test run_wasm(bytes, name, Int64(7), Int64(3)) == f(Int64(7), Int64(3))
+                end
+
+                # Float64 functions
+                @test run_wasm(bytes, "_s5001_abs_f64", -3.7) == _s5001_abs_f64(-3.7)
+                @test run_wasm(bytes, "_s5001_sqrt_f64", 9.0) == _s5001_sqrt_f64(9.0)
+                @test run_wasm(bytes, "_s5001_floor_f64", -3.7) == _s5001_floor_f64(-3.7)
+                @test run_wasm(bytes, "_s5001_ceil_f64", -3.7) == _s5001_ceil_f64(-3.7)
+                @test run_wasm(bytes, "_s5001_min_f64", 3.14, 2.71) == _s5001_min_f64(3.14, 2.71)
+                @test run_wasm(bytes, "_s5001_max_f64", 3.14, 2.71) == _s5001_max_f64(3.14, 2.71)
+            end
+        end
+    end
+
+    # ================================================================
+    # STRESS-6000: sort kwargs
+    # ================================================================
+    # sort(rev=true) works. sort(by=...) not supported in overlay.
+
+    @testset "STRESS-6000: sort kwargs" begin
+        _s6000_sort_rev_i64(v::Vector{Int64})::Vector{Int64} = sort(v; rev=true)
+        _s6000_sort_rev_f64(v::Vector{Float64})::Vector{Float64} = sort(v; rev=true)
+
+        @testset "sort(rev=true)" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s6000_sort_rev_i64, Int64[3, 1, 4, 1, 5]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s6000_sort_rev_f64, Float64[3.0, 1.0, 4.0, 1.0, 5.0]; optimize=opt).pass
+            end
+        end
+    end
+
+    # ================================================================
+    # STRESS-6001: round/clamp/div kwargs
+    # ================================================================
+    # clamp, fld, cld work. round(digits=N) fails at runtime.
+
+    @testset "STRESS-6001: clamp/fld/cld" begin
+        _s6001_clamp_lo(x::Float64)::Float64 = clamp(x, 0.0, 10.0)
+        _s6001_clamp_hi(x::Float64)::Float64 = clamp(x, 0.0, 10.0)
+        _s6001_clamp_mid(x::Float64)::Float64 = clamp(x, 0.0, 10.0)
+        _s6001_fld(x::Int64, y::Int64)::Int64 = fld(x, y)
+        _s6001_cld(x::Int64, y::Int64)::Int64 = cld(x, y)
+
+        for opt in [false, true]
+            @test compare_julia_wasm(_s6001_clamp_lo, -5.0; optimize=opt).pass
+            @test compare_julia_wasm(_s6001_clamp_hi, 15.0; optimize=opt).pass
+            @test compare_julia_wasm(_s6001_clamp_mid, 5.0; optimize=opt).pass
+            @test compare_julia_wasm(_s6001_fld, Int64(-7), Int64(3); optimize=opt).pass
+            @test compare_julia_wasm(_s6001_cld, Int64(7), Int64(3); optimize=opt).pass
+        end
+    end
+
+    # ================================================================
+    # STRESS-6002: String function kwargs
+    # ================================================================
+    # split(limit=N), split(keepempty=false) work.
+
+    @testset "STRESS-6002: String kwargs" begin
+        _s6002_split_limit()::Int64 = Int64(length(split("a,b,c,d", ","; limit=2)))
+        _s6002_split_keepempty()::Int64 = Int64(length(split("a,,b,,c", ","; keepempty=false)))
+
+        for opt in [false, true]
+            @test compare_julia_wasm(_s6002_split_limit; optimize=opt).pass
+            @test compare_julia_wasm(_s6002_split_keepempty; optimize=opt).pass
+        end
+    end
+
+    # ================================================================
+    # STRESS-7000: Empty and Single-Element Inputs
+    # ================================================================
+
+    @testset "STRESS-7000: Empty/Single Inputs" begin
+        _s7000_sort_i64(v::Vector{Int64})::Vector{Int64} = sort(v)
+        _s7000_sum_i64(v::Vector{Int64})::Int64 = sum(v)
+        _s7000_reverse_i64(v::Vector{Int64})::Vector{Int64} = reverse(v)
+        _s7000_unique_i64(v::Vector{Int64})::Vector{Int64} = unique(v)
+        _s7000_filter_i64(v::Vector{Int64})::Vector{Int64} = filter(iseven, v)
+        _s7000_length_i64(v::Vector{Int64})::Int64 = Int64(length(v))
+        _s7000_min_i64(v::Vector{Int64})::Int64 = minimum(v)
+        _s7000_sort_f64(v::Vector{Float64})::Vector{Float64} = sort(v)
+        _s7000_sum_f64(v::Vector{Float64})::Float64 = sum(v)
+        _s7000_reverse_f64(v::Vector{Float64})::Vector{Float64} = reverse(v)
+
+        @testset "empty Int64" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s7000_sort_i64, Int64[]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s7000_sum_i64, Int64[]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s7000_reverse_i64, Int64[]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s7000_unique_i64, Int64[]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s7000_filter_i64, Int64[]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s7000_length_i64, Int64[]; optimize=opt).pass
+            end
+        end
+
+        @testset "empty Float64" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s7000_sort_f64, Float64[]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s7000_sum_f64, Float64[]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s7000_reverse_f64, Float64[]; optimize=opt).pass
+            end
+        end
+
+        @testset "single element" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s7000_sort_i64, Int64[42]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s7000_sum_i64, Int64[42]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s7000_min_i64, Int64[42]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s7000_sort_f64, Float64[42.0]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s7000_sum_f64, Float64[42.0]; optimize=opt).pass
+            end
+        end
+    end
+
+    # ================================================================
+    # STRESS-7001: NaN/Inf/-0.0 Propagation
+    # ================================================================
+    # IEEE 754 special values through math operations.
+
+    @testset "STRESS-7001: NaN/Inf/-0.0" begin
+        _s7001_copysign_neg0(x::Float64, y::Float64)::Float64 = copysign(x, y)
+        _s7001_signbit(x::Float64)::Int32 = signbit(x) ? Int32(1) : Int32(0)
+        _s7001_abs_f64(x::Float64)::Float64 = abs(x)
+        _s7001_isinf(x::Float64)::Int32 = isinf(x) ? Int32(1) : Int32(0)
+        _s7001_isnan(x::Float64)::Int32 = isnan(x) ? Int32(1) : Int32(0)
+
+        @testset "-0.0 handling" begin
+            for opt in [false, true]
+                @test compare_julia_wasm(_s7001_copysign_neg0, 1.0, -0.0; optimize=opt).pass
+                @test compare_julia_wasm(_s7001_signbit, -0.0; optimize=opt).pass
+                @test compare_julia_wasm(_s7001_signbit, 0.0; optimize=opt).pass
+            end
+        end
+
+        @testset "Inf propagation" begin
+            for opt in [false, true]
+                @test compare_julia_wasm(_s7001_abs_f64, -Inf; optimize=opt).pass
+                @test compare_julia_wasm(_s7001_isinf, Inf; optimize=opt).pass
+                @test compare_julia_wasm(_s7001_isinf, -Inf; optimize=opt).pass
+            end
+        end
+
+        @testset "NaN propagation" begin
+            for opt in [false, true]
+                @test compare_julia_wasm(_s7001_isnan, NaN; optimize=opt).pass
+            end
+        end
+    end
+
+    # ================================================================
+    # STRESS-7002: Overflow Boundaries and Large Vectors
+    # ================================================================
+
+    @testset "STRESS-7002: Overflow/Large" begin
+        _s7002_abs_near_min(x::Int32)::Int32 = abs(x)
+        _s7002_div_tmax(x::Int64, y::Int64)::Int64 = div(x, y)
+        _s7002_sum_large(v::Vector{Int64})::Int64 = sum(v)
+        _s7002_sort_large(v::Vector{Int64})::Vector{Int64} = sort(v)
+
+        @testset "boundary arithmetic" begin
+            for opt in [false, true]
+                @test compare_julia_wasm(_s7002_abs_near_min, typemin(Int32) + Int32(1); optimize=opt).pass
+                @test compare_julia_wasm(_s7002_div_tmax, typemax(Int64), Int64(2); optimize=opt).pass
+            end
+        end
+
+        @testset "large vectors" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s7002_sum_large, collect(Int64, 1:100); optimize=opt).pass
+                @test compare_julia_wasm_vec(_s7002_sort_large, Int64[mod(i * 37, 100) for i in 1:100]; optimize=opt).pass
+            end
+        end
+    end
+
+    # ================================================================
+    # STRESS-8000: Binaryen Size and Correctness Survey
+    # ================================================================
+    # Comprehensive binaryen survey across representative function categories.
+
+    @testset "STRESS-8000: Binaryen Survey" begin
+        # Simple scalar functions
+        _s8000_abs(x::Int64)::Int64 = abs(x)
+        _s8000_sign(x::Int64)::Int64 = sign(x)
+        _s8000_iseven(x::Int64)::Int32 = iseven(x) ? Int32(1) : Int32(0)
+        _s8000_clamp(x::Float64)::Float64 = clamp(x, 0.0, 10.0)
+        _s8000_sqrt(x::Float64)::Float64 = sqrt(x)
+        _s8000_floor(x::Float64)::Float64 = floor(x)
+        _s8000_min(x::Int64, y::Int64)::Int64 = min(x, y)
+        _s8000_gcd(x::Int64, y::Int64)::Int64 = gcd(x, y)
+
+        @testset "scalar functions" begin
+            for opt in [false, true]
+                @test compare_julia_wasm(_s8000_abs, Int64(-5); optimize=opt).pass
+                @test compare_julia_wasm(_s8000_sign, Int64(-3); optimize=opt).pass
+                @test compare_julia_wasm(_s8000_iseven, Int64(4); optimize=opt).pass
+                @test compare_julia_wasm(_s8000_clamp, 15.0; optimize=opt).pass
+                @test compare_julia_wasm(_s8000_sqrt, 9.0; optimize=opt).pass
+                @test compare_julia_wasm(_s8000_floor, 3.7; optimize=opt).pass
+                @test compare_julia_wasm(_s8000_min, Int64(3), Int64(7); optimize=opt).pass
+                @test compare_julia_wasm(_s8000_gcd, Int64(12), Int64(8); optimize=opt).pass
+            end
+        end
+
+        # Vector functions
+        _s8000_sort(v::Vector{Int64})::Vector{Int64} = sort(v)
+        _s8000_sum(v::Vector{Int64})::Int64 = sum(v)
+        _s8000_filter_map(v::Vector{Int64})::Int64 = sum(map(abs, filter(x -> x > Int64(0), v)))
+
+        @testset "vector functions" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s8000_sort, Int64[5, 3, 1, 4, 2]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s8000_sum, Int64[1, 2, 3, 4, 5]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s8000_filter_map, Int64[-3, 1, -4, 2, 5]; optimize=opt).pass
+            end
+        end
+
+        # String functions
+        _s8000_strlen()::Int64 = Int64(length(uppercase("hello")))
+        _s8000_strcat()::Int32 = "hello" * " world" == "hello world" ? Int32(1) : Int32(0)
+
+        @testset "string functions" begin
+            for opt in [false, true]
+                @test compare_julia_wasm(_s8000_strlen; optimize=opt).pass
+                @test compare_julia_wasm(_s8000_strcat; optimize=opt).pass
+            end
+        end
+    end
+
+    # ================================================================
+    # STRESS-8001: Binaryen with Overlays and Compositions
+    # ================================================================
+    # Complex compositions and multi-function modules through binaryen.
+    # These are most likely to expose GUFA/type-narrowing bugs.
+
+    @testset "STRESS-8001: Binaryen Deep Validation" begin
+        # 8-deep chain through binaryen (reuse STRESS-3000 pattern)
+        _s8001_deep(v::Vector{Int64})::Int64 =
+            sum(unique(sort(filter(x -> x > Int64(0), map(abs, accumulate(+, reverse(v)))))))
+
+        # Math composition through binaryen
+        _s8001_math(v::Vector{Float64})::Float64 =
+            sum(map(x -> sin(x) * cos(x), filter(x -> x > 0.0, v)))
+
+        # Closure pipeline through binaryen
+        _s8001_closure(v::Vector{Int64})::Int64 = begin
+            scale = Int64(3)
+            threshold = Int64(2)
+            sum(map(x -> x * scale, filter(x -> x > threshold, v)))
+        end
+
+        @testset "compositions + binaryen" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s8001_deep, Int64[3, -1, 4, -1, 5]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s8001_math, Float64[1.0, -2.0, 3.0, 0.5]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s8001_closure, Int64[1, 2, 3, 4, 5]; optimize=opt).pass
+            end
+        end
+    end
+
 end
