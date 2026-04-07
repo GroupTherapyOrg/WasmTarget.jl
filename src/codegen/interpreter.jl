@@ -938,6 +938,19 @@ const _WASM_J_TABLE_VEC = UInt64[Base.Math.J_TABLE[i] for i in 1:256]
     return (jU, jL)
 end
 
+# ─── Set union! Overlay ────────────────────────────────────────────────────
+# Why: Base.union!(::AbstractSet, itr) calls sizehint!(s, n; shrink=false) which
+#      expands kwargs to 608 IR stmts with kwerr stubs that trap at runtime.
+# Fix: Skip sizehint! (no-op in WasmGC) and just iterate+push!.
+# Remove when: kwargs compilation handles kwerr stubs correctly (dead code elim)
+
+@overlay WASM_METHOD_TABLE function Base.union!(s::AbstractSet{T}, itr) where T
+    for x in itr
+        push!(s, x)
+    end
+    return s
+end
+
 # ─── WasmInterpreter ───────────────────────────────────────────────────────
 
 struct WasmInterpreter <: CC.AbstractInterpreter

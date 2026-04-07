@@ -2757,6 +2757,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     end
 
                     if target_info !== nothing
+                        @debug "Cross-call resolved" name=name idx=idx return_type=target_info.return_type has_ssa_local=haskey(ctx.ssa_locals, idx)
                         # PURE-036z: Check if any arg needs extern.convert_any insertion
                         # The args were already pushed, but we need to convert concrete refs to externref
                         # where the target function expects externref but we pushed a concrete ref.
@@ -2858,11 +2859,12 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         if target_info.return_type === Union{}
                             push!(bytes, Opcode.UNREACHABLE)
                         end
-                        # PURE-220: For higher-order calls (Core.Argument func_ref), if SSA has
-                        # no local and target returns non-void, drop the unused return value.
-                        # Previously these emitted unreachable (making the code dead), but now
-                        # with actual calls, the return value stays on the stack.
-                        if func_ref isa Core.Argument && !haskey(ctx.ssa_locals, idx) && target_info.return_type !== Nothing
+                        # PURE-220: If SSA has no local and target returns non-void,
+                        # drop the unused return value. This applies to all cross-function
+                        # calls (GlobalRef, Core.Argument, etc.) where the caller discards
+                        # the result (no %XX = assignment in the IR).
+                        if !haskey(ctx.ssa_locals, idx) && target_info.return_type !== Nothing && target_info.return_type !== Union{}
+                            @debug "Dropping unused cross-call result" name=name idx=idx return_type=target_info.return_type
                             push!(bytes, Opcode.DROP)
                         end
                         # Check: if function returns externref but caller expects concrete ref,

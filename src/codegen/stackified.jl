@@ -580,14 +580,14 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # duplicate stores that would cause "not enough arguments on stack" errors.
 
                 # Only drop unused values that don't have locals
-                if !haskey(ctx.ssa_locals, i) && stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
+                if !haskey(ctx.ssa_locals, i) && stmt isa Expr && (stmt.head === :call || stmt.head === :invoke || stmt.head === :foreigncall)
                     # PURE-220: Skip if compile_statement already emitted a DROP
                     # PURE-6006: Guard against call instruction false-positive (func_idx 0x1a == DROP)
                     already_dropped = !isempty(stmt_bytes) && stmt_bytes[end] == Opcode.DROP &&
                                       !(length(stmt_bytes) >= 2 && stmt_bytes[end-1] == Opcode.CALL)
                     # Use statement_produces_wasm_value to check if the call actually
                     # produces a value on the stack (handles Any type correctly)
-                    if !already_dropped && statement_produces_wasm_value(stmt, i, ctx)
+                    if !already_dropped && !isempty(stmt_bytes) && statement_produces_wasm_value(stmt, i, ctx)
                         if !haskey(ctx.phi_locals, i)
                             use_count = get(ssa_use_count, i, 0)
                             if use_count == 0
@@ -1759,8 +1759,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # PURE-6006: Guard against call instruction false-positive (func_idx 0x1a == DROP)
                     already_dropped = !isempty(stmt_bytes) && stmt_bytes[end] == Opcode.DROP &&
                                       !(length(stmt_bytes) >= 2 && stmt_bytes[end-1] == Opcode.CALL)
-                    if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
-                        if !already_dropped && statement_produces_wasm_value(stmt, i, ctx)
+                    if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke || stmt.head === :foreigncall)
+                        if !already_dropped && !isempty(stmt_bytes) && statement_produces_wasm_value(stmt, i, ctx)
                             if !haskey(ctx.phi_locals, i)
                                 use_count = get(ssa_use_count, i, 0)
                                 if use_count == 0

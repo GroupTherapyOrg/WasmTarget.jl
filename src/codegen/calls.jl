@@ -2459,6 +2459,17 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # Memory{T}.instance is a singleton empty Memory (length 0)
         # We compile it to create an empty WasmGC array
         field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
+
+        # Handle getfield(DataType_constant, :flags) — compile-time constant folding.
+        # Broadcasting IR uses DataType.flags to check type properties (e.g., isprimitivetype).
+        # The DataType is a compile-time constant, so we can emit the flags value directly.
+        if field_sym === :flags && obj_arg isa DataType && isdefined(obj_arg, :flags)
+            flags_val = obj_arg.flags
+            push!(bytes, Opcode.I32_CONST)
+            append!(bytes, encode_leb128_signed(Int64(flags_val)))
+            return bytes
+        end
+
         if field_sym === :instance && obj_arg isa DataType && obj_arg <: Memory
             # Memory{T}.instance - create an empty array (length 0)
             # Extract element type from Memory{T}
