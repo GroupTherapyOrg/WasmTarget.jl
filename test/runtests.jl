@@ -5593,7 +5593,7 @@ end
                 @test run_wasm(bytes, "gt_any_any") == 1      # Any <: Any
                 # String types
                 @test run_wasm(bytes, "gt_str_str") == 1      # String <: String
-                @test_broken run_wasm(bytes, "gt_str_absstr") == 1   # String <: AbstractString — null pointer in wasm_subtype
+                @test run_wasm(bytes, "gt_str_absstr") == 1   # String <: AbstractString — FOUND-5003: fixed Union{Type{T}} phi local allocation
                 @test run_wasm(bytes, "gt_str_any") == 1      # String <: Any
                 @test run_wasm(bytes, "gt_str_num") == 0      # String !<: Number
                 @test run_wasm(bytes, "gt_absstr_str") == 0   # AbstractString !<: String
@@ -5639,7 +5639,7 @@ end
                 # Abstract hierarchy
                 @test run_wasm(bytes, "gt_signed_int") == 1   # Signed <: Integer
                 @test run_wasm(bytes, "gt_int_real") == 1     # Integer <: Real
-                @test_broken run_wasm(bytes, "gt_real_num") == 1     # Real <: Number — null pointer in wasm_subtype
+                @test run_wasm(bytes, "gt_real_num") == 1     # Real <: Number — FOUND-5003: fixed Union{Type{T}} phi local allocation
                 @test run_wasm(bytes, "gt_num_any") == 1      # Number <: Any
                 @test run_wasm(bytes, "gt_unsigned_int") == 1 # Unsigned <: Integer
                 @test run_wasm(bytes, "gt_absfloat_real") == 1 # AbstractFloat <: Real

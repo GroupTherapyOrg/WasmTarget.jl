@@ -565,6 +565,17 @@ function julia_to_wasm_type_concrete(T, ctx::AbstractCompilationContext)::WasmVa
                 end
                 return result
             else
+                # FOUND-5003: Union of Type{T} values (e.g., Union{Type{Any}, Type{Number}}).
+                # All Type{T} values compile to JlDataType struct refs via global.get.
+                # Use the DataType type directly instead of creating a tagged union,
+                # which would cause ConcreteRef type mismatches at phi edges.
+                all_type_vals = all(non_nothing_u) do t
+                    t isa DataType && t <: Type
+                end
+                if all_type_vals && ctx.type_registry.jl_datatype_idx !== nothing
+                    return ConcreteRef(ctx.type_registry.jl_datatype_idx, true)
+                end
+
                 # Non-numeric multi-variant union.
                 # Check if all variants are WasmGC struct types — if so, use StructRef.
                 # This aligns with get_concrete_wasm_type which returns StructRef for
