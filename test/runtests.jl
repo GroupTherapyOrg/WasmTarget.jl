@@ -9644,4 +9644,73 @@ console.log(JSON.stringify({
         end
     end
 
+    # ================================================================
+    # STRESS-2004: Closure Passed as Argument Through Multiple Layers
+    # ================================================================
+    # Tests closure GC struct passing through call chains, nested maps,
+    # reduce with closures, and multi-capture filter compositions.
+
+    @testset "STRESS-2004: Closure Argument Passing" begin
+
+        # Closure applied via map
+        _s2004_apply_add1(v::Vector{Int64})::Vector{Int64} = map(x -> x + Int64(1), v)
+
+        # Closure with capture passed to filter
+        _s2004_filter_cap(v::Vector{Int64})::Vector{Int64} = (t = Int64(3); filter(x -> x > t, v))
+
+        # Composed closures via nested map
+        _s2004_composed(v::Vector{Int64})::Vector{Int64} = begin
+            dbl = (x::Int64) -> x * Int64(2)
+            add1 = (x::Int64) -> x + Int64(1)
+            map(x -> add1(dbl(x)), v)
+        end
+
+        # Same closure applied twice (chained maps)
+        _s2004_twice(v::Vector{Int64})::Vector{Int64} = begin
+            triple = (x::Int64) -> x * Int64(3)
+            map(triple, map(triple, v))
+        end
+
+        # Nested map with different closures
+        _s2004_nested(v::Vector{Int64})::Vector{Int64} = begin
+            sq = (x::Int64) -> x * x
+            neg = (x::Int64) -> -x
+            map(neg, map(sq, v))
+        end
+
+        # Closure in reduce
+        _s2004_reduce(v::Vector{Int64})::Int64 =
+            reduce((a::Int64, x::Int64) -> a + x * Int64(2), v; init=Int64(0))
+
+        # Multi-capture filter (two captured variables)
+        _s2004_multi_cap(v::Vector{Int64})::Vector{Int64} = begin
+            lo = Int64(2); hi = Int64(8)
+            filter(x -> x >= lo && x <= hi, v)
+        end
+
+        # Capture chain: closure captures threshold for count
+        _s2004_cap_chain(v::Vector{Int64})::Int64 = begin
+            threshold = Int64(5)
+            Int64(length(filter(x -> x > threshold, v)))
+        end
+
+        @testset "basic closure passing" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s2004_apply_add1, Int64[1,2,3]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s2004_filter_cap, Int64[1,2,3,4,5,6]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s2004_composed, Int64[1,2,3]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s2004_twice, Int64[1,2,3]; optimize=opt).pass
+            end
+        end
+
+        @testset "advanced closure chains" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s2004_nested, Int64[1,2,3]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s2004_reduce, Int64[1,2,3,4,5]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s2004_multi_cap, Int64[1,3,5,7,9]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s2004_cap_chain, Int64[1,3,5,7,9]; optimize=opt).pass
+            end
+        end
+    end
+
 end
