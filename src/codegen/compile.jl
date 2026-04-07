@@ -329,7 +329,7 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     # WBUILD-10000: Phase 59/60 math functions (pow, hypot, cbrt, trig variants)
     :pow_body, :_log_ext, :_hypot, :cbrt,
     :sind, :cosd, :sinpi, :cospi, :tanpi,
-    :asinh, :acosh, :sincos, :rem2pi, :_cosc,
+    :asinh, :acosh, :sincos, :rem2pi, :_cosc, :sinc,
     # WBUILD-1013: Software FMA needed by log/exp when have_fma=false
     :fma_emulated,
     # WBUILD-1022: Float64 remainder (used by mod/rem)

@@ -7210,11 +7210,11 @@ console.log(JSON.stringify({
 
         @testset "Special functions (WBUILD-1024)" begin
             _t60_sinc(x::Float64)::Float64 = sinc(x)
-            @test_broken compare_julia_wasm(_t60_sinc, 0.0).pass  # WASM execution error
-            @test_broken compare_julia_wasm(_t60_sinc, 0.5).pass
-            @test_broken compare_julia_wasm(_t60_sinc, 1.0).pass
-            @test_broken compare_julia_wasm(_t60_sinc, -1.0).pass
-            @test_broken compare_julia_wasm(_t60_sinc, 3.14).pass
+            @test compare_julia_wasm(_t60_sinc, 0.0).pass
+            @test compare_julia_wasm(_t60_sinc, 0.5).pass
+            @test compare_julia_wasm(_t60_sinc, 1.0).pass
+            @test compare_julia_wasm(_t60_sinc, -1.0).pass
+            @test compare_julia_wasm(_t60_sinc, 3.14).pass
 
             _t60_cosc(x::Float64)::Float64 = cosc(x)
             @test compare_julia_wasm(_t60_cosc, 0.5).pass
