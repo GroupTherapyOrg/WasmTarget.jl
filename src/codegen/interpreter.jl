@@ -51,6 +51,7 @@ end
 #      Use our copy overlay + sort! overlay for a clean path.
 #      Kwargs NOT forwarded — Julia's kwarg dispatch (sym_in/kwerr) generates
 #      unreachable stubs. Default sort!(copy(v)) covers the common case.
+#      sort(v, rev=true) still broken due to kwarg dispatch codegen issues.
 # Remove when: codegen handles foreigncall(:memmove) or Base.sort IR is simpler
 @overlay WASM_METHOD_TABLE function Base.sort(v::AbstractVector;
         lt=isless, by=identity, rev::Bool=false,
@@ -640,6 +641,21 @@ end
         i += 1
     end
     return result
+end
+
+# ─── Dict delete! Overlay ─────────────────────────────────────────────────
+# Why: Base._delete! uses atomic_pointerset(ptr, C_NULL, :monotonic) to null out
+#      key/val references for GC. WASM codegen doesn't support atomic_pointerset.
+#      WasmGC handles reference cleanup automatically, so we just clear the slot.
+# Remove when: codegen handles atomic_pointerset as a regular store
+@overlay WASM_METHOD_TABLE function Base.delete!(h::Dict{K,V}, key) where {K,V}
+    index = Base.ht_keyindex(h, key)
+    if index > 0
+        h.slots[index] = 0x00
+        h.count = h.count - 1
+        h.age = h.age + 1
+    end
+    return h
 end
 
 # ─── Char Classification Overlays ─────────────────────────────────────────

@@ -5691,7 +5691,7 @@ end
             end
             bytes = compile(dict_delete_test, ())
             @test bytes !== nothing
-            @test_broken run_wasm(bytes, "dict_delete_test") == 20
+            @test run_wasm(bytes, "dict_delete_test") == 20
         end
 
         @testset "Set{Int64} operations" begin
@@ -5701,7 +5701,7 @@ end
             end
             bytes = compile(set_create_test, ())
             @test bytes !== nothing
-            @test_broken run_wasm(bytes, "set_create_test") == 310
+            @test run_wasm(bytes, "set_create_test") == 310
         end
 
     end
@@ -5721,7 +5721,7 @@ end
             if _bc_broken
                 @test_broken compare_julia_wasm(bc_add_i32).pass
             else
-                @test_broken compare_julia_wasm(bc_add_i32).pass
+                @test compare_julia_wasm(bc_add_i32).pass
             end
         end
 
@@ -5733,7 +5733,7 @@ end
             if _bc_broken
                 @test_broken compare_julia_wasm(bc_mul_scalar_i32).pass
             else
-                @test_broken compare_julia_wasm(bc_mul_scalar_i32).pass
+                @test compare_julia_wasm(bc_mul_scalar_i32).pass
             end
         end
 
@@ -5745,7 +5745,7 @@ end
             if _bc_broken
                 @test_broken compare_julia_wasm(bc_sub_i32).pass
             else
-                @test_broken compare_julia_wasm(bc_sub_i32).pass
+                @test compare_julia_wasm(bc_sub_i32).pass
             end
         end
 
@@ -5757,7 +5757,7 @@ end
             if _bc_broken
                 @test_broken compare_julia_wasm(bc_add_f64).pass
             else
-                @test_broken compare_julia_wasm(bc_add_f64).pass
+                @test compare_julia_wasm(bc_add_f64).pass
             end
         end
 
@@ -5769,7 +5769,7 @@ end
             if _bc_broken
                 @test_broken compare_julia_wasm(bc_div_f64).pass
             else
-                @test_broken compare_julia_wasm(bc_div_f64).pass
+                @test compare_julia_wasm(bc_div_f64).pass
             end
         end
 
@@ -5781,7 +5781,7 @@ end
             if _bc_broken
                 @test_broken compare_julia_wasm(bc_add_i64).pass
             else
-                @test_broken compare_julia_wasm(bc_add_i64).pass
+                @test compare_julia_wasm(bc_add_i64).pass
             end
         end
 
