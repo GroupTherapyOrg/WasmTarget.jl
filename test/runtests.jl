@@ -9444,4 +9444,60 @@ console.log(JSON.stringify({
         end
     end
 
+    # ================================================================
+    # STRESS-1003: Array Mutation Type Matrix
+    # ================================================================
+
+    @testset "STRESS-1003: Array Mutation Type Matrix" begin
+
+        _s1003_push_i64(v::Vector{Int64})::Vector{Int64} = (push!(v, Int64(99)); v)
+        _s1003_push_f64(v::Vector{Float64})::Vector{Float64} = (push!(v, 99.0); v)
+        _s1003_pop_i64(v::Vector{Int64})::Int64 = pop!(v)
+        _s1003_pop_f64(v::Vector{Float64})::Float64 = pop!(v)
+        _s1003_pushf_i64(v::Vector{Int64})::Vector{Int64} = (pushfirst!(v, Int64(0)); v)
+        _s1003_popf_i64(v::Vector{Int64})::Int64 = popfirst!(v)
+        _s1003_ins_i64(v::Vector{Int64})::Vector{Int64} = (insert!(v, Int64(2), Int64(99)); v)
+        _s1003_del_i64(v::Vector{Int64})::Vector{Int64} = (deleteat!(v, Int64(2)); v)
+        _s1003_empty_i64(v::Vector{Int64})::Int64 = (empty!(v); Int64(length(v)))
+        _s1003_sorti_i64(v::Vector{Int64})::Vector{Int64} = (sort!(v); v)
+        _s1003_sorti_f64(v::Vector{Float64})::Vector{Float64} = (sort!(v); v)
+        _s1003_revi_i64(v::Vector{Int64})::Vector{Int64} = (reverse!(v); v)
+        _s1003_resize_i64(v::Vector{Int64})::Int64 = (resize!(v, Int64(5)); Int64(length(v)))
+        _s1003_splice_i64(v::Vector{Int64})::Int64 = splice!(v, Int64(2))
+
+        @testset "push!/pop!" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s1003_push_i64, Int64[1,2,3]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1003_push_f64, Float64[1.0,2.0,3.0]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1003_pop_i64, Int64[1,2,3]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1003_pop_f64, Float64[1.0,2.0,3.0]; optimize=opt).pass
+            end
+        end
+
+        @testset "pushfirst!/popfirst!" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s1003_pushf_i64, Int64[1,2,3]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1003_popf_i64, Int64[1,2,3]; optimize=opt).pass
+            end
+        end
+
+        @testset "insert!/deleteat!/empty!" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s1003_ins_i64, Int64[1,2,3]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1003_del_i64, Int64[1,2,3]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1003_empty_i64, Int64[1,2,3]; optimize=opt).pass
+            end
+        end
+
+        @testset "sort!/reverse!/resize!/splice!" begin
+            for opt in [false, true]
+                @test compare_julia_wasm_vec(_s1003_sorti_i64, Int64[3,1,2]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1003_sorti_f64, Float64[3.0,1.0,2.0]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1003_revi_i64, Int64[1,2,3]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1003_resize_i64, Int64[1,2,3]; optimize=opt).pass
+                @test compare_julia_wasm_vec(_s1003_splice_i64, Int64[10,20,30]; optimize=opt).pass
+            end
+        end
+    end
+
 end
