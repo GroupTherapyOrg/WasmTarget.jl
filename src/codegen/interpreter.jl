@@ -792,6 +792,42 @@ end
     return x < y
 end
 
+# ─── pow_body(Float64, Int64) Overlay ────────────────────────────────────
+# Why: Base.Math.pow_body has 136 IR stmts with a complex loop, phi nodes,
+#      and have_fma branches. The stackifier miscompiles the main loop —
+#      only n=3 (fast-path) works, all other values hit unreachable.
+# Remove when: stackifier correctly handles pow_body's loop/phi pattern
+@overlay WASM_METHOD_TABLE function Base.Math.pow_body(x::Float64, n::Int64)
+    if n == 0
+        return 1.0
+    end
+    if n == 1
+        return x
+    end
+    if n == 2
+        return x * x
+    end
+    if n == 3
+        return x * x * x
+    end
+    neg = n < 0
+    if neg
+        n = -n
+        x = 1.0 / x
+    end
+    # Power by squaring
+    result = 1.0
+    base = x
+    while n > 0
+        if (n & Int64(1)) == Int64(1)
+            result = result * base
+        end
+        base = base * base
+        n = n >> 1
+    end
+    return result
+end
+
 # ─── repeat(String) Overlay ─────────────────────────────────────────────
 # Why: Base.repeat(::String, ::Int) uses unsafe_copyto! with foreigncall(:memmove)
 #      for efficient string repetition. Pure Julia loop with codeunit works in WASM.

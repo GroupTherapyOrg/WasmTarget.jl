@@ -327,7 +327,7 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     # WBUILD-9001: Additional math functions
     :log2, :log10, :log1p, :expm1, :exp2, :exp10,
     # WBUILD-10000: Phase 59/60 math functions (pow, hypot, cbrt, trig variants)
-    :pow_body, :_log_ext, :_hypot, :cbrt,
+    :pow_body, :literal_pow, :_log_ext, :_hypot, :cbrt,
     :sind, :cosd, :sinpi, :cospi, :tanpi,
     :asinh, :acosh, :sincos, :rem2pi, :_cosc, :sinc,
     # WBUILD-1013: Software FMA needed by log/exp when have_fma=false
@@ -1436,13 +1436,15 @@ function compile_module(functions::Vector;
         # Check if this is a closure (function with captured variables)
         closure_type = typeof(f)
         is_closure = is_closure_type(closure_type)
+
+        # Get typed IR using the ORIGINAL arg_types (without closure type prepend).
+        # Base.code_typed already knows the first slot is typeof(f) for closures.
+        code_info, return_type = get_typed_ir(f, arg_types; optimize=optimize_ir, interp=interp)
+
         if is_closure
-            # Prepend the closure type to arg_types
+            # Prepend the closure type to arg_types for type registration and WASM codegen
             arg_types = (closure_type, arg_types...)
         end
-
-        # Get typed IR
-        code_info, return_type = get_typed_ir(f, arg_types; optimize=optimize_ir, interp=interp)
 
         # Detect WasmGlobal arguments
         global_args = Set{Int}()

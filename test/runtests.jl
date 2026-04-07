@@ -7647,74 +7647,61 @@ console.log(JSON.stringify({
 
     # ========================================================================
     # Phase 71: BF2 Trivial String Dispatch (repeat, lpad, rpad, prevind)
-    # Tests that Base string functions compile and execute correctly
-    # via early dispatch entries in invoke.jl.
-    # NOTE: Helper and test functions defined at module level to avoid
-    # @testset closure capture (see CLAUDE.md).
+    # Tests that Base string functions compile and execute correctly.
+    # NOTE: Test functions call Base functions directly to avoid @testset
+    # closure capture (functions inside @testset that reference other local
+    # functions become closures, which the compiler can't export to JS).
     # ========================================================================
 
-    @noinline _bf2_repeat(s::String, n::Int64)::String = repeat(s, n)
-    @noinline _bf2_lpad(s::String, n::Int64)::String = lpad(s, n)
-    @noinline _bf2_rpad(s::String, n::Int64)::String = rpad(s, n)
-
-    _bf2_test_repeat_basic()::Int32 = _bf2_repeat("abc", Int64(3)) == "abcabcabc" ? Int32(1) : Int32(0)
-    _bf2_test_repeat_char()::Int32 = _bf2_repeat("x", Int64(5)) == "xxxxx" ? Int32(1) : Int32(0)
-    _bf2_test_repeat_once()::Int32 = _bf2_repeat("hello", Int64(1)) == "hello" ? Int32(1) : Int32(0)
-    _bf2_test_lpad_basic()::Int32 = _bf2_lpad("hi", Int64(5)) == "   hi" ? Int32(1) : Int32(0)
-    _bf2_test_lpad_nopad()::Int32 = _bf2_lpad("hello", Int64(3)) == "hello" ? Int32(1) : Int32(0)
-    _bf2_test_lpad_exact()::Int32 = _bf2_lpad("abc", Int64(3)) == "abc" ? Int32(1) : Int32(0)
-    _bf2_test_rpad_basic()::Int32 = _bf2_rpad("hi", Int64(5)) == "hi   " ? Int32(1) : Int32(0)
-    _bf2_test_rpad_nopad()::Int32 = _bf2_rpad("hello", Int64(3)) == "hello" ? Int32(1) : Int32(0)
-    _bf2_test_rpad_exact()::Int32 = _bf2_rpad("abc", Int64(3)) == "abc" ? Int32(1) : Int32(0)
+    # Self-contained test functions — no local function capture
+    _bf2_test_repeat_basic()::Int32 = repeat("abc", Int64(3)) == "abcabcabc" ? Int32(1) : Int32(0)
+    _bf2_test_repeat_char()::Int32 = repeat("x", Int64(5)) == "xxxxx" ? Int32(1) : Int32(0)
+    _bf2_test_repeat_once()::Int32 = repeat("hello", Int64(1)) == "hello" ? Int32(1) : Int32(0)
+    _bf2_test_lpad_basic()::Int32 = lpad("hi", Int64(5)) == "   hi" ? Int32(1) : Int32(0)
+    _bf2_test_lpad_nopad()::Int32 = lpad("hello", Int64(3)) == "hello" ? Int32(1) : Int32(0)
+    _bf2_test_lpad_exact()::Int32 = lpad("abc", Int64(3)) == "abc" ? Int32(1) : Int32(0)
+    _bf2_test_rpad_basic()::Int32 = rpad("hi", Int64(5)) == "hi   " ? Int32(1) : Int32(0)
+    _bf2_test_rpad_nopad()::Int32 = rpad("hello", Int64(3)) == "hello" ? Int32(1) : Int32(0)
+    _bf2_test_rpad_exact()::Int32 = rpad("abc", Int64(3)) == "abc" ? Int32(1) : Int32(0)
     _bf2_test_prevind()::Int64 = prevind("hello", Int64(5))
     _bf2_test_prevind_start()::Int64 = prevind("hello", Int64(1))
     _bf2_test_prevind_mid()::Int64 = prevind("abcdef", Int64(3))
 
     @testset "Phase 71: String Dispatch (BF2)" begin
-        # repeat/lpad/rpad: use compile_multi to include helper function
         @testset "repeat - basic" begin
-            bytes = compile_multi([(_bf2_test_repeat_basic, ()), (_bf2_repeat, (String, Int64))])
-            @test validate_wasm(bytes) && run_wasm(bytes, "_bf2_test_repeat_basic") == 1
+            @test compare_julia_wasm(_bf2_test_repeat_basic).pass
         end
 
         @testset "repeat - single char" begin
-            bytes = compile_multi([(_bf2_test_repeat_char, ()), (_bf2_repeat, (String, Int64))])
-            @test run_wasm(bytes, "_bf2_test_repeat_char") == 1
+            @test compare_julia_wasm(_bf2_test_repeat_char).pass
         end
 
         @testset "repeat - once" begin
-            bytes = compile_multi([(_bf2_test_repeat_once, ()), (_bf2_repeat, (String, Int64))])
-            @test run_wasm(bytes, "_bf2_test_repeat_once") == 1
+            @test compare_julia_wasm(_bf2_test_repeat_once).pass
         end
 
         @testset "lpad - basic" begin
-            bytes = compile_multi([(_bf2_test_lpad_basic, ()), (_bf2_lpad, (String, Int64))])
-            @test validate_wasm(bytes) && run_wasm(bytes, "_bf2_test_lpad_basic") == 1
+            @test compare_julia_wasm(_bf2_test_lpad_basic).pass
         end
 
         @testset "lpad - no padding needed" begin
-            bytes = compile_multi([(_bf2_test_lpad_nopad, ()), (_bf2_lpad, (String, Int64))])
-            @test run_wasm(bytes, "_bf2_test_lpad_nopad") == 1
+            @test compare_julia_wasm(_bf2_test_lpad_nopad).pass
         end
 
         @testset "lpad - exact length" begin
-            bytes = compile_multi([(_bf2_test_lpad_exact, ()), (_bf2_lpad, (String, Int64))])
-            @test run_wasm(bytes, "_bf2_test_lpad_exact") == 1
+            @test compare_julia_wasm(_bf2_test_lpad_exact).pass
         end
 
         @testset "rpad - basic" begin
-            bytes = compile_multi([(_bf2_test_rpad_basic, ()), (_bf2_rpad, (String, Int64))])
-            @test validate_wasm(bytes) && run_wasm(bytes, "_bf2_test_rpad_basic") == 1
+            @test compare_julia_wasm(_bf2_test_rpad_basic).pass
         end
 
         @testset "rpad - no padding needed" begin
-            bytes = compile_multi([(_bf2_test_rpad_nopad, ()), (_bf2_rpad, (String, Int64))])
-            @test run_wasm(bytes, "_bf2_test_rpad_nopad") == 1
+            @test compare_julia_wasm(_bf2_test_rpad_nopad).pass
         end
 
         @testset "rpad - exact length" begin
-            bytes = compile_multi([(_bf2_test_rpad_exact, ()), (_bf2_rpad, (String, Int64))])
-            @test run_wasm(bytes, "_bf2_test_rpad_exact") == 1
+            @test compare_julia_wasm(_bf2_test_rpad_exact).pass
         end
 
         # prevind tests now pass — promote from @test_broken to @test
