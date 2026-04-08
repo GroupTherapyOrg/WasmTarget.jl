@@ -67,16 +67,16 @@ export WasmFigure, WasmAxis, WasmPlotRef
 # compilerbarrier prevents Julia's constant propagation from folding these
 # calls away — the body is never compiled to WASM (it's an import stub).
 @noinline function _wasm_heatmap(ax_id::Int64, nrows::Int64, ncols::Int64)::Int64
-    Core.Intrinsics.compilerbarrier(:conditional, Int64(0))
+    Base.compilerbarrier(:conditional, Int64(0))
 end
 @noinline function _wasm_lines(ax_id::Int64, n::Int64)::Int64
-    Core.Intrinsics.compilerbarrier(:conditional, Int64(0))
+    Base.compilerbarrier(:conditional, Int64(0))
 end
 @noinline function _wasm_scatter(ax_id::Int64, n::Int64)::Int64
-    Core.Intrinsics.compilerbarrier(:conditional, Int64(0))
+    Base.compilerbarrier(:conditional, Int64(0))
 end
 @noinline function _wasm_display(fig_id::Int64)::Int64
-    Core.Intrinsics.compilerbarrier(:conditional, Int64(0))
+    Base.compilerbarrier(:conditional, Int64(0))
 end
 
 export _wasm_heatmap, _wasm_lines, _wasm_scatter, _wasm_display
