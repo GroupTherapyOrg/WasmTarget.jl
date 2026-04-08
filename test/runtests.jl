@@ -10416,129 +10416,267 @@ console.log(JSON.stringify({
                           I64, F64, NumType, _wasm_heatmap, _wasm_lines,
                           _wasm_scatter, _wasm_display, add_makie_imports!
 
-        # --- Test functions ---
+        # ================================================================
+        # Part A: Direct import stub pipeline with real math
+        # ================================================================
+        @testset "direct stub pipeline" begin
 
-        # Heatmap: 10x10 grid with sin*cos computation + import
-        @noinline function _wet_heatmap_sincos()
-            nrows = Int64(10)
-            ncols = Int64(10)
-            total = 0.0
-            for i in Int64(1):nrows
-                for j in Int64(1):ncols
-                    total = total + sin(Float64(i) * 0.1) * cos(Float64(j) * 0.1)
+            # Heatmap: 10x10 grid with sin*cos computation + import
+            @noinline function _wet_heatmap_sincos()
+                nrows = Int64(10)
+                ncols = Int64(10)
+                total = 0.0
+                for i in Int64(1):nrows
+                    for j in Int64(1):ncols
+                        total = total + sin(Float64(i) * 0.1) * cos(Float64(j) * 0.1)
+                    end
                 end
+                _wasm_heatmap(Int64(1), nrows, ncols)
             end
-            _wasm_heatmap(Int64(1), nrows, ncols)
-        end
 
-        # Lines: 100-point sin wave + import
-        @noinline function _wet_lines_sinwave()
-            n = Int64(0)
-            for i in Int64(1):Int64(100)
-                x = Float64(i) * 0.1
-                y = sin(x * 5.0)
-                n = n + Int64(1)
+            # Lines: 100-point sin wave + import
+            @noinline function _wet_lines_sinwave()
+                n = Int64(0)
+                for i in Int64(1):Int64(100)
+                    x = Float64(i) * 0.1
+                    y = sin(x * 5.0)
+                    n = n + Int64(1)
+                end
+                _wasm_lines(Int64(2), n)
             end
-            _wasm_lines(Int64(2), n)
-        end
 
-        # Scatter: 50 points + import
-        @noinline function _wet_scatter_points()
-            n = Int64(0)
-            for i in Int64(1):Int64(50)
-                x = Float64(i) * 0.2
-                y = cos(x)
-                n = n + Int64(1)
+            # Scatter: 50 points + import
+            @noinline function _wet_scatter_points()
+                n = Int64(0)
+                for i in Int64(1):Int64(50)
+                    x = Float64(i) * 0.2
+                    y = cos(x)
+                    n = n + Int64(1)
+                end
+                _wasm_scatter(Int64(3), n)
             end
-            _wasm_scatter(Int64(3), n)
-        end
 
-        # Display standalone
-        @noinline function _wet_display_only()
-            _wasm_display(Int64(42))
-        end
+            # Display standalone
+            @noinline function _wet_display_only()
+                _wasm_display(Int64(42))
+            end
 
-        # Combined: heatmap + lines + display
-        @noinline function _wet_combined_hl()
-            _wasm_heatmap(Int64(1), Int64(20), Int64(20))
-            _wasm_lines(Int64(1), Int64(200))
-            _wasm_display(Int64(1))
-        end
+            # Combined: heatmap + lines + display
+            @noinline function _wet_combined_hl()
+                _wasm_heatmap(Int64(1), Int64(20), Int64(20))
+                _wasm_lines(Int64(1), Int64(200))
+                _wasm_display(Int64(1))
+            end
 
-        # Combined: all three plot types + display
-        @noinline function _wet_combined_all()
-            _wasm_heatmap(Int64(1), Int64(30), Int64(30))
-            _wasm_lines(Int64(1), Int64(100))
-            _wasm_scatter(Int64(1), Int64(50))
-            _wasm_display(Int64(1))
-        end
+            # Combined: all three plot types + display
+            @noinline function _wet_combined_all()
+                _wasm_heatmap(Int64(1), Int64(30), Int64(30))
+                _wasm_lines(Int64(1), Int64(100))
+                _wasm_scatter(Int64(1), Int64(50))
+                _wasm_display(Int64(1))
+            end
 
-        # --- Compile all functions into one module ---
-        mod = WasmModule()
-        add_import!(mod, "Math", "pow", NumType[F64, F64], NumType[F64])
-        stubs = add_makie_imports!(mod)
+            # Pure math verification — no import stubs, returns Float64 sin sum
+            @noinline function _wet_math_sinsum()
+                total = 0.0
+                for i in Int64(1):Int64(10)
+                    total = total + sin(Float64(i) * 0.1)
+                end
+                total
+            end
 
-        result_mod = compile_module(
-            [
-                (_wet_heatmap_sincos, (), "_wet_heatmap_sincos"),
-                (_wet_lines_sinwave, (), "_wet_lines_sinwave"),
-                (_wet_scatter_points, (), "_wet_scatter_points"),
-                (_wet_display_only, (), "_wet_display_only"),
-                (_wet_combined_hl, (), "_wet_combined_hl"),
-                (_wet_combined_all, (), "_wet_combined_all"),
-            ];
-            existing_module=mod,
-            import_stubs=stubs
-        )
-        wasm_bytes = to_bytes(result_mod)
+            mod = WasmModule()
+            add_import!(mod, "Math", "pow", NumType[F64, F64], NumType[F64])
+            stubs = add_makie_imports!(mod)
 
-        # Test 1-2: Valid WASM
-        @test wasm_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6D]
-        @test length(wasm_bytes) > 1000
-
-        if NODE_CMD !== nothing
-            makie_mock = Dict(
-                "heatmap" => "(ax_id, nrows, ncols) => ax_id * 10000n + nrows * 100n + ncols",
-                "lines" => "(ax_id, n) => ax_id * 1000n + n",
-                "scatter" => "(ax_id, n) => ax_id * 1000n + n",
-                "display" => "(fig_id) => fig_id * 100n"
+            result_mod = compile_module(
+                [
+                    (_wet_heatmap_sincos, (), "_wet_heatmap_sincos"),
+                    (_wet_lines_sinwave, (), "_wet_lines_sinwave"),
+                    (_wet_scatter_points, (), "_wet_scatter_points"),
+                    (_wet_display_only, (), "_wet_display_only"),
+                    (_wet_combined_hl, (), "_wet_combined_hl"),
+                    (_wet_combined_all, (), "_wet_combined_all"),
+                    (_wet_math_sinsum, (), "_wet_math_sinsum"),
+                ];
+                existing_module=mod,
+                import_stubs=stubs
             )
-            imports = Dict("Math" => Dict("pow" => "Math.pow"), "makie" => makie_mock)
+            wasm_bytes = to_bytes(result_mod)
 
-            # Test 3: heatmap with sin*cos math → import called with 10x10
-            r = run_wasm_with_imports(wasm_bytes, "_wet_heatmap_sincos", imports)
-            @test r == 1 * 10000 + 10 * 100 + 10  # 11010
+            # Tests 1-2: Valid WASM binary
+            @test wasm_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6D]
+            @test length(wasm_bytes) > 1000
 
-            # Test 4: lines with sin wave → import called with 100 points
-            r = run_wasm_with_imports(wasm_bytes, "_wet_lines_sinwave", imports)
-            @test r == 2 * 1000 + 100  # 2100
+            if NODE_CMD !== nothing
+                makie_mock = Dict(
+                    "heatmap" => "(ax_id, nrows, ncols) => ax_id * 10000n + nrows * 100n + ncols",
+                    "lines" => "(ax_id, n) => ax_id * 1000n + n",
+                    "scatter" => "(ax_id, n) => ax_id * 1000n + n",
+                    "display" => "(fig_id) => fig_id * 100n"
+                )
+                imports = Dict("Math" => Dict("pow" => "Math.pow"), "makie" => makie_mock)
 
-            # Test 5: scatter with cos → import called with 50 points
-            r = run_wasm_with_imports(wasm_bytes, "_wet_scatter_points", imports)
-            @test r == 3 * 1000 + 50  # 3050
+                # Test 3: heatmap with sin*cos math → correct 10x10 dimensions
+                r = run_wasm_with_imports(wasm_bytes, "_wet_heatmap_sincos", imports)
+                @test r == 11010  # 1*10000 + 10*100 + 10
 
-            # Test 6: display standalone
-            r = run_wasm_with_imports(wasm_bytes, "_wet_display_only", imports)
-            @test r == 42 * 100  # 4200
+                # Test 4: lines with sin wave → correct 100-point count
+                r = run_wasm_with_imports(wasm_bytes, "_wet_lines_sinwave", imports)
+                @test r == 2100  # 2*1000 + 100
 
-            # Test 7: combined heatmap+lines+display → display is last call
-            r = run_wasm_with_imports(wasm_bytes, "_wet_combined_hl", imports)
-            @test r == 1 * 100  # 100
+                # Test 5: scatter with cos → correct 50-point count
+                r = run_wasm_with_imports(wasm_bytes, "_wet_scatter_points", imports)
+                @test r == 3050  # 3*1000 + 50
 
-            # Test 8: combined all plot types → display is last call
-            r = run_wasm_with_imports(wasm_bytes, "_wet_combined_all", imports)
-            @test r == 1 * 100  # 100
+                # Test 6: display with specific fig_id
+                r = run_wasm_with_imports(wasm_bytes, "_wet_display_only", imports)
+                @test r == 4200  # 42*100
 
-            # Test 9: heatmap dimensions are correct (not just non-zero)
-            @test 1 * 10000 + 10 * 100 + 10 == 11010
+                # Test 7: combined heatmap+lines+display pipeline
+                r = run_wasm_with_imports(wasm_bytes, "_wet_combined_hl", imports)
+                @test r == 100  # display(1) → 1*100
 
-            # Test 10: multi-function module — each function independently callable
-            r_h = run_wasm_with_imports(wasm_bytes, "_wet_heatmap_sincos", imports)
-            r_l = run_wasm_with_imports(wasm_bytes, "_wet_lines_sinwave", imports)
-            r_s = run_wasm_with_imports(wasm_bytes, "_wet_scatter_points", imports)
-            @test r_h != r_l  # different functions produce different results
-            @test r_l != r_s
-            @test r_h == 11010 && r_l == 2100 && r_s == 3050
+                # Test 8: combined all plot types pipeline
+                r = run_wasm_with_imports(wasm_bytes, "_wet_combined_all", imports)
+                @test r == 100  # display(1) → 1*100
+
+                # Test 9: WASM math matches Julia — sin wave sum (replaces soft arithmetic check)
+                r = run_wasm_with_imports(wasm_bytes, "_wet_math_sinsum", imports)
+                expected_sinsum = sum(sin(Float64(i) * 0.1) for i in 1:10)
+                @test r isa Float64
+                @test isapprox(r, expected_sinsum; atol=1e-10)
+
+                # Test 10: multi-function module — each function independently callable
+                r_h = run_wasm_with_imports(wasm_bytes, "_wet_heatmap_sincos", imports)
+                r_l = run_wasm_with_imports(wasm_bytes, "_wet_lines_sinwave", imports)
+                r_s = run_wasm_with_imports(wasm_bytes, "_wet_scatter_points", imports)
+                @test r_h != r_l && r_l != r_s
+                @test r_h == 11010 && r_l == 2100 && r_s == 3050
+            end
+        end
+
+        # ================================================================
+        # Part B: Makie overlay pipeline — Figure/Axis/plot!/display
+        # through actual Makie API calls compiled via WASM_METHOD_TABLE
+        # ================================================================
+        @testset "Makie overlay pipeline" begin
+            using Makie
+
+            # Figure → Axis → heatmap! → display through overlay dispatch
+            @noinline function _wet_ov_heatmap()
+                fig = Makie.Figure()
+                ax = Makie.Axis(fig)
+                data = Vector{Float64}(undef, 25)
+                for i in Int64(1):Int64(25)
+                    data[i] = sin(Float64(i) * 0.1)
+                end
+                Makie.heatmap!(ax, data)
+                _wasm_display(fig.id)
+            end
+
+            # Figure → Axis → lines! → display through overlay dispatch
+            @noinline function _wet_ov_lines()
+                fig = Makie.Figure()
+                ax = Makie.Axis(fig)
+                x = Vector{Float64}(undef, 75)
+                y = Vector{Float64}(undef, 75)
+                for i in Int64(1):Int64(75)
+                    x[i] = Float64(i) * 0.1
+                    y[i] = sin(x[i] * 3.0)
+                end
+                Makie.lines!(ax, x, y)
+                _wasm_display(fig.id)
+            end
+
+            # Figure → Axis → scatter! → display through overlay dispatch
+            @noinline function _wet_ov_scatter()
+                fig = Makie.Figure()
+                ax = Makie.Axis(fig)
+                sx = Vector{Float64}(undef, 40)
+                sy = Vector{Float64}(undef, 40)
+                for i in Int64(1):Int64(40)
+                    sx[i] = Float64(i) * 0.25
+                    sy[i] = cos(sx[i])
+                end
+                Makie.scatter!(ax, sx, sy)
+                _wasm_display(fig.id)
+            end
+
+            # Full pipeline: heatmap + lines + scatter + display
+            @noinline function _wet_ov_full()
+                fig = Makie.Figure()
+                ax = Makie.Axis(fig)
+                # Heatmap data
+                hdata = Vector{Float64}(undef, 16)
+                for i in Int64(1):Int64(16)
+                    hdata[i] = sin(Float64(i) * 0.2)
+                end
+                Makie.heatmap!(ax, hdata)
+                # Line data
+                lx = Vector{Float64}(undef, 60)
+                ly = Vector{Float64}(undef, 60)
+                for i in Int64(1):Int64(60)
+                    lx[i] = Float64(i) * 0.1
+                    ly[i] = sin(lx[i])
+                end
+                Makie.lines!(ax, lx, ly)
+                # Scatter data
+                scx = Vector{Float64}(undef, 30)
+                scy = Vector{Float64}(undef, 30)
+                for i in Int64(1):Int64(30)
+                    scx[i] = Float64(i) * 0.3
+                    scy[i] = cos(scx[i])
+                end
+                Makie.scatter!(ax, scx, scy)
+                _wasm_display(fig.id)
+            end
+
+            mod = WasmModule()
+            add_import!(mod, "Math", "pow", NumType[F64, F64], NumType[F64])
+            stubs = add_makie_imports!(mod)
+
+            result_mod = compile_module(
+                [
+                    (_wet_ov_heatmap, (), "_wet_ov_heatmap"),
+                    (_wet_ov_lines, (), "_wet_ov_lines"),
+                    (_wet_ov_scatter, (), "_wet_ov_scatter"),
+                    (_wet_ov_full, (), "_wet_ov_full"),
+                ];
+                existing_module=mod,
+                import_stubs=stubs
+            )
+            wasm_bytes = to_bytes(result_mod)
+
+            # Test 11: Overlay pipeline produces valid WASM
+            @test wasm_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6D]
+            @test length(wasm_bytes) > 500
+
+            if NODE_CMD !== nothing
+                makie_mock = Dict(
+                    "heatmap" => "(ax_id, nrows, ncols) => ax_id * 10000n + nrows * 100n + ncols",
+                    "lines" => "(ax_id, n) => ax_id * 1000n + n",
+                    "scatter" => "(ax_id, n) => ax_id * 1000n + n",
+                    "display" => "(fig_id) => fig_id * 100n"
+                )
+                imports = Dict("Math" => Dict("pow" => "Math.pow"), "makie" => makie_mock)
+
+                # Test 12: Overlay heatmap pipeline → display called with fig_id=1
+                r = run_wasm_with_imports(wasm_bytes, "_wet_ov_heatmap", imports)
+                @test r == 100  # display(fig_id=1) → 1*100
+
+                # Test 13: Overlay lines pipeline → display called with fig_id=1
+                r = run_wasm_with_imports(wasm_bytes, "_wet_ov_lines", imports)
+                @test r == 100
+
+                # Test 14: Overlay scatter pipeline → display called with fig_id=1
+                r = run_wasm_with_imports(wasm_bytes, "_wet_ov_scatter", imports)
+                @test r == 100
+
+                # Test 15: Full overlay pipeline (all 3 plot types + display)
+                r = run_wasm_with_imports(wasm_bytes, "_wet_ov_full", imports)
+                @test r == 100
+            end
         end
     end
 
