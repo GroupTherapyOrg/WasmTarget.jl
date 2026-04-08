@@ -10205,4 +10205,203 @@ console.log(JSON.stringify({
         end
     end
 
+    # ================================================================
+    # WE-003/004/005/006: Makie Import Stub Tests
+    # ================================================================
+    # Verify that _wasm_heatmap, _wasm_lines, _wasm_scatter, _wasm_display
+    # compile to WASM import calls when used with import_stubs.
+    # JS mock imports encode received arguments into their return value
+    # so we can verify correct argument passing from a single WASM export.
+
+    @testset "WE-003: heatmap! import stub" begin
+        using WasmTarget: WasmModule, add_import!, compile_module, to_bytes,
+                          I64, F64, NumType, _wasm_heatmap, add_makie_imports!
+
+        # No ::Int64 return annotation — get_typed_ir can't handle convert() for it
+        @noinline function _we003_heatmap_call()
+            _wasm_heatmap(Int64(2), Int64(5), Int64(3))
+        end
+
+        mod = WasmModule()
+        add_import!(mod, "Math", "pow", NumType[F64, F64], NumType[F64])
+        stubs = add_makie_imports!(mod)
+
+        result_mod = compile_module(
+            [(_we003_heatmap_call, (), "_we003_heatmap_call")];
+            existing_module=mod,
+            import_stubs=stubs
+        )
+        wasm_bytes = to_bytes(result_mod)
+
+        @test wasm_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6D]
+        @test length(wasm_bytes) > 100
+
+        if NODE_CMD !== nothing
+            imports = Dict(
+                "Math" => Dict("pow" => "Math.pow"),
+                "makie" => Dict(
+                    "heatmap" => "(ax_id, nrows, ncols) => ax_id * 10000n + nrows * 100n + ncols",
+                    "lines" => "(ax_id, n) => 0n",
+                    "scatter" => "(ax_id, n) => 0n",
+                    "display" => "(fig_id) => 0n"
+                )
+            )
+            result = run_wasm_with_imports(wasm_bytes, "_we003_heatmap_call", imports)
+            # ax_id=2, nrows=5, ncols=3 → 2*10000 + 5*100 + 3 = 20503
+            @test result == 20503
+        end
+    end
+
+    @testset "WE-004: lines! import stub" begin
+        using WasmTarget: WasmModule, add_import!, compile_module, to_bytes,
+                          I64, F64, NumType, _wasm_lines, add_makie_imports!
+
+        @noinline function _we004_lines_call()
+            _wasm_lines(Int64(4), Int64(100))
+        end
+
+        mod = WasmModule()
+        add_import!(mod, "Math", "pow", NumType[F64, F64], NumType[F64])
+        stubs = add_makie_imports!(mod)
+
+        result_mod = compile_module(
+            [(_we004_lines_call, (), "_we004_lines_call")];
+            existing_module=mod,
+            import_stubs=stubs
+        )
+        wasm_bytes = to_bytes(result_mod)
+
+        @test wasm_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6D]
+
+        if NODE_CMD !== nothing
+            imports = Dict(
+                "Math" => Dict("pow" => "Math.pow"),
+                "makie" => Dict(
+                    "heatmap" => "(ax_id, nrows, ncols) => 0n",
+                    "lines" => "(ax_id, n) => ax_id * 1000n + n",
+                    "scatter" => "(ax_id, n) => 0n",
+                    "display" => "(fig_id) => 0n"
+                )
+            )
+            result = run_wasm_with_imports(wasm_bytes, "_we004_lines_call", imports)
+            # ax_id=4, n=100 → 4*1000 + 100 = 4100
+            @test result == 4100
+        end
+    end
+
+    @testset "WE-005: scatter! import stub" begin
+        using WasmTarget: WasmModule, add_import!, compile_module, to_bytes,
+                          I64, F64, NumType, _wasm_scatter, add_makie_imports!
+
+        @noinline function _we005_scatter_call()
+            _wasm_scatter(Int64(6), Int64(50))
+        end
+
+        mod = WasmModule()
+        add_import!(mod, "Math", "pow", NumType[F64, F64], NumType[F64])
+        stubs = add_makie_imports!(mod)
+
+        result_mod = compile_module(
+            [(_we005_scatter_call, (), "_we005_scatter_call")];
+            existing_module=mod,
+            import_stubs=stubs
+        )
+        wasm_bytes = to_bytes(result_mod)
+
+        @test wasm_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6D]
+
+        if NODE_CMD !== nothing
+            imports = Dict(
+                "Math" => Dict("pow" => "Math.pow"),
+                "makie" => Dict(
+                    "heatmap" => "(ax_id, nrows, ncols) => 0n",
+                    "lines" => "(ax_id, n) => 0n",
+                    "scatter" => "(ax_id, n) => ax_id * 1000n + n",
+                    "display" => "(fig_id) => 0n"
+                )
+            )
+            result = run_wasm_with_imports(wasm_bytes, "_we005_scatter_call", imports)
+            # ax_id=6, n=50 → 6*1000 + 50 = 6050
+            @test result == 6050
+        end
+    end
+
+    @testset "WE-006: display import stub" begin
+        using WasmTarget: WasmModule, add_import!, compile_module, to_bytes,
+                          I64, F64, NumType, _wasm_display, add_makie_imports!
+
+        @noinline function _we006_display_call()
+            _wasm_display(Int64(7))
+        end
+
+        mod = WasmModule()
+        add_import!(mod, "Math", "pow", NumType[F64, F64], NumType[F64])
+        stubs = add_makie_imports!(mod)
+
+        result_mod = compile_module(
+            [(_we006_display_call, (), "_we006_display_call")];
+            existing_module=mod,
+            import_stubs=stubs
+        )
+        wasm_bytes = to_bytes(result_mod)
+
+        @test wasm_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6D]
+
+        if NODE_CMD !== nothing
+            imports = Dict(
+                "Math" => Dict("pow" => "Math.pow"),
+                "makie" => Dict(
+                    "heatmap" => "(ax_id, nrows, ncols) => 0n",
+                    "lines" => "(ax_id, n) => 0n",
+                    "scatter" => "(ax_id, n) => 0n",
+                    "display" => "(fig_id) => fig_id * 100n"
+                )
+            )
+            result = run_wasm_with_imports(wasm_bytes, "_we006_display_call", imports)
+            # fig_id=7 → 7*100 = 700
+            @test result == 700
+        end
+    end
+
+    @testset "WE-003/006 combined: Figure→Axis→heatmap!→display pipeline" begin
+        using WasmTarget: WasmModule, add_import!, compile_module, to_bytes,
+                          I64, F64, NumType, _wasm_heatmap, _wasm_display,
+                          add_makie_imports!
+
+        @noinline function _we_combined_pipeline()
+            # heatmap call: ax_id=2, 10 rows, 10 cols
+            _wasm_heatmap(Int64(2), Int64(10), Int64(10))
+            # display call: fig_id=1 — this is the returned value
+            _wasm_display(Int64(1))
+        end
+
+        mod = WasmModule()
+        add_import!(mod, "Math", "pow", NumType[F64, F64], NumType[F64])
+        stubs = add_makie_imports!(mod)
+
+        result_mod = compile_module(
+            [(_we_combined_pipeline, (), "_we_combined_pipeline")];
+            existing_module=mod,
+            import_stubs=stubs
+        )
+        wasm_bytes = to_bytes(result_mod)
+
+        @test wasm_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6D]
+
+        if NODE_CMD !== nothing
+            imports = Dict(
+                "Math" => Dict("pow" => "Math.pow"),
+                "makie" => Dict(
+                    "heatmap" => "(ax_id, nrows, ncols) => ax_id * 10000n + nrows * 100n + ncols",
+                    "lines" => "(ax_id, n) => 0n",
+                    "scatter" => "(ax_id, n) => 0n",
+                    "display" => "(fig_id) => fig_id * 100n"
+                )
+            )
+            result = run_wasm_with_imports(wasm_bytes, "_we_combined_pipeline", imports)
+            # display returns fig_id*100 = 1*100 = 100
+            @test result == 100
+        end
+    end
+
 end

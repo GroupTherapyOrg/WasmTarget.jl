@@ -59,6 +59,53 @@ end
 
 export WasmFigure, WasmAxis, WasmPlotRef
 
+# Makie WASM import stubs — called from overlays, compiled to WASM imports.
+# When compiled normally, these are no-ops. When compiled with import_stubs
+# via compile_module, they become WASM import calls to JS rendering functions.
+# Returns Int64 (not Nothing) so the WASM function type has a result slot,
+# avoiding void-return stack issues in the cross-function call codegen.
+# compilerbarrier prevents Julia's constant propagation from folding these
+# calls away — the body is never compiled to WASM (it's an import stub).
+@noinline function _wasm_heatmap(ax_id::Int64, nrows::Int64, ncols::Int64)::Int64
+    Core.Intrinsics.compilerbarrier(:conditional, Int64(0))
+end
+@noinline function _wasm_lines(ax_id::Int64, n::Int64)::Int64
+    Core.Intrinsics.compilerbarrier(:conditional, Int64(0))
+end
+@noinline function _wasm_scatter(ax_id::Int64, n::Int64)::Int64
+    Core.Intrinsics.compilerbarrier(:conditional, Int64(0))
+end
+@noinline function _wasm_display(fig_id::Int64)::Int64
+    Core.Intrinsics.compilerbarrier(:conditional, Int64(0))
+end
+
+export _wasm_heatmap, _wasm_lines, _wasm_scatter, _wasm_display
+
+"""
+    add_makie_imports!(mod::WasmModule) -> Vector
+
+Add Makie plot import declarations to a WASM module and return import_stubs
+tuples for use with `compile_module(; existing_module=mod, import_stubs=stubs)`.
+
+The caller must also add `Math.pow` import before calling this if not using
+an existing module that already has it.
+"""
+function add_makie_imports!(mod::WasmModule)
+    heatmap_idx = add_import!(mod, "makie", "heatmap", NumType[I64, I64, I64], NumType[I64])
+    lines_idx = add_import!(mod, "makie", "lines", NumType[I64, I64], NumType[I64])
+    scatter_idx = add_import!(mod, "makie", "scatter", NumType[I64, I64], NumType[I64])
+    display_idx = add_import!(mod, "makie", "display", NumType[I64], NumType[I64])
+
+    return [
+        (_wasm_heatmap, "_wasm_heatmap", (Int64, Int64, Int64), heatmap_idx, Int64),
+        (_wasm_lines, "_wasm_lines", (Int64, Int64), lines_idx, Int64),
+        (_wasm_scatter, "_wasm_scatter", (Int64, Int64), scatter_idx, Int64),
+        (_wasm_display, "_wasm_display", (Int64,), display_idx, Int64),
+    ]
+end
+
+export add_makie_imports!
+
 # Main API
 export compile, compile_multi, compile_from_codeinfo, compile_with_base, optimize, WasmModule, to_bytes
 export FrozenCompilationState, build_frozen_state, compile_module_from_ir_frozen, compile_module_from_ir_frozen_no_dict
