@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>WasmTarget Makie E2E</title>
+  <style>
+    body { margin: 0; background: #111; }
+    #makie-canvas { width: 512px; height: 512px; }
+    #status { color: #0f0; font-family: monospace; padding: 8px; }
+  </style>
+</head>
+<body>
+  <div id="status">Loading...</div>
+  <div id="makie-canvas"></div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./node_modules/three/build/three.module.js"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+
+    // ---- State ----
+    const scenes = {};  // fig_id -> { scene, camera, renderer }
+    const calls = [];   // record import calls for assertion
+    window.__makieCalls = calls;
+    window.__makieScenes = scenes;
+
+    // ---- Three.js import implementations ----
+
+    function createScene(figId) {
+      const container = document.getElementById('makie-canvas');
+      const w = container.clientWidth || 512;
+      const h = container.clientHeight || 512;
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x222222);
+
+      const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+      camera.position.z = 5;
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+      renderer.setSize(w, h);
+      container.appendChild(renderer.domElement);
+
+      scenes[figId] = { scene, camera, renderer };
+      return scenes[figId];
+    }
+
+    // Heatmap: create a colored rectangle grid
+    // ax_id, nrows, ncols passed from WASM
+    function makieHeatmap(axId, nrows, ncols) {
+      calls.push({ type: 'heatmap', axId: Number(axId), nrows: Number(nrows), ncols: Number(ncols) });
+
+      // Find scene (fig_id=1 assumed for simplicity)
+      const s = scenes[1] || createScene(1);
+
+      const nr = Number(nrows);
+      const nc = Number(ncols);
+      const geometry = new THREE.PlaneGeometry(2, 2, nc, nr);
+      const colors = [];
+      for (let i = 0; i < (nc + 1) * (nr + 1); i++) {
+        const t = i / ((nc + 1) * (nr + 1));
+        colors.push(t, 0.3, 1 - t);  // blue → red gradient
+      }
+      geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+      const material = new THREE.MeshBasicMaterial({ vertexColors: true });
+      const mesh = new THREE.Mesh(geometry, material);
+      s.scene.add(mesh);
+
+      return BigInt(axId) * 10000n + BigInt(nrows) * 100n + BigInt(ncols);
+    }
+
+    // Lines: create a line strip
+    function makieLines(axId, n) {
+      calls.push({ type: 'lines', axId: Number(axId), n: Number(n) });
+
+      const s = scenes[1] || createScene(1);
+      const points = [];
+      const nPts = Number(n);
+      for (let i = 0; i < nPts; i++) {
+        const t = i / nPts;
+        points.push(new THREE.Vector3(t * 2 - 1, Math.sin(t * Math.PI * 4) * 0.8, 0));
+      }
+      const geometry = new THREE.BufferGeometry().setFromPoints(points);
+      const material = new THREE.LineBasicMaterial({ color: 0x00ff00 });
+      const line = new THREE.Line(geometry, material);
+      s.scene.add(line);
+
+      return BigInt(axId) * 1000n + BigInt(n);
+    }
+
+    // Scatter: create points
+    function makieScatter(axId, n) {
+      calls.push({ type: 'scatter', axId: Number(axId), n: Number(n) });
+
+      const s = scenes[1] || createScene(1);
+      const positions = [];
+      const nPts = Number(n);
+      for (let i = 0; i < nPts; i++) {
+        const t = i / nPts;
+        positions.push(t * 2 - 1, Math.cos(t * Math.PI * 3) * 0.8, 0);
+      }
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      const material = new THREE.PointsMaterial({ color: 0xff4444, size: 5, sizeAttenuation: false });
+      const pts = new THREE.Points(geometry, material);
+      s.scene.add(pts);
+
+      return BigInt(axId) * 1000n + BigInt(n);
+    }
+
+    // Display: trigger render
+    function makieDisplay(figId) {
+      calls.push({ type: 'display', figId: Number(figId) });
+
+      const s = scenes[Number(figId)];
+      if (s) {
+        s.renderer.render(s.scene, s.camera);
+      }
+      return BigInt(figId) * 100n;
+    }
+
+    // ---- Load and run WASM ----
+    async function main() {
+      const status = document.getElementById('status');
+      try {
+        const resp = await fetch('./module.wasm');
+        const bytes = await resp.arrayBuffer();
+
+        const importObject = {
+          Math: { pow: Math.pow },
+          makie: {
+            heatmap: makieHeatmap,
+            lines: makieLines,
+            scatter: makieScatter,
+            display: makieDisplay
+          }
+        };
+
+        const { instance } = await WebAssembly.instantiate(bytes, importObject);
+        window.__wasmInstance = instance;
+
+        // Run the full overlay pipeline function
+        const funcName = new URLSearchParams(location.search).get('func') || '_wet_ov_full';
+        const func = instance.exports[funcName];
+        if (func) {
+          const result = func();
+          window.__wasmResult = Number(result);
+          status.textContent = `OK: ${funcName} returned ${result}`;
+        } else {
+          // List available exports
+          const exports = Object.keys(instance.exports).filter(k => typeof instance.exports[k] === 'function');
+          status.textContent = `ERROR: ${funcName} not found. Available: ${exports.join(', ')}`;
+        }
+
+        window.__testReady = true;
+      } catch (e) {
+        status.textContent = `ERROR: ${e.message}`;
+        window.__testError = e.message;
+        window.__testReady = true;
+      }
+    }
+
+    main();
+  </script>
+</body>
+</html>

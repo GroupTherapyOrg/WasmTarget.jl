@@ -10677,6 +10677,58 @@ console.log(JSON.stringify({
                 r = run_wasm_with_imports(wasm_bytes, "_wet_ov_full", imports)
                 @test r == 100
             end
+
+            # ================================================================
+            # Part C: Browser E2E with Three.js (WET-002)
+            # Writes WASM to test/browser/, runs Playwright headless Chromium,
+            # verifies: canvas created, has pixels, imports called, display
+            # triggered, correct return value.
+            # ================================================================
+            @testset "browser Three.js rendering" begin
+                browser_dir = joinpath(@__DIR__, "browser")
+                wasm_path = joinpath(browser_dir, "module.wasm")
+
+                # Write overlay WASM for browser test
+                write(wasm_path, wasm_bytes)
+                @test isfile(wasm_path)
+
+                # Check npm deps available
+                if !isdir(joinpath(browser_dir, "node_modules"))
+                    @warn "npm deps not installed in test/browser/, skipping browser tests"
+                else
+                    for func_name in ["_wet_ov_full", "_wet_ov_heatmap", "_wet_ov_lines", "_wet_ov_scatter"]
+                        @testset "browser: $func_name" begin
+                            run_script = joinpath(browser_dir, "run_test.mjs")
+                            cmd = NEEDS_EXPERIMENTAL_FLAG ?
+                                `$NODE_CMD --experimental-wasm-gc $run_script $func_name` :
+                                `$NODE_CMD $run_script $func_name`
+
+                            out_pipe = Pipe()
+                            err_pipe = Pipe()
+                            proc = run(pipeline(cmd; stdout=out_pipe, stderr=err_pipe); wait=false)
+                            close(out_pipe.in)
+                            close(err_pipe.in)
+                            output = read(out_pipe, String) |> strip
+                            errout = read(err_pipe, String) |> strip
+                            wait(proc)
+
+                            if isempty(output)
+                                @error "Browser test no output" stderr=errout
+                                @test false
+                            else
+                                results = JSON.parse(output)
+                                @test length(results) >= 5
+                                for r in results
+                                    @test r["pass"] == true
+                                end
+                            end
+                        end
+                    end
+
+                    # Clean up WASM file
+                    rm(wasm_path; force=true)
+                end
+            end
         end
     end
 
