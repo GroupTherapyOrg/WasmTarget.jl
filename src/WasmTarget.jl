@@ -41,6 +41,24 @@ include("runtime/intrinsics.jl")
 include("runtime/stringops.jl")
 include("runtime/arrayops.jl")
 
+# Makie WASM types — lightweight structs for WasmTargetMakieExt overlays
+# These live in WasmTarget (not the extension) so the compiler can resolve them.
+struct WasmFigure
+    id::Int64
+end
+
+struct WasmAxis
+    fig_id::Int64
+    id::Int64
+end
+
+struct WasmPlotRef
+    ax_id::Int64
+    plot_id::Int64
+end
+
+export WasmFigure, WasmAxis, WasmPlotRef
+
 # Main API
 export compile, compile_multi, compile_from_codeinfo, compile_with_base, optimize, WasmModule, to_bytes
 export FrozenCompilationState, build_frozen_state, compile_module_from_ir_frozen, compile_module_from_ir_frozen_no_dict

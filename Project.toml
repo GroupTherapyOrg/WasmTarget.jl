@@ -8,21 +8,27 @@ HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 JuliaLowering = "f3c80556-a63f-4383-b822-37d64f81a311"
 JuliaSyntax = "70703baa-626e-46a2-a12c-08ffd08c73b4"
+Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
 SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
 
 [sources]
 JuliaLowering = {rev = "main", url = "https://github.com/JuliaLang/JuliaLowering.jl"}
 JuliaSyntax = {rev = "main", url = "https://github.com/JuliaLang/JuliaSyntax.jl"}
 
+[extensions]
+WasmTargetMakieExt = "Makie"
+
 [compat]
 HTTP = "1.11.0"
 JSON = "0.21"
 JuliaLowering = "1.0.0"
 JuliaSyntax = "1, 2"
+Makie = "0.24.9"
 julia = "1.12"
 
 [extras]
+Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test"]
+test = ["Test", "Makie"]
