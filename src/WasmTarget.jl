@@ -131,7 +131,7 @@ export WasmGlobal, global_index, global_eltype
 # AbstractInterpreter with overlay method table (GPUCompiler pattern)
 export WasmInterpreter, get_wasm_interpreter, WASM_METHOD_TABLE
 # Therapy.jl integration - direct IR compilation for reactive handlers
-export compile_handler, compile_closure_body, DOMBindingSpec, TypeRegistry, FunctionRegistry
+export compile_handler, compile_closure_body, DOMBindingSpec, TypeRegistry, FunctionRegistry, register_function!
 export serialize_type_registry, serialize_function_table, serialize_type_ids, serialize_dispatch_tables
 export add_import!, add_global!, add_global_export!, add_function!, add_export!
 export I32, I64, F32, F64, NumType, Opcode, ExternRef
