@@ -10557,10 +10557,11 @@ console.log(JSON.stringify({
         end
 
         # ================================================================
-        # Part B: Makie overlay pipeline — Figure/Axis/plot!/display
+        # Part B: WGLMakie overlay pipeline — Figure/Axis/plot!/display
         # through actual Makie API calls compiled via WASM_METHOD_TABLE
         # ================================================================
-        @testset "Makie overlay pipeline" begin
+        @testset "WGLMakie overlay pipeline" begin
+            using WGLMakie
             using Makie
 
             # Figure → Axis → heatmap! → display through overlay dispatch

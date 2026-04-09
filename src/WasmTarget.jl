@@ -41,7 +41,7 @@ include("runtime/intrinsics.jl")
 include("runtime/stringops.jl")
 include("runtime/arrayops.jl")
 
-# Makie WASM types — lightweight structs for WasmTargetMakieExt overlays
+# Makie WASM types — lightweight structs for WasmTargetWGLMakieExt overlays
 # These live in WasmTarget (not the extension) so the compiler can resolve them.
 struct WasmFigure
     id::Int64
