@@ -2116,7 +2116,9 @@ function compile_closure_body(
     invoke_imports::Dict{Int, UInt32} = Dict{Int, UInt32}(),
     void_return::Bool = false
 )
-    # Get typed IR for the closure (using WasmInterpreter for overlays)
+    # Get typed IR for the closure (using WasmInterpreter for overlays).
+    # Import stubs use Base.donotdelete() to prevent DCE in optimized IR,
+    # so we always use optimize=true for proper :invoke resolution.
     interp = get_wasm_interpreter()
     typed_results = Base.code_typed(closure, (); interp=interp)
     if isempty(typed_results)
@@ -2259,10 +2261,8 @@ function _autodiscover_closure_deps!(closure::Function, code_info::Core.CodeInfo
     seen = Set{Tuple{Any, Tuple}}()
 
     # Also collect from existing func_registry to avoid duplicates
-    for (name, infos) in func_registry.functions
-        for info in infos
-            push!(seen, (info.func_ref, info.arg_types))
-        end
+    for (name, info) in func_registry.functions
+        push!(seen, (info.func_ref, info.arg_types))
     end
 
     for stmt in code_info.code
@@ -2323,10 +2323,8 @@ function _autodiscover_closure_deps!(closure::Function, code_info::Core.CodeInfo
     # Reset seen to only func_registry entries — direct deps added during collection
     # must NOT be skipped here (that was the seen-set bug: BF1)
     compiled = Set{Tuple{Any, Tuple}}()
-    for (_n, infos) in func_registry.functions
-        for info in infos
-            push!(compiled, (info.func_ref, info.arg_types))
-        end
+    for (_n, info) in func_registry.functions
+        push!(compiled, (info.func_ref, info.arg_types))
     end
 
     # Compile each dependency into the existing module

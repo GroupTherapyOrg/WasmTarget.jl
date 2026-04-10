@@ -3728,6 +3728,13 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # Fall through for other struct types - will hit error
     end
 
+    # Core.donotdelete — compiler fence preventing DCE. No WASM output needed.
+    # Arguments were already evaluated by the caller's IR; we just skip emitting.
+    # Used by WASM import stubs (Canvas2D, etc.) to keep calls alive in optimized IR.
+    if is_func(func, :donotdelete) || (func isa GlobalRef && func.name === :donotdelete && func.mod === Core)
+        return bytes
+    end
+
     # Special case for compilerbarrier - just pass through the value
     if is_func(func, :compilerbarrier)
         # compilerbarrier(kind, value) - first arg is a symbol, second is the value
