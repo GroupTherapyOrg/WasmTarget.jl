@@ -461,7 +461,8 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
     # Also exempt JuliaSyntax submodules (e.g., Tokenize for accept_number with isdigit)
     _is_julias = nameof(mod) === :JuliaSyntax ||
                  (isdefined(mod, :parentmodule) && try nameof(parentmodule(mod)) === :JuliaSyntax catch; false end)
-    _exempt_mod = mod === WasmTarget || _is_julias ||
+    _is_kwarg_wrapper = startswith(String(meth_name), "#")
+    _exempt_mod = mod === WasmTarget || _is_julias || _is_kwarg_wrapper ||
                   (_is_base_or_sub && (meth_name in AUTODISCOVER_BASE_METHODS ||
                                        startswith(String(meth_name), "#string#") ||
                                        startswith(String(meth_name), "#power_by_squaring#")))
@@ -2265,6 +2266,9 @@ function _autodiscover_closure_deps!(closure::Function, code_info::Core.CodeInfo
         push!(seen, (info.func_ref, info.arg_types))
     end
 
+    # Reuse check_and_add_external_method! to discover both Base whitelisted
+    # methods AND user-package methods (e.g., WasmPlot kwarg wrappers)
+    _to_scan_tmp = Vector{Tuple{Any, Tuple, String}}()
     for stmt in code_info.code
         if stmt isa Expr && stmt.head === :invoke && length(stmt.args) >= 2
             mi_or_ci = stmt.args[1]
@@ -2276,42 +2280,7 @@ function _autodiscover_closure_deps!(closure::Function, code_info::Core.CodeInfo
                 nothing
             end
             mi === nothing && continue
-
-            meth = mi.def
-            meth isa Method || continue
-
-            meth_mod = meth.module
-            meth_name = meth.name
-            _is_base_or_sub = meth_mod === Base || (try parentmodule(meth_mod) === Base catch; false end)
-
-            # Only auto-discover whitelisted Base methods
-            if !(_is_base_or_sub && meth_name in AUTODISCOVER_BASE_METHODS)
-                continue
-            end
-
-            # Extract function + arg types from MethodInstance
-            sig = mi.specTypes
-            sig <: Tuple && length(sig.parameters) >= 1 || continue
-
-            func = try
-                func_type = sig.parameters[1]
-                if func_type isa DataType && func_type <: Function
-                    getfield(meth_mod, meth_name)
-                else
-                    nothing
-                end
-            catch
-                nothing
-            end
-            func === nothing && continue
-
-            arg_types = Tuple(sig.parameters[2:end])
-            key = (func, arg_types)
-            key in seen && continue
-            push!(seen, key)
-
-            name = string(meth_name)
-            push!(deps, (func, arg_types, name))
+            check_and_add_external_method!(mi, seen, deps, _to_scan_tmp)
         end
     end
 
