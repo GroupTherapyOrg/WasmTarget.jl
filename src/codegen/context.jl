@@ -2275,26 +2275,25 @@ function statement_produces_wasm_value(stmt::Expr, idx::Int, ctx::AbstractCompil
         end
     end
 
-    # For invoke statements, check the MethodInstance's return type
+    # For invoke statements, check the return type from CodeInstance/MethodInstance.
+    # This is authoritative for cross-calls: the WASM function's return type
+    # is determined by the CodeInstance, not the SSA type at the call site.
+    # In Julia 1.12+, rettype lives on CodeInstance, not MethodInstance.
     if stmt.head === :invoke && length(stmt.args) >= 1
         mi_or_ci = stmt.args[1]
-        mi = if mi_or_ci isa Core.MethodInstance
-            mi_or_ci
-        elseif isdefined(Core, :CodeInstance) && mi_or_ci isa Core.CodeInstance
-            mi_or_ci.def
-        else
-            nothing
+        ret_type = nothing
+        if isdefined(Core, :CodeInstance) && mi_or_ci isa Core.CodeInstance
+            ret_type = mi_or_ci.rettype
+        elseif mi_or_ci isa Core.MethodInstance && isdefined(mi_or_ci, :rettype)
+            ret_type = mi_or_ci.rettype
         end
-        if mi isa Core.MethodInstance
-            # Get the return type from the MethodInstance
-            # specTypes contains the return type
-            ret_type = mi.specTypes
-            # The return type is the rettype field when available
-            if isdefined(mi, :rettype)
-                ret_type = mi.rettype
-                if ret_type === Nothing
-                    return false
-                end
+        if ret_type !== nothing
+            if ret_type === Nothing || ret_type === Union{}
+                return false
+            end
+            # Known concrete return type — cross-call WILL push a value
+            if ret_type !== Any
+                return true
             end
         end
     end

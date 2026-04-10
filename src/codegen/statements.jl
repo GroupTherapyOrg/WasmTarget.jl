@@ -1583,6 +1583,25 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
         append!(bytes, encode_leb128_unsigned(ctx.slot_locals[_slot_assign_id]))
     end
 
+    # TRACE: Find double-DROP in compiled output for func 8
+    if ctx.func_idx == 8
+        n_drops = 0
+        for bi in 1:length(bytes)
+            if bytes[bi] == 0x1a
+                # Check it's really a DROP (not an operand of struct.get etc.)
+                # Only count if not preceded by fb 02 (GC struct.get)
+                is_struct_get_operand = bi >= 3 && bytes[bi-2] == 0xfb && bytes[bi-1] == 0x02
+                if !is_struct_get_operand
+                    n_drops += 1
+                end
+            end
+        end
+        if n_drops >= 2
+            stmt_str = stmt isa Expr ? string(stmt)[1:min(80, length(string(stmt)))] : string(typeof(stmt))
+            @warn "STMT $idx has $n_drops DROPs in $(length(bytes)) bytes: $stmt_str"
+        end
+    end
+
     return bytes
 end
 

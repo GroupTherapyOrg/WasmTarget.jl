@@ -1744,6 +1744,15 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 stmt_bytes = compile_statement(stmt, i, ctx)
                 append!(block_bytes, stmt_bytes)
 
+                # DEBUG: trace DROP emissions
+                _dbg_fn = try string(ctx.func_name) catch; "" end
+                if contains(_dbg_fn, "test_if_call")
+                    _drop_count = count(b -> b == 0x1a, stmt_bytes)
+                    if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
+                        @warn "STACKIFIED-DROP stmt=$i head=$(stmt.head) drops_in_stmt_bytes=$(_drop_count) stmt_bytes_len=$(length(stmt_bytes)) last2=$(length(stmt_bytes) >= 2 ? (stmt_bytes[end-1], stmt_bytes[end]) : ()) has_ssa=$(haskey(ctx.ssa_locals, i))" maxlog=20
+                    end
+                end
+
                 # PURE-9066: After unreachable/stub, mark dead code within block.
                 # Previous `break` exited the block loop, causing subsequent dead
                 # statements to be placed in the wrong block. Now we mark dead code
@@ -1765,6 +1774,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 use_count = get(ssa_use_count, i, 0)
                                 if use_count == 0
                                     push!(block_bytes, Opcode.DROP)
+                                    @warn "STACKIFIED-DROP ADDED extra drop for stmt=$i" maxlog=20
                                 end
                             end
                         end
