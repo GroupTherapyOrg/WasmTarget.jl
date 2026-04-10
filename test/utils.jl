@@ -22,11 +22,11 @@ function detect_node()
         m = match(r"v(\d+)\.", version_str)
         if m !== nothing
             major_version = Base.parse(Int, m.captures[1])
-            if major_version >= 23
-                # WasmGC is stable in v23+
+            if major_version >= 22
+                # WasmGC is stable in v22+ (flag removed)
                 return (`node`, false)
             elseif major_version >= 20
-                # WasmGC is experimental in v20-22
+                # WasmGC is experimental in v20-21
                 return (`node`, true)
             else
                 @warn "Node.js version $version_str found, but v20+ required for WasmGC"
