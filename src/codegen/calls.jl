@@ -5401,21 +5401,19 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # match Tuple{}'s assigned ID for the check to pass correctly.
         target_is_tuple = (target_func isa GlobalRef && target_func.name === :tuple && target_func.mod === Core)
 
-        if target_is_tuple && ctx.type_registry.base_struct_idx !== nothing
-            base_idx = ctx.type_registry.base_struct_idx
+        if target_is_tuple
             # Kwarg dispatch pattern: _apply_iterate(iterate, Core.tuple, unknown_kwargs_vec)
             # produces a Tuple{Vararg{Symbol}} which is checked by isa(result, Tuple{}).
-            # The isa check uses typeId comparison (shared wasm type), so we must emit
-            # a struct with Tuple{}'s correct typeId.
-            # Register Tuple{} and get its typeId
-            register_tuple_type!(ctx.mod, ctx.type_registry, Tuple{})
+            # The isa check uses ref.test against Tuple{}'s concrete WasmGC type,
+            # so we must emit a struct.new of the actual Tuple{} type (not base struct).
+            info = register_tuple_type!(ctx.mod, ctx.type_registry, Tuple{})
             tuple_empty_tid = ensure_type_id!(ctx.type_registry, Tuple{})
-            # Emit: i32.const $typeId; struct.new $base_idx
+            # Emit: i32.const $typeId; struct.new $Tuple_empty_type_idx
             push!(bytes, Opcode.I32_CONST)
             append!(bytes, encode_leb128_signed(Int64(tuple_empty_tid)))
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.STRUCT_NEW)
-            append!(bytes, encode_leb128_unsigned(base_idx))
+            append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
         # Only handle single-container Vector{T} splatting with known binary intrinsics
         elseif length(args) == 3 && container_type <: Vector && container_type isa DataType
             elem_type = eltype(container_type)
