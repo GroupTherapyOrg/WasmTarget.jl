@@ -2859,14 +2859,11 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         if target_info.return_type === Union{}
                             push!(bytes, Opcode.UNREACHABLE)
                         end
-                        # PURE-220: If SSA has no local and target returns non-void,
-                        # drop the unused return value. This applies to all cross-function
-                        # calls (GlobalRef, Core.Argument, etc.) where the caller discards
-                        # the result (no %XX = assignment in the IR).
-                        if !haskey(ctx.ssa_locals, idx) && target_info.return_type !== Nothing && target_info.return_type !== Union{}
-                            @debug "Dropping unused cross-call result" name=name idx=idx return_type=target_info.return_type
-                            push!(bytes, Opcode.DROP)
-                        end
+                        # PURE-220: Unused cross-call return values are dropped by
+                        # the stackifier (statement_produces_wasm_value + use_count==0).
+                        # Do NOT emit DROP here — the stackifier's already_dropped heuristic
+                        # has false positives when the LEB128 function index byte coincides
+                        # with Opcode.CALL (0x10), causing double DROP and stack underflow.
                         # Check: if function returns externref but caller expects concrete ref,
                         # insert any_convert_extern + ref.cast null to bridge the type gap.
                         # This happens when the function's wasm return type is externref (mapped

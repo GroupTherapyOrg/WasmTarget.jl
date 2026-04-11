@@ -1275,6 +1275,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 phi_local_type = ctx.locals[local_idx - ctx.n_params + 1]
                                 edge_val_type = get_phi_edge_wasm_type(val)
 
+
                                 if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type) && !(phi_local_type === I64 && edge_val_type === I32)
                                     if phi_local_type === ExternRef && (edge_val_type === I32 || edge_val_type === I64 || edge_val_type === F32 || edge_val_type === F64)
                                         # PURE-325: Box numeric phi edge for ExternRef local
@@ -1392,7 +1393,6 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                             actual_val_type = get_concrete_wasm_type(param_julia_type, ctx.mod, ctx.type_registry)
                                         end
                                     end
-
                                     if _already_boxed2
                                         append!(bytes, phi_value_bytes)
                                     elseif actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type) && !(phi_local_type === I64 && actual_val_type === I32) && !(phi_local_type === F64 && (actual_val_type === I64 || actual_val_type === I32 || actual_val_type === F32)) && !(phi_local_type === F32 && (actual_val_type === I64 || actual_val_type === I32))
@@ -1453,6 +1453,13 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                         # statement, not a local.get.
                                         phi_is_ref = phi_local_type isa ConcreteRef || phi_local_type === StructRef || phi_local_type === ArrayRef || phi_local_type === AnyRef || phi_local_type === ExternRef
                                         phi_val_is_numeric = !isempty(phi_value_bytes) && (phi_value_bytes[1] == Opcode.I32_CONST || phi_value_bytes[1] == Opcode.I64_CONST || phi_value_bytes[1] == Opcode.F32_CONST || phi_value_bytes[1] == Opcode.F64_CONST)
+                                        # PURE-6025b: Don't treat as numeric if the bytes contain
+                                        # a GC instruction (e.g., array.new_data for Symbol constants
+                                        # starts with i32.const for the offset argument but produces
+                                        # a ref-typed value, not a numeric one).
+                                        if phi_val_is_numeric && any(b == Opcode.GC_PREFIX for b in phi_value_bytes)
+                                            phi_val_is_numeric = false
+                                        end
                                         if phi_is_ref && phi_val_is_numeric
                                             append!(bytes, emit_phi_type_default(phi_local_type))
                                         else
