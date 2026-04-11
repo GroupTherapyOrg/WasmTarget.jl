@@ -2296,7 +2296,14 @@ function _autodiscover_closure_deps!(closure::Function, code_info::Core.CodeInfo
         push!(compiled, (info.func_ref, info.arg_types))
     end
 
-    # Compile each dependency into the existing module
+    # Two-pass compilation (same pattern as compile_module):
+    # Pass 1: Get typed IR and reserve function indices for ALL deps
+    # Pass 2: Compile bodies (all cross-call targets already in func_registry)
+    # This prevents stubbing when a caller (e.g. _render_axis!) is compiled
+    # before its callees (e.g. _render_bar!, _render_ticks!).
+
+    # Pass 1: collect typed IR, filter, reserve indices
+    dep_data = Vector{Tuple{Any, Tuple, String, Core.CodeInfo, Type}}()
     for (f, arg_types, name) in all_deps
         key = (f, arg_types)
         key in compiled && continue
@@ -2307,21 +2314,35 @@ function _autodiscover_closure_deps!(closure::Function, code_info::Core.CodeInfo
             isempty(typed_results) && continue
             dep_code_info, dep_return_type = typed_results[1]
             dep_return_type === Union{} && continue
+            push!(dep_data, (f, arg_types, name, dep_code_info, dep_return_type))
+        catch e
+            @warn "compile_closure_body: skipping dependency $name — $e"
+        end
+    end
 
-            # Create context and compile
+    isempty(dep_data) && return
+
+    # Reserve function indices for ALL deps before compiling any bodies
+    n_base = UInt32(length(mod.imports) + length(mod.functions))
+    for (i, (f, arg_types, name, _, dep_return_type)) in enumerate(dep_data)
+        func_idx = n_base + UInt32(i - 1)
+        register_function!(func_registry, name, f, arg_types, func_idx, dep_return_type)
+    end
+
+    # Pass 2: compile function bodies (all cross-call targets now registered)
+    for (i, (f, arg_types, name, dep_code_info, dep_return_type)) in enumerate(dep_data)
+        func_idx = n_base + UInt32(i - 1)
+        try
             dep_ctx = CompilationContext(dep_code_info, arg_types, dep_return_type, mod, type_registry;
-                                         func_registry=func_registry)
+                                         func_registry=func_registry, func_idx=func_idx, func_ref=f)
             dep_body = generate_body(dep_ctx)
 
-            # Get Wasm types
             param_types = WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in arg_types]
             result_types = dep_return_type === Nothing ? WasmValType[] : WasmValType[get_concrete_wasm_type(dep_return_type, mod, type_registry)]
 
-            # Add to module and registry
-            func_idx = add_function!(mod, param_types, result_types, dep_ctx.locals, dep_body)
-            register_function!(func_registry, name, f, arg_types, func_idx, dep_return_type)
+            add_function!(mod, param_types, result_types, dep_ctx.locals, dep_body)
         catch e
-            @warn "compile_closure_body: skipping dependency $name — $e"
+            @warn "compile_closure_body: error compiling dependency $name — $e"
         end
     end
 end
