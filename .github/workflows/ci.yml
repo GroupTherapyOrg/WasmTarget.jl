@@ -39,7 +39,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          BINARYEN_VERSION=119
+          BINARYEN_VERSION=125
           case "${{ runner.os }}" in
             Linux)
               PLATFORM="x86_64-linux"

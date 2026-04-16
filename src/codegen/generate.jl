@@ -229,9 +229,13 @@ function generate_body(ctx::AbstractCompilationContext)::Vector{UInt8}
     # expecting i64 input from a value that is already i32.
     bytes = fix_i32_wrap_after_i32_ops(bytes)
 
-    # PURE-414: Check validator for errors after function body generation
+    # PURE-414: Check validator for errors after function body generation.
+    # Downgraded to @debug: the validator observes raw pre-fix emitted opcodes,
+    # but the fix_* passes above (lines 213-230) repair the byte stream before
+    # it leaves this function. wasm-tools validate / wasm-opt are the source of
+    # truth; these collected errors are a developer diagnostic only.
     if has_errors(ctx.validator)
-        @warn "Stack validator found $(length(ctx.validator.errors)) issue(s) in $(ctx.validator.func_name)" errors=ctx.validator.errors
+        @debug "Stack validator found $(length(ctx.validator.errors)) issue(s) in $(ctx.validator.func_name)" errors=ctx.validator.errors
     end
 
     return bytes
