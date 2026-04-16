@@ -1,6 +1,10 @@
 [deps]
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
-WasmTarget = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+WasmTarget = "9f3a1415-1112-405b-ae89-c61daf9872bd"
 
 [sources]
 WasmTarget = {path = ".."}
+
+[compat]
+Documenter = "1"
+julia = "1.12"

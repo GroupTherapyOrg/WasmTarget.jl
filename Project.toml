@@ -3,22 +3,15 @@ uuid = "9f3a1415-1112-405b-ae89-c61daf9872bd"
 version = "0.1.0"
 authors = ["Dale Black"]
 
+# Note: HTTP, JuliaLowering, JuliaSyntax, SHA were previously listed as deps
+# but were never imported anywhere in src/. Their names appear only in
+# comments (e.g. "# Custom primitive types like JuliaSyntax.Kind"). Dropping
+# them removes a large transitive resolve and unblocks registration.
 [deps]
-HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
-JuliaLowering = "f3c80556-a63f-4383-b822-37d64f81a311"
-JuliaSyntax = "70703baa-626e-46a2-a12c-08ffd08c73b4"
-SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
-
-[sources]
-JuliaLowering = {rev = "main", url = "https://github.com/JuliaLang/JuliaLowering.jl"}
-JuliaSyntax = {rev = "main", url = "https://github.com/JuliaLang/JuliaSyntax.jl"}
 
 [compat]
-HTTP = "1.11.0"
 JSON = "0.21"
-JuliaLowering = "1.0.0"
-JuliaSyntax = "1, 2"
 julia = "1.12"
 
 [extras]

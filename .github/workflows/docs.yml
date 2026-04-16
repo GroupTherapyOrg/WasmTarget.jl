@@ -32,10 +32,13 @@ jobs:
           node-version: '22'
 
       - name: Install docs dependencies
+        # docs/Project.toml already pins WasmTarget = {path = ".."} via [sources],
+        # so plain Pkg.instantiate is enough. The previous Pkg.develop(path=".")
+        # tried to add WasmTarget a second time and failed with
+        # "Refusing to add package WasmTarget — same name already exists".
         run: |
           julia --project=docs -e '
             using Pkg
-            Pkg.develop(path=".")
             Pkg.instantiate()
           '
 
