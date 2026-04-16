@@ -7,4 +7,4 @@ WasmTarget = {path = ".."}
 
 [compat]
 Documenter = "1"
-julia = "1.12"
+julia = "~1.12"
