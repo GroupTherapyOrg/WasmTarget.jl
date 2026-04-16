@@ -269,7 +269,7 @@ function fix_array_len_wrap(bytes::Vector{UInt8})::Vector{UInt8}
         i += 1
     end
     if fixes > 0
-        @warn "fix_array_len_wrap: removed $fixes spurious i32_wrap_i64 after array_len"
+        @debug "fix_array_len_wrap: removed $fixes spurious i32_wrap_i64 after array_len"
     end
     return result
 end
@@ -437,7 +437,7 @@ function fix_i32_wrap_after_i32_ops(bytes::Vector{UInt8})::Vector{UInt8}
         end
     end
     if fixes > 0
-        @warn "fix_i32_wrap_after_i32_ops: removed $fixes spurious i32_wrap_i64 after i32-producing ops"
+        @debug "fix_i32_wrap_after_i32_ops: removed $fixes spurious i32_wrap_i64 after i32-producing ops"
     end
     return result
 end
@@ -589,7 +589,7 @@ function fix_i64_local_in_i32_ops(bytes::Vector{UInt8}, all_local_types::Vector{
         end
     end
     if fixes > 0
-        @warn "fix_i64_local_in_i32_ops: inserted $fixes i32_wrap_i64 for i64 locals used in i32 ops"
+        @debug "fix_i64_local_in_i32_ops: inserted $fixes i32_wrap_i64 for i64 locals used in i32 ops"
     end
     return result
 end

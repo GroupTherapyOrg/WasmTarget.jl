@@ -193,7 +193,7 @@ function discover_dependencies(functions::Vector; interp=nothing)::Vector
             ir, _ = Base.code_ircode(f, arg_types; kwargs...)[1]
             ir
         catch e
-            @warn "discover_dependencies: skipping $name($(join(arg_types, ", "))) — $e"
+            @debug "discover_dependencies: skipping $name($(join(arg_types, ", "))) — $e"
             push!(skipped, (name, e))
             continue
         end
@@ -213,7 +213,7 @@ function discover_dependencies(functions::Vector; interp=nothing)::Vector
     end
 
     if !isempty(skipped)
-        @warn "discover_dependencies: discovered $(length(normalized) + length(to_add)) functions, skipped $(length(skipped)) (see warnings above)"
+        @debug "discover_dependencies: discovered $(length(normalized) + length(to_add)) functions, skipped $(length(skipped))"
     end
 
     # Add discovered dependencies to the function list
@@ -2316,7 +2316,7 @@ function _autodiscover_closure_deps!(closure::Function, code_info::Core.CodeInfo
             dep_return_type === Union{} && continue
             push!(dep_data, (f, arg_types, name, dep_code_info, dep_return_type))
         catch e
-            @warn "compile_closure_body: skipping dependency $name — $e"
+            @debug "compile_closure_body: skipping dependency $name — $e"
         end
     end
 
@@ -2342,7 +2342,7 @@ function _autodiscover_closure_deps!(closure::Function, code_info::Core.CodeInfo
 
             add_function!(mod, param_types, result_types, dep_ctx.locals, dep_body)
         catch e
-            @warn "compile_closure_body: error compiling dependency $name — $e"
+            @debug "compile_closure_body: error compiling dependency $name — $e"
         end
     end
 end

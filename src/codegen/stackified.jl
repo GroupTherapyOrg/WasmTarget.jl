@@ -969,7 +969,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion.
                         # PiNode narrows Any→Expr (ExternRef→ConcreteRef). Compile the value
                         # and wrap with extern_convert_any to get back to ExternRef.
-                        @warn "PURE-325 FIX HIT: phi=$phi_idx val=$(val.id) ssa_wasm=$ssa_wasm_type phi_wasm=$phi_local_wasm_type stmt=$(typeof(stmt))"
+                        @debug "PURE-325 FIX HIT: phi=$phi_idx val=$(val.id) ssa_wasm=$ssa_wasm_type phi_wasm=$phi_local_wasm_type stmt=$(typeof(stmt))"
                         if stmt !== nothing && !(stmt isa Core.PhiNode)
                             append!(result, compile_statement(stmt, val.id, ctx))
                         else
@@ -979,7 +979,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         push!(result, Opcode.EXTERN_CONVERT_ANY)
                     else
                         # Type mismatch: emit type-safe default instead of recomputing
-                        @warn "PURE-325 NULL DEFAULT: phi=$phi_idx val=$(val.id) ssa_wasm=$ssa_wasm_type phi_wasm=$phi_local_wasm_type"
+                        @debug "PURE-325 NULL DEFAULT: phi=$phi_idx val=$(val.id) ssa_wasm=$ssa_wasm_type phi_wasm=$phi_local_wasm_type"
                         append!(result, emit_phi_type_default(phi_local_wasm_type))
                     end
                 elseif phi_local_wasm_type !== nothing && phi_local_wasm_type === I64 && ssa_wasm_type === I32
@@ -1781,7 +1781,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 use_count = get(ssa_use_count, i, 0)
                                 if use_count == 0
                                     push!(block_bytes, Opcode.DROP)
-                                    @warn "STACKIFIED-DROP ADDED extra drop for stmt=$i" maxlog=20
+                                    @debug "STACKIFIED-DROP ADDED extra drop for stmt=$i"
                                 end
                             end
                         end

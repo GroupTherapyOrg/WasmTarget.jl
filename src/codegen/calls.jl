@@ -5718,7 +5718,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 # Julia couldn't specialize (arg types contain Any/abstract types).
                 # These are dead code branches in WasmGC context (we compile with concrete types).
                 _has_abstract = any(t -> t === Any || !isconcretetype(t), call_arg_types)
-                @warn "CROSS-CALL UNREACHABLE: $(func) with arg types $(call_arg_types) (in func_$(ctx.func_idx))$((_has_abstract ? " [abstract-suppressed]" : ""))"
+                @debug "CROSS-CALL UNREACHABLE: $(func) with arg types $(call_arg_types) (in func_$(ctx.func_idx))$((_has_abstract ? " [abstract-suppressed]" : ""))"
                 # PURE-908: Clear pre-pushed args before emitting UNREACHABLE.
                 bytes = UInt8[]
                 push!(bytes, Opcode.UNREACHABLE)
@@ -6034,7 +6034,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             end
         end
         # Unknown function call — emit unreachable (will trap at runtime)
-        @warn "Stubbing unsupported call: $func (will trap at runtime) (in func_$(ctx.func_idx))"
+        @debug "Stubbing unsupported call: $func (will trap at runtime) (in func_$(ctx.func_idx))"
         # PURE-908: Clear pre-pushed args before UNREACHABLE
         bytes = UInt8[]
         push!(bytes, Opcode.UNREACHABLE)

@@ -542,7 +542,7 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
         elseif phi_local_type === ExternRef && (edge_val_type isa ConcreteRef || edge_val_type === StructRef || edge_val_type === ArrayRef || edge_val_type === AnyRef)
             # PURE-3113: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion
             # Mirrors the handling in set_phi_locals_for_edge! (line 10213) and compile_phi_value (line 9825)
-            @warn "PURE-3113 FIX A: phi=$phi_ssa_idx edge_val_type=$edge_val_type phi_local_type=$phi_local_type"
+            @debug "PURE-3113 FIX A: phi=$phi_ssa_idx edge_val_type=$edge_val_type phi_local_type=$phi_local_type"
             value_bytes = compile_value(val, ctx)
             if !isempty(value_bytes)
                 append!(bytes, value_bytes)

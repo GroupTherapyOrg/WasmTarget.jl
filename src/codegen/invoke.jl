@@ -1998,11 +1998,11 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
                     push!(bytes, Opcode.CALL)
                     append!(bytes, encode_leb128_unsigned(io.write_string_idx))
                 else
-                    @warn "println/print: unsupported Tuple type $arg_type, skipping"
+                    @debug "println/print: unsupported Tuple type $arg_type, skipping"
                 end
             else
                 # Unknown type — skip (stub)
-                @warn "println/print: unsupported argument type $arg_type, skipping"
+                @debug "println/print: unsupported argument type $arg_type, skipping"
             end
         end
         if name === :println
@@ -4028,7 +4028,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                             push!(bytes, Opcode.CALL)
                             append!(bytes, encode_leb128_unsigned(io.write_bool_idx))
                         else
-                            @warn "show: unsupported argument type $arg_type, skipping"
+                            @debug "show: unsupported argument type $arg_type, skipping"
                         end
                     end
                 else
@@ -4563,7 +4563,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     append!(bytes, encode_leb128_unsigned(_ctor_sinfo.wasm_type_idx))
                 else
                     # Registration failed — fallback to unreachable
-                    @warn "Struct constructor: failed to register $(_ctor_target)"
+                    @debug "Struct constructor: failed to register $(_ctor_target)"
                     push!(bytes, Opcode.UNREACHABLE)
                     ctx.last_stmt_was_stub = true
                 end
@@ -4572,7 +4572,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 # Unknown method — emit unreachable (will trap at runtime)
                 # This allows compilation to succeed for code paths that
                 # don't actually reach these methods.
-                @warn "Stubbing unsupported method: $name (will trap at runtime) (in func_$(ctx.func_idx))" expr=expr idx=idx mi_info=(mi !== nothing ? string(mi.specTypes) : "nothing")
+                @debug "Stubbing unsupported method: $name (will trap at runtime) (in func_$(ctx.func_idx))" expr=expr idx=idx mi_info=(mi !== nothing ? string(mi.specTypes) : "nothing")
                 push!(bytes, Opcode.UNREACHABLE)
                 ctx.last_stmt_was_stub = true  # PURE-908
             end

@@ -139,7 +139,7 @@ function build_dispatch_tables(func_registry::FunctionRegistry,
             push!(arities, length(info.arg_types))
         end
         if length(arities) != 1
-            @warn "PURE-9060: Skipping dispatch table for $(func_ref): mixed arities $(arities)"
+            @debug "PURE-9060: Skipping dispatch table for $(func_ref): mixed arities $(arities)"
             continue
         end
         arity = first(arities)
@@ -160,7 +160,7 @@ function build_dispatch_tables(func_registry::FunctionRegistry,
             for T in info.arg_types
                 tid = get_type_id(type_registry, T)
                 if tid == Int32(0)
-                    @warn "PURE-9060: No type ID for $(T) — skipping dispatch entry"
+                    @debug "PURE-9060: No type ID for $(T) — skipping dispatch entry"
                     all_valid = false
                     break
                 end

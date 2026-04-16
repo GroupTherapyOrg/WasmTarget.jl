@@ -1598,7 +1598,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
         end
         if n_drops >= 2
             stmt_str = stmt isa Expr ? string(stmt)[1:min(80, length(string(stmt)))] : string(typeof(stmt))
-            @warn "STMT $idx has $n_drops DROPs in $(length(bytes)) bytes: $stmt_str"
+            @debug "STMT $idx has $n_drops DROPs in $(length(bytes)) bytes: $stmt_str"
         end
     end
 
@@ -1630,7 +1630,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
         if ssa_type isa DataType && ssa_type <: Type && length(ssa_type.parameters) >= 1
             ssa_type.parameters[1]
         else
-            @warn "Stubbing :new with dynamic SSAValue type: $struct_type_ref ($ssa_type)"
+            @debug "Stubbing :new with dynamic SSAValue type: $struct_type_ref ($ssa_type)"
             push!(bytes, Opcode.UNREACHABLE)
             ctx.last_stmt_was_stub = true  # PURE-908
             return bytes
