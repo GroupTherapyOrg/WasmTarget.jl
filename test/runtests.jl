@@ -5160,7 +5160,7 @@ end
                 write(wasm_path, bytes)
 
                 js_code = """
-                const bytes = require('fs').readFileSync('$wasm_path');
+                const bytes = require('fs').readFileSync('$(escape_string(wasm_path))');
                 WebAssembly.instantiate(bytes, {Math: {pow: Math.pow}}).then(m => {
                     const exp = m.instance.exports;
                     const s1 = exp.make_th_s1(42);
