@@ -63,8 +63,19 @@ jobs:
           curl -fL -o binaryen.tar.gz "$URL"
           tar -xzf binaryen.tar.gz
           BINARYEN_BIN="$(pwd)/binaryen-version_${BINARYEN_VERSION}/bin"
+          # On Windows the Git Bash $PWD is MSYS-format (/d/a/...), which Julia's
+          # Sys.which() cannot resolve. Convert to native Windows form before
+          # appending to $GITHUB_PATH so subsequent (non-bash) steps find wasm-opt.exe.
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            BINARYEN_BIN="$(cygpath -w "$BINARYEN_BIN")"
+          fi
           echo "$BINARYEN_BIN" >> "$GITHUB_PATH"
-          "$BINARYEN_BIN/wasm-opt" --version
+          # Sanity check — invoke via the just-extracted path.
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            "$(cygpath -u "$BINARYEN_BIN")/wasm-opt.exe" --version
+          else
+            "$BINARYEN_BIN/wasm-opt" --version
+          fi
 
       - name: Install dependencies
         run: |
