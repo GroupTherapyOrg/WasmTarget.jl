@@ -1951,7 +1951,14 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # Determine the type of the values for select
         val_type = infer_value_type(args[2], ctx)
 
-        # For reference types (like Int128/UInt128 structs), need typed select
+        # For reference types (like Int128/UInt128 structs), need typed select.
+        # The result-type operand after `0x63` (ref null heaptype) is a
+        # SIGNED LEB128 — heaptype is either a negative abstract-type code
+        # (anyref = -18, etc.) or a non-negative type index, and WASM uses
+        # signed encoding for both so a parser can tell them apart. Using
+        # `encode_leb128_unsigned` for a type index whose low 7 bits have
+        # bit 6 set (e.g. 84) emits a single byte `0x54` that the browser
+        # then interprets as the signed value -44: "Unknown heap type -44".
         if val_type === Int128 || val_type === UInt128
             # Use select_t with the struct type
             type_idx = get_int128_type!(ctx.mod, ctx.type_registry, val_type)
@@ -1959,7 +1966,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             push!(bytes, 0x01)  # One type
             # Encode (ref null type_idx) for nullable struct ref
             push!(bytes, 0x63)  # ref null
-            append!(bytes, encode_leb128_unsigned(type_idx))
+            append!(bytes, encode_leb128_signed(Int64(type_idx)))
         elseif is_struct_type(val_type) || val_type <: AbstractArray || val_type === String
             # Other reference types need typed select too
             wasm_type = julia_to_wasm_type_concrete(val_type, ctx)
@@ -1967,7 +1974,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 push!(bytes, Opcode.SELECT_T)
                 push!(bytes, 0x01)  # One type
                 push!(bytes, 0x63)  # ref null
-                append!(bytes, encode_leb128_unsigned(wasm_type.type_idx))
+                append!(bytes, encode_leb128_signed(Int64(wasm_type.type_idx)))
             else
                 # Fall back to untyped select for value types
                 push!(bytes, Opcode.SELECT)
