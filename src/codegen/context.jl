@@ -2060,6 +2060,23 @@ function emit_ref_cast_if_structref!(bytes::Vector{UInt8}, val, target_type_idx:
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.REF_CAST_NULL)
         append!(bytes, encode_leb128_signed(Int64(target_type_idx)))
+    elseif local_wasm_type isa ConcreteRef && local_wasm_type.type_idx != UInt32(target_type_idx)
+        # Local is a specific ConcreteRef but points to a DIFFERENT struct
+        # type than the one struct_get/array_get wants. This happens when
+        # dispatch narrows a union-of-structs to one branch via PiNode +
+        # local assignment: the local's declared type stays at the union's
+        # representative (e.g. type 46), while the next getfield expects
+        # the target branch's struct type (e.g. type 70). Without this
+        # cast the browser rejects with:
+        #     struct.get[0] expected type (ref null 70),
+        #       found local.get of type (ref null 46)
+        # `ref.cast null $target_type_idx` is a runtime narrowing — if
+        # the value is actually of type `$target_type_idx` or a subtype
+        # it passes cleanly; if not, the cast traps (same semantics as
+        # Julia's abstract-dispatch failure).
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.REF_CAST_NULL)
+        append!(bytes, encode_leb128_signed(Int64(target_type_idx)))
     end
     return bytes
 end
