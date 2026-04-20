@@ -3,17 +3,11 @@ uuid = "9f3a1415-1112-405b-ae89-c61daf9872bd"
 version = "0.1.0"
 authors = ["Dale Black"]
 
-# Note: HTTP, JuliaLowering, JuliaSyntax, SHA were previously listed as deps
-# but were never imported anywhere in src/. Their names appear only in
-# comments (e.g. "# Custom primitive types like JuliaSyntax.Kind"). Dropping
-# them removes a large transitive resolve and unblocks registration.
 [deps]
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 
 [compat]
-# `~1.12` = [1.12.0, 1.13.0) — pins to the 1.12 minor line only. Bare
-# `"1.12"` is shorthand for `^1.12` which would also accept 1.13, 1.14, etc.
-JSON = "0.21"
+JSON = "0.21, 1"
 julia = "~1.12"
 
 [extras]
