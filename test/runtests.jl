@@ -2,6 +2,11 @@ using WasmTarget
 using WasmTarget: to_bytes_mvp_i64, to_bytes_mvp_flex
 using Test
 
+# Package-level QA runs first so structural/import failures surface
+# before the ~hour-long codegen suite spins up.
+include("test_aqua.jl")
+include("test_explicit_imports.jl")
+
 include("utils.jl")
 
 # Recursive test functions (must be at module level for proper GlobalRef resolution)

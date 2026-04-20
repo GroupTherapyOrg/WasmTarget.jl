@@ -182,13 +182,16 @@ end
 
 """
 Unmarshal a JSON result, handling BigInt markers.
+
+Accepts `AbstractDict` (not just `Dict`) so JSON.jl 1.x's `JSON.Object`
+return type is handled the same as 0.21's plain `Dict`.
 """
 function unmarshal_result(result)
-    if result isa Dict && haskey(result, "__bigint__")
+    if result isa AbstractDict && haskey(result, "__bigint__")
         return Base.parse(Int64, result["__bigint__"])
     elseif result isa Vector
         return [unmarshal_result(r) for r in result]
-    elseif result isa Dict
+    elseif result isa AbstractDict
         return Dict(k => unmarshal_result(v) for (k, v) in result)
     elseif result isa AbstractString
         # Handle special float values from JSON serialization

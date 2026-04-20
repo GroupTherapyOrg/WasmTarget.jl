@@ -1,7 +1,7 @@
 # Runtime Intrinsics - Mapping Julia Core.Intrinsics to Wasm
 # Reference: Julia's Core.Intrinsics module
 
-export IntrinsicMapping, get_wasm_opcode
+export get_wasm_opcode
 
 """
 Mapping from Julia intrinsics to Wasm opcodes.
