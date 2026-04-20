@@ -21,13 +21,39 @@
 # is the only way to reach the function. Renaming either side would
 # be a breaking API change.
 using ExplicitImports
+using Logging
 using Test
 using WasmTarget
 
+# ExplicitImports emits a `default_param_context reached recursion limit`
+# @warn per deeply-nested type parameter it can't fully walk. For a
+# compiler package like WasmTarget this fires thousands of times and
+# each warning dumps the whole unresolved `ImplicitCursor{...}` type,
+# producing multi-MB blobs that swamp CI logs (GitHub truncates them,
+# making real failures unreadable). Filter just that one message —
+# everything else still flows through to the user.
+struct _FilteredLogger <: AbstractLogger
+    inner::AbstractLogger
+end
+Logging.min_enabled_level(l::_FilteredLogger) = Logging.min_enabled_level(l.inner)
+Logging.shouldlog(l::_FilteredLogger, level, _mod, group, id) =
+    Logging.shouldlog(l.inner, level, _mod, group, id)
+Logging.catch_exceptions(l::_FilteredLogger) = Logging.catch_exceptions(l.inner)
+function Logging.handle_message(l::_FilteredLogger, level, msg, _mod, group, id,
+                                file, line; kwargs...)
+    if level == Logging.Warn &&
+       occursin("default_param_context reached recursion limit", string(msg))
+        return
+    end
+    Logging.handle_message(l.inner, level, msg, _mod, group, id, file, line; kwargs...)
+end
+
 @testset "ExplicitImports" begin
-    test_explicit_imports(WasmTarget;
-        all_explicit_imports_are_public = false,
-        all_qualified_accesses_are_public = false,
-        no_self_qualified_accesses = (; ignore = (:optimize,)),
-    )
+    with_logger(_FilteredLogger(current_logger())) do
+        test_explicit_imports(WasmTarget;
+            all_explicit_imports_are_public = false,
+            all_qualified_accesses_are_public = false,
+            no_self_qualified_accesses = (; ignore = (:optimize,)),
+        )
+    end
 end
