@@ -8,7 +8,6 @@ Compile real Julia functions to WebAssembly that runs in any modern browser or N
 
 [![CI](https://github.com/GroupTherapyOrg/WasmTarget.jl/actions/workflows/ci.yml/badge.svg)](https://github.com/GroupTherapyOrg/WasmTarget.jl/actions/workflows/ci.yml)
 [![Aqua QA](https://juliatesting.github.io/Aqua.jl/dev/assets/badge.svg)](https://github.com/JuliaTesting/Aqua.jl)
-[![ExplicitImports](https://img.shields.io/badge/ExplicitImports.jl-%F0%9F%94%8E-aquamarine.svg)](https://github.com/JuliaTesting/ExplicitImports.jl)
 [![Docs](https://img.shields.io/badge/docs-stable-blue.svg)](https://grouptherapyorg.github.io/WasmTarget.jl/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE.md)
 
