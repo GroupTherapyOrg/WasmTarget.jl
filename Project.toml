@@ -1,6 +1,6 @@
 name = "WasmTarget"
 uuid = "9f3a1415-1112-405b-ae89-c61daf9872bd"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Dale Black"]
 
 [deps]
