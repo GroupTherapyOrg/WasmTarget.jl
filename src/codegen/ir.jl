@@ -1,7 +1,7 @@
 # Julia IR Handling
 # Interface to Julia's typed intermediate representation
 
-export get_typed_ir, IRStatement
+export get_typed_ir
 
 """
     get_typed_ir(f, arg_types)

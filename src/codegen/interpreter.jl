@@ -16,7 +16,7 @@
 # use for compiling Julia to non-native targets.
 
 import Core.Compiler as CC
-using Base.Experimental: @MethodTable, @overlay
+using Base.Experimental: @overlay
 
 # ─── Method Table ───────────────────────────────────────────────────────────
 
