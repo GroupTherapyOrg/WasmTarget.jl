@@ -1,10 +1,11 @@
 [deps]
-Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+FileWatching = "7b1f6079-737a-58dc-b8bc-7a2ca5c1b5ee"
+Therapy = "b2c3d4e5-f6a7-8901-bcde-f12345678901"
 WasmTarget = "9f3a1415-1112-405b-ae89-c61daf9872bd"
 
 [sources]
 WasmTarget = {path = ".."}
 
 [compat]
-Documenter = "1"
+Therapy = "0.1"
 julia = "~1.12"

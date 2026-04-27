@@ -1,0 +1,136 @@
+@import "tailwindcss";
+
+/* Configure content sources for v4 */
+@source "./src/**/*.jl";
+
+/* Enable class-based dark mode (toggle via .dark class on <html>) */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* View Transitions API override — Therapy's ClientRouter wraps each
+   SPA swap in `document.startViewTransition(doSwap)` when the browser
+   supports it. The default user-agent transition cross-fades the
+   whole `root` capture; during that animation old and new page
+   snapshots are both painted, briefly showing layout shifts when the
+   two routes' `#page-content` inner layouts differ. Zeroing the
+   animation keeps the VT pipeline (so anything we tag later with a
+   custom transition-name still animates) while avoiding the
+   cross-fade artifacts on route boundaries. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+}
+
+/* Stable scrollbar gutter so the document scrollbar appearing /
+   disappearing between pages doesn't reflow the content and shift
+   nav widths by a few pixels mid-navigation. */
+html {
+  scrollbar-gutter: stable;
+}
+
+/* Theme customizations */
+@theme {
+  --font-sans: 'Optima', 'Palatino Linotype', 'Book Antiqua', 'EB Garamond', serif;
+  --font-serif: 'EB Garamond', 'Palatino Linotype', 'Book Antiqua', Georgia, serif;
+  --font-mono: 'JuliaMono', 'Fira Code', 'JetBrains Mono', monospace;
+
+  /* Warm neutral palette (shared across GroupTherapyOrg ecosystem) */
+  --color-warm-50: #f8f7f4;
+  --color-warm-100: #f0ece4;
+  --color-warm-200: #e8e3d9;
+  --color-warm-300: #d4d0c8;
+  --color-warm-400: #9a9590;
+  --color-warm-500: #8a8680;
+  --color-warm-600: #6b6560;
+  --color-warm-700: #5a5855;
+  --color-warm-800: #2a2520;
+  --color-warm-900: #1a1918;
+  --color-warm-950: #111110;
+
+  /* Accent palette — Julia Blue #4063d8 (WasmTarget.jl primary accent) */
+  --color-accent-50: #eef2fc;
+  --color-accent-100: #d5def7;
+  --color-accent-200: #aabdef;
+  --color-accent-300: #7f9ce6;
+  --color-accent-400: #597edf;
+  --color-accent-500: #4063d8;
+  --color-accent-600: #3350b0;
+  --color-accent-700: #283e88;
+  --color-accent-800: #1e2f64;
+  --color-accent-900: #141f42;
+  --color-accent-950: #0c1329;
+
+  /* Accent-secondary palette — Julia Green #389826 (WasmTarget.jl secondary accent) */
+  --color-accent-secondary-50: #f0f8ee;
+  --color-accent-secondary-100: #d6edcf;
+  --color-accent-secondary-200: #addba0;
+  --color-accent-secondary-300: #7ac46a;
+  --color-accent-secondary-400: #4da832;
+  --color-accent-secondary-500: #389826;
+  --color-accent-secondary-600: #2e7c1f;
+  --color-accent-secondary-700: #245f19;
+  --color-accent-secondary-800: #1b4813;
+  --color-accent-secondary-900: #12310d;
+  --color-accent-secondary-950: #0b1f08;
+
+  /* Border radius tokens (shadcn compatibility) */
+  --radius: 0.5rem;
+}
+
+/* Design System CSS custom properties */
+@layer base {
+  button { cursor: pointer; }
+  therapy-island { display: contents; }
+
+  /* Heading spacing and underlines — scoped to page content (Pluto-style separation) */
+  #page-content h1:not(.no-rule) { padding-top: 1.5rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--color-warm-200); margin-bottom: 1rem; }
+  #page-content h2 { padding-top: 1.25rem; padding-bottom: 0.375rem; border-bottom: 1px solid var(--color-warm-200); margin-bottom: 0.75rem; }
+  #page-content h3 { padding-top: 1rem; padding-bottom: 0.25rem; border-bottom: 1px solid var(--color-warm-100); margin-bottom: 0.5rem; }
+  .dark #page-content h1:not(.no-rule), .dark #page-content h2 { border-bottom-color: var(--color-warm-800); }
+  .dark #page-content h3 { border-bottom-color: var(--color-warm-900); }
+
+  :root {
+    /* Shared neutrals */
+    --bg-primary: #f8f7f4;
+    --bg-secondary: #f0ece4;
+    --bg-tertiary: #e8e3d9;
+    --text-primary: #2a2520;
+    --text-secondary: #6b6560;
+    --text-tertiary: #9a9590;
+
+    /* Julia palette */
+    --julia-red: #cb3c33;
+    --julia-purple: #9558b2;
+    --julia-blue: #4063d8;
+    --julia-green: #389826;
+
+    /* WasmTarget.jl accent overrides */
+    --accent: var(--julia-blue);
+    --accent-secondary: var(--julia-green);
+
+    /* .jl wordmark tri-colors (exclude Blue — the active accent) */
+    --jl-dot: #389826;  /* Green */
+    --jl-j: #9558b2;    /* Purple */
+    --jl-l: #cb3c33;    /* Red */
+  }
+
+  html {
+    scroll-behavior: smooth;
+    background-color: var(--bg-primary);
+  }
+
+  pre code {
+    font-family: 'JuliaMono', 'Fira Code', 'JetBrains Mono', monospace;
+  }
+}
+
+/* Dark mode custom properties */
+@layer base {
+  .dark {
+    --bg-primary: #111110;
+    --bg-secondary: #1a1918;
+    --bg-tertiary: #252422;
+    --text-primary: #d4d0c8;
+    --text-secondary: #8a8680;
+    --text-tertiary: #5a5855;
+  }
+}

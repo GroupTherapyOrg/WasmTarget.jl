@@ -18,7 +18,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout WasmTarget.jl
         uses: actions/checkout@v4
 
       - name: Setup Julia
@@ -26,29 +26,20 @@ jobs:
         with:
           version: '1.12'
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
+      - uses: julia-actions/cache@v2
 
-      - name: Install docs dependencies
-        # docs/Project.toml already pins WasmTarget = {path = ".."} via [sources],
-        # so plain Pkg.instantiate is enough. The previous Pkg.develop(path=".")
-        # tried to add WasmTarget a second time and failed with
-        # "Refusing to add package WasmTarget — same name already exists".
+      - name: Install dependencies
         run: |
           julia --project=docs -e '
             using Pkg
+            Pkg.Registry.add("General")
+            Pkg.resolve()
             Pkg.instantiate()
           '
 
-      - name: Build WASM examples
-        run: julia --project=docs docs/build_wasm_examples.jl
-
       - name: Build docs
-        run: julia --project=docs docs/make.jl
-        env:
-          CI: "true"
+        run: |
+          julia --project=docs --optimize=3 docs/app.jl build
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
@@ -56,7 +47,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/build
+          path: docs/dist
 
   deploy:
     environment:
