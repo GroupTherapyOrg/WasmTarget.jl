@@ -239,7 +239,7 @@ Julia's `OverlayMethodTable` resolves overlays at inference time. Codegen never 
 | `Int64`, `UInt64` | `i64` |
 | `Float32` | `f32` |
 | `Float64` | `f64` |
-| `String` | WasmGC `array<i32>` |
+| `String` | WasmGC packed `(array (mut i8))` (UTF-8 bytes; `array.get_u` widens to i32 on the stack) |
 | User structs | WasmGC struct |
 | `Vector{T}` | WasmGC `struct{array_ref, size}` |
 | `Dict{K,V}` | WasmGC struct (hash table) |
