@@ -103,6 +103,84 @@ function run_fuzz(; types = (Int64, Float64), depth = 3, max_examples = 200, see
     println("ledger: $(length(op)) open gap(s) → test/fuzz/failures/INDEX.md")
 end
 
+# --- Natural-signature discovery (Vector args via the marshalling bridge) ----
+function _reproducer_natural(o::Outcome, ::Type{IN}, body) where {IN}
+    inp = o.input === nothing ? "$(IN)()" : repr(o.input[1])
+    return """
+    using WasmTarget
+    include(joinpath("test", "fuzz", "harness.jl")); using .FuzzHarness
+    repro(v::$(IN)) = $(body)
+    _m(a, b) = (a isa AbstractFloat || b isa AbstractFloat) ?
+        ((isnan(a) && isnan(b)) || (isinf(a) && isinf(b) && sign(a) == sign(b)) ||
+         a == b || isapprox(float(a), float(b); rtol = 1e-9, atol = 1e-12)) : (a == b)
+    _v = $(inp)
+    _threw = try repro(_v); false catch; true end
+    _r = FuzzHarness.compile_and_run_vec(repro, ($(IN),), [(_v,)])[1]
+    _ok = _threw ? (_r[1] === :trap) : (_r[1] === :ok && _m(repro(_v), _r[2]))
+    _ok || error("WasmTarget gap @ v=\$_v : native=\$(_threw ? :throw : repro(_v)) wasm=\$_r")
+    """
+end
+
+function _record_natural!(o::Outcome, ::Type{IN}, ::Type{RET}, body; run_id) where {IN,RET}
+    construct = "$(o.category): `$(body)` :: $(IN)→$(RET)"
+    diag = if o.category === :compile_error
+        sprint(showerror, o.detail)
+    else
+        nat = o.native === nothing ? "?" : (o.native[1] === :throw ? "throw $(typeof(o.native[2]))" : repr(o.native[2]))
+        wsm = o.wasm === nothing ? "?" : (o.wasm[1] === :trap ? "trap" : repr(o.wasm[2]))
+        "at v=$(o.input === nothing ? "?" : repr(o.input[1])): native=$nat  wasm=$wsm"
+    end
+    g = Ledger.Gap(o.category, o.category, construct, "test/fuzz (natural)", "repro", "($(IN),)",
+                   _reproducer_natural(o, IN, body), diag)
+    return Ledger.record_gap!(g; run_id = run_id)
+end
+
+function fuzz_natural(::Type{IN}, ::Type{RET}; depth, max_examples, seed, run_id, dbdir) where {IN,RET}
+    gen = gen_natural(IN, RET; depth = depth)
+    db = Supposition.DirectoryDB(dbdir)
+    res = @check db=db rng=Xoshiro(seed) max_examples=max_examples function nat_prop(body = gen)
+        property_holds_natural(body, IN)
+    end
+    r = something(res.result)
+    if r isa Supposition.Fail
+        minimal = first(values(getfield(r, 1)))
+        o = differential_natural(minimal, IN)
+        id = _record_natural!(o, IN, RET, minimal; run_id = run_id)
+        println("  ✗ $(IN)→$(RET): $(o.category) — `$(minimal)` → gap $id")
+        return false
+    else
+        println("  ✓ $(IN)→$(RET): clean ($max_examples ex, depth $depth)")
+        return true
+    end
+end
+
+# Natural-signature sweep: Vector inputs, multiple return types, many seeds (temp DBs).
+function sweep_natural(; k::Int = 6, depth = 4, max_examples = 50)
+    FuzzHarness.NODE_OK || (@warn "Node.js unavailable"; return)
+    specs = [(Vector{Int64}, Int64), (Vector{Int64}, Vector{Int64}), (Vector{Int64}, Bool),
+             (Vector{Float64}, Float64), (Vector{Float64}, Vector{Float64})]
+    before = Set(get(g, "id", "") for g in Ledger.load_gaps())
+    for s in 1:k
+        run_id = string("nat-", s, "-d", depth)
+        for (i, (IN, RET)) in enumerate(specs)
+            tmp = mktempdir()
+            try
+                fuzz_natural(IN, RET; depth = depth, max_examples = max_examples,
+                             seed = 0x9E3779B9 * s + i, run_id = run_id, dbdir = tmp)
+            catch e
+                println("  seed $s $(IN)→$(RET): sweep error $(typeof(e))")
+            end
+        end
+    end
+    Ledger.regenerate_index!()
+    after = Ledger.load_gaps()
+    newids = [get(g, "id", "") for g in after if !(get(g, "id", "") in before)]
+    println("\n== natural sweep complete: $(length(after)) total, $(length(newids)) new ==")
+    for g in filter(gg -> get(gg, "status", "open") == "open", after)
+        println("  [", get(g, "category", "?"), "] ", get(g, "id", "?"), " — ", get(g, "construct", ""))
+    end
+end
+
 # --- Inventory sweep: many independent seeds (temp DBs) to surface breadth ---
 # Each seed explores with a FRESH temp DB so the committed corpus doesn't keep
 # replaying the same known counterexample — this is how we find DISTINCT bugs

@@ -19,12 +19,13 @@
 module FuzzProperty
 
 export differential, property_holds, Outcome
+export differential_natural, property_holds_natural
 
 using WasmTarget
 
 # pulls in FuzzHarness + FuzzGen (included by the entrypoint before this file)
-using ..FuzzHarness: compile_and_run
-using ..FuzzGen: make_function, sample_inputs
+using ..FuzzHarness: compile_and_run, compile_and_run_vec
+using ..FuzzGen: make_function, sample_inputs, make_function_natural, vector_inputs
 
 struct Outcome
     category::Symbol            # :ok :wrong_value :runtime_trap :divergent_throw :compile_error :skip
@@ -103,5 +104,45 @@ run is skipped). Returning false drives Supposition to shrink `body`.
 """
 property_holds(body, ::Type{T0}) where {T0} =
     differential(body, T0).category in (:ok, :skip)
+
+# --- Natural-signature differential (Vector/etc. args via marshalling bridge) ---
+"""
+    differential_natural(body, IN; var=:v) -> Outcome
+
+Like `differential`, but the generated function takes a real `IN`-typed argument
+(e.g. `Vector{Int64}`) marshalled across the bridge, evaluated over edge-biased
+`vector_inputs`. The return type is whatever `body` infers to.
+"""
+function differential_natural(body, ::Type{IN}; var::Symbol = :v) where {IN}
+    fn, _, src = make_function_natural(body, IN; var = var)
+    samples = vector_inputs(eltype(IN))
+
+    natives = map(samples) do tup
+        try
+            (:ok, Base.invokelatest(fn, tup...))
+        catch e
+            (:throw, e)
+        end
+    end
+
+    wres = compile_and_run_vec(fn, (IN,), samples; strict = true)
+    if wres === :no_node
+        return Outcome(:skip, src, nothing, nothing, nothing, nothing)
+    elseif wres isa Pair && wres.first === :compile_error
+        return Outcome(:compile_error, src, samples[1], natives[1], (:trap, "compile"), wres.second)
+    elseif wres isa Pair
+        return Outcome(:skip, src, nothing, nothing, nothing, wres.second)
+    end
+
+    for (i, (nv, wv)) in enumerate(zip(natives, wres))
+        cat = classify(nv, wv)
+        cat === :match && continue
+        return Outcome(cat, src, samples[i], nv, wv, body)
+    end
+    return Outcome(:ok, src, nothing, nothing, nothing, body)
+end
+
+property_holds_natural(body, ::Type{IN}; var::Symbol = :v) where {IN} =
+    differential_natural(body, IN; var = var).category in (:ok, :skip)
 
 end # module FuzzProperty

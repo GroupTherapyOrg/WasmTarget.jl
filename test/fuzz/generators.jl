@@ -18,6 +18,7 @@
 module FuzzGen
 
 export gen_program, sample_inputs, make_function
+export gen_natural, make_function_natural, vector_inputs
 
 using Supposition
 using Supposition: Data
@@ -227,5 +228,32 @@ sample_inputs(::Type{Int64}) =
 sample_inputs(::Type{Float64}) =
     [(0.0,), (1.0,), (-1.0,), (2.0,), (0.5,), (-0.5,), (3.5,), (-3.5,),
      (1e300,), (-1e300,), (1e-300,), (Inf,), (-Inf,), (NaN,), (100.0,), (1e8,)]
+
+# --- Natural-signature programs: f(v::IN) = <RET expr using v> ---------------
+# The input is a real value (e.g. a Vector passed via the marshalling bridge),
+# `var` is in scope in the body. RET is the body's type (inferred at compile).
+gen_natural(::Type{IN}, ::Type{RET}; depth::Int = 4, var::Symbol = :v) where {IN,RET} =
+    map(n -> n.v, gen_expr(RET, depth, Dict{Type,Vector{Symbol}}(IN => [var])))
+
+function make_function_natural(body, ::Type{IN}; var::Symbol = :v) where {IN}
+    _PROG_COUNTER[] += 1
+    fname = Symbol("fuzz_nat_", _PROG_COUNTER[])
+    src = "$(fname)($(var)::$(IN)) = $(body)"
+    fn = Core.eval(Main, Meta.parse(src))
+    return (fn, fname, src)
+end
+
+# Edge-biased inputs for Vector arguments: empty, singleton, sorted, reverse,
+# duplicate-laden, extreme values, longer.
+vector_inputs(::Type{Int64}) = Tuple[
+    (Int64[],), ([0],), ([1],), ([-1],), ([5, 3, 8, 1],), ([3, 3, 3],),
+    ([-9, 2, 0, 2, -9],), ([typemax(Int64), typemin(Int64), 0],),
+    ([10, 9, 8, 7, 6, 5, 4, 3, 2, 1],), ([1, 2, 3, 4, 5],), ([-100, 100],),
+]
+vector_inputs(::Type{Float64}) = Tuple[
+    (Float64[],), ([0.0],), ([1.5, -2.5, 3.5],), ([Inf, -Inf, NaN],),
+    ([1.0, 1.0, 1.0],), ([-0.0, 0.0],), ([1e300, -1e300, 0.5],),
+    ([5.0, 4.0, 3.0, 2.0, 1.0],), ([3.14, 2.71, 1.41],),
+]
 
 end # module FuzzGen
