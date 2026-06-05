@@ -96,6 +96,45 @@ function _ensure_typeof_scratch_local!(ctx::AbstractCompilationContext)::UInt32
     return local_idx
 end
 
+# Emit a Julia-semantics shift. Stack on entry: [value, shift] (same wasm type).
+# Julia's shl_int/lshr_int yield 0 and ashr_int yields sign-fill when the shift
+# amount ≥ bitwidth, whereas wasm's shifts mask the amount to `mod bitwidth`
+# (so e.g. `1 << 64` is 1 in raw wasm but 0 in Julia). We guard:
+#   shl/lshr:  (shift < width) ? (value <op> shift) : 0
+#   ashr:      value >>s (shift < width ? shift : width-1)   (clamp → sign-fill)
+function _emit_shift_guarded!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, is32::Bool, kind::Symbol)
+    wconst = is32 ? Opcode.I32_CONST : Opcode.I64_CONST
+    wltu   = is32 ? Opcode.I32_LT_U : Opcode.I64_LT_U
+    width  = is32 ? 32 : 64
+    sl     = UInt32(allocate_local!(ctx, is32 ? I32 : I64))
+    shop   = kind === :shl  ? (is32 ? Opcode.I32_SHL : Opcode.I64_SHL) :
+             kind === :lshr ? (is32 ? Opcode.I32_SHR_U : Opcode.I64_SHR_U) :
+                              (is32 ? Opcode.I32_SHR_S : Opcode.I64_SHR_S)
+    _lset(op, i) = (push!(bytes, op); append!(bytes, encode_leb128_unsigned(i)))
+    _wc(v) = (push!(bytes, wconst); append!(bytes, encode_leb128_signed(Int64(v))))
+    if kind === :ashr
+        # [value, shift] → [value, clamped] → shr_s
+        _lset(Opcode.LOCAL_SET, sl)              # [value]
+        _lset(Opcode.LOCAL_GET, sl)              # [value, shift]        (a = shift)
+        _wc(width - 1)                           # [value, shift, w-1]   (b = w-1)
+        _lset(Opcode.LOCAL_GET, sl)              # [value, shift, w-1, shift]
+        _wc(width)                               # [..., width]
+        push!(bytes, wltu)                       # [value, shift, w-1, cond]
+        push!(bytes, Opcode.SELECT)              # [value, cond? shift : w-1]
+        push!(bytes, shop)                       # [value >>s clamped]
+    else
+        # [value, shift] → [result] → select(result, 0, shift<width)
+        _lset(Opcode.LOCAL_TEE, sl)              # [value, shift]  (shift saved)
+        push!(bytes, shop)                       # [result]
+        _wc(0)                                   # [result, 0]
+        _lset(Opcode.LOCAL_GET, sl)              # [result, 0, shift]
+        _wc(width)                               # [result, 0, shift, width]
+        push!(bytes, wltu)                       # [result, 0, cond]
+        push!(bytes, Opcode.SELECT)              # [cond? result : 0]
+    end
+    return bytes
+end
+
 """
 Emit WASM instructions to convert a Char codepoint (on stack) to Julia's raw UInt32 bits.
 Julia stores Char as UTF-8 bytes in the high positions of a UInt32:
@@ -4782,7 +4821,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     push!(bytes, Opcode.I64_EXTEND_I32_S)
                 end
             end
-            push!(bytes, is_32bit ? Opcode.I32_SHL : Opcode.I64_SHL)
+            _emit_shift_guarded!(bytes, ctx, is_32bit, :shl)   # over-shift → 0 (Julia semantics)
         end
 
     elseif is_func(func, :ashr_int)  # arithmetic shift right
@@ -4796,7 +4835,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 push!(bytes, Opcode.I64_EXTEND_I32_S)
             end
         end
-        push!(bytes, is_32bit ? Opcode.I32_SHR_S : Opcode.I64_SHR_S)
+        _emit_shift_guarded!(bytes, ctx, is_32bit, :ashr)   # over-shift → sign-fill (Julia semantics)
 
     elseif is_func(func, :lshr_int)  # logical shift right
         if is_128bit
@@ -4813,7 +4852,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     push!(bytes, Opcode.I64_EXTEND_I32_S)
                 end
             end
-            push!(bytes, is_32bit ? Opcode.I32_SHR_U : Opcode.I64_SHR_U)
+            _emit_shift_guarded!(bytes, ctx, is_32bit, :lshr)   # over-shift → 0 (Julia semantics)
         end
 
     # Count leading/trailing zeros (used in Char conversion)
