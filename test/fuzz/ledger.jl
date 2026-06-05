@@ -244,10 +244,20 @@ end
 
 # Run a reproducer snippet in a fresh module. Returns true if it runs WITHOUT
 # throwing (⇒ gap fixed), false if it throws (⇒ gap still present).
+#
+# A bare `Module()` has `Base` but NOT `include` (that's only injected for
+# file/`module`-loaded modules), so we pre-load the harness ourselves via an
+# ABSOLUTE path (pwd-independent) and neutralize any `include(...)` line the
+# reproducer carries — making both old and new reproducers runnable regardless
+# of where verify is invoked from.
+const _HARNESS_PATH = joinpath(@__DIR__, "harness.jl")
 function _run_reproducer(snippet::AbstractString)
     m = Module(gensym(:gap))
     try
         Core.eval(m, :(using WasmTarget))
+        Base.include(m, _HARNESS_PATH)                 # defines m.FuzzHarness
+        Core.eval(m, :(using .FuzzHarness))            # brings in compile_and_run
+        Core.eval(m, :(include(args...) = nothing))    # neutralize reproducer's own include
         Core.eval(m, Meta.parseall(snippet))
         return true
     catch

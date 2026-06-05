@@ -71,9 +71,9 @@ function _record!(o::Outcome, ::Type{T0}, body; run_id) where {T0}
 end
 
 # --- Discovery --------------------------------------------------------------
-function fuzz_type(::Type{T0}; depth, max_examples, seed, run_id) where {T0}
+function fuzz_type(::Type{T0}; depth, max_examples, seed, run_id, dbdir = CORPUS_DIR) where {T0}
     gen = gen_program(T0; depth = depth)
-    db = Supposition.DirectoryDB(CORPUS_DIR)
+    db = Supposition.DirectoryDB(dbdir)
     res = @check db=db rng=Xoshiro(seed) max_examples=max_examples function diff_prop(body = gen)
         property_holds(body, T0)
     end
@@ -101,6 +101,35 @@ function run_fuzz(; types = (Int64, Float64), depth = 3, max_examples = 200, see
     Ledger.regenerate_index!()
     op = Ledger.open_gaps()
     println("ledger: $(length(op)) open gap(s) → test/fuzz/failures/INDEX.md")
+end
+
+# --- Inventory sweep: many independent seeds (temp DBs) to surface breadth ---
+# Each seed explores with a FRESH temp DB so the committed corpus doesn't keep
+# replaying the same known counterexample — this is how we find DISTINCT bugs
+# before fixing any. Records each distinct gap to the real ledger.
+function sweep(; k::Int = 8, types = (Int64, Float64), depth = 4, max_examples = 80)
+    FuzzHarness.NODE_OK || (@warn "Node.js unavailable"; return)
+    before = Set(get(g, "id", "") for g in Ledger.load_gaps())
+    for s in 1:k
+        run_id = string("sweep-", s, "-d", depth)
+        for (i, T0) in enumerate(types)
+            tmp = mktempdir()
+            try
+                fuzz_type(T0; depth = depth, max_examples = max_examples,
+                          seed = 0x9E3779B9 * s + i, run_id = run_id, dbdir = tmp)
+            catch e
+                println("  seed $s $(T0): sweep error $(typeof(e))")
+            end
+        end
+    end
+    Ledger.regenerate_index!()
+    after = Ledger.load_gaps()
+    newids = [get(g, "id", "") for g in after if !(get(g, "id", "") in before)]
+    println("\n== sweep complete: $(length(after)) total gap(s), $(length(newids)) new ==")
+    for g in after
+        get(g, "status", "open") == "open" || continue
+        println("  [", get(g, "category", "?"), "] ", get(g, "id", "?"), " — ", get(g, "construct", ""))
+    end
 end
 
 # --- Verify (re-run open gaps, auto-close fixed) ----------------------------

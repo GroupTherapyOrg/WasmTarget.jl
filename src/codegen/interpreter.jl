@@ -166,12 +166,25 @@ end
 end
 
 @overlay WASM_METHOD_TABLE function Base.reverse(s::String)
+    # Reverse by CHARACTER, not byte: a naive byte-reverse splits multi-byte UTF-8
+    # codepoints (e.g. the 2-byte 'é'), producing invalid strings whose char count
+    # then differs from the input. Walk from the end; for each char, skip its
+    # continuation bytes (0b10xxxxxx) back to the start byte, then emit that char's
+    # bytes in FORWARD order.
     n = ncodeunits(s)
     bytes = UInt8[]
     i = n
     while i >= 1
-        push!(bytes, codeunit(s, i))
-        i -= 1
+        j = i
+        while j >= 1 && (codeunit(s, j) & 0xc0) == 0x80
+            j -= 1
+        end
+        k = j
+        while k <= i
+            push!(bytes, codeunit(s, k))
+            k += 1
+        end
+        i = j - 1
     end
     return String(bytes)
 end

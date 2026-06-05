@@ -86,7 +86,7 @@ Compile `fn` for `argtypes` and evaluate it over every arg-tuple in `inputs` in 
 single Node process. Returns a vector of `(:ok, value)` / `(:trap, msg)`, one per
 input — or `:compile_error => err` / `:no_node` for whole-batch failures.
 """
-function compile_and_run(fn, argtypes::Tuple, inputs::Vector; strict::Bool=true)
+function compile_and_run(fn, argtypes::Tuple, inputs::Vector; strict::Bool=true, timeout::Real=8)
     NODE_OK || return :no_node
     fname = string(nameof(fn))
     bytes = try
@@ -119,11 +119,26 @@ function compile_and_run(fn, argtypes::Tuple, inputs::Vector; strict::Bool=true)
     """
     write(jpath, loader)
     cmd = NEEDS_FLAG ? `$NODE_CMD --experimental-wasm-gc $jpath` : `$NODE_CMD $jpath`
-    out = try
-        read(pipeline(cmd; stderr=devnull), String)
+    # Deadline-protected execution: a generated module can compile to a wasm that
+    # infinite-loops (native terminates, wasm doesn't — a real divergence). Without
+    # a timeout that would hang the whole fuzzer, so a hang becomes a per-input
+    # `:trap "timeout"` finding instead. `time()` is wall-clock seconds.
+    opath = joinpath(dir, "out.json")
+    proc = try
+        run(pipeline(cmd; stdout=opath, stderr=devnull); wait=false)
     catch e
         return (:exec_error => e)
     end
+    deadline = time() + timeout
+    while process_running(proc)
+        if time() > deadline
+            try; kill(proc, Base.SIGKILL); catch; end
+            return Tuple{Symbol,Any}[(:trap, "timeout") for _ in inputs]
+        end
+        sleep(0.03)
+    end
+    out = isfile(opath) ? read(opath, String) : ""
+    isempty(strip(out)) && return Tuple{Symbol,Any}[(:trap, "no-output") for _ in inputs]
     parsed = JSON.parse(strip(out))
     results = Vector{Tuple{Symbol,Any}}(undef, length(parsed))
     for (i, r) in enumerate(parsed)
