@@ -29,8 +29,13 @@ struct Fn
     ret::Type
 end
 
+# A binary-operator argument slot (for reduce/foldl): renders as a bare op symbol.
+struct BinOp end
+
 const VInt   = Vector{Int64}
 const VFloat = Vector{Float64}
+const DictII = Dict{Int64,Int64}
+const SetI   = Set{Int64}
 
 # --- Op tables: (name, argtypes::Tuple{Union{Type,Fn}...}, rettype) ---------
 const OPS = Any[
@@ -109,6 +114,26 @@ const OPS = Any[
     (:startswith, (String, String), Bool), (:endswith, (String, String), Bool),
     (:contains, (String, String), Bool), (:occursin, (String, String), Bool),
     (:cmp, (String, String), Int64),
+    # ---- Dict{Int64,Int64} (built internally) ----
+    (:length,  (DictII,),               Int64),
+    (:get,     (DictII, Int64, Int64),  Int64),   # get(d, key, default)
+    (:getindex,(DictII, Int64),         Int64),   # d[key] — KeyError if missing (oracle target)
+    (:haskey,  (DictII, Int64),         Bool),
+    (:isempty, (DictII,),               Bool),
+    # ---- Set{Int64} (built internally) ----
+    (:length,  (SetI,),                 Int64),
+    (:in,      (Int64, SetI),           Bool),
+    (:isempty, (SetI,),                 Bool),
+    # ---- Char ----
+    (:isdigit,      (Char,), Bool), (:isspace, (Char,), Bool), (:isletter, (Char,), Bool),
+    (:isuppercase,  (Char,), Bool), (:islowercase, (Char,), Bool), (:isascii, (Char,), Bool),
+    (:uppercase,    (Char,), Char), (:lowercase, (Char,), Char),
+    (:Int,          (Char,), Int64),
+    (:<,            (Char, Char), Bool), (:(==), (Char, Char), Bool),
+    # ---- Higher-order with binary op (reduce/foldl) ----
+    (:reduce, (BinOp(), VInt),   Int64),
+    (:foldl,  (BinOp(), VInt),   Int64),
+    (:reduce, (BinOp(), VFloat), Float64),
 ]
 
 # --- Literal / leaf generators (edge-case biased) --------------------------
@@ -120,6 +145,7 @@ _lit(::Type{Float64}) =
     Data.Floats{Float64}()
 _lit(::Type{Bool})   = Data.SampledFrom([true, false])
 _lit(::Type{String}) = Data.SampledFrom(["", "a", "abc", "Hello", "héllo", "12345", "  pad  "])
+_lit(::Type{Char})   = Data.SampledFrom(['a', 'Z', '0', '9', ' ', 'x', 'é', '!'])
 
 # ExprNode boxes every alternative so Supposition's OneOf has a single element type.
 struct ExprNode
@@ -150,14 +176,32 @@ function _gen_vec_literal(::Type{ET}, depth, env) where {ET}
     end
 end
 
+# A bounded Dict literal `Dict(k1=>v1, k2=>v2)` and Set literal `Set([a,b,c])`.
+function _gen_dict_literal(depth, env)
+    k = gen_expr(Int64, depth, env)
+    Data.bind(k) do k1
+        Data.bind(k) do v1
+            Data.bind(k) do k2
+                Data.bind(k) do v2
+                    Data.just(ExprNode(Expr(:call, :Dict,
+                        Expr(:call, :(=>), k1.v, v1.v), Expr(:call, :(=>), k2.v, v2.v))))
+                end
+            end
+        end
+    end
+end
+_gen_set_literal(depth, env) =
+    map(n -> ExprNode(Expr(:call, :Set, n.v)), _gen_vec_literal(Int64, depth, env))
+
 # A generated unary lambda `y -> <ret expr in y>` for higher-order ops.
 function _gen_lambda(fn::Fn, depth, _env)
     body = gen_expr(fn.ret, max(depth - 1, 0), Dict{Type,Vector{Symbol}}(fn.param => [:y]))
     map(b -> ExprNode(Expr(:->, :y, b.v)), body)
 end
 
-# Generate one argument slot (a Type → expression, or an Fn → lambda).
-_gen_arg(at::Fn, depth, env)  = _gen_lambda(at, depth, env)
+# Generate one argument slot: a Type → expression, an Fn → lambda, BinOp → op symbol.
+_gen_arg(at::Fn, depth, env)   = _gen_lambda(at, depth, env)
+_gen_arg(at::BinOp, depth, env) = map(s -> ExprNode(s), Data.SampledFrom([:+, :*, :min, :max]))
 _gen_arg(at::Type, depth, env) = gen_expr(at, depth, env)
 
 """
@@ -165,7 +209,7 @@ _gen_arg(at::Type, depth, env) = gen_expr(at, depth, env)
 
 Expression of Julia type `T`, depth-bounded, using variables in `env`.
 """
-const _LIT_TYPES = Dict{Type,Bool}(Int64 => true, Float64 => true, Bool => true, String => true)
+const _LIT_TYPES = Dict{Type,Bool}(Int64 => true, Float64 => true, Bool => true, String => true, Char => true)
 
 function gen_expr(::Type{T}, depth::Int, env::Dict{Type,Vector{Symbol}}) where {T}
     # LAZY construction: collect production *thunks* (each returns a Possibility),
@@ -186,6 +230,10 @@ function gen_expr(::Type{T}, depth::Int, env::Dict{Type,Vector{Symbol}}) where {
         push!(prods, () -> _gen_vec_literal(Int64, max(depth - 1, 0), env))
     elseif T === VFloat
         push!(prods, () -> _gen_vec_literal(Float64, max(depth - 1, 0), env))
+    elseif T === DictII
+        push!(prods, () -> _gen_dict_literal(max(depth - 1, 0), env))
+    elseif T === SetI
+        push!(prods, () -> _gen_set_literal(max(depth - 1, 0), env))
     end
     if depth > 0
         for entry in OPS
