@@ -37,7 +37,12 @@ struct Outcome
 end
 
 function vals_match(a, b)
-    if a isa AbstractFloat || b isa AbstractFloat
+    # Elementwise (NaN-aware) for vectors — `[NaN] == [NaN]` is false, so a plain
+    # `==` would flag identity-on-NaN as a divergence (false positive).
+    if a isa AbstractVector && b isa AbstractVector
+        length(a) == length(b) || return false
+        return all(vals_match(x, y) for (x, y) in zip(a, b))
+    elseif a isa AbstractFloat || b isa AbstractFloat
         fa = float(a); fb = float(b)
         (isnan(fa) && isnan(fb)) && return true
         (isinf(fa) && isinf(fb) && sign(fa) == sign(fb)) && return true
@@ -117,9 +122,11 @@ function differential_natural(body, ::Type{IN}; var::Symbol = :v) where {IN}
     fn, _, src = make_function_natural(body, IN; var = var)
     samples = vector_inputs(eltype(IN))
 
+    # Run native on DEEPCOPIES — mutating ops (push!/sort!/…) must not corrupt the
+    # samples that wasm marshals next, or we'd compare native(mutated) vs wasm(pristine).
     natives = map(samples) do tup
         try
-            (:ok, Base.invokelatest(fn, tup...))
+            (:ok, Base.invokelatest(fn, deepcopy(tup)...))
         catch e
             (:throw, e)
         end

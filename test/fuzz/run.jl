@@ -110,14 +110,21 @@ function _reproducer_natural(o::Outcome, ::Type{IN}, body) where {IN}
     using WasmTarget
     include(joinpath("test", "fuzz", "harness.jl")); using .FuzzHarness
     repro(v::$(IN)) = $(body)
-    _m(a, b) = (a isa AbstractFloat || b isa AbstractFloat) ?
-        ((isnan(a) && isnan(b)) || (isinf(a) && isinf(b) && sign(a) == sign(b)) ||
-         a == b || isapprox(float(a), float(b); rtol = 1e-9, atol = 1e-12)) : (a == b)
+    function _m(a, b)
+        if a isa AbstractVector && b isa AbstractVector
+            length(a) == length(b) || return false
+            return all(_m(x, y) for (x, y) in zip(a, b))
+        elseif a isa AbstractFloat || b isa AbstractFloat
+            return (isnan(a) && isnan(b)) || (isinf(a) && isinf(b) && sign(a) == sign(b)) ||
+                   a == b || isapprox(float(a), float(b); rtol = 1e-9, atol = 1e-12)
+        end
+        return a == b
+    end
     _v = $(inp)
-    _threw = try repro(_v); false catch; true end
-    _r = FuzzHarness.compile_and_run_vec(repro, ($(IN),), [(_v,)])[1]
-    _ok = _threw ? (_r[1] === :trap) : (_r[1] === :ok && _m(repro(_v), _r[2]))
-    _ok || error("WasmTarget gap @ v=\$_v : native=\$(_threw ? :throw : repro(_v)) wasm=\$_r")
+    _nat = try (true, repro(deepcopy(_v))) catch; (false, nothing) end   # deepcopy: don't let mutation alias wasm's input
+    _r = FuzzHarness.compile_and_run_vec(repro, ($(IN),), [(deepcopy(_v),)])[1]
+    _ok = _nat[1] ? (_r[1] === :ok && _m(_nat[2], _r[2])) : (_r[1] === :trap)
+    _ok || error("WasmTarget gap @ v=\$_v : native=\$(_nat[1] ? _nat[2] : :throw) wasm=\$_r")
     """
 end
 
