@@ -2621,52 +2621,31 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             # WBUILD-5501: memset(ptr, value, size) — fill memory with a byte value.
             # CORRECT BY DESIGN for zero-fill: WasmGC arrays are zero-initialized by
             # array.new_default, so memset(ptr, 0, size) is a no-op. All current callers
-            # (Dict/Set constructor, rehash!) use value=0.
-            # LIMITATION: Non-zero fill (value != 0) would silently produce wrong results.
-            # If this is ever needed, implement via array.fill or element-by-element loop.
-            # Return the pointer (first arg) as the result since memset returns ptr.
+            # (Dict/Set constructor, rehash!) use value=0 (a literal 0x00).
+            # SOUNDNESS: a *literal* non-zero fill would silently produce wrong results,
+            # so we refuse it (foreigncall args: [name,rt,argtypes,nreq,cc, ptr, value, size]).
+            if length(expr.args) >= 7 && (expr.args[7] isa Number) && !iszero(expr.args[7])
+                record_unsupported!(ctx, :value_stub, "memset with a non-zero constant fill value"; idx=idx, detail=expr)
+                push!(bytes, Opcode.UNREACHABLE)  # non-strict path: trap rather than mis-fill
+                ctx.last_stmt_was_stub = true
+                return bytes
+            end
+            # Zero-fill no-op: return the pointer (first arg) as the result since memset returns ptr.
             if length(expr.args) >= 6
                 ptr_arg = expr.args[6]
                 append!(bytes, compile_value(ptr_arg, ctx))
             end
             return bytes
         elseif name === :jl_object_id
-            # WBUILD-5501: jl_object_id(x) → UInt64: compute object identity hash.
-            # HARMLESS STUB: Dict/Set use hash() not objectid(). No auto-discovered
-            # method chain calls jl_object_id. String variant returns array.len (length
-            # as hash). Other types return constant 42.
-            # NOT NEEDED for correctness — Dict hashing works via Base.hash() which is
-            # pure Julia bitwise operations that compile correctly.
-            if length(expr.args) >= 6
-                obj_arg = expr.args[6]
-                obj_type = infer_value_type(obj_arg, ctx)
-
-                if obj_type === Symbol || obj_type === String
-                    # Hash the byte array: FNV-1a over characters
-                    # We need a loop, so implement inline:
-                    # result = 14695981039346656037 (FNV offset basis)
-                    # for each byte b in array:
-                    #   result = (result XOR b) * 1099511628211 (FNV prime)
-                    #
-                    # Since Wasm doesn't have easy loops here, we use a simpler approach:
-                    # hash = array.len (gives a unique-enough hash for small dicts)
-                    # This is a simplified hash that uses the string length as a hash.
-                    # For correctness with equal symbols, equal strings produce equal hashes.
-                    append!(bytes, compile_value(obj_arg, ctx))
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.ARRAY_LEN)
-                    # Extend i32 to i64 for UInt64 result
-                    push!(bytes, Opcode.I64_EXTEND_I32_U)
-                else
-                    # For non-string types, return a constant hash
-                    push!(bytes, Opcode.I64_CONST)
-                    append!(bytes, encode_leb128_signed(Int64(42)))
-                end
-            else
-                # Fallback: constant hash
-                push!(bytes, Opcode.I64_CONST)
-                append!(bytes, encode_leb128_signed(Int64(0)))
-            end
+            # jl_object_id(x) → UInt64: identity hash. There is no correct WasmGC
+            # implementation yet (no stable per-object identity). The previous stub
+            # returned array.len for strings and a constant 42 otherwise — both silently
+            # wrong (constant 42 collides every object to one hash bucket). Refuse instead.
+            # Dict/Set hashing does NOT route through here (it uses Base.hash, pure Julia),
+            # so this should be unreachable in practice; if it fires, it's a real gap.
+            record_unsupported!(ctx, :value_stub, "objectid / identity-hash (jl_object_id)"; idx=idx, detail=expr)
+            push!(bytes, Opcode.UNREACHABLE)  # non-strict path: trap rather than return a fake hash
+            ctx.last_stmt_was_stub = true
             return bytes
         elseif name === :jl_string_to_genericmemory
             # Convert String to Memory{UInt8}

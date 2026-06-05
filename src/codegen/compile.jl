@@ -7,10 +7,10 @@
 
 Compile a Julia function to a WebAssembly module.
 """
-function compile_function(f, arg_types::Tuple, func_name::String; optimize_ir::Bool=true)::WasmModule
+function compile_function(f, arg_types::Tuple, func_name::String; optimize_ir::Bool=true, strict::Bool=true)::WasmModule
     # Use compile_module for single functions too, enabling auto-discovery of dependencies
     # This ensures that cross-function calls work correctly
-    return compile_module([(f, arg_types, func_name)]; optimize_ir=optimize_ir)
+    return compile_module([(f, arg_types, func_name)]; optimize_ir=optimize_ir, strict=strict)
 end
 
 # Legacy implementation kept for reference - now unused
@@ -1316,7 +1316,8 @@ function compile_module(functions::Vector;
                         return_registries::Bool=false,
                         overlay_entries::Set=Set{Tuple{Any,Tuple}}(),
                         optimize_ir::Bool=true,
-                        register_ir_types::Bool=false
+                        register_ir_types::Bool=false,
+                        strict::Bool=true
                         )
     # Create WasmInterpreter with overlay method table (GPUCompiler pattern).
     # Must be created here (after user functions exist) so world age is current.
@@ -1724,7 +1725,7 @@ function compile_module(functions::Vector;
             ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
                                     func_registry=func_registry, func_idx=func_idx, func_ref=f,
                                     global_args=global_args, is_compiled_closure=is_closure,
-                                    module_globals=module_globals)
+                                    module_globals=module_globals, strict=strict)
             body = generate_body(ctx)
             locals = ctx.locals
         end

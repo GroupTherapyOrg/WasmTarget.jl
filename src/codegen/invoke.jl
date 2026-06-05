@@ -4562,17 +4562,21 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     push!(bytes, Opcode.STRUCT_NEW)
                     append!(bytes, encode_leb128_unsigned(_ctor_sinfo.wasm_type_idx))
                 else
-                    # Registration failed — fallback to unreachable
-                    @debug "Struct constructor: failed to register $(_ctor_target)"
+                    # Registration failed — codegen cannot lay out this struct type.
+                    record_unsupported!(ctx, :unsupported_type,
+                        "struct constructor for `$(_ctor_target)` (type registration failed)"; idx=idx, detail=expr)
                     push!(bytes, Opcode.UNREACHABLE)
                     ctx.last_stmt_was_stub = true
                 end
 
             else
-                # Unknown method — emit unreachable (will trap at runtime)
-                # This allows compilation to succeed for code paths that
-                # don't actually reach these methods.
-                @debug "Stubbing unsupported method: $name (will trap at runtime) (in func_$(ctx.func_idx))" expr=expr idx=idx mi_info=(mi !== nothing ? string(mi.specTypes) : "nothing")
+                # Unknown method — codegen has no translation for this invoke target.
+                # Under strict=true this raises WasmCompileError naming the method + source
+                # location; under strict=false it emits unreachable (traps at runtime),
+                # which lets compilation succeed for paths that never reach this method.
+                record_unsupported!(ctx, :unsupported_method,
+                    "method `$name`" * (mi !== nothing ? " for $(mi.specTypes)" : "");
+                    idx=idx, detail=expr)
                 push!(bytes, Opcode.UNREACHABLE)
                 ctx.last_stmt_was_stub = true  # PURE-908
             end

@@ -10210,3 +10210,6 @@ console.log(JSON.stringify({
     end
 
 end
+
+# Bounded differential fuzz (native-vs-wasm over generated compositions) + corpus replay.
+include("fuzz_suite.jl")
