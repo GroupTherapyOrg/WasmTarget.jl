@@ -80,7 +80,10 @@ _path(id::AbstractString) = joinpath(LEDGER_DIR, "$(id).md")
 
 # --- Writing ---------------------------------------------------------------
 
-function _render(g::Gap, id::AbstractString, status::AbstractString, first_seen::AbstractString)
+const _ANALYSIS_PLACEHOLDER = "_(No analysis yet. Add root-cause notes below the `## Analysis` heading — they are PRESERVED across re-records.)_"
+
+function _render(g::Gap, id::AbstractString, status::AbstractString, first_seen::AbstractString,
+                 analysis::AbstractString = _ANALYSIS_PLACEHOLDER)
     repro = strip(g.reproducer)
     diag = strip(g.diagnostic)
     """
@@ -115,9 +118,22 @@ function _render(g::Gap, id::AbstractString, status::AbstractString, first_seen:
 
     ## Work on this
     ```
-    julia --project=. -e 'include("test/fuzz/ledger.jl"); using .Ledger; verify_gaps!()'
+    julia --project=test/fuzz test/fuzz/run.jl verify
     ```
+
+    ## Analysis
+    $(strip(analysis))
     """
+end
+
+# Extract a hand-authored `## Analysis` section (everything after the heading) so
+# it survives re-records. Returns the placeholder if absent/empty.
+function _extract_analysis(path::AbstractString)
+    isfile(path) || return _ANALYSIS_PLACEHOLDER
+    m = match(r"(?s)\n## Analysis\n(.*)$", read(path, String))
+    m === nothing && return _ANALYSIS_PLACEHOLDER
+    body = strip(m.captures[1])
+    return isempty(body) ? _ANALYSIS_PLACEHOLDER : body
 end
 
 # Parse the `key: value` header block of a gap file into a Dict.
@@ -139,9 +155,11 @@ end
 """
     record_gap!(g::Gap; run_id="") -> String
 
-Write/refresh the gap's file. Preserves an existing `status` (so a gap already
-marked `fixed` is not silently reopened by a stale rediscovery — call
-`verify_gaps!` to reconcile). Returns the gap id.
+Write/refresh the gap's file. Preserves across re-records:
+  * `status` (a gap marked `fixed` is not silently reopened — `verify_gaps!` reconciles)
+  * `first_seen`
+  * the hand-authored `## Analysis` section (root-cause notes a fix loop adds)
+so re-discovering the same gap never clobbers human/loop analysis. Returns the gap id.
 """
 function record_gap!(g::Gap; run_id::AbstractString = "")
     isdir(LEDGER_DIR) || mkpath(LEDGER_DIR)
@@ -149,12 +167,14 @@ function record_gap!(g::Gap; run_id::AbstractString = "")
     path = _path(id)
     status = "open"
     first_seen = run_id
+    analysis = _ANALYSIS_PLACEHOLDER
     if isfile(path)
         hdr = _parse_header(path)
         status = get(hdr, "status", "open")
         first_seen = get(hdr, "first_seen", run_id)
+        analysis = _extract_analysis(path)
     end
-    write(path, _render(g, id, status, first_seen))
+    write(path, _render(g, id, status, first_seen, analysis))
     return id
 end
 
