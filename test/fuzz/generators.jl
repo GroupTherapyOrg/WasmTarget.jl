@@ -33,80 +33,81 @@ const VFloat = Vector{Float64}
 
 # --- Op tables: (name, argtypes::Tuple{Union{Type,Fn}...}, rettype) ---------
 const OPS = Any[
-    # Int64 scalar
-    (:+,    (Int64, Int64), Int64),
-    (:-,    (Int64, Int64), Int64),
-    (:*,    (Int64, Int64), Int64),
-    (:abs,  (Int64,),       Int64),
-    (:sign, (Int64,),       Int64),
-    (:min,  (Int64, Int64), Int64),
-    (:max,  (Int64, Int64), Int64),
-    (:div,  (Int64, Int64), Int64),
-    (:rem,  (Int64, Int64), Int64),
-    (:gcd,  (Int64, Int64), Int64),
-    # Float64 scalar
-    (:+,    (Float64, Float64), Float64),
-    (:-,    (Float64, Float64), Float64),
-    (:*,    (Float64, Float64), Float64),
-    (:/,    (Float64, Float64), Float64),
-    (:abs,  (Float64,),         Float64),
-    (:sqrt, (Float64,),         Float64),
-    (:cbrt, (Float64,),         Float64),
-    (:sin,  (Float64,),         Float64),
-    (:cos,  (Float64,),         Float64),
-    (:exp,  (Float64,),         Float64),
-    (:log,  (Float64,),         Float64),
-    (:floor,(Float64,),         Float64),
-    (:ceil, (Float64,),         Float64),
-    (:min,  (Float64, Float64), Float64),
-    (:max,  (Float64, Float64), Float64),
-    (:hypot,(Float64, Float64), Float64),
-    # Mixed-type conversions
-    (:Float64, (Int64,),   Float64),
-    # Bool (comparisons / logic) — consumed by filter/count predicates
-    (:(==), (Int64, Int64), Bool),
-    (:<,    (Int64, Int64), Bool),
-    (:>,    (Int64, Int64), Bool),
-    (:<=,   (Int64, Int64), Bool),
-    (:iseven, (Int64,),     Bool),
-    (:isodd,  (Int64,),     Bool),
-    (:&,    (Bool, Bool),   Bool),
-    (:|,    (Bool, Bool),   Bool),
-    (:!,    (Bool,),        Bool),
-    # Vector{Int64} → Vector{Int64}
-    (:sort,    (VInt,),               VInt),
-    (:reverse, (VInt,),               VInt),
-    (:unique,  (VInt,),               VInt),
-    (:map,     (Fn(Int64, Int64), VInt), VInt),
-    (:filter,  (Fn(Int64, Bool),  VInt), VInt),
-    # Vector{Int64} → Int64
-    (:sum,     (VInt,),               Int64),
-    (:prod,    (VInt,),               Int64),
-    (:maximum, (VInt,),               Int64),
-    (:minimum, (VInt,),               Int64),
-    (:length,  (VInt,),               Int64),
-    (:first,   (VInt,),               Int64),
-    (:last,    (VInt,),               Int64),
-    (:count,   (Fn(Int64, Bool),  VInt), Int64),
-    # Vector{Float64} → Vector{Float64} / Float64
-    (:sort,    (VFloat,),             VFloat),
-    (:reverse, (VFloat,),             VFloat),
-    (:map,     (Fn(Float64, Float64), VFloat), VFloat),
-    (:sum,     (VFloat,),             Float64),
-    (:maximum, (VFloat,),             Float64),
-    (:minimum, (VFloat,),             Float64),
-    (:length,  (VFloat,),             Int64),
-    # String → String
-    (:uppercase, (String,),          String),
-    (:lowercase, (String,),          String),
-    (:reverse,   (String,),          String),
-    (:strip,     (String,),          String),
-    (:*,         (String, String),   String),
-    (:string,    (Int64,),           String),
-    (:string,    (Float64,),         String),
-    # String → Int64
-    (:length,     (String,),         Int64),
-    (:ncodeunits, (String,),         Int64),
+    # ---- Int64 scalar (Numeric) ----
+    (:+, (Int64, Int64), Int64), (:-, (Int64, Int64), Int64), (:*, (Int64, Int64), Int64),
+    (:abs, (Int64,), Int64), (:sign, (Int64,), Int64), (:-, (Int64,), Int64),
+    (:min, (Int64, Int64), Int64), (:max, (Int64, Int64), Int64),
+    (:div, (Int64, Int64), Int64), (:rem, (Int64, Int64), Int64), (:mod, (Int64, Int64), Int64),
+    (:fld, (Int64, Int64), Int64), (:cld, (Int64, Int64), Int64),
+    (:gcd, (Int64, Int64), Int64), (:lcm, (Int64, Int64), Int64),
+    (:clamp, (Int64, Int64, Int64), Int64), (:^, (Int64, Int64), Int64),
+    (:zero, (Int64,), Int64), (:one, (Int64,), Int64), (:abs2, (Int64,), Int64),
+    (:&, (Int64, Int64), Int64), (:|, (Int64, Int64), Int64), (:xor, (Int64, Int64), Int64),
+    (:<<, (Int64, Int64), Int64), (:>>, (Int64, Int64), Int64), (:~, (Int64,), Int64),
+    # ---- Float64 scalar (Numeric + Math) ----
+    (:+, (Float64, Float64), Float64), (:-, (Float64, Float64), Float64),
+    (:*, (Float64, Float64), Float64), (:/, (Float64, Float64), Float64),
+    (:-, (Float64,), Float64), (:abs, (Float64,), Float64), (:sign, (Float64,), Float64),
+    (:min, (Float64, Float64), Float64), (:max, (Float64, Float64), Float64),
+    (:sqrt, (Float64,), Float64), (:cbrt, (Float64,), Float64), (:hypot, (Float64, Float64), Float64),
+    (:sin, (Float64,), Float64), (:cos, (Float64,), Float64), (:tan, (Float64,), Float64),
+    (:asin, (Float64,), Float64), (:acos, (Float64,), Float64), (:atan, (Float64,), Float64),
+    (:sinh, (Float64,), Float64), (:cosh, (Float64,), Float64), (:tanh, (Float64,), Float64),
+    (:exp, (Float64,), Float64), (:exp2, (Float64,), Float64), (:expm1, (Float64,), Float64),
+    (:log, (Float64,), Float64), (:log2, (Float64,), Float64), (:log10, (Float64,), Float64),
+    (:log1p, (Float64,), Float64),
+    (:sinpi, (Float64,), Float64), (:cospi, (Float64,), Float64),
+    (:deg2rad, (Float64,), Float64), (:rad2deg, (Float64,), Float64),
+    (:floor, (Float64,), Float64), (:ceil, (Float64,), Float64),
+    (:round, (Float64,), Float64), (:trunc, (Float64,), Float64),
+    (:copysign, (Float64, Float64), Float64), (:^, (Float64, Float64), Float64),
+    (:mod, (Float64, Float64), Float64), (:rem, (Float64, Float64), Float64),
+    (:clamp, (Float64, Float64, Float64), Float64), (:inv, (Float64,), Float64),
+    (:atan, (Float64, Float64), Float64),
+    # ---- Mixed-type conversions ----
+    (:Float64, (Int64,), Float64), (:float, (Int64,), Float64),
+    # ---- Bool (comparisons / predicates / logic) ----
+    (:(==), (Int64, Int64), Bool), (:(!=), (Int64, Int64), Bool),
+    (:<, (Int64, Int64), Bool), (:>, (Int64, Int64), Bool),
+    (:<=, (Int64, Int64), Bool), (:>=, (Int64, Int64), Bool),
+    (:iseven, (Int64,), Bool), (:isodd, (Int64,), Bool),
+    (:iszero, (Int64,), Bool), (:isone, (Int64,), Bool), (:signbit, (Int64,), Bool),
+    (:(==), (Float64, Float64), Bool), (:<, (Float64, Float64), Bool), (:>, (Float64, Float64), Bool),
+    (:isnan, (Float64,), Bool), (:isinf, (Float64,), Bool), (:isfinite, (Float64,), Bool),
+    (:iszero, (Float64,), Bool), (:signbit, (Float64,), Bool),
+    (:&, (Bool, Bool), Bool), (:|, (Bool, Bool), Bool), (:!, (Bool,), Bool), (:xor, (Bool, Bool), Bool),
+    # ---- Vector{Int64} → Vector{Int64} ----
+    (:sort, (VInt,), VInt), (:reverse, (VInt,), VInt), (:unique, (VInt,), VInt),
+    (:cumsum, (VInt,), VInt), (:map, (Fn(Int64, Int64), VInt), VInt),
+    (:filter, (Fn(Int64, Bool), VInt), VInt), (:push!, (VInt, Int64), VInt),
+    (:pushfirst!, (VInt, Int64), VInt),
+    # ---- Vector{Int64} → Int64 / Bool ----
+    (:sum, (VInt,), Int64), (:prod, (VInt,), Int64),
+    (:maximum, (VInt,), Int64), (:minimum, (VInt,), Int64),
+    (:length, (VInt,), Int64), (:first, (VInt,), Int64), (:last, (VInt,), Int64),
+    (:argmax, (VInt,), Int64), (:argmin, (VInt,), Int64),
+    (:count, (Fn(Int64, Bool), VInt), Int64),
+    (:any, (Fn(Int64, Bool), VInt), Bool), (:all, (Fn(Int64, Bool), VInt), Bool),
+    (:in, (Int64, VInt), Bool), (:isempty, (VInt,), Bool),
+    # ---- Vector{Float64} ----
+    (:sort, (VFloat,), VFloat), (:reverse, (VFloat,), VFloat),
+    (:map, (Fn(Float64, Float64), VFloat), VFloat),
+    (:sum, (VFloat,), Float64), (:prod, (VFloat,), Float64),
+    (:maximum, (VFloat,), Float64), (:minimum, (VFloat,), Float64),
+    (:length, (VFloat,), Int64),
+    # ---- String → String ----
+    (:uppercase, (String,), String), (:lowercase, (String,), String),
+    (:reverse, (String,), String), (:strip, (String,), String),
+    (:lstrip, (String,), String), (:rstrip, (String,), String),
+    (:chomp, (String,), String), (:titlecase, (String,), String),
+    (:uppercasefirst, (String,), String), (:lowercasefirst, (String,), String),
+    (:*, (String, String), String), (:string, (Int64,), String), (:string, (Float64,), String),
+    # ---- String → Int64 / Bool ----
+    (:length, (String,), Int64), (:ncodeunits, (String,), Int64),
+    (:isempty, (String,), Bool), (:isascii, (String,), Bool),
+    (:startswith, (String, String), Bool), (:endswith, (String, String), Bool),
+    (:contains, (String, String), Bool), (:occursin, (String, String), Bool),
+    (:cmp, (String, String), Int64),
 ]
 
 # --- Literal / leaf generators (edge-case biased) --------------------------
@@ -166,32 +167,38 @@ Expression of Julia type `T`, depth-bounded, using variables in `env`.
 const _LIT_TYPES = Dict{Type,Bool}(Int64 => true, Float64 => true, Bool => true, String => true)
 
 function gen_expr(::Type{T}, depth::Int, env::Dict{Type,Vector{Symbol}}) where {T}
-    # Leaves: literals of T + any in-scope variable of type T (boxed in ExprNode).
-    leafgens = Any[]
-    haskey(_LIT_TYPES, T) && push!(leafgens, _lit(T))
+    # LAZY construction: collect production *thunks* (each returns a Possibility),
+    # then pick one at GENERATION time via bind. Eagerly expanding every op at every
+    # level would build ≈ops^depth generator objects (intractable at depth ≥4); with
+    # bind, only the sampled path expands, so construction is O(#productions) and a
+    # sample is O(depth).
+    prods = Function[]
+    if haskey(_LIT_TYPES, T)
+        push!(prods, () -> map(ExprNode, _lit(T)))
+    end
     for vs in get(env, T, Symbol[])
-        push!(leafgens, Data.just(vs))
-    end
-
-    node_gens = Any[]
-    isempty(leafgens) || push!(node_gens, map(ExprNode, reduce(|, leafgens)))
-    # Vector constructor leaf — ALWAYS available (elements one level down), so
-    # vector types have a production even at depth 0.
-    if T === VInt
-        push!(node_gens, _gen_vec_literal(Int64, max(depth - 1, 0), env))
-    elseif T === VFloat
-        push!(node_gens, _gen_vec_literal(Float64, max(depth - 1, 0), env))
-    end
-
-    if depth > 0
-        for (name, argts, rett) in OPS
-            rett === T || continue
-            arg_gens = Any[_gen_arg(at, depth - 1, env) for at in argts]
-            push!(node_gens, _gen_call(name, Vector{Any}(arg_gens)))
+        let v = vs
+            push!(prods, () -> Data.just(ExprNode(v)))
         end
     end
-    isempty(node_gens) && error("no generator for type $T at depth $depth")
-    return reduce(|, node_gens)
+    if T === VInt
+        push!(prods, () -> _gen_vec_literal(Int64, max(depth - 1, 0), env))
+    elseif T === VFloat
+        push!(prods, () -> _gen_vec_literal(Float64, max(depth - 1, 0), env))
+    end
+    if depth > 0
+        for entry in OPS
+            entry[3] === T || continue
+            let nm = entry[1]::Symbol, ats = entry[2], d = depth - 1
+                push!(prods, () -> _gen_call(nm, Any[_gen_arg(at, d, env) for at in ats]))
+            end
+        end
+    end
+    isempty(prods) && error("no generator for type $T at depth $depth")
+    length(prods) == 1 && return prods[1]()
+    return Data.bind(Data.SampledFrom(eachindex(prods))) do idx
+        prods[idx]()
+    end
 end
 
 """
