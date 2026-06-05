@@ -222,6 +222,7 @@ function _build_param_ops()
         add(:in, (T, VT), Bool); add(:count, (Fn(T, Bool), VT), Int64)
         add(:any, (Fn(T, Bool), VT), Bool); add(:all, (Fn(T, Bool), VT), Bool)
         add(:push!, (VT, T), VT); add(:pushfirst!, (VT, T), VT)
+        add(:collect, (VT,), VT)   # iterator surface (bounded by 3-elt literals)
     end
     for T in VEC_NUM
         VT = Vector{T}

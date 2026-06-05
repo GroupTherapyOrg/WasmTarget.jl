@@ -242,9 +242,64 @@ function ci_fuzz_passes(; types = (Int64, Float64), depth = 2, max_examples = 30
     return allpass
 end
 
+# --- Coverage metric: which ops are exercised + verified-passing ------------
+const _COV_SEEN = Dict{Symbol,Int}()
+const _COV_PASS = Dict{Symbol,Int}()
+
+_call_heads(x) = (acc = Symbol[]; _walk_heads!(acc, x); acc)
+function _walk_heads!(acc, x)
+    if x isa Expr
+        if x.head === :call && !isempty(x.args) && x.args[1] isa Symbol
+            push!(acc, x.args[1])
+        end
+        for a in x.args
+            _walk_heads!(acc, a)
+        end
+    end
+    return acc
+end
+
+function _record_coverage!(body, passed::Bool)
+    for s in _call_heads(body)
+        _COV_SEEN[s] = get(_COV_SEEN, s, 0) + 1
+        passed && (_COV_PASS[s] = get(_COV_PASS, s, 0) + 1)
+    end
+end
+
+function coverage_report()
+    allops = Set(e[1] for e in FuzzGen.OPS)
+    seen   = Set(keys(_COV_SEEN))
+    passed = Set(k for (k, v) in _COV_PASS if v > 0)
+    println("== op-symbol coverage ==")
+    println("  $(length(intersect(seen, allops)))/$(length(allops)) op symbols exercised; ",
+            "$(length(intersect(passed, allops))) verified-passing")
+    unseen = sort(collect(setdiff(allops, seen)); by = string)
+    isempty(unseen) || println("  unseen:               ", join(unseen, ", "))
+    failonly = sort(collect(setdiff(intersect(seen, allops), passed)); by = string)
+    isempty(failonly) || println("  seen-but-never-passed: ", join(failonly, ", "))
+end
+
+# Generate n programs per type, run differential on each, record op coverage.
+function coverage_sweep(; n::Int = 400, depth = 4, types = (Int64, Float64))
+    FuzzHarness.NODE_OK || (@warn "Node.js unavailable"; return)
+    empty!(_COV_SEEN); empty!(_COV_PASS)
+    for T in types
+        gen = gen_program(T; depth = depth)
+        for _ in 1:n
+            body = try; Supposition.example(gen); catch; continue; end
+            o = try; differential(body, T); catch; continue; end
+            o.category === :skip && continue
+            _record_coverage!(body, o.category === :ok)
+        end
+    end
+    coverage_report()
+end
+
 if abspath(PROGRAM_FILE) == @__FILE__
     if length(ARGS) >= 1 && ARGS[1] == "verify"
         verify()
+    elseif length(ARGS) >= 1 && ARGS[1] == "coverage"
+        coverage_sweep()
     else
         run_fuzz()
     end
