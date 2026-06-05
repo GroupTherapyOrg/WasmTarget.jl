@@ -6,6 +6,21 @@ across fuzzer re-records** by `Ledger.record_gap!`, so a fix loop's notes are ne
 clobbered. See `failures/INDEX.md` for the live list. This file holds only
 observations that don't map onto a single auto-generated gap.
 
+## Fixed (verified-closed via the loop)
+
+- **Integer shift `<<`/`>>` over-shift** — wasm masks the shift amount to `mod bitwidth`;
+  Julia yields 0 (shl/lshr) or sign-fill (ashr) for shift ≥ bitwidth. Fixed with a
+  width-aware guard (`_emit_shift_guarded!`, calls.jl). Closed 4 gaps.
+- **`reverse(String)` unicode** — reversed bytes, splitting multi-byte codepoints.
+  Now reverses by character. Closed 1 gap.
+
+## Known deep gaps (need C-lib-call → WasmGC work)
+
+- **`collect(Vector)` / memmove** — `collect([a,b,c])` lowers to a raw-pointer
+  `memmove` foreigncall that doesn't map to WasmGC arrays → traps. Omitted from the
+  generator (contrived for vectors); real `collect` coverage needs ranges/generators
+  (Part 2) and a WasmGC `array.copy`-based memmove.
+
 ## Observations not yet captured as gaps
 
 - **`Vector == Vector` traps.** `sort([0,x,x]) == sort([0,x,x])` traps in wasm where
