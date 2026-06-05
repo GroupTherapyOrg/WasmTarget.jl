@@ -38,7 +38,7 @@ const DictII = Dict{Int64,Int64}
 const SetI   = Set{Int64}
 
 # --- Op tables: (name, argtypes::Tuple{Union{Type,Fn}...}, rettype) ---------
-const OPS = Any[
+const _CONCRETE_OPS_REFERENCE = Any[   # superseded by _build_param_ops(); kept for reference
     # ---- Int64 scalar (Numeric) ----
     (:+, (Int64, Int64), Int64), (:-, (Int64, Int64), Int64), (:*, (Int64, Int64), Int64),
     (:abs, (Int64,), Int64), (:sign, (Int64,), Int64), (:-, (Int64,), Int64),
@@ -136,16 +136,139 @@ const OPS = Any[
     (:reduce, (BinOp(), VFloat), Float64),
 ]
 
-# --- Literal / leaf generators (edge-case biased) --------------------------
-_lit(::Type{Int64}) =
-    Data.SampledFrom(Int64[0, 1, -1, 2, -2, 10, typemax(Int64), typemin(Int64)]) |
-    Data.Integers{Int64}()
-_lit(::Type{Float64}) =
-    Data.SampledFrom(Float64[0.0, 1.0, -1.0, 2.0, 0.5, -0.5, Inf, -Inf, NaN, 1e300, 3.141592653589793]) |
-    Data.Floats{Float64}()
-_lit(::Type{Bool})   = Data.SampledFrom([true, false])
+# --- Literal / leaf generators (edge-case biased), generic over the type lattice ---
+# Generic integer/float literals (edge values + random) for ALL widths.
+_lit(::Type{T}) where {T<:Integer} =
+    Data.SampledFrom(T[zero(T), one(T), typemax(T), typemin(T), T(2)]) | Data.Integers{T}()
+_lit(::Type{T}) where {T<:AbstractFloat} =
+    Data.SampledFrom(T[zero(T), one(T), -one(T), T(Inf), T(-Inf), T(NaN), T(0.5), T(2)]) | Data.Floats{T}()
+_lit(::Type{Bool})   = Data.SampledFrom([true, false])   # explicit: Bool<:Integer, but Data.Integers{Bool} is unsupported
 _lit(::Type{String}) = Data.SampledFrom(["", "a", "abc", "Hello", "héllo", "12345", "  pad  "])
 _lit(::Type{Char})   = Data.SampledFrom(['a', 'Z', '0', '9', ' ', 'x', 'é', '!'])
+
+# Which types have a literal leaf.
+_has_lit(::Type{<:Integer})        = true
+_has_lit(::Type{<:AbstractFloat})  = true
+_has_lit(::Type{Char})             = true
+_has_lit(::Type{String})           = true
+_has_lit(::Type)                   = false
+
+# --- Type lattice (the point of the apparatus: be GENERAL) ------------------
+const INT_TYPES   = (Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64)
+const SINT_TYPES  = (Int8, Int16, Int32, Int64)
+const FLOAT_TYPES = (Float32, Float64)
+const NUM_TYPES   = (INT_TYPES..., FLOAT_TYPES...)
+const VEC_ELT     = (Int64, Int32, Int8, Float64, Float32, Bool)
+const VEC_NUM     = (Int64, Int32, Int8, Float64, Float32)
+const SET_ELT     = (Int64, Int32, String)
+const DICT_KV     = ((Int64, Int64), (Int32, Int64), (Int64, Float64),
+                     (String, Int64), (Int64, String), (String, String))
+
+# Build the op table programmatically across the type lattice. Return types use
+# the natural choice; where Julia's promotion differs (e.g. sum), programs stay
+# valid via auto-promotion + conversion bridges, and the harness detects the real
+# return type via code_typed for marshalling — so the oracle remains sound.
+function _build_param_ops()
+    O = Any[]
+    add(n, a, r) = push!(O, (n, a, r))
+    for T in NUM_TYPES
+        add(:+, (T, T), T); add(:-, (T, T), T); add(:*, (T, T), T)
+        add(:min, (T, T), T); add(:max, (T, T), T); add(:abs, (T,), T); add(:sign, (T,), T)
+        add(:(==), (T, T), Bool); add(:(!=), (T, T), Bool)
+        add(:<, (T, T), Bool); add(:<=, (T, T), Bool); add(:>, (T, T), Bool)
+        add(:iszero, (T,), Bool)
+    end
+    for T in (SINT_TYPES..., FLOAT_TYPES...)
+        add(:-, (T,), T)            # unary negate (skip on unsigned to avoid wrap noise)
+    end
+    for T in INT_TYPES
+        add(:div, (T, T), T); add(:rem, (T, T), T); add(:mod, (T, T), T)
+        add(:&, (T, T), T); add(:|, (T, T), T); add(:xor, (T, T), T); add(:~, (T,), T)
+        add(:<<, (T, Int64), T); add(:>>, (T, Int64), T)
+        add(:isodd, (T,), Bool); add(:iseven, (T,), Bool)
+    end
+    for T in SINT_TYPES
+        add(:gcd, (T, T), T); add(:lcm, (T, T), T)
+    end
+    for T in FLOAT_TYPES
+        add(:/, (T, T), T); add(:hypot, (T, T), T); add(:copysign, (T, T), T); add(:^, (T, T), T)
+        add(:mod, (T, T), T); add(:rem, (T, T), T)
+        for u in (:sqrt, :cbrt, :sin, :cos, :tan, :asin, :acos, :atan, :sinh, :cosh, :tanh,
+                  :exp, :exp2, :expm1, :log, :log2, :log10, :log1p,
+                  :floor, :ceil, :round, :trunc, :inv, :sinpi, :cospi, :deg2rad, :rad2deg)
+            add(u, (T,), T)
+        end
+        add(:isnan, (T,), Bool); add(:isinf, (T,), Bool); add(:isfinite, (T,), Bool); add(:signbit, (T,), Bool)
+    end
+    # Conversions: bridge the lattice back to marshalable top types (Int64/Float64).
+    for T in (Int8, Int16, Int32, UInt8, UInt16, UInt32)
+        add(:Int64, (T,), Int64)            # safe widen
+    end
+    add(:signed, (UInt64,), Int64)          # lossless reinterpret
+    for T in INT_TYPES
+        add(:Float64, (T,), Float64); add(:Float32, (T,), Float32)
+    end
+    add(:Float64, (Float32,), Float64); add(:Float32, (Float64,), Float32)
+    # Bool logic
+    add(:&, (Bool, Bool), Bool); add(:|, (Bool, Bool), Bool); add(:!, (Bool,), Bool)
+    add(:xor, (Bool, Bool), Bool); add(:(==), (Bool, Bool), Bool)
+    # Vector{T} over varied element types
+    for T in VEC_ELT
+        VT = Vector{T}
+        add(:sort, (VT,), VT); add(:reverse, (VT,), VT); add(:unique, (VT,), VT)
+        add(:length, (VT,), Int64); add(:isempty, (VT,), Bool)
+        add(:map, (Fn(T, T), VT), VT); add(:filter, (Fn(T, Bool), VT), VT)
+        add(:first, (VT,), T); add(:last, (VT,), T)
+        add(:in, (T, VT), Bool); add(:count, (Fn(T, Bool), VT), Int64)
+        add(:any, (Fn(T, Bool), VT), Bool); add(:all, (Fn(T, Bool), VT), Bool)
+        add(:push!, (VT, T), VT); add(:pushfirst!, (VT, T), VT)
+    end
+    for T in VEC_NUM
+        VT = Vector{T}
+        add(:sum, (VT,), T); add(:prod, (VT,), T)
+        add(:maximum, (VT,), T); add(:minimum, (VT,), T)
+        add(:reduce, (BinOp(), VT), T); add(:foldl, (BinOp(), VT), T)
+        add(:argmax, (VT,), Int64); add(:argmin, (VT,), Int64)
+    end
+    # Dict{K,V}
+    for (K, V) in DICT_KV
+        DT = Dict{K,V}
+        add(:length, (DT,), Int64); add(:isempty, (DT,), Bool)
+        add(:haskey, (DT, K), Bool); add(:get, (DT, K, V), V); add(:getindex, (DT, K), V)
+    end
+    # Set{T}
+    for T in SET_ELT
+        ST = Set{T}
+        add(:length, (ST,), Int64); add(:isempty, (ST,), Bool); add(:in, (T, ST), Bool)
+    end
+    # Char
+    for u in (:isdigit, :isspace, :isletter, :isuppercase, :islowercase, :isascii)
+        add(u, (Char,), Bool)
+    end
+    add(:uppercase, (Char,), Char); add(:lowercase, (Char,), Char); add(:Int, (Char,), Int64)
+    add(:<, (Char, Char), Bool); add(:(==), (Char, Char), Bool)
+    # String
+    for u in (:uppercase, :lowercase, :reverse, :strip, :lstrip, :rstrip,
+              :chomp, :titlecase, :uppercasefirst, :lowercasefirst)
+        add(u, (String,), String)
+    end
+    add(:*, (String, String), String); add(:string, (Int64,), String); add(:string, (Float64,), String)
+    add(:length, (String,), Int64); add(:ncodeunits, (String,), Int64)
+    add(:isempty, (String,), Bool); add(:isascii, (String,), Bool)
+    for b in (:startswith, :endswith, :contains, :occursin)
+        add(b, (String, String), Bool)
+    end
+    add(:cmp, (String, String), Int64)
+    return O
+end
+
+const OPS = _build_param_ops()
+const OPS_BY_RET = let d = Dict{Type,Vector{Any}}()
+    for e in OPS
+        push!(get!(d, e[3], Any[]), e)
+    end
+    d
+end
 
 # ExprNode boxes every alternative so Supposition's OneOf has a single element type.
 struct ExprNode
@@ -176,13 +299,15 @@ function _gen_vec_literal(::Type{ET}, depth, env) where {ET}
     end
 end
 
-# A bounded Dict literal `Dict(k1=>v1, k2=>v2)` and Set literal `Set([a,b,c])`.
-function _gen_dict_literal(depth, env)
-    k = gen_expr(Int64, depth, env)
-    Data.bind(k) do k1
-        Data.bind(k) do v1
-            Data.bind(k) do k2
-                Data.bind(k) do v2
+# A bounded Dict literal `Dict(k1=>v1, k2=>v2)` and Set literal `Set([a,b,c])`,
+# parametric over key/value/element types.
+function _gen_dict_literal(::Type{K}, ::Type{V}, depth, env) where {K,V}
+    kg = gen_expr(K, depth, env)
+    vg = gen_expr(V, depth, env)
+    Data.bind(kg) do k1
+        Data.bind(vg) do v1
+            Data.bind(kg) do k2
+                Data.bind(vg) do v2
                     Data.just(ExprNode(Expr(:call, :Dict,
                         Expr(:call, :(=>), k1.v, v1.v), Expr(:call, :(=>), k2.v, v2.v))))
                 end
@@ -190,8 +315,8 @@ function _gen_dict_literal(depth, env)
         end
     end
 end
-_gen_set_literal(depth, env) =
-    map(n -> ExprNode(Expr(:call, :Set, n.v)), _gen_vec_literal(Int64, depth, env))
+_gen_set_literal(::Type{ET}, depth, env) where {ET} =
+    map(n -> ExprNode(Expr(:call, :Set, n.v)), _gen_vec_literal(ET, depth, env))
 
 # A generated unary lambda `y -> <ret expr in y>` for higher-order ops.
 function _gen_lambda(fn::Fn, depth, _env)
@@ -218,7 +343,7 @@ function gen_expr(::Type{T}, depth::Int, env::Dict{Type,Vector{Symbol}}) where {
     # bind, only the sampled path expands, so construction is O(#productions) and a
     # sample is O(depth).
     prods = Function[]
-    if haskey(_LIT_TYPES, T)
+    if _has_lit(T)
         push!(prods, () -> map(ExprNode, _lit(T)))
     end
     for vs in get(env, T, Symbol[])
@@ -226,18 +351,22 @@ function gen_expr(::Type{T}, depth::Int, env::Dict{Type,Vector{Symbol}}) where {
             push!(prods, () -> Data.just(ExprNode(v)))
         end
     end
-    if T === VInt
-        push!(prods, () -> _gen_vec_literal(Int64, max(depth - 1, 0), env))
-    elseif T === VFloat
-        push!(prods, () -> _gen_vec_literal(Float64, max(depth - 1, 0), env))
-    elseif T === DictII
-        push!(prods, () -> _gen_dict_literal(max(depth - 1, 0), env))
-    elseif T === SetI
-        push!(prods, () -> _gen_set_literal(max(depth - 1, 0), env))
+    # Container constructor leaves, parametric over element/key/value types.
+    if T <: AbstractVector
+        let ET = eltype(T), d = max(depth - 1, 0)
+            push!(prods, () -> _gen_vec_literal(ET, d, env))
+        end
+    elseif T <: AbstractDict
+        let KT = keytype(T), VT = valtype(T), d = max(depth - 1, 0)
+            push!(prods, () -> _gen_dict_literal(KT, VT, d, env))
+        end
+    elseif T <: AbstractSet
+        let ET = eltype(T), d = max(depth - 1, 0)
+            push!(prods, () -> _gen_set_literal(ET, d, env))
+        end
     end
     if depth > 0
-        for entry in OPS
-            entry[3] === T || continue
+        for entry in get(OPS_BY_RET, T, ())
             let nm = entry[1]::Symbol, ats = entry[2], d = depth - 1
                 push!(prods, () -> _gen_call(nm, Any[_gen_arg(at, d, env) for at in ats]))
             end
