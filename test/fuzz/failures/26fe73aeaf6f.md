@@ -1,6 +1,6 @@
 ---
 id: 26fe73aeaf6f
-status: open
+status: fixed
 category: divergent_throw
 kind: divergent_throw
 construct: "divergent_throw: `pushfirst!(v, first(v))` :: Vector{Int64}→Vector{Int64}"

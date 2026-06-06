@@ -611,7 +611,11 @@ end
         found = false
         j = 1
         while j <= length(result)
-            if result[j] == val
+            rj = result[j]
+            # NaN-aware equality: `==` misses NaN (NaN==NaN is false) so unique kept
+            # duplicate NaNs. `x != x` detects NaN (no-op for non-float T). (isequal
+            # itself doesn't compile cleanly for Float here.)
+            if rj == val || (rj != rj && val != val)
                 found = true
                 break
             end
