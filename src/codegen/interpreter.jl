@@ -945,6 +945,22 @@ end
     return String(bytes)
 end
 
+# ─── first/last(Vector) Overlays ─────────────────────────────────────────
+# Why: first(v)/last(v) compile to an unchecked array.get; on an empty vector that
+#      reads the (capacity-allocated) backing array → returns garbage instead of
+#      throwing BoundsError like native. Guard emptiness so wasm errors too (the
+#      differential then matches: both error). Non-empty path is unchanged.
+# Remove when: getindex bounds-checks the Vector size on OOB.
+@overlay WASM_METHOD_TABLE function Base.first(v::Vector{T}) where T
+    length(v) == 0 && throw(BoundsError())
+    return v[1]
+end
+@overlay WASM_METHOD_TABLE function Base.last(v::Vector{T}) where T
+    n = length(v)
+    n == 0 && throw(BoundsError())
+    return v[n]
+end
+
 # ─── empty!(Vector) Overlay ─────────────────────────────────────────────
 # Why: Base.empty! uses internal _deleteend! with foreigncall(:memmove) for
 #      clearing vector contents. Simple resize to 0 works in WASM.
