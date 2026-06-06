@@ -629,6 +629,59 @@ end
     return result
 end
 
+# Float-specialized `unique`: the generic overlay above compares with `==`, which
+# treats -0.0 and 0.0 as equal, but Julia's `unique` uses `isequal` and keeps both.
+# These more-specific overlays win dispatch for float vectors and add a signbit
+# check (safe here: only floats, so `signbit` always compiles, unlike the generic
+# AbstractVector path that can see Strings). NaN handled as before (`x != x`).
+@overlay WASM_METHOD_TABLE function Base.unique(A::Vector{Float64})
+    n = length(A)
+    result = similar(A, 0)
+    i = 1
+    while i <= n
+        val = A[i]
+        found = false
+        j = 1
+        while j <= length(result)
+            rj = result[j]
+            if (rj != rj && val != val) || (rj == val && signbit(rj) == signbit(val))
+                found = true
+                break
+            end
+            j += 1
+        end
+        if !found
+            push!(result, val)
+        end
+        i += 1
+    end
+    return result
+end
+
+@overlay WASM_METHOD_TABLE function Base.unique(A::Vector{Float32})
+    n = length(A)
+    result = similar(A, 0)
+    i = 1
+    while i <= n
+        val = A[i]
+        found = false
+        j = 1
+        while j <= length(result)
+            rj = result[j]
+            if (rj != rj && val != val) || (rj == val && signbit(rj) == signbit(val))
+                found = true
+                break
+            end
+            j += 1
+        end
+        if !found
+            push!(result, val)
+        end
+        i += 1
+    end
+    return result
+end
+
 # ─── unsigned Overlay ─────────────────────────────────────────────────────
 # Why: Base.unsigned(::Int64) produces 387 IR stmts with foreigncall(:jl_get_field_offset),
 #      foreigncall(:memcpy), foreigncall(:jl_value_ptr), etc. — complex reinterpret infrastructure.
