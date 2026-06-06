@@ -1,6 +1,6 @@
 ---
 id: facb12b58cbb
-status: open
+status: fixed
 category: compile_error
 kind: compile_error
 construct: "compile_error: `length(Dict(x => \"\", x => \"\"))` :: Int64"

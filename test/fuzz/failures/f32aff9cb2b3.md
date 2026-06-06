@@ -1,6 +1,6 @@
 ---
 id: f32aff9cb2b3
-status: open
+status: fixed
 category: compile_error
 kind: compile_error
 construct: "compile_error: `length(Dict(0 => 0, x => x))` :: Int64"

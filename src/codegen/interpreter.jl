@@ -22,6 +22,20 @@ using Base.Experimental: @overlay
 
 Base.Experimental.@MethodTable(WASM_METHOD_TABLE)
 
+# ─── Dict literal-constructor Overlay ───────────────────────────────────────
+# Why: Dict{K,V}(::Tuple{Pair...}) (the `Dict(k=>v, …)` literal) is mis-compiled as
+#      a fieldwise struct.new from the tuple argument (Dict is a hash table, not a
+#      simple struct) → emits invalid wasm (ref where i64 expected). Empty
+#      Dict{K,V}() + setindex! IS supported, so build the Dict via that path.
+# Remove when: codegen compiles the real Dict tuple-constructor body.
+@overlay WASM_METHOD_TABLE function (::Type{Dict{K,V}})(kv::Tuple) where {K,V}
+    d = Dict{K,V}()
+    for p in kv
+        d[p.first] = p.second
+    end
+    return d
+end
+
 # ─── Sort Overlay ──────────────────────────────────────────────────────────
 # Base.sort! dispatches through InsertionSort/MergeSort/By/Lt/Order —
 # deep dispatch chains that produce hundreds of IR statements.

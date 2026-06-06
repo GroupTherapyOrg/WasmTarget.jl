@@ -1,6 +1,6 @@
 ---
 id: eb1feee54ef1
-status: open
+status: fixed
 category: compile_error
 kind: compile_error
 construct: "compile_error: `getindex(Dict(0 => 0.0, 0 => 0.0), 0)` :: Float64"
