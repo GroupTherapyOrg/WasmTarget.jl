@@ -1,16 +1,16 @@
 ---
-id: 8194d53dff7a
+id: 81afaa9a6cc2
 status: open
 category: compile_error
 kind: compile_error
-construct: "compile_error: `Float64(exp(0.0f0))` :: Float64"
+construct: "compile_error: `length(Dict(0 => 0, 0 => x))` :: Int64"
 location: "test/fuzz (generated)"
 fn_name: repro
-arg_types: "(Float64,)"
-first_seen: sweep-8-d4
+arg_types: "(Int64,)"
+first_seen: sweep-9-d4
 ---
 
-# Gap `8194d53dff7a` — compile_error: `Float64(exp(0.0f0))` :: Float64
+# Gap `81afaa9a6cc2` — compile_error: `length(Dict(0 => 0, 0 => x))` :: Int64
 
 **Category:** `compile_error` &nbsp;•&nbsp; **Kind:** `compile_error` &nbsp;•&nbsp; **Location:** `test/fuzz (generated)`
 
@@ -20,17 +20,17 @@ A follow-up loop fixes the compiler, then `verify_gaps!()` re-runs this to auto-
 
 ```julia
 using WasmTarget
-repro(x::Float64) = Float64(exp(0.0f0))
-WasmTarget.compile(repro, (Float64,))   # raises while the value-stub gap is present
+repro(x::Int64) = length(Dict(0 => 0, 0 => x))
+WasmTarget.compile(repro, (Int64,))   # raises while the value-stub gap is present
 ```
 
 ## Diagnostic
 ```
 WasmValidationError: wasm-tools rejected the emitted compiled module
-error: func 2 failed to validate
+error: func 1 failed to validate
 
 Caused by:
-    0: type mismatch: expected i64, found anyref (at offset 0x8a8)
+    0: type mismatch: expected i64, found (ref null $type) (at offset 0x2cb)
 ```
 
 ## Work on this

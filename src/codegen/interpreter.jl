@@ -774,6 +774,10 @@ end
 #      IEEE 754 floating-point remainder is a - trunc(a/b)*b.
 # Remove when: stackifier correctly handles rem_internal's IR
 @overlay WASM_METHOD_TABLE function Base.rem(x::Float64, y::Float64)
+    # fmod semantics. The plain `x - trunc(x/y)*y` breaks at Inf divisors
+    # (x/Inf=0, then 0*Inf=NaN), so guard the special cases to match native rem.
+    (isnan(x) || isnan(y) || isinf(x) || y == 0.0) && return NaN
+    isinf(y) && return x                      # rem(finite, ±Inf) = x
     return x - trunc(x / y) * y
 end
 
@@ -782,6 +786,12 @@ end
 #      IEEE 754 modulo is a - floor(a/b)*b.
 # Remove when: stackifier correctly handles rem_internal's IR
 @overlay WASM_METHOD_TABLE function Base.mod(x::Float64, y::Float64)
+    # As rem, but the result takes the sign of the divisor. Guard Inf/NaN/zero.
+    (isnan(x) || isnan(y) || isinf(x) || y == 0.0) && return NaN
+    if isinf(y)
+        # mod(x, ±Inf): x already matches divisor sign (or is 0) → x; else → y
+        return (x == 0.0 || (x > 0.0) == (y > 0.0)) ? x : y
+    end
     return x - floor(x / y) * y
 end
 
