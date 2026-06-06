@@ -737,6 +737,48 @@ end
     return c
 end
 
+# ─── maximum/minimum Overlays ────────────────────────────────────────────
+# Why: Base maximum/minimum compile from mapreduce/`max`,`min` whose comparison
+#      signedness flips to UNSIGNED in some compositions (e.g.
+#      `sum([...]) + maximum(sort([0,x,x]))` returned the min: `0 >ᵤ -1` is false).
+#      A simple explicit-loop overlay keeps the comparison correctly signed.
+#      NaN poisons (matches Base: maximum/minimum return NaN if present).
+# Remove when: native maximum/minimum codegen picks signed comparison in compositions.
+@overlay WASM_METHOD_TABLE function Base.maximum(v::Vector{T}) where T
+    n = length(v)
+    n == 0 && throw(ArgumentError("collection must be non-empty"))
+    i = 1
+    while i <= n
+        x = v[i]
+        x != x && return x   # NaN
+        i += 1
+    end
+    best = v[1]
+    i = 2
+    while i <= n
+        v[i] > best && (best = v[i])
+        i += 1
+    end
+    return best
+end
+@overlay WASM_METHOD_TABLE function Base.minimum(v::Vector{T}) where T
+    n = length(v)
+    n == 0 && throw(ArgumentError("collection must be non-empty"))
+    i = 1
+    while i <= n
+        x = v[i]
+        x != x && return x   # NaN
+        i += 1
+    end
+    best = v[1]
+    i = 2
+    while i <= n
+        v[i] < best && (best = v[i])
+        i += 1
+    end
+    return best
+end
+
 # ─── argmax/argmin Overlays ──────────────────────────────────────────────
 # Why: Base implementations use complex dispatch through _findmax/_findmin
 #      with Pairs iterators and kwarg patterns that produce codegen errors.
