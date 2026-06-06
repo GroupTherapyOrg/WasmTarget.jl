@@ -922,25 +922,21 @@ end
 #      extraction works for all Int64 values.
 # Remove when: codegen handles the Ryu string conversion pipeline
 @overlay WASM_METHOD_TABLE function Base.string(x::Int64)
+    x == Int64(0) && return "0"
     neg = x < 0
-    # Work with positive value
-    v = neg ? -x : x
-    # Extract digits in reverse (handle v=0 explicitly to avoid empty digits)
+    # Extract digits WITHOUT negating x: `v = -x` overflows for typemin(Int64)
+    # (-typemin == typemin, still negative) → the old loop produced "" → "-".
+    # Process the value in place (digit magnitude via |q % 10|, ≤9 so -d is safe).
     digits = UInt8[]
-    if v == Int64(0)
-        push!(digits, UInt8(48))  # '0'
-    else
-        while v > 0
-            d = v - (v ÷ Int64(10)) * Int64(10)  # v % 10 without rem
-            push!(digits, UInt8(48 + d))  # '0' + d
-            v = v ÷ Int64(10)
-        end
+    q = x
+    while q != Int64(0)
+        d = q - (q ÷ Int64(10)) * Int64(10)   # q % 10 (carries sign of q)
+        d = d < Int64(0) ? -d : d             # magnitude 0..9
+        push!(digits, UInt8(48 + d))          # '0' + d
+        q = q ÷ Int64(10)                     # truncates toward zero
     end
-    # Build result in correct order
     bytes = UInt8[]
-    if neg
-        push!(bytes, UInt8(45))  # '-'
-    end
+    neg && push!(bytes, UInt8(45))            # '-'
     i = length(digits)
     while i >= 1
         push!(bytes, digits[i])
