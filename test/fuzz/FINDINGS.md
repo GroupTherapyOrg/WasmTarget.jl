@@ -6,31 +6,35 @@ across fuzzer re-records** by `Ledger.record_gap!`, so a fix loop's notes are ne
 clobbered. See `failures/INDEX.md` for the live list. This file holds only
 observations that don't map onto a single auto-generated gap.
 
-## Remaining 4 gaps (the deep/feature long tail) — all root-caused & triaged for Part 2
+## Remaining 16 gaps (the deep/feature long tail) — all root-caused & triaged for Part 2
 
-Every tractable gap is fixed (see "Fixed" below). The 4 that remain each need real
+Every tractable gap is fixed (see "Fixed" below). The 16 that remain each need real
 codegen/feature work, not an overlay — full root-cause is in each gap file's
-`## Analysis`. Note three of them (`0beb5ec969a2`, `3b005c4957f7`) share a single
-root: the map-kernel-dependency + `String(bytes)` aliasing codegen bugs. Fix those
-once and both string gaps close together.
+`## Analysis`. They collapse onto **six shared roots**, so the fix count is far smaller
+than the gap count:
 
-- **`string(::Float64)` / Ryu** (`19d59e9a61b3`) — float→string is unimplemented
-  (needs `Base.Ryu` shortest-round-trip digit generation). `string(::Int64)` works.
-  *Feature work.*
-- **`length(::String)` as a map kernel** (`3b005c4957f7`) — Base's char-count loop
-  traps when pulled in as a map-kernel dependency (`map(y->length(s), v)`). A
-  lead-byte-count overlay fixes map BUT miscompiles inside `lstrip`/`rstrip` (which
-  call `length` as a byte count), breaking the green ASCII strip tests — so it was
-  reverted. Needs the underlying map-kernel codegen bug fixed. *Deep codegen.*
-- **`strip`/`lstrip`/`rstrip` unicode** (`0beb5ec969a2`) — last unicode-string
-  holdout (startswith/endswith/reverse on strings are now all fixed). Gated on
-  two underlying codegen bugs: `ncodeunits` on a `String(bytes)` result (aliasing), and
-  a complex boolean-condition + `break` in a `while` (miscompile). *Deep codegen.*
-- **`unique∘cumsum` then `lcm`** (`a48cf6e47497`) — shared scratch-local aliasing in
-  the local allocator: an `unique(cumsum(...))` left operand leaves a stale local that
-  the right operand's `lcm` (binary-gcd) reads, so gcd(2,1)→2. Order-sensitive,
-  operator-agnostic. Same *class* as the now-fixed `maximum(sort(...))` cluster. The
-  real fix is in local reuse across operand boundaries. *Deep codegen.*
+1. **Unicode `Char` tables (feature)** — `uppercase('é')` (`ff2542499cc2`),
+   `isspace('é')` (`bc93362af34e`), `isdigit(uppercase('é'))` (`6bd3c602cf17`). Char
+   case/category for codepoints ≥ 0x80 needs Unicode tables; ASCII works.
+2. **Float→string / Ryu (feature)** — `string(::Float64)` (`19d59e9a61b3`); needs
+   `Base.Ryu`. `string(::Int64)` works.
+3. **map-kernel-dependency codegen** — a *compiled* function mis-executes when pulled
+   in as a `map` kernel: `length(::String)` (`3b005c4957f7`), `atan`/`asin` with a
+   constant arg (`5511171c8055`), and `Dict`-in-kernel (`a771b83dda7c`, `f3829eae0fbb`).
+4. **SubString / `String(bytes)` codegen** — `codeunit(::SubString)` reads return 0 in
+   nested builds, and freshly-built strings misbehave: strip unicode (`0beb5ec969a2`),
+   `uppercase(::SubString)` (`05bc422e7ffb`). The reverted `length(::String)` overlay
+   also lives here (see [3]).
+5. **`Dict` construction edges** — duplicate-key Dict literals return garbage
+   (`dbac068444b5`), and combine with SubString values (`627592b54cf2`) / strip
+   defaults (`787f51057ef8`).
+6. **scratch-local aliasing across operand boundaries** — `unique∘cumsum` then `lcm`
+   (`a48cf6e47497`), `push!∘pushfirst!` + `Set` (`905344436a9f`); same class as the
+   now-fixed `maximum(sort(...))` cluster. Fix = local reuse across operands.
+
+Plus one isolated **constant-folding-parity** case: `0x01 << <Int64-typemin literal>`
+(`31d4d64b9325`) — native folds it to `0.0`; WasmTarget evaluates the shift. The common
+runtime narrow-shift bug it resembles is **fixed** (see below).
 
 ## Fixed (verified-closed via the loop)
 
@@ -38,6 +42,13 @@ once and both string gaps close together.
   replaced with Sterbenz-exact scaled subtraction (bit-exact vs native fmod).
 - **Float32 `exp`/`exp2`/`exp10`** — Float32 kernel emitted invalid wasm; redirect
   through the correct Float64 kernel (≤1 ULP).
+- **Narrow-width integer `<<` (UInt8/UInt16)** — `0x01 << x` (a UInt8 shift) ran in an
+  i32 register without truncating to the operand's width, so e.g. `0x01 << 8` gave 256
+  instead of 0. Fixed in `_emit_shift_guarded!`/`_julia_int_width` (calls.jl): the
+  over-shift threshold now uses the Julia type width and the `shl` result is masked to
+  that width; the i64→i32 shift-amount wrap now saturates so a huge amount can't wrap
+  to a no-op. Closed `39f963bc044a`. (The folded literal-typemin case `31d4d64b9325`
+  is a separate constant-folding-parity edge — see above.)
 - **`isless`(Float32) / `sort`(Vector{Float32})** — Base's Float32 `isless` emitted
   invalid wasm (`type mismatch: expected i64, found anyref`), so *any* Float32
   ordering failed to compile. Surfaced by the bounded CI fuzz (seed 0xCD) as

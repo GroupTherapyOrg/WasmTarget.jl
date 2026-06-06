@@ -207,6 +207,14 @@ end
     return String(bytes)
 end
 
+# NOTE: `uppercase`/`lowercase`(::SubString) is NOT overlaid. The natural overlay
+# (byte-loop reading codeunit(s,i) from the SubString into a fresh String) compiles
+# but is SILENTLY WRONG: `codeunit(::SubString)` reads return 0 inside this
+# nested-build context (length comes out right, bytes come out zero) — the same
+# SubString/String(bytes) codegen class the strip overlays contort around. A loud
+# compile error (gap 05bc422e7ffb) is better than silently-wrong content; the real
+# fix needs that underlying codegen bug. Triaged for Part 2 with the strip gaps.
+
 @noinline function _wasm_titlecase_impl(s::String, strict::Bool)
     n = ncodeunits(s)
     n == 0 && return s

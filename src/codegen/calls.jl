@@ -102,10 +102,34 @@ end
 # (so e.g. `1 << 64` is 1 in raw wasm but 0 in Julia). We guard:
 #   shl/lshr:  (shift < width) ? (value <op> shift) : 0
 #   ashr:      value >>s (shift < width ? shift : width-1)   (clamp → sign-fill)
-function _emit_shift_guarded!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, is32::Bool, kind::Symbol)
+# Bit width of the Julia integer operand being shifted (8/16/32/64). Falls back to
+# the wasm register width for non-concrete / non-bitsinteger operand types so the
+# guard is a no-op (behaviour unchanged) unless we positively know it's narrow.
+function _julia_int_width(@nospecialize(T), is32::Bool)
+    if T isa Type && isconcretetype(T) && T <: Base.BitInteger
+        return sizeof(T) * 8
+    end
+    return is32 ? 32 : 64
+end
+
+# `julia_width` is the Julia operand's bit width (8/16/32/64). It can be NARROWER
+# than the wasm representation width (UInt8/UInt16/Int8/Int16 all live in an i32).
+# Two corrections are needed when julia_width < wasm width, both for `<<`:
+#   * over-shift threshold must be julia_width, not the wasm width — Julia yields 0
+#     once shift ≥ julia_width (wasm's i32.shl also masks the *amount* mod 32, so a
+#     shift of exactly 32/64 would otherwise wrap to a no-op and leak the value); and
+#   * the shl result must be truncated to julia_width bits (e.g. `UInt8(1) << 8` is
+#     0 in Julia but 256 in a raw i32), since high bits spill into the wide register.
+# Right shifts (lshr/ashr) of a *normalised* narrow value need no result mask; lshr
+# also honours the julia_width threshold (shr_u of a width-bit value by ≥ width = 0).
+function _emit_shift_guarded!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, is32::Bool, kind::Symbol;
+                              julia_width::Int = (is32 ? 32 : 64))
     wconst = is32 ? Opcode.I32_CONST : Opcode.I64_CONST
     wltu   = is32 ? Opcode.I32_LT_U : Opcode.I64_LT_U
+    wand   = is32 ? Opcode.I32_AND : Opcode.I64_AND
     width  = is32 ? 32 : 64
+    thr    = clamp(julia_width, 1, width)        # over-shift threshold (Julia width)
+    narrow = thr < width                          # operand narrower than its wasm reg
     sl     = UInt32(allocate_local!(ctx, is32 ? I32 : I64))
     shop   = kind === :shl  ? (is32 ? Opcode.I32_SHL : Opcode.I64_SHL) :
              kind === :lshr ? (is32 ? Opcode.I32_SHR_U : Opcode.I64_SHR_U) :
@@ -113,7 +137,7 @@ function _emit_shift_guarded!(bytes::Vector{UInt8}, ctx::AbstractCompilationCont
     _lset(op, i) = (push!(bytes, op); append!(bytes, encode_leb128_unsigned(i)))
     _wc(v) = (push!(bytes, wconst); append!(bytes, encode_leb128_signed(Int64(v))))
     if kind === :ashr
-        # [value, shift] → [value, clamped] → shr_s
+        # [value, shift] → [value, clamped] → shr_s   (sign-fill semantics unchanged)
         _lset(Opcode.LOCAL_SET, sl)              # [value]
         _lset(Opcode.LOCAL_GET, sl)              # [value, shift]        (a = shift)
         _wc(width - 1)                           # [value, shift, w-1]   (b = w-1)
@@ -123,15 +147,38 @@ function _emit_shift_guarded!(bytes::Vector{UInt8}, ctx::AbstractCompilationCont
         push!(bytes, Opcode.SELECT)              # [value, cond? shift : w-1]
         push!(bytes, shop)                       # [value >>s clamped]
     else
-        # [value, shift] → [result] → select(result, 0, shift<width)
+        # [value, shift] → [result] → select(result, 0, shift < thr)
         _lset(Opcode.LOCAL_TEE, sl)              # [value, shift]  (shift saved)
         push!(bytes, shop)                       # [result]
         _wc(0)                                   # [result, 0]
         _lset(Opcode.LOCAL_GET, sl)              # [result, 0, shift]
-        _wc(width)                               # [result, 0, shift, width]
+        _wc(thr)                                 # [result, 0, shift, thr]
         push!(bytes, wltu)                       # [result, 0, cond]
         push!(bytes, Opcode.SELECT)              # [cond? result : 0]
+        if kind === :shl && narrow
+            _wc((Int64(1) << thr) - 1)           # [result, mask]  (2^width - 1)
+            push!(bytes, wand)                   # [result & mask]  truncate to width
+        end
     end
+    return bytes
+end
+
+# Narrow an i64 shift AMOUNT to i32 for an i32-represented value, SATURATING any
+# out-of-range amount (≥ julia_width, unsigned) to julia_width so the over-shift
+# guard maps it to 0. A plain I32_WRAP_I64 drops the amount's high bits, so a huge
+# shift like `x << typemin(Int64)` (low 32 bits = 0) would wrap to a no-op and leak
+# the unshifted value. Stack: [.., amount_i64] → [.., amount_i32].
+function _emit_wrap_shift_amount_saturating!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, julia_width::Int)
+    amt = UInt32(allocate_local!(ctx, I64))
+    _g(op, i) = (push!(bytes, op); append!(bytes, encode_leb128_unsigned(i)))
+    _c(v) = (push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(v))))
+    _g(Opcode.LOCAL_TEE, amt)                    # [amount]
+    _c(julia_width)                              # [amount, jw]
+    _g(Opcode.LOCAL_GET, amt)                    # [amount, jw, amount]
+    _c(julia_width)                              # [amount, jw, amount, jw]
+    push!(bytes, Opcode.I64_LT_U)                # [amount, jw, cond]   cond = amount <u jw
+    push!(bytes, Opcode.SELECT)                  # [cond ? amount : jw]
+    push!(bytes, Opcode.I32_WRAP_I64)            # [amount_i32]
     return bytes
 end
 
@@ -4814,14 +4861,15 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             if length(args) >= 2
                 shift_type = infer_value_type(args[2], ctx)
                 if is_32bit && (shift_type === Int64 || shift_type === UInt64)
-                    # Truncate i64 shift amount to i32
-                    push!(bytes, Opcode.I32_WRAP_I64)
+                    # Saturating wrap of i64 amount → i32 (preserves over-shift magnitude)
+                    _emit_wrap_shift_amount_saturating!(bytes, ctx, _julia_int_width(arg_type, is_32bit))
                 elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
                     # Extend i32 shift amount to i64 (Wasm requires matching types)
                     push!(bytes, Opcode.I64_EXTEND_I32_S)
                 end
             end
-            _emit_shift_guarded!(bytes, ctx, is_32bit, :shl)   # over-shift → 0 (Julia semantics)
+            _emit_shift_guarded!(bytes, ctx, is_32bit, :shl;
+                                 julia_width = _julia_int_width(arg_type, is_32bit))   # over-shift → 0 + narrow truncation
         end
 
     elseif is_func(func, :ashr_int)  # arithmetic shift right
@@ -4845,14 +4893,15 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             if length(args) >= 2
                 shift_type = infer_value_type(args[2], ctx)
                 if is_32bit && (shift_type === Int64 || shift_type === UInt64)
-                    # Truncate i64 shift amount to i32
-                    push!(bytes, Opcode.I32_WRAP_I64)
+                    # Saturating wrap of i64 amount → i32 (preserves over-shift magnitude)
+                    _emit_wrap_shift_amount_saturating!(bytes, ctx, _julia_int_width(arg_type, is_32bit))
                 elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
                     # Extend i32 shift amount to i64 (Wasm requires matching types)
                     push!(bytes, Opcode.I64_EXTEND_I32_S)
                 end
             end
-            _emit_shift_guarded!(bytes, ctx, is_32bit, :lshr)   # over-shift → 0 (Julia semantics)
+            _emit_shift_guarded!(bytes, ctx, is_32bit, :lshr;
+                                 julia_width = _julia_int_width(arg_type, is_32bit))   # over-shift → 0 (Julia semantics)
         end
 
     # Count leading/trailing zeros (used in Char conversion)
