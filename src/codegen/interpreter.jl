@@ -978,6 +978,27 @@ end
 @overlay WASM_METHOD_TABLE Base.exp2(x::Float32) = Float32(exp2(Float64(x)))
 @overlay WASM_METHOD_TABLE Base.exp10(x::Float32) = Float32(exp10(Float64(x)))
 
+# ─── asin(Float64) Overlay ───────────────────────────────────────────────
+# Why: Base's asin compiles fine standalone but its 600-stmt body mis-executes
+#      (runtime trap) when pulled in as a *map-kernel dependency* — `map(asin, v)`
+#      traps even for in-domain inputs, while `acos`/`atan`/`log` in map are fine.
+#      Identity asin(x)=atan(x/√((1-x)(1+x))) reduces to atan (which works in map);
+#      the (1-x)(1+x) form avoids cancellation near ±1 — verified ≤1 ULP over [-1,1].
+# Remove when: large compiled functions work correctly as map-kernel dependencies.
+@overlay WASM_METHOD_TABLE function Base.asin(x::Float64)
+    abs(x) > 1.0 && throw(DomainError(x, "asin(x) requires -1 ≤ x ≤ 1"))
+    return atan(x / sqrt((1.0 - x) * (1.0 + x)))   # NaN→NaN, ±1→±π/2 via ±Inf
+end
+
+# NOTE: A `length(::String)` overlay (lead-byte count via ncodeunits/codeunit) was
+# trialed to fix the map-kernel-dependency trap (gap 3b005c4957f7) but had to be
+# reverted: lstrip/rstrip above call `length(s)` internally as a *byte* count
+# (char==byte for ASCII), and the overlay miscompiles in that dependency context —
+# the same boolean-cond-in-while codegen class the strip overlays already contort
+# around — silently breaking the previously-green ASCII strip tests. A global
+# `length(::String)` that's correct both as a map kernel AND inside lstrip/rstrip
+# needs the underlying codegen bug fixed first. Re-opened, triaged for Part 2.
+
 # ─── isless(Float64) Overlay ────────────────────────────────────────────
 # Why: Base.isless(Float64,Float64) produces 793 IR stmts with complex dispatch
 #      through isnan checks and bitwise comparisons — triggers stackifier bug.
@@ -992,6 +1013,26 @@ end
         return true   # everything is less than NaN
     end
     # Handle signed zero: -0.0 < 0.0
+    if x == y
+        return signbit(x) && !signbit(y)
+    end
+    return x < y
+end
+
+# ─── isless(Float32) Overlay ────────────────────────────────────────────
+# Why: Base.isless(Float32,Float32) (like the Float64 case) emits invalid wasm —
+#      a `type mismatch: expected i64, found anyref` validation failure — so any
+#      Float32 ordering (e.g. `sort(::Vector{Float32})`, found by the fuzzer as
+#      `length(sort([0f0,0f0,0f0]))`) fails to compile. Same NaN/signed-zero
+#      convention as the Float64 overlay; isnan/signbit/== all work for Float32.
+# Remove when: Base's Float32 isless compiles to valid wasm directly.
+@overlay WASM_METHOD_TABLE function Base.isless(x::Float32, y::Float32)
+    if isnan(x)
+        return false
+    end
+    if isnan(y)
+        return true
+    end
     if x == y
         return signbit(x) && !signbit(y)
     end

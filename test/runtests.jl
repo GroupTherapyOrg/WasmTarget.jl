@@ -9322,9 +9322,22 @@ console.log(JSON.stringify({
             end
         end
 
-        # exp(Float32) has a codegen type mismatch bug (i64 vs anyref in local)
-        @testset "exp(Float32) — known bug" begin
-            @test_broken compare_julia_wasm(exp, Float32(1.0f0)).pass
+        # exp(Float32): the native Float32 kernel emitted invalid wasm (i64 vs anyref
+        # in a local); fixed by redirecting through the Float64 kernel (≤1 ULP).
+        @testset "exp(Float32)" begin
+            @test compare_julia_wasm(exp, Float32(1.0f0)).pass
+        end
+
+        # isless(Float32): Base's Float32 isless emitted invalid wasm (i64 vs anyref),
+        # so any Float32 ordering failed to compile. Surfaced by the fuzzer as
+        # length(sort([0f0,0f0,0f0])); fixed with an isless(::Float32,::Float32) overlay.
+        @testset "sort/isless(Float32)" begin
+            f32_sort_len()::Int64 = length(sort([0.0f0, 0.0f0, 0.0f0]))
+            @test compare_julia_wasm(f32_sort_len).pass  # 3
+            f32_sort_min()::Float32 = sort(Float32[3, 1, 2])[1]
+            @test compare_julia_wasm(f32_sort_min).pass  # 1.0f0
+            f32_sort_max()::Float32 = sort(Float32[3, 1, 2])[3]
+            @test compare_julia_wasm(f32_sort_max).pass  # 3.0f0
         end
     end
 

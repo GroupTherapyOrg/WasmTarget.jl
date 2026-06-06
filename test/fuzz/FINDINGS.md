@@ -6,28 +6,61 @@ across fuzzer re-records** by `Ledger.record_gap!`, so a fix loop's notes are ne
 clobbered. See `failures/INDEX.md` for the live list. This file holds only
 observations that don't map onto a single auto-generated gap.
 
-## Remaining 16 gaps (the deep/niche long tail)
+## Remaining 4 gaps (the deep/feature long tail) — all root-caused & triaged for Part 2
 
-**Deep codegen bugs (focused work each):**
-- `maximum(sort(...))` composition (3) — scratch/stack-local aliasing: an iterating
-  left reducer (`sum`/`prod`) followed by `maximum(sort(...))` makes maximum return the
-  min. Individual ops correct; only the composition fails; swapping operands fixes it.
-- Float32 `exp`/`exp2` (2) — `exp(0.0f0)` emits invalid wasm in the compiled Float32-exp
-  dependency function (validation failure; `sin`/`log`/etc. Float32 are fine).
-- `strip` unicode (1) — gated on `ncodeunits`-on-`String(bytes)` aliasing + boolean-
-  condition-before-`while` miscompile (see below).
+Every tractable gap is fixed (see "Fixed" below). The 4 that remain each need real
+codegen/feature work, not an overlay — full root-cause is in each gap file's
+`## Analysis`. Note three of them (`0beb5ec969a2`, `3b005c4957f7`) share a single
+root: the map-kernel-dependency + `String(bytes)` aliasing codegen bugs. Fix those
+once and both string gaps close together.
 
-**Niche edge cases (low value):**
-- signed-zero (2): `argmax([-0.0,0.0,0.0])`, `unique([-0.0,0.0])` — Julia's `isless`/
-  `isequal` distinguish ±0.0; our `>`/`==` treat them equal. (NaN cases now fixed.)
-
-**Traps to investigate (4):** `first(map(asin,…))`, `isempty(Set([str,str,…]))`,
-`map(y->length(""),v)`, `startswith("",chomp(""))` — string/Set edge traps.
-
-**Composition/misc (4):** `mod(x, minimum(v))`, `cumsum(...) | lcm`, `gcd(count(...),
-maximum(...))` — mostly natural-sig compositions; likely overlap with the above roots.
+- **`string(::Float64)` / Ryu** (`19d59e9a61b3`) — float→string is unimplemented
+  (needs `Base.Ryu` shortest-round-trip digit generation). `string(::Int64)` works.
+  *Feature work.*
+- **`length(::String)` as a map kernel** (`3b005c4957f7`) — Base's char-count loop
+  traps when pulled in as a map-kernel dependency (`map(y->length(s), v)`). A
+  lead-byte-count overlay fixes map BUT miscompiles inside `lstrip`/`rstrip` (which
+  call `length` as a byte count), breaking the green ASCII strip tests — so it was
+  reverted. Needs the underlying map-kernel codegen bug fixed. *Deep codegen.*
+- **`strip`/`lstrip`/`rstrip` unicode** (`0beb5ec969a2`) — last unicode-string
+  holdout (startswith/endswith/reverse on strings are now all fixed). Gated on
+  two underlying codegen bugs: `ncodeunits` on a `String(bytes)` result (aliasing), and
+  a complex boolean-condition + `break` in a `while` (miscompile). *Deep codegen.*
+- **`unique∘cumsum` then `lcm`** (`a48cf6e47497`) — shared scratch-local aliasing in
+  the local allocator: an `unique(cumsum(...))` left operand leaves a stale local that
+  the right operand's `lcm` (binary-gcd) reads, so gcd(2,1)→2. Order-sensitive,
+  operator-agnostic. Same *class* as the now-fixed `maximum(sort(...))` cluster. The
+  real fix is in local reuse across operand boundaries. *Deep codegen.*
 
 ## Fixed (verified-closed via the loop)
+
+- **`rem`/`mod`(Float64) precision** — `x - trunc(x/y)*y` rounds for large quotients;
+  replaced with Sterbenz-exact scaled subtraction (bit-exact vs native fmod).
+- **Float32 `exp`/`exp2`/`exp10`** — Float32 kernel emitted invalid wasm; redirect
+  through the correct Float64 kernel (≤1 ULP).
+- **`isless`(Float32) / `sort`(Vector{Float32})** — Base's Float32 `isless` emitted
+  invalid wasm (`type mismatch: expected i64, found anyref`), so *any* Float32
+  ordering failed to compile. Surfaced by the bounded CI fuzz (seed 0xCD) as
+  `length(sort([0f0,0f0,0f0]))`; fixed with an `isless(::Float32,::Float32)` overlay
+  mirroring the Float64 one. Regression-guarded by `@testset "sort/isless(Float32)"`
+  in `runtests.jl` and by the CI fuzz seed itself.
+- **`asin`(Float64)** — Base's 600-stmt asin traps as a *map-kernel dependency*;
+  overlaid as `atan(x/√((1-x)(1+x)))` (atan works in map), ≤1 ULP.
+- **`startswith`/`endswith`** — were String-only; generalized to `AbstractString` so
+  SubString operands (e.g. `chomp(t)`) byte-compare in place (`String(::SubString)`
+  would memmove-trap).
+- **`unique`(Vector{Float})** — `==` deduped -0.0/0.0; Float-specialized overlays add a
+  signbit check (isequal semantics) without breaking the String-safe generic path.
+- **`maximum`/`minimum`(Vector)** — explicit signed loop + NaN poison; also dissolved
+  the `maximum(sort(...))` scratch-aliasing composition cluster.
+- **Dict construction/length** — ref/i64 confusion (closed 18 gap variants).
+- **Integer shift `<<`/`>>` over-shift** — wasm masks the shift amount to `mod bitwidth`;
+  Julia yields 0 (shl/lshr) or sign-fill (ashr) for shift ≥ bitwidth. Fixed with a
+  width-aware guard (`_emit_shift_guarded!`, calls.jl). Closed 4 gaps.
+- **`reverse(String)` unicode** — reversed bytes, splitting multi-byte codepoints.
+  Now reverses by character. Closed 1 gap.
+- Plus: `hypot`, `string(Int64)` (typemin), `first`/`last` bounds, `argmax`/`argmin`
+  NaN+signed-zero, and the soundness apparatus (strict mode, value-stub refusal).
 
 - **Integer shift `<<`/`>>` over-shift** — wasm masks the shift amount to `mod bitwidth`;
   Julia yields 0 (shl/lshr) or sign-fill (ashr) for shift ≥ bitwidth. Fixed with a
