@@ -844,6 +844,22 @@ end
     return nothing
 end
 
+# ─── hypot(Float64) Overlay ──────────────────────────────────────────────
+# Why: native Base.hypot's scaling/correction path produces NaN for tiny inputs in
+#      wasm (e.g. hypot(1e-300,1e-300) → NaN, should be ~1.4e-300). Use the standard
+#      scaled formula m·√((a/m)²+(b/m)²), which is overflow/underflow-safe and within
+#      the differential's ULP tolerance of native.
+# Remove when: native hypot compiles correctly across the float range.
+@overlay WASM_METHOD_TABLE function Base.hypot(a::Float64, b::Float64)
+    a = abs(a); b = abs(b)
+    (isinf(a) || isinf(b)) && return Inf
+    (isnan(a) || isnan(b)) && return NaN
+    m = a > b ? a : b
+    m == 0.0 && return 0.0
+    r1 = a / m; r2 = b / m
+    return m * sqrt(r1 * r1 + r2 * r2)
+end
+
 # ─── rem(Float64) Overlay ────────────────────────────────────────────────
 # Why: Base.rem calls rem_internal which triggers stackifier bug
 #      ("i64.sub expected i64, found anyref" — 100+ IR stmts with complex branches).
