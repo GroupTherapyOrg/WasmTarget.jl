@@ -6,6 +6,27 @@ across fuzzer re-records** by `Ledger.record_gap!`, so a fix loop's notes are ne
 clobbered. See `failures/INDEX.md` for the live list. This file holds only
 observations that don't map onto a single auto-generated gap.
 
+## Remaining 16 gaps (the deep/niche long tail)
+
+**Deep codegen bugs (focused work each):**
+- `maximum(sort(...))` composition (3) — scratch/stack-local aliasing: an iterating
+  left reducer (`sum`/`prod`) followed by `maximum(sort(...))` makes maximum return the
+  min. Individual ops correct; only the composition fails; swapping operands fixes it.
+- Float32 `exp`/`exp2` (2) — `exp(0.0f0)` emits invalid wasm in the compiled Float32-exp
+  dependency function (validation failure; `sin`/`log`/etc. Float32 are fine).
+- `strip` unicode (1) — gated on `ncodeunits`-on-`String(bytes)` aliasing + boolean-
+  condition-before-`while` miscompile (see below).
+
+**Niche edge cases (low value):**
+- signed-zero (2): `argmax([-0.0,0.0,0.0])`, `unique([-0.0,0.0])` — Julia's `isless`/
+  `isequal` distinguish ±0.0; our `>`/`==` treat them equal. (NaN cases now fixed.)
+
+**Traps to investigate (4):** `first(map(asin,…))`, `isempty(Set([str,str,…]))`,
+`map(y->length(""),v)`, `startswith("",chomp(""))` — string/Set edge traps.
+
+**Composition/misc (4):** `mod(x, minimum(v))`, `cumsum(...) | lcm`, `gcd(count(...),
+maximum(...))` — mostly natural-sig compositions; likely overlap with the above roots.
+
 ## Fixed (verified-closed via the loop)
 
 - **Integer shift `<<`/`>>` over-shift** — wasm masks the shift amount to `mod bitwidth`;
