@@ -726,6 +726,14 @@ end
 @overlay WASM_METHOD_TABLE function Base.argmax(v::Vector{T}) where T
     n = length(v)
     n == 0 && throw(ArgumentError("collection must be non-empty"))
+    # NaN poisons: Julia's findmax/argmax returns the FIRST NaN's index if any NaN.
+    # (`x != x` is true only for NaN; a no-op for integer T.)
+    i = 1
+    while i <= n
+        x = v[i]
+        x != x && return i
+        i += 1
+    end
     best_idx = 1
     best_val = v[1]
     i = 2
@@ -742,6 +750,12 @@ end
 @overlay WASM_METHOD_TABLE function Base.argmin(v::Vector{T}) where T
     n = length(v)
     n == 0 && throw(ArgumentError("collection must be non-empty"))
+    i = 1   # NaN poisons (see argmax) — first NaN index wins
+    while i <= n
+        x = v[i]
+        x != x && return i
+        i += 1
+    end
     best_idx = 1
     best_val = v[1]
     i = 2
