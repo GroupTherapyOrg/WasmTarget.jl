@@ -866,11 +866,22 @@ end
 #      IEEE 754 floating-point remainder is a - trunc(a/b)*b.
 # Remove when: stackifier correctly handles rem_internal's IR
 @overlay WASM_METHOD_TABLE function Base.rem(x::Float64, y::Float64)
-    # fmod semantics. The plain `x - trunc(x/y)*y` breaks at Inf divisors
-    # (x/Inf=0, then 0*Inf=NaN), so guard the special cases to match native rem.
+    # fmod semantics. `x - trunc(x/y)*y` is *lossy* for large quotients:
+    # trunc(x/y)*y rounds, so rem(5.4e7, 1.41) drifts ~1e-9 off native fmod
+    # (which is exact). Use scaled subtraction instead — each `a -= c` step is
+    # exact by Sterbenz (c <= a < 2c), so the whole reduction is bit-exact.
     (isnan(x) || isnan(y) || isinf(x) || y == 0.0) && return NaN
     isinf(y) && return x                      # rem(finite, ±Inf) = x
-    return x - trunc(x / y) * y
+    a = abs(x)
+    b = abs(y)
+    while a >= b
+        c = b
+        while c <= a * 0.5                    # largest c = b*2^k with c <= a
+            c += c                            # exact: exponent bump
+        end
+        a -= c                                # exact: a/2 < c <= a (Sterbenz)
+    end
+    return signbit(x) ? -a : a                # rem takes the sign of x
 end
 
 # ─── mod(Float64) Overlay ────────────────────────────────────────────────
@@ -879,13 +890,36 @@ end
 # Remove when: stackifier correctly handles rem_internal's IR
 @overlay WASM_METHOD_TABLE function Base.mod(x::Float64, y::Float64)
     # As rem, but the result takes the sign of the divisor. Guard Inf/NaN/zero.
+    # Same exactness fix as rem: scaled subtraction, not `x - floor(x/y)*y`.
     (isnan(x) || isnan(y) || isinf(x) || y == 0.0) && return NaN
     if isinf(y)
         # mod(x, ±Inf): x already matches divisor sign (or is 0) → x; else → y
         return (x == 0.0 || (x > 0.0) == (y > 0.0)) ? x : y
     end
-    return x - floor(x / y) * y
+    a = abs(x)
+    b = abs(y)
+    while a >= b
+        c = b
+        while c <= a * 0.5
+            c += c
+        end
+        a -= c
+    end
+    r = signbit(x) ? -a : a                   # = rem(x, y), exact
+    # mod's result takes the sign of the divisor; one corrective add suffices.
+    return (r != 0.0 && (signbit(r) != signbit(y))) ? r + y : r
 end
+
+# ─── Float32 exp / exp2 / exp10 Overlays ─────────────────────────────────
+# Why: Base's Float32 exp family compiles to a dependency function that emits
+#      invalid wasm (validation failure) — its table-driven Float32 kernel hits
+#      a codegen gap the Float64 path doesn't. The Float64 kernel is correct, and
+#      Float32(exp(Float64(x))) matches Julia's native exp(::Float32) to ≤1 ULP
+#      (within the differential's transcendental tolerance), so redirect through it.
+# Remove when: the Float32 transcendental kernel compiles to valid wasm directly.
+@overlay WASM_METHOD_TABLE Base.exp(x::Float32) = Float32(exp(Float64(x)))
+@overlay WASM_METHOD_TABLE Base.exp2(x::Float32) = Float32(exp2(Float64(x)))
+@overlay WASM_METHOD_TABLE Base.exp10(x::Float32) = Float32(exp10(Float64(x)))
 
 # ─── isless(Float64) Overlay ────────────────────────────────────────────
 # Why: Base.isless(Float64,Float64) produces 793 IR stmts with complex dispatch
