@@ -14,6 +14,18 @@ observations that don't map onto a single auto-generated gap.
 - **`reverse(String)` unicode** — reversed bytes, splitting multi-byte codepoints.
   Now reverses by character. Closed 1 gap.
 
+## Known deep gaps (entangled with underlying codegen bugs)
+
+- **`strip`/`lstrip`/`rstrip` unicode** — overlays use `length(s)` (char count) to
+  byte-index `codeunit` (drops trailing bytes of multibyte UTF-8). Switching to
+  `ncodeunits` exposes TWO deeper codegen bugs the originals contort around:
+  (1) **`ncodeunits` on a `String(bytes)` result** returns wrong values (aliasing),
+  and (2) a **complex boolean condition + `break` in a `while`** loop miscompiles
+  (whitespace-find loop stops trimming). A correct single-pass strip trips (2).
+  Real fix needs those two codegen bugs fixed first — then strip becomes trivial.
+- **Dict ops** — emit malformed wasm: `type mismatch: expected i64, found (ref $type)`
+  — a ref/i64 confusion in Dict construction/length codegen (18 gap variants).
+
 ## Known deep gaps (need C-lib-call → WasmGC work)
 
 - **`collect(Vector)` / memmove** — `collect([a,b,c])` lowers to a raw-pointer
