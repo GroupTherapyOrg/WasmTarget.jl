@@ -798,7 +798,9 @@ end
     best_val = v[1]
     i = 2
     while i <= n
-        if v[i] > best_val
+        # `>` plus a signed-zero tiebreak: +0.0 ranks above -0.0 (Julia's isless).
+        # For non-zero/integer T the tiebreak is false (equal ⇒ same signbit).
+        if v[i] > best_val || (v[i] == best_val && signbit(best_val) && !signbit(v[i]))
             best_val = v[i]
             best_idx = i
         end
@@ -820,7 +822,7 @@ end
     best_val = v[1]
     i = 2
     while i <= n
-        if v[i] < best_val
+        if v[i] < best_val || (v[i] == best_val && !signbit(best_val) && signbit(v[i]))  # -0.0 ranks below +0.0
             best_val = v[i]
             best_idx = i
         end
