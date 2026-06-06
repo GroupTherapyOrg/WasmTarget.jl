@@ -106,7 +106,11 @@ end
 # Base implementations use foreigncall :memcmp which can't run in WASM.
 # Pure Julia byte-by-byte comparisons using ncodeunits + codeunit.
 
-@overlay WASM_METHOD_TABLE function Base.startswith(a::String, b::String)
+# Typed `AbstractString` (not just `String`) so SubString operands work too — e.g.
+# `startswith(s, chomp(t))`, where chomp returns a SubString. `codeunit`/`ncodeunits`
+# both compile for SubString, but `String(::SubString)` traps (memmove), so we must
+# byte-compare in place rather than materialize. Byte prefix == UTF-8 prefix.
+@overlay WASM_METHOD_TABLE function Base.startswith(a::AbstractString, b::AbstractString)
     al = ncodeunits(a)
     bl = ncodeunits(b)
     bl > al && return false
@@ -118,7 +122,7 @@ end
     return true
 end
 
-@overlay WASM_METHOD_TABLE function Base.endswith(a::String, b::String)
+@overlay WASM_METHOD_TABLE function Base.endswith(a::AbstractString, b::AbstractString)
     al = ncodeunits(a)
     bl = ncodeunits(b)
     bl > al && return false
