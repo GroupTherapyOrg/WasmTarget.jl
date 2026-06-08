@@ -38,6 +38,17 @@ runtime narrow-shift bug it resembles is **fixed** (see below).
 
 ## Fixed (verified-closed via the loop)
 
+- **`sinh`/`cosh`/`tanh`(Float64) hyperbolic** — were value-stubs (no native
+  codegen): `sinh(x)` emitted nothing on the stack, so `hypot(Inf, sinh(x))`
+  failed wasm validation ("expected f64 but nothing on stack"). Implemented via
+  the working `exp`: `cosh = (eᵃ+e⁻ᵃ)/2` (exact); `sinh` uses a Taylor branch for
+  |x|<0.35 (the `eˣ-e⁻ˣ` form loses precision to cancellation near 0); both use an
+  overflow-safe `eᵃ/2 = exp(a-ln2)` for |x|>20 (matches native finite `sinh(710)`
+  where the naive form overflows to Inf); `tanh = sinh/cosh` with |x|>20 ⇒ ±1.
+  Verified 42/42 vs native across the sample range incl. ±0/±Inf/NaN and the
+  danger band [1e-12,1e-7]. Float32 redirects through Float64. Closed
+  `0ef240ffe2b5`; guarded by `@testset "Hyperbolic sinh/cosh/tanh"`. (The
+  generator's `expm1`/`log1p`/`sinpi`/… are the same value-stub class — next batch.)
 - **`reduce`/`foldl`(Vector) with `min`/`max`** — `reduce(op, v)`/`foldl(op, v)`
   lowered through native `mapreduce`/`mapfoldl`, whose CFG keeps a `mapreduce_impl`
   block (the >1024-element branch) that emits invalid wasm. The module failed to

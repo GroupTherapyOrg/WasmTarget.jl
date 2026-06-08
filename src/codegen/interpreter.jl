@@ -1021,6 +1021,51 @@ end
 @overlay WASM_METHOD_TABLE Base.exp2(x::Float32) = Float32(exp2(Float64(x)))
 @overlay WASM_METHOD_TABLE Base.exp10(x::Float32) = Float32(exp10(Float64(x)))
 
+# ─── Hyperbolic Overlays (sinh / cosh / tanh) ────────────────────────────
+# Why: Base's sinh/cosh/tanh have no native wasm codegen — they emit a value-stub
+#      (nothing on the stack), so e.g. `hypot(Inf, sinh(x))` fails validation with
+#      "expected f64 but nothing on stack". Implement via the (working) `exp`.
+#      cosh = (eᵃ + e⁻ᵃ)/2 is exact everywhere (no cancellation; cosh ≥ 1).
+#      sinh needs a Taylor branch for |x| < 0.35: the exp form eˣ-e⁻ˣ loses
+#      precision to cancellation near 0 and would blow past the differential's
+#      rtol=1e-9 in the band [1e-12, 1e-7] (below 1e-12 the atol covers it).
+#      tanh = sinh/cosh with a |x|>20 ⇒ ±1 guard so large x can't make Inf/Inf.
+# Remove when: native libm-style hyperbolic codegen exists.
+const _WASM_LN2 = 0.6931471805599453             # log(2), for the overflow-safe eᵃ/2
+
+@overlay WASM_METHOD_TABLE function Base.sinh(x::Float64)
+    (isnan(x) || isinf(x)) && return x          # sinh(±Inf)=±Inf, sinh(NaN)=NaN
+    a = abs(x)
+    if a < 0.35
+        # Taylor in x²: x·(1 + x²/3! + x⁴/5! + x⁶/7! + x⁸/9!); ≤7e-13 rel at 0.35.
+        x2 = x * x
+        return x * (1.0 + x2*(1/6 + x2*(1/120 + x2*(1/5040 + x2*(1/362880)))))
+    elseif a > 20.0
+        # eᵃ/2 via exp(a - ln2): drops e⁻ᵃ (<2e-9 rel here) and never forms the
+        # overflowing eᵃ, so sinh stays finite up to native's limit (e.g. x=710).
+        s = exp(a - _WASM_LN2)
+        return x < 0.0 ? -s : s
+    end
+    e = exp(a)
+    s = 0.5 * (e - 1.0/e)
+    return x < 0.0 ? -s : s
+end
+@overlay WASM_METHOD_TABLE function Base.cosh(x::Float64)
+    isnan(x) && return x
+    a = abs(x)
+    a > 20.0 && return exp(a - _WASM_LN2)        # eᵃ/2, overflow-safe (cosh(±Inf)=Inf)
+    e = exp(a)
+    return 0.5 * (e + 1.0/e)
+end
+@overlay WASM_METHOD_TABLE function Base.tanh(x::Float64)
+    isnan(x) && return x
+    abs(x) > 20.0 && return x < 0.0 ? -1.0 : 1.0  # saturated to ±1 (also ±Inf)
+    return sinh(x) / cosh(x)                       # accurate: sinh is cancellation-safe
+end
+@overlay WASM_METHOD_TABLE Base.sinh(x::Float32) = Float32(sinh(Float64(x)))
+@overlay WASM_METHOD_TABLE Base.cosh(x::Float32) = Float32(cosh(Float64(x)))
+@overlay WASM_METHOD_TABLE Base.tanh(x::Float32) = Float32(tanh(Float64(x)))
+
 # ─── asin(Float64) Overlay ───────────────────────────────────────────────
 # Why: Base's asin compiles fine standalone but its 600-stmt body mis-executes
 #      (runtime trap) when pulled in as a *map-kernel dependency* — `map(asin, v)`

@@ -7255,6 +7255,37 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_t60_tanpi, 0.125).pass
         end
 
+        @testset "Hyperbolic sinh/cosh/tanh (WASMTARGET-FUZZ)" begin
+            # Base sinh/cosh/tanh were value-stubs (no codegen) — hypot(Inf, sinh(x))
+            # failed to validate. Overlays: cosh exact; sinh Taylor (|x|<0.35) else
+            # exp-based with an overflow-safe eᵃ/2 for |x|>20; tanh = sinh/cosh (±1 for |x|>20).
+            # These use a *different* algorithm than Base (exp-based), so compare within
+            # the differential tolerance (rtol=1e-9) rather than bit-exact `==`.
+            _t60_sinh(x::Float64)::Float64 = sinh(x)
+            _t60_cosh(x::Float64)::Float64 = cosh(x)
+            _t60_tanh(x::Float64)::Float64 = tanh(x)
+            _hyp_close(f, x) = (r = compare_julia_wasm(f, x);
+                !r.skipped && isapprox(r.expected, r.actual; rtol=1e-9, atol=1e-12))
+            for x in (0.0, 0.34, 0.35, 0.5, 1.0, -1.0, 2.0, -2.0, 5.0, 20.0, 21.0,
+                      30.0, 710.0, 1e-8, 1e-300)
+                @test _hyp_close(_t60_sinh, x)
+                @test _hyp_close(_t60_cosh, x)
+                @test _hyp_close(_t60_tanh, x)
+            end
+            # saturation / specials via Bool wrappers (bit-exact ⇒ plain `.pass`)
+            _t60_sinh_pinf(x::Float64)::Bool = isinf(sinh(x)) && sinh(x) > 0.0
+            _t60_cosh_inf(x::Float64)::Bool  = isinf(cosh(x))
+            _t60_tanh_one(x::Float64)::Bool  = tanh(x) == 1.0
+            _t60_tanh_nan(x::Float64)::Bool  = isnan(tanh(x))
+            @test compare_julia_wasm(_t60_sinh_pinf, Inf).pass
+            @test compare_julia_wasm(_t60_cosh_inf, -Inf).pass
+            @test compare_julia_wasm(_t60_tanh_one, Inf).pass
+            @test compare_julia_wasm(_t60_tanh_nan, NaN).pass
+            # Float32 redirect
+            _t60_sinh32(x::Float32)::Float32 = sinh(x)
+            @test _hyp_close(_t60_sinh32, 1.0f0)
+        end
+
         # Cofunctions, Hyperbolic inverse, Other inverse trig, Hyperbolic cofunctions
         # — REMOVED (placeholder @test_broken false stubs)
 
