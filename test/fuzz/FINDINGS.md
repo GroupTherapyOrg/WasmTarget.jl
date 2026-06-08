@@ -38,6 +38,16 @@ runtime narrow-shift bug it resembles is **fixed** (see below).
 
 ## Fixed (verified-closed via the loop)
 
+- **`reduce`/`foldl`(Vector) with `min`/`max`** — `reduce(op, v)`/`foldl(op, v)`
+  lowered through native `mapreduce`/`mapfoldl`, whose CFG keeps a `mapreduce_impl`
+  block (the >1024-element branch) that emits invalid wasm. The module failed to
+  validate **even for tiny vectors that never reach that branch**, so every
+  reduce/foldl trapped (lax mode returned the MAX for a `min` reduction —
+  `reduce(min,[5,3,8,1])` → 8). Fixed with `Base.reduce(op::F,::Vector)` /
+  `Base.foldl` left-fold overlays (exact for the generated +/*/min/max). `op::F`
+  forces specialization so the empty-collection identity folds to a constant
+  (avoids a `dynamic invoke reduce_empty(…)::Union{}` that won't compile). Closed
+  `742d636e6708`, `f1ba8bacdda5`; guarded by `@testset "reduce/foldl(min/max)"`.
 - **`rem`/`mod`(Float64) precision** — `x - trunc(x/y)*y` rounds for large quotients;
   replaced with Sterbenz-exact scaled subtraction (bit-exact vs native fmod).
 - **Float32 `exp`/`exp2`/`exp10`** — Float32 kernel emitted invalid wasm; redirect

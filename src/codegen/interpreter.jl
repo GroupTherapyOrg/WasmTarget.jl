@@ -844,6 +844,41 @@ end
     return best
 end
 
+# ─── reduce/foldl Overlays ───────────────────────────────────────────────
+# Why: `reduce(op, v)` / `foldl(op, v)` over a Vector lower through native
+#      mapreduce/mapfoldl. The CFG keeps a `mapreduce_impl` block (large-vector
+#      branch) that emits invalid wasm, so the whole module fails to validate
+#      even for small vectors — every reduce/foldl trapped (in lax mode it
+#      returned garbage, e.g. `reduce(min, [5,3,8,1])` yielded the MAX). A plain
+#      left-fold is exact for the generated associative ops (+, *, min, max) and
+#      matches Base's observable result. (Float `+` differs only by pairwise-vs-
+#      sequential rounding, within the differential harness's tolerance.)
+#
+#      `op::F` forces per-op specialization so the empty-collection identity
+#      folds to a compile-time constant — otherwise `op` infers as abstract
+#      `Function` and the empty branch becomes a `dynamic invoke ...::Union{}`
+#      (Base.reduce_empty) that fails to compile. The `op === (+/*)` branches
+#      give Base's empty identity (0 / 1); min/max (and any other op) throw on
+#      empty, exactly as Base does.
+# Remove when: native mapreduce/mapfoldl codegen is implemented.
+@inline function _wasm_reduce_loop(op::F, v::Vector{T}) where {F,T}
+    n = length(v)
+    if n == 0
+        op === (+) && return zero(T)
+        op === (*) && return one(T)
+        throw(ArgumentError("reducing over an empty collection is not allowed; consider supplying `init` to the reduce function"))
+    end
+    acc = v[1]
+    i = 2
+    while i <= n
+        acc = op(acc, v[i])
+        i += 1
+    end
+    return acc
+end
+@overlay WASM_METHOD_TABLE Base.reduce(op::F, v::Vector{T}) where {F,T} = _wasm_reduce_loop(op, v)
+@overlay WASM_METHOD_TABLE Base.foldl(op::F, v::Vector{T}) where {F,T} = _wasm_reduce_loop(op, v)
+
 # ─── argmax/argmin Overlays ──────────────────────────────────────────────
 # Why: Base implementations use complex dispatch through _findmax/_findmin
 #      with Pairs iterators and kwarg patterns that produce codegen errors.

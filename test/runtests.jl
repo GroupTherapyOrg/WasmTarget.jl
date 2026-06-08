@@ -983,6 +983,15 @@ _p63_sum_i64(v::Vector{Int64})::Int64 = sum(v)
 _p63_sum_f64(v::Vector{Float64})::Float64 = sum(v)
 _p63_prod_i64(v::Vector{Int64})::Int64 = prod(v)
 _p63_reduce_plus(v::Vector{Int64})::Int64 = reduce(+, v)
+# WASMTARGET-FUZZ: reduce/foldl with min/max reducer (overlay; closed 742d/f1ba).
+# Native lowering kept a `mapreduce_impl` block that emitted invalid wasm, so any
+# reduce/foldl trapped (lax mode returned the MAX for a min reduction).
+_p63_reduce_min_i64(v::Vector{Int64})::Int64 = reduce(min, v)
+_p63_reduce_max_i64(v::Vector{Int64})::Int64 = reduce(max, v)
+_p63_foldl_min_i64(v::Vector{Int64})::Int64 = foldl(min, v)
+_p63_foldl_max_i64(v::Vector{Int64})::Int64 = foldl(max, v)
+_p63_reduce_min_f64(v::Vector{Float64})::Float64 = reduce(min, v)
+_p63_foldl_max_f64(v::Vector{Float64})::Float64 = foldl(max, v)
 _p63_minimum_i64(v::Vector{Int64})::Int64 = minimum(v)
 _p63_maximum_i64(v::Vector{Int64})::Int64 = maximum(v)
 _p63_minimum_f64(v::Vector{Float64})::Float64 = minimum(v)
@@ -7438,6 +7447,18 @@ console.log(JSON.stringify({
             @testset "reduce(+)" begin
                 @test compare_julia_wasm_vec(_p63_reduce_plus, Int64[1, 2, 3, 4, 5]).pass
                 @test compare_julia_wasm_vec(_p63_reduce_plus, Int64[10, 20, 30]).pass
+            end
+            @testset "reduce/foldl(min/max) (WASMTARGET-FUZZ)" begin
+                # min/max reducer: native kept an invalid mapreduce_impl block ⇒ trap;
+                # the overlay's left-fold returns the correct end (not the opposite).
+                for v in (Int64[5, 3, 8, 1, 4], Int64[-10, -5, -20], Int64[7], Int64[0, 0, 0])
+                    @test compare_julia_wasm_vec(_p63_reduce_min_i64, v).pass
+                    @test compare_julia_wasm_vec(_p63_reduce_max_i64, v).pass
+                    @test compare_julia_wasm_vec(_p63_foldl_min_i64, v).pass
+                    @test compare_julia_wasm_vec(_p63_foldl_max_i64, v).pass
+                end
+                @test compare_julia_wasm_vec(_p63_reduce_min_f64, Float64[5.5, 1.1, 3.3]).pass
+                @test compare_julia_wasm_vec(_p63_foldl_max_f64, Float64[5.5, 1.1, 3.3]).pass
             end
             @testset "prod" begin
                 @test compare_julia_wasm_vec(_p63_prod_i64, Int64[2, 3, 4, 5]).pass
