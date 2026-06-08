@@ -40,6 +40,10 @@ function _reproducer(o::Outcome, ::Type{T0}, body) where {T0}
         WasmTarget.compile(repro, ($(T0),))   # raises while the value-stub gap is present
         """
     end
+    # `:optimizer_unsound` — raw matches native but a binaryen build (detail[2] =
+    # :size/:speed) diverges; reproduce against THAT optimized build.
+    optkw = o.category === :optimizer_unsound ? "; opt=$(repr(o.detail[2]))" : ""
+    tag = o.category === :optimizer_unsound ? " (wasm-opt $(o.detail[2]))" : ""
     return """
     using WasmTarget
     include(joinpath("test", "fuzz", "harness.jl")); using .FuzzHarness
@@ -49,9 +53,9 @@ function _reproducer(o::Outcome, ::Type{T0}, body) where {T0}
          a == b || isapprox(float(a), float(b); rtol = 1e-9, atol = 1e-12)) : (a == b)
     _x = $(inp)
     _threw = try repro(_x); false catch; true end
-    _r = FuzzHarness.compile_and_run(repro, ($(T0),), [(_x,)])[1]
+    _r = FuzzHarness.compile_and_run(repro, ($(T0),), [(_x,)]$(optkw))[1]
     _ok = _threw ? (_r[1] === :trap) : (_r[1] === :ok && _m(repro(_x), _r[2]))
-    _ok || error("WasmTarget gap @ x=\$_x : native=\$(_threw ? :throw : repro(_x)) wasm=\$_r")
+    _ok || error("WasmTarget gap$(tag) @ x=\$_x : native=\$(_threw ? :throw : repro(_x)) wasm=\$_r")
     """
 end
 
@@ -75,13 +79,13 @@ function fuzz_type(::Type{T0}; depth, max_examples, seed, run_id, dbdir = CORPUS
     gen = gen_program(T0; depth = depth)
     db = Supposition.DirectoryDB(dbdir)
     res = @check db=db rng=Xoshiro(seed) max_examples=max_examples function diff_prop(body = gen)
-        property_holds(body, T0)
+        property_holds(body, T0; check_opt = true)   # discovery also hunts wasm-opt unsoundness
     end
     r = something(res.result)
     if r isa Supposition.Fail
         ce = getfield(r, 1)                 # NamedTuple (body = <minimal expr>,)
         minimal = first(values(ce))
-        o = differential(minimal, T0)       # re-derive full details on the minimal body
+        o = differential(minimal, T0; check_opt = true)   # re-derive full details (incl. opt) on the minimal body
         id = _record!(o, T0, minimal; run_id = run_id)
         println("  ✗ $(T0): $(o.category) — minimal `$(minimal)` → gap $id")
         return (false, o.category)
@@ -106,6 +110,8 @@ end
 # --- Natural-signature discovery (Vector args via the marshalling bridge) ----
 function _reproducer_natural(o::Outcome, ::Type{IN}, body) where {IN}
     inp = o.input === nothing ? "$(IN)()" : repr(o.input[1])
+    optkw = o.category === :optimizer_unsound ? "; opt=$(repr(o.detail[2]))" : ""
+    tag = o.category === :optimizer_unsound ? " (wasm-opt $(o.detail[2]))" : ""
     return """
     using WasmTarget
     include(joinpath("test", "fuzz", "harness.jl")); using .FuzzHarness
@@ -122,9 +128,9 @@ function _reproducer_natural(o::Outcome, ::Type{IN}, body) where {IN}
     end
     _v = $(inp)
     _nat = try (true, repro(deepcopy(_v))) catch; (false, nothing) end   # deepcopy: don't let mutation alias wasm's input
-    _r = FuzzHarness.compile_and_run_vec(repro, ($(IN),), [(deepcopy(_v),)])[1]
+    _r = FuzzHarness.compile_and_run_vec(repro, ($(IN),), [(deepcopy(_v),)]$(optkw))[1]
     _ok = _nat[1] ? (_r[1] === :ok && _m(_nat[2], _r[2])) : (_r[1] === :trap)
-    _ok || error("WasmTarget gap @ v=\$_v : native=\$(_nat[1] ? _nat[2] : :throw) wasm=\$_r")
+    _ok || error("WasmTarget gap$(tag) @ v=\$_v : native=\$(_nat[1] ? _nat[2] : :throw) wasm=\$_r")
     """
 end
 
@@ -146,12 +152,12 @@ function fuzz_natural(::Type{IN}, ::Type{RET}; depth, max_examples, seed, run_id
     gen = gen_natural(IN, RET; depth = depth)
     db = Supposition.DirectoryDB(dbdir)
     res = @check db=db rng=Xoshiro(seed) max_examples=max_examples function nat_prop(body = gen)
-        property_holds_natural(body, IN)
+        property_holds_natural(body, IN; check_opt = true)   # discovery also hunts wasm-opt unsoundness
     end
     r = something(res.result)
     if r isa Supposition.Fail
         minimal = first(values(getfield(r, 1)))
-        o = differential_natural(minimal, IN)
+        o = differential_natural(minimal, IN; check_opt = true)
         id = _record_natural!(o, IN, RET, minimal; run_id = run_id)
         println("  ✗ $(IN)→$(RET): $(o.category) — `$(minimal)` → gap $id")
         return false

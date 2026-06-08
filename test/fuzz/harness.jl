@@ -18,6 +18,10 @@ export compile_and_run, compile_and_run_vec, NODE_OK
 using WasmTarget
 using JSON
 
+# Persistent Node worker pool (shared design with test/utils.jl): one long-lived
+# set of `node` workers instead of a fresh spawn per program.
+include(joinpath(@__DIR__, "..", "wasm_runner.jl"));  using .WasmRunner
+
 # --- JS↔WasmGC bridge for Vector marshalling (reused from test/utils.jl) -----
 # These compile to wasm alongside the target so JS can build/read Vector args.
 _bv_i64_new(n::Int64)::Vector{Int64} = Vector{Int64}(undef, n)
@@ -102,22 +106,20 @@ Compile `fn` for `argtypes` and evaluate it over every arg-tuple in `inputs` in 
 single Node process. Returns a vector of `(:ok, value)` / `(:trap, msg)`, one per
 input — or `:compile_error => err` / `:no_node` for whole-batch failures.
 """
-function compile_and_run(fn, argtypes::Tuple, inputs::Vector; strict::Bool=true, timeout::Real=8)
+function compile_and_run(fn, argtypes::Tuple, inputs::Vector; strict::Bool=true, timeout::Real=8, opt=false)
     NODE_OK || return :no_node
     fname = string(nameof(fn))
     bytes = try
-        WasmTarget.compile(fn, argtypes; strict=strict, validate=true)
+        WasmTarget.compile(fn, argtypes; strict=strict, validate=true, optimize=opt)
     catch e
         return (:compile_error => e)
     end
 
-    dir = mktempdir()
-    wpath = joinpath(dir, "m.wasm")
-    jpath = joinpath(dir, "run.mjs")
-    write(wpath, bytes)
-    loader = """
-    import fs from 'fs';
-    const bytes = fs.readFileSync('$(escape_string(wpath))');
+    # Driver body: `bytes` is injected by the worker; returns a results array.
+    # An infinite-looping wasm (native terminates, wasm doesn't — a real
+    # divergence) blocks its worker; the pool's deadline watchdog kills+restarts
+    # it and returns per-input `:trap "timeout"`.
+    driver = """
     const inputs = $(_js_inputs(inputs));
     const enc = (k,v) => {
         if (typeof v === 'bigint') return { __bigint__: v.toString() };
@@ -127,43 +129,12 @@ function compile_and_run(fn, argtypes::Tuple, inputs::Vector; strict::Bool=true,
     const importObject = { Math: { pow: Math.pow } };
     const { instance } = await WebAssembly.instantiate(bytes, importObject);
     const f = instance.exports['$fname'];
-    const out = inputs.map(args => {
+    return inputs.map(args => {
         try { return { ok: JSON.parse(JSON.stringify(f(...args), enc)) }; }
         catch (e) { return { trap: String(e && e.message || e) }; }
     });
-    console.log(JSON.stringify(out));
     """
-    write(jpath, loader)
-    cmd = NEEDS_FLAG ? `$NODE_CMD --experimental-wasm-gc $jpath` : `$NODE_CMD $jpath`
-    # Deadline-protected execution: a generated module can compile to a wasm that
-    # infinite-loops (native terminates, wasm doesn't — a real divergence). Without
-    # a timeout that would hang the whole fuzzer, so a hang becomes a per-input
-    # `:trap "timeout"` finding instead. `time()` is wall-clock seconds.
-    opath = joinpath(dir, "out.json")
-    proc = try
-        run(pipeline(cmd; stdout=opath, stderr=devnull); wait=false)
-    catch e
-        return (:exec_error => e)
-    end
-    deadline = time() + timeout
-    while process_running(proc)
-        if time() > deadline
-            try; kill(proc, Base.SIGKILL); catch; end
-            return Tuple{Symbol,Any}[(:trap, "timeout") for _ in inputs]
-        end
-        sleep(0.03)
-    end
-    out = isfile(opath) ? read(opath, String) : ""
-    isempty(strip(out)) && return Tuple{Symbol,Any}[(:trap, "no-output") for _ in inputs]
-    parsed = JSON.parse(strip(out))
-    results = Vector{Tuple{Symbol,Any}}(undef, length(parsed))
-    for (i, r) in enumerate(parsed)
-        if r isa AbstractDict && haskey(r, "ok")
-            results[i] = (:ok, _unmarshal(r["ok"]))
-        else
-            results[i] = (:trap, get(r, "trap", "unknown"))
-        end
-    end
+    results = _pool_results(bytes, driver, length(inputs); timeout=timeout)
     return results
 end
 
@@ -202,7 +173,7 @@ arguments AND returns by compiling the target together with the wasm marshalling
 bridge. `inputs` is a Vector of arg-tuples (args may be Vectors). Returns per-input
 `(:ok, value)` / `(:trap, msg)` — a Vector result comes back as a Julia Vector.
 """
-function compile_and_run_vec(fn, argtypes::Tuple, inputs::Vector; strict::Bool=true, timeout::Real=8)
+function compile_and_run_vec(fn, argtypes::Tuple, inputs::Vector; strict::Bool=true, timeout::Real=8, opt=false)
     NODE_OK || return :no_node
     fname = string(nameof(fn))
     needs_i64 = any(==(Vector{Int64}), argtypes)
@@ -214,18 +185,13 @@ function compile_and_run_vec(fn, argtypes::Tuple, inputs::Vector; strict::Bool=t
     needs_i64 && append!(funcs, _BRIDGE_I64)
     needs_f64 && append!(funcs, _BRIDGE_F64)
     bytes = try
-        WasmTarget.compile_multi(funcs; strict=strict, validate=true)
+        WasmTarget.compile_multi(funcs; strict=strict, validate=true, optimize=opt)
     catch e
         return (:compile_error => e)
     end
-    dir = mktempdir()
-    wpath = joinpath(dir, "m.wasm"); jpath = joinpath(dir, "run.mjs"); opath = joinpath(dir, "out.json")
-    write(wpath, bytes)
     inarr = "[" * join((("[" * join((_enc_arg(a) for a in tup), ",") * "]") for tup in inputs), ",") * "]"
     retmode = retvec === Int64 ? "vi" : retvec === Float64 ? "vf" : "scalar"
-    loader = """
-    import fs from 'fs';
-    const bytes = fs.readFileSync('$(escape_string(wpath))');
+    driver = """
     const { instance } = await WebAssembly.instantiate(bytes, { Math: { pow: Math.pow } });
     const e = instance.exports; const f = e['$fname'];
     const bvi = a => { const v=e._bv_i64_new(BigInt(a.length)); for(let i=0;i<a.length;i++) e['_bv_i64_set!'](v,BigInt(i+1),BigInt(a[i])); return v; };
@@ -235,40 +201,32 @@ function compile_and_run_vec(fn, argtypes::Tuple, inputs::Vector; strict::Bool=t
     const rdf = v => { const n=Number(e._bv_f64_len(v)); const o=[]; for(let i=0;i<n;i++){const x=e._bv_f64_get(v,BigInt(i+1)); o.push(Number.isNaN(x)?"__NaN__":x===Infinity?"__Inf__":x===-Infinity?"__-Inf__":x);} return o; };
     const enc = (k,val)=>{ if(typeof val==='bigint') return {__bigint__:val.toString()}; if(typeof val==='number'){if(val===Infinity)return"__Inf__";if(val===-Infinity)return"__-Inf__";if(Number.isNaN(val))return"__NaN__";} return val; };
     const inputs = $(inarr);
-    const out = inputs.map(args => { try {
+    return inputs.map(args => { try {
         const r = f(...args.map(marsh));
         const v = "$(retmode)"==="vi" ? rdi(r) : "$(retmode)"==="vf" ? rdf(r) : JSON.parse(JSON.stringify(r, enc));
         return { ok: v };
     } catch(err){ return { trap: String(err && err.message || err) }; } });
-    console.log(JSON.stringify(out));
     """
-    write(jpath, loader)
-    cmd = NEEDS_FLAG ? `$NODE_CMD --experimental-wasm-gc $jpath` : `$NODE_CMD $jpath`
-    proc = try
-        run(pipeline(cmd; stdout=opath, stderr=devnull); wait=false)
-    catch e
-        return (:exec_error => e)
-    end
-    deadline = time() + timeout
-    while process_running(proc)
-        if time() > deadline
-            try; kill(proc, Base.SIGKILL); catch; end
-            return Tuple{Symbol,Any}[(:trap, "timeout") for _ in inputs]
-        end
-        sleep(0.03)
-    end
-    out = isfile(opath) ? read(opath, String) : ""
-    isempty(strip(out)) && return Tuple{Symbol,Any}[(:trap, "no-output") for _ in inputs]
-    parsed = JSON.parse(strip(out))
-    results = Vector{Tuple{Symbol,Any}}(undef, length(parsed))
-    for (i, r) in enumerate(parsed)
+    return _pool_results(bytes, driver, length(inputs); timeout=timeout)
+end
+
+# Run a driver body through the persistent pool and convert its raw {ok|trap}
+# results into the harness's tagged `(:ok,val)` / `(:trap,msg)` tuples. Falls
+# back to the harness-level markers (`:no_node`, `:exec_error => …`) so the
+# property layer classifies them exactly as the old per-spawn path did.
+function _pool_results(bytes, driver, ninputs; timeout::Real=8)
+    status, results = WasmRunner.run_driver_batch(bytes, driver; deadline=timeout, ninputs=ninputs)
+    status === :nonode && return :no_node
+    status === :error  && return (:exec_error => results)
+    out = Vector{Tuple{Symbol,Any}}(undef, length(results))
+    for (i, r) in enumerate(results)
         if r isa AbstractDict && haskey(r, "ok")
-            results[i] = (:ok, _unmarshal(r["ok"]))
+            out[i] = (:ok, _unmarshal(r["ok"]))
         else
-            results[i] = (:trap, get(r, "trap", "unknown"))
+            out[i] = (:trap, String(get(r, "trap", "unknown")))
         end
     end
-    return results
+    return out
 end
 
 end # module FuzzHarness

@@ -12,6 +12,13 @@
 #   runtime_trap    native returns, wasm traps                  → reachable gap
 #   divergent_throw native throws, wasm returns                 → wasm over-accepts
 #   compile_error   strict compile raised (value-stub)          → known-wrong op
+#   optimizer_unsound  RAW wasm matches native but a binaryen-OPTIMIZED build
+#                      (wasm-opt -Os / -O3) diverges            → OPTIMIZER ALARM
+#
+# Every program that the raw build gets RIGHT is re-run through the wasm-opt
+# pipeline (`:size`=-Os, `:speed`=-O3); a behavioural change there means the
+# optimizer broke semantics — exactly the kind of bug the strict guarantee must
+# exclude. (We only opt-check raw-clean programs; a raw gap is reported first.)
 #
 # Float comparison: NaN==NaN and ±Inf match; otherwise exact or ULP-tolerant
 # (wasm's libm ≠ openlibm for transcendentals).
@@ -66,13 +73,48 @@ function classify(nv, wv)
     end
 end
 
+# wasm-opt levels every raw-clean program is re-checked against (binaryen).
+const OPT_LEVELS = (:size, :speed)   # -Os, -O3
+
+# Run ONE build variant of `fn` over `samples` and return the first non-matching
+# Outcome (or `Outcome(:ok,…)` if every sample matched). `runner` is the scalar
+# or vector harness; `opt` is `false` (raw) or a wasm-opt level.
+function _run_variant(fn, argtypes, samples, natives, body, src, runner, opt)
+    wres = runner(fn, argtypes, samples; strict = true, opt = opt)
+    if wres === :no_node
+        return Outcome(:skip, src, nothing, nothing, nothing, nothing)
+    elseif wres isa Pair && wres.first === :compile_error
+        return Outcome(:compile_error, src, samples[1], natives[1], (:trap, "compile"), wres.second)
+    elseif wres isa Pair
+        return Outcome(:skip, src, nothing, nothing, nothing, wres.second)
+    end
+    for (i, (nv, wv)) in enumerate(zip(natives, wres))
+        cat = classify(nv, wv)
+        cat === :match && continue
+        return Outcome(cat, src, samples[i], nv, wv, body)
+    end
+    return Outcome(:ok, src, nothing, nothing, nothing, body)
+end
+
+# Re-check raw-clean program through the wasm-opt pipeline. Returns an
+# `:optimizer_unsound` Outcome on the first opt level that diverges, else nothing.
+function _opt_check(fn, argtypes, samples, natives, body, src, runner)
+    for lvl in OPT_LEVELS
+        o = _run_variant(fn, argtypes, samples, natives, body, src, runner, lvl)
+        o.category in (:ok, :skip, :compile_error) && continue
+        return Outcome(:optimizer_unsound, o.src, o.input, o.native, o.wasm, (body, lvl, o.category))
+    end
+    return nothing
+end
+
 """
     differential(body, T0) -> Outcome
 
-Run the full native-vs-wasm differential for one generated body. Returns the
-first non-matching `Outcome`, or `Outcome(:ok, …)` if every sample matched.
+Run the full native-vs-wasm differential for one generated body. Checks the RAW
+build, then (if raw is clean) the wasm-opt builds. Returns the first non-matching
+`Outcome`, or `Outcome(:ok, …)` if every sample matched on every variant.
 """
-function differential(body, ::Type{T0}) where {T0}
+function differential(body, ::Type{T0}; check_opt::Bool = false) where {T0}
     fn, _, src = make_function(body, T0)
     samples = sample_inputs(T0)
 
@@ -84,21 +126,10 @@ function differential(body, ::Type{T0}) where {T0}
         end
     end
 
-    wres = compile_and_run(fn, (T0,), samples; strict = true)
-    if wres === :no_node
-        return Outcome(:skip, src, nothing, nothing, nothing, nothing)
-    elseif wres isa Pair && wres.first === :compile_error
-        return Outcome(:compile_error, src, samples[1], natives[1], (:trap, "compile"), wres.second)
-    elseif wres isa Pair
-        return Outcome(:skip, src, nothing, nothing, nothing, wres.second)
-    end
-
-    for (i, (nv, wv)) in enumerate(zip(natives, wres))
-        cat = classify(nv, wv)
-        cat === :match && continue
-        return Outcome(cat, src, samples[i], nv, wv, body)
-    end
-    return Outcome(:ok, src, nothing, nothing, nothing, body)
+    raw = _run_variant(fn, (T0,), samples, natives, body, src, compile_and_run, false)
+    (raw.category === :ok && check_opt) || return raw
+    opt = _opt_check(fn, (T0,), samples, natives, body, src, compile_and_run)
+    return opt === nothing ? raw : opt
 end
 
 """
@@ -107,8 +138,8 @@ end
 The Supposition property: true iff native and wasm agree on every sample (or the
 run is skipped). Returning false drives Supposition to shrink `body`.
 """
-property_holds(body, ::Type{T0}) where {T0} =
-    differential(body, T0).category in (:ok, :skip)
+property_holds(body, ::Type{T0}; check_opt::Bool = false) where {T0} =
+    differential(body, T0; check_opt).category in (:ok, :skip)
 
 # --- Natural-signature differential (Vector/etc. args via marshalling bridge) ---
 """
@@ -118,7 +149,7 @@ Like `differential`, but the generated function takes a real `IN`-typed argument
 (e.g. `Vector{Int64}`) marshalled across the bridge, evaluated over edge-biased
 `vector_inputs`. The return type is whatever `body` infers to.
 """
-function differential_natural(body, ::Type{IN}; var::Symbol = :v) where {IN}
+function differential_natural(body, ::Type{IN}; var::Symbol = :v, check_opt::Bool = false) where {IN}
     fn, _, src = make_function_natural(body, IN; var = var)
     samples = vector_inputs(eltype(IN))
 
@@ -132,24 +163,13 @@ function differential_natural(body, ::Type{IN}; var::Symbol = :v) where {IN}
         end
     end
 
-    wres = compile_and_run_vec(fn, (IN,), samples; strict = true)
-    if wres === :no_node
-        return Outcome(:skip, src, nothing, nothing, nothing, nothing)
-    elseif wres isa Pair && wres.first === :compile_error
-        return Outcome(:compile_error, src, samples[1], natives[1], (:trap, "compile"), wres.second)
-    elseif wres isa Pair
-        return Outcome(:skip, src, nothing, nothing, nothing, wres.second)
-    end
-
-    for (i, (nv, wv)) in enumerate(zip(natives, wres))
-        cat = classify(nv, wv)
-        cat === :match && continue
-        return Outcome(cat, src, samples[i], nv, wv, body)
-    end
-    return Outcome(:ok, src, nothing, nothing, nothing, body)
+    raw = _run_variant(fn, (IN,), samples, natives, body, src, compile_and_run_vec, false)
+    (raw.category === :ok && check_opt) || return raw
+    opt = _opt_check(fn, (IN,), samples, natives, body, src, compile_and_run_vec)
+    return opt === nothing ? raw : opt
 end
 
-property_holds_natural(body, ::Type{IN}; var::Symbol = :v) where {IN} =
-    differential_natural(body, IN; var = var).category in (:ok, :skip)
+property_holds_natural(body, ::Type{IN}; var::Symbol = :v, check_opt::Bool = false) where {IN} =
+    differential_natural(body, IN; var = var, check_opt = check_opt).category in (:ok, :skip)
 
 end # module FuzzProperty
