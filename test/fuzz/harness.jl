@@ -53,6 +53,13 @@ end
 const (NODE_CMD, NEEDS_FLAG) = _detect_node()
 const NODE_OK = NODE_CMD !== nothing
 
+# Per-program Node watchdog deadline (seconds). The orchestrator raises it via
+# WT_FUZZ_TIMEOUT when the fuzz pass OVERLAPS the codegen shards: under CPU
+# contention a starved worker can miss a tight deadline and a retried timeout
+# would be misreported as a wasm `:trap` (a fake divergence). A real hang still
+# times out at every attempt and reds the gate.
+const DEFAULT_TIMEOUT = something(tryparse(Float64, get(ENV, "WT_FUZZ_TIMEOUT", "8")), 8.0)
+
 # --- Argument / result marshalling (mirrors test/utils.jl) ------------------
 function _js_arg(arg)
     if arg isa Int64 || arg isa Int
@@ -106,7 +113,7 @@ Compile `fn` for `argtypes` and evaluate it over every arg-tuple in `inputs` in 
 single Node process. Returns a vector of `(:ok, value)` / `(:trap, msg)`, one per
 input — or `:compile_error => err` / `:no_node` for whole-batch failures.
 """
-function compile_and_run(fn, argtypes::Tuple, inputs::Vector; strict::Bool=true, timeout::Real=8, opt=false)
+function compile_and_run(fn, argtypes::Tuple, inputs::Vector; strict::Bool=true, timeout::Real=DEFAULT_TIMEOUT, opt=false)
     NODE_OK || return :no_node
     fname = string(nameof(fn))
     bytes = try
@@ -173,7 +180,7 @@ arguments AND returns by compiling the target together with the wasm marshalling
 bridge. `inputs` is a Vector of arg-tuples (args may be Vectors). Returns per-input
 `(:ok, value)` / `(:trap, msg)` — a Vector result comes back as a Julia Vector.
 """
-function compile_and_run_vec(fn, argtypes::Tuple, inputs::Vector; strict::Bool=true, timeout::Real=8, opt=false)
+function compile_and_run_vec(fn, argtypes::Tuple, inputs::Vector; strict::Bool=true, timeout::Real=DEFAULT_TIMEOUT, opt=false)
     NODE_OK || return :no_node
     fname = string(nameof(fn))
     needs_i64 = any(==(Vector{Int64}), argtypes)

@@ -605,9 +605,10 @@ generate_ground_truth("add_one", x -> x + Int32(1), [
 ])
 ```
 """
-function generate_ground_truth(name::String, f, inputs::Vector; overwrite::Bool=false)
-    mkpath(GROUND_TRUTH_DIR)
-    path = joinpath(GROUND_TRUTH_DIR, "$name.json")
+function generate_ground_truth(name::String, f, inputs::Vector; overwrite::Bool=false,
+                               dir::AbstractString=GROUND_TRUTH_DIR)
+    mkpath(dir)
+    path = joinpath(dir, "$name.json")
     if isfile(path) && !overwrite
         @info "Ground truth '$name' already exists. Use overwrite=true to regenerate."
         return path
@@ -641,8 +642,8 @@ end
 
 Load a ground truth snapshot by name from `test/ground_truth/`.
 """
-function load_ground_truth(name::String)
-    path = joinpath(GROUND_TRUTH_DIR, "$name.json")
+function load_ground_truth(name::String; dir::AbstractString=GROUND_TRUTH_DIR)
+    path = joinpath(dir, "$name.json")
     if !isfile(path)
         error("Ground truth '$name' not found at $path. Run generate_ground_truth first.")
     end
@@ -666,8 +667,8 @@ for r in results
 end
 ```
 """
-function compare_against_ground_truth(name::String, f)
-    snapshot = load_ground_truth(name)
+function compare_against_ground_truth(name::String, f; dir::AbstractString=GROUND_TRUTH_DIR)
+    snapshot = load_ground_truth(name; dir=dir)
     entries = snapshot["entries"]
 
     results = NamedTuple[]

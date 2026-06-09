@@ -1,3 +1,5 @@
+const _WT_T0 = time()   # process start — workers report setup overhead against this
+
 # ── Parallel test execution via process sharding ─────────────────────────────
 # The codegen suite is compile-bound. The ~80 Phase testsets are independent, so
 # we run them across N worker PROCESSES, each compiling a disjoint shard. PROCESSES
@@ -19,20 +21,29 @@ end
 # A child process runs either ONE codegen shard (WT_SHARD="i,N") or the fuzz pass
 # (WT_FUZZ=1). The orchestrator (neither var set) spawns both phases below.
 if get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_FUZZ", "") != "1" && get(ENV, "WT_NO_SHARD", "") != "1"
-    nshards = max(1, min(_wt_logical_cpus() - 2, 16))
+    nshards = max(1, min(_wt_logical_cpus(), 16))
     if nshards > 1
-        @info "Sharding test suite across $nshards worker processes (+ 1 contention-free fuzz pass)"
+        @info "Sharding test suite across $nshards worker processes (+ overlapped fuzz pass)"
         proj, file = Base.active_project(), @__FILE__
         logdir = mktempdir()
-        _spawn(envpair, lf) = run(pipeline(ignorestatus(addenv(`$(Base.julia_cmd()) --project=$proj $file`, envpair));
+        _spawn(envpair, lf) = run(pipeline(ignorestatus(addenv(`$(Base.julia_cmd()) --project=$proj $file`, envpair...));
                           stdout=lf, stderr=lf); wait=false)
-        # ── Phase A: codegen shards run CONCURRENTLY (compile-bound; little Node use) ──
-        # Capture each worker to its own log (a shared stdout interleaves + buffers
-        # away on exit), so a failing shard's error is actually visible.
+        # ── The fuzz pass OVERLAPS the codegen shards (it's Node/IO-bound while the
+        # shards are compile-bound). Under contention a CPU-starved Node worker can
+        # miss the 8s watchdog and fake a hang into a `:trap`, so the overlapped pass
+        # gets a much larger deadline (WT_FUZZ_TIMEOUT) on top of retry-on-timeout —
+        # a REAL hang still reds the gate, a load blip clears on retry. Spawned FIRST
+        # so its setup (~18s) and Node-pool boot hide entirely inside phase A.
+        flf = joinpath(logdir, "fuzz.log")
+        fp = _spawn(("WT_FUZZ" => "1", "WT_FUZZ_TIMEOUT" => "30"), flf)
+        # ── Codegen shards run CONCURRENTLY. Capture each worker to its own log (a
+        # shared stdout interleaves + buffers away on exit), so a failing shard's
+        # error is actually visible.
         procs = map(0:nshards-1) do i
             lf = joinpath(logdir, "shard_$i.log")
-            (i, lf, _spawn("WT_SHARD" => "$i,$nshards", lf))
+            (i, lf, _spawn(("WT_SHARD" => "$i,$nshards",), lf))
         end
+        phase_times = String[]   # "<secs>\t<name>" collected across all shard logs
         codes = map(procs) do triple
             i, lf, p = triple
             wait(p)
@@ -41,20 +52,28 @@ if get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_FUZZ", "") != "1" && get(ENV, 
                 println("════ shard $i FAILED (exit $(p.exitcode)) ════")
                 println(join(last(lines, 35), '\n'))
             else
-                for ln in lines; occursin("WasmTarget.jl |", ln) && println("  shard $i: ", strip(ln)); end
+                for ln in lines
+                    occursin("WasmTarget.jl |", ln) && println("  shard $i: ", strip(ln))
+                    startswith(ln, "WT_PHASE_TIME\t") && push!(phase_times, String(ln[sizeof("WT_PHASE_TIME\t")+1:end]))
+                    startswith(ln, "WT_SETUP_TIME\t") && println("  shard $i setup: ", split(ln, '\t')[2], "s")
+                end
             end
             p.exitcode
         end
-        # ── Phase B: differential fuzz runs ALONE, AFTER the codegen shards join. ──
-        # Running it under codegen contention starves its Node workers past the watchdog
-        # deadline; those timeouts get classified as wasm `:trap`s → flaky false
-        # counterexamples. A dedicated serial pass gives the fuzz pool the whole machine,
-        # so a reported divergence is real. (Assignment-free exit accounting below: the
-        # earlier `failed = true` inside a `for` was soft-scoped to a NEW local, so shard
-        # failures never reached `exit` — the suite went green on a failing shard.)
-        println("──── differential fuzz (serial, contention-free) ────")
-        flf = joinpath(logdir, "fuzz.log")
-        fp = _spawn("WT_FUZZ" => "1", flf)
+        # Refresh the LPT-packing input (committed) on demand. sorted-by-name → stable diffs.
+        if get(ENV, "WT_RECORD_TIMES", "") == "1" && !isempty(phase_times)
+            open(joinpath(@__DIR__, "phase_times.tsv"), "w") do io
+                for ln in sort(phase_times; by = l -> split(l, '\t'; limit = 2)[2])
+                    println(io, ln)
+                end
+            end
+            @info "Recorded $(length(phase_times)) phase durations → test/phase_times.tsv"
+        end
+        # ── Join the overlapped fuzz pass (usually already done by now). ──
+        # (Assignment-free exit accounting below: an earlier `failed = true` inside a
+        # `for` was soft-scoped to a NEW local, so shard failures never reached `exit`
+        # — the suite went green on a failing shard.)
+        println("──── differential fuzz (overlapped) ────")
         wait(fp)
         flines = isfile(flf) ? split(read(flf, String), '\n') : String[]
         if fp.exitcode != 0
@@ -129,13 +148,48 @@ macro pphase(name, body)
         push!(_PHASES, ($(esc(name)), $(esc(fname))))
     end
 end
-# Run the Phases this process owns: round-robin by registration order, so the
-# assignment is identical and disjoint across worker processes. A skipped phase's
-# function is never CALLED → never JIT-compiled (the lazy-compile win). Called
-# inside the `@testset "WasmTarget.jl"` block.
+# Run the Phases this process owns. Assignment must be identical and disjoint
+# across worker processes, so it is a pure function of (committed timings file,
+# registration order, nshards): phases are bin-packed onto shards by LPT (longest
+# processing time first → least-loaded shard) using the durations recorded in
+# test/phase_times.tsv. Round-robin left the shard walls >2× apart (1:03 vs 2:09);
+# LPT pulls the wall down toward the mean. Phases with no recorded duration get
+# the median, and a missing file degrades to "all equal" (≈ round-robin packing).
+# A skipped phase's function is never CALLED → never JIT-compiled (the lazy-compile
+# win). Each phase's wall time is emitted as a `WT_PHASE_TIME` line; the
+# orchestrator regenerates the tsv from those lines when WT_RECORD_TIMES=1.
+const _PHASE_TIMES_TSV = joinpath(@__DIR__, "phase_times.tsv")
+function _phase_durations()
+    d = Dict{String,Float64}()
+    isfile(_PHASE_TIMES_TSV) || return d
+    for ln in eachline(_PHASE_TIMES_TSV)
+        parts = split(ln, '\t'; limit = 2)
+        length(parts) == 2 || continue
+        t = tryparse(Float64, parts[1])
+        t === nothing || (d[String(parts[2])] = t)
+    end
+    return d
+end
+function _phase_owner(n::Int)
+    rec = _phase_durations()
+    med = isempty(rec) ? 1.0 : sort!(collect(values(rec)))[(length(rec) + 1) ÷ 2]
+    dur = [get(rec, name, med) for (name, _) in _PHASES]
+    owner = Vector{Int}(undef, length(_PHASES))
+    load = zeros(n)
+    for i in sort(collect(eachindex(_PHASES)); by = j -> -dur[j])
+        s = argmin(load)
+        owner[i] = s - 1
+        load[s] += dur[i]
+    end
+    return owner
+end
 function _run_phases()
-    for (i, (_, pf)) in enumerate(_PHASES)
-        ((i - 1) % _WT_NSHARDS == _WT_SHARD) && pf()
+    println("WT_SETUP_TIME\t", round(time() - _WT_T0; digits = 1))   # worker fixed overhead (boot + using + includes)
+    owner = _phase_owner(_WT_NSHARDS)
+    for (i, (name, pf)) in enumerate(_PHASES)
+        owner[i] == _WT_SHARD || continue
+        t = @elapsed pf()
+        println("WT_PHASE_TIME\t", round(t; digits = 3), "\t", name)
     end
 end
 
@@ -4501,13 +4555,16 @@ begin
             end
         end
 
-        # Ground truth snapshot tests
+        # Ground truth snapshot tests — exercise the MACHINERY in a temp dir so
+        # they never rewrite the committed fixtures in test/ground_truth/ (the
+        # regenerated timestamps dirtied the working tree on every run).
+        gtdir = mktempdir()
         @testset "generate_ground_truth — creates snapshot file" begin
             path = generate_ground_truth("gt_add_one", x -> x + Int32(1), [
                 (Int32(0),), (Int32(5),), (Int32(-1),),
-            ]; overwrite=true)
+            ]; overwrite=true, dir=gtdir)
             @test isfile(path)
-            snapshot = load_ground_truth("gt_add_one")
+            snapshot = load_ground_truth("gt_add_one"; dir=gtdir)
             @test snapshot["name"] == "gt_add_one"
             @test length(snapshot["entries"]) == 3
             @test snapshot["entries"][1]["expected"] == 1
@@ -4518,8 +4575,8 @@ begin
         @testset "compare_against_ground_truth — all pass" begin
             generate_ground_truth("gt_double", x -> x * Int32(2), [
                 (Int32(3),), (Int32(0),), (Int32(-4),),
-            ]; overwrite=true)
-            results = compare_against_ground_truth("gt_double", x -> x * Int32(2))
+            ]; overwrite=true, dir=gtdir)
+            results = compare_against_ground_truth("gt_double", x -> x * Int32(2); dir=gtdir)
             @test length(results) == 3
             for r in results
                 if !r.skipped
@@ -4531,9 +4588,9 @@ begin
         @testset "compare_against_ground_truth — detects mismatch" begin
             generate_ground_truth("gt_negate", x -> -x, [
                 (Int32(5),), (Int32(-3),),
-            ]; overwrite=true)
+            ]; overwrite=true, dir=gtdir)
             # Intentionally use wrong function to get mismatch
-            results = compare_against_ground_truth("gt_negate", x -> x + Int32(1))
+            results = compare_against_ground_truth("gt_negate", x -> x + Int32(1); dir=gtdir)
             @test length(results) == 2
             if !results[1].skipped
                 @test !results[1].pass  # -5 != 6
@@ -4547,15 +4604,15 @@ begin
         @testset "generate_ground_truth — skip if exists" begin
             path = generate_ground_truth("gt_skip_test", x -> x, [
                 (Int32(1),),
-            ]; overwrite=true)
+            ]; overwrite=true, dir=gtdir)
             @test isfile(path)
             # Second call without overwrite should not error
             path2 = generate_ground_truth("gt_skip_test", x -> x, [
                 (Int32(999),),
-            ])
+            ]; dir=gtdir)
             @test path == path2
             # Original data should be preserved
-            snapshot = load_ground_truth("gt_skip_test")
+            snapshot = load_ground_truth("gt_skip_test"; dir=gtdir)
             @test snapshot["entries"][1]["expected"] == 1  # not 999
         end
 
