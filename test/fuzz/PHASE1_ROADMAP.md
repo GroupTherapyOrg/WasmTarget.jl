@@ -132,13 +132,29 @@ args and return values. Requires **oracle marshalling of structs** (3E). Then pa
 structs (generate type params), mutable vs immutable, inner constructors. The runtests
 suite already exercises hand-written structs — fold that knowledge into the generator.
 
-### 3E. The oracle / marshalling bridge (the gating constraint)
-The native-vs-wasm bridge currently round-trips scalars + vectors. To test 3A–3D it must
-encode/decode **arbitrary supported types** across the Node boundary: structs (by field),
-tuples/namedtuples, nested collections, dicts. Plus semantics: **mutation** (does wasm mutate
-like native for `!`-functions?), throw/trap parity, and the numeric edge cases (NaN, ±0, Inf,
-BigInt) already partly handled in `vals_match` / the JS `enc`. **This is the pacing item** —
-no generation layer is real until the oracle can compare its values.
+### 3E. The oracle / marshalling bridge (the gating constraint) — CONCRETE DESIGN
+The native-vs-wasm bridge currently round-trips scalars + vectors via JSON text — which the
+JSON-0.21 incident (gap `fa64c0d70add`) proved is a soundness hazard: any value that crosses
+as decimal text inherits the serializer's semantics. The replacement (`bridge.jl`, M1) is a
+**type-directed, bit-exact accessor bridge**:
+
+- **Descriptor**: from the static return type `T`, Julia computes a JSON descriptor tree
+  (ints/Bool raw, floats as `reinterpret` BITS, Char as codepoint, String as codeunits,
+  Tuple/NamedTuple/struct as field lists, Vector as len+get — recursively).
+- **Accessor closure**: the minimal set of getter fns the descriptor needs (`getfield`
+  wrappers, `_len`/`_get` per concrete Vector type, `_bits_f64`, `_scu` string codeunits…)
+  is `@eval`-generated (memoized per type), compiled ALONGSIDE the target via
+  `compile_multi((fn, args, mangled_name))`, and driven by ONE generic JS walker.
+- **Comparison**: the Julia side walks the same descriptor against the NATIVE value —
+  no reconstruction, no text. All numeric policy (NaN classes equal, ULP tolerance for
+  transcendentals) lives in one auditable comparator, decoupled from transport.
+- Accessor codegen is itself WasmTarget output — a bug there surfaces as a systematic,
+  classified failure (it is part of the compiler under test, not a hidden oracle dependency).
+
+Then: **mutation parity** (M2: re-read `!`-function args through the same bridge after the
+call), throw/trap parity (already classified), and constructor wrappers so structs/tuples can
+also be passed IN as arguments. **This is the pacing item** — no generation layer is real
+until the oracle can compare its values.
 
 ### 3F. try/catch & error paths
 Generate code that may throw (div-by-zero, bounds, conversion, `error(...)`) wrapped in
@@ -169,16 +185,33 @@ path (scalar, natural/vector, struct, control-flow) runs the dual check, not jus
 
 ---
 
-## 5. Suggested sequencing
+## 5. Milestones (sequenced; 1–2 are DONE)
 
-1. **Unblock the gate** (Section 2) — diagnose, make deterministic, commit the robust suite
-   (runtests sharding + serial fuzz, `wasm_runner` retry, `run.jl` ratchet, workload,
-   ledger). Fix-forward the flaky threaded commit `3fca4b2`.
-2. **Oracle breadth first** (3E) — it's the constraint; expand it before chasing generators.
-3. **Type-directed generator core** (3A) + **catalogue** (3B) on top of the broadened oracle.
-4. **Control flow** (3C), then **structs/parametric** (3D), then **try/catch** (3F),
-   keeping **wasm-opt dual** (3G) on every path.
-5. **Scale the discovery tier** (Section 4) and let it run; triage the gap stream into Phase 2.
+1. ~~**Unblock the gate** (Section 2)~~ — DONE (`db518dd`): JSON-0.21 decode corruption
+   root-caused, pinned `JSON = "1"`, same verdict everywhere, suite committed green.
+   ~~Speed~~ — DONE (`5631cf9`): LPT phase-packing + overlapped fuzz pass, 4:34 → ~2:24.
+2. **M1 — typed bit-exact bridge for RETURN values** (3E): descriptor + accessor closure +
+   JS walker + structural comparator. Universe: all int widths, Float32/64, Bool, Char,
+   String, Tuple, NamedTuple, plain+nested+parametric structs, Vector{T} (nested).
+   Validated by a standalone round-trip test file before the differential adopts it.
+3. **M2 — argument side + mutation parity**: constructor wrappers marshal the same universe
+   IN; `mutates`-tagged ops re-read their args through the bridge post-call and compare
+   against native's post-call args.
+4. **M3 — type universe + per-module catalogue** (3A/3B): catalogue files split by Base
+   module, entries tagged `can_throw`/`mutates`/version bounds (the version tags are what
+   make Phase 3 (julia 1.13) a catalogue DIFF, and Phase 4 (Statistics/LinearAlgebra…)
+   just additional catalogue files). Struct POOL: K random struct types pre-`eval`d per
+   sweep seed (world-age-safe), then used as ordinary types by the generator.
+5. **M4 — statement layer** (3C): type-directed blocks — `let`, `if`/ternary/short-circuit,
+   `while`/`for` with accumulators, comprehensions, early `return`.
+6. **M5 — try/catch** (3F): provoke throw-tagged catalogue ops under `try/catch/finally`;
+   assert parity on BOTH the value path and the caught path.
+7. **M6 — discovery scale + the Phase-1-complete artifact** (Section 4): process-parallel
+   sweep driver (reuse WT_SHARD pattern); structural (canonicalized-expr) known-gap matching;
+   gap dedup by normalized minimal body; and a generated **coverage matrix report**
+   (op × verified-passing / ledgered-gap / unsupported). *Phase 1 is checked off when every
+   catalogue row is non-empty and the matrix is regenerated by one command* — the matrix is
+   then Phase 2's checklist, worked gap-by-gap from the ledger.
 
 ## 6. Definition of done (Phase 1)
 - One command runs a **deterministic, green** bounded gate on every commit in ~minutes;
