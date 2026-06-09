@@ -157,29 +157,35 @@ Send a driver script (async-fn body returning a results array, with `bytes` in
 scope) to a free worker and collect its response. Self-heals on timeout/crash.
 """
 function run_driver(pool::RunnerPool, wasmHex::AbstractString, src::AbstractString;
-                    deadline::Real = 8.0, ninputs::Int = 1)
+                    deadline::Real = 8.0, ninputs::Int = 1, retries::Int = 2)
     w = take!(pool.free)                          # acquire (blocks if all busy)
-    restart = false
     try
         req = JSON.json(Dict("id" => 1, "wasmHex" => wasmHex, "src" => src))
-        println(w.proc, req)
-        flush(w.proc)
-        line = _read_deadline(w, deadline)
-        if line === nothing                        # timeout or worker crash
-            restart = true
-            return (:ok, Any[Dict("trap" => "timeout") for _ in 1:ninputs])
+        for attempt in 0:retries
+            println(w.proc, req)
+            flush(w.proc)
+            line = _read_deadline(w, deadline)
+            if line === nothing                    # timeout or worker crash
+                # A timeout is ambiguous: a genuinely hung wasm (a REAL divergence —
+                # native terminates) OR a CPU-starved worker under load (infrastructure
+                # artifact). Retry on a fresh worker; a real hang times out every attempt,
+                # a load blip clears. Only after exhausting retries do we report the trap.
+                w = _replace_worker!(pool, w)
+                attempt < retries && continue
+                return (:ok, Any[Dict("trap" => "timeout") for _ in 1:ninputs])
+            end
+            resp = try
+                JSON.parse(line)
+            catch e
+                w = _replace_worker!(pool, w)
+                return (:error, "bad-response: $(e)")
+            end
+            haskey(resp, "error") && return (:error, String(resp["error"]))
+            return (:ok, resp["results"]::AbstractVector)
         end
-        resp = try JSON.parse(line) catch e; restart = true; return (:error, "bad-response: $(e)") end
-        if haskey(resp, "error")
-            return (:error, String(resp["error"]))
-        end
-        return (:ok, resp["results"]::AbstractVector)
+        return (:ok, Any[Dict("trap" => "timeout") for _ in 1:ninputs])
     finally
-        if restart
-            put!(pool.free, _replace_worker!(pool, w))
-        else
-            put!(pool.free, w)
-        end
+        put!(pool.free, w)                          # `w` is always the current (live) worker
     end
 end
 

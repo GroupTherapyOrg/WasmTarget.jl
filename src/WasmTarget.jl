@@ -1,5 +1,7 @@
 module WasmTarget
 
+using PrecompileTools: @setup_workload, @compile_workload
+
 # Builder - Low-level Wasm binary emitter
 include("builder/types.jl")
 include("builder/writer.jl")
@@ -361,6 +363,55 @@ function validate_wasm_bytes(bytes::Vector{UInt8}; label::AbstractString="module
         ok || throw(WasmValidationError("wasm-tools rejected the emitted $label", String(take!(err))))
     end
     return bytes
+end
+
+# ── Precompile workload ──────────────────────────────────────────────────────
+# `compile(f, types)` JIT-compiles the WasmInterpreter + codegen for that
+# signature. The test suite's wall-time is dominated by paying that JIT warmup at
+# runtime (Julia's global codegen lock serializes it, so threads can't hide it).
+# Exercising representative signatures HERE bakes those compiler method instances
+# into the `.ji` cache — the warmup is paid once at `]precompile` and is ~free on
+# every cached run. Compile-only (no Node, no binaryen). Each call is guarded so a
+# value-stub on some path can never break precompilation.
+struct _PCStruct; a::Int32; b::Float64; end
+_pc_iadd(x::Int64)            = x + Int64(1)
+_pc_imix(x::Int64)           = ((x * Int64(3)) ÷ Int64(2)) % Int64(7) | Int64(1)
+_pc_i32(x::Int32)            = (x * Int32(3)) % Int32(7)
+_pc_fmath(x::Float64)        = sin(x) + sqrt(abs(x)) * 2.0 - cos(x)
+_pc_fmix(x::Float64)         = (x * 2.0 + 1.0) / (abs(x) + 1.0)
+_pc_conv(x::Int64)           = Float64(x) * 1.5
+_pc_cond(x::Int64)           = x > Int64(0) ? x * Int64(2) : -x
+_pc_loop(n::Int64)           = (s = Int64(0); i = Int64(1); while i <= n; s += i; i += Int64(1); end; s)
+_pc_rec(n::Int64)            = n <= Int64(1) ? Int64(1) : n * _pc_rec(n - Int64(1))
+_pc_vsort(v::Vector{Int64})    = sort(v)
+_pc_vsum(v::Vector{Float64})   = sum(v)
+_pc_vmap(v::Vector{Int64})     = map(y -> y * Int64(2), v)
+_pc_vfilter(v::Vector{Int64})  = filter(y -> y > Int64(0), v)
+_pc_vreduce(v::Vector{Int64})  = reduce(min, v)
+_pc_vstat(v::Vector{Int64})    = maximum(v) + length(v) + (isempty(v) ? Int64(0) : first(v))
+_pc_dict(x::Int64)           = get(Dict(Int64(0) => Int64(1), Int64(1) => Int64(2)), x, Int64(0))
+_pc_set(x::Int64)            = length(Set([x, x, x + Int64(1)]))
+_pc_strlen(x::Int64)         = length(string(x))
+_pc_strup(s::String)         = length(uppercase(s))
+_pc_struct(x::Int32)         = (s = _PCStruct(x, 1.5); s.a + Int32(s.b))
+_pc_tuple(x::Int64)          = (t = (x, x + Int64(1), x + Int64(2)); t[1] + t[3])
+
+@setup_workload begin
+    @compile_workload begin
+        for (f, ts) in (
+            (_pc_iadd, (Int64,)), (_pc_imix, (Int64,)), (_pc_i32, (Int32,)),
+            (_pc_fmath, (Float64,)), (_pc_fmix, (Float64,)), (_pc_conv, (Int64,)),
+            (_pc_cond, (Int64,)), (_pc_loop, (Int64,)), (_pc_rec, (Int64,)),
+            (_pc_dict, (Int64,)), (_pc_set, (Int64,)),
+            (_pc_strlen, (Int64,)), (_pc_strup, (String,)),
+            (_pc_struct, (Int32,)), (_pc_tuple, (Int64,)),
+            (_pc_vsort, (Vector{Int64},)), (_pc_vsum, (Vector{Float64},)),
+            (_pc_vmap, (Vector{Int64},)), (_pc_vfilter, (Vector{Int64},)),
+            (_pc_vreduce, (Vector{Int64},)), (_pc_vstat, (Vector{Int64},)),
+        )
+            try; compile(f, ts; validate=false); catch; end
+        end
+    end
 end
 
 end # module

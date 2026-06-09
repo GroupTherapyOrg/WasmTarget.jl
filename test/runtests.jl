@@ -1,28 +1,78 @@
-# ── Parallel test execution via threads ──────────────────────────────────────
+# ── Parallel test execution via process sharding ─────────────────────────────
 # The codegen suite is compile-bound. The ~80 Phase testsets are independent, so
-# we run them on N THREADS in ONE process — sharing the (large, one-time) JIT
-# warmup of the WasmTarget compiler, which a multi-PROCESS approach would pay N
-# times. Each phase is a lazily-compiled top-level function (see @pphase), so
-# `Threads.@spawn pf()` just calls it on a worker thread (no closure capturing
-# top-level `function`/`struct` defs) and the thread-safe compiler (task-local
-# per-compile state) lets them run concurrently. `Sys.CPU_THREADS` under-reports
-# on Apple Silicon (only performance cores: 4 of 10 on an M-series), so read the
-# true logical-CPU count via sysctl and relaunch with `true-2` threads if started
-# under-threaded. WT_NO_THREADS=1 forces serial.
+# we run them across N worker PROCESSES, each compiling a disjoint shard. PROCESSES
+# (not threads) for ROBUSTNESS: the wasm compiler keeps shared mutable state that
+# races under threads (intermittent test errors); process isolation eliminates it.
+# This is only fast because two other pieces remove the per-process penalties:
+#   • each Phase is a LAZILY-compiled function (see @pphase) → a worker JIT-compiles
+#     ONLY its 1/N shard, not all 80;
+#   • PrecompileTools workload (src/WasmTarget.jl) bakes the wasm-compiler's JIT
+#     warmup into the .ji cache → workers load it warm instead of re-JITting.
+# `Sys.CPU_THREADS` under-reports on Apple Silicon (only perf cores: 4 of 10 on an
+# M-series), so read the true logical-CPU count via sysctl. WT_NO_SHARD=1 = serial.
 function _wt_logical_cpus()
     if Sys.isapple()
         try; return parse(Int, strip(read(`sysctl -n hw.ncpu`, String))); catch; end
     end
     return Sys.CPU_THREADS
 end
-let want = max(1, _wt_logical_cpus() - 2)
-    if Threads.nthreads() < want && get(ENV, "WT_THREADS_SET", "") != "1" && get(ENV, "WT_NO_THREADS", "") != "1"
-        @info "Relaunching test suite with $want threads (started with $(Threads.nthreads()))"
-        cmd = addenv(`$(Base.julia_cmd()) --threads=$want --project=$(Base.active_project()) $(@__FILE__)`,
-                     "WT_THREADS_SET" => "1")
-        exit(run(ignorestatus(cmd); wait=true).exitcode)
+# A child process runs either ONE codegen shard (WT_SHARD="i,N") or the fuzz pass
+# (WT_FUZZ=1). The orchestrator (neither var set) spawns both phases below.
+if get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_FUZZ", "") != "1" && get(ENV, "WT_NO_SHARD", "") != "1"
+    nshards = max(1, min(_wt_logical_cpus() - 2, 16))
+    if nshards > 1
+        @info "Sharding test suite across $nshards worker processes (+ 1 contention-free fuzz pass)"
+        proj, file = Base.active_project(), @__FILE__
+        logdir = mktempdir()
+        _spawn(envpair, lf) = run(pipeline(ignorestatus(addenv(`$(Base.julia_cmd()) --project=$proj $file`, envpair));
+                          stdout=lf, stderr=lf); wait=false)
+        # ── Phase A: codegen shards run CONCURRENTLY (compile-bound; little Node use) ──
+        # Capture each worker to its own log (a shared stdout interleaves + buffers
+        # away on exit), so a failing shard's error is actually visible.
+        procs = map(0:nshards-1) do i
+            lf = joinpath(logdir, "shard_$i.log")
+            (i, lf, _spawn("WT_SHARD" => "$i,$nshards", lf))
+        end
+        codes = map(procs) do triple
+            i, lf, p = triple
+            wait(p)
+            lines = isfile(lf) ? split(read(lf, String), '\n') : String[]
+            if p.exitcode != 0
+                println("════ shard $i FAILED (exit $(p.exitcode)) ════")
+                println(join(last(lines, 35), '\n'))
+            else
+                for ln in lines; occursin("WasmTarget.jl |", ln) && println("  shard $i: ", strip(ln)); end
+            end
+            p.exitcode
+        end
+        # ── Phase B: differential fuzz runs ALONE, AFTER the codegen shards join. ──
+        # Running it under codegen contention starves its Node workers past the watchdog
+        # deadline; those timeouts get classified as wasm `:trap`s → flaky false
+        # counterexamples. A dedicated serial pass gives the fuzz pool the whole machine,
+        # so a reported divergence is real. (Assignment-free exit accounting below: the
+        # earlier `failed = true` inside a `for` was soft-scoped to a NEW local, so shard
+        # failures never reached `exit` — the suite went green on a failing shard.)
+        println("──── differential fuzz (serial, contention-free) ────")
+        flf = joinpath(logdir, "fuzz.log")
+        fp = _spawn("WT_FUZZ" => "1", flf)
+        wait(fp)
+        flines = isfile(flf) ? split(read(flf, String), '\n') : String[]
+        if fp.exitcode != 0
+            println("════ fuzz FAILED (exit $(fp.exitcode)) ════")
+            println(join(last(flines, 45), '\n'))
+        else
+            for ln in flines; occursin("Differential fuzz", ln) && println("  ", strip(ln)); end
+        end
+        exit((any(!=(0), codes) || fp.exitcode != 0) ? 1 : 0)
     end
 end
+const (_WT_SHARD, _WT_NSHARDS) = let s = get(ENV, "WT_SHARD", "")
+    isempty(s) ? (0, 1) : (parse(Int, split(s, ",")[1]), parse(Int, split(s, ",")[2]))
+end
+_wt_fuzz() = get(ENV, "WT_FUZZ", "") == "1"          # the dedicated serial fuzz pass
+_wt_shard0() = _WT_SHARD == 0 && !_wt_fuzz()         # run-once Aqua/QA only on codegen shard 0
+# Fuzz runs in its own pass (WT_FUZZ=1) OR inline when not sharding (serial fallback).
+_wt_run_fuzz() = _wt_fuzz() || (get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_NO_SHARD", "") == "1")
 
 using WasmTarget
 using WasmTarget: to_bytes_mvp_i64, to_bytes_mvp_flex
@@ -35,7 +85,7 @@ using Test
 
 # Package-level QA runs first so structural failures surface
 # before the ~hour-long codegen suite spins up. (Shard 0 only — it's process-wide.)
-include("test_aqua.jl")
+_wt_shard0() && include("test_aqua.jl")
 
 include("utils.jl")
 
@@ -54,6 +104,11 @@ struct TestLine; p1::TestPoint2D; p2::TestPoint2D; end
 @generated function f_gen(x)
     x <: Int64 ? :(x * Int64(2)) : :(x * 3.0)
 end
+
+# Phase 37's subtype helpers (structs + ~1800 lines) — included at MODULE level so
+# their bindings exist before any phase function runs (avoids world-age under the
+# lazy-phase compilation model).
+include("helpers/subtype.jl")
 
 # Each top-level Phase testset is `@pphase "name" begin … end`. CRITICAL for speed:
 # the macro wraps the body in a uniquely-named TOP-LEVEL function and registers it,
@@ -74,39 +129,13 @@ macro pphase(name, body)
         push!(_PHASES, ($(esc(name)), $(esc(fname))))
     end
 end
-# Run the Phases this process owns (round-robin by registration order → identical
-# assignment across worker processes). Called inside the `@testset "WasmTarget.jl"`.
+# Run the Phases this process owns: round-robin by registration order, so the
+# assignment is identical and disjoint across worker processes. A skipped phase's
+# function is never CALLED → never JIT-compiled (the lazy-compile win). Called
+# inside the `@testset "WasmTarget.jl"` block.
 function _run_phases()
-    parent = Test.get_testset()
-    if Threads.nthreads() == 1
-        for (_, pf) in _PHASES; pf(); end          # serial fallback
-        return
-    end
-    # Spawn each phase onto a worker thread, running its testset into a private
-    # local-root (so concurrent `record!`s never share a set); then splice the
-    # roots into the parent sequentially. Phase functions compile lazily and the
-    # compiler is thread-safe (task-local per-compile state), so this parallelizes
-    # the compile-bound work while sharing the one-time JIT warmup.
-    tasks = map(_PHASES) do (name, pf)
-        Threads.@spawn begin
-            root = Test.DefaultTestSet("__pp__")
-            Test.push_testset(root)
-            try
-                pf()
-            catch e
-                Test.record(root, Test.Error(:nontest_error, Symbol(name), e,
-                                             Base.current_exceptions(), LineNumberNode(0)))
-            finally
-                Test.pop_testset()
-            end
-            root
-        end
-    end
-    for t in tasks
-        root = fetch(t)
-        for child in root.results
-            Test.record(parent, child)
-        end
+    for (i, (_, pf)) in enumerate(_PHASES)
+        ((i - 1) % _WT_NSHARDS == _WT_SHARD) && pf()
     end
 end
 
@@ -5285,9 +5314,9 @@ begin
     # Phase 37: Subtype Checking (PURE-9064)
     # ========================================================================
     @pphase "Phase 37: Subtype Checking (PURE-9064)" begin
-
-        include("helpers/subtype.jl")
-
+        # helpers/subtype.jl is included at MODULE level (see top) so its defs exist
+        # in an earlier world than this phase function — `include` here would define
+        # them too late (world-age error under lazy-phase compilation).
         @testset "wasm_subtype compiles for concrete DataType pairs" begin
             # Test wrapper functions that call _datatype_subtype
             function ws_int_num()::Int32
@@ -10313,10 +10342,14 @@ console.log(JSON.stringify({
 
 end  # end of phase-registration block
 
-@testset "WasmTarget.jl" begin
-    _run_phases()   # runs only this process's shard of the 80 registered phases
+# The dedicated fuzz pass (WT_FUZZ=1) skips the codegen phases entirely — it exists
+# only to run the differential fuzz alone, contention-free.
+if !_wt_fuzz()
+    @testset "WasmTarget.jl" begin
+        _run_phases()   # runs only this process's shard of the 80 registered phases
+    end
 end
 
 # Bounded differential fuzz (native-vs-wasm over generated compositions) + corpus replay.
-# Shard 0 only — it's process-wide and runs its own Node pool.
-include("fuzz_suite.jl")
+# Runs in its own contention-free pass (WT_FUZZ=1), or inline in the serial fallback.
+_wt_run_fuzz() && include("fuzz_suite.jl")
