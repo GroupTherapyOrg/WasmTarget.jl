@@ -23,7 +23,10 @@ const FUZZ_DIR = @__DIR__
 include(joinpath(FUZZ_DIR, "harness.jl"));     using .FuzzHarness
 include(joinpath(FUZZ_DIR, "bridge.jl"));      using .FuzzBridge
 include(joinpath(FUZZ_DIR, "bridge_args.jl")); using .FuzzBridgeArgs
+include(joinpath(FUZZ_DIR, "catalogue.jl"));   using .FuzzCatalogue
+include(joinpath(FUZZ_DIR, "structpool.jl"));  using .FuzzStructPool
 include(joinpath(FUZZ_DIR, "generators.jl"));  using .FuzzGen
+FuzzStructPool.build_pool!()   # deterministic (seeded) — same pool every process
 include(joinpath(FUZZ_DIR, "property.jl"));     using .FuzzProperty
 include(joinpath(FUZZ_DIR, "ledger.jl"));       using .Ledger
 
@@ -31,49 +34,43 @@ const CORPUS_DIR = joinpath(FUZZ_DIR, "corpus")
 
 # --- Build a self-contained reproducer for a gap ----------------------------
 # Contract: the snippet THROWS while the gap is present and RUNS CLEANLY once
-# fixed. The match logic mirrors FuzzProperty.classify so reproducers stay
-# faithful while depending only on WasmTarget + the harness.
-function _reproducer(o::Outcome, ::Type{T0}, body) where {T0}
-    inp = o.input === nothing ? "0" : repr(o.input[1])
+# fixed. Universal across the whole universe: args/results cross via the
+# bit-exact bridge, pool-struct types are rebuilt deterministically, and
+# mutation parity is re-checked for mutable arguments.
+function _reproducer(o::Outcome, ::Type{T0}, body; var::Symbol = :x) where {T0}
+    bodystr = FuzzGen._body_repr(body)
     if o.category === :compile_error
         return """
         using WasmTarget
-        repro(x::$(T0)) = $(body)
-        WasmTarget.compile(repro, ($(T0),))   # raises while the value-stub gap is present
+        include(joinpath("test", "fuzz", "structpool.jl")); using .FuzzStructPool
+        FuzzStructPool.build_pool!()
+        repro($(var)::$(T0)) = $(bodystr)
+        WasmTarget.compile(repro, ($(T0),))   # raises while the gap is present
         """
     end
-    # `:optimizer_unsound` — raw matches native but a binaryen build (detail[2] =
-    # :size/:speed) diverges; reproduce against THAT optimized build.
-    optkw = o.category === :optimizer_unsound ? "; opt=$(repr(o.detail[2]))" : ""
+    inp = o.input === nothing ? "0" : repr(o.input[1])
+    optkw = o.category === :optimizer_unsound ? ", opt=$(repr(o.detail[2]))" : ""
     tag = o.category === :optimizer_unsound ? " (wasm-opt $(o.detail[2]))" : ""
     return """
     using WasmTarget
-    include(joinpath("test", "fuzz", "harness.jl")); using .FuzzHarness
-    repro(x::$(T0)) = $(body)
-    _m(a, b) = (a isa AbstractFloat || b isa AbstractFloat) ?
-        ((isnan(a) && isnan(b)) || (isinf(a) && isinf(b) && sign(a) == sign(b)) ||
-         a == b || isapprox(float(a), float(b); rtol = 1e-9, atol = 1e-12)) : (a == b)
+    include(joinpath("test", "fuzz", "harness.jl"));     using .FuzzHarness
+    include(joinpath("test", "fuzz", "bridge.jl"));      using .FuzzBridge
+    include(joinpath("test", "fuzz", "bridge_args.jl")); using .FuzzBridgeArgs
+    include(joinpath("test", "fuzz", "structpool.jl"));  using .FuzzStructPool
+    FuzzStructPool.build_pool!()
+    repro($(var)::$(T0)) = $(bodystr)
     _x = $(inp)
-    _threw = try repro(_x); false catch; true end
-    _r = FuzzHarness.compile_and_run(repro, ($(T0),), [(_x,)]$(optkw))[1]
-    _ok = _threw ? (_r[1] === :trap) : (_r[1] === :ok && _m(repro(_x), _r[2]))
-    _ok || error("WasmTarget gap$(tag) @ x=\$_x : native=\$(_threw ? :throw : repro(_x)) wasm=\$_r")
+    _c = deepcopy(_x)
+    _nat = try (:ok, repro(_c)) catch e (:throw, e) end
+    _rt = Base.widenconst(Base.code_typed(repro, ($(T0),))[1][2])
+    _res = FuzzBridgeArgs.bridge_run_args(repro, ($(T0),), [(deepcopy(_x),)]; rettype = _rt$(optkw))[1]
+    _pd = FuzzBridgeArgs.ismutable_shape($(T0)) ? FuzzBridge.descriptor($(T0))[1] : nothing
+    _ok = _nat[1] === :throw ? (_res[1] === :trap) :
+        (_res[1] === :ok &&
+         FuzzBridge.tree_matches(FuzzBridge.descriptor(_rt)[1], _nat[2], _res[2]) &&
+         (_pd === nothing || FuzzBridge.tree_matches(_pd, _c, _res[3][1])))
+    _ok || error("WasmTarget gap$(tag) @ x=\$_x : native=\$(_nat[1] === :throw ? :throw : _nat[2]) wasm=\$(_res[1]) \$(_res[2])")
     """
-end
-
-function _record!(o::Outcome, ::Type{T0}, body; run_id) where {T0}
-    construct = "$(o.category): `$(body)` :: $(T0)"
-    loc = "test/fuzz (generated)"
-    diag = if o.category === :compile_error
-        sprint(showerror, o.detail)
-    else
-        nat = o.native === nothing ? "?" : (o.native[1] === :throw ? "throw $(typeof(o.native[2]))" : repr(o.native[2]))
-        wsm = o.wasm === nothing ? "?" : (o.wasm[1] === :trap ? "trap" : repr(o.wasm[2]))
-        "at x=$(o.input === nothing ? "?" : repr(o.input[1])): native=$nat  wasm=$wsm"
-    end
-    g = Ledger.Gap(o.category, o.category, construct, loc, "repro", "($(T0),)",
-                   _reproducer(o, T0, body), diag)
-    return Ledger.record_gap!(g; run_id = run_id)
 end
 
 # --- Discovery --------------------------------------------------------------
@@ -109,32 +106,8 @@ function run_fuzz(; types = (Int64, Float64), depth = 3, max_examples = 200, see
     println("ledger: $(length(op)) open gap(s) → test/fuzz/failures/INDEX.md")
 end
 
-# --- Natural-signature discovery (Vector args via the marshalling bridge) ----
-function _reproducer_natural(o::Outcome, ::Type{IN}, body) where {IN}
-    inp = o.input === nothing ? "$(IN)()" : repr(o.input[1])
-    optkw = o.category === :optimizer_unsound ? "; opt=$(repr(o.detail[2]))" : ""
-    tag = o.category === :optimizer_unsound ? " (wasm-opt $(o.detail[2]))" : ""
-    return """
-    using WasmTarget
-    include(joinpath("test", "fuzz", "harness.jl")); using .FuzzHarness
-    repro(v::$(IN)) = $(body)
-    function _m(a, b)
-        if a isa AbstractVector && b isa AbstractVector
-            length(a) == length(b) || return false
-            return all(_m(x, y) for (x, y) in zip(a, b))
-        elseif a isa AbstractFloat || b isa AbstractFloat
-            return (isnan(a) && isnan(b)) || (isinf(a) && isinf(b) && sign(a) == sign(b)) ||
-                   a == b || isapprox(float(a), float(b); rtol = 1e-9, atol = 1e-12)
-        end
-        return a == b
-    end
-    _v = $(inp)
-    _nat = try (true, repro(deepcopy(_v))) catch; (false, nothing) end   # deepcopy: don't let mutation alias wasm's input
-    _r = FuzzHarness.compile_and_run_vec(repro, ($(IN),), [(deepcopy(_v),)]$(optkw))[1]
-    _ok = _nat[1] ? (_r[1] === :ok && _m(_nat[2], _r[2])) : (_r[1] === :trap)
-    _ok || error("WasmTarget gap$(tag) @ v=\$_v : native=\$(_nat[1] ? _nat[2] : :throw) wasm=\$_r")
-    """
-end
+# --- Natural-signature discovery (any supported arg type via the bridge) -----
+_reproducer_natural(o::Outcome, ::Type{IN}, body) where {IN} = _reproducer(o, IN, body; var = :v)
 
 function _record_natural!(o::Outcome, ::Type{IN}, ::Type{RET}, body; run_id) where {IN,RET}
     construct = "$(o.category): `$(body)` :: $(IN)→$(RET)"

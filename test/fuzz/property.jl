@@ -124,6 +124,18 @@ function differential(body, ::Type{T0}; check_opt::Bool = false) where {T0}
     fn, _, src = make_function(body, T0)
     samples = sample_inputs(T0)
 
+    # Full-bridge path (args AND results bit-exact, mutation parity) whenever
+    # the signature is inside the bridge universe — which covers every type the
+    # generator can request, including pool structs / tuples / Char args.
+    rt0 = try
+        Base.widenconst(only(Base.code_typed(fn, (T0,); optimize = true))[2])
+    catch
+        nothing
+    end
+    if rt0 isa Type && isconcretetype(rt0) && bridge_supported(rt0) && args_supported(T0)
+        return _differential_args(fn, (T0,), samples, body, src, rt0; check_opt = check_opt)
+    end
+
     natives = map(samples) do tup
         try
             (:ok, Base.invokelatest(fn, tup...))
@@ -136,7 +148,7 @@ function differential(body, ::Type{T0}; check_opt::Bool = false) where {T0}
     # bridge universe (it always is for today's scalar generator — this RETIRES
     # the JSON-decimal-text result path); legacy JSON transport otherwise.
     rt = try
-        only(Base.code_typed(fn, (T0,); optimize = true))[2]
+        Base.widenconst(only(Base.code_typed(fn, (T0,); optimize = true))[2])
     catch
         nothing
     end
@@ -177,7 +189,7 @@ function differential_natural(body, ::Type{IN}; var::Symbol = :v, check_opt::Boo
     samples = vector_inputs(eltype(IN))
 
     rt = try
-        only(Base.code_typed(fn, (IN,); optimize = true))[2]
+        Base.widenconst(only(Base.code_typed(fn, (IN,); optimize = true))[2])
     catch
         nothing
     end

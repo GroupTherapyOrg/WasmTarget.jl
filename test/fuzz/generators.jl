@@ -22,122 +22,18 @@ export gen_natural, make_function_natural, vector_inputs
 
 using Supposition
 using Supposition: Data
+# The op catalogue (tagged, per-module data — see catalogue.jl) and the seeded
+# struct pool are the two halves of the type universe this generator walks.
+using ..FuzzCatalogue
+using ..FuzzCatalogue: CatEntry
+using ..FuzzStructPool
 
-# A function-typed argument slot: a generated unary lambda `param -> <ret expr>`.
-struct Fn
-    param::Type
-    ret::Type
-end
-
-# A binary-operator argument slot (for reduce/foldl): renders as a bare op symbol.
-struct BinOp end
-
-const VInt   = Vector{Int64}
-const VFloat = Vector{Float64}
-const DictII = Dict{Int64,Int64}
-const SetI   = Set{Int64}
-
-# --- Op tables: (name, argtypes::Tuple{Union{Type,Fn}...}, rettype) ---------
-const _CONCRETE_OPS_REFERENCE = Any[   # superseded by _build_param_ops(); kept for reference
-    # ---- Int64 scalar (Numeric) ----
-    (:+, (Int64, Int64), Int64), (:-, (Int64, Int64), Int64), (:*, (Int64, Int64), Int64),
-    (:abs, (Int64,), Int64), (:sign, (Int64,), Int64), (:-, (Int64,), Int64),
-    (:min, (Int64, Int64), Int64), (:max, (Int64, Int64), Int64),
-    (:div, (Int64, Int64), Int64), (:rem, (Int64, Int64), Int64), (:mod, (Int64, Int64), Int64),
-    (:fld, (Int64, Int64), Int64), (:cld, (Int64, Int64), Int64),
-    (:gcd, (Int64, Int64), Int64), (:lcm, (Int64, Int64), Int64),
-    (:clamp, (Int64, Int64, Int64), Int64), (:^, (Int64, Int64), Int64),
-    (:zero, (Int64,), Int64), (:one, (Int64,), Int64), (:abs2, (Int64,), Int64),
-    (:&, (Int64, Int64), Int64), (:|, (Int64, Int64), Int64), (:xor, (Int64, Int64), Int64),
-    (:<<, (Int64, Int64), Int64), (:>>, (Int64, Int64), Int64), (:~, (Int64,), Int64),
-    # ---- Float64 scalar (Numeric + Math) ----
-    (:+, (Float64, Float64), Float64), (:-, (Float64, Float64), Float64),
-    (:*, (Float64, Float64), Float64), (:/, (Float64, Float64), Float64),
-    (:-, (Float64,), Float64), (:abs, (Float64,), Float64), (:sign, (Float64,), Float64),
-    (:min, (Float64, Float64), Float64), (:max, (Float64, Float64), Float64),
-    (:sqrt, (Float64,), Float64), (:cbrt, (Float64,), Float64), (:hypot, (Float64, Float64), Float64),
-    (:sin, (Float64,), Float64), (:cos, (Float64,), Float64), (:tan, (Float64,), Float64),
-    (:asin, (Float64,), Float64), (:acos, (Float64,), Float64), (:atan, (Float64,), Float64),
-    (:sinh, (Float64,), Float64), (:cosh, (Float64,), Float64), (:tanh, (Float64,), Float64),
-    (:exp, (Float64,), Float64), (:exp2, (Float64,), Float64), (:expm1, (Float64,), Float64),
-    (:log, (Float64,), Float64), (:log2, (Float64,), Float64), (:log10, (Float64,), Float64),
-    (:log1p, (Float64,), Float64),
-    (:sinpi, (Float64,), Float64), (:cospi, (Float64,), Float64),
-    (:deg2rad, (Float64,), Float64), (:rad2deg, (Float64,), Float64),
-    (:floor, (Float64,), Float64), (:ceil, (Float64,), Float64),
-    (:round, (Float64,), Float64), (:trunc, (Float64,), Float64),
-    (:copysign, (Float64, Float64), Float64), (:^, (Float64, Float64), Float64),
-    (:mod, (Float64, Float64), Float64), (:rem, (Float64, Float64), Float64),
-    (:clamp, (Float64, Float64, Float64), Float64), (:inv, (Float64,), Float64),
-    (:atan, (Float64, Float64), Float64),
-    # ---- Mixed-type conversions ----
-    (:Float64, (Int64,), Float64), (:float, (Int64,), Float64),
-    # ---- Bool (comparisons / predicates / logic) ----
-    (:(==), (Int64, Int64), Bool), (:(!=), (Int64, Int64), Bool),
-    (:<, (Int64, Int64), Bool), (:>, (Int64, Int64), Bool),
-    (:<=, (Int64, Int64), Bool), (:>=, (Int64, Int64), Bool),
-    (:iseven, (Int64,), Bool), (:isodd, (Int64,), Bool),
-    (:iszero, (Int64,), Bool), (:isone, (Int64,), Bool), (:signbit, (Int64,), Bool),
-    (:(==), (Float64, Float64), Bool), (:<, (Float64, Float64), Bool), (:>, (Float64, Float64), Bool),
-    (:isnan, (Float64,), Bool), (:isinf, (Float64,), Bool), (:isfinite, (Float64,), Bool),
-    (:iszero, (Float64,), Bool), (:signbit, (Float64,), Bool),
-    (:&, (Bool, Bool), Bool), (:|, (Bool, Bool), Bool), (:!, (Bool,), Bool), (:xor, (Bool, Bool), Bool),
-    # ---- Vector{Int64} → Vector{Int64} ----
-    (:sort, (VInt,), VInt), (:reverse, (VInt,), VInt), (:unique, (VInt,), VInt),
-    (:cumsum, (VInt,), VInt), (:map, (Fn(Int64, Int64), VInt), VInt),
-    (:filter, (Fn(Int64, Bool), VInt), VInt), (:push!, (VInt, Int64), VInt),
-    (:pushfirst!, (VInt, Int64), VInt),
-    # ---- Vector{Int64} → Int64 / Bool ----
-    (:sum, (VInt,), Int64), (:prod, (VInt,), Int64),
-    (:maximum, (VInt,), Int64), (:minimum, (VInt,), Int64),
-    (:length, (VInt,), Int64), (:first, (VInt,), Int64), (:last, (VInt,), Int64),
-    (:argmax, (VInt,), Int64), (:argmin, (VInt,), Int64),
-    (:count, (Fn(Int64, Bool), VInt), Int64),
-    (:any, (Fn(Int64, Bool), VInt), Bool), (:all, (Fn(Int64, Bool), VInt), Bool),
-    (:in, (Int64, VInt), Bool), (:isempty, (VInt,), Bool),
-    # ---- Vector{Float64} ----
-    (:sort, (VFloat,), VFloat), (:reverse, (VFloat,), VFloat),
-    (:map, (Fn(Float64, Float64), VFloat), VFloat),
-    (:sum, (VFloat,), Float64), (:prod, (VFloat,), Float64),
-    (:maximum, (VFloat,), Float64), (:minimum, (VFloat,), Float64),
-    (:length, (VFloat,), Int64),
-    # ---- String → String ----
-    (:uppercase, (String,), String), (:lowercase, (String,), String),
-    (:reverse, (String,), String), (:strip, (String,), String),
-    (:lstrip, (String,), String), (:rstrip, (String,), String),
-    (:chomp, (String,), String), (:titlecase, (String,), String),
-    (:uppercasefirst, (String,), String), (:lowercasefirst, (String,), String),
-    (:*, (String, String), String), (:string, (Int64,), String), (:string, (Float64,), String),
-    # ---- String → Int64 / Bool ----
-    (:length, (String,), Int64), (:ncodeunits, (String,), Int64),
-    (:isempty, (String,), Bool), (:isascii, (String,), Bool),
-    (:startswith, (String, String), Bool), (:endswith, (String, String), Bool),
-    (:contains, (String, String), Bool), (:occursin, (String, String), Bool),
-    (:cmp, (String, String), Int64),
-    # ---- Dict{Int64,Int64} (built internally) ----
-    (:length,  (DictII,),               Int64),
-    (:get,     (DictII, Int64, Int64),  Int64),   # get(d, key, default)
-    (:getindex,(DictII, Int64),         Int64),   # d[key] — KeyError if missing (oracle target)
-    (:haskey,  (DictII, Int64),         Bool),
-    (:isempty, (DictII,),               Bool),
-    # ---- Set{Int64} (built internally) ----
-    (:length,  (SetI,),                 Int64),
-    (:in,      (Int64, SetI),           Bool),
-    (:isempty, (SetI,),                 Bool),
-    # ---- Char ----
-    (:isdigit,      (Char,), Bool), (:isspace, (Char,), Bool), (:isletter, (Char,), Bool),
-    (:isuppercase,  (Char,), Bool), (:islowercase, (Char,), Bool), (:isascii, (Char,), Bool),
-    (:uppercase,    (Char,), Char), (:lowercase, (Char,), Char),
-    (:Int,          (Char,), Int64),
-    (:<,            (Char, Char), Bool), (:(==), (Char, Char), Bool),
-    # ---- Higher-order with binary op (reduce/foldl) ----
-    (:reduce, (BinOp(), VInt),   Int64),
-    (:foldl,  (BinOp(), VInt),   Int64),
-    (:reduce, (BinOp(), VFloat), Float64),
-]
+# Op tables live in FuzzCatalogue (tagged CatEntry data). OPS keeps the legacy
+# name for coverage reporting; entries still index like (name, argtypes, ret).
+const OPS = FuzzCatalogue.CATALOGUE
+const OPS_BY_RET = FuzzCatalogue.catalogue_by_ret()
 
 # --- Literal / leaf generators (edge-case biased), generic over the type lattice ---
-# Generic integer/float literals (edge values + random) for ALL widths.
 _lit(::Type{T}) where {T<:Integer} =
     Data.SampledFrom(T[zero(T), one(T), typemax(T), typemin(T), T(2)]) | Data.Integers{T}()
 _lit(::Type{T}) where {T<:AbstractFloat} =
@@ -153,137 +49,23 @@ _has_lit(::Type{Char})             = true
 _has_lit(::Type{String})           = true
 _has_lit(::Type)                   = false
 
-# --- Type lattice (the point of the apparatus: be GENERAL) ------------------
-const INT_TYPES   = (Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64)
-const SINT_TYPES  = (Int8, Int16, Int32, Int64)
-const FLOAT_TYPES = (Float32, Float64)
-const NUM_TYPES   = (INT_TYPES..., FLOAT_TYPES...)
-const VEC_ELT     = (Int64, Int32, Int8, Float64, Float32, Bool)
-const VEC_NUM     = (Int64, Int32, Int8, Float64, Float32)
-const SET_ELT     = (Int64, Int32, String)
-const DICT_KV     = ((Int64, Int64), (Int32, Int64), (Int64, Float64),
-                     (String, Int64), (Int64, String), (String, String))
-
-# Build the op table programmatically across the type lattice. Return types use
-# the natural choice; where Julia's promotion differs (e.g. sum), programs stay
-# valid via auto-promotion + conversion bridges, and the harness detects the real
-# return type via code_typed for marshalling — so the oracle remains sound.
-function _build_param_ops()
-    O = Any[]
-    add(n, a, r) = push!(O, (n, a, r))
-    for T in NUM_TYPES
-        add(:+, (T, T), T); add(:-, (T, T), T); add(:*, (T, T), T)
-        add(:min, (T, T), T); add(:max, (T, T), T); add(:abs, (T,), T); add(:sign, (T,), T)
-        add(:(==), (T, T), Bool); add(:(!=), (T, T), Bool)
-        add(:<, (T, T), Bool); add(:<=, (T, T), Bool); add(:>, (T, T), Bool)
-        add(:iszero, (T,), Bool)
-    end
-    for T in (SINT_TYPES..., FLOAT_TYPES...)
-        add(:-, (T,), T)            # unary negate (skip on unsigned to avoid wrap noise)
-    end
-    for T in INT_TYPES
-        add(:div, (T, T), T); add(:rem, (T, T), T); add(:mod, (T, T), T)
-        add(:&, (T, T), T); add(:|, (T, T), T); add(:xor, (T, T), T); add(:~, (T,), T)
-        add(:<<, (T, Int64), T); add(:>>, (T, Int64), T)
-        add(:isodd, (T,), Bool); add(:iseven, (T,), Bool)
-    end
-    for T in SINT_TYPES
-        add(:gcd, (T, T), T); add(:lcm, (T, T), T)
-    end
-    for T in FLOAT_TYPES
-        add(:/, (T, T), T); add(:hypot, (T, T), T); add(:copysign, (T, T), T); add(:^, (T, T), T)
-        add(:mod, (T, T), T); add(:rem, (T, T), T)
-        for u in (:sqrt, :cbrt, :sin, :cos, :tan, :asin, :acos, :atan, :sinh, :cosh, :tanh,
-                  :exp, :exp2, :expm1, :log, :log2, :log10, :log1p,
-                  :floor, :ceil, :round, :trunc, :inv, :sinpi, :cospi, :deg2rad, :rad2deg)
-            add(u, (T,), T)
-        end
-        add(:isnan, (T,), Bool); add(:isinf, (T,), Bool); add(:isfinite, (T,), Bool); add(:signbit, (T,), Bool)
-    end
-    # Conversions: bridge the lattice back to marshalable top types (Int64/Float64).
-    for T in (Int8, Int16, Int32, UInt8, UInt16, UInt32)
-        add(:Int64, (T,), Int64)            # safe widen
-    end
-    add(:signed, (UInt64,), Int64)          # lossless reinterpret
-    for T in INT_TYPES
-        add(:Float64, (T,), Float64); add(:Float32, (T,), Float32)
-    end
-    add(:Float64, (Float32,), Float64); add(:Float32, (Float64,), Float32)
-    # Bool logic
-    add(:&, (Bool, Bool), Bool); add(:|, (Bool, Bool), Bool); add(:!, (Bool,), Bool)
-    add(:xor, (Bool, Bool), Bool); add(:(==), (Bool, Bool), Bool)
-    # Vector{T} over varied element types
-    for T in VEC_ELT
-        VT = Vector{T}
-        add(:sort, (VT,), VT); add(:reverse, (VT,), VT); add(:unique, (VT,), VT)
-        add(:length, (VT,), Int64); add(:isempty, (VT,), Bool)
-        add(:map, (Fn(T, T), VT), VT); add(:filter, (Fn(T, Bool), VT), VT)
-        add(:first, (VT,), T); add(:last, (VT,), T)
-        add(:in, (T, VT), Bool); add(:count, (Fn(T, Bool), VT), Int64)
-        add(:any, (Fn(T, Bool), VT), Bool); add(:all, (Fn(T, Bool), VT), Bool)
-        add(:push!, (VT, T), VT); add(:pushfirst!, (VT, T), VT)
-        # NOTE: collect(Vector) omitted — lowers to a raw-pointer memmove foreigncall
-        # (unsupported for WasmGC arrays); real collect coverage needs ranges/generators
-        # (Part 2). See test/fuzz/FINDINGS.md.
-    end
-    for T in VEC_NUM
-        VT = Vector{T}
-        add(:sum, (VT,), T); add(:prod, (VT,), T)
-        add(:maximum, (VT,), T); add(:minimum, (VT,), T)
-        add(:reduce, (BinOp(), VT), T); add(:foldl, (BinOp(), VT), T)
-        add(:argmax, (VT,), Int64); add(:argmin, (VT,), Int64)
-    end
-    # Dict{K,V}
-    for (K, V) in DICT_KV
-        DT = Dict{K,V}
-        add(:length, (DT,), Int64); add(:isempty, (DT,), Bool)
-        add(:haskey, (DT, K), Bool); add(:get, (DT, K, V), V); add(:getindex, (DT, K), V)
-    end
-    # Set{T}
-    for T in SET_ELT
-        ST = Set{T}
-        add(:length, (ST,), Int64); add(:isempty, (ST,), Bool); add(:in, (T, ST), Bool)
-    end
-    # Char
-    for u in (:isdigit, :isspace, :isletter, :isuppercase, :islowercase, :isascii)
-        add(u, (Char,), Bool)
-    end
-    add(:uppercase, (Char,), Char); add(:lowercase, (Char,), Char); add(:Int, (Char,), Int64)
-    add(:<, (Char, Char), Bool); add(:(==), (Char, Char), Bool)
-    # String
-    for u in (:uppercase, :lowercase, :reverse, :strip, :lstrip, :rstrip,
-              :chomp, :titlecase, :uppercasefirst, :lowercasefirst)
-        add(u, (String,), String)
-    end
-    add(:*, (String, String), String); add(:string, (Int64,), String); add(:string, (Float64,), String)
-    add(:length, (String,), Int64); add(:ncodeunits, (String,), Int64)
-    add(:isempty, (String,), Bool); add(:isascii, (String,), Bool)
-    for b in (:startswith, :endswith, :contains, :occursin)
-        add(b, (String, String), Bool)
-    end
-    add(:cmp, (String, String), Int64)
-    return O
-end
-
-const OPS = _build_param_ops()
-const OPS_BY_RET = let d = Dict{Type,Vector{Any}}()
-    for e in OPS
-        push!(get!(d, e[3], Any[]), e)
-    end
-    d
-end
-
 # ExprNode boxes every alternative so Supposition's OneOf has a single element type.
 struct ExprNode
     v::Any
 end
 
 # Combine arg generators (each Possibility{ExprNode}) into a call ExprNode via
-# nested bind. `acc` accumulates UNWRAPPED sub-expressions.
+# nested bind. `acc` accumulates UNWRAPPED sub-expressions. Catalogue names that
+# start with `.` are FIELD ACCESS (`.nm`, one receiver arg) and render as
+# `recv.nm` rather than a call.
 function _gen_call(opname::Symbol, arg_gens::Vector)
+    sname = string(opname)
+    finish(acc) = startswith(sname, ".") ?
+        ExprNode(Expr(:., acc[1], QuoteNode(Symbol(sname[2:end])))) :
+        ExprNode(Expr(:call, opname, acc...))
     rec(i, acc) =
         i > length(arg_gens) ?
-            Data.just(ExprNode(Expr(:call, opname, acc...))) :
+            Data.just(finish(acc)) :
             Data.bind(arg_gens[i]) do a
                 rec(i + 1, (acc..., a.v))
             end
@@ -321,16 +103,37 @@ end
 _gen_set_literal(::Type{ET}, depth, env) where {ET} =
     map(n -> ExprNode(Expr(:call, :Set, n.v)), _gen_vec_literal(ET, depth, env))
 
+# N-ary literal builder: bind a generator per field, then assemble with `mk`.
+function _gen_fields(fts, depth, env, mk)
+    rec(i, acc) =
+        i > length(fts) ?
+            Data.just(ExprNode(mk(acc))) :
+            Data.bind(gen_expr(fts[i], depth, env)) do a
+                rec(i + 1, (acc..., a.v))
+            end
+    return rec(1, ())
+end
+_gen_tuple_literal(::Type{T}, depth, env) where {T} =
+    _gen_fields([fieldtype(T, i) for i in 1:fieldcount(T)], depth, env,
+                acc -> Expr(:tuple, acc...))
+_gen_nt_literal(::Type{T}, depth, env) where {T} =
+    _gen_fields([fieldtype(T, i) for i in 1:fieldcount(T)], depth, env,
+                acc -> Expr(:tuple, (Expr(:(=), fieldnames(T)[i], acc[i]) for i in eachindex(acc))...))
+_gen_struct_literal(p, depth, env) =
+    _gen_fields(p.fieldtypes, depth, env, acc -> Expr(:call, p.name, acc...))
+
 # A generated unary lambda `y -> <ret expr in y>` for higher-order ops.
 function _gen_lambda(fn::Fn, depth, _env)
     body = gen_expr(fn.ret, max(depth - 1, 0), Dict{Type,Vector{Symbol}}(fn.param => [:y]))
     map(b -> ExprNode(Expr(:->, :y, b.v)), body)
 end
 
-# Generate one argument slot: a Type → expression, an Fn → lambda, BinOp → op symbol.
+# Generate one argument slot: a Type → expression, an Fn → lambda, BinOp → op
+# symbol, Val{i} → the literal index i (tuple getindex).
 _gen_arg(at::Fn, depth, env)   = _gen_lambda(at, depth, env)
 _gen_arg(at::BinOp, depth, env) = map(s -> ExprNode(s), Data.SampledFrom([:+, :*, :min, :max]))
-_gen_arg(at::Type, depth, env) = gen_expr(at, depth, env)
+_gen_arg(at::Type, depth, env) =
+    at <: Val ? Data.just(ExprNode(at.parameters[1])) : gen_expr(at, depth, env)
 
 """
     gen_expr(T, depth, env) -> Possibility{ExprNode}
@@ -352,6 +155,36 @@ function gen_expr(::Type{T}, depth::Int, env::Dict{Type,Vector{Symbol}}) where {
     for vs in get(env, T, Symbol[])
         let v = vs
             push!(prods, () -> Data.just(ExprNode(v)))
+        end
+    end
+    # Tuple / NamedTuple literals (M3): any concrete tuple-ish type with
+    # generatable fields can be built as a literal.
+    if T <: Tuple && isconcretetype(T)
+        let FT = T, d = max(depth - 1, 0)
+            push!(prods, () -> _gen_tuple_literal(FT, d, env))
+        end
+    elseif T <: NamedTuple && isconcretetype(T)
+        let FT = T, d = max(depth - 1, 0)
+            push!(prods, () -> _gen_nt_literal(FT, d, env))
+        end
+    end
+    # Pool-struct construction + field access (M3): generated struct types are
+    # ordinary citizens of the universe.
+    for p in FuzzStructPool.POOL
+        if p.T === T
+            let ps = p, d = max(depth - 1, 0)
+                push!(prods, () -> _gen_struct_literal(ps, d, env))
+            end
+        end
+    end
+    if depth > 0
+        for (ft, ST, fname) in FuzzStructPool.pool_field_entries()
+            if ft === T
+                let S = ST, nm = fname, d = depth - 1
+                    push!(prods, () -> map(e -> ExprNode(Expr(:., e.v, QuoteNode(nm))),
+                                           gen_expr(S, d, env)))
+                end
+            end
         end
     end
     # Container constructor leaves, parametric over element/key/value types.
@@ -396,10 +229,37 @@ const _PROG_COUNTER = Ref(0)
 function make_function(body, ::Type{T0}) where {T0}
     _PROG_COUNTER[] += 1
     fname = Symbol("fuzz_fn_", _PROG_COUNTER[])
-    src = "$(fname)(x::$(T0)) = $(body)"
-    fn = Core.eval(Main, Meta.parse(src))
+    src = "$(fname)(x::$(T0)) = $(_body_repr(body))"
+    # Eval as an Expr (NOT via string round-trip): a bare Char/String literal
+    # body would stringify into an identifier ('é' → é → UndefVarError).
+    fdef = Expr(:(=), Expr(:call, fname, Expr(:(::), :x, T0)), body)
+    fn = Core.eval(Main, fdef)
     return (fn, fname, src)
 end
+# Display/reproducer-faithful rendering: literal leaves keep their quotes.
+_body_repr(body) = body isa Union{Expr,Symbol,Number} ? string(body) : repr(body)
+
+# Generic edge-biased argument values for ANY universe type (the arg-side
+# counterpart of _lit) — lets sweeps point the differential at structs, tuples,
+# chars, narrow ints… without hand-written input lists.
+_edges(::Type{T}) where {T<:Integer} = T[zero(T), one(T), typemax(T), typemin(T), T(2)]
+_edges(::Type{Bool})    = [true, false]
+_edges(::Type{T}) where {T<:AbstractFloat} = T[0, 1, -1, T(Inf), T(-Inf), T(NaN), T(0.5)]
+_edges(::Type{Char})    = ['a', 'Z', '0', 'é', '!']
+_edges(::Type{String})  = ["", "a", "héllo", "12345"]
+_edges(::Type{Vector{E}}) where {E} =
+    [E[], E[_edges(E)[1]], E[x for x in _edges(E)[1:min(3, end)]]]
+function _edges(::Type{T}) where {T}
+    if (isstructtype(T) || T <: Tuple) && isconcretetype(T) && fieldcount(T) > 0
+        fes = [_edges(fieldtype(T, i)) for i in 1:fieldcount(T)]
+        mk(vals) = T <: Tuple ? Tuple(vals) : T <: NamedTuple ? T(Tuple(vals)) : T(vals...)
+        return [mk([fes[i][mod1(j + i - 1, length(fes[i]))] for i in eachindex(fes)]) for j in 1:4]
+    end
+    error("no edge values for type $T")
+end
+
+sample_inputs(::Type{T}) where {T} = Tuple[(v,) for v in _edges(T)]
+vector_inputs(::Type{E}) where {E} = Tuple[(v,) for v in _edges(Vector{E})]
 
 sample_inputs(::Type{Int64}) =
     [(0,), (1,), (-1,), (2,), (-3,), (7,), (-128,), (1000,),
@@ -418,8 +278,9 @@ gen_natural(::Type{IN}, ::Type{RET}; depth::Int = 4, var::Symbol = :v) where {IN
 function make_function_natural(body, ::Type{IN}; var::Symbol = :v) where {IN}
     _PROG_COUNTER[] += 1
     fname = Symbol("fuzz_nat_", _PROG_COUNTER[])
-    src = "$(fname)($(var)::$(IN)) = $(body)"
-    fn = Core.eval(Main, Meta.parse(src))
+    src = "$(fname)($(var)::$(IN)) = $(_body_repr(body))"
+    fdef = Expr(:(=), Expr(:call, fname, Expr(:(::), var, IN)), body)
+    fn = Core.eval(Main, fdef)
     return (fn, fname, src)
 end
 
