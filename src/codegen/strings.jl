@@ -3,7 +3,7 @@
 # ============================================================================
 
 # Module-level storage for the i16 char array type index used at the JS boundary
-const _CHAR_ARRAY_TYPE_IDX = Ref{Union{Nothing, UInt32}}(nothing)
+const _CHAR_ARRAY_TYPE_IDX = TaskLocalRef{Union{Nothing, UInt32}}(:_wt_char_array_idx, nothing)
 
 function clear_char_array_type!()
     _CHAR_ARRAY_TYPE_IDX[] = nothing
@@ -56,7 +56,7 @@ Module-level storage for the utf8_to_js helper function index.
 This helper converts an i8 UTF-8 array to a JS string via fromCharCodeArray.
 Created once per module in add_string_io_imports! or add_io_imports!.
 """
-const _UTF8_TO_JS_FUNC_IDX = Ref{Union{Nothing, UInt32}}(nothing)
+const _UTF8_TO_JS_FUNC_IDX = TaskLocalRef{Union{Nothing, UInt32}}(:_wt_utf8_to_js_idx, nothing)
 
 function clear_utf8_to_js_func!()
     _UTF8_TO_JS_FUNC_IDX[] = nothing
@@ -312,7 +312,7 @@ function add_io_imports!(mod::WasmModule, type_registry::TypeRegistry)
 end
 
 # Module-level storage for IO imports (set during compile_module if println/print is used)
-const _IO_IMPORTS = Ref{Union{Nothing, IOImports}}(nothing)
+const _IO_IMPORTS = TaskLocalRef{Union{Nothing, IOImports}}(:_wt_io_imports, nothing)
 
 """
     get_io_imports() -> Union{Nothing, IOImports}
@@ -345,7 +345,7 @@ end
 # Performance Timer — jl_hrtime via performance.now() (PURE-9042)
 # ============================================================================
 
-const _PERF_NOW_IDX = Ref{Union{Nothing, UInt32}}(nothing)
+const _PERF_NOW_IDX = TaskLocalRef{Union{Nothing, UInt32}}(:_wt_perf_now_idx, nothing)
 
 """
     ensure_perf_now_import!(mod) -> UInt32
@@ -383,7 +383,7 @@ struct RNGGlobals
     seed_import_idx::UInt32  # import index for env.random_i64
 end
 
-const _RNG_GLOBALS = Ref{Union{Nothing, RNGGlobals}}(nothing)
+const _RNG_GLOBALS = TaskLocalRef{Union{Nothing, RNGGlobals}}(:_wt_rng_globals, nothing)
 
 function get_rng_globals()
     return _RNG_GLOBALS[]

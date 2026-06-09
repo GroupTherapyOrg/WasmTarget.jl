@@ -82,14 +82,29 @@ end
 
 const _POOL = Ref{Union{RunnerPool,Nothing}}(nothing)
 
-"""Default worker count: leave a couple cores for Julia-side compilation."""
-default_k() = max(1, min(8, Sys.CPU_THREADS - 2))
+"""True logical CPU count. `Sys.CPU_THREADS` reports only PERFORMANCE cores on
+Apple Silicon (e.g. 4 of 10 on an M-series), so read `hw.ncpu` via sysctl there."""
+function logical_cpu_count()
+    if Sys.isapple()
+        try; return parse(Int, strip(read(`sysctl -n hw.ncpu`, String))); catch; end
+    end
+    return Sys.CPU_THREADS
+end
 
+"""Default Node-worker count. One persistent worker per Julia thread suffices
+(requests are issued one-per-thread); the suite shards across PROCESSES, each
+single-threaded, so this is 1–2 per process rather than one-per-core."""
+default_k() = max(1, min(8, Threads.nthreads() + 1))
+
+const _POOL_INIT_LOCK = ReentrantLock()
 function get_pool(; k::Int = default_k())::Union{RunnerPool,Nothing}
     runner_available() || return nothing
-    if _POOL[] === nothing
-        _POOL[] = RunnerPool(k)
-        atexit(shutdown_pool!)
+    _POOL[] !== nothing && return _POOL[]   # fast path
+    lock(_POOL_INIT_LOCK) do                 # double-checked: only one thread builds the pool
+        if _POOL[] === nothing
+            _POOL[] = RunnerPool(k)
+            atexit(shutdown_pool!)
+        end
     end
     return _POOL[]
 end

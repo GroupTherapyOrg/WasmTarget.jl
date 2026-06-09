@@ -96,9 +96,28 @@ function register_closure_type!(mod::WasmModule, registry::TypeRegistry, T::Data
     return info
 end
 
+# ── Task-local per-compile state ─────────────────────────────────────────────
+# The struct-registration re-entrancy guard and the string/IO/RNG lazy caches
+# below are PER-COMPILE state that historically lived in module-global `Ref`/`Dict`
+# (fine while compiles ran sequentially). To compile multiple functions in
+# parallel (the test suite spawns one task per Phase), make them task-local: each
+# compile task gets its own copy, so concurrent compiles can't corrupt each other.
+# Behaviour is identical for sequential use. These wrappers keep the original
+# `d[k]` / `r[]` call sites unchanged.
+struct TaskLocalDict{K,V}; key::Symbol; end
+_tld(d::TaskLocalDict{K,V}) where {K,V} = get!(() -> Dict{K,V}(), task_local_storage(), d.key)::Dict{K,V}
+Base.haskey(d::TaskLocalDict, k) = haskey(_tld(d), k)
+Base.getindex(d::TaskLocalDict, k) = getindex(_tld(d), k)
+Base.setindex!(d::TaskLocalDict, v, k) = setindex!(_tld(d), v, k)
+Base.delete!(d::TaskLocalDict, k) = delete!(_tld(d), k)
+
+mutable struct TaskLocalRef{T}; key::Symbol; default::T; end
+Base.getindex(r::TaskLocalRef{T}) where {T} = get(task_local_storage(), r.key, r.default)::T
+Base.setindex!(r::TaskLocalRef, v) = (task_local_storage()[r.key] = v)
+
 # Track types currently being registered to prevent infinite recursion
 # Maps type -> reserved type index for self-referential types, or -1 for normal types
-const _registering_types = Dict{DataType, Int}()
+const _registering_types = TaskLocalDict{DataType, Int}(:_wt_registering_types)
 
 """
 Check if a type is self-referential (has fields that reference itself).
