@@ -32,6 +32,7 @@ using WasmTarget
 
 # pulls in FuzzHarness + FuzzGen (included by the entrypoint before this file)
 using ..FuzzHarness: compile_and_run, compile_and_run_vec
+using ..FuzzBridge: bridge_run, descriptor, tree_matches, tree_decode, bridge_supported
 using ..FuzzGen: make_function, sample_inputs, make_function_natural, vector_inputs
 
 struct Outcome
@@ -59,11 +60,11 @@ function vals_match(a, b)
     return a == b
 end
 
-function classify(nv, wv)
+function classify(nv, wv, cmp = vals_match)
     nstat, _ = nv
     wstat, _ = wv
     if nstat === :ok && wstat === :ok
-        return vals_match(nv[2], wv[2]) ? :match : :wrong_value
+        return cmp(nv[2], wv[2]) ? :match : :wrong_value
     elseif nstat === :ok && wstat === :trap
         return :runtime_trap
     elseif nstat === :throw && wstat === :ok
@@ -79,9 +80,12 @@ const OPT_LEVELS = (:size, :speed)   # -Os, -O3
 # Run ONE build variant of `fn` over `samples` and return the first non-matching
 # Outcome (or `Outcome(:ok,…)` if every sample matched). `runner` is the scalar
 # or vector harness; `opt` is `false` (raw) or a wasm-opt level.
-function _run_variant(fn, argtypes, samples, natives, body, src, runner, opt)
+# `cmp(native, payload)` decides ok-vs-ok agreement; `dec(payload)` renders the
+# wasm payload for DIAGNOSTICS (the bridge returns descriptor trees, not values).
+function _run_variant(fn, argtypes, samples, natives, body, src, runner, opt;
+                      cmp = vals_match, dec = identity)
     wres = runner(fn, argtypes, samples; strict = true, opt = opt)
-    if wres === :no_node
+    if wres === :no_node || wres === :unsupported
         return Outcome(:skip, src, nothing, nothing, nothing, nothing)
     elseif wres isa Pair && wres.first === :compile_error
         return Outcome(:compile_error, src, samples[1], natives[1], (:trap, "compile"), wres.second)
@@ -89,18 +93,19 @@ function _run_variant(fn, argtypes, samples, natives, body, src, runner, opt)
         return Outcome(:skip, src, nothing, nothing, nothing, wres.second)
     end
     for (i, (nv, wv)) in enumerate(zip(natives, wres))
-        cat = classify(nv, wv)
+        cat = classify(nv, wv, cmp)
         cat === :match && continue
-        return Outcome(cat, src, samples[i], nv, wv, body)
+        wd = wv[1] === :ok ? (:ok, dec(wv[2])) : wv
+        return Outcome(cat, src, samples[i], nv, wd, body)
     end
     return Outcome(:ok, src, nothing, nothing, nothing, body)
 end
 
 # Re-check raw-clean program through the wasm-opt pipeline. Returns an
 # `:optimizer_unsound` Outcome on the first opt level that diverges, else nothing.
-function _opt_check(fn, argtypes, samples, natives, body, src, runner)
+function _opt_check(fn, argtypes, samples, natives, body, src, runner; cmp = vals_match, dec = identity)
     for lvl in OPT_LEVELS
-        o = _run_variant(fn, argtypes, samples, natives, body, src, runner, lvl)
+        o = _run_variant(fn, argtypes, samples, natives, body, src, runner, lvl; cmp = cmp, dec = dec)
         o.category in (:ok, :skip, :compile_error) && continue
         return Outcome(:optimizer_unsound, o.src, o.input, o.native, o.wasm, (body, lvl, o.category))
     end
@@ -126,9 +131,26 @@ function differential(body, ::Type{T0}; check_opt::Bool = false) where {T0}
         end
     end
 
-    raw = _run_variant(fn, (T0,), samples, natives, body, src, compile_and_run, false)
+    # Bit-exact bridge transport whenever the inferred return type is in the
+    # bridge universe (it always is for today's scalar generator — this RETIRES
+    # the JSON-decimal-text result path); legacy JSON transport otherwise.
+    rt = try
+        only(Base.code_typed(fn, (T0,); optimize = true))[2]
+    catch
+        nothing
+    end
+    if rt isa Type && isconcretetype(rt) && bridge_supported(rt)
+        desc = descriptor(rt)[1]
+        runner = (f, at, s; strict = true, opt = false) ->
+            bridge_run(f, at, s; rettype = rt, strict = strict, opt = opt)
+        cmp = (n, t) -> tree_matches(desc, n, t)
+        dec = t -> tree_decode(desc, t)
+    else
+        runner, cmp, dec = compile_and_run, vals_match, identity
+    end
+    raw = _run_variant(fn, (T0,), samples, natives, body, src, runner, false; cmp = cmp, dec = dec)
     (raw.category === :ok && check_opt) || return raw
-    opt = _opt_check(fn, (T0,), samples, natives, body, src, compile_and_run)
+    opt = _opt_check(fn, (T0,), samples, natives, body, src, runner; cmp = cmp, dec = dec)
     return opt === nothing ? raw : opt
 end
 

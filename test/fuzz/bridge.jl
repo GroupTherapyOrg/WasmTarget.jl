@@ -30,7 +30,7 @@
 
 module FuzzBridge
 
-export bridge_run, descriptor, tree_matches, bridge_supported
+export bridge_run, descriptor, tree_matches, tree_decode, bridge_supported
 
 using WasmTarget
 using JSON
@@ -238,6 +238,22 @@ function tree_matches(d, native, tree)::Bool
         return all(tree_matches(d["el"], native[i], ta[i]) for i in eachindex(ta))
     end
     return false
+end
+
+# Best-effort reconstruction of a walked tree into a displayable Julia value —
+# for ledger DIAGNOSTICS only (composites decode to tuples/vectors; comparison
+# never goes through this, it uses tree_matches).
+function tree_decode(d, tree)
+    tree isa AbstractDict || return tree
+    haskey(tree, "err") && return Symbol(tree["err"])
+    k = d["k"]
+    k == "int" && return _dec_int(d["w"], d["s"], tree["x"])
+    k == "bits" && return _dec_bits(Val(d["w"]), tree["x"])
+    k == "char" && return Char(parse(Int64, tree["x"]))
+    k == "str" && return String(UInt8.(tree["s"]))
+    k == "fields" && return Tuple(tree_decode(d["fs"][i]["d"], tree["f"][i]) for i in eachindex(d["fs"]))
+    k == "vec" && return Any[tree_decode(d["el"], t) for t in tree["a"]]
+    return tree
 end
 
 # ── Execution: compile target + accessor closure, run, return walked trees ───
