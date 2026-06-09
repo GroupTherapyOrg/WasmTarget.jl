@@ -26,6 +26,7 @@ include(joinpath(FUZZ_DIR, "bridge_args.jl")); using .FuzzBridgeArgs
 include(joinpath(FUZZ_DIR, "catalogue.jl"));   using .FuzzCatalogue
 include(joinpath(FUZZ_DIR, "structpool.jl"));  using .FuzzStructPool
 include(joinpath(FUZZ_DIR, "generators.jl"));  using .FuzzGen
+include(joinpath(FUZZ_DIR, "statements.jl"));  using .FuzzStatements
 FuzzStructPool.build_pool!()   # deterministic (seeded) — same pool every process
 include(joinpath(FUZZ_DIR, "property.jl"));     using .FuzzProperty
 include(joinpath(FUZZ_DIR, "ledger.jl"));       using .Ledger

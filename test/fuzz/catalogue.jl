@@ -114,7 +114,9 @@ function _build()
         add(T |> nameof, (Int64,), T; mod = :conv, throws = true)   # narrowing InexactError
     end
     add(:Int64, (Float64,), Int64; mod = :conv, throws = true)      # InexactError on non-integral
-    add(:round, (Int64, Float64), Int64; mod = :conv, throws = true)  # round(Int64, x)
+    # NOTE: round(Int64, x) needs a TYPE-literal first slot the generator can't
+    # type-direct (an Int64-typed EXPR is not the type Int64) — covered by the
+    # Int64(::Float64) ctor entry above instead.
     # Bool logic
     add(:&, (Bool, Bool), Bool; mod = :bool); add(:|, (Bool, Bool), Bool; mod = :bool)
     add(:!, (Bool,), Bool; mod = :bool); add(:xor, (Bool, Bool), Bool; mod = :bool)
