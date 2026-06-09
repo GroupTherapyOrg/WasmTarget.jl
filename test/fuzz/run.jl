@@ -22,6 +22,7 @@ using Supposition: Data
 const FUZZ_DIR = @__DIR__
 include(joinpath(FUZZ_DIR, "harness.jl"));     using .FuzzHarness
 include(joinpath(FUZZ_DIR, "bridge.jl"));      using .FuzzBridge
+include(joinpath(FUZZ_DIR, "bridge_args.jl")); using .FuzzBridgeArgs
 include(joinpath(FUZZ_DIR, "generators.jl"));  using .FuzzGen
 include(joinpath(FUZZ_DIR, "property.jl"));     using .FuzzProperty
 include(joinpath(FUZZ_DIR, "ledger.jl"));       using .Ledger

@@ -33,6 +33,7 @@ using WasmTarget
 # pulls in FuzzHarness + FuzzGen (included by the entrypoint before this file)
 using ..FuzzHarness: compile_and_run, compile_and_run_vec
 using ..FuzzBridge: bridge_run, descriptor, tree_matches, tree_decode, bridge_supported
+using ..FuzzBridgeArgs: bridge_run_args, args_supported, ismutable_shape
 using ..FuzzGen: make_function, sample_inputs, make_function_natural, vector_inputs
 
 struct Outcome
@@ -175,6 +176,16 @@ function differential_natural(body, ::Type{IN}; var::Symbol = :v, check_opt::Boo
     fn, _, src = make_function_natural(body, IN; var = var)
     samples = vector_inputs(eltype(IN))
 
+    rt = try
+        only(Base.code_typed(fn, (IN,); optimize = true))[2]
+    catch
+        nothing
+    end
+    if rt isa Type && isconcretetype(rt) && bridge_supported(rt) && args_supported(IN)
+        return _differential_args(fn, (IN,), samples, body, src, rt; check_opt = check_opt)
+    end
+
+    # Legacy fallback (return type outside the bridge universe).
     # Run native on DEEPCOPIES — mutating ops (push!/sort!/…) must not corrupt the
     # samples that wasm marshals next, or we'd compare native(mutated) vs wasm(pristine).
     natives = map(samples) do tup
@@ -189,6 +200,57 @@ function differential_natural(body, ::Type{IN}; var::Symbol = :v, check_opt::Boo
     (raw.category === :ok && check_opt) || return raw
     opt = _opt_check(fn, (IN,), samples, natives, body, src, compile_and_run_vec)
     return opt === nothing ? raw : opt
+end
+
+# ── Full-bridge differential: arbitrary supported args AND returns, WITH
+# mutation parity — wasm must mutate its arguments exactly like native does.
+function _differential_args(fn, argtypes::Tuple, samples, body, src, rt::Type; check_opt::Bool)
+    rdesc = descriptor(rt)[1]
+    pdescs = Any[ismutable_shape(T) ? descriptor(T)[1] : nothing for T in argtypes]
+    # Native runs on its OWN deepcopies, which we KEEP — they are the expected
+    # post-call argument states for the mutation-parity comparison.
+    natpairs = map(samples) do tup
+        c = deepcopy(tup)
+        v = try
+            (:ok, Base.invokelatest(fn, c...))
+        catch e
+            (:throw, e)
+        end
+        (v, c)
+    end
+    function variant(opt)
+        wres = bridge_run_args(fn, argtypes, samples; rettype = rt, opt = opt)
+        (wres === :no_node || wres === :unsupported) &&
+            return Outcome(:skip, src, nothing, nothing, nothing, nothing)
+        wres isa Pair && wres.first === :compile_error &&
+            return Outcome(:compile_error, src, samples[1], natpairs[1][1], (:trap, "compile"), wres.second)
+        wres isa Pair && return Outcome(:skip, src, nothing, nothing, nothing, wres.second)
+        for (i, (nv, npost)) in enumerate(natpairs)
+            w = wres[i]
+            nstat, wstat = nv[1], w[1]
+            if nstat === :ok && wstat === :ok
+                retok = tree_matches(rdesc, nv[2], w[2])
+                mutok = all(j -> pdescs[j] === nothing ||
+                                 tree_matches(pdescs[j], npost[j], w[3][j]), eachindex(pdescs))
+                (retok && mutok) && continue
+                wd = (:ok, retok ? "(ret ok; arg mutation diverged)" : tree_decode(rdesc, w[2]))
+                return Outcome(:wrong_value, src, samples[i], nv, wd, body)
+            elseif nstat === :ok && wstat === :trap
+                return Outcome(:runtime_trap, src, samples[i], nv, (:trap, w[2]), body)
+            elseif nstat === :throw && wstat === :ok
+                return Outcome(:divergent_throw, src, samples[i], nv, (:ok, tree_decode(rdesc, w[2])), body)
+            end
+        end
+        return Outcome(:ok, src, nothing, nothing, nothing, body)
+    end
+    raw = variant(false)
+    (raw.category === :ok && check_opt) || return raw
+    for lvl in OPT_LEVELS
+        o = variant(lvl)
+        o.category in (:ok, :skip, :compile_error) && continue
+        return Outcome(:optimizer_unsound, o.src, o.input, o.native, o.wasm, (body, lvl, o.category))
+    end
+    return raw
 end
 
 property_holds_natural(body, ::Type{IN}; var::Symbol = :v, check_opt::Bool = false) where {IN} =
