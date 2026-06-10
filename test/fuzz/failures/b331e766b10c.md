@@ -36,8 +36,8 @@ catch
 end
 _x = 0
 _c = deepcopy(_x)
-_nat = try (:ok, repro(_c)) catch e (:throw, e) end
-_rt = Base.widenconst(Base.code_typed(repro, (Int32,))[1][2])
+_nat = try (:ok, repro(_c)); catch e; (:throw, e); end
+_rt = Core.Compiler.widenconst(Base.code_typed(repro, (Int32,))[1][2])
 _res = FuzzBridgeArgs.bridge_run_args(repro, (Int32,), [(deepcopy(_x),)]; rettype = _rt)[1]
 _pd = FuzzBridgeArgs.ismutable_shape(Int32) ? FuzzBridge.descriptor(Int32)[1] : nothing
 _ok = _nat[1] === :throw ? (_res[1] === :trap) :

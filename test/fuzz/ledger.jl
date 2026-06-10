@@ -265,7 +265,15 @@ function _run_reproducer(snippet::AbstractString)
         Core.eval(m, :(using .FuzzStructPool))
         Core.eval(m, :(FuzzStructPool.build_pool!()))  # idempotent; pool types appear in bodies
         Core.eval(m, :(include(args...) = nothing))    # neutralize reproducer's own includes
-        Core.eval(m, Meta.parseall(snippet))
+        ex = Meta.parseall(snippet)
+        # P2-batch5: a reproducer that doesn't even PARSE can never auto-close —
+        # it fails verify forever regardless of compiler progress. Surface it
+        # loudly instead of silently counting it "still open".
+        if ex isa Expr && any(a -> a isa Expr && a.head === :error, ex.args)
+            @warn "gap reproducer has a SYNTAX ERROR (will never auto-close) — repair the snippet" snippet=first(snippet, 120)
+            return false
+        end
+        Core.eval(m, ex)
         return true
     catch
         return false
