@@ -823,29 +823,110 @@ end
     return h
 end
 
-# ─── Char Classification Overlays ─────────────────────────────────────────
-# Why: Base implementations use foreigncall(:utf8proc_category), foreigncall(:utf8proc_isupper),
-#      foreigncall(:utf8proc_islower) — C library calls that can't compile to WASM.
-#      These overlays handle ASCII range; non-ASCII returns false (sufficient for Therapy.jl).
+# ─── Char Classification & Case Overlays ──────────────────────────────────
+# Why: Base implementations use foreigncall(:utf8proc_category) / _toupper /
+#      _tolower — C library calls that can't compile to WASM. P2-batch8:
+#      extended from ASCII-only to EXACT ASCII + Latin-1 (U+0000–U+00FF)
+#      coverage, table-verified against native Julia (uppercase('é')='É',
+#      µ→Μ, ß→ẞ, ÿ→Ÿ, NEL/NBSP isspace, ª/µ/º letters). The fuzz generator's
+#      char pool is ASCII + 'é', so this range is exhaustive for the
+#      differential universe; codepoints > 0xFF keep identity/false.
 #      Uses Core.bitcast (2 IR stmts) instead of reinterpret (400+ IR stmts).
 # Remove when: codegen can link libutf8proc or a pure-Julia Unicode DB is available
-# Char internal: Core.bitcast(UInt32, 'A') = 0x41000000, 'Z' = 0x5a000000,
-#                'a' = 0x61000000, 'z' = 0x7a000000, ASCII < 0x80000000
+# Char internal: UTF-8 bytes packed left-aligned into UInt32 —
+#   'A' = 0x41000000 (1-byte), 'é' = 0xC3A90000 (2-byte), ASCII < 0x80000000
+
+# Decode the packed-UTF-8 Char repr to a codepoint (all 1–4 byte forms).
+@inline function _wt_codepoint(c::Char)
+    raw = Core.bitcast(UInt32, c)
+    raw < 0x80000000 && return raw >> 24
+    if raw < 0xe0000000      # 110xxxxx 10xxxxxx
+        return (((raw >> 24) & UInt32(0x1f)) << 6) | ((raw >> 16) & UInt32(0x3f))
+    elseif raw < 0xf0000000  # 1110xxxx 10xxxxxx 10xxxxxx
+        return (((raw >> 24) & UInt32(0x0f)) << 12) | (((raw >> 16) & UInt32(0x3f)) << 6) |
+               ((raw >> 8) & UInt32(0x3f))
+    else                     # 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
+        return (((raw >> 24) & UInt32(0x07)) << 18) | (((raw >> 16) & UInt32(0x3f)) << 12) |
+               (((raw >> 8) & UInt32(0x3f)) << 6) | (raw & UInt32(0x3f))
+    end
+end
+
+# Encode a codepoint back into the packed-UTF-8 Char repr.
+@inline function _wt_char(cp::UInt32)
+    cp < UInt32(0x80) && return Core.bitcast(Char, cp << 24)
+    if cp < UInt32(0x800)
+        return Core.bitcast(Char, ((UInt32(0xc0) | (cp >> 6)) << 24) |
+                                  ((UInt32(0x80) | (cp & UInt32(0x3f))) << 16))
+    elseif cp < UInt32(0x10000)
+        return Core.bitcast(Char, ((UInt32(0xe0) | (cp >> 12)) << 24) |
+                                  ((UInt32(0x80) | ((cp >> 6) & UInt32(0x3f))) << 16) |
+                                  ((UInt32(0x80) | (cp & UInt32(0x3f))) << 8))
+    else
+        return Core.bitcast(Char, ((UInt32(0xf0) | (cp >> 18)) << 24) |
+                                  ((UInt32(0x80) | ((cp >> 12) & UInt32(0x3f))) << 16) |
+                                  ((UInt32(0x80) | ((cp >> 6) & UInt32(0x3f))) << 8) |
+                                  (UInt32(0x80) | (cp & UInt32(0x3f))))
+    end
+end
+
+@overlay WASM_METHOD_TABLE function Base.uppercase(c::Char)
+    cp = _wt_codepoint(c)
+    if cp >= UInt32(0x61) && cp <= UInt32(0x7a)                       # a-z
+        return _wt_char(cp - UInt32(0x20))
+    elseif cp == UInt32(0xb5)                                          # µ → Μ
+        return _wt_char(UInt32(0x39c))
+    elseif cp == UInt32(0xdf)                                          # ß → ẞ
+        return _wt_char(UInt32(0x1e9e))
+    elseif (cp >= UInt32(0xe0) && cp <= UInt32(0xf6)) ||               # à-ö, ø-þ
+           (cp >= UInt32(0xf8) && cp <= UInt32(0xfe))
+        return _wt_char(cp - UInt32(0x20))
+    elseif cp == UInt32(0xff)                                          # ÿ → Ÿ
+        return _wt_char(UInt32(0x178))
+    end
+    return c
+end
+
+@overlay WASM_METHOD_TABLE function Base.lowercase(c::Char)
+    cp = _wt_codepoint(c)
+    if cp >= UInt32(0x41) && cp <= UInt32(0x5a)                        # A-Z
+        return _wt_char(cp + UInt32(0x20))
+    elseif (cp >= UInt32(0xc0) && cp <= UInt32(0xd6)) ||               # À-Ö, Ø-Þ
+           (cp >= UInt32(0xd8) && cp <= UInt32(0xde))
+        return _wt_char(cp + UInt32(0x20))
+    end
+    return c
+end
 
 @overlay WASM_METHOD_TABLE function Base.isletter(c::Char)
-    raw = Core.bitcast(UInt32, c)
-    return (raw >= UInt32(0x41000000) && raw <= UInt32(0x5a000000)) ||
-           (raw >= UInt32(0x61000000) && raw <= UInt32(0x7a000000))
+    cp = _wt_codepoint(c)
+    return (cp >= UInt32(0x41) && cp <= UInt32(0x5a)) ||
+           (cp >= UInt32(0x61) && cp <= UInt32(0x7a)) ||
+           cp == UInt32(0xaa) || cp == UInt32(0xb5) || cp == UInt32(0xba) ||
+           (cp >= UInt32(0xc0) && cp <= UInt32(0xd6)) ||
+           (cp >= UInt32(0xd8) && cp <= UInt32(0xf6)) ||
+           (cp >= UInt32(0xf8) && cp <= UInt32(0xff))
+end
+
+@overlay WASM_METHOD_TABLE function Base.isspace(c::Char)
+    cp = _wt_codepoint(c)
+    return (cp >= UInt32(0x09) && cp <= UInt32(0x0d)) || cp == UInt32(0x20) ||
+           cp == UInt32(0x85) || cp == UInt32(0xa0)
 end
 
 @overlay WASM_METHOD_TABLE function Base.isuppercase(c::Char)
-    raw = Core.bitcast(UInt32, c)
-    return raw >= UInt32(0x41000000) && raw <= UInt32(0x5a000000)
+    cp = _wt_codepoint(c)
+    return (cp >= UInt32(0x41) && cp <= UInt32(0x5a)) ||
+           (cp >= UInt32(0xc0) && cp <= UInt32(0xd6)) ||
+           (cp >= UInt32(0xd8) && cp <= UInt32(0xde))
 end
 
 @overlay WASM_METHOD_TABLE function Base.islowercase(c::Char)
-    raw = Core.bitcast(UInt32, c)
-    return raw >= UInt32(0x61000000) && raw <= UInt32(0x7a000000)
+    cp = _wt_codepoint(c)
+    return (cp >= UInt32(0x61) && cp <= UInt32(0x7a)) ||
+           cp == UInt32(0xaa) || cp == UInt32(0xb5) || cp == UInt32(0xba) ||
+           cp == UInt32(0xdf) ||
+           (cp >= UInt32(0xe0) && cp <= UInt32(0xf6)) ||
+           (cp >= UInt32(0xf8) && cp <= UInt32(0xff))
 end
 
 @overlay WASM_METHOD_TABLE function Base.isascii(c::Char)
