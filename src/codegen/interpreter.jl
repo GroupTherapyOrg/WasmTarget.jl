@@ -739,6 +739,35 @@ end
     return result
 end
 
+# ─── _collect(EltypeUnknown) Overlay ──────────────────────────────────────
+# Why: Base's _collect for EltypeUnknown generators peeks the first element and
+#      widens via setindex_widen_up_to / dynamic _similar_for — machinery codegen
+#      can't translate. Whenever the map kernel's body can't be concrete-evaled
+#      under the overlay table (string-literal constants like y->length(""), or
+#      calls to overlayed methods like y->asin(1.0)), inlining bails and the
+#      raw `invoke _collect` became an unsupported-method stub → runtime trap
+#      (gap 3b005c4957f7 family). The empty-iterator branch of Base's version
+#      also materialised Vector{Any} where native returns a typed empty vector.
+#      In the closed-world wasm compile the kernel's return type IS statically
+#      known — promote_op folds to a Const — so collect straight into Vector{T}
+#      with a plain loop, no widening, and the n==0 branch is correctly typed.
+# Remove when: codegen handles setindex_widen_up_to + dynamically-typed similar.
+@overlay WASM_METHOD_TABLE function Base._collect(c::AbstractVector, itr::Base.Generator{<:AbstractVector},
+                                                  ::Base.EltypeUnknown,
+                                                  isz::Union{Base.HasLength, Base.HasShape{1}})
+    f = itr.f
+    A = itr.iter
+    T = Base.promote_op(f, eltype(A))
+    n = length(A)
+    dest = Vector{T}(undef, n)
+    i = 1
+    while i <= n
+        @inbounds dest[i] = f(A[i])
+        i += 1
+    end
+    return dest
+end
+
 # ─── Dict delete! Overlay ─────────────────────────────────────────────────
 # Why: Base._delete! uses atomic_pointerset(ptr, C_NULL, :monotonic) to null out
 #      key/val references for GC. WASM codegen doesn't support atomic_pointerset.

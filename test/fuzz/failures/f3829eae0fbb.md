@@ -1,6 +1,6 @@
 ---
 id: f3829eae0fbb
-status: open
+status: fixed
 category: runtime_trap
 kind: runtime_trap
 construct: "runtime_trap: `map((y->length(Dict(y => \"\", y => \"\"))), v)` :: Vector{Int64}→Vector{Int64}"
