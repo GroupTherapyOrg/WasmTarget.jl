@@ -34,7 +34,7 @@ repro(x::Int32) = try
 catch
     x
 end
-_x = 0
+_x = Int32(0)
 _c = deepcopy(_x)
 _nat = try (:ok, repro(_c)); catch e; (:throw, e); end
 _rt = Core.Compiler.widenconst(Base.code_typed(repro, (Int32,))[1][2])
@@ -51,6 +51,13 @@ _ok || error("WasmTarget gap @ x=$_x : native=$(_nat[1] === :throw ? :throw : _n
 ```
 at x=0: native=0  wasm=trap
 ```
+
+## Diagnostic update (P2-batch4, 2026-06-09)
+The div-by-zero trap is now a catchable DivideError (guarded intrinsic). The
+reproducer still fails because its return type is `Union{Int32, Int64}`
+(`div(0, x::Int32)` promotes to Int64; catch arm returns Int32) and
+`bridge_run_args` returns `:unsupported` for small-Union returns. ROOT CAUSE
+IS NOW BRIDGE TRANSPORT of Union primitive returns, not div codegen.
 
 ## Work on this
 ```

@@ -50,7 +50,10 @@ function _reproducer(o::Outcome, ::Type{T0}, body; var::Symbol = :x) where {T0}
         WasmTarget.compile(repro, ($(T0),))   # raises while the gap is present
         """
     end
-    inp = o.input === nothing ? "0" : repr(o.input[1])
+    # Narrow signed ints repr without their type (`repr(Int32(0)) == "0"`), which
+    # would hand repro() an Int64 — wrap them so the literal round-trips typed.
+    _lit(v) = v isa Union{Int8, Int16, Int32} ? "$(typeof(v))($(repr(v)))" : repr(v)
+    inp = o.input === nothing ? "0" : _lit(o.input[1])
     optkw = o.category === :optimizer_unsound ? ", opt=$(repr(o.detail[2]))" : ""
     tag = o.category === :optimizer_unsound ? " (wasm-opt $(o.detail[2]))" : ""
     return """

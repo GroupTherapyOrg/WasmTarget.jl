@@ -375,6 +375,10 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     :unsigned,
     # FOUND-5001: copy overlay (element-by-element) needed by sort, filter, etc.
     :copy,
+    # P2-batch4: div/rem on constant operands stay as un-inlined `:invoke`s when
+    # inference proves they always throw (rt Union{}) — compile the real Base
+    # methods so the guarded div intrinsic raises a catchable DivideError.
+    :div, :rem,
 ])
 
 """

@@ -1357,6 +1357,15 @@ function find_try_regions(code)::Vector{TryRegion}
 
             if leave_idx > 0
                 push!(regions, TryRegion(i, catch_dest, leave_idx))
+            elseif catch_dest > i
+                # P2-batch4: an always-throwing try body has NO :leave (Julia elides
+                # it when the body can't exit normally — e.g. `try div(0,0) catch`).
+                # Dropping the region here meant no try_table was emitted at all, so
+                # the throw escaped uncaught. Synthesize leave_idx = catch_dest: the
+                # try body becomes enter+1 .. catch_dest-1 and every consumer's
+                # normal-exit range (leave_idx+1 .. catch_dest-1) is empty, which is
+                # exactly right — there is no normal exit.
+                push!(regions, TryRegion(i, catch_dest, catch_dest))
             end
         end
     end

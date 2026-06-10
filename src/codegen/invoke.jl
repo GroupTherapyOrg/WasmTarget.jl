@@ -2943,7 +2943,10 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 push!(bytes, is_32bit ? Opcode.I32_SUB : Opcode.I64_SUB)
             elseif name === :* || name === :mul_int
                 push!(bytes, is_32bit ? Opcode.I32_MUL : Opcode.I64_MUL)
-            elseif name === :throw_boundserror || name === :throw || name === :throw_inexacterror
+            elseif name === :throw_boundserror || name === :throw || name === :throw_inexacterror ||
+                   name === :throw_complex_domainerror || name === :throw_complex_domainerror_neg1 ||
+                   name === :throw_exp_domainerror || name === :_throw_argerror ||
+                   name === :throw_domerr_powbysq || name === :__throw_gcd_overflow
                 # PURE-1102: Error throwing functions - emit throw (catchable) instead of unreachable (trap)
                 # Clear the stack first (arguments were pushed but not needed)
                 bytes = UInt8[]  # Reset - don't need the pushed args
