@@ -1694,6 +1694,33 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
     bytes = UInt8[]
     catch_dest = region.catch_dest
 
+    # P2-batch16: merge-phi structure (port of PURE-9031 from the simple
+    # generator). Without it, a try body that completes NORMALLY fell out of
+    # the try_table straight THROUGH the catch handler, overwriting the merge
+    # phi with the catch arm's value (`try gcd(Int32(0), x) catch Int32(0)`
+    # returned 0 — gap 6d3a1788a329 family). Structure:
+    #   block $merge (void)
+    #     block $catch_landing (void)
+    #       try_table (catch_all 0)  ;; body; normal completion brs to $merge
+    #       end
+    #     end
+    #     ;; catch handler (sets merge phi), falls through to $merge end
+    #   end
+    #   ;; post-merge code (phi reads, conversions, return)
+    merge_start = length(code) + 1
+    for i in catch_dest:length(code)
+        if code[i] isa Core.PhiNode && haskey(ctx.phi_locals, i)
+            merge_start = i
+            break
+        end
+    end
+    has_merge = merge_start <= length(code)
+
+    if has_merge
+        push!(bytes, Opcode.BLOCK)   # $merge
+        push!(bytes, 0x40)
+    end
+
     # Catch landing block (void) — catch_all branches here
     push!(bytes, Opcode.BLOCK)
     push!(bytes, 0x40)  # void
@@ -1714,14 +1741,38 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
     # - returns use RETURN opcode (exits function from within try_table)
     append!(bytes, generate_stackified_flow(ctx, try_body_blocks, code))
 
+    if has_merge
+        # Normal completion: the try-exit edge targets the merge block, which is
+        # OUTSIDE try_body_blocks, so the stackified body never assigns the merge
+        # phi locals — set them here from each phi's try-side edge value.
+        for i in merge_start:length(code)
+            st = code[i]
+            st isa Core.PhiNode || break   # merge phis are contiguous
+            haskey(ctx.phi_locals, i) || continue
+            for (k, e) in enumerate(st.edges)
+                if e < catch_dest && isassigned(st.values, k)
+                    emit_phi_local_set!(bytes, st.values[k], i, ctx)
+                    break
+                end
+            end
+        end
+        push!(bytes, Opcode.BR)
+        append!(bytes, encode_leb128_unsigned(2))  # past catch_landing + catch → $merge end
+    end
+
     # End try_table
     push!(bytes, Opcode.END)
 
     # End catch_landing block
     push!(bytes, Opcode.END)
 
-    # Catch handler (from catch_dest to end of code)
-    for i in catch_dest:length(code)
+    # PURE-9032-style: the catch handler is reachable via exception regardless
+    # of any stub flags set while emitting the try body.
+    ctx.last_stmt_was_stub = false
+
+    # Catch handler: catch_dest up to the merge point (or end of code)
+    catch_stop = has_merge ? merge_start - 1 : length(code)
+    for i in catch_dest:catch_stop
         stmt = code[i]
         if stmt !== nothing
             # Skip pop_exception — it's a runtime marker, no WASM equivalent
@@ -1729,6 +1780,33 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
                 continue
             end
             append!(bytes, compile_statement(stmt, i, ctx))
+        end
+    end
+
+    if has_merge
+        # Catch-side merge phi values (edge source >= catch_dest)
+        for i in merge_start:length(code)
+            st = code[i]
+            st isa Core.PhiNode || break
+            haskey(ctx.phi_locals, i) || continue
+            for (k, e) in enumerate(st.edges)
+                if e >= catch_dest && isassigned(st.values, k)
+                    emit_phi_local_set!(bytes, st.values[k], i, ctx)
+                    break
+                end
+            end
+        end
+        push!(bytes, Opcode.END)   # $merge
+        ctx.last_stmt_was_stub = false
+        # Post-merge code: phi reads, conversions, return
+        for i in merge_start:length(code)
+            stmt = code[i]
+            if stmt !== nothing
+                if stmt isa Expr && stmt.head === :pop_exception
+                    continue
+                end
+                append!(bytes, compile_statement(stmt, i, ctx))
+            end
         end
     end
 

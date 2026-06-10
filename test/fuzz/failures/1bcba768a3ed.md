@@ -1,6 +1,6 @@
 ---
 id: 1bcba768a3ed
-status: open
+status: fixed
 category: wrong_value
 kind: wrong_value
 construct: "wrong_value: `try\n    first([x, x, getindex([Int32(0), Int32(0), x], 0)])\ncatch\n    begin\n        acc_bc = x\n        i_bc = Int64(0)\n        while i_bc < Int64(1)\n            acc_bc = x\n            i_bc = i_bc + Int64(1)\n        end\n        acc_bc\n    end\nend` :: Int32"
