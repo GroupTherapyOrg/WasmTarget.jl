@@ -27,6 +27,7 @@ include(joinpath(FUZZ_DIR, "catalogue.jl"));   using .FuzzCatalogue
 include(joinpath(FUZZ_DIR, "structpool.jl"));  using .FuzzStructPool
 include(joinpath(FUZZ_DIR, "generators.jl"));  using .FuzzGen
 include(joinpath(FUZZ_DIR, "statements.jl"));  using .FuzzStatements
+include(joinpath(FUZZ_DIR, "canon.jl"));       using .FuzzCanon
 FuzzStructPool.build_pool!()   # deterministic (seeded) — same pool every process
 include(joinpath(FUZZ_DIR, "property.jl"));     using .FuzzProperty
 include(joinpath(FUZZ_DIR, "ledger.jl"));       using .Ledger
@@ -74,9 +75,29 @@ function _reproducer(o::Outcome, ::Type{T0}, body; var::Symbol = :x) where {T0}
     """
 end
 
+function _record!(o::Outcome, ::Type{T0}, body; run_id) where {T0}
+    # Dedup by ROOT CAUSE (M6): same canonical minimal body as an open gap →
+    # don't open a second file.
+    if FuzzCanon.canon_matchable(body) && FuzzCanon.canon_str(body) in _known_gap_canon()
+        return "dup-of-open-gap"
+    end
+    construct = "$(o.category): `$(FuzzGen._body_repr(body))` :: $(T0)"
+    diag = if o.category === :compile_error
+        sprint(showerror, o.detail)
+    else
+        nat = o.native === nothing ? "?" : (o.native[1] === :throw ? "throw $(typeof(o.native[2]))" : repr(o.native[2]))
+        wsm = o.wasm === nothing ? "?" : (o.wasm[1] === :trap ? "trap" : repr(o.wasm[2]))
+        "at x=$(o.input === nothing ? "?" : repr(o.input[1])): native=$nat  wasm=$wsm"
+    end
+    g = Ledger.Gap(o.category, o.category, construct, "test/fuzz (generated)", "repro", "($(T0),)",
+                   _reproducer(o, T0, body), diag)
+    return Ledger.record_gap!(g; run_id = run_id)
+end
+
 # --- Discovery --------------------------------------------------------------
-function fuzz_type(::Type{T0}; depth, max_examples, seed, run_id, dbdir = CORPUS_DIR) where {T0}
-    gen = gen_program(T0; depth = depth)
+function fuzz_type(::Type{T0}; depth, max_examples, seed, run_id, dbdir = CORPUS_DIR,
+                   gen = nothing) where {T0}
+    gen = gen === nothing ? gen_program(T0; depth = depth) : gen
     db = Supposition.DirectoryDB(dbdir)
     res = @check db=db rng=Xoshiro(seed) max_examples=max_examples function diff_prop(body = gen)
         property_holds(body, T0; check_opt = true)   # discovery also hunts wasm-opt unsoundness
@@ -111,7 +132,10 @@ end
 _reproducer_natural(o::Outcome, ::Type{IN}, body) where {IN} = _reproducer(o, IN, body; var = :v)
 
 function _record_natural!(o::Outcome, ::Type{IN}, ::Type{RET}, body; run_id) where {IN,RET}
-    construct = "$(o.category): `$(body)` :: $(IN)→$(RET)"
+    if FuzzCanon.canon_matchable(body) && FuzzCanon.canon_str(body) in _known_gap_canon()
+        return "dup-of-open-gap"
+    end
+    construct = "$(o.category): `$(FuzzGen._body_repr(body))` :: $(IN)→$(RET)"
     diag = if o.category === :compile_error
         sprint(showerror, o.detail)
     else
@@ -214,23 +238,26 @@ end
 # must not turn the suite red (an active fuzzing project always has open gaps); only
 # a NEW, unknown divergence should. (Fixed gaps are NOT skipped, so a regression of a
 # fix still fails.) Deep discovery of new gaps happens in `run.jl` sweeps.
-function _known_gap_bodies()
-    bodies = Set{String}()
+# Known-gap matching is STRUCTURAL (M6): each open gap's minimal body is parsed
+# and canonicalized (variables erased, call heads/literals kept); a candidate
+# body hits a known gap iff one of its SUBTREES shares the canonical form. (The
+# old substring match had a fatal hole: a short gap body like `x` matched every
+# program.) Unparseable / pure-variable gap bodies are excluded from the set.
+function _known_gap_canon()
+    known = Set{String}()
     try
         for g in Ledger.open_gaps()
             m = match(r"`(.*)`", get(g, "construct", ""))   # construct: "<cat>: `<body>` :: <ty>"
-            m !== nothing && push!(bodies, m.captures[1])
+            m === nothing && continue
+            ex = try Meta.parse(m.captures[1]) catch; nothing end
+            (ex !== nothing && FuzzCanon.canon_matchable(ex)) &&
+                push!(known, FuzzCanon.canon_str(ex))
         end
     catch
     end
-    return bodies
+    return known
 end
-
-# True if `sb` (a generated body, stringified) CONTAINS a known-open gap's body as a
-# sub-expression — i.e. it fails for an already-tracked reason. Substring match so a
-# new composition around a known-bad sub-expression (e.g. `Float64(typemax)`) is also
-# tolerated; only a divergence with no known root turns the gate red.
-_hits_known_gap(sb::AbstractString, known) = any(kb -> !isempty(kb) && occursin(kb, sb), known)
+_hits_known_gap(body, known) = FuzzCanon.hits_canon(body, known)
 
 function ci_fuzz_passes(; types = (Int64, Float64), depth = 2, max_examples = 30, seed = 0xCD)
     FuzzHarness.NODE_OK || return true   # skip cleanly where Node is unavailable
@@ -242,13 +269,13 @@ function ci_fuzz_passes(; types = (Int64, Float64), depth = 2, max_examples = 30
             cp(joinpath(CORPUS_DIR, f), joinpath(tmp, f); force = true)
         end
     end
-    known = _known_gap_bodies()
+    known = _known_gap_canon()
     allpass = true
     for (i, T0) in enumerate(types)
         gen = gen_program(T0; depth = depth)
         db = Supposition.DirectoryDB(tmp)
         res = @check db=db rng=Xoshiro(seed + i) max_examples=max_examples function ci_prop(body = gen)
-            property_holds(body, T0) || _hits_known_gap(string(body), known)   # known-open gaps don't fail the ratchet
+            property_holds(body, T0) || _hits_known_gap(body, known)   # known-open gaps don't fail the ratchet
         end
         something(res.result) isa Supposition.Fail && (allpass = false)
     end
@@ -308,11 +335,182 @@ function coverage_sweep(; n::Int = 400, depth = 4, types = (Int64, Float64))
     coverage_report()
 end
 
+# ============================================================================
+# M6 — discovery at scale + the coverage matrix (the Phase-1-complete artifact)
+# ============================================================================
+
+# Scalar T0s the sweeps drive. Char is EXCLUDED while transport-blocked
+# (gap b9d9c2d60d86) — Char still appears as an intermediate type everywhere.
+const SWEEP_TYPES = (Int64, Float64, Int32, UInt8, Bool)
+
+# The deterministic job list a parallel sweep partitions: expression-layer and
+# statement-layer programs per scalar type × seed, struct→struct natural
+# signatures over the pool, and vector signatures.
+function _sweep_jobs(; seeds::Int = 4)
+    jobs = Any[]
+    for s in 1:seeds, T in SWEEP_TYPES
+        push!(jobs, (:expr, T, s))
+        push!(jobs, (:stmt, T, s))
+    end
+    for s in 1:max(1, seeds ÷ 2)
+        for p in FuzzStructPool.POOL
+            push!(jobs, (:nat, p.T, p.T, s))
+        end
+        for (IN, RET) in ((Vector{Int64}, Int64), (Vector{Int64}, Vector{Int64}),
+                          (Vector{Float64}, Float64), (Vector{Float64}, Vector{Float64}),
+                          (Tuple{Int64,Float64}, Tuple{Int64,Float64}))
+            push!(jobs, (:nat, IN, RET, s))
+        end
+    end
+    return jobs
+end
+
+function _run_job(job; depth, max_examples)
+    tmp = mktempdir()
+    try
+        if job[1] === :expr
+            _, T, s = job
+            fuzz_type(T; depth = depth, max_examples = max_examples,
+                      seed = 0xD15C0 + 7919s, run_id = "sweep-expr-$s", dbdir = tmp)
+        elseif job[1] === :stmt
+            _, T, s = job
+            fuzz_type(T; depth = depth, max_examples = max_examples,
+                      seed = 0x57A7 + 7919s, run_id = "sweep-stmt-$s", dbdir = tmp,
+                      gen = FuzzStatements.gen_program_stmts(T; depth = depth))
+        else
+            _, IN, RET, s = job
+            fuzz_natural(IN, RET; depth = depth, max_examples = max_examples,
+                         seed = 0xA47 + 7919s, run_id = "sweep-nat-$s", dbdir = tmp)
+        end
+    catch e
+        println("  job $job: error $(typeof(e))")
+    end
+end
+
+"""
+    sweep_full(; shard = nothing, seeds = 4, depth = 3, max_examples = 60)
+
+The full-universe discovery sweep. `shard = (i, n)` runs the i-th 1/n slice
+(0-based) — `sweep_parallel` partitions across processes.
+"""
+function sweep_full(; shard = nothing, seeds::Int = 4, depth = 3, max_examples = 60)
+    FuzzHarness.NODE_OK || (@warn "Node.js unavailable"; return)
+    jobs = _sweep_jobs(seeds = seeds)
+    for (k, job) in enumerate(jobs)
+        shard !== nothing && ((k - 1) % shard[2] != shard[1]) && continue
+        _run_job(job; depth = depth, max_examples = max_examples)
+    end
+end
+
+"""
+    sweep_parallel(; procs = max(2, Sys.CPU_THREADS ÷ 2 - 1), seeds = 4, ...)
+
+Process-parallel discovery: N workers each run a disjoint job slice against
+the SHARED ledger (ids are content-addressed, so concurrent distinct gaps
+coexist); the orchestrator regenerates the index and reports new gaps.
+"""
+function sweep_parallel(; procs::Int = max(2, Sys.CPU_THREADS - 2), seeds::Int = 4,
+                        depth = 3, max_examples = 60)
+    before = Set(get(g, "id", "") for g in Ledger.load_gaps())
+    file = joinpath(FUZZ_DIR, "run.jl")
+    cmds = [addenv(`$(Base.julia_cmd()) --project=$(Base.active_project()) $file sweep-shard $(i) $(procs) $(seeds) $(depth) $(max_examples)`)
+            for i in 0:procs-1]
+    ps = [run(pipeline(ignorestatus(c); stdout = stdout, stderr = stderr); wait = false) for c in cmds]
+    foreach(wait, ps)
+    Ledger.regenerate_index!()
+    after = Ledger.load_gaps()
+    newids = [get(g, "id", "") for g in after if !(get(g, "id", "") in before)]
+    nopen = count(g -> get(g, "status", "open") == "open", after)
+    println("\n== parallel sweep complete: $nopen open, $(length(newids)) new ==")
+    for g in after
+        get(g, "id", "") in newids || continue
+        println("  NEW [", get(g, "category", "?"), "] ", get(g, "id", "?"), " — ", first(get(g, "construct", ""), 110))
+    end
+end
+
+# --- Coverage matrix: the checkable definition of Phase-1 coverage -----------
+# For every catalogue entry: was it exercised, did it appear in a verified-
+# passing program, or is it implicated in an open ledger gap? Regenerate with:
+#     julia --project=test/fuzz test/fuzz/run.jl coverage
+_sig(name::Symbol, arity::Int) = (name, arity)
+
+function _body_sigs(x, acc = Set{Tuple{Symbol,Int}}())
+    if x isa Expr
+        if x.head === :call && !isempty(x.args) && x.args[1] isa Symbol
+            push!(acc, _sig(x.args[1], length(x.args) - 1))
+        elseif x.head === :. && length(x.args) == 2 && x.args[2] isa QuoteNode
+            push!(acc, _sig(Symbol(".", x.args[2].value), 1))
+        end
+        for a in x.args
+            _body_sigs(a, acc)
+        end
+    end
+    return acc
+end
+
+function write_coverage!(; per_type::Int = 120, depth = 3)
+    FuzzHarness.NODE_OK || (@warn "Node.js unavailable"; return)
+    seen = Set{Tuple{Symbol,Int}}()
+    passed = Set{Tuple{Symbol,Int}}()
+    for T in SWEEP_TYPES
+        for gen in (gen_program(T; depth = depth),
+                    FuzzStatements.gen_program_stmts(T; depth = depth))
+            for _ in 1:(per_type ÷ 2)
+                body = try Supposition.example(gen) catch; continue end
+                sigs = _body_sigs(body)
+                union!(seen, sigs)
+                o = try differential(body, T) catch; continue end
+                o.category === :ok && union!(passed, sigs)
+            end
+        end
+    end
+    gapsigs = Set{Tuple{Symbol,Int}}()
+    for g in Ledger.open_gaps()
+        m = match(r"`(.*)`", get(g, "construct", ""))
+        m === nothing && continue
+        ex = try Meta.parse(m.captures[1]) catch; nothing end
+        ex === nothing && continue
+        union!(gapsigs, _body_sigs(ex))
+    end
+    bymod = Dict{Symbol,Vector{Any}}()
+    for e in FuzzGen.OPS
+        push!(get!(bymod, e.mod, Any[]), e)
+    end
+    counts = Dict{Symbol,Int}()
+    open(joinpath(FUZZ_DIR, "COVERAGE.md"), "w") do io
+        println(io, "# Catalogue Coverage Matrix\n")
+        println(io, "Regenerate: `julia --project=test/fuzz test/fuzz/run.jl coverage`\n")
+        println(io, "Status per entry: `pass` seen in ≥1 verified-passing program · `gap` implicated")
+        println(io, "in an open ledger gap · `seen` exercised without a passing witness yet ·")
+        println(io, "`unseen` not sampled this run (sampling is stochastic — rerun with a higher")
+        println(io, "budget before treating `unseen` as a coverage hole).\n")
+        for mod in sort(collect(keys(bymod)))
+            println(io, "## ", mod, "\n")
+            println(io, "| op | args | ret | status |")
+            println(io, "|---|---|---|---|")
+            for e in bymod[mod]
+                sg = _sig(e.name, length(e.argtypes))
+                st = sg in gapsigs ? "gap" : sg in passed ? "pass" : sg in seen ? "seen" : "unseen"
+                counts[Symbol(st)] = get(counts, Symbol(st), 0) + 1
+                println(io, "| `", e.name, "` | `", join(e.argtypes, ", "), "` | `", e.ret, "` | ", st, " |")
+            end
+            println(io)
+        end
+        println(io, "**Totals:** ", join(("$(v) $(k)" for (k, v) in sort(collect(counts))), " · "))
+    end
+    println("coverage matrix → test/fuzz/COVERAGE.md  ", sort(collect(counts)))
+end
+
 if abspath(PROGRAM_FILE) == @__FILE__
     if length(ARGS) >= 1 && ARGS[1] == "verify"
         verify()
     elseif length(ARGS) >= 1 && ARGS[1] == "coverage"
-        coverage_sweep()
+        write_coverage!()
+    elseif length(ARGS) >= 1 && ARGS[1] == "sweep"
+        sweep_parallel()
+    elseif length(ARGS) >= 1 && ARGS[1] == "sweep-shard"
+        i, n, seeds, depth, mex = parse.(Int, ARGS[2:6])
+        sweep_full(shard = (i, n), seeds = seeds, depth = depth, max_examples = mex)
     else
         run_fuzz()
     end
