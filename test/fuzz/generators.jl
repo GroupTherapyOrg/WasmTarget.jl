@@ -236,8 +236,18 @@ function make_function(body, ::Type{T0}) where {T0}
     fn = Core.eval(Main, fdef)
     return (fn, fname, src)
 end
-# Display/reproducer-faithful rendering: literal leaves keep their quotes.
-_body_repr(body) = body isa Union{Expr,Symbol,Number} ? string(body) : repr(body)
+# Display/reproducer-faithful rendering. Two hazards when stringifying an Expr
+# tree that embeds literal VALUES:
+#   * bare Char/String literal bodies would render unquoted → repr those;
+#   * SIGNED narrow ints (Int8/16/32) render as bare digits, which RE-PARSE as
+#     Int64 — silently changing promotion/overflow semantics in reproducers and
+#     canon matching (a gcd(Int32(0), x) gap re-parsed as gcd(0, x) and stopped
+#     reproducing). Unsigned (0xa5) and Float32 (1.5f0) literals are
+#     self-typing. So wrap signed-narrow leaves in explicit ctor calls first.
+_body_repr(body) = body isa Union{Expr,Symbol,Number} ? string(_retype_literals(body)) : repr(body)
+_retype_literals(x::Union{Int8,Int16,Int32}) = Expr(:call, nameof(typeof(x)), Int64(x))
+_retype_literals(x::Expr) = Expr(x.head, map(_retype_literals, x.args)...)
+_retype_literals(x) = x
 
 # Generic edge-biased argument values for ANY universe type (the arg-side
 # counterpart of _lit) — lets sweeps point the differential at structs, tuples,

@@ -1,6 +1,6 @@
 ---
 id: c97ab1ffb27e
-status: open
+status: fixed
 category: optimizer_unsound
 kind: optimizer_unsound
 construct: "optimizer_unsound: `begin\n    v_b = 0\n    begin\n        fin_bl = 0.0\n        r_bl = try\n                sqrt(x)\n            finally\n                fin_bl = 0.0\n            end\n        r_bl + fin_bl\n    end\nend` :: Float64"
@@ -50,8 +50,8 @@ repro(x::Float64) = begin
 end
 _x = -1.0
 _c = deepcopy(_x)
-_nat = try (:ok, repro(_c)) catch e (:throw, e) end
-_rt = Base.widenconst(Base.code_typed(repro, (Float64,))[1][2])
+_nat = try (:ok, repro(_c)); catch e; (:throw, e); end
+_rt = Core.Compiler.widenconst(Base.code_typed(repro, (Float64,))[1][2])
 _res = FuzzBridgeArgs.bridge_run_args(repro, (Float64,), [(deepcopy(_x),)]; rettype = _rt, opt=:size)[1]
 _pd = FuzzBridgeArgs.ismutable_shape(Float64) ? FuzzBridge.descriptor(Float64)[1] : nothing
 _ok = _nat[1] === :throw ? (_res[1] === :trap) :

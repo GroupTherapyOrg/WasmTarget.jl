@@ -65,7 +65,10 @@ function _reproducer(o::Outcome, ::Type{T0}, body; var::Symbol = :x) where {T0}
     _c = deepcopy(_x)
     _nat = try (:ok, repro(_c)); catch e; (:throw, e); end
     _rt = Core.Compiler.widenconst(Base.code_typed(repro, ($(T0),))[1][2])
-    _res = FuzzBridgeArgs.bridge_run_args(repro, ($(T0),), [(deepcopy(_x),)]; rettype = _rt$(optkw))[1]
+    _rt === Union{} && (_rt = Int64)   # always-throws body: result never walked, any rettype compiles
+    _rr = FuzzBridgeArgs.bridge_run_args(repro, ($(T0),), [(deepcopy(_x),)]; rettype = _rt$(optkw))
+    _rr isa Vector || error("bridge could not run reproducer: " * string(_rr))
+    _res = _rr[1]
     _pd = FuzzBridgeArgs.ismutable_shape($(T0)) ? FuzzBridge.descriptor($(T0))[1] : nothing
     _ok = _nat[1] === :throw ? (_res[1] === :trap) :
         (_res[1] === :ok &&
