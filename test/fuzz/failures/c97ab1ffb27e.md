@@ -1,0 +1,75 @@
+---
+id: c97ab1ffb27e
+status: fixed
+category: optimizer_unsound
+kind: optimizer_unsound
+construct: "optimizer_unsound: `begin\n    v_b = 0\n    begin\n        fin_bl = 0.0\n        r_bl = try\n                sqrt(x)\n            finally\n                fin_bl = 0.0\n            end\n        r_bl + fin_bl\n    end\nend` :: Float64"
+location: "test/fuzz (generated)"
+fn_name: repro
+arg_types: "(Float64,)"
+first_seen: sweep-stmt-2
+---
+
+# Gap `c97ab1ffb27e` — optimizer_unsound: `begin
+    v_b = 0
+    begin
+        fin_bl = 0.0
+        r_bl = try
+                sqrt(x)
+            finally
+                fin_bl = 0.0
+            end
+        r_bl + fin_bl
+    end
+end` :: Float64
+
+**Category:** `optimizer_unsound` &nbsp;•&nbsp; **Kind:** `optimizer_unsound` &nbsp;•&nbsp; **Location:** `test/fuzz (generated)`
+
+## Reproducer
+Contract: this snippet **throws while the gap is present** and **runs cleanly once fixed**.
+A follow-up loop fixes the compiler, then `verify_gaps!()` re-runs this to auto-close the gap.
+
+```julia
+using WasmTarget
+include(joinpath("test", "fuzz", "harness.jl"));     using .FuzzHarness
+include(joinpath("test", "fuzz", "bridge.jl"));      using .FuzzBridge
+include(joinpath("test", "fuzz", "bridge_args.jl")); using .FuzzBridgeArgs
+include(joinpath("test", "fuzz", "structpool.jl"));  using .FuzzStructPool
+FuzzStructPool.build_pool!()
+repro(x::Float64) = begin
+    v_b = 0
+    begin
+        fin_bl = 0.0
+        r_bl = try
+                sqrt(x)
+            finally
+                fin_bl = 0.0
+            end
+        r_bl + fin_bl
+    end
+end
+_x = -1.0
+_c = deepcopy(_x)
+_nat = try (:ok, repro(_c)); catch e; (:throw, e); end
+_rt = Core.Compiler.widenconst(Base.code_typed(repro, (Float64,))[1][2])
+_res = FuzzBridgeArgs.bridge_run_args(repro, (Float64,), [(deepcopy(_x),)]; rettype = _rt, opt=:size)[1]
+_pd = FuzzBridgeArgs.ismutable_shape(Float64) ? FuzzBridge.descriptor(Float64)[1] : nothing
+_ok = _nat[1] === :throw ? (_res[1] === :trap) :
+    (_res[1] === :ok &&
+     FuzzBridge.tree_matches(FuzzBridge.descriptor(_rt)[1], _nat[2], _res[2]) &&
+     (_pd === nothing || FuzzBridge.tree_matches(_pd, _c, _res[3][1])))
+_ok || error("WasmTarget gap (wasm-opt size) @ x=$_x : native=$(_nat[1] === :throw ? :throw : _nat[2]) wasm=$(_res[1]) $(_res[2])")
+```
+
+## Diagnostic
+```
+at x=-1.0: native=throw DomainError  wasm=NaN
+```
+
+## Work on this
+```
+julia --project=test/fuzz test/fuzz/run.jl verify
+```
+
+## Analysis
+_(No analysis yet. Add root-cause notes below the `## Analysis` heading — they are PRESERVED across re-records.)_

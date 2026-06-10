@@ -4,6 +4,10 @@
 using Test, Dates
 import JSON
 
+# Persistent Node worker pool — replaces per-call `node` spawns (≈150–300ms each)
+# with long-lived workers (~0.2ms/run). Shared with the differential fuzzer.
+include(joinpath(@__DIR__, "wasm_runner.jl"));  using .WasmRunner
+
 # ============================================================================
 # Node.js Detection
 # ============================================================================
@@ -61,90 +65,15 @@ The result of the function call, parsed from JSON.
 Returns `nothing` if Node.js is not available.
 """
 function run_wasm(wasm_bytes::Vector{UInt8}, func_name::String, args...)
-    if NODE_CMD === nothing
+    if !WasmRunner.runner_available()
         @warn "Node.js not available. Skipping Wasm execution."
         return nothing
     end
-
-    dir = mktempdir()
-    wasm_path = joinpath(dir, "module.wasm")
-    js_path = joinpath(dir, "loader.mjs")
-
-    # Write the Wasm binary
-    write(wasm_path, wasm_bytes)
-
-    # Convert Julia args to JS args
-    # Handle BigInt for 64-bit integers
     js_args = join(map(arg -> format_js_arg(arg), args), ", ")
-
-    # Generate the loader script
-    loader_script = """
-import fs from 'fs';
-
-const bytes = fs.readFileSync('$(escape_string(wasm_path))');
-
-async function run() {
-    try {
-        const importObject = { Math: { pow: Math.pow } };
-        const wasmModule = await WebAssembly.instantiate(bytes, importObject);
-        const func = wasmModule.instance.exports['$func_name'];
-
-        if (typeof func !== 'function') {
-            console.error('Export "$func_name" is not a function');
-            process.exit(1);
-        }
-
-        const result = func($js_args);
-
-        // Handle BigInt and special float serialization for JSON
-        const serialized = JSON.stringify(result, (key, value) => {
-            if (typeof value === 'bigint') {
-                // Return as string with marker for parsing
-                return { __bigint__: value.toString() };
-            }
-            if (typeof value === 'number') {
-                if (value === Infinity) return "__Inf__";
-                if (value === -Infinity) return "__-Inf__";
-                if (Number.isNaN(value)) return "__NaN__";
-            }
-            return value;
-        });
-
-        console.log(serialized);
-    } catch (e) {
-        console.error('Wasm execution error:', e.message);
-        process.exit(1);
-    }
-}
-
-run();
-"""
-
-    open(js_path, "w") do io
-        print(io, loader_script)
-    end
-
-    # Run Node.js (with experimental flag if needed for older versions)
-    try
-        node_cmd = NEEDS_EXPERIMENTAL_FLAG ? `$NODE_CMD --experimental-wasm-gc $js_path` : `$NODE_CMD $js_path`
-        output = read(pipeline(node_cmd; stderr=stderr), String)
-        output = strip(output)
-
-        if isempty(output)
-            return nothing
-        end
-
-        # Parse the JSON result
-        result = JSON.parse(output)
-
-        # Handle BigInt unmarshaling
-        return unmarshal_result(result)
-    catch e
-        if e isa ProcessFailedException
-            error("Wasm execution failed. Check stderr for details.")
-        end
-        rethrow()
-    end
+    status, val = WasmRunner.run_wasm_single(wasm_bytes, func_name, js_args)
+    status === :nonode && return nothing
+    (status === :trap || status === :error) && error("Wasm execution failed: $(val)")
+    return unmarshal_result(val)
 end
 
 """
@@ -233,89 +162,16 @@ run_wasm_with_imports(bytes, "main", imports, Int32(42))
 """
 function run_wasm_with_imports(wasm_bytes::Vector{UInt8}, func_name::String,
                                imports::Dict, args...)
-    if NODE_CMD === nothing
+    if !WasmRunner.runner_available()
         @warn "Node.js not available. Skipping Wasm execution."
         return nothing
     end
-
-    dir = mktempdir()
-    wasm_path = joinpath(dir, "module.wasm")
-    js_path = joinpath(dir, "loader.mjs")
-
-    # Write the Wasm binary
-    write(wasm_path, wasm_bytes)
-
-    # Convert Julia args to JS args
     js_args = join(map(arg -> format_js_arg(arg), args), ", ")
-
-    # Build imports object
-    imports_js = build_imports_js(imports)
-
-    # Generate the loader script
-    loader_script = """
-import fs from 'fs';
-
-const bytes = fs.readFileSync('$(escape_string(wasm_path))');
-
-$imports_js
-
-async function run() {
-    try {
-        const wasmModule = await WebAssembly.instantiate(bytes, importObject);
-        const func = wasmModule.instance.exports['$func_name'];
-
-        if (typeof func !== 'function') {
-            console.error('Export "$func_name" is not a function');
-            process.exit(1);
-        }
-
-        const result = func($js_args);
-
-        // Handle BigInt and special float serialization for JSON
-        const serialized = JSON.stringify(result, (key, value) => {
-            if (typeof value === 'bigint') {
-                return { __bigint__: value.toString() };
-            }
-            if (typeof value === 'number') {
-                if (value === Infinity) return "__Inf__";
-                if (value === -Infinity) return "__-Inf__";
-                if (Number.isNaN(value)) return "__NaN__";
-            }
-            return value;
-        });
-
-        console.log(serialized);
-    } catch (e) {
-        console.error('Wasm execution error:', e.message);
-        process.exit(1);
-    }
-}
-
-run();
-"""
-
-    open(js_path, "w") do io
-        print(io, loader_script)
-    end
-
-    # Run Node.js
-    try
-        node_cmd = NEEDS_EXPERIMENTAL_FLAG ? `$NODE_CMD --experimental-wasm-gc $js_path` : `$NODE_CMD $js_path`
-        output = read(pipeline(node_cmd; stderr=stderr), String)
-        output = strip(output)
-
-        if isempty(output)
-            return nothing
-        end
-
-        result = JSON.parse(output)
-        return unmarshal_result(result)
-    catch e
-        if e isa ProcessFailedException
-            error("Wasm execution failed. Check stderr for details.")
-        end
-        rethrow()
-    end
+    status, val = WasmRunner.run_wasm_single(wasm_bytes, func_name, js_args;
+                                             import_js = build_imports_js(imports))
+    status === :nonode && return nothing
+    (status === :trap || status === :error) && error("Wasm execution failed: $(val)")
+    return unmarshal_result(val)
 end
 
 """
@@ -749,9 +605,10 @@ generate_ground_truth("add_one", x -> x + Int32(1), [
 ])
 ```
 """
-function generate_ground_truth(name::String, f, inputs::Vector; overwrite::Bool=false)
-    mkpath(GROUND_TRUTH_DIR)
-    path = joinpath(GROUND_TRUTH_DIR, "$name.json")
+function generate_ground_truth(name::String, f, inputs::Vector; overwrite::Bool=false,
+                               dir::AbstractString=GROUND_TRUTH_DIR)
+    mkpath(dir)
+    path = joinpath(dir, "$name.json")
     if isfile(path) && !overwrite
         @info "Ground truth '$name' already exists. Use overwrite=true to regenerate."
         return path
@@ -785,8 +642,8 @@ end
 
 Load a ground truth snapshot by name from `test/ground_truth/`.
 """
-function load_ground_truth(name::String)
-    path = joinpath(GROUND_TRUTH_DIR, "$name.json")
+function load_ground_truth(name::String; dir::AbstractString=GROUND_TRUTH_DIR)
+    path = joinpath(dir, "$name.json")
     if !isfile(path)
         error("Ground truth '$name' not found at $path. Run generate_ground_truth first.")
     end
@@ -810,8 +667,8 @@ for r in results
 end
 ```
 """
-function compare_against_ground_truth(name::String, f)
-    snapshot = load_ground_truth(name)
+function compare_against_ground_truth(name::String, f; dir::AbstractString=GROUND_TRUTH_DIR)
+    snapshot = load_ground_truth(name; dir=dir)
     entries = snapshot["entries"]
 
     results = NamedTuple[]
@@ -891,11 +748,11 @@ end
 
 Generate JavaScript loader code that uses bridge functions to marshal Vector args.
 """
-function _generate_bridge_loader(wasm_path, func_name, args, arg_types, return_vec_eltype)
+function _generate_bridge_driver(func_name, args, arg_types, return_vec_eltype)
+    # Driver body for the persistent runner pool: `bytes` is injected, and we
+    # RETURN a 1-element results array ([{ok:…}] | [{trap:"msg"}]) instead of
+    # reading a file and console.logging.
     lines = String[]
-    push!(lines, "import fs from 'fs';")
-    push!(lines, "const bytes = fs.readFileSync('$(escape_string(wasm_path))');")
-    push!(lines, "async function run() {")
     push!(lines, "  try {")
     push!(lines, "    const importObject = { Math: { pow: Math.pow } };")
     push!(lines, "    const wasmModule = await WebAssembly.instantiate(bytes, importObject);")
@@ -933,12 +790,12 @@ function _generate_bridge_loader(wasm_path, func_name, args, arg_types, return_v
     # Call the function
     push!(lines, "    const result = e['$(func_name)']($(join(call_args, ", ")));")
 
-    # Extract result
+    # Extract result → out, then `return [{ok: out}]`
     if return_vec_eltype === Int64
         push!(lines, "    const len = Number(e._bv_i64_len(result));")
         push!(lines, "    const out = [];")
         push!(lines, "    for (let i = 0; i < len; i++) out.push(e._bv_i64_get(result, BigInt(i+1)).toString());")
-        push!(lines, "    console.log(JSON.stringify(out));")
+        push!(lines, "    return [{ ok: out }];")
     elseif return_vec_eltype === Float64
         push!(lines, "    const len = Number(e._bv_f64_len(result));")
         push!(lines, "    const out = [];")
@@ -949,10 +806,10 @@ function _generate_bridge_loader(wasm_path, func_name, args, arg_types, return_v
         push!(lines, "      else if (v === -Infinity) out.push('-Inf');")
         push!(lines, "      else out.push(v);")
         push!(lines, "    }")
-        push!(lines, "    console.log(JSON.stringify(out));")
+        push!(lines, "    return [{ ok: out }];")
     else
         # Scalar result
-        push!(lines, """    const serialized = JSON.stringify(result, (key, value) => {
+        push!(lines, """    const enc = (key, value) => {
       if (typeof value === 'bigint') return { __bigint__: value.toString() };
       if (typeof value === 'number') {
         if (value === Infinity) return "__Inf__";
@@ -960,16 +817,13 @@ function _generate_bridge_loader(wasm_path, func_name, args, arg_types, return_v
         if (Number.isNaN(value)) return "__NaN__";
       }
       return value;
-    });""")
-        push!(lines, "    console.log(serialized);")
+    };""")
+        push!(lines, "    return [{ ok: JSON.parse(JSON.stringify(result, enc)) }];")
     end
 
-    push!(lines, "  } catch (e) {")
-    push!(lines, "    console.error('Wasm execution error:', e.message);")
-    push!(lines, "    process.exit(1);")
+    push!(lines, "  } catch (err) {")
+    push!(lines, "    return [{ trap: String(err && err.message || err) }];")
     push!(lines, "  }")
-    push!(lines, "}")
-    push!(lines, "run();")
 
     return join(lines, "\n")
 end
@@ -997,7 +851,7 @@ function compare_julia_wasm_vec(f, args...; optimize::Bool=false)
     # WASM bridge if we don't copy first.
     args_for_wasm = deepcopy(args)
 
-    if NODE_CMD === nothing
+    if !WasmRunner.runner_available()
         expected = f(args...)
         return (pass=true, expected=expected, actual=nothing, skipped=true, wasm_size=0)
     end
@@ -1029,30 +883,23 @@ function compare_julia_wasm_vec(f, args...; optimize::Bool=false)
     # 4. Compile (with optional binaryen optimization)
     bytes = WasmTarget.compile_multi(func_list; optimize=optimize)
 
-    # 5. Generate bridge-aware loader and run
+    # 5. Generate bridge-aware driver and run via the persistent pool
     func_name = string(nameof(f))
-    dir = mktempdir()
-    wasm_path = joinpath(dir, "module.wasm")
-    js_path = joinpath(dir, "loader.mjs")
-
-    write(wasm_path, bytes)
-    loader_code = _generate_bridge_loader(wasm_path, func_name, args_for_wasm, arg_types, return_vec_eltype)
-    open(js_path, "w") do io
-        print(io, loader_code)
-    end
+    driver = _generate_bridge_driver(func_name, args_for_wasm, arg_types, return_vec_eltype)
 
     # 6. Execute
-    try
-        node_cmd = NEEDS_EXPERIMENTAL_FLAG ? `$NODE_CMD --experimental-wasm-gc $js_path` : `$NODE_CMD $js_path`
-        output = read(pipeline(node_cmd; stderr=stderr), String)
-        output = strip(output)
-
-        if isempty(output)
-            return (pass=false, expected=expected, actual=nothing, skipped=false, wasm_size=length(bytes))
+    let
+        status, results = WasmRunner.run_driver_batch(bytes, driver; ninputs=1)
+        if status === :nonode
+            return (pass=true, expected=expected, actual=nothing, skipped=true, wasm_size=length(bytes))
+        elseif status === :error
+            return (pass=false, expected=expected, actual="WASM_ERROR", skipped=false, wasm_size=length(bytes))
         end
-
-        result = JSON.parse(output)
-        actual = unmarshal_result(result)
+        r = results[1]
+        if haskey(r, "trap")
+            return (pass=false, expected=expected, actual="WASM_ERROR", skipped=false, wasm_size=length(bytes))
+        end
+        actual = unmarshal_result(r["ok"])
 
         # For Vector returns, compare element-by-element
         if expected isa Vector
@@ -1075,11 +922,6 @@ function compare_julia_wasm_vec(f, args...; optimize::Bool=false)
         end
 
         return (pass=pass, expected=expected, actual=actual, skipped=false, wasm_size=length(bytes))
-    catch e
-        if e isa ProcessFailedException
-            return (pass=false, expected=expected, actual="WASM_ERROR", skipped=false, wasm_size=length(bytes))
-        end
-        rethrow()
     end
 end
 

@@ -1,5 +1,7 @@
 module WasmTarget
 
+using PrecompileTools: @setup_workload, @compile_workload
+
 # Builder - Low-level Wasm binary emitter
 include("builder/types.jl")
 include("builder/writer.jl")
@@ -7,6 +9,7 @@ include("builder/instructions.jl")
 include("builder/validator.jl")
 
 # Codegen - Julia IR to Wasm bytecode
+include("codegen/diagnostics.jl")  # strict-mode diagnostics; must precede context.jl (struct field)
 include("codegen/interpreter.jl")
 include("codegen/ir.jl")
 include("codegen/int_key_map.jl")
@@ -71,6 +74,8 @@ export compile_handler, compile_closure_body, DOMBindingSpec, TypeRegistry, Func
 export serialize_type_registry, serialize_function_table, serialize_type_ids, serialize_dispatch_tables
 export add_import!, add_global!, add_global_export!, add_function!, add_export!
 export I32, I64, F32, F64, NumType, Opcode, ExternRef
+# Soundness: strict-mode diagnostics + validation gate
+export WasmDiagnostic, WasmCompileError, WasmValidationError, validate_wasm_bytes
 
 """
     compile(f, arg_types; optimize=false) -> Vector{UInt8}
@@ -81,22 +86,28 @@ Returns a valid WebAssembly binary that can be instantiated and executed.
 Set `optimize=true` for size-optimized output (default `-Os` like dart2wasm),
 `optimize=:speed` for `-O3`, or `optimize=:debug` for `-O1` without `--traps-never-happen`.
 """
-function compile(f, arg_types::Tuple; optimize=false, optimize_ir::Bool=true)::Vector{UInt8}
+function compile(f, arg_types::Tuple; optimize=false, optimize_ir::Bool=true,
+                 strict::Bool=true, validate::Bool=true)::Vector{UInt8}
     # Get function name for export
     func_name = string(nameof(f))
 
-    # Compile to WasmModule
-    mod = compile_function(f, arg_types, func_name; optimize_ir=optimize_ir)
+    # Compile to WasmModule (strict=true raises WasmCompileError on unsupported constructs)
+    mod = compile_function(f, arg_types, func_name; optimize_ir=optimize_ir, strict=strict)
 
     # Serialize to bytes
     bytes = to_bytes(mod)
-    optimize === false && return bytes
+    if optimize === false
+        # Soundness gate: validate the emitted module (raises WasmValidationError on reject)
+        validate && validate_wasm_bytes(bytes; label="compiled module")
+        return bytes
+    end
     level = optimize === true ? :size : optimize
-    return WasmTarget.optimize(bytes; level=level)
+    return WasmTarget.optimize(bytes; level=level, validate=validate)
 end
 
 # Convenience method for single argument type
-compile(f, arg_type::Type; optimize=false, optimize_ir::Bool=true) = compile(f, (arg_type,); optimize=optimize, optimize_ir=optimize_ir)
+compile(f, arg_type::Type; optimize=false, optimize_ir::Bool=true, strict::Bool=true, validate::Bool=true) =
+    compile(f, (arg_type,); optimize=optimize, optimize_ir=optimize_ir, strict=strict, validate=validate)
 
 """
     compile_multi(functions; optimize=false) -> Vector{UInt8}
@@ -121,23 +132,28 @@ Functions can call each other within the module.
 """
 function compile_multi(functions::Vector; optimize=false, stub_names::Set{String}=Set{String}(),
                        return_registries::Bool=false, optimize_ir::Bool=true,
-                       register_ir_types::Bool=false)
+                       register_ir_types::Bool=false, strict::Bool=true, validate::Bool=true)
     result = compile_module(functions; stub_names=stub_names, return_registries=return_registries,
-                           optimize_ir=optimize_ir, register_ir_types=register_ir_types)
+                           optimize_ir=optimize_ir, register_ir_types=register_ir_types, strict=strict)
     if return_registries
         mod, type_registry, func_registry, dispatch_registry = result
         bytes = to_bytes(mod)
         if optimize !== false
             level = optimize === true ? :size : optimize
-            bytes = WasmTarget.optimize(bytes; level=level)
+            bytes = WasmTarget.optimize(bytes; level=level, validate=validate)
+        else
+            validate && validate_wasm_bytes(bytes; label="compiled module")
         end
         return (bytes, type_registry, func_registry, dispatch_registry)
     else
         mod = result
         bytes = to_bytes(mod)
-        optimize === false && return bytes
+        if optimize === false
+            validate && validate_wasm_bytes(bytes; label="compiled module")
+            return bytes
+        end
         level = optimize === true ? :size : optimize
-        return WasmTarget.optimize(bytes; level=level)
+        return WasmTarget.optimize(bytes; level=level, validate=validate)
     end
 end
 
@@ -240,8 +256,14 @@ const WASM_OPT_GC_FLAGS = [
     "--enable-bulk-memory", "--enable-sign-ext", "--enable-exception-handling",
 ]
 
+# NOTE: dart2wasm also passes --traps-never-happen, but that assumption is
+# UNSOUND here: WasmTarget uses wasm traps as Julia's error semantics (div by
+# zero, bounds checks, throw paths), and -tnh lets binaryen delete/reorder
+# those paths — optimized builds returned garbage where native throws
+# (ledger gaps dacbfa51e334, 5cc6c2b2ac64, c77a8f98bb53, …). Dart never relies
+# on traps; Julia-compiled code does.
 const WASM_OPT_PRODUCTION_FLAGS = [
-    "--closed-world", "--traps-never-happen",
+    "--closed-world",
     "--type-unfinalizing", "-Os", "--type-ssa", "--gufa", "-Os",
     "--type-merging", "-Os", "--type-finalizing", "--minimize-rec-groups",
 ]
@@ -275,7 +297,7 @@ function optimize(bytes::Vector{UInt8}; level::Symbol=:size, validate::Bool=true
     if level === :size
         append!(flags, WASM_OPT_PRODUCTION_FLAGS)
     elseif level === :speed
-        append!(flags, ["--closed-world", "--traps-never-happen",
+        append!(flags, ["--closed-world",   # no --traps-never-happen: see WASM_OPT_PRODUCTION_FLAGS
                         "--type-unfinalizing", "-O3", "--type-ssa", "--gufa", "-O3",
                         "--type-merging", "-O3", "--type-finalizing", "--minimize-rec-groups"])
     elseif level === :debug
@@ -301,19 +323,100 @@ function optimize(bytes::Vector{UInt8}; level::Symbol=:size, validate::Bool=true
 
         opt_bytes = read(output_path)
 
-        # Validate optimized output
-        if validate
-            wasm_tools = Sys.which("wasm-tools")
-            if wasm_tools !== nothing
-                try
-                    Base.run(pipeline(`$(wasm_tools) validate --features=gc $(output_path)`, stderr=devnull))
-                catch
-                    @warn "wasm-tools validate failed on optimized output"
-                end
-            end
-        end
+        # Soundness gate: validate optimized output (raises WasmValidationError on reject)
+        validate && validate_wasm_bytes(opt_bytes; label="optimized module")
 
         return opt_bytes
+    end
+end
+
+# ============================================================================
+# Validation gate — wasm-tools validate (default-on soundness check)
+# ============================================================================
+
+const _WARNED_NO_WASM_TOOLS = Ref(false)
+function _warn_no_wasm_tools_once()
+    if !_WARNED_NO_WASM_TOOLS[]
+        @warn "wasm-tools not found — skipping the wasm validation gate (install: `cargo install wasm-tools`)"
+        _WARNED_NO_WASM_TOOLS[] = true
+    end
+end
+
+"""
+    validate_wasm_bytes(bytes; label="module") -> Vector{UInt8}
+
+Run `wasm-tools validate --features=gc` on `bytes`. Throws [`WasmValidationError`](@ref)
+if the validator rejects the module. If `wasm-tools` is not installed, this is a no-op
+(with a one-time warning) so the package stays usable without the tool. Returns `bytes`
+unchanged so it can be used inline.
+"""
+function validate_wasm_bytes(bytes::Vector{UInt8}; label::AbstractString="module")
+    wasm_tools = Sys.which("wasm-tools")
+    if wasm_tools === nothing
+        _warn_no_wasm_tools_once()
+        return bytes
+    end
+    mktempdir() do dir
+        p = joinpath(dir, "validate.wasm")
+        write(p, bytes)
+        err = IOBuffer()
+        ok = try
+            Base.run(pipeline(`$(wasm_tools) validate --features=gc $(p)`, stdout=devnull, stderr=err))
+            true
+        catch
+            false
+        end
+        ok || throw(WasmValidationError("wasm-tools rejected the emitted $label", String(take!(err))))
+    end
+    return bytes
+end
+
+# ── Precompile workload ──────────────────────────────────────────────────────
+# `compile(f, types)` JIT-compiles the WasmInterpreter + codegen for that
+# signature. The test suite's wall-time is dominated by paying that JIT warmup at
+# runtime (Julia's global codegen lock serializes it, so threads can't hide it).
+# Exercising representative signatures HERE bakes those compiler method instances
+# into the `.ji` cache — the warmup is paid once at `]precompile` and is ~free on
+# every cached run. Compile-only (no Node, no binaryen). Each call is guarded so a
+# value-stub on some path can never break precompilation.
+struct _PCStruct; a::Int32; b::Float64; end
+_pc_iadd(x::Int64)            = x + Int64(1)
+_pc_imix(x::Int64)           = ((x * Int64(3)) ÷ Int64(2)) % Int64(7) | Int64(1)
+_pc_i32(x::Int32)            = (x * Int32(3)) % Int32(7)
+_pc_fmath(x::Float64)        = sin(x) + sqrt(abs(x)) * 2.0 - cos(x)
+_pc_fmix(x::Float64)         = (x * 2.0 + 1.0) / (abs(x) + 1.0)
+_pc_conv(x::Int64)           = Float64(x) * 1.5
+_pc_cond(x::Int64)           = x > Int64(0) ? x * Int64(2) : -x
+_pc_loop(n::Int64)           = (s = Int64(0); i = Int64(1); while i <= n; s += i; i += Int64(1); end; s)
+_pc_rec(n::Int64)            = n <= Int64(1) ? Int64(1) : n * _pc_rec(n - Int64(1))
+_pc_vsort(v::Vector{Int64})    = sort(v)
+_pc_vsum(v::Vector{Float64})   = sum(v)
+_pc_vmap(v::Vector{Int64})     = map(y -> y * Int64(2), v)
+_pc_vfilter(v::Vector{Int64})  = filter(y -> y > Int64(0), v)
+_pc_vreduce(v::Vector{Int64})  = reduce(min, v)
+_pc_vstat(v::Vector{Int64})    = maximum(v) + length(v) + (isempty(v) ? Int64(0) : first(v))
+_pc_dict(x::Int64)           = get(Dict(Int64(0) => Int64(1), Int64(1) => Int64(2)), x, Int64(0))
+_pc_set(x::Int64)            = length(Set([x, x, x + Int64(1)]))
+_pc_strlen(x::Int64)         = length(string(x))
+_pc_strup(s::String)         = length(uppercase(s))
+_pc_struct(x::Int32)         = (s = _PCStruct(x, 1.5); s.a + Int32(s.b))
+_pc_tuple(x::Int64)          = (t = (x, x + Int64(1), x + Int64(2)); t[1] + t[3])
+
+@setup_workload begin
+    @compile_workload begin
+        for (f, ts) in (
+            (_pc_iadd, (Int64,)), (_pc_imix, (Int64,)), (_pc_i32, (Int32,)),
+            (_pc_fmath, (Float64,)), (_pc_fmix, (Float64,)), (_pc_conv, (Int64,)),
+            (_pc_cond, (Int64,)), (_pc_loop, (Int64,)), (_pc_rec, (Int64,)),
+            (_pc_dict, (Int64,)), (_pc_set, (Int64,)),
+            (_pc_strlen, (Int64,)), (_pc_strup, (String,)),
+            (_pc_struct, (Int32,)), (_pc_tuple, (Int64,)),
+            (_pc_vsort, (Vector{Int64},)), (_pc_vsum, (Vector{Float64},)),
+            (_pc_vmap, (Vector{Int64},)), (_pc_vfilter, (Vector{Int64},)),
+            (_pc_vreduce, (Vector{Int64},)), (_pc_vstat, (Vector{Int64},)),
+        )
+            try; compile(f, ts; validate=false); catch; end
+        end
     end
 end
 

@@ -66,6 +66,12 @@ mutable struct CompilationContext <: AbstractCompilationContext
     # instead of normal compilation. Maps SSA index -> WASM import function index.
     # Used by Therapy.jl to wire js() calls as WASM imports (Leptos pattern).
     invoke_imports::Dict{Int, UInt32}
+    # Soundness: when true (default), codegen raises WasmCompileError instead of
+    # silently emitting an `unreachable`/value stub for unsupported constructs.
+    # strict=false restores the historical permissive stub-and-trap behavior.
+    strict::Bool
+    # Diagnostics accumulated during compilation (see diagnostics.jl).
+    diagnostics::Vector{WasmDiagnostic}
 end
 
 function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
@@ -78,7 +84,8 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
                            module_globals::Vector{Tuple{Tuple{Module, Symbol}, UInt32}}=Tuple{Tuple{Module, Symbol}, UInt32}[],
                            dispatch_registry::Union{Nothing, DispatchTableRegistry}=nothing,
                            skip_stmts::Set{Int}=Set{Int}(),
-                           invoke_imports::Dict{Int, UInt32}=Dict{Int, UInt32}())
+                           invoke_imports::Dict{Int, UInt32}=Dict{Int, UInt32}(),
+                           strict::Bool=true)
     # Calculate n_params excluding WasmGlobal arguments (they're phantom)
     n_real_params = count(i -> !(i in global_args), 1:length(arg_types))
     ctx = CompilationContext(
@@ -111,7 +118,9 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         dispatch_registry,      # PURE-9060: Tier 2 hash dispatch
         nothing,                # PURE-9063: typeof scratch local (allocated on demand)
         skip_stmts,             # Skip statements (Therapy.jl js() interop)
-        invoke_imports          # Invoke imports (Therapy.jl js() as WASM imports)
+        invoke_imports,         # Invoke imports (Therapy.jl js() as WASM imports)
+        strict,                 # Soundness: raise on unsupported constructs (default true)
+        WasmDiagnostic[]        # Diagnostics accumulated during compilation
     )
     # Analyze SSA types and allocate locals for multi-use SSAs
     analyze_ssa_types!(ctx)
@@ -496,7 +505,12 @@ function julia_to_wasm_type_concrete(T, ctx::AbstractCompilationContext)::WasmVa
             type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
             return ConcreteRef(type_idx, true)
         end
-    elseif T <: AbstractArray  # Handles Vector, Matrix, and higher-dim arrays
+    # P2-batch20: exclude Unions — Union{Vector{Int32},Vector{Int64}} <: AbstractArray
+    # is true, and registering the UNION as a single-member vector wrapper here while
+    # value sites used the tagged-union struct made the two representations collide
+    # (gap 5ae13ccb033a: `sum([x,x,acc_b])` with Int32→Int64 widening). Unions fall
+    # through to the dedicated Union branch below.
+    elseif !(T isa Union) && T <: AbstractArray  # Handles Vector, Matrix, and higher-dim arrays
         # In Julia 1.11+, Vector is a struct with :ref (MemoryRef) and :size fields
         # Check if the type is registered as a struct first (for Vector/Matrix)
         if haskey(ctx.type_registry.structs, T)
@@ -2439,11 +2453,13 @@ mutable struct InplaceCompilationContext <: AbstractCompilationContext
     slot_locals::Nothing
     dispatch_registry::Nothing
     typeof_scratch_local::Nothing
+    strict::Bool
+    diagnostics::Vector{WasmDiagnostic}
 end
 
 function InplaceCompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
                                   func_registry::Union{FunctionRegistry, Nothing}=nothing,
-                                  func_idx::UInt32=UInt32(0), func_ref=nothing)
+                                  func_idx::UInt32=UInt32(0), func_ref=nothing, strict::Bool=true)
     # Wrap code_info in SimpleIR if needed (Core.CodeInfo → SimpleIR for concrete field access)
     ci = code_info isa SimpleIR ? code_info : SimpleIR(code_info.code, code_info.ssavaluetypes)
     n_real_params = length(arg_types)
@@ -2460,7 +2476,8 @@ function InplaceCompilationContext(code_info, arg_types::Tuple, return_type, mod
         Tuple{Tuple{Module, Symbol}, UInt32}[],  # module_globals
         nothing, nothing,          # scratch_locals, memoryref_offsets
         WasmStackValidator(enabled=true, func_name="func_$(func_idx)"),
-        false, nothing, nothing, nothing  # last_stmt_was_stub, slot_locals, dispatch_registry, typeof_scratch_local
+        false, nothing, nothing, nothing,  # last_stmt_was_stub, slot_locals, dispatch_registry, typeof_scratch_local
+        strict, WasmDiagnostic[]            # strict mode + diagnostics
     )
     analyze_ssa_types!(ctx)
     analyze_control_flow!(ctx)

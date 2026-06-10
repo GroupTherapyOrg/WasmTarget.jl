@@ -1,24 +1,33 @@
 name = "WasmTarget"
 uuid = "9f3a1415-1112-405b-ae89-c61daf9872bd"
-version = "0.1.1"
+version = "0.3.0"
 authors = ["Dale Black"]
 
 [deps]
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
 
 [compat]
 # `~1.12` = [1.12.0, 1.13.0) — pins to the 1.12 minor line only. Bare
 # `"1.12"` is shorthand for `^1.12` which would also accept 1.13, 1.14, etc.
 Aqua = "0.8"
 Dates = "1"
+# JSON 1.x ONLY — 0.21 silently wraps >typemax(Int64) integer literals to a
+# garbage Int64 on parse, corrupting the Node-bridge decode of large-float results
+# (the differential fuzzer then reports spurious wrong_value divergences).
 JSON = "1"
+PrecompileTools = "1"
+Random = "1"
+Supposition = "0.3"
 Test = "1"
 julia = "~1.12"
 
 [extras]
 Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+Supposition = "5a0628fe-1738-4658-9b6d-0b7605a9755b"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Aqua", "Dates", "Test"]
+test = ["Aqua", "Dates", "Random", "Supposition", "Test"]

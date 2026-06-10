@@ -96,6 +96,189 @@ function _ensure_typeof_scratch_local!(ctx::AbstractCompilationContext)::UInt32
     return local_idx
 end
 
+# Normalise BOTH narrow (sub-32-bit) operands on the stack before an i32 op
+# that OBSERVES the full register width (div/rem). WasmTarget defers narrow-int
+# normalisation: an i32 register may carry overflow junk above the Julia width
+# (e.g. UInt8 0xa5 + 0xff = 0x1a4) which add/sub/mul/and/or don't care about —
+# but div_u/rem_u divide the WIDE value (gap: div(0xa5 + x, 0x04)::UInt8 gave
+# 0x69, native 0x29). Unsigned → mask to width; signed → sign-extend in
+# register. Stack: [a, b] → [norm(a), norm(b)]. No-op for full-width operands.
+function _emit_normalise_narrow_pair!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext,
+                                      signed::Bool, julia_width::Int)
+    julia_width < 32 || return bytes
+    b = UInt32(allocate_local!(ctx, I32))
+    function norm!()
+        if signed
+            push!(bytes, julia_width == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
+        else
+            push!(bytes, Opcode.I32_CONST)
+            append!(bytes, encode_leb128_signed(Int64((1 << julia_width) - 1)))
+            push!(bytes, Opcode.I32_AND)
+        end
+    end
+    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(b))   # [a]
+    norm!()                                                                      # [a*]
+    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(b))   # [a*, b]
+    norm!()                                                                      # [a*, b*]
+    return bytes
+end
+
+# Emit a catchable throw of a fieldless exception struct (e.g. DivideError):
+# stash the instance in the $current_exn global, then `throw` tag 0 — the same
+# mechanism explicit Julia `throw(...)` lowers to, so enclosing try_table
+# handlers (and JS, for uncaught propagation) see a real exception, not a trap.
+function _emit_throw_error_struct!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, @nospecialize(T))
+    ensure_exception_tag!(ctx.mod)
+    exn_global = ensure_exception_global!(ctx.mod)
+    info = register_struct_type!(ctx.mod, ctx.type_registry, T)
+    if info !== nothing
+        emit_type_id!(bytes, ctx.type_registry, T)
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.STRUCT_NEW)
+        append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
+    else
+        push!(bytes, Opcode.REF_NULL)
+        push!(bytes, UInt8(AnyRef))
+    end
+    push!(bytes, Opcode.GLOBAL_SET)
+    append!(bytes, encode_leb128_unsigned(exn_global))
+    push!(bytes, Opcode.THROW)
+    append!(bytes, encode_leb128_unsigned(0))
+    return bytes
+end
+
+# Guard an integer div/rem so Julia-visible error cases THROW (catchable
+# DivideError) instead of reaching the wasm instruction's uncatchable trap:
+#   * divisor == 0                  → DivideError   (div_s/div_u/rem_s/rem_u trap)
+#   * sdiv typemin(width) ÷ -1      → DivideError   (i32/i64.div_s traps at full
+#     width; at narrow widths — Int8/Int16 in an i32 register — wasm computes
+#     2^(w-1) silently, so the guard is also a *value* soundness fix)
+# rem_s(typemin, -1) is defined as 0 in wasm — matches Julia — so `check_overflow`
+# is only set for signed div. Stack: [a, b] → [a, b] (operands re-pushed; values
+# must already be narrow-normalised).
+function _emit_div_guard!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, is32::Bool;
+                          check_overflow::Bool=false, julia_width::Int=(is32 ? 32 : 64))
+    lt     = is32 ? I32 : I64
+    wconst = is32 ? Opcode.I32_CONST : Opcode.I64_CONST
+    weqz   = is32 ? Opcode.I32_EQZ : Opcode.I64_EQZ
+    weq    = is32 ? Opcode.I32_EQ : Opcode.I64_EQ
+    la = UInt32(allocate_local!(ctx, lt))
+    lb = UInt32(allocate_local!(ctx, lt))
+    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(lb))  # [a]
+    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(la))  # []
+    # b == 0 → throw DivideError
+    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(lb))
+    push!(bytes, weqz)
+    push!(bytes, Opcode.IF)
+    push!(bytes, 0x40)  # void
+    _emit_throw_error_struct!(bytes, ctx, DivideError)
+    push!(bytes, Opcode.END)
+    if check_overflow
+        # a == typemin(width) && b == -1 → throw DivideError
+        tmin = julia_width >= 64 ? typemin(Int64) : -(Int64(1) << (julia_width - 1))
+        push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(la))
+        push!(bytes, wconst); append!(bytes, encode_leb128_signed(tmin))
+        push!(bytes, weq)
+        push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(lb))
+        push!(bytes, wconst); append!(bytes, encode_leb128_signed(-1))
+        push!(bytes, weq)
+        push!(bytes, Opcode.I32_AND)
+        push!(bytes, Opcode.IF)
+        push!(bytes, 0x40)  # void
+        _emit_throw_error_struct!(bytes, ctx, DivideError)
+        push!(bytes, Opcode.END)
+    end
+    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(la))
+    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(lb))
+    return bytes
+end
+
+# Emit a Julia-semantics shift. Stack on entry: [value, shift] (same wasm type).
+# Julia's shl_int/lshr_int yield 0 and ashr_int yields sign-fill when the shift
+# amount ≥ bitwidth, whereas wasm's shifts mask the amount to `mod bitwidth`
+# (so e.g. `1 << 64` is 1 in raw wasm but 0 in Julia). We guard:
+#   shl/lshr:  (shift < width) ? (value <op> shift) : 0
+#   ashr:      value >>s (shift < width ? shift : width-1)   (clamp → sign-fill)
+# Bit width of the Julia integer operand being shifted (8/16/32/64). Falls back to
+# the wasm register width for non-concrete / non-bitsinteger operand types so the
+# guard is a no-op (behaviour unchanged) unless we positively know it's narrow.
+function _julia_int_width(@nospecialize(T), is32::Bool)
+    if T isa Type && isconcretetype(T) && T <: Base.BitInteger
+        return sizeof(T) * 8
+    end
+    return is32 ? 32 : 64
+end
+
+# `julia_width` is the Julia operand's bit width (8/16/32/64). It can be NARROWER
+# than the wasm representation width (UInt8/UInt16/Int8/Int16 all live in an i32).
+# Two corrections are needed when julia_width < wasm width, both for `<<`:
+#   * over-shift threshold must be julia_width, not the wasm width — Julia yields 0
+#     once shift ≥ julia_width (wasm's i32.shl also masks the *amount* mod 32, so a
+#     shift of exactly 32/64 would otherwise wrap to a no-op and leak the value); and
+#   * the shl result must be truncated to julia_width bits (e.g. `UInt8(1) << 8` is
+#     0 in Julia but 256 in a raw i32), since high bits spill into the wide register.
+# Right shifts (lshr/ashr) of a *normalised* narrow value need no result mask; lshr
+# also honours the julia_width threshold (shr_u of a width-bit value by ≥ width = 0).
+function _emit_shift_guarded!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, is32::Bool, kind::Symbol;
+                              julia_width::Int = (is32 ? 32 : 64))
+    wconst = is32 ? Opcode.I32_CONST : Opcode.I64_CONST
+    wltu   = is32 ? Opcode.I32_LT_U : Opcode.I64_LT_U
+    wand   = is32 ? Opcode.I32_AND : Opcode.I64_AND
+    width  = is32 ? 32 : 64
+    thr    = clamp(julia_width, 1, width)        # over-shift threshold (Julia width)
+    narrow = thr < width                          # operand narrower than its wasm reg
+    sl     = UInt32(allocate_local!(ctx, is32 ? I32 : I64))
+    shop   = kind === :shl  ? (is32 ? Opcode.I32_SHL : Opcode.I64_SHL) :
+             kind === :lshr ? (is32 ? Opcode.I32_SHR_U : Opcode.I64_SHR_U) :
+                              (is32 ? Opcode.I32_SHR_S : Opcode.I64_SHR_S)
+    _lset(op, i) = (push!(bytes, op); append!(bytes, encode_leb128_unsigned(i)))
+    _wc(v) = (push!(bytes, wconst); append!(bytes, encode_leb128_signed(Int64(v))))
+    if kind === :ashr
+        # [value, shift] → [value, clamped] → shr_s   (sign-fill semantics unchanged)
+        _lset(Opcode.LOCAL_SET, sl)              # [value]
+        _lset(Opcode.LOCAL_GET, sl)              # [value, shift]        (a = shift)
+        _wc(width - 1)                           # [value, shift, w-1]   (b = w-1)
+        _lset(Opcode.LOCAL_GET, sl)              # [value, shift, w-1, shift]
+        _wc(width)                               # [..., width]
+        push!(bytes, wltu)                       # [value, shift, w-1, cond]
+        push!(bytes, Opcode.SELECT)              # [value, cond? shift : w-1]
+        push!(bytes, shop)                       # [value >>s clamped]
+    else
+        # [value, shift] → [result] → select(result, 0, shift < thr)
+        _lset(Opcode.LOCAL_TEE, sl)              # [value, shift]  (shift saved)
+        push!(bytes, shop)                       # [result]
+        _wc(0)                                   # [result, 0]
+        _lset(Opcode.LOCAL_GET, sl)              # [result, 0, shift]
+        _wc(thr)                                 # [result, 0, shift, thr]
+        push!(bytes, wltu)                       # [result, 0, cond]
+        push!(bytes, Opcode.SELECT)              # [cond? result : 0]
+        if kind === :shl && narrow
+            _wc((Int64(1) << thr) - 1)           # [result, mask]  (2^width - 1)
+            push!(bytes, wand)                   # [result & mask]  truncate to width
+        end
+    end
+    return bytes
+end
+
+# Narrow an i64 shift AMOUNT to i32 for an i32-represented value, SATURATING any
+# out-of-range amount (≥ julia_width, unsigned) to julia_width so the over-shift
+# guard maps it to 0. A plain I32_WRAP_I64 drops the amount's high bits, so a huge
+# shift like `x << typemin(Int64)` (low 32 bits = 0) would wrap to a no-op and leak
+# the unshifted value. Stack: [.., amount_i64] → [.., amount_i32].
+function _emit_wrap_shift_amount_saturating!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, julia_width::Int)
+    amt = UInt32(allocate_local!(ctx, I64))
+    _g(op, i) = (push!(bytes, op); append!(bytes, encode_leb128_unsigned(i)))
+    _c(v) = (push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(v))))
+    _g(Opcode.LOCAL_TEE, amt)                    # [amount]
+    _c(julia_width)                              # [amount, jw]
+    _g(Opcode.LOCAL_GET, amt)                    # [amount, jw, amount]
+    _c(julia_width)                              # [amount, jw, amount, jw]
+    push!(bytes, Opcode.I64_LT_U)                # [amount, jw, cond]   cond = amount <u jw
+    push!(bytes, Opcode.SELECT)                  # [cond ? amount : jw]
+    push!(bytes, Opcode.I32_WRAP_I64)            # [amount_i32]
+    return bytes
+end
+
 """
 Emit WASM instructions to convert a Char codepoint (on stack) to Julia's raw UInt32 bits.
 Julia stores Char as UTF-8 bytes in the high positions of a UInt32:
@@ -1860,51 +2043,18 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         false_bytes = compile_value(args[3], ctx)  # false_val
         cond_bytes = compile_value(args[1], ctx)   # cond
 
-        # PURE-036y: Validate that cond_bytes pushes an i32 value, not a ref or nothing.
-        # Check for struct.new (0xfb 0x00 or 0xfb 0x01) which produces ref instead of i32.
-        cond_is_ref = false
-        if length(cond_bytes) >= 3
-            # Scan for GC_PREFIX + STRUCT_NEW pattern
-            for i in 1:(length(cond_bytes)-1)
-                if cond_bytes[i] == 0xfb && (cond_bytes[i+1] == 0x00 || cond_bytes[i+1] == 0x01)
-                    cond_is_ref = true
-                    break
-                end
-            end
-        end
-        # Also check if cond_bytes is just a local.get of a ref-typed local/param
-        if !cond_is_ref && length(cond_bytes) >= 2 && cond_bytes[1] == 0x20  # LOCAL_GET
-            # Decode LEB128 to get local index
-            local_idx = 0
-            shift = 0
-            for i in 2:length(cond_bytes)
-                b = cond_bytes[i]
-                local_idx |= (b & 0x7f) << shift
-                if (b & 0x80) == 0
-                    break
-                end
-                shift += 7
-            end
-            # Check if this local is ref-typed
-            arr_idx = local_idx - ctx.n_params + 1
-            if arr_idx >= 1 && arr_idx <= length(ctx.locals)
-                local_type = ctx.locals[arr_idx]
-                if local_type isa ConcreteRef || local_type === StructRef ||
-                   local_type === ArrayRef || local_type === ExternRef || local_type === AnyRef
-                    cond_is_ref = true
-                end
-            elseif local_idx < ctx.n_params && local_idx >= 0
-                # It's a parameter - check its type
-                param_idx = local_idx + 1
-                if param_idx <= length(ctx.arg_types)
-                    param_wasm = julia_to_wasm_type_concrete(ctx.arg_types[param_idx], ctx)
-                    if param_wasm isa ConcreteRef || param_wasm === StructRef ||
-                       param_wasm === ArrayRef || param_wasm === ExternRef || param_wasm === AnyRef
-                        cond_is_ref = true
-                    end
-                end
-            end
-        end
+        # PURE-036y / P2-batch10: the condition must push an i32, not a ref.
+        # The old detection BYTE-SCANNED cond_bytes for 0xfb 0x00/0x01 (GC_PREFIX +
+        # STRUCT_NEW) — but LEB128 operands collide with that pattern: `local.get 251`
+        # encodes as [0x20, 0xfb, 0x01], so any condition living in local 251 (or any
+        # constant containing those bytes) was misclassified as a ref and the SELECT
+        # was silently dropped, leaving only the true-branch value. In a gcd loop
+        # phi-update this froze the loop-carried value → infinite loop (gap
+        # 6830e0e173d4/c8566ce342f8 family). Classify by the VALUE'S TYPE instead.
+        cond_wasm_type = infer_value_wasm_type(args[1], ctx)
+        cond_is_ref = cond_wasm_type isa ConcreteRef || cond_wasm_type === StructRef ||
+                      cond_wasm_type === ArrayRef || cond_wasm_type === ExternRef ||
+                      cond_wasm_type === AnyRef || cond_wasm_type === EqRef
 
         # If cond produces ref, fall back to just true_bytes (can't use as SELECT condition)
         if cond_is_ref
@@ -2637,7 +2787,10 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     field_ref
                 end
 
-                field_idx = findfirst(==(field_sym), info.field_names)
+                # P2-batch20: positional getfield(x, i::Integer) — see struct branch
+                field_idx = field_sym isa Integer ?
+                    (1 <= field_sym <= length(info.field_names) ? Int(field_sym) : nothing) :
+                    findfirst(==(field_sym), info.field_names)
                 if field_idx !== nothing
                     append!(bytes, compile_value(obj_arg, ctx))
                     push!(bytes, Opcode.GC_PREFIX)
@@ -2675,7 +2828,11 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 field_ref
             end
 
-            field_idx = findfirst(==(field_sym), info.field_names)
+            # P2-batch20: getfield(x, i::Integer) — positional access (gap
+            # 8f5c0002bb71). Julia field order == info.field_names order.
+            field_idx = field_sym isa Integer ?
+                (1 <= field_sym <= length(info.field_names) ? Int(field_sym) : nothing) :
+                findfirst(==(field_sym), info.field_names)
             if field_idx !== nothing
                 append!(bytes, compile_value(obj_arg, ctx))
                 # PURE-701: If obj_arg's local is structref (union of struct types),
@@ -4205,6 +4362,52 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             push!(bytes, is_32bit ? Opcode.I32_MUL : Opcode.I64_MUL)
         end
 
+    # P2-batch13: NARROW-WIDTH checked add/sub/mul (Int8/UInt8/Int16/UInt16).
+    # The register-width handlers below detect overflow with sign-bit tricks at
+    # bit 31/63 — but a narrow op can never overflow the wide register, so the
+    # flag stayed false and e.g. checked_abs(Int8(-128)) leaked 128 instead of
+    # throwing OverflowError (lcm(Int8(-128), 1) divergent_throw family).
+    # Compute in i32 on normalised inputs; flag = result fails the
+    # sign/zero-extend round-trip at the JULIA width; value = wrapped result.
+    elseif is_32bit && _julia_int_width(arg_type, is_32bit) < 32 &&
+           (is_func(func, :checked_sadd_int) || is_func(func, :checked_uadd_int) ||
+            is_func(func, :checked_ssub_int) || is_func(func, :checked_usub_int) ||
+            is_func(func, :checked_smul_int) || is_func(func, :checked_umul_int))
+        local _ncw = _julia_int_width(arg_type, is_32bit)
+        local _nc_signed = is_func(func, :checked_sadd_int) || is_func(func, :checked_ssub_int) ||
+                           is_func(func, :checked_smul_int)
+        local _nc_op = (is_func(func, :checked_sadd_int) || is_func(func, :checked_uadd_int)) ? Opcode.I32_ADD :
+                       (is_func(func, :checked_ssub_int) || is_func(func, :checked_usub_int)) ? Opcode.I32_SUB :
+                       Opcode.I32_MUL
+        _emit_normalise_narrow_pair!(bytes, ctx, _nc_signed, _ncw)
+        local _nc_r = UInt32(allocate_local!(ctx, I32))
+        push!(bytes, _nc_op)
+        push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(_nc_r))
+        # helper: push wrapped-to-width copy of result
+        local _nc_norm! = function ()
+            push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(_nc_r))
+            if _nc_signed
+                push!(bytes, _ncw == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
+            else
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int64((1 << _ncw) - 1)))
+                push!(bytes, Opcode.I32_AND)
+            end
+        end
+        local _nc_tt = Tuple{Int32, Bool}
+        if !haskey(ctx.type_registry.structs, _nc_tt)
+            register_tuple_type!(ctx.mod, ctx.type_registry, _nc_tt)
+        end
+        local _nc_info = ctx.type_registry.structs[_nc_tt]
+        push!(bytes, Opcode.I32_CONST); push!(bytes, 0x00)   # typeId
+        _nc_norm!()                                           # field 1: wrapped value
+        _nc_norm!()                                           # flag: wrapped != raw
+        push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(_nc_r))
+        push!(bytes, Opcode.I32_NE)
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.STRUCT_NEW)
+        append!(bytes, encode_leb128_unsigned(_nc_info.wasm_type_idx))
+
     # PURE-9003: checked_smul_int(a, b) -> Tuple{T, Bool} (result, overflow_flag)
     # Overflow detection via division check: if a != 0 && a != -1: overflow = result/a != b
     elseif is_func(func, :checked_smul_int) || is_func(func, :checked_umul_int)
@@ -4362,15 +4565,24 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         end
 
     elseif is_func(func, :sdiv_int) || is_func(func, :checked_sdiv_int)
+        local _dw = _julia_int_width(arg_type, is_32bit)
+        is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, true, _dw)
+        _emit_div_guard!(bytes, ctx, is_32bit; check_overflow=true, julia_width=_dw)
         push!(bytes, is_32bit ? Opcode.I32_DIV_S : Opcode.I64_DIV_S)
 
     elseif is_func(func, :udiv_int) || is_func(func, :checked_udiv_int)
+        is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, false, _julia_int_width(arg_type, is_32bit))
+        _emit_div_guard!(bytes, ctx, is_32bit)
         push!(bytes, is_32bit ? Opcode.I32_DIV_U : Opcode.I64_DIV_U)
 
     elseif is_func(func, :srem_int) || is_func(func, :checked_srem_int)
+        is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, true, _julia_int_width(arg_type, is_32bit))
+        _emit_div_guard!(bytes, ctx, is_32bit)
         push!(bytes, is_32bit ? Opcode.I32_REM_S : Opcode.I64_REM_S)
 
     elseif is_func(func, :urem_int) || is_func(func, :checked_urem_int)
+        is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, false, _julia_int_width(arg_type, is_32bit))
+        _emit_div_guard!(bytes, ctx, is_32bit)
         push!(bytes, is_32bit ? Opcode.I32_REM_U : Opcode.I64_REM_U)
 
     # Bitcast (reinterpret bits between types)
@@ -4459,10 +4671,16 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         _compile_call_flipsign(args, bytes, ctx, is_128bit, is_32bit, arg_type)
 
     # Comparison operations
+    # P2-batch13: ordered comparisons OBSERVE the full register width, so narrow
+    # operands must be renormalised first (same policy as div/rem): an Int8 value
+    # of -x can sit in the i32 register as 128, and slt_int(128, 0) = false flips
+    # checked_abs's overflow test (lcm(Int8(-128), 1) returned 128 instead of
+    # throwing). Signed → sign-extend in register; unsigned → mask.
     elseif is_func(func, :slt_int)  # signed less than
         if is_128bit
             append!(bytes, emit_int128_slt(ctx, arg_type))
         else
+            is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, true, _julia_int_width(arg_type, is_32bit))
             push!(bytes, is_32bit ? Opcode.I32_LT_S : Opcode.I64_LT_S)
         end
 
@@ -4470,6 +4688,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         if is_128bit
             append!(bytes, emit_int128_sle(ctx, arg_type))
         else
+            is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, true, _julia_int_width(arg_type, is_32bit))
             push!(bytes, is_32bit ? Opcode.I32_LE_S : Opcode.I64_LE_S)
         end
 
@@ -4477,6 +4696,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         if is_128bit
             append!(bytes, emit_int128_ult(ctx, arg_type))
         else
+            is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, false, _julia_int_width(arg_type, is_32bit))
             push!(bytes, is_32bit ? Opcode.I32_LT_U : Opcode.I64_LT_U)
         end
 
@@ -4484,6 +4704,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         if is_128bit
             append!(bytes, emit_int128_ule(ctx, arg_type))
         else
+            is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, false, _julia_int_width(arg_type, is_32bit))
             push!(bytes, is_32bit ? Opcode.I32_LE_U : Opcode.I64_LE_U)
         end
 
@@ -4491,6 +4712,10 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         if is_128bit
             append!(bytes, emit_int128_eq(ctx, arg_type))
         else
+            # P2-batch14: equality also observes full register width — normalise
+            # narrow pairs (Int8(0) == Int8(x) compared junk high bits, gap
+            # 1bcb0e7214c3). Sign-extend is equality-preserving at the width.
+            is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, true, _julia_int_width(arg_type, is_32bit))
             push!(bytes, is_32bit ? Opcode.I32_EQ : Opcode.I64_EQ)
         end
 
@@ -4498,6 +4723,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         if is_128bit
             append!(bytes, emit_int128_ne(ctx, arg_type))
         else
+            is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, true, _julia_int_width(arg_type, is_32bit))  # P2-batch14
             push!(bytes, is_32bit ? Opcode.I32_NE : Opcode.I64_NE)
         end
 
@@ -4775,14 +5001,15 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             if length(args) >= 2
                 shift_type = infer_value_type(args[2], ctx)
                 if is_32bit && (shift_type === Int64 || shift_type === UInt64)
-                    # Truncate i64 shift amount to i32
-                    push!(bytes, Opcode.I32_WRAP_I64)
+                    # Saturating wrap of i64 amount → i32 (preserves over-shift magnitude)
+                    _emit_wrap_shift_amount_saturating!(bytes, ctx, _julia_int_width(arg_type, is_32bit))
                 elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
                     # Extend i32 shift amount to i64 (Wasm requires matching types)
                     push!(bytes, Opcode.I64_EXTEND_I32_S)
                 end
             end
-            push!(bytes, is_32bit ? Opcode.I32_SHL : Opcode.I64_SHL)
+            _emit_shift_guarded!(bytes, ctx, is_32bit, :shl;
+                                 julia_width = _julia_int_width(arg_type, is_32bit))   # over-shift → 0 + narrow truncation
         end
 
     elseif is_func(func, :ashr_int)  # arithmetic shift right
@@ -4796,7 +5023,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 push!(bytes, Opcode.I64_EXTEND_I32_S)
             end
         end
-        push!(bytes, is_32bit ? Opcode.I32_SHR_S : Opcode.I64_SHR_S)
+        _emit_shift_guarded!(bytes, ctx, is_32bit, :ashr)   # over-shift → sign-fill (Julia semantics)
 
     elseif is_func(func, :lshr_int)  # logical shift right
         if is_128bit
@@ -4806,14 +5033,15 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             if length(args) >= 2
                 shift_type = infer_value_type(args[2], ctx)
                 if is_32bit && (shift_type === Int64 || shift_type === UInt64)
-                    # Truncate i64 shift amount to i32
-                    push!(bytes, Opcode.I32_WRAP_I64)
+                    # Saturating wrap of i64 amount → i32 (preserves over-shift magnitude)
+                    _emit_wrap_shift_amount_saturating!(bytes, ctx, _julia_int_width(arg_type, is_32bit))
                 elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
                     # Extend i32 shift amount to i64 (Wasm requires matching types)
                     push!(bytes, Opcode.I64_EXTEND_I32_S)
                 end
             end
-            push!(bytes, is_32bit ? Opcode.I32_SHR_U : Opcode.I64_SHR_U)
+            _emit_shift_guarded!(bytes, ctx, is_32bit, :lshr;
+                                 julia_width = _julia_int_width(arg_type, is_32bit))   # over-shift → 0 (Julia semantics)
         end
 
     # Count leading/trailing zeros (used in Char conversion)
@@ -4961,6 +5189,19 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             # PURE-324: Skip extend if source is already i64 (e.g., from widened phi local)
             src_wasm = length(args) >= 2 ? get_phi_edge_wasm_type(args[2], ctx) : nothing
             if src_wasm !== I64
+                # P2-batch13: a narrow source must be renormalised at its JULIA
+                # width first — sext_int(Int64, x::Int8) with register value 128
+                # otherwise widens to 128 instead of -128.
+                local _sx_src = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
+                if _sx_src === Int8
+                    push!(bytes, Opcode.I32_EXTEND8_S)
+                elseif _sx_src === Int16
+                    push!(bytes, Opcode.I32_EXTEND16_S)
+                elseif _sx_src === UInt8
+                    push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(0xff)); push!(bytes, Opcode.I32_AND)
+                elseif _sx_src === UInt16
+                    push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(0xffff)); push!(bytes, Opcode.I32_AND)
+                end
                 push!(bytes, Opcode.I64_EXTEND_I32_S)
             end
         elseif target_type === Int128 || target_type === UInt128

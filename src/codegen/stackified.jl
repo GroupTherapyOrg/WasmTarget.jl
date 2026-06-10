@@ -24,7 +24,15 @@ function generate_complex_flow(ctx::AbstractCompilationContext, blocks::Vector{B
     # approach of emitting loop/br for backedges and storing to phi locals at each branch.
     has_phi_nodes = any(stmt isa Core.PhiNode for stmt in code)
     has_loops = any(ctx.loop_headers)
-    if has_loops || length(conditionals) > 2 || (length(conditionals) >= 2 && has_phi_nodes)
+    # P2-batch14: an IR `unreachable` (ReturnNode with no value — the marker after
+    # always-throwing calls) breaks the nested-conditionals generator: with two
+    # conditionals where one branch ends in a throw, the second GotoIfNot was
+    # dropped on the live path and its if/else emitted dead after the throw
+    # (`Int8(0) == Int8(x) ? 0 : x` unconditionally returned 0 — gap
+    # 1bcb0e7214c3 family). The stackifier handles these shapes correctly.
+    has_unreachable = any(stmt isa Core.ReturnNode && !isdefined(stmt, :val) for stmt in code)
+    if has_loops || length(conditionals) > 2 || (length(conditionals) >= 2 && has_phi_nodes) ||
+       (length(conditionals) >= 2 && has_unreachable)
         return generate_stackified_flow(ctx, blocks, code)
     end
 
@@ -187,7 +195,8 @@ function emit_numeric_to_anyref!(target_bytes::Vector{UInt8}, val, val_wasm::Was
     return  # No extern_convert_any — struct ref is already anyref
 end
 
-function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
+function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code;
+                                  trailing_unreachable::Bool = true)::Vector{UInt8}
     # ========================================================================
     # STEP 0: BOUNDSCHECK PATTERN DETECTION
     # ========================================================================
@@ -200,7 +209,12 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
 
     for i in 1:length(code)
         stmt = code[i]
-        if stmt isa Expr && stmt.head === :boundscheck && length(stmt.args) >= 1
+        # P2-batch6: boundscheck now compiles to its REAL value (true unless
+        # @inbounds), so the always-jump/dead-region carving below — which
+        # assumed we emit 0 — only applies to an explicit `false` (inside
+        # @inbounds). For boundscheck=true the GotoIfNot falls through to the
+        # check + catchable throw_boundserror, and that path must stay live.
+        if stmt isa Expr && stmt.head === :boundscheck && length(stmt.args) >= 1 && stmt.args[1] === false
             if i + 1 <= length(code) && code[i + 1] isa Core.GotoIfNot
                 goto_stmt = code[i + 1]::Core.GotoIfNot
                 if goto_stmt.cond isa Core.SSAValue && goto_stmt.cond.id == i
@@ -1484,7 +1498,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
 
     # PURE-6024 debug: trace function name for debugging
     _debug_fn_name = try string(ctx.func_name) catch; "" end
-    _debug_stackified = contains(_debug_fn_name, "parse_int_literal")
+    _debug_stackified = contains(_debug_fn_name, "parse_int_literal") ||
+        (haskey(ENV, "WT_DBG_FN") && !isempty(ENV["WT_DBG_FN"]) && contains(_debug_fn_name, ENV["WT_DBG_FN"]))
     if _debug_stackified
         @warn "PURE-6024 STACKIFIED DEBUG: $(length(blocks)) blocks, non_trivial_targets=$non_trivial_targets, outer_targets=$outer_targets, return_type=$(ctx.return_type)"
     end
@@ -1507,6 +1522,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 @warn "  SKIP dead block $block_idx"
             end
             continue
+        end
+
+        if _debug_stackified
+            @warn "  BLOCK $block_idx [$(block.start_idx):$(block.end_idx)] term=$(typeof(block.terminator)) bytes=$(length(bytes)) open_blocks=$open_blocks open_loops=$open_loops"
         end
 
         # Check if we're entering a loop
@@ -1921,6 +1940,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             # Check if destination has phi nodes that need values from this edge
             has_phi = dest_block !== nothing && dest_has_phi_from_edge(dest_block, terminator_idx)
 
+            if _debug_stackified
+                @warn "  GIN blk=$block_idx term_idx=$terminator_idx dest=$(term.dest) dest_block=$dest_block has_phi=$has_phi nontrivial=$(dest_block in non_trivial_targets) bytes=$(length(bytes))"
+            end
+
             # Compile condition
             cond_bytes = compile_condition_to_i32(term.cond, ctx)
             append!(bytes, cond_bytes)
@@ -2120,7 +2143,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # For functions with a return type: emit unreachable (WASM validation uses
     # polymorphic stack after unreachable, so this validates). But we ALSO need
     # to ensure br to the outermost block uses `return` instead of `br`.
-    push!(bytes, Opcode.UNREACHABLE)
+    # P2-batch19: callers compiling a FALL-THROUGH region (the pre-branch code
+    # of an exit-branch try/catch) opt out — for them this guard is live code.
+    trailing_unreachable && push!(bytes, Opcode.UNREACHABLE)
 
     return bytes
 end

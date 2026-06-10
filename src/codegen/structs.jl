@@ -96,9 +96,28 @@ function register_closure_type!(mod::WasmModule, registry::TypeRegistry, T::Data
     return info
 end
 
+# ── Task-local per-compile state ─────────────────────────────────────────────
+# The struct-registration re-entrancy guard and the string/IO/RNG lazy caches
+# below are PER-COMPILE state that historically lived in module-global `Ref`/`Dict`
+# (fine while compiles ran sequentially). To compile multiple functions in
+# parallel (the test suite spawns one task per Phase), make them task-local: each
+# compile task gets its own copy, so concurrent compiles can't corrupt each other.
+# Behaviour is identical for sequential use. These wrappers keep the original
+# `d[k]` / `r[]` call sites unchanged.
+struct TaskLocalDict{K,V}; key::Symbol; end
+_tld(d::TaskLocalDict{K,V}) where {K,V} = get!(() -> Dict{K,V}(), task_local_storage(), d.key)::Dict{K,V}
+Base.haskey(d::TaskLocalDict, k) = haskey(_tld(d), k)
+Base.getindex(d::TaskLocalDict, k) = getindex(_tld(d), k)
+Base.setindex!(d::TaskLocalDict, v, k) = setindex!(_tld(d), v, k)
+Base.delete!(d::TaskLocalDict, k) = delete!(_tld(d), k)
+
+mutable struct TaskLocalRef{T}; key::Symbol; default::T; end
+Base.getindex(r::TaskLocalRef{T}) where {T} = get(task_local_storage(), r.key, r.default)::T
+Base.setindex!(r::TaskLocalRef, v) = (task_local_storage()[r.key] = v)
+
 # Track types currently being registered to prevent infinite recursion
 # Maps type -> reserved type index for self-referential types, or -1 for normal types
-const _registering_types = Dict{DataType, Int}()
+const _registering_types = TaskLocalDict{DataType, Int}(:_wt_registering_types)
 
 """
 Check if a type is self-referential (has fields that reference itself).
@@ -661,6 +680,22 @@ end
 Register a Julia tuple type in the Wasm module.
 Tuples are represented as WasmGC structs with numbered fields.
 """
+# P2-batch17: rewrite Type{X} tuple parameters to DataType so every spelling of
+# a type-object-carrying tuple shares one registry entry / wasm struct type.
+function _canonical_tuple_type(T::DataType)
+    changed = false
+    ps = Any[]
+    for P in T.parameters
+        if P isa DataType && P !== DataType && P !== Union{} && P <: Type
+            push!(ps, DataType)
+            changed = true
+        else
+            push!(ps, P)
+        end
+    end
+    return changed ? Tuple{ps...} : T
+end
+
 function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<:Tuple})
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
@@ -676,6 +711,19 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
     # .parameters — only DataType does. Return nothing for non-concrete tuples.
     if T isa UnionAll
         return nothing
+    end
+
+    # P2-batch17: canonicalize Type{X} elements to DataType. Inference spells a
+    # type-object tuple element as Type{Int32} on one path (Const-widened arg
+    # inference in the Core.tuple emitter) and DataType on another (the SSA
+    # local's widenconst). Registering both spellings created two distinct wasm
+    # structs for the same runtime tuple, and the ref.cast between them trapped
+    # at runtime (LazyString error-message paths, gap 6d3a1788a329 layer 2).
+    canon = _canonical_tuple_type(T)
+    if canon !== T
+        info = register_tuple_type!(mod, registry, canon)
+        info !== nothing && (registry.structs[T] = info)
+        return info
     end
 
     # Get element types

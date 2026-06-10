@@ -1,19 +1,19 @@
 {
-  "name": "gt_negate",
-  "julia_version": "1.12.4",
   "entries": [
     {
-      "expected": -5,
       "args": [
         5
-      ]
+      ],
+      "expected": -5
     },
     {
-      "expected": 3,
       "args": [
         -3
-      ]
+      ],
+      "expected": 3
     }
   ],
-  "generated": "2026-04-14T18:48:23.369"
+  "generated": "2026-06-09T15:08:55.774",
+  "julia_version": "1.12.4",
+  "name": "gt_negate"
 }

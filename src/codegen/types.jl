@@ -1895,7 +1895,10 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
         elem_type = T.parameters[2]  # Element type is second parameter for GenericMemory
         type_idx = get_array_type!(mod, registry, elem_type)
         return ConcreteRef(type_idx, true)
-    elseif T <: AbstractArray  # Handles Vector, Matrix, and higher-dim arrays
+    # P2-batch20: exclude Unions (Union{Vector{Int32},Vector{Int64}} <: AbstractArray) —
+    # they must reach the Union branch below, not register as one member's wrapper
+    # (gap 5ae13ccb033a).
+    elseif !(T isa Union) && T <: AbstractArray  # Handles Vector, Matrix, and higher-dim arrays
         # Both Vector and Matrix are stored as structs with (ref, size) fields
         # This allows setfield!(v, :size, ...) for push!/resize! operations
         if T <: Array

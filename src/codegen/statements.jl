@@ -601,10 +601,13 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
             # Struct construction: %new(Type, args...)
             stmt_bytes = compile_new(stmt, idx, ctx)
         elseif stmt.head === :boundscheck
-            # Bounds check - we can skip this as Wasm has its own bounds checking
-            # This is a no-op that produces a Bool (we push false since we're not doing checks)
+            # P2-batch6: compile to the expr's REAL value (true unless @inbounds).
+            # We previously pushed false ("wasm has its own bounds checking"), but
+            # wasm's array.get check is an UNCATCHABLE TRAP — skipping Julia's own
+            # check branch meant getindex OOB could never reach the catchable
+            # throw_boundserror path (gap 3ead683e6ff9 family / divergent_throw).
             push!(stmt_bytes, Opcode.I32_CONST)
-            push!(stmt_bytes, 0x00)  # false = no bounds checking
+            push!(stmt_bytes, (isempty(stmt.args) || stmt.args[1] !== false) ? 0x01 : 0x00)
         elseif stmt.head === :foreigncall
             # Handle foreign calls - specifically for Vector allocation
             stmt_bytes = compile_foreigncall(stmt, idx, ctx)
@@ -1608,6 +1611,34 @@ end
 """
 Compile a struct construction expression (%new).
 """
+# P2-batch17: type-correct default for an exception field whose value can't be
+# represented (see the Exception branch of compile_new).
+function _exn_field_null_or_zero!(bytes::Vector{UInt8}, fwasm)
+    if fwasm === I32
+        push!(bytes, Opcode.I32_CONST)
+        push!(bytes, 0x00)
+    elseif fwasm === I64
+        push!(bytes, Opcode.I64_CONST)
+        push!(bytes, 0x00)
+    elseif fwasm === F32
+        push!(bytes, Opcode.F32_CONST)
+        append!(bytes, zeros(UInt8, 4))
+    elseif fwasm === F64
+        push!(bytes, Opcode.F64_CONST)
+        append!(bytes, zeros(UInt8, 8))
+    elseif fwasm isa ConcreteRef
+        push!(bytes, Opcode.REF_NULL)
+        append!(bytes, encode_leb128_signed(Int64(fwasm.type_idx)))
+    elseif fwasm === ExternRef || fwasm === StructRef || fwasm === ArrayRef || fwasm === AnyRef || fwasm === EqRef
+        push!(bytes, Opcode.REF_NULL)
+        push!(bytes, UInt8(fwasm))
+    else
+        push!(bytes, Opcode.REF_NULL)
+        push!(bytes, UInt8(StructRef))
+    end
+    return bytes
+end
+
 function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
     bytes = UInt8[]
 
@@ -1879,12 +1910,74 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
         return bytes
     end
 
-    # PURE-325: Error constructors — these are always followed by throw() which is unreachable.
-    # Emit unreachable instead of trying to compile the struct construction, because
-    # error types like ArgumentError have AbstractString fields that can receive LazyString
-    # (a struct ref) where ArrayRef is expected, causing type mismatches.
+    # PURE-325 / P2-batch17: Error constructors used to compile to a bare
+    # `unreachable` on the theory that they're always followed by throw(). With
+    # CATCHABLE throws that arm is live: `try checked_abs(typemin) catch` must
+    # reach the tag-0 throw, and an unreachable before it is an uncatchable trap
+    # (gap 6d3a1788a329 layer 3). Construct the struct for real; any field whose
+    # wasm type can't accept the value (AbstractString field ← LazyString value,
+    # the original PURE-325 mismatch) gets ref.null instead — the exception's
+    # typeid survives for `e isa T`, only the lazy message payload is dropped.
     if struct_type <: Exception
-        push!(bytes, Opcode.UNREACHABLE)
+        if !haskey(ctx.type_registry.structs, struct_type)
+            try
+                register_struct_type!(ctx.mod, ctx.type_registry, struct_type)
+            catch
+            end
+        end
+        _exn_info = get(ctx.type_registry.structs, struct_type, nothing)
+        _exn_def = _exn_info === nothing ? nothing : ctx.mod.types[_exn_info.wasm_type_idx + 1]
+        if _exn_info === nothing || !(_exn_def isa StructType)
+            push!(bytes, Opcode.UNREACHABLE)
+            return bytes
+        end
+        if _exn_info.field_offset > 0
+            emit_type_id!(bytes, ctx.type_registry, struct_type)
+        end
+        for (fi, val) in enumerate(field_values)
+            _wfi = fi + Int(_exn_info.field_offset)
+            _fwasm = _wfi <= length(_exn_def.fields) ? _exn_def.fields[_wfi].valtype : nothing
+            _vwasm = try infer_value_wasm_type(val, ctx) catch; nothing end
+            _emitted = false
+            if _fwasm !== nothing && _vwasm !== nothing
+                if _fwasm === _vwasm
+                    append!(bytes, compile_value(val, ctx))
+                    _emitted = true
+                elseif _fwasm isa ConcreteRef && (_vwasm === StructRef || _vwasm === AnyRef || _vwasm === EqRef)
+                    append!(bytes, compile_value(val, ctx))
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.REF_CAST_NULL)
+                    append!(bytes, encode_leb128_signed(Int64(_fwasm.type_idx)))
+                    _emitted = true
+                elseif (_fwasm === AnyRef || _fwasm === EqRef) && (_vwasm isa ConcreteRef || _vwasm === StructRef || _vwasm === ArrayRef)
+                    append!(bytes, compile_value(val, ctx))
+                    _emitted = true
+                elseif _fwasm === StructRef && _vwasm isa ConcreteRef
+                    # Only struct-typed concrete refs subsume into structref (arrays don't)
+                    _vdef = ctx.mod.types[_vwasm.type_idx + 1]
+                    if _vdef isa StructType
+                        append!(bytes, compile_value(val, ctx))
+                        _emitted = true
+                    end
+                elseif _fwasm === ExternRef && (_vwasm isa ConcreteRef || _vwasm === StructRef || _vwasm === ArrayRef || _vwasm === AnyRef || _vwasm === EqRef)
+                    append!(bytes, compile_value(val, ctx))
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                    _emitted = true
+                end
+            end
+            _emitted || _exn_field_null_or_zero!(bytes, _fwasm)
+        end
+        # :new may carry FEWER args than fields (trailing fields undef) — pad
+        # them, or struct.new pops the typeid as a field value and fails to
+        # validate ("expected anyref, found i32").
+        _n_wasm_fields = length(_exn_def.fields)
+        for _pad_fi in (length(field_values) + Int(_exn_info.field_offset) + 1):_n_wasm_fields
+            _exn_field_null_or_zero!(bytes, _exn_def.fields[_pad_fi].valtype)
+        end
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.STRUCT_NEW)
+        append!(bytes, encode_leb128_unsigned(_exn_info.wasm_type_idx))
         return bytes
     end
 
@@ -2621,52 +2714,31 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             # WBUILD-5501: memset(ptr, value, size) — fill memory with a byte value.
             # CORRECT BY DESIGN for zero-fill: WasmGC arrays are zero-initialized by
             # array.new_default, so memset(ptr, 0, size) is a no-op. All current callers
-            # (Dict/Set constructor, rehash!) use value=0.
-            # LIMITATION: Non-zero fill (value != 0) would silently produce wrong results.
-            # If this is ever needed, implement via array.fill or element-by-element loop.
-            # Return the pointer (first arg) as the result since memset returns ptr.
+            # (Dict/Set constructor, rehash!) use value=0 (a literal 0x00).
+            # SOUNDNESS: a *literal* non-zero fill would silently produce wrong results,
+            # so we refuse it (foreigncall args: [name,rt,argtypes,nreq,cc, ptr, value, size]).
+            if length(expr.args) >= 7 && (expr.args[7] isa Number) && !iszero(expr.args[7])
+                record_unsupported!(ctx, :value_stub, "memset with a non-zero constant fill value"; idx=idx, detail=expr)
+                push!(bytes, Opcode.UNREACHABLE)  # non-strict path: trap rather than mis-fill
+                ctx.last_stmt_was_stub = true
+                return bytes
+            end
+            # Zero-fill no-op: return the pointer (first arg) as the result since memset returns ptr.
             if length(expr.args) >= 6
                 ptr_arg = expr.args[6]
                 append!(bytes, compile_value(ptr_arg, ctx))
             end
             return bytes
         elseif name === :jl_object_id
-            # WBUILD-5501: jl_object_id(x) → UInt64: compute object identity hash.
-            # HARMLESS STUB: Dict/Set use hash() not objectid(). No auto-discovered
-            # method chain calls jl_object_id. String variant returns array.len (length
-            # as hash). Other types return constant 42.
-            # NOT NEEDED for correctness — Dict hashing works via Base.hash() which is
-            # pure Julia bitwise operations that compile correctly.
-            if length(expr.args) >= 6
-                obj_arg = expr.args[6]
-                obj_type = infer_value_type(obj_arg, ctx)
-
-                if obj_type === Symbol || obj_type === String
-                    # Hash the byte array: FNV-1a over characters
-                    # We need a loop, so implement inline:
-                    # result = 14695981039346656037 (FNV offset basis)
-                    # for each byte b in array:
-                    #   result = (result XOR b) * 1099511628211 (FNV prime)
-                    #
-                    # Since Wasm doesn't have easy loops here, we use a simpler approach:
-                    # hash = array.len (gives a unique-enough hash for small dicts)
-                    # This is a simplified hash that uses the string length as a hash.
-                    # For correctness with equal symbols, equal strings produce equal hashes.
-                    append!(bytes, compile_value(obj_arg, ctx))
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.ARRAY_LEN)
-                    # Extend i32 to i64 for UInt64 result
-                    push!(bytes, Opcode.I64_EXTEND_I32_U)
-                else
-                    # For non-string types, return a constant hash
-                    push!(bytes, Opcode.I64_CONST)
-                    append!(bytes, encode_leb128_signed(Int64(42)))
-                end
-            else
-                # Fallback: constant hash
-                push!(bytes, Opcode.I64_CONST)
-                append!(bytes, encode_leb128_signed(Int64(0)))
-            end
+            # jl_object_id(x) → UInt64: identity hash. There is no correct WasmGC
+            # implementation yet (no stable per-object identity). The previous stub
+            # returned array.len for strings and a constant 42 otherwise — both silently
+            # wrong (constant 42 collides every object to one hash bucket). Refuse instead.
+            # Dict/Set hashing does NOT route through here (it uses Base.hash, pure Julia),
+            # so this should be unreachable in practice; if it fires, it's a real gap.
+            record_unsupported!(ctx, :value_stub, "objectid / identity-hash (jl_object_id)"; idx=idx, detail=expr)
+            push!(bytes, Opcode.UNREACHABLE)  # non-strict path: trap rather than return a fake hash
+            ctx.last_stmt_was_stub = true
             return bytes
         elseif name === :jl_string_to_genericmemory
             # Convert String to Memory{UInt8}

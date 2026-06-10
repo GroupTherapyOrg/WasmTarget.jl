@@ -8,6 +8,7 @@ Compile real Julia functions to WebAssembly that runs in any modern browser or N
 
 [![CI](https://github.com/GroupTherapyOrg/WasmTarget.jl/actions/workflows/ci.yml/badge.svg)](https://github.com/GroupTherapyOrg/WasmTarget.jl/actions/workflows/ci.yml)
 [![Aqua QA](https://juliatesting.github.io/Aqua.jl/dev/assets/badge.svg)](https://github.com/JuliaTesting/Aqua.jl)
+[![Fuzzy Tests](https://raw.githubusercontent.com/Seelengrab/Supposition.jl/main/badge.svg)](https://github.com/Seelengrab/Supposition.jl)
 [![Docs](https://img.shields.io/badge/docs-stable-blue.svg)](https://grouptherapyorg.github.io/WasmTarget.jl/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE.md)
 
@@ -244,6 +245,38 @@ Julia's `OverlayMethodTable` resolves overlays at inference time. Codegen never 
 | `Vector{T}` | WasmGC `struct{array_ref, size}` |
 | `Dict{K,V}` | WasmGC struct (hash table) |
 | `JSValue` | `externref` |
+
+## Soundness & Testing
+
+WasmTarget aims to be **correct-or-loud, never silently wrong**.
+
+**`strict=true` (default).** When codegen meets a construct that would compile to a
+*wrong value* (e.g. `objectid`, a non-zero `memset`), `compile` raises a
+`WasmCompileError` naming the construct and its source location instead of emitting
+it. Sound traps on dead error-branches (Julia's `kwerr`, `throw_*domainerror`, …)
+still compile — they abort if executed, never returning a wrong value. Pass
+`strict=false` to fall back to the permissive stub-and-trap behavior.
+
+```julia
+compile(f, (T,))                 # strict + validated (default)
+compile(f, (T,); strict=false)   # permissive: emit runtime-trap stubs
+```
+
+**`validate=true` (default).** Every compiled module is checked with
+`wasm-tools validate`; a reject raises `WasmValidationError` rather than handing
+back malformed bytes.
+
+**Differential fuzzing.** `test/fuzz/` generates *well-typed* random compositions of
+Base functions and checks each against native Julia (native is both oracle and
+validity filter). Findings are auto-shrunk to a minimal reproducer, persisted to a
+[Supposition.jl](https://github.com/Seelengrab/Supposition.jl) `DirectoryDB` corpus
+(replayed first on every run), and documented as self-reproducing "gap" files under
+`test/fuzz/failures/`. A bounded pass runs in CI; deep exploration runs standalone:
+
+```bash
+julia --project=test/fuzz test/fuzz/run.jl          # discover → shrink → document
+julia --project=test/fuzz test/fuzz/run.jl verify   # re-check open gaps, auto-close fixed
+```
 
 ## Requirements
 

@@ -22,6 +22,20 @@ using Base.Experimental: @overlay
 
 Base.Experimental.@MethodTable(WASM_METHOD_TABLE)
 
+# ─── Dict literal-constructor Overlay ───────────────────────────────────────
+# Why: Dict{K,V}(::Tuple{Pair...}) (the `Dict(k=>v, …)` literal) is mis-compiled as
+#      a fieldwise struct.new from the tuple argument (Dict is a hash table, not a
+#      simple struct) → emits invalid wasm (ref where i64 expected). Empty
+#      Dict{K,V}() + setindex! IS supported, so build the Dict via that path.
+# Remove when: codegen compiles the real Dict tuple-constructor body.
+@overlay WASM_METHOD_TABLE function (::Type{Dict{K,V}})(kv::Tuple) where {K,V}
+    d = Dict{K,V}()
+    for p in kv
+        d[p.first] = p.second
+    end
+    return d
+end
+
 # ─── Sort Overlay ──────────────────────────────────────────────────────────
 # Base.sort! dispatches through InsertionSort/MergeSort/By/Lt/Order —
 # deep dispatch chains that produce hundreds of IR statements.
@@ -92,7 +106,11 @@ end
 # Base implementations use foreigncall :memcmp which can't run in WASM.
 # Pure Julia byte-by-byte comparisons using ncodeunits + codeunit.
 
-@overlay WASM_METHOD_TABLE function Base.startswith(a::String, b::String)
+# Typed `AbstractString` (not just `String`) so SubString operands work too — e.g.
+# `startswith(s, chomp(t))`, where chomp returns a SubString. `codeunit`/`ncodeunits`
+# both compile for SubString, but `String(::SubString)` traps (memmove), so we must
+# byte-compare in place rather than materialize. Byte prefix == UTF-8 prefix.
+@overlay WASM_METHOD_TABLE function Base.startswith(a::AbstractString, b::AbstractString)
     al = ncodeunits(a)
     bl = ncodeunits(b)
     bl > al && return false
@@ -104,7 +122,7 @@ end
     return true
 end
 
-@overlay WASM_METHOD_TABLE function Base.endswith(a::String, b::String)
+@overlay WASM_METHOD_TABLE function Base.endswith(a::AbstractString, b::AbstractString)
     al = ncodeunits(a)
     bl = ncodeunits(b)
     bl > al && return false
@@ -166,15 +184,36 @@ end
 end
 
 @overlay WASM_METHOD_TABLE function Base.reverse(s::String)
+    # Reverse by CHARACTER, not byte: a naive byte-reverse splits multi-byte UTF-8
+    # codepoints (e.g. the 2-byte 'é'), producing invalid strings whose char count
+    # then differs from the input. Walk from the end; for each char, skip its
+    # continuation bytes (0b10xxxxxx) back to the start byte, then emit that char's
+    # bytes in FORWARD order.
     n = ncodeunits(s)
     bytes = UInt8[]
     i = n
     while i >= 1
-        push!(bytes, codeunit(s, i))
-        i -= 1
+        j = i
+        while j >= 1 && (codeunit(s, j) & 0xc0) == 0x80
+            j -= 1
+        end
+        k = j
+        while k <= i
+            push!(bytes, codeunit(s, k))
+            k += 1
+        end
+        i = j - 1
     end
     return String(bytes)
 end
+
+# NOTE: `uppercase`/`lowercase`(::SubString) is NOT overlaid. The natural overlay
+# (byte-loop reading codeunit(s,i) from the SubString into a fresh String) compiles
+# but is SILENTLY WRONG: `codeunit(::SubString)` reads return 0 inside this
+# nested-build context (length comes out right, bytes come out zero) — the same
+# SubString/String(bytes) codegen class the strip overlays contort around. A loud
+# compile error (gap 05bc422e7ffb) is better than silently-wrong content; the real
+# fix needs that underlying codegen bug. Triaged for Part 2 with the strip gaps.
 
 @noinline function _wasm_titlecase_impl(s::String, strict::Bool)
     n = ncodeunits(s)
@@ -258,13 +297,21 @@ end
 
 # NOTE: Two-pass approach avoids codegen bug where `===` comparison combined with
 # push! in a loop produces wrong results. Pass 1 finds the boundary index, Pass 2
-# does an unconditional copy. Uses `length(s)` instead of `ncodeunits(s)` to avoid
-# a separate ncodeunits aliasing bug with String(bytes) results.
+# does an unconditional copy.
+# P2-batch7: scan/copy bounds are BYTE counts — these loops index codeunits, and
+# the old `length(s)` bound (char count) truncated multibyte strings
+# (strip("héllo") dropped the last byte → gap 0beb5ec969a2 family). The
+# ncodeunits-on-String(bytes) aliasing bug that originally forced length() here
+# no longer reproduces (probed: ncodeunits is correct on built strings).
 # Handles space (0x20), tab (0x09), newline (0x0a), CR (0x0d), VT (0x0b), FF (0x0c)
 @noinline @overlay WASM_METHOD_TABLE function Base.lstrip(s::String)
     n = length(s)
     n == 0 && return s
-    # Pass 1: find first non-whitespace byte index
+    # Pass 1: find first non-whitespace byte index. Leading whitespace is ASCII
+    # (1 char == 1 byte), so the char-count bound is always >= the prefix length
+    # — and length(s) here keeps the loop in the exact shape that compiles
+    # correctly (this overlay is knife-edge sensitive: swapping the SCAN bound
+    # to sizeof/ncodeunits miscompiles in dependency context — see NOTE above).
     start = 1
     while start <= n
         bi = Int64(codeunit(s, start))
@@ -275,10 +322,13 @@ end
         start += 1
     end
     start > n && return ""
-    # Pass 2: unconditional copy from start to end
+    # Pass 2: unconditional copy from start to the LAST BYTE. P2-batch7: the
+    # copy bound must be the byte count — the old length(s) bound truncated
+    # multibyte strings (strip("héllo") dropped a byte, gap 0beb5ec969a2).
+    nb = sizeof(s)
     bytes = UInt8[]
     i = start
-    while i <= n
+    while i <= nb
         push!(bytes, codeunit(s, i))
         i += 1
     end
@@ -286,7 +336,10 @@ end
 end
 
 @noinline @overlay WASM_METHOD_TABLE function Base.rstrip(s::String)
-    n = length(s)
+    n = sizeof(s)   # P2-batch7: BYTE count — backward scan starts at the last
+    # byte; UTF-8 continuation bytes (0x80-0xBF) never match ASCII whitespace,
+    # so byte-wise scanning is multibyte-safe. (The old length(s) bound started
+    # the scan mid-string for multibyte inputs and truncated the result.)
     n == 0 && return s
     # Scan backward from end to find last non-whitespace
     last_nws = n
@@ -303,6 +356,159 @@ end
     bytes = UInt8[]
     i = 1
     while i <= last_nws
+        push!(bytes, codeunit(s, i))
+        i += 1
+    end
+    return String(bytes)
+end
+
+# ─── Ryu scalar writeshortest Overlay (string(::Float64/Float32)) ─────────
+# Why: the digit-generation kernel writeshortest(buf, pos, x, ...) compiles
+#      fine, but the scalar wrapper that string(x::AbstractFloat) calls steals
+#      its buffer via String(resize!(buf, ...)) → atomic_pointerset, which
+#      codegen stubs → every string(::Float64) trapped (gap 5741ab865252
+#      family: string(0.0) in Set/Dict/length). Same kernel, but materialize
+#      the result through the String(bytes) path every other overlay uses.
+# Remove when: codegen handles the unsafe_takestring / atomic_pointerset
+#      buffer-steal idiom.
+@noinline @overlay WASM_METHOD_TABLE function Base.Ryu.writeshortest(x::T) where {T <: Union{Float32, Float64}}
+    # Explicit 1-arg method (no default-arg expansion: @overlay does not put the
+    # generated wrapper arities in the overlay table, so a defaulted definition
+    # never shadowed Base's 1-arg call from string()).
+    cap = Base.Ryu.neededdigits(T)
+    buf = UInt8[]
+    i = 0
+    while i < cap
+        push!(buf, 0x00)
+        i += 1
+    end
+    pos = Base.Ryu.writeshortest(buf, 1, x, false, false, true, -1,
+                                 UInt8('e'), false, UInt8('.'), false, false)
+    out = UInt8[]
+    i = 1
+    while i < pos
+        push!(out, buf[i])
+        i += 1
+    end
+    return String(out)
+end
+
+# ─── string(::Float64/Float32) Overlay ─────────────────────────────────────
+# Why: Base.string(x::IEEEFloat) (Ryu.jl:122) does NOT route through the
+#      scalar writeshortest wrapper — the StringVector + buffer-steal
+#      (String(resize!(buf, ...)) → atomic_pointerset) lives INLINE in its own
+#      body, which codegen stubs → unreachable trap (gap 5741ab865252 family).
+#      Same Ryu kernel, result materialized through the String(bytes) path
+#      the other overlays use.
+@noinline @overlay WASM_METHOD_TABLE function Base.string(x::T) where {T <: Union{Float32, Float64}}
+    cap = Base.Ryu.neededdigits(T)
+    buf = UInt8[]
+    i = 0
+    while i < cap
+        push!(buf, 0x00)
+        i += 1
+    end
+    pos = Base.Ryu.writeshortest(buf, 1, x, false, false, true, -1,
+                                 UInt8('e'), false, UInt8('.'), false, false)
+    out = UInt8[]
+    i = 1
+    while i < pos
+        push!(out, buf[i])
+        i += 1
+    end
+    return String(out)
+end
+
+# ─── reinterpret Overlay (P2-batch20) ─────────────────────────────────────
+# Why: Base.reinterpret between primitive bits types inlines to ~390 stmts of
+#      generic bit-checking machinery (padding checks, _foldl_impl, LazyString
+#      error paths) that miscompiles (gap e817213d1890). For same-size
+#      primitives it is exactly Core.bitcast, which the wasm backend lowers to
+#      i32/i64.reinterpret_f32/f64 or a no-op.
+# Remove when: the generic Base.reinterpret path compiles clean.
+const _WT_BITS32 = Union{Int32, UInt32, Float32, Char}
+const _WT_BITS64 = Union{Int64, UInt64, Float64}
+const _WT_BITS16 = Union{Int16, UInt16}
+const _WT_BITS8  = Union{Int8, UInt8, Bool}
+@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Out}, x::_WT_BITS32) where {Out<:_WT_BITS32}
+    Core.bitcast(Out, x)
+end
+@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Out}, x::_WT_BITS64) where {Out<:_WT_BITS64}
+    Core.bitcast(Out, x)
+end
+@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Out}, x::_WT_BITS16) where {Out<:_WT_BITS16}
+    Core.bitcast(Out, x)
+end
+@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Out}, x::_WT_BITS8) where {Out<:_WT_BITS8}
+    Core.bitcast(Out, x)
+end
+
+# ─── Shift Overlays (deterministic dispatch) ──────────────────────────────
+# Why: under CC.OverlayMethodTable, `x << n` / `x >> n` with an Int64 amount
+#      resolves to a raw-intrinsic-bodied method instead of Base's guarded
+#      one, so huge/negative amounts leaked raw wasm shift semantics
+#      (`0x01 << typemin(Int64)` returned 1; native gives 0 — gap
+#      31d4d64b9325 family, 6 gaps). These overlays make dispatch
+#      deterministic with Julia's documented semantics: negative amount
+#      flips direction; over-shift → 0 (shl/lshr) or sign-fill (ashr).
+#      The wasm-side emission of the intrinsics already guards over-shift,
+#      so bodies compile to the existing guarded sequences.
+# Remove when: overlay-table method selection matches native dispatch.
+@overlay WASM_METHOD_TABLE function Base.:(<<)(x::T, n::Int64) where {T <: Base.BitInteger}
+    nb = 8 * sizeof(T)
+    if n >= 0
+        return n >= nb ? zero(T) : Base.shl_int(x, Core.bitcast(UInt64, n))
+    end
+    m = -n   # NB: -typemin(Int64) wraps to typemin — caught by m < 0
+    if m < 0 || m >= nb
+        return T <: Signed ? Base.ashr_int(x, Core.bitcast(UInt64, Int64(nb - 1))) : zero(T)
+    end
+    return T <: Signed ? Base.ashr_int(x, Core.bitcast(UInt64, m)) : Base.lshr_int(x, Core.bitcast(UInt64, m))
+end
+
+@overlay WASM_METHOD_TABLE function Base.:(>>)(x::T, n::Int64) where {T <: Base.BitInteger}
+    nb = 8 * sizeof(T)
+    if n >= 0
+        if n >= nb
+            return T <: Signed ? Base.ashr_int(x, Core.bitcast(UInt64, Int64(nb - 1))) : zero(T)
+        end
+        return T <: Signed ? Base.ashr_int(x, Core.bitcast(UInt64, n)) : Base.lshr_int(x, Core.bitcast(UInt64, n))
+    end
+    m = -n
+    (m < 0 || m >= nb) && return zero(T)
+    return Base.shl_int(x, Core.bitcast(UInt64, m))
+end
+
+@overlay WASM_METHOD_TABLE function Base.:(>>>)(x::T, n::Int64) where {T <: Base.BitInteger}
+    nb = 8 * sizeof(T)
+    if n >= 0
+        return n >= nb ? zero(T) : Base.lshr_int(x, Core.bitcast(UInt64, n))
+    end
+    m = -n
+    (m < 0 || m >= nb) && return zero(T)
+    return Base.shl_int(x, Core.bitcast(UInt64, m))
+end
+
+# ─── chomp Overlay ────────────────────────────────────────────────────────
+# Why: Base.chomp returns a SubString{String}, and SubString poisons every
+#      downstream consumer in the compiled world: uppercase(::SubString) emits
+#      invalid wasm, SubString as a Dict value promotes the Dict to an abstract
+#      value type that traps, and == against String stubs (gap 05bc422e7ffb /
+#      627592b54cf2 / 655cf74e7170 family). The established convention here is
+#      String-returning overlays (lstrip/rstrip already do this) — observable
+#      only via typeof(), which generated programs don't inspect. Byte-level:
+#      drop one trailing "\n" or "\r\n", exactly Base's semantics.
+# Remove when: SubString has a full wasm repr (uppercase/==/Dict-value paths).
+@noinline @overlay WASM_METHOD_TABLE function Base.chomp(s::String)
+    n = sizeof(s)
+    n == 0 && return s
+    if codeunit(s, n) != 0x0a
+        return s
+    end
+    last = (n >= 2 && codeunit(s, n - 1) == 0x0d) ? n - 2 : n - 1
+    bytes = UInt8[]
+    i = 1
+    while i <= last
         push!(bytes, codeunit(s, i))
         i += 1
     end
@@ -584,7 +790,64 @@ end
         found = false
         j = 1
         while j <= length(result)
-            if result[j] == val
+            rj = result[j]
+            # NaN-aware equality: `==` misses NaN (NaN==NaN is false) so unique kept
+            # duplicate NaNs. `x != x` detects NaN (no-op for non-float T). (isequal
+            # itself doesn't compile cleanly for Float here.)
+            if rj == val || (rj != rj && val != val)
+                found = true
+                break
+            end
+            j += 1
+        end
+        if !found
+            push!(result, val)
+        end
+        i += 1
+    end
+    return result
+end
+
+# Float-specialized `unique`: the generic overlay above compares with `==`, which
+# treats -0.0 and 0.0 as equal, but Julia's `unique` uses `isequal` and keeps both.
+# These more-specific overlays win dispatch for float vectors and add a signbit
+# check (safe here: only floats, so `signbit` always compiles, unlike the generic
+# AbstractVector path that can see Strings). NaN handled as before (`x != x`).
+@overlay WASM_METHOD_TABLE function Base.unique(A::Vector{Float64})
+    n = length(A)
+    result = similar(A, 0)
+    i = 1
+    while i <= n
+        val = A[i]
+        found = false
+        j = 1
+        while j <= length(result)
+            rj = result[j]
+            if (rj != rj && val != val) || (rj == val && signbit(rj) == signbit(val))
+                found = true
+                break
+            end
+            j += 1
+        end
+        if !found
+            push!(result, val)
+        end
+        i += 1
+    end
+    return result
+end
+
+@overlay WASM_METHOD_TABLE function Base.unique(A::Vector{Float32})
+    n = length(A)
+    result = similar(A, 0)
+    i = 1
+    while i <= n
+        val = A[i]
+        found = false
+        j = 1
+        while j <= length(result)
+            rj = result[j]
+            if (rj != rj && val != val) || (rj == val && signbit(rj) == signbit(val))
                 found = true
                 break
             end
@@ -643,6 +906,35 @@ end
     return result
 end
 
+# ─── _collect(EltypeUnknown) Overlay ──────────────────────────────────────
+# Why: Base's _collect for EltypeUnknown generators peeks the first element and
+#      widens via setindex_widen_up_to / dynamic _similar_for — machinery codegen
+#      can't translate. Whenever the map kernel's body can't be concrete-evaled
+#      under the overlay table (string-literal constants like y->length(""), or
+#      calls to overlayed methods like y->asin(1.0)), inlining bails and the
+#      raw `invoke _collect` became an unsupported-method stub → runtime trap
+#      (gap 3b005c4957f7 family). The empty-iterator branch of Base's version
+#      also materialised Vector{Any} where native returns a typed empty vector.
+#      In the closed-world wasm compile the kernel's return type IS statically
+#      known — promote_op folds to a Const — so collect straight into Vector{T}
+#      with a plain loop, no widening, and the n==0 branch is correctly typed.
+# Remove when: codegen handles setindex_widen_up_to + dynamically-typed similar.
+@overlay WASM_METHOD_TABLE function Base._collect(c::AbstractVector, itr::Base.Generator{<:AbstractVector},
+                                                  ::Base.EltypeUnknown,
+                                                  isz::Union{Base.HasLength, Base.HasShape{1}})
+    f = itr.f
+    A = itr.iter
+    T = Base.promote_op(f, eltype(A))
+    n = length(A)
+    dest = Vector{T}(undef, n)
+    i = 1
+    while i <= n
+        @inbounds dest[i] = f(A[i])
+        i += 1
+    end
+    return dest
+end
+
 # ─── Dict delete! Overlay ─────────────────────────────────────────────────
 # Why: Base._delete! uses atomic_pointerset(ptr, C_NULL, :monotonic) to null out
 #      key/val references for GC. WASM codegen doesn't support atomic_pointerset.
@@ -658,29 +950,110 @@ end
     return h
 end
 
-# ─── Char Classification Overlays ─────────────────────────────────────────
-# Why: Base implementations use foreigncall(:utf8proc_category), foreigncall(:utf8proc_isupper),
-#      foreigncall(:utf8proc_islower) — C library calls that can't compile to WASM.
-#      These overlays handle ASCII range; non-ASCII returns false (sufficient for Therapy.jl).
+# ─── Char Classification & Case Overlays ──────────────────────────────────
+# Why: Base implementations use foreigncall(:utf8proc_category) / _toupper /
+#      _tolower — C library calls that can't compile to WASM. P2-batch8:
+#      extended from ASCII-only to EXACT ASCII + Latin-1 (U+0000–U+00FF)
+#      coverage, table-verified against native Julia (uppercase('é')='É',
+#      µ→Μ, ß→ẞ, ÿ→Ÿ, NEL/NBSP isspace, ª/µ/º letters). The fuzz generator's
+#      char pool is ASCII + 'é', so this range is exhaustive for the
+#      differential universe; codepoints > 0xFF keep identity/false.
 #      Uses Core.bitcast (2 IR stmts) instead of reinterpret (400+ IR stmts).
 # Remove when: codegen can link libutf8proc or a pure-Julia Unicode DB is available
-# Char internal: Core.bitcast(UInt32, 'A') = 0x41000000, 'Z' = 0x5a000000,
-#                'a' = 0x61000000, 'z' = 0x7a000000, ASCII < 0x80000000
+# Char internal: UTF-8 bytes packed left-aligned into UInt32 —
+#   'A' = 0x41000000 (1-byte), 'é' = 0xC3A90000 (2-byte), ASCII < 0x80000000
+
+# Decode the packed-UTF-8 Char repr to a codepoint (all 1–4 byte forms).
+@inline function _wt_codepoint(c::Char)
+    raw = Core.bitcast(UInt32, c)
+    raw < 0x80000000 && return raw >> 24
+    if raw < 0xe0000000      # 110xxxxx 10xxxxxx
+        return (((raw >> 24) & UInt32(0x1f)) << 6) | ((raw >> 16) & UInt32(0x3f))
+    elseif raw < 0xf0000000  # 1110xxxx 10xxxxxx 10xxxxxx
+        return (((raw >> 24) & UInt32(0x0f)) << 12) | (((raw >> 16) & UInt32(0x3f)) << 6) |
+               ((raw >> 8) & UInt32(0x3f))
+    else                     # 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
+        return (((raw >> 24) & UInt32(0x07)) << 18) | (((raw >> 16) & UInt32(0x3f)) << 12) |
+               (((raw >> 8) & UInt32(0x3f)) << 6) | (raw & UInt32(0x3f))
+    end
+end
+
+# Encode a codepoint back into the packed-UTF-8 Char repr.
+@inline function _wt_char(cp::UInt32)
+    cp < UInt32(0x80) && return Core.bitcast(Char, cp << 24)
+    if cp < UInt32(0x800)
+        return Core.bitcast(Char, ((UInt32(0xc0) | (cp >> 6)) << 24) |
+                                  ((UInt32(0x80) | (cp & UInt32(0x3f))) << 16))
+    elseif cp < UInt32(0x10000)
+        return Core.bitcast(Char, ((UInt32(0xe0) | (cp >> 12)) << 24) |
+                                  ((UInt32(0x80) | ((cp >> 6) & UInt32(0x3f))) << 16) |
+                                  ((UInt32(0x80) | (cp & UInt32(0x3f))) << 8))
+    else
+        return Core.bitcast(Char, ((UInt32(0xf0) | (cp >> 18)) << 24) |
+                                  ((UInt32(0x80) | ((cp >> 12) & UInt32(0x3f))) << 16) |
+                                  ((UInt32(0x80) | ((cp >> 6) & UInt32(0x3f))) << 8) |
+                                  (UInt32(0x80) | (cp & UInt32(0x3f))))
+    end
+end
+
+@overlay WASM_METHOD_TABLE function Base.uppercase(c::Char)
+    cp = _wt_codepoint(c)
+    if cp >= UInt32(0x61) && cp <= UInt32(0x7a)                       # a-z
+        return _wt_char(cp - UInt32(0x20))
+    elseif cp == UInt32(0xb5)                                          # µ → Μ
+        return _wt_char(UInt32(0x39c))
+    elseif cp == UInt32(0xdf)                                          # ß → ẞ
+        return _wt_char(UInt32(0x1e9e))
+    elseif (cp >= UInt32(0xe0) && cp <= UInt32(0xf6)) ||               # à-ö, ø-þ
+           (cp >= UInt32(0xf8) && cp <= UInt32(0xfe))
+        return _wt_char(cp - UInt32(0x20))
+    elseif cp == UInt32(0xff)                                          # ÿ → Ÿ
+        return _wt_char(UInt32(0x178))
+    end
+    return c
+end
+
+@overlay WASM_METHOD_TABLE function Base.lowercase(c::Char)
+    cp = _wt_codepoint(c)
+    if cp >= UInt32(0x41) && cp <= UInt32(0x5a)                        # A-Z
+        return _wt_char(cp + UInt32(0x20))
+    elseif (cp >= UInt32(0xc0) && cp <= UInt32(0xd6)) ||               # À-Ö, Ø-Þ
+           (cp >= UInt32(0xd8) && cp <= UInt32(0xde))
+        return _wt_char(cp + UInt32(0x20))
+    end
+    return c
+end
 
 @overlay WASM_METHOD_TABLE function Base.isletter(c::Char)
-    raw = Core.bitcast(UInt32, c)
-    return (raw >= UInt32(0x41000000) && raw <= UInt32(0x5a000000)) ||
-           (raw >= UInt32(0x61000000) && raw <= UInt32(0x7a000000))
+    cp = _wt_codepoint(c)
+    return (cp >= UInt32(0x41) && cp <= UInt32(0x5a)) ||
+           (cp >= UInt32(0x61) && cp <= UInt32(0x7a)) ||
+           cp == UInt32(0xaa) || cp == UInt32(0xb5) || cp == UInt32(0xba) ||
+           (cp >= UInt32(0xc0) && cp <= UInt32(0xd6)) ||
+           (cp >= UInt32(0xd8) && cp <= UInt32(0xf6)) ||
+           (cp >= UInt32(0xf8) && cp <= UInt32(0xff))
+end
+
+@overlay WASM_METHOD_TABLE function Base.isspace(c::Char)
+    cp = _wt_codepoint(c)
+    return (cp >= UInt32(0x09) && cp <= UInt32(0x0d)) || cp == UInt32(0x20) ||
+           cp == UInt32(0x85) || cp == UInt32(0xa0)
 end
 
 @overlay WASM_METHOD_TABLE function Base.isuppercase(c::Char)
-    raw = Core.bitcast(UInt32, c)
-    return raw >= UInt32(0x41000000) && raw <= UInt32(0x5a000000)
+    cp = _wt_codepoint(c)
+    return (cp >= UInt32(0x41) && cp <= UInt32(0x5a)) ||
+           (cp >= UInt32(0xc0) && cp <= UInt32(0xd6)) ||
+           (cp >= UInt32(0xd8) && cp <= UInt32(0xde))
 end
 
 @overlay WASM_METHOD_TABLE function Base.islowercase(c::Char)
-    raw = Core.bitcast(UInt32, c)
-    return raw >= UInt32(0x61000000) && raw <= UInt32(0x7a000000)
+    cp = _wt_codepoint(c)
+    return (cp >= UInt32(0x61) && cp <= UInt32(0x7a)) ||
+           cp == UInt32(0xaa) || cp == UInt32(0xb5) || cp == UInt32(0xba) ||
+           cp == UInt32(0xdf) ||
+           (cp >= UInt32(0xe0) && cp <= UInt32(0xf6)) ||
+           (cp >= UInt32(0xf8) && cp <= UInt32(0xff))
 end
 
 @overlay WASM_METHOD_TABLE function Base.isascii(c::Char)
@@ -706,6 +1079,83 @@ end
     return c
 end
 
+# ─── maximum/minimum Overlays ────────────────────────────────────────────
+# Why: Base maximum/minimum compile from mapreduce/`max`,`min` whose comparison
+#      signedness flips to UNSIGNED in some compositions (e.g.
+#      `sum([...]) + maximum(sort([0,x,x]))` returned the min: `0 >ᵤ -1` is false).
+#      A simple explicit-loop overlay keeps the comparison correctly signed.
+#      NaN poisons (matches Base: maximum/minimum return NaN if present).
+# Remove when: native maximum/minimum codegen picks signed comparison in compositions.
+@overlay WASM_METHOD_TABLE function Base.maximum(v::Vector{T}) where T
+    n = length(v)
+    n == 0 && throw(ArgumentError("collection must be non-empty"))
+    i = 1
+    while i <= n
+        x = v[i]
+        x != x && return x   # NaN
+        i += 1
+    end
+    best = v[1]
+    i = 2
+    while i <= n
+        v[i] > best && (best = v[i])
+        i += 1
+    end
+    return best
+end
+@overlay WASM_METHOD_TABLE function Base.minimum(v::Vector{T}) where T
+    n = length(v)
+    n == 0 && throw(ArgumentError("collection must be non-empty"))
+    i = 1
+    while i <= n
+        x = v[i]
+        x != x && return x   # NaN
+        i += 1
+    end
+    best = v[1]
+    i = 2
+    while i <= n
+        v[i] < best && (best = v[i])
+        i += 1
+    end
+    return best
+end
+
+# ─── reduce/foldl Overlays ───────────────────────────────────────────────
+# Why: `reduce(op, v)` / `foldl(op, v)` over a Vector lower through native
+#      mapreduce/mapfoldl. The CFG keeps a `mapreduce_impl` block (large-vector
+#      branch) that emits invalid wasm, so the whole module fails to validate
+#      even for small vectors — every reduce/foldl trapped (in lax mode it
+#      returned garbage, e.g. `reduce(min, [5,3,8,1])` yielded the MAX). A plain
+#      left-fold is exact for the generated associative ops (+, *, min, max) and
+#      matches Base's observable result. (Float `+` differs only by pairwise-vs-
+#      sequential rounding, within the differential harness's tolerance.)
+#
+#      `op::F` forces per-op specialization so the empty-collection identity
+#      folds to a compile-time constant — otherwise `op` infers as abstract
+#      `Function` and the empty branch becomes a `dynamic invoke ...::Union{}`
+#      (Base.reduce_empty) that fails to compile. The `op === (+/*)` branches
+#      give Base's empty identity (0 / 1); min/max (and any other op) throw on
+#      empty, exactly as Base does.
+# Remove when: native mapreduce/mapfoldl codegen is implemented.
+@inline function _wasm_reduce_loop(op::F, v::Vector{T}) where {F,T}
+    n = length(v)
+    if n == 0
+        op === (+) && return zero(T)
+        op === (*) && return one(T)
+        throw(ArgumentError("reducing over an empty collection is not allowed; consider supplying `init` to the reduce function"))
+    end
+    acc = v[1]
+    i = 2
+    while i <= n
+        acc = op(acc, v[i])
+        i += 1
+    end
+    return acc
+end
+@overlay WASM_METHOD_TABLE Base.reduce(op::F, v::Vector{T}) where {F,T} = _wasm_reduce_loop(op, v)
+@overlay WASM_METHOD_TABLE Base.foldl(op::F, v::Vector{T}) where {F,T} = _wasm_reduce_loop(op, v)
+
 # ─── argmax/argmin Overlays ──────────────────────────────────────────────
 # Why: Base implementations use complex dispatch through _findmax/_findmin
 #      with Pairs iterators and kwarg patterns that produce codegen errors.
@@ -713,11 +1163,21 @@ end
 @overlay WASM_METHOD_TABLE function Base.argmax(v::Vector{T}) where T
     n = length(v)
     n == 0 && throw(ArgumentError("collection must be non-empty"))
+    # NaN poisons: Julia's findmax/argmax returns the FIRST NaN's index if any NaN.
+    # (`x != x` is true only for NaN; a no-op for integer T.)
+    i = 1
+    while i <= n
+        x = v[i]
+        x != x && return i
+        i += 1
+    end
     best_idx = 1
     best_val = v[1]
     i = 2
     while i <= n
-        if v[i] > best_val
+        # `>` plus a signed-zero tiebreak: +0.0 ranks above -0.0 (Julia's isless).
+        # For non-zero/integer T the tiebreak is false (equal ⇒ same signbit).
+        if v[i] > best_val || (v[i] == best_val && signbit(best_val) && !signbit(v[i]))
             best_val = v[i]
             best_idx = i
         end
@@ -729,11 +1189,17 @@ end
 @overlay WASM_METHOD_TABLE function Base.argmin(v::Vector{T}) where T
     n = length(v)
     n == 0 && throw(ArgumentError("collection must be non-empty"))
+    i = 1   # NaN poisons (see argmax) — first NaN index wins
+    while i <= n
+        x = v[i]
+        x != x && return i
+        i += 1
+    end
     best_idx = 1
     best_val = v[1]
     i = 2
     while i <= n
-        if v[i] < best_val
+        if v[i] < best_val || (v[i] == best_val && !signbit(best_val) && signbit(v[i]))  # -0.0 ranks below +0.0
             best_val = v[i]
             best_idx = i
         end
@@ -755,13 +1221,44 @@ end
     return nothing
 end
 
+# ─── hypot(Float64) Overlay ──────────────────────────────────────────────
+# Why: native Base.hypot's scaling/correction path produces NaN for tiny inputs in
+#      wasm (e.g. hypot(1e-300,1e-300) → NaN, should be ~1.4e-300). Use the standard
+#      scaled formula m·√((a/m)²+(b/m)²), which is overflow/underflow-safe and within
+#      the differential's ULP tolerance of native.
+# Remove when: native hypot compiles correctly across the float range.
+@overlay WASM_METHOD_TABLE function Base.hypot(a::Float64, b::Float64)
+    a = abs(a); b = abs(b)
+    (isinf(a) || isinf(b)) && return Inf
+    (isnan(a) || isnan(b)) && return NaN
+    m = a > b ? a : b
+    m == 0.0 && return 0.0
+    r1 = a / m; r2 = b / m
+    return m * sqrt(r1 * r1 + r2 * r2)
+end
+
 # ─── rem(Float64) Overlay ────────────────────────────────────────────────
 # Why: Base.rem calls rem_internal which triggers stackifier bug
 #      ("i64.sub expected i64, found anyref" — 100+ IR stmts with complex branches).
 #      IEEE 754 floating-point remainder is a - trunc(a/b)*b.
 # Remove when: stackifier correctly handles rem_internal's IR
 @overlay WASM_METHOD_TABLE function Base.rem(x::Float64, y::Float64)
-    return x - trunc(x / y) * y
+    # fmod semantics. `x - trunc(x/y)*y` is *lossy* for large quotients:
+    # trunc(x/y)*y rounds, so rem(5.4e7, 1.41) drifts ~1e-9 off native fmod
+    # (which is exact). Use scaled subtraction instead — each `a -= c` step is
+    # exact by Sterbenz (c <= a < 2c), so the whole reduction is bit-exact.
+    (isnan(x) || isnan(y) || isinf(x) || y == 0.0) && return NaN
+    isinf(y) && return x                      # rem(finite, ±Inf) = x
+    a = abs(x)
+    b = abs(y)
+    while a >= b
+        c = b
+        while c <= a * 0.5                    # largest c = b*2^k with c <= a
+            c += c                            # exact: exponent bump
+        end
+        a -= c                                # exact: a/2 < c <= a (Sterbenz)
+    end
+    return signbit(x) ? -a : a                # rem takes the sign of x
 end
 
 # ─── mod(Float64) Overlay ────────────────────────────────────────────────
@@ -769,8 +1266,103 @@ end
 #      IEEE 754 modulo is a - floor(a/b)*b.
 # Remove when: stackifier correctly handles rem_internal's IR
 @overlay WASM_METHOD_TABLE function Base.mod(x::Float64, y::Float64)
-    return x - floor(x / y) * y
+    # As rem, but the result takes the sign of the divisor. Guard Inf/NaN/zero.
+    # Same exactness fix as rem: scaled subtraction, not `x - floor(x/y)*y`.
+    (isnan(x) || isnan(y) || isinf(x) || y == 0.0) && return NaN
+    if isinf(y)
+        # mod(x, ±Inf): x already matches divisor sign (or is 0) → x; else → y
+        return (x == 0.0 || (x > 0.0) == (y > 0.0)) ? x : y
+    end
+    a = abs(x)
+    b = abs(y)
+    while a >= b
+        c = b
+        while c <= a * 0.5
+            c += c
+        end
+        a -= c
+    end
+    r = signbit(x) ? -a : a                   # = rem(x, y), exact
+    # mod's result takes the sign of the divisor; one corrective add suffices.
+    return (r != 0.0 && (signbit(r) != signbit(y))) ? r + y : r
 end
+
+# ─── Float32 exp / exp2 / exp10 Overlays ─────────────────────────────────
+# Why: Base's Float32 exp family compiles to a dependency function that emits
+#      invalid wasm (validation failure) — its table-driven Float32 kernel hits
+#      a codegen gap the Float64 path doesn't. The Float64 kernel is correct, and
+#      Float32(exp(Float64(x))) matches Julia's native exp(::Float32) to ≤1 ULP
+#      (within the differential's transcendental tolerance), so redirect through it.
+# Remove when: the Float32 transcendental kernel compiles to valid wasm directly.
+@overlay WASM_METHOD_TABLE Base.exp(x::Float32) = Float32(exp(Float64(x)))
+@overlay WASM_METHOD_TABLE Base.exp2(x::Float32) = Float32(exp2(Float64(x)))
+@overlay WASM_METHOD_TABLE Base.exp10(x::Float32) = Float32(exp10(Float64(x)))
+
+# ─── Hyperbolic Overlays (sinh / cosh / tanh) ────────────────────────────
+# Why: Base's sinh/cosh/tanh have no native wasm codegen — they emit a value-stub
+#      (nothing on the stack), so e.g. `hypot(Inf, sinh(x))` fails validation with
+#      "expected f64 but nothing on stack". Implement via the (working) `exp`.
+#      cosh = (eᵃ + e⁻ᵃ)/2 is exact everywhere (no cancellation; cosh ≥ 1).
+#      sinh needs a Taylor branch for |x| < 0.35: the exp form eˣ-e⁻ˣ loses
+#      precision to cancellation near 0 and would blow past the differential's
+#      rtol=1e-9 in the band [1e-12, 1e-7] (below 1e-12 the atol covers it).
+#      tanh = sinh/cosh with a |x|>20 ⇒ ±1 guard so large x can't make Inf/Inf.
+# Remove when: native libm-style hyperbolic codegen exists.
+const _WASM_LN2 = 0.6931471805599453             # log(2), for the overflow-safe eᵃ/2
+
+@overlay WASM_METHOD_TABLE function Base.sinh(x::Float64)
+    (isnan(x) || isinf(x)) && return x          # sinh(±Inf)=±Inf, sinh(NaN)=NaN
+    a = abs(x)
+    if a < 0.35
+        # Taylor in x²: x·(1 + x²/3! + x⁴/5! + x⁶/7! + x⁸/9!); ≤7e-13 rel at 0.35.
+        x2 = x * x
+        return x * (1.0 + x2*(1/6 + x2*(1/120 + x2*(1/5040 + x2*(1/362880)))))
+    elseif a > 20.0
+        # eᵃ/2 via exp(a - ln2): drops e⁻ᵃ (<2e-9 rel here) and never forms the
+        # overflowing eᵃ, so sinh stays finite up to native's limit (e.g. x=710).
+        s = exp(a - _WASM_LN2)
+        return x < 0.0 ? -s : s
+    end
+    e = exp(a)
+    s = 0.5 * (e - 1.0/e)
+    return x < 0.0 ? -s : s
+end
+@overlay WASM_METHOD_TABLE function Base.cosh(x::Float64)
+    isnan(x) && return x
+    a = abs(x)
+    a > 20.0 && return exp(a - _WASM_LN2)        # eᵃ/2, overflow-safe (cosh(±Inf)=Inf)
+    e = exp(a)
+    return 0.5 * (e + 1.0/e)
+end
+@overlay WASM_METHOD_TABLE function Base.tanh(x::Float64)
+    isnan(x) && return x
+    abs(x) > 20.0 && return x < 0.0 ? -1.0 : 1.0  # saturated to ±1 (also ±Inf)
+    return sinh(x) / cosh(x)                       # accurate: sinh is cancellation-safe
+end
+@overlay WASM_METHOD_TABLE Base.sinh(x::Float32) = Float32(sinh(Float64(x)))
+@overlay WASM_METHOD_TABLE Base.cosh(x::Float32) = Float32(cosh(Float64(x)))
+@overlay WASM_METHOD_TABLE Base.tanh(x::Float32) = Float32(tanh(Float64(x)))
+
+# ─── asin(Float64) Overlay ───────────────────────────────────────────────
+# Why: Base's asin compiles fine standalone but its 600-stmt body mis-executes
+#      (runtime trap) when pulled in as a *map-kernel dependency* — `map(asin, v)`
+#      traps even for in-domain inputs, while `acos`/`atan`/`log` in map are fine.
+#      Identity asin(x)=atan(x/√((1-x)(1+x))) reduces to atan (which works in map);
+#      the (1-x)(1+x) form avoids cancellation near ±1 — verified ≤1 ULP over [-1,1].
+# Remove when: large compiled functions work correctly as map-kernel dependencies.
+@overlay WASM_METHOD_TABLE function Base.asin(x::Float64)
+    abs(x) > 1.0 && throw(DomainError(x, "asin(x) requires -1 ≤ x ≤ 1"))
+    return atan(x / sqrt((1.0 - x) * (1.0 + x)))   # NaN→NaN, ±1→±π/2 via ±Inf
+end
+
+# NOTE: A `length(::String)` overlay (lead-byte count via ncodeunits/codeunit) was
+# trialed to fix the map-kernel-dependency trap (gap 3b005c4957f7) but had to be
+# reverted: lstrip/rstrip above call `length(s)` internally as a *byte* count
+# (char==byte for ASCII), and the overlay miscompiles in that dependency context —
+# the same boolean-cond-in-while codegen class the strip overlays already contort
+# around — silently breaking the previously-green ASCII strip tests. A global
+# `length(::String)` that's correct both as a map kernel AND inside lstrip/rstrip
+# needs the underlying codegen bug fixed first. Re-opened, triaged for Part 2.
 
 # ─── isless(Float64) Overlay ────────────────────────────────────────────
 # Why: Base.isless(Float64,Float64) produces 793 IR stmts with complex dispatch
@@ -792,40 +1384,63 @@ end
     return x < y
 end
 
+# ─── isless(Float32) Overlay ────────────────────────────────────────────
+# Why: Base.isless(Float32,Float32) (like the Float64 case) emits invalid wasm —
+#      a `type mismatch: expected i64, found anyref` validation failure — so any
+#      Float32 ordering (e.g. `sort(::Vector{Float32})`, found by the fuzzer as
+#      `length(sort([0f0,0f0,0f0]))`) fails to compile. Same NaN/signed-zero
+#      convention as the Float64 overlay; isnan/signbit/== all work for Float32.
+# Remove when: Base's Float32 isless compiles to valid wasm directly.
+@overlay WASM_METHOD_TABLE function Base.isless(x::Float32, y::Float32)
+    if isnan(x)
+        return false
+    end
+    if isnan(y)
+        return true
+    end
+    if x == y
+        return signbit(x) && !signbit(y)
+    end
+    return x < y
+end
+
 # ─── pow_body(Float64, Int64) Overlay ────────────────────────────────────
-# Why: Base.Math.pow_body has 136 IR stmts with a complex loop, phi nodes,
-#      and have_fma branches. The stackifier miscompiles the main loop —
-#      only n=3 (fast-path) works, all other values hit unreachable.
-# Remove when: stackifier correctly handles pow_body's loop/phi pattern
+# Why: Base.Math.pow_body(F64, Integer) is COMPENSATED power-by-squaring; its
+#      fma/muladd ops fuse on the native host (ARM), so a naive square-and-
+#      multiply loop (the previous overlay) drifted ~3 ulp — at 1e200 scale
+#      that flips sin(x^x) entirely (gap e0f6a8de978a). This is a faithful
+#      port of Base's algorithm with every fused op routed through
+#      Base.fma_emulated (exact single rounding, == hardware fma/muladd).
+# Remove when: muladd_float/fma_float lower to exact FMA in the wasm backend
 @overlay WASM_METHOD_TABLE function Base.Math.pow_body(x::Float64, n::Int64)
-    if n == 0
-        return 1.0
-    end
-    if n == 1
-        return x
-    end
-    if n == 2
-        return x * x
-    end
-    if n == 3
-        return x * x * x
-    end
-    neg = n < 0
-    if neg
+    y = 1.0
+    xnlo = -0.0
+    ynlo = 0.0
+    n == 3 && return x * x * x   # keep compatibility with literal_pow
+    if n < 0
+        rx = inv(x)
+        n == -2 && return rx * rx
+        isfinite(x) && (xnlo = -Base.fma_emulated(x, rx, -1.0) * rx)
+        x = rx
         n = -n
-        x = 1.0 / x
     end
-    # Power by squaring
-    result = 1.0
-    base = x
-    while n > 0
-        if (n & Int64(1)) == Int64(1)
-            result = result * base
+    while n > 1
+        if n & 1 > 0
+            err = Base.fma_emulated(y, xnlo, x * ynlo)
+            t = x * y                              # two_mul(x, y)
+            tlo = Base.fma_emulated(x, y, -t)
+            y = t
+            ynlo = tlo + err
         end
-        base = base * base
-        n = n >> 1
+        err = x * 2 * xnlo
+        t = x * x                                  # two_mul(x, x)
+        tlo = Base.fma_emulated(x, x, -t)
+        x = t
+        xnlo = tlo + err
+        n >>>= 1
     end
-    return result
+    err = Base.fma_emulated(y, xnlo, x * ynlo)
+    return ifelse(isfinite(x) & isfinite(err), Base.fma_emulated(x, y, err), x * y)
 end
 
 # ─── repeat(String) Overlay ─────────────────────────────────────────────
@@ -871,31 +1486,43 @@ end
 #      extraction works for all Int64 values.
 # Remove when: codegen handles the Ryu string conversion pipeline
 @overlay WASM_METHOD_TABLE function Base.string(x::Int64)
+    x == Int64(0) && return "0"
     neg = x < 0
-    # Work with positive value
-    v = neg ? -x : x
-    # Extract digits in reverse (handle v=0 explicitly to avoid empty digits)
+    # Extract digits WITHOUT negating x: `v = -x` overflows for typemin(Int64)
+    # (-typemin == typemin, still negative) → the old loop produced "" → "-".
+    # Process the value in place (digit magnitude via |q % 10|, ≤9 so -d is safe).
     digits = UInt8[]
-    if v == Int64(0)
-        push!(digits, UInt8(48))  # '0'
-    else
-        while v > 0
-            d = v - (v ÷ Int64(10)) * Int64(10)  # v % 10 without rem
-            push!(digits, UInt8(48 + d))  # '0' + d
-            v = v ÷ Int64(10)
-        end
+    q = x
+    while q != Int64(0)
+        d = q - (q ÷ Int64(10)) * Int64(10)   # q % 10 (carries sign of q)
+        d = d < Int64(0) ? -d : d             # magnitude 0..9
+        push!(digits, UInt8(48 + d))          # '0' + d
+        q = q ÷ Int64(10)                     # truncates toward zero
     end
-    # Build result in correct order
     bytes = UInt8[]
-    if neg
-        push!(bytes, UInt8(45))  # '-'
-    end
+    neg && push!(bytes, UInt8(45))            # '-'
     i = length(digits)
     while i >= 1
         push!(bytes, digits[i])
         i -= 1
     end
     return String(bytes)
+end
+
+# ─── first/last(Vector) Overlays ─────────────────────────────────────────
+# Why: first(v)/last(v) compile to an unchecked array.get; on an empty vector that
+#      reads the (capacity-allocated) backing array → returns garbage instead of
+#      throwing BoundsError like native. Guard emptiness so wasm errors too (the
+#      differential then matches: both error). Non-empty path is unchanged.
+# Remove when: getindex bounds-checks the Vector size on OOB.
+@overlay WASM_METHOD_TABLE function Base.first(v::Vector{T}) where T
+    length(v) == 0 && throw(BoundsError())
+    return v[1]
+end
+@overlay WASM_METHOD_TABLE function Base.last(v::Vector{T}) where T
+    n = length(v)
+    n == 0 && throw(BoundsError())
+    return v[n]
 end
 
 # ─── empty!(Vector) Overlay ─────────────────────────────────────────────

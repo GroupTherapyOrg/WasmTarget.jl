@@ -964,6 +964,73 @@ function strip_excess_after_function_end(bytes::Vector{UInt8})::Vector{UInt8}
             i += 9; continue
         end
 
+        # P2-batch12: opcodes with non-trivial immediates the decoder previously
+        # treated as single-byte. Mis-skipping makes the scanner read an OPERAND
+        # byte as an opcode — an operand byte of 0x0B then looks like the
+        # function's closing `end` at depth 0 and TRUNCATES the real tail.
+        # select_t's type-index operand was the trigger: type indices shift per
+        # module, so the same function validated in one module and lost its last
+        # 9 instructions in another (Ryu kernel, gaps 19d59e9a61b3/b72318c9598c).
+        _skip_leb() = (while i <= length(bytes); b = bytes[i]; i += 1; (b & 0x80) == 0 && break; end)
+        if op == 0x08  # throw: tag index LEB
+            i += 1; _skip_leb(); continue
+        end
+        if op == 0x0E  # br_table: vec(label) + default label
+            i += 1
+            cnt = 0; shift = 0
+            while i <= length(bytes)
+                b = bytes[i]; i += 1
+                cnt |= Int(b & 0x7f) << shift
+                (b & 0x80) == 0 && break
+                shift += 7
+            end
+            for _ in 1:(cnt + 1); _skip_leb(); end
+            continue
+        end
+        if op == 0x1C  # select_t: vec(valtype); each valtype is 1 byte, or 0x63/0x64 + heaptype LEB
+            i += 1
+            cnt = 0; shift = 0
+            while i <= length(bytes)
+                b = bytes[i]; i += 1
+                cnt |= Int(b & 0x7f) << shift
+                (b & 0x80) == 0 && break
+                shift += 7
+            end
+            for _ in 1:cnt
+                i > length(bytes) && break
+                vt = bytes[i]; i += 1
+                (vt == 0x63 || vt == 0x64) && _skip_leb()  # ref null ht / ref ht
+            end
+            continue
+        end
+        if op == 0x1F  # try_table: blocktype + vec(catch clause); OPENS A FRAME
+            depth += 1
+            i += 1
+            if i <= length(bytes)
+                if bytes[i] == 0x40
+                    i += 1
+                else
+                    _skip_leb()
+                end
+            end
+            cnt = 0; shift = 0
+            while i <= length(bytes)
+                b = bytes[i]; i += 1
+                cnt |= Int(b & 0x7f) << shift
+                (b & 0x80) == 0 && break
+                shift += 7
+            end
+            for _ in 1:cnt
+                i > length(bytes) && break
+                kind = bytes[i]; i += 1
+                # 0x00 catch tag+label, 0x01 catch_ref tag+label: 2 LEBs;
+                # 0x02 catch_all label, 0x03 catch_all_ref label: 1 LEB
+                (kind == 0x00 || kind == 0x01) && _skip_leb()
+                _skip_leb()
+            end
+            continue
+        end
+
         # Skip instructions with LEB128 operands
         n_skip = if op == 0x20 || op == 0x21 || op == 0x22; 1      # local.get/set/tee
                  elseif op == 0x23 || op == 0x24; 1                  # global.get/set
@@ -1357,6 +1424,15 @@ function find_try_regions(code)::Vector{TryRegion}
 
             if leave_idx > 0
                 push!(regions, TryRegion(i, catch_dest, leave_idx))
+            elseif catch_dest > i
+                # P2-batch4: an always-throwing try body has NO :leave (Julia elides
+                # it when the body can't exit normally — e.g. `try div(0,0) catch`).
+                # Dropping the region here meant no try_table was emitted at all, so
+                # the throw escaped uncaught. Synthesize leave_idx = catch_dest: the
+                # try body becomes enter+1 .. catch_dest-1 and every consumer's
+                # normal-exit range (leave_idx+1 .. catch_dest-1) is empty, which is
+                # exactly right — there is no normal exit.
+                push!(regions, TryRegion(i, catch_dest, catch_dest))
             end
         end
     end
@@ -1614,9 +1690,153 @@ Structure:
   end
   ; catch handler code (pop_exception skipped, returns -1 or similar)
 """
+# P2-batch17: compile a catch-handler region [from..to] honouring GotoIfNot
+# (conditional catch arms / exception isa dispatch). The linear per-statement
+# loops no-op'd GotoIfNot, so `catch; if x; a; else; b; end` always produced the
+# then arm (gap f80bce91645e). Mirrors the PURE-9032 handling from the simple
+# no-merge generator.
+function _compile_catch_region!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, code, from::Int, to::Int)
+    i = from
+    while i <= to
+        stmt = code[i]
+        if stmt === nothing || (stmt isa Expr && stmt.head === :pop_exception)
+            i += 1
+            continue
+        end
+        if stmt isa Core.GotoIfNot
+            else_target = stmt.dest
+            append!(bytes, compile_condition_to_i32(stmt.cond, ctx))
+            then_start = i + 1
+            then_end = min(else_target - 1, to)
+            then_has_return = any(code[j] isa Core.ReturnNode for j in then_start:then_end)
+            push!(bytes, Opcode.IF)
+            push!(bytes, 0x40)
+            for j in then_start:then_end
+                ts = code[j]
+                if ts !== nothing && !(ts isa Expr && ts.head === :pop_exception)
+                    append!(bytes, compile_statement(ts, j, ctx))
+                end
+            end
+            if then_has_return
+                # Then arm exits the function — no else arm needed; continue at dest
+                push!(bytes, Opcode.END)
+                ctx.last_stmt_was_stub = false
+                i = else_target
+            else
+                push!(bytes, Opcode.ELSE)
+                for j in else_target:to
+                    es = code[j]
+                    if es !== nothing && !(es isa Expr && es.head === :pop_exception)
+                        append!(bytes, compile_statement(es, j, ctx))
+                    end
+                end
+                push!(bytes, Opcode.END)
+                ctx.last_stmt_was_stub = false
+                i = to + 1
+            end
+        else
+            append!(bytes, compile_statement(stmt, i, ctx))
+            i += 1
+        end
+    end
+    return bytes
+end
+
 function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code, region::TryRegion)::Vector{UInt8}
     bytes = UInt8[]
     catch_dest = region.catch_dest
+
+    # P2-batch16: merge-phi structure (port of PURE-9031 from the simple
+    # generator). Without it, a try body that completes NORMALLY fell out of
+    # the try_table straight THROUGH the catch handler, overwriting the merge
+    # phi with the catch arm's value (`try gcd(Int32(0), x) catch Int32(0)`
+    # returned 0 — gap 6d3a1788a329 family). Structure:
+    #   block $merge (void)
+    #     block $catch_landing (void)
+    #       try_table (catch_all 0)  ;; body; normal completion brs to $merge
+    #       end
+    #     end
+    #     ;; catch handler (sets merge phi), falls through to $merge end
+    #   end
+    #   ;; post-merge code (phi reads, conversions, return)
+    # P2-batch19: a MERGE phi must have a try-side edge (< catch_dest). Phis
+    # whose edges all originate inside the catch region are INTERNAL to the
+    # catch arm (e.g. the inlined `mod(typemin, x)` diamond — gap 93a32c2c9d13)
+    # and are handled by the stackified catch compilation below, not by the
+    # merge structure.
+    merge_start = length(code) + 1
+    for i in catch_dest:length(code)
+        st = code[i]
+        if st isa Core.PhiNode && haskey(ctx.phi_locals, i) &&
+           any(Int(e) < catch_dest for e in st.edges)
+            merge_start = i
+            break
+        end
+    end
+    has_merge = merge_start <= length(code)
+
+    # P2-batch19: pre-try branch that EXITS over the whole try/catch
+    # (`if cond; try ... catch ... end else X end`). The else target lies
+    # outside the try-body block subset, so the stackifier silently dropped the
+    # branch and the condition value corrupted the operand stack (gaps
+    # efca694cdd4f / 6cf9be31dafc). Restructure as:
+    #   <pre-branch stmts>
+    #   block $else: cond eqz br_if; <try/catch structure> end
+    #   <post code [dest..]>
+    # Only for the return-style shape (no merge phis; the catch arm returns).
+    exit_idx = 0
+    exit_dest = 0
+    if !has_merge
+        catch_ret = 0
+        for i in catch_dest:length(code)
+            if code[i] isa Core.ReturnNode
+                catch_ret = i
+                break
+            end
+        end
+        if catch_ret > 0
+            for i in 1:(region.enter_idx - 1)
+                st = code[i]
+                if st isa Core.GotoIfNot && st.dest > catch_ret
+                    exit_idx = i
+                    exit_dest = st.dest
+                    break
+                end
+            end
+        end
+    end
+    has_exit_branch = exit_idx > 0
+
+    if has_exit_branch
+        # Pre-branch code via the stackifier — it can contain loops (Set/Vector
+        # literal fills); a linear walk flattens them (6cf9be31dafc traped OOB).
+        # The branch block itself is truncated before its GotoIfNot terminator,
+        # which is emitted manually as the $else guard below.
+        pre_blocks = BasicBlock[]
+        for b in blocks
+            b.start_idx > exit_idx && continue
+            if b.end_idx < exit_idx
+                push!(pre_blocks, b)
+            else
+                # block containing the exit branch: keep statements before it
+                b.start_idx <= exit_idx - 1 &&
+                    push!(pre_blocks, BasicBlock(b.start_idx, exit_idx - 1, nothing))
+            end
+        end
+        append!(bytes, generate_stackified_flow(ctx, pre_blocks, code; trailing_unreachable = false))
+        push!(bytes, Opcode.BLOCK)   # $else
+        push!(bytes, 0x40)
+        append!(bytes, compile_condition_to_i32((code[exit_idx]::Core.GotoIfNot).cond, ctx))
+        push!(bytes, Opcode.I32_EQZ)
+        push!(bytes, Opcode.BR_IF)
+        append!(bytes, encode_leb128_unsigned(0))
+        ctx.last_stmt_was_stub = false
+    end
+
+    if has_merge
+        push!(bytes, Opcode.BLOCK)   # $merge
+        push!(bytes, 0x40)
+    end
 
     # Catch landing block (void) — catch_all branches here
     push!(bytes, Opcode.BLOCK)
@@ -1629,8 +1849,11 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
     push!(bytes, Opcode.CATCH_ALL)               # catch_all type
     append!(bytes, encode_leb128_unsigned(0))    # label index 0
 
-    # Extract blocks before catch handler — includes try body + normal return path
-    try_body_blocks = [b for b in blocks if b.start_idx < catch_dest]
+    # Extract blocks before catch handler — includes try body + normal return path.
+    # With an exit branch, pre-branch/branch blocks are emitted above instead.
+    try_body_blocks = has_exit_branch ?
+        [b for b in blocks if b.start_idx > exit_idx && b.start_idx < catch_dest] :
+        [b for b in blocks if b.start_idx < catch_dest]
 
     # Use generate_stackified_flow for proper control flow:
     # - phi locals set at every edge (GotoNode, GotoIfNot, fall-through)
@@ -1638,23 +1861,148 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
     # - returns use RETURN opcode (exits function from within try_table)
     append!(bytes, generate_stackified_flow(ctx, try_body_blocks, code))
 
+    if has_merge
+        # Normal completion: the try-exit edge targets the merge block, which is
+        # OUTSIDE try_body_blocks, so the stackified body never assigns the merge
+        # phi locals — set them here from each phi's try-side edge value.
+        for i in merge_start:length(code)
+            st = code[i]
+            st isa Core.PhiNode || break   # merge phis are contiguous
+            haskey(ctx.phi_locals, i) || continue
+            for (k, e) in enumerate(st.edges)
+                if e < catch_dest && isassigned(st.values, k)
+                    emit_phi_local_set!(bytes, st.values[k], i, ctx)
+                    break
+                end
+            end
+        end
+        push!(bytes, Opcode.BR)
+        append!(bytes, encode_leb128_unsigned(2))  # past catch_landing + catch → $merge end
+    end
+
     # End try_table
     push!(bytes, Opcode.END)
 
     # End catch_landing block
     push!(bytes, Opcode.END)
 
-    # Catch handler (from catch_dest to end of code)
-    for i in catch_dest:length(code)
-        stmt = code[i]
-        if stmt !== nothing
-            # Skip pop_exception — it's a runtime marker, no WASM equivalent
-            if stmt isa Expr && stmt.head === :pop_exception
-                continue
+    # PURE-9032-style: the catch handler is reachable via exception regardless
+    # of any stub flags set while emitting the try body.
+    ctx.last_stmt_was_stub = false
+
+    # Catch handler: catch_dest up to the merge point (or end of code)
+    if has_merge
+        # P2-batch17: GotoIfNot-aware linear walk (conditional catch arms)
+        _compile_catch_region!(bytes, ctx, code, catch_dest, merge_start - 1)
+    else
+        # P2-batch19: self-contained catch arm (ends in return) — compile via
+        # the stackifier so internal phis/diamonds/loops work (inlined
+        # mod/div in catch arms, loop-in-catch — gaps 93a32c2c9d13 family).
+        catch_blocks = [b for b in blocks
+                        if b.start_idx >= catch_dest &&
+                           (!has_exit_branch || b.start_idx < exit_dest)]
+        append!(bytes, generate_stackified_flow(ctx, catch_blocks, code))
+    end
+
+    if has_exit_branch
+        push!(bytes, Opcode.END)   # $else
+        ctx.last_stmt_was_stub = false
+        # Post code: the else arm of the pre-try branch (returns)
+        _compile_catch_region!(bytes, ctx, code, exit_dest, length(code))
+    end
+
+    if has_merge
+        # Catch-side merge phi values (edge source >= catch_dest)
+        for i in merge_start:length(code)
+            st = code[i]
+            st isa Core.PhiNode || break
+            haskey(ctx.phi_locals, i) || continue
+            for (k, e) in enumerate(st.edges)
+                if e >= catch_dest && isassigned(st.values, k)
+                    emit_phi_local_set!(bytes, st.values[k], i, ctx)
+                    break
+                end
             end
-            append!(bytes, compile_statement(stmt, i, ctx))
+        end
+        push!(bytes, Opcode.END)   # $merge
+        ctx.last_stmt_was_stub = false
+        # Post-merge code: phi reads, conversions, return
+        for i in merge_start:length(code)
+            stmt = code[i]
+            if stmt !== nothing
+                if stmt isa Expr && stmt.head === :pop_exception
+                    continue
+                end
+                append!(bytes, compile_statement(stmt, i, ctx))
+            end
         end
     end
+
+    return bytes
+end
+
+# P2-batch18: does the outer region's normal path (between :leave and the catch
+# dest) return from the function? True for the return-style try/catch chain
+# shapes; false for merging shapes (which goto a phi instead).
+function _outer_normal_path_returns(code, outer::TryRegion)::Bool
+    for i in (outer.leave_idx + 1):(outer.catch_dest - 1)
+        code[i] isa Core.ReturnNode && return true
+    end
+    return false
+end
+
+# P2-batch18: `try A catch; <prefix>; try B catch C end end` — the outer catch
+# handler IS (or wraps) the inner try. Emits two chained try_tables:
+#   block $c1 / try_table(catch_all 0): pre + outer body + normal return / end / end
+#   ;; outer catch handler:
+#   <prefix stmts>
+#   block $c2 / try_table(catch_all 0): inner body + normal return / end / end
+#   ;; inner catch region (GotoIfNot-aware)
+# Only called for the return-style shape (guarded at the dispatch site).
+function generate_catch_try_chain(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
+                                  code, outer::TryRegion, inner::TryRegion)::Vector{UInt8}
+    bytes = UInt8[]
+    ensure_exception_tag!(ctx.mod)
+    ensure_exception_global!(ctx.mod)
+
+    # Emit one `block $c / try_table(catch_all 0) ... end / end` whose body is
+    # compiled by the STACKIFIER over the given block subset — try bodies here
+    # can contain loops/phis (e.g. inlined vector-literal fill loops), which a
+    # linear statement walk silently flattens. The normal path inside each body
+    # RETURNS (guarded at the dispatch site), so the try_table needs no result.
+    function _emit_try_table_region!(body_blocks::Vector{BasicBlock})
+        push!(bytes, Opcode.BLOCK)
+        push!(bytes, 0x40)
+        push!(bytes, Opcode.TRY_TABLE)
+        push!(bytes, 0x40)
+        append!(bytes, encode_leb128_unsigned(1))
+        push!(bytes, Opcode.CATCH_ALL)
+        append!(bytes, encode_leb128_unsigned(0))
+        append!(bytes, generate_stackified_flow(ctx, body_blocks, code))
+        push!(bytes, Opcode.END)   # try_table
+        push!(bytes, Opcode.END)   # catch landing block
+        ctx.last_stmt_was_stub = false
+    end
+
+    # Outer try_table — includes pre-try code, mirroring generate_try_catch_stackified
+    _emit_try_table_region!([b for b in blocks if b.start_idx < outer.catch_dest])
+
+    # Outer catch handler prefix (pop_exception / assignments before the inner try)
+    for i in outer.catch_dest:(inner.enter_idx - 1)
+        stmt = code[i]
+        if stmt === nothing || stmt isa Core.EnterNode ||
+           (stmt isa Expr && stmt.head === :pop_exception)
+            continue
+        end
+        append!(bytes, compile_statement(stmt, i, ctx))
+    end
+
+    # Inner try_table
+    _emit_try_table_region!([b for b in blocks
+                             if b.start_idx > inner.enter_idx && b.start_idx < inner.catch_dest])
+
+    # Inner catch region (GotoIfNot-aware)
+    _compile_catch_region!(bytes, ctx, code, inner.catch_dest, length(code))
 
     return bytes
 end
@@ -1679,6 +2027,17 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
         # Inner is nested if its enter is within the outer's try scope
         if inner.enter_idx > outer.enter_idx && inner.enter_idx < outer.catch_dest
             return generate_nested_try_catch_2(ctx, blocks, code, outer, inner)
+        elseif length(regions) == 2 && inner.enter_idx >= outer.catch_dest &&
+               _outer_normal_path_returns(code, outer) &&
+               !any(code[i] isa Core.PhiNode && haskey(ctx.phi_locals, i)
+                    for i in inner.catch_dest:length(code))
+            # P2-batch18: the OUTER catch handler contains the inner try
+            # (`try A catch; try B catch C end end`). This is NOT sequential —
+            # the sequential generator emitted both structures back-to-back and
+            # produced invalid wasm (gaps 331b3b4b2d4a, 39f798226bbd,
+            # 422b9863eab9). Requires the return-style shape (each arm returns;
+            # no merge phis) — anything else falls through to sequential.
+            return generate_catch_try_chain(ctx, blocks, code, outer, inner)
         else
             # Sequential (non-nested) try/catch regions
             return generate_sequential_try_catch(ctx, blocks, code, regions)
@@ -1695,11 +2054,39 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
     # delegate to generate_stackified_flow which properly handles phi locals,
     # nested GotoIfNot, and GotoNode. The simple linear approach below can only
     # handle one level of GotoIfNot and doesn't set phi locals at edges.
+    # P2-batch11: scan the PRE-TRY region too (1:enter_idx-1) — a loop before the
+    # try (e.g. `v_b = sum([0,0,0]); try ... catch`) has phis whose backedges the
+    # linear "code before EnterNode" emission below silently flattens, running the
+    # loop body straight through → OOB array reads (gap 44a8808e5bfc family).
     has_phi = false
-    for i in (enter_idx+1):(catch_dest-1)
+    for i in 1:(catch_dest-1)
+        i == enter_idx && continue
         if i <= length(code) && code[i] isa Core.PhiNode
             has_phi = true
             break
+        end
+        # P2-batch15: pre-try BRANCHES flatten the same way pre-try loops did —
+        # `if cond; try ... catch ... end else ... end` executed the try arm on
+        # BOTH paths and the broken structure let the throw escape the
+        # try_table (gap efca694cdd4f family). Any control flow before the
+        # EnterNode needs the stackified try generator.
+        if i < enter_idx && (code[i] isa Core.GotoIfNot || code[i] isa Core.GotoNode)
+            has_phi = true
+            break
+        end
+    end
+    # P2-batch19: CATCH-INTERNAL phis (all edges ≥ catch_dest — inlined diamonds
+    # or loops inside the catch arm, e.g. `catch; mod(typemin, x)`) need the
+    # stackified catch compilation; the linear walk misplaced their edge
+    # assignments (gaps 93a32c2c9d13 / 6c9ddf4c936f).
+    if !has_phi
+        for i in catch_dest:length(code)
+            st = code[i]
+            if st isa Core.PhiNode && haskey(ctx.phi_locals, i) &&
+               all(Int(e) >= catch_dest for e in st.edges)
+                has_phi = true
+                break
+            end
         end
     end
     if has_phi
@@ -1824,15 +2211,8 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
         ctx.last_stmt_was_stub = false
 
         # Catch handler code (from catch_dest to merge_start-1)
-        for i in catch_dest:(merge_start-1)
-            stmt = code[i]
-            if stmt !== nothing
-                if stmt isa Expr && stmt.head === :pop_exception
-                    continue
-                end
-                append!(bytes, compile_statement(stmt, i, ctx))
-            end
-        end
+        # P2-batch17: GotoIfNot-aware (conditional catch arms — gap f80bce91645e)
+        _compile_catch_region!(bytes, ctx, code, catch_dest, merge_start - 1)
 
         # SET catch phi locals
         for phi_idx in merge_phi_nodes
@@ -2506,7 +2886,31 @@ function _compile_try_body_gotoifnot(stmt::Core.GotoIfNot, i::Int, leave_idx::In
         end
     end
 
-    if then_has_throw || then_has_return
+    # P2-batch17: diamond/guard pattern — the then region ends with a forward
+    # GotoNode OVER the else region to a merge/continuation point M. The else
+    # arm is only [dest..M-1]; statements from M on are the shared continuation
+    # and must run on BOTH paths. The old code compiled [dest..leave-1] as the
+    # else arm, burying the whole rest of the try body inside a dead throw arm
+    # (gap 6d3a1788a329 family: `Int64(try gcd(Int32(0), Int32(x)) catch Int32(0) end)`
+    # returned 0 — the Int32 range-check's else arm swallowed all the gcd work).
+    merge_after = _try_goto_merge_target(stmt, i, leave_idx, code)
+    if !(then_has_throw || then_has_return) && merge_after !== nothing
+        push!(bytes, Opcode.IF)
+        push!(bytes, 0x40)
+        for j in then_start:then_end
+            if code[j] !== nothing
+                append!(bytes, compile_statement(code[j], j, ctx))
+            end
+        end
+        push!(bytes, Opcode.ELSE)
+        for j in else_target:(merge_after-1)
+            if code[j] !== nothing
+                append!(bytes, compile_statement(code[j], j, ctx))
+            end
+        end
+        push!(bytes, Opcode.END)
+        ctx.last_stmt_was_stub = false
+    elseif then_has_throw || then_has_return
         push!(bytes, Opcode.IF)
         push!(bytes, 0x40)
         for j in then_start:then_end
@@ -2558,8 +2962,26 @@ function _advance_past_gotoifnot(stmt::Core.GotoIfNot, i::Int, leave_idx::Int, c
     end
     if then_has_throw || then_has_return
         return else_target
-    else
-        return leave_idx
     end
+    # P2-batch17: diamond/guard — continue at the merge point, not the leave
+    m = _try_goto_merge_target(stmt, i, leave_idx, code)
+    m !== nothing && return m
+    return leave_idx
+end
+
+# P2-batch17: if the then region of a try-body GotoIfNot ends with a forward
+# GotoNode over the else region (label > dest), that label is the merge /
+# continuation point — code from there on belongs to both paths.
+function _try_goto_merge_target(stmt::Core.GotoIfNot, i::Int, leave_idx::Int, code)::Union{Int,Nothing}
+    else_target = stmt.dest
+    then_end = min(else_target - 1, leave_idx - 1)
+    last_stmt = nothing
+    for j in (i+1):then_end
+        code[j] === nothing && continue
+        last_stmt = code[j]
+    end
+    last_stmt isa Core.GotoNode || return nothing
+    m = last_stmt.label
+    return (m > else_target && m <= leave_idx) ? m : nothing
 end
 

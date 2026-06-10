@@ -7,10 +7,10 @@
 
 Compile a Julia function to a WebAssembly module.
 """
-function compile_function(f, arg_types::Tuple, func_name::String; optimize_ir::Bool=true)::WasmModule
+function compile_function(f, arg_types::Tuple, func_name::String; optimize_ir::Bool=true, strict::Bool=true)::WasmModule
     # Use compile_module for single functions too, enabling auto-discovery of dependencies
     # This ensures that cross-function calls work correctly
-    return compile_module([(f, arg_types, func_name)]; optimize_ir=optimize_ir)
+    return compile_module([(f, arg_types, func_name)]; optimize_ir=optimize_ir, strict=strict)
 end
 
 # Legacy implementation kept for reference - now unused
@@ -375,6 +375,19 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     :unsigned,
     # FOUND-5001: copy overlay (element-by-element) needed by sort, filter, etc.
     :copy,
+    # P2-batch4: div/rem on constant operands stay as un-inlined `:invoke`s when
+    # inference proves they always throw (rt Union{}) — compile the real Base
+    # methods so the guarded div intrinsic raises a catchable DivideError.
+    # P2-batch17: mod/fld/cld are the same family (gap 0feb6e87a716: mod(0x00,0x00)
+    # in a try stayed an :invoke with rt Union{} and stubbed to an uncatchable trap).
+    :div, :rem, :mod, :fld, :cld,
+    # P2-batch20: any/all with closure predicates stay un-inlined :invokes of
+    # Base._any/_all (gap f891246d19f5) — same precedent as :filter.
+    :_any, :_all, :any, :all,
+    # P2-batch20: Float64^Float64 must use Julia's correctly-rounded pow_body,
+    # not the JS Math.pow import (3-ulp divergence → sin(x^x) wildly off, gap
+    # e0f6a8de978a). The ^ wrapper is tiny; pow_body is already whitelisted.
+    :^,
 ])
 
 """
@@ -1316,7 +1329,8 @@ function compile_module(functions::Vector;
                         return_registries::Bool=false,
                         overlay_entries::Set=Set{Tuple{Any,Tuple}}(),
                         optimize_ir::Bool=true,
-                        register_ir_types::Bool=false
+                        register_ir_types::Bool=false,
+                        strict::Bool=true
                         )
     # Create WasmInterpreter with overlay method table (GPUCompiler pattern).
     # Must be created here (after user functions exist) so world age is current.
@@ -1701,8 +1715,17 @@ function compile_module(functions::Vector;
             # PARSE-001: Auto-stub functions that always throw (return type Union{}).
             # These are error/throw functions (e.g., _parser_stuck_error) whose bodies
             # produce invalid WASM due to Union{}-typed values. Since they only throw,
-            # UNREACHABLE is the correct semantics.
-            body = UInt8[Opcode.UNREACHABLE, Opcode.END]
+            # a throw is the correct semantics — and P2-batch17: it must be the
+            # CATCHABLE tag-0 throw, not `unreachable`: callers inside try/catch
+            # must be able to catch it (an unreachable here was an uncatchable trap).
+            ensure_exception_tag!(mod)
+            _exn_g = ensure_exception_global!(mod)
+            body = UInt8[0xD0, 0x6E]                       # ref.null any
+            push!(body, Opcode.GLOBAL_SET)
+            append!(body, encode_leb128_unsigned(_exn_g))
+            push!(body, Opcode.THROW)
+            append!(body, encode_leb128_unsigned(0))
+            push!(body, Opcode.END)
             locals = WasmValType[]
         elseif intrinsic_body !== nothing
             # Use the intrinsic body directly
@@ -1724,7 +1747,7 @@ function compile_module(functions::Vector;
             ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
                                     func_registry=func_registry, func_idx=func_idx, func_ref=f,
                                     global_args=global_args, is_compiled_closure=is_closure,
-                                    module_globals=module_globals)
+                                    module_globals=module_globals, strict=strict)
             body = generate_body(ctx)
             locals = ctx.locals
         end

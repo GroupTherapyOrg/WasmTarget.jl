@@ -1,12 +1,197 @@
+const _WT_T0 = time()   # process start — workers report setup overhead against this
+
+# ── Parallel test execution via process sharding ─────────────────────────────
+# The codegen suite is compile-bound. The ~80 Phase testsets are independent, so
+# we run them across N worker PROCESSES, each compiling a disjoint shard. PROCESSES
+# (not threads) for ROBUSTNESS: the wasm compiler keeps shared mutable state that
+# races under threads (intermittent test errors); process isolation eliminates it.
+# This is only fast because two other pieces remove the per-process penalties:
+#   • each Phase is a LAZILY-compiled function (see @pphase) → a worker JIT-compiles
+#     ONLY its 1/N shard, not all 80;
+#   • PrecompileTools workload (src/WasmTarget.jl) bakes the wasm-compiler's JIT
+#     warmup into the .ji cache → workers load it warm instead of re-JITting.
+# `Sys.CPU_THREADS` under-reports on Apple Silicon (only perf cores: 4 of 10 on an
+# M-series), so read the true logical-CPU count via sysctl. WT_NO_SHARD=1 = serial.
+function _wt_logical_cpus()
+    if Sys.isapple()
+        try; return parse(Int, strip(read(`sysctl -n hw.ncpu`, String))); catch; end
+    end
+    return Sys.CPU_THREADS
+end
+# A child process runs either ONE codegen shard (WT_SHARD="i,N") or the fuzz pass
+# (WT_FUZZ=1). The orchestrator (neither var set) spawns both phases below.
+if get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_FUZZ", "") != "1" && get(ENV, "WT_NO_SHARD", "") != "1"
+    nshards = max(1, min(_wt_logical_cpus(), 16))
+    if nshards > 1
+        @info "Sharding test suite across $nshards worker processes (+ overlapped fuzz pass)"
+        proj, file = Base.active_project(), @__FILE__
+        logdir = mktempdir()
+        _spawn(envpair, lf) = run(pipeline(ignorestatus(addenv(`$(Base.julia_cmd()) --project=$proj $file`, envpair...));
+                          stdout=lf, stderr=lf); wait=false)
+        # ── The fuzz pass OVERLAPS the codegen shards (it's Node/IO-bound while the
+        # shards are compile-bound). Under contention a CPU-starved Node worker can
+        # miss the 8s watchdog and fake a hang into a `:trap`, so the overlapped pass
+        # gets a much larger deadline (WT_FUZZ_TIMEOUT) on top of retry-on-timeout —
+        # a REAL hang still reds the gate, a load blip clears on retry. Spawned FIRST
+        # so its setup (~18s) and Node-pool boot hide entirely inside phase A.
+        flf = joinpath(logdir, "fuzz.log")
+        fp = _spawn(("WT_FUZZ" => "1", "WT_FUZZ_TIMEOUT" => "30"), flf)
+        # ── Codegen shards run CONCURRENTLY. Capture each worker to its own log (a
+        # shared stdout interleaves + buffers away on exit), so a failing shard's
+        # error is actually visible.
+        procs = map(0:nshards-1) do i
+            lf = joinpath(logdir, "shard_$i.log")
+            (i, lf, _spawn(("WT_SHARD" => "$i,$nshards",), lf))
+        end
+        phase_times = String[]   # "<secs>\t<name>" collected across all shard logs
+        codes = map(procs) do triple
+            i, lf, p = triple
+            wait(p)
+            lines = isfile(lf) ? split(read(lf, String), '\n') : String[]
+            if p.exitcode != 0
+                println("════ shard $i FAILED (exit $(p.exitcode)) ════")
+                println(join(last(lines, 35), '\n'))
+            else
+                for ln in lines
+                    occursin("WasmTarget.jl |", ln) && println("  shard $i: ", strip(ln))
+                    startswith(ln, "WT_PHASE_TIME\t") && push!(phase_times, String(ln[sizeof("WT_PHASE_TIME\t")+1:end]))
+                    startswith(ln, "WT_SETUP_TIME\t") && println("  shard $i setup: ", split(ln, '\t')[2], "s")
+                end
+            end
+            p.exitcode
+        end
+        # Refresh the LPT-packing input (committed) on demand. sorted-by-name → stable diffs.
+        if get(ENV, "WT_RECORD_TIMES", "") == "1" && !isempty(phase_times)
+            open(joinpath(@__DIR__, "phase_times.tsv"), "w") do io
+                for ln in sort(phase_times; by = l -> split(l, '\t'; limit = 2)[2])
+                    println(io, ln)
+                end
+            end
+            @info "Recorded $(length(phase_times)) phase durations → test/phase_times.tsv"
+        end
+        # ── Join the overlapped fuzz pass (usually already done by now). ──
+        # (Assignment-free exit accounting below: an earlier `failed = true` inside a
+        # `for` was soft-scoped to a NEW local, so shard failures never reached `exit`
+        # — the suite went green on a failing shard.)
+        println("──── differential fuzz (overlapped) ────")
+        wait(fp)
+        flines = isfile(flf) ? split(read(flf, String), '\n') : String[]
+        if fp.exitcode != 0
+            println("════ fuzz FAILED (exit $(fp.exitcode)) ════")
+            println(join(last(flines, 45), '\n'))
+        else
+            for ln in flines; occursin("Differential fuzz", ln) && println("  ", strip(ln)); end
+        end
+        exit((any(!=(0), codes) || fp.exitcode != 0) ? 1 : 0)
+    end
+end
+const (_WT_SHARD, _WT_NSHARDS) = let s = get(ENV, "WT_SHARD", "")
+    isempty(s) ? (0, 1) : (parse(Int, split(s, ",")[1]), parse(Int, split(s, ",")[2]))
+end
+_wt_fuzz() = get(ENV, "WT_FUZZ", "") == "1"          # the dedicated serial fuzz pass
+_wt_shard0() = _WT_SHARD == 0 && !_wt_fuzz()         # run-once Aqua/QA only on codegen shard 0
+# Fuzz runs in its own pass (WT_FUZZ=1) OR inline when not sharding (serial fallback).
+_wt_run_fuzz() = _wt_fuzz() || (get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_NO_SHARD", "") == "1")
+
 using WasmTarget
 using WasmTarget: to_bytes_mvp_i64, to_bytes_mvp_flex
+# Hoisted to module level so the parallel-phase macro (which spawns each phase in a
+# closure) can use them — `using`/`import` are illegal inside a closure.
+using WasmTarget: add_array_type!, add_export!, add_function!, add_import!, add_struct_type!,
+                  encode_leb128_signed, encode_leb128_unsigned, F64, FieldType, I32, I64,
+                  Opcode, to_bytes, WasmModule
 using Test
 
 # Package-level QA runs first so structural failures surface
-# before the ~hour-long codegen suite spins up.
-include("test_aqua.jl")
+# before the ~hour-long codegen suite spins up. (Shard 0 only — it's process-wide.)
+_wt_shard0() && include("test_aqua.jl")
 
 include("utils.jl")
+
+# ── Parallel-phase infrastructure (process sharding) ─────────────────────────
+# Test fixtures hoisted from inside phase testsets — `struct`/`using` are illegal
+# inside the `if` block each phase now sits in (only top-level allows them).
+mutable struct ResultType; success::Bool; value::Int32; end
+mutable struct VoidTestState; value::Int32; end
+mutable struct InterpValue; tag::Int32; int_val::Int64; float_val::Float64; bool_val::Int32; end
+struct TestPair{T}; first::T; second::T; end
+mutable struct TestCounter; value::Int64; end
+mutable struct TestNode; value::Int64; next::Union{TestNode, Nothing}; end
+struct TestPoint2D; x::Float64; y::Float64; end
+struct TestLine; p1::TestPoint2D; p2::TestPoint2D; end
+# @generated must be top-level (illegal inside a phase function), so hoist it.
+@generated function f_gen(x)
+    x <: Int64 ? :(x * Int64(2)) : :(x * 3.0)
+end
+
+# Phase 37's subtype helpers (structs + ~1800 lines) — included at MODULE level so
+# their bindings exist before any phase function runs (avoids world-age under the
+# lazy-phase compilation model).
+include("helpers/subtype.jl")
+
+# Each top-level Phase testset is `@pphase "name" begin … end`. CRITICAL for speed:
+# the macro wraps the body in a uniquely-named TOP-LEVEL function and registers it,
+# instead of emitting the body inline. A function body is compiled LAZILY (on first
+# call), so a worker that runs only its 1/N shard compiles only those phases — the
+# other ~7/8 are merely *defined* (cheap), not compiled. (Inline gating skipped
+# execution but Julia still compiled every phase's code into the top-level thunk —
+# ~3.5 min of redundant work per process, which made sharding slower than serial.)
+# The inline `function`/`struct`(hoisted) defs in a phase body are legal here because
+# they're nested inside the phase's named function.
+const _PHASES = Tuple{String,Function}[]
+macro pphase(name, body)
+    fname = gensym(:wtphase)
+    testset_call = Expr(:macrocall, Symbol("@testset"), __source__, name, body)
+    fundef = Expr(:function, Expr(:call, fname), testset_call)
+    quote
+        $(esc(fundef))
+        push!(_PHASES, ($(esc(name)), $(esc(fname))))
+    end
+end
+# Run the Phases this process owns. Assignment must be identical and disjoint
+# across worker processes, so it is a pure function of (committed timings file,
+# registration order, nshards): phases are bin-packed onto shards by LPT (longest
+# processing time first → least-loaded shard) using the durations recorded in
+# test/phase_times.tsv. Round-robin left the shard walls >2× apart (1:03 vs 2:09);
+# LPT pulls the wall down toward the mean. Phases with no recorded duration get
+# the median, and a missing file degrades to "all equal" (≈ round-robin packing).
+# A skipped phase's function is never CALLED → never JIT-compiled (the lazy-compile
+# win). Each phase's wall time is emitted as a `WT_PHASE_TIME` line; the
+# orchestrator regenerates the tsv from those lines when WT_RECORD_TIMES=1.
+const _PHASE_TIMES_TSV = joinpath(@__DIR__, "phase_times.tsv")
+function _phase_durations()
+    d = Dict{String,Float64}()
+    isfile(_PHASE_TIMES_TSV) || return d
+    for ln in eachline(_PHASE_TIMES_TSV)
+        parts = split(ln, '\t'; limit = 2)
+        length(parts) == 2 || continue
+        t = tryparse(Float64, parts[1])
+        t === nothing || (d[String(parts[2])] = t)
+    end
+    return d
+end
+function _phase_owner(n::Int)
+    rec = _phase_durations()
+    med = isempty(rec) ? 1.0 : sort!(collect(values(rec)))[(length(rec) + 1) ÷ 2]
+    dur = [get(rec, name, med) for (name, _) in _PHASES]
+    owner = Vector{Int}(undef, length(_PHASES))
+    load = zeros(n)
+    for i in sort(collect(eachindex(_PHASES)); by = j -> -dur[j])
+        s = argmin(load)
+        owner[i] = s - 1
+        load[s] += dur[i]
+    end
+    return owner
+end
+function _run_phases()
+    println("WT_SETUP_TIME\t", round(time() - _WT_T0; digits = 1))   # worker fixed overhead (boot + using + includes)
+    owner = _phase_owner(_WT_NSHARDS)
+    for (i, (name, pf)) in enumerate(_PHASES)
+        owner[i] == _WT_SHARD || continue
+        t = @elapsed pf()
+        println("WT_PHASE_TIME\t", round(t; digits = 3), "\t", name)
+    end
+end
 
 # Recursive test functions (must be at module level for proper GlobalRef resolution)
 @noinline function test_factorial_rec(n::Int32)::Int32
@@ -99,10 +284,6 @@ end
 end
 
 # Struct for testing compiled struct field access
-mutable struct TestPoint2D
-    x::Int32
-    y::Int32
-end
 
 # Function that creates a struct and accesses its fields
 # Uses inferencebarrier to prevent Julia optimizer from eliminating the struct
@@ -983,6 +1164,15 @@ _p63_sum_i64(v::Vector{Int64})::Int64 = sum(v)
 _p63_sum_f64(v::Vector{Float64})::Float64 = sum(v)
 _p63_prod_i64(v::Vector{Int64})::Int64 = prod(v)
 _p63_reduce_plus(v::Vector{Int64})::Int64 = reduce(+, v)
+# WASMTARGET-FUZZ: reduce/foldl with min/max reducer (overlay; closed 742d/f1ba).
+# Native lowering kept a `mapreduce_impl` block that emitted invalid wasm, so any
+# reduce/foldl trapped (lax mode returned the MAX for a min reduction).
+_p63_reduce_min_i64(v::Vector{Int64})::Int64 = reduce(min, v)
+_p63_reduce_max_i64(v::Vector{Int64})::Int64 = reduce(max, v)
+_p63_foldl_min_i64(v::Vector{Int64})::Int64 = foldl(min, v)
+_p63_foldl_max_i64(v::Vector{Int64})::Int64 = foldl(max, v)
+_p63_reduce_min_f64(v::Vector{Float64})::Float64 = reduce(min, v)
+_p63_foldl_max_f64(v::Vector{Float64})::Float64 = foldl(max, v)
 _p63_minimum_i64(v::Vector{Int64})::Int64 = minimum(v)
 _p63_maximum_i64(v::Vector{Int64})::Int64 = maximum(v)
 _p63_minimum_f64(v::Vector{Float64})::Float64 = minimum(v)
@@ -1085,12 +1275,15 @@ function _p65_splat_prod_f64(v::Vector{Float64})::Float64
     return *(v...)
 end
 
-@testset "WasmTarget.jl" begin
+# Each `@pphase` below defines + registers a top-level phase function (lazy compile).
+# They run inside the `@testset "WasmTarget.jl"` block at the end of the file via
+# `_run_phases()`, which executes only this process's shard.
+begin
 
     # ========================================================================
     # Phase 1: Infrastructure Tests - Verify the test harness works
     # ========================================================================
-    @testset "Phase 1: Test Harness Infrastructure" begin
+    @pphase "Phase 1: Test Harness Infrastructure" begin
 
         @testset "LEB128 Encoding" begin
             # Test unsigned LEB128
@@ -1240,7 +1433,7 @@ end
     # ========================================================================
     # Phase 2: Wasm Builder Tests
     # ========================================================================
-    @testset "Phase 2: Wasm Builder" begin
+    @pphase "Phase 2: Wasm Builder" begin
 
         @testset "WasmModule - i32.add generation" begin
             mod = WasmTarget.WasmModule()
@@ -1342,7 +1535,7 @@ end
     # ========================================================================
     # Phase 3: Compiler Tests - Julia IR to Wasm
     # ========================================================================
-    @testset "Phase 3: Julia Compiler" begin
+    @pphase "Phase 3: Julia Compiler" begin
 
         @testset "Simple Int64 addition" begin
             # Define a simple function
@@ -1375,7 +1568,7 @@ end
     # ========================================================================
     # Phase 4: Control Flow and Comparisons
     # ========================================================================
-    @testset "Phase 4: Control Flow" begin
+    @pphase "Phase 4: Control Flow" begin
 
         @testset "Comparisons - returning Bool as i32" begin
             is_positive(x) = x > 0
@@ -1482,7 +1675,7 @@ end
     # ========================================================================
     # Phase 5: More Integer Operations
     # ========================================================================
-    @testset "Phase 5: Integer Operations" begin
+    @pphase "Phase 5: Integer Operations" begin
 
         @testset "Subtraction and Multiplication" begin
             my_sub(a, b) = a - b
@@ -1554,7 +1747,7 @@ end
     # ========================================================================
     # Phase 6: Type Conversions
     # ========================================================================
-    @testset "Phase 6: Type Conversions" begin
+    @pphase "Phase 6: Type Conversions" begin
 
         @testset "Int32 to Int64" begin
             widen32(x::Int32) = Int64(x)
@@ -1605,10 +1798,9 @@ end
     # ========================================================================
     # Phase 7: WasmGC Structs
     # ========================================================================
-    @testset "Phase 7: WasmGC Structs" begin
+    @pphase "Phase 7: WasmGC Structs" begin
 
         @testset "Builder: Struct type creation" begin
-            using WasmTarget: WasmModule, add_struct_type!, FieldType, I32, I64, to_bytes
 
             # Create a module with a struct type
             mod = WasmModule()
@@ -1628,7 +1820,6 @@ end
         end
 
         @testset "Builder: Struct with mixed fields" begin
-            using WasmTarget: WasmModule, add_struct_type!, FieldType, I32, I64, F64, to_bytes
 
             mod = WasmModule()
 
@@ -1643,7 +1834,6 @@ end
         end
 
         @testset "Builder: Struct type deduplication" begin
-            using WasmTarget: WasmModule, add_struct_type!, FieldType, I32, to_bytes
 
             mod = WasmModule()
 
@@ -1657,8 +1847,6 @@ end
 
         @testset "Hand-crafted: Struct creation and field access" begin
             if NODE_CMD !== nothing
-                using WasmTarget: WasmModule, add_struct_type!, add_function!, add_export!
-                using WasmTarget: FieldType, I32, to_bytes, Opcode, encode_leb128_unsigned, encode_leb128_signed
 
                 # Create a module that:
                 # 1. Defines a struct type { i32, i32 }
@@ -1705,8 +1893,6 @@ end
 
         @testset "Hand-crafted: Struct field 1 access" begin
             if NODE_CMD !== nothing
-                using WasmTarget: WasmModule, add_struct_type!, add_function!, add_export!
-                using WasmTarget: FieldType, I32, to_bytes, Opcode, encode_leb128_unsigned, encode_leb128_signed
 
                 mod = WasmModule()
                 struct_type_idx = add_struct_type!(mod, [FieldType(I32, true), FieldType(I32, true)])
@@ -1743,8 +1929,6 @@ end
 
         @testset "Hand-crafted: Struct with parameters" begin
             if NODE_CMD !== nothing
-                using WasmTarget: WasmModule, add_struct_type!, add_function!, add_export!
-                using WasmTarget: FieldType, I32, to_bytes, Opcode, encode_leb128_unsigned
 
                 # Function: (a: i32, b: i32) -> i32
                 # Creates struct(a, b), returns field y (b)
@@ -1787,12 +1971,10 @@ end
     # ========================================================================
     # Phase 8: Tuples
     # ========================================================================
-    @testset "Phase 8: Tuples" begin
+    @pphase "Phase 8: Tuples" begin
 
         @testset "Hand-crafted: Tuple creation and access" begin
             if NODE_CMD !== nothing
-                using WasmTarget: WasmModule, add_struct_type!, add_function!, add_export!
-                using WasmTarget: FieldType, I32, to_bytes, Opcode, encode_leb128_unsigned
 
                 # Function: (a: i32, b: i32) -> i32
                 # Creates tuple (a, b), returns first element
@@ -1832,8 +2014,6 @@ end
 
         @testset "Hand-crafted: Tuple second element" begin
             if NODE_CMD !== nothing
-                using WasmTarget: WasmModule, add_struct_type!, add_function!, add_export!
-                using WasmTarget: FieldType, I32, to_bytes, Opcode, encode_leb128_unsigned
 
                 mod = WasmModule()
                 tuple_type_idx = add_struct_type!(mod, [FieldType(I32, false), FieldType(I32, false)])
@@ -1866,8 +2046,6 @@ end
 
         @testset "Hand-crafted: 3-element tuple" begin
             if NODE_CMD !== nothing
-                using WasmTarget: WasmModule, add_struct_type!, add_function!, add_export!
-                using WasmTarget: FieldType, I32, I64, to_bytes, Opcode, encode_leb128_unsigned, encode_leb128_signed
 
                 mod = WasmModule()
                 # Tuple{Int32, Int32, Int32}
@@ -1911,10 +2089,9 @@ end
     # ========================================================================
     # Phase 9: WasmGC Arrays
     # ========================================================================
-    @testset "Phase 9: WasmGC Arrays" begin
+    @pphase "Phase 9: WasmGC Arrays" begin
 
         @testset "Builder: Array type creation" begin
-            using WasmTarget: WasmModule, add_array_type!, I32, to_bytes
 
             mod = WasmModule()
             arr_type_idx = add_array_type!(mod, I32, true)
@@ -1927,8 +2104,6 @@ end
 
         @testset "Hand-crafted: Array length" begin
             if NODE_CMD !== nothing
-                using WasmTarget: WasmModule, add_array_type!, add_function!, add_export!
-                using WasmTarget: I32, to_bytes, Opcode, encode_leb128_unsigned, encode_leb128_signed
 
                 # Function: () -> i32
                 # Creates array of length 5, returns the length
@@ -1963,8 +2138,6 @@ end
 
         @testset "Hand-crafted: Array get element" begin
             if NODE_CMD !== nothing
-                using WasmTarget: WasmModule, add_array_type!, add_function!, add_export!
-                using WasmTarget: I32, to_bytes, Opcode, encode_leb128_unsigned, encode_leb128_signed
 
                 # Create array with init value 42, get element at index 0
                 mod = WasmModule()
@@ -2001,8 +2174,6 @@ end
 
         @testset "Hand-crafted: Array new_fixed" begin
             if NODE_CMD !== nothing
-                using WasmTarget: WasmModule, add_array_type!, add_function!, add_export!
-                using WasmTarget: I32, to_bytes, Opcode, encode_leb128_unsigned, encode_leb128_signed
 
                 # Create array with fixed elements [10, 20, 30], get middle element
                 mod = WasmModule()
@@ -2046,11 +2217,9 @@ end
     # ========================================================================
     # Phase 10: JavaScript Imports
     # ========================================================================
-    @testset "Phase 10: JavaScript Imports" begin
+    @pphase "Phase 10: JavaScript Imports" begin
 
         @testset "Builder: Add import function" begin
-            using WasmTarget: WasmModule, add_import!, add_function!, add_export!
-            using WasmTarget: I32, to_bytes
 
             mod = WasmModule()
             # Import a function: env.log_i32(i32) -> void
@@ -2076,8 +2245,6 @@ end
 
         @testset "Execute: Import and call JavaScript function" begin
             if NODE_CMD !== nothing
-                using WasmTarget: WasmModule, add_import!, add_function!, add_export!
-                using WasmTarget: I32, to_bytes, Opcode, encode_leb128_unsigned, encode_leb128_signed
 
                 mod = WasmModule()
 
@@ -2108,7 +2275,7 @@ end
 
     end
 
-    @testset "Phase 11: Loops" begin
+    @pphase "Phase 11: Loops" begin
 
         @testset "Simple while loop - sum 1 to n" begin
             @noinline function simple_sum(n::Int32)::Int32
@@ -2172,7 +2339,7 @@ end
     # Note: Recursive functions must be defined at module level (not inside @testset)
     # to avoid closure capture which is not yet supported in the Wasm compiler
 
-    @testset "Phase 12: Recursion" begin
+    @pphase "Phase 12: Recursion" begin
 
         @testset "Recursive factorial" begin
             wasm_bytes = WasmTarget.compile(test_factorial_rec, (Int32,))
@@ -2208,7 +2375,7 @@ end
     # ========================================================================
     # Phase 13: Compiled Struct Field Access
     # ========================================================================
-    @testset "Phase 13: Compiled Struct Access" begin
+    @pphase "Phase 13: Compiled Struct Access" begin
 
         @testset "Struct creation and field sum" begin
             wasm_bytes = WasmTarget.compile(test_point_sum, (Int32, Int32))
@@ -2233,7 +2400,7 @@ end
     # ========================================================================
     # Phase 14: Float Operations and Branching
     # ========================================================================
-    @testset "Phase 14: Float Operations" begin
+    @pphase "Phase 14: Float Operations" begin
 
         @testset "Float addition" begin
             wasm_bytes = WasmTarget.compile(test_float_add, (Float64, Float64))
@@ -2270,7 +2437,7 @@ end
     # ========================================================================
     # Phase 15: Strings
     # ========================================================================
-    @testset "Phase 15: Strings" begin
+    @pphase "Phase 15: Strings" begin
 
         # String sizeof - returns byte length of string
         @noinline function str_sizeof(s::String)::Int64
@@ -2811,7 +2978,7 @@ end
     # ========================================================================
     # Phase 16: Multi-Function Modules
     # ========================================================================
-    @testset "Phase 16: Multi-Function Modules" begin
+    @pphase "Phase 16: Multi-Function Modules" begin
 
         @noinline function multi_add(a::Int32, b::Int32)::Int32
             return a + b
@@ -2878,10 +3045,6 @@ end
         end
 
         # Result type pattern test
-        mutable struct ResultType
-            success::Bool
-            value::Int32
-        end
 
         @noinline function result_try_div(a::Int32, b::Int32)::ResultType
             if b == Int32(0)
@@ -2914,7 +3077,7 @@ end
     # ========================================================================
     # Phase 17: JS Interop (externref)
     # ========================================================================
-    @testset "Phase 17: JS Interop" begin
+    @pphase "Phase 17: JS Interop" begin
 
         @testset "externref pass-through" begin
             @noinline function jsval_passthrough(x::JSValue)::JSValue
@@ -2948,7 +3111,7 @@ end
     # ========================================================================
     # Phase 18: Tables and Indirect Calls
     # ========================================================================
-    @testset "Phase 18: Tables" begin
+    @pphase "Phase 18: Tables" begin
 
         @testset "Basic table creation" begin
             mod = WasmTarget.WasmModule()
@@ -3275,7 +3438,7 @@ end
     # ========================================================================
     # Phase 21: Multi-dimensional Arrays (Matrix)
     # ========================================================================
-    @testset "Phase 21: Multi-dimensional Arrays (Matrix)" begin
+    @pphase "Phase 21: Multi-dimensional Arrays (Matrix)" begin
 
         @testset "Matrix type compiles" begin
             # Test that functions accepting Matrix compile correctly
@@ -3358,7 +3521,7 @@ end
     # ========================================================================
     # Phase 22: Math Functions (WASM-native)
     # ========================================================================
-    @testset "Phase 22: Math Functions (WASM-native)" begin
+    @pphase "Phase 22: Math Functions (WASM-native)" begin
 
         @testset "sqrt (via llvm intrinsic)" begin
             if NODE_CMD !== nothing
@@ -3478,12 +3641,9 @@ end
     # Tests for complex control flow in void-returning functions (event handlers)
     # Covers: nested &&/||, sequential ifs, early returns
     # ========================================================================
-    @testset "Phase 23: Void Control Flow" begin
+    @pphase "Phase 23: Void Control Flow" begin
 
         # Test helper: a mutable struct to track side effects
-        mutable struct VoidTestState
-            value::Int32
-        end
 
         # ----------------------------------------------------------------
         # Test 1: Simple nested && operator (a && b && c pattern)
@@ -3756,7 +3916,7 @@ end
     # ========================================================================
     # Phase 23: Union Types / Tagged Unions
     # ========================================================================
-    @testset "Phase 23: Union Types" begin
+    @pphase "Phase 23: Union Types" begin
 
         # Test 1: UnionInfo and TypeRegistry structures
         @testset "Union type registration" begin
@@ -3836,12 +3996,6 @@ end
 
         # Test 5: Interpreter Value pattern - explicit tagged struct
         # This is the recommended pattern for runtime dynamic values
-        mutable struct InterpValue
-            tag::Int32       # 0 = nothing, 1 = int, 2 = float, 3 = bool
-            int_val::Int64
-            float_val::Float64
-            bool_val::Int32  # 0 or 1
-        end
 
         @testset "Interpreter value pattern" begin
             @noinline function make_int_value(x::Int64)::InterpValue
@@ -3884,7 +4038,7 @@ end
     # Tests for: mutual recursion, deep call stacks, complex control flow
     # Required for the interpreter's recursive eval() function
     # ========================================================================
-    @testset "Phase 24: Advanced Recursion and Control Flow" begin
+    @pphase "Phase 24: Advanced Recursion and Control Flow" begin
 
         @testset "Mutual recursion" begin
             # Compile both functions together to enable cross-calls
@@ -3959,7 +4113,7 @@ end
     # ========================================================================
     # Phase 28: Binaryen Optimization
     # ========================================================================
-    @testset "Phase 28: Binaryen Optimization" begin
+    @pphase "Phase 28: Binaryen Optimization" begin
         if Sys.which("wasm-opt") !== nothing
             @testset "optimize() reduces size" begin
                 test_add(a::Int32, b::Int32)::Int32 = a + b
@@ -4021,7 +4175,7 @@ end
     # Phase 29: Stack Validator Integration Tests (PURE-415)
     # Verify the validator catches the exact bug patterns from PURE-317→323
     # ========================================================================
-    @testset "Phase 29: Stack Validator Integration" begin
+    @pphase "Phase 29: Stack Validator Integration" begin
 
         @testset "externref-vs-anyref mismatch (PURE-323 pattern)" begin
             v = WasmStackValidator(func_name="test_externref_anyref")
@@ -4226,7 +4380,7 @@ end
     # Phase 30: Comparison Harness Tests (PURE-502)
     # Verify compare_julia_wasm and compare_batch work on known-good functions
     # ========================================================================
-    @testset "Phase 30: Comparison Harness" begin
+    @pphase "Phase 30: Comparison Harness" begin
 
         @testset "compare_julia_wasm — Int32 add" begin
             add_one(x::Int32) = x + Int32(1)
@@ -4316,7 +4470,7 @@ end
     # Verify compare_julia_wasm_manual, compare_batch_manual, and
     # compare_julia_wasm_wrapper for complex-type ground truth verification
     # ========================================================================
-    @testset "Phase 31: Manual Comparison Harness" begin
+    @pphase "Phase 31: Manual Comparison Harness" begin
 
         @testset "compare_julia_wasm_manual — correct expected" begin
             r = compare_julia_wasm_manual(x -> x + Int32(1), (Int32(5),), Int32(6))
@@ -4401,13 +4555,16 @@ end
             end
         end
 
-        # Ground truth snapshot tests
+        # Ground truth snapshot tests — exercise the MACHINERY in a temp dir so
+        # they never rewrite the committed fixtures in test/ground_truth/ (the
+        # regenerated timestamps dirtied the working tree on every run).
+        gtdir = mktempdir()
         @testset "generate_ground_truth — creates snapshot file" begin
             path = generate_ground_truth("gt_add_one", x -> x + Int32(1), [
                 (Int32(0),), (Int32(5),), (Int32(-1),),
-            ]; overwrite=true)
+            ]; overwrite=true, dir=gtdir)
             @test isfile(path)
-            snapshot = load_ground_truth("gt_add_one")
+            snapshot = load_ground_truth("gt_add_one"; dir=gtdir)
             @test snapshot["name"] == "gt_add_one"
             @test length(snapshot["entries"]) == 3
             @test snapshot["entries"][1]["expected"] == 1
@@ -4418,8 +4575,8 @@ end
         @testset "compare_against_ground_truth — all pass" begin
             generate_ground_truth("gt_double", x -> x * Int32(2), [
                 (Int32(3),), (Int32(0),), (Int32(-4),),
-            ]; overwrite=true)
-            results = compare_against_ground_truth("gt_double", x -> x * Int32(2))
+            ]; overwrite=true, dir=gtdir)
+            results = compare_against_ground_truth("gt_double", x -> x * Int32(2); dir=gtdir)
             @test length(results) == 3
             for r in results
                 if !r.skipped
@@ -4431,9 +4588,9 @@ end
         @testset "compare_against_ground_truth — detects mismatch" begin
             generate_ground_truth("gt_negate", x -> -x, [
                 (Int32(5),), (Int32(-3),),
-            ]; overwrite=true)
+            ]; overwrite=true, dir=gtdir)
             # Intentionally use wrong function to get mismatch
-            results = compare_against_ground_truth("gt_negate", x -> x + Int32(1))
+            results = compare_against_ground_truth("gt_negate", x -> x + Int32(1); dir=gtdir)
             @test length(results) == 2
             if !results[1].skipped
                 @test !results[1].pass  # -5 != 6
@@ -4447,15 +4604,15 @@ end
         @testset "generate_ground_truth — skip if exists" begin
             path = generate_ground_truth("gt_skip_test", x -> x, [
                 (Int32(1),),
-            ]; overwrite=true)
+            ]; overwrite=true, dir=gtdir)
             @test isfile(path)
             # Second call without overwrite should not error
             path2 = generate_ground_truth("gt_skip_test", x -> x, [
                 (Int32(999),),
-            ])
+            ]; dir=gtdir)
             @test path == path2
             # Original data should be preserved
-            snapshot = load_ground_truth("gt_skip_test")
+            snapshot = load_ground_truth("gt_skip_test"; dir=gtdir)
             @test snapshot["entries"][1]["expected"] == 1  # not 999
         end
 
@@ -4465,7 +4622,7 @@ end
     # Tests that progressively complex Julia functions compile AND execute correctly.
     # Each test uses compare_julia_wasm as the correctness oracle (level 3: CORRECT).
 
-    @testset "Phase 32: M_EXPAND Expression Patterns" begin
+    @pphase "Phase 32: M_EXPAND Expression Patterns" begin
 
         @testset "Arithmetic — Int64" begin
             @test compare_julia_wasm(() -> Int64(1) + Int64(1)).pass
@@ -4604,7 +4761,7 @@ end
     # recursion, generics) compile AND execute correctly via compare_julia_wasm.
     # Most M_ADVANCED features work because Julia's type inference inlines/devirtualizes them.
 
-    @testset "Phase 33: M_ADVANCED Language Features" begin
+    @pphase "Phase 33: M_ADVANCED Language Features" begin
 
         @testset "Closures — inlined by Julia" begin
             # Closure with captured variable (Julia inlines it)
@@ -4681,13 +4838,7 @@ end
         end
 
         @testset "Generated functions" begin
-            @generated function f_gen(x)
-                if x <: Int64
-                    return :(x * Int64(2))
-                else
-                    return :(x * 3.0)
-                end
-            end
+            # f_gen hoisted to module level — `@generated` must be at top level.
             @test compare_julia_wasm(f_gen, Int64(5)).pass
         end
 
@@ -4701,10 +4852,6 @@ end
         end
 
         @testset "Generic structs" begin
-            struct TestPair{T}
-                first::T
-                second::T
-            end
             f_generic(a::Float64, b::Float64) = begin
                 p = TestPair{Float64}(a, b)
                 p.first + p.second
@@ -4713,9 +4860,6 @@ end
         end
 
         @testset "Mutable structs" begin
-            mutable struct TestCounter
-                value::Int64
-            end
             f_counter(n::Int64) = begin
                 c = TestCounter(Int64(0))
                 for i in Int64(1):n
@@ -4727,10 +4871,6 @@ end
         end
 
         @testset "Recursive data structures" begin
-            mutable struct TestNode
-                value::Int64
-                next::Union{TestNode, Nothing}
-            end
             f_list(n::Int64) = begin
                 head = TestNode(Int64(1), nothing)
                 current = head
@@ -4752,14 +4892,6 @@ end
         end
 
         @testset "Nested structs" begin
-            struct TestPoint2D
-                x::Float64
-                y::Float64
-            end
-            struct TestLine
-                p1::TestPoint2D
-                p2::TestPoint2D
-            end
             f_nested(x1::Float64, y1::Float64, x2::Float64, y2::Float64) = begin
                 l = TestLine(TestPoint2D(x1, y1), TestPoint2D(x2, y2))
                 dx = l.p2.x - l.p1.x
@@ -4905,7 +5037,7 @@ end
     # ========================================================================
     # Phase 34: PURE-9060 — Tier 2 Hash-Based Dispatch (FNV-1a)
     # ========================================================================
-    @testset "Phase 34: Tier 2 Hash Dispatch (PURE-9060)" begin
+    @pphase "Phase 34: Tier 2 Hash Dispatch (PURE-9060)" begin
 
         @testset "Individual specializations compile + validate" begin
             # Each specialization compiles to valid wasm
@@ -5002,7 +5134,7 @@ end
     # User-defined methods are checked BEFORE frozen Base dispatch tables.
     # ========================================================================
 
-    @testset "Phase 24: Overlay Dispatch Tables" begin
+    @pphase "Phase 24: Overlay Dispatch Tables" begin
 
         @testset "Overlay registry is built for user struct methods" begin
             # Base functions (10 structs → triggers megamorphic dispatch)
@@ -5120,7 +5252,7 @@ end
     # ========================================================================
     # Phase 36: Full $JlType Hierarchy Structs (PURE-9063)
     # ========================================================================
-    @testset "Phase 36: JlType Hierarchy (PURE-9063)" begin
+    @pphase "Phase 36: JlType Hierarchy (PURE-9063)" begin
 
         @testset "Type lookup table is created with all DFS types" begin
             mod, type_registry, func_registry, _ = compile_module(
@@ -5238,10 +5370,10 @@ end
     # ========================================================================
     # Phase 37: Subtype Checking (PURE-9064)
     # ========================================================================
-    @testset "Phase 37: Subtype Checking (PURE-9064)" begin
-
-        include("helpers/subtype.jl")
-
+    @pphase "Phase 37: Subtype Checking (PURE-9064)" begin
+        # helpers/subtype.jl is included at MODULE level (see top) so its defs exist
+        # in an earlier world than this phase function — `include` here would define
+        # them too late (world-age error under lazy-phase compilation).
         @testset "wasm_subtype compiles for concrete DataType pairs" begin
             # Test wrapper functions that call _datatype_subtype
             function ws_int_num()::Int32
@@ -5679,7 +5811,7 @@ end
     # ========================================================================
     # Phase 38: Dict/Set from Base (PURE-9065)
     # ========================================================================
-    @testset "Phase 38: Dict/Set from Base (PURE-9065)" begin
+    @pphase "Phase 38: Dict/Set from Base (PURE-9065)" begin
 
         @testset "Dict{Int64,Int64} basic operations" begin
             function dict_int_create()::Int64
@@ -5751,7 +5883,7 @@ end
     # Tests .+, .*, .-, ./ operators on arrays
     # NOTE: Broadcasting IR changed in Julia 1.13, causing runtime exceptions.
     # Works on 1.12. Marked broken on 1.13 pending codegen fix for new IR patterns.
-    @testset "Phase 39: Broadcasting (PURE-9066)" begin
+    @pphase "Phase 39: Broadcasting (PURE-9066)" begin
         _bc_broken = VERSION >= v"1.13.0-beta1"
 
         @testset "Int32 .+ vector" begin
@@ -5834,7 +5966,7 @@ end
     # ═══════════════════════════════════════════════════════════════════════════
     # Phase 46: D-002 — compile_value dispatch via ref.test + field access
     # ═══════════════════════════════════════════════════════════════════════════
-    @testset "Phase 46: compile_value dispatch (D-002)" begin
+    @pphase "Phase 46: compile_value dispatch (D-002)" begin
         # Compile all D-002 functions together
         d002_bytes = compile_multi([
             (cv_field_dispatch, (Any,)),
@@ -5892,7 +6024,7 @@ end
     # ═══════════════════════════════════════════════════════════════════════════
     # Phase 47: D-003 — compile_statement dispatch (ReturnNode + Expr head)
     # ═══════════════════════════════════════════════════════════════════════════
-    @testset "Phase 47: compile_statement dispatch (D-003)" begin
+    @pphase "Phase 47: compile_statement dispatch (D-003)" begin
         d003_bytes = compile_multi([
             (cs_dispatch, (Any,)),
             (test_cs_return, ()),
@@ -5940,7 +6072,7 @@ end
     # ═══════════════════════════════════════════════════════════════════════════
     # Phase 48: D-004 — Intrinsic dispatch (symbol name → opcode selection)
     # ═══════════════════════════════════════════════════════════════════════════
-    @testset "Phase 48: intrinsic dispatch (D-004)" begin
+    @pphase "Phase 48: intrinsic dispatch (D-004)" begin
         d004_bytes = compile_multi([
             (intrinsic_tag, (Symbol,)),
             (test_intr_add, ()),
@@ -5978,7 +6110,7 @@ end
     # ═══════════════════════════════════════════════════════════════════════════
     # Phase 49: D-005 — SSA local allocation (multi-use values)
     # ═══════════════════════════════════════════════════════════════════════════
-    @testset "Phase 49: SSA local allocation (D-005)" begin
+    @pphase "Phase 49: SSA local allocation (D-005)" begin
         d005_bytes = compile_multi([
             (test_ssa_multi_use, (Int64,)),
             (test_ssa_chain, (Int64, Int64)),
@@ -6003,7 +6135,7 @@ end
     # ═══════════════════════════════════════════════════════════════════════════
     # Phase 50: D-006 — Control flow (if/else, loops, phi nodes)
     # ═══════════════════════════════════════════════════════════════════════════
-    @testset "Phase 50: control flow (D-006)" begin
+    @pphase "Phase 50: control flow (D-006)" begin
         d006_bytes = compile_multi([
             (test_cf_if_else, (Int64,)),
             (test_cf_loop, (Int64,)),
@@ -6044,7 +6176,7 @@ end
     # ═══════════════════════════════════════════════════════════════════════════
     # Phase 51: D-007 — WASM module assembly (multi-function, multi-type)
     # ═══════════════════════════════════════════════════════════════════════════
-    @testset "Phase 51: WASM module assembly (D-007)" begin
+    @pphase "Phase 51: WASM module assembly (D-007)" begin
         d007_bytes = compile_multi([
             (d007_helper, (Int64,)),
             (d007_square_double, (Int64,)),
@@ -6076,7 +6208,7 @@ end
     # ═══════════════════════════════════════════════════════════════════════════
     # Phase 52: E2E-001 — f(x)=x*x+1 via REAL codegen dispatch in WASM
     # ═══════════════════════════════════════════════════════════════════════════
-    @testset "Phase 52: E2E-001 f(5)=26 via REAL codegen (no hand-emitted opcodes)" begin
+    @pphase "Phase 52: E2E-001 f(5)=26 via REAL codegen (no hand-emitted opcodes)" begin
 
         # --- 52a: Native verification ---
         @testset "native: e2e_run() produces valid WASM with f(5)=26" begin
@@ -6172,7 +6304,7 @@ end
     # ═══════════════════════════════════════════════════════════════════════════
     # Phase 53: E2E-002 — 20-function regression suite via REAL codegen
     # ═══════════════════════════════════════════════════════════════════════════
-    @testset "Phase 53: E2E-002 20-function regression (no hand-emitted opcodes)" begin
+    @pphase "Phase 53: E2E-002 20-function regression (no hand-emitted opcodes)" begin
 
         # --- 53a: Native verification — all 20 produce valid WASM with correct results ---
         native_specs = [
@@ -6336,7 +6468,7 @@ end
     # Proves: Julia source → Base.code_typed → IR conversion → WASM codegen → execute.
     # Entry points auto-generated from real source functions (not hand-written IR).
     # ═══════════════════════════════════════════════════════════════════════════
-    @testset "Phase 54: P-001 Parser-to-codegen pipeline" begin
+    @pphase "Phase 54: P-001 Parser-to-codegen pipeline" begin
 
         # --- 54a: Cross-validation — auto-generated matches hand-written E2E-002 ---
         @testset "cross-validate: auto-gen matches hand-written" begin
@@ -6488,7 +6620,7 @@ end
     # All 22 functions auto-generated from source via Base.code_typed.
     # Compiled to a single WASM module, verified via WASM-in-WASM in Node.js.
     # ═══════════════════════════════════════════════════════════════════════════
-    @testset "Phase 55: P-003 22-function regression suite" begin
+    @pphase "Phase 55: P-003 22-function regression suite" begin
 
         # --- 55a: Compile all 22 auto-gen entries + helpers ---
         p03_mod = compile_multi([
@@ -6618,7 +6750,7 @@ end
     # playground/codegen.wasm build artifact does not exist; tests were always skipped.
 
     # Phase 23: TF-005 Cross-function type-sharing regression tests
-    @testset "Phase 23: Cross-function Type Sharing (TF-005)" begin
+    @pphase "Phase 23: Cross-function Type Sharing (TF-005)" begin
 
         # Test 1: Simple struct create + isa across compile_multi
         @testset "TF5-1: Struct create + isa dispatch" begin
@@ -6777,7 +6909,7 @@ console.log(JSON.stringify({cc:Number(cc),cd:Number(cd),ok}));
         return Int32(0)
     end
 
-    @testset "Phase 24: Core IR Type Registration (IR-001)" begin
+    @pphase "Phase 24: Core IR Type Registration (IR-001)" begin
 
         # Test 1: Compile Core IR maker + dispatch functions
         @testset "IR001-1: Core IR types compile and validate" begin
@@ -7028,7 +7160,7 @@ console.log(JSON.stringify({
     # ========================================================================
     # Phase 59 cont'd: Power/Hypot/Cbrt — WBUILD-1021
     # ========================================================================
-    @testset "Phase 59 cont'd: Power/Hypot/Cbrt (WBUILD-1021)" begin
+    @pphase "Phase 59 cont'd: Power/Hypot/Cbrt (WBUILD-1021)" begin
         @testset "Float64^Float64 (WBUILD-1021)" begin
             _t59_pow(x::Float64, y::Float64)::Float64 = x^y
             @test compare_julia_wasm(_t59_pow, 2.0, 3.0).pass
@@ -7071,7 +7203,7 @@ console.log(JSON.stringify({
     # ========================================================================
     # Phase 59 cont'd: Utility Math — WBUILD-1022
     # ========================================================================
-    @testset "Phase 59 cont'd: Utility Math (WBUILD-1022)" begin
+    @pphase "Phase 59 cont'd: Utility Math (WBUILD-1022)" begin
         @testset "sign(Float64) (WBUILD-1022)" begin
             _t59_sign(x::Float64)::Float64 = sign(x)
             @test compare_julia_wasm(_t59_sign, 1.0).pass
@@ -7130,7 +7262,7 @@ console.log(JSON.stringify({
     # ========================================================================
     # Phase 59 cont'd: NaN/Inf/Subnormal Edge Cases — WBUILD-1023
     # ========================================================================
-    @testset "Phase 59 cont'd: NaN/Inf/Subnormal (WBUILD-1023)" begin
+    @pphase "Phase 59 cont'd: NaN/Inf/Subnormal (WBUILD-1023)" begin
         @testset "NaN propagation (WBUILD-1023)" begin
             # NaN == NaN is false in IEEE 754, so wrap with isnan check
             _t59_isnan_sin(x::Float64)::Int32 = Int32(isnan(sin(x)))
@@ -7220,7 +7352,7 @@ console.log(JSON.stringify({
     # ========================================================================
     # Phase 60: Full Base.Math Coverage — WBUILD-1024
     # ========================================================================
-    @testset "Phase 60: Base.Math Coverage (WBUILD-1024)" begin
+    @pphase "Phase 60: Base.Math Coverage (WBUILD-1024)" begin
 
         # Degree-based trig (WBUILD-1024) — REMOVED (placeholder @test_broken false stub)
 
@@ -7244,6 +7376,37 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_t60_tanpi, 0.25).pass
             @test compare_julia_wasm(_t60_tanpi, -0.25).pass
             @test compare_julia_wasm(_t60_tanpi, 0.125).pass
+        end
+
+        @testset "Hyperbolic sinh/cosh/tanh (WASMTARGET-FUZZ)" begin
+            # Base sinh/cosh/tanh were value-stubs (no codegen) — hypot(Inf, sinh(x))
+            # failed to validate. Overlays: cosh exact; sinh Taylor (|x|<0.35) else
+            # exp-based with an overflow-safe eᵃ/2 for |x|>20; tanh = sinh/cosh (±1 for |x|>20).
+            # These use a *different* algorithm than Base (exp-based), so compare within
+            # the differential tolerance (rtol=1e-9) rather than bit-exact `==`.
+            _t60_sinh(x::Float64)::Float64 = sinh(x)
+            _t60_cosh(x::Float64)::Float64 = cosh(x)
+            _t60_tanh(x::Float64)::Float64 = tanh(x)
+            _hyp_close(f, x) = (r = compare_julia_wasm(f, x);
+                !r.skipped && isapprox(r.expected, r.actual; rtol=1e-9, atol=1e-12))
+            for x in (0.0, 0.34, 0.35, 0.5, 1.0, -1.0, 2.0, -2.0, 5.0, 20.0, 21.0,
+                      30.0, 710.0, 1e-8, 1e-300)
+                @test _hyp_close(_t60_sinh, x)
+                @test _hyp_close(_t60_cosh, x)
+                @test _hyp_close(_t60_tanh, x)
+            end
+            # saturation / specials via Bool wrappers (bit-exact ⇒ plain `.pass`)
+            _t60_sinh_pinf(x::Float64)::Bool = isinf(sinh(x)) && sinh(x) > 0.0
+            _t60_cosh_inf(x::Float64)::Bool  = isinf(cosh(x))
+            _t60_tanh_one(x::Float64)::Bool  = tanh(x) == 1.0
+            _t60_tanh_nan(x::Float64)::Bool  = isnan(tanh(x))
+            @test compare_julia_wasm(_t60_sinh_pinf, Inf).pass
+            @test compare_julia_wasm(_t60_cosh_inf, -Inf).pass
+            @test compare_julia_wasm(_t60_tanh_one, Inf).pass
+            @test compare_julia_wasm(_t60_tanh_nan, NaN).pass
+            # Float32 redirect
+            _t60_sinh32(x::Float32)::Float32 = sinh(x)
+            @test _hyp_close(_t60_sinh32, 1.0f0)
         end
 
         # Cofunctions, Hyperbolic inverse, Other inverse trig, Hyperbolic cofunctions
@@ -7350,7 +7513,7 @@ console.log(JSON.stringify({
     # ========================================================================
     # Tests the bridge infrastructure itself — Vector round-trips, edge cases.
     # Uses compare_julia_wasm_vec which compiles bridge functions alongside user code.
-    @testset "Phase 62: Bridge Tests (WBUILD-2013)" begin
+    @pphase "Phase 62: Bridge Tests (WBUILD-2013)" begin
 
         @testset "Vector{Int64} round-trip" begin
             @test compare_julia_wasm_vec(_p63_identity_i64, Int64[1, 2, 3]).pass
@@ -7375,7 +7538,7 @@ console.log(JSON.stringify({
     # ========================================================================
     # Tests REAL Base functions via the bridge. NO reimplementations.
     # Every function here calls the actual Base.sort/filter/map/etc.
-    @testset "Phase 63: Real Base Collections (WBUILD-2020)" begin
+    @pphase "Phase 63: Real Base Collections (WBUILD-2020)" begin
 
         # ──────────────────────────────────────────────────────────────────
         # WBUILD-2020: map (CLEAN — no stubs, works for any size)
@@ -7438,6 +7601,18 @@ console.log(JSON.stringify({
             @testset "reduce(+)" begin
                 @test compare_julia_wasm_vec(_p63_reduce_plus, Int64[1, 2, 3, 4, 5]).pass
                 @test compare_julia_wasm_vec(_p63_reduce_plus, Int64[10, 20, 30]).pass
+            end
+            @testset "reduce/foldl(min/max) (WASMTARGET-FUZZ)" begin
+                # min/max reducer: native kept an invalid mapreduce_impl block ⇒ trap;
+                # the overlay's left-fold returns the correct end (not the opposite).
+                for v in (Int64[5, 3, 8, 1, 4], Int64[-10, -5, -20], Int64[7], Int64[0, 0, 0])
+                    @test compare_julia_wasm_vec(_p63_reduce_min_i64, v).pass
+                    @test compare_julia_wasm_vec(_p63_reduce_max_i64, v).pass
+                    @test compare_julia_wasm_vec(_p63_foldl_min_i64, v).pass
+                    @test compare_julia_wasm_vec(_p63_foldl_max_i64, v).pass
+                end
+                @test compare_julia_wasm_vec(_p63_reduce_min_f64, Float64[5.5, 1.1, 3.3]).pass
+                @test compare_julia_wasm_vec(_p63_foldl_max_f64, Float64[5.5, 1.1, 3.3]).pass
             end
             @testset "prod" begin
                 @test compare_julia_wasm_vec(_p63_prod_i64, Int64[2, 3, 4, 5]).pass
@@ -7547,7 +7722,7 @@ console.log(JSON.stringify({
     # ========================================================================
     # Phase 65: Vector Splatting (_apply_iterate) — WBUILD-5301
     # ========================================================================
-    @testset "Phase 65: Vector Splatting (WBUILD-5301)" begin
+    @pphase "Phase 65: Vector Splatting (WBUILD-5301)" begin
         @testset "+(vec...) Int64 — reduce via _apply_iterate" begin
             @test compare_julia_wasm_vec(_p65_splat_sum_i64, Int64[1, 2, 3]).pass
             @test compare_julia_wasm_vec(_p65_splat_sum_i64, Int64[10, 20, 30, 40]).pass
@@ -7632,7 +7807,7 @@ console.log(JSON.stringify({
     # Bug: shared `seen` set caused direct deps to be skipped during compilation.
     # ========================================================================
 
-    @testset "Phase 68: Closure Autodiscovery (BF1-FIX)" begin
+    @pphase "Phase 68: Closure Autodiscovery (BF1-FIX)" begin
         function _bf1_test_autodiscovery(closure)
             mod = WasmTarget.WasmModule()
             type_registry = WasmTarget.TypeRegistry()
@@ -7708,7 +7883,7 @@ console.log(JSON.stringify({
     _bf2_test_prevind_start()::Int64 = prevind("hello", Int64(1))
     _bf2_test_prevind_mid()::Int64 = prevind("abcdef", Int64(3))
 
-    @testset "Phase 71: String Dispatch (BF2)" begin
+    @pphase "Phase 71: String Dispatch (BF2)" begin
         @testset "repeat - basic" begin
             @test compare_julia_wasm(_bf2_test_repeat_basic).pass
         end
@@ -7765,7 +7940,7 @@ console.log(JSON.stringify({
     # ========================================================================
     # Phase 72: CF-1003 Numeric Functions Full E2E
     # ========================================================================
-    @testset "Phase 72: Numeric Functions (CF-1003)" begin
+    @pphase "Phase 72: Numeric Functions (CF-1003)" begin
 
         # --- abs ---
         @testset "abs" begin
@@ -7912,7 +8087,7 @@ console.log(JSON.stringify({
     # ========================================================================
     # Phase 73: CF-2002 String Functions Build — Overlay E2E Tests
     # ========================================================================
-    @testset "Phase 73: String Functions (CF-2002)" begin
+    @pphase "Phase 73: String Functions (CF-2002)" begin
 
         # --- chop ---
         @testset "chop" begin
@@ -8214,7 +8389,7 @@ console.log(JSON.stringify({
     # Tests for push!, pop!, pushfirst!, popfirst!, insert!, deleteat!,
     # append!, prepend!, splice! — all via overlays using similar+setfield!
     # ========================================================================
-    @testset "Phase 74: Array Mutation Functions" begin
+    @pphase "Phase 74: Array Mutation Functions" begin
 
         # --- push! ---
         @testset "push!" begin
@@ -8347,7 +8522,7 @@ console.log(JSON.stringify({
     # CF-1003 (Numeric), CF-2003 (Strings), CF-3003 (Collections),
     # CF-4003 (Array), CF-5003 (Type Conv), CF-6003 (Iterators), CF-7003 (Dict/Set)
     # ========================================================================
-    @testset "Phase 75: Comprehensive FULLTEST" begin
+    @pphase "Phase 75: Comprehensive FULLTEST" begin
 
         # ================================================================
         # CF-1003: Numeric FULLTEST — missing functions + edge cases
@@ -9122,7 +9297,7 @@ console.log(JSON.stringify({
     # Every numeric function × every applicable type, raw + binaryen.
     # Fixes: lcm(Int32) checked_smul tuple type, Inf/NaN JS bridge.
 
-    @testset "STRESS-1000: Numeric Type Matrix" begin
+    @pphase "STRESS-1000: Numeric Type Matrix" begin
 
         # --- Single-arg: abs ---
         @testset "abs type matrix" begin
@@ -9255,7 +9430,7 @@ console.log(JSON.stringify({
     # ================================================================
     # Float32 + Float64 for all math functions, raw + binaryen.
 
-    @testset "STRESS-1001: Math Type Matrix" begin
+    @pphase "STRESS-1001: Math Type Matrix" begin
 
         # --- WASM-native math (Float32 + Float64) ---
         @testset "WASM-native math Float32/Float64" begin
@@ -9322,9 +9497,22 @@ console.log(JSON.stringify({
             end
         end
 
-        # exp(Float32) has a codegen type mismatch bug (i64 vs anyref in local)
-        @testset "exp(Float32) — known bug" begin
-            @test_broken compare_julia_wasm(exp, Float32(1.0f0)).pass
+        # exp(Float32): the native Float32 kernel emitted invalid wasm (i64 vs anyref
+        # in a local); fixed by redirecting through the Float64 kernel (≤1 ULP).
+        @testset "exp(Float32)" begin
+            @test compare_julia_wasm(exp, Float32(1.0f0)).pass
+        end
+
+        # isless(Float32): Base's Float32 isless emitted invalid wasm (i64 vs anyref),
+        # so any Float32 ordering failed to compile. Surfaced by the fuzzer as
+        # length(sort([0f0,0f0,0f0])); fixed with an isless(::Float32,::Float32) overlay.
+        @testset "sort/isless(Float32)" begin
+            f32_sort_len()::Int64 = length(sort([0.0f0, 0.0f0, 0.0f0]))
+            @test compare_julia_wasm(f32_sort_len).pass  # 3
+            f32_sort_min()::Float32 = sort(Float32[3, 1, 2])[1]
+            @test compare_julia_wasm(f32_sort_min).pass  # 1.0f0
+            f32_sort_max()::Float32 = sort(Float32[3, 1, 2])[3]
+            @test compare_julia_wasm(f32_sort_max).pass  # 3.0f0
         end
     end
 
@@ -9333,7 +9521,7 @@ console.log(JSON.stringify({
     # ================================================================
     # Vector{Int64} and Vector{Float64} for all collection functions, raw + binaryen.
 
-    @testset "STRESS-1002: Collection Type Matrix" begin
+    @pphase "STRESS-1002: Collection Type Matrix" begin
 
         # --- Vector-returning functions ---
         _s1002_sort_i64(v::Vector{Int64})::Vector{Int64} = sort(v)
@@ -9452,7 +9640,7 @@ console.log(JSON.stringify({
     # STRESS-1003: Array Mutation Type Matrix
     # ================================================================
 
-    @testset "STRESS-1003: Array Mutation Type Matrix" begin
+    @pphase "STRESS-1003: Array Mutation Type Matrix" begin
 
         # --- Int64 variants ---
         _s1003_push_i64(v::Vector{Int64})::Vector{Int64} = (push!(v, Int64(99)); v)
@@ -9547,7 +9735,7 @@ console.log(JSON.stringify({
     # String functions use zero-arg wrappers (hardcode constants internally),
     # so compare_julia_wasm works directly.
 
-    @testset "STRESS-1004: String Functions Binaryen" begin
+    @pphase "STRESS-1004: String Functions Binaryen" begin
 
         # --- Basic string ops ---
         _s1004_sizeof()::Int64 = sizeof("hello")
@@ -9654,7 +9842,7 @@ console.log(JSON.stringify({
     # Tests closure GC struct passing through call chains, nested maps,
     # reduce with closures, and multi-capture filter compositions.
 
-    @testset "STRESS-2004: Closure Argument Passing" begin
+    @pphase "STRESS-2004: Closure Argument Passing" begin
 
         # Closure applied via map
         _s2004_apply_add1(v::Vector{Int64})::Vector{Int64} = map(x -> x + Int64(1), v)
@@ -9723,7 +9911,7 @@ console.log(JSON.stringify({
     # Tests: reverse → accumulate → map(abs) → filter(>0) → sort → unique → sum
     # Verifies deep native+overlay composition with closures, both types.
 
-    @testset "STRESS-3000: 8-Deep Collection Chain" begin
+    @pphase "STRESS-3000: 8-Deep Collection Chain" begin
         # 8-deep: reverse → accumulate(+) → map(abs) → filter(>0) → sort → unique → sum
         _s3000_deep_i64(v::Vector{Int64})::Int64 =
             sum(unique(sort(filter(x -> x > Int64(0), map(abs, accumulate(+, reverse(v)))))))
@@ -9759,7 +9947,7 @@ console.log(JSON.stringify({
     # ================================================================
     # Deep string chains mixing native + overlay. No vector args.
 
-    @testset "STRESS-3001: String Operation Chain" begin
+    @pphase "STRESS-3001: String Operation Chain" begin
         # 5-deep: uppercase → strip → split(",") → join("-") → length
         _s3001_chain1()::Int64 =
             Int64(length(join(split(strip(uppercase("  hello,world,test  ")), ","), "-")))
@@ -9793,7 +9981,7 @@ console.log(JSON.stringify({
     # ================================================================
     # Math functions applied over filtered vectors. Native + stackifier.
 
-    @testset "STRESS-3002: Math × Collection Chain" begin
+    @pphase "STRESS-3002: Math × Collection Chain" begin
         # sqrt chain (WASM-native math)
         _s3002_sqrt_chain(v::Vector{Float64})::Float64 =
             sum(map(sqrt, filter(x -> x > 0.0, v)))
@@ -9825,7 +10013,7 @@ console.log(JSON.stringify({
     # ================================================================
     # Input Int64, intermediate/output Float64. Tests type conversion in chains.
 
-    @testset "STRESS-3003: Cross-Type Promotion Chain" begin
+    @pphase "STRESS-3003: Cross-Type Promotion Chain" begin
         # Int64 → filter → map(abs) → sum → Float64 → sqrt
         _s3003_cross(v::Vector{Int64})::Float64 =
             sqrt(Float64(sum(map(abs, filter(x -> x > Int64(0), v)))))
@@ -9845,7 +10033,7 @@ console.log(JSON.stringify({
     # ================================================================
     # 3 named closures composed into a pipeline. Captures local variables.
 
-    @testset "STRESS-3004: Closure + Composition Chain" begin
+    @pphase "STRESS-3004: Closure + Composition Chain" begin
         # Named closures: transform + predicate + reducer
         _s3004_pipeline(v::Vector{Int64})::Int64 = begin
             transform = (x::Int64) -> x * Int64(2) + Int64(1)
@@ -9888,7 +10076,7 @@ console.log(JSON.stringify({
     # ================================================================
     # 20 diverse functions (Int64 + Float64, 1-arg + 2-arg) in one compile_multi.
 
-    @testset "STRESS-5001: 20-Function Module" begin
+    @pphase "STRESS-5001: 20-Function Module" begin
         _s5001_abs_i64(x::Int64)::Int64 = abs(x)
         _s5001_sign_i64(x::Int64)::Int64 = sign(x)
         _s5001_iseven_i64(x::Int64)::Int32 = iseven(x) ? Int32(1) : Int32(0)
@@ -9970,7 +10158,7 @@ console.log(JSON.stringify({
     # ================================================================
     # sort(rev=true) works. sort(by=...) not supported in overlay.
 
-    @testset "STRESS-6000: sort kwargs" begin
+    @pphase "STRESS-6000: sort kwargs" begin
         _s6000_sort_rev_i64(v::Vector{Int64})::Vector{Int64} = sort(v; rev=true)
         _s6000_sort_rev_f64(v::Vector{Float64})::Vector{Float64} = sort(v; rev=true)
 
@@ -9987,7 +10175,7 @@ console.log(JSON.stringify({
     # ================================================================
     # clamp, fld, cld work. round(digits=N) fails at runtime.
 
-    @testset "STRESS-6001: clamp/fld/cld" begin
+    @pphase "STRESS-6001: clamp/fld/cld" begin
         _s6001_clamp_lo(x::Float64)::Float64 = clamp(x, 0.0, 10.0)
         _s6001_clamp_hi(x::Float64)::Float64 = clamp(x, 0.0, 10.0)
         _s6001_clamp_mid(x::Float64)::Float64 = clamp(x, 0.0, 10.0)
@@ -10008,7 +10196,7 @@ console.log(JSON.stringify({
     # ================================================================
     # split(limit=N), split(keepempty=false) work.
 
-    @testset "STRESS-6002: String kwargs" begin
+    @pphase "STRESS-6002: String kwargs" begin
         _s6002_split_limit()::Int64 = Int64(length(split("a,b,c,d", ","; limit=2)))
         _s6002_split_keepempty()::Int64 = Int64(length(split("a,,b,,c", ","; keepempty=false)))
 
@@ -10022,7 +10210,7 @@ console.log(JSON.stringify({
     # STRESS-7000: Empty and Single-Element Inputs
     # ================================================================
 
-    @testset "STRESS-7000: Empty/Single Inputs" begin
+    @pphase "STRESS-7000: Empty/Single Inputs" begin
         _s7000_sort_i64(v::Vector{Int64})::Vector{Int64} = sort(v)
         _s7000_sum_i64(v::Vector{Int64})::Int64 = sum(v)
         _s7000_reverse_i64(v::Vector{Int64})::Vector{Int64} = reverse(v)
@@ -10069,7 +10257,7 @@ console.log(JSON.stringify({
     # ================================================================
     # IEEE 754 special values through math operations.
 
-    @testset "STRESS-7001: NaN/Inf/-0.0" begin
+    @pphase "STRESS-7001: NaN/Inf/-0.0" begin
         _s7001_copysign_neg0(x::Float64, y::Float64)::Float64 = copysign(x, y)
         _s7001_signbit(x::Float64)::Int32 = signbit(x) ? Int32(1) : Int32(0)
         _s7001_abs_f64(x::Float64)::Float64 = abs(x)
@@ -10103,7 +10291,7 @@ console.log(JSON.stringify({
     # STRESS-7002: Overflow Boundaries and Large Vectors
     # ================================================================
 
-    @testset "STRESS-7002: Overflow/Large" begin
+    @pphase "STRESS-7002: Overflow/Large" begin
         _s7002_abs_near_min(x::Int32)::Int32 = abs(x)
         _s7002_div_tmax(x::Int64, y::Int64)::Int64 = div(x, y)
         _s7002_sum_large(v::Vector{Int64})::Int64 = sum(v)
@@ -10129,7 +10317,7 @@ console.log(JSON.stringify({
     # ================================================================
     # Comprehensive binaryen survey across representative function categories.
 
-    @testset "STRESS-8000: Binaryen Survey" begin
+    @pphase "STRESS-8000: Binaryen Survey" begin
         # Simple scalar functions
         _s8000_abs(x::Int64)::Int64 = abs(x)
         _s8000_sign(x::Int64)::Int64 = sign(x)
@@ -10184,7 +10372,7 @@ console.log(JSON.stringify({
     # Complex compositions and multi-function modules through binaryen.
     # These are most likely to expose GUFA/type-narrowing bugs.
 
-    @testset "STRESS-8001: Binaryen Deep Validation" begin
+    @pphase "STRESS-8001: Binaryen Deep Validation" begin
         # 8-deep chain through binaryen (reuse STRESS-3000 pattern)
         _s8001_deep(v::Vector{Int64})::Int64 =
             sum(unique(sort(filter(x -> x > Int64(0), map(abs, accumulate(+, reverse(v)))))))
@@ -10209,4 +10397,16 @@ console.log(JSON.stringify({
         end
     end
 
+end  # end of phase-registration block
+
+# The dedicated fuzz pass (WT_FUZZ=1) skips the codegen phases entirely — it exists
+# only to run the differential fuzz alone, contention-free.
+if !_wt_fuzz()
+    @testset "WasmTarget.jl" begin
+        _run_phases()   # runs only this process's shard of the 80 registered phases
+    end
 end
+
+# Bounded differential fuzz (native-vs-wasm over generated compositions) + corpus replay.
+# Runs in its own contention-free pass (WT_FUZZ=1), or inline in the serial fallback.
+_wt_run_fuzz() && include("fuzz_suite.jl")
