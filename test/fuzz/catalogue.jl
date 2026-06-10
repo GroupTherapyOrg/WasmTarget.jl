@@ -18,7 +18,7 @@
 
 module FuzzCatalogue
 
-export CatEntry, CATALOGUE, catalogue_by_ret, Fn, BinOp
+export CatEntry, CATALOGUE, catalogue_by_ret, catalogue_throwy_by_ret, Fn, BinOp
 export INT_TYPES, SINT_TYPES, FLOAT_TYPES, NUM_TYPES, VEC_ELT, VEC_NUM, SET_ELT, DICT_KV
 export TUPLE_TYPES, NT_TYPES
 
@@ -203,6 +203,15 @@ function _build()
 end
 
 const CATALOGUE = _build()
+
+# Throw-capable entries by return type — M5 biases try-bodies toward these.
+function catalogue_throwy_by_ret()
+    d = Dict{Type,Vector{CatEntry}}()
+    for e in CATALOGUE
+        e.throws && push!(get!(d, e.ret, CatEntry[]), e)
+    end
+    return d
+end
 
 function catalogue_by_ret()
     d = Dict{Type,Vector{CatEntry}}()

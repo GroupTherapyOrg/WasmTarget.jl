@@ -23,7 +23,8 @@ export gen_block, gen_program_stmts
 using Supposition
 using Supposition: Data
 using ..FuzzGen
-using ..FuzzGen: ExprNode, gen_expr
+using ..FuzzGen: ExprNode, gen_expr, _gen_call, _gen_arg
+using ..FuzzCatalogue: catalogue_throwy_by_ret
 
 # Types worth binding to locals (drives cross-type dataflow through blocks).
 const BIND_TYPES = Type[Int64, Float64, Bool, Int32, Vector{Int64}, Vector{Float64}, String]
@@ -62,6 +63,11 @@ function gen_block(::Type{T}, depth::Int, env::Dict{Type,Vector{Symbol}},
         end
         if allow_return
             push!(prods, () -> _early_return(T, depth, env, path))
+        end
+        # try/catch as a value (M5): try-bodies biased toward throw-tagged ops.
+        push!(prods, () -> _try_catch(T, depth, env, path))
+        if T in ACC_TYPES
+            push!(prods, () -> _try_finally(T, depth, env, path))
         end
     end
     return Data.bind(Data.SampledFrom(eachindex(prods))) do i
@@ -167,6 +173,59 @@ function _early_return(::Type{T}, depth, env, path) where {T}
                 Data.just(ExprNode(Expr(:block,
                     Expr(:if, c.v, Expr(:block, Expr(:return, r.v))),
                     rest.v)))
+            end
+        end
+    end
+end
+
+# ── try/catch (M5) ───────────────────────────────────────────────────────────
+const THROWY_BY_RET = catalogue_throwy_by_ret()
+
+# A T-valued expression biased toward actually THROWING: prefer a throw-tagged
+# catalogue op (its args still come from the edge-biased generators — ÷0, empty
+# vectors, out-of-range narrows arise naturally), or guard-error, or plain block.
+function _throwy_block(::Type{T}, depth, env, path) where {T}
+    prods = Function[]
+    for e in get(THROWY_BY_RET, T, ())
+        let nm = e.name, ats = e.argtypes, d = max(depth - 1, 0)
+            push!(prods, () -> _gen_call(nm, Any[_gen_arg(at, d, env) for at in ats]))
+        end
+    end
+    # cond && error("fz"); <T-expr> — an explicit user-thrown path
+    push!(prods, () -> Data.bind(gen_expr(Bool, max(depth - 1, 0), env)) do c
+        Data.bind(gen_expr(T, max(depth - 1, 0), env)) do r
+            Data.just(ExprNode(Expr(:block,
+                Expr(:&&, c.v, :(error("fz"))), r.v)))
+        end
+    end)
+    push!(prods, () -> gen_block(T, max(depth - 1, 0), env, path * "p"))
+    return Data.bind(Data.SampledFrom(eachindex(prods))) do i
+        prods[i]()
+    end
+end
+
+# value = try <throwy T-block> catch; <T-block> end
+function _try_catch(::Type{T}, depth, env, path) where {T}
+    Data.bind(_throwy_block(T, depth, env, path * "y")) do t
+        Data.bind(gen_block(T, max(depth - 1, 0), env, path * "c")) do c
+            Data.just(ExprNode(Expr(:try, Expr(:block, t.v), false, Expr(:block, c.v))))
+        end
+    end
+end
+
+# acc = init; r = try <throwy> finally acc = fin end; r + acc
+# (finally must run on BOTH paths; if the body throws, the whole expr throws
+# natively and must trap in wasm — after running the finally.)
+function _try_finally(::Type{T}, depth, env, path) where {T}
+    acc = Symbol("fin_", path); r = Symbol("r_", path)
+    Data.bind(gen_expr(T, max(depth - 1, 0), env)) do init
+        Data.bind(gen_expr(T, max(depth - 1, 0), env)) do fin
+            Data.bind(_throwy_block(T, depth, env, path * "y")) do body
+                Data.just(ExprNode(Expr(:block,
+                    Expr(:(=), acc, init.v),
+                    Expr(:(=), r, Expr(:try, Expr(:block, body.v), false, false,
+                                       Expr(:block, Expr(:(=), acc, fin.v)))),
+                    Expr(:call, :+, r, acc))))
             end
         end
     end
