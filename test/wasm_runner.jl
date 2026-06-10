@@ -122,7 +122,12 @@ function _replace_worker!(pool::RunnerPool, w::Worker)::Worker
     _kill_worker(w)
     fresh = try _start_worker() catch; nothing end
     lock(pool.lock) do
-        idx = findfirst(===(w), pool.workers)
+        # P2-batch10: `===(w)` is a CORE BUILTIN call with one arg — it THROWS
+        # ("===: too few arguments"); there is no curried Base method for ===.
+        # This only ran on the worker-crash path, so every worker death
+        # poisoned the whole pool (gap 6830e0e173d4's "context-sensitive
+        # compile error + IOError session poisoning" was THIS, not codegen).
+        idx = findfirst(x -> x === w, pool.workers)
         if idx !== nothing && fresh !== nothing
             pool.workers[idx] = fresh
         end

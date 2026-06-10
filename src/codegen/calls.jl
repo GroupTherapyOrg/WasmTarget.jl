@@ -2043,51 +2043,18 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         false_bytes = compile_value(args[3], ctx)  # false_val
         cond_bytes = compile_value(args[1], ctx)   # cond
 
-        # PURE-036y: Validate that cond_bytes pushes an i32 value, not a ref or nothing.
-        # Check for struct.new (0xfb 0x00 or 0xfb 0x01) which produces ref instead of i32.
-        cond_is_ref = false
-        if length(cond_bytes) >= 3
-            # Scan for GC_PREFIX + STRUCT_NEW pattern
-            for i in 1:(length(cond_bytes)-1)
-                if cond_bytes[i] == 0xfb && (cond_bytes[i+1] == 0x00 || cond_bytes[i+1] == 0x01)
-                    cond_is_ref = true
-                    break
-                end
-            end
-        end
-        # Also check if cond_bytes is just a local.get of a ref-typed local/param
-        if !cond_is_ref && length(cond_bytes) >= 2 && cond_bytes[1] == 0x20  # LOCAL_GET
-            # Decode LEB128 to get local index
-            local_idx = 0
-            shift = 0
-            for i in 2:length(cond_bytes)
-                b = cond_bytes[i]
-                local_idx |= (b & 0x7f) << shift
-                if (b & 0x80) == 0
-                    break
-                end
-                shift += 7
-            end
-            # Check if this local is ref-typed
-            arr_idx = local_idx - ctx.n_params + 1
-            if arr_idx >= 1 && arr_idx <= length(ctx.locals)
-                local_type = ctx.locals[arr_idx]
-                if local_type isa ConcreteRef || local_type === StructRef ||
-                   local_type === ArrayRef || local_type === ExternRef || local_type === AnyRef
-                    cond_is_ref = true
-                end
-            elseif local_idx < ctx.n_params && local_idx >= 0
-                # It's a parameter - check its type
-                param_idx = local_idx + 1
-                if param_idx <= length(ctx.arg_types)
-                    param_wasm = julia_to_wasm_type_concrete(ctx.arg_types[param_idx], ctx)
-                    if param_wasm isa ConcreteRef || param_wasm === StructRef ||
-                       param_wasm === ArrayRef || param_wasm === ExternRef || param_wasm === AnyRef
-                        cond_is_ref = true
-                    end
-                end
-            end
-        end
+        # PURE-036y / P2-batch10: the condition must push an i32, not a ref.
+        # The old detection BYTE-SCANNED cond_bytes for 0xfb 0x00/0x01 (GC_PREFIX +
+        # STRUCT_NEW) — but LEB128 operands collide with that pattern: `local.get 251`
+        # encodes as [0x20, 0xfb, 0x01], so any condition living in local 251 (or any
+        # constant containing those bytes) was misclassified as a ref and the SELECT
+        # was silently dropped, leaving only the true-branch value. In a gcd loop
+        # phi-update this froze the loop-carried value → infinite loop (gap
+        # 6830e0e173d4/c8566ce342f8 family). Classify by the VALUE'S TYPE instead.
+        cond_wasm_type = infer_value_wasm_type(args[1], ctx)
+        cond_is_ref = cond_wasm_type isa ConcreteRef || cond_wasm_type === StructRef ||
+                      cond_wasm_type === ArrayRef || cond_wasm_type === ExternRef ||
+                      cond_wasm_type === AnyRef || cond_wasm_type === EqRef
 
         # If cond produces ref, fall back to just true_bytes (can't use as SELECT condition)
         if cond_is_ref
