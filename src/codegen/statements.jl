@@ -601,10 +601,13 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
             # Struct construction: %new(Type, args...)
             stmt_bytes = compile_new(stmt, idx, ctx)
         elseif stmt.head === :boundscheck
-            # Bounds check - we can skip this as Wasm has its own bounds checking
-            # This is a no-op that produces a Bool (we push false since we're not doing checks)
+            # P2-batch6: compile to the expr's REAL value (true unless @inbounds).
+            # We previously pushed false ("wasm has its own bounds checking"), but
+            # wasm's array.get check is an UNCATCHABLE TRAP — skipping Julia's own
+            # check branch meant getindex OOB could never reach the catchable
+            # throw_boundserror path (gap 3ead683e6ff9 family / divergent_throw).
             push!(stmt_bytes, Opcode.I32_CONST)
-            push!(stmt_bytes, 0x00)  # false = no bounds checking
+            push!(stmt_bytes, (isempty(stmt.args) || stmt.args[1] !== false) ? 0x01 : 0x00)
         elseif stmt.head === :foreigncall
             # Handle foreign calls - specifically for Vector allocation
             stmt_bytes = compile_foreigncall(stmt, idx, ctx)

@@ -362,8 +362,9 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
             else
                 # Non-PiNode SSA without local: re-compile the statement to reproduce its value.
                 if stmt isa Expr && stmt.head === :boundscheck
+                    # P2-batch6: real value (true unless @inbounds) — see statements.jl
                     push!(bytes, Opcode.I32_CONST)
-                    push!(bytes, 0x00)
+                    push!(bytes, (isempty(stmt.args) || stmt.args[1] !== false) ? 0x01 : 0x00)
                 elseif stmt isa Expr && (stmt.head === :call || stmt.head === :invoke || stmt.head === :new || stmt.head === :foreigncall)
                     # Re-compile the expression to produce its value on the stack.
                     # Call the specific compiler directly to avoid compile_statement's

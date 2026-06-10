@@ -200,7 +200,12 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
 
     for i in 1:length(code)
         stmt = code[i]
-        if stmt isa Expr && stmt.head === :boundscheck && length(stmt.args) >= 1
+        # P2-batch6: boundscheck now compiles to its REAL value (true unless
+        # @inbounds), so the always-jump/dead-region carving below — which
+        # assumed we emit 0 — only applies to an explicit `false` (inside
+        # @inbounds). For boundscheck=true the GotoIfNot falls through to the
+        # check + catchable throw_boundserror, and that path must stay live.
+        if stmt isa Expr && stmt.head === :boundscheck && length(stmt.args) >= 1 && stmt.args[1] === false
             if i + 1 <= length(code) && code[i + 1] isa Core.GotoIfNot
                 goto_stmt = code[i + 1]::Core.GotoIfNot
                 if goto_stmt.cond isa Core.SSAValue && goto_stmt.cond.id == i
