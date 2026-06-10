@@ -1704,8 +1704,13 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
     # delegate to generate_stackified_flow which properly handles phi locals,
     # nested GotoIfNot, and GotoNode. The simple linear approach below can only
     # handle one level of GotoIfNot and doesn't set phi locals at edges.
+    # P2-batch11: scan the PRE-TRY region too (1:enter_idx-1) — a loop before the
+    # try (e.g. `v_b = sum([0,0,0]); try ... catch`) has phis whose backedges the
+    # linear "code before EnterNode" emission below silently flattens, running the
+    # loop body straight through → OOB array reads (gap 44a8808e5bfc family).
     has_phi = false
-    for i in (enter_idx+1):(catch_dest-1)
+    for i in 1:(catch_dest-1)
+        i == enter_idx && continue
         if i <= length(code) && code[i] isa Core.PhiNode
             has_phi = true
             break

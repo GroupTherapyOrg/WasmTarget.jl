@@ -81,7 +81,12 @@ function infer_value_wasm_type(val, ctx::AbstractCompilationContext)::WasmValTyp
         # Literal value
         if val isa Int64 || val isa UInt64
             return I64
-        elseif val isa Int32 || val isa UInt32 || val isa Bool
+        elseif val isa Int32 || val isa UInt32 || val isa Bool ||
+               val isa Int8 || val isa UInt8 || val isa Int16 || val isa UInt16
+            # P2-batch11: narrow ints were MISSING here — a literal like 0x00
+            # fell through to AnyRef, so `return 0x00` failed
+            # return_type_compatible(AnyRef, I32) and compiled to `unreachable`
+            # (gap 46fd6782e95c). compile_value already emits i32.const for these.
             return I32
         elseif val isa Float64
             return F64
