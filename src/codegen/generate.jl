@@ -1782,6 +1782,15 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
             has_phi = true
             break
         end
+        # P2-batch15: pre-try BRANCHES flatten the same way pre-try loops did —
+        # `if cond; try ... catch ... end else ... end` executed the try arm on
+        # BOTH paths and the broken structure let the throw escape the
+        # try_table (gap efca694cdd4f family). Any control flow before the
+        # EnterNode needs the stackified try generator.
+        if i < enter_idx && (code[i] isa Core.GotoIfNot || code[i] isa Core.GotoNode)
+            has_phi = true
+            break
+        end
     end
     if has_phi
         return generate_try_catch_stackified(ctx, blocks, code, region)
