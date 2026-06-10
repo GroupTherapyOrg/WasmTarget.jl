@@ -4705,6 +4705,10 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         if is_128bit
             append!(bytes, emit_int128_eq(ctx, arg_type))
         else
+            # P2-batch14: equality also observes full register width — normalise
+            # narrow pairs (Int8(0) == Int8(x) compared junk high bits, gap
+            # 1bcb0e7214c3). Sign-extend is equality-preserving at the width.
+            is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, true, _julia_int_width(arg_type, is_32bit))
             push!(bytes, is_32bit ? Opcode.I32_EQ : Opcode.I64_EQ)
         end
 
@@ -4712,6 +4716,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         if is_128bit
             append!(bytes, emit_int128_ne(ctx, arg_type))
         else
+            is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, true, _julia_int_width(arg_type, is_32bit))  # P2-batch14
             push!(bytes, is_32bit ? Opcode.I32_NE : Opcode.I64_NE)
         end
 

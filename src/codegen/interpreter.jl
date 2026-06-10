@@ -419,6 +419,52 @@ end
     return String(out)
 end
 
+# ─── Shift Overlays (deterministic dispatch) ──────────────────────────────
+# Why: under CC.OverlayMethodTable, `x << n` / `x >> n` with an Int64 amount
+#      resolves to a raw-intrinsic-bodied method instead of Base's guarded
+#      one, so huge/negative amounts leaked raw wasm shift semantics
+#      (`0x01 << typemin(Int64)` returned 1; native gives 0 — gap
+#      31d4d64b9325 family, 6 gaps). These overlays make dispatch
+#      deterministic with Julia's documented semantics: negative amount
+#      flips direction; over-shift → 0 (shl/lshr) or sign-fill (ashr).
+#      The wasm-side emission of the intrinsics already guards over-shift,
+#      so bodies compile to the existing guarded sequences.
+# Remove when: overlay-table method selection matches native dispatch.
+@overlay WASM_METHOD_TABLE function Base.:(<<)(x::T, n::Int64) where {T <: Base.BitInteger}
+    nb = 8 * sizeof(T)
+    if n >= 0
+        return n >= nb ? zero(T) : Base.shl_int(x, Core.bitcast(UInt64, n))
+    end
+    m = -n   # NB: -typemin(Int64) wraps to typemin — caught by m < 0
+    if m < 0 || m >= nb
+        return T <: Signed ? Base.ashr_int(x, Core.bitcast(UInt64, Int64(nb - 1))) : zero(T)
+    end
+    return T <: Signed ? Base.ashr_int(x, Core.bitcast(UInt64, m)) : Base.lshr_int(x, Core.bitcast(UInt64, m))
+end
+
+@overlay WASM_METHOD_TABLE function Base.:(>>)(x::T, n::Int64) where {T <: Base.BitInteger}
+    nb = 8 * sizeof(T)
+    if n >= 0
+        if n >= nb
+            return T <: Signed ? Base.ashr_int(x, Core.bitcast(UInt64, Int64(nb - 1))) : zero(T)
+        end
+        return T <: Signed ? Base.ashr_int(x, Core.bitcast(UInt64, n)) : Base.lshr_int(x, Core.bitcast(UInt64, n))
+    end
+    m = -n
+    (m < 0 || m >= nb) && return zero(T)
+    return Base.shl_int(x, Core.bitcast(UInt64, m))
+end
+
+@overlay WASM_METHOD_TABLE function Base.:(>>>)(x::T, n::Int64) where {T <: Base.BitInteger}
+    nb = 8 * sizeof(T)
+    if n >= 0
+        return n >= nb ? zero(T) : Base.lshr_int(x, Core.bitcast(UInt64, n))
+    end
+    m = -n
+    (m < 0 || m >= nb) && return zero(T)
+    return Base.shl_int(x, Core.bitcast(UInt64, m))
+end
+
 # ─── chomp Overlay ────────────────────────────────────────────────────────
 # Why: Base.chomp returns a SubString{String}, and SubString poisons every
 #      downstream consumer in the compiled world: uppercase(::SubString) emits

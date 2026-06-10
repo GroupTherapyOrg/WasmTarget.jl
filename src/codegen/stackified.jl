@@ -24,7 +24,15 @@ function generate_complex_flow(ctx::AbstractCompilationContext, blocks::Vector{B
     # approach of emitting loop/br for backedges and storing to phi locals at each branch.
     has_phi_nodes = any(stmt isa Core.PhiNode for stmt in code)
     has_loops = any(ctx.loop_headers)
-    if has_loops || length(conditionals) > 2 || (length(conditionals) >= 2 && has_phi_nodes)
+    # P2-batch14: an IR `unreachable` (ReturnNode with no value — the marker after
+    # always-throwing calls) breaks the nested-conditionals generator: with two
+    # conditionals where one branch ends in a throw, the second GotoIfNot was
+    # dropped on the live path and its if/else emitted dead after the throw
+    # (`Int8(0) == Int8(x) ? 0 : x` unconditionally returned 0 — gap
+    # 1bcb0e7214c3 family). The stackifier handles these shapes correctly.
+    has_unreachable = any(stmt isa Core.ReturnNode && !isdefined(stmt, :val) for stmt in code)
+    if has_loops || length(conditionals) > 2 || (length(conditionals) >= 2 && has_phi_nodes) ||
+       (length(conditionals) >= 2 && has_unreachable)
         return generate_stackified_flow(ctx, blocks, code)
     end
 
