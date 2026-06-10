@@ -113,8 +113,15 @@ Compile `fn` for `argtypes` and evaluate it over every arg-tuple in `inputs` in 
 single Node process. Returns a vector of `(:ok, value)` / `(:trap, msg)`, one per
 input — or `:compile_error => err` / `:no_node` for whole-batch failures.
 """
+# P2-batch20: Char params are i32 holding Julia's UTF-8-justified bits.
+# Accept Char or Integer (codepoint) inputs and transport the justified bits.
+_norm_arg(a, T) = T === Char ? reinterpret(Int32, a isa Char ? a : Char(a)) : a
+_norm_inputs(inputs::Vector, argtypes::Tuple) =
+    [Tuple(_norm_arg(a, T) for (a, T) in zip(tup, argtypes)) for tup in inputs]
+
 function compile_and_run(fn, argtypes::Tuple, inputs::Vector; strict::Bool=true, timeout::Real=DEFAULT_TIMEOUT, opt=false)
     NODE_OK || return :no_node
+    Char in argtypes && (inputs = _norm_inputs(inputs, argtypes))
     fname = string(nameof(fn))
     bytes = try
         WasmTarget.compile(fn, argtypes; strict=strict, validate=true, optimize=opt)

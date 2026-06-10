@@ -381,6 +381,13 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     # P2-batch17: mod/fld/cld are the same family (gap 0feb6e87a716: mod(0x00,0x00)
     # in a try stayed an :invoke with rt Union{} and stubbed to an uncatchable trap).
     :div, :rem, :mod, :fld, :cld,
+    # P2-batch20: any/all with closure predicates stay un-inlined :invokes of
+    # Base._any/_all (gap f891246d19f5) — same precedent as :filter.
+    :_any, :_all, :any, :all,
+    # P2-batch20: Float64^Float64 must use Julia's correctly-rounded pow_body,
+    # not the JS Math.pow import (3-ulp divergence → sin(x^x) wildly off, gap
+    # e0f6a8de978a). The ^ wrapper is tiny; pow_body is already whitelisted.
+    :^,
 ])
 
 """

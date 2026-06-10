@@ -505,7 +505,12 @@ function julia_to_wasm_type_concrete(T, ctx::AbstractCompilationContext)::WasmVa
             type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
             return ConcreteRef(type_idx, true)
         end
-    elseif T <: AbstractArray  # Handles Vector, Matrix, and higher-dim arrays
+    # P2-batch20: exclude Unions — Union{Vector{Int32},Vector{Int64}} <: AbstractArray
+    # is true, and registering the UNION as a single-member vector wrapper here while
+    # value sites used the tagged-union struct made the two representations collide
+    # (gap 5ae13ccb033a: `sum([x,x,acc_b])` with Int32→Int64 widening). Unions fall
+    # through to the dedicated Union branch below.
+    elseif !(T isa Union) && T <: AbstractArray  # Handles Vector, Matrix, and higher-dim arrays
         # In Julia 1.11+, Vector is a struct with :ref (MemoryRef) and :size fields
         # Check if the type is registered as a struct first (for Vector/Matrix)
         if haskey(ctx.type_registry.structs, T)

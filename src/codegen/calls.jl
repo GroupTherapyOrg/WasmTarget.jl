@@ -2787,7 +2787,10 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     field_ref
                 end
 
-                field_idx = findfirst(==(field_sym), info.field_names)
+                # P2-batch20: positional getfield(x, i::Integer) — see struct branch
+                field_idx = field_sym isa Integer ?
+                    (1 <= field_sym <= length(info.field_names) ? Int(field_sym) : nothing) :
+                    findfirst(==(field_sym), info.field_names)
                 if field_idx !== nothing
                     append!(bytes, compile_value(obj_arg, ctx))
                     push!(bytes, Opcode.GC_PREFIX)
@@ -2825,7 +2828,11 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 field_ref
             end
 
-            field_idx = findfirst(==(field_sym), info.field_names)
+            # P2-batch20: getfield(x, i::Integer) — positional access (gap
+            # 8f5c0002bb71). Julia field order == info.field_names order.
+            field_idx = field_sym isa Integer ?
+                (1 <= field_sym <= length(info.field_names) ? Int(field_sym) : nothing) :
+                findfirst(==(field_sym), info.field_names)
             if field_idx !== nothing
                 append!(bytes, compile_value(obj_arg, ctx))
                 # PURE-701: If obj_arg's local is structref (union of struct types),

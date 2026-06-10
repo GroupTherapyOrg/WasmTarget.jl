@@ -419,6 +419,30 @@ end
     return String(out)
 end
 
+# ─── reinterpret Overlay (P2-batch20) ─────────────────────────────────────
+# Why: Base.reinterpret between primitive bits types inlines to ~390 stmts of
+#      generic bit-checking machinery (padding checks, _foldl_impl, LazyString
+#      error paths) that miscompiles (gap e817213d1890). For same-size
+#      primitives it is exactly Core.bitcast, which the wasm backend lowers to
+#      i32/i64.reinterpret_f32/f64 or a no-op.
+# Remove when: the generic Base.reinterpret path compiles clean.
+const _WT_BITS32 = Union{Int32, UInt32, Float32, Char}
+const _WT_BITS64 = Union{Int64, UInt64, Float64}
+const _WT_BITS16 = Union{Int16, UInt16}
+const _WT_BITS8  = Union{Int8, UInt8, Bool}
+@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Out}, x::_WT_BITS32) where {Out<:_WT_BITS32}
+    Core.bitcast(Out, x)
+end
+@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Out}, x::_WT_BITS64) where {Out<:_WT_BITS64}
+    Core.bitcast(Out, x)
+end
+@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Out}, x::_WT_BITS16) where {Out<:_WT_BITS16}
+    Core.bitcast(Out, x)
+end
+@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Out}, x::_WT_BITS8) where {Out<:_WT_BITS8}
+    Core.bitcast(Out, x)
+end
+
 # ─── Shift Overlays (deterministic dispatch) ──────────────────────────────
 # Why: under CC.OverlayMethodTable, `x << n` / `x >> n` with an Int64 amount
 #      resolves to a raw-intrinsic-bodied method instead of Base's guarded
@@ -1381,39 +1405,42 @@ end
 end
 
 # ─── pow_body(Float64, Int64) Overlay ────────────────────────────────────
-# Why: Base.Math.pow_body has 136 IR stmts with a complex loop, phi nodes,
-#      and have_fma branches. The stackifier miscompiles the main loop —
-#      only n=3 (fast-path) works, all other values hit unreachable.
-# Remove when: stackifier correctly handles pow_body's loop/phi pattern
+# Why: Base.Math.pow_body(F64, Integer) is COMPENSATED power-by-squaring; its
+#      fma/muladd ops fuse on the native host (ARM), so a naive square-and-
+#      multiply loop (the previous overlay) drifted ~3 ulp — at 1e200 scale
+#      that flips sin(x^x) entirely (gap e0f6a8de978a). This is a faithful
+#      port of Base's algorithm with every fused op routed through
+#      Base.fma_emulated (exact single rounding, == hardware fma/muladd).
+# Remove when: muladd_float/fma_float lower to exact FMA in the wasm backend
 @overlay WASM_METHOD_TABLE function Base.Math.pow_body(x::Float64, n::Int64)
-    if n == 0
-        return 1.0
-    end
-    if n == 1
-        return x
-    end
-    if n == 2
-        return x * x
-    end
-    if n == 3
-        return x * x * x
-    end
-    neg = n < 0
-    if neg
+    y = 1.0
+    xnlo = -0.0
+    ynlo = 0.0
+    n == 3 && return x * x * x   # keep compatibility with literal_pow
+    if n < 0
+        rx = inv(x)
+        n == -2 && return rx * rx
+        isfinite(x) && (xnlo = -Base.fma_emulated(x, rx, -1.0) * rx)
+        x = rx
         n = -n
-        x = 1.0 / x
     end
-    # Power by squaring
-    result = 1.0
-    base = x
-    while n > 0
-        if (n & Int64(1)) == Int64(1)
-            result = result * base
+    while n > 1
+        if n & 1 > 0
+            err = Base.fma_emulated(y, xnlo, x * ynlo)
+            t = x * y                              # two_mul(x, y)
+            tlo = Base.fma_emulated(x, y, -t)
+            y = t
+            ynlo = tlo + err
         end
-        base = base * base
-        n = n >> 1
+        err = x * 2 * xnlo
+        t = x * x                                  # two_mul(x, x)
+        tlo = Base.fma_emulated(x, x, -t)
+        x = t
+        xnlo = tlo + err
+        n >>>= 1
     end
-    return result
+    err = Base.fma_emulated(y, xnlo, x * ynlo)
+    return ifelse(isfinite(x) & isfinite(err), Base.fma_emulated(x, y, err), x * y)
 end
 
 # ─── repeat(String) Overlay ─────────────────────────────────────────────
