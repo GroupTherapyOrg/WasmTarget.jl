@@ -362,6 +362,63 @@ end
     return String(bytes)
 end
 
+# ─── Ryu scalar writeshortest Overlay (string(::Float64/Float32)) ─────────
+# Why: the digit-generation kernel writeshortest(buf, pos, x, ...) compiles
+#      fine, but the scalar wrapper that string(x::AbstractFloat) calls steals
+#      its buffer via String(resize!(buf, ...)) → atomic_pointerset, which
+#      codegen stubs → every string(::Float64) trapped (gap 5741ab865252
+#      family: string(0.0) in Set/Dict/length). Same kernel, but materialize
+#      the result through the String(bytes) path every other overlay uses.
+# Remove when: codegen handles the unsafe_takestring / atomic_pointerset
+#      buffer-steal idiom.
+@noinline @overlay WASM_METHOD_TABLE function Base.Ryu.writeshortest(x::T) where {T <: Union{Float32, Float64}}
+    # Explicit 1-arg method (no default-arg expansion: @overlay does not put the
+    # generated wrapper arities in the overlay table, so a defaulted definition
+    # never shadowed Base's 1-arg call from string()).
+    cap = Base.Ryu.neededdigits(T)
+    buf = UInt8[]
+    i = 0
+    while i < cap
+        push!(buf, 0x00)
+        i += 1
+    end
+    pos = Base.Ryu.writeshortest(buf, 1, x, false, false, true, -1,
+                                 UInt8('e'), false, UInt8('.'), false, false)
+    out = UInt8[]
+    i = 1
+    while i < pos
+        push!(out, buf[i])
+        i += 1
+    end
+    return String(out)
+end
+
+# ─── string(::Float64/Float32) Overlay ─────────────────────────────────────
+# Why: Base.string(x::IEEEFloat) (Ryu.jl:122) does NOT route through the
+#      scalar writeshortest wrapper — the StringVector + buffer-steal
+#      (String(resize!(buf, ...)) → atomic_pointerset) lives INLINE in its own
+#      body, which codegen stubs → unreachable trap (gap 5741ab865252 family).
+#      Same Ryu kernel, result materialized through the String(bytes) path
+#      the other overlays use.
+@noinline @overlay WASM_METHOD_TABLE function Base.string(x::T) where {T <: Union{Float32, Float64}}
+    cap = Base.Ryu.neededdigits(T)
+    buf = UInt8[]
+    i = 0
+    while i < cap
+        push!(buf, 0x00)
+        i += 1
+    end
+    pos = Base.Ryu.writeshortest(buf, 1, x, false, false, true, -1,
+                                 UInt8('e'), false, UInt8('.'), false, false)
+    out = UInt8[]
+    i = 1
+    while i < pos
+        push!(out, buf[i])
+        i += 1
+    end
+    return String(out)
+end
+
 # ─── chomp Overlay ────────────────────────────────────────────────────────
 # Why: Base.chomp returns a SubString{String}, and SubString poisons every
 #      downstream consumer in the compiled world: uppercase(::SubString) emits
