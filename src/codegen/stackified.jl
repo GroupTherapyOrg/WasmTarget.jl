@@ -1497,7 +1497,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
 
     # PURE-6024 debug: trace function name for debugging
     _debug_fn_name = try string(ctx.func_name) catch; "" end
-    _debug_stackified = contains(_debug_fn_name, "parse_int_literal")
+    _debug_stackified = contains(_debug_fn_name, "parse_int_literal") ||
+        (haskey(ENV, "WT_DBG_FN") && !isempty(ENV["WT_DBG_FN"]) && contains(_debug_fn_name, ENV["WT_DBG_FN"]))
     if _debug_stackified
         @warn "PURE-6024 STACKIFIED DEBUG: $(length(blocks)) blocks, non_trivial_targets=$non_trivial_targets, outer_targets=$outer_targets, return_type=$(ctx.return_type)"
     end
@@ -1520,6 +1521,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 @warn "  SKIP dead block $block_idx"
             end
             continue
+        end
+
+        if _debug_stackified
+            @warn "  BLOCK $block_idx [$(block.start_idx):$(block.end_idx)] term=$(typeof(block.terminator)) bytes=$(length(bytes)) open_blocks=$open_blocks open_loops=$open_loops"
         end
 
         # Check if we're entering a loop
@@ -1933,6 +1938,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
 
             # Check if destination has phi nodes that need values from this edge
             has_phi = dest_block !== nothing && dest_has_phi_from_edge(dest_block, terminator_idx)
+
+            if _debug_stackified
+                @warn "  GIN blk=$block_idx term_idx=$terminator_idx dest=$(term.dest) dest_block=$dest_block has_phi=$has_phi nontrivial=$(dest_block in non_trivial_targets) bytes=$(length(bytes))"
+            end
 
             # Compile condition
             cond_bytes = compile_condition_to_i32(term.cond, ctx)

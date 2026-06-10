@@ -1690,6 +1690,58 @@ Structure:
   end
   ; catch handler code (pop_exception skipped, returns -1 or similar)
 """
+# P2-batch17: compile a catch-handler region [from..to] honouring GotoIfNot
+# (conditional catch arms / exception isa dispatch). The linear per-statement
+# loops no-op'd GotoIfNot, so `catch; if x; a; else; b; end` always produced the
+# then arm (gap f80bce91645e). Mirrors the PURE-9032 handling from the simple
+# no-merge generator.
+function _compile_catch_region!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, code, from::Int, to::Int)
+    i = from
+    while i <= to
+        stmt = code[i]
+        if stmt === nothing || (stmt isa Expr && stmt.head === :pop_exception)
+            i += 1
+            continue
+        end
+        if stmt isa Core.GotoIfNot
+            else_target = stmt.dest
+            append!(bytes, compile_condition_to_i32(stmt.cond, ctx))
+            then_start = i + 1
+            then_end = min(else_target - 1, to)
+            then_has_return = any(code[j] isa Core.ReturnNode for j in then_start:then_end)
+            push!(bytes, Opcode.IF)
+            push!(bytes, 0x40)
+            for j in then_start:then_end
+                ts = code[j]
+                if ts !== nothing && !(ts isa Expr && ts.head === :pop_exception)
+                    append!(bytes, compile_statement(ts, j, ctx))
+                end
+            end
+            if then_has_return
+                # Then arm exits the function — no else arm needed; continue at dest
+                push!(bytes, Opcode.END)
+                ctx.last_stmt_was_stub = false
+                i = else_target
+            else
+                push!(bytes, Opcode.ELSE)
+                for j in else_target:to
+                    es = code[j]
+                    if es !== nothing && !(es isa Expr && es.head === :pop_exception)
+                        append!(bytes, compile_statement(es, j, ctx))
+                    end
+                end
+                push!(bytes, Opcode.END)
+                ctx.last_stmt_was_stub = false
+                i = to + 1
+            end
+        else
+            append!(bytes, compile_statement(stmt, i, ctx))
+            i += 1
+        end
+    end
+    return bytes
+end
+
 function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code, region::TryRegion)::Vector{UInt8}
     bytes = UInt8[]
     catch_dest = region.catch_dest
@@ -1771,17 +1823,9 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
     ctx.last_stmt_was_stub = false
 
     # Catch handler: catch_dest up to the merge point (or end of code)
+    # P2-batch17: GotoIfNot-aware (conditional catch arms — gap f80bce91645e)
     catch_stop = has_merge ? merge_start - 1 : length(code)
-    for i in catch_dest:catch_stop
-        stmt = code[i]
-        if stmt !== nothing
-            # Skip pop_exception — it's a runtime marker, no WASM equivalent
-            if stmt isa Expr && stmt.head === :pop_exception
-                continue
-            end
-            append!(bytes, compile_statement(stmt, i, ctx))
-        end
-    end
+    _compile_catch_region!(bytes, ctx, code, catch_dest, catch_stop)
 
     if has_merge
         # Catch-side merge phi values (edge source >= catch_dest)
@@ -1992,15 +2036,8 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
         ctx.last_stmt_was_stub = false
 
         # Catch handler code (from catch_dest to merge_start-1)
-        for i in catch_dest:(merge_start-1)
-            stmt = code[i]
-            if stmt !== nothing
-                if stmt isa Expr && stmt.head === :pop_exception
-                    continue
-                end
-                append!(bytes, compile_statement(stmt, i, ctx))
-            end
-        end
+        # P2-batch17: GotoIfNot-aware (conditional catch arms — gap f80bce91645e)
+        _compile_catch_region!(bytes, ctx, code, catch_dest, merge_start - 1)
 
         # SET catch phi locals
         for phi_idx in merge_phi_nodes
@@ -2674,7 +2711,31 @@ function _compile_try_body_gotoifnot(stmt::Core.GotoIfNot, i::Int, leave_idx::In
         end
     end
 
-    if then_has_throw || then_has_return
+    # P2-batch17: diamond/guard pattern — the then region ends with a forward
+    # GotoNode OVER the else region to a merge/continuation point M. The else
+    # arm is only [dest..M-1]; statements from M on are the shared continuation
+    # and must run on BOTH paths. The old code compiled [dest..leave-1] as the
+    # else arm, burying the whole rest of the try body inside a dead throw arm
+    # (gap 6d3a1788a329 family: `Int64(try gcd(Int32(0), Int32(x)) catch Int32(0) end)`
+    # returned 0 — the Int32 range-check's else arm swallowed all the gcd work).
+    merge_after = _try_goto_merge_target(stmt, i, leave_idx, code)
+    if !(then_has_throw || then_has_return) && merge_after !== nothing
+        push!(bytes, Opcode.IF)
+        push!(bytes, 0x40)
+        for j in then_start:then_end
+            if code[j] !== nothing
+                append!(bytes, compile_statement(code[j], j, ctx))
+            end
+        end
+        push!(bytes, Opcode.ELSE)
+        for j in else_target:(merge_after-1)
+            if code[j] !== nothing
+                append!(bytes, compile_statement(code[j], j, ctx))
+            end
+        end
+        push!(bytes, Opcode.END)
+        ctx.last_stmt_was_stub = false
+    elseif then_has_throw || then_has_return
         push!(bytes, Opcode.IF)
         push!(bytes, 0x40)
         for j in then_start:then_end
@@ -2726,8 +2787,26 @@ function _advance_past_gotoifnot(stmt::Core.GotoIfNot, i::Int, leave_idx::Int, c
     end
     if then_has_throw || then_has_return
         return else_target
-    else
-        return leave_idx
     end
+    # P2-batch17: diamond/guard — continue at the merge point, not the leave
+    m = _try_goto_merge_target(stmt, i, leave_idx, code)
+    m !== nothing && return m
+    return leave_idx
+end
+
+# P2-batch17: if the then region of a try-body GotoIfNot ends with a forward
+# GotoNode over the else region (label > dest), that label is the merge /
+# continuation point — code from there on belongs to both paths.
+function _try_goto_merge_target(stmt::Core.GotoIfNot, i::Int, leave_idx::Int, code)::Union{Int,Nothing}
+    else_target = stmt.dest
+    then_end = min(else_target - 1, leave_idx - 1)
+    last_stmt = nothing
+    for j in (i+1):then_end
+        code[j] === nothing && continue
+        last_stmt = code[j]
+    end
+    last_stmt isa Core.GotoNode || return nothing
+    m = last_stmt.label
+    return (m > else_target && m <= leave_idx) ? m : nothing
 end
 

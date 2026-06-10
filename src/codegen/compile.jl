@@ -378,7 +378,9 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     # P2-batch4: div/rem on constant operands stay as un-inlined `:invoke`s when
     # inference proves they always throw (rt Union{}) — compile the real Base
     # methods so the guarded div intrinsic raises a catchable DivideError.
-    :div, :rem,
+    # P2-batch17: mod/fld/cld are the same family (gap 0feb6e87a716: mod(0x00,0x00)
+    # in a try stayed an :invoke with rt Union{} and stubbed to an uncatchable trap).
+    :div, :rem, :mod, :fld, :cld,
 ])
 
 """
@@ -1706,8 +1708,17 @@ function compile_module(functions::Vector;
             # PARSE-001: Auto-stub functions that always throw (return type Union{}).
             # These are error/throw functions (e.g., _parser_stuck_error) whose bodies
             # produce invalid WASM due to Union{}-typed values. Since they only throw,
-            # UNREACHABLE is the correct semantics.
-            body = UInt8[Opcode.UNREACHABLE, Opcode.END]
+            # a throw is the correct semantics — and P2-batch17: it must be the
+            # CATCHABLE tag-0 throw, not `unreachable`: callers inside try/catch
+            # must be able to catch it (an unreachable here was an uncatchable trap).
+            ensure_exception_tag!(mod)
+            _exn_g = ensure_exception_global!(mod)
+            body = UInt8[0xD0, 0x6E]                       # ref.null any
+            push!(body, Opcode.GLOBAL_SET)
+            append!(body, encode_leb128_unsigned(_exn_g))
+            push!(body, Opcode.THROW)
+            append!(body, encode_leb128_unsigned(0))
+            push!(body, Opcode.END)
             locals = WasmValType[]
         elseif intrinsic_body !== nothing
             # Use the intrinsic body directly

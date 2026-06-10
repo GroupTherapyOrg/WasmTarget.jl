@@ -680,6 +680,22 @@ end
 Register a Julia tuple type in the Wasm module.
 Tuples are represented as WasmGC structs with numbered fields.
 """
+# P2-batch17: rewrite Type{X} tuple parameters to DataType so every spelling of
+# a type-object-carrying tuple shares one registry entry / wasm struct type.
+function _canonical_tuple_type(T::DataType)
+    changed = false
+    ps = Any[]
+    for P in T.parameters
+        if P isa DataType && P !== DataType && P !== Union{} && P <: Type
+            push!(ps, DataType)
+            changed = true
+        else
+            push!(ps, P)
+        end
+    end
+    return changed ? Tuple{ps...} : T
+end
+
 function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<:Tuple})
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
@@ -695,6 +711,19 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
     # .parameters — only DataType does. Return nothing for non-concrete tuples.
     if T isa UnionAll
         return nothing
+    end
+
+    # P2-batch17: canonicalize Type{X} elements to DataType. Inference spells a
+    # type-object tuple element as Type{Int32} on one path (Const-widened arg
+    # inference in the Core.tuple emitter) and DataType on another (the SSA
+    # local's widenconst). Registering both spellings created two distinct wasm
+    # structs for the same runtime tuple, and the ref.cast between them trapped
+    # at runtime (LazyString error-message paths, gap 6d3a1788a329 layer 2).
+    canon = _canonical_tuple_type(T)
+    if canon !== T
+        info = register_tuple_type!(mod, registry, canon)
+        info !== nothing && (registry.structs[T] = info)
+        return info
     end
 
     # Get element types
