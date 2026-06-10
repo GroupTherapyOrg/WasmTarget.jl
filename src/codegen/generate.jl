@@ -1857,6 +1857,72 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
     return bytes
 end
 
+# P2-batch18: does the outer region's normal path (between :leave and the catch
+# dest) return from the function? True for the return-style try/catch chain
+# shapes; false for merging shapes (which goto a phi instead).
+function _outer_normal_path_returns(code, outer::TryRegion)::Bool
+    for i in (outer.leave_idx + 1):(outer.catch_dest - 1)
+        code[i] isa Core.ReturnNode && return true
+    end
+    return false
+end
+
+# P2-batch18: `try A catch; <prefix>; try B catch C end end` — the outer catch
+# handler IS (or wraps) the inner try. Emits two chained try_tables:
+#   block $c1 / try_table(catch_all 0): pre + outer body + normal return / end / end
+#   ;; outer catch handler:
+#   <prefix stmts>
+#   block $c2 / try_table(catch_all 0): inner body + normal return / end / end
+#   ;; inner catch region (GotoIfNot-aware)
+# Only called for the return-style shape (guarded at the dispatch site).
+function generate_catch_try_chain(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
+                                  code, outer::TryRegion, inner::TryRegion)::Vector{UInt8}
+    bytes = UInt8[]
+    ensure_exception_tag!(ctx.mod)
+    ensure_exception_global!(ctx.mod)
+
+    # Emit one `block $c / try_table(catch_all 0) ... end / end` whose body is
+    # compiled by the STACKIFIER over the given block subset — try bodies here
+    # can contain loops/phis (e.g. inlined vector-literal fill loops), which a
+    # linear statement walk silently flattens. The normal path inside each body
+    # RETURNS (guarded at the dispatch site), so the try_table needs no result.
+    function _emit_try_table_region!(body_blocks::Vector{BasicBlock})
+        push!(bytes, Opcode.BLOCK)
+        push!(bytes, 0x40)
+        push!(bytes, Opcode.TRY_TABLE)
+        push!(bytes, 0x40)
+        append!(bytes, encode_leb128_unsigned(1))
+        push!(bytes, Opcode.CATCH_ALL)
+        append!(bytes, encode_leb128_unsigned(0))
+        append!(bytes, generate_stackified_flow(ctx, body_blocks, code))
+        push!(bytes, Opcode.END)   # try_table
+        push!(bytes, Opcode.END)   # catch landing block
+        ctx.last_stmt_was_stub = false
+    end
+
+    # Outer try_table — includes pre-try code, mirroring generate_try_catch_stackified
+    _emit_try_table_region!([b for b in blocks if b.start_idx < outer.catch_dest])
+
+    # Outer catch handler prefix (pop_exception / assignments before the inner try)
+    for i in outer.catch_dest:(inner.enter_idx - 1)
+        stmt = code[i]
+        if stmt === nothing || stmt isa Core.EnterNode ||
+           (stmt isa Expr && stmt.head === :pop_exception)
+            continue
+        end
+        append!(bytes, compile_statement(stmt, i, ctx))
+    end
+
+    # Inner try_table
+    _emit_try_table_region!([b for b in blocks
+                             if b.start_idx > inner.enter_idx && b.start_idx < inner.catch_dest])
+
+    # Inner catch region (GotoIfNot-aware)
+    _compile_catch_region!(bytes, ctx, code, inner.catch_dest, length(code))
+
+    return bytes
+end
+
 function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
     bytes = UInt8[]
     regions = find_try_regions(code)
@@ -1877,6 +1943,17 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
         # Inner is nested if its enter is within the outer's try scope
         if inner.enter_idx > outer.enter_idx && inner.enter_idx < outer.catch_dest
             return generate_nested_try_catch_2(ctx, blocks, code, outer, inner)
+        elseif length(regions) == 2 && inner.enter_idx >= outer.catch_dest &&
+               _outer_normal_path_returns(code, outer) &&
+               !any(code[i] isa Core.PhiNode && haskey(ctx.phi_locals, i)
+                    for i in inner.catch_dest:length(code))
+            # P2-batch18: the OUTER catch handler contains the inner try
+            # (`try A catch; try B catch C end end`). This is NOT sequential —
+            # the sequential generator emitted both structures back-to-back and
+            # produced invalid wasm (gaps 331b3b4b2d4a, 39f798226bbd,
+            # 422b9863eab9). Requires the return-style shape (each arm returns;
+            # no merge phis) — anything else falls through to sequential.
+            return generate_catch_try_chain(ctx, blocks, code, outer, inner)
         else
             # Sequential (non-nested) try/catch regions
             return generate_sequential_try_catch(ctx, blocks, code, regions)

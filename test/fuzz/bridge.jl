@@ -100,6 +100,20 @@ function _build!(accs, names, T::Type)
         lf = _make_vlen(T);  l = _acc!(accs, names, "_vlen_$m", lf, (T,))
         gf = _make_vget(T);  g = _acc!(accs, names, "_vget_$m", gf, (T, Int64))
         return Dict("k" => "vec", "len" => l, "get" => g, "el" => el)
+    elseif T isa Union
+        # P2-batch18: all-int unions (e.g. Union{Int32,Int64} from
+        # `try div(0,x)::Int64 catch x::Int32 end`) transport as the widest
+        # member — codegen widens the wasm return to the largest int, and the
+        # JS walker's String(v) handles number and BigInt alike. tree_matches
+        # compares with ==, which is value-based across Int widths.
+        ms = Base.uniontypes(T)
+        if all(m -> haskey(_INTS, m) && m !== Bool, ms)
+            ws = [_INTS[m] for m in ms]
+            if all(t -> t[2], ws) || all(t -> !t[2], ws)   # uniform signedness
+                return Dict("k" => "int", "w" => maximum(first.(ws)), "s" => ws[1][2])
+            end
+        end
+        return nothing
     elseif (isstructtype(T) || T <: Tuple) && isconcretetype(T)
         # Tuples, NamedTuples, and (im)mutable structs all decompose by field.
         n = fieldcount(T)

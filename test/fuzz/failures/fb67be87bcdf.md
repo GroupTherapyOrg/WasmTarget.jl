@@ -1,6 +1,6 @@
 ---
 id: fb67be87bcdf
-status: open
+status: fixed
 category: runtime_trap
 kind: runtime_trap
 construct: "runtime_trap: `try\n    div(0, x)\ncatch\n    x\nend` :: Int32"
