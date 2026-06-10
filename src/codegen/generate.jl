@@ -964,6 +964,73 @@ function strip_excess_after_function_end(bytes::Vector{UInt8})::Vector{UInt8}
             i += 9; continue
         end
 
+        # P2-batch12: opcodes with non-trivial immediates the decoder previously
+        # treated as single-byte. Mis-skipping makes the scanner read an OPERAND
+        # byte as an opcode — an operand byte of 0x0B then looks like the
+        # function's closing `end` at depth 0 and TRUNCATES the real tail.
+        # select_t's type-index operand was the trigger: type indices shift per
+        # module, so the same function validated in one module and lost its last
+        # 9 instructions in another (Ryu kernel, gaps 19d59e9a61b3/b72318c9598c).
+        _skip_leb() = (while i <= length(bytes); b = bytes[i]; i += 1; (b & 0x80) == 0 && break; end)
+        if op == 0x08  # throw: tag index LEB
+            i += 1; _skip_leb(); continue
+        end
+        if op == 0x0E  # br_table: vec(label) + default label
+            i += 1
+            cnt = 0; shift = 0
+            while i <= length(bytes)
+                b = bytes[i]; i += 1
+                cnt |= Int(b & 0x7f) << shift
+                (b & 0x80) == 0 && break
+                shift += 7
+            end
+            for _ in 1:(cnt + 1); _skip_leb(); end
+            continue
+        end
+        if op == 0x1C  # select_t: vec(valtype); each valtype is 1 byte, or 0x63/0x64 + heaptype LEB
+            i += 1
+            cnt = 0; shift = 0
+            while i <= length(bytes)
+                b = bytes[i]; i += 1
+                cnt |= Int(b & 0x7f) << shift
+                (b & 0x80) == 0 && break
+                shift += 7
+            end
+            for _ in 1:cnt
+                i > length(bytes) && break
+                vt = bytes[i]; i += 1
+                (vt == 0x63 || vt == 0x64) && _skip_leb()  # ref null ht / ref ht
+            end
+            continue
+        end
+        if op == 0x1F  # try_table: blocktype + vec(catch clause); OPENS A FRAME
+            depth += 1
+            i += 1
+            if i <= length(bytes)
+                if bytes[i] == 0x40
+                    i += 1
+                else
+                    _skip_leb()
+                end
+            end
+            cnt = 0; shift = 0
+            while i <= length(bytes)
+                b = bytes[i]; i += 1
+                cnt |= Int(b & 0x7f) << shift
+                (b & 0x80) == 0 && break
+                shift += 7
+            end
+            for _ in 1:cnt
+                i > length(bytes) && break
+                kind = bytes[i]; i += 1
+                # 0x00 catch tag+label, 0x01 catch_ref tag+label: 2 LEBs;
+                # 0x02 catch_all label, 0x03 catch_all_ref label: 1 LEB
+                (kind == 0x00 || kind == 0x01) && _skip_leb()
+                _skip_leb()
+            end
+            continue
+        end
+
         # Skip instructions with LEB128 operands
         n_skip = if op == 0x20 || op == 0x21 || op == 0x22; 1      # local.get/set/tee
                  elseif op == 0x23 || op == 0x24; 1                  # global.get/set

@@ -4355,6 +4355,52 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             push!(bytes, is_32bit ? Opcode.I32_MUL : Opcode.I64_MUL)
         end
 
+    # P2-batch13: NARROW-WIDTH checked add/sub/mul (Int8/UInt8/Int16/UInt16).
+    # The register-width handlers below detect overflow with sign-bit tricks at
+    # bit 31/63 — but a narrow op can never overflow the wide register, so the
+    # flag stayed false and e.g. checked_abs(Int8(-128)) leaked 128 instead of
+    # throwing OverflowError (lcm(Int8(-128), 1) divergent_throw family).
+    # Compute in i32 on normalised inputs; flag = result fails the
+    # sign/zero-extend round-trip at the JULIA width; value = wrapped result.
+    elseif is_32bit && _julia_int_width(arg_type, is_32bit) < 32 &&
+           (is_func(func, :checked_sadd_int) || is_func(func, :checked_uadd_int) ||
+            is_func(func, :checked_ssub_int) || is_func(func, :checked_usub_int) ||
+            is_func(func, :checked_smul_int) || is_func(func, :checked_umul_int))
+        local _ncw = _julia_int_width(arg_type, is_32bit)
+        local _nc_signed = is_func(func, :checked_sadd_int) || is_func(func, :checked_ssub_int) ||
+                           is_func(func, :checked_smul_int)
+        local _nc_op = (is_func(func, :checked_sadd_int) || is_func(func, :checked_uadd_int)) ? Opcode.I32_ADD :
+                       (is_func(func, :checked_ssub_int) || is_func(func, :checked_usub_int)) ? Opcode.I32_SUB :
+                       Opcode.I32_MUL
+        _emit_normalise_narrow_pair!(bytes, ctx, _nc_signed, _ncw)
+        local _nc_r = UInt32(allocate_local!(ctx, I32))
+        push!(bytes, _nc_op)
+        push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(_nc_r))
+        # helper: push wrapped-to-width copy of result
+        local _nc_norm! = function ()
+            push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(_nc_r))
+            if _nc_signed
+                push!(bytes, _ncw == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
+            else
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int64((1 << _ncw) - 1)))
+                push!(bytes, Opcode.I32_AND)
+            end
+        end
+        local _nc_tt = Tuple{Int32, Bool}
+        if !haskey(ctx.type_registry.structs, _nc_tt)
+            register_tuple_type!(ctx.mod, ctx.type_registry, _nc_tt)
+        end
+        local _nc_info = ctx.type_registry.structs[_nc_tt]
+        push!(bytes, Opcode.I32_CONST); push!(bytes, 0x00)   # typeId
+        _nc_norm!()                                           # field 1: wrapped value
+        _nc_norm!()                                           # flag: wrapped != raw
+        push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(_nc_r))
+        push!(bytes, Opcode.I32_NE)
+        push!(bytes, Opcode.GC_PREFIX)
+        push!(bytes, Opcode.STRUCT_NEW)
+        append!(bytes, encode_leb128_unsigned(_nc_info.wasm_type_idx))
+
     # PURE-9003: checked_smul_int(a, b) -> Tuple{T, Bool} (result, overflow_flag)
     # Overflow detection via division check: if a != 0 && a != -1: overflow = result/a != b
     elseif is_func(func, :checked_smul_int) || is_func(func, :checked_umul_int)
@@ -4618,10 +4664,16 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         _compile_call_flipsign(args, bytes, ctx, is_128bit, is_32bit, arg_type)
 
     # Comparison operations
+    # P2-batch13: ordered comparisons OBSERVE the full register width, so narrow
+    # operands must be renormalised first (same policy as div/rem): an Int8 value
+    # of -x can sit in the i32 register as 128, and slt_int(128, 0) = false flips
+    # checked_abs's overflow test (lcm(Int8(-128), 1) returned 128 instead of
+    # throwing). Signed → sign-extend in register; unsigned → mask.
     elseif is_func(func, :slt_int)  # signed less than
         if is_128bit
             append!(bytes, emit_int128_slt(ctx, arg_type))
         else
+            is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, true, _julia_int_width(arg_type, is_32bit))
             push!(bytes, is_32bit ? Opcode.I32_LT_S : Opcode.I64_LT_S)
         end
 
@@ -4629,6 +4681,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         if is_128bit
             append!(bytes, emit_int128_sle(ctx, arg_type))
         else
+            is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, true, _julia_int_width(arg_type, is_32bit))
             push!(bytes, is_32bit ? Opcode.I32_LE_S : Opcode.I64_LE_S)
         end
 
@@ -4636,6 +4689,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         if is_128bit
             append!(bytes, emit_int128_ult(ctx, arg_type))
         else
+            is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, false, _julia_int_width(arg_type, is_32bit))
             push!(bytes, is_32bit ? Opcode.I32_LT_U : Opcode.I64_LT_U)
         end
 
@@ -4643,6 +4697,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         if is_128bit
             append!(bytes, emit_int128_ule(ctx, arg_type))
         else
+            is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, false, _julia_int_width(arg_type, is_32bit))
             push!(bytes, is_32bit ? Opcode.I32_LE_U : Opcode.I64_LE_U)
         end
 
@@ -5122,6 +5177,19 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             # PURE-324: Skip extend if source is already i64 (e.g., from widened phi local)
             src_wasm = length(args) >= 2 ? get_phi_edge_wasm_type(args[2], ctx) : nothing
             if src_wasm !== I64
+                # P2-batch13: a narrow source must be renormalised at its JULIA
+                # width first — sext_int(Int64, x::Int8) with register value 128
+                # otherwise widens to 128 instead of -128.
+                local _sx_src = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
+                if _sx_src === Int8
+                    push!(bytes, Opcode.I32_EXTEND8_S)
+                elseif _sx_src === Int16
+                    push!(bytes, Opcode.I32_EXTEND16_S)
+                elseif _sx_src === UInt8
+                    push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(0xff)); push!(bytes, Opcode.I32_AND)
+                elseif _sx_src === UInt16
+                    push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(0xffff)); push!(bytes, Opcode.I32_AND)
+                end
                 push!(bytes, Opcode.I64_EXTEND_I32_S)
             end
         elseif target_type === Int128 || target_type === UInt128
