@@ -1759,14 +1759,79 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
     #     ;; catch handler (sets merge phi), falls through to $merge end
     #   end
     #   ;; post-merge code (phi reads, conversions, return)
+    # P2-batch19: a MERGE phi must have a try-side edge (< catch_dest). Phis
+    # whose edges all originate inside the catch region are INTERNAL to the
+    # catch arm (e.g. the inlined `mod(typemin, x)` diamond — gap 93a32c2c9d13)
+    # and are handled by the stackified catch compilation below, not by the
+    # merge structure.
     merge_start = length(code) + 1
     for i in catch_dest:length(code)
-        if code[i] isa Core.PhiNode && haskey(ctx.phi_locals, i)
+        st = code[i]
+        if st isa Core.PhiNode && haskey(ctx.phi_locals, i) &&
+           any(Int(e) < catch_dest for e in st.edges)
             merge_start = i
             break
         end
     end
     has_merge = merge_start <= length(code)
+
+    # P2-batch19: pre-try branch that EXITS over the whole try/catch
+    # (`if cond; try ... catch ... end else X end`). The else target lies
+    # outside the try-body block subset, so the stackifier silently dropped the
+    # branch and the condition value corrupted the operand stack (gaps
+    # efca694cdd4f / 6cf9be31dafc). Restructure as:
+    #   <pre-branch stmts>
+    #   block $else: cond eqz br_if; <try/catch structure> end
+    #   <post code [dest..]>
+    # Only for the return-style shape (no merge phis; the catch arm returns).
+    exit_idx = 0
+    exit_dest = 0
+    if !has_merge
+        catch_ret = 0
+        for i in catch_dest:length(code)
+            if code[i] isa Core.ReturnNode
+                catch_ret = i
+                break
+            end
+        end
+        if catch_ret > 0
+            for i in 1:(region.enter_idx - 1)
+                st = code[i]
+                if st isa Core.GotoIfNot && st.dest > catch_ret
+                    exit_idx = i
+                    exit_dest = st.dest
+                    break
+                end
+            end
+        end
+    end
+    has_exit_branch = exit_idx > 0
+
+    if has_exit_branch
+        # Pre-branch code via the stackifier — it can contain loops (Set/Vector
+        # literal fills); a linear walk flattens them (6cf9be31dafc traped OOB).
+        # The branch block itself is truncated before its GotoIfNot terminator,
+        # which is emitted manually as the $else guard below.
+        pre_blocks = BasicBlock[]
+        for b in blocks
+            b.start_idx > exit_idx && continue
+            if b.end_idx < exit_idx
+                push!(pre_blocks, b)
+            else
+                # block containing the exit branch: keep statements before it
+                b.start_idx <= exit_idx - 1 &&
+                    push!(pre_blocks, BasicBlock(b.start_idx, exit_idx - 1, nothing))
+            end
+        end
+        append!(bytes, generate_stackified_flow(ctx, pre_blocks, code; trailing_unreachable = false))
+        push!(bytes, Opcode.BLOCK)   # $else
+        push!(bytes, 0x40)
+        append!(bytes, compile_condition_to_i32((code[exit_idx]::Core.GotoIfNot).cond, ctx))
+        push!(bytes, Opcode.I32_EQZ)
+        push!(bytes, Opcode.BR_IF)
+        append!(bytes, encode_leb128_unsigned(0))
+        ctx.last_stmt_was_stub = false
+    end
 
     if has_merge
         push!(bytes, Opcode.BLOCK)   # $merge
@@ -1784,8 +1849,11 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
     push!(bytes, Opcode.CATCH_ALL)               # catch_all type
     append!(bytes, encode_leb128_unsigned(0))    # label index 0
 
-    # Extract blocks before catch handler — includes try body + normal return path
-    try_body_blocks = [b for b in blocks if b.start_idx < catch_dest]
+    # Extract blocks before catch handler — includes try body + normal return path.
+    # With an exit branch, pre-branch/branch blocks are emitted above instead.
+    try_body_blocks = has_exit_branch ?
+        [b for b in blocks if b.start_idx > exit_idx && b.start_idx < catch_dest] :
+        [b for b in blocks if b.start_idx < catch_dest]
 
     # Use generate_stackified_flow for proper control flow:
     # - phi locals set at every edge (GotoNode, GotoIfNot, fall-through)
@@ -1823,9 +1891,25 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
     ctx.last_stmt_was_stub = false
 
     # Catch handler: catch_dest up to the merge point (or end of code)
-    # P2-batch17: GotoIfNot-aware (conditional catch arms — gap f80bce91645e)
-    catch_stop = has_merge ? merge_start - 1 : length(code)
-    _compile_catch_region!(bytes, ctx, code, catch_dest, catch_stop)
+    if has_merge
+        # P2-batch17: GotoIfNot-aware linear walk (conditional catch arms)
+        _compile_catch_region!(bytes, ctx, code, catch_dest, merge_start - 1)
+    else
+        # P2-batch19: self-contained catch arm (ends in return) — compile via
+        # the stackifier so internal phis/diamonds/loops work (inlined
+        # mod/div in catch arms, loop-in-catch — gaps 93a32c2c9d13 family).
+        catch_blocks = [b for b in blocks
+                        if b.start_idx >= catch_dest &&
+                           (!has_exit_branch || b.start_idx < exit_dest)]
+        append!(bytes, generate_stackified_flow(ctx, catch_blocks, code))
+    end
+
+    if has_exit_branch
+        push!(bytes, Opcode.END)   # $else
+        ctx.last_stmt_was_stub = false
+        # Post code: the else arm of the pre-try branch (returns)
+        _compile_catch_region!(bytes, ctx, code, exit_dest, length(code))
+    end
 
     if has_merge
         # Catch-side merge phi values (edge source >= catch_dest)
@@ -1989,6 +2073,20 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
         if i < enter_idx && (code[i] isa Core.GotoIfNot || code[i] isa Core.GotoNode)
             has_phi = true
             break
+        end
+    end
+    # P2-batch19: CATCH-INTERNAL phis (all edges ≥ catch_dest — inlined diamonds
+    # or loops inside the catch arm, e.g. `catch; mod(typemin, x)`) need the
+    # stackified catch compilation; the linear walk misplaced their edge
+    # assignments (gaps 93a32c2c9d13 / 6c9ddf4c936f).
+    if !has_phi
+        for i in catch_dest:length(code)
+            st = code[i]
+            if st isa Core.PhiNode && haskey(ctx.phi_locals, i) &&
+               all(Int(e) >= catch_dest for e in st.edges)
+                has_phi = true
+                break
+            end
         end
     end
     if has_phi

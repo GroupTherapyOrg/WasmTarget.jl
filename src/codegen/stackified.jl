@@ -195,7 +195,8 @@ function emit_numeric_to_anyref!(target_bytes::Vector{UInt8}, val, val_wasm::Was
     return  # No extern_convert_any — struct ref is already anyref
 end
 
-function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
+function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code;
+                                  trailing_unreachable::Bool = true)::Vector{UInt8}
     # ========================================================================
     # STEP 0: BOUNDSCHECK PATTERN DETECTION
     # ========================================================================
@@ -2142,7 +2143,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # For functions with a return type: emit unreachable (WASM validation uses
     # polymorphic stack after unreachable, so this validates). But we ALSO need
     # to ensure br to the outermost block uses `return` instead of `br`.
-    push!(bytes, Opcode.UNREACHABLE)
+    # P2-batch19: callers compiling a FALL-THROUGH region (the pre-branch code
+    # of an exit-branch try/catch) opt out — for them this guard is live code.
+    trailing_unreachable && push!(bytes, Opcode.UNREACHABLE)
 
     return bytes
 end

@@ -1,6 +1,6 @@
 ---
 id: 6cf9be31dafc
-status: open
+status: fixed
 category: wrong_value
 kind: wrong_value
 construct: "wrong_value: `if isempty(Set([0, 0, 0]))\n    begin\n        v_bt = 0\n        try\n            div(x, x)\n        catch\n            0\n        end\n    end\nelse\n    0\nend` :: Int64"

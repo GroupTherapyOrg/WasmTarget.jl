@@ -1,6 +1,6 @@
 ---
 id: efca694cdd4f
-status: open
+status: fixed
 category: wrong_value
 kind: wrong_value
 construct: "wrong_value: `if isempty(\"a\")\n    try\n        div(0x00, x)\n    catch\n        0x00\n    end\nelse\n    x\nend` :: UInt8"
