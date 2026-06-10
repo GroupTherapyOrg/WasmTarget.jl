@@ -256,8 +256,14 @@ const WASM_OPT_GC_FLAGS = [
     "--enable-bulk-memory", "--enable-sign-ext", "--enable-exception-handling",
 ]
 
+# NOTE: dart2wasm also passes --traps-never-happen, but that assumption is
+# UNSOUND here: WasmTarget uses wasm traps as Julia's error semantics (div by
+# zero, bounds checks, throw paths), and -tnh lets binaryen delete/reorder
+# those paths — optimized builds returned garbage where native throws
+# (ledger gaps dacbfa51e334, 5cc6c2b2ac64, c77a8f98bb53, …). Dart never relies
+# on traps; Julia-compiled code does.
 const WASM_OPT_PRODUCTION_FLAGS = [
-    "--closed-world", "--traps-never-happen",
+    "--closed-world",
     "--type-unfinalizing", "-Os", "--type-ssa", "--gufa", "-Os",
     "--type-merging", "-Os", "--type-finalizing", "--minimize-rec-groups",
 ]
@@ -291,7 +297,7 @@ function optimize(bytes::Vector{UInt8}; level::Symbol=:size, validate::Bool=true
     if level === :size
         append!(flags, WASM_OPT_PRODUCTION_FLAGS)
     elseif level === :speed
-        append!(flags, ["--closed-world", "--traps-never-happen",
+        append!(flags, ["--closed-world",   # no --traps-never-happen: see WASM_OPT_PRODUCTION_FLAGS
                         "--type-unfinalizing", "-O3", "--type-ssa", "--gufa", "-O3",
                         "--type-merging", "-O3", "--type-finalizing", "--minimize-rec-groups"])
     elseif level === :debug

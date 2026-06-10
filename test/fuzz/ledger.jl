@@ -250,14 +250,21 @@ end
 # ABSOLUTE path (pwd-independent) and neutralize any `include(...)` line the
 # reproducer carries — making both old and new reproducers runnable regardless
 # of where verify is invoked from.
-const _HARNESS_PATH = joinpath(@__DIR__, "harness.jl")
+const _PRELOAD = [joinpath(@__DIR__, f) for f in
+                  ("harness.jl", "bridge.jl", "bridge_args.jl", "structpool.jl")]
 function _run_reproducer(snippet::AbstractString)
     m = Module(gensym(:gap))
     try
         Core.eval(m, :(using WasmTarget))
-        Base.include(m, _HARNESS_PATH)                 # defines m.FuzzHarness
-        Core.eval(m, :(using .FuzzHarness))            # brings in compile_and_run
-        Core.eval(m, :(include(args...) = nothing))    # neutralize reproducer's own include
+        for f in _PRELOAD                              # full bridge stack — the universal
+            Base.include(m, f)                         # reproducers depend on all of it
+        end
+        Core.eval(m, :(using .FuzzHarness))
+        Core.eval(m, :(using .FuzzBridge))
+        Core.eval(m, :(using .FuzzBridgeArgs))
+        Core.eval(m, :(using .FuzzStructPool))
+        Core.eval(m, :(FuzzStructPool.build_pool!()))  # idempotent; pool types appear in bodies
+        Core.eval(m, :(include(args...) = nothing))    # neutralize reproducer's own includes
         Core.eval(m, Meta.parseall(snippet))
         return true
     catch

@@ -1,16 +1,27 @@
 ---
-id: 5cc6c2b2ac64
-status: fixed
+id: c97ab1ffb27e
+status: open
 category: optimizer_unsound
 kind: optimizer_unsound
-construct: "optimizer_unsound: `sqrt(x)` :: Float64"
+construct: "optimizer_unsound: `begin\n    v_b = 0\n    begin\n        fin_bl = 0.0\n        r_bl = try\n                sqrt(x)\n            finally\n                fin_bl = 0.0\n            end\n        r_bl + fin_bl\n    end\nend` :: Float64"
 location: "test/fuzz (generated)"
 fn_name: repro
 arg_types: "(Float64,)"
-first_seen: sweep-expr-1
+first_seen: sweep-stmt-2
 ---
 
-# Gap `5cc6c2b2ac64` — optimizer_unsound: `sqrt(x)` :: Float64
+# Gap `c97ab1ffb27e` — optimizer_unsound: `begin
+    v_b = 0
+    begin
+        fin_bl = 0.0
+        r_bl = try
+                sqrt(x)
+            finally
+                fin_bl = 0.0
+            end
+        r_bl + fin_bl
+    end
+end` :: Float64
 
 **Category:** `optimizer_unsound` &nbsp;•&nbsp; **Kind:** `optimizer_unsound` &nbsp;•&nbsp; **Location:** `test/fuzz (generated)`
 
@@ -25,11 +36,22 @@ include(joinpath("test", "fuzz", "bridge.jl"));      using .FuzzBridge
 include(joinpath("test", "fuzz", "bridge_args.jl")); using .FuzzBridgeArgs
 include(joinpath("test", "fuzz", "structpool.jl"));  using .FuzzStructPool
 FuzzStructPool.build_pool!()
-repro(x::Float64) = sqrt(x)
+repro(x::Float64) = begin
+    v_b = 0
+    begin
+        fin_bl = 0.0
+        r_bl = try
+                sqrt(x)
+            finally
+                fin_bl = 0.0
+            end
+        r_bl + fin_bl
+    end
+end
 _x = -1.0
 _c = deepcopy(_x)
-_nat = try (:ok, repro(_c)); catch e; (:throw, e); end
-_rt = Core.Compiler.widenconst(Base.code_typed(repro, (Float64,))[1][2])
+_nat = try (:ok, repro(_c)) catch e (:throw, e) end
+_rt = Base.widenconst(Base.code_typed(repro, (Float64,))[1][2])
 _res = FuzzBridgeArgs.bridge_run_args(repro, (Float64,), [(deepcopy(_x),)]; rettype = _rt, opt=:size)[1]
 _pd = FuzzBridgeArgs.ismutable_shape(Float64) ? FuzzBridge.descriptor(Float64)[1] : nothing
 _ok = _nat[1] === :throw ? (_res[1] === :trap) :

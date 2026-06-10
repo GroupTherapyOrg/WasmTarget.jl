@@ -128,7 +128,7 @@ function differential(body, ::Type{T0}; check_opt::Bool = false) where {T0}
     # the signature is inside the bridge universe — which covers every type the
     # generator can request, including pool structs / tuples / Char args.
     rt0 = try
-        Base.widenconst(only(Base.code_typed(fn, (T0,); optimize = true))[2])
+        Core.Compiler.widenconst(only(Base.code_typed(fn, (T0,); optimize = true))[2])
     catch
         nothing
     end
@@ -148,7 +148,7 @@ function differential(body, ::Type{T0}; check_opt::Bool = false) where {T0}
     # bridge universe (it always is for today's scalar generator — this RETIRES
     # the JSON-decimal-text result path); legacy JSON transport otherwise.
     rt = try
-        Base.widenconst(only(Base.code_typed(fn, (T0,); optimize = true))[2])
+        Core.Compiler.widenconst(only(Base.code_typed(fn, (T0,); optimize = true))[2])
     catch
         nothing
     end
@@ -189,7 +189,7 @@ function differential_natural(body, ::Type{IN}; var::Symbol = :v, check_opt::Boo
     samples = vector_inputs(eltype(IN))
 
     rt = try
-        Base.widenconst(only(Base.code_typed(fn, (IN,); optimize = true))[2])
+        Core.Compiler.widenconst(only(Base.code_typed(fn, (IN,); optimize = true))[2])
     catch
         nothing
     end

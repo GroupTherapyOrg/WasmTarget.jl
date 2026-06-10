@@ -96,6 +96,33 @@ function _ensure_typeof_scratch_local!(ctx::AbstractCompilationContext)::UInt32
     return local_idx
 end
 
+# Normalise BOTH narrow (sub-32-bit) operands on the stack before an i32 op
+# that OBSERVES the full register width (div/rem). WasmTarget defers narrow-int
+# normalisation: an i32 register may carry overflow junk above the Julia width
+# (e.g. UInt8 0xa5 + 0xff = 0x1a4) which add/sub/mul/and/or don't care about —
+# but div_u/rem_u divide the WIDE value (gap: div(0xa5 + x, 0x04)::UInt8 gave
+# 0x69, native 0x29). Unsigned → mask to width; signed → sign-extend in
+# register. Stack: [a, b] → [norm(a), norm(b)]. No-op for full-width operands.
+function _emit_normalise_narrow_pair!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext,
+                                      signed::Bool, julia_width::Int)
+    julia_width < 32 || return bytes
+    b = UInt32(allocate_local!(ctx, I32))
+    function norm!()
+        if signed
+            push!(bytes, julia_width == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
+        else
+            push!(bytes, Opcode.I32_CONST)
+            append!(bytes, encode_leb128_signed(Int64((1 << julia_width) - 1)))
+            push!(bytes, Opcode.I32_AND)
+        end
+    end
+    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(b))   # [a]
+    norm!()                                                                      # [a*]
+    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(b))   # [a*, b]
+    norm!()                                                                      # [a*, b*]
+    return bytes
+end
+
 # Emit a Julia-semantics shift. Stack on entry: [value, shift] (same wasm type).
 # Julia's shl_int/lshr_int yield 0 and ashr_int yields sign-fill when the shift
 # amount ≥ bitwidth, whereas wasm's shifts mask the amount to `mod bitwidth`
@@ -4448,15 +4475,19 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         end
 
     elseif is_func(func, :sdiv_int) || is_func(func, :checked_sdiv_int)
+        is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, true, _julia_int_width(arg_type, is_32bit))
         push!(bytes, is_32bit ? Opcode.I32_DIV_S : Opcode.I64_DIV_S)
 
     elseif is_func(func, :udiv_int) || is_func(func, :checked_udiv_int)
+        is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, false, _julia_int_width(arg_type, is_32bit))
         push!(bytes, is_32bit ? Opcode.I32_DIV_U : Opcode.I64_DIV_U)
 
     elseif is_func(func, :srem_int) || is_func(func, :checked_srem_int)
+        is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, true, _julia_int_width(arg_type, is_32bit))
         push!(bytes, is_32bit ? Opcode.I32_REM_S : Opcode.I64_REM_S)
 
     elseif is_func(func, :urem_int) || is_func(func, :checked_urem_int)
+        is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, false, _julia_int_width(arg_type, is_32bit))
         push!(bytes, is_32bit ? Opcode.I32_REM_U : Opcode.I64_REM_U)
 
     # Bitcast (reinterpret bits between types)

@@ -182,6 +182,9 @@ module Opcode
     const I32_WRAP_I64 = 0xA7
     const I64_EXTEND_I32_S = 0xAC
     const I64_EXTEND_I32_U = 0xAD
+    # Sign-extension operators (--enable-sign-ext): in-register narrow normalisation
+    const I32_EXTEND8_S = 0xC0
+    const I32_EXTEND16_S = 0xC1
     const F32_CONVERT_I32_S = 0xB2
     const F32_CONVERT_I32_U = 0xB3
     const F32_CONVERT_I64_S = 0xB4

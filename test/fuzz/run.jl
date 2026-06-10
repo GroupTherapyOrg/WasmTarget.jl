@@ -63,8 +63,8 @@ function _reproducer(o::Outcome, ::Type{T0}, body; var::Symbol = :x) where {T0}
     repro($(var)::$(T0)) = $(bodystr)
     _x = $(inp)
     _c = deepcopy(_x)
-    _nat = try (:ok, repro(_c)) catch e (:throw, e) end
-    _rt = Base.widenconst(Base.code_typed(repro, ($(T0),))[1][2])
+    _nat = try (:ok, repro(_c)); catch e; (:throw, e); end
+    _rt = Core.Compiler.widenconst(Base.code_typed(repro, ($(T0),))[1][2])
     _res = FuzzBridgeArgs.bridge_run_args(repro, ($(T0),), [(deepcopy(_x),)]; rettype = _rt$(optkw))[1]
     _pd = FuzzBridgeArgs.ismutable_shape($(T0)) ? FuzzBridge.descriptor($(T0))[1] : nothing
     _ok = _nat[1] === :throw ? (_res[1] === :trap) :

@@ -1,6 +1,6 @@
 ---
 id: dacbfa51e334
-status: open
+status: fixed
 category: optimizer_unsound
 kind: optimizer_unsound
 construct: "optimizer_unsound: `argmax(v)` :: Vector{Int64}→Int64"
