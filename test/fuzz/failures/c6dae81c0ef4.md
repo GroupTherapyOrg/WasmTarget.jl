@@ -1,6 +1,6 @@
 ---
 id: c6dae81c0ef4
-status: open
+status: fixed
 category: runtime_trap
 kind: runtime_trap
 construct: "runtime_trap: `try\n    sqrt(cos(x))\ncatch\n    0.0\nend` :: Float64"

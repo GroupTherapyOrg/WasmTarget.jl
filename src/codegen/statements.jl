@@ -2729,6 +2729,23 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 append!(bytes, compile_value(ptr_arg, ctx))
             end
             return bytes
+        elseif name === :jl_types_equal
+            # jl_types_equal(T1, T2) → Int32. Base.Math's pow uses `T === Float16`
+            # style checks that lower to this foreigncall. When both args are
+            # compile-time type literals, fold to a constant (gap 01c21040d51f:
+            # the unknown-foreigncall stub made every Float32^Float32 trap).
+            _resolve_type_lit(a) = a isa GlobalRef ? (try getfield(a.mod, a.name) catch; nothing end) :
+                                   a isa QuoteNode ? a.value : a
+            if length(expr.args) >= 7
+                t1 = _resolve_type_lit(expr.args[6])
+                t2 = _resolve_type_lit(expr.args[7])
+                if t1 isa Type && t2 isa Type
+                    push!(bytes, Opcode.I32_CONST)
+                    push!(bytes, t1 === t2 ? 0x01 : 0x00)
+                    return bytes
+                end
+            end
+            # Non-literal args: fall through to the unknown-foreigncall stub below
         elseif name === :jl_object_id
             # jl_object_id(x) → UInt64: identity hash. There is no correct WasmGC
             # implementation yet (no stable per-object identity). The previous stub

@@ -1833,6 +1833,33 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
         ctx.last_stmt_was_stub = false
     end
 
+    # P2-batch21 (gap 2c8a7b674388): pre-try code must NOT live inside the
+    # try_table — a throwing pre-try statement (e.g. the catchable bounds throw
+    # of a `getindex(v, 0)` before the try) would be caught by this try's
+    # catch_all, whereas natively it propagates uncaught. Emit blocks before
+    # the EnterNode OUTSIDE the try_table, splitting the block that spans the
+    # enter (Enter does not terminate a basic block); the tail goes into the
+    # try body so phi edges keyed on its last statement stay resolvable.
+    pre_try_blocks = BasicBlock[]
+    body_head = nothing
+    for b in blocks
+        (has_exit_branch && b.start_idx <= exit_idx) && continue
+        b.start_idx < catch_dest || continue
+        if b.end_idx < region.enter_idx
+            push!(pre_try_blocks, b)
+        elseif b.start_idx <= region.enter_idx <= b.end_idx
+            b.start_idx < region.enter_idx &&
+                push!(pre_try_blocks, BasicBlock(b.start_idx, region.enter_idx - 1, nothing))
+            region.enter_idx < b.end_idx &&
+                (body_head = BasicBlock(region.enter_idx + 1, b.end_idx, b.terminator))
+        end
+    end
+    if !isempty(pre_try_blocks)
+        append!(bytes, generate_stackified_flow(ctx, pre_try_blocks, code;
+                                                trailing_unreachable=false))
+        ctx.last_stmt_was_stub = false
+    end
+
     if has_merge
         push!(bytes, Opcode.BLOCK)   # $merge
         push!(bytes, 0x40)
@@ -1849,11 +1876,11 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
     push!(bytes, Opcode.CATCH_ALL)               # catch_all type
     append!(bytes, encode_leb128_unsigned(0))    # label index 0
 
-    # Extract blocks before catch handler — includes try body + normal return path.
-    # With an exit branch, pre-branch/branch blocks are emitted above instead.
-    try_body_blocks = has_exit_branch ?
-        [b for b in blocks if b.start_idx > exit_idx && b.start_idx < catch_dest] :
-        [b for b in blocks if b.start_idx < catch_dest]
+    # Try-body blocks: strictly after the enter, before the catch handler.
+    # Pre-try and pre-branch blocks are emitted above, outside the try_table.
+    try_body_blocks = [b for b in blocks
+                       if b.start_idx > region.enter_idx && b.start_idx < catch_dest]
+    body_head !== nothing && pushfirst!(try_body_blocks, body_head)
 
     # Use generate_stackified_flow for proper control flow:
     # - phi locals set at every edge (GotoNode, GotoIfNot, fall-through)
@@ -1907,8 +1934,11 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
     if has_exit_branch
         push!(bytes, Opcode.END)   # $else
         ctx.last_stmt_was_stub = false
-        # Post code: the else arm of the pre-try branch (returns)
-        _compile_catch_region!(bytes, ctx, code, exit_dest, length(code))
+        # Post code: the else arm of the pre-try branch (returns). P2-batch21:
+        # stackified — else arms can contain loops/begin blocks/nested ifs that
+        # the linear walk flattened or rejected (gap 227929b3fbff family).
+        post_blocks = [b for b in blocks if b.start_idx >= exit_dest]
+        append!(bytes, generate_stackified_flow(ctx, post_blocks, code))
     end
 
     if has_merge
@@ -1987,19 +2017,40 @@ function generate_catch_try_chain(ctx::AbstractCompilationContext, blocks::Vecto
     # Outer try_table — includes pre-try code, mirroring generate_try_catch_stackified
     _emit_try_table_region!([b for b in blocks if b.start_idx < outer.catch_dest])
 
-    # Outer catch handler prefix (pop_exception / assignments before the inner try)
-    for i in outer.catch_dest:(inner.enter_idx - 1)
-        stmt = code[i]
-        if stmt === nothing || stmt isa Core.EnterNode ||
-           (stmt isa Expr && stmt.head === :pop_exception)
-            continue
+    # Outer catch handler prefix (pop_exception / assignments before the inner try).
+    # P2-batch21 (gap 90fa5e0f6382): the inner EnterNode does NOT terminate a basic
+    # block, so one block can SPAN it — its head is prefix, its tail is the start
+    # of the inner try body (e.g. a vector-literal allocation whose fill-loop phi
+    # in the next block has an edge keyed on the tail's last statement). The old
+    # filters dropped the spanning block from BOTH regions (null deref) or put it
+    # wholly in the prefix (phi never initialised → oob trap). Split it at the
+    # enter: head → prefix, tail → inner region, so the stackifier sees the phi's
+    # predecessor and emits the edge assignment.
+    prefix_blocks = BasicBlock[]
+    inner_head = nothing
+    for b in blocks
+        b.start_idx >= outer.catch_dest || continue
+        if b.end_idx < inner.enter_idx
+            push!(prefix_blocks, b)
+        elseif b.start_idx <= inner.enter_idx <= b.end_idx
+            b.start_idx < inner.enter_idx &&
+                push!(prefix_blocks, BasicBlock(b.start_idx, inner.enter_idx - 1, nothing))
+            inner.enter_idx < b.end_idx &&
+                (inner_head = BasicBlock(inner.enter_idx + 1, b.end_idx, b.terminator))
         end
-        append!(bytes, compile_statement(stmt, i, ctx))
+    end
+    if !isempty(prefix_blocks)
+        # Falls through into the inner try_table, so no trailing unreachable.
+        append!(bytes, generate_stackified_flow(ctx, prefix_blocks, code;
+                                                trailing_unreachable=false))
+        ctx.last_stmt_was_stub = false
     end
 
     # Inner try_table
-    _emit_try_table_region!([b for b in blocks
-                             if b.start_idx > inner.enter_idx && b.start_idx < inner.catch_dest])
+    inner_blocks = [b for b in blocks
+                    if b.start_idx > inner.enter_idx && b.start_idx < inner.catch_dest]
+    inner_head !== nothing && pushfirst!(inner_blocks, inner_head)
+    _emit_try_table_region!(inner_blocks)
 
     # Inner catch region (GotoIfNot-aware)
     _compile_catch_region!(bytes, ctx, code, inner.catch_dest, length(code))

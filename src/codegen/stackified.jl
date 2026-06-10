@@ -1496,8 +1496,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         end
     end
 
-    # PURE-6024 debug: trace function name for debugging
-    _debug_fn_name = try string(ctx.func_name) catch; "" end
+    # PURE-6024 debug: trace function name for debugging.
+    # P2-batch21: ctx has no func_name field — use func_ref (the function object),
+    # otherwise WT_DBG_FN can never match and the traces below are unreachable.
+    _debug_fn_name = try string(ctx.func_ref) catch; "" end
     _debug_stackified = contains(_debug_fn_name, "parse_int_literal") ||
         (haskey(ENV, "WT_DBG_FN") && !isempty(ENV["WT_DBG_FN"]) && contains(_debug_fn_name, ENV["WT_DBG_FN"]))
     if _debug_stackified
