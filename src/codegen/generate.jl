@@ -765,13 +765,86 @@ function _skip_gc_leb_count(sub_op::UInt8)::Int
     sub_op == 0x01 && return 1  # struct.new_default
     (sub_op >= 0x02 && sub_op <= 0x05) && return 2  # struct.get/get_s/get_u/set
     (sub_op == 0x06 || sub_op == 0x07) && return 1  # array.new/new_default
-    sub_op == 0x08 && return 2  # array.new_fixed
+    sub_op == 0x08 && return 2  # array.new_fixed (type, count)
+    (sub_op == 0x09 || sub_op == 0x0a) && return 2  # array.new_data/new_elem (type, seg)
     (sub_op >= 0x0b && sub_op <= 0x0e) && return 1  # array.get/get_s/get_u/set
     sub_op == 0x0f && return 0  # array.len
+    sub_op == 0x10 && return 1  # array.fill (type)
+    (sub_op >= 0x11 && sub_op <= 0x13) && return 2  # array.copy/init_data/init_elem
     (sub_op >= 0x14 && sub_op <= 0x17) && return 1  # ref.test/cast
     (sub_op == 0x1a || sub_op == 0x1b) && return 0  # extern/any convert
     (sub_op >= 0x1c && sub_op <= 0x1e) && return 0  # i31 ops
     return 0
+end
+
+"""
+Forward-parse an instruction byte buffer and return the start index of the LAST
+instruction, or 0 if the buffer is empty / truncated mid-instruction. Backward
+scans for "does this buffer end with local.get?" misfire when an immediate byte
+collides with an opcode — e.g. `i32.const 32` encodes as [0x41, 0x20] and the
+0x20 immediate reads as LOCAL_GET (the titlecase ±32 wrong-value family, where
+ASCII case distance is exactly 32). A forward parse from a known instruction
+boundary is unambiguous.
+"""
+function _last_instr_start(bytes::Vector{UInt8})::Int
+    i = 1
+    n = length(bytes)
+    last_start = 0
+    while i <= n
+        last_start = i
+        op = bytes[i]
+        if op == 0xFB  # GC prefix: sub-opcode + LEB operands
+            i + 1 > n && return 0
+            sub_op = bytes[i + 1]
+            i += 2
+            for _ in 1:_skip_gc_leb_count(sub_op)
+                while true
+                    i > n && return 0
+                    b = bytes[i]; i += 1
+                    (b & 0x80) == 0 && break
+                end
+            end
+        elseif op == 0x43  # f32.const: 4 raw payload bytes
+            i + 4 > n && return 0
+            i += 5
+        elseif op == 0x44  # f64.const: 8 raw payload bytes
+            i + 8 > n && return 0
+            i += 9
+        elseif op == 0xFC  # saturating-trunc / misc prefix: sub-opcode LEB
+            i += 1
+            while true
+                i > n && return 0
+                b = bytes[i]; i += 1
+                (b & 0x80) == 0 && break
+            end
+        elseif op == 0x0E  # br_table: count N, then N+1 label LEBs
+            i += 1
+            cnt = 0; shift = 0
+            while true
+                i > n && return 0
+                b = bytes[i]; i += 1
+                cnt |= (Int(b & 0x7f) << shift); shift += 7
+                (b & 0x80) == 0 && break
+            end
+            for _ in 1:(cnt + 1)
+                while true
+                    i > n && return 0
+                    b = bytes[i]; i += 1
+                    (b & 0x80) == 0 && break
+                end
+            end
+        else
+            i += 1
+            for _ in 1:_skip_leb_count(op)
+                while true
+                    i > n && return 0
+                    b = bytes[i]; i += 1
+                    (b & 0x80) == 0 && break
+                end
+            end
+        end
+    end
+    return last_start
 end
 
 """
@@ -1930,8 +2003,24 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
 
     # Catch handler: catch_dest up to the merge point (or end of code)
     if has_merge
-        # P2-batch17: GotoIfNot-aware linear walk (conditional catch arms)
-        _compile_catch_region!(bytes, ctx, code, catch_dest, merge_start - 1)
+        # P2-batch17: GotoIfNot-aware linear walk (conditional catch arms).
+        # P3 gap 40da73b299fc: arms containing loops or phis need REAL control
+        # flow — the linear walk drops back-edges (loops flatten to straight
+        # line) and never emits phi-edge stores (phi locals read their zero
+        # defaults: the [0,0,0] fill loop indexed array[-1] → OOB trap).
+        # Route those through the stackifier like the no-merge case below.
+        _arm_rng = catch_dest:(merge_start - 1)
+        _arm_complex = any(i -> code[i] isa Core.PhiNode, _arm_rng) ||
+                       any(i -> code[i] isa Core.GotoNode && (code[i]::Core.GotoNode).label <= i, _arm_rng) ||
+                       count(i -> code[i] isa Core.GotoIfNot, _arm_rng) > 1
+        if _arm_complex
+            catch_blocks = [b for b in blocks
+                            if b.start_idx >= catch_dest && b.start_idx < merge_start]
+            append!(bytes, generate_stackified_flow(ctx, catch_blocks, code;
+                                                    trailing_unreachable = false))
+        else
+            _compile_catch_region!(bytes, ctx, code, catch_dest, merge_start - 1)
+        end
     else
         # P2-batch19: self-contained catch arm (ends in return) — compile via
         # the stackifier so internal phis/diamonds/loops work (inlined
@@ -1967,14 +2056,28 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
         end
         push!(bytes, Opcode.END)   # $merge
         ctx.last_stmt_was_stub = false
-        # Post-merge code: phi reads, conversions, return
-        for i in merge_start:length(code)
-            stmt = code[i]
-            if stmt !== nothing
-                if stmt isa Expr && stmt.head === :pop_exception
-                    continue
+        # Post-merge code: phi reads, conversions, return.
+        # P3 gap 40da73b299fc: the linear walk DROPS control flow — a
+        # `goto #N if not %cond` guarding a throw_inexacterror vanished, so
+        # the throw executed unconditionally on the no-throw path (escaped
+        # exception). Route control-flow-bearing post-merge regions through
+        # the stackifier; keep the linear walk for the plain
+        # phi-read/convert/return tail it was written for.
+        _pm_rng = merge_start:length(code)
+        _pm_complex = any(i -> code[i] isa Core.GotoIfNot || code[i] isa Core.GotoNode, _pm_rng)
+        if _pm_complex
+            pm_blocks = [b for b in blocks if b.start_idx >= merge_start]
+            append!(bytes, generate_stackified_flow(ctx, pm_blocks, code;
+                                                    trailing_unreachable = false))
+        else
+            for i in _pm_rng
+                stmt = code[i]
+                if stmt !== nothing
+                    if stmt isa Expr && stmt.head === :pop_exception
+                        continue
+                    end
+                    append!(bytes, compile_statement(stmt, i, ctx))
                 end
-                append!(bytes, compile_statement(stmt, i, ctx))
             end
         end
     end
@@ -2088,6 +2191,64 @@ end
 #   block $ck / try_table(catch_all 0): body of level k / end / end
 # and after the last try_table, the final catch region (GotoIfNot-aware).
 # Only called for the return-style shape (guarded at the dispatch site).
+# P3 gap 600287f76223: `try A catch; if cond; try B … else Z end end` — the
+# OUTER catch arm is an if/else split whose arms hold (possibly empty) chains.
+# The chain layout funnelled both paths into the inner try_table (the else arm
+# became unreachable); the sequential layout treats the regions as disjoint.
+# Emit the outer level exactly like one _emit_chain_levels! level, then
+# delegate the whole catch arm to generate_branch_split_try restricted to the
+# catch-subset blocks.
+function generate_catch_arm_split(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
+                                  code, outer::TryRegion, arm_regions::Vector{TryRegion},
+                                  branch_idx::Int)::Vector{UInt8}
+    bytes = UInt8[]
+    ensure_exception_tag!(ctx.mod)
+    ensure_exception_global!(ctx.mod)
+
+    # Outer level: pre-try blocks OUTSIDE the try_table (EnterNode split —
+    # natively-uncaught throws there must not reach our catch_all).
+    r = outer
+    pre = BasicBlock[]
+    head = nothing
+    for b in blocks
+        b.start_idx < r.catch_dest || continue
+        if b.end_idx < r.enter_idx
+            push!(pre, b)
+        elseif b.start_idx <= r.enter_idx <= b.end_idx
+            b.start_idx < r.enter_idx &&
+                push!(pre, BasicBlock(b.start_idx, r.enter_idx - 1, nothing))
+            r.enter_idx < b.end_idx &&
+                (head = BasicBlock(r.enter_idx + 1, b.end_idx, b.terminator))
+        end
+    end
+    if !isempty(pre)
+        append!(bytes, generate_stackified_flow(ctx, pre, code; trailing_unreachable=false))
+        ctx.last_stmt_was_stub = false
+    end
+    body = [b for b in blocks if b.start_idx > r.enter_idx && b.start_idx < r.catch_dest]
+    head !== nothing && pushfirst!(body, head)
+    push!(bytes, Opcode.BLOCK)
+    push!(bytes, 0x40)
+    push!(bytes, Opcode.TRY_TABLE)
+    push!(bytes, 0x40)
+    append!(bytes, encode_leb128_unsigned(1))
+    push!(bytes, Opcode.CATCH_ALL)
+    append!(bytes, encode_leb128_unsigned(0))
+    append!(bytes, generate_stackified_flow(ctx, body, code))
+    push!(bytes, Opcode.END)   # try_table
+    push!(bytes, Opcode.END)   # catch landing block
+    ctx.last_stmt_was_stub = false
+
+    # Catch arm: prefix + if/else split with per-arm chains, every path returns.
+    bdest = (code[branch_idx]::Core.GotoIfNot).dest
+    then_chain = [q for q in arm_regions if q.enter_idx < bdest]
+    else_chain = [q for q in arm_regions if q.enter_idx >= bdest]
+    arm_blocks = [b for b in blocks if b.start_idx >= r.catch_dest]
+    append!(bytes, generate_branch_split_try(ctx, arm_blocks, code, then_chain,
+                                             else_chain, branch_idx))
+    return bytes
+end
+
 function generate_catch_try_chain(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
                                   code, chain::Vector{TryRegion})::Vector{UInt8}
     bytes = UInt8[]
@@ -2250,6 +2411,20 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
                 chain_ok = false
                 break
             end
+            # P3 gap 600287f76223: a branch in the inter-level gap that jumps
+            # OVER the next region (`catch; if cond; try ... else ... end`) is
+            # an if/else split inside the catch arm, not a chain — the chain
+            # layout funnels BOTH paths into the inner try_table and the else
+            # arm becomes unreachable.
+            for i in prev.catch_dest:(cur.enter_idx - 1)
+                st = code[i]
+                dest = st isa Core.GotoIfNot ? st.dest : st isa Core.GotoNode ? st.label : 0
+                if dest > cur.catch_dest
+                    chain_ok = false
+                    break
+                end
+            end
+            chain_ok || break
         end
         # Catch-INTERNAL phis (all edges ≥ the final catch_dest — fill loops in
         # the catch arm) are handled by the stackified tail; only a phi merging
@@ -2259,6 +2434,49 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
                 any(Int(e) < regions[end].catch_dest for e in (code[i]::Core.PhiNode).edges)
                 for i in regions[end].catch_dest:length(code))
             return generate_catch_try_chain(ctx, blocks, code, regions)
+        end
+        # P3 gap 600287f76223: branch-split INSIDE the outer catch arm —
+        # `try A catch; if cond; try B … else Z end end`. All inner regions
+        # live in the catch arm, a GotoIfNot between catch_dest and the first
+        # inner enter jumps over it, every arm path returns, no cross-arm phi.
+        if !_branches_over_outer(code, outer) &&
+           (_outer_normal_path_returns(code, outer) || outer.leave_idx == outer.catch_dest)
+            arm_regions = regions[2:end]
+            if all(q.enter_idx >= outer.catch_dest for q in arm_regions) && !isempty(arm_regions)
+                cas_branch = 0
+                for i in outer.catch_dest:(arm_regions[1].enter_idx - 1)
+                    st = code[i]
+                    st isa Core.GotoIfNot && st.dest > arm_regions[1].catch_dest && (cas_branch = i)
+                end
+                if cas_branch > 0
+                    cas_bdest = (code[cas_branch]::Core.GotoIfNot).dest
+                    cas_then = [q for q in arm_regions if q.enter_idx < cas_bdest]
+                    cas_else = [q for q in arm_regions if q.enter_idx >= cas_bdest]
+                    _cas_consec(ch) = all(
+                        ch[k].enter_idx >= ch[k-1].catch_dest &&
+                        (_outer_normal_path_returns(code, ch[k-1]) ||
+                         ch[k-1].leave_idx == ch[k-1].catch_dest)
+                        for k in 2:length(ch))
+                    cas_arms_ok = !isempty(cas_then) &&
+                                  all(q.enter_idx > cas_branch for q in cas_then) &&
+                                  _cas_consec(cas_then) && _cas_consec(cas_else) &&
+                                  cas_then[end].catch_dest <= cas_bdest
+                    if cas_arms_ok
+                        cas_then_ret = any(code[i] isa Core.ReturnNode
+                                           for i in cas_then[end].catch_dest:(cas_bdest - 1))
+                        cas_else_lo = isempty(cas_else) ? cas_bdest : cas_else[end].catch_dest
+                        cas_else_ret = any(code[i] isa Core.ReturnNode
+                                           for i in cas_else_lo:length(code))
+                        cas_no_cross_phi = !any(code[i] isa Core.PhiNode && haskey(ctx.phi_locals, i) &&
+                                                any(Int(e) < cas_bdest for e in (code[i]::Core.PhiNode).edges)
+                                                for i in cas_bdest:length(code))
+                        if cas_then_ret && cas_else_ret && cas_no_cross_phi
+                            return generate_catch_arm_split(ctx, blocks, code, outer,
+                                                            arm_regions, cas_branch)
+                        end
+                    end
+                end
+            end
         end
         # Sequential (non-nested) try/catch regions
         return generate_sequential_try_catch(ctx, blocks, code, regions)
@@ -2911,11 +3129,21 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
     ensure_exception_global!(ctx.mod)
 
     # === Pre-outer code (stmts before outer enter) ===
-    for i in 1:(outer.enter_idx - 1)
-        stmt = code[i]
-        if stmt !== nothing && !(stmt isa Core.EnterNode)
-            append!(bytes, compile_statement(stmt, i, ctx))
+    # P3 gap ae64a1ba676e: STACKIFIED, not a linear compile_statement walk —
+    # vector-literal fill loops before the try never had their phi inits
+    # stored (index local read 0 → array[-1] → uncatchable OOB trap).
+    pre_outer = BasicBlock[]
+    for b in blocks
+        if b.end_idx < outer.enter_idx
+            push!(pre_outer, b)
+        elseif b.start_idx <= outer.enter_idx <= b.end_idx && b.start_idx < outer.enter_idx
+            push!(pre_outer, BasicBlock(b.start_idx, outer.enter_idx - 1, nothing))
         end
+    end
+    if !isempty(pre_outer)
+        append!(bytes, generate_stackified_flow(ctx, pre_outer, code;
+                                                trailing_unreachable=false))
+        ctx.last_stmt_was_stub = false
     end
 
     # === Outer catch landing block (void) ===
@@ -2929,13 +3157,31 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
     push!(bytes, Opcode.CATCH_ALL)
     append!(bytes, encode_leb128_unsigned(0))  # → label 0 (outer catch landing)
 
-    # Code between outer enter and inner enter (e.g. UpsilonNodes)
-    for i in (outer.enter_idx + 1):(inner.enter_idx - 1)
-        stmt = code[i]
-        if stmt !== nothing && !(stmt isa Core.EnterNode)
-            append!(bytes, compile_statement(stmt, i, ctx))
+    # Code between outer enter and inner enter — stackified for the same
+    # reason (the outer try body before the inner try can hold fill loops,
+    # closures over vector literals, etc.).
+    between = BasicBlock[]
+    for b in blocks
+        lo = max(b.start_idx, outer.enter_idx + 1)
+        hi = min(b.end_idx, inner.enter_idx - 1)
+        lo > hi && continue
+        if lo == b.start_idx && hi == b.end_idx
+            push!(between, b)
+        else
+            push!(between, BasicBlock(lo, hi, hi == b.end_idx ? b.terminator : nothing))
         end
     end
+    if !isempty(between)
+        append!(bytes, generate_stackified_flow(ctx, between, code;
+                                                trailing_unreachable=false))
+        ctx.last_stmt_was_stub = false
+    end
+
+    # === Skip block: the body's NORMAL exit branches past the inner catch
+    # handler (P3 g2_nest: without it, falling out of the try_table also fell
+    # through the landing block END into the handler).
+    push!(bytes, Opcode.BLOCK)
+    push!(bytes, 0x40)
 
     # === Inner catch landing block (void) ===
     push!(bytes, Opcode.BLOCK)
@@ -2970,6 +3216,11 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
     # End inner try_table
     push!(bytes, Opcode.END)
 
+    # Normal path: branch past the inner catch handler to the skip-block end
+    # (depth 0 = landing block, depth 1 = skip block).
+    push!(bytes, Opcode.BR)
+    append!(bytes, encode_leb128_unsigned(1))
+
     # End inner catch landing block
     push!(bytes, Opcode.END)
 
@@ -2978,86 +3229,28 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
 
     # === Inner catch handler (stmts inner.catch_dest to outer.catch_dest-1) ===
     # This is INSIDE the outer try_table, so re-throws are caught by outer catch!
-    local _ci = inner.catch_dest
-    while _ci <= outer.catch_dest - 1
-        local _cs = code[_ci]
-        if _cs === nothing
-            _ci += 1
-            continue
-        end
-        if _cs isa Expr && (_cs.head === :pop_exception || _cs.head === :leave)
-            _ci += 1
-            continue
-        end
-        if _cs isa Core.GotoIfNot
-            # GotoIfNot in inner catch body — generate if/then[/else]/end
-            local _else_tgt = _cs.dest
-            append!(bytes, compile_condition_to_i32(_cs.cond, ctx))
-
-            # Check if then-branch has return or throw
-            local _ts = _ci + 1
-            local _thr = false
-            local _tret = false
-            for _j in _ts:min(_else_tgt - 1, outer.catch_dest - 1)
-                if code[_j] isa Core.ReturnNode
-                    _tret = true
-                    break
-                elseif code[_j] isa Expr
-                    if code[_j].head === :call
-                        local _cf = code[_j].args[1]
-                        if _cf isa GlobalRef && _cf.name === :throw
-                            _thr = true
-                            break
-                        end
-                    elseif code[_j].head === :invoke && length(code[_j].args) >= 2
-                        local _invf = code[_j].args[2]
-                        if _invf isa GlobalRef && (_invf.name === :throw || _invf.name === :error)
-                            _thr = true
-                            break
-                        end
-                    end
-                end
-            end
-
-            if _thr || _tret
-                # Then-branch terminates (throw/return) — just if/then/end, fall through else
-                push!(bytes, Opcode.IF)
-                push!(bytes, 0x40)
-                for _j in _ts:min(_else_tgt - 1, outer.catch_dest - 1)
-                    local _s1 = code[_j]
-                    if _s1 !== nothing && !(_s1 isa Expr && (_s1.head === :pop_exception || _s1.head === :leave))
-                        append!(bytes, compile_statement(_s1, _j, ctx))
-                    end
-                end
-                push!(bytes, Opcode.END)
-                ctx.last_stmt_was_stub = false
-                _ci = _else_tgt
-            else
-                # Both branches present — if/then/else/end
-                push!(bytes, Opcode.IF)
-                push!(bytes, 0x40)
-                for _j in _ts:min(_else_tgt - 1, outer.catch_dest - 1)
-                    local _s2 = code[_j]
-                    if _s2 !== nothing && !(_s2 isa Expr && (_s2.head === :pop_exception || _s2.head === :leave))
-                        append!(bytes, compile_statement(_s2, _j, ctx))
-                    end
-                end
-                push!(bytes, Opcode.ELSE)
-                for _j in _else_tgt:(outer.catch_dest - 1)
-                    local _s3 = code[_j]
-                    if _s3 !== nothing && !(_s3 isa Expr && (_s3.head === :pop_exception || _s3.head === :leave))
-                        append!(bytes, compile_statement(_s3, _j, ctx))
-                    end
-                end
-                push!(bytes, Opcode.END)
-                ctx.last_stmt_was_stub = false
-                _ci = outer.catch_dest  # done with inner catch
-            end
+    # P3 gap ae64a1ba676e: STACKIFIED — the previous hand-rolled GotoIfNot
+    # walk dropped phi-edge stores and loops, the same linear-walk class as
+    # the catch arms in P3-batch6/8.
+    inner_catch = BasicBlock[]
+    for b in blocks
+        lo = max(b.start_idx, inner.catch_dest)
+        hi = min(b.end_idx, outer.catch_dest - 1)
+        lo > hi && continue
+        if lo == b.start_idx && hi == b.end_idx
+            push!(inner_catch, b)
         else
-            append!(bytes, compile_statement(_cs, _ci, ctx))
-            _ci += 1
+            push!(inner_catch, BasicBlock(lo, hi, hi == b.end_idx ? b.terminator : nothing))
         end
     end
+    if !isempty(inner_catch)
+        append!(bytes, generate_stackified_flow(ctx, inner_catch, code;
+                                                trailing_unreachable=false))
+        ctx.last_stmt_was_stub = false
+    end
+
+    # End skip block (the body's normal path lands here, after the handler)
+    push!(bytes, Opcode.END)
 
     # End outer try_table
     push!(bytes, Opcode.END)
@@ -3069,14 +3262,11 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
     ctx.last_stmt_was_stub = false
 
     # === Outer catch handler (stmts outer.catch_dest to end) ===
-    for i in outer.catch_dest:length(code)
-        stmt = code[i]
-        if stmt !== nothing
-            if stmt isa Expr && stmt.head === :pop_exception
-                continue
-            end
-            append!(bytes, compile_statement(stmt, i, ctx))
-        end
+    # P3: stackified for the same linear-walk reasons as the inner handler.
+    outer_catch = [b for b in blocks if b.start_idx >= outer.catch_dest]
+    if !isempty(outer_catch)
+        append!(bytes, generate_stackified_flow(ctx, outer_catch, code))
+        ctx.last_stmt_was_stub = false
     end
 
     return bytes

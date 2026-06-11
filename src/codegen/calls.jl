@@ -5369,6 +5369,28 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             push!(bytes, Opcode.I32_WRAP_I64)
         end
         # i64 to i64 or i32 to i32 is a no-op
+        # P3 gap 40da73b299fc (2nd find): sub-32-bit targets must be width-
+        # normalised — bare i32.wrap_i64 is 32-bit truncation, so the
+        # InexactError round-trip `zext(trunc(x)) == x` compared x against
+        # itself and let out-of-range values through silently. Unsigned
+        # targets zero-mask; signed targets sign-extend (so sext consumers
+        # and the return marshalling read the right value directly).
+        if target_type === Bool
+            push!(bytes, Opcode.I32_CONST, 0x01)
+            push!(bytes, Opcode.I32_AND)
+        elseif target_type === UInt8
+            push!(bytes, Opcode.I32_CONST)
+            append!(bytes, encode_leb128_signed(Int64(0xFF)))
+            push!(bytes, Opcode.I32_AND)
+        elseif target_type === UInt16
+            push!(bytes, Opcode.I32_CONST)
+            append!(bytes, encode_leb128_signed(Int64(0xFFFF)))
+            push!(bytes, Opcode.I32_AND)
+        elseif target_type === Int8
+            push!(bytes, Opcode.I32_EXTEND8_S)
+        elseif target_type === Int16
+            push!(bytes, Opcode.I32_EXTEND16_S)
+        end
 
     elseif is_func(func, :sitofp)  # Signed int to float
         # sitofp(TargetType, value) - first arg is target type, second is value
@@ -5378,6 +5400,16 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         source_is_32bit = source_type === Int32 || source_type === UInt32 || source_type === Char ||
                           source_type === Int16 || source_type === UInt16 || source_type === Int8 || source_type === UInt8 ||
                           (isprimitivetype(source_type) && sizeof(source_type) <= 4)
+
+        # P3 gap 40ed488e7f10: narrow signed values can sit in the i32 register
+        # zero-extended (e.g. a width-masked shl leaves Int8(-8) as 0xF8), but
+        # the signed convert reads the full register. Sign-extend at the
+        # consumer, same convention as the comparison normalisation.
+        if source_type === Int8
+            push!(bytes, Opcode.I32_EXTEND8_S)
+        elseif source_type === Int16
+            push!(bytes, Opcode.I32_EXTEND16_S)
+        end
 
         if target_type === Float32
             push!(bytes, source_is_32bit ? Opcode.F32_CONVERT_I32_S : Opcode.F32_CONVERT_I64_S)

@@ -18,3 +18,4 @@ node_modules/
 # Claude Code
 .claude/worktrees/
 ralph_loops/
+Manifest-v*.toml

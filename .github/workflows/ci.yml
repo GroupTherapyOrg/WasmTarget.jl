@@ -14,6 +14,8 @@ jobs:
       matrix:
         version:
           - '1.12'
+          # ~1.13.0-0 admits prereleases (rc) until 1.13.0 final lands
+          - '~1.13.0-0'
         os:
           - ubuntu-latest
           - macos-latest

@@ -788,37 +788,13 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     local_wasm_type === ArrayRef || local_wasm_type === ExternRef || local_wasm_type === AnyRef ||
                     local_wasm_type === EqRef)
                     last_byte = stmt_bytes[end]
-                    # PURE-220: Check that the last byte is NOT an operand of a
-                    # trailing instruction with LEB128 immediate.
-                    # Scan backward for opcodes followed by LEB128 operands:
-                    #   LOCAL_GET/SET/TEE (0x20-0x22), CALL (0x10),
-                    #   CALL_INDIRECT (0x11), BR (0x0C), BR_IF (0x0D),
-                    #   GLOBAL_GET/SET (0x23/0x24).
-                    # When the function index in a CALL instruction's LEB128 encoding
-                    # has its last byte in the numeric opcode range (0x46-0xC4), the
-                    # check falsely triggers. E.g. call 80 → bytes [0x10, 0x50],
-                    # and 0x50 = i64.eqz.
-                    ends_with_leb_operand = false
-                    for si in (length(stmt_bytes) - 1):-1:max(1, length(stmt_bytes) - 6)
-                        b = stmt_bytes[si]
-                        if b == 0x20 || b == 0x21 || b == 0x22 ||  # local.get/set/tee
-                           b == 0x10 || b == 0x11 ||                # call/call_indirect
-                           b == 0x23 || b == 0x24 ||                # global.get/set
-                           b == 0x0C || b == 0x0D                   # br/br_if
-                            # Check if the LEB128 after this opcode reaches exactly to end
-                            leb_check_end = si
-                            for bi in (si + 1):length(stmt_bytes)
-                                leb_check_end = bi
-                                if (stmt_bytes[bi] & 0x80) == 0
-                                    break
-                                end
-                            end
-                            if leb_check_end == length(stmt_bytes)
-                                ends_with_leb_operand = true
-                            end
-                            break
-                        end
-                    end
+                    # PURE-220 / P3-titlecase: the last byte must be a single-byte
+                    # numeric opcode that IS the final instruction — not an immediate
+                    # byte of a trailing call/local.get/const. Forward-parse to the
+                    # true last instruction boundary instead of guessing backward
+                    # (e.g. call 80 → [0x10, 0x50] where 0x50 reads as i64.eqz).
+                    local _cn_li = _last_instr_start(stmt_bytes)
+                    ends_with_leb_operand = !(_cn_li == length(stmt_bytes))
                     if !ends_with_leb_operand
                         # Pure stack ops: single-byte opcodes with NO immediate arguments
                         is_numeric_stack_op = (
@@ -846,68 +822,55 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                 # handled the conversion (any flag was set: ref_cast, any_convert, extern_convert)
                 pure_check_handled = needs_ref_cast_local !== nothing || needs_any_convert_extern || needs_extern_convert_any
                 if !needs_type_safe_default && !has_gc_prefix && !pure_check_handled && length(stmt_bytes) >= 2
-                    # Find the last local_get at the end of stmt_bytes
-                    local end_lg_pos = 0
-                    # Scan backward for 0x20 (LOCAL_GET) that could be the trailing value
-                    for si in length(stmt_bytes):-1:max(1, length(stmt_bytes) - 5)
-                        if stmt_bytes[si] == 0x20 && si < length(stmt_bytes)
-                            # PURE-306: Guard against false positives where 0x20 is actually
-                            # an operand byte (e.g., LEB128 encoding of local index 32),
-                            # not the LOCAL_GET opcode. If the previous byte is an opcode
-                            # that takes a LEB128 operand, this 0x20 might be its operand.
-                            if si > 1
-                                prev_byte = stmt_bytes[si - 1]
-                                if prev_byte == 0x20 || prev_byte == 0x21 || prev_byte == 0x22 ||  # local.get/set/tee
-                                   prev_byte == 0x10 || prev_byte == 0x11 ||                        # call/call_indirect
-                                   prev_byte == 0x23 || prev_byte == 0x24 ||                        # global.get/set
-                                   prev_byte == 0x0C || prev_byte == 0x0D                           # br/br_if
-                                    # This 0x20 could be the start of a LEB128 operand
-                                    # for the previous instruction. Skip this false match.
-                                    continue
-                                end
+                    # PURE-306 / P3-titlecase: locate the trailing local.get by FORWARD
+                    # parse from a known instruction boundary. The previous backward scan
+                    # misread immediate bytes as the LOCAL_GET opcode — `i32.const 32`
+                    # is [0x41, 0x20], so any `x ± 32` (ASCII case distance!) had its
+                    # 0x20 immediate matched, the following arithmetic opcode decoded as
+                    # a bogus local index, and a random local's type then decided whether
+                    # the whole computation was replaced with a zero default.
+                    local si = _last_instr_start(stmt_bytes)
+                    if si > 0 && stmt_bytes[si] == 0x20 && si < length(stmt_bytes)
+                        # Decode the trailing local.get's LEB128 index
+                        local tlg_idx = 0
+                        local tlg_shift = 0
+                        local tlg_end = 0
+                        for bi in (si + 1):length(stmt_bytes)
+                            b = stmt_bytes[bi]
+                            tlg_idx |= (Int(b & 0x7f) << tlg_shift)
+                            tlg_shift += 7
+                            if (b & 0x80) == 0
+                                tlg_end = bi
+                                break
                             end
-                            # Try to decode LEB128 after it
-                            local tlg_idx = 0
-                            local tlg_shift = 0
-                            local tlg_end = 0
-                            for bi in (si + 1):length(stmt_bytes)
-                                b = stmt_bytes[bi]
-                                tlg_idx |= (Int(b & 0x7f) << tlg_shift)
-                                tlg_shift += 7
-                                if (b & 0x80) == 0
-                                    tlg_end = bi
-                                    break
+                        end
+                        if tlg_end == length(stmt_bytes)
+                            # This local.get is at the very end of stmt_bytes
+                            tlg_arr_idx = tlg_idx - ctx.n_params + 1
+                            if tlg_arr_idx >= 1 && tlg_arr_idx <= length(ctx.locals)
+                                tlg_type = ctx.locals[tlg_arr_idx]
+                                if !wasm_types_compatible(local_wasm_type, tlg_type)
+                                    # Trailing local.get of incompatible type — truncate and emit default
+                                    resize!(stmt_bytes, si - 1)
+                                    needs_type_safe_default = true
                                 end
-                            end
-                            if tlg_end == length(stmt_bytes)
-                                # This local.get is at the very end of stmt_bytes
-                                tlg_arr_idx = tlg_idx - ctx.n_params + 1
-                                if tlg_arr_idx >= 1 && tlg_arr_idx <= length(ctx.locals)
-                                    tlg_type = ctx.locals[tlg_arr_idx]
-                                    if !wasm_types_compatible(local_wasm_type, tlg_type)
-                                        # Trailing local.get of incompatible type — truncate and emit default
+                            elseif tlg_idx < ctx.n_params
+                                # PURE-036bl: Trailing local.get of a PARAM - check param type
+                                param_julia_type = ctx.arg_types[tlg_idx + 1]  # Julia is 1-indexed
+                                tlg_type = get_concrete_wasm_type(param_julia_type, ctx.mod, ctx.type_registry)
+                                if tlg_type !== nothing && !wasm_types_compatible(local_wasm_type, tlg_type)
+                                    if tlg_type === ExternRef && local_wasm_type isa ConcreteRef
+                                        # externref param → concrete ref requires any_convert_extern + ref.cast
+                                        needs_any_convert_extern = true
+                                        needs_ref_cast_local = local_wasm_type
+                                    elseif (tlg_type === StructRef || tlg_type === ArrayRef || tlg_type === AnyRef) && local_wasm_type isa ConcreteRef
+                                        needs_ref_cast_local = local_wasm_type
+                                    else
                                         resize!(stmt_bytes, si - 1)
                                         needs_type_safe_default = true
                                     end
-                                elseif tlg_idx < ctx.n_params
-                                    # PURE-036bl: Trailing local.get of a PARAM - check param type
-                                    param_julia_type = ctx.arg_types[tlg_idx + 1]  # Julia is 1-indexed
-                                    tlg_type = get_concrete_wasm_type(param_julia_type, ctx.mod, ctx.type_registry)
-                                    if tlg_type !== nothing && !wasm_types_compatible(local_wasm_type, tlg_type)
-                                        if tlg_type === ExternRef && local_wasm_type isa ConcreteRef
-                                            # externref param → concrete ref requires any_convert_extern + ref.cast
-                                            needs_any_convert_extern = true
-                                            needs_ref_cast_local = local_wasm_type
-                                        elseif (tlg_type === StructRef || tlg_type === ArrayRef || tlg_type === AnyRef) && local_wasm_type isa ConcreteRef
-                                            needs_ref_cast_local = local_wasm_type
-                                        else
-                                            resize!(stmt_bytes, si - 1)
-                                            needs_type_safe_default = true
-                                        end
-                                    end
                                 end
                             end
-                            break
                         end
                     end
                 end

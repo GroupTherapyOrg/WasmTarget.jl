@@ -419,6 +419,52 @@ end
     return String(out)
 end
 
+# ─── Ryu scalar writefixed/writeexp Overlays (WASMMAKIE W-004) ────────────
+# Why: same buffer-steal idiom as writeshortest — the scalar wrappers build a
+#      StringVector and materialize via String(resize!(buf, ...)) →
+#      atomic_pointerset, which codegen stubs → unreachable trap. The digit
+#      kernels writefixed(buf, pos, x, precision, ...) compile fine. Same
+#      treatment: push!-built buffer + String(bytes) materialization.
+#      (Consumers: tick-label formatting — Makie tick_format / Showoff.)
+# Remove when: codegen handles the unsafe_takestring buffer-steal idiom.
+@noinline @overlay WASM_METHOD_TABLE function Base.Ryu.writefixed(x::T, precision::Integer) where {T <: Union{Float32, Float64}}
+    cap = precision + Base.Ryu.neededdigits(T)
+    buf = UInt8[]
+    i = 0
+    while i < cap
+        push!(buf, 0x00)
+        i += 1
+    end
+    pos = Base.Ryu.writefixed(buf, 1, x, precision, false, false, false,
+                              UInt8('.'), false)
+    out = UInt8[]
+    i = 1
+    while i < pos
+        push!(out, buf[i])
+        i += 1
+    end
+    return String(out)
+end
+
+@noinline @overlay WASM_METHOD_TABLE function Base.Ryu.writeexp(x::T, precision::Integer) where {T <: Union{Float32, Float64}}
+    cap = precision + Base.Ryu.neededdigits(T)
+    buf = UInt8[]
+    i = 0
+    while i < cap
+        push!(buf, 0x00)
+        i += 1
+    end
+    pos = Base.Ryu.writeexp(buf, 1, x, precision, false, false, false,
+                            UInt8('e'), UInt8('.'), false)
+    out = UInt8[]
+    i = 1
+    while i < pos
+        push!(out, buf[i])
+        i += 1
+    end
+    return String(out)
+end
+
 # ─── reinterpret Overlay (P2-batch20) ─────────────────────────────────────
 # Why: Base.reinterpret between primitive bits types inlines to ~390 stmts of
 #      generic bit-checking machinery (padding checks, _foldl_impl, LazyString
@@ -1270,8 +1316,14 @@ end
     # Same exactness fix as rem: scaled subtraction, not `x - floor(x/y)*y`.
     (isnan(x) || isnan(y) || isinf(x) || y == 0.0) && return NaN
     if isinf(y)
-        # mod(x, ±Inf): x already matches divisor sign (or is 0) → x; else → y
-        return (x == 0.0 || (x > 0.0) == (y > 0.0)) ? x : y
+        @static if VERSION >= v"1.13.0-"
+            # 1.13 changed mod(finite, ±Inf) to return x regardless of sign
+            # (gap f231ad158795: mod(1.0, -Inf) = 1.0 on 1.13, -Inf on 1.12)
+            return x
+        else
+            # 1.12: x already matches divisor sign (or is 0) → x; else → y
+            return (x == 0.0 || (x > 0.0) == (y > 0.0)) ? x : y
+        end
     end
     a = abs(x)
     b = abs(y)
@@ -1628,6 +1680,62 @@ end
         push!(s, x)
     end
     return s
+end
+
+# ─── String hash Overlay (Julia 1.13+) ─────────────────────────────────────
+# Why: 1.13 replaced the memhash foreigncall with pure-Julia rapidhash
+#      (Base.hash_bytes) that reads string memory through 4/8-byte
+#      pointerref(Ptr{UInt32/UInt64}) loads — WasmGC has no raw pointers, so
+#      the inlined loads stubbed to unreachable (every Dict{String,...} op
+#      trapped). The :invoke-level hash_bytes handler in invoke.jl only
+#      catches the non-inlined form.
+# Fix: Overlay hash(::String, ::UInt) with FNV-1a over codeunit() reads,
+#      matching get_or_create_string_hash_func! (types.jl) EXACTLY — same
+#      offset basis, prime, and low-32-bit seed mix — so Julia-level hashing
+#      and the wasm helper (used by the memhash/hash_bytes fallback paths)
+#      agree within one module. Hash values intentionally differ from native
+#      Julia (1.12 precedent: internal consistency is what Dict needs).
+# Remove when: codegen supports wide pointerref loads traced to string refs.
+
+@static if VERSION >= v"1.13.0-"
+    @noinline function _wasm_string_fnv1a(s::String, h::UInt)
+        hv = 0xcbf29ce484222325 ⊻ UInt64(UInt32(h & 0xffffffff))
+        i = 1
+        n = ncodeunits(s)
+        while i <= n
+            hv = (hv ⊻ UInt64(codeunit(s, i))) * 0x00000100000001b3
+            i += 1
+        end
+        return hv % UInt
+    end
+
+    @overlay WASM_METHOD_TABLE function Base.hash(data::String, h::UInt)
+        return _wasm_string_fnv1a(data, h)
+    end
+end
+
+# ─── Byte-vector membership Overlay ─────────────────────────────────────────
+# Why: in(::Int8/UInt8, ::DenseInt8/DenseUInt8) goes through findfirst whose
+#      fast path is a C memchr foreigncall over the vector's memory; Julia
+#      1.13 inlines it into callers (gap fc7454877290 family). WasmGC has no
+#      raw pointers, so the memchr stubbed to unreachable.
+# Fix: plain loop — same semantics, no pointers. Applies on 1.12 too (the
+#      memchr is present there as well; 1.12's IR shape just didn't surface
+#      it in the fuzz catalogue).
+# Remove when: codegen traces memchr's ptr arg back to the source array.
+
+@overlay WASM_METHOD_TABLE function Base.in(a::UInt8, b::Base.DenseUInt8)
+    for x in b
+        x == a && return true
+    end
+    return false
+end
+
+@overlay WASM_METHOD_TABLE function Base.in(a::Int8, b::Base.DenseInt8)
+    for x in b
+        x == a && return true
+    end
+    return false
 end
 
 # ─── WasmInterpreter ───────────────────────────────────────────────────────

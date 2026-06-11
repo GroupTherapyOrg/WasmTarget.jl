@@ -330,13 +330,23 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     :pow_body, :literal_pow, :_log_ext, :_hypot, :cbrt,
     :sind, :cosd, :sinpi, :cospi, :tanpi,
     :asinh, :acosh, :sincos, :rem2pi, :_cosc, :sinc,
+    # P3: Julia 1.13 sinc/cosc — polynomial-table evaluator + generic wrappers
+    :_cos_cardinal_eval, :_cosc_generic, :_sinc_generic,
     # WBUILD-1013: Software FMA needed by log/exp when have_fma=false
     :fma_emulated,
     # WBUILD-1022: Float64 remainder (used by mod/rem)
     :rem_internal,
+    # P3 / WASMMAKIE W-002: Float64 ranges (0.0:5.0) construct via the
+    # high-precision StepRangeLen path — TwicePrecision is plain float-pair
+    # struct arithmetic, compilable from its real Base IR.
+    :steprangelen_hp, :twiceprecision, :_colon, :unsafe_getindex,
+    # P3 / WASMMAKIE W-002: round(x; digits=d) — pure float math over pow_body
+    :_round_digits,
+    # P3 / WASMMAKIE W-002: broadcast over diff(v) views — alias-analysis copy
+    :unaliascopy,
     # WBUILD-1040: Collection operations (pure Julia in 1.12)
-    :reverse, Symbol("#sort#24"), :_sort!, :reverse!,
-    :filter, Symbol("#filter#460"), :_similar_or_copy,
+    :reverse, :_sort!, :reverse!,
+    :filter, :_similar_or_copy,
     # WBUILD-2014: Unblock sum/reduce/prod for >15 elements + filter resize
     :mapreduce_impl, :resize!,
     # WBUILD-3001: unique(itr) at set.jl:224 needs Set, in!, push! — all compile cleanly
@@ -361,6 +371,8 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     # The memmove foreigncall in Ryu needed a pointer-chain tracer for the
     # bitcast→add_ptr→getfield(:mem) pattern. Now handled by _trace_ptr_to_memory_array.
     :string, :writeshortest,
+    # WASMMAKIE W-004: tick-label formatting (Makie tick_format / Showoff).
+    :writefixed, :writeexp,
     # BF-2000: String operations — primary functions
     :chomp, :chopprefix, :chopsuffix, :lowercasefirst, :uppercasefirst,
     :prevind, :first,
@@ -423,9 +435,13 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
     # (version-dependent names for kwarg expansion methods)
     if mod_name in SKIP_AUTODISCOVER_MODULES || mod === Core || _is_base_or_sub
         _meth_str = String(meth_name)
+        # P3: #sort#NN / #filter#NN kwarg-body numbers are version-dependent
+        # (1.12 has #sort#24, 1.13 has #sort#25) — match by prefix.
         _is_allowed = _is_base_or_sub && (meth_name in AUTODISCOVER_BASE_METHODS ||
                                            startswith(_meth_str, "#string#") ||
-                                           startswith(_meth_str, "#power_by_squaring#"))
+                                           startswith(_meth_str, "#power_by_squaring#") ||
+                                           startswith(_meth_str, "#sort#") ||
+                                           startswith(_meth_str, "#filter#"))
         # P2-batch22 (gap 8a25857213ba family): user closures defined in Main.
         # A closure passed to a higher-order function compiles as a real
         # :invoke when its body is too big to inline; skipping Main wholesale
@@ -496,7 +512,9 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
     _exempt_mod = mod === WasmTarget || _is_julias || _is_kwarg_wrapper ||
                   (_is_base_or_sub && (meth_name in AUTODISCOVER_BASE_METHODS ||
                                        startswith(String(meth_name), "#string#") ||
-                                       startswith(String(meth_name), "#power_by_squaring#")))
+                                       startswith(String(meth_name), "#power_by_squaring#") ||
+                                       startswith(String(meth_name), "#sort#") ||
+                                       startswith(String(meth_name), "#filter#")))
     if !_exempt_mod
         for t in arg_types
             if t isa DataType && t <: Function && isconcretetype(t)
