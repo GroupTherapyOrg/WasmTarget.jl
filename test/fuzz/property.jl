@@ -193,6 +193,18 @@ function differential_natural(body, ::Type{IN}; var::Symbol = :v, check_opt::Boo
     catch
         nothing
     end
+    # P2-batch26 (gap 56af911c52b2): a rettype CONTAINING Union{} (e.g.
+    # Vector{Union{}} from `map` with an always-throwing closure) is
+    # degenerate — the value can only ever be an empty container, whose
+    # native/wasm representations are unrelatable across the JS boundary.
+    # The throwing (non-empty) path already compares correctly as
+    # throw ↔ trap, so these programs carry no differential evidence. Skip.
+    # (rt === Union{} itself — the whole body always throws — stays testable.)
+    _contains_bottom(@nospecialize T) = T === Union{} ||
+        (T isa DataType && any(p -> p isa Type && _contains_bottom(p), T.parameters))
+    if rt isa Type && rt !== Union{} && _contains_bottom(rt)
+        return Outcome(:skip, src, nothing, nothing, nothing, nothing)
+    end
     if rt isa Type && isconcretetype(rt) && bridge_supported(rt) && args_supported(IN)
         return _differential_args(fn, (IN,), samples, body, src, rt; check_opt = check_opt)
     end

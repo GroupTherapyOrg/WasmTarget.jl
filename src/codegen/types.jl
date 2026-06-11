@@ -906,6 +906,17 @@ function get_array_type!(mod::WasmModule, registry::TypeRegistry, elem_type::Typ
         return registry.arrays[elem_type]
     end
 
+    # P2-batch26 (gap 56af911c52b2): Vector{Union{}} — `map` with an
+    # always-throwing closure infers eltype Union{}. Such an array can only
+    # ever be EMPTY (Union{} has no values), so the element representation is
+    # arbitrary; use Int64 so the JS boundary and accessors have a concrete
+    # layout instead of trapping with a type-incompatibility.
+    if elem_type === Union{}
+        type_idx = get_array_type!(mod, registry, Int64)
+        registry.arrays[elem_type] = type_idx
+        return type_idx
+    end
+
     # UInt8 arrays share the packed i8 type with String — this ensures array.copy
     # between Vector{UInt8}/Memory{UInt8} and String works (same WasmGC element type).
     # Reading from packed i8 arrays requires ARRAY_GET_U instead of ARRAY_GET.

@@ -2946,7 +2946,10 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
             elseif name === :throw_boundserror || name === :throw || name === :throw_inexacterror ||
                    name === :throw_complex_domainerror || name === :throw_complex_domainerror_neg1 ||
                    name === :throw_exp_domainerror || name === :_throw_argerror ||
-                   name === :throw_domerr_powbysq || name === :__throw_gcd_overflow
+                   name === :throw_domerr_powbysq || name === :__throw_gcd_overflow ||
+                   # P2-batch26 (gap 5922408579a8): checked_mul inside lcm —
+                   # OverflowError must be catchable, not an unreachable stub.
+                   name === :throw_overflowerr_binaryop || name === :throw_overflowerr_negation
                 # PURE-1102: Error throwing functions - emit throw (catchable) instead of unreachable (trap)
                 # Clear the stack first (arguments were pushed but not needed)
                 bytes = UInt8[]  # Reset - don't need the pushed args
