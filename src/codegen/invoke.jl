@@ -2946,7 +2946,10 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
             elseif name === :throw_boundserror || name === :throw || name === :throw_inexacterror ||
                    name === :throw_complex_domainerror || name === :throw_complex_domainerror_neg1 ||
                    name === :throw_exp_domainerror || name === :_throw_argerror ||
-                   name === :throw_domerr_powbysq || name === :__throw_gcd_overflow
+                   name === :throw_domerr_powbysq || name === :__throw_gcd_overflow ||
+                   # P2-batch26 (gap 5922408579a8): checked_mul inside lcm —
+                   # OverflowError must be catchable, not an unreachable stub.
+                   name === :throw_overflowerr_binaryop || name === :throw_overflowerr_negation
                 # PURE-1102: Error throwing functions - emit throw (catchable) instead of unreachable (trap)
                 # Clear the stack first (arguments were pushed but not needed)
                 bytes = UInt8[]  # Reset - don't need the pushed args
@@ -3551,17 +3554,25 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 push!(bytes, Opcode.GC_PREFIX)
                 push!(bytes, Opcode.ARRAY_LEN)
 
-            # Math domain error functions - these would normally throw, but in WASM we return NaN
+            # Math domain error functions — throw catchably (tag 0), matching native
+            # semantics. These used to push NaN ("graceful degradation"), but the IR
+            # statement after a Union{} invoke is `unreachable`, so the NaN was never
+            # observed and the function trapped uncatchably (gap c6dae81c0ef4).
             elseif name === :sin_domain_error || name === :cos_domain_error ||
                    name === :tan_domain_error || name === :asin_domain_error ||
                    name === :acos_domain_error || name === :log_domain_error ||
                    name === :sqrt_domain_error
-                # These functions throw in Julia but we return NaN for graceful degradation
-                # Return type is Union{} (never returns) but we need to produce a value
-                # Push NaN for float domain errors
-                push!(bytes, Opcode.F64_CONST)
-                nan_bytes = reinterpret(UInt8, [NaN])
-                append!(bytes, nan_bytes)
+                bytes = UInt8[]  # Reset - don't need the pushed args
+                ensure_exception_tag!(ctx.mod)
+                # PURE-9032: Stash a ref.null any as exception (no specific value)
+                exn_global = ensure_exception_global!(ctx.mod)
+                push!(bytes, 0xD0)  # ref.null
+                push!(bytes, 0x6E)  # any
+                push!(bytes, Opcode.GLOBAL_SET)
+                append!(bytes, encode_leb128_unsigned(exn_global))
+                push!(bytes, Opcode.THROW)
+                append!(bytes, encode_leb128_unsigned(0))  # tag index 0
+                ctx.last_stmt_was_stub = true  # PURE-908
 
             # ================================================================
             # WASM-055: Base.string dispatch to int_to_string

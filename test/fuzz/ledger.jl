@@ -245,6 +245,15 @@ end
 # Run a reproducer snippet in a fresh module. Returns true if it runs WITHOUT
 # throwing (⇒ gap fixed), false if it throws (⇒ gap still present).
 #
+# CAVEAT (P2-batch22, gap 8a25857213ba post-mortem): evaluating into an
+# anonymous module is NOT identical to the discovery context (sweep shards
+# define programs in Main). Compile paths that branch on the defining module
+# (e.g. auto-discovery's Main skip-list) can make a reproducer pass here while
+# the same code traps in a script — which looked like flaky auto-closes. If a
+# sweep re-finds a gap that verify keeps closing, suspect module sensitivity
+# and re-probe the construct in a standalone `julia` script before trusting
+# either verdict.
+#
 # A bare `Module()` has `Base` but NOT `include` (that's only injected for
 # file/`module`-loaded modules), so we pre-load the harness ourselves via an
 # ABSOLUTE path (pwd-independent) and neutralize any `include(...)` line the

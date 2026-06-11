@@ -11,75 +11,75 @@ budget before treating `unseen` as a coverage hole).
 
 | op | args | ret | status |
 |---|---|---|---|
-| `+` | `Int8, Int8` | `Int8` | gap |
+| `+` | `Int8, Int8` | `Int8` | pass |
 | `-` | `Int8, Int8` | `Int8` | pass |
 | `*` | `Int8, Int8` | `Int8` | pass |
-| `min` | `Int8, Int8` | `Int8` | gap |
+| `min` | `Int8, Int8` | `Int8` | pass |
 | `max` | `Int8, Int8` | `Int8` | pass |
-| `abs` | `Int8` | `Int8` | gap |
+| `abs` | `Int8` | `Int8` | pass |
 | `sign` | `Int8` | `Int8` | pass |
-| `+` | `Int16, Int16` | `Int16` | gap |
+| `+` | `Int16, Int16` | `Int16` | pass |
 | `-` | `Int16, Int16` | `Int16` | pass |
 | `*` | `Int16, Int16` | `Int16` | pass |
-| `min` | `Int16, Int16` | `Int16` | gap |
+| `min` | `Int16, Int16` | `Int16` | pass |
 | `max` | `Int16, Int16` | `Int16` | pass |
-| `abs` | `Int16` | `Int16` | gap |
+| `abs` | `Int16` | `Int16` | pass |
 | `sign` | `Int16` | `Int16` | pass |
-| `+` | `Int32, Int32` | `Int32` | gap |
+| `+` | `Int32, Int32` | `Int32` | pass |
 | `-` | `Int32, Int32` | `Int32` | pass |
 | `*` | `Int32, Int32` | `Int32` | pass |
-| `min` | `Int32, Int32` | `Int32` | gap |
+| `min` | `Int32, Int32` | `Int32` | pass |
 | `max` | `Int32, Int32` | `Int32` | pass |
-| `abs` | `Int32` | `Int32` | gap |
+| `abs` | `Int32` | `Int32` | pass |
 | `sign` | `Int32` | `Int32` | pass |
-| `+` | `Int64, Int64` | `Int64` | gap |
+| `+` | `Int64, Int64` | `Int64` | pass |
 | `-` | `Int64, Int64` | `Int64` | pass |
 | `*` | `Int64, Int64` | `Int64` | pass |
-| `min` | `Int64, Int64` | `Int64` | gap |
+| `min` | `Int64, Int64` | `Int64` | pass |
 | `max` | `Int64, Int64` | `Int64` | pass |
-| `abs` | `Int64` | `Int64` | gap |
+| `abs` | `Int64` | `Int64` | pass |
 | `sign` | `Int64` | `Int64` | pass |
-| `+` | `UInt8, UInt8` | `UInt8` | gap |
+| `+` | `UInt8, UInt8` | `UInt8` | pass |
 | `-` | `UInt8, UInt8` | `UInt8` | pass |
 | `*` | `UInt8, UInt8` | `UInt8` | pass |
-| `min` | `UInt8, UInt8` | `UInt8` | gap |
+| `min` | `UInt8, UInt8` | `UInt8` | pass |
 | `max` | `UInt8, UInt8` | `UInt8` | pass |
-| `abs` | `UInt8` | `UInt8` | gap |
+| `abs` | `UInt8` | `UInt8` | pass |
 | `sign` | `UInt8` | `UInt8` | pass |
-| `+` | `UInt16, UInt16` | `UInt16` | gap |
+| `+` | `UInt16, UInt16` | `UInt16` | pass |
 | `-` | `UInt16, UInt16` | `UInt16` | pass |
 | `*` | `UInt16, UInt16` | `UInt16` | pass |
-| `min` | `UInt16, UInt16` | `UInt16` | gap |
+| `min` | `UInt16, UInt16` | `UInt16` | pass |
 | `max` | `UInt16, UInt16` | `UInt16` | pass |
-| `abs` | `UInt16` | `UInt16` | gap |
+| `abs` | `UInt16` | `UInt16` | pass |
 | `sign` | `UInt16` | `UInt16` | pass |
-| `+` | `UInt32, UInt32` | `UInt32` | gap |
+| `+` | `UInt32, UInt32` | `UInt32` | pass |
 | `-` | `UInt32, UInt32` | `UInt32` | pass |
 | `*` | `UInt32, UInt32` | `UInt32` | pass |
-| `min` | `UInt32, UInt32` | `UInt32` | gap |
+| `min` | `UInt32, UInt32` | `UInt32` | pass |
 | `max` | `UInt32, UInt32` | `UInt32` | pass |
-| `abs` | `UInt32` | `UInt32` | gap |
+| `abs` | `UInt32` | `UInt32` | pass |
 | `sign` | `UInt32` | `UInt32` | pass |
-| `+` | `UInt64, UInt64` | `UInt64` | gap |
+| `+` | `UInt64, UInt64` | `UInt64` | pass |
 | `-` | `UInt64, UInt64` | `UInt64` | pass |
 | `*` | `UInt64, UInt64` | `UInt64` | pass |
-| `min` | `UInt64, UInt64` | `UInt64` | gap |
+| `min` | `UInt64, UInt64` | `UInt64` | pass |
 | `max` | `UInt64, UInt64` | `UInt64` | pass |
-| `abs` | `UInt64` | `UInt64` | gap |
+| `abs` | `UInt64` | `UInt64` | pass |
 | `sign` | `UInt64` | `UInt64` | pass |
-| `+` | `Float32, Float32` | `Float32` | gap |
+| `+` | `Float32, Float32` | `Float32` | pass |
 | `-` | `Float32, Float32` | `Float32` | pass |
 | `*` | `Float32, Float32` | `Float32` | pass |
-| `min` | `Float32, Float32` | `Float32` | gap |
+| `min` | `Float32, Float32` | `Float32` | pass |
 | `max` | `Float32, Float32` | `Float32` | pass |
-| `abs` | `Float32` | `Float32` | gap |
+| `abs` | `Float32` | `Float32` | pass |
 | `sign` | `Float32` | `Float32` | pass |
-| `+` | `Float64, Float64` | `Float64` | gap |
+| `+` | `Float64, Float64` | `Float64` | pass |
 | `-` | `Float64, Float64` | `Float64` | pass |
 | `*` | `Float64, Float64` | `Float64` | pass |
-| `min` | `Float64, Float64` | `Float64` | gap |
+| `min` | `Float64, Float64` | `Float64` | pass |
 | `max` | `Float64, Float64` | `Float64` | pass |
-| `abs` | `Float64` | `Float64` | gap |
+| `abs` | `Float64` | `Float64` | pass |
 | `sign` | `Float64` | `Float64` | pass |
 | `-` | `Int8` | `Int8` | pass |
 | `-` | `Int16` | `Int16` | pass |
@@ -87,38 +87,38 @@ budget before treating `unseen` as a coverage hole).
 | `-` | `Int64` | `Int64` | pass |
 | `-` | `Float32` | `Float32` | pass |
 | `-` | `Float64` | `Float64` | pass |
-| `div` | `Int8, Int8` | `Int8` | gap |
+| `div` | `Int8, Int8` | `Int8` | pass |
 | `rem` | `Int8, Int8` | `Int8` | pass |
 | `mod` | `Int8, Int8` | `Int8` | pass |
-| `div` | `Int16, Int16` | `Int16` | gap |
+| `div` | `Int16, Int16` | `Int16` | pass |
 | `rem` | `Int16, Int16` | `Int16` | pass |
 | `mod` | `Int16, Int16` | `Int16` | pass |
-| `div` | `Int32, Int32` | `Int32` | gap |
+| `div` | `Int32, Int32` | `Int32` | pass |
 | `rem` | `Int32, Int32` | `Int32` | pass |
 | `mod` | `Int32, Int32` | `Int32` | pass |
-| `div` | `Int64, Int64` | `Int64` | gap |
+| `div` | `Int64, Int64` | `Int64` | pass |
 | `rem` | `Int64, Int64` | `Int64` | pass |
 | `mod` | `Int64, Int64` | `Int64` | pass |
-| `div` | `UInt8, UInt8` | `UInt8` | gap |
+| `div` | `UInt8, UInt8` | `UInt8` | pass |
 | `rem` | `UInt8, UInt8` | `UInt8` | pass |
 | `mod` | `UInt8, UInt8` | `UInt8` | pass |
-| `div` | `UInt16, UInt16` | `UInt16` | gap |
+| `div` | `UInt16, UInt16` | `UInt16` | pass |
 | `rem` | `UInt16, UInt16` | `UInt16` | pass |
 | `mod` | `UInt16, UInt16` | `UInt16` | pass |
-| `div` | `UInt32, UInt32` | `UInt32` | gap |
+| `div` | `UInt32, UInt32` | `UInt32` | pass |
 | `rem` | `UInt32, UInt32` | `UInt32` | pass |
 | `mod` | `UInt32, UInt32` | `UInt32` | pass |
-| `div` | `UInt64, UInt64` | `UInt64` | gap |
+| `div` | `UInt64, UInt64` | `UInt64` | pass |
 | `rem` | `UInt64, UInt64` | `UInt64` | pass |
 | `mod` | `UInt64, UInt64` | `UInt64` | pass |
-| `gcd` | `Int8, Int8` | `Int8` | gap |
-| `lcm` | `Int8, Int8` | `Int8` | gap |
-| `gcd` | `Int16, Int16` | `Int16` | gap |
-| `lcm` | `Int16, Int16` | `Int16` | gap |
-| `gcd` | `Int32, Int32` | `Int32` | gap |
-| `lcm` | `Int32, Int32` | `Int32` | gap |
-| `gcd` | `Int64, Int64` | `Int64` | gap |
-| `lcm` | `Int64, Int64` | `Int64` | gap |
+| `gcd` | `Int8, Int8` | `Int8` | pass |
+| `lcm` | `Int8, Int8` | `Int8` | pass |
+| `gcd` | `Int16, Int16` | `Int16` | pass |
+| `lcm` | `Int16, Int16` | `Int16` | pass |
+| `gcd` | `Int32, Int32` | `Int32` | pass |
+| `lcm` | `Int32, Int32` | `Int32` | pass |
+| `gcd` | `Int64, Int64` | `Int64` | pass |
+| `lcm` | `Int64, Int64` | `Int64` | pass |
 | `/` | `Float32, Float32` | `Float32` | pass |
 | `copysign` | `Float32, Float32` | `Float32` | pass |
 | `mod` | `Float32, Float32` | `Float32` | pass |
@@ -132,64 +132,64 @@ budget before treating `unseen` as a coverage hole).
 
 | op | args | ret | status |
 |---|---|---|---|
-| `&` | `Int8, Int8` | `Int8` | gap |
-| `|` | `Int8, Int8` | `Int8` | gap |
+| `&` | `Int8, Int8` | `Int8` | pass |
+| `|` | `Int8, Int8` | `Int8` | pass |
 | `xor` | `Int8, Int8` | `Int8` | pass |
 | `~` | `Int8` | `Int8` | pass |
-| `<<` | `Int8, Int64` | `Int8` | gap |
+| `<<` | `Int8, Int64` | `Int8` | pass |
 | `>>` | `Int8, Int64` | `Int8` | pass |
-| `&` | `Int16, Int16` | `Int16` | gap |
-| `|` | `Int16, Int16` | `Int16` | gap |
+| `&` | `Int16, Int16` | `Int16` | pass |
+| `|` | `Int16, Int16` | `Int16` | pass |
 | `xor` | `Int16, Int16` | `Int16` | pass |
 | `~` | `Int16` | `Int16` | pass |
-| `<<` | `Int16, Int64` | `Int16` | gap |
+| `<<` | `Int16, Int64` | `Int16` | pass |
 | `>>` | `Int16, Int64` | `Int16` | pass |
-| `&` | `Int32, Int32` | `Int32` | gap |
-| `|` | `Int32, Int32` | `Int32` | gap |
+| `&` | `Int32, Int32` | `Int32` | pass |
+| `|` | `Int32, Int32` | `Int32` | pass |
 | `xor` | `Int32, Int32` | `Int32` | pass |
 | `~` | `Int32` | `Int32` | pass |
-| `<<` | `Int32, Int64` | `Int32` | gap |
+| `<<` | `Int32, Int64` | `Int32` | pass |
 | `>>` | `Int32, Int64` | `Int32` | pass |
-| `&` | `Int64, Int64` | `Int64` | gap |
-| `|` | `Int64, Int64` | `Int64` | gap |
+| `&` | `Int64, Int64` | `Int64` | pass |
+| `|` | `Int64, Int64` | `Int64` | pass |
 | `xor` | `Int64, Int64` | `Int64` | pass |
 | `~` | `Int64` | `Int64` | pass |
-| `<<` | `Int64, Int64` | `Int64` | gap |
+| `<<` | `Int64, Int64` | `Int64` | pass |
 | `>>` | `Int64, Int64` | `Int64` | pass |
-| `&` | `UInt8, UInt8` | `UInt8` | gap |
-| `|` | `UInt8, UInt8` | `UInt8` | gap |
+| `&` | `UInt8, UInt8` | `UInt8` | pass |
+| `|` | `UInt8, UInt8` | `UInt8` | pass |
 | `xor` | `UInt8, UInt8` | `UInt8` | pass |
 | `~` | `UInt8` | `UInt8` | pass |
-| `<<` | `UInt8, Int64` | `UInt8` | gap |
+| `<<` | `UInt8, Int64` | `UInt8` | pass |
 | `>>` | `UInt8, Int64` | `UInt8` | pass |
-| `&` | `UInt16, UInt16` | `UInt16` | gap |
-| `|` | `UInt16, UInt16` | `UInt16` | gap |
+| `&` | `UInt16, UInt16` | `UInt16` | pass |
+| `|` | `UInt16, UInt16` | `UInt16` | pass |
 | `xor` | `UInt16, UInt16` | `UInt16` | pass |
 | `~` | `UInt16` | `UInt16` | pass |
-| `<<` | `UInt16, Int64` | `UInt16` | gap |
+| `<<` | `UInt16, Int64` | `UInt16` | pass |
 | `>>` | `UInt16, Int64` | `UInt16` | pass |
-| `&` | `UInt32, UInt32` | `UInt32` | gap |
-| `|` | `UInt32, UInt32` | `UInt32` | gap |
+| `&` | `UInt32, UInt32` | `UInt32` | pass |
+| `|` | `UInt32, UInt32` | `UInt32` | pass |
 | `xor` | `UInt32, UInt32` | `UInt32` | pass |
 | `~` | `UInt32` | `UInt32` | pass |
-| `<<` | `UInt32, Int64` | `UInt32` | gap |
+| `<<` | `UInt32, Int64` | `UInt32` | pass |
 | `>>` | `UInt32, Int64` | `UInt32` | pass |
-| `&` | `UInt64, UInt64` | `UInt64` | gap |
-| `|` | `UInt64, UInt64` | `UInt64` | gap |
+| `&` | `UInt64, UInt64` | `UInt64` | pass |
+| `|` | `UInt64, UInt64` | `UInt64` | pass |
 | `xor` | `UInt64, UInt64` | `UInt64` | pass |
 | `~` | `UInt64` | `UInt64` | pass |
-| `<<` | `UInt64, Int64` | `UInt64` | gap |
+| `<<` | `UInt64, Int64` | `UInt64` | pass |
 | `>>` | `UInt64, Int64` | `UInt64` | pass |
 
 ## bool
 
 | op | args | ret | status |
 |---|---|---|---|
-| `&` | `Bool, Bool` | `Bool` | gap |
-| `|` | `Bool, Bool` | `Bool` | gap |
-| `!` | `Bool` | `Bool` | pass |
+| `&` | `Bool, Bool` | `Bool` | pass |
+| `|` | `Bool, Bool` | `Bool` | pass |
+| `!` | `Bool` | `Bool` | unseen |
 | `xor` | `Bool, Bool` | `Bool` | pass |
-| `==` | `Bool, Bool` | `Bool` | gap |
+| `==` | `Bool, Bool` | `Bool` | pass |
 | `ifelse` | `Bool, Int64, Int64` | `Int64` | pass |
 | `ifelse` | `Bool, Float64, Float64` | `Float64` | pass |
 
@@ -197,77 +197,77 @@ budget before treating `unseen` as a coverage hole).
 
 | op | args | ret | status |
 |---|---|---|---|
-| `isdigit` | `Char` | `Bool` | gap |
-| `isspace` | `Char` | `Bool` | gap |
-| `isletter` | `Char` | `Bool` | unseen |
+| `isdigit` | `Char` | `Bool` | pass |
+| `isspace` | `Char` | `Bool` | pass |
+| `isletter` | `Char` | `Bool` | pass |
 | `isuppercase` | `Char` | `Bool` | pass |
 | `islowercase` | `Char` | `Bool` | pass |
 | `isascii` | `Char` | `Bool` | pass |
-| `uppercase` | `Char` | `Char` | gap |
+| `uppercase` | `Char` | `Char` | pass |
 | `lowercase` | `Char` | `Char` | pass |
-| `Int` | `Char` | `Int64` | gap |
+| `Int` | `Char` | `Int64` | pass |
 | `<` | `Char, Char` | `Bool` | pass |
-| `==` | `Char, Char` | `Bool` | gap |
+| `==` | `Char, Char` | `Bool` | pass |
 
 ## cmp
 
 | op | args | ret | status |
 |---|---|---|---|
-| `==` | `Int8, Int8` | `Bool` | gap |
+| `==` | `Int8, Int8` | `Bool` | pass |
 | `!=` | `Int8, Int8` | `Bool` | pass |
 | `<` | `Int8, Int8` | `Bool` | pass |
 | `<=` | `Int8, Int8` | `Bool` | pass |
 | `>` | `Int8, Int8` | `Bool` | pass |
 | `iszero` | `Int8` | `Bool` | pass |
-| `==` | `Int16, Int16` | `Bool` | gap |
+| `==` | `Int16, Int16` | `Bool` | pass |
 | `!=` | `Int16, Int16` | `Bool` | pass |
 | `<` | `Int16, Int16` | `Bool` | pass |
 | `<=` | `Int16, Int16` | `Bool` | pass |
 | `>` | `Int16, Int16` | `Bool` | pass |
 | `iszero` | `Int16` | `Bool` | pass |
-| `==` | `Int32, Int32` | `Bool` | gap |
+| `==` | `Int32, Int32` | `Bool` | pass |
 | `!=` | `Int32, Int32` | `Bool` | pass |
 | `<` | `Int32, Int32` | `Bool` | pass |
 | `<=` | `Int32, Int32` | `Bool` | pass |
 | `>` | `Int32, Int32` | `Bool` | pass |
 | `iszero` | `Int32` | `Bool` | pass |
-| `==` | `Int64, Int64` | `Bool` | gap |
+| `==` | `Int64, Int64` | `Bool` | pass |
 | `!=` | `Int64, Int64` | `Bool` | pass |
 | `<` | `Int64, Int64` | `Bool` | pass |
 | `<=` | `Int64, Int64` | `Bool` | pass |
 | `>` | `Int64, Int64` | `Bool` | pass |
 | `iszero` | `Int64` | `Bool` | pass |
-| `==` | `UInt8, UInt8` | `Bool` | gap |
+| `==` | `UInt8, UInt8` | `Bool` | pass |
 | `!=` | `UInt8, UInt8` | `Bool` | pass |
 | `<` | `UInt8, UInt8` | `Bool` | pass |
 | `<=` | `UInt8, UInt8` | `Bool` | pass |
 | `>` | `UInt8, UInt8` | `Bool` | pass |
 | `iszero` | `UInt8` | `Bool` | pass |
-| `==` | `UInt16, UInt16` | `Bool` | gap |
+| `==` | `UInt16, UInt16` | `Bool` | pass |
 | `!=` | `UInt16, UInt16` | `Bool` | pass |
 | `<` | `UInt16, UInt16` | `Bool` | pass |
 | `<=` | `UInt16, UInt16` | `Bool` | pass |
 | `>` | `UInt16, UInt16` | `Bool` | pass |
 | `iszero` | `UInt16` | `Bool` | pass |
-| `==` | `UInt32, UInt32` | `Bool` | gap |
+| `==` | `UInt32, UInt32` | `Bool` | pass |
 | `!=` | `UInt32, UInt32` | `Bool` | pass |
 | `<` | `UInt32, UInt32` | `Bool` | pass |
 | `<=` | `UInt32, UInt32` | `Bool` | pass |
 | `>` | `UInt32, UInt32` | `Bool` | pass |
 | `iszero` | `UInt32` | `Bool` | pass |
-| `==` | `UInt64, UInt64` | `Bool` | gap |
+| `==` | `UInt64, UInt64` | `Bool` | pass |
 | `!=` | `UInt64, UInt64` | `Bool` | pass |
 | `<` | `UInt64, UInt64` | `Bool` | pass |
 | `<=` | `UInt64, UInt64` | `Bool` | pass |
 | `>` | `UInt64, UInt64` | `Bool` | pass |
 | `iszero` | `UInt64` | `Bool` | pass |
-| `==` | `Float32, Float32` | `Bool` | gap |
+| `==` | `Float32, Float32` | `Bool` | pass |
 | `!=` | `Float32, Float32` | `Bool` | pass |
 | `<` | `Float32, Float32` | `Bool` | pass |
 | `<=` | `Float32, Float32` | `Bool` | pass |
 | `>` | `Float32, Float32` | `Bool` | pass |
 | `iszero` | `Float32` | `Bool` | pass |
-| `==` | `Float64, Float64` | `Bool` | gap |
+| `==` | `Float64, Float64` | `Bool` | pass |
 | `!=` | `Float64, Float64` | `Bool` | pass |
 | `<` | `Float64, Float64` | `Bool` | pass |
 | `<=` | `Float64, Float64` | `Bool` | pass |
@@ -302,67 +302,67 @@ budget before treating `unseen` as a coverage hole).
 
 | op | args | ret | status |
 |---|---|---|---|
-| `Int64` | `Int8` | `Int64` | gap |
-| `Int64` | `Int16` | `Int64` | gap |
-| `Int64` | `Int32` | `Int64` | gap |
-| `Int64` | `UInt8` | `Int64` | gap |
-| `Int64` | `UInt16` | `Int64` | gap |
-| `Int64` | `UInt32` | `Int64` | gap |
+| `Int64` | `Int8` | `Int64` | pass |
+| `Int64` | `Int16` | `Int64` | pass |
+| `Int64` | `Int32` | `Int64` | pass |
+| `Int64` | `UInt8` | `Int64` | pass |
+| `Int64` | `UInt16` | `Int64` | pass |
+| `Int64` | `UInt32` | `Int64` | pass |
 | `signed` | `UInt64` | `Int64` | pass |
-| `Float64` | `Int8` | `Float64` | gap |
+| `Float64` | `Int8` | `Float64` | pass |
 | `Float32` | `Int8` | `Float32` | pass |
-| `Float64` | `Int16` | `Float64` | gap |
+| `Float64` | `Int16` | `Float64` | pass |
 | `Float32` | `Int16` | `Float32` | pass |
-| `Float64` | `Int32` | `Float64` | gap |
+| `Float64` | `Int32` | `Float64` | pass |
 | `Float32` | `Int32` | `Float32` | pass |
-| `Float64` | `Int64` | `Float64` | gap |
+| `Float64` | `Int64` | `Float64` | pass |
 | `Float32` | `Int64` | `Float32` | pass |
-| `Float64` | `UInt8` | `Float64` | gap |
+| `Float64` | `UInt8` | `Float64` | pass |
 | `Float32` | `UInt8` | `Float32` | pass |
-| `Float64` | `UInt16` | `Float64` | gap |
+| `Float64` | `UInt16` | `Float64` | pass |
 | `Float32` | `UInt16` | `Float32` | pass |
-| `Float64` | `UInt32` | `Float64` | gap |
+| `Float64` | `UInt32` | `Float64` | pass |
 | `Float32` | `UInt32` | `Float32` | pass |
-| `Float64` | `UInt64` | `Float64` | gap |
+| `Float64` | `UInt64` | `Float64` | pass |
 | `Float32` | `UInt64` | `Float32` | pass |
-| `Float64` | `Float32` | `Float64` | gap |
+| `Float64` | `Float32` | `Float64` | pass |
 | `Float32` | `Float64` | `Float32` | pass |
 | `Int8` | `Int64` | `Int8` | pass |
 | `Int16` | `Int64` | `Int16` | pass |
 | `Int32` | `Int64` | `Int32` | pass |
-| `Int64` | `Float64` | `Int64` | gap |
+| `Int64` | `Float64` | `Int64` | pass |
 
 ## dict
 
 | op | args | ret | status |
 |---|---|---|---|
-| `length` | `Dict{Int64, Int64}` | `Int64` | gap |
-| `isempty` | `Dict{Int64, Int64}` | `Bool` | gap |
+| `length` | `Dict{Int64, Int64}` | `Int64` | pass |
+| `isempty` | `Dict{Int64, Int64}` | `Bool` | pass |
 | `haskey` | `Dict{Int64, Int64}, Int64` | `Bool` | pass |
 | `get` | `Dict{Int64, Int64}, Int64, Int64` | `Int64` | pass |
 | `getindex` | `Dict{Int64, Int64}, Int64` | `Int64` | pass |
-| `length` | `Dict{Int32, Int64}` | `Int64` | gap |
-| `isempty` | `Dict{Int32, Int64}` | `Bool` | gap |
+| `length` | `Dict{Int32, Int64}` | `Int64` | pass |
+| `isempty` | `Dict{Int32, Int64}` | `Bool` | pass |
 | `haskey` | `Dict{Int32, Int64}, Int32` | `Bool` | pass |
 | `get` | `Dict{Int32, Int64}, Int32, Int64` | `Int64` | pass |
 | `getindex` | `Dict{Int32, Int64}, Int32` | `Int64` | pass |
-| `length` | `Dict{Int64, Float64}` | `Int64` | gap |
-| `isempty` | `Dict{Int64, Float64}` | `Bool` | gap |
+| `length` | `Dict{Int64, Float64}` | `Int64` | pass |
+| `isempty` | `Dict{Int64, Float64}` | `Bool` | pass |
 | `haskey` | `Dict{Int64, Float64}, Int64` | `Bool` | pass |
 | `get` | `Dict{Int64, Float64}, Int64, Float64` | `Float64` | pass |
 | `getindex` | `Dict{Int64, Float64}, Int64` | `Float64` | pass |
-| `length` | `Dict{String, Int64}` | `Int64` | gap |
-| `isempty` | `Dict{String, Int64}` | `Bool` | gap |
+| `length` | `Dict{String, Int64}` | `Int64` | pass |
+| `isempty` | `Dict{String, Int64}` | `Bool` | pass |
 | `haskey` | `Dict{String, Int64}, String` | `Bool` | pass |
 | `get` | `Dict{String, Int64}, String, Int64` | `Int64` | pass |
 | `getindex` | `Dict{String, Int64}, String` | `Int64` | pass |
-| `length` | `Dict{Int64, String}` | `Int64` | gap |
-| `isempty` | `Dict{Int64, String}` | `Bool` | gap |
+| `length` | `Dict{Int64, String}` | `Int64` | pass |
+| `isempty` | `Dict{Int64, String}` | `Bool` | pass |
 | `haskey` | `Dict{Int64, String}, Int64` | `Bool` | pass |
 | `get` | `Dict{Int64, String}, Int64, String` | `String` | pass |
 | `getindex` | `Dict{Int64, String}, Int64` | `String` | pass |
-| `length` | `Dict{String, String}` | `Int64` | gap |
-| `isempty` | `Dict{String, String}` | `Bool` | gap |
+| `length` | `Dict{String, String}` | `Int64` | pass |
+| `isempty` | `Dict{String, String}` | `Bool` | pass |
 | `haskey` | `Dict{String, String}, String` | `Bool` | pass |
 | `get` | `Dict{String, String}, String, String` | `String` | pass |
 | `getindex` | `Dict{String, String}, String` | `String` | pass |
@@ -372,13 +372,13 @@ budget before treating `unseen` as a coverage hole).
 | op | args | ret | status |
 |---|---|---|---|
 | `hypot` | `Float32, Float32` | `Float32` | pass |
-| `^` | `Float32, Float32` | `Float32` | gap |
-| `sqrt` | `Float32` | `Float32` | gap |
+| `^` | `Float32, Float32` | `Float32` | pass |
+| `sqrt` | `Float32` | `Float32` | pass |
 | `cbrt` | `Float32` | `Float32` | pass |
-| `sin` | `Float32` | `Float32` | gap |
-| `cos` | `Float32` | `Float32` | gap |
+| `sin` | `Float32` | `Float32` | pass |
+| `cos` | `Float32` | `Float32` | pass |
 | `tan` | `Float32` | `Float32` | pass |
-| `asin` | `Float32` | `Float32` | gap |
+| `asin` | `Float32` | `Float32` | pass |
 | `acos` | `Float32` | `Float32` | pass |
 | `atan` | `Float32` | `Float32` | pass |
 | `sinh` | `Float32` | `Float32` | pass |
@@ -401,13 +401,13 @@ budget before treating `unseen` as a coverage hole).
 | `deg2rad` | `Float32` | `Float32` | pass |
 | `rad2deg` | `Float32` | `Float32` | pass |
 | `hypot` | `Float64, Float64` | `Float64` | pass |
-| `^` | `Float64, Float64` | `Float64` | gap |
-| `sqrt` | `Float64` | `Float64` | gap |
+| `^` | `Float64, Float64` | `Float64` | pass |
+| `sqrt` | `Float64` | `Float64` | pass |
 | `cbrt` | `Float64` | `Float64` | pass |
-| `sin` | `Float64` | `Float64` | gap |
-| `cos` | `Float64` | `Float64` | gap |
+| `sin` | `Float64` | `Float64` | pass |
+| `cos` | `Float64` | `Float64` | pass |
 | `tan` | `Float64` | `Float64` | pass |
-| `asin` | `Float64` | `Float64` | gap |
+| `asin` | `Float64` | `Float64` | pass |
 | `acos` | `Float64` | `Float64` | pass |
 | `atan` | `Float64` | `Float64` | pass |
 | `sinh` | `Float64` | `Float64` | pass |
@@ -434,39 +434,39 @@ budget before treating `unseen` as a coverage hole).
 
 | op | args | ret | status |
 |---|---|---|---|
-| `length` | `Set{Int64}` | `Int64` | gap |
-| `isempty` | `Set{Int64}` | `Bool` | gap |
+| `length` | `Set{Int64}` | `Int64` | pass |
+| `isempty` | `Set{Int64}` | `Bool` | pass |
 | `in` | `Int64, Set{Int64}` | `Bool` | pass |
-| `length` | `Set{Int32}` | `Int64` | gap |
-| `isempty` | `Set{Int32}` | `Bool` | gap |
+| `length` | `Set{Int32}` | `Int64` | pass |
+| `isempty` | `Set{Int32}` | `Bool` | pass |
 | `in` | `Int32, Set{Int32}` | `Bool` | pass |
-| `length` | `Set{String}` | `Int64` | gap |
-| `isempty` | `Set{String}` | `Bool` | gap |
+| `length` | `Set{String}` | `Int64` | pass |
+| `isempty` | `Set{String}` | `Bool` | pass |
 | `in` | `String, Set{String}` | `Bool` | pass |
 
 ## string
 
 | op | args | ret | status |
 |---|---|---|---|
-| `uppercase` | `String` | `String` | gap |
+| `uppercase` | `String` | `String` | pass |
 | `lowercase` | `String` | `String` | pass |
 | `reverse` | `String` | `String` | pass |
 | `strip` | `String` | `String` | pass |
 | `lstrip` | `String` | `String` | pass |
 | `rstrip` | `String` | `String` | pass |
-| `chomp` | `String` | `String` | seen |
+| `chomp` | `String` | `String` | pass |
 | `titlecase` | `String` | `String` | pass |
 | `uppercasefirst` | `String` | `String` | pass |
 | `lowercasefirst` | `String` | `String` | pass |
 | `*` | `String, String` | `String` | pass |
-| `string` | `Int64` | `String` | gap |
-| `string` | `Float64` | `String` | gap |
-| `length` | `String` | `Int64` | gap |
+| `string` | `Int64` | `String` | pass |
+| `string` | `Float64` | `String` | pass |
+| `length` | `String` | `Int64` | pass |
 | `ncodeunits` | `String` | `Int64` | pass |
-| `isempty` | `String` | `Bool` | gap |
+| `isempty` | `String` | `Bool` | pass |
 | `isascii` | `String` | `Bool` | pass |
 | `startswith` | `String, String` | `Bool` | pass |
-| `endswith` | `String, String` | `Bool` | seen |
+| `endswith` | `String, String` | `Bool` | pass |
 | `contains` | `String, String` | `Bool` | pass |
 | `occursin` | `String, String` | `Bool` | pass |
 | `cmp` | `String, String` | `Int64` | pass |
@@ -477,38 +477,38 @@ budget before treating `unseen` as a coverage hole).
 |---|---|---|---|
 | `getindex` | `Tuple{Int64, Int64}, Val{1}` | `Int64` | pass |
 | `getindex` | `Tuple{Int64, Int64}, Val{2}` | `Int64` | pass |
-| `length` | `Tuple{Int64, Int64}` | `Int64` | gap |
+| `length` | `Tuple{Int64, Int64}` | `Int64` | pass |
 | `reverse` | `Tuple{Int64, Int64}` | `Tuple{Int64, Int64}` | pass |
 | `getindex` | `Tuple{Int64, Float64}, Val{1}` | `Int64` | pass |
 | `getindex` | `Tuple{Int64, Float64}, Val{2}` | `Float64` | pass |
-| `length` | `Tuple{Int64, Float64}` | `Int64` | gap |
+| `length` | `Tuple{Int64, Float64}` | `Int64` | pass |
 | `getindex` | `Tuple{Float64, Bool}, Val{1}` | `Float64` | pass |
 | `getindex` | `Tuple{Float64, Bool}, Val{2}` | `Bool` | pass |
-| `length` | `Tuple{Float64, Bool}` | `Int64` | gap |
+| `length` | `Tuple{Float64, Bool}` | `Int64` | pass |
 | `getindex` | `Tuple{Int64, Int64, Int64}, Val{1}` | `Int64` | pass |
 | `getindex` | `Tuple{Int64, Int64, Int64}, Val{2}` | `Int64` | pass |
 | `getindex` | `Tuple{Int64, Int64, Int64}, Val{3}` | `Int64` | pass |
-| `length` | `Tuple{Int64, Int64, Int64}` | `Int64` | gap |
+| `length` | `Tuple{Int64, Int64, Int64}` | `Int64` | pass |
 | `getindex` | `Tuple{Float64, Float64}, Val{1}` | `Float64` | pass |
 | `getindex` | `Tuple{Float64, Float64}, Val{2}` | `Float64` | pass |
-| `length` | `Tuple{Float64, Float64}` | `Int64` | gap |
+| `length` | `Tuple{Float64, Float64}` | `Int64` | pass |
 | `reverse` | `Tuple{Float64, Float64}` | `Tuple{Float64, Float64}` | pass |
 | `.a` | `@NamedTuple{a::Int64, b::Float64}` | `Int64` | pass |
 | `.b` | `@NamedTuple{a::Int64, b::Float64}` | `Float64` | pass |
 | `.n` | `@NamedTuple{n::Int64, flag::Bool}` | `Int64` | pass |
-| `.flag` | `@NamedTuple{n::Int64, flag::Bool}` | `Bool` | seen |
+| `.flag` | `@NamedTuple{n::Int64, flag::Bool}` | `Bool` | pass |
 
 ## vector
 
 | op | args | ret | status |
 |---|---|---|---|
-| `sort` | `Vector{Int64}` | `Vector{Int64}` | gap |
+| `sort` | `Vector{Int64}` | `Vector{Int64}` | pass |
 | `reverse` | `Vector{Int64}` | `Vector{Int64}` | pass |
-| `unique` | `Vector{Int64}` | `Vector{Int64}` | gap |
-| `length` | `Vector{Int64}` | `Int64` | gap |
-| `isempty` | `Vector{Int64}` | `Bool` | gap |
-| `map` | `Fn(Int64, Int64), Vector{Int64}` | `Vector{Int64}` | gap |
-| `filter` | `Fn(Int64, Bool), Vector{Int64}` | `Vector{Int64}` | gap |
+| `unique` | `Vector{Int64}` | `Vector{Int64}` | pass |
+| `length` | `Vector{Int64}` | `Int64` | pass |
+| `isempty` | `Vector{Int64}` | `Bool` | pass |
+| `map` | `Fn(Int64, Int64), Vector{Int64}` | `Vector{Int64}` | pass |
+| `filter` | `Fn(Int64, Bool), Vector{Int64}` | `Vector{Int64}` | pass |
 | `first` | `Vector{Int64}` | `Int64` | pass |
 | `last` | `Vector{Int64}` | `Int64` | pass |
 | `getindex` | `Vector{Int64}, Int64` | `Int64` | pass |
@@ -520,13 +520,13 @@ budget before treating `unseen` as a coverage hole).
 | `pushfirst!` | `Vector{Int64}, Int64` | `Vector{Int64}` | pass |
 | `sort!` | `Vector{Int64}` | `Vector{Int64}` | pass |
 | `reverse!` | `Vector{Int64}` | `Vector{Int64}` | pass |
-| `sort` | `Vector{Int32}` | `Vector{Int32}` | gap |
+| `sort` | `Vector{Int32}` | `Vector{Int32}` | pass |
 | `reverse` | `Vector{Int32}` | `Vector{Int32}` | pass |
-| `unique` | `Vector{Int32}` | `Vector{Int32}` | gap |
-| `length` | `Vector{Int32}` | `Int64` | gap |
-| `isempty` | `Vector{Int32}` | `Bool` | gap |
-| `map` | `Fn(Int32, Int32), Vector{Int32}` | `Vector{Int32}` | gap |
-| `filter` | `Fn(Int32, Bool), Vector{Int32}` | `Vector{Int32}` | gap |
+| `unique` | `Vector{Int32}` | `Vector{Int32}` | pass |
+| `length` | `Vector{Int32}` | `Int64` | pass |
+| `isempty` | `Vector{Int32}` | `Bool` | pass |
+| `map` | `Fn(Int32, Int32), Vector{Int32}` | `Vector{Int32}` | pass |
+| `filter` | `Fn(Int32, Bool), Vector{Int32}` | `Vector{Int32}` | pass |
 | `first` | `Vector{Int32}` | `Int32` | pass |
 | `last` | `Vector{Int32}` | `Int32` | pass |
 | `getindex` | `Vector{Int32}, Int64` | `Int32` | pass |
@@ -538,13 +538,13 @@ budget before treating `unseen` as a coverage hole).
 | `pushfirst!` | `Vector{Int32}, Int32` | `Vector{Int32}` | pass |
 | `sort!` | `Vector{Int32}` | `Vector{Int32}` | pass |
 | `reverse!` | `Vector{Int32}` | `Vector{Int32}` | pass |
-| `sort` | `Vector{Int8}` | `Vector{Int8}` | gap |
+| `sort` | `Vector{Int8}` | `Vector{Int8}` | pass |
 | `reverse` | `Vector{Int8}` | `Vector{Int8}` | pass |
-| `unique` | `Vector{Int8}` | `Vector{Int8}` | gap |
-| `length` | `Vector{Int8}` | `Int64` | gap |
-| `isempty` | `Vector{Int8}` | `Bool` | gap |
-| `map` | `Fn(Int8, Int8), Vector{Int8}` | `Vector{Int8}` | gap |
-| `filter` | `Fn(Int8, Bool), Vector{Int8}` | `Vector{Int8}` | gap |
+| `unique` | `Vector{Int8}` | `Vector{Int8}` | pass |
+| `length` | `Vector{Int8}` | `Int64` | pass |
+| `isempty` | `Vector{Int8}` | `Bool` | pass |
+| `map` | `Fn(Int8, Int8), Vector{Int8}` | `Vector{Int8}` | pass |
+| `filter` | `Fn(Int8, Bool), Vector{Int8}` | `Vector{Int8}` | pass |
 | `first` | `Vector{Int8}` | `Int8` | pass |
 | `last` | `Vector{Int8}` | `Int8` | pass |
 | `getindex` | `Vector{Int8}, Int64` | `Int8` | pass |
@@ -556,13 +556,13 @@ budget before treating `unseen` as a coverage hole).
 | `pushfirst!` | `Vector{Int8}, Int8` | `Vector{Int8}` | pass |
 | `sort!` | `Vector{Int8}` | `Vector{Int8}` | pass |
 | `reverse!` | `Vector{Int8}` | `Vector{Int8}` | pass |
-| `sort` | `Vector{Float64}` | `Vector{Float64}` | gap |
+| `sort` | `Vector{Float64}` | `Vector{Float64}` | pass |
 | `reverse` | `Vector{Float64}` | `Vector{Float64}` | pass |
-| `unique` | `Vector{Float64}` | `Vector{Float64}` | gap |
-| `length` | `Vector{Float64}` | `Int64` | gap |
-| `isempty` | `Vector{Float64}` | `Bool` | gap |
-| `map` | `Fn(Float64, Float64), Vector{Float64}` | `Vector{Float64}` | gap |
-| `filter` | `Fn(Float64, Bool), Vector{Float64}` | `Vector{Float64}` | gap |
+| `unique` | `Vector{Float64}` | `Vector{Float64}` | pass |
+| `length` | `Vector{Float64}` | `Int64` | pass |
+| `isempty` | `Vector{Float64}` | `Bool` | pass |
+| `map` | `Fn(Float64, Float64), Vector{Float64}` | `Vector{Float64}` | pass |
+| `filter` | `Fn(Float64, Bool), Vector{Float64}` | `Vector{Float64}` | pass |
 | `first` | `Vector{Float64}` | `Float64` | pass |
 | `last` | `Vector{Float64}` | `Float64` | pass |
 | `getindex` | `Vector{Float64}, Int64` | `Float64` | pass |
@@ -574,13 +574,13 @@ budget before treating `unseen` as a coverage hole).
 | `pushfirst!` | `Vector{Float64}, Float64` | `Vector{Float64}` | pass |
 | `sort!` | `Vector{Float64}` | `Vector{Float64}` | pass |
 | `reverse!` | `Vector{Float64}` | `Vector{Float64}` | pass |
-| `sort` | `Vector{Float32}` | `Vector{Float32}` | gap |
+| `sort` | `Vector{Float32}` | `Vector{Float32}` | pass |
 | `reverse` | `Vector{Float32}` | `Vector{Float32}` | pass |
-| `unique` | `Vector{Float32}` | `Vector{Float32}` | gap |
-| `length` | `Vector{Float32}` | `Int64` | gap |
-| `isempty` | `Vector{Float32}` | `Bool` | gap |
-| `map` | `Fn(Float32, Float32), Vector{Float32}` | `Vector{Float32}` | gap |
-| `filter` | `Fn(Float32, Bool), Vector{Float32}` | `Vector{Float32}` | gap |
+| `unique` | `Vector{Float32}` | `Vector{Float32}` | pass |
+| `length` | `Vector{Float32}` | `Int64` | pass |
+| `isempty` | `Vector{Float32}` | `Bool` | pass |
+| `map` | `Fn(Float32, Float32), Vector{Float32}` | `Vector{Float32}` | pass |
+| `filter` | `Fn(Float32, Bool), Vector{Float32}` | `Vector{Float32}` | pass |
 | `first` | `Vector{Float32}` | `Float32` | pass |
 | `last` | `Vector{Float32}` | `Float32` | pass |
 | `getindex` | `Vector{Float32}, Int64` | `Float32` | pass |
@@ -592,13 +592,13 @@ budget before treating `unseen` as a coverage hole).
 | `pushfirst!` | `Vector{Float32}, Float32` | `Vector{Float32}` | pass |
 | `sort!` | `Vector{Float32}` | `Vector{Float32}` | pass |
 | `reverse!` | `Vector{Float32}` | `Vector{Float32}` | pass |
-| `sort` | `Vector{Bool}` | `Vector{Bool}` | gap |
+| `sort` | `Vector{Bool}` | `Vector{Bool}` | pass |
 | `reverse` | `Vector{Bool}` | `Vector{Bool}` | pass |
-| `unique` | `Vector{Bool}` | `Vector{Bool}` | gap |
-| `length` | `Vector{Bool}` | `Int64` | gap |
-| `isempty` | `Vector{Bool}` | `Bool` | gap |
-| `map` | `Fn(Bool, Bool), Vector{Bool}` | `Vector{Bool}` | gap |
-| `filter` | `Fn(Bool, Bool), Vector{Bool}` | `Vector{Bool}` | gap |
+| `unique` | `Vector{Bool}` | `Vector{Bool}` | pass |
+| `length` | `Vector{Bool}` | `Int64` | pass |
+| `isempty` | `Vector{Bool}` | `Bool` | pass |
+| `map` | `Fn(Bool, Bool), Vector{Bool}` | `Vector{Bool}` | pass |
+| `filter` | `Fn(Bool, Bool), Vector{Bool}` | `Vector{Bool}` | pass |
 | `first` | `Vector{Bool}` | `Bool` | pass |
 | `last` | `Vector{Bool}` | `Bool` | pass |
 | `getindex` | `Vector{Bool}, Int64` | `Bool` | pass |
@@ -613,47 +613,47 @@ budget before treating `unseen` as a coverage hole).
 | `sum` | `Vector{Int64}` | `Int64` | pass |
 | `prod` | `Vector{Int64}` | `Int64` | pass |
 | `maximum` | `Vector{Int64}` | `Int64` | pass |
-| `minimum` | `Vector{Int64}` | `Int64` | gap |
+| `minimum` | `Vector{Int64}` | `Int64` | pass |
 | `reduce` | `BinOp(), Vector{Int64}` | `Int64` | pass |
-| `foldl` | `BinOp(), Vector{Int64}` | `Int64` | gap |
-| `argmax` | `Vector{Int64}` | `Int64` | gap |
+| `foldl` | `BinOp(), Vector{Int64}` | `Int64` | pass |
+| `argmax` | `Vector{Int64}` | `Int64` | pass |
 | `argmin` | `Vector{Int64}` | `Int64` | pass |
-| `cumsum` | `Vector{Int64}` | `Vector{Int64}` | gap |
+| `cumsum` | `Vector{Int64}` | `Vector{Int64}` | pass |
 | `sum` | `Vector{Int32}` | `Int32` | pass |
 | `prod` | `Vector{Int32}` | `Int32` | pass |
 | `maximum` | `Vector{Int32}` | `Int32` | pass |
-| `minimum` | `Vector{Int32}` | `Int32` | gap |
+| `minimum` | `Vector{Int32}` | `Int32` | pass |
 | `reduce` | `BinOp(), Vector{Int32}` | `Int32` | pass |
-| `foldl` | `BinOp(), Vector{Int32}` | `Int32` | gap |
-| `argmax` | `Vector{Int32}` | `Int64` | gap |
+| `foldl` | `BinOp(), Vector{Int32}` | `Int32` | pass |
+| `argmax` | `Vector{Int32}` | `Int64` | pass |
 | `argmin` | `Vector{Int32}` | `Int64` | pass |
-| `cumsum` | `Vector{Int32}` | `Vector{Int32}` | gap |
+| `cumsum` | `Vector{Int32}` | `Vector{Int32}` | pass |
 | `sum` | `Vector{Int8}` | `Int8` | pass |
 | `prod` | `Vector{Int8}` | `Int8` | pass |
 | `maximum` | `Vector{Int8}` | `Int8` | pass |
-| `minimum` | `Vector{Int8}` | `Int8` | gap |
+| `minimum` | `Vector{Int8}` | `Int8` | pass |
 | `reduce` | `BinOp(), Vector{Int8}` | `Int8` | pass |
-| `foldl` | `BinOp(), Vector{Int8}` | `Int8` | gap |
-| `argmax` | `Vector{Int8}` | `Int64` | gap |
+| `foldl` | `BinOp(), Vector{Int8}` | `Int8` | pass |
+| `argmax` | `Vector{Int8}` | `Int64` | pass |
 | `argmin` | `Vector{Int8}` | `Int64` | pass |
-| `cumsum` | `Vector{Int8}` | `Vector{Int8}` | gap |
+| `cumsum` | `Vector{Int8}` | `Vector{Int8}` | pass |
 | `sum` | `Vector{Float64}` | `Float64` | pass |
 | `prod` | `Vector{Float64}` | `Float64` | pass |
 | `maximum` | `Vector{Float64}` | `Float64` | pass |
-| `minimum` | `Vector{Float64}` | `Float64` | gap |
+| `minimum` | `Vector{Float64}` | `Float64` | pass |
 | `reduce` | `BinOp(), Vector{Float64}` | `Float64` | pass |
-| `foldl` | `BinOp(), Vector{Float64}` | `Float64` | gap |
-| `argmax` | `Vector{Float64}` | `Int64` | gap |
+| `foldl` | `BinOp(), Vector{Float64}` | `Float64` | pass |
+| `argmax` | `Vector{Float64}` | `Int64` | pass |
 | `argmin` | `Vector{Float64}` | `Int64` | pass |
-| `cumsum` | `Vector{Float64}` | `Vector{Float64}` | gap |
+| `cumsum` | `Vector{Float64}` | `Vector{Float64}` | pass |
 | `sum` | `Vector{Float32}` | `Float32` | pass |
 | `prod` | `Vector{Float32}` | `Float32` | pass |
 | `maximum` | `Vector{Float32}` | `Float32` | pass |
-| `minimum` | `Vector{Float32}` | `Float32` | gap |
+| `minimum` | `Vector{Float32}` | `Float32` | pass |
 | `reduce` | `BinOp(), Vector{Float32}` | `Float32` | pass |
-| `foldl` | `BinOp(), Vector{Float32}` | `Float32` | gap |
-| `argmax` | `Vector{Float32}` | `Int64` | gap |
+| `foldl` | `BinOp(), Vector{Float32}` | `Float32` | pass |
+| `argmax` | `Vector{Float32}` | `Int64` | pass |
 | `argmin` | `Vector{Float32}` | `Int64` | pass |
-| `cumsum` | `Vector{Float32}` | `Vector{Float32}` | gap |
+| `cumsum` | `Vector{Float32}` | `Vector{Float32}` | pass |
 
-**Totals:** 198 gap · 387 pass · 3 seen · 1 unseen
+**Totals:** 588 pass · 1 unseen

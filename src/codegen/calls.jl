@@ -217,8 +217,12 @@ end
 #     shift of exactly 32/64 would otherwise wrap to a no-op and leak the value); and
 #   * the shl result must be truncated to julia_width bits (e.g. `UInt8(1) << 8` is
 #     0 in Julia but 256 in a raw i32), since high bits spill into the wide register.
-# Right shifts (lshr/ashr) of a *normalised* narrow value need no result mask; lshr
-# also honours the julia_width threshold (shr_u of a width-bit value by ≥ width = 0).
+# Right shifts (lshr/ashr) OBSERVE the high bits of the register, so a narrow
+# operand must be normalised first: arithmetic on Int8/16/UInt8/16 leaves junk
+# above julia_width (e.g. `x+x` for UInt8 0x80 is 0x100 in the i32 register), and
+# that junk would shift down into the result. We zero-mask before lshr and
+# sign-extend from julia_width before ashr; lshr also honours the julia_width
+# over-shift threshold (shr_u of a width-bit value by ≥ width = 0).
 function _emit_shift_guarded!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, is32::Bool, kind::Symbol;
                               julia_width::Int = (is32 ? 32 : 64))
     wconst = is32 ? Opcode.I32_CONST : Opcode.I64_CONST
@@ -233,6 +237,17 @@ function _emit_shift_guarded!(bytes::Vector{UInt8}, ctx::AbstractCompilationCont
                               (is32 ? Opcode.I32_SHR_S : Opcode.I64_SHR_S)
     _lset(op, i) = (push!(bytes, op); append!(bytes, encode_leb128_unsigned(i)))
     _wc(v) = (push!(bytes, wconst); append!(bytes, encode_leb128_signed(Int64(v))))
+    if narrow && (kind === :lshr || (kind === :ashr && is32 && (thr == 8 || thr == 16)))
+        # Normalise the value (under the shift amount): stash shift, fix value, restore.
+        _lset(Opcode.LOCAL_SET, sl)              # [value]
+        if kind === :lshr
+            _wc((Int64(1) << thr) - 1)
+            push!(bytes, wand)                   # zero out junk above julia_width
+        else  # ashr: replicate bit thr-1 upward so shr_s sign-fills correctly
+            push!(bytes, thr == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
+        end
+        _lset(Opcode.LOCAL_GET, sl)              # [value', shift]
+    end
     if kind === :ashr
         # [value, shift] → [value, clamped] → shr_s   (sign-fill semantics unchanged)
         _lset(Opcode.LOCAL_SET, sl)              # [value]
@@ -5023,7 +5038,8 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 push!(bytes, Opcode.I64_EXTEND_I32_S)
             end
         end
-        _emit_shift_guarded!(bytes, ctx, is_32bit, :ashr)   # over-shift → sign-fill (Julia semantics)
+        _emit_shift_guarded!(bytes, ctx, is_32bit, :ashr;
+                             julia_width = _julia_int_width(arg_type, is_32bit))   # over-shift → sign-fill; narrow input sign-extended
 
     elseif is_func(func, :lshr_int)  # logical shift right
         if is_128bit

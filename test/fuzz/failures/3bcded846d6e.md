@@ -1,31 +1,23 @@
 ---
-id: f639b170ea37
+id: 3bcded846d6e
 status: fixed
 category: compile_error
 kind: compile_error
-construct: "compile_error: `if Int8(0) == first([Int8(0), Int8(0), Int8(0)])\n    try\n        div(0, 0)\n    catch\n        x\n    end\nelse\n    begin\n        acc_be = Int('a')\n        i_be = Int64(0)\n        while i_be < Int64(1)\n            acc_be = x\n            i_be = i_be + Int64(1)\n        end\n        acc_be\n    end\nend` :: Int64"
+construct: "compile_error: `begin\n    acc_b = length(cumsum([Int32(0), Int32(0), Int32(0)]))\n    i_b = Int64(0)\n    while i_b < Int64(1)\n        acc_b = length(Dict(x => \"\", x => \"\")) + length(Dict(0 => x, x => x))\n        i_b = i_b + Int64(1)\n    end\n    acc_b\nend` :: Int64"
 location: "test/fuzz (generated)"
 fn_name: repro
 arg_types: "(Int64,)"
 first_seen: sweep-stmt-3
 ---
 
-# Gap `f639b170ea37` — compile_error: `if Int8(0) == first([Int8(0), Int8(0), Int8(0)])
-    try
-        div(0, 0)
-    catch
-        x
+# Gap `3bcded846d6e` — compile_error: `begin
+    acc_b = length(cumsum([Int32(0), Int32(0), Int32(0)]))
+    i_b = Int64(0)
+    while i_b < Int64(1)
+        acc_b = length(Dict(x => "", x => "")) + length(Dict(0 => x, x => x))
+        i_b = i_b + Int64(1)
     end
-else
-    begin
-        acc_be = Int('a')
-        i_be = Int64(0)
-        while i_be < Int64(1)
-            acc_be = x
-            i_be = i_be + Int64(1)
-        end
-        acc_be
-    end
+    acc_b
 end` :: Int64
 
 **Category:** `compile_error` &nbsp;•&nbsp; **Kind:** `compile_error` &nbsp;•&nbsp; **Location:** `test/fuzz (generated)`
@@ -38,22 +30,14 @@ A follow-up loop fixes the compiler, then `verify_gaps!()` re-runs this to auto-
 using WasmTarget
 include(joinpath("test", "fuzz", "structpool.jl")); using .FuzzStructPool
 FuzzStructPool.build_pool!()
-repro(x::Int64) = if Int8(0) == first([Int8(0), Int8(0), Int8(0)])
-    try
-        div(0, 0)
-    catch
-        x
+repro(x::Int64) = begin
+    acc_b = length(cumsum([Int32(0), Int32(0), Int32(0)]))
+    i_b = Int64(0)
+    while i_b < Int64(1)
+        acc_b = length(Dict(x => "", x => "")) + length(Dict(0 => x, x => x))
+        i_b = i_b + Int64(1)
     end
-else
-    begin
-        acc_be = Int('a')
-        i_be = Int64(0)
-        while i_be < Int64(1)
-            acc_be = x
-            i_be = i_be + Int64(1)
-        end
-        acc_be
-    end
+    acc_b
 end
 WasmTarget.compile(repro, (Int64,))   # raises while the gap is present
 ```
@@ -64,7 +48,7 @@ WasmValidationError: wasm-tools rejected the emitted compiled module
 error: func 1 failed to validate
 
 Caused by:
-    0: type mismatch: expected i64 but nothing on stack (at offset 0x475)
+    0: type mismatch: expected i32, found i64 (at offset 0x1ea9)
 ```
 
 ## Work on this
