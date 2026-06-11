@@ -2003,8 +2003,24 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
 
     # Catch handler: catch_dest up to the merge point (or end of code)
     if has_merge
-        # P2-batch17: GotoIfNot-aware linear walk (conditional catch arms)
-        _compile_catch_region!(bytes, ctx, code, catch_dest, merge_start - 1)
+        # P2-batch17: GotoIfNot-aware linear walk (conditional catch arms).
+        # P3 gap 40da73b299fc: arms containing loops or phis need REAL control
+        # flow — the linear walk drops back-edges (loops flatten to straight
+        # line) and never emits phi-edge stores (phi locals read their zero
+        # defaults: the [0,0,0] fill loop indexed array[-1] → OOB trap).
+        # Route those through the stackifier like the no-merge case below.
+        _arm_rng = catch_dest:(merge_start - 1)
+        _arm_complex = any(i -> code[i] isa Core.PhiNode, _arm_rng) ||
+                       any(i -> code[i] isa Core.GotoNode && (code[i]::Core.GotoNode).label <= i, _arm_rng) ||
+                       count(i -> code[i] isa Core.GotoIfNot, _arm_rng) > 1
+        if _arm_complex
+            catch_blocks = [b for b in blocks
+                            if b.start_idx >= catch_dest && b.start_idx < merge_start]
+            append!(bytes, generate_stackified_flow(ctx, catch_blocks, code;
+                                                    trailing_unreachable = false))
+        else
+            _compile_catch_region!(bytes, ctx, code, catch_dest, merge_start - 1)
+        end
     else
         # P2-batch19: self-contained catch arm (ends in return) — compile via
         # the stackifier so internal phis/diamonds/loops work (inlined
@@ -2040,14 +2056,28 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
         end
         push!(bytes, Opcode.END)   # $merge
         ctx.last_stmt_was_stub = false
-        # Post-merge code: phi reads, conversions, return
-        for i in merge_start:length(code)
-            stmt = code[i]
-            if stmt !== nothing
-                if stmt isa Expr && stmt.head === :pop_exception
-                    continue
+        # Post-merge code: phi reads, conversions, return.
+        # P3 gap 40da73b299fc: the linear walk DROPS control flow — a
+        # `goto #N if not %cond` guarding a throw_inexacterror vanished, so
+        # the throw executed unconditionally on the no-throw path (escaped
+        # exception). Route control-flow-bearing post-merge regions through
+        # the stackifier; keep the linear walk for the plain
+        # phi-read/convert/return tail it was written for.
+        _pm_rng = merge_start:length(code)
+        _pm_complex = any(i -> code[i] isa Core.GotoIfNot || code[i] isa Core.GotoNode, _pm_rng)
+        if _pm_complex
+            pm_blocks = [b for b in blocks if b.start_idx >= merge_start]
+            append!(bytes, generate_stackified_flow(ctx, pm_blocks, code;
+                                                    trailing_unreachable = false))
+        else
+            for i in _pm_rng
+                stmt = code[i]
+                if stmt !== nothing
+                    if stmt isa Expr && stmt.head === :pop_exception
+                        continue
+                    end
+                    append!(bytes, compile_statement(stmt, i, ctx))
                 end
-                append!(bytes, compile_statement(stmt, i, ctx))
             end
         end
     end

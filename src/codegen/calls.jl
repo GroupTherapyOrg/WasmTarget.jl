@@ -5369,6 +5369,28 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             push!(bytes, Opcode.I32_WRAP_I64)
         end
         # i64 to i64 or i32 to i32 is a no-op
+        # P3 gap 40da73b299fc (2nd find): sub-32-bit targets must be width-
+        # normalised — bare i32.wrap_i64 is 32-bit truncation, so the
+        # InexactError round-trip `zext(trunc(x)) == x` compared x against
+        # itself and let out-of-range values through silently. Unsigned
+        # targets zero-mask; signed targets sign-extend (so sext consumers
+        # and the return marshalling read the right value directly).
+        if target_type === Bool
+            push!(bytes, Opcode.I32_CONST, 0x01)
+            push!(bytes, Opcode.I32_AND)
+        elseif target_type === UInt8
+            push!(bytes, Opcode.I32_CONST)
+            append!(bytes, encode_leb128_signed(Int64(0xFF)))
+            push!(bytes, Opcode.I32_AND)
+        elseif target_type === UInt16
+            push!(bytes, Opcode.I32_CONST)
+            append!(bytes, encode_leb128_signed(Int64(0xFFFF)))
+            push!(bytes, Opcode.I32_AND)
+        elseif target_type === Int8
+            push!(bytes, Opcode.I32_EXTEND8_S)
+        elseif target_type === Int16
+            push!(bytes, Opcode.I32_EXTEND16_S)
+        end
 
     elseif is_func(func, :sitofp)  # Signed int to float
         # sitofp(TargetType, value) - first arg is target type, second is value
