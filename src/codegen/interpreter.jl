@@ -1270,8 +1270,14 @@ end
     # Same exactness fix as rem: scaled subtraction, not `x - floor(x/y)*y`.
     (isnan(x) || isnan(y) || isinf(x) || y == 0.0) && return NaN
     if isinf(y)
-        # mod(x, ±Inf): x already matches divisor sign (or is 0) → x; else → y
-        return (x == 0.0 || (x > 0.0) == (y > 0.0)) ? x : y
+        @static if VERSION >= v"1.13.0-"
+            # 1.13 changed mod(finite, ±Inf) to return x regardless of sign
+            # (gap f231ad158795: mod(1.0, -Inf) = 1.0 on 1.13, -Inf on 1.12)
+            return x
+        else
+            # 1.12: x already matches divisor sign (or is 0) → x; else → y
+            return (x == 0.0 || (x > 0.0) == (y > 0.0)) ? x : y
+        end
     end
     a = abs(x)
     b = abs(y)
@@ -1660,6 +1666,30 @@ end
     @overlay WASM_METHOD_TABLE function Base.hash(data::String, h::UInt)
         return _wasm_string_fnv1a(data, h)
     end
+end
+
+# ─── Byte-vector membership Overlay ─────────────────────────────────────────
+# Why: in(::Int8/UInt8, ::DenseInt8/DenseUInt8) goes through findfirst whose
+#      fast path is a C memchr foreigncall over the vector's memory; Julia
+#      1.13 inlines it into callers (gap fc7454877290 family). WasmGC has no
+#      raw pointers, so the memchr stubbed to unreachable.
+# Fix: plain loop — same semantics, no pointers. Applies on 1.12 too (the
+#      memchr is present there as well; 1.12's IR shape just didn't surface
+#      it in the fuzz catalogue).
+# Remove when: codegen traces memchr's ptr arg back to the source array.
+
+@overlay WASM_METHOD_TABLE function Base.in(a::UInt8, b::Base.DenseUInt8)
+    for x in b
+        x == a && return true
+    end
+    return false
+end
+
+@overlay WASM_METHOD_TABLE function Base.in(a::Int8, b::Base.DenseInt8)
+    for x in b
+        x == a && return true
+    end
+    return false
 end
 
 # ─── WasmInterpreter ───────────────────────────────────────────────────────
