@@ -43,6 +43,7 @@ include("codegen/wasm_constructors.jl")
 include("runtime/intrinsics.jl")
 include("runtime/stringops.jl")
 include("runtime/arrayops.jl")
+include("bridge.jl")
 
 
 # Main API
