@@ -8,8 +8,8 @@ JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
 
 [compat]
-# `~1.12` = [1.12.0, 1.13.0) — pins to the 1.12 minor line only. Bare
-# `"1.12"` is shorthand for `^1.12` which would also accept 1.13, 1.14, etc.
+# Tilde specifiers pin to supported minor lines only: the typed-IR format the
+# compiler consumes is version-specific, so each minor needs explicit support.
 Aqua = "0.8"
 Dates = "1"
 # JSON 1.x ONLY — 0.21 silently wraps >typemax(Int64) integer literals to a
@@ -20,7 +20,7 @@ PrecompileTools = "1"
 Random = "1"
 Supposition = "0.3"
 Test = "1"
-julia = "~1.12"
+julia = "~1.12, ~1.13"
 
 [extras]
 Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"

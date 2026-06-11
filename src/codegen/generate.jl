@@ -765,13 +765,86 @@ function _skip_gc_leb_count(sub_op::UInt8)::Int
     sub_op == 0x01 && return 1  # struct.new_default
     (sub_op >= 0x02 && sub_op <= 0x05) && return 2  # struct.get/get_s/get_u/set
     (sub_op == 0x06 || sub_op == 0x07) && return 1  # array.new/new_default
-    sub_op == 0x08 && return 2  # array.new_fixed
+    sub_op == 0x08 && return 2  # array.new_fixed (type, count)
+    (sub_op == 0x09 || sub_op == 0x0a) && return 2  # array.new_data/new_elem (type, seg)
     (sub_op >= 0x0b && sub_op <= 0x0e) && return 1  # array.get/get_s/get_u/set
     sub_op == 0x0f && return 0  # array.len
+    sub_op == 0x10 && return 1  # array.fill (type)
+    (sub_op >= 0x11 && sub_op <= 0x13) && return 2  # array.copy/init_data/init_elem
     (sub_op >= 0x14 && sub_op <= 0x17) && return 1  # ref.test/cast
     (sub_op == 0x1a || sub_op == 0x1b) && return 0  # extern/any convert
     (sub_op >= 0x1c && sub_op <= 0x1e) && return 0  # i31 ops
     return 0
+end
+
+"""
+Forward-parse an instruction byte buffer and return the start index of the LAST
+instruction, or 0 if the buffer is empty / truncated mid-instruction. Backward
+scans for "does this buffer end with local.get?" misfire when an immediate byte
+collides with an opcode — e.g. `i32.const 32` encodes as [0x41, 0x20] and the
+0x20 immediate reads as LOCAL_GET (the titlecase ±32 wrong-value family, where
+ASCII case distance is exactly 32). A forward parse from a known instruction
+boundary is unambiguous.
+"""
+function _last_instr_start(bytes::Vector{UInt8})::Int
+    i = 1
+    n = length(bytes)
+    last_start = 0
+    while i <= n
+        last_start = i
+        op = bytes[i]
+        if op == 0xFB  # GC prefix: sub-opcode + LEB operands
+            i + 1 > n && return 0
+            sub_op = bytes[i + 1]
+            i += 2
+            for _ in 1:_skip_gc_leb_count(sub_op)
+                while true
+                    i > n && return 0
+                    b = bytes[i]; i += 1
+                    (b & 0x80) == 0 && break
+                end
+            end
+        elseif op == 0x43  # f32.const: 4 raw payload bytes
+            i + 4 > n && return 0
+            i += 5
+        elseif op == 0x44  # f64.const: 8 raw payload bytes
+            i + 8 > n && return 0
+            i += 9
+        elseif op == 0xFC  # saturating-trunc / misc prefix: sub-opcode LEB
+            i += 1
+            while true
+                i > n && return 0
+                b = bytes[i]; i += 1
+                (b & 0x80) == 0 && break
+            end
+        elseif op == 0x0E  # br_table: count N, then N+1 label LEBs
+            i += 1
+            cnt = 0; shift = 0
+            while true
+                i > n && return 0
+                b = bytes[i]; i += 1
+                cnt |= (Int(b & 0x7f) << shift); shift += 7
+                (b & 0x80) == 0 && break
+            end
+            for _ in 1:(cnt + 1)
+                while true
+                    i > n && return 0
+                    b = bytes[i]; i += 1
+                    (b & 0x80) == 0 && break
+                end
+            end
+        else
+            i += 1
+            for _ in 1:_skip_leb_count(op)
+                while true
+                    i > n && return 0
+                    b = bytes[i]; i += 1
+                    (b & 0x80) == 0 && break
+                end
+            end
+        end
+    end
+    return last_start
 end
 
 """
