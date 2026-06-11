@@ -3177,6 +3177,12 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
         ctx.last_stmt_was_stub = false
     end
 
+    # === Skip block: the body's NORMAL exit branches past the inner catch
+    # handler (P3 g2_nest: without it, falling out of the try_table also fell
+    # through the landing block END into the handler).
+    push!(bytes, Opcode.BLOCK)
+    push!(bytes, 0x40)
+
     # === Inner catch landing block (void) ===
     push!(bytes, Opcode.BLOCK)
     push!(bytes, 0x40)
@@ -3210,6 +3216,11 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
     # End inner try_table
     push!(bytes, Opcode.END)
 
+    # Normal path: branch past the inner catch handler to the skip-block end
+    # (depth 0 = landing block, depth 1 = skip block).
+    push!(bytes, Opcode.BR)
+    append!(bytes, encode_leb128_unsigned(1))
+
     # End inner catch landing block
     push!(bytes, Opcode.END)
 
@@ -3218,86 +3229,28 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
 
     # === Inner catch handler (stmts inner.catch_dest to outer.catch_dest-1) ===
     # This is INSIDE the outer try_table, so re-throws are caught by outer catch!
-    local _ci = inner.catch_dest
-    while _ci <= outer.catch_dest - 1
-        local _cs = code[_ci]
-        if _cs === nothing
-            _ci += 1
-            continue
-        end
-        if _cs isa Expr && (_cs.head === :pop_exception || _cs.head === :leave)
-            _ci += 1
-            continue
-        end
-        if _cs isa Core.GotoIfNot
-            # GotoIfNot in inner catch body — generate if/then[/else]/end
-            local _else_tgt = _cs.dest
-            append!(bytes, compile_condition_to_i32(_cs.cond, ctx))
-
-            # Check if then-branch has return or throw
-            local _ts = _ci + 1
-            local _thr = false
-            local _tret = false
-            for _j in _ts:min(_else_tgt - 1, outer.catch_dest - 1)
-                if code[_j] isa Core.ReturnNode
-                    _tret = true
-                    break
-                elseif code[_j] isa Expr
-                    if code[_j].head === :call
-                        local _cf = code[_j].args[1]
-                        if _cf isa GlobalRef && _cf.name === :throw
-                            _thr = true
-                            break
-                        end
-                    elseif code[_j].head === :invoke && length(code[_j].args) >= 2
-                        local _invf = code[_j].args[2]
-                        if _invf isa GlobalRef && (_invf.name === :throw || _invf.name === :error)
-                            _thr = true
-                            break
-                        end
-                    end
-                end
-            end
-
-            if _thr || _tret
-                # Then-branch terminates (throw/return) — just if/then/end, fall through else
-                push!(bytes, Opcode.IF)
-                push!(bytes, 0x40)
-                for _j in _ts:min(_else_tgt - 1, outer.catch_dest - 1)
-                    local _s1 = code[_j]
-                    if _s1 !== nothing && !(_s1 isa Expr && (_s1.head === :pop_exception || _s1.head === :leave))
-                        append!(bytes, compile_statement(_s1, _j, ctx))
-                    end
-                end
-                push!(bytes, Opcode.END)
-                ctx.last_stmt_was_stub = false
-                _ci = _else_tgt
-            else
-                # Both branches present — if/then/else/end
-                push!(bytes, Opcode.IF)
-                push!(bytes, 0x40)
-                for _j in _ts:min(_else_tgt - 1, outer.catch_dest - 1)
-                    local _s2 = code[_j]
-                    if _s2 !== nothing && !(_s2 isa Expr && (_s2.head === :pop_exception || _s2.head === :leave))
-                        append!(bytes, compile_statement(_s2, _j, ctx))
-                    end
-                end
-                push!(bytes, Opcode.ELSE)
-                for _j in _else_tgt:(outer.catch_dest - 1)
-                    local _s3 = code[_j]
-                    if _s3 !== nothing && !(_s3 isa Expr && (_s3.head === :pop_exception || _s3.head === :leave))
-                        append!(bytes, compile_statement(_s3, _j, ctx))
-                    end
-                end
-                push!(bytes, Opcode.END)
-                ctx.last_stmt_was_stub = false
-                _ci = outer.catch_dest  # done with inner catch
-            end
+    # P3 gap ae64a1ba676e: STACKIFIED — the previous hand-rolled GotoIfNot
+    # walk dropped phi-edge stores and loops, the same linear-walk class as
+    # the catch arms in P3-batch6/8.
+    inner_catch = BasicBlock[]
+    for b in blocks
+        lo = max(b.start_idx, inner.catch_dest)
+        hi = min(b.end_idx, outer.catch_dest - 1)
+        lo > hi && continue
+        if lo == b.start_idx && hi == b.end_idx
+            push!(inner_catch, b)
         else
-            append!(bytes, compile_statement(_cs, _ci, ctx))
-            _ci += 1
+            push!(inner_catch, BasicBlock(lo, hi, hi == b.end_idx ? b.terminator : nothing))
         end
     end
+    if !isempty(inner_catch)
+        append!(bytes, generate_stackified_flow(ctx, inner_catch, code;
+                                                trailing_unreachable=false))
+        ctx.last_stmt_was_stub = false
+    end
+
+    # End skip block (the body's normal path lands here, after the handler)
+    push!(bytes, Opcode.END)
 
     # End outer try_table
     push!(bytes, Opcode.END)
@@ -3309,14 +3262,11 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
     ctx.last_stmt_was_stub = false
 
     # === Outer catch handler (stmts outer.catch_dest to end) ===
-    for i in outer.catch_dest:length(code)
-        stmt = code[i]
-        if stmt !== nothing
-            if stmt isa Expr && stmt.head === :pop_exception
-                continue
-            end
-            append!(bytes, compile_statement(stmt, i, ctx))
-        end
+    # P3: stackified for the same linear-walk reasons as the inner handler.
+    outer_catch = [b for b in blocks if b.start_idx >= outer.catch_dest]
+    if !isempty(outer_catch)
+        append!(bytes, generate_stackified_flow(ctx, outer_catch, code))
+        ctx.last_stmt_was_stub = false
     end
 
     return bytes
