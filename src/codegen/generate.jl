@@ -3167,10 +3167,23 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
     # Code between outer enter and inner enter — stackified for the same
     # reason (the outer try body before the inner try can hold fill loops,
     # closures over vector literals, etc.).
+    # P3 gap 5954d7d85a04: a GotoIfNot between the enters that jumps OVER the
+    # inner region (`try { if c { try B finally } else E } catch`) is an
+    # if/else split inside the outer BODY — without handling it, the
+    # stackified between-segment's out-of-subset exit fell INTO the inner
+    # try_table and the else path executed the wrong arm.
+    body_branch = 0
+    for i in (outer.enter_idx + 1):(inner.enter_idx - 1)
+        st = code[i]
+        st isa Core.GotoIfNot && st.dest > inner.catch_dest && (body_branch = i; break)
+    end
+    body_bdest = body_branch > 0 ? (code[body_branch]::Core.GotoIfNot).dest : 0
+
     between = BasicBlock[]
+    between_hi = body_branch > 0 ? body_branch - 1 : inner.enter_idx - 1
     for b in blocks
         lo = max(b.start_idx, outer.enter_idx + 1)
-        hi = min(b.end_idx, inner.enter_idx - 1)
+        hi = min(b.end_idx, between_hi)
         lo > hi && continue
         if lo == b.start_idx && hi == b.end_idx
             push!(between, b)
@@ -3182,6 +3195,17 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
         append!(bytes, generate_stackified_flow(ctx, between, code;
                                                 trailing_unreachable=false))
         ctx.last_stmt_was_stub = false
+    end
+
+    # If split: open the $else wrap — condition false branches past the
+    # then-arm (the whole inner-try machinery) to the common tail.
+    if body_branch > 0
+        push!(bytes, Opcode.BLOCK)
+        push!(bytes, 0x40)
+        append!(bytes, compile_condition_to_i32((code[body_branch]::Core.GotoIfNot).cond, ctx))
+        push!(bytes, Opcode.I32_EQZ)
+        push!(bytes, Opcode.BR_IF)
+        append!(bytes, encode_leb128_unsigned(0))
     end
 
     # === Skip block: the body's NORMAL exit branches past the inner catch
@@ -3302,12 +3326,13 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
     # End skip block (both paths land here, at the merge)
     push!(bytes, Opcode.END)
 
-    # === Merge code (phis through the rest of the outer body) ===
+    # === Merge code (phis through the rest of the then-arm / outer body) ===
+    _post_hi = body_branch > 0 ? min(body_bdest - 1, outer.catch_dest - 1) : outer.catch_dest - 1
     if merge_start > 0
         merge_blocks = BasicBlock[]
         for b in blocks
             lo = max(b.start_idx, merge_start)
-            hi = min(b.end_idx, outer.catch_dest - 1)
+            hi = min(b.end_idx, _post_hi)
             lo > hi && continue
             if lo == b.start_idx && hi == b.end_idx
                 push!(merge_blocks, b)
@@ -3317,6 +3342,29 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
         end
         if !isempty(merge_blocks)
             append!(bytes, generate_stackified_flow(ctx, merge_blocks, code;
+                                                    trailing_unreachable=false))
+            ctx.last_stmt_was_stub = false
+        end
+    end
+
+    # Close the $else wrap and emit the common tail (else arm + shared
+    # leave/return code) — the then path falls through into it as well.
+    if body_branch > 0
+        push!(bytes, Opcode.END)   # $else
+        ctx.last_stmt_was_stub = false
+        tail_blocks = BasicBlock[]
+        for b in blocks
+            lo = max(b.start_idx, body_bdest)
+            hi = min(b.end_idx, outer.catch_dest - 1)
+            lo > hi && continue
+            if lo == b.start_idx && hi == b.end_idx
+                push!(tail_blocks, b)
+            else
+                push!(tail_blocks, BasicBlock(lo, hi, hi == b.end_idx ? b.terminator : nothing))
+            end
+        end
+        if !isempty(tail_blocks)
+            append!(bytes, generate_stackified_flow(ctx, tail_blocks, code;
                                                     trailing_unreachable=false))
             ctx.last_stmt_was_stub = false
         end
