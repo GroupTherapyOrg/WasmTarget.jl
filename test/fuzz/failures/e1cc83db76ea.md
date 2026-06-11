@@ -92,3 +92,23 @@ placement crosses the structure. Next: dump regions/branch dests, walk
 the branch-split guards for this shape (likely needs the outermost-
 spanning definition extended to GotoIfNots whose TAKEN path exits the
 region range entirely).
+
+## Triage 2 (byte-level, P3 bugsmash)
+
+MINIMAL repro (both versions):
+`if getindex([true,true,true], 2); try div(0x00,0x00) catch; 0x00 end else 0x00 end`
+Routes: single region + has_exit_branch (generate_try_catch_stackified,
+P2-batch21 machinery; exit_idx = the spanning GotoIfNot, pre_blocks
+truncated before it). WAT at trap (offset 0x3d0):
+  array_get 15 → local 20; br 1; end;          ← bounds-ok path
+  ref.null any; global.set; throw 0; return; end  ← boundserror arm
+  block; UNREACHABLE                              ← br 1 LANDS HERE → trap
+The boundscheck diamond's dead `unreachable` (IR stmt after the throw)
+is emitted AT the continuation point inside a fresh block — the bounds-ok
+`br 1` lands on it. Block-depth bookkeeping breaks in the TRUNCATED pre
+subset (block containing exit_idx keeps stmts before it, terminator
+nothing). Suspect: the boundscheck-jump/dead-region logic in
+generate_stackified_flow treats the truncated block's missing terminator
+as fall-through into the dead `unreachable` region instead of skipping
+it. Next: dump pre_blocks boundaries for the minimal repro and walk
+stackified's dead_regions/boundscheck_jumps for the truncated subset.
