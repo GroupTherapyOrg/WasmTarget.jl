@@ -1714,6 +1714,21 @@ end
     end
 end
 
+# ─── Vector shrink Overlay ──────────────────────────────────────────────────
+# Why: shrinking resize! inlines Base._deleteend! whose freed-slot clearing
+#      (atomic_pointerset GC bookkeeping) stubs to a runtime trap (gap
+#      4c40e07c9230, WASMMAKIE T-005). In the WasmGC layout a Vector is
+#      struct{array, size} with capacity ≥ size — shrinking is just a size
+#      update; the GC tracks the backing array as a whole.
+# Cost: ref-typed elements in the hidden capacity stay reachable until the
+#      vector itself dies (bounded by capacity; same class as sizehint!).
+
+@overlay WASM_METHOD_TABLE function Base._deleteend!(a::Vector{T}, delta::Int) where T
+    n = length(a)
+    setfield!(a, :size, (n - delta,))
+    return nothing
+end
+
 # ─── Byte-vector membership Overlay ─────────────────────────────────────────
 # Why: in(::Int8/UInt8, ::DenseInt8/DenseUInt8) goes through findfirst whose
 #      fast path is a C memchr foreigncall over the vector's memory; Julia
