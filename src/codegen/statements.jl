@@ -657,6 +657,9 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
         ctx.last_stmt_was_stub = false  # PURE-908: reset before dispatch
         if stmt.head === :call
             stmt_bytes = compile_call(stmt, idx, ctx)
+            if haskey(ENV, "WT_TRACE_MM") && !isempty(stmt_bytes) && stmt_bytes[1] == Opcode.UNREACHABLE
+                println(stderr, "UNREACH idx=$idx stmt=", repr(stmt)[1:min(end,110)])
+            end
         elseif stmt.head === :invoke
             stmt_bytes = compile_invoke(stmt, idx, ctx)
         elseif stmt.head === :new

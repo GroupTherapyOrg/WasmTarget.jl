@@ -1920,6 +1920,24 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         end
     end
 
+    # P3 gap 450889a9cb7e: getfield(::DataType-literal, :layout) — the layout
+    # pointer is compile-time host metadata; its only consumers are the
+    # pointerref loads folded in _try_fold_layout_pointerref. Emit a benign
+    # fake pointer instead of an unreachable stub (which killed the rest of
+    # the block as dead code).
+    if (is_func(func, :getfield) || is_func(func, :getproperty)) && length(args) >= 2
+        local _gf_dt = args[1] isa QuoteNode ? args[1].value : args[1]
+        local _gf_fld = args[2] isa QuoteNode ? args[2].value : args[2]
+        if _gf_dt isa DataType && _gf_fld === :layout
+            # non-null fake: the inlined `dt.layout == C_NULL && throw(...)`
+            # guard must not fire; the pointer is never dereferenced (loads
+            # are folded).
+            push!(bytes, Opcode.I64_CONST)
+            push!(bytes, 0x01)
+            return bytes
+        end
+    end
+
     # Special case for signal read: getfield(Signal, :value) -> global.get
     # This is detected by analyze_signal_captures! and stored in signal_ssa_getters
     # ONLY applies to actual getfield/getproperty(Signal, :value) calls (WasmGlobal pattern)
@@ -4203,6 +4221,14 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.ARRAY_GET_U)
             append!(bytes, encode_leb128_unsigned(string_arr_type))
+            return bytes
+        end
+        # P3 gap 450889a9cb7e: DataType layout-metadata loads
+        # (datatype_layoutsize/arrayelem in inlined _unsetindex!) — the layout
+        # pointer is compile-time host metadata; fold the whole load.
+        local _pr_fold = _try_fold_layout_pointerref(ptr_arg, ctx)
+        if _pr_fold !== nothing
+            append!(bytes, compile_value(_pr_fold, ctx))
             return bytes
         end
         # P3 gap 450889a9cb7e: byte reads through Vector{UInt8} storage pointers
@@ -6604,3 +6630,40 @@ function _emit_apply_iterate_reduce!(bytes::Vector{UInt8}, container_arg, contai
     append!(bytes, encode_leb128_unsigned(acc_local))
 end
 
+
+"""
+    _try_fold_layout_pointerref(ptr_arg, ctx) -> DataTypeLayout | nothing
+
+P3 gap 450889a9cb7e: fold `unsafe_load(convert(Ptr{DataTypeLayout},
+dt.layout))` (the datatype_layoutsize / datatype_arrayelem idiom) when `dt`
+is a DataType literal — the layout struct is immutable host metadata, fully
+known at compile time. Returns the host-loaded DataTypeLayout for literal
+materialization, or nothing if the chain doesn't match.
+"""
+function _try_fold_layout_pointerref(ptr_arg, ctx::AbstractCompilationContext)
+    cur = ptr_arg
+    for _ in 1:4
+        cur isa Core.SSAValue || return nothing
+        st = ctx.code_info.code[cur.id]
+        st isa Expr && st.head === :call || return nothing
+        cf = st.args[1]
+        cfn = cf isa GlobalRef ? cf.name : cf
+        if cfn === :bitcast && length(st.args) >= 3
+            cur = st.args[3]
+        elseif cfn === :getfield && length(st.args) >= 3
+            dt = st.args[2]
+            dt isa QuoteNode && (dt = dt.value)
+            if dt isa GlobalRef
+                dt = isdefined(dt.mod, dt.name) ? getfield(dt.mod, dt.name) : nothing
+            end
+            fld = st.args[3] isa QuoteNode ? st.args[3].value : st.args[3]
+            (dt isa DataType && fld === :layout) || return nothing
+            lay = try getfield(dt, :layout) catch; return nothing end
+            lay == C_NULL && return nothing
+            return unsafe_load(convert(Ptr{Base.DataTypeLayout}, lay))
+        else
+            return nothing
+        end
+    end
+    return nothing
+end

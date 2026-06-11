@@ -1793,6 +1793,19 @@ end
     return String(out)
 end
 
+# ─── MemoryRef slot-clear Overlay ───────────────────────────────────────────
+# Why: Base._unsetindex!(::MemoryRef) nulls freed slots for the native GC. It
+#      reads DataType layout metadata (getfield(Memory{T}, :layout) via
+#      datatype_arrayelem/datatype_layoutsize) BEFORE its isbits early-return,
+#      and those reads stub → uncatchable trap (gap 450889a9cb7e: Ryu
+#      writeshortest's merged IR inlines it on the fixed-decimal path).
+#      WasmGC tracks the backing array as a whole — slot clearing is a no-op.
+# Cost: ref elements in freed slots stay reachable until the container dies
+#      (same accepted trade-off as the _deleteend! overlay below).
+@overlay WASM_METHOD_TABLE function Base._unsetindex!(A::MemoryRef{T}) where T
+    return A
+end
+
 # ─── Vector shrink Overlay ──────────────────────────────────────────────────
 # Why: shrinking resize! inlines Base._deleteend! whose freed-slot clearing
 #      (atomic_pointerset GC bookkeeping) stubs to a runtime trap (gap
