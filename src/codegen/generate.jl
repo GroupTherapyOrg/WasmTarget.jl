@@ -322,10 +322,21 @@ function fix_i32_wrap_after_i32_ops(bytes::Vector{UInt8})::Vector{UInt8}
                 push!(result, bytes[i])
                 sub = bytes[i]
                 i += 1
-                # array_new_fixed has 2 LEB operands, most GC ops have 1
-                n_lebs = (sub == 0x08 || sub == 0x09) ? 2 :  # array_new_fixed, array_new_data
-                         (sub in (0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x1A, 0x1C, 0x1D, 0x1E, 0x1F)) ? 1 :
-                         (sub in (0x1B, 0x1A)) ? 0 : 0  # extern_convert_any, any_convert_extern have 0
+                # P2-batch24 (gap 3bcded846d6e): the old table mis-counted several
+                # GC immediates — array.len (0x0F) has NONE but was counted as 1,
+                # so the parser ate the next instruction's bytes, desynced, and a
+                # later byte landing in the 0x45-0x78 range made this pass strip a
+                # LEGITIMATE i32_wrap_i64 (memorynew's size wrap → "expected i32,
+                # found i64"). Immediate counts per the WasmGC spec:
+                #   2 LEBs: struct.get/_s/_u/set (type+field), array.new_fixed/
+                #           _data/_elem, array.copy, array.init_data/_elem
+                #   1 LEB:  struct.new/_default, array.new/_default, array.get
+                #           family, array.set, array.fill, ref.test/cast (±null)
+                #   0:      array.len, any/extern convert, ref.i31, i31.get_s/u
+                # (br_on_cast 0x18/0x19 would need flags+3 LEBs — never emitted.)
+                n_lebs = (sub in (0x02, 0x03, 0x04, 0x05, 0x08, 0x09, 0x0A, 0x11, 0x12, 0x13)) ? 2 :
+                         (sub in (0x00, 0x01, 0x06, 0x07, 0x0B, 0x0C, 0x0D, 0x0E, 0x10, 0x14, 0x15, 0x16, 0x17)) ? 1 :
+                         0  # 0x0F array.len, 0x1A/0x1B converts, 0x1C-0x1E i31 ops
                 for _ in 1:n_lebs
                     while i <= length(bytes)
                         push!(result, bytes[i])
@@ -2051,7 +2062,13 @@ function generate_branch_split_try(ctx::AbstractCompilationContext, blocks::Vect
         push!(bytes, Opcode.END)   # try_table
         push!(bytes, Opcode.END)   # catch landing block
         ctx.last_stmt_was_stub = false
-        _compile_catch_region!(bytes, ctx, code, region.catch_dest, hi)
+        # Catch region — stackified (P2-batch24): catch arms can contain
+        # vector-literal fill loops the linear walker flattens. The arm is
+        # return-style (guarded at dispatch).
+        catch_blocks = [b for b in blocks
+                        if b.start_idx >= region.catch_dest && b.start_idx <= hi]
+        append!(bytes, generate_stackified_flow(ctx, catch_blocks, code))
+        ctx.last_stmt_was_stub = false
     end
 
     # Pre-branch code (may contain loops — stackified), truncated at the branch.
@@ -2080,16 +2097,15 @@ function generate_branch_split_try(ctx::AbstractCompilationContext, blocks::Vect
     return bytes
 end
 
-# P2-batch18: `try A catch; <prefix>; try B catch C end end` — the outer catch
-# handler IS (or wraps) the inner try. Emits two chained try_tables:
-#   block $c1 / try_table(catch_all 0): pre + outer body + normal return / end / end
-#   ;; outer catch handler:
-#   <prefix stmts>
-#   block $c2 / try_table(catch_all 0): inner body + normal return / end / end
-#   ;; inner catch region (GotoIfNot-aware)
+# P2-batch18 (generalised to N levels in P2-batch24, gap a38002fd0ef2):
+# `try A catch; <prefix>; try B catch; … try Z catch W end … end end` — each
+# catch handler IS (or wraps) the next try. Per level k:
+#   <prefix stmts between level k-1's catch_dest and level k's enter>
+#   block $ck / try_table(catch_all 0): body of level k / end / end
+# and after the last try_table, the final catch region (GotoIfNot-aware).
 # Only called for the return-style shape (guarded at the dispatch site).
 function generate_catch_try_chain(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
-                                  code, outer::TryRegion, inner::TryRegion)::Vector{UInt8}
+                                  code, chain::Vector{TryRegion})::Vector{UInt8}
     bytes = UInt8[]
     ensure_exception_tag!(ctx.mod)
     ensure_exception_global!(ctx.mod)
@@ -2113,72 +2129,48 @@ function generate_catch_try_chain(ctx::AbstractCompilationContext, blocks::Vecto
         ctx.last_stmt_was_stub = false
     end
 
-    # P2-batch22 (gap 2075020442b9): pre-try code emitted OUTSIDE the outer
-    # try_table, mirroring generate_try_catch_stackified — putting it inside
-    # both mis-catches pre-try throws (they propagate uncaught natively) and
-    # broke stack validation when a pre-try statement produced a value
-    # (`v_b = length(Dict(...))` before the try). Split the block spanning
-    # the outer EnterNode: head → pre, tail → outer try body.
-    outer_pre = BasicBlock[]
-    outer_head = nothing
-    for b in blocks
-        b.start_idx < outer.catch_dest || continue
-        if b.end_idx < outer.enter_idx
-            push!(outer_pre, b)
-        elseif b.start_idx <= outer.enter_idx <= b.end_idx
-            b.start_idx < outer.enter_idx &&
-                push!(outer_pre, BasicBlock(b.start_idx, outer.enter_idx - 1, nothing))
-            outer.enter_idx < b.end_idx &&
-                (outer_head = BasicBlock(outer.enter_idx + 1, b.end_idx, b.terminator))
+    # Per level: prefix (pre-try code for level 1, the catch-handler prefix for
+    # deeper levels), then the level's try_table. P2-batch21/22 lessons baked
+    # in: prefixes live OUTSIDE the try_table (a throwing prefix must propagate
+    # past this level's catch_all — gap 2075020442b9), and the EnterNode does
+    # NOT terminate a basic block, so the block spanning it is SPLIT — head to
+    # the prefix, tail into the try body, keeping fill-loop phi edges keyed on
+    # the tail's last statement resolvable (gap 90fa5e0f6382).
+    for (k, r) in enumerate(chain)
+        lo = k == 1 ? 1 : chain[k-1].catch_dest
+        pre = BasicBlock[]
+        head = nothing
+        for b in blocks
+            b.start_idx >= lo || continue
+            b.start_idx < r.catch_dest || continue
+            if b.end_idx < r.enter_idx
+                push!(pre, b)
+            elseif b.start_idx <= r.enter_idx <= b.end_idx
+                b.start_idx < r.enter_idx &&
+                    push!(pre, BasicBlock(b.start_idx, r.enter_idx - 1, nothing))
+                r.enter_idx < b.end_idx &&
+                    (head = BasicBlock(r.enter_idx + 1, b.end_idx, b.terminator))
+            end
         end
-    end
-    if !isempty(outer_pre)
-        append!(bytes, generate_stackified_flow(ctx, outer_pre, code;
-                                                trailing_unreachable=false))
-        ctx.last_stmt_was_stub = false
-    end
-    outer_body = [b for b in blocks
-                  if b.start_idx > outer.enter_idx && b.start_idx < outer.catch_dest]
-    outer_head !== nothing && pushfirst!(outer_body, outer_head)
-    _emit_try_table_region!(outer_body)
-
-    # Outer catch handler prefix (pop_exception / assignments before the inner try).
-    # P2-batch21 (gap 90fa5e0f6382): the inner EnterNode does NOT terminate a basic
-    # block, so one block can SPAN it — its head is prefix, its tail is the start
-    # of the inner try body (e.g. a vector-literal allocation whose fill-loop phi
-    # in the next block has an edge keyed on the tail's last statement). The old
-    # filters dropped the spanning block from BOTH regions (null deref) or put it
-    # wholly in the prefix (phi never initialised → oob trap). Split it at the
-    # enter: head → prefix, tail → inner region, so the stackifier sees the phi's
-    # predecessor and emits the edge assignment.
-    prefix_blocks = BasicBlock[]
-    inner_head = nothing
-    for b in blocks
-        b.start_idx >= outer.catch_dest || continue
-        if b.end_idx < inner.enter_idx
-            push!(prefix_blocks, b)
-        elseif b.start_idx <= inner.enter_idx <= b.end_idx
-            b.start_idx < inner.enter_idx &&
-                push!(prefix_blocks, BasicBlock(b.start_idx, inner.enter_idx - 1, nothing))
-            inner.enter_idx < b.end_idx &&
-                (inner_head = BasicBlock(inner.enter_idx + 1, b.end_idx, b.terminator))
+        if !isempty(pre)
+            # Falls through into this level's try_table — no trailing unreachable.
+            append!(bytes, generate_stackified_flow(ctx, pre, code;
+                                                    trailing_unreachable=false))
+            ctx.last_stmt_was_stub = false
         end
-    end
-    if !isempty(prefix_blocks)
-        # Falls through into the inner try_table, so no trailing unreachable.
-        append!(bytes, generate_stackified_flow(ctx, prefix_blocks, code;
-                                                trailing_unreachable=false))
-        ctx.last_stmt_was_stub = false
+        body = [b for b in blocks
+                if b.start_idx > r.enter_idx && b.start_idx < r.catch_dest]
+        head !== nothing && pushfirst!(body, head)
+        _emit_try_table_region!(body)
     end
 
-    # Inner try_table
-    inner_blocks = [b for b in blocks
-                    if b.start_idx > inner.enter_idx && b.start_idx < inner.catch_dest]
-    inner_head !== nothing && pushfirst!(inner_blocks, inner_head)
-    _emit_try_table_region!(inner_blocks)
-
-    # Inner catch region (GotoIfNot-aware)
-    _compile_catch_region!(bytes, ctx, code, inner.catch_dest, length(code))
+    # Final catch region — stackified (P2-batch24, gap fdc7171b283f): the catch
+    # arm can contain vector-literal fill loops whose phis the linear
+    # GotoIfNot-aware walker silently flattened. The arm is return-style
+    # (guarded at dispatch), so a trailing unreachable is correct.
+    tail_blocks = [b for b in blocks if b.start_idx >= chain[end].catch_dest]
+    append!(bytes, generate_stackified_flow(ctx, tail_blocks, code))
+    ctx.last_stmt_was_stub = false
 
     return bytes
 end
@@ -2231,28 +2223,36 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
         # Inner is nested if its enter is within the outer's try scope
         if inner.enter_idx > outer.enter_idx && inner.enter_idx < outer.catch_dest
             return generate_nested_try_catch_2(ctx, blocks, code, outer, inner)
-        elseif length(regions) == 2 && inner.enter_idx >= outer.catch_dest &&
-               (_outer_normal_path_returns(code, outer) ||
-                # P2-batch22 (gap 2075020442b9): an always-throwing outer body has
-                # no :leave (leave_idx synthesized = catch_dest) and so no normal-
-                # path return — but the chain layout is still exactly right (the
-                # outer try_table body just ends unreachable). The sequential
-                # fallback emitted invalid wasm for this shape.
-                outer.leave_idx == outer.catch_dest) &&
-               !_branches_over_outer(code, outer) &&
-               !any(code[i] isa Core.PhiNode && haskey(ctx.phi_locals, i)
-                    for i in inner.catch_dest:length(code))
-            # P2-batch18: the OUTER catch handler contains the inner try
-            # (`try A catch; try B catch C end end`). This is NOT sequential —
-            # the sequential generator emitted both structures back-to-back and
-            # produced invalid wasm (gaps 331b3b4b2d4a, 39f798226bbd,
-            # 422b9863eab9). Requires the return-style shape (each arm returns;
-            # no merge phis) — anything else falls through to sequential.
-            return generate_catch_try_chain(ctx, blocks, code, outer, inner)
-        else
-            # Sequential (non-nested) try/catch regions
-            return generate_sequential_try_catch(ctx, blocks, code, regions)
         end
+        # P2-batch18 (N levels: P2-batch24, gap a38002fd0ef2): each catch
+        # handler contains the next try (`try A catch; try B catch; … end end`).
+        # NOT sequential — the sequential generator emitted the structures
+        # back-to-back and produced invalid wasm (gaps 331b3b4b2d4a,
+        # 39f798226bbd, 422b9863eab9). Per level, the normal path must return
+        # or be always-throwing (no :leave → leave_idx synthesized =
+        # catch_dest — gap 2075020442b9); nothing may branch over the chain
+        # (gap bac7c93c2871: that's an if/else split, handled above); and no
+        # merge phis after the last catch (return-style shape).
+        chain_ok = true
+        for k in 2:length(regions)
+            prev, cur = regions[k-1], regions[k]
+            if !(cur.enter_idx >= prev.catch_dest &&
+                 (_outer_normal_path_returns(code, prev) || prev.leave_idx == prev.catch_dest))
+                chain_ok = false
+                break
+            end
+        end
+        # Catch-INTERNAL phis (all edges ≥ the final catch_dest — fill loops in
+        # the catch arm) are handled by the stackified tail; only a phi merging
+        # values from BEFORE the final catch breaks the return-style layout.
+        if chain_ok && !_branches_over_outer(code, outer) &&
+           !any(code[i] isa Core.PhiNode && haskey(ctx.phi_locals, i) &&
+                any(Int(e) < regions[end].catch_dest for e in (code[i]::Core.PhiNode).edges)
+                for i in regions[end].catch_dest:length(code))
+            return generate_catch_try_chain(ctx, blocks, code, regions)
+        end
+        # Sequential (non-nested) try/catch regions
+        return generate_sequential_try_catch(ctx, blocks, code, regions)
     end
 
     # Single try/catch region
@@ -2285,6 +2285,16 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
             has_phi = true
             break
         end
+    end
+    # P2-batch24 (gap 89516a151f4f): the linear walker handles at most ONE
+    # GotoIfNot diamond inside the try scope. try/finally normal paths inline
+    # whole functions (asin's domain guards etc.) — several diamonds, which
+    # the linear walk miscompiled into an unconditional throw (caught →
+    # exceptional finally → rethrow → uncaught). Two or more branches inside
+    # the region → stackified.
+    if !has_phi
+        n_gin = count(i -> code[i] isa Core.GotoIfNot, (enter_idx + 1):(catch_dest - 1))
+        n_gin >= 2 && (has_phi = true)
     end
     # P2-batch19: CATCH-INTERNAL phis (all edges ≥ catch_dest — inlined diamonds
     # or loops inside the catch arm, e.g. `catch; mod(typemin, x)`) need the
