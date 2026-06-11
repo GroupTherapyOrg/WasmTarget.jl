@@ -381,6 +381,9 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     :getindex_continued, :_string, :string_index_err,
     # BF-6000: SizeUnknown collect (filtered comprehensions) + foldr
     :grow_to!, :_foldl_impl,
+    # P3 gap 5663ffe988fc: HasShape collect for non-isbits eltypes (String
+    # comprehensions) re-dispatches through collect/collect_to_with_first!
+    :collect, :_collect, :collect_to_with_first!, :collect_to!,
     # FOUND-5001: sym_in needed for kwarg validation in count/argmax/argmin/etc.
     :sym_in,
     # FOUND-5001: unsigned overlay (bitcast) needed by gcd, lcm, strip, titlecase, etc.
