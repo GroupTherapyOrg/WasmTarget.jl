@@ -1,6 +1,6 @@
 ---
 id: e1cc83db76ea
-status: open
+status: fixed
 category: runtime_trap
 kind: runtime_trap
 construct: "runtime_trap: `if isodd(Int8(0))\n    0x00\nelse\n    if getindex([true, true, true], length((0, 0)))\n        try\n            div(0x00, 0x00)\n        catch\n            0x00\n        end\n    else\n        0x00\n    end\nend` :: UInt8"

@@ -1908,6 +1908,12 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
             end
         end
         append!(bytes, generate_stackified_flow(ctx, pre_blocks, code; trailing_unreachable = false))
+        # P3 gap e1cc83db76ea: the pre subset can end with a catchable-throw
+        # statement (boundscheck arm) that leaves last_stmt_was_stub=true —
+        # compile_condition_to_i32 then dead-code-guards the CONDITION into a
+        # bare `unreachable` and the whole if/try structure traps on entry.
+        # The pre region falls through here alive; reset BEFORE the condition.
+        ctx.last_stmt_was_stub = false
         push!(bytes, Opcode.BLOCK)   # $else
         push!(bytes, 0x40)
         append!(bytes, compile_condition_to_i32((code[exit_idx]::Core.GotoIfNot).cond, ctx))
