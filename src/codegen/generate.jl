@@ -3129,11 +3129,21 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
     ensure_exception_global!(ctx.mod)
 
     # === Pre-outer code (stmts before outer enter) ===
-    for i in 1:(outer.enter_idx - 1)
-        stmt = code[i]
-        if stmt !== nothing && !(stmt isa Core.EnterNode)
-            append!(bytes, compile_statement(stmt, i, ctx))
+    # P3 gap ae64a1ba676e: STACKIFIED, not a linear compile_statement walk —
+    # vector-literal fill loops before the try never had their phi inits
+    # stored (index local read 0 → array[-1] → uncatchable OOB trap).
+    pre_outer = BasicBlock[]
+    for b in blocks
+        if b.end_idx < outer.enter_idx
+            push!(pre_outer, b)
+        elseif b.start_idx <= outer.enter_idx <= b.end_idx && b.start_idx < outer.enter_idx
+            push!(pre_outer, BasicBlock(b.start_idx, outer.enter_idx - 1, nothing))
         end
+    end
+    if !isempty(pre_outer)
+        append!(bytes, generate_stackified_flow(ctx, pre_outer, code;
+                                                trailing_unreachable=false))
+        ctx.last_stmt_was_stub = false
     end
 
     # === Outer catch landing block (void) ===
@@ -3147,12 +3157,24 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
     push!(bytes, Opcode.CATCH_ALL)
     append!(bytes, encode_leb128_unsigned(0))  # → label 0 (outer catch landing)
 
-    # Code between outer enter and inner enter (e.g. UpsilonNodes)
-    for i in (outer.enter_idx + 1):(inner.enter_idx - 1)
-        stmt = code[i]
-        if stmt !== nothing && !(stmt isa Core.EnterNode)
-            append!(bytes, compile_statement(stmt, i, ctx))
+    # Code between outer enter and inner enter — stackified for the same
+    # reason (the outer try body before the inner try can hold fill loops,
+    # closures over vector literals, etc.).
+    between = BasicBlock[]
+    for b in blocks
+        lo = max(b.start_idx, outer.enter_idx + 1)
+        hi = min(b.end_idx, inner.enter_idx - 1)
+        lo > hi && continue
+        if lo == b.start_idx && hi == b.end_idx
+            push!(between, b)
+        else
+            push!(between, BasicBlock(lo, hi, hi == b.end_idx ? b.terminator : nothing))
         end
+    end
+    if !isempty(between)
+        append!(bytes, generate_stackified_flow(ctx, between, code;
+                                                trailing_unreachable=false))
+        ctx.last_stmt_was_stub = false
     end
 
     # === Inner catch landing block (void) ===
