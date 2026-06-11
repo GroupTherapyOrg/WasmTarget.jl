@@ -22,9 +22,26 @@ Julia has a 4-stage compiler pipeline: parsing, lowering, type inference, and co
 Julia source → Julia compiler (parse, lower, infer) → Fully typed IR → WasmTarget → .wasm
 ```
 
-Julia's compiler does the hard work — parsing, macro expansion, type inference, optimization. WasmTarget gets fully type-inferred IR and translates it to Wasm instructions. For functions where the IR is straightforward (arithmetic, control flow, structs, closures), compilation is direct. For functions with complex IR patterns (GC internals, C library calls, deep dispatch chains), WasmTarget provides [method overlays](https://github.com/JuliaGPU/GPUCompiler.jl) — the same pattern CUDA.jl uses — that give Julia's inference a simpler path to resolve before codegen runs.
+Julia's compiler does the hard work — parsing, macro expansion, type inference, optimization. WasmTarget gets fully type-inferred IR and translates it. A function reaches Wasm through one of three paths:
 
-Coverage is growing. 176 core Base functions work today (see tables below). The goal is for any pure Julia function to compile — we're not there yet, but the foundation is solid.
+1. **Direct compilation (the default).** The function's own typed IR — arithmetic, control flow, loops, structs, tuples, closures, try/catch — translates statement-by-statement to Wasm instructions. This is how *your* code compiles, and how most of Base compiles too, because Julia inlines aggressively: a call like `sum(v)` usually arrives already flattened into plain loops inside the caller's IR.
+
+2. **Auto-discovered callees.** When a Base call is too large to inline, it stays in the IR as a real `:invoke`. WasmTarget walks these, compiles each callee as its own Wasm function from *its* typed IR, and links the calls — recursively. A curated whitelist controls which Base internals are eligible (Dict hashing, sorting internals, checked arithmetic, string search, integer parsing, …), so a single `Dict(k => v)` in your code transparently pulls in and compiles the real `ht_keyindex2_shorthash!` from Base.
+
+3. **Method overlays (~100 methods).** For Base methods whose real implementation can't translate — they reach into GC internals, `ccall` into libjulia/libc, use pointer arithmetic, or rely on lookup tables WasmGC can't address — WasmTarget ships replacement implementations via Julia's [`OverlayMethodTable`](https://github.com/JuliaGPU/GPUCompiler.jl), the same mechanism CUDA.jl and AMDGPU.jl use. Overlays are resolved during inference, so codegen never sees the original. They are *semantically faithful* substitutes, e.g. `Base.Math.pow_body` is re-implemented as the same compensated power-by-squaring algorithm (bit-identical results), and `reinterpret` becomes a direct `Core.bitcast`.
+
+Where overlays currently live, by area:
+
+| Area | Examples |
+|:-----|:---------|
+| Array mutation | `push!`, `pop!`, `insert!`, `deleteat!`, `splice!`, `append!`, `copy`, `filter` — WasmGC arrays are fixed-size, so growth is reallocate-and-copy |
+| Strings | `split`, `join`, `replace`, `strip` family, `repeat`, `reverse`, `cmp`, `string(::Float64)` (Ryu shortest-round-trip, reimplemented) |
+| Math tails | `sinh`/`cosh`/`tanh`/`asin`, `hypot`, `mod`/`rem(::Float64)`, `pow_body`, `Math.table_unpack` (memory-addressed tables → computed) |
+| Bit reinterpretation | `reinterpret` between same-width primitives → `Core.bitcast`; shifts on `BitInteger` (Julia over-shift semantics) |
+| Reductions | `reduce`/`foldl`/`maximum`/`minimum`/`argmax`/`argmin`/`count` on `Vector` — flat-IR loop forms |
+| Dict/Set | `Dict` tuple constructor, `delete!`, `union!` |
+
+Everything not listed compiles from its real Base implementation. The split is verified continuously — see the coverage matrix below.
 
 ## Quick Start
 
@@ -59,178 +76,42 @@ bytes = compile_multi([
 ])
 ```
 
-## Core Julia Function Coverage
+## Coverage
 
-**176 core functions compile and produce correct E2E results.** 1793 tests, 0 broken.
+Coverage is tracked by a **differential fuzzer**, not a hand-maintained list. The fuzzer holds a catalogue of ~590 Base operation signatures across these areas:
 
-Every function is verified: compile to Wasm, validate with `wasm-tools`, execute in Node.js, compare against native Julia.
+| Area | What's covered |
+|:-----|:---------------|
+| Numeric | `abs`, `sign`, `clamp`, `min`/`max`, `div`/`mod`/`rem`/`divrem`, `gcd`/`lcm`, predicates (`iseven`, `isnan`, …), `typemin`/`typemax`, checked arithmetic, 8/16/32/64/128-bit widths |
+| Math | trig/hyperbolic/inverse families, `exp`/`log` families, `sqrt`/`cbrt`/`hypot`, rounding, `^` (float and integer, correctly rounded), `Float32` and `Float64` |
+| Strings | indexing, search (`contains`, `findnext`, …), case transforms, `split`/`join`/`replace`, padding, `string(::Int)`/`string(::Float64)` round-trips, `Char` predicates |
+| Collections | `sort`, `map`/`filter`/`reduce`/`mapreduce`, `sum`/`prod`/`extrema`, `any`/`all`/`count`, `unique`, `accumulate`/`cumsum`, `findmax`/`argmax` |
+| Array mutation | `push!`/`pop!`/`pushfirst!`/`popfirst!`, `insert!`/`deleteat!`/`splice!`, `append!`/`prepend!`, `fill!`/`empty!`/`resize!`, mutation parity checked against native |
+| Dict/Set | construction, `setindex!`/`getindex`/`get`, `haskey`/`in`, `delete!`/`pop!`, `Set` ops, with `Int`/`String`/`Float` keys |
+| Iterators | `collect`, `enumerate`, `zip`, `pairs`, `Iterators.take`/`drop`/`filter`/`map`/`flatten`, ranges |
+| Control flow | nested if/else, while loops with accumulators, try/catch/finally (including nested chains), early returns, closures over all of the above |
 
-### Numeric (24/24)
-
-| Function | Path | Status |
-|:---------|:-----|:-------|
-| `abs` (Int64, Float64) | Native | Working |
-| `sign` (Int64, Float64) | Native | Working |
-| `signbit` (Int64, Float64) | Native | Working |
-| `clamp` (Int64, Float64) | Native | Working |
-| `min` (Int64, Float64) | Native | Working |
-| `max` (Int64, Float64) | Native | Working |
-| `minmax` | Native | Working |
-| `div` | Native | Working |
-| `mod` (Int64) | Native | Working |
-| `rem` (Int64) | Native | Working |
-| `divrem` | Native | Working |
-| `gcd` | Overlay | Working |
-| `lcm` | Overlay | Working |
-| `iseven` | Native | Working |
-| `isodd` | Native | Working |
-| `isnan` | Native | Working |
-| `isinf` | Native | Working |
-| `isfinite` | Native | Working |
-| `iszero` | Native | Working |
-| `isone` | Native | Working |
-| `zero` | Native | Working |
-| `one` | Native | Working |
-| `typemin` | Native | Working |
-| `typemax` | Native | Working |
-
-### Math (43/43)
-
-| Function | Path | Status |
-|:---------|:-----|:-------|
-| `sin`, `cos`, `tan` | Native | Working |
-| `asin`, `acos`, `atan` | Native | Working |
-| `sinh`, `cosh`, `tanh` | Native | Working |
-| `exp`, `log`, `log2`, `log10` | Native | Working |
-| `log1p`, `expm1`, `exp2` | Native | Working |
-| `sqrt`, `cbrt`, `hypot` | Native | Working |
-| `sincos`, `sinpi`, `cospi`, `tanpi` | Native | Working |
-| `sinc`, `cosc`, `modf` | Native | Working |
-| `ldexp`, `mod2pi` | Native | Working |
-| `deg2rad`, `rad2deg` | Native | Working |
-| `floor`, `ceil`, `round`, `trunc` | Native | Working |
-| `fourthroot`, `copysign` | Native | Working |
-| `Float64^Float64`, `Float64^Int` | Native | Working |
-| `mod` (Float64), `rem` (Float64) | Overlay | Working |
-
-### Strings (37/37)
-
-| Function | Path | Status |
-|:---------|:-----|:-------|
-| `length`, `ncodeunits` | Native | Working |
-| `contains`, `occursin` | Native | Working |
-| `startswith`, `endswith` | Overlay | Working |
-| `nextind`, `prevind`, `thisind` | Native | Working |
-| `lowercase`, `uppercase` | Native | Working |
-| `cmp`, `reverse` (String) | Overlay | Working |
-| `chomp`, `chopprefix`, `chopsuffix` | Native | Working |
-| `chop`, `last` (String, Int) | Overlay | Working |
-| `split`, `replace`, `join` | Overlay | Working |
-| `lpad`, `rpad` | Native | Working |
-| `isdigit`, `isspace` | Native | Working |
-| `isletter`, `isuppercase`, `islowercase`, `isascii` | Overlay | Working |
-| `titlecase`, `lowercasefirst`, `uppercasefirst` | Overlay | Working |
-| `strip`, `lstrip`, `rstrip` | Overlay | Working |
-| `repeat`, `string` (Int64) | Overlay | Working |
-
-### Collections (26/26)
-
-| Function | Path | Status |
-|:---------|:-----|:-------|
-| `sort`, `sort!`, `filter` | Overlay | Working |
-| `map`, `reduce`, `foldl`, `foldr` | Native | Working |
-| `sum`, `prod` | Native | Working |
-| `minimum`, `maximum`, `extrema` | Native | Working |
-| `any`, `all` | Native | Working |
-| `count`, `unique`, `foreach` | Overlay | Working |
-| `reverse` (Vector), `accumulate` | Native | Working |
-| `findmax`, `findmin`, `mapreduce` | Native | Working |
-| `argmax`, `argmin` | Overlay | Working |
-
-### Array Mutation (16/16)
-
-| Function | Path | Status |
-|:---------|:-----|:-------|
-| `push!`, `pop!`, `pushfirst!`, `popfirst!` | Overlay | Working |
-| `insert!`, `deleteat!`, `splice!` | Overlay | Working |
-| `append!`, `prepend!` | Overlay | Working |
-| `empty!`, `fill!`, `copy` | Overlay | Working |
-| `resize!`, `reverse`, `length`, `vec` | Native | Working |
-
-### Dict/Set (10/10)
-
-| Function | Path | Status |
-|:---------|:-----|:-------|
-| `Dict()` + `setindex!`, `haskey`, `get` | Native | Working |
-| `delete!`, `pop!`, `isempty`, `length` | Native | Working |
-| `Set()` + `push!`, `in` | Native | Working |
-
-### Iterators (14/15)
-
-| Function | Path | Status |
-|:---------|:-----|:-------|
-| `collect`, `enumerate`, `zip`, `eachindex`, `pairs` | Native | Working |
-| `Iterators.filter`, `.map`, `.flatten` | Native | Working |
-| `Iterators.take`, `.drop`, `.takewhile`, `.dropwhile` | Native | Working |
-| `CartesianIndices`, ranges | Native | Working |
-| Generator-with-filter | — | Blocked |
-
-### Type Conversion (5/5)
-
-| Function | Path | Status |
-|:---------|:-----|:-------|
-| `convert`, `sizeof` | Native | Working |
-| `isless` (Int64) | Native | Working |
-| `isless` (Float64), `cmp` (String) | Overlay | Working |
-
-### Summary
-
-| Category | Total | Native | Overlay | Broken |
-|:---------|------:|-------:|--------:|-------:|
-| Numeric | 24 | 22 | 2 | 0 |
-| Math | 43 | 41 | 2 | 0 |
-| Strings | 37 | 17 | 20 | 0 |
-| Collections | 26 | 16 | 10 | 0 |
-| Array Mutation | 16 | 4 | 12 | 0 |
-| Type Conversion | 5 | 3 | 2 | 0 |
-| Dict/Set | 10 | 10 | 0 | 0 |
-| Iterators | 15 | 14 | 0 | 1 |
-| **Total** | **176** | **127 (72%)** | **48 (27%)** | **1** |
-
-23/23 cross-path composition tests pass — native and overlay functions compose correctly through Julia's inference system.
-
-## Native IR vs Overlay
-
-Most functions compile directly from Julia's typed IR — the real Base implementation runs as-is in Wasm. For functions where the IR is too complex (GC internals, foreigncalls, deep dispatch), WasmTarget provides **method overlays** — the same [GPUCompiler.jl](https://github.com/JuliaGPU/GPUCompiler.jl) pattern that CUDA.jl and AMDGPU.jl use:
-
-```julia
-@overlay WASM_METHOD_TABLE function Base.sort!(v::AbstractVector;
-        lt=isless, by=identity, rev::Bool=false, ...)
-    # Simple insertion sort — flat IR, no deep dispatch chains
-    ...
-end
-```
-
-Julia's `OverlayMethodTable` resolves overlays at inference time. Codegen never sees the complex original.
+Every signature's status lives in [`test/fuzz/COVERAGE.md`](test/fuzz/COVERAGE.md), regenerated from fuzzing runs: an entry is `pass` only when it appears in at least one randomly-generated program whose Wasm output **matched native Julia exactly** — value, thrown-ness, and argument mutations. Current matrix: **588 of 589 entries pass** (the remainder unsampled in the last run, not failing), with **0 known divergences** and 179 fixed-divergence postmortems in [`test/fuzz/failures/`](test/fuzz/failures/).
 
 ## Language Features
 
 | Feature | Status |
 |:--------|:------:|
-| Integer arithmetic (32/64/128-bit) | Working |
-| Floating point (32/64-bit, IEEE 754) | Working |
+| Integer arithmetic (8/16/32/64/128-bit, Julia wrap/over-shift semantics) | Working |
+| Floating point (32/64-bit, IEEE 754, correctly-rounded `^`) | Working |
 | Control flow (if/else, while, for) | Working |
 | Structs (mutable and immutable) | Working |
 | Tuples and NamedTuples | Working |
 | Arrays (Vector, Matrix) | Working |
-| Strings | Working |
-| Closures | Working |
-| Try/catch/throw | Working |
-| Union{Nothing, T} | Working |
+| Strings (UTF-8) | Working |
+| Closures (including closures over Dicts/Vectors, passed to higher-order functions) | Working |
+| Exceptions: try/catch/finally, nested chains, catchable Base errors (`BoundsError`, `DivideError`, `DomainError`, `OverflowError`, `InexactError`, …) | Working |
+| Union{Nothing, T} and small unions | Working |
 | Multi-function modules | Working |
 | JS interop (externref) | Working |
 | Dict / Set | Working |
 | Splatting (f(args...)) | Working |
+| Keyword arguments | Working |
 
 ## Type Mappings
 
@@ -253,9 +134,9 @@ WasmTarget aims to be **correct-or-loud, never silently wrong**.
 **`strict=true` (default).** When codegen meets a construct that would compile to a
 *wrong value* (e.g. `objectid`, a non-zero `memset`), `compile` raises a
 `WasmCompileError` naming the construct and its source location instead of emitting
-it. Sound traps on dead error-branches (Julia's `kwerr`, `throw_*domainerror`, …)
-still compile — they abort if executed, never returning a wrong value. Pass
-`strict=false` to fall back to the permissive stub-and-trap behavior.
+it. Julia exceptions compile to *catchable* Wasm exceptions (a shared exception
+tag), so `try`/`catch` over throwing Base code behaves like native; only genuinely
+unsupported constructs trap. Pass `strict=false` for permissive stub-and-trap.
 
 ```julia
 compile(f, (T,))                 # strict + validated (default)
@@ -267,15 +148,19 @@ compile(f, (T,); strict=false)   # permissive: emit runtime-trap stubs
 back malformed bytes.
 
 **Differential fuzzing.** `test/fuzz/` generates *well-typed* random compositions of
-Base functions and checks each against native Julia (native is both oracle and
-validity filter). Findings are auto-shrunk to a minimal reproducer, persisted to a
-[Supposition.jl](https://github.com/Seelengrab/Supposition.jl) `DirectoryDB` corpus
-(replayed first on every run), and documented as self-reproducing "gap" files under
-`test/fuzz/failures/`. A bounded pass runs in CI; deep exploration runs standalone:
+Base functions — expressions, statements, loops, try/catch, closures, structs — and
+checks each against native Julia (native is both oracle and validity filter):
+same value, same throw, same argument mutations, bit-exact across a Node.js bridge.
+Findings are auto-shrunk to a minimal reproducer, persisted to a
+[Supposition.jl](https://github.com/Seelengrab/Supposition.jl) corpus (replayed
+first on every run as a regression ratchet), and documented as self-reproducing
+"gap" files that auto-close when fixed. A bounded pass runs in CI; deep exploration
+runs standalone:
 
 ```bash
-julia --project=test/fuzz test/fuzz/run.jl          # discover → shrink → document
-julia --project=test/fuzz test/fuzz/run.jl verify   # re-check open gaps, auto-close fixed
+julia --project=test/fuzz test/fuzz/run.jl sweep     # parallel discovery (time-boxed)
+julia --project=test/fuzz test/fuzz/run.jl verify    # re-check open gaps, auto-close fixed
+julia --project=test/fuzz test/fuzz/run.jl coverage  # regenerate COVERAGE.md
 ```
 
 ## Requirements
@@ -288,7 +173,7 @@ julia --project=test/fuzz test/fuzz/run.jl verify   # re-check open gaps, auto-c
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/GroupTherapyOrg/WasmTarget.jl")
+Pkg.add("WasmTarget")
 ```
 
 ## License

@@ -187,7 +187,7 @@ budget before treating `unseen` as a coverage hole).
 |---|---|---|---|
 | `&` | `Bool, Bool` | `Bool` | pass |
 | `|` | `Bool, Bool` | `Bool` | pass |
-| `!` | `Bool` | `Bool` | pass |
+| `!` | `Bool` | `Bool` | unseen |
 | `xor` | `Bool, Bool` | `Bool` | pass |
 | `==` | `Bool, Bool` | `Bool` | pass |
 | `ifelse` | `Bool, Int64, Int64` | `Int64` | pass |
@@ -199,7 +199,7 @@ budget before treating `unseen` as a coverage hole).
 |---|---|---|---|
 | `isdigit` | `Char` | `Bool` | pass |
 | `isspace` | `Char` | `Bool` | pass |
-| `isletter` | `Char` | `Bool` | unseen |
+| `isletter` | `Char` | `Bool` | pass |
 | `isuppercase` | `Char` | `Bool` | pass |
 | `islowercase` | `Char` | `Bool` | pass |
 | `isascii` | `Char` | `Bool` | pass |
@@ -465,8 +465,8 @@ budget before treating `unseen` as a coverage hole).
 | `ncodeunits` | `String` | `Int64` | pass |
 | `isempty` | `String` | `Bool` | pass |
 | `isascii` | `String` | `Bool` | pass |
-| `startswith` | `String, String` | `Bool` | unseen |
-| `endswith` | `String, String` | `Bool` | unseen |
+| `startswith` | `String, String` | `Bool` | pass |
+| `endswith` | `String, String` | `Bool` | pass |
 | `contains` | `String, String` | `Bool` | pass |
 | `occursin` | `String, String` | `Bool` | pass |
 | `cmp` | `String, String` | `Int64` | pass |
@@ -656,4 +656,4 @@ budget before treating `unseen` as a coverage hole).
 | `argmin` | `Vector{Float32}` | `Int64` | pass |
 | `cumsum` | `Vector{Float32}` | `Vector{Float32}` | pass |
 
-**Totals:** 586 pass · 3 unseen
+**Totals:** 588 pass · 1 unseen
