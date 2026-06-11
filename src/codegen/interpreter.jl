@@ -1630,6 +1630,38 @@ end
     return s
 end
 
+# ─── String hash Overlay (Julia 1.13+) ─────────────────────────────────────
+# Why: 1.13 replaced the memhash foreigncall with pure-Julia rapidhash
+#      (Base.hash_bytes) that reads string memory through 4/8-byte
+#      pointerref(Ptr{UInt32/UInt64}) loads — WasmGC has no raw pointers, so
+#      the inlined loads stubbed to unreachable (every Dict{String,...} op
+#      trapped). The :invoke-level hash_bytes handler in invoke.jl only
+#      catches the non-inlined form.
+# Fix: Overlay hash(::String, ::UInt) with FNV-1a over codeunit() reads,
+#      matching get_or_create_string_hash_func! (types.jl) EXACTLY — same
+#      offset basis, prime, and low-32-bit seed mix — so Julia-level hashing
+#      and the wasm helper (used by the memhash/hash_bytes fallback paths)
+#      agree within one module. Hash values intentionally differ from native
+#      Julia (1.12 precedent: internal consistency is what Dict needs).
+# Remove when: codegen supports wide pointerref loads traced to string refs.
+
+@static if VERSION >= v"1.13.0-"
+    @noinline function _wasm_string_fnv1a(s::String, h::UInt)
+        hv = 0xcbf29ce484222325 ⊻ UInt64(UInt32(h & 0xffffffff))
+        i = 1
+        n = ncodeunits(s)
+        while i <= n
+            hv = (hv ⊻ UInt64(codeunit(s, i))) * 0x00000100000001b3
+            i += 1
+        end
+        return hv % UInt
+    end
+
+    @overlay WASM_METHOD_TABLE function Base.hash(data::String, h::UInt)
+        return _wasm_string_fnv1a(data, h)
+    end
+end
+
 # ─── WasmInterpreter ───────────────────────────────────────────────────────
 
 struct WasmInterpreter <: CC.AbstractInterpreter
