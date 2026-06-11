@@ -2350,11 +2350,18 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
         # first region, each arm holds a (possibly empty) consecutive chain of
         # regions, every arm returns, and no merge phis cross the split.
         begin
+            # P3 gap 464d3b1b41ec: take the FIRST (outermost) spanning branch,
+            # not the last. With nested ifs both spanning the region (`if a;
+            # if b; try … else x end else try … end`), the innermost pick
+            # left the outer GotoIfNot stranded inside the stackified
+            # pre-code, whose out-of-subset exit fell into the wrong arm.
+            # Everything after the outermost split nests inside its arms.
             branch_idx = 0
             for i in 1:(outer.enter_idx - 1)
                 st = code[i]
                 if st isa Core.GotoIfNot && st.dest > outer.catch_dest
                     branch_idx = i
+                    break
                 end
             end
             if branch_idx > 0
