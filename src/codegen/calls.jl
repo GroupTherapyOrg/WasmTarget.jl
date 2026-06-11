@@ -4203,10 +4203,58 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.ARRAY_GET_U)
             append!(bytes, encode_leb128_unsigned(string_arr_type))
-        else
-            push!(bytes, Opcode.UNREACHABLE)
-            ctx.last_stmt_was_stub = true  # PURE-908
+            return bytes
         end
+        # P3 gap 450889a9cb7e: byte reads through Vector{UInt8} storage pointers
+        # (Ryu digit readback). Fake base pointers compile to 0, so the pointer
+        # VALUE is the 0-based byte offset.
+        local _pr_vec = ptr_arg !== nothing ? _trace_memmove_ptr(ptr_arg, ctx) : nothing
+        if _pr_vec !== nothing
+            local _pr_arr_t = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
+            append!(bytes, compile_value(_pr_vec, ctx))
+            local _pr_vinfo = ctx.type_registry.structs[infer_value_type(_pr_vec, ctx)]
+            push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
+            append!(bytes, encode_leb128_unsigned(_pr_vinfo.wasm_type_idx))
+            append!(bytes, encode_leb128_unsigned(1))
+            push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.REF_CAST_NULL)
+            append!(bytes, encode_leb128_signed(Int64(_pr_arr_t)))
+            append!(bytes, compile_value(ptr_arg, ctx))
+            push!(bytes, Opcode.I32_WRAP_I64)
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ARRAY_GET_U)
+            append!(bytes, encode_leb128_unsigned(_pr_arr_t))
+            return bytes
+        end
+        push!(bytes, Opcode.UNREACHABLE)
+        ctx.last_stmt_was_stub = true  # PURE-908
+        return bytes
+    elseif func isa GlobalRef && func.name === :pointerset
+        # P3 gap 450889a9cb7e: byte writes through Vector{UInt8} storage
+        # pointers (Ryu digit emission). pointerset(ptr, value, i, align)
+        # returns the pointer; consumers ignore it (fake i64 0).
+        local _ps_ptr = length(args) >= 1 ? args[1] : nothing
+        local _ps_vec = _ps_ptr !== nothing ? _trace_memmove_ptr(_ps_ptr, ctx) : nothing
+        local _ps_vt = length(args) >= 2 ? infer_value_type(args[2], ctx) : nothing
+        if _ps_vec !== nothing && (_ps_vt === UInt8 || _ps_vt === Int8)
+            local _ps_arr_t = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
+            append!(bytes, compile_value(_ps_vec, ctx))
+            local _ps_vinfo = ctx.type_registry.structs[infer_value_type(_ps_vec, ctx)]
+            push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
+            append!(bytes, encode_leb128_unsigned(_ps_vinfo.wasm_type_idx))
+            append!(bytes, encode_leb128_unsigned(1))
+            push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.REF_CAST_NULL)
+            append!(bytes, encode_leb128_signed(Int64(_ps_arr_t)))
+            append!(bytes, compile_value(_ps_ptr, ctx))
+            push!(bytes, Opcode.I32_WRAP_I64)
+            append!(bytes, compile_value(args[2], ctx))
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ARRAY_SET)
+            append!(bytes, encode_leb128_unsigned(_ps_arr_t))
+            push!(bytes, Opcode.I64_CONST); push!(bytes, 0x00)
+            return bytes
+        end
+        push!(bytes, Opcode.UNREACHABLE)
+        ctx.last_stmt_was_stub = true  # PURE-908
         return bytes
     end
 

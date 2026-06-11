@@ -46,14 +46,20 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext)
     # collected: in WasmGC the fake base pointer (getfield :ptr_or_offset)
     # compiles to 0, so the POINTER VALUE ITSELF is the byte offset — callers
     # compile the original pointer arg as the array.copy offset.
+    _mm_dbg = haskey(ENV, "WT_TRACE_MM")
+    _fail = function (why, what)
+        _mm_dbg && println(stderr, "  MMtrace FAIL [", why, "]: ", repr(what)[1:min(end, 110)])
+        return nothing
+    end
     cur = arg
     for _ in 1:48
-        cur isa Core.SSAValue || return nothing
+        cur isa Core.SSAValue || return _fail("non-ssa", cur)
         st = ctx.code_info.code[cur.id]
+        _mm_dbg && println(stderr, "  MMtrace %", cur.id, " = ", repr(st)[1:min(end, 100)])
         if st isa Core.PiNode
             cur = st.val
         elseif st isa Core.PhiNode
-            (length(st.values) >= 1 && isassigned(st.values, 1)) || return nothing
+            (length(st.values) >= 1 && isassigned(st.values, 1)) || return _fail("phi-unassigned", st)
             cur = st.values[1]
         elseif st isa Expr && st.head === :call && length(st.args) >= 2
             cf = st.args[1]
@@ -64,25 +70,28 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext)
                 cur = st.args[2]
             elseif cfn === :getfield && length(st.args) >= 3
                 fld = st.args[3] isa QuoteNode ? st.args[3].value : st.args[3]
-                if fld === :ptr_or_offset
+                if fld === :ptr_or_offset || fld === :ptr || fld === :mem
+                    # memoryref.ptr_or_offset, memory.ptr, memoryref.mem — all
+                    # hops toward the backing vector; all compile to offset-0
+                    # bases in WasmGC.
                     cur = st.args[2]
                 elseif fld === :ref
                     vec = st.args[2]
                     vt = infer_value_type(vec, ctx)
                     (vt isa DataType && vt <: Vector &&
-                     (eltype(vt) === UInt8 || eltype(vt) === Int8)) || return nothing
+                     (eltype(vt) === UInt8 || eltype(vt) === Int8)) || return _fail("not-bytevec: $vt", vec)
                     return vec
                 else
-                    return nothing
+                    return _fail("getfield-fld=$fld", st)
                 end
             else
-                return nothing
+                return _fail("call-fn=$cfn", st)
             end
         else
-            return nothing
+            return _fail("stmt-kind", st)
         end
     end
-    return nothing
+    return _fail("depth", arg)
 end
 
 """
