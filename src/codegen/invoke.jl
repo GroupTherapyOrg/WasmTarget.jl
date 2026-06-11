@@ -4583,6 +4583,22 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     ctx.last_stmt_was_stub = true
                 end
 
+            elseif get(ctx.ssa_types, idx, Any) === Union{}
+                # P3 gap 8029d25b6d15: an :invoke with inferred rettype Union{}
+                # ALWAYS throws natively (e.g. Int32(::Int64) after const-prop
+                # pins an out-of-range literal). The native behaviour IS a
+                # throw, so emit a catchable tag-0 throw — unreachable would
+                # turn a natively-catchable error into an uncatchable trap.
+                bytes = UInt8[]  # discard pre-pushed args
+                ensure_exception_tag!(ctx.mod)
+                exn_global = ensure_exception_global!(ctx.mod)
+                push!(bytes, 0xD0)  # ref.null
+                push!(bytes, 0x6E)  # any
+                push!(bytes, Opcode.GLOBAL_SET)
+                append!(bytes, encode_leb128_unsigned(exn_global))
+                push!(bytes, Opcode.THROW)
+                append!(bytes, encode_leb128_unsigned(0))
+                ctx.last_stmt_was_stub = true  # PURE-908
             else
                 # Unknown method — codegen has no translation for this invoke target.
                 # Under strict=true this raises WasmCompileError naming the method + source

@@ -5379,6 +5379,16 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                           source_type === Int16 || source_type === UInt16 || source_type === Int8 || source_type === UInt8 ||
                           (isprimitivetype(source_type) && sizeof(source_type) <= 4)
 
+        # P3 gap 40ed488e7f10: narrow signed values can sit in the i32 register
+        # zero-extended (e.g. a width-masked shl leaves Int8(-8) as 0xF8), but
+        # the signed convert reads the full register. Sign-extend at the
+        # consumer, same convention as the comparison normalisation.
+        if source_type === Int8
+            push!(bytes, Opcode.I32_EXTEND8_S)
+        elseif source_type === Int16
+            push!(bytes, Opcode.I32_EXTEND16_S)
+        end
+
         if target_type === Float32
             push!(bytes, source_is_32bit ? Opcode.F32_CONVERT_I32_S : Opcode.F32_CONVERT_I64_S)
         else  # Float64
