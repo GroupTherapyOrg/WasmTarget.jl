@@ -415,6 +415,13 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
         _is_allowed = _is_base_or_sub && (meth_name in AUTODISCOVER_BASE_METHODS ||
                                            startswith(_meth_str, "#string#") ||
                                            startswith(_meth_str, "#power_by_squaring#"))
+        # P2-batch22 (gap 8a25857213ba family): user closures defined in Main.
+        # A closure passed to a higher-order function compiles as a real
+        # :invoke when its body is too big to inline; skipping Main wholesale
+        # stubbed that invoke to unreachable (so `any(y->haskey(Dict(...)...)`
+        # trapped iff defined in Main — anonymous modules worked). Generated
+        # closure names start with '#'; allow those through.
+        _is_allowed |= mod === Main && startswith(_meth_str, "#")
         if !_is_allowed
             return
         end
