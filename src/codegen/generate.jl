@@ -2020,37 +2020,15 @@ end
 #   end
 #   <else arm: try_table B / catch Y>     ;; all paths return
 function generate_branch_split_try(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
-                                   code, outer::TryRegion, inner::TryRegion,
+                                   code, then_chain::Vector{TryRegion},
+                                   else_chain::Vector{TryRegion},
                                    branch_idx::Int)::Vector{UInt8}
     bytes = UInt8[]
     ensure_exception_tag!(ctx.mod)
     ensure_exception_global!(ctx.mod)
     else_start = (code[branch_idx]::Core.GotoIfNot).dest
 
-    # try body + any pre-enter statements of one arm, splitting the block that
-    # spans the EnterNode (Enter does not terminate a basic block).
-    function _emit_arm!(lo::Int, region::TryRegion, hi::Int)
-        pre = BasicBlock[]
-        head = nothing
-        for b in blocks
-            b.start_idx >= lo || continue
-            b.start_idx < region.catch_dest || continue
-            if b.end_idx < region.enter_idx
-                push!(pre, b)
-            elseif b.start_idx <= region.enter_idx <= b.end_idx
-                b.start_idx < region.enter_idx &&
-                    push!(pre, BasicBlock(b.start_idx, region.enter_idx - 1, nothing))
-                region.enter_idx < b.end_idx &&
-                    (head = BasicBlock(region.enter_idx + 1, b.end_idx, b.terminator))
-            end
-        end
-        if !isempty(pre)
-            append!(bytes, generate_stackified_flow(ctx, pre, code; trailing_unreachable=false))
-            ctx.last_stmt_was_stub = false
-        end
-        body = [b for b in blocks
-                if b.start_idx > region.enter_idx && b.start_idx < region.catch_dest]
-        head !== nothing && pushfirst!(body, head)
+    function _emit_try_table!(body_blocks::Vector{BasicBlock})
         push!(bytes, Opcode.BLOCK)
         push!(bytes, 0x40)
         push!(bytes, Opcode.TRY_TABLE)
@@ -2058,17 +2036,23 @@ function generate_branch_split_try(ctx::AbstractCompilationContext, blocks::Vect
         append!(bytes, encode_leb128_unsigned(1))
         push!(bytes, Opcode.CATCH_ALL)
         append!(bytes, encode_leb128_unsigned(0))
-        append!(bytes, generate_stackified_flow(ctx, body, code))
+        append!(bytes, generate_stackified_flow(ctx, body_blocks, code))
         push!(bytes, Opcode.END)   # try_table
         push!(bytes, Opcode.END)   # catch landing block
         ctx.last_stmt_was_stub = false
-        # Catch region — stackified (P2-batch24): catch arms can contain
-        # vector-literal fill loops the linear walker flattens. The arm is
-        # return-style (guarded at dispatch).
-        catch_blocks = [b for b in blocks
-                        if b.start_idx >= region.catch_dest && b.start_idx <= hi]
-        append!(bytes, generate_stackified_flow(ctx, catch_blocks, code))
-        ctx.last_stmt_was_stub = false
+    end
+
+    # One arm = a (possibly empty) CHAIN of try regions plus its surrounding
+    # code, all paths returning (guarded at dispatch). P2-batch25 (gap
+    # 589873788e5c): an arm can hold try-in-catch chains, not just one try.
+    function _emit_arm!(lo::Int, chain::Vector{TryRegion}, hi::Int)
+        if isempty(chain)
+            arm_blocks = [b for b in blocks if b.start_idx >= lo && b.start_idx <= hi]
+            append!(bytes, generate_stackified_flow(ctx, arm_blocks, code))
+            ctx.last_stmt_was_stub = false
+        else
+            _emit_chain_levels!(bytes, ctx, blocks, code, chain, lo, hi, _emit_try_table!)
+        end
     end
 
     # Pre-branch code (may contain loops — stackified), truncated at the branch.
@@ -2091,9 +2075,9 @@ function generate_branch_split_try(ctx::AbstractCompilationContext, blocks::Vect
     push!(bytes, Opcode.I32_EQZ)
     push!(bytes, Opcode.BR_IF)
     append!(bytes, encode_leb128_unsigned(0))
-    _emit_arm!(branch_idx + 1, outer, else_start - 1)   # then arm — all paths return
+    _emit_arm!(branch_idx + 1, then_chain, else_start - 1)   # then arm — all paths return
     push!(bytes, Opcode.END)     # $else
-    _emit_arm!(else_start, inner, length(code))          # else arm — all paths return
+    _emit_arm!(else_start, else_chain, length(code))          # else arm — all paths return
     return bytes
 end
 
@@ -2129,15 +2113,27 @@ function generate_catch_try_chain(ctx::AbstractCompilationContext, blocks::Vecto
         ctx.last_stmt_was_stub = false
     end
 
-    # Per level: prefix (pre-try code for level 1, the catch-handler prefix for
-    # deeper levels), then the level's try_table. P2-batch21/22 lessons baked
-    # in: prefixes live OUTSIDE the try_table (a throwing prefix must propagate
-    # past this level's catch_all — gap 2075020442b9), and the EnterNode does
-    # NOT terminate a basic block, so the block spanning it is SPLIT — head to
-    # the prefix, tail into the try body, keeping fill-loop phi edges keyed on
-    # the tail's last statement resolvable (gap 90fa5e0f6382).
+    _emit_chain_levels!(bytes, ctx, blocks, code, chain, 1, length(code),
+                        _emit_try_table_region!)
+    return bytes
+end
+
+# Shared chain emission bounded to [lo, hi] (P2-batch25: arms of a branch-split
+# can themselves be chains — gap 589873788e5c). Per level: prefix (pre-try code
+# for level 1, the catch-handler prefix for deeper levels), then the level's
+# try_table; after the last level, the stackified catch tail. P2-batch21/22
+# lessons baked in: prefixes live OUTSIDE the try_table (a throwing prefix must
+# propagate past this level's catch_all — gap 2075020442b9), and the EnterNode
+# does NOT terminate a basic block, so the block spanning it is SPLIT — head to
+# the prefix, tail into the try body, keeping fill-loop phi edges keyed on the
+# tail's last statement resolvable (gap 90fa5e0f6382). The catch tail is
+# stackified (gap fdc7171b283f: fill loops in catch arms).
+function _emit_chain_levels!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext,
+                             blocks::Vector{BasicBlock}, code,
+                             chain::Vector{TryRegion}, lo0::Int, hi::Int,
+                             emit_try_table!::Function)
     for (k, r) in enumerate(chain)
-        lo = k == 1 ? 1 : chain[k-1].catch_dest
+        lo = k == 1 ? lo0 : chain[k-1].catch_dest
         pre = BasicBlock[]
         head = nothing
         for b in blocks
@@ -2161,17 +2157,13 @@ function generate_catch_try_chain(ctx::AbstractCompilationContext, blocks::Vecto
         body = [b for b in blocks
                 if b.start_idx > r.enter_idx && b.start_idx < r.catch_dest]
         head !== nothing && pushfirst!(body, head)
-        _emit_try_table_region!(body)
+        emit_try_table!(body)
     end
 
-    # Final catch region — stackified (P2-batch24, gap fdc7171b283f): the catch
-    # arm can contain vector-literal fill loops whose phis the linear
-    # GotoIfNot-aware walker silently flattened. The arm is return-style
-    # (guarded at dispatch), so a trailing unreachable is correct.
-    tail_blocks = [b for b in blocks if b.start_idx >= chain[end].catch_dest]
+    tail_blocks = [b for b in blocks
+                   if b.start_idx >= chain[end].catch_dest && b.start_idx <= hi]
     append!(bytes, generate_stackified_flow(ctx, tail_blocks, code))
     ctx.last_stmt_was_stub = false
-
     return bytes
 end
 
@@ -2192,31 +2184,48 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
         sort!(regions, by=r -> r.enter_idx)
         outer = regions[1]
         inner = regions[2]
-        # P2-batch22 (gap bac7c93c2871): if/else split with one try per arm —
-        # a pre-try GotoIfNot jumps OVER the outer region into the else arm,
-        # the then arm returns, and no merge phis exist (each arm returns).
-        if length(regions) == 2 && inner.enter_idx >= outer.catch_dest
+        # P2-batch22 (gap bac7c93c2871; chains-per-arm P2-batch25, gap
+        # 589873788e5c): if/else split — a pre-try GotoIfNot jumps OVER the
+        # first region, each arm holds a (possibly empty) consecutive chain of
+        # regions, every arm returns, and no merge phis cross the split.
+        begin
             branch_idx = 0
             for i in 1:(outer.enter_idx - 1)
                 st = code[i]
-                if st isa Core.GotoIfNot && st.dest > outer.catch_dest && st.dest <= inner.enter_idx
+                if st isa Core.GotoIfNot && st.dest > outer.catch_dest
                     branch_idx = i
                 end
             end
             if branch_idx > 0
                 bdest = (code[branch_idx]::Core.GotoIfNot).dest
-                then_returns = any(code[i] isa Core.ReturnNode
-                                   for i in outer.catch_dest:(bdest - 1))
-                else_returns = any(code[i] isa Core.ReturnNode
-                                   for i in inner.catch_dest:length(code))
-                # Arm-INTERNAL phis (vector-literal fill loops etc.) are fine —
-                # the stackified arm bodies handle them. Only a CROSS-ARM merge
-                # phi (an edge from before the else arm) breaks the layout.
-                no_cross_phi = !any(code[i] isa Core.PhiNode && haskey(ctx.phi_locals, i) &&
-                                    any(Int(e) < bdest for e in (code[i]::Core.PhiNode).edges)
-                                    for i in bdest:length(code))
-                if then_returns && else_returns && no_cross_phi
-                    return generate_branch_split_try(ctx, blocks, code, outer, inner, branch_idx)
+                then_chain = [r for r in regions if r.enter_idx < bdest]
+                else_chain = [r for r in regions if r.enter_idx >= bdest]
+                _chain_consecutive(ch) = all(
+                    ch[k].enter_idx >= ch[k-1].catch_dest &&
+                    (_outer_normal_path_returns(code, ch[k-1]) ||
+                     ch[k-1].leave_idx == ch[k-1].catch_dest)
+                    for k in 2:length(ch))
+                arms_ok = !isempty(then_chain) &&
+                          all(r.enter_idx > branch_idx for r in then_chain) &&
+                          _chain_consecutive(then_chain) && _chain_consecutive(else_chain) &&
+                          # then arm fully precedes the else arm
+                          then_chain[end].catch_dest <= bdest
+                if arms_ok
+                    then_returns = any(code[i] isa Core.ReturnNode
+                                       for i in then_chain[end].catch_dest:(bdest - 1))
+                    else_lo = isempty(else_chain) ? bdest : else_chain[end].catch_dest
+                    else_returns = any(code[i] isa Core.ReturnNode
+                                       for i in else_lo:length(code))
+                    # Arm-INTERNAL phis (vector-literal fill loops etc.) are fine —
+                    # the stackified arm bodies handle them. Only a CROSS-ARM merge
+                    # phi (an edge from before the else arm) breaks the layout.
+                    no_cross_phi = !any(code[i] isa Core.PhiNode && haskey(ctx.phi_locals, i) &&
+                                        any(Int(e) < bdest for e in (code[i]::Core.PhiNode).edges)
+                                        for i in bdest:length(code))
+                    if then_returns && else_returns && no_cross_phi
+                        return generate_branch_split_try(ctx, blocks, code, then_chain,
+                                                         else_chain, branch_idx)
+                    end
                 end
             end
         end
@@ -2939,33 +2948,24 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
     push!(bytes, Opcode.CATCH_ALL)
     append!(bytes, encode_leb128_unsigned(0))  # → label 0 (inner catch landing)
 
-    # Inner try body (inner.enter_idx+1 to inner.leave_idx-1)
-    local _it = inner.enter_idx + 1
-    while _it <= inner.leave_idx - 1
-        local _is = code[_it]
-        if _is === nothing
-            _it += 1
-            continue
-        end
-        if _is isa Core.GotoIfNot
-            append!(bytes, _compile_try_body_gotoifnot(_is, _it, inner.leave_idx, code, ctx))
-            _it = _advance_past_gotoifnot(_is, _it, inner.leave_idx, code)
-        else
-            append!(bytes, compile_statement(_is, _it, ctx))
-            _it += 1
-        end
-    end
-
-    # Normal exit after inner try body (leave markers → skip, compile rest including return)
-    for i in inner.leave_idx:(inner.catch_dest - 1)
-        stmt = code[i]
-        if stmt !== nothing
-            if stmt isa Expr && stmt.head === :leave
-                continue
-            end
-            append!(bytes, compile_statement(stmt, i, ctx))
+    # Inner try body + normal exit — STACKIFIED (P2-batch25, gap 3bee390c7d25):
+    # the body can contain vector-literal fill loops (try/finally inlines
+    # whole expressions) that the previous linear walk flattened into a single
+    # pass (loop phi never initialised → oob trap). Split the block spanning
+    # the inner EnterNode; everything before inner.catch_dest belongs here.
+    inner_body = BasicBlock[]
+    local _ib_head = nothing
+    for b in blocks
+        b.start_idx < inner.catch_dest || continue
+        if b.start_idx > inner.enter_idx
+            push!(inner_body, b)
+        elseif b.start_idx <= inner.enter_idx <= b.end_idx && inner.enter_idx < b.end_idx
+            _ib_head = BasicBlock(inner.enter_idx + 1, b.end_idx, b.terminator)
         end
     end
+    _ib_head !== nothing && pushfirst!(inner_body, _ib_head)
+    append!(bytes, generate_stackified_flow(ctx, inner_body, code))
+    ctx.last_stmt_was_stub = false
 
     # End inner try_table
     push!(bytes, Opcode.END)

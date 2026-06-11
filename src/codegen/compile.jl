@@ -384,6 +384,17 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     # P2-batch20: any/all with closure predicates stay un-inlined :invokes of
     # Base._any/_all (gap f891246d19f5) — same precedent as :filter.
     :_any, :_all, :any, :all,
+    # P2-batch25: gcd(typemin(T), x) routes through un-inlined checked_abs,
+    # whose invoke stubbed to an uncatchable unreachable (gap d85520bb7a58).
+    # checked_abs/checked_neg bodies are plain compilable Julia whose internal
+    # throw(OverflowError) lowers to the catchable tag-0 path.
+    :checked_abs, :checked_neg,
+    # P2-batch25 (gap d252317ff208): Int-from-Float constructors stay as real
+    # invokes when inference proves they always throw (`Int64(14.95…)` →
+    # InexactError) — the body is the guard + catchable throw, so compile it
+    # instead of stubbing the invoke to an uncatchable unreachable.
+    :Int8, :Int16, :Int32, :Int64, :Int128,
+    :UInt8, :UInt16, :UInt32, :UInt64, :UInt128,
     # P2-batch20: Float64^Float64 must use Julia's correctly-rounded pow_body,
     # not the JS Math.pow import (3-ulp divergence → sin(x^x) wildly off, gap
     # e0f6a8de978a). The ^ wrapper is tiny; pow_body is already whitelisted.
