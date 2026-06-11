@@ -419,6 +419,52 @@ end
     return String(out)
 end
 
+# ─── Ryu scalar writefixed/writeexp Overlays (WASMMAKIE W-004) ────────────
+# Why: same buffer-steal idiom as writeshortest — the scalar wrappers build a
+#      StringVector and materialize via String(resize!(buf, ...)) →
+#      atomic_pointerset, which codegen stubs → unreachable trap. The digit
+#      kernels writefixed(buf, pos, x, precision, ...) compile fine. Same
+#      treatment: push!-built buffer + String(bytes) materialization.
+#      (Consumers: tick-label formatting — Makie tick_format / Showoff.)
+# Remove when: codegen handles the unsafe_takestring buffer-steal idiom.
+@noinline @overlay WASM_METHOD_TABLE function Base.Ryu.writefixed(x::T, precision::Integer) where {T <: Union{Float32, Float64}}
+    cap = precision + Base.Ryu.neededdigits(T)
+    buf = UInt8[]
+    i = 0
+    while i < cap
+        push!(buf, 0x00)
+        i += 1
+    end
+    pos = Base.Ryu.writefixed(buf, 1, x, precision, false, false, false,
+                              UInt8('.'), false)
+    out = UInt8[]
+    i = 1
+    while i < pos
+        push!(out, buf[i])
+        i += 1
+    end
+    return String(out)
+end
+
+@noinline @overlay WASM_METHOD_TABLE function Base.Ryu.writeexp(x::T, precision::Integer) where {T <: Union{Float32, Float64}}
+    cap = precision + Base.Ryu.neededdigits(T)
+    buf = UInt8[]
+    i = 0
+    while i < cap
+        push!(buf, 0x00)
+        i += 1
+    end
+    pos = Base.Ryu.writeexp(buf, 1, x, precision, false, false, false,
+                            UInt8('e'), UInt8('.'), false)
+    out = UInt8[]
+    i = 1
+    while i < pos
+        push!(out, buf[i])
+        i += 1
+    end
+    return String(out)
+end
+
 # ─── reinterpret Overlay (P2-batch20) ─────────────────────────────────────
 # Why: Base.reinterpret between primitive bits types inlines to ~390 stmts of
 #      generic bit-checking machinery (padding checks, _foldl_impl, LazyString

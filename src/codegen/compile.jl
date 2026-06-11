@@ -363,6 +363,8 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     # The memmove foreigncall in Ryu needed a pointer-chain tracer for the
     # bitcast→add_ptr→getfield(:mem) pattern. Now handled by _trace_ptr_to_memory_array.
     :string, :writeshortest,
+    # WASMMAKIE W-004: tick-label formatting (Makie tick_format / Showoff).
+    :writefixed, :writeexp,
     # BF-2000: String operations — primary functions
     :chomp, :chopprefix, :chopsuffix, :lowercasefirst, :uppercasefirst,
     :prevind, :first,
