@@ -1726,7 +1726,7 @@ end
     for p in parts
         if p isa Char
             u = reinterpret(UInt32, p)
-            nb = 4 - (trailing_zeros(u | 0xff) >> 3)
+            nb = u == 0x00000000 ? 1 : (4 - (trailing_zeros(u) >> 3))
             i = 1
             while i <= nb
                 push!(out, UInt8((u >> (8 * (4 - i))) & 0xFF))
@@ -1748,6 +1748,39 @@ end
         end
     end
     return String(out)
+end
+
+# Concrete 2-arg specializations: the Vararg method's invoke widens elements
+# to the Union (heterogeneous-union tuple reads still miscompile — the
+# hetero-Dict class), so give inference concrete signatures to prefer for the
+# common mixed pairs ("m" * substring, str * char, ...).
+@inline function _wasm_append_str!(out::Vector{UInt8}, s::Union{String, SubString{String}})
+    for i in 1:ncodeunits(s)
+        push!(out, codeunit(s, i))
+    end
+    return out
+end
+@inline function _wasm_append_char!(out::Vector{UInt8}, c::Char)
+    u = reinterpret(UInt32, c)
+    nb = u == 0x00000000 ? 1 : (4 - (trailing_zeros(u) >> 3))
+    i = 1
+    while i <= nb
+        push!(out, UInt8((u >> (8 * (4 - i))) & 0xFF))
+        i += 1
+    end
+    return out
+end
+@overlay WASM_METHOD_TABLE function Base._string(a::String, b::SubString{String})
+    return String(_wasm_append_str!(_wasm_append_str!(UInt8[], a), b))
+end
+@overlay WASM_METHOD_TABLE function Base._string(a::SubString{String}, b::String)
+    return String(_wasm_append_str!(_wasm_append_str!(UInt8[], a), b))
+end
+@overlay WASM_METHOD_TABLE function Base._string(a::String, b::Char)
+    return String(_wasm_append_char!(_wasm_append_str!(UInt8[], a), b))
+end
+@overlay WASM_METHOD_TABLE function Base._string(a::Char, b::String)
+    return String(_wasm_append_str!(_wasm_append_char!(UInt8[], a), b))
 end
 
 # String(::SubString) inlines an unsafe_string pointer conversion ("cannot
