@@ -163,6 +163,7 @@ function return_type_compatible(value_type::WasmValType, return_type::WasmValTyp
             return true
         end
     end
+    haskey(ENV, "WT_TRACE_RETCOMPAT") && println(stderr, "RETCOMPAT false: val=$value_type ret=$return_type")
     return false
 end
 

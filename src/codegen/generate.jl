@@ -171,17 +171,20 @@ function generate_body(ctx::AbstractCompilationContext)::Vector{UInt8}
     # with empty stack. Two patterns:
     # Pattern 1: [end] [return] [unreachable] [end] — dead return before unreachable
     # Pattern 2: [return] [end] [return] [end] — both if/else branches return
-    # IMPORTANT: 0x0b (END opcode) also appears as LEB128 operands (e.g., local index 11).
-    # To avoid false positives, verify that the preceding byte is NOT an instruction
-    # that takes a LEB128 operand (local.get=0x20, local.set=0x21, local.tee=0x22,
-    # global.get=0x23, global.set=0x24, br=0x0c, br_if=0x0d, call=0x10, etc.).
+    # Forward-parse to find genuine instruction boundaries: raw backward byte checks
+    # misfire when a LEB immediate collides with an opcode — e.g. `local.get 1418`
+    # encodes as [0x20, 0x8a, 0x0b] and the trailing 0x0b reads as END, turning
+    # [local.get N][return][unreachable][end] into a false Pattern-1 match that
+    # rewrites a LIVE return to unreachable (gap 4c8236022172).
     if length(bytes) >= 4 && bytes[end] == Opcode.END
-        is_end3_real = bytes[end - 3] == Opcode.END && (length(bytes) < 5 ||
-            !(bytes[end - 4] in (0x20, 0x21, 0x22, 0x23, 0x24, 0x0c, 0x0d, 0x10, 0x11, 0x41, 0x42)))
-        if bytes[end - 1] == 0x00 && bytes[end - 2] == Opcode.RETURN && is_end3_real
-            bytes[end - 2] = 0x00  # Replace RETURN with UNREACHABLE
-        elseif bytes[end - 1] == Opcode.RETURN && bytes[end - 2] == Opcode.END && bytes[end - 3] == Opcode.RETURN
-            bytes[end - 1] = 0x00  # Replace dead RETURN with UNREACHABLE
+        _tail = _last_instr_starts(bytes, 4)
+        if length(_tail) == 4
+            _t1, _t2, _t3, _t4 = bytes[_tail[1]], bytes[_tail[2]], bytes[_tail[3]], bytes[_tail[4]]
+            if _t1 == Opcode.END && _t2 == Opcode.RETURN && _t3 == Opcode.UNREACHABLE && _t4 == Opcode.END
+                bytes[_tail[2]] = Opcode.UNREACHABLE  # Pattern 1: dead RETURN after END
+            elseif _t1 == Opcode.RETURN && _t2 == Opcode.END && _t3 == Opcode.RETURN && _t4 == Opcode.END
+                bytes[_tail[3]] = Opcode.UNREACHABLE  # Pattern 2: dead final RETURN
+            end
         end
     end
 
@@ -740,6 +743,10 @@ function _skip_leb_count(op::UInt8)::Int
     (op == 0x20 || op == 0x21 || op == 0x22 || op == 0x23 || op == 0x24) && return 1
     # br, br_if
     (op == 0x0C || op == 0x0D) && return 1
+    # throw (tag index)
+    op == 0x08 && return 1
+    # br_on_null / br_on_non_null (label)
+    (op == 0xD5 || op == 0xD6) && return 1
     # call
     op == 0x10 && return 1
     # call_indirect (type_idx, table_idx)
@@ -792,50 +799,82 @@ function _last_instr_start(bytes::Vector{UInt8})::Int
     last_start = 0
     while i <= n
         last_start = i
-        op = bytes[i]
-        if op == 0xFB  # GC prefix: sub-opcode + LEB operands
-            i + 1 > n && return 0
-            sub_op = bytes[i + 1]
-            i += 2
-            for _ in 1:_skip_gc_leb_count(sub_op)
-                while true
-                    i > n && return 0
-                    b = bytes[i]; i += 1
-                    (b & 0x80) == 0 && break
-                end
-            end
-        elseif op == 0x43  # f32.const: 4 raw payload bytes
-            i + 4 > n && return 0
-            i += 5
-        elseif op == 0x44  # f64.const: 8 raw payload bytes
-            i + 8 > n && return 0
-            i += 9
-        elseif op == 0xFC  # saturating-trunc / misc prefix: sub-opcode LEB
-            i += 1
+        i = _instr_next(bytes, i)
+        i == 0 && return 0
+    end
+    return last_start
+end
+
+"""
+Advance past the single instruction starting at index `i`; return the index of
+the next instruction, or 0 if the buffer ends mid-instruction.
+"""
+function _instr_next(bytes::Vector{UInt8}, i::Int)::Int
+    n = length(bytes)
+    op = bytes[i]
+    if op == 0xFB  # GC prefix: sub-opcode + LEB operands
+        i + 1 > n && return 0
+        sub_op = bytes[i + 1]
+        i += 2
+        for _ in 1:_skip_gc_leb_count(sub_op)
             while true
                 i > n && return 0
                 b = bytes[i]; i += 1
                 (b & 0x80) == 0 && break
             end
-        elseif op == 0x0E  # br_table: count N, then N+1 label LEBs
-            i += 1
-            cnt = 0; shift = 0
+        end
+    elseif op == 0x43  # f32.const: 4 raw payload bytes
+        i + 4 > n && return 0
+        i += 5
+    elseif op == 0x44  # f64.const: 8 raw payload bytes
+        i + 8 > n && return 0
+        i += 9
+    elseif op == 0xFC  # saturating-trunc / misc prefix: sub-opcode LEB
+        i += 1
+        while true
+            i > n && return 0
+            b = bytes[i]; i += 1
+            (b & 0x80) == 0 && break
+        end
+    elseif op == 0x0E  # br_table: count N, then N+1 label LEBs
+        i += 1
+        cnt = 0; shift = 0
+        while true
+            i > n && return 0
+            b = bytes[i]; i += 1
+            cnt |= (Int(b & 0x7f) << shift); shift += 7
+            (b & 0x80) == 0 && break
+        end
+        for _ in 1:(cnt + 1)
             while true
                 i > n && return 0
                 b = bytes[i]; i += 1
-                cnt |= (Int(b & 0x7f) << shift); shift += 7
                 (b & 0x80) == 0 && break
             end
-            for _ in 1:(cnt + 1)
-                while true
-                    i > n && return 0
-                    b = bytes[i]; i += 1
-                    (b & 0x80) == 0 && break
-                end
-            end
-        else
-            i += 1
-            for _ in 1:_skip_leb_count(op)
+        end
+    elseif op == 0x1F  # try_table: blocktype, count N, then N catch clauses
+        i += 1
+        i > n && return 0
+        # blocktype LEB (single byte for valtypes/void; signed LEB for type idx)
+        while true
+            i > n && return 0
+            b = bytes[i]; i += 1
+            (b & 0x80) == 0 && break
+        end
+        cnt = 0; shift = 0
+        while true
+            i > n && return 0
+            b = bytes[i]; i += 1
+            cnt |= (Int(b & 0x7f) << shift); shift += 7
+            (b & 0x80) == 0 && break
+        end
+        for _ in 1:cnt
+            i > n && return 0
+            kind = bytes[i]; i += 1
+            # catch (0x00) / catch_ref (0x01): tag LEB + label LEB;
+            # catch_all (0x02) / catch_all_ref (0x03): label LEB only
+            nlebs = kind <= 0x01 ? 2 : 1
+            for _ in 1:nlebs
                 while true
                     i > n && return 0
                     b = bytes[i]; i += 1
@@ -843,8 +882,35 @@ function _last_instr_start(bytes::Vector{UInt8})::Int
                 end
             end
         end
+    else
+        i += 1
+        for _ in 1:_skip_leb_count(op)
+            while true
+                i > n && return 0
+                b = bytes[i]; i += 1
+                (b & 0x80) == 0 && break
+            end
+        end
     end
-    return last_start
+    return i
+end
+
+"""
+Forward-parse an instruction buffer and return the start indices of the last
+`k` instructions (oldest first). Returns fewer than `k` entries if the buffer
+holds fewer instructions, and an empty vector if it is truncated mid-instruction.
+"""
+function _last_instr_starts(bytes::Vector{UInt8}, k::Int)::Vector{Int}
+    i = 1
+    n = length(bytes)
+    starts = Int[]
+    while i <= n
+        push!(starts, i)
+        length(starts) > k && popfirst!(starts)
+        i = _instr_next(bytes, i)
+        i == 0 && return Int[]
+    end
+    return starts
 end
 
 """
