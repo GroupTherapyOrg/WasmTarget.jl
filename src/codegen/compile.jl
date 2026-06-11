@@ -2402,17 +2402,26 @@ function _autodiscover_closure_deps!(closure::Function, code_info::Core.CodeInfo
     # Pass 2: compile function bodies (all cross-call targets now registered)
     for (i, (f, arg_types, name, dep_code_info, dep_return_type)) in enumerate(dep_data)
         func_idx = n_base + UInt32(i - 1)
+        # types FIRST — the placeholder below must match the registered
+        # signature so call sites stay valid
+        param_types = WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in arg_types]
+        result_types = dep_return_type === Nothing ? WasmValType[] : WasmValType[get_concrete_wasm_type(dep_return_type, mod, type_registry)]
         try
             dep_ctx = CompilationContext(dep_code_info, arg_types, dep_return_type, mod, type_registry;
                                          func_registry=func_registry, func_idx=func_idx, func_ref=f)
             dep_body = generate_body(dep_ctx)
 
-            param_types = WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in arg_types]
-            result_types = dep_return_type === Nothing ? WasmValType[] : WasmValType[get_concrete_wasm_type(dep_return_type, mod, type_registry)]
-
             add_function!(mod, param_types, result_types, dep_ctx.locals, dep_body)
         catch e
             @debug "compile_closure_body: error compiling dependency $name — $e"
+            # WASMMAKIE E-003: indices were RESERVED for every dep in pass 1 —
+            # skipping a failed body here shifted every later function down
+            # one slot, so cross-calls hit the WRONG functions (validation:
+            # 'not enough arguments on the stack'). A typed `unreachable`
+            # placeholder keeps the index space aligned (calling the failed
+            # dep traps loudly instead of corrupting unrelated calls).
+            add_function!(mod, param_types, result_types, WasmValType[],
+                          UInt8[0x00, 0x0b])  # unreachable; end
         end
     end
 end
