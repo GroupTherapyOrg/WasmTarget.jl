@@ -1912,8 +1912,12 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
     elseif !(T isa Union) && T <: AbstractArray  # Handles Vector, Matrix, and higher-dim arrays
         # Both Vector and Matrix are stored as structs with (ref, size) fields
         # This allows setfield!(v, :size, ...) for push!/resize! operations
-        if T <: Array
-            # Julia Vector/Array gets (ref, size) layout
+        if T <: Vector
+            # Julia Vector (Array{T,1}) gets (ref, size) layout.
+            # P3 gap 3aaa51b9a688: `T <: Array` also caught Matrix — it got
+            # the 1-D vector layout (Tuple{Int64} size field) while the
+            # constructor built the real NTuple{N,Int64} dims tuple, so every
+            # Matrix struct.new failed validation. Matrices route below.
             if haskey(registry.structs, T)
                 info = registry.structs[T]
                 return ConcreteRef(info.wasm_type_idx, true)

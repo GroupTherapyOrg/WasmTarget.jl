@@ -519,8 +519,11 @@ function julia_to_wasm_type_concrete(T, ctx::AbstractCompilationContext)::WasmVa
         end
 
         # 1D arrays (Vector) are stored as WasmGC structs (with ref and size fields)
-        if T <: Array
-            # Register Vector/Array as a struct type with (ref, size) layout
+        # P3 gap 3aaa51b9a688: `T <: Array` also caught Matrix — vector layout
+        # (Tuple{Int64} size) while the ctor built NTuple{N,Int64} dims, so
+        # every Matrix struct.new failed validation. Only Vector goes here.
+        if T <: Vector
+            # Register Vector as a struct type with (ref, size) layout
             info = register_vector_type!(ctx.mod, ctx.type_registry, T)
             return ConcreteRef(info.wasm_type_idx, true)
         elseif T <: AbstractVector && T isa DataType

@@ -1521,8 +1521,8 @@ function compile_module(functions::Vector;
                 get_string_array_type!(mod, type_registry)
             elseif is_struct_type(T)
                 register_struct_type!(mod, type_registry, T)
-            elseif T <: Array
-                # Vector/Array is now a struct with (ref, size) for setfield! support
+            elseif T <: Vector
+                # Vector (1-D only — matrices use register_matrix_type! below)
                 register_vector_type!(mod, type_registry, T)
             elseif T <: AbstractVector && T isa DataType
                 # Other AbstractVector types (SubArray, UnitRange, etc.) - register as regular struct
@@ -1543,8 +1543,8 @@ function compile_module(functions::Vector;
             get_string_array_type!(mod, type_registry)
         elseif is_struct_type(return_type)
             register_struct_type!(mod, type_registry, return_type)
-        elseif return_type !== Union{} && return_type <: Array
-            # Vector/Array is now a struct with (ref, size) for setfield! support
+        elseif return_type !== Union{} && return_type <: Vector
+            # Vector (1-D only — matrices use register_matrix_type! below)
             register_vector_type!(mod, type_registry, return_type)
         elseif return_type !== Union{} && return_type <: AbstractVector && return_type isa DataType
             # Other AbstractVector types (SubArray, UnitRange, etc.) - register as regular struct
@@ -1885,8 +1885,10 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
                 get_string_array_type!(mod, type_registry)
             elseif is_struct_type(T)
                 register_struct_type!(mod, type_registry, T)
-            elseif T <: Array
+            elseif T <: Vector
                 register_vector_type!(mod, type_registry, T)
+            elseif T <: Array && T isa DataType
+                register_matrix_type!(mod, type_registry, T)
             elseif T === String
                 get_string_array_type!(mod, type_registry)
             end
@@ -1895,8 +1897,10 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
         # Register return type
         if is_struct_type(return_type)
             register_struct_type!(mod, type_registry, return_type)
-        elseif return_type !== Union{} && return_type <: Array
+        elseif return_type !== Union{} && return_type <: Vector
             register_vector_type!(mod, type_registry, return_type)
+        elseif return_type !== Union{} && return_type <: Array && return_type isa DataType
+            register_matrix_type!(mod, type_registry, return_type)
         elseif return_type === String
             get_string_array_type!(mod, type_registry)
         end
@@ -2262,8 +2266,10 @@ function compile_function_into!(f::Function, arg_types::Tuple, mod::WasmModule,
     for T in actual_arg_types
         if is_closure_type(T)
             register_closure_type!(mod, type_registry, T)
-        elseif T <: Array
+        elseif T <: Vector
             register_vector_type!(mod, type_registry, T)
+        elseif T <: Array && T isa DataType
+            register_matrix_type!(mod, type_registry, T)
         elseif is_struct_type(T)
             register_struct_type!(mod, type_registry, T)
         elseif T === String
@@ -2273,8 +2279,10 @@ function compile_function_into!(f::Function, arg_types::Tuple, mod::WasmModule,
 
     # Register return type
     if return_type !== Nothing && return_type !== Union{}
-        if return_type <: Array
+        if return_type <: Vector
             register_vector_type!(mod, type_registry, return_type)
+        elseif return_type <: Array && return_type isa DataType
+            register_matrix_type!(mod, type_registry, return_type)
         elseif is_struct_type(return_type)
             register_struct_type!(mod, type_registry, return_type)
         elseif return_type === String
@@ -2572,8 +2580,10 @@ function build_frozen_state(ir_entries::Vector)::FrozenCompilationState
                 get_string_array_type!(mod, type_registry)
             elseif is_struct_type(T)
                 register_struct_type!(mod, type_registry, T)
-            elseif T <: Array
+            elseif T <: Vector
                 register_vector_type!(mod, type_registry, T)
+            elseif T <: Array && T isa DataType
+                register_matrix_type!(mod, type_registry, T)
             elseif T === String
                 get_string_array_type!(mod, type_registry)
             end
@@ -2582,8 +2592,10 @@ function build_frozen_state(ir_entries::Vector)::FrozenCompilationState
         # Register return type
         if is_struct_type(return_type)
             register_struct_type!(mod, type_registry, return_type)
-        elseif return_type !== Union{} && return_type <: Array
+        elseif return_type !== Union{} && return_type <: Vector
             register_vector_type!(mod, type_registry, return_type)
+        elseif return_type !== Union{} && return_type <: Array && return_type isa DataType
+            register_matrix_type!(mod, type_registry, return_type)
         elseif return_type === String
             get_string_array_type!(mod, type_registry)
         end
