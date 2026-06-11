@@ -2191,6 +2191,64 @@ end
 #   block $ck / try_table(catch_all 0): body of level k / end / end
 # and after the last try_table, the final catch region (GotoIfNot-aware).
 # Only called for the return-style shape (guarded at the dispatch site).
+# P3 gap 600287f76223: `try A catch; if cond; try B … else Z end end` — the
+# OUTER catch arm is an if/else split whose arms hold (possibly empty) chains.
+# The chain layout funnelled both paths into the inner try_table (the else arm
+# became unreachable); the sequential layout treats the regions as disjoint.
+# Emit the outer level exactly like one _emit_chain_levels! level, then
+# delegate the whole catch arm to generate_branch_split_try restricted to the
+# catch-subset blocks.
+function generate_catch_arm_split(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
+                                  code, outer::TryRegion, arm_regions::Vector{TryRegion},
+                                  branch_idx::Int)::Vector{UInt8}
+    bytes = UInt8[]
+    ensure_exception_tag!(ctx.mod)
+    ensure_exception_global!(ctx.mod)
+
+    # Outer level: pre-try blocks OUTSIDE the try_table (EnterNode split —
+    # natively-uncaught throws there must not reach our catch_all).
+    r = outer
+    pre = BasicBlock[]
+    head = nothing
+    for b in blocks
+        b.start_idx < r.catch_dest || continue
+        if b.end_idx < r.enter_idx
+            push!(pre, b)
+        elseif b.start_idx <= r.enter_idx <= b.end_idx
+            b.start_idx < r.enter_idx &&
+                push!(pre, BasicBlock(b.start_idx, r.enter_idx - 1, nothing))
+            r.enter_idx < b.end_idx &&
+                (head = BasicBlock(r.enter_idx + 1, b.end_idx, b.terminator))
+        end
+    end
+    if !isempty(pre)
+        append!(bytes, generate_stackified_flow(ctx, pre, code; trailing_unreachable=false))
+        ctx.last_stmt_was_stub = false
+    end
+    body = [b for b in blocks if b.start_idx > r.enter_idx && b.start_idx < r.catch_dest]
+    head !== nothing && pushfirst!(body, head)
+    push!(bytes, Opcode.BLOCK)
+    push!(bytes, 0x40)
+    push!(bytes, Opcode.TRY_TABLE)
+    push!(bytes, 0x40)
+    append!(bytes, encode_leb128_unsigned(1))
+    push!(bytes, Opcode.CATCH_ALL)
+    append!(bytes, encode_leb128_unsigned(0))
+    append!(bytes, generate_stackified_flow(ctx, body, code))
+    push!(bytes, Opcode.END)   # try_table
+    push!(bytes, Opcode.END)   # catch landing block
+    ctx.last_stmt_was_stub = false
+
+    # Catch arm: prefix + if/else split with per-arm chains, every path returns.
+    bdest = (code[branch_idx]::Core.GotoIfNot).dest
+    then_chain = [q for q in arm_regions if q.enter_idx < bdest]
+    else_chain = [q for q in arm_regions if q.enter_idx >= bdest]
+    arm_blocks = [b for b in blocks if b.start_idx >= r.catch_dest]
+    append!(bytes, generate_branch_split_try(ctx, arm_blocks, code, then_chain,
+                                             else_chain, branch_idx))
+    return bytes
+end
+
 function generate_catch_try_chain(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
                                   code, chain::Vector{TryRegion})::Vector{UInt8}
     bytes = UInt8[]
@@ -2353,6 +2411,20 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
                 chain_ok = false
                 break
             end
+            # P3 gap 600287f76223: a branch in the inter-level gap that jumps
+            # OVER the next region (`catch; if cond; try ... else ... end`) is
+            # an if/else split inside the catch arm, not a chain — the chain
+            # layout funnels BOTH paths into the inner try_table and the else
+            # arm becomes unreachable.
+            for i in prev.catch_dest:(cur.enter_idx - 1)
+                st = code[i]
+                dest = st isa Core.GotoIfNot ? st.dest : st isa Core.GotoNode ? st.label : 0
+                if dest > cur.catch_dest
+                    chain_ok = false
+                    break
+                end
+            end
+            chain_ok || break
         end
         # Catch-INTERNAL phis (all edges ≥ the final catch_dest — fill loops in
         # the catch arm) are handled by the stackified tail; only a phi merging
@@ -2362,6 +2434,49 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
                 any(Int(e) < regions[end].catch_dest for e in (code[i]::Core.PhiNode).edges)
                 for i in regions[end].catch_dest:length(code))
             return generate_catch_try_chain(ctx, blocks, code, regions)
+        end
+        # P3 gap 600287f76223: branch-split INSIDE the outer catch arm —
+        # `try A catch; if cond; try B … else Z end end`. All inner regions
+        # live in the catch arm, a GotoIfNot between catch_dest and the first
+        # inner enter jumps over it, every arm path returns, no cross-arm phi.
+        if !_branches_over_outer(code, outer) &&
+           (_outer_normal_path_returns(code, outer) || outer.leave_idx == outer.catch_dest)
+            arm_regions = regions[2:end]
+            if all(q.enter_idx >= outer.catch_dest for q in arm_regions) && !isempty(arm_regions)
+                cas_branch = 0
+                for i in outer.catch_dest:(arm_regions[1].enter_idx - 1)
+                    st = code[i]
+                    st isa Core.GotoIfNot && st.dest > arm_regions[1].catch_dest && (cas_branch = i)
+                end
+                if cas_branch > 0
+                    cas_bdest = (code[cas_branch]::Core.GotoIfNot).dest
+                    cas_then = [q for q in arm_regions if q.enter_idx < cas_bdest]
+                    cas_else = [q for q in arm_regions if q.enter_idx >= cas_bdest]
+                    _cas_consec(ch) = all(
+                        ch[k].enter_idx >= ch[k-1].catch_dest &&
+                        (_outer_normal_path_returns(code, ch[k-1]) ||
+                         ch[k-1].leave_idx == ch[k-1].catch_dest)
+                        for k in 2:length(ch))
+                    cas_arms_ok = !isempty(cas_then) &&
+                                  all(q.enter_idx > cas_branch for q in cas_then) &&
+                                  _cas_consec(cas_then) && _cas_consec(cas_else) &&
+                                  cas_then[end].catch_dest <= cas_bdest
+                    if cas_arms_ok
+                        cas_then_ret = any(code[i] isa Core.ReturnNode
+                                           for i in cas_then[end].catch_dest:(cas_bdest - 1))
+                        cas_else_lo = isempty(cas_else) ? cas_bdest : cas_else[end].catch_dest
+                        cas_else_ret = any(code[i] isa Core.ReturnNode
+                                           for i in cas_else_lo:length(code))
+                        cas_no_cross_phi = !any(code[i] isa Core.PhiNode && haskey(ctx.phi_locals, i) &&
+                                                any(Int(e) < cas_bdest for e in (code[i]::Core.PhiNode).edges)
+                                                for i in cas_bdest:length(code))
+                        if cas_then_ret && cas_else_ret && cas_no_cross_phi
+                            return generate_catch_arm_split(ctx, blocks, code, outer,
+                                                            arm_regions, cas_branch)
+                        end
+                    end
+                end
+            end
         end
         # Sequential (non-nested) try/catch regions
         return generate_sequential_try_catch(ctx, blocks, code, regions)
