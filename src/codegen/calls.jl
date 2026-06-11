@@ -1901,6 +1901,25 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         end
     end
 
+    # P3 gap 450889a9cb7e: `getglobal(mod, :name)` builtin (how typed IR reads
+    # const module globals like Base.Ryu.DIGIT_TABLE16) had NO handler and fell
+    # through to the unknown-call stub → every Ryu string(::Float64) trapped.
+    # With constant module + symbol args, resolve at compile time and compile
+    # the VALUE — compile_value materializes vector/struct/scalar constants.
+    if is_func(func, :getglobal) && length(args) >= 2
+        _gg_mod = args[1] isa QuoteNode ? args[1].value :
+                  args[1] isa GlobalRef ? (isdefined(args[1].mod, args[1].name) ?
+                                           getfield(args[1].mod, args[1].name) : args[1]) :
+                  args[1]
+        _gg_name = args[2] isa QuoteNode ? args[2].value : args[2]
+        if _gg_mod isa Module && _gg_name isa Symbol && isdefined(_gg_mod, _gg_name) &&
+           isconst(_gg_mod, _gg_name)
+            _gg_val = getglobal(_gg_mod, _gg_name)
+            append!(bytes, compile_value(_gg_val, ctx))
+            return bytes
+        end
+    end
+
     # Special case for signal read: getfield(Signal, :value) -> global.get
     # This is detected by analyze_signal_captures! and stored in signal_ssa_getters
     # ONLY applies to actual getfield/getproperty(Signal, :value) calls (WasmGlobal pattern)

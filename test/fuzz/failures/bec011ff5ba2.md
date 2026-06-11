@@ -1,6 +1,6 @@
 ---
 id: bec011ff5ba2
-status: open
+status: fixed
 category: runtime_trap
 kind: runtime_trap
 construct: "PASSING a const-global non-isbits Vector as a callee argument traps; reading its length directly works since v0.3.1 (residual of ffd3d052c6a4) (WASMMAKIE R-002)"
