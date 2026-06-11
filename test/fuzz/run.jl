@@ -394,17 +394,30 @@ function _run_job(job; depth, max_examples)
 end
 
 """
-    sweep_full(; shard = nothing, seeds = 4, depth = 3, max_examples = 60)
+    sweep_full(; shard = nothing, seeds = 4, depth = 3, max_examples = 60,
+                 time_budget = 0)
 
 The full-universe discovery sweep. `shard = (i, n)` runs the i-th 1/n slice
-(0-based) — `sweep_parallel` partitions across processes.
+(0-based) — `sweep_parallel` partitions across processes. `time_budget` (s)
+stops cleanly before the next job once exceeded (0 = unbounded); discovery
+is stochastic re-sampling, so a truncated sweep is still a valid sweep.
 """
-function sweep_full(; shard = nothing, seeds::Int = 4, depth = 3, max_examples = 60)
+function sweep_full(; shard = nothing, seeds::Int = 4, depth = 3, max_examples = 60,
+                    time_budget::Int = 0)
     FuzzHarness.NODE_OK || (@warn "Node.js unavailable"; return)
     jobs = _sweep_jobs(seeds = seeds)
-    for (k, job) in enumerate(jobs)
-        shard !== nothing && ((k - 1) % shard[2] != shard[1]) && continue
-        _run_job(job; depth = depth, max_examples = max_examples)
+    mine = [k for k in eachindex(jobs)
+            if shard === nothing || (k - 1) % shard[2] == shard[1]]
+    tag = shard === nothing ? "" : "[shard $(shard[1])] "
+    t0 = time()
+    for (j, k) in enumerate(mine)
+        el = round(Int, time() - t0)
+        if time_budget > 0 && el > time_budget
+            println("$(tag)⏱ time budget $(time_budget)s exhausted — stopping at job $(j)/$(length(mine))")
+            break
+        end
+        println("$(tag)job $(j)/$(length(mine)) $(jobs[k][1]) $(jobs[k][2]) (elapsed $(el)s)")
+        _run_job(jobs[k]; depth = depth, max_examples = max_examples)
     end
 end
 
@@ -416,10 +429,13 @@ the SHARED ledger (ids are content-addressed, so concurrent distinct gaps
 coexist); the orchestrator regenerates the index and reports new gaps.
 """
 function sweep_parallel(; procs::Int = max(2, Sys.CPU_THREADS - 2), seeds::Int = 4,
-                        depth = 3, max_examples = 60)
+                        depth = 3, max_examples = 60, time_budget::Int = 1800)
     before = Set(get(g, "id", "") for g in Ledger.load_gaps())
     file = joinpath(FUZZ_DIR, "run.jl")
-    cmds = [addenv(`$(Base.julia_cmd()) --project=$(Base.active_project()) $file sweep-shard $(i) $(procs) $(seeds) $(depth) $(max_examples)`)
+    println("== parallel sweep: $procs workers, $(length(_sweep_jobs(seeds = seeds))) jobs, " *
+            "time budget $(time_budget)s/worker ==")
+    t0 = time()
+    cmds = [addenv(`$(Base.julia_cmd()) --project=$(Base.active_project()) $file sweep-shard $(i) $(procs) $(seeds) $(depth) $(max_examples) $(time_budget)`)
             for i in 0:procs-1]
     ps = [run(pipeline(ignorestatus(c); stdout = stdout, stderr = stderr); wait = false) for c in cmds]
     foreach(wait, ps)
@@ -427,7 +443,7 @@ function sweep_parallel(; procs::Int = max(2, Sys.CPU_THREADS - 2), seeds::Int =
     after = Ledger.load_gaps()
     newids = [get(g, "id", "") for g in after if !(get(g, "id", "") in before)]
     nopen = count(g -> get(g, "status", "open") == "open", after)
-    println("\n== parallel sweep complete: $nopen open, $(length(newids)) new ==")
+    println("\n== parallel sweep complete in $(round(Int, time() - t0))s: $nopen open, $(length(newids)) new ==")
     for g in after
         get(g, "id", "") in newids || continue
         println("  NEW [", get(g, "category", "?"), "] ", get(g, "id", "?"), " — ", first(get(g, "construct", ""), 110))
@@ -513,10 +529,13 @@ if abspath(PROGRAM_FILE) == @__FILE__
     elseif length(ARGS) >= 1 && ARGS[1] == "coverage"
         write_coverage!()
     elseif length(ARGS) >= 1 && ARGS[1] == "sweep"
-        sweep_parallel()
+        # Optional second arg: per-worker time budget in seconds (default 1800).
+        sweep_parallel(time_budget = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 1800)
     elseif length(ARGS) >= 1 && ARGS[1] == "sweep-shard"
         i, n, seeds, depth, mex = parse.(Int, ARGS[2:6])
-        sweep_full(shard = (i, n), seeds = seeds, depth = depth, max_examples = mex)
+        tb = length(ARGS) >= 7 ? parse(Int, ARGS[7]) : 0
+        sweep_full(shard = (i, n), seeds = seeds, depth = depth, max_examples = mex,
+                   time_budget = tb)
     else
         run_fuzz()
     end
