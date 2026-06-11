@@ -336,6 +336,14 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     :fma_emulated,
     # WBUILD-1022: Float64 remainder (used by mod/rem)
     :rem_internal,
+    # P3 / WASMMAKIE W-002: Float64 ranges (0.0:5.0) construct via the
+    # high-precision StepRangeLen path — TwicePrecision is plain float-pair
+    # struct arithmetic, compilable from its real Base IR.
+    :steprangelen_hp, :twiceprecision, :_colon, :unsafe_getindex,
+    # P3 / WASMMAKIE W-002: round(x; digits=d) — pure float math over pow_body
+    :_round_digits,
+    # P3 / WASMMAKIE W-002: broadcast over diff(v) views — alias-analysis copy
+    :unaliascopy,
     # WBUILD-1040: Collection operations (pure Julia in 1.12)
     :reverse, :_sort!, :reverse!,
     :filter, :_similar_or_copy,
