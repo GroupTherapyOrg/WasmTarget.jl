@@ -2723,10 +2723,15 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 ctx.last_stmt_was_stub = true
                 return bytes
             end
-            # Zero-fill no-op: return the pointer (first arg) as the result since memset returns ptr.
-            if length(expr.args) >= 6
-                ptr_arg = expr.args[6]
-                append!(bytes, compile_value(ptr_arg, ctx))
+            # Zero-fill no-op. memset returns the ptr, but only materialise it when
+            # the result is actually stored (ssa_local exists). Unconditionally
+            # pushing it orphaned a stub value on the stack: callers (Dict ctor,
+            # rehash!) discard the result, and statement_produces_wasm_value treats
+            # the Ptr-typed foreigncall as void so no DROP follows. Latent until a
+            # reachable block `end` closed over the orphan (P2-batch23, gaps
+            # 4be58371947f / 203da15d789c).
+            if length(expr.args) >= 6 && haskey(ctx.ssa_locals, idx)
+                append!(bytes, compile_value(expr.args[6], ctx))
             end
             return bytes
         elseif name === :jl_types_equal

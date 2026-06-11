@@ -1506,6 +1506,26 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         @warn "PURE-6024 STACKIFIED DEBUG: $(length(blocks)) blocks, non_trivial_targets=$non_trivial_targets, outer_targets=$outer_targets, return_type=$(ctx.return_type)"
     end
 
+    # P2-batch23 (gaps 4be58371947f / 203da15d789c): when compiling a SUBSET of
+    # the function's blocks (pre-try regions, chain prefixes), a terminator can
+    # target a statement BEYOND the subset (e.g. `if cond; return X; end; try…`
+    # — the GotoIfNot's dest is the try region). Previously the branch was
+    # silently dropped while its compiled condition stayed on the stack
+    # ("values remaining at end of block"). Wrap the subset in an EXIT block:
+    # out-of-subset forward branches br to it, landing exactly where the
+    # caller's continuation (e.g. the try_table) begins.
+    _subset_end = isempty(blocks) ? 0 : maximum(b.end_idx for b in blocks)
+    _term_dest(t) = t isa Core.GotoIfNot ? t.dest : t isa Core.GotoNode ? t.label : 0
+    needs_exit_block = any(begin
+                               d = _term_dest(b.terminator)
+                               d > _subset_end && get(stmt_to_block, d, nothing) === nothing
+                           end for b in blocks)
+    _exit_depth() = length(open_blocks) + length(open_loops)
+    if needs_exit_block
+        push!(bytes, Opcode.BLOCK)
+        push!(bytes, 0x40)
+    end
+
     # Now generate code for each block in order
     for (block_idx, block) in enumerate(blocks)
         # First, close any blocks whose target is this block
@@ -2009,6 +2029,16 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         append!(bytes, encode_leb128_unsigned(label_depth))
                     end
                 end
+            elseif dest_block === nothing && needs_exit_block && term.dest > _subset_end
+                # P2-batch23: dest is beyond the compiled subset — branch to the
+                # exit block (the caller's continuation begins right after it).
+                push!(bytes, Opcode.I32_EQZ)
+                push!(bytes, Opcode.BR_IF)
+                append!(bytes, encode_leb128_unsigned(_exit_depth()))
+            elseif dest_block === nothing
+                # Unresolvable dest: drop the compiled condition rather than
+                # orphaning it on the operand stack.
+                push!(bytes, Opcode.DROP)
             end
 
             # PURE-314: GotoIfNot fall-through phi locals
@@ -2102,6 +2132,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     push!(bytes, Opcode.BR)
                     append!(bytes, encode_leb128_unsigned(label_depth))
                 end
+            elseif dest_block === nothing && needs_exit_block && term.label > _subset_end
+                # P2-batch23: unconditional jump beyond the compiled subset —
+                # branch to the exit block (the caller's continuation).
+                push!(bytes, Opcode.BR)
+                append!(bytes, encode_leb128_unsigned(_exit_depth()))
             end
         else
             # No explicit terminator (GotoNode, GotoIfNot, ReturnNode)
@@ -2148,6 +2183,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # P2-batch19: callers compiling a FALL-THROUGH region (the pre-branch code
     # of an exit-branch try/catch) opt out — for them this guard is live code.
     trailing_unreachable && push!(bytes, Opcode.UNREACHABLE)
+
+    # P2-batch23: close the subset exit block — out-of-subset branches land
+    # here, i.e. exactly at the caller's continuation.
+    needs_exit_block && push!(bytes, Opcode.END)
 
     return bytes
 end

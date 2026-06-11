@@ -417,6 +417,7 @@ function sweep_full(; shard = nothing, seeds::Int = 4, depth = 3, max_examples =
             break
         end
         println("$(tag)job $(j)/$(length(mine)) $(jobs[k][1]) $(jobs[k][2]) (elapsed $(el)s)")
+        flush(stdout)   # progress must be visible through file redirects
         _run_job(jobs[k]; depth = depth, max_examples = max_examples)
     end
 end
@@ -434,6 +435,7 @@ function sweep_parallel(; procs::Int = max(2, Sys.CPU_THREADS - 2), seeds::Int =
     file = joinpath(FUZZ_DIR, "run.jl")
     println("== parallel sweep: $procs workers, $(length(_sweep_jobs(seeds = seeds))) jobs, " *
             "time budget $(time_budget)s/worker ==")
+    flush(stdout)
     t0 = time()
     cmds = [addenv(`$(Base.julia_cmd()) --project=$(Base.active_project()) $file sweep-shard $(i) $(procs) $(seeds) $(depth) $(max_examples) $(time_budget)`)
             for i in 0:procs-1]

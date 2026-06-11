@@ -2211,12 +2211,21 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
                     branch_idx = i
                 end
             end
-            if branch_idx > 0 &&
-               any(code[i] isa Core.ReturnNode
-                   for i in outer.catch_dest:((code[branch_idx]::Core.GotoIfNot).dest - 1)) &&
-               !any(code[i] isa Core.PhiNode && haskey(ctx.phi_locals, i)
-                    for i in outer.catch_dest:length(code))
-                return generate_branch_split_try(ctx, blocks, code, outer, inner, branch_idx)
+            if branch_idx > 0
+                bdest = (code[branch_idx]::Core.GotoIfNot).dest
+                then_returns = any(code[i] isa Core.ReturnNode
+                                   for i in outer.catch_dest:(bdest - 1))
+                else_returns = any(code[i] isa Core.ReturnNode
+                                   for i in inner.catch_dest:length(code))
+                # Arm-INTERNAL phis (vector-literal fill loops etc.) are fine —
+                # the stackified arm bodies handle them. Only a CROSS-ARM merge
+                # phi (an edge from before the else arm) breaks the layout.
+                no_cross_phi = !any(code[i] isa Core.PhiNode && haskey(ctx.phi_locals, i) &&
+                                    any(Int(e) < bdest for e in (code[i]::Core.PhiNode).edges)
+                                    for i in bdest:length(code))
+                if then_returns && else_returns && no_cross_phi
+                    return generate_branch_split_try(ctx, blocks, code, outer, inner, branch_idx)
+                end
             end
         end
         # Inner is nested if its enter is within the outer's try scope
