@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.3.1](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.0...v0.3.1) (2026-06-11)
+
+
+### Features
+
+* catch-arm branch-split generator (if/else with inner try inside catch) ([13e88b0](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/13e88b0cd9cbb903bd59f449be58ea2d3835c2c9))
+* Float64 ranges, round(digits=), range broadcasts (WASMMAKIE W-002) ([78b1586](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/78b158663f3b7b420e31b44c14a0a27359e26450))
+* Julia 1.13 support alongside 1.12 — CI matrix + docs ([dc36264](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/dc3626471ce443ac644a5655c08b37061aa93df9))
+* Ryu writefixed/writeexp scalar overlays (WASMMAKIE W-004) ([5aeb98d](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/5aeb98d9b9727a17c3bdcc84c7844ef370053de4))
+
+
+### Bug Fixes
+
+* byte-vector in() memchr overlay + version-aware mod(x, Inf) semantics ([9b3ea5b](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/9b3ea5bcf59ff02de7d903c8fff4d5becff11525))
+* catch-arm control flow + trunc_int width normalisation ([8a34688](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/8a34688ee5c7cb968e8c0dae451c19a7168bc244))
+* forward-parse instruction boundaries in trailing type-safety checks ([0d5c88c](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/0d5c88cce2fd83137f082d285c3a432dff3b0948))
+* Julia 1.13 String hashing, sinc/cosc evaluator, version-tolerant kwarg-body whitelist ([adbe30d](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/adbe30dee0263cfd88ef74065c4b44404104a7a3))
+* nested-try generator fully stackified + normal-path skip block ([365a14e](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/365a14e9acb0f3c0fc6224d6fe0d54d3e3320bfc))
+* sitofp narrow sign-extension + catchable Union{}-rettype invokes ([4166d8e](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/4166d8e0338c328843a0695f85e9584d7e75f7e7))
+* stackify nested-try pre-outer and between-enter segments ([ff6eccc](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/ff6eccc7277b14101ee66cf24fe3d5024e924ce5))
+
 ## [0.3.0](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.2.1...v0.3.0) (2026-06-11)
 
 
