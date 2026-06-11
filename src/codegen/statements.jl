@@ -942,14 +942,18 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
 
                 # Check if stmt_bytes ends with struct_get whose result type is incompatible
                 # with the target local. struct_get = [0xFB, 0x02, type_leb, field_leb]
+                # P3 gap a6c6091b2a80: FORWARD-parse to the last instruction — the
+                # backward 0xFB 0x02 scan misread `local.get 379` (LEB 0xFB 0x02!)
+                # as a struct_get, decoded garbage type/field, and nulled the value
+                # of an ht_keyindex2_shorthash! invoke (composition-only null deref:
+                # only modules with enough locals reach index 379). Same misparse
+                # class as the i32.const-32 byte-scan bug (gap a1b2c32const).
                 if !needs_type_safe_default && length(stmt_bytes) >= 4 && local_wasm_type isa ConcreteRef
-                    # Find the last struct_get in stmt_bytes by scanning backward for 0xFB 0x02
                     sg_pos = 0
-                    for si in (length(stmt_bytes) - 3):-1:1
-                        if stmt_bytes[si] == Opcode.GC_PREFIX && stmt_bytes[si + 1] == Opcode.STRUCT_GET
-                            sg_pos = si
-                            break
-                        end
+                    local _sg_li = _last_instr_start(stmt_bytes)
+                    if _sg_li > 0 && _sg_li + 1 <= length(stmt_bytes) &&
+                       stmt_bytes[_sg_li] == Opcode.GC_PREFIX && stmt_bytes[_sg_li + 1] == Opcode.STRUCT_GET
+                        sg_pos = _sg_li
                     end
                     if sg_pos > 0 && sg_pos + 2 <= length(stmt_bytes)
                         # Decode type_idx LEB128
@@ -1271,6 +1275,8 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                 end
 
                 if needs_type_safe_default
+                    haskey(ENV, "WT_TRACE_NULLDEF") && println(stderr,
+                        "NULLDEF idx=$idx local_type=$local_wasm_type stmt=", repr(stmt)[1:min(end,120)])
                     ssa_type_mismatch = true
                     # Emit type-safe default instead of the incompatible value
                     if local_wasm_type isa ConcreteRef

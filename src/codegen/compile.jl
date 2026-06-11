@@ -2380,10 +2380,29 @@ function _autodiscover_closure_deps!(closure::Function, code_info::Core.CodeInfo
         push!(compiled, key)
 
         try
-            typed_results = Base.code_typed(f, arg_types)
-            isempty(typed_results) && continue
-            dep_code_info, dep_return_type = typed_results[1]
+            # WASMMAKIE E-003: use the SAME IR entry compile_module uses
+            # (constructor/closure handling) instead of bare code_typed, and
+            # pre-register parameter/return struct types — missing
+            # registration produced 'Unknown struct type reference' for
+            # constructor deps (TickLabel, SubString)
+            dep_code_info, dep_return_type = get_typed_ir(f, arg_types;
+                optimize=true, interp=get_wasm_interpreter())
+            dep_code_info === nothing && continue
             dep_return_type === Union{} && continue
+            for T in arg_types
+                if T isa DataType
+                    if is_struct_type(T)
+                        register_struct_type!(mod, type_registry, T)
+                    elseif T <: Vector
+                        register_vector_type!(mod, type_registry, T)
+                    elseif T === String
+                        get_string_array_type!(mod, type_registry)
+                    end
+                end
+            end
+            if dep_return_type isa DataType && is_struct_type(dep_return_type)
+                register_struct_type!(mod, type_registry, dep_return_type)
+            end
             push!(dep_data, (f, arg_types, name, dep_code_info, dep_return_type))
         catch e
             @warn "compile_closure_body: skipping dependency $name — $e"
@@ -2408,18 +2427,30 @@ function _autodiscover_closure_deps!(closure::Function, code_info::Core.CodeInfo
     # 'expected i64, found i32'). Reserve-then-replace makes reserved
     # indices unconditionally stable.
     slot_positions = Vector{Int}(undef, length(dep_data))
+    slot_ok = Vector{Bool}(undef, length(dep_data))
     for (i, (f, arg_types, name, _, dep_return_type)) in enumerate(dep_data)
-        param_types = WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in arg_types]
-        result_types = dep_return_type === Nothing ? WasmValType[] : WasmValType[get_concrete_wasm_type(dep_return_type, mod, type_registry)]
+        # unconvertible signatures (e.g. Vararg in code_typed tuples) can
+        # never compile OR be validly called — reserve an empty-sig slot so
+        # index alignment holds, and skip the body
+        param_types, result_types, ok = try
+            (WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in arg_types],
+             dep_return_type === Nothing ? WasmValType[] : WasmValType[get_concrete_wasm_type(dep_return_type, mod, type_registry)],
+             true)
+        catch e
+            @warn "compile_closure_body: unconvertible dep signature $name — $e"
+            (WasmValType[], WasmValType[], false)
+        end
         add_function!(mod, param_types, result_types, WasmValType[],
                       UInt8[0x00, 0x0b])  # unreachable; end
         slot_positions[i] = length(mod.functions)
+        slot_ok[i] = ok
     end
 
     # Pass 2: compile bodies and REPLACE each placeholder in place (failed
     # bodies keep the placeholder — calling the failed dep traps loudly
     # instead of corrupting unrelated calls)
     for (i, (f, arg_types, name, dep_code_info, dep_return_type)) in enumerate(dep_data)
+        slot_ok[i] || continue   # unconvertible signature — placeholder stays
         func_idx = n_base + UInt32(i - 1)
         try
             dep_ctx = CompilationContext(dep_code_info, arg_types, dep_return_type, mod, type_registry;
