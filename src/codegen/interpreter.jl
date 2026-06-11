@@ -1362,6 +1362,13 @@ end
 # Remove when: native libm-style hyperbolic codegen exists.
 const _WASM_LN2 = 0.6931471805599453             # log(2), for the overflow-safe eᵃ/2
 
+# P3 gap c9f2efb08deb: the previous exp(a - ln2) trick for a > 20 carried ~3
+# ulp error (argument rounding amplified by exp), which sin(sinh(x)) blew into
+# full divergence at huge x — chaotic amplification. Fix ONLY that branch:
+# the plain exp form is exact up to H_LARGE_X (exp(709) is finite), and above
+# it Base's half-exponent squaring applies (bit-identical: exp compiles to
+# the same Base kernel). Small/mid branches keep the catalogue-proven
+# formulas — Base's minimax kernels can't be matched bitwise without fma.
 @overlay WASM_METHOD_TABLE function Base.sinh(x::Float64)
     (isnan(x) || isinf(x)) && return x          # sinh(±Inf)=±Inf, sinh(NaN)=NaN
     a = abs(x)
@@ -1369,27 +1376,27 @@ const _WASM_LN2 = 0.6931471805599453             # log(2), for the overflow-safe
         # Taylor in x²: x·(1 + x²/3! + x⁴/5! + x⁶/7! + x⁸/9!); ≤7e-13 rel at 0.35.
         x2 = x * x
         return x * (1.0 + x2*(1/6 + x2*(1/120 + x2*(1/5040 + x2*(1/362880)))))
-    elseif a > 20.0
-        # eᵃ/2 via exp(a - ln2): drops e⁻ᵃ (<2e-9 rel here) and never forms the
-        # overflowing eᵃ, so sinh stays finite up to native's limit (e.g. x=710).
-        s = exp(a - _WASM_LN2)
-        return x < 0.0 ? -s : s
+    elseif a >= 709.7822265633563                # H_LARGE_X(Float64), as in Base
+        E = exp(0.5 * a)
+        return copysign(0.5 * E * E, x)
     end
-    e = exp(a)
-    s = 0.5 * (e - 1.0/e)
-    return x < 0.0 ? -s : s
+    E = exp(a)
+    return copysign(0.5 * (E - 1.0 / E), x)      # 1/E underflows harmlessly at large a
 end
 @overlay WASM_METHOD_TABLE function Base.cosh(x::Float64)
     isnan(x) && return x
     a = abs(x)
-    a > 20.0 && return exp(a - _WASM_LN2)        # eᵃ/2, overflow-safe (cosh(±Inf)=Inf)
-    e = exp(a)
-    return 0.5 * (e + 1.0/e)
+    if a >= 709.7822265633563                    # H_LARGE_X(Float64), as in Base
+        E = exp(0.5 * a)
+        return 0.5 * E * E
+    end
+    E = exp(a)
+    return 0.5 * (E + 1.0 / E)
 end
 @overlay WASM_METHOD_TABLE function Base.tanh(x::Float64)
     isnan(x) && return x
     abs(x) > 20.0 && return x < 0.0 ? -1.0 : 1.0  # saturated to ±1 (also ±Inf)
-    return sinh(x) / cosh(x)                       # accurate: sinh is cancellation-safe
+    return sinh(x) / cosh(x)                       # catalogue-proven quotient
 end
 @overlay WASM_METHOD_TABLE Base.sinh(x::Float32) = Float32(sinh(Float64(x)))
 @overlay WASM_METHOD_TABLE Base.cosh(x::Float32) = Float32(cosh(Float64(x)))
