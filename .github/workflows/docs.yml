@@ -29,6 +29,11 @@ jobs:
       - uses: julia-actions/cache@v2
 
       - name: Install dependencies
+        env:
+          # Bypass the pkg-server snapshot cache — resolve against General's
+          # git state so freshly registered deps (Therapy releases) are
+          # visible immediately instead of after CDN propagation.
+          JULIA_PKG_SERVER: ""
         run: |
           julia --project=docs -e '
             using Pkg
