@@ -1714,6 +1714,52 @@ end
     end
 end
 
+# ─── String concatenation Overlay ───────────────────────────────────────────
+# Why: Base._string (the Vararg backend of string(...) and String * SubString)
+#      copies bytes through pointer arithmetic over the parts; the compiled
+#      form null-derefs or traps for every multi-part call (gap 284d3e7059cd,
+#      WASMMAKIE W-005 — even string("ab","cd") failed; only the dedicated
+#      String*String path worked). Build bytes via codeunit reads instead.
+
+@overlay WASM_METHOD_TABLE function Base._string(parts::Union{Char, SubString{String}, String, Symbol}...)
+    out = UInt8[]
+    for p in parts
+        if p isa Char
+            u = reinterpret(UInt32, p)
+            nb = 4 - (trailing_zeros(u | 0xff) >> 3)
+            i = 1
+            while i <= nb
+                push!(out, UInt8((u >> (8 * (4 - i))) & 0xFF))
+                i += 1
+            end
+        elseif p isa String
+            for i in 1:ncodeunits(p)
+                push!(out, codeunit(p, i))
+            end
+        elseif p isa SubString{String}
+            for i in 1:ncodeunits(p)
+                push!(out, codeunit(p, i))
+            end
+        else  # Symbol — represented as a string in WasmGC
+            s = String(p)
+            for i in 1:ncodeunits(s)
+                push!(out, codeunit(s, i))
+            end
+        end
+    end
+    return String(out)
+end
+
+# String(::SubString) inlines an unsafe_string pointer conversion ("cannot
+# convert NULL to string" guard) that null-derefs in WasmGC — copy bytes.
+@overlay WASM_METHOD_TABLE function Base.String(s::SubString{String})
+    out = UInt8[]
+    for i in 1:ncodeunits(s)
+        push!(out, codeunit(s, i))
+    end
+    return String(out)
+end
+
 # ─── Vector shrink Overlay ──────────────────────────────────────────────────
 # Why: shrinking resize! inlines Base._deleteend! whose freed-slot clearing
 #      (atomic_pointerset GC bookkeeping) stubs to a runtime trap (gap
