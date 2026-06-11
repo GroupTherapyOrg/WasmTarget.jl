@@ -165,7 +165,7 @@ julia --project=test/fuzz test/fuzz/run.jl coverage  # regenerate COVERAGE.md
 
 ## Requirements
 
-- **Julia 1.12** (required — IR format is version-specific)
+- **Julia 1.12 or 1.13** (required — the typed-IR format is version-specific, so each minor line is supported explicitly; both run in CI)
 - Node.js 20+ for testing (WasmGC support)
 - `wasm-tools` for validation (`cargo install wasm-tools`)
 
