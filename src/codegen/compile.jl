@@ -2386,7 +2386,7 @@ function _autodiscover_closure_deps!(closure::Function, code_info::Core.CodeInfo
             dep_return_type === Union{} && continue
             push!(dep_data, (f, arg_types, name, dep_code_info, dep_return_type))
         catch e
-            @debug "compile_closure_body: skipping dependency $name — $e"
+            @warn "compile_closure_body: skipping dependency $name — $e"
         end
     end
 
@@ -2399,29 +2399,39 @@ function _autodiscover_closure_deps!(closure::Function, code_info::Core.CodeInfo
         register_function!(func_registry, name, f, arg_types, func_idx, dep_return_type)
     end
 
-    # Pass 2: compile function bodies (all cross-call targets now registered)
-    for (i, (f, arg_types, name, dep_code_info, dep_return_type)) in enumerate(dep_data)
-        func_idx = n_base + UInt32(i - 1)
-        # types FIRST — the placeholder below must match the registered
-        # signature so call sites stay valid
+    # Pass 1.5 (WASMMAKIE E-003): append a typed `unreachable` placeholder
+    # SLOT for every dep up front. Body compilation below can itself create
+    # helper functions (string hash/iterate, vector helpers, …) which APPEND
+    # to mod.functions — with sequential add_function! that shifted every
+    # later dep above its reserved index and cross-calls hit the WRONG
+    # functions (validation: 'not enough arguments on the stack' /
+    # 'expected i64, found i32'). Reserve-then-replace makes reserved
+    # indices unconditionally stable.
+    slot_positions = Vector{Int}(undef, length(dep_data))
+    for (i, (f, arg_types, name, _, dep_return_type)) in enumerate(dep_data)
         param_types = WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in arg_types]
         result_types = dep_return_type === Nothing ? WasmValType[] : WasmValType[get_concrete_wasm_type(dep_return_type, mod, type_registry)]
+        add_function!(mod, param_types, result_types, WasmValType[],
+                      UInt8[0x00, 0x0b])  # unreachable; end
+        slot_positions[i] = length(mod.functions)
+    end
+
+    # Pass 2: compile bodies and REPLACE each placeholder in place (failed
+    # bodies keep the placeholder — calling the failed dep traps loudly
+    # instead of corrupting unrelated calls)
+    for (i, (f, arg_types, name, dep_code_info, dep_return_type)) in enumerate(dep_data)
+        func_idx = n_base + UInt32(i - 1)
         try
             dep_ctx = CompilationContext(dep_code_info, arg_types, dep_return_type, mod, type_registry;
                                          func_registry=func_registry, func_idx=func_idx, func_ref=f)
             dep_body = generate_body(dep_ctx)
-
-            add_function!(mod, param_types, result_types, dep_ctx.locals, dep_body)
+            slot = slot_positions[i]
+            placeholder = mod.functions[slot]
+            mod.functions[slot] = WasmFunction(placeholder.type_idx,
+                                               WasmValType[l for l in dep_ctx.locals],
+                                               dep_body)
         catch e
-            @debug "compile_closure_body: error compiling dependency $name — $e"
-            # WASMMAKIE E-003: indices were RESERVED for every dep in pass 1 —
-            # skipping a failed body here shifted every later function down
-            # one slot, so cross-calls hit the WRONG functions (validation:
-            # 'not enough arguments on the stack'). A typed `unreachable`
-            # placeholder keeps the index space aligned (calling the failed
-            # dep traps loudly instead of corrupting unrelated calls).
-            add_function!(mod, param_types, result_types, WasmValType[],
-                          UInt8[0x00, 0x0b])  # unreachable; end
+            @warn "compile_closure_body: error compiling dependency $name — $e"
         end
     end
 end
