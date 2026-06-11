@@ -3223,8 +3223,36 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
     # End inner try_table
     push!(bytes, Opcode.END)
 
-    # Normal path: branch past the inner catch handler to the skip-block end
-    # (depth 0 = landing block, depth 1 = skip block).
+    # P3 gap 5fe789cdb92c: when the inner-normal and inner-catch paths MERGE
+    # at phis before the outer catch (un-inlined invokes in the catch arm keep
+    # the merge un-collapsed), the skip branch must land AT THE MERGE, not
+    # after the whole inner-catch range — and both paths must store their
+    # merge-phi edges (the stackified subsets can't: the phi is out of subset).
+    merge_start = 0
+    for i in inner.catch_dest:(outer.catch_dest - 1)
+        st = code[i]
+        if st isa Core.PhiNode && haskey(ctx.phi_locals, i) &&
+           any(Int(e) < inner.catch_dest for e in st.edges)
+            merge_start = i
+            break
+        end
+    end
+
+    # Normal path: store merge-phi edges (keyed below inner.catch_dest), then
+    # branch past the inner catch handler to the skip-block end.
+    if merge_start > 0
+        for i in merge_start:(outer.catch_dest - 1)
+            st = code[i]
+            st isa Core.PhiNode || break
+            haskey(ctx.phi_locals, i) || continue
+            for (k, e) in enumerate(st.edges)
+                if Int(e) < inner.catch_dest && isassigned(st.values, k)
+                    emit_phi_local_set!(bytes, st.values[k], i, ctx)
+                    break
+                end
+            end
+        end
+    end
     push!(bytes, Opcode.BR)
     append!(bytes, encode_leb128_unsigned(1))
 
@@ -3234,15 +3262,16 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
     # Reset dead code flag — inner catch handler is reachable
     ctx.last_stmt_was_stub = false
 
-    # === Inner catch handler (stmts inner.catch_dest to outer.catch_dest-1) ===
+    # === Inner catch handler (stmts inner.catch_dest up to the merge) ===
     # This is INSIDE the outer try_table, so re-throws are caught by outer catch!
     # P3 gap ae64a1ba676e: STACKIFIED — the previous hand-rolled GotoIfNot
     # walk dropped phi-edge stores and loops, the same linear-walk class as
     # the catch arms in P3-batch6/8.
+    inner_catch_hi = merge_start > 0 ? merge_start - 1 : outer.catch_dest - 1
     inner_catch = BasicBlock[]
     for b in blocks
         lo = max(b.start_idx, inner.catch_dest)
-        hi = min(b.end_idx, outer.catch_dest - 1)
+        hi = min(b.end_idx, inner_catch_hi)
         lo > hi && continue
         if lo == b.start_idx && hi == b.end_idx
             push!(inner_catch, b)
@@ -3255,9 +3284,43 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
                                                 trailing_unreachable=false))
         ctx.last_stmt_was_stub = false
     end
+    # Catch path: store merge-phi edges keyed inside the handler range.
+    if merge_start > 0
+        for i in merge_start:(outer.catch_dest - 1)
+            st = code[i]
+            st isa Core.PhiNode || break
+            haskey(ctx.phi_locals, i) || continue
+            for (k, e) in enumerate(st.edges)
+                if inner.catch_dest <= Int(e) <= inner_catch_hi && isassigned(st.values, k)
+                    emit_phi_local_set!(bytes, st.values[k], i, ctx)
+                    break
+                end
+            end
+        end
+    end
 
-    # End skip block (the body's normal path lands here, after the handler)
+    # End skip block (both paths land here, at the merge)
     push!(bytes, Opcode.END)
+
+    # === Merge code (phis through the rest of the outer body) ===
+    if merge_start > 0
+        merge_blocks = BasicBlock[]
+        for b in blocks
+            lo = max(b.start_idx, merge_start)
+            hi = min(b.end_idx, outer.catch_dest - 1)
+            lo > hi && continue
+            if lo == b.start_idx && hi == b.end_idx
+                push!(merge_blocks, b)
+            else
+                push!(merge_blocks, BasicBlock(lo, hi, hi == b.end_idx ? b.terminator : nothing))
+            end
+        end
+        if !isempty(merge_blocks)
+            append!(bytes, generate_stackified_flow(ctx, merge_blocks, code;
+                                                    trailing_unreachable=false))
+            ctx.last_stmt_was_stub = false
+        end
+    end
 
     # End outer try_table
     push!(bytes, Opcode.END)
