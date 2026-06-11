@@ -113,6 +113,21 @@ Every signature's status lives in [`test/fuzz/COVERAGE.md`](test/fuzz/COVERAGE.m
 | Splatting (f(args...)) | Working |
 | Keyword arguments | Working |
 
+### Known limitations
+
+Constructs whose **inferred type is abstract** (requiring runtime type
+dispatch) are not supported and trap or raise a compile error:
+
+- **Heterogeneous-key `Dict` literals** — `Dict(Int32(0) => 0, some_int64 => 0)`
+  promotes through `dict_with_eltype`, inferring an unparameterized `Dict`.
+  Promote keys explicitly so all pairs share one concrete type.
+- **Mixed `Char`/`String`/`SubString` varargs beyond two arguments** — the
+  vararg tuple's elements widen to a `Union`; two-argument combinations are
+  covered by concrete overlay specializations.
+- **Matrix literals of tuples** (`[(a,b) (c,d); …]`) — the `hvncat` machinery
+  currently recurses in compilation; build with `Matrix{T}(undef, m, n)` and
+  explicit stores instead.
+
 ## Type Mappings
 
 | Julia Type | WebAssembly Type |
