@@ -40,6 +40,24 @@ getfield(vec,:ref)→:ptr_or_offset) back to its backing Vector. Returns
 nothing unless the base is a Vector with 1-byte elements (memmove counts
 bytes; element index == byte offset only for elsize 1).
 """
+# Emit the backing wasm ARRAY ref for a walk result: Vector{T} structs read
+# field 1 (.ref); Memory{T} values ARE the array. Always cast to `arr_t`.
+function _emit_backing_array!(bytes::Vector{UInt8}, vec, ctx::AbstractCompilationContext, arr_t)
+    vt = infer_value_type(vec, ctx)
+    append!(bytes, compile_value(vec, ctx))
+    is_mem = vt isa DataType && (vt.name.name === :Memory || vt.name.name === :GenericMemory ||
+                                 vt.name.name === :MemoryRef || vt.name.name === :GenericMemoryRef)
+    if !is_mem
+        vinfo = ctx.type_registry.structs[vt]
+        push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
+        append!(bytes, encode_leb128_unsigned(vinfo.wasm_type_idx))
+        append!(bytes, encode_leb128_unsigned(1))
+    end
+    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.REF_CAST_NULL)
+    append!(bytes, encode_leb128_signed(Int64(arr_t)))
+    return bytes
+end
+
 function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
                             eltypes = (UInt8, Int8), allow_ref::Bool = false)
     # Walk permissively (through bitcast/add_ptr/sub_ptr/PiNode and any phi
@@ -83,6 +101,15 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
                 cur = st.args[3]
             elseif cfn === :add_ptr || cfn === :sub_ptr
                 cur = st.args[2]
+            elseif cfn === :memorynew
+                # P4-stdlib: pointer into a freshly-allocated Memory{T} —
+                # Memory compiles DIRECTLY as a wasm array; valid terminal
+                # (callers use _emit_backing_array! which skips the Vector
+                # struct deref for Memory values).
+                local _mn_t = infer_value_type(cur, ctx)
+                local _mn_el = _mn_t isa DataType && length(_mn_t.parameters) >= 2 ? _mn_t.parameters[2] : nothing
+                _mn_el in eltypes || return _fail("memorynew-elty: $_mn_t", st)
+                return cur
             elseif cfn === :memoryrefnew && (length(st.args) == 2 || st.args[3] == 1)
                 # P4-stdlib: base memoryref (index 1) — pure identity hop.
                 # Variable-index refs are NOT walked: their byte offset would
@@ -102,6 +129,13 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
                      eltype(vt) in eltypes) || return _fail("elty-not-allowed: $vt", vec)
                     return vec
                 else
+                    # P4-stdlib (SHA update!): getfield(obj, fld) whose RESULT
+                    # type is an allowed Vector (ctx.buffer::Vector{UInt8}) is
+                    # itself the backing-store identity.
+                    local _gf_vt = infer_value_type(cur, ctx)
+                    if _gf_vt isa DataType && _gf_vt <: Vector && eltype(_gf_vt) in eltypes
+                        return cur
+                    end
                     return _fail("getfield-fld=$fld", st)
                 end
             else
@@ -3384,23 +3418,15 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
         # width 4/8 → array.copy with byte offsets/count scaled to elements.
         # (Byte vectors keep the established paths below; array.copy is
         # overlap-safe per the WasmGC spec, matching memmove semantics.)
-        local _MMV_PRIMS = (Int16, UInt16, Int32, UInt32, Int64, UInt64, Float32, Float64)
+        local _MMV_PRIMS = (Int8, UInt8, Int16, UInt16, Int32, UInt32, Int64, UInt64, Float32, Float64)
         local _mmv_d = _trace_memmove_ptr(dest_ptr_arg, ctx; eltypes = _MMV_PRIMS)
         local _mmv_s = _mmv_d !== nothing ? _trace_memmove_ptr(src_ptr_arg, ctx; eltypes = _MMV_PRIMS) : nothing
         if _mmv_d !== nothing && _mmv_s !== nothing
             local _mmv_te = eltype(infer_value_type(_mmv_d, ctx))
-            if _mmv_te === eltype(infer_value_type(_mmv_s, ctx)) && sizeof(_mmv_te) in (4, 8)
+            if _mmv_te === eltype(infer_value_type(_mmv_s, ctx)) && sizeof(_mmv_te) in (1, 4, 8)
                 local _mmv_arr = get_array_type!(ctx.mod, ctx.type_registry, _mmv_te)
                 local _mmv_sh = trailing_zeros(sizeof(_mmv_te))
-                local _mmv_emit_arr = vec -> begin
-                    append!(bytes, compile_value(vec, ctx))
-                    local _vi = ctx.type_registry.structs[infer_value_type(vec, ctx)]
-                    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
-                    append!(bytes, encode_leb128_unsigned(_vi.wasm_type_idx))
-                    append!(bytes, encode_leb128_unsigned(1))
-                    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.REF_CAST_NULL)
-                    append!(bytes, encode_leb128_signed(Int64(_mmv_arr)))
-                end
+                local _mmv_emit_arr = vec -> _emit_backing_array!(bytes, vec, ctx, _mmv_arr)
                 local _mmv_emit_off = a -> begin
                     append!(bytes, compile_value(a, ctx))
                     push!(bytes, Opcode.I32_WRAP_I64)
@@ -3606,13 +3632,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
         if _mm_d !== nothing && _mm_s !== nothing
             _arr_t = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
             _mm_emit_arr! = function (vec)
-                append!(bytes, compile_value(vec, ctx))
-                _vinfo = ctx.type_registry.structs[infer_value_type(vec, ctx)]
-                push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
-                append!(bytes, encode_leb128_unsigned(_vinfo.wasm_type_idx))
-                append!(bytes, encode_leb128_unsigned(1))  # field 1 = data array
-                push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.REF_CAST_NULL)
-                append!(bytes, encode_leb128_signed(Int64(_arr_t)))
+                _emit_backing_array!(bytes, vec, ctx, _arr_t)
             end
             _mm_emit_ptr_off! = function (ptr_arg)
                 # fake base pointer compiles to 0 → pointer value == byte offset
@@ -3802,7 +3822,12 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
     # VALUE — execution continues past it — so it must NOT set
     # last_stmt_was_stub: the flag dead-codes the rest of the block,
     # poisoning live conditions into `unreachable` (the value-vs-dead
-    # contradiction behind the FINDINGS P4 family).
+    # contradiction behind the FINDINGS P4 family). It must still be LOUD:
+    # record the unsupported foreigncall so strict mode surfaces it instead
+    # of silently no-opping effectful calls (a missed memmove made SHA
+    # digest its own zeros — input-independent output).
+    record_unsupported!(ctx, :unsupported_method,
+        "foreigncall `$(name)` (no handler; emitted type-default value)"; idx=idx, detail=expr)
     return bytes
 end
 

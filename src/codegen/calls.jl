@@ -4247,18 +4247,68 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         local _pr_vec = ptr_arg !== nothing ? _trace_memmove_ptr(ptr_arg, ctx) : nothing
         if _pr_vec !== nothing
             local _pr_arr_t = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
-            append!(bytes, compile_value(_pr_vec, ctx))
-            local _pr_vinfo = ctx.type_registry.structs[infer_value_type(_pr_vec, ctx)]
-            push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
-            append!(bytes, encode_leb128_unsigned(_pr_vinfo.wasm_type_idx))
-            append!(bytes, encode_leb128_unsigned(1))
-            push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.REF_CAST_NULL)
-            append!(bytes, encode_leb128_signed(Int64(_pr_arr_t)))
+            _emit_backing_array!(bytes, _pr_vec, ctx, _pr_arr_t)
             append!(bytes, compile_value(ptr_arg, ctx))
             push!(bytes, Opcode.I32_WRAP_I64)
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.ARRAY_GET_U)
             append!(bytes, encode_leb128_unsigned(_pr_arr_t))
+            return bytes
+        end
+        # P4-stdlib (Random digest!): CROSS-WIDTH byte reads — Ptr{UInt8}
+        # into Vector{UInt32/UInt64/...} storage (SHA reads its u32 state
+        # byte-wise). elem = arr[byteoff >> log2(s)]; byte = (elem >>
+        # (8*(byteoff & (s-1)))) & 0xFF (little-endian; mirror of the
+        # cross-width pointerset).
+        local _PRB_WIDE = (Int16, UInt16, Int32, UInt32, Int64, UInt64)
+        local _prb_tp = begin
+            local _t = ptr_arg !== nothing ? infer_value_type(ptr_arg, ctx) : nothing
+            _t isa DataType && _t <: Ptr ? eltype(_t) : nothing
+        end
+        local _prb_vec = (ptr_arg !== nothing && (_prb_tp === UInt8 || _prb_tp === Int8)) ?
+            _trace_memmove_ptr(ptr_arg, ctx; eltypes = _PRB_WIDE) : nothing
+        if _prb_vec !== nothing
+            local _prb_te = eltype(infer_value_type(_prb_vec, ctx))
+            local _prb_s = sizeof(_prb_te)
+            local _prb_arr = get_array_type!(ctx.mod, ctx.type_registry, _prb_te)
+            local _prb_w64 = _prb_s == 8
+            # scratch: byte offset (i32)
+            local _prb_lb = length(ctx.locals) + ctx.n_params
+            push!(ctx.locals, I32)
+            # byte offset = ptr + (i-1)   (pointer target is 1 byte wide)
+            append!(bytes, compile_value(ptr_arg, ctx))
+            if length(args) >= 2 && !(args[2] isa Integer && args[2] == 1)
+                append!(bytes, compile_value(args[2], ctx))
+                push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(1)))
+                push!(bytes, Opcode.I64_SUB)
+                push!(bytes, Opcode.I64_ADD)
+            end
+            push!(bytes, Opcode.I32_WRAP_I64)
+            push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(_prb_lb))
+            # arr ref
+            _emit_backing_array!(bytes, _prb_vec, ctx, _prb_arr)
+            # elem index = b >> log2(s)
+            push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(_prb_lb))
+            push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(trailing_zeros(_prb_s))))
+            push!(bytes, Opcode.I32_SHR_U)
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, _prb_s <= 2 ? Opcode.ARRAY_GET_U : Opcode.ARRAY_GET)
+            append!(bytes, encode_leb128_unsigned(_prb_arr))
+            # shift = 8 * (b & (s-1))
+            push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(_prb_lb))
+            push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(_prb_s - 1)))
+            push!(bytes, Opcode.I32_AND)
+            push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(3)))
+            push!(bytes, Opcode.I32_SHL)
+            if _prb_w64
+                push!(bytes, Opcode.I64_EXTEND_I32_U)
+                push!(bytes, Opcode.I64_SHR_U)
+                push!(bytes, Opcode.I32_WRAP_I64)
+            else
+                push!(bytes, Opcode.I32_SHR_U)
+            end
+            push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(0xFF)))
+            push!(bytes, Opcode.I32_AND)
             return bytes
         end
         # P4-stdlib (Statistics median/quantile): TYPED loads through
@@ -4356,13 +4406,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         local _ps_vt = length(args) >= 2 ? infer_value_type(args[2], ctx) : nothing
         if _ps_vec !== nothing && (_ps_vt === UInt8 || _ps_vt === Int8)
             local _ps_arr_t = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
-            append!(bytes, compile_value(_ps_vec, ctx))
-            local _ps_vinfo = ctx.type_registry.structs[infer_value_type(_ps_vec, ctx)]
-            push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
-            append!(bytes, encode_leb128_unsigned(_ps_vinfo.wasm_type_idx))
-            append!(bytes, encode_leb128_unsigned(1))
-            push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.REF_CAST_NULL)
-            append!(bytes, encode_leb128_signed(Int64(_ps_arr_t)))
+            _emit_backing_array!(bytes, _ps_vec, ctx, _ps_arr_t)
             append!(bytes, compile_value(_ps_ptr, ctx))
             push!(bytes, Opcode.I32_WRAP_I64)
             append!(bytes, compile_value(args[2], ctx))
@@ -4475,13 +4519,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 local _psw_lv = length(ctx.locals) + ctx.n_params
                 push!(ctx.locals, I64)
                 # array ref
-                append!(bytes, compile_value(_psw_vec, ctx))
-                local _psw_vinfo = ctx.type_registry.structs[infer_value_type(_psw_vec, ctx)]
-                push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
-                append!(bytes, encode_leb128_unsigned(_psw_vinfo.wasm_type_idx))
-                append!(bytes, encode_leb128_unsigned(1))
-                push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.REF_CAST_NULL)
-                append!(bytes, encode_leb128_signed(Int64(_psw_arr)))
+                _emit_backing_array!(bytes, _psw_vec, ctx, _psw_arr)
                 push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(_psw_la))
                 # base byte index = ptr + (i-1)*s
                 append!(bytes, compile_value(_ps_ptr, ctx))
