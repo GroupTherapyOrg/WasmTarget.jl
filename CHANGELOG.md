@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.4](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.3...v0.3.4) (2026-06-12)
+
+
+### Features
+
+* fuzz-catalogue Statistics slice + first harvest (7 ledgered Int64-median gaps) ([15b164a](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/15b164a949f28f67a5210def7bd52a6728f3a00a))
+* Statistics stdlib pilot — typed pointer machinery, copy handlers, layout folds (7/7 on 1.12, 5/7 on 1.13) ([1e7a7a1](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/1e7a7a1579c8c794d17cad966bbf52dde67bf60a))
+* WasmTargetStatisticsExt weakdep extension — Statistics 7/7 on both versions ([e3cbab6](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/e3cbab6ab25efc069c1f9f02b9bbf30acc1881ba))
+
+
+### Bug Fixes
+
+* catch-arm split with GotoNode skip + merging arms (gap 10cc64efe535) ([9bf8241](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/9bf82417bdef368ef81e60528c74c78bfdc885d0))
+
 ## [0.3.3](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.2...v0.3.3) (2026-06-12)
 
 
