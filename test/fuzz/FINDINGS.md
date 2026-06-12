@@ -195,3 +195,21 @@ emits. Infrastructure landed: per-collection cache partitions
 (cache_token / cache_owner), entry-scoped strict mode
 (TRIM_ENTRY_NAMES), width-matched foreigncall defaults, TRIM_IR_CACHE
 serving the collection's consistent-world IR through get_typed_ir.
+
+### P5-trim update (same day, post-fix)
+
+The matrix above is superseded: (1) the 1.12 Dates failures were the
+void-return wrapper bug (try/catch 2-block structure emitted
+`block (result T)` for Nothing-return functions — fixed in 51d3476,
+both Dates probes now PASS on 1.12 under :trim); (2) Random under
+:trim on 1.12 is 6/6 PASS (i64/f64/bool/range/stream/randn) once the
+fuzz bridges enable wasm:js-string builtins and stub the io imports —
+those were harness gaps, not compiler bugs; (3) 1.13 Random under
+:trim is the pair-locals family (ref.cast lands on the i32 index of a
+[ref,idx] memoryrefnew pair inside hash_seed — a517b4c8372d), so :trim
+does NOT sidestep it; (4) bounded discovery differential
+(discovery_differential(), 40 fixed-seed bodies × Int64/Float64 ×
+both versions): :trim agrees with :legacy everywhere, with median
+excluded as the one documented residual (deep show/print machinery,
+the IOBuffer campaign). Net: :trim is at parity-or-better with legacy
+on everything except median, on both versions.
