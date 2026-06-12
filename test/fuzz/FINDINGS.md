@@ -157,3 +157,20 @@ dead-value emissions; WT_TRACE_STUBARGS / WT_TRAP_STACK exist. A
 depth-5+ fuzz sweep over boundscheck-arm + jump-target compositions is
 the likely organic reproducer source; until then this note is the
 tracking entry.
+
+## P4-stdlib: Printf probe results (stdlib #4 scouting)
+
+1.12 out-of-box via bridge probes: **float formats PASS** (`%.3f`, `%e`
+— riding the Ryu machinery) — the hard part of Printf already works.
+Integer/string formats (`%d`, `%08x`, `%s`, padded `%6d`) trap in
+`format` (wasm-function ~0xbc7): the byte shape is a phi-edge store
+sequence where the edge VALUE compiled to bare `unreachable` ×2 then
+`local.set` — a merge after a flattened throw arm (Union{}-rettype
+catchable throws at invoke.jl ~2975/4641 set the dead flag; the arm's
+phi-edge stores then compile dead values on what is at runtime a LIVE
+path). A dead-context guard in emit_phi_local_set! did NOT change the
+emitted bytes (reverted) — the emitting walker is elsewhere; next dig
+should attribute via a stacktrace instrument inside emit_phi_local_set!
+(mirror the WT_TRACE_CONDSTUB recipe that cracked the type-intersection
+fold). Printf integration is otherwise the established playbook once
+this one shape is fixed.
