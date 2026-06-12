@@ -117,6 +117,11 @@ function _build()
     # NOTE: round(Int64, x) needs a TYPE-literal first slot the generator can't
     # type-direct (an Int64-typed EXPR is not the type Int64) — covered by the
     # Int64(::Float64) ctor entry above instead.
+    # ── P4-stdlib: Dates scalar predicates (the Date-typed surface needs
+    # value generators — deferred; these compose freely with Int64 exprs).
+    add(:isleapyear, (Int64,), Bool; mod = :dates)
+    add(:daysinmonth, (Int64, Int64), Int64; mod = :dates, throws = true)  # month ∉ 1:12 throws
+
     # Bool logic
     add(:&, (Bool, Bool), Bool; mod = :bool); add(:|, (Bool, Bool), Bool; mod = :bool)
     add(:!, (Bool,), Bool; mod = :bool); add(:xor, (Bool, Bool), Bool; mod = :bool)
