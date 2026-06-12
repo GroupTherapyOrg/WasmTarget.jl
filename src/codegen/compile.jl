@@ -1411,14 +1411,26 @@ function compile_module(functions::Vector;
                         overlay_entries::Set=Set{Tuple{Any,Tuple}}(),
                         optimize_ir::Bool=true,
                         register_ir_types::Bool=false,
-                        strict::Bool=true
+                        strict::Bool=true,
+                        discovery::Symbol=:legacy
                         )
+    # P5-trim: discovery=:trim replaces the homegrown dependency walk +
+    # AUTODISCOVER whitelist with the upstream closed-world collection
+    # (collect_closed_world). The whole pipeline then compiles from the
+    # collection's paired CodeInfos via the TRIM_IR_CACHE served inside
+    # get_typed_ir. Cache cleanup is in the wrapper below.
+    discovery === :trim && return _compile_module_trim(functions;
+        stub_names, existing_module, import_stubs, return_registries,
+        overlay_entries, optimize_ir, register_ir_types, strict)
     # Create WasmInterpreter with overlay method table (GPUCompiler pattern).
     # Must be created here (after user functions exist) so world age is current.
     interp = get_wasm_interpreter()
 
     # WASM-057: Auto-discover function dependencies
-    functions = discover_dependencies(functions; interp=interp)
+    # P5-trim: skipped when the trim plan already expanded the closed world
+    if !_TRIM_ACTIVE[]
+        functions = discover_dependencies(functions; interp=interp)
+    end
 
     # Filter out any discovered functions that are import stubs
     # (import stubs are registered in func_registry at their import indices, not compiled)
@@ -4382,3 +4394,30 @@ function deserialize_ir_entries(json_str::String)
     return result
 end
 
+
+
+# P5-trim: trim-discovery wrapper — build the plan, activate the IR cache,
+# and run the standard pipeline with discovery handled (the legacy
+# discover_dependencies call inside is skipped via the pre-expanded list +
+# _TRIM_ACTIVE flag).
+const _TRIM_ACTIVE = Ref(false)
+function _compile_module_trim(functions::Vector; kwargs...)
+    normalized = Any[]
+    for entry in functions
+        if length(entry) == 2
+            f, arg_types = entry
+            push!(normalized, (f, arg_types, string(nameof(f))))
+        else
+            push!(normalized, entry)
+        end
+    end
+    plan, ir_cache = trim_compile_plan(normalized)
+    TRIM_IR_CACHE[] = ir_cache
+    _TRIM_ACTIVE[] = true
+    try
+        return compile_module(plan; discovery=:legacy, kwargs...)
+    finally
+        TRIM_IR_CACHE[] = nothing
+        _TRIM_ACTIVE[] = false
+    end
+end

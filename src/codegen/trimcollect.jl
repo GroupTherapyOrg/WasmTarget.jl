@@ -58,3 +58,70 @@ function entry_method_instance(f, arg_types::Tuple)
     m = which(f, arg_types)
     return CC.specialize_method(m, tt, Core.svec())
 end
+
+
+"""
+    trim_compile_plan(entries_named) -> (functions, ir_cache)
+
+Run `collect_closed_world` over the named entry points and derive the
+compile_module inputs: the full (func, arg_types, name) list (entries keep
+their given names; discovered functions get deduped names) and the
+(f, arg_types) → (CodeInfo, rettype) cache that get_typed_ir serves —
+every function compiles from the collection's consistent-world IR.
+
+Skipped (with a debug note): non-singleton callables (stateful closures —
+their call sites inline or carry the closure value; no module-level
+function entry to register) and Core/internal entries without a usable
+function object.
+"""
+function trim_compile_plan(entries_named::Vector)
+    entry_mis = Any[]
+    entry_keys = Dict{Any, String}()   # mi → requested name
+    for (f, arg_types, name) in entries_named
+        mi = entry_method_instance(f, arg_types)
+        push!(entry_mis, mi)
+        entry_keys[mi] = name
+    end
+    codeinfos = collect_closed_world(entry_mis)
+
+    functions = Any[]
+    ir_cache = IdDict{Any, Tuple{Core.CodeInfo, Any}}()
+    used_names = Set{String}()
+    i = 1
+    while i + 1 <= length(codeinfos)
+        ci, src = codeinfos[i], codeinfos[i + 1]
+        i += 2
+        (ci isa Core.CodeInstance && src isa Core.CodeInfo) || continue
+        mi = ci.def isa Core.MethodInstance ? ci.def : ci.def.def
+        sig = mi.specTypes
+        (sig isa DataType && sig <: Tuple && length(sig.parameters) >= 1) || continue
+        ftyp = sig.parameters[1]
+        f = nothing
+        if ftyp isa DataType && isdefined(ftyp, :instance)
+            f = ftyp.instance            # singleton functions incl. Core.kwcall
+        elseif ftyp isa DataType && ftyp <: Type && length(ftyp.parameters) >= 1
+            f = ftyp.parameters[1]       # constructors: Type{T} → T
+            (f isa DataType || f isa UnionAll) || (f = nothing)
+        end
+        if f === nothing
+            @debug "trim_compile_plan: skipping non-singleton callable" sig
+            continue
+        end
+        arg_types = Tuple(sig.parameters[2:end])
+        # name: requested for entries, deduped method name otherwise
+        name = get(entry_keys, mi, nothing)
+        if name === nothing
+            base = mi.def isa Method ? string(mi.def.name) : string(nameof(f))
+            name = base
+            n = 1
+            while name in used_names
+                name = string(base, "_", n)
+                n += 1
+            end
+        end
+        push!(used_names, name)
+        push!(functions, (f, arg_types, name))
+        ir_cache[(f, arg_types)] = (src, ci.rettype)
+    end
+    return functions, ir_cache
+end

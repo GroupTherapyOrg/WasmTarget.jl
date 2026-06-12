@@ -30,7 +30,8 @@ bridge. Returns per-input `(:ok, ret_tree, post_trees)` / `(:trap, msg)`, where
 immutable args) — or `:unsupported` / `(:compile_error => e)` / `:no_node`.
 """
 function bridge_run_args(fn, argtypes::Tuple, inputs::Vector; rettype::Type,
-                         strict::Bool = true, timeout::Real = DEFAULT_TIMEOUT, opt = false)
+                         strict::Bool = true, timeout::Real = DEFAULT_TIMEOUT, opt = false,
+                         discovery::Symbol = :legacy)
     NODE_OK || return :no_node
     rp = Bridge.descriptor(rettype)
     rp === nothing && return :unsupported
@@ -70,7 +71,8 @@ function bridge_run_args(fn, argtypes::Tuple, inputs::Vector; rettype::Type,
     funcs = Any[(fn, argtypes, fname)]
     append!(funcs, accs)
     bytes = try
-        WasmTarget.compile_multi(funcs; strict = strict, validate = true, optimize = opt)
+        WasmTarget.compile_multi(funcs; strict = strict, validate = true, optimize = opt,
+                                 discovery = discovery)
     catch e
         return (:compile_error => e)
     end
