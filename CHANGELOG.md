@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.7](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.6...v0.3.7) (2026-06-12)
+
+
+### Features
+
+* closed-world collection via upstream trim machinery (JuliaLang/julia[#62087](https://github.com/GroupTherapyOrg/WasmTarget.jl/issues/62087) alignment) ([4df8660](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/4df866047a2a2fc2709c6c73221017bb0fa3d686))
+* discovery=:trim pipeline — compile_multi via closed-world collection ([b930bdd](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/b930bdda53ffb5c3c4097be006a5fe60cd648304))
+* trim pipeline — per-collection cache partitions, entry-scoped strictness, width-matched stub defaults ([1581951](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/158195168cd185d9a3f650b996452bff3c30d390))
+
+
+### Bug Fixes
+
+* void wrapper blocks for Nothing-return try/catch + trim harness support ([51d3476](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/51d3476139db493c004f5c044d1b25420d538184))
+
 ## [0.3.6](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.5...v0.3.6) (2026-06-12)
 
 
