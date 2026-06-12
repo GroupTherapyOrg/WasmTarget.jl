@@ -2941,6 +2941,16 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     insert!(bytes, 2, 0x00)  # LEB128 for 0
                 end
                 push!(bytes, is_32bit ? Opcode.I32_SUB : Opcode.I64_SUB)
+            elseif (name === :* || name === :mul_int) && length(args) == 2 &&
+                   (infer_value_type(args[1], ctx) === String || infer_value_type(args[1], ctx) === Symbol) &&
+                   (infer_value_type(args[2], ctx) === String || infer_value_type(args[2], ctx) === Symbol)
+                # String/Symbol `*` is CONCATENATION: this name-keyed arithmetic
+                # fallback fires when the concat MI failed to register as a
+                # cross-call (its body bottoms out in Vararg _string) and was
+                # emitting i64.mul on two string refs — the E-003 island's
+                # fn#107 validation failure. Args were pre-pushed: rebuild.
+                bytes = UInt8[]
+                append!(bytes, compile_string_concat(args[1], args[2], ctx))
             elseif name === :* || name === :mul_int
                 push!(bytes, is_32bit ? Opcode.I32_MUL : Opcode.I64_MUL)
             elseif name === :throw_boundserror || name === :throw || name === :throw_inexacterror ||
@@ -3682,6 +3692,13 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     emit_type_id!(bytes, ctx.type_registry, _ctor_type)
                     # Push remaining fields: for msg-based exceptions, compile the msg arg as string array
                     nfields = length(fieldnames(_ctor_type))
+                    # the ACTUAL wasm field types decide bridging/null heap types
+                    local _ctor_def = ctx.mod.types[_ctor_info.wasm_type_idx + 1]
+                    _ctor_field_wasm = fi_ -> begin
+                        _w = fi_ + Int(_ctor_info.field_offset)
+                        (_ctor_def isa StructType && _w <= length(_ctor_def.fields)) ?
+                            _ctor_def.fields[_w].valtype : nothing
+                    end
                     for fi in 1:nfields
                         if fi <= length(args)
                             local _ft_ctor = fieldtype(_ctor_type, fi)
@@ -3690,15 +3707,38 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                             # WBUILD-1011: Box numeric values for Any/abstract-typed struct fields
                             if _is_numeric_val && (_ft_ctor === Any || isabstracttype(_ft_ctor))
                                 emit_numeric_to_anyref!(bytes, args[fi], _val_wasm, ctx)
+                                if _ctor_field_wasm(fi) === ExternRef
+                                    push!(bytes, Opcode.GC_PREFIX)
+                                    push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                end
                             else
                                 append!(bytes, compile_value(args[fi], ctx))
+                                # WASMMAKIE E-003: Any fields map to EXTERNREF — a
+                                # concrete ref (e.g. BoundsError(LinearIndices(...), i)
+                                # in wilkinson's range indexing) fails struct.new
+                                # validation without extern.convert_any
+                                if _ctor_field_wasm(fi) === ExternRef &&
+                                   (_val_wasm isa ConcreteRef || _val_wasm === StructRef ||
+                                    _val_wasm === ArrayRef || _val_wasm === AnyRef || _val_wasm === EqRef)
+                                    push!(bytes, Opcode.GC_PREFIX)
+                                    push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                end
                             end
                         else
-                            # Default: push null ref for ref fields, 0 for i32/i64
+                            # Default: push null ref for ref fields, 0 for i32/i64 —
+                            # the NULL HEAP TYPE must match the wasm field type
                             local _ft = fieldtype(_ctor_type, fi)
-                            if _ft <: AbstractString || _ft === Any || _ft === Symbol || isabstracttype(_ft)
+                            local _fw = _ctor_field_wasm(fi)
+                            if _fw === I32
+                                push!(bytes, Opcode.I32_CONST, 0x00)
+                            elseif _fw === I64
+                                push!(bytes, Opcode.I64_CONST, 0x00)
+                            elseif _fw === ExternRef
                                 push!(bytes, Opcode.REF_NULL)
-                                push!(bytes, UInt8(AnyRef))
+                                push!(bytes, UInt8(ExternRef))
+                            elseif _fw isa ConcreteRef
+                                push!(bytes, Opcode.REF_NULL)
+                                append!(bytes, encode_leb128_signed(Int64(_fw.type_idx)))
                             elseif _ft === Int32 || _ft === Bool
                                 push!(bytes, Opcode.I32_CONST, 0x00)
                             elseif _ft === Int64 || _ft === UInt64

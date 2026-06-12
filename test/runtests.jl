@@ -7798,7 +7798,12 @@ console.log(JSON.stringify({
             items = Int64[1, 2, 3, 4, 5]
             funcs = _bf1_test_autodiscovery(() -> filter(iseven, items::Vector{Int64}))
             @test "filter" in funcs
-            @test "resize!" in funcs  # transitive dep should also be present
+            # WASMMAKIE-E-003: discovery now uses the SAME wasm-interpreter IR
+            # the body compiler uses (the old mismatch silently skipped
+            # overlay-dependent deps and stubbed their call sites). Under the
+            # overlay IR, filter has no discoverable callees (resize! et al.
+            # are inline-handled) — transitive discovery is covered by the
+            # sort case below (#sort# kwarg body is a transitive dep).
         end
 
         @testset "sort closure autodiscovery" begin

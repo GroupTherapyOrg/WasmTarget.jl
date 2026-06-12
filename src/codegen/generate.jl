@@ -253,23 +253,30 @@ Also handles: array_len followed by i64_extend_i32_s (0xAC) is redundant but val
 we leave those alone since they don't cause validation errors.
 """
 function fix_array_len_wrap(bytes::Vector{UInt8})::Vector{UInt8}
+    # Forward-parse INSTRUCTION boundaries (5th instance of the backward/raw
+    # byte-scan class): the raw 3-byte match also fired when [0xFB 0x0F] was
+    # the LEB immediate of another instruction — e.g. `local.get 2043` encodes
+    # as [0x20 0xFB 0x0F] in bodies with >1947 locals — deleting a LIVE
+    # i32.wrap_i64 after it and desyncing every later validation/decode
+    # (the E-003 island's fn#107 `i64.mul[0] expected i64, found ref`).
     result = UInt8[]
     sizehint!(result, length(bytes))
     i = 1
     fixes = 0
-    while i <= length(bytes)
-        # Check for array_len (0xFB 0x0F) followed by i32_wrap_i64 (0xA7)
-        if bytes[i] == 0xFB && i + 2 <= length(bytes) && bytes[i+1] == 0x0F && bytes[i+2] == 0xA7
-            # Emit array_len but skip the i32_wrap_i64
-            push!(result, bytes[i])    # 0xFB
-            push!(result, bytes[i+1])  # 0x0F
-            # Skip 0xA7 (i32_wrap_i64) — array_len already returns i32
-            i += 3
+    n = length(bytes)
+    while i <= n
+        j = _instr_next(bytes, i)
+        j == 0 && (append!(result, @view bytes[i:n]); break)  # truncated tail: copy verbatim
+        # a GENUINE array.len is exactly the two bytes [0xFB 0x0F]
+        if j - i == 2 && bytes[i] == 0xFB && bytes[i + 1] == 0x0F &&
+           j <= n && bytes[j] == 0xA7
+            push!(result, 0xFB, 0x0F)
+            i = j + 1   # skip the spurious i32.wrap_i64 — array.len returns i32
             fixes += 1
             continue
         end
-        push!(result, bytes[i])
-        i += 1
+        append!(result, @view bytes[i:(j - 1)])
+        i = j
     end
     if fixes > 0
         @debug "fix_array_len_wrap: removed $fixes spurious i32_wrap_i64 after array_len"
