@@ -297,6 +297,22 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                 pi_local_type = local_array_idx >= 1 && local_array_idx <= length(ctx.locals) ? ctx.locals[local_array_idx] : nothing
                 # Determine the value's wasm type
                 val_wasm_type = get_phi_edge_wasm_type(stmt.val, ctx)
+                # P4-stdlib (Random hash_seed): prefer the ACTUAL local type of
+                # the source when one exists — the type-derived guess says I64
+                # for Union{Nothing, UInt64}, but such unions live in AnyRef
+                # locals (boxed; an i64 cannot encode `nothing`), so the
+                # AnyRef→numeric unbox below never fired and raw anyref reached
+                # i64 arithmetic.
+                if stmt.val isa Core.SSAValue
+                    local _pv_li = get(ctx.ssa_locals, stmt.val.id, nothing)
+                    _pv_li === nothing && (_pv_li = get(ctx.phi_locals, stmt.val.id, nothing))
+                    if _pv_li !== nothing
+                        local _pv_off = _pv_li - ctx.n_params
+                        if _pv_off >= 0 && _pv_off < length(ctx.locals)
+                            val_wasm_type = ctx.locals[_pv_off + 1]
+                        end
+                    end
+                end
                 # Check if source is a multi-value expression (e.g., multi-arg memoryrefnew)
                 # that would push >1 value on the stack — local_set only consumes 1.
                 is_multi_value_src = false

@@ -4542,6 +4542,34 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 push!(bytes, Opcode.I64_EXTEND_I32_S)
             end
         end
+        # P4-stdlib (Random hash_seed): unbox ANYREF-housed numeric args —
+        # Any-returning callees (e.g. _foldl_impl) box numerics, and
+        # Union{Nothing, UInt64}-style SSAs live in AnyRef locals; consuming
+        # them raw in i64 arithmetic failed validation. Mirror of the
+        # externref unbox below, minus any_convert_extern. Gated on the
+        # ACTUAL local type (type-derived guesses say I64 for these unions).
+        local _arg_anyref = false
+        if !_is_externref_value(arg, ctx) && arg isa Core.SSAValue
+            local _aa_li = get(ctx.ssa_locals, arg.id, nothing)
+            _aa_li === nothing && (_aa_li = get(ctx.phi_locals, arg.id, nothing))
+            if _aa_li !== nothing
+                local _aa_off = _aa_li - ctx.n_params
+                if _aa_off >= 0 && _aa_off < length(ctx.locals)
+                    _arg_anyref = ctx.locals[_aa_off + 1] === AnyRef
+                end
+            end
+        end
+        if is_numeric_intrinsic && _arg_anyref
+            local _aa_target = is_32bit ? I32 : I64
+            local _aa_box = get_numeric_box_type!(ctx.mod, ctx.type_registry, _aa_target)
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.REF_CAST_NULL)
+            append!(bytes, encode_leb128_signed(Int64(_aa_box)))
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.STRUCT_GET)
+            append!(bytes, encode_leb128_unsigned(_aa_box))
+            append!(bytes, encode_leb128_unsigned(UInt32(1)))  # field 1 = value
+        end
         # PURE-904: Unbox externref args for numeric intrinsics.
         # When a param/SSA has Wasm type externref but Julia IR uses it as
         # numeric (UInt32, Int64, etc.), unbox: any_convert_extern → ref.cast → struct.get

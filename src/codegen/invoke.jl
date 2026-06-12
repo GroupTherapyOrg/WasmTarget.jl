@@ -2418,6 +2418,20 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     expected_wasm = get_concrete_wasm_type(expected_julia_type, ctx.mod, ctx.type_registry)
                     actual_julia_type = infer_value_type(arg, ctx)
                     actual_wasm = get_concrete_wasm_type(actual_julia_type, ctx.mod, ctx.type_registry)
+                    # P4-stdlib (Random hash_seed): the type-derived guess says
+                    # I64 for Union{Nothing, UInt64}, but such SSAs live in
+                    # AnyRef locals (boxed) — use the ACTUAL local type so the
+                    # bridging below sees the real representation.
+                    if arg isa Core.SSAValue
+                        local _ivl = get(ctx.ssa_locals, arg.id, nothing)
+                        _ivl === nothing && (_ivl = get(ctx.phi_locals, arg.id, nothing))
+                        if _ivl !== nothing
+                            local _ivo = _ivl - ctx.n_params
+                            if _ivo >= 0 && _ivo < length(ctx.locals)
+                                actual_wasm = ctx.locals[_ivo + 1]
+                            end
+                        end
+                    end
 
                     # PURE-3111/4155: Handle Nothing→ref conversion.
                     # compile_value emits i32_const 0 for Nothing,
@@ -2488,12 +2502,29 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     elseif expected_wasm === F64 && actual_wasm === F32
                         # f32 to f64 — insert f64.promote_f32
                         push!(bytes, Opcode.F64_PROMOTE_F32)
-                    elseif expected_wasm === I32 && (actual_wasm isa ConcreteRef || actual_wasm === StructRef || actual_wasm === ArrayRef || actual_wasm === ExternRef || actual_wasm === AnyRef)
+                    elseif (expected_wasm === I32 || expected_wasm === I64 || expected_wasm === F32 || expected_wasm === F64) &&
+                           (actual_wasm === AnyRef || actual_wasm === ExternRef)
+                        # P4-stdlib (Random hash_seed): boxed numeric in anyref/
+                        # externref consumed as a number — UNBOX via the numeric
+                        # box (was: drop + zero, silently wrong on live paths;
+                        # a null ref traps loud on the cast instead).
+                        if actual_wasm === ExternRef
+                            append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                        end
+                        local _ub_box = get_numeric_box_type!(ctx.mod, ctx.type_registry, expected_wasm)
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.REF_CAST_NULL)
+                        append!(bytes, encode_leb128_signed(Int64(_ub_box)))
+                        push!(bytes, Opcode.GC_PREFIX)
+                        push!(bytes, Opcode.STRUCT_GET)
+                        append!(bytes, encode_leb128_unsigned(_ub_box))
+                        append!(bytes, encode_leb128_unsigned(UInt32(1)))  # field 1 = value
+                    elseif expected_wasm === I32 && (actual_wasm isa ConcreteRef || actual_wasm === StructRef || actual_wasm === ArrayRef)
                         # ref to i32 — drop and push 0 (type mismatch, likely dead code)
                         push!(bytes, Opcode.DROP)
                         push!(bytes, Opcode.I32_CONST)
                         push!(bytes, 0x00)
-                    elseif expected_wasm === I64 && (actual_wasm isa ConcreteRef || actual_wasm === StructRef || actual_wasm === ArrayRef || actual_wasm === ExternRef || actual_wasm === AnyRef)
+                    elseif expected_wasm === I64 && (actual_wasm isa ConcreteRef || actual_wasm === StructRef || actual_wasm === ArrayRef)
                         # ref to i64 — drop and push 0 (type mismatch, likely dead code)
                         push!(bytes, Opcode.DROP)
                         push!(bytes, Opcode.I64_CONST)
