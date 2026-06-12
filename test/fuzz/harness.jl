@@ -219,7 +219,7 @@ function compile_and_run_vec(fn, argtypes::Tuple, inputs::Vector; strict::Bool=t
         const r = f(...args.map(marsh));
         const v = "$(retmode)"==="vi" ? rdi(r) : "$(retmode)"==="vf" ? rdf(r) : JSON.parse(JSON.stringify(r, enc));
         return { ok: v };
-    } catch(err){ return { trap: String(err && err.message || err) }; } });
+    } catch(err){ return { trap: String(err && err.message || err) + (process.env.WT_TRAP_STACK && err && err.stack ? " | " + String(err.stack).split("\\n").slice(0,3).join(" ; ") : "") }; } });
     """
     return _pool_results(bytes, driver, length(inputs); timeout=timeout)
 end

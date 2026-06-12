@@ -92,7 +92,7 @@ function bridge_run_args(fn, argtypes::Tuple, inputs::Vector; rettype::Type,
             const r = f(...args);
             const post = args.map((a, j) => pdescs[j] ? walk(pdescs[j], a) : null);
             return { ok: walk(rdesc, r), post: post };
-        } catch (e) { return { trap: String(e && e.message || e) }; }
+        } catch (e) { return { trap: String(e && e.message || e) + (process.env.WT_TRAP_STACK && e && e.stack ? " | " + String(e.stack).split("\\n").slice(0,3).join(" ; ") : "") }; }
     });
     """
     status, results = run_driver_batch(bytes, driver; deadline = timeout, ninputs = length(inputs))
