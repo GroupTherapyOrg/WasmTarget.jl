@@ -33,9 +33,39 @@ using Base.Experimental: @overlay
         push!(bytes, (word >> 24) % UInt8)
         iszero(seed) && break
     end
-    neg && push!(bytes, 0x01)
+    if neg
+        push!(bytes, 0x01)
+    end
     SHA.update!(ctx, bytes)
     return SHA.digest!(ctx)
+end
+
+
+# Julia 1.13 changed the API: hash_seed(seed, ctx::SHA_CTX) streams into a
+# caller-provided context. Same type-stable byte-vector reroute; the native
+# tail returns `nothing`.
+@static if VERSION >= v"1.13-"
+    @overlay WasmTarget.WASM_METHOD_TABLE function Random.hash_seed(seed::Integer, ctx::SHA.SHA_CTX)
+        neg = signbit(seed)
+        if neg
+            seed = ~seed
+        end
+        bytes = UInt8[]
+        while true
+            word = (seed % UInt32) & 0xffffffff
+            seed >>>= 32
+            push!(bytes, word % UInt8)
+            push!(bytes, (word >> 8) % UInt8)
+            push!(bytes, (word >> 16) % UInt8)
+            push!(bytes, (word >> 24) % UInt8)
+            iszero(seed) && break
+        end
+        if neg
+            push!(bytes, 0x01)
+        end
+        SHA.update!(ctx, bytes)
+        return nothing
+    end
 end
 
 end # module

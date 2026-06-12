@@ -78,8 +78,7 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
         if st isa Core.PiNode
             cur = st.val
         elseif st isa Expr && st.head === :foreigncall && length(st.args) >= 6 &&
-               (st.args[1] === QuoteNode(:jl_value_ptr) ||
-                (st.args[1] isa QuoteNode && st.args[1].value === :jl_value_ptr))
+               extract_foreigncall_name(st.args[1]) === :jl_value_ptr
             # P4-stdlib: pointer_from_objref-style base pointers
             # (jl_value_ptr(obj)) — in the fake-pointer model the base is 0,
             # so just hop to the object and keep walking toward the vector.
@@ -110,10 +109,11 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
                 local _mn_el = _mn_t isa DataType && length(_mn_t.parameters) >= 2 ? _mn_t.parameters[2] : nothing
                 _mn_el in eltypes || return _fail("memorynew-elty: $_mn_t", st)
                 return cur
-            elseif cfn === :memoryrefnew && (length(st.args) == 2 || st.args[3] == 1)
-                # P4-stdlib: base memoryref (index 1) — pure identity hop.
-                # Variable-index refs are NOT walked: their byte offset would
-                # be lost (the fake base compiles to 0), so they stay stubbed.
+            elseif cfn === :memoryrefnew
+                # P4-stdlib: identity hop through memoryrefnew — base refs are
+                # offset 0, and INDEXED refs now encode (i-1)*elsize in the
+                # pointer VALUE (getfield(:ptr_or_offset) reads
+                # ctx.memoryref_offsets), so the walk only needs the identity.
                 cur = st.args[2]
             elseif cfn === :getfield && length(st.args) >= 3
                 fld = st.args[3] isa QuoteNode ? st.args[3].value : st.args[3]
@@ -3407,7 +3407,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
     # In WasmGC, we emit array.copy between the underlying array<i32> representations.
     # Trace: memmove args come from getfield(memoryref, :ptr_or_offset) which is i64.const 0.
     # The real arrays are found by tracing back through memoryrefnew to the backing Memory.
-    if name === :memmove && length(expr.args) >= 8
+    if (name === :memmove || name === :memcpy) && length(expr.args) >= 8
         dest_ptr_arg = expr.args[6]   # Ptr{Nothing} — traces to dest MemoryRef
         src_ptr_arg = expr.args[7]    # Ptr{Nothing} — traces to src MemoryRef
         nbytes_arg = expr.args[8]     # UInt64 — byte count
@@ -3626,7 +3626,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
     # Ryu's writeshortest shifts digit bytes in-buffer (decimal point
     # insertion). Trace both pointers through add_ptr/sub_ptr chains to the
     # backing vector and emit array.copy (overlap-safe per the wasm spec).
-    if name === :memmove && length(expr.args) >= 8
+    if (name === :memmove || name === :memcpy) && length(expr.args) >= 8
         _mm_d = _trace_memmove_ptr(expr.args[6], ctx)
         _mm_s = _trace_memmove_ptr(expr.args[7], ctx)
         if _mm_d !== nothing && _mm_s !== nothing
@@ -3708,7 +3708,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
     # dest_off_ptr, src_mem, src_off_ptr, n_elements) — Memory{T} compiles
     # directly as a wasm array, so this is a plain array.copy; the ptr args
     # are byte offsets (fake-base model) scaled to element indices.
-    local _gmc_sym = expr.args[1] isa QuoteNode ? expr.args[1].value : expr.args[1]
+    local _gmc_sym = extract_foreigncall_name(expr.args[1])
     if _gmc_sym === :jl_genericmemory_copyto && length(expr.args) >= 10
         local _gmc_mt = infer_value_type(expr.args[6], ctx)
         local _gmc_te = _gmc_mt isa DataType && length(_gmc_mt.parameters) >= 2 ? _gmc_mt.parameters[2] : nothing
@@ -3749,7 +3749,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
     # must NOT set the stub flag — range compilers treat a stubbed statement
     # as dead code and abort the rest of the block, poisoning later
     # conditions into `unreachable`.
-    local _fc_sym = expr.args[1] isa QuoteNode ? expr.args[1].value : expr.args[1]
+    local _fc_sym = extract_foreigncall_name(expr.args[1])
     if _fc_sym === :jl_type_intersection && length(expr.args) >= 7
         # P4-stdlib (Random hash_seed): dispatch guards compare
         # typeintersect(T1, T2) === Union{} with CONSTANT type args — fold on

@@ -103,6 +103,8 @@ using WasmTarget: add_array_type!, add_export!, add_function!, add_import!, add_
 using Test
 import Statistics
 import Dates
+import Random
+import SHA
 using Dates: Dates, @dateformat_str
 
 # Package-level QA runs first so structural failures surface
@@ -10456,6 +10458,41 @@ console.log(JSON.stringify({
         @test compare_julia_wasm(_dates_strsum, 5).pass
         @test compare_julia_wasm(_dates_strdtsum, 123).pass
         @test compare_julia_wasm(_dates_strdtsum, 0).pass
+    end
+
+    # ── P4-stdlib: Random (stdlib #3) ──────────────────────────────────────
+    # Seeded Xoshiro streams compile from the real implementations and match
+    # native bit-exactly; WasmTargetRandomExt reroutes hash_seed through
+    # SHA's type-stable byte-vector path (identical digests). Unseeded RNGs
+    # (TaskLocalRNG, OS entropy) defer to embedding-side imports.
+    _rand_i64(x::Int64)::Int64 = rand(Random.Xoshiro(x), Int64)
+    _rand_f64(x::Int64)::Float64 = rand(Random.Xoshiro(x))
+    _rand_range(x::Int64)::Int64 = rand(Random.Xoshiro(x), 1:100)
+    _rand_randn(x::Int64)::Float64 = randn(Random.Xoshiro(x))
+    function _rand_stream(x::Int64)::Int64
+        rng = Random.Xoshiro(x)
+        a = rand(rng, Int64)
+        b = rand(rng, Int64)
+        return a ⊻ b
+    end
+    _rand_bool(x::Int64)::Bool = rand(Random.Xoshiro(x), Bool)
+
+    @pphase "Random stdlib" begin
+        # 1.13's Random IR shapes hit the ledgered memoryrefnew pair-to-local
+        # family (a517b4c8372d) across the board — the whole phase is gated
+        # until pair-locals land. 1.12: all seeded streams bit-exact.
+        @static if VERSION < v"1.13-"
+            @test compare_julia_wasm(_rand_i64, 42).pass
+            @test compare_julia_wasm(_rand_i64, -3).pass
+            @test compare_julia_wasm(_rand_f64, 42).pass
+            @test compare_julia_wasm(_rand_range, 7).pass
+            @test compare_julia_wasm(_rand_randn, 42).pass
+            @test compare_julia_wasm(_rand_stream, 7).pass
+            @test compare_julia_wasm(_rand_bool, 42).pass
+            @test compare_julia_wasm(_rand_bool, -3).pass
+        else
+            @test_skip false
+        end
     end
 
 end  # end of phase-registration block

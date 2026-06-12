@@ -2802,9 +2802,32 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 append!(bytes, compile_value(obj_arg, ctx))
                 return bytes
             elseif field_sym === :ptr_or_offset
-                # Not needed in WasmGC - return 0 as placeholder
-                push!(bytes, Opcode.I64_CONST)
-                push!(bytes, 0x00)
+                # P4-stdlib (SHA update!): the fake-pointer VALUE is the byte
+                # offset. Base refs → 0; refs from memoryrefnew(ref, i, bc)
+                # carry (i-1)*elsize (ctx.memoryref_offsets records i), so
+                # pointer arithmetic over indexed refs stays faithful.
+                local _poo_idx = obj_arg isa Core.SSAValue ?
+                    get(ctx.memoryref_offsets, obj_arg.id, nothing) : nothing
+                local _poo_el = obj_type isa DataType && length(obj_type.parameters) >= 1 ?
+                    (obj_type.name.name === :GenericMemoryRef && length(obj_type.parameters) >= 2 ?
+                     obj_type.parameters[2] : obj_type.parameters[1]) : nothing
+                if _poo_idx !== nothing && _poo_el isa DataType && isbitstype(_poo_el)
+                    append!(bytes, compile_value(_poo_idx, ctx))
+                    local _poo_it = infer_value_type(_poo_idx, ctx)
+                    (_poo_it === Int64 || _poo_it === Int || _poo_it === UInt64) ||
+                        push!(bytes, Opcode.I64_EXTEND_I32_S)
+                    push!(bytes, Opcode.I64_CONST)
+                    append!(bytes, encode_leb128_signed(Int64(1)))
+                    push!(bytes, Opcode.I64_SUB)
+                    if sizeof(_poo_el) != 1
+                        push!(bytes, Opcode.I64_CONST)
+                        append!(bytes, encode_leb128_signed(Int64(sizeof(_poo_el))))
+                        push!(bytes, Opcode.I64_MUL)
+                    end
+                else
+                    push!(bytes, Opcode.I64_CONST)
+                    push!(bytes, 0x00)
+                end
                 return bytes
             end
         end
@@ -4244,15 +4267,83 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # P3 gap 450889a9cb7e: byte reads through Vector{UInt8} storage pointers
         # (Ryu digit readback). Fake base pointers compile to 0, so the pointer
         # VALUE is the 0-based byte offset.
+        local _pr_tp0 = begin
+            local _t = ptr_arg !== nothing ? infer_value_type(ptr_arg, ctx) : nothing
+            _t isa DataType && _t <: Ptr ? eltype(_t) : nothing
+        end
         local _pr_vec = ptr_arg !== nothing ? _trace_memmove_ptr(ptr_arg, ctx) : nothing
-        if _pr_vec !== nothing
+        if _pr_vec !== nothing && (_pr_tp0 === UInt8 || _pr_tp0 === Int8 || _pr_tp0 === Nothing || _pr_tp0 === nothing)
             local _pr_arr_t = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
             _emit_backing_array!(bytes, _pr_vec, ctx, _pr_arr_t)
             append!(bytes, compile_value(ptr_arg, ctx))
+            if length(args) >= 2 && !(args[2] isa Integer && args[2] == 1)
+                append!(bytes, compile_value(args[2], ctx))
+                push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(1)))
+                push!(bytes, Opcode.I64_SUB)
+                push!(bytes, Opcode.I64_ADD)
+            end
             push!(bytes, Opcode.I32_WRAP_I64)
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.ARRAY_GET_U)
             append!(bytes, encode_leb128_unsigned(_pr_arr_t))
+            return bytes
+        elseif _pr_vec !== nothing && _pr_tp0 isa DataType && isprimitivetype(_pr_tp0) &&
+               sizeof(_pr_tp0) in (2, 4, 8)
+            # P4-stdlib (SHA transform!): WIDE loads (Ptr{UInt32/UInt64})
+            # from Vector{UInt8} storage — the 1-byte fast path above served
+            # a single byte here, silently corrupting the message schedule.
+            # Assemble the word little-endian from s consecutive bytes.
+            local _prw_s = sizeof(_pr_tp0)
+            local _prw_arr = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
+            local _prw_w64 = _prw_s == 8 || _pr_tp0 === Float64
+            # scratch: arr ref + base index
+            local _prw_la = length(ctx.locals) + ctx.n_params
+            push!(ctx.locals, ConcreteRef(_prw_arr, true))
+            local _prw_lb = length(ctx.locals) + ctx.n_params
+            push!(ctx.locals, I32)
+            _emit_backing_array!(bytes, _pr_vec, ctx, _prw_arr)
+            push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(_prw_la))
+            append!(bytes, compile_value(ptr_arg, ctx))
+            if length(args) >= 2 && !(args[2] isa Integer && args[2] == 1)
+                append!(bytes, compile_value(args[2], ctx))
+                push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(1)))
+                push!(bytes, Opcode.I64_SUB)
+                push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(_prw_s)))
+                push!(bytes, Opcode.I64_MUL)
+                push!(bytes, Opcode.I64_ADD)
+            end
+            push!(bytes, Opcode.I32_WRAP_I64)
+            push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(_prw_lb))
+            for _prw_k in 0:(_prw_s - 1)
+                push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(_prw_la))
+                push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(_prw_lb))
+                if _prw_k > 0
+                    push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(_prw_k)))
+                    push!(bytes, Opcode.I32_ADD)
+                end
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ARRAY_GET_U)
+                append!(bytes, encode_leb128_unsigned(_prw_arr))
+                if _prw_w64
+                    push!(bytes, Opcode.I64_EXTEND_I32_U)
+                    if _prw_k > 0
+                        push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(8 * _prw_k)))
+                        push!(bytes, Opcode.I64_SHL)
+                    end
+                    _prw_k > 0 && push!(bytes, Opcode.I64_OR)
+                else
+                    if _prw_k > 0
+                        push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(8 * _prw_k)))
+                        push!(bytes, Opcode.I32_SHL)
+                        push!(bytes, Opcode.I32_OR)
+                    end
+                end
+            end
+            if _pr_tp0 === Float64
+                push!(bytes, Opcode.F64_REINTERPRET_I64)
+            elseif _pr_tp0 === Float32
+                push!(bytes, Opcode.F32_REINTERPRET_I32)
+            end
             return bytes
         end
         # P4-stdlib (Random digest!): CROSS-WIDTH byte reads — Ptr{UInt8}
