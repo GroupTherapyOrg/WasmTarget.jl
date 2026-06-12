@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.3.2](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.1...v0.3.2) (2026-06-12)
+
+
+### Features
+
+* getglobal handler + memmove array.copy (Ryu string(Float64) partial) ([0b44304](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/0b44304a75b4861fdb955d8281b66c04a9bab610))
+* pointerref/pointerset over Vector{UInt8} storage pointers ([4026792](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/4026792dabbdde52fb2dea90fa608a322e7edd38))
+* String comprehensions via collect-family whitelist ([342df71](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/342df7197f9769782925e5bc46df428f38eb8442))
+* string concatenation overlays (_string varargs + String(::SubString)) ([3b577e0](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/3b577e0ccbe29f000be1ed8eff846210e749a202))
+* string(::Float64) fully working — DataType layout-metadata folding ([e818f2b](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/e818f2bb9bcb71c06f7f1944c04095993bba0564))
+* String*SubString / string-with-Char concat via concrete overlays ([0b24b23](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/0b24b23986fbe40db294daaaaa03c4d68d24bdc6))
+
+
+### Bug Fixes
+
+* branch-split dispatch picks the outermost spanning branch ([75e0560](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/75e0560024de928697253e5c3fcf1ef465983326))
+* dead-return peephole misparsed LEB immediate as END opcode (gap 4c8236022172) ([3fd53cf](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/3fd53cf555cb515554f6b99aca8e230b48371ebd))
+* if/else split inside outer try body (nested generator $else wrap) ([4757cfa](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/4757cfab70d3b0e2a3e24aedbffc6bd4c584bf06))
+* Matrix types no longer registered with the Vector layout ([0556e48](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/0556e482dda889cdc514f6513e2bc63ec1f84247))
+* merge-phi catch-try chains routed to new generator (gap ff6dc9760825) ([1fa9ad8](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/1fa9ad8959e5fe20267b34308dc9c1fa27f99231))
+* narrow-int canonicalization in zext_int and signed shift results (gap da22976c7cd6) ([2a6915b](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/2a6915b2884317937117660f1a4da1636e83edc1))
+* nested-try merge phis — skip branch lands at the merge ([1db16e7](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/1db16e730a26d0a8317bfd77a317a65ab10b5c42))
+* recursive merge-phi catch-try chains (gap 73a575f2d651) ([bbff623](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/bbff6230fa62e7098848bdc0b199d25a42a88db0))
+* reset stub flag before compiling the exit-branch condition ([533dffa](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/533dffab31efa4c69fe0645d02391f6ff1bb7cc5))
+* shrinking resize! via _deleteend! overlay ([7be8ed9](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/7be8ed96b30f42906044100d5a219830c92ec805))
+* sinh/cosh large-x precision — half-exponent squaring above H_LARGE_X ([0eb612c](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/0eb612c270223608c666edfdb668f99134065e70))
+* struct_get type-check scan misread local.get 379 as struct.get ([f255a91](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/f255a9168bd1d4af190e0224a48e0eeabc818ab0))
+
 ## [0.3.1](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.0...v0.3.1) (2026-06-11)
 
 
