@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.6](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.5...v0.3.6) (2026-06-12)
+
+
+### Features
+
+* Random groundwork batch 2 — generic-arith anyref unbox, byte-reinterpret overlays, svec/type-intersection folds ([19935b5](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/19935b54ff879a46a521547617d4975db7be1094))
+* Random groundwork batch 3 — hash_seed overlay, dynamic eq unbox, cross-width pointerset, dead-flag fix ([0efd531](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/0efd531b86f8a5f8139c124ebcca44e10568bd55))
+* Random groundwork batch 4 — cross-width reads, Memory walk terminals, backing-array consolidation ([83ee1f1](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/83ee1f1f987ccc22a54968548d847b3ff3c54365))
+* Random stdlib integration — seeded Xoshiro bit-exact on 1.12 (wide-from-narrow reads, offset-faithful pointers) ([e5faa29](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/e5faa2950f7bce9aea78205e710fecfcd483ca2b))
+
+
+### Bug Fixes
+
+* extend packed array.get_u/get_s results stored to i64 locals (Random seed! path) ([e42d7c8](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/e42d7c8fae9686175cf422b32fd012e6ae7ee931))
+* ground-truth local types for boxed-union adapters (Random groundwork) ([9b732ae](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/9b732ae563aaae4db80452cd8582dbedeada4593))
+
 ## [0.3.5](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.4...v0.3.5) (2026-06-12)
 
 
