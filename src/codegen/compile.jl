@@ -474,7 +474,15 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
             if func_type isa DataType && func_type <: Function
                 # Regular function call
                 # The function is stored in the Method's sig
-                func = try
+                # P4-stdlib (Statistics pilot): Core.kwcall instances carry
+                # mi.def in the FUNCTION's module with the function's NAME
+                # (def.module=Statistics, def.name=:var for `var(v; kw...)`),
+                # so getfield(mod, meth_name) extracts the WRONG callee (var
+                # itself, with kwcall-shaped arg types — method lookup then
+                # fails and the invoke stubbed). Use the kwcall singleton;
+                # its sorter body recursively discovers the kwarg-body method.
+                _is_kwcall = try func_type.instance === Core.kwcall catch; false end
+                func = _is_kwcall ? Core.kwcall : try
                     getfield(mod, meth_name)
                 catch
                     # WBUILD-4000: Inner functions (closures) aren't module-level bindings.
@@ -512,7 +520,11 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
     _is_julias = nameof(mod) === :JuliaSyntax ||
                  (isdefined(mod, :parentmodule) && try nameof(parentmodule(mod)) === :JuliaSyntax catch; false end)
     _is_kwarg_wrapper = startswith(String(meth_name), "#")
+    # P4-stdlib: kwcall sorters necessarily take the target function as an
+    # argument (typeof(var) etc.) — exempt them from the function-singleton
+    # skip, as the whole point is to compile through to the kwarg body.
     _exempt_mod = mod === WasmTarget || _is_julias || _is_kwarg_wrapper ||
+                  func === Core.kwcall ||
                   (_is_base_or_sub && (meth_name in AUTODISCOVER_BASE_METHODS ||
                                        startswith(String(meth_name), "#string#") ||
                                        startswith(String(meth_name), "#power_by_squaring#") ||
