@@ -167,7 +167,19 @@ function record_unsupported!(ctx, kind::Symbol, construct::AbstractString;
     diag = WasmDiagnostic(kind, _ctx_func_name(ctx), String(construct),
                           idx > 0 ? julia_loc(ctx, idx) : nothing, detail)
     push!(ctx.diagnostics, diag)
-    if ctx.strict && soundness_fatal
+    # P5-trim: the closed-world collection is MORE complete than legacy
+    # discovery — it includes error-formatting dead paths (show/print
+    # machinery) the whitelist never compiled. On DISCOVERED (non-entry)
+    # functions, downgrade value-stubs to loud runtime stubs for parity with
+    # legacy behavior; entry functions keep full strictness.
+    local _fatal = ctx.strict && soundness_fatal
+    if _fatal && kind === :value_stub
+        local _entries = TRIM_ENTRY_NAMES[]
+        if _entries !== nothing && !(_ctx_func_name(ctx) in _entries)
+            _fatal = false
+        end
+    end
+    if _fatal
         throw(WasmCompileError(diag))
     else
         @debug "WasmTarget stub: $diag"

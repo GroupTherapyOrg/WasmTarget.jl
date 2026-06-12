@@ -1893,6 +1893,17 @@ struct WasmInterpreter <: CC.AbstractInterpreter
     inf_cache::Vector{CC.InferenceResult}
     inf_params::CC.InferenceParams
     opt_params::CC.OptimizationParams
+    # P5-trim: codegen cache for the upstream CompilationQueue/compile!
+    # closed-world collection (the juliac --trim machinery). compile! stashes
+    # the uncompressed optimized CodeInfo of every collected CodeInstance
+    # here — the (CodeInstance, CodeInfo) pairs the plugin handoff consumes.
+    codegen::IdDict{Core.CodeInstance, Core.CodeInfo}
+    # P5-trim: cache-partition token. The legacy pipeline shares :wasm_target
+    # for cross-compile CodeInstance reuse; collect_closed_world uses a FRESH
+    # per-collection token — a shared partition can hold CodeInstances
+    # inferred by earlier interps whose codegen CodeInfos were never stashed,
+    # tripping compile!'s `use_const_api || haskey(interp.codegen)` invariant.
+    cache_token::Any
 end
 
 function WasmInterpreter(; world::UInt=Base.get_world_counter())
@@ -1904,7 +1915,14 @@ function WasmInterpreter(; world::UInt=Base.get_world_counter())
         inline_cost_threshold=500,
         inline_nonleaf_penalty=100,
     )
-    WasmInterpreter(world, mt, CC.InferenceResult[], inf_params, opt_params)
+    WasmInterpreter(world, mt, CC.InferenceResult[], inf_params, opt_params,
+                    IdDict{Core.CodeInstance, Core.CodeInfo}(), :wasm_target)
+end
+
+function WasmInterpreter(cache_token; world::UInt=Base.get_world_counter())
+    base = WasmInterpreter(; world)
+    WasmInterpreter(base.world, base.method_table, base.inf_cache,
+                    base.inf_params, base.opt_params, base.codegen, cache_token)
 end
 
 # Required AbstractInterpreter API
@@ -1912,8 +1930,9 @@ CC.InferenceParams(interp::WasmInterpreter) = interp.inf_params
 CC.OptimizationParams(interp::WasmInterpreter) = interp.opt_params
 CC.get_inference_world(interp::WasmInterpreter) = interp.world
 CC.get_inference_cache(interp::WasmInterpreter) = interp.inf_cache
-CC.cache_owner(::WasmInterpreter) = :wasm_target
+CC.cache_owner(interp::WasmInterpreter) = interp.cache_token
 CC.method_table(interp::WasmInterpreter) = interp.method_table
+CC.codegen_cache(interp::WasmInterpreter) = interp.codegen
 
 # Disable concrete eval (GPUCompiler pattern).
 # Without this, the compiler constant-folds calls using Base implementation,

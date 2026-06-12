@@ -11,6 +11,7 @@ include("builder/validator.jl")
 # Codegen - Julia IR to Wasm bytecode
 include("codegen/diagnostics.jl")  # strict-mode diagnostics; must precede context.jl (struct field)
 include("codegen/interpreter.jl")
+include("codegen/trimcollect.jl")
 include("codegen/ir.jl")
 include("codegen/int_key_map.jl")
 include("codegen/types.jl")
@@ -133,9 +134,11 @@ Functions can call each other within the module.
 """
 function compile_multi(functions::Vector; optimize=false, stub_names::Set{String}=Set{String}(),
                        return_registries::Bool=false, optimize_ir::Bool=true,
-                       register_ir_types::Bool=false, strict::Bool=true, validate::Bool=true)
+                       register_ir_types::Bool=false, strict::Bool=true, validate::Bool=true,
+                       discovery::Symbol=:legacy)
     result = compile_module(functions; stub_names=stub_names, return_registries=return_registries,
-                           optimize_ir=optimize_ir, register_ir_types=register_ir_types, strict=strict)
+                           optimize_ir=optimize_ir, register_ir_types=register_ir_types, strict=strict,
+                           discovery=discovery)
     if return_registries
         mod, type_registry, func_registry, dispatch_registry = result
         bytes = to_bytes(mod)
