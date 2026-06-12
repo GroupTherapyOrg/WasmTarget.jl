@@ -126,6 +126,26 @@ function _build()
     # Vector{T}
     for T in VEC_ELT
         VT = Vector{T}
+        # ── P4-stdlib: Statistics (the stdlib-integration pilot). Names
+        # resolve in Main via `using Statistics` in the fuzz runner. All
+        # reductions return Float64; empty vectors throw for median/middle
+        # (ArgumentError/BoundsError) and quantile throws for p ∉ [0,1] —
+        # throws=true makes the harness check throw-parity, not skip them.
+        if T === Float64 || T === Int64
+            add(:mean, (VT,), Float64; mod = :stats)
+        end
+        if T === Float64
+            # median/middle restricted to Float64: the Int64 radix path
+            # stores a memoryrefnew [ref,idx] stack pair to an SSA local
+            # (open gap family a517b4c8372d — two-value SSA architectural
+            # item). Re-add Int64 when pair-locals land.
+            add(:median, (VT,), Float64; mod = :stats, throws = true)
+            add(:middle, (VT,), Float64; mod = :stats, throws = true)
+            add(:var, (VT,), Float64; mod = :stats)
+            add(:std, (VT,), Float64; mod = :stats)
+            add(:quantile, (VT, Float64), Float64; mod = :stats, throws = true)
+            add(:cor, (VT, VT), Float64; mod = :stats, throws = true)   # length mismatch throws
+        end
         add(:sort, (VT,), VT; mod = :vector); add(:reverse, (VT,), VT; mod = :vector)
         add(:unique, (VT,), VT; mod = :vector)
         add(:length, (VT,), Int64; mod = :vector); add(:isempty, (VT,), Bool; mod = :vector)
