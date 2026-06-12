@@ -2802,9 +2802,32 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 append!(bytes, compile_value(obj_arg, ctx))
                 return bytes
             elseif field_sym === :ptr_or_offset
-                # Not needed in WasmGC - return 0 as placeholder
-                push!(bytes, Opcode.I64_CONST)
-                push!(bytes, 0x00)
+                # P4-stdlib (SHA update!): the fake-pointer VALUE is the byte
+                # offset. Base refs → 0; refs from memoryrefnew(ref, i, bc)
+                # carry (i-1)*elsize (ctx.memoryref_offsets records i), so
+                # pointer arithmetic over indexed refs stays faithful.
+                local _poo_idx = obj_arg isa Core.SSAValue ?
+                    get(ctx.memoryref_offsets, obj_arg.id, nothing) : nothing
+                local _poo_el = obj_type isa DataType && length(obj_type.parameters) >= 1 ?
+                    (obj_type.name.name === :GenericMemoryRef && length(obj_type.parameters) >= 2 ?
+                     obj_type.parameters[2] : obj_type.parameters[1]) : nothing
+                if _poo_idx !== nothing && _poo_el isa DataType && isbitstype(_poo_el)
+                    append!(bytes, compile_value(_poo_idx, ctx))
+                    local _poo_it = infer_value_type(_poo_idx, ctx)
+                    (_poo_it === Int64 || _poo_it === Int || _poo_it === UInt64) ||
+                        push!(bytes, Opcode.I64_EXTEND_I32_S)
+                    push!(bytes, Opcode.I64_CONST)
+                    append!(bytes, encode_leb128_signed(Int64(1)))
+                    push!(bytes, Opcode.I64_SUB)
+                    if sizeof(_poo_el) != 1
+                        push!(bytes, Opcode.I64_CONST)
+                        append!(bytes, encode_leb128_signed(Int64(sizeof(_poo_el))))
+                        push!(bytes, Opcode.I64_MUL)
+                    end
+                else
+                    push!(bytes, Opcode.I64_CONST)
+                    push!(bytes, 0x00)
+                end
                 return bytes
             end
         end
@@ -4244,21 +4267,139 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # P3 gap 450889a9cb7e: byte reads through Vector{UInt8} storage pointers
         # (Ryu digit readback). Fake base pointers compile to 0, so the pointer
         # VALUE is the 0-based byte offset.
+        local _pr_tp0 = begin
+            local _t = ptr_arg !== nothing ? infer_value_type(ptr_arg, ctx) : nothing
+            _t isa DataType && _t <: Ptr ? eltype(_t) : nothing
+        end
         local _pr_vec = ptr_arg !== nothing ? _trace_memmove_ptr(ptr_arg, ctx) : nothing
-        if _pr_vec !== nothing
+        if _pr_vec !== nothing && (_pr_tp0 === UInt8 || _pr_tp0 === Int8 || _pr_tp0 === Nothing || _pr_tp0 === nothing)
             local _pr_arr_t = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
-            append!(bytes, compile_value(_pr_vec, ctx))
-            local _pr_vinfo = ctx.type_registry.structs[infer_value_type(_pr_vec, ctx)]
-            push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
-            append!(bytes, encode_leb128_unsigned(_pr_vinfo.wasm_type_idx))
-            append!(bytes, encode_leb128_unsigned(1))
-            push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.REF_CAST_NULL)
-            append!(bytes, encode_leb128_signed(Int64(_pr_arr_t)))
+            _emit_backing_array!(bytes, _pr_vec, ctx, _pr_arr_t)
             append!(bytes, compile_value(ptr_arg, ctx))
+            if length(args) >= 2 && !(args[2] isa Integer && args[2] == 1)
+                append!(bytes, compile_value(args[2], ctx))
+                push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(1)))
+                push!(bytes, Opcode.I64_SUB)
+                push!(bytes, Opcode.I64_ADD)
+            end
             push!(bytes, Opcode.I32_WRAP_I64)
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.ARRAY_GET_U)
             append!(bytes, encode_leb128_unsigned(_pr_arr_t))
+            return bytes
+        elseif _pr_vec !== nothing && _pr_tp0 isa DataType && isprimitivetype(_pr_tp0) &&
+               sizeof(_pr_tp0) in (2, 4, 8)
+            # P4-stdlib (SHA transform!): WIDE loads (Ptr{UInt32/UInt64})
+            # from Vector{UInt8} storage — the 1-byte fast path above served
+            # a single byte here, silently corrupting the message schedule.
+            # Assemble the word little-endian from s consecutive bytes.
+            local _prw_s = sizeof(_pr_tp0)
+            local _prw_arr = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
+            local _prw_w64 = _prw_s == 8 || _pr_tp0 === Float64
+            # scratch: arr ref + base index
+            local _prw_la = length(ctx.locals) + ctx.n_params
+            push!(ctx.locals, ConcreteRef(_prw_arr, true))
+            local _prw_lb = length(ctx.locals) + ctx.n_params
+            push!(ctx.locals, I32)
+            _emit_backing_array!(bytes, _pr_vec, ctx, _prw_arr)
+            push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(_prw_la))
+            append!(bytes, compile_value(ptr_arg, ctx))
+            if length(args) >= 2 && !(args[2] isa Integer && args[2] == 1)
+                append!(bytes, compile_value(args[2], ctx))
+                push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(1)))
+                push!(bytes, Opcode.I64_SUB)
+                push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(_prw_s)))
+                push!(bytes, Opcode.I64_MUL)
+                push!(bytes, Opcode.I64_ADD)
+            end
+            push!(bytes, Opcode.I32_WRAP_I64)
+            push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(_prw_lb))
+            for _prw_k in 0:(_prw_s - 1)
+                push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(_prw_la))
+                push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(_prw_lb))
+                if _prw_k > 0
+                    push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(_prw_k)))
+                    push!(bytes, Opcode.I32_ADD)
+                end
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ARRAY_GET_U)
+                append!(bytes, encode_leb128_unsigned(_prw_arr))
+                if _prw_w64
+                    push!(bytes, Opcode.I64_EXTEND_I32_U)
+                    if _prw_k > 0
+                        push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(8 * _prw_k)))
+                        push!(bytes, Opcode.I64_SHL)
+                    end
+                    _prw_k > 0 && push!(bytes, Opcode.I64_OR)
+                else
+                    if _prw_k > 0
+                        push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(8 * _prw_k)))
+                        push!(bytes, Opcode.I32_SHL)
+                        push!(bytes, Opcode.I32_OR)
+                    end
+                end
+            end
+            if _pr_tp0 === Float64
+                push!(bytes, Opcode.F64_REINTERPRET_I64)
+            elseif _pr_tp0 === Float32
+                push!(bytes, Opcode.F32_REINTERPRET_I32)
+            end
+            return bytes
+        end
+        # P4-stdlib (Random digest!): CROSS-WIDTH byte reads — Ptr{UInt8}
+        # into Vector{UInt32/UInt64/...} storage (SHA reads its u32 state
+        # byte-wise). elem = arr[byteoff >> log2(s)]; byte = (elem >>
+        # (8*(byteoff & (s-1)))) & 0xFF (little-endian; mirror of the
+        # cross-width pointerset).
+        local _PRB_WIDE = (Int16, UInt16, Int32, UInt32, Int64, UInt64)
+        local _prb_tp = begin
+            local _t = ptr_arg !== nothing ? infer_value_type(ptr_arg, ctx) : nothing
+            _t isa DataType && _t <: Ptr ? eltype(_t) : nothing
+        end
+        local _prb_vec = (ptr_arg !== nothing && (_prb_tp === UInt8 || _prb_tp === Int8)) ?
+            _trace_memmove_ptr(ptr_arg, ctx; eltypes = _PRB_WIDE) : nothing
+        if _prb_vec !== nothing
+            local _prb_te = eltype(infer_value_type(_prb_vec, ctx))
+            local _prb_s = sizeof(_prb_te)
+            local _prb_arr = get_array_type!(ctx.mod, ctx.type_registry, _prb_te)
+            local _prb_w64 = _prb_s == 8
+            # scratch: byte offset (i32)
+            local _prb_lb = length(ctx.locals) + ctx.n_params
+            push!(ctx.locals, I32)
+            # byte offset = ptr + (i-1)   (pointer target is 1 byte wide)
+            append!(bytes, compile_value(ptr_arg, ctx))
+            if length(args) >= 2 && !(args[2] isa Integer && args[2] == 1)
+                append!(bytes, compile_value(args[2], ctx))
+                push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(1)))
+                push!(bytes, Opcode.I64_SUB)
+                push!(bytes, Opcode.I64_ADD)
+            end
+            push!(bytes, Opcode.I32_WRAP_I64)
+            push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(_prb_lb))
+            # arr ref
+            _emit_backing_array!(bytes, _prb_vec, ctx, _prb_arr)
+            # elem index = b >> log2(s)
+            push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(_prb_lb))
+            push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(trailing_zeros(_prb_s))))
+            push!(bytes, Opcode.I32_SHR_U)
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, _prb_s <= 2 ? Opcode.ARRAY_GET_U : Opcode.ARRAY_GET)
+            append!(bytes, encode_leb128_unsigned(_prb_arr))
+            # shift = 8 * (b & (s-1))
+            push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(_prb_lb))
+            push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(_prb_s - 1)))
+            push!(bytes, Opcode.I32_AND)
+            push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(3)))
+            push!(bytes, Opcode.I32_SHL)
+            if _prb_w64
+                push!(bytes, Opcode.I64_EXTEND_I32_U)
+                push!(bytes, Opcode.I64_SHR_U)
+                push!(bytes, Opcode.I32_WRAP_I64)
+            else
+                push!(bytes, Opcode.I32_SHR_U)
+            end
+            push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(0xFF)))
+            push!(bytes, Opcode.I32_AND)
             return bytes
         end
         # P4-stdlib (Statistics median/quantile): TYPED loads through
@@ -4356,13 +4497,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         local _ps_vt = length(args) >= 2 ? infer_value_type(args[2], ctx) : nothing
         if _ps_vec !== nothing && (_ps_vt === UInt8 || _ps_vt === Int8)
             local _ps_arr_t = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
-            append!(bytes, compile_value(_ps_vec, ctx))
-            local _ps_vinfo = ctx.type_registry.structs[infer_value_type(_ps_vec, ctx)]
-            push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
-            append!(bytes, encode_leb128_unsigned(_ps_vinfo.wasm_type_idx))
-            append!(bytes, encode_leb128_unsigned(1))
-            push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.REF_CAST_NULL)
-            append!(bytes, encode_leb128_signed(Int64(_ps_arr_t)))
+            _emit_backing_array!(bytes, _ps_vec, ctx, _ps_arr_t)
             append!(bytes, compile_value(_ps_ptr, ctx))
             push!(bytes, Opcode.I32_WRAP_I64)
             append!(bytes, compile_value(args[2], ctx))
@@ -4456,6 +4591,66 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 return bytes
             end
         end
+        # P4-stdlib (Random digest!): CROSS-WIDTH store — Ptr{UInt64/32/16}
+        # into Vector{UInt8} storage (SHA writes the bitlength into its byte
+        # buffer). Emit little-endian byte-wise array.set stores.
+        local _psw_vec = (_ps_ptr !== nothing && _psg_tp isa DataType &&
+                          isprimitivetype(_psg_tp) && sizeof(_psg_tp) in (2, 4, 8)) ?
+            _trace_memmove_ptr(_ps_ptr, ctx) : nothing
+        if _psw_vec !== nothing && length(args) >= 2
+            local _psw_te = eltype(infer_value_type(_psw_vec, ctx))
+            if _psw_te === UInt8 || _psw_te === Int8
+                local _psw_arr = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
+                local _psw_s = sizeof(_psg_tp)
+                # scratch locals: array ref, base byte index, value (i64)
+                local _psw_la = length(ctx.locals) + ctx.n_params
+                push!(ctx.locals, ConcreteRef(_psw_arr, true))
+                local _psw_li = length(ctx.locals) + ctx.n_params
+                push!(ctx.locals, I32)
+                local _psw_lv = length(ctx.locals) + ctx.n_params
+                push!(ctx.locals, I64)
+                # array ref
+                _emit_backing_array!(bytes, _psw_vec, ctx, _psw_arr)
+                push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(_psw_la))
+                # base byte index = ptr + (i-1)*s
+                append!(bytes, compile_value(_ps_ptr, ctx))
+                if length(args) >= 3 && !(args[3] isa Integer && args[3] == 1)
+                    append!(bytes, compile_value(args[3], ctx))
+                    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(1)))
+                    push!(bytes, Opcode.I64_SUB)
+                    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(_psw_s)))
+                    push!(bytes, Opcode.I64_MUL)
+                    push!(bytes, Opcode.I64_ADD)
+                end
+                push!(bytes, Opcode.I32_WRAP_I64)
+                push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(_psw_li))
+                # value as i64 (extend 32-bit values)
+                append!(bytes, compile_value(args[2], ctx))
+                local _psw_vw = julia_to_wasm_type(_psg_tp)
+                _psw_vw === I32 && push!(bytes, Opcode.I64_EXTEND_I32_U)
+                _psw_vw === F64 && push!(bytes, Opcode.I64_REINTERPRET_F64)
+                push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(_psw_lv))
+                for _psw_k in 0:(_psw_s - 1)
+                    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(_psw_la))
+                    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(_psw_li))
+                    if _psw_k > 0
+                        push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(_psw_k)))
+                        push!(bytes, Opcode.I32_ADD)
+                    end
+                    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(_psw_lv))
+                    if _psw_k > 0
+                        push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(8 * _psw_k)))
+                        push!(bytes, Opcode.I64_SHR_U)
+                    end
+                    push!(bytes, Opcode.I32_WRAP_I64)
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.ARRAY_SET)
+                    append!(bytes, encode_leb128_unsigned(_psw_arr))
+                end
+                push!(bytes, Opcode.I64_CONST); push!(bytes, 0x00)   # fake ptr return
+                return bytes
+            end
+        end
         push!(bytes, Opcode.UNREACHABLE)
         ctx.last_stmt_was_stub = true  # PURE-908
         return bytes
@@ -4541,6 +4736,39 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             elseif !is_32bit && !is_128bit && _actual_wasm === I32
                 push!(bytes, Opcode.I64_EXTEND_I32_S)
             end
+        end
+        # P4-stdlib (Random hash_seed): unbox ANYREF-housed numeric args —
+        # Any-returning callees (e.g. _foldl_impl) box numerics, and
+        # Union{Nothing, UInt64}-style SSAs live in AnyRef locals; consuming
+        # them raw in i64 arithmetic failed validation. Mirror of the
+        # externref unbox below, minus any_convert_extern. Gated on the
+        # ACTUAL local type (type-derived guesses say I64 for these unions).
+        local _arg_anyref = false
+        if !_is_externref_value(arg, ctx) && arg isa Core.SSAValue
+            local _aa_li = get(ctx.ssa_locals, arg.id, nothing)
+            _aa_li === nothing && (_aa_li = get(ctx.phi_locals, arg.id, nothing))
+            if _aa_li !== nothing
+                local _aa_off = _aa_li - ctx.n_params
+                if _aa_off >= 0 && _aa_off < length(ctx.locals)
+                    _arg_anyref = ctx.locals[_aa_off + 1] === AnyRef
+                end
+            end
+        end
+        # Also fire for the GENERIC arithmetic operators (+,-,*,div,rem,mod):
+        # dynamic call sites with everything typed Any (e.g. `4 - %foldl` in
+        # Random.hash_seed) default to the i64 opcodes but consume raw anyref.
+        local _generic_arith = func isa GlobalRef &&
+            func.name in (:+, :-, :*, :div, :rem, :mod)
+        if (is_numeric_intrinsic || _generic_arith) && _arg_anyref
+            local _aa_target = is_32bit ? I32 : I64
+            local _aa_box = get_numeric_box_type!(ctx.mod, ctx.type_registry, _aa_target)
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.REF_CAST_NULL)
+            append!(bytes, encode_leb128_signed(Int64(_aa_box)))
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.STRUCT_GET)
+            append!(bytes, encode_leb128_unsigned(_aa_box))
+            append!(bytes, encode_leb128_unsigned(UInt32(1)))  # field 1 = value
         end
         # PURE-904: Unbox externref args for numeric intrinsics.
         # When a param/SSA has Wasm type externref but Julia IR uses it as
@@ -5956,10 +6184,18 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     # Julia's type inference may resolve length(::SimpleVector) to the builtin directly.
     # PURE-6021: args[1] (svec array) is already pre-pushed by the generic loop above.
     elseif ((func isa GlobalRef && func.name === :_svec_len && func.mod === Core) || (isdefined(Core, :_svec_len) && func === Core._svec_len)) && length(args) == 1
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_LEN)
-        # array.len returns i32 but Julia expects Int64
-        push!(bytes, Opcode.I64_EXTEND_I32_U)
+        # P4-stdlib: fold against host-constant svecs (padding/typename.names)
+        local _svl = _try_host_svec(args[1], ctx)
+        if _svl isa Core.SimpleVector
+            bytes = UInt8[]   # discard pre-pushed placeholder
+            push!(bytes, Opcode.I64_CONST)
+            append!(bytes, encode_leb128_signed(Int64(length(_svl))))
+        else
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ARRAY_LEN)
+            # array.len returns i32 but Julia expects Int64
+            push!(bytes, Opcode.I64_EXTEND_I32_U)
+        end
 
     # PURE-4149: Core._svec_ref(sv, i) — get element from SimpleVector (externref array).
     # _svec_ref is 1-indexed in Julia, 0-indexed in Wasm → subtract 1.
@@ -6068,6 +6304,21 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 if _gfc_val isa Union{Integer, Bool, Char, Float32, Float64, String, Symbol} &&
                    !(_gfc_val isa Union{Int128, UInt128, BigInt})
                     append!(bytes, compile_value(_gfc_val, ctx))
+                    _gfc_done = true
+                end
+            end
+        end
+        # P4-stdlib: constant-receiver getfield yielding a SimpleVector
+        # (typename(T).names) — emit a benign null placeholder (a stub
+        # dead-codes the rest of the block); consumers fold against the
+        # host value via _try_host_svec.
+        if !_gfc_done && func.name === :getfield && length(args) == 2 && args[1] isa QuoteNode
+            local _gfc_fld2 = args[2] isa QuoteNode ? args[2].value : args[2]
+            if _gfc_fld2 isa Symbol
+                local _gfc_v2 = try getfield(args[1].value, _gfc_fld2) catch; nothing end
+                if _gfc_v2 isa Core.SimpleVector
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, UInt8(ArrayRef))
                     _gfc_done = true
                 end
             end
@@ -6344,6 +6595,69 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     end
                 end
             else
+                # P4-stdlib (Random hash_seed): dynamic ==/!= on BOXED operands
+                # (Any-typed foldl results in anyref locals) is LIVE code — the
+                # unreachable below dead-coded the loop-exit condition. Unbox
+                # both sides as i64 boxes and compare; a non-i64 box traps
+                # LOUD on the cast (correct-or-loud) instead of silently.
+                local _dyneq_ok = false
+                if (func.name === :(==) || func.name === :!=) && length(args) == 2
+                    local _dq_all_ref = true
+                    for _dq_a in args
+                        local _dq_is = false
+                        if _dq_a isa Core.SSAValue
+                            local _dq_li = get(ctx.ssa_locals, _dq_a.id, nothing)
+                            _dq_li === nothing && (_dq_li = get(ctx.phi_locals, _dq_a.id, nothing))
+                            if _dq_li !== nothing
+                                local _dq_off = _dq_li - ctx.n_params
+                                if _dq_off >= 0 && _dq_off < length(ctx.locals)
+                                    _dq_is = ctx.locals[_dq_off + 1] === AnyRef
+                                end
+                            end
+                        end
+                        _dq_is || (_dq_all_ref = false)
+                    end
+                    if _dq_all_ref
+                        local _dq_box = get_numeric_box_type!(ctx.mod, ctx.type_registry, I64)
+                        bytes = UInt8[]
+                        for _dq_a in args
+                            append!(bytes, compile_value(_dq_a, ctx))
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.REF_CAST_NULL)
+                            append!(bytes, encode_leb128_signed(Int64(_dq_box)))
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.STRUCT_GET)
+                            append!(bytes, encode_leb128_unsigned(_dq_box))
+                            append!(bytes, encode_leb128_unsigned(UInt32(1)))
+                        end
+                        push!(bytes, Opcode.I64_EQ)
+                        func.name === :!= && push!(bytes, Opcode.I32_EQZ)
+                        # The result SSA is Any-typed (anyref local) — box the
+                        # i32 Bool; compile_condition_to_i32 unboxes at use.
+                        local _dq_dst = get(ctx.ssa_locals, idx, nothing)
+                        if _dq_dst !== nothing
+                            local _dq_doff = _dq_dst - ctx.n_params
+                            local _dq_lt = _dq_doff >= 0 && _dq_doff < length(ctx.locals) ?
+                                ctx.locals[_dq_doff + 1] : nothing
+                            if _dq_lt === AnyRef || _dq_lt isa ConcreteRef || _dq_lt === StructRef
+                                local _dq_b32 = get_numeric_box_type!(ctx.mod, ctx.type_registry, I32)
+                                local _dq_scr = length(ctx.locals) + ctx.n_params
+                                push!(ctx.locals, I32)
+                                push!(bytes, Opcode.LOCAL_SET)
+                                append!(bytes, encode_leb128_unsigned(_dq_scr))
+                                push!(bytes, Opcode.I32_CONST)
+                                push!(bytes, 0x00)   # typeId
+                                push!(bytes, Opcode.LOCAL_GET)
+                                append!(bytes, encode_leb128_unsigned(_dq_scr))
+                                push!(bytes, Opcode.GC_PREFIX)
+                                push!(bytes, Opcode.STRUCT_NEW)
+                                append!(bytes, encode_leb128_unsigned(_dq_b32))
+                            end
+                        end
+                        _dyneq_ok = true
+                    end
+                end
+                if !_dyneq_ok
                 # No matching signature - likely dead code from Union type branches
                 # Emit unreachable instead of error (the branch won't be taken at runtime)
                 # PURE-605: Suppress warning for known-safe dynamic dispatch paths where
@@ -6355,6 +6669,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 bytes = UInt8[]
                 push!(bytes, Opcode.UNREACHABLE)
                 ctx.last_stmt_was_stub = true  # PURE-908
+                end
             end
         else
             # GlobalRef constructor call: SSA return type reveals the struct being constructed
@@ -6883,6 +7198,33 @@ is a DataType literal — the layout struct is immutable host metadata, fully
 known at compile time. Returns the host-loaded DataTypeLayout for literal
 materialization, or nothing if the chain doesn't match.
 """
+
+# P4-stdlib (Random hash_seed): resolve an IR value to a HOST SimpleVector
+# constant when its definition is compile-time evaluable — `padding(T, n)`
+# with literal args, or `getfield(typename(T), :names)`. The defs emit benign
+# null placeholders (no svec constant emission exists); consumers like
+# _svec_len/_svec_ref fold against the host value instead of reading it.
+function _try_host_svec(arg, ctx::AbstractCompilationContext)
+    arg isa Core.SSAValue || return nothing
+    (arg.id < 1 || arg.id > length(ctx.code_info.code)) && return nothing
+    st = ctx.code_info.code[arg.id]
+    if st isa Expr && (st.head === :invoke || st.head === :call)
+        a1 = st.head === :invoke ? (length(st.args) >= 2 ? st.args[2] : nothing) : st.args[1]
+        nm = a1 isa GlobalRef ? a1.name : a1 isa Function ? nameof(a1) : nothing
+        rest = st.head === :invoke ? st.args[3:end] : st.args[2:end]
+        if nm === :padding && length(rest) == 2 && rest[1] isa Type && rest[2] isa Integer
+            return try Base.padding(rest[1], Int(rest[2])) catch; nothing end
+        elseif nm === :getfield && length(rest) >= 2 && rest[1] isa QuoteNode
+            fld = rest[2] isa QuoteNode ? rest[2].value : rest[2]
+            if fld isa Symbol
+                v = try getfield(rest[1].value, fld) catch; nothing end
+                v isa Core.SimpleVector && return v
+            end
+        end
+    end
+    return nothing
+end
+
 function _try_fold_layout_pointerref(ptr_arg, ctx::AbstractCompilationContext)
     cur = ptr_arg
     for _ in 1:4

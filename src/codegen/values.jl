@@ -174,6 +174,12 @@ the raw compile_value would push anyref, but i32.eqz needs i32. This helper unbo
 ref.cast + struct.get when needed.
 """
 function compile_condition_to_i32(cond, ctx::AbstractCompilationContext)::Vector{UInt8}
+    if haskey(ENV, "WT_TRACE_CONDSTUB") && ctx.last_stmt_was_stub
+        println(stderr, "CONDSTUB cond=", first(repr(cond), 30))
+        for fr in stacktrace()[2:9]
+            println(stderr, "   ", fr)
+        end
+    end
     bytes = compile_value(cond, ctx)
     # Check if the condition value is in a non-i32 local
     if cond isa Core.SSAValue
@@ -315,16 +321,31 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                     # e.g., π(x::Union{Int32,Float64}, Int32) → ref.cast $BoxedInt32 + struct.get 1
                     local _pi_target_wasm = julia_to_wasm_type(pi_type)
                     if (_pi_target_wasm === I32 || _pi_target_wasm === I64 || _pi_target_wasm === F32 || _pi_target_wasm === F64)
-                        # Check if the underlying value is anyref (boxed)
+                        # Check if the underlying value is anyref (boxed).
+                        # P4-stdlib (Random hash_seed): read the ACTUAL local type
+                        # when one exists — get_concrete_wasm_type guesses I64 for
+                        # Union{Nothing, UInt64}, but such unions are allocated as
+                        # AnyRef locals (an i64 cannot encode `nothing`), so the
+                        # guess skipped the unbox and raw anyref reached i64.sub.
                         local _pi_src_wasm = nothing
-                        if stmt.val isa Core.Argument
+                        if stmt.val isa Core.SSAValue
+                            local _pi_li = get(ctx.ssa_locals, stmt.val.id, nothing)
+                            _pi_li === nothing && (_pi_li = get(ctx.phi_locals, stmt.val.id, nothing))
+                            if _pi_li !== nothing
+                                local _pi_off = _pi_li - ctx.n_params
+                                if _pi_off >= 0 && _pi_off < length(ctx.locals)
+                                    _pi_src_wasm = ctx.locals[_pi_off + 1]
+                                end
+                            end
+                            if _pi_src_wasm === nothing
+                                local _pi_src_type = get(ctx.ssa_types, stmt.val.id, Any)
+                                _pi_src_wasm = get_concrete_wasm_type(_pi_src_type, ctx.mod, ctx.type_registry)
+                            end
+                        elseif stmt.val isa Core.Argument
                             local _pi_arg_idx = ctx.is_compiled_closure ? stmt.val.n : stmt.val.n - 1
                             if _pi_arg_idx >= 1 && _pi_arg_idx <= length(ctx.arg_types)
                                 _pi_src_wasm = get_concrete_wasm_type(ctx.arg_types[_pi_arg_idx], ctx.mod, ctx.type_registry)
                             end
-                        elseif stmt.val isa Core.SSAValue
-                            local _pi_src_type = get(ctx.ssa_types, stmt.val.id, Any)
-                            _pi_src_wasm = get_concrete_wasm_type(_pi_src_type, ctx.mod, ctx.type_registry)
                         end
                         if _pi_src_wasm === AnyRef || _pi_src_wasm === StructRef || _pi_src_wasm isa ConcreteRef
                             # Value is boxed in anyref — unbox via ref.cast + struct.get

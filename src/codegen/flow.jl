@@ -1456,6 +1456,28 @@ function generate_loop_code(ctx::AbstractCompilationContext)::Vector{UInt8}
 
         stmt = code[i]
 
+        # P4-stdlib (Random / FINDINGS P4 dead-coding class): mirror
+        # compile_statement's PURE-6027 boundary reset here — the walker
+        # compiles GotoIfNot CONDITIONS via compile_condition_to_i32 without
+        # passing through compile_statement, so a stub/throw flag from a
+        # previous block leaked into conditions at reachable jump targets
+        # (`i64.const 0; unreachable; i32.eqz` poisoned-condition trap).
+        if ctx.last_stmt_was_stub && i > 1
+            local _bw_prev = code[i - 1]
+            if _bw_prev isa Core.GotoNode || _bw_prev isa Core.GotoIfNot || _bw_prev isa Core.ReturnNode
+                ctx.last_stmt_was_stub = false
+            else
+                for _bw_s in code
+                    local _bw_d = _bw_s isa Core.GotoNode ? _bw_s.label :
+                                  _bw_s isa Core.GotoIfNot ? _bw_s.dest : 0
+                    if _bw_d == i
+                        ctx.last_stmt_was_stub = false
+                        break
+                    end
+                end
+            end
+        end
+
         # PURE-6024: Skip statements in dead code (after unreachable in current block)
         if dead_code_depth >= 0
             i += 1
