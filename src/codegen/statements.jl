@@ -1720,6 +1720,20 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
             ctx.last_stmt_was_stub = true  # PURE-908
             return bytes
         end
+    elseif struct_type_ref isa Core.Argument
+        # Constructor bodies reference the constructed type as Core.Argument(1)
+        # (#self# = Type{T}): TickLabel(...)'s IR is `%new(_1, fields...)`.
+        # The :new statement's own inferred SSA type IS the constructed type
+        # (E-003: TickLabel and SubString constructor deps failed here).
+        local new_ssa_type = ctx.code_info.ssavaluetypes[idx]
+        if new_ssa_type isa DataType && isconcretetype(new_ssa_type) && isstructtype(new_ssa_type)
+            new_ssa_type
+        else
+            @debug "Stubbing :new with unresolvable Core.Argument type: $struct_type_ref ($new_ssa_type)"
+            push!(bytes, Opcode.UNREACHABLE)
+            ctx.last_stmt_was_stub = true  # PURE-908
+            return bytes
+        end
     else
         error("Unknown struct type reference: $struct_type_ref")
     end
@@ -2523,6 +2537,22 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                         push!(bytes, Opcode.EXTERN_CONVERT_ANY)
                         field_bytes = UInt8[]
                     end
+                end
+            end
+            # WASMMAKIE E-003: inline-expression sources (e.g. a nested
+            # struct.new result) aren't covered by the local.get/global.get
+            # byte-pattern checks above — bridge by the value's INFERRED wasm
+            # type instead (wilkinson's kwarg structs pushed (ref $t) into
+            # externref fields and failed validation).
+            if actual_field_wasm === ExternRef && !isempty(field_bytes) &&
+               field_bytes[1] != 0x20 && field_bytes[1] != 0x23 && field_bytes[1] != 0xD0
+                _inline_vw = try infer_value_wasm_type(val, ctx) catch; nothing end
+                if _inline_vw !== nothing && (_inline_vw isa ConcreteRef || _inline_vw === StructRef ||
+                                              _inline_vw === ArrayRef || _inline_vw === AnyRef || _inline_vw === EqRef)
+                    append!(bytes, field_bytes)
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                    field_bytes = UInt8[]
                 end
             end
             # PURE-906: Check if field expects numeric but source is ref-typed (externref/anyref).

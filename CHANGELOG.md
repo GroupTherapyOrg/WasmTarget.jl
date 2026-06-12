@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.3](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.2...v0.3.3) (2026-06-12)
+
+
+### Bug Fixes
+
+* closure-path compilation of WasmMakie islands — eight codegen fixes (WASMMAKIE-E-003) ([c98db5f](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/c98db5f99d67f6786ff7ad514e8cf2fc91c2ae71))
+* closure-path compilation of WasmMakie islands (WASMMAKIE-E-003) ([73c2d01](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/73c2d0182dfeaa3ec6e3f89d19b7e346a1cad64e))
+
 ## [0.3.2](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.1...v0.3.2) (2026-06-12)
 
 

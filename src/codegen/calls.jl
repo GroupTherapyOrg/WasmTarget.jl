@@ -5812,7 +5812,19 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         end
 
     elseif is_func(func, :*)
-        if arg_type === Float32
+        # String/Symbol `*` is CONCATENATION, not arithmetic: the plain-call
+        # path (closure-compiled bodies present concat as `call *`, not
+        # invoke) fell into the numeric branch and emitted i64.mul on two
+        # string refs — the E-003 island's fn#107 validation failure. Route
+        # to the same compile_string_concat the invoke path uses; args were
+        # pre-pushed, so rebuild the buffer (PURE-908 pattern).
+        _conc1 = length(args) >= 1 ? infer_value_type(args[1], ctx) : Nothing
+        _conc2 = length(args) >= 2 ? infer_value_type(args[2], ctx) : Nothing
+        if length(args) == 2 && (_conc1 === String || _conc1 === Symbol) &&
+           (_conc2 === String || _conc2 === Symbol)
+            bytes = UInt8[]
+            append!(bytes, compile_string_concat(args[1], args[2], ctx))
+        elseif arg_type === Float32
             push!(bytes, Opcode.F32_MUL)
         elseif arg_type === Float64
             push!(bytes, Opcode.F64_MUL)
