@@ -344,6 +344,35 @@ function _warn_no_wasm_tools_once()
 end
 
 """
+Disassemble ±12 instructions around the first `(at offset 0x…)` in a validator
+message. Best-effort: any failure returns "" (validation errors must never be
+masked by their own diagnostics).
+"""
+function _disassembly_context(wasm_tools, wasm_path::AbstractString, validator_msg::AbstractString)::String
+    try
+        m = match(r"at offset 0x([0-9a-f]+)", validator_msg)
+        m === nothing && return ""
+        target = parse(UInt64, m.captures[1]; base=16)
+        dis = read(pipeline(`$(wasm_tools) print --print-offsets $(wasm_path)`, stderr=devnull), String)
+        lines = split(dis, '\n')
+        # offsets appear as leading `(;@1fd2  ;)` comments
+        best = 0
+        for (i, ln) in enumerate(lines)
+            om = match(r"^\(;@([0-9a-f]+)\s*;\)", ln)
+            om === nothing && continue
+            off = parse(UInt64, om.captures[1]; base=16)
+            off <= target && (best = i)
+            off > target && break
+        end
+        best == 0 && return ""
+        lo, hi = max(1, best - 12), min(length(lines), best + 2)
+        join(lines[lo:hi], "\n")
+    catch
+        ""
+    end
+end
+
+"""
     validate_wasm_bytes(bytes; label="module") -> Vector{UInt8}
 
 Run `wasm-tools validate --features=gc` on `bytes`. Throws [`WasmValidationError`](@ref)
@@ -371,7 +400,12 @@ function validate_wasm_bytes(bytes::Vector{UInt8}; label::AbstractString="module
             # debug escape hatch: keep the rejected module for offline objdump
             dump_to = get(ENV, "WT_DUMP_INVALID", "")
             isempty(dump_to) || (write(dump_to, bytes); @info "invalid module dumped" dump_to)
-            throw(WasmValidationError("wasm-tools rejected the emitted $label", String(take!(err))))
+            details = String(take!(err))
+            # self-diagnosing failures: disassemble around the failing offset so the
+            # error names the construct (e.g. WHICH callee a mis-arity call targets)
+            ctx_dis = _disassembly_context(wasm_tools, p, details)
+            isempty(ctx_dis) || (details *= "\n\nemitted code at the failing offset:\n" * ctx_dis)
+            throw(WasmValidationError("wasm-tools rejected the emitted $label", details))
         end
     end
     return bytes

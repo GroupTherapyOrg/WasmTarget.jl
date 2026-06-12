@@ -670,6 +670,10 @@ end
 Register a function in the registry.
 """
 function register_function!(registry::FunctionRegistry, name::String, func_ref, arg_types::Tuple, wasm_idx::UInt32, return_type::Type=Any)
+    # campaign diagnostics: WT_LOG_REGISTRY=1 logs every registration (name,
+    # arg types, index) — for hunting call-site/callee signature divergence
+    get(ENV, "WT_LOG_REGISTRY", "") == "1" &&
+        println(stderr, "WTREG\t", name, "\t", wasm_idx, "\t", arg_types)
     info = FunctionInfo(name, func_ref, arg_types, wasm_idx, return_type)
 
     # Update or add in functions list (linear scan)
