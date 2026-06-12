@@ -1893,6 +1893,11 @@ struct WasmInterpreter <: CC.AbstractInterpreter
     inf_cache::Vector{CC.InferenceResult}
     inf_params::CC.InferenceParams
     opt_params::CC.OptimizationParams
+    # P5-trim: codegen cache for the upstream CompilationQueue/compile!
+    # closed-world collection (the juliac --trim machinery). compile! stashes
+    # the uncompressed optimized CodeInfo of every collected CodeInstance
+    # here — the (CodeInstance, CodeInfo) pairs the plugin handoff consumes.
+    codegen::IdDict{Core.CodeInstance, Core.CodeInfo}
 end
 
 function WasmInterpreter(; world::UInt=Base.get_world_counter())
@@ -1904,7 +1909,8 @@ function WasmInterpreter(; world::UInt=Base.get_world_counter())
         inline_cost_threshold=500,
         inline_nonleaf_penalty=100,
     )
-    WasmInterpreter(world, mt, CC.InferenceResult[], inf_params, opt_params)
+    WasmInterpreter(world, mt, CC.InferenceResult[], inf_params, opt_params,
+                    IdDict{Core.CodeInstance, Core.CodeInfo}())
 end
 
 # Required AbstractInterpreter API
@@ -1914,6 +1920,7 @@ CC.get_inference_world(interp::WasmInterpreter) = interp.world
 CC.get_inference_cache(interp::WasmInterpreter) = interp.inf_cache
 CC.cache_owner(::WasmInterpreter) = :wasm_target
 CC.method_table(interp::WasmInterpreter) = interp.method_table
+CC.codegen_cache(interp::WasmInterpreter) = interp.codegen
 
 # Disable concrete eval (GPUCompiler pattern).
 # Without this, the compiler constant-folds calls using Base implementation,

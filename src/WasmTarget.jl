@@ -11,6 +11,7 @@ include("builder/validator.jl")
 # Codegen - Julia IR to Wasm bytecode
 include("codegen/diagnostics.jl")  # strict-mode diagnostics; must precede context.jl (struct field)
 include("codegen/interpreter.jl")
+include("codegen/trimcollect.jl")
 include("codegen/ir.jl")
 include("codegen/int_key_map.jl")
 include("codegen/types.jl")
