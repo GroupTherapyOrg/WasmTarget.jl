@@ -540,8 +540,20 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
     # P4-stdlib: kwcall sorters necessarily take the target function as an
     # argument (typeof(var) etc.) — exempt them from the function-singleton
     # skip, as the whole point is to compile through to the kwarg body.
+    # a8c00917b1b0 follow-up (PlutoIslands newton): user-defined higher-order
+    # functions (e.g. `standard_Newton(f, …)` in a notebook sandbox module) were
+    # silently skipped by the function-singleton-arg heuristic below — their
+    # :invoke then compiled to `unreachable`. The heuristic exists to stop
+    # cascading discovery through Base/stdlib internals; USER code (any module
+    # rooted in Main, incl. gensym'd sandboxes) should always be attempted —
+    # the can_compile probe still gates what actually lands.
+    _root = mod
+    while parentmodule(_root) !== _root
+        _root = parentmodule(_root)
+    end
+    _is_userland = _root === Main
     _exempt_mod = mod === WasmTarget || _is_julias || _is_kwarg_wrapper ||
-                  func === Core.kwcall ||
+                  func === Core.kwcall || _is_userland ||
                   (_is_base_or_sub && (meth_name in AUTODISCOVER_BASE_METHODS ||
                                        startswith(String(meth_name), "#string#") ||
                                        startswith(String(meth_name), "#power_by_squaring#") ||

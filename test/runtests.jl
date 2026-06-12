@@ -10495,6 +10495,11 @@ console.log(JSON.stringify({
         end
     end
 
+    # top-level so they're singleton functions, not capturing closures —
+    # a closure-typed ENTRY can't cross the JS arg boundary in run_wasm
+    _wt_apply_twice(g, x::Float64) = g(g(x))
+    _wt_ho_entry(n::Int64) = _wt_apply_twice(x -> 0.2 * x^3 - 4.0 * x + 1.0, Float64(n))
+
     @pphase "Float-range colon (a8c00917b1b0)" begin
         # Singleton callable structs bound to their own type name (Base.Colon):
         # discovery extracted the TYPE, probed a nonexistent constructor, and the
@@ -10512,6 +10517,10 @@ console.log(JSON.stringify({
         @test compare_julia_wasm(_range_fls, 3).pass
         @test compare_julia_wasm(_range_fls, -7).pass
         @test compare_julia_wasm(_range_arg, 3).pass
+
+        # follow-up: user-defined higher-order fns (function-typed args) were
+        # skipped by the singleton-arg heuristic — userland modules are exempt now
+        @test compare_julia_wasm(_wt_ho_entry, 5).pass
     end
 
 end  # end of phase-registration block
