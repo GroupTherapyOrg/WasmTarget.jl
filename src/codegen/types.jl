@@ -716,6 +716,32 @@ function get_function(registry::FunctionRegistry, name::String)::Union{FunctionI
 end
 
 """
+Registry lookup by FULL signature only (no function identity). Needed for
+capturing-closure callees (453393ca4ba4): the call site's closure VALUE is a
+different instance than the one registration stored, so identity (`ref ===`)
+can never match — but the self-prepended arg_types tuple identifies the entry.
+"""
+function get_function_by_argtypes(registry::FunctionRegistry, arg_types::Tuple)::Union{FunctionInfo, Nothing}
+    for (ref, infos) in registry.by_ref, info in infos
+        info.arg_types == arg_types && return info
+    end
+    # subtype-tolerant pass (mirrors get_function's compatible-signature pass)
+    for (ref, infos) in registry.by_ref, info in infos
+        if length(info.arg_types) == length(arg_types)
+            ok = true
+            for (expected, actual) in zip(info.arg_types, arg_types)
+                if !(actual <: expected)
+                    ok = false
+                    break
+                end
+            end
+            ok && return info
+        end
+    end
+    return nothing
+end
+
+"""
 Look up a function by reference and argument types (for dispatch).
 """
 function get_function(registry::FunctionRegistry, func_ref, arg_types::Tuple)::Union{FunctionInfo, Nothing}

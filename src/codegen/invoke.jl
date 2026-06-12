@@ -2199,6 +2199,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
     # during argument compilation. This helps when param_types (from mi.specTypes) differ from
     # the actual compiled function's parameter types.
     target_info_early = nothing
+    closure_self_to_push = nothing   # 453393ca4ba4: see below
     if ctx.func_registry !== nothing && !is_self_call_early
         called_func_early = nothing
         if actual_func_ref_early isa GlobalRef
@@ -2234,9 +2235,44 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
             if target_info_early === nothing && typeof(called_func_early) <: Function && isconcretetype(typeof(called_func_early))
                 closure_arg_types_early = (typeof(called_func_early), call_arg_types_early...)
                 target_info_early = get_function(ctx.func_registry, called_func_early, closure_arg_types_early)
+                # 453393ca4ba4: a CAPTURING closure entry takes the closure object as
+                # wasm param 1 — the call site must push it (PlutoIslands newton C-W3:
+                # 6 values for a 7-param functype → "nothing on stack")
+                if target_info_early !== nothing && is_closure_type(typeof(called_func_early))
+                    closure_self_to_push = actual_func_ref_early
+                end
             end
         end
     end
+
+    # 453393ca4ba4: capturing-closure callees — the function position is a VALUE
+    # (SSA/argument/local); identity-keyed registry lookup can never match the
+    # runtime-constructed instance, so the invoke silently fell through to an
+    # `unreachable` (PlutoIslands newton C-W3). Resolve by TYPE against the
+    # self-prepended signature and push the closure object as wasm param 1.
+    get(ENV, "WT_DBG_CLOSURE", "") == "1" &&
+        println(stderr, "CLOSDBG ref=", repr(actual_func_ref_early), " :: ", typeof(actual_func_ref_early),
+                " ti_early=", target_info_early !== nothing)
+    if target_info_early === nothing && ctx.func_registry !== nothing && !is_self_call_early &&
+       actual_func_ref_early !== nothing && !(actual_func_ref_early isa GlobalRef)
+        ft_early = try
+            infer_value_type(actual_func_ref_early, ctx)
+        catch
+            nothing
+        end
+        if ft_early isa DataType && is_closure_type(ft_early)
+            cat_early = tuple([infer_value_type(arg, ctx) for arg in args]...)
+            ti = get_function_by_argtypes(ctx.func_registry, (ft_early, cat_early...))
+            get(ENV, "WT_DBG_CLOSURE", "") == "1" &&
+                println(stderr, "CLOSDBG bytype ft=", ft_early, " cat=", cat_early, " hit=", ti !== nothing)
+            if ti !== nothing
+                target_info_early = ti
+                closure_self_to_push = actual_func_ref_early
+            end
+        end
+    end
+    # self-prepended entries: arg_types are shifted +1 relative to `args`
+    early_argtypes_offset = closure_self_to_push === nothing ? 0 : 1
 
     # ================================================================
     # Early dispatch: Julia Base string operations → str_* intrinsics
@@ -2338,6 +2374,12 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 return _compile_invoke_str_rpad([args[1], args[2], args[3]], ctx)
             end
         end
+    end
+
+    # 453393ca4ba4: closure callee — the compiled function takes the closure
+    # object as wasm param 1; push it before the explicit args
+    if closure_self_to_push !== nothing
+        append!(bytes, compile_value(closure_self_to_push, ctx))
     end
 
     # Push arguments (for non-signal calls)
@@ -2608,8 +2650,8 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
             # PURE-036z: Also check against target_info_early if available
             # This catches cases where param_types says ConcreteRef but the actual target function
             # expects ExternRef (because it was registered with different type mapping)
-            if target_info_early !== nothing && arg_idx <= length(target_info_early.arg_types)
-                target_expected_julia = target_info_early.arg_types[arg_idx]
+            if target_info_early !== nothing && arg_idx + early_argtypes_offset <= length(target_info_early.arg_types)
+                target_expected_julia = target_info_early.arg_types[arg_idx + early_argtypes_offset]
                 target_expected_wasm = get_concrete_wasm_type(target_expected_julia, ctx.mod, ctx.type_registry)
                 if target_expected_wasm === ExternRef && !extern_convert_emitted
                     # Target function expects externref for this arg
@@ -2775,10 +2817,18 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     end
                 end
 
+                if called_func === nothing && closure_self_to_push !== nothing && target_info_early !== nothing
+                    # 453393ca4ba4: closure callee resolved by TYPE in the early
+                    # block; the closure object is already on the stack under the args
+                    called_func = closure_self_to_push
+                end
                 if called_func !== nothing
                     # Infer argument types for dispatch
                     call_arg_types = tuple([infer_value_type(arg, ctx) for arg in args]...)
                     target_info = get_function(ctx.func_registry, called_func, call_arg_types)
+                    if target_info === nothing && closure_self_to_push !== nothing
+                        target_info = target_info_early
+                    end
 
                     # PURE-320: Closure/kwarg functions are registered with self-type prepended
                     # (e.g., typeof(#SourceFile#40) prepended to arg_types). Retry with self-type.
