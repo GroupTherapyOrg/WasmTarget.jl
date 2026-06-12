@@ -33,8 +33,12 @@ source-located diagnostics when dynamic dispatch remains — the same
 "abstract inference unsupported" boundary WasmTarget's strict mode guards,
 but reported far better).
 """
+# P5-trim: entry names for strict-mode scoping (see record_unsupported!).
+const TRIM_ENTRY_NAMES = Ref{Union{Nothing, Set{String}}}(nothing)
+
 function collect_closed_world(entries::Vector{Any}; verify::Bool=false)
-    interp = WasmInterpreter()
+    # Fresh cache partition per collection: see cache_token in WasmInterpreter.
+    interp = WasmInterpreter(Base.RefValue(0))
     invokelatest_queue = CC.CompilationQueue(; interp)
     codeinfos = Any[]
     workqueue = CC.CompilationQueue(; interp)

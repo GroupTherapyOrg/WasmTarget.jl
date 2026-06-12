@@ -3801,7 +3801,33 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
     # --traps-never-happen to eliminate surrounding live code.
     # Returning a type-appropriate default keeps the optimizer safe.
     fc_return_type = length(expr.args) >= 2 ? expr.args[2] : Nothing
-    if fc_return_type === Int32 || fc_return_type === UInt32
+    # P5-trim: emit the default in the width of the ACTUAL SSA LOCAL when one
+    # exists — the declared foreigncall return type can disagree with the
+    # local the pipeline allocated (i64 default into an i32 local failed
+    # validation in freshly-collected show machinery).
+    local _fcd_lt = nothing
+    local _fcd_li = get(ctx.ssa_locals, idx, nothing)
+    if _fcd_li !== nothing
+        local _fcd_off = _fcd_li - ctx.n_params
+        if _fcd_off >= 0 && _fcd_off < length(ctx.locals)
+            _fcd_lt = ctx.locals[_fcd_off + 1]
+        end
+    end
+    if _fcd_lt === I32
+        push!(bytes, Opcode.I32_CONST); push!(bytes, 0x00)
+    elseif _fcd_lt === I64
+        push!(bytes, Opcode.I64_CONST); push!(bytes, 0x00)
+    elseif _fcd_lt === F64
+        append!(bytes, [Opcode.F64_CONST, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+    elseif _fcd_lt === F32
+        append!(bytes, [Opcode.F32_CONST, 0x00, 0x00, 0x00, 0x00])
+    elseif _fcd_lt isa ConcreteRef
+        push!(bytes, Opcode.REF_NULL)
+        append!(bytes, encode_leb128_signed(Int64(_fcd_lt.type_idx)))
+    elseif _fcd_lt === AnyRef || _fcd_lt === ExternRef || _fcd_lt === StructRef || _fcd_lt === ArrayRef || _fcd_lt === EqRef
+        push!(bytes, Opcode.REF_NULL)
+        push!(bytes, UInt8(_fcd_lt))
+    elseif fc_return_type === Int32 || fc_return_type === UInt32
         push!(bytes, Opcode.I32_CONST)
         push!(bytes, 0x00)
     elseif fc_return_type === Int64 || fc_return_type === UInt64 || fc_return_type === Int

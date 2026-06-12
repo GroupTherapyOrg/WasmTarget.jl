@@ -4413,11 +4413,13 @@ function _compile_module_trim(functions::Vector; kwargs...)
     end
     plan, ir_cache = trim_compile_plan(normalized)
     TRIM_IR_CACHE[] = ir_cache
+    TRIM_ENTRY_NAMES[] = Set{String}(String(e[3]) for e in normalized)
     _TRIM_ACTIVE[] = true
     try
         return compile_module(plan; discovery=:legacy, kwargs...)
     finally
         TRIM_IR_CACHE[] = nothing
+        TRIM_ENTRY_NAMES[] = nothing
         _TRIM_ACTIVE[] = false
     end
 end
