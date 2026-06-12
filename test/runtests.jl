@@ -102,6 +102,8 @@ using WasmTarget: add_array_type!, add_export!, add_function!, add_import!, add_
                   Opcode, to_bytes, WasmModule
 using Test
 import Statistics
+import Dates
+using Dates: Dates, @dateformat_str
 
 # Package-level QA runs first so structural failures surface
 # before the ~hour-long codegen suite spins up. (Shard 0 only — it's process-wide.)
@@ -10407,6 +10409,53 @@ console.log(JSON.stringify({
         @test compare_julia_wasm_vec(_stats_median, Float64[9.0, -2.0, 7.5, 0.0, 1.0, 3.25, -8.0]).pass
         @test compare_julia_wasm_vec(_stats_quantile, Float64[1.0, 2.0, 3.0, 4.0]).pass
         @test compare_julia_wasm_vec(_stats_middle, Float64[1.0, 9.0, 2.0]).pass
+    end
+
+    # ── P4-stdlib: Dates (stdlib #2) ───────────────────────────────────────
+    # Value layer compiles from the real Dates implementations; rendering
+    # (string(::Date)/(::DateTime)) via WasmTargetDatesExt overlays (the
+    # native path needs IOBuffer growth machinery). now()/today() need a
+    # host-time import wired by the embedding pipeline — not covered here.
+    _dates_year(x::Int64)::Int64 = Dates.year(Dates.Date(2020, 1, 1) + Dates.Day(x))
+    _dates_dow(x::Int64)::Int64 = Dates.dayofweek(Dates.Date(2024, 1, 1) + Dates.Day(x))
+    _dates_diff(x::Int64)::Int64 = Dates.value(Dates.Date(2024, 3, 1) - Dates.Date(2024, 2, x % 28 + 1))
+    _dates_dim(x::Int64)::Int64 = Dates.daysinmonth(Dates.Date(2024, x % 12 + 1, 1))
+    _dates_leap(x::Int64)::Bool = Dates.isleapyear(2000 + x)
+    _dates_conv(x::Int64)::Int64 = Dates.value(convert(Dates.Millisecond, Dates.Second(x)))
+    _dates_parse(x::Int64)::Int64 = Dates.day(Dates.Date("2024-03-15", dateformat"yyyy-mm-dd")) + x
+    # Rendering checks return an in-wasm content checksum (the scalar JS
+    # harness can't marshal String returns; the polynomial hash makes the
+    # comparison content-exact anyway — bridge probes verified the actual
+    # strings bit-exact during integration).
+    function _dates_strsum(x::Int64)::Int64
+        s = string(Dates.Date(2024, 1, 1) + Dates.Day(x))
+        h = Int64(0)
+        for b in codeunits(s)
+            h = h * 31 + Int64(b)
+        end
+        return h
+    end
+    function _dates_strdtsum(x::Int64)::Int64
+        s = string(Dates.DateTime(2023, 6, 15, 12, 0, 0) + Dates.Millisecond(x))
+        h = Int64(0)
+        for b in codeunits(s)
+            h = h * 31 + Int64(b)
+        end
+        return h
+    end
+
+    @pphase "Dates stdlib" begin
+        @test compare_julia_wasm(_dates_year, 5).pass
+        @test compare_julia_wasm(_dates_dow, 5).pass
+        @test compare_julia_wasm(_dates_diff, 5).pass
+        @test compare_julia_wasm(_dates_dim, 5).pass
+        @test compare_julia_wasm(_dates_leap, 5).pass
+        @test compare_julia_wasm(_dates_leap, 0).pass
+        @test compare_julia_wasm(_dates_conv, 5).pass
+        @test compare_julia_wasm(_dates_parse, 5).pass
+        @test compare_julia_wasm(_dates_strsum, 5).pass
+        @test compare_julia_wasm(_dates_strdtsum, 123).pass
+        @test compare_julia_wasm(_dates_strdtsum, 0).pass
     end
 
 end  # end of phase-registration block

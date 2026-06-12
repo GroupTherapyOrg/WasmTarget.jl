@@ -18,6 +18,7 @@
 
 using Supposition, Random
 using Statistics   # P4-stdlib: catalogue :stats entries resolve in Main
+using Dates: isleapyear, daysinmonth   # P4-stdlib: :dates entries
 using Supposition: Data
 
 const FUZZ_DIR = @__DIR__
