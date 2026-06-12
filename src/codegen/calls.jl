@@ -224,7 +224,7 @@ end
 # sign-extend from julia_width before ashr; lshr also honours the julia_width
 # over-shift threshold (shr_u of a width-bit value by ≥ width = 0).
 function _emit_shift_guarded!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, is32::Bool, kind::Symbol;
-                              julia_width::Int = (is32 ? 32 : 64))
+                              julia_width::Int = (is32 ? 32 : 64), signed_narrow::Bool = false)
     wconst = is32 ? Opcode.I32_CONST : Opcode.I64_CONST
     wltu   = is32 ? Opcode.I32_LT_U : Opcode.I64_LT_U
     wand   = is32 ? Opcode.I32_AND : Opcode.I64_AND
@@ -267,9 +267,19 @@ function _emit_shift_guarded!(bytes::Vector{UInt8}, ctx::AbstractCompilationCont
         _wc(thr)                                 # [result, 0, shift, thr]
         push!(bytes, wltu)                       # [result, 0, cond]
         push!(bytes, Opcode.SELECT)              # [cond? result : 0]
-        if kind === :shl && narrow
-            _wc((Int64(1) << thr) - 1)           # [result, mask]  (2^width - 1)
-            push!(bytes, wand)                   # [result & mask]  truncate to width
+        if narrow && (kind === :shl || (kind === :lshr && signed_narrow))
+            # P3 (found probing da22976c7cd6): a SIGNED narrow result must be
+            # re-sign-extended, not zero-masked — `Int8(-1) << 0` masked to
+            # 0xFF read back as 255. extend8_s/16_s ignores the spilled high
+            # bits, so it replaces the mask. lshr needs it too: the shifted
+            # bits are width-canonical but bit thr-1 can be set (shift 0 of
+            # 0x80 → Int8 -128, not 128).
+            if signed_narrow && is32 && (thr == 8 || thr == 16)
+                push!(bytes, thr == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
+            elseif kind === :shl
+                _wc((Int64(1) << thr) - 1)       # [result, mask]  (2^width - 1)
+                push!(bytes, wand)               # [result & mask]  truncate to width
+            end
         end
     end
     return bytes
@@ -5117,7 +5127,8 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 end
             end
             _emit_shift_guarded!(bytes, ctx, is_32bit, :shl;
-                                 julia_width = _julia_int_width(arg_type, is_32bit))   # over-shift → 0 + narrow truncation
+                                 julia_width = _julia_int_width(arg_type, is_32bit),
+                                 signed_narrow = arg_type isa Type && arg_type <: Signed)   # over-shift → 0 + narrow truncation
         end
 
     elseif is_func(func, :ashr_int)  # arithmetic shift right
@@ -5150,7 +5161,8 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 end
             end
             _emit_shift_guarded!(bytes, ctx, is_32bit, :lshr;
-                                 julia_width = _julia_int_width(arg_type, is_32bit))   # over-shift → 0 (Julia semantics)
+                                 julia_width = _julia_int_width(arg_type, is_32bit),
+                                 signed_narrow = arg_type isa Type && arg_type <: Signed)   # over-shift → 0 (Julia semantics)
         end
 
     # Count leading/trailing zeros (used in Char conversion)
@@ -5375,21 +5387,49 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         else
             target_type_ref
         end
+        # P3 gap da22976c7cd6: sub-32-bit values live in i32 locals that can
+        # carry dirty high bits (e.g. `0x01 + 0xff` leaves 0x100 — add_int does
+        # not re-narrow). zext_int takes the BITS of the source width, so mask
+        # to that width before extending (`x << Int64(0x01 + x)` shifted by 256
+        # instead of 0 — over-shift gave 0 where native wraps the count).
+        _zx_src = length(args) >= 2 ? infer_value_type(args[2], ctx) : nothing
+        _zx_mask = (_zx_src === UInt8 || _zx_src === Int8) ? Int64(0xFF) :
+                   (_zx_src === UInt16 || _zx_src === Int16) ? Int64(0xFFFF) : Int64(0)
         if target_type === Int64 || target_type === UInt64
             # Extending to 64-bit - emit extend instruction
             # PURE-324: Skip extend if source is already i64 (e.g., from widened phi local)
             src_wasm_z = length(args) >= 2 ? get_phi_edge_wasm_type(args[2], ctx) : nothing
             if src_wasm_z !== I64
+                if _zx_mask != 0
+                    push!(bytes, Opcode.I32_CONST)
+                    append!(bytes, encode_leb128_signed(_zx_mask))
+                    push!(bytes, Opcode.I32_AND)
+                end
                 push!(bytes, Opcode.I64_EXTEND_I32_U)
+            end
+        elseif target_type === Int32 || target_type === UInt32
+            # Same-register-class extension: mask the source width so dirty
+            # carry bits don't leak into the wider type
+            if _zx_mask != 0 && get_phi_edge_wasm_type(args[2], ctx) !== I64
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(_zx_mask))
+                push!(bytes, Opcode.I32_AND)
             end
         elseif target_type === Int128 || target_type === UInt128
             # Extending to 128-bit - create struct with (typeId, lo=value, hi=0)
             # The value is already on the stack (i64), need to create 128-bit struct
             source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : UInt64
 
-            # If source is 32-bit, extend to 64-bit first
+            # If source is 32-bit or narrower, extend to 64-bit first
             # PURE-325: Bool also maps to i32, so include it here
-            if source_type === Int32 || source_type === UInt32 || source_type === Bool
+            # P3 da22976c7cd6: 8/16-bit sources also live in i32 — mask their
+            # width (dirty carry bits) before the unsigned extend
+            if _zx_mask != 0
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(_zx_mask))
+                push!(bytes, Opcode.I32_AND)
+                push!(bytes, Opcode.I64_EXTEND_I32_U)
+            elseif source_type === Int32 || source_type === UInt32 || source_type === Bool
                 push!(bytes, Opcode.I64_EXTEND_I32_U)
             end
 
