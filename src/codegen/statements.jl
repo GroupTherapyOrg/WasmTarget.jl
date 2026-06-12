@@ -960,6 +960,22 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     end
                 end
 
+                # P4-stdlib (Random seed!): stmt ends with array.get_u/get_s on a
+                # packed array — those ALWAYS produce i32 — while the SSA local
+                # is i64 (seed bytes combined into UInt64 words). Append the
+                # signedness-matching extend. Forward-parsed like the struct_get
+                # check below (backward scans misfire on LEB collisions).
+                if !needs_type_safe_default && local_wasm_type === I64 && length(stmt_bytes) >= 3
+                    local _ag_li = _last_instr_start(stmt_bytes)
+                    if _ag_li > 0 && _ag_li + 1 <= length(stmt_bytes) &&
+                       stmt_bytes[_ag_li] == Opcode.GC_PREFIX &&
+                       (stmt_bytes[_ag_li + 1] == Opcode.ARRAY_GET_U ||
+                        stmt_bytes[_ag_li + 1] == Opcode.ARRAY_GET_S)
+                        push!(stmt_bytes, stmt_bytes[_ag_li + 1] == Opcode.ARRAY_GET_U ?
+                              Opcode.I64_EXTEND_I32_U : Opcode.I64_EXTEND_I32_S)
+                    end
+                end
+
                 # Check if stmt_bytes ends with struct_get whose result type is incompatible
                 # with the target local. struct_get = [0xFB, 0x02, type_leb, field_leb]
                 # P3 gap a6c6091b2a80: FORWARD-parse to the last instruction — the
