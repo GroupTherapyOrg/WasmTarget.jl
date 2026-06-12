@@ -6364,12 +6364,17 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             # Infer argument types BEFORE pushing (need for type checking)
             call_arg_types = tuple([infer_value_type(arg, ctx) for arg in args]...)
 
-            target_info = get_function(ctx.func_registry, called_func, call_arg_types)
+            # 1f6e77980994: dynamic-dispatch sites must not pick a same-name
+            # overload with an incompatible return (i32 getindex for a ref site)
+            _exp_ret_c = get(ctx.ssa_types, idx, nothing)
+            target_info = get_function(ctx.func_registry, called_func, call_arg_types;
+                                       expected_return=_exp_ret_c isa Type ? _exp_ret_c : nothing)
 
             # PURE-320: Closure/kwarg functions are registered with self-type prepended
             if target_info === nothing && typeof(called_func) <: Function && isconcretetype(typeof(called_func))
                 closure_arg_types = (typeof(called_func), call_arg_types...)
-                target_info = get_function(ctx.func_registry, called_func, closure_arg_types)
+                target_info = get_function(ctx.func_registry, called_func, closure_arg_types;
+                                           expected_return=_exp_ret_c isa Type ? _exp_ret_c : nothing)
             end
 
             if target_info !== nothing
@@ -6591,6 +6596,26 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                             # Insert ref.cast to narrow anyref → structref.
                             append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.REF_CAST_NULL])
                             push!(bytes, 0x6B)  # structref heap type
+                        elseif (target_local_type === AnyRef || target_local_type === StructRef) &&
+                               (ret_wasm === I32 || ret_wasm === I64 || ret_wasm === F32 || ret_wasm === F64)
+                            # 1f6e77980994: callee returns a numeric but the SSA local is a
+                            # ref class (dynamic Any-typed call site, e.g. getindex on a bond
+                            # Vector resolving to an i32-returning overload) — box the RESULT
+                            # exactly like the PURE-9022 arg path ('expected anyref, found i32').
+                            local box_type_idx_ret = get_numeric_box_type!(ctx.mod, ctx.type_registry, ret_wasm)
+                            local _box_scratch_ret = length(ctx.locals) + ctx.n_params
+                            push!(ctx.locals, ret_wasm)
+                            push!(bytes, Opcode.LOCAL_SET)
+                            append!(bytes, encode_leb128_unsigned(_box_scratch_ret))
+                            emit_box_type_id!(bytes, ctx.type_registry, ret_wasm)
+                            push!(bytes, Opcode.LOCAL_GET)
+                            append!(bytes, encode_leb128_unsigned(_box_scratch_ret))
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.STRUCT_NEW)
+                            append!(bytes, encode_leb128_unsigned(box_type_idx_ret))
+                            if target_local_type === StructRef
+                                # box struct is already a structref subtype — no cast needed
+                            end
                         end
                     end
                 end

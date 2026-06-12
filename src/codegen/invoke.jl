@@ -2230,7 +2230,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
         end
         if called_func_early !== nothing
             call_arg_types_early = tuple([infer_value_type(arg, ctx) for arg in args]...)
-            target_info_early = get_function(ctx.func_registry, called_func_early, call_arg_types_early)
+            _exp_ret = get(ctx.ssa_types, idx, nothing)
+            target_info_early = get_function(ctx.func_registry, called_func_early, call_arg_types_early;
+                                             expected_return=_exp_ret isa Type ? _exp_ret : nothing)
             # PURE-320: Closure/kwarg functions are registered with self-type prepended
             if target_info_early === nothing && typeof(called_func_early) <: Function && isconcretetype(typeof(called_func_early))
                 closure_arg_types_early = (typeof(called_func_early), call_arg_types_early...)
@@ -2825,7 +2827,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 if called_func !== nothing
                     # Infer argument types for dispatch
                     call_arg_types = tuple([infer_value_type(arg, ctx) for arg in args]...)
-                    target_info = get_function(ctx.func_registry, called_func, call_arg_types)
+                    _exp_ret_l = get(ctx.ssa_types, idx, nothing)
+                    target_info = get_function(ctx.func_registry, called_func, call_arg_types;
+                                               expected_return=_exp_ret_l isa Type ? _exp_ret_l : nothing)
                     if target_info === nothing && closure_self_to_push !== nothing
                         target_info = target_info_early
                     end

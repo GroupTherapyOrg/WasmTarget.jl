@@ -744,7 +744,15 @@ end
 """
 Look up a function by reference and argument types (for dispatch).
 """
-function get_function(registry::FunctionRegistry, func_ref, arg_types::Tuple)::Union{FunctionInfo, Nothing}
+function get_function(registry::FunctionRegistry, func_ref, arg_types::Tuple;
+                      expected_return::Union{Nothing,Type}=nothing)::Union{FunctionInfo, Nothing}
+    # 1f6e77980994 family: loose subtype passes could pick the WRONG same-name
+    # overload (e.g. getindex(Vector{Bool})::Bool for a Vector{String} site →
+    # i32 stored into an anyref local). When the caller knows the expected
+    # return type, candidates with incompatible returns are skipped.
+    _ret_ok(info) = expected_return === nothing || expected_return === Any ||
+                    info.return_type === Any ||
+                    info.return_type <: expected_return || expected_return <: info.return_type
     infos = nothing
     for (ref, v) in registry.by_ref
         if ref === func_ref
@@ -754,16 +762,18 @@ function get_function(registry::FunctionRegistry, func_ref, arg_types::Tuple)::U
     end
     infos === nothing && return nothing
 
-    # Find matching signature (exact match for now)
+    # Find matching signature (exact match for now). Even exact arg matches are
+    # gated on return compatibility: two registered overloads can share loosely
+    # inferred arg types while returning different wasm classes (1f6e77980994).
     for info in infos
-        if info.arg_types == arg_types
+        if info.arg_types == arg_types && _ret_ok(info)
             return info
         end
     end
 
     # Try to find a compatible signature (subtype matching: actual <: registered)
     for info in infos
-        if length(info.arg_types) == length(arg_types)
+        if length(info.arg_types) == length(arg_types) && _ret_ok(info)
             match = true
             for (expected, actual) in zip(info.arg_types, arg_types)
                 if !(actual <: expected)
@@ -781,7 +791,7 @@ function get_function(registry::FunctionRegistry, func_ref, arg_types::Tuple)::U
     # This handles cases where infer_value_type returns abstract types (e.g., Type)
     # but the function was registered with concrete types (e.g., Type{SourceFile}).
     for info in infos
-        if length(info.arg_types) == length(arg_types)
+        if length(info.arg_types) == length(arg_types) && _ret_ok(info)
             match = true
             for (expected, actual) in zip(info.arg_types, arg_types)
                 if !(actual <: expected) && !(expected <: actual)
