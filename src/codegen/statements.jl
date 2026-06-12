@@ -3730,6 +3730,29 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
     # as dead code and abort the rest of the block, poisoning later
     # conditions into `unreachable`.
     local _fc_sym = expr.args[1] isa QuoteNode ? expr.args[1].value : expr.args[1]
+    if _fc_sym === :jl_type_intersection && length(expr.args) >= 7
+        # P4-stdlib (Random hash_seed): dispatch guards compare
+        # typeintersect(T1, T2) === Union{} with CONSTANT type args — fold on
+        # the host and emit the resulting type constant (NOT a stub: the
+        # stub flag dead-coded the live loop-exit condition that follows).
+        local _ti_a = expr.args[6]
+        local _ti_b = expr.args[7]
+        _ti_a isa QuoteNode && (_ti_a = _ti_a.value)
+        _ti_b isa QuoteNode && (_ti_b = _ti_b.value)
+        if _ti_a isa GlobalRef
+            _ti_a = try getfield(_ti_a.mod, _ti_a.name) catch; _ti_a end
+        end
+        if _ti_b isa GlobalRef
+            _ti_b = try getfield(_ti_b.mod, _ti_b.name) catch; _ti_b end
+        end
+        if _ti_a isa Type && _ti_b isa Type
+            local _ti_r = try typeintersect(_ti_a, _ti_b) catch; nothing end
+            if _ti_r !== nothing
+                append!(bytes, compile_value(_ti_r, ctx))
+                return bytes
+            end
+        end
+    end
     if _fc_sym === :jl_value_ptr
         # pointer_from_objref-style base pointer — in the fake-pointer model
         # every base is byte offset 0. A benign value, NOT a stub: typed

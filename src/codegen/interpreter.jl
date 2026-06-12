@@ -716,6 +716,21 @@ end
 end
 end
 
+# P4-stdlib (Random hash_seed): byte-wise reinterpret of primitive words —
+# the generic Base._reinterpret_padding walks DataType padding metadata
+# (host pointers; not compilable). Pure shift arithmetic is semantically
+# identical for padding-free primitives.
+@overlay WASM_METHOD_TABLE Base._reinterpret_padding(::Type{NTuple{4, UInt8}}, x::UInt32) =
+    (x % UInt8, (x >> 8) % UInt8, (x >> 16) % UInt8, (x >> 24) % UInt8)
+@overlay WASM_METHOD_TABLE Base._reinterpret_padding(::Type{NTuple{8, UInt8}}, x::UInt64) =
+    (x % UInt8, (x >> 8) % UInt8, (x >> 16) % UInt8, (x >> 24) % UInt8,
+     (x >> 32) % UInt8, (x >> 40) % UInt8, (x >> 48) % UInt8, (x >> 56) % UInt8)
+@overlay WASM_METHOD_TABLE Base._reinterpret_padding(::Type{UInt32}, x::NTuple{4, UInt8}) =
+    UInt32(x[1]) | (UInt32(x[2]) << 8) | (UInt32(x[3]) << 16) | (UInt32(x[4]) << 24)
+@overlay WASM_METHOD_TABLE Base._reinterpret_padding(::Type{UInt64}, x::NTuple{8, UInt8}) =
+    UInt64(x[1]) | (UInt64(x[2]) << 8) | (UInt64(x[3]) << 16) | (UInt64(x[4]) << 24) |
+    (UInt64(x[5]) << 32) | (UInt64(x[6]) << 40) | (UInt64(x[7]) << 48) | (UInt64(x[8]) << 56)
+
 @overlay WASM_METHOD_TABLE function Base.push!(v::Vector{T}, x) where T
     n = length(v)
     new_v = similar(v, n + 1)

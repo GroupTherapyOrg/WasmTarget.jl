@@ -4559,7 +4559,12 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 end
             end
         end
-        if is_numeric_intrinsic && _arg_anyref
+        # Also fire for the GENERIC arithmetic operators (+,-,*,div,rem,mod):
+        # dynamic call sites with everything typed Any (e.g. `4 - %foldl` in
+        # Random.hash_seed) default to the i64 opcodes but consume raw anyref.
+        local _generic_arith = func isa GlobalRef &&
+            func.name in (:+, :-, :*, :div, :rem, :mod)
+        if (is_numeric_intrinsic || _generic_arith) && _arg_anyref
             local _aa_target = is_32bit ? I32 : I64
             local _aa_box = get_numeric_box_type!(ctx.mod, ctx.type_registry, _aa_target)
             push!(bytes, Opcode.GC_PREFIX)
@@ -5984,10 +5989,18 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     # Julia's type inference may resolve length(::SimpleVector) to the builtin directly.
     # PURE-6021: args[1] (svec array) is already pre-pushed by the generic loop above.
     elseif ((func isa GlobalRef && func.name === :_svec_len && func.mod === Core) || (isdefined(Core, :_svec_len) && func === Core._svec_len)) && length(args) == 1
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_LEN)
-        # array.len returns i32 but Julia expects Int64
-        push!(bytes, Opcode.I64_EXTEND_I32_U)
+        # P4-stdlib: fold against host-constant svecs (padding/typename.names)
+        local _svl = _try_host_svec(args[1], ctx)
+        if _svl isa Core.SimpleVector
+            bytes = UInt8[]   # discard pre-pushed placeholder
+            push!(bytes, Opcode.I64_CONST)
+            append!(bytes, encode_leb128_signed(Int64(length(_svl))))
+        else
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ARRAY_LEN)
+            # array.len returns i32 but Julia expects Int64
+            push!(bytes, Opcode.I64_EXTEND_I32_U)
+        end
 
     # PURE-4149: Core._svec_ref(sv, i) — get element from SimpleVector (externref array).
     # _svec_ref is 1-indexed in Julia, 0-indexed in Wasm → subtract 1.
@@ -6096,6 +6109,21 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 if _gfc_val isa Union{Integer, Bool, Char, Float32, Float64, String, Symbol} &&
                    !(_gfc_val isa Union{Int128, UInt128, BigInt})
                     append!(bytes, compile_value(_gfc_val, ctx))
+                    _gfc_done = true
+                end
+            end
+        end
+        # P4-stdlib: constant-receiver getfield yielding a SimpleVector
+        # (typename(T).names) — emit a benign null placeholder (a stub
+        # dead-codes the rest of the block); consumers fold against the
+        # host value via _try_host_svec.
+        if !_gfc_done && func.name === :getfield && length(args) == 2 && args[1] isa QuoteNode
+            local _gfc_fld2 = args[2] isa QuoteNode ? args[2].value : args[2]
+            if _gfc_fld2 isa Symbol
+                local _gfc_v2 = try getfield(args[1].value, _gfc_fld2) catch; nothing end
+                if _gfc_v2 isa Core.SimpleVector
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, UInt8(ArrayRef))
                     _gfc_done = true
                 end
             end
@@ -6911,6 +6939,33 @@ is a DataType literal — the layout struct is immutable host metadata, fully
 known at compile time. Returns the host-loaded DataTypeLayout for literal
 materialization, or nothing if the chain doesn't match.
 """
+
+# P4-stdlib (Random hash_seed): resolve an IR value to a HOST SimpleVector
+# constant when its definition is compile-time evaluable — `padding(T, n)`
+# with literal args, or `getfield(typename(T), :names)`. The defs emit benign
+# null placeholders (no svec constant emission exists); consumers like
+# _svec_len/_svec_ref fold against the host value instead of reading it.
+function _try_host_svec(arg, ctx::AbstractCompilationContext)
+    arg isa Core.SSAValue || return nothing
+    (arg.id < 1 || arg.id > length(ctx.code_info.code)) && return nothing
+    st = ctx.code_info.code[arg.id]
+    if st isa Expr && (st.head === :invoke || st.head === :call)
+        a1 = st.head === :invoke ? (length(st.args) >= 2 ? st.args[2] : nothing) : st.args[1]
+        nm = a1 isa GlobalRef ? a1.name : a1 isa Function ? nameof(a1) : nothing
+        rest = st.head === :invoke ? st.args[3:end] : st.args[2:end]
+        if nm === :padding && length(rest) == 2 && rest[1] isa Type && rest[2] isa Integer
+            return try Base.padding(rest[1], Int(rest[2])) catch; nothing end
+        elseif nm === :getfield && length(rest) >= 2 && rest[1] isa QuoteNode
+            fld = rest[2] isa QuoteNode ? rest[2].value : rest[2]
+            if fld isa Symbol
+                v = try getfield(rest[1].value, fld) catch; nothing end
+                v isa Core.SimpleVector && return v
+            end
+        end
+    end
+    return nothing
+end
+
 function _try_fold_layout_pointerref(ptr_arg, ctx::AbstractCompilationContext)
     cur = ptr_arg
     for _ in 1:4

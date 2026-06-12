@@ -174,6 +174,12 @@ the raw compile_value would push anyref, but i32.eqz needs i32. This helper unbo
 ref.cast + struct.get when needed.
 """
 function compile_condition_to_i32(cond, ctx::AbstractCompilationContext)::Vector{UInt8}
+    if haskey(ENV, "WT_TRACE_CONDSTUB") && ctx.last_stmt_was_stub
+        println(stderr, "CONDSTUB cond=", first(repr(cond), 30))
+        for fr in stacktrace()[2:9]
+            println(stderr, "   ", fr)
+        end
+    end
     bytes = compile_value(cond, ctx)
     # Check if the condition value is in a non-i32 local
     if cond isa Core.SSAValue

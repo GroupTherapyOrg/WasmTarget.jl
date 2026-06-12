@@ -4670,6 +4670,18 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 push!(bytes, Opcode.THROW)
                 append!(bytes, encode_leb128_unsigned(0))
                 ctx.last_stmt_was_stub = true  # PURE-908
+            elseif name === :padding && length(args) == 2 &&
+                   args[1] isa Type && args[2] isa Integer
+                # P4-stdlib (Random hash_seed): padding(T, n) of literal args is
+                # a compile-time constant SimpleVector. No svec constant
+                # emission exists — emit a benign null placeholder (NOT a stub:
+                # a stub dead-codes the rest of the block) and let consumers
+                # (_svec_len etc.) fold against the host value via
+                # _try_host_svec.
+                bytes = UInt8[]
+                push!(bytes, Opcode.REF_NULL)
+                push!(bytes, UInt8(ArrayRef))
+
             elseif name === :array_subpadding && length(args) == 2 &&
                    args[1] isa Type && args[2] isa Type
                 # P4-stdlib (Statistics median): Base.array_subpadding is a pure
