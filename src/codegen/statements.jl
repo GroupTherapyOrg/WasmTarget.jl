@@ -3798,7 +3798,11 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
         push!(bytes, Opcode.I64_CONST)
         push!(bytes, 0x00)
     end
-    ctx.last_stmt_was_stub = true  # PURE-908
+    # P4-stdlib (Random digest!, the CONDSTUB class root): this path EMITS A
+    # VALUE — execution continues past it — so it must NOT set
+    # last_stmt_was_stub: the flag dead-codes the rest of the block,
+    # poisoning live conditions into `unreachable` (the value-vs-dead
+    # contradiction behind the FINDINGS P4 family).
     return bytes
 end
 

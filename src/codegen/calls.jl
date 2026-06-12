@@ -4456,6 +4456,72 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 return bytes
             end
         end
+        # P4-stdlib (Random digest!): CROSS-WIDTH store — Ptr{UInt64/32/16}
+        # into Vector{UInt8} storage (SHA writes the bitlength into its byte
+        # buffer). Emit little-endian byte-wise array.set stores.
+        local _psw_vec = (_ps_ptr !== nothing && _psg_tp isa DataType &&
+                          isprimitivetype(_psg_tp) && sizeof(_psg_tp) in (2, 4, 8)) ?
+            _trace_memmove_ptr(_ps_ptr, ctx) : nothing
+        if _psw_vec !== nothing && length(args) >= 2
+            local _psw_te = eltype(infer_value_type(_psw_vec, ctx))
+            if _psw_te === UInt8 || _psw_te === Int8
+                local _psw_arr = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
+                local _psw_s = sizeof(_psg_tp)
+                # scratch locals: array ref, base byte index, value (i64)
+                local _psw_la = length(ctx.locals) + ctx.n_params
+                push!(ctx.locals, ConcreteRef(_psw_arr, true))
+                local _psw_li = length(ctx.locals) + ctx.n_params
+                push!(ctx.locals, I32)
+                local _psw_lv = length(ctx.locals) + ctx.n_params
+                push!(ctx.locals, I64)
+                # array ref
+                append!(bytes, compile_value(_psw_vec, ctx))
+                local _psw_vinfo = ctx.type_registry.structs[infer_value_type(_psw_vec, ctx)]
+                push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
+                append!(bytes, encode_leb128_unsigned(_psw_vinfo.wasm_type_idx))
+                append!(bytes, encode_leb128_unsigned(1))
+                push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.REF_CAST_NULL)
+                append!(bytes, encode_leb128_signed(Int64(_psw_arr)))
+                push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(_psw_la))
+                # base byte index = ptr + (i-1)*s
+                append!(bytes, compile_value(_ps_ptr, ctx))
+                if length(args) >= 3 && !(args[3] isa Integer && args[3] == 1)
+                    append!(bytes, compile_value(args[3], ctx))
+                    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(1)))
+                    push!(bytes, Opcode.I64_SUB)
+                    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(_psw_s)))
+                    push!(bytes, Opcode.I64_MUL)
+                    push!(bytes, Opcode.I64_ADD)
+                end
+                push!(bytes, Opcode.I32_WRAP_I64)
+                push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(_psw_li))
+                # value as i64 (extend 32-bit values)
+                append!(bytes, compile_value(args[2], ctx))
+                local _psw_vw = julia_to_wasm_type(_psg_tp)
+                _psw_vw === I32 && push!(bytes, Opcode.I64_EXTEND_I32_U)
+                _psw_vw === F64 && push!(bytes, Opcode.I64_REINTERPRET_F64)
+                push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(_psw_lv))
+                for _psw_k in 0:(_psw_s - 1)
+                    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(_psw_la))
+                    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(_psw_li))
+                    if _psw_k > 0
+                        push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(_psw_k)))
+                        push!(bytes, Opcode.I32_ADD)
+                    end
+                    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(_psw_lv))
+                    if _psw_k > 0
+                        push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(8 * _psw_k)))
+                        push!(bytes, Opcode.I64_SHR_U)
+                    end
+                    push!(bytes, Opcode.I32_WRAP_I64)
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.ARRAY_SET)
+                    append!(bytes, encode_leb128_unsigned(_psw_arr))
+                end
+                push!(bytes, Opcode.I64_CONST); push!(bytes, 0x00)   # fake ptr return
+                return bytes
+            end
+        end
         push!(bytes, Opcode.UNREACHABLE)
         ctx.last_stmt_was_stub = true  # PURE-908
         return bytes
@@ -6400,6 +6466,69 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     end
                 end
             else
+                # P4-stdlib (Random hash_seed): dynamic ==/!= on BOXED operands
+                # (Any-typed foldl results in anyref locals) is LIVE code — the
+                # unreachable below dead-coded the loop-exit condition. Unbox
+                # both sides as i64 boxes and compare; a non-i64 box traps
+                # LOUD on the cast (correct-or-loud) instead of silently.
+                local _dyneq_ok = false
+                if (func.name === :(==) || func.name === :!=) && length(args) == 2
+                    local _dq_all_ref = true
+                    for _dq_a in args
+                        local _dq_is = false
+                        if _dq_a isa Core.SSAValue
+                            local _dq_li = get(ctx.ssa_locals, _dq_a.id, nothing)
+                            _dq_li === nothing && (_dq_li = get(ctx.phi_locals, _dq_a.id, nothing))
+                            if _dq_li !== nothing
+                                local _dq_off = _dq_li - ctx.n_params
+                                if _dq_off >= 0 && _dq_off < length(ctx.locals)
+                                    _dq_is = ctx.locals[_dq_off + 1] === AnyRef
+                                end
+                            end
+                        end
+                        _dq_is || (_dq_all_ref = false)
+                    end
+                    if _dq_all_ref
+                        local _dq_box = get_numeric_box_type!(ctx.mod, ctx.type_registry, I64)
+                        bytes = UInt8[]
+                        for _dq_a in args
+                            append!(bytes, compile_value(_dq_a, ctx))
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.REF_CAST_NULL)
+                            append!(bytes, encode_leb128_signed(Int64(_dq_box)))
+                            push!(bytes, Opcode.GC_PREFIX)
+                            push!(bytes, Opcode.STRUCT_GET)
+                            append!(bytes, encode_leb128_unsigned(_dq_box))
+                            append!(bytes, encode_leb128_unsigned(UInt32(1)))
+                        end
+                        push!(bytes, Opcode.I64_EQ)
+                        func.name === :!= && push!(bytes, Opcode.I32_EQZ)
+                        # The result SSA is Any-typed (anyref local) — box the
+                        # i32 Bool; compile_condition_to_i32 unboxes at use.
+                        local _dq_dst = get(ctx.ssa_locals, idx, nothing)
+                        if _dq_dst !== nothing
+                            local _dq_doff = _dq_dst - ctx.n_params
+                            local _dq_lt = _dq_doff >= 0 && _dq_doff < length(ctx.locals) ?
+                                ctx.locals[_dq_doff + 1] : nothing
+                            if _dq_lt === AnyRef || _dq_lt isa ConcreteRef || _dq_lt === StructRef
+                                local _dq_b32 = get_numeric_box_type!(ctx.mod, ctx.type_registry, I32)
+                                local _dq_scr = length(ctx.locals) + ctx.n_params
+                                push!(ctx.locals, I32)
+                                push!(bytes, Opcode.LOCAL_SET)
+                                append!(bytes, encode_leb128_unsigned(_dq_scr))
+                                push!(bytes, Opcode.I32_CONST)
+                                push!(bytes, 0x00)   # typeId
+                                push!(bytes, Opcode.LOCAL_GET)
+                                append!(bytes, encode_leb128_unsigned(_dq_scr))
+                                push!(bytes, Opcode.GC_PREFIX)
+                                push!(bytes, Opcode.STRUCT_NEW)
+                                append!(bytes, encode_leb128_unsigned(_dq_b32))
+                            end
+                        end
+                        _dyneq_ok = true
+                    end
+                end
+                if !_dyneq_ok
                 # No matching signature - likely dead code from Union type branches
                 # Emit unreachable instead of error (the branch won't be taken at runtime)
                 # PURE-605: Suppress warning for known-safe dynamic dispatch paths where
@@ -6411,6 +6540,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 bytes = UInt8[]
                 push!(bytes, Opcode.UNREACHABLE)
                 ctx.last_stmt_was_stub = true  # PURE-908
+                end
             end
         else
             # GlobalRef constructor call: SSA return type reveals the struct being constructed
