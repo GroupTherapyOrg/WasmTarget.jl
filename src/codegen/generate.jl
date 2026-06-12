@@ -3087,8 +3087,12 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
     try_exit_range = (leave_idx+1):(catch_dest-1)
     catch_range = catch_dest:(has_merge_phis ? merge_start - 1 : length(code))
 
-    # Determine result type for the function
-    result_type_byte = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+    # Determine result type for the function. Nothing/Union{} returns have NO
+    # wasm result (the signature drops them), so the wrapper block must be void
+    # or the block's value is left orphaned at function end.
+    func_returns_void = ctx.return_type === Nothing || ctx.return_type === Union{}
+    result_type_byte = func_returns_void ? nothing :
+        get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
 
     # PURE-9031: Structure with merge phi support:
     # block $merge (void)                    ; merge block — both paths converge here
@@ -3238,7 +3242,11 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
         # No merge phis — use original 2-block structure
         # Outer block for the result value
         push!(bytes, Opcode.BLOCK)
-        append!(bytes, encode_block_type(result_type_byte))
+        if func_returns_void
+            push!(bytes, 0x40)
+        else
+            append!(bytes, encode_block_type(result_type_byte))
+        end
 
         # Inner void block for catch destination
         push!(bytes, Opcode.BLOCK)
@@ -3545,10 +3553,14 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
             last_processed = region_end
         else
             # No merge phis — use 2-block structure (direct return in both paths)
-            result_type_byte = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
-
+            # Void-return functions get a void wrapper (signature has no results).
             push!(bytes, Opcode.BLOCK)
-            append!(bytes, encode_block_type(result_type_byte))
+            if ctx.return_type === Nothing || ctx.return_type === Union{}
+                push!(bytes, 0x40)
+            else
+                append!(bytes, encode_block_type(
+                    get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)))
+            end
 
             push!(bytes, Opcode.BLOCK)
             push!(bytes, 0x40)

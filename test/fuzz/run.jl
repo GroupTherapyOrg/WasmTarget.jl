@@ -17,6 +17,7 @@
 #     reproducer a follow-up loop can run, fix, and auto-close via `verify`.
 
 using Supposition, Random
+using WasmTarget   # discovery_differential needs disable_cache!
 using Statistics   # P4-stdlib: catalogue :stats entries resolve in Main
 using Dates: isleapyear, daysinmonth   # P4-stdlib: :dates entries
 using Supposition: Data
@@ -286,6 +287,57 @@ function ci_fuzz_passes(; types = (Int64, Float64), depth = 2, max_examples = 30
             property_holds(body, T0) || _hits_known_gap(body, known)   # known-open gaps don't fail the ratchet
         end
         something(res.result) isa Supposition.Fail && (allpass = false)
+    end
+    return allpass
+end
+
+# --- Discovery-mode differential: :legacy vs :trim --------------------------
+# For each generated body where the LEGACY pipeline is clean (native == wasm),
+# require the TRIM-collected pipeline to agree with native too. A failure
+# shrinks to a minimal body where the two discovery modes diverge.
+function _trim_agrees(body, ::Type{T0}) where {T0}
+    fn, _, _ = make_function(body, T0)
+    samples = sample_inputs(T0)
+    rt = try
+        Core.Compiler.widenconst(only(Base.code_typed(fn, (T0,); optimize = true))[2])
+    catch
+        nothing
+    end
+    (rt isa Type && isconcretetype(rt) && FuzzBridge.bridge_supported(rt)) || return true
+    natives = map(samples) do tup
+        try
+            (:ok, Base.invokelatest(fn, tup...))
+        catch e
+            (:throw, e)
+        end
+    end
+    all(n -> n[1] === :ok, natives) || return true   # throwy bodies: out of scope here
+    wres = FuzzBridge.bridge_run(fn, (T0,), samples; rettype = rt, discovery = :trim)
+    wres === :no_node && return true
+    wres isa Vector || return false                  # compile/exec error under :trim only
+    desc = FuzzBridge.descriptor(rt)[1]
+    return all(zip(natives, wres)) do (n, w)
+        w[1] === :ok && FuzzBridge.tree_matches(desc, n[2], w[2])
+    end
+end
+
+function discovery_differential(; types = (Int64, Float64), depth = 2,
+                                max_examples = 40, seed = 0xD15C)
+    FuzzHarness.NODE_OK || return true
+    WasmTarget.disable_cache!()   # cache is keyed without discovery mode
+    allpass = true
+    for (i, T0) in enumerate(types)
+        gen = gen_program(T0; depth = depth)
+        res = @check rng=Xoshiro(seed + i) max_examples=max_examples function disc_prop(body = gen)
+            differential(body, T0).category === :ok || return true   # legacy not clean → out of scope
+            _trim_agrees(body, T0)
+        end
+        if something(res.result) isa Supposition.Fail
+            allpass = false
+            println("  ✗ $(T0): discovery modes diverge — see counterexample above")
+        else
+            println("  ✓ $(T0): :trim agrees with :legacy on $max_examples bodies (depth $depth)")
+        end
     end
     return allpass
 end

@@ -33,7 +33,8 @@ if `rettype` is outside the bridge universe, or `(:compile_error => e)` /
 `:no_node` for whole-batch failures.
 """
 function bridge_run(fn, argtypes::Tuple, inputs::Vector; rettype::Type,
-                    strict::Bool = true, timeout::Real = DEFAULT_TIMEOUT, opt = false)
+                    strict::Bool = true, timeout::Real = DEFAULT_TIMEOUT, opt = false,
+                    discovery::Symbol = :legacy)
     NODE_OK || return :no_node
     dp = descriptor(rettype)
     dp === nothing && return :unsupported
@@ -42,14 +43,16 @@ function bridge_run(fn, argtypes::Tuple, inputs::Vector; rettype::Type,
     funcs = Any[(fn, argtypes, fname)]
     append!(funcs, accs)
     bytes = try
-        WasmTarget.compile_multi(funcs; strict = strict, validate = true, optimize = opt)
+        WasmTarget.compile_multi(funcs; strict = strict, validate = true, optimize = opt,
+                                 discovery = discovery)
     catch e
         return (:compile_error => e)
     end
     driver = """
     const inputs = $(_js_inputs(inputs));
-    const importObject = { Math: { pow: Math.pow } };
-    const { instance } = await WebAssembly.instantiate(bytes, importObject);
+    const _io = { write_string(){}, write_int(){}, write_float(){}, write_bool(){}, write_newline(){}, write_nothing(){} };
+    const importObject = { Math: { pow: Math.pow }, io: _io };
+    const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
     const ex = instance.exports;
     const f = ex['$fname'];
     const desc = $(JSON.json(desc));
