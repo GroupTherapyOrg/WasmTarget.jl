@@ -2357,7 +2357,12 @@ function _autodiscover_closure_deps!(closure::Function, code_info::Core.CodeInfo
     isempty(deps) && return
 
     # Run full dependency discovery on the collected deps
-    all_deps = discover_dependencies(deps)
+    # WASMMAKIE E-003: the wasm interpreter (overlay table) is REQUIRED here —
+    # without it code_ircode fails on overlay-dependent deps (resolve_axis),
+    # the dep is silently skipped, and its CALLEES (final_limits) never get
+    # discovered: the call site then stubs unreachable while the parent
+    # compiles fine. compile_module's discovery already passes it.
+    all_deps = discover_dependencies(deps; interp=get_wasm_interpreter())
 
     # Reset seen to only func_registry entries — direct deps added during collection
     # must NOT be skipped here (that was the seen-set bug: BF1)
@@ -2412,12 +2417,6 @@ function _autodiscover_closure_deps!(closure::Function, code_info::Core.CodeInfo
     isempty(dep_data) && return
 
     # Reserve function indices for ALL deps before compiling any bodies
-    n_base = UInt32(length(mod.imports) + length(mod.functions))
-    for (i, (f, arg_types, name, _, dep_return_type)) in enumerate(dep_data)
-        func_idx = n_base + UInt32(i - 1)
-        register_function!(func_registry, name, f, arg_types, func_idx, dep_return_type)
-    end
-
     # Pass 1.5 (WASMMAKIE E-003): append a typed `unreachable` placeholder
     # SLOT for every dep up front. Body compilation below can itself create
     # helper functions (string hash/iterate, vector helpers, …) which APPEND
@@ -2426,12 +2425,18 @@ function _autodiscover_closure_deps!(closure::Function, code_info::Core.CodeInfo
     # functions (validation: 'not enough arguments on the stack' /
     # 'expected i64, found i32'). Reserve-then-replace makes reserved
     # indices unconditionally stable.
+    #
+    # Unconvertible signatures (e.g. Vararg in code_typed tuples) can never
+    # compile OR be validly called: they keep an empty-sig slot for index
+    # alignment but are NOT registered — a registered entry made call sites
+    # emit `call <()→() placeholder>` with the caller's args still on the
+    # stack ('expected i64, found i32' at the next local.set); unregistered,
+    # the call site misses the lookup and stubs inline (stack-polymorphic,
+    # validates, traps loudly only if actually reached).
+    n_base = UInt32(length(mod.imports) + length(mod.functions))
     slot_positions = Vector{Int}(undef, length(dep_data))
     slot_ok = Vector{Bool}(undef, length(dep_data))
     for (i, (f, arg_types, name, _, dep_return_type)) in enumerate(dep_data)
-        # unconvertible signatures (e.g. Vararg in code_typed tuples) can
-        # never compile OR be validly called — reserve an empty-sig slot so
-        # index alignment holds, and skip the body
         param_types, result_types, ok = try
             (WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in arg_types],
              dep_return_type === Nothing ? WasmValType[] : WasmValType[get_concrete_wasm_type(dep_return_type, mod, type_registry)],
@@ -2439,6 +2444,10 @@ function _autodiscover_closure_deps!(closure::Function, code_info::Core.CodeInfo
         catch e
             @warn "compile_closure_body: unconvertible dep signature $name — $e"
             (WasmValType[], WasmValType[], false)
+        end
+        if ok
+            func_idx = n_base + UInt32(i - 1)
+            register_function!(func_registry, name, f, arg_types, func_idx, dep_return_type)
         end
         add_function!(mod, param_types, result_types, WasmValType[],
                       UInt8[0x00, 0x0b])  # unreachable; end
