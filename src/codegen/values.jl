@@ -246,6 +246,7 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
     # more values. Emitting data after unreachable creates invalid WASM byte sequences
     # (e.g., array element i32_const values decode as block/loop instructions).
     if ctx.last_stmt_was_stub
+        haskey(ENV, "WT_TRACE_DEADVAL") && println(stderr, "DEADVAL val=", first(repr(val), 60))
         push!(bytes, 0x00)  # unreachable
         return bytes
     end

@@ -2328,6 +2328,184 @@ function generate_catch_arm_split(ctx::AbstractCompilationContext, blocks::Vecto
     return bytes
 end
 
+# P3 gap 10cc64efe535: catch-arm split with a GotoNode skip and MERGING arms.
+# `try A catch; if cond X else try B catch Y end end end` where the arms meet
+# at a merge phi instead of returning. Layout:
+#   <pre> block $c1 { try_table { body A (returns) } }
+#   block $armmerge (void)
+#     <arm prefix [catch_dest .. gin-1]>           ; fill loops, cond computation
+#     block $skiparm (void)
+#       <cond> i32.eqz br_if 0                     ; !cond → inner-try arm
+#       <merge-phi store for the skip edge>; br 1  ; cond → skip to $armmerge
+#     end
+#     block $c2 { try_table { body B } }           ; always-throw body, no result
+#     <inner catch tail [B.catch_dest .. merge-1]>
+#     <merge-phi store for the catch-tail edge>
+#   end
+#   <post-merge [merge ..]: phi reads, pop_exception, return>
+function generate_catch_arm_skip_merge(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
+                                       code, outer::TryRegion, inner::TryRegion,
+                                       gin_idx::Int, skip_idx::Int, merge_idx::Int)::Vector{UInt8}
+    bytes = UInt8[]
+    ensure_exception_tag!(ctx.mod)
+    ensure_exception_global!(ctx.mod)
+
+    # Outer pre + body — identical structure to generate_catch_arm_split
+    r = outer
+    pre = BasicBlock[]
+    head = nothing
+    for b in blocks
+        b.start_idx < r.catch_dest || continue
+        if b.end_idx < r.enter_idx
+            push!(pre, b)
+        elseif b.start_idx <= r.enter_idx <= b.end_idx
+            b.start_idx < r.enter_idx &&
+                push!(pre, BasicBlock(b.start_idx, r.enter_idx - 1, nothing))
+            r.enter_idx < b.end_idx &&
+                (head = BasicBlock(r.enter_idx + 1, b.end_idx, b.terminator))
+        end
+    end
+    if !isempty(pre)
+        append!(bytes, generate_stackified_flow(ctx, pre, code; trailing_unreachable=false))
+        ctx.last_stmt_was_stub = false
+    end
+    body = [b for b in blocks if b.start_idx > r.enter_idx && b.start_idx < r.catch_dest]
+    head !== nothing && pushfirst!(body, head)
+    push!(bytes, Opcode.BLOCK)
+    push!(bytes, 0x40)
+    push!(bytes, Opcode.TRY_TABLE)
+    push!(bytes, 0x40)
+    append!(bytes, encode_leb128_unsigned(1))
+    push!(bytes, Opcode.CATCH_ALL)
+    append!(bytes, encode_leb128_unsigned(0))
+    append!(bytes, generate_stackified_flow(ctx, body, code))
+    push!(bytes, Opcode.END)   # try_table
+    push!(bytes, Opcode.END)   # catch landing block
+    ctx.last_stmt_was_stub = false
+
+    push!(bytes, Opcode.BLOCK)   # $armmerge
+    push!(bytes, 0x40)
+    # Arm prefix [outer.catch_dest .. gin_idx-1], truncating the block that
+    # carries the GotoIfNot terminator (emitted manually below)
+    arm_pre = BasicBlock[]
+    for b in blocks
+        b.start_idx >= r.catch_dest || continue
+        b.start_idx <= gin_idx || continue
+        if b.end_idx < gin_idx
+            push!(arm_pre, b)
+        elseif b.start_idx <= gin_idx - 1
+            push!(arm_pre, BasicBlock(b.start_idx, gin_idx - 1, nothing))
+        end
+    end
+    if !isempty(arm_pre)
+        append!(bytes, generate_stackified_flow(ctx, arm_pre, code; trailing_unreachable=false))
+    end
+    # e1cc class: the prefix can end with a catchable-throw arm — reset before
+    # compiling the live condition.
+    ctx.last_stmt_was_stub = false
+    push!(bytes, Opcode.BLOCK)   # $skiparm
+    push!(bytes, 0x40)
+    append!(bytes, compile_condition_to_i32((code[gin_idx]::Core.GotoIfNot).cond, ctx))
+    push!(bytes, Opcode.I32_EQZ)
+    push!(bytes, Opcode.BR_IF)
+    append!(bytes, encode_leb128_unsigned(0))   # !cond → inner-try arm
+    ctx.last_stmt_was_stub = false
+    # cond TRUE → skip edge: store the merge phi's skip-edge value, br $armmerge
+    local _ph = code[merge_idx]::Core.PhiNode
+    for (j, e) in enumerate(_ph.edges)
+        if Int(e) == skip_idx && isassigned(_ph.values, j)
+            emit_phi_local_set!(bytes, _ph.values[j], merge_idx, ctx)
+            break
+        end
+    end
+    push!(bytes, Opcode.BR)
+    append!(bytes, encode_leb128_unsigned(1))   # past $skiparm → $armmerge end
+    push!(bytes, Opcode.END)   # $skiparm
+    ctx.last_stmt_was_stub = false
+
+    # Inner region: prefix [gdest .. inner.enter-1] (ϒ etc.), then try_table
+    in_pre = BasicBlock[]
+    in_head = nothing
+    for b in blocks
+        b.start_idx > gin_idx || continue
+        b.start_idx < inner.catch_dest || continue
+        if b.end_idx < inner.enter_idx
+            push!(in_pre, b)
+        elseif b.start_idx <= inner.enter_idx <= b.end_idx
+            b.start_idx < inner.enter_idx &&
+                push!(in_pre, BasicBlock(b.start_idx, inner.enter_idx - 1, nothing))
+            inner.enter_idx < b.end_idx &&
+                (in_head = BasicBlock(inner.enter_idx + 1, b.end_idx, b.terminator))
+        end
+    end
+    if !isempty(in_pre)
+        append!(bytes, generate_stackified_flow(ctx, in_pre, code; trailing_unreachable=false))
+        ctx.last_stmt_was_stub = false
+    end
+    in_body = [b for b in blocks
+               if b.start_idx > inner.enter_idx && b.start_idx < inner.catch_dest]
+    in_head !== nothing && pushfirst!(in_body, in_head)
+    push!(bytes, Opcode.BLOCK)
+    push!(bytes, 0x40)
+    push!(bytes, Opcode.TRY_TABLE)
+    push!(bytes, 0x40)
+    append!(bytes, encode_leb128_unsigned(1))
+    push!(bytes, Opcode.CATCH_ALL)
+    append!(bytes, encode_leb128_unsigned(0))
+    append!(bytes, generate_stackified_flow(ctx, in_body, code;
+                                            trailing_unreachable=false))
+    ctx.last_stmt_was_stub = false
+    # If the inner body completes normally it merges too — store its phi
+    # edge (an edge strictly inside the body range) and branch to $armmerge.
+    local _had_body_edge = false
+    for (j, e) in enumerate(_ph.edges)
+        if inner.enter_idx < Int(e) && Int(e) < inner.catch_dest && isassigned(_ph.values, j)
+            emit_phi_local_set!(bytes, _ph.values[j], merge_idx, ctx)
+            _had_body_edge = true
+            break
+        end
+    end
+    if _had_body_edge
+        push!(bytes, Opcode.BR)
+        append!(bytes, encode_leb128_unsigned(2))   # try_table + $c2 → $armmerge
+    end
+    push!(bytes, Opcode.END)   # try_table
+    push!(bytes, Opcode.END)   # $c2
+    ctx.last_stmt_was_stub = false
+    # Inner catch tail [inner.catch_dest .. merge-1], then the catch-edge store
+    tail_blocks = [b for b in blocks
+                   if b.start_idx >= inner.catch_dest && b.start_idx < merge_idx]
+    if !isempty(tail_blocks)
+        append!(bytes, generate_stackified_flow(ctx, tail_blocks, code;
+                                                trailing_unreachable=false))
+        ctx.last_stmt_was_stub = false
+    end
+    for (j, e) in enumerate(_ph.edges)
+        if Int(e) >= inner.catch_dest && isassigned(_ph.values, j)
+            emit_phi_local_set!(bytes, _ph.values[j], merge_idx, ctx)
+            break
+        end
+    end
+    push!(bytes, Opcode.END)   # $armmerge
+    ctx.last_stmt_was_stub = false
+
+    # Post-merge [merge_idx ..]: phi reads, conversions, return
+    if any(i -> code[i] isa Core.GotoIfNot || code[i] isa Core.GotoNode, merge_idx:length(code))
+        pm_blocks = [b for b in blocks if b.start_idx >= merge_idx]
+        append!(bytes, generate_stackified_flow(ctx, pm_blocks, code;
+                                                trailing_unreachable=false))
+    else
+        for i in merge_idx:length(code)
+            stmt = code[i]
+            if stmt !== nothing
+                stmt isa Expr && stmt.head === :pop_exception && continue
+                append!(bytes, compile_statement(stmt, i, ctx))
+            end
+        end
+    end
+    return bytes
+end
+
 function generate_catch_try_chain(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
                                   code, chain::Vector{TryRegion})::Vector{UInt8}
     bytes = UInt8[]
@@ -2778,6 +2956,48 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
                         if cas_then_ret && cas_else_ret && cas_no_cross_phi
                             return generate_catch_arm_split(ctx, blocks, code, outer,
                                                             arm_regions, cas_branch)
+                        end
+                    end
+                end
+                # P3 gap 10cc64efe535: catch-arm split where the SKIP over the
+                # inner region is a GotoNode (the GotoIfNot targets the
+                # inner-try side) and the arms MERGE at a phi instead of
+                # returning: `try A catch; if isempty(...) 0x00 else try B
+                # catch x end end end`. Detect: one inner region; a GotoNode
+                # in the arm prefix jumping past it to a phi whose edges are
+                # exactly {the GotoNode, the inner catch tail}; the paired
+                # GotoIfNot immediately precedes the GotoNode.
+                if length(arm_regions) == 1
+                    local _cm_in = arm_regions[1]
+                    local _cm_skip = 0
+                    for i in outer.catch_dest:(_cm_in.enter_idx - 1)
+                        local _st = code[i]
+                        if _st isa Core.GotoNode && _st.label > _cm_in.catch_dest
+                            _cm_skip = i
+                            break
+                        end
+                    end
+                    if _cm_skip > 0 && _cm_skip >= 2 && code[_cm_skip - 1] isa Core.GotoIfNot
+                        local _cm_gin = _cm_skip - 1
+                        local _cm_gdest = (code[_cm_gin]::Core.GotoIfNot).dest
+                        local _cm_merge = (code[_cm_skip]::Core.GotoNode).label
+                        local _cm_phi_ok = _cm_merge <= length(code) &&
+                            code[_cm_merge] isa Core.PhiNode && haskey(ctx.phi_locals, _cm_merge) &&
+                            all(Int(e) == _cm_skip || Int(e) >= _cm_in.catch_dest
+                                for e in (code[_cm_merge]::Core.PhiNode).edges)
+                        # the GotoIfNot must target the inner-try side, the
+                        # inner tail must not branch past the merge, and no
+                        # later phi may pull edges from before the merge
+                        local _cm_tail_ok = !any(begin
+                                local _t = code[i]
+                                local _d = _t isa Core.GotoIfNot ? _t.dest :
+                                           _t isa Core.GotoNode ? _t.label : 0
+                                _d > _cm_merge
+                            end for i in _cm_in.catch_dest:(_cm_merge - 1))
+                        if _cm_phi_ok && _cm_tail_ok &&
+                           _cm_gdest > _cm_skip && _cm_gdest <= _cm_in.enter_idx
+                            return generate_catch_arm_skip_merge(ctx, blocks, code, outer,
+                                                                 _cm_in, _cm_gin, _cm_skip, _cm_merge)
                         end
                     end
                 end

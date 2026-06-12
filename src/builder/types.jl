@@ -328,8 +328,12 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
     elseif T <: Tuple
         # Tuples map to WasmGC structs
         return StructRef
-    elseif T <: AbstractArray
-        # Arrays map to WasmGC arrays
+    elseif !(T isa Union) && T <: AbstractArray
+        # Arrays map to WasmGC arrays. P4-stdlib: exclude Unions —
+        # Union{Vector{Float64}, Vector{UInt64}} <: AbstractArray is true and
+        # short-circuited here to ArrayRef, but Vectors are concretely struct
+        # refs; route unions to find_common_wasm_type below (same class as
+        # the P2-batch20 exclusion in get_concrete_wasm_type).
         return ArrayRef
     elseif T <: WasmGlobal
         # WasmGlobal is passed as a WasmGC struct (holds just value since idx is in type)
@@ -439,14 +443,24 @@ function find_common_wasm_type(types::Vector)::WasmValType
         return ArrayRef
     end
 
-    # Check if all are array types
-    if all(t -> t <: AbstractArray, types)
+    # Check if all are RAW-array-represented types. P4-stdlib (Statistics
+    # median): Vector/Matrix are concretely (ref $struct{arr,size}) — only
+    # String/Symbol and Memory/MemoryRef compile to bare wasm arrays. The old
+    # blanket `t <: AbstractArray → ArrayRef` typed Union{Nothing,
+    # Vector{Float64}, Vector{UInt64}} signatures as arrayref while every
+    # return site pushes a struct ref: the callee's value died to a ref.null
+    # default and the caller failed validation (structref vs arrayref).
+    _is_array_rep = t -> t === String || t === Symbol ||
+        (t isa DataType && (t.name.name === :Memory || t.name.name === :GenericMemory ||
+                            t.name.name === :MemoryRef || t.name.name === :GenericMemoryRef))
+    if all(_is_array_rep, types)
         return ArrayRef
     end
 
-    # Check if all are reference types (structs, tuples, etc.)
-    # Exclude String/Symbol which are WasmGC arrays, not structs
-    is_wasm_struct = t -> ((isconcretetype(t) && isstructtype(t)) || t <: Tuple) && t !== String && t !== Symbol
+    # Check if all are reference types (structs, tuples, struct-represented
+    # arrays). Exclude raw-array reps (String/Symbol/Memory).
+    is_wasm_struct = t -> !_is_array_rep(t) &&
+        (((isconcretetype(t) && isstructtype(t)) || t <: Tuple) || t <: AbstractArray)
     if all(is_wasm_struct, types)
         return StructRef
     end

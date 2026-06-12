@@ -17,6 +17,7 @@
 #     reproducer a follow-up loop can run, fix, and auto-close via `verify`.
 
 using Supposition, Random
+using Statistics   # P4-stdlib: catalogue :stats entries resolve in Main
 using Supposition: Data
 
 const FUZZ_DIR = @__DIR__

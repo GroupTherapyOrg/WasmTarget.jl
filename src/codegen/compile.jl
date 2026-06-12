@@ -309,6 +309,9 @@ These are methods whose actual Julia implementations we want to compile
 to WasmGC rather than intercepting with workarounds.
 """
 const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
+    # P4-stdlib (Statistics quantile): the 5-arg sort!(v, lo, hi, alg, order)
+    # internal — partialsort/quantile paths invoke it un-inlined.
+    :sort!,
     :setindex!, :getindex, :ht_keyindex, :ht_keyindex2_shorthash!, :rehash!,
     # PURE-9065: Dict/Set operations
     :delete!, :union!, :get, :pop!, :empty!, :push!, :in,
@@ -444,6 +447,7 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
                                            startswith(_meth_str, "#string#") ||
                                            startswith(_meth_str, "#power_by_squaring#") ||
                                            startswith(_meth_str, "#sort#") ||
+                                           startswith(_meth_str, "#_sort!#") ||
                                            startswith(_meth_str, "#filter#"))
         # P2-batch22 (gap 8a25857213ba family): user closures defined in Main.
         # A closure passed to a higher-order function compiles as a real
@@ -474,7 +478,15 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
             if func_type isa DataType && func_type <: Function
                 # Regular function call
                 # The function is stored in the Method's sig
-                func = try
+                # P4-stdlib (Statistics pilot): Core.kwcall instances carry
+                # mi.def in the FUNCTION's module with the function's NAME
+                # (def.module=Statistics, def.name=:var for `var(v; kw...)`),
+                # so getfield(mod, meth_name) extracts the WRONG callee (var
+                # itself, with kwcall-shaped arg types — method lookup then
+                # fails and the invoke stubbed). Use the kwcall singleton;
+                # its sorter body recursively discovers the kwarg-body method.
+                _is_kwcall = try func_type.instance === Core.kwcall catch; false end
+                func = _is_kwcall ? Core.kwcall : try
                     getfield(mod, meth_name)
                 catch
                     # WBUILD-4000: Inner functions (closures) aren't module-level bindings.
@@ -512,11 +524,16 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
     _is_julias = nameof(mod) === :JuliaSyntax ||
                  (isdefined(mod, :parentmodule) && try nameof(parentmodule(mod)) === :JuliaSyntax catch; false end)
     _is_kwarg_wrapper = startswith(String(meth_name), "#")
+    # P4-stdlib: kwcall sorters necessarily take the target function as an
+    # argument (typeof(var) etc.) — exempt them from the function-singleton
+    # skip, as the whole point is to compile through to the kwarg body.
     _exempt_mod = mod === WasmTarget || _is_julias || _is_kwarg_wrapper ||
+                  func === Core.kwcall ||
                   (_is_base_or_sub && (meth_name in AUTODISCOVER_BASE_METHODS ||
                                        startswith(String(meth_name), "#string#") ||
                                        startswith(String(meth_name), "#power_by_squaring#") ||
                                        startswith(String(meth_name), "#sort#") ||
+                                       startswith(String(meth_name), "#_sort!#") ||
                                        startswith(String(meth_name), "#filter#")))
     if !_exempt_mod
         for t in arg_types

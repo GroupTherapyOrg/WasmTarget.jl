@@ -133,3 +133,27 @@ runtime narrow-shift bug it resembles is **fixed** (see below).
 - `Int32`/`UInt*` numeric universes; `round/trunc(Int, ::Float64)` (trap-prone — good oracle targets)
 - ranges with bounded literal sizes (`1:k`, `k:step:m`)
 - string conversions once `int_to_string`/`float_to_string` are fixed (see those gaps)
+
+## P4-stdlib: 1.13 wrapper-shape generator limitation (open, overlay-mitigated)
+
+`Statistics.median(v::Vector{Float64})` on Julia 1.13: the WRAPPER
+specialization inlines `copyto!`-machinery whose IR has a catchable
+boundscheck throw arm (`invoke throw_boundserror; unreachable`)
+immediately before an intra-range jump target, inside a function that
+routes to the stackifier (conditionals > 2). The compiled module
+validates but the runtime path dead-codes a later GotoIfNot condition
+to `i32.const 0; unreachable` (V8 trap at the condition). The literal
+definition `median!(copy(v))` — semantically identical — compiles
+correctly; `WasmTargetStatisticsExt` reroutes the wrappers via
+1.13-gated overlays.
+
+Status: mitigated, root cause NOT fixed. The conditionals-path range
+walk got a resume-at-jump-target fix (compile_range, P4-stdlib), but
+this shape compiles via the stackifier whose per-block resets did not
+prevent it — the dead-coding site is still unidentified (the flag
+leaks somewhere between block statement compilation and terminator
+condition emission). Forensics: WT_TRACE_DEADVAL=1 shows ~121
+dead-value emissions; WT_TRACE_STUBARGS / WT_TRAP_STACK exist. A
+depth-5+ fuzz sweep over boundscheck-arm + jump-target compositions is
+the likely organic reproducer source; until then this note is the
+tracking entry.

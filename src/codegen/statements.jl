@@ -40,7 +40,8 @@ getfield(vec,:ref)→:ptr_or_offset) back to its backing Vector. Returns
 nothing unless the base is a Vector with 1-byte elements (memmove counts
 bytes; element index == byte offset only for elsize 1).
 """
-function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext)
+function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
+                            eltypes = (UInt8, Int8), allow_ref::Bool = false)
     # Walk permissively (through bitcast/add_ptr/sub_ptr/PiNode and any phi
     # edge) looking ONLY for the backing vector's identity. Offsets are NOT
     # collected: in WasmGC the fake base pointer (getfield :ptr_or_offset)
@@ -58,15 +59,34 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext)
         _mm_dbg && println(stderr, "  MMtrace %", cur.id, " = ", repr(st)[1:min(end, 100)])
         if st isa Core.PiNode
             cur = st.val
+        elseif st isa Expr && st.head === :foreigncall && length(st.args) >= 6 &&
+               (st.args[1] === QuoteNode(:jl_value_ptr) ||
+                (st.args[1] isa QuoteNode && st.args[1].value === :jl_value_ptr))
+            # P4-stdlib: pointer_from_objref-style base pointers
+            # (jl_value_ptr(obj)) — in the fake-pointer model the base is 0,
+            # so just hop to the object and keep walking toward the vector.
+            cur = st.args[6]
         elseif st isa Core.PhiNode
             (length(st.values) >= 1 && isassigned(st.values, 1)) || return _fail("phi-unassigned", st)
             cur = st.values[1]
+        elseif allow_ref && st isa Expr && st.head === :new
+            # P4-stdlib: pointer into a Base.RefValue{T} box (radix sort
+            # counters use pointer_from_objref(Ref(...))) — the terminal IS
+            # the box; the caller emits struct.get/set on it.
+            local _nt = infer_value_type(cur, ctx)
+            (_nt isa DataType && _nt <: Base.RefValue) || return _fail("new-non-refvalue: $_nt", st)
+            return cur
         elseif st isa Expr && st.head === :call && length(st.args) >= 2
             cf = st.args[1]
             cfn = cf isa GlobalRef ? cf.name : cf
             if cfn === :bitcast
                 cur = st.args[3]
             elseif cfn === :add_ptr || cfn === :sub_ptr
+                cur = st.args[2]
+            elseif cfn === :memoryrefnew && (length(st.args) == 2 || st.args[3] == 1)
+                # P4-stdlib: base memoryref (index 1) — pure identity hop.
+                # Variable-index refs are NOT walked: their byte offset would
+                # be lost (the fake base compiles to 0), so they stay stubbed.
                 cur = st.args[2]
             elseif cfn === :getfield && length(st.args) >= 3
                 fld = st.args[3] isa QuoteNode ? st.args[3].value : st.args[3]
@@ -79,7 +99,7 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext)
                     vec = st.args[2]
                     vt = infer_value_type(vec, ctx)
                     (vt isa DataType && vt <: Vector &&
-                     (eltype(vt) === UInt8 || eltype(vt) === Int8)) || return _fail("not-bytevec: $vt", vec)
+                     eltype(vt) in eltypes) || return _fail("elty-not-allowed: $vt", vec)
                     return vec
                 else
                     return _fail("getfield-fld=$fld", st)
@@ -3326,6 +3346,51 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
         src_ptr_arg = expr.args[7]    # Ptr{Nothing} — traces to src MemoryRef
         nbytes_arg = expr.args[8]     # UInt64 — byte count
 
+        # P4-stdlib (Statistics median): memmove between TYPED vectors
+        # (copy(::Vector{Float64}) inlines to memmove of f64 storage). Trace
+        # both pointers to their backing vectors; same primitive eltype of
+        # width 4/8 → array.copy with byte offsets/count scaled to elements.
+        # (Byte vectors keep the established paths below; array.copy is
+        # overlap-safe per the WasmGC spec, matching memmove semantics.)
+        local _MMV_PRIMS = (Int16, UInt16, Int32, UInt32, Int64, UInt64, Float32, Float64)
+        local _mmv_d = _trace_memmove_ptr(dest_ptr_arg, ctx; eltypes = _MMV_PRIMS)
+        local _mmv_s = _mmv_d !== nothing ? _trace_memmove_ptr(src_ptr_arg, ctx; eltypes = _MMV_PRIMS) : nothing
+        if _mmv_d !== nothing && _mmv_s !== nothing
+            local _mmv_te = eltype(infer_value_type(_mmv_d, ctx))
+            if _mmv_te === eltype(infer_value_type(_mmv_s, ctx)) && sizeof(_mmv_te) in (4, 8)
+                local _mmv_arr = get_array_type!(ctx.mod, ctx.type_registry, _mmv_te)
+                local _mmv_sh = trailing_zeros(sizeof(_mmv_te))
+                local _mmv_emit_arr = vec -> begin
+                    append!(bytes, compile_value(vec, ctx))
+                    local _vi = ctx.type_registry.structs[infer_value_type(vec, ctx)]
+                    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
+                    append!(bytes, encode_leb128_unsigned(_vi.wasm_type_idx))
+                    append!(bytes, encode_leb128_unsigned(1))
+                    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.REF_CAST_NULL)
+                    append!(bytes, encode_leb128_signed(Int64(_mmv_arr)))
+                end
+                local _mmv_emit_off = a -> begin
+                    append!(bytes, compile_value(a, ctx))
+                    push!(bytes, Opcode.I32_WRAP_I64)
+                    push!(bytes, Opcode.I32_CONST)
+                    append!(bytes, encode_leb128_signed(Int64(_mmv_sh)))
+                    push!(bytes, Opcode.I32_SHR_U)
+                end
+                _mmv_emit_arr(_mmv_d)
+                _mmv_emit_off(dest_ptr_arg)
+                _mmv_emit_arr(_mmv_s)
+                _mmv_emit_off(src_ptr_arg)
+                _mmv_emit_off(nbytes_arg)
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ARRAY_COPY)
+                append!(bytes, encode_leb128_unsigned(_mmv_arr))
+                append!(bytes, encode_leb128_unsigned(_mmv_arr))
+                # memmove returns dest ptr — fake i64 0
+                push!(bytes, Opcode.I64_CONST, 0x00)
+                return bytes
+            end
+        end
+
         code = ctx.code_info.code
         dest_info = _trace_memmove_array(dest_ptr_arg, code, ctx)
         src_info = _trace_memmove_array(src_ptr_arg, code, ctx)
@@ -3585,6 +3650,74 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             return bytes
         end
         # If we can't trace the string, fall through to unreachable
+    end
+
+    # P4-stdlib (Statistics median): jl_genericmemory_copyto(dest_mem,
+    # dest_off_ptr, src_mem, src_off_ptr, n_elements) — Memory{T} compiles
+    # directly as a wasm array, so this is a plain array.copy; the ptr args
+    # are byte offsets (fake-base model) scaled to element indices.
+    local _gmc_sym = expr.args[1] isa QuoteNode ? expr.args[1].value : expr.args[1]
+    if _gmc_sym === :jl_genericmemory_copyto && length(expr.args) >= 10
+        local _gmc_mt = infer_value_type(expr.args[6], ctx)
+        local _gmc_te = _gmc_mt isa DataType && length(_gmc_mt.parameters) >= 2 ? _gmc_mt.parameters[2] : nothing
+        if _gmc_te isa DataType && isprimitivetype(_gmc_te) && sizeof(_gmc_te) in (1, 2, 4, 8) &&
+           infer_value_type(expr.args[8], ctx) === _gmc_mt
+            local _gmc_arr = get_array_type!(ctx.mod, ctx.type_registry, _gmc_te)
+            local _gmc_sh = trailing_zeros(sizeof(_gmc_te))
+            local _gmc_off = a -> begin
+                append!(bytes, compile_value(a, ctx))
+                push!(bytes, Opcode.I32_WRAP_I64)
+                if _gmc_sh > 0
+                    push!(bytes, Opcode.I32_CONST)
+                    append!(bytes, encode_leb128_signed(Int64(_gmc_sh)))
+                    push!(bytes, Opcode.I32_SHR_U)
+                end
+            end
+            append!(bytes, compile_value(expr.args[6], ctx))
+            push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.REF_CAST_NULL)
+            append!(bytes, encode_leb128_signed(Int64(_gmc_arr)))
+            _gmc_off(expr.args[7])
+            append!(bytes, compile_value(expr.args[8], ctx))
+            push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.REF_CAST_NULL)
+            append!(bytes, encode_leb128_signed(Int64(_gmc_arr)))
+            _gmc_off(expr.args[9])
+            append!(bytes, compile_value(expr.args[10], ctx))
+            if infer_value_type(expr.args[10], ctx) in (Int64, UInt64, Int)
+                push!(bytes, Opcode.I32_WRAP_I64)
+            end
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ARRAY_COPY)
+            append!(bytes, encode_leb128_unsigned(_gmc_arr))
+            append!(bytes, encode_leb128_unsigned(_gmc_arr))
+            return bytes   # Cvoid — no value
+        end
+    end
+
+    # P4-stdlib (Statistics median/quantile): two HOT-PATH foreigncalls that
+    # must NOT set the stub flag — range compilers treat a stubbed statement
+    # as dead code and abort the rest of the block, poisoning later
+    # conditions into `unreachable`.
+    local _fc_sym = expr.args[1] isa QuoteNode ? expr.args[1].value : expr.args[1]
+    if _fc_sym === :jl_value_ptr
+        # pointer_from_objref-style base pointer — in the fake-pointer model
+        # every base is byte offset 0. A benign value, NOT a stub: typed
+        # pointerref/pointerset trace the object identity separately.
+        push!(bytes, Opcode.I64_CONST)
+        push!(bytes, 0x00)
+        return bytes
+    elseif _fc_sym === :jl_stored_inline && length(expr.args) >= 6
+        # datatype_storedinline(T) — pure layout predicate; fold when the
+        # type argument is a compile-time constant.
+        local _fc_t = expr.args[6]
+        _fc_t isa QuoteNode && (_fc_t = _fc_t.value)
+        if _fc_t isa GlobalRef
+            _fc_t = try getfield(_fc_t.mod, _fc_t.name) catch; _fc_t end
+        end
+        if _fc_t isa Type
+            push!(bytes, Opcode.I32_CONST)
+            push!(bytes, (try Base.allocatedinline(_fc_t) catch; false end) ? 0x01 : 0x00)
+            return bytes
+        end
     end
 
     # Unknown foreigncall — emit a default return value instead of unreachable.

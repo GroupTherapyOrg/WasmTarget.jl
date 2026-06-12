@@ -4639,11 +4639,23 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 push!(bytes, Opcode.THROW)
                 append!(bytes, encode_leb128_unsigned(0))
                 ctx.last_stmt_was_stub = true  # PURE-908
+            elseif name === :array_subpadding && length(args) == 2 &&
+                   args[1] isa Type && args[2] isa Type
+                # P4-stdlib (Statistics median): Base.array_subpadding is a pure
+                # compile-time layout predicate guarding reinterpret-based radix
+                # sort paths, and its args arrive as literal types — host-evaluate
+                # and emit the Bool constant (the stub trapped the whole
+                # IEEEFloatOptimization sort path at runtime).
+                bytes = UInt8[]   # discard pre-pushed args
+                push!(bytes, Opcode.I32_CONST)
+                push!(bytes, Base.array_subpadding(args[1], args[2]) ? 0x01 : 0x00)
+
             else
                 # Unknown method — codegen has no translation for this invoke target.
                 # Under strict=true this raises WasmCompileError naming the method + source
                 # location; under strict=false it emits unreachable (traps at runtime),
                 # which lets compilation succeed for paths that never reach this method.
+                haskey(ENV, "WT_TRACE_STUBARGS") && println(stderr, "STUBARGS ", name, " args=", repr(args))
                 record_unsupported!(ctx, :unsupported_method,
                     "method `$name`" * (mi !== nothing ? " for $(mi.specTypes)" : "");
                     idx=idx, detail=expr)

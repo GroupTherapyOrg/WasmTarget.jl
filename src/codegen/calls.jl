@@ -4261,6 +4261,89 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             append!(bytes, encode_leb128_unsigned(_pr_arr_t))
             return bytes
         end
+        # P4-stdlib (Statistics median/quantile): TYPED loads through
+        # Vector{T} storage pointers — sort's radix path reads UInt64 through
+        # Ptr{UInt64} into Float64 storage (reinterpret(uinttype(T), v)).
+        # Same fake-pointer model: the pointer VALUE is the byte offset;
+        # element index = (ptr + (i-1)*sizeof(Te)) >> log2(sizeof(Te));
+        # a same-size reinterpret bridges element type vs pointer target.
+        local _PRG_PRIMS = (Int8, UInt8, Int16, UInt16, Int32, UInt32,
+                            Int64, UInt64, Float32, Float64)
+        local _prg_tp = begin
+            local _t = ptr_arg !== nothing ? infer_value_type(ptr_arg, ctx) : nothing
+            _t isa DataType && _t <: Ptr ? eltype(_t) : nothing
+        end
+        local _prg_vec = (ptr_arg !== nothing && _prg_tp in _PRG_PRIMS) ?
+            _trace_memmove_ptr(ptr_arg, ctx; eltypes = _PRG_PRIMS, allow_ref = true) : nothing
+        if _prg_vec !== nothing && begin
+                local _t = infer_value_type(_prg_vec, ctx)
+                _t isa DataType && _t <: Base.RefValue
+            end
+            # Pointer into a RefValue{T} box: load is struct.get of field :x
+            local _prr_rt = infer_value_type(_prg_vec, ctx)
+            local _prr_te = _prr_rt.parameters[1]
+            if _prr_te in _PRG_PRIMS && sizeof(_prr_te) == sizeof(_prg_tp)
+                if !haskey(ctx.type_registry.structs, _prr_rt)
+                    register_struct_type!(ctx.mod, ctx.type_registry, _prr_rt)
+                end
+                local _prr_info = ctx.type_registry.structs[_prr_rt]
+                append!(bytes, compile_value(_prg_vec, ctx))
+                push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.REF_CAST_NULL)
+                append!(bytes, encode_leb128_signed(Int64(_prr_info.wasm_type_idx)))
+                push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
+                append!(bytes, encode_leb128_unsigned(_prr_info.wasm_type_idx))
+                append!(bytes, encode_leb128_unsigned(1))   # field 0 = typeId, 1 = x
+                if _prr_te === Float64 && (_prg_tp === UInt64 || _prg_tp === Int64)
+                    push!(bytes, Opcode.I64_REINTERPRET_F64)
+                elseif (_prr_te === UInt64 || _prr_te === Int64) && _prg_tp === Float64
+                    push!(bytes, Opcode.F64_REINTERPRET_I64)
+                elseif _prr_te === Float32 && (_prg_tp === UInt32 || _prg_tp === Int32)
+                    push!(bytes, Opcode.I32_REINTERPRET_F32)
+                elseif (_prr_te === UInt32 || _prr_te === Int32) && _prg_tp === Float32
+                    push!(bytes, Opcode.F32_REINTERPRET_I32)
+                end
+                return bytes
+            end
+        elseif _prg_vec !== nothing
+            local _prg_vt = infer_value_type(_prg_vec, ctx)
+            local _prg_te = eltype(_prg_vt)
+            if sizeof(_prg_te) == sizeof(_prg_tp) && sizeof(_prg_te) in (4, 8)
+                local _prg_arr = get_array_type!(ctx.mod, ctx.type_registry, _prg_te)
+                append!(bytes, compile_value(_prg_vec, ctx))
+                local _prg_vinfo = ctx.type_registry.structs[_prg_vt]
+                push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
+                append!(bytes, encode_leb128_unsigned(_prg_vinfo.wasm_type_idx))
+                append!(bytes, encode_leb128_unsigned(1))
+                push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.REF_CAST_NULL)
+                append!(bytes, encode_leb128_signed(Int64(_prg_arr)))
+                append!(bytes, compile_value(ptr_arg, ctx))      # i64 byte offset
+                if length(args) >= 2 && !(args[2] isa Integer && args[2] == 1)
+                    append!(bytes, compile_value(args[2], ctx))
+                    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(1)))
+                    push!(bytes, Opcode.I64_SUB)
+                    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(sizeof(_prg_te))))
+                    push!(bytes, Opcode.I64_MUL)
+                    push!(bytes, Opcode.I64_ADD)
+                end
+                push!(bytes, Opcode.I32_WRAP_I64)
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int64(trailing_zeros(sizeof(_prg_te)))))
+                push!(bytes, Opcode.I32_SHR_U)
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ARRAY_GET)
+                append!(bytes, encode_leb128_unsigned(_prg_arr))
+                if _prg_te === Float64 && (_prg_tp === UInt64 || _prg_tp === Int64)
+                    push!(bytes, Opcode.I64_REINTERPRET_F64)
+                elseif (_prg_te === UInt64 || _prg_te === Int64) && _prg_tp === Float64
+                    push!(bytes, Opcode.F64_REINTERPRET_I64)
+                elseif _prg_te === Float32 && (_prg_tp === UInt32 || _prg_tp === Int32)
+                    push!(bytes, Opcode.I32_REINTERPRET_F32)
+                elseif (_prg_te === UInt32 || _prg_te === Int32) && _prg_tp === Float32
+                    push!(bytes, Opcode.F32_REINTERPRET_I32)
+                end
+                return bytes
+            end
+        end
         push!(bytes, Opcode.UNREACHABLE)
         ctx.last_stmt_was_stub = true  # PURE-908
         return bytes
@@ -4288,6 +4371,90 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             append!(bytes, encode_leb128_unsigned(_ps_arr_t))
             push!(bytes, Opcode.I64_CONST); push!(bytes, 0x00)
             return bytes
+        end
+        # P4-stdlib: TYPED writes through Vector{T} storage pointers —
+        # mirror of the typed pointerref path (radix sort scatter phase).
+        # pointerset(ptr, value, i, align); same index arithmetic; the value
+        # reinterprets from the pointer target type to the element type.
+        local _PSG_PRIMS = (Int8, UInt8, Int16, UInt16, Int32, UInt32,
+                            Int64, UInt64, Float32, Float64)
+        local _psg_tp = begin
+            local _t = _ps_ptr !== nothing ? infer_value_type(_ps_ptr, ctx) : nothing
+            _t isa DataType && _t <: Ptr ? eltype(_t) : nothing
+        end
+        local _psg_vec = (_ps_ptr !== nothing && _psg_tp in _PSG_PRIMS) ?
+            _trace_memmove_ptr(_ps_ptr, ctx; eltypes = _PSG_PRIMS, allow_ref = true) : nothing
+        if _psg_vec !== nothing && length(args) >= 2 && begin
+                local _t = infer_value_type(_psg_vec, ctx)
+                _t isa DataType && _t <: Base.RefValue
+            end
+            local _psr_rt = infer_value_type(_psg_vec, ctx)
+            local _psr_te = _psr_rt.parameters[1]
+            if _psr_te in _PSG_PRIMS && sizeof(_psr_te) == sizeof(_psg_tp)
+                if !haskey(ctx.type_registry.structs, _psr_rt)
+                    register_struct_type!(ctx.mod, ctx.type_registry, _psr_rt)
+                end
+                local _psr_info = ctx.type_registry.structs[_psr_rt]
+                append!(bytes, compile_value(_psg_vec, ctx))
+                push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.REF_CAST_NULL)
+                append!(bytes, encode_leb128_signed(Int64(_psr_info.wasm_type_idx)))
+                append!(bytes, compile_value(args[2], ctx))
+                if _psr_te === Float64 && (_psg_tp === UInt64 || _psg_tp === Int64)
+                    push!(bytes, Opcode.F64_REINTERPRET_I64)
+                elseif (_psr_te === UInt64 || _psr_te === Int64) && _psg_tp === Float64
+                    push!(bytes, Opcode.I64_REINTERPRET_F64)
+                elseif _psr_te === Float32 && (_psg_tp === UInt32 || _psg_tp === Int32)
+                    push!(bytes, Opcode.F32_REINTERPRET_I32)
+                elseif (_psr_te === UInt32 || _psr_te === Int32) && _psg_tp === Float32
+                    push!(bytes, Opcode.I32_REINTERPRET_F32)
+                end
+                push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_SET)
+                append!(bytes, encode_leb128_unsigned(_psr_info.wasm_type_idx))
+                append!(bytes, encode_leb128_unsigned(1))
+                push!(bytes, Opcode.I64_CONST); push!(bytes, 0x00)
+                return bytes
+            end
+        elseif _psg_vec !== nothing && length(args) >= 2
+            local _psg_vt = infer_value_type(_psg_vec, ctx)
+            local _psg_te = eltype(_psg_vt)
+            if sizeof(_psg_te) == sizeof(_psg_tp) && sizeof(_psg_te) in (4, 8)
+                local _psg_arr = get_array_type!(ctx.mod, ctx.type_registry, _psg_te)
+                append!(bytes, compile_value(_psg_vec, ctx))
+                local _psg_vinfo = ctx.type_registry.structs[_psg_vt]
+                push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
+                append!(bytes, encode_leb128_unsigned(_psg_vinfo.wasm_type_idx))
+                append!(bytes, encode_leb128_unsigned(1))
+                push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.REF_CAST_NULL)
+                append!(bytes, encode_leb128_signed(Int64(_psg_arr)))
+                append!(bytes, compile_value(_ps_ptr, ctx))      # i64 byte offset
+                if length(args) >= 3 && !(args[3] isa Integer && args[3] == 1)
+                    append!(bytes, compile_value(args[3], ctx))
+                    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(1)))
+                    push!(bytes, Opcode.I64_SUB)
+                    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(sizeof(_psg_te))))
+                    push!(bytes, Opcode.I64_MUL)
+                    push!(bytes, Opcode.I64_ADD)
+                end
+                push!(bytes, Opcode.I32_WRAP_I64)
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(Int64(trailing_zeros(sizeof(_psg_te)))))
+                push!(bytes, Opcode.I32_SHR_U)
+                append!(bytes, compile_value(args[2], ctx))
+                if _psg_te === Float64 && (_psg_tp === UInt64 || _psg_tp === Int64)
+                    push!(bytes, Opcode.F64_REINTERPRET_I64)
+                elseif (_psg_te === UInt64 || _psg_te === Int64) && _psg_tp === Float64
+                    push!(bytes, Opcode.I64_REINTERPRET_F64)
+                elseif _psg_te === Float32 && (_psg_tp === UInt32 || _psg_tp === Int32)
+                    push!(bytes, Opcode.F32_REINTERPRET_I32)
+                elseif (_psg_te === UInt32 || _psg_te === Int32) && _psg_tp === Float32
+                    push!(bytes, Opcode.I32_REINTERPRET_F32)
+                end
+                push!(bytes, Opcode.GC_PREFIX)
+                push!(bytes, Opcode.ARRAY_SET)
+                append!(bytes, encode_leb128_unsigned(_psg_arr))
+                push!(bytes, Opcode.I64_CONST); push!(bytes, 0x00)
+                return bytes
+            end
         end
         push!(bytes, Opcode.UNREACHABLE)
         ctx.last_stmt_was_stub = true  # PURE-908
@@ -5888,8 +6055,27 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     elseif func isa GlobalRef && func.name in (:isdefined, :getfield, :setfield!) && func.mod in (Core, Base)
         # PURE-908: Clear pre-pushed args
         bytes = UInt8[]
-        push!(bytes, Opcode.UNREACHABLE)
-        ctx.last_stmt_was_stub = true  # PURE-908
+        # P4-stdlib (Statistics median): getfield on a compile-time CONSTANT
+        # receiver (QuoteNode) — e.g. getfield(typename(UInt64), :flags) from
+        # inlined isbits-style predicates in sort. Host-evaluate; emit the
+        # constant when it has a primitive/string representation. (The :names
+        # svec form stays trapped — no constant emission for SimpleVector.)
+        local _gfc_done = false
+        if func.name === :getfield && length(args) == 2 && args[1] isa QuoteNode
+            local _gfc_fld = args[2] isa QuoteNode ? args[2].value : args[2]
+            if _gfc_fld isa Symbol
+                local _gfc_val = try getfield(args[1].value, _gfc_fld) catch; nothing end
+                if _gfc_val isa Union{Integer, Bool, Char, Float32, Float64, String, Symbol} &&
+                   !(_gfc_val isa Union{Int128, UInt128, BigInt})
+                    append!(bytes, compile_value(_gfc_val, ctx))
+                    _gfc_done = true
+                end
+            end
+        end
+        if !_gfc_done
+            push!(bytes, Opcode.UNREACHABLE)
+            ctx.last_stmt_was_stub = true  # PURE-908
+        end
 
     # PURE-604: Symbol(x) — in WasmGC, Symbol IS String (both are byte arrays).
     # The argument is already compiled as a string array — just pass through.

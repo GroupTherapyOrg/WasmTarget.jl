@@ -698,6 +698,24 @@ end
 # Julia 1.12's array mutation IR uses low-level GC operations that are
 # incompatible with WasmGC. These use similar() + indexing which compile fine.
 
+# P4-stdlib (Statistics median/quantile on 1.13): _growend_internal! replaced
+# the _growend! closures sort's scratch handling uses. WasmGC has no capacity
+# concept — reallocate-and-copy exactly like the push!/append! overlays.
+@static if VERSION >= v"1.13-"
+@overlay WASM_METHOD_TABLE function Base._growend_internal!(a::Vector{T}, delta::Int, len::Int) where T
+    newlen = len + delta
+    new_v = similar(a, newlen)
+    i = 1
+    while i <= len
+        new_v[i] = a[i]
+        i += 1
+    end
+    setfield!(a, :ref, getfield(new_v, :ref))
+    setfield!(a, :size, (newlen,))
+    return nothing
+end
+end
+
 @overlay WASM_METHOD_TABLE function Base.push!(v::Vector{T}, x) where T
     n = length(v)
     new_v = similar(v, n + 1)
