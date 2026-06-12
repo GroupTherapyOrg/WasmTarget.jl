@@ -309,6 +309,9 @@ These are methods whose actual Julia implementations we want to compile
 to WasmGC rather than intercepting with workarounds.
 """
 const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
+    # P4-stdlib (Statistics quantile): the 5-arg sort!(v, lo, hi, alg, order)
+    # internal — partialsort/quantile paths invoke it un-inlined.
+    :sort!,
     :setindex!, :getindex, :ht_keyindex, :ht_keyindex2_shorthash!, :rehash!,
     # PURE-9065: Dict/Set operations
     :delete!, :union!, :get, :pop!, :empty!, :push!, :in,
@@ -444,6 +447,7 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
                                            startswith(_meth_str, "#string#") ||
                                            startswith(_meth_str, "#power_by_squaring#") ||
                                            startswith(_meth_str, "#sort#") ||
+                                           startswith(_meth_str, "#_sort!#") ||
                                            startswith(_meth_str, "#filter#"))
         # P2-batch22 (gap 8a25857213ba family): user closures defined in Main.
         # A closure passed to a higher-order function compiles as a real
@@ -529,6 +533,7 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
                                        startswith(String(meth_name), "#string#") ||
                                        startswith(String(meth_name), "#power_by_squaring#") ||
                                        startswith(String(meth_name), "#sort#") ||
+                                       startswith(String(meth_name), "#_sort!#") ||
                                        startswith(String(meth_name), "#filter#")))
     if !_exempt_mod
         for t in arg_types
