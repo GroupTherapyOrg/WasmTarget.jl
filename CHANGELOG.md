@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.5](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.4...v0.3.5) (2026-06-12)
+
+
+### Features
+
+* Dates stdlib integration — value layer + WasmTargetDatesExt rendering overlays ([eef47a7](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/eef47a72543f854bcdad5ed421ca3c89784a4457))
+
 ## [0.3.4](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.3...v0.3.4) (2026-06-12)
 
 
