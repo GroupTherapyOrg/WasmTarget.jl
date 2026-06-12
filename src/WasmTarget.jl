@@ -367,7 +367,12 @@ function validate_wasm_bytes(bytes::Vector{UInt8}; label::AbstractString="module
         catch
             false
         end
-        ok || throw(WasmValidationError("wasm-tools rejected the emitted $label", String(take!(err))))
+        if !ok
+            # debug escape hatch: keep the rejected module for offline objdump
+            dump_to = get(ENV, "WT_DUMP_INVALID", "")
+            isempty(dump_to) || (write(dump_to, bytes); @info "invalid module dumped" dump_to)
+            throw(WasmValidationError("wasm-tools rejected the emitted $label", String(take!(err))))
+        end
     end
     return bytes
 end
