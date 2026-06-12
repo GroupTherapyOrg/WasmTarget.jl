@@ -10495,6 +10495,25 @@ console.log(JSON.stringify({
         end
     end
 
+    @pphase "Float-range colon (a8c00917b1b0)" begin
+        # Singleton callable structs bound to their own type name (Base.Colon):
+        # discovery extracted the TYPE, probed a nonexistent constructor, and the
+        # un-inlined 3-arg colon invoke silently compiled to `unreachable`
+        # (validates-then-traps — PlutoIslands newton canvas groups). Pins the
+        # instance-extraction fix + the :Colon allowlist entry.
+        _range_fls(n::Int64) = begin
+            r = -10:0.01:10
+            Float64(first(r)) + Float64(last(r)) + Float64(step(r)) + Float64(n)
+        end
+        _range_arg(n::Int64) = begin
+            inner(rng) = Float64(first(rng)) + Float64(last(rng)) + Float64(step(rng))
+            inner(-10:0.01:10) + Float64(n)
+        end
+        @test compare_julia_wasm(_range_fls, 3).pass
+        @test compare_julia_wasm(_range_fls, -7).pass
+        @test compare_julia_wasm(_range_arg, 3).pass
+    end
+
 end  # end of phase-registration block
 
 # The dedicated fuzz pass (WT_FUZZ=1) skips the codegen phases entirely — it exists

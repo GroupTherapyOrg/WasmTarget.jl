@@ -343,6 +343,11 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     # high-precision StepRangeLen path — TwicePrecision is plain float-pair
     # struct arithmetic, compilable from its real Base IR.
     :steprangelen_hp, :twiceprecision, :_colon, :unsafe_getindex,
+    # a8c00917b1b0 (PlutoIslands newton): the 3-arg `(::Colon)(start, step, stop)`
+    # callable stays an un-inlined :invoke — without it on the list the call site
+    # silently compiled to `unreachable` (validates-then-traps). The deeper chain
+    # (_colon, steprangelen_hp, twiceprecision) was already allowed above.
+    :Colon,
     # P3 / WASMMAKIE W-002: round(x; digits=d) — pure float math over pow_body
     :_round_digits,
     # P3 / WASMMAKIE W-002: broadcast over diff(v) views — alias-analysis copy
@@ -487,7 +492,15 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
                 # its sorter body recursively discovers the kwarg-body method.
                 _is_kwcall = try func_type.instance === Core.kwcall catch; false end
                 func = _is_kwcall ? Core.kwcall : try
-                    getfield(mod, meth_name)
+                    f0 = getfield(mod, meth_name)
+                    # a8c00917b1b0: singleton callable structs bound to their own
+                    # type name (e.g. `Base.Colon`) — getfield yields the TYPE, and
+                    # code_typed(Type, args) probes a CONSTRUCTOR call that doesn't
+                    # exist, so the callee was silently skipped and its invoke
+                    # compiled to `unreachable`. The method belongs to the
+                    # singleton INSTANCE — use it.
+                    (f0 isa Type && f0 === func_type && isdefined(func_type, :instance)) ?
+                        func_type.instance : f0
                 catch
                     # WBUILD-4000: Inner functions (closures) aren't module-level bindings.
                     # For singleton callable structs (zero-field closures like overflow_case),
