@@ -174,3 +174,24 @@ should attribute via a stacktrace instrument inside emit_phi_local_set!
 (mirror the WT_TRACE_CONDSTUB recipe that cracked the type-intersection
 fold). Printf integration is otherwise the established playbook once
 this one shape is fixed.
+
+## P5-trim: differential matrix (discovery=:trim vs :legacy), 2026-06-12
+
+| surface | 1.13 :trim | 1.12 :trim | legacy baseline |
+|---|---|---|---|
+| Statistics mean/std/quantile | PASS (bit-exact) | PASS | PASS (whitelist-cured) |
+| Statistics median | validation err (print machinery) | validation err | PASS |
+| Dates date-diff/parse | PASS | validation err (version-specific IR) | PASS |
+| Random rand-i64 (seeded) | validation err (func 10) | compiles; exec needs "wasm:js-string" import (harness gap) | 1.12 PASS / 1.13 pair-locals |
+
+Headlines: quantile passes under :trim with ZERO whitelist (legacy
+needed :sort! curation). The collection is MORE COMPLETE than legacy —
+it pulls error-formatting/show paths the whitelist never compiled,
+which makes the deferred IOBuffer/print campaign the main blocker for
+full parity (median both versions). Secondary digs: 1.12 date-diff
+validation, 1.13 rand func-10 validation, and the harness's
+importObject lacking the js-string builtin module some collected code
+emits. Infrastructure landed: per-collection cache partitions
+(cache_token / cache_owner), entry-scoped strict mode
+(TRIM_ENTRY_NAMES), width-matched foreigncall defaults, TRIM_IR_CACHE
+serving the collection's consistent-world IR through get_typed_ir.
