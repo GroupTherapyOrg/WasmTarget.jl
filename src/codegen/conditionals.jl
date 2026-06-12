@@ -139,9 +139,31 @@ function generate_linear_flow(ctx::AbstractCompilationContext, blocks::Vector{Ba
                 append!(range_bytes, stmt_bytes)
 
                 # PURE-6024: Skip remaining statements after unreachable.
+                # P4-stdlib (Statistics median on 1.13, e1cc class): the rest
+                # of the range is NOT necessarily dead — a jump target inside
+                # (i, end_idx] is reachable from elsewhere (the no-throw arm
+                # of a boundscheck diamond branches past the throw into the
+                # middle of this range). Resume at the next jump-target index
+                # with the flag cleared (compile_statement's PURE-6027
+                # boundary logic, applied range-internally); only bail when
+                # no such target exists.
                 stmt_type_nc = get(ctx.ssa_types, i, Any)
                 if stmt_type_nc === Union{} || ctx.last_stmt_was_stub
-                    return range_bytes
+                    _rw_resume = 0
+                    for _rw_s in code
+                        _rw_d = _rw_s isa Core.GotoNode ? _rw_s.label :
+                                _rw_s isa Core.GotoIfNot ? _rw_s.dest : 0
+                        if _rw_d > i && _rw_d <= min(end_idx, length(code)) &&
+                           (_rw_resume == 0 || _rw_d < _rw_resume)
+                            _rw_resume = _rw_d
+                        end
+                    end
+                    _rw_resume == 0 && return range_bytes
+                    for _rw_j in (i+1):(_rw_resume-1)
+                        push!(compiled, _rw_j)
+                    end
+                    ctx.last_stmt_was_stub = false
+                    continue
                 end
 
                 # Drop unused values
