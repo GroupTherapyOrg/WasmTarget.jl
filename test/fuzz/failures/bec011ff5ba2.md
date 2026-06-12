@@ -1,18 +1,18 @@
 ---
-id: eeb022548784
+id: bec011ff5ba2
 status: fixed
 category: runtime_trap
 kind: runtime_trap
-construct: "referencing a const-global String traps at runtime (same shape as fixed const-global Vector gap ffd3d052c6a4, String case) (WASMMAKIE W-005 minus sign)"
-location: "WASMMAKIE vendor/tick_format.jl"
+construct: "PASSING a const-global non-isbits Vector as a callee argument traps; reading its length directly works since v0.3.1 (residual of ffd3d052c6a4) (WASMMAKIE R-002)"
+location: "WASMMAKIE draw layer (no_dash)"
 fn_name: repro
 arg_types: "(Int64,)"
-first_seen: wasmmakie-w005
+first_seen: wasmmakie-r002
 ---
 
-# Gap `eeb022548784` — referencing a const-global String traps at runtime (same shape as fixed const-global Vector gap ffd3d052c6a4, String case) (WASMMAKIE W-005 minus sign)
+# Gap `bec011ff5ba2` — PASSING a const-global non-isbits Vector as a callee argument traps; reading its length directly works since v0.3.1 (residual of ffd3d052c6a4) (WASMMAKIE R-002)
 
-**Category:** `runtime_trap` &nbsp;•&nbsp; **Kind:** `runtime_trap` &nbsp;•&nbsp; **Location:** `WASMMAKIE vendor/tick_format.jl`
+**Category:** `runtime_trap` &nbsp;•&nbsp; **Kind:** `runtime_trap` &nbsp;•&nbsp; **Location:** `WASMMAKIE draw layer (no_dash)`
 
 ## Reproducer
 Contract: this snippet **throws while the gap is present** and **runs cleanly once fixed**.
@@ -21,9 +21,9 @@ A follow-up loop fixes the compiler, then `verify_gaps!()` re-runs this to auto-
 ```julia
 using WasmTarget
 include(joinpath("test", "fuzz", "harness.jl")); using .FuzzHarness
-const MINUS = "\u2212"
-repro(x::Int64) = Int64(ncodeunits(MINUS)) + x
-
+const EMPTYV2 = Float64[]
+@noinline consume(v::Vector{Float64}, x::Int64) = Int64(length(v)) + x
+repro(x::Int64) = consume(EMPTYV2, x)
 _nat = try (true, repro(Int64(0))) catch; (false, nothing) end
 _r = FuzzHarness.compile_and_run_vec(repro, (Int64,), [(Int64(0),)])[1]
 _ok = _nat[1] ? (_r[1] === :ok && _nat[2] == _r[2]) : (_r[1] === :trap)
@@ -32,7 +32,7 @@ _ok || error("WasmTarget gap: native=$(_nat[1] ? _nat[2] : :throw) wasm=$_r")
 
 ## Diagnostic
 ```
-native=3 wasm=trap on const-global String reference
+native=0 wasm=trap when the const-global flows through an argument
 ```
 
 ## Work on this

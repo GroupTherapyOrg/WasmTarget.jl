@@ -171,17 +171,20 @@ function generate_body(ctx::AbstractCompilationContext)::Vector{UInt8}
     # with empty stack. Two patterns:
     # Pattern 1: [end] [return] [unreachable] [end] — dead return before unreachable
     # Pattern 2: [return] [end] [return] [end] — both if/else branches return
-    # IMPORTANT: 0x0b (END opcode) also appears as LEB128 operands (e.g., local index 11).
-    # To avoid false positives, verify that the preceding byte is NOT an instruction
-    # that takes a LEB128 operand (local.get=0x20, local.set=0x21, local.tee=0x22,
-    # global.get=0x23, global.set=0x24, br=0x0c, br_if=0x0d, call=0x10, etc.).
+    # Forward-parse to find genuine instruction boundaries: raw backward byte checks
+    # misfire when a LEB immediate collides with an opcode — e.g. `local.get 1418`
+    # encodes as [0x20, 0x8a, 0x0b] and the trailing 0x0b reads as END, turning
+    # [local.get N][return][unreachable][end] into a false Pattern-1 match that
+    # rewrites a LIVE return to unreachable (gap 4c8236022172).
     if length(bytes) >= 4 && bytes[end] == Opcode.END
-        is_end3_real = bytes[end - 3] == Opcode.END && (length(bytes) < 5 ||
-            !(bytes[end - 4] in (0x20, 0x21, 0x22, 0x23, 0x24, 0x0c, 0x0d, 0x10, 0x11, 0x41, 0x42)))
-        if bytes[end - 1] == 0x00 && bytes[end - 2] == Opcode.RETURN && is_end3_real
-            bytes[end - 2] = 0x00  # Replace RETURN with UNREACHABLE
-        elseif bytes[end - 1] == Opcode.RETURN && bytes[end - 2] == Opcode.END && bytes[end - 3] == Opcode.RETURN
-            bytes[end - 1] = 0x00  # Replace dead RETURN with UNREACHABLE
+        _tail = _last_instr_starts(bytes, 4)
+        if length(_tail) == 4
+            _t1, _t2, _t3, _t4 = bytes[_tail[1]], bytes[_tail[2]], bytes[_tail[3]], bytes[_tail[4]]
+            if _t1 == Opcode.END && _t2 == Opcode.RETURN && _t3 == Opcode.UNREACHABLE && _t4 == Opcode.END
+                bytes[_tail[2]] = Opcode.UNREACHABLE  # Pattern 1: dead RETURN after END
+            elseif _t1 == Opcode.RETURN && _t2 == Opcode.END && _t3 == Opcode.RETURN && _t4 == Opcode.END
+                bytes[_tail[3]] = Opcode.UNREACHABLE  # Pattern 2: dead final RETURN
+            end
         end
     end
 
@@ -740,6 +743,10 @@ function _skip_leb_count(op::UInt8)::Int
     (op == 0x20 || op == 0x21 || op == 0x22 || op == 0x23 || op == 0x24) && return 1
     # br, br_if
     (op == 0x0C || op == 0x0D) && return 1
+    # throw (tag index)
+    op == 0x08 && return 1
+    # br_on_null / br_on_non_null (label)
+    (op == 0xD5 || op == 0xD6) && return 1
     # call
     op == 0x10 && return 1
     # call_indirect (type_idx, table_idx)
@@ -792,50 +799,82 @@ function _last_instr_start(bytes::Vector{UInt8})::Int
     last_start = 0
     while i <= n
         last_start = i
-        op = bytes[i]
-        if op == 0xFB  # GC prefix: sub-opcode + LEB operands
-            i + 1 > n && return 0
-            sub_op = bytes[i + 1]
-            i += 2
-            for _ in 1:_skip_gc_leb_count(sub_op)
-                while true
-                    i > n && return 0
-                    b = bytes[i]; i += 1
-                    (b & 0x80) == 0 && break
-                end
-            end
-        elseif op == 0x43  # f32.const: 4 raw payload bytes
-            i + 4 > n && return 0
-            i += 5
-        elseif op == 0x44  # f64.const: 8 raw payload bytes
-            i + 8 > n && return 0
-            i += 9
-        elseif op == 0xFC  # saturating-trunc / misc prefix: sub-opcode LEB
-            i += 1
+        i = _instr_next(bytes, i)
+        i == 0 && return 0
+    end
+    return last_start
+end
+
+"""
+Advance past the single instruction starting at index `i`; return the index of
+the next instruction, or 0 if the buffer ends mid-instruction.
+"""
+function _instr_next(bytes::Vector{UInt8}, i::Int)::Int
+    n = length(bytes)
+    op = bytes[i]
+    if op == 0xFB  # GC prefix: sub-opcode + LEB operands
+        i + 1 > n && return 0
+        sub_op = bytes[i + 1]
+        i += 2
+        for _ in 1:_skip_gc_leb_count(sub_op)
             while true
                 i > n && return 0
                 b = bytes[i]; i += 1
                 (b & 0x80) == 0 && break
             end
-        elseif op == 0x0E  # br_table: count N, then N+1 label LEBs
-            i += 1
-            cnt = 0; shift = 0
+        end
+    elseif op == 0x43  # f32.const: 4 raw payload bytes
+        i + 4 > n && return 0
+        i += 5
+    elseif op == 0x44  # f64.const: 8 raw payload bytes
+        i + 8 > n && return 0
+        i += 9
+    elseif op == 0xFC  # saturating-trunc / misc prefix: sub-opcode LEB
+        i += 1
+        while true
+            i > n && return 0
+            b = bytes[i]; i += 1
+            (b & 0x80) == 0 && break
+        end
+    elseif op == 0x0E  # br_table: count N, then N+1 label LEBs
+        i += 1
+        cnt = 0; shift = 0
+        while true
+            i > n && return 0
+            b = bytes[i]; i += 1
+            cnt |= (Int(b & 0x7f) << shift); shift += 7
+            (b & 0x80) == 0 && break
+        end
+        for _ in 1:(cnt + 1)
             while true
                 i > n && return 0
                 b = bytes[i]; i += 1
-                cnt |= (Int(b & 0x7f) << shift); shift += 7
                 (b & 0x80) == 0 && break
             end
-            for _ in 1:(cnt + 1)
-                while true
-                    i > n && return 0
-                    b = bytes[i]; i += 1
-                    (b & 0x80) == 0 && break
-                end
-            end
-        else
-            i += 1
-            for _ in 1:_skip_leb_count(op)
+        end
+    elseif op == 0x1F  # try_table: blocktype, count N, then N catch clauses
+        i += 1
+        i > n && return 0
+        # blocktype LEB (single byte for valtypes/void; signed LEB for type idx)
+        while true
+            i > n && return 0
+            b = bytes[i]; i += 1
+            (b & 0x80) == 0 && break
+        end
+        cnt = 0; shift = 0
+        while true
+            i > n && return 0
+            b = bytes[i]; i += 1
+            cnt |= (Int(b & 0x7f) << shift); shift += 7
+            (b & 0x80) == 0 && break
+        end
+        for _ in 1:cnt
+            i > n && return 0
+            kind = bytes[i]; i += 1
+            # catch (0x00) / catch_ref (0x01): tag LEB + label LEB;
+            # catch_all (0x02) / catch_all_ref (0x03): label LEB only
+            nlebs = kind <= 0x01 ? 2 : 1
+            for _ in 1:nlebs
                 while true
                     i > n && return 0
                     b = bytes[i]; i += 1
@@ -843,8 +882,35 @@ function _last_instr_start(bytes::Vector{UInt8})::Int
                 end
             end
         end
+    else
+        i += 1
+        for _ in 1:_skip_leb_count(op)
+            while true
+                i > n && return 0
+                b = bytes[i]; i += 1
+                (b & 0x80) == 0 && break
+            end
+        end
     end
-    return last_start
+    return i
+end
+
+"""
+Forward-parse an instruction buffer and return the start indices of the last
+`k` instructions (oldest first). Returns fewer than `k` entries if the buffer
+holds fewer instructions, and an empty vector if it is truncated mid-instruction.
+"""
+function _last_instr_starts(bytes::Vector{UInt8}, k::Int)::Vector{Int}
+    i = 1
+    n = length(bytes)
+    starts = Int[]
+    while i <= n
+        push!(starts, i)
+        length(starts) > k && popfirst!(starts)
+        i = _instr_next(bytes, i)
+        i == 0 && return Int[]
+    end
+    return starts
 end
 
 """
@@ -1908,6 +1974,12 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
             end
         end
         append!(bytes, generate_stackified_flow(ctx, pre_blocks, code; trailing_unreachable = false))
+        # P3 gap e1cc83db76ea: the pre subset can end with a catchable-throw
+        # statement (boundscheck arm) that leaves last_stmt_was_stub=true —
+        # compile_condition_to_i32 then dead-code-guards the CONDITION into a
+        # bare `unreachable` and the whole if/try structure traps on entry.
+        # The pre region falls through here alive; reset BEFORE the condition.
+        ctx.last_stmt_was_stub = false
         push!(bytes, Opcode.BLOCK)   # $else
         push!(bytes, 0x40)
         append!(bytes, compile_condition_to_i32((code[exit_idx]::Core.GotoIfNot).cond, ctx))
@@ -2328,6 +2400,162 @@ function _emit_chain_levels!(bytes::Vector{UInt8}, ctx::AbstractCompilationConte
     return bytes
 end
 
+# P3 gaps ff6dc9760825 / 73a575f2d651: merge-phi variant of the catch-try
+# chain. Levels nest in catch arms and EACH level can have its OWN merge phi
+# (`try div(x,x) catch; try div(0,0x..,x) catch 0x00 end end` — inner phi
+# merges the inner try's normal/catch values, an outer phi merges the outer
+# body with that result). A flat single-merge layout stored only the innermost
+# phi's edges, leaving the outer phi local at its zero default (73a5 returned
+# 0 for every non-throwing input). Recursive per-level layout:
+#   <pre_k>
+#   block $merge_k (void)               ; only when level k has a merge phi
+#     block $ck { try_table(catch_all 0) { body_k; try-side phi stores; br 2 } }
+#     <catch arm: recurse into level k+1, or stackified>
+#     <catch-side phi stores>
+#   end
+#   <post-merge [merge_k .. hi]: phi reads / next-level code, falls through>
+# A level whose normal path returns (no merge phi) emits the plain
+# return-style block and recurses into its catch arm.
+function generate_catch_try_chain_merge(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
+                                        code, chain::Vector{TryRegion})::Vector{UInt8}
+    bytes = UInt8[]
+    ensure_exception_tag!(ctx.mod)
+    ensure_exception_global!(ctx.mod)
+    _emit_merge_chain_level!(bytes, ctx, blocks, code, chain, 1, 1, length(code))
+    return bytes
+end
+
+function _emit_merge_chain_level!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext,
+                                  blocks::Vector{BasicBlock}, code,
+                                  chain::Vector{TryRegion}, k::Int, lo::Int, hi::Int)
+    r = chain[k]
+    # This level's merge phi: first phi at/after the catch dest (within bounds)
+    # with a try-side edge from THIS level's body.
+    mk = 0
+    for i in r.catch_dest:hi
+        st = code[i]
+        if st isa Core.PhiNode && haskey(ctx.phi_locals, i) &&
+           any(r.enter_idx < Int(e) < r.catch_dest for e in st.edges)
+            mk = i
+            break
+        end
+    end
+
+    # Pre code [lo .. enter-1], splitting the block that spans the EnterNode
+    pre = BasicBlock[]
+    head = nothing
+    for b in blocks
+        b.start_idx >= lo || continue
+        b.start_idx < r.catch_dest || continue
+        if b.end_idx < r.enter_idx
+            push!(pre, b)
+        elseif b.start_idx <= r.enter_idx <= b.end_idx
+            b.start_idx < r.enter_idx &&
+                push!(pre, BasicBlock(b.start_idx, r.enter_idx - 1, nothing))
+            r.enter_idx < b.end_idx &&
+                (head = BasicBlock(r.enter_idx + 1, b.end_idx, b.terminator))
+        end
+    end
+    if !isempty(pre)
+        append!(bytes, generate_stackified_flow(ctx, pre, code;
+                                                trailing_unreachable=false))
+        ctx.last_stmt_was_stub = false
+    end
+    body = [b for b in blocks
+            if b.start_idx > r.enter_idx && b.start_idx < r.catch_dest]
+    head !== nothing && pushfirst!(body, head)
+
+    arm_hi = mk == 0 ? hi : mk - 1
+    _has_inner = k < length(chain) && chain[k+1].enter_idx >= r.catch_dest &&
+                 chain[k+1].enter_idx <= arm_hi
+
+    mk > 0 && (push!(bytes, Opcode.BLOCK); push!(bytes, 0x40))   # $merge_k
+    push!(bytes, Opcode.BLOCK)   # $ck — catch landing
+    push!(bytes, 0x40)
+    push!(bytes, Opcode.TRY_TABLE)
+    push!(bytes, 0x40)
+    append!(bytes, encode_leb128_unsigned(1))
+    push!(bytes, Opcode.CATCH_ALL)
+    append!(bytes, encode_leb128_unsigned(0))
+    append!(bytes, generate_stackified_flow(ctx, body, code;
+                                            trailing_unreachable=(mk == 0)))
+    ctx.last_stmt_was_stub = false
+    if mk > 0
+        # Normal completion: the merge target is outside the body subset, so
+        # the stackified body never assigns the merge phi locals — store this
+        # level's try-side edge values, then branch past try_table + $ck.
+        for i in mk:hi
+            st = code[i]
+            st isa Core.PhiNode || break   # merge phis are contiguous
+            haskey(ctx.phi_locals, i) || continue
+            for (j, e) in enumerate(st.edges)
+                ei = Int(e)
+                if r.enter_idx < ei && ei < r.catch_dest && isassigned(st.values, j)
+                    emit_phi_local_set!(bytes, st.values[j], i, ctx)
+                    break
+                end
+            end
+        end
+        push!(bytes, Opcode.BR)
+        append!(bytes, encode_leb128_unsigned(2))
+    end
+    push!(bytes, Opcode.END)   # try_table
+    push!(bytes, Opcode.END)   # $ck
+    ctx.last_stmt_was_stub = false
+
+    # Catch arm [catch_dest .. arm_hi]: the next level nests here, else plain
+    if _has_inner
+        _emit_merge_chain_level!(bytes, ctx, blocks, code, chain, k + 1,
+                                 r.catch_dest, arm_hi)
+    else
+        arm_blocks = [b for b in blocks
+                      if b.start_idx >= r.catch_dest && b.start_idx <= arm_hi]
+        if !isempty(arm_blocks)
+            # Never pad the arm with a trailing unreachable: when an ENCLOSING
+            # level has a merge, the arm falls through into that level's
+            # catch-side phi stores (a pad trapped the whole catch path of a
+            # return-style inner level — ff6dc9760825 on 1.13). A returning
+            # arm emits its own RETURN; the function-end pad covers the rest.
+            append!(bytes, generate_stackified_flow(ctx, arm_blocks, code;
+                                                    trailing_unreachable=false))
+            ctx.last_stmt_was_stub = false
+        end
+    end
+
+    if mk > 0
+        # Catch-side merge phi values (edge source inside the catch arm)
+        for i in mk:hi
+            st = code[i]
+            st isa Core.PhiNode || break
+            haskey(ctx.phi_locals, i) || continue
+            for (j, e) in enumerate(st.edges)
+                if r.catch_dest <= Int(e) < mk && isassigned(st.values, j)
+                    emit_phi_local_set!(bytes, st.values[j], i, ctx)
+                    break
+                end
+            end
+        end
+        push!(bytes, Opcode.END)   # $merge_k
+        ctx.last_stmt_was_stub = false
+        # Post-merge [mk .. hi]: phi reads, conversions, return — or, for an
+        # inner level, the code that flows on inside the ENCLOSING catch arm.
+        if any(i -> code[i] isa Core.GotoIfNot || code[i] isa Core.GotoNode, mk:hi)
+            pm_blocks = [b for b in blocks if b.start_idx >= mk && b.start_idx <= hi]
+            append!(bytes, generate_stackified_flow(ctx, pm_blocks, code;
+                                                    trailing_unreachable=false))
+        else
+            for i in mk:hi
+                stmt = code[i]
+                if stmt !== nothing
+                    stmt isa Expr && stmt.head === :pop_exception && continue
+                    append!(bytes, compile_statement(stmt, i, ctx))
+                end
+            end
+        end
+    end
+    return bytes
+end
+
 function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
     bytes = UInt8[]
     regions = find_try_regions(code)
@@ -2350,11 +2578,18 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
         # first region, each arm holds a (possibly empty) consecutive chain of
         # regions, every arm returns, and no merge phis cross the split.
         begin
+            # P3 gap 464d3b1b41ec: take the FIRST (outermost) spanning branch,
+            # not the last. With nested ifs both spanning the region (`if a;
+            # if b; try … else x end else try … end`), the innermost pick
+            # left the outer GotoIfNot stranded inside the stackified
+            # pre-code, whose out-of-subset exit fell into the wrong arm.
+            # Everything after the outermost split nests inside its arms.
             branch_idx = 0
             for i in 1:(outer.enter_idx - 1)
                 st = code[i]
                 if st isa Core.GotoIfNot && st.dest > outer.catch_dest
                     branch_idx = i
+                    break
                 end
             end
             if branch_idx > 0
@@ -2434,6 +2669,69 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
                 any(Int(e) < regions[end].catch_dest for e in (code[i]::Core.PhiNode).edges)
                 for i in regions[end].catch_dest:length(code))
             return generate_catch_try_chain(ctx, blocks, code, regions)
+        end
+        # P3 gap ff6dc9760825: catch-try chain that MERGES into a phi instead
+        # of returning per level (`try div(x,x) catch; try div(0,0) catch 0x00
+        # end end` — inference folds the constant arms, leaving a 2-level
+        # chain whose normal paths goto a merge phi). The return-style chain
+        # above rejects it (cross-phi guard) and the sequential fallback
+        # emitted level 2 AFTER level 1's catch landing instead of inside the
+        # handler, leaving the handler empty (validation: "expected i32 but
+        # nothing on stack" at the result-block end).
+        begin
+            _mc_first_cd = regions[1].catch_dest
+            # a merge phi exists for some level: a phi past the level's catch
+            # dest with an edge from inside that level's body
+            _mc_has_merge = false
+            for r in regions, i in r.catch_dest:length(code)
+                st = code[i]
+                if st isa Core.PhiNode && haskey(ctx.phi_locals, i) &&
+                   any(r.enter_idx < Int(e) < r.catch_dest for e in st.edges)
+                    _mc_has_merge = true
+                    break
+                end
+            end
+            if _mc_has_merge && !_branches_over_outer(code, outer)
+                _mc_ok = true
+                for k in 2:length(regions)
+                    prev, cur = regions[k-1], regions[k]
+                    if cur.enter_idx < prev.catch_dest
+                        _mc_ok = false
+                        break
+                    end
+                    # inter-level branch jumping over the next region → an
+                    # if/else split inside the catch arm, not a chain
+                    for i in prev.catch_dest:(cur.enter_idx - 1)
+                        st = code[i]
+                        dest = st isa Core.GotoIfNot ? st.dest : st isa Core.GotoNode ? st.label : 0
+                        if dest > cur.catch_dest
+                            _mc_ok = false
+                            break
+                        end
+                    end
+                    _mc_ok || break
+                end
+                # every phi edge after the first catch dest must originate at
+                # or after it, or inside some level's body — an edge from
+                # pre-try code means a branch AROUND the chain, which this
+                # layout cannot route
+                if _mc_ok
+                    for i in _mc_first_cd:length(code)
+                        st = code[i]
+                        st isa Core.PhiNode || continue
+                        haskey(ctx.phi_locals, i) || continue
+                        for e in st.edges
+                            ei = Int(e)
+                            ei >= _mc_first_cd && continue
+                            any(r.enter_idx < ei && ei < r.catch_dest for r in regions) ||
+                                (_mc_ok = false)
+                        end
+                    end
+                end
+                if _mc_ok
+                    return generate_catch_try_chain_merge(ctx, blocks, code, regions)
+                end
+            end
         end
         # P3 gap 600287f76223: branch-split INSIDE the outer catch arm —
         # `try A catch; if cond; try B … else Z end end`. All inner regions
@@ -3160,10 +3458,23 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
     # Code between outer enter and inner enter — stackified for the same
     # reason (the outer try body before the inner try can hold fill loops,
     # closures over vector literals, etc.).
+    # P3 gap 5954d7d85a04: a GotoIfNot between the enters that jumps OVER the
+    # inner region (`try { if c { try B finally } else E } catch`) is an
+    # if/else split inside the outer BODY — without handling it, the
+    # stackified between-segment's out-of-subset exit fell INTO the inner
+    # try_table and the else path executed the wrong arm.
+    body_branch = 0
+    for i in (outer.enter_idx + 1):(inner.enter_idx - 1)
+        st = code[i]
+        st isa Core.GotoIfNot && st.dest > inner.catch_dest && (body_branch = i; break)
+    end
+    body_bdest = body_branch > 0 ? (code[body_branch]::Core.GotoIfNot).dest : 0
+
     between = BasicBlock[]
+    between_hi = body_branch > 0 ? body_branch - 1 : inner.enter_idx - 1
     for b in blocks
         lo = max(b.start_idx, outer.enter_idx + 1)
-        hi = min(b.end_idx, inner.enter_idx - 1)
+        hi = min(b.end_idx, between_hi)
         lo > hi && continue
         if lo == b.start_idx && hi == b.end_idx
             push!(between, b)
@@ -3175,6 +3486,17 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
         append!(bytes, generate_stackified_flow(ctx, between, code;
                                                 trailing_unreachable=false))
         ctx.last_stmt_was_stub = false
+    end
+
+    # If split: open the $else wrap — condition false branches past the
+    # then-arm (the whole inner-try machinery) to the common tail.
+    if body_branch > 0
+        push!(bytes, Opcode.BLOCK)
+        push!(bytes, 0x40)
+        append!(bytes, compile_condition_to_i32((code[body_branch]::Core.GotoIfNot).cond, ctx))
+        push!(bytes, Opcode.I32_EQZ)
+        push!(bytes, Opcode.BR_IF)
+        append!(bytes, encode_leb128_unsigned(0))
     end
 
     # === Skip block: the body's NORMAL exit branches past the inner catch
@@ -3216,8 +3538,36 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
     # End inner try_table
     push!(bytes, Opcode.END)
 
-    # Normal path: branch past the inner catch handler to the skip-block end
-    # (depth 0 = landing block, depth 1 = skip block).
+    # P3 gap 5fe789cdb92c: when the inner-normal and inner-catch paths MERGE
+    # at phis before the outer catch (un-inlined invokes in the catch arm keep
+    # the merge un-collapsed), the skip branch must land AT THE MERGE, not
+    # after the whole inner-catch range — and both paths must store their
+    # merge-phi edges (the stackified subsets can't: the phi is out of subset).
+    merge_start = 0
+    for i in inner.catch_dest:(outer.catch_dest - 1)
+        st = code[i]
+        if st isa Core.PhiNode && haskey(ctx.phi_locals, i) &&
+           any(Int(e) < inner.catch_dest for e in st.edges)
+            merge_start = i
+            break
+        end
+    end
+
+    # Normal path: store merge-phi edges (keyed below inner.catch_dest), then
+    # branch past the inner catch handler to the skip-block end.
+    if merge_start > 0
+        for i in merge_start:(outer.catch_dest - 1)
+            st = code[i]
+            st isa Core.PhiNode || break
+            haskey(ctx.phi_locals, i) || continue
+            for (k, e) in enumerate(st.edges)
+                if Int(e) < inner.catch_dest && isassigned(st.values, k)
+                    emit_phi_local_set!(bytes, st.values[k], i, ctx)
+                    break
+                end
+            end
+        end
+    end
     push!(bytes, Opcode.BR)
     append!(bytes, encode_leb128_unsigned(1))
 
@@ -3227,15 +3577,16 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
     # Reset dead code flag — inner catch handler is reachable
     ctx.last_stmt_was_stub = false
 
-    # === Inner catch handler (stmts inner.catch_dest to outer.catch_dest-1) ===
+    # === Inner catch handler (stmts inner.catch_dest up to the merge) ===
     # This is INSIDE the outer try_table, so re-throws are caught by outer catch!
     # P3 gap ae64a1ba676e: STACKIFIED — the previous hand-rolled GotoIfNot
     # walk dropped phi-edge stores and loops, the same linear-walk class as
     # the catch arms in P3-batch6/8.
+    inner_catch_hi = merge_start > 0 ? merge_start - 1 : outer.catch_dest - 1
     inner_catch = BasicBlock[]
     for b in blocks
         lo = max(b.start_idx, inner.catch_dest)
-        hi = min(b.end_idx, outer.catch_dest - 1)
+        hi = min(b.end_idx, inner_catch_hi)
         lo > hi && continue
         if lo == b.start_idx && hi == b.end_idx
             push!(inner_catch, b)
@@ -3248,9 +3599,67 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
                                                 trailing_unreachable=false))
         ctx.last_stmt_was_stub = false
     end
+    # Catch path: store merge-phi edges keyed inside the handler range.
+    if merge_start > 0
+        for i in merge_start:(outer.catch_dest - 1)
+            st = code[i]
+            st isa Core.PhiNode || break
+            haskey(ctx.phi_locals, i) || continue
+            for (k, e) in enumerate(st.edges)
+                if inner.catch_dest <= Int(e) <= inner_catch_hi && isassigned(st.values, k)
+                    emit_phi_local_set!(bytes, st.values[k], i, ctx)
+                    break
+                end
+            end
+        end
+    end
 
-    # End skip block (the body's normal path lands here, after the handler)
+    # End skip block (both paths land here, at the merge)
     push!(bytes, Opcode.END)
+
+    # === Merge code (phis through the rest of the then-arm / outer body) ===
+    _post_hi = body_branch > 0 ? min(body_bdest - 1, outer.catch_dest - 1) : outer.catch_dest - 1
+    if merge_start > 0
+        merge_blocks = BasicBlock[]
+        for b in blocks
+            lo = max(b.start_idx, merge_start)
+            hi = min(b.end_idx, _post_hi)
+            lo > hi && continue
+            if lo == b.start_idx && hi == b.end_idx
+                push!(merge_blocks, b)
+            else
+                push!(merge_blocks, BasicBlock(lo, hi, hi == b.end_idx ? b.terminator : nothing))
+            end
+        end
+        if !isempty(merge_blocks)
+            append!(bytes, generate_stackified_flow(ctx, merge_blocks, code;
+                                                    trailing_unreachable=false))
+            ctx.last_stmt_was_stub = false
+        end
+    end
+
+    # Close the $else wrap and emit the common tail (else arm + shared
+    # leave/return code) — the then path falls through into it as well.
+    if body_branch > 0
+        push!(bytes, Opcode.END)   # $else
+        ctx.last_stmt_was_stub = false
+        tail_blocks = BasicBlock[]
+        for b in blocks
+            lo = max(b.start_idx, body_bdest)
+            hi = min(b.end_idx, outer.catch_dest - 1)
+            lo > hi && continue
+            if lo == b.start_idx && hi == b.end_idx
+                push!(tail_blocks, b)
+            else
+                push!(tail_blocks, BasicBlock(lo, hi, hi == b.end_idx ? b.terminator : nothing))
+            end
+        end
+        if !isempty(tail_blocks)
+            append!(bytes, generate_stackified_flow(ctx, tail_blocks, code;
+                                                    trailing_unreachable=false))
+            ctx.last_stmt_was_stub = false
+        end
+    end
 
     # End outer try_table
     push!(bytes, Opcode.END)

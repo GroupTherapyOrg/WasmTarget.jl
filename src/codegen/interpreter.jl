@@ -1362,6 +1362,13 @@ end
 # Remove when: native libm-style hyperbolic codegen exists.
 const _WASM_LN2 = 0.6931471805599453             # log(2), for the overflow-safe eᵃ/2
 
+# P3 gap c9f2efb08deb: the previous exp(a - ln2) trick for a > 20 carried ~3
+# ulp error (argument rounding amplified by exp), which sin(sinh(x)) blew into
+# full divergence at huge x — chaotic amplification. Fix ONLY that branch:
+# the plain exp form is exact up to H_LARGE_X (exp(709) is finite), and above
+# it Base's half-exponent squaring applies (bit-identical: exp compiles to
+# the same Base kernel). Small/mid branches keep the catalogue-proven
+# formulas — Base's minimax kernels can't be matched bitwise without fma.
 @overlay WASM_METHOD_TABLE function Base.sinh(x::Float64)
     (isnan(x) || isinf(x)) && return x          # sinh(±Inf)=±Inf, sinh(NaN)=NaN
     a = abs(x)
@@ -1369,27 +1376,27 @@ const _WASM_LN2 = 0.6931471805599453             # log(2), for the overflow-safe
         # Taylor in x²: x·(1 + x²/3! + x⁴/5! + x⁶/7! + x⁸/9!); ≤7e-13 rel at 0.35.
         x2 = x * x
         return x * (1.0 + x2*(1/6 + x2*(1/120 + x2*(1/5040 + x2*(1/362880)))))
-    elseif a > 20.0
-        # eᵃ/2 via exp(a - ln2): drops e⁻ᵃ (<2e-9 rel here) and never forms the
-        # overflowing eᵃ, so sinh stays finite up to native's limit (e.g. x=710).
-        s = exp(a - _WASM_LN2)
-        return x < 0.0 ? -s : s
+    elseif a >= 709.7822265633563                # H_LARGE_X(Float64), as in Base
+        E = exp(0.5 * a)
+        return copysign(0.5 * E * E, x)
     end
-    e = exp(a)
-    s = 0.5 * (e - 1.0/e)
-    return x < 0.0 ? -s : s
+    E = exp(a)
+    return copysign(0.5 * (E - 1.0 / E), x)      # 1/E underflows harmlessly at large a
 end
 @overlay WASM_METHOD_TABLE function Base.cosh(x::Float64)
     isnan(x) && return x
     a = abs(x)
-    a > 20.0 && return exp(a - _WASM_LN2)        # eᵃ/2, overflow-safe (cosh(±Inf)=Inf)
-    e = exp(a)
-    return 0.5 * (e + 1.0/e)
+    if a >= 709.7822265633563                    # H_LARGE_X(Float64), as in Base
+        E = exp(0.5 * a)
+        return 0.5 * E * E
+    end
+    E = exp(a)
+    return 0.5 * (E + 1.0 / E)
 end
 @overlay WASM_METHOD_TABLE function Base.tanh(x::Float64)
     isnan(x) && return x
     abs(x) > 20.0 && return x < 0.0 ? -1.0 : 1.0  # saturated to ±1 (also ±Inf)
-    return sinh(x) / cosh(x)                       # accurate: sinh is cancellation-safe
+    return sinh(x) / cosh(x)                       # catalogue-proven quotient
 end
 @overlay WASM_METHOD_TABLE Base.sinh(x::Float32) = Float32(sinh(Float64(x)))
 @overlay WASM_METHOD_TABLE Base.cosh(x::Float32) = Float32(cosh(Float64(x)))
@@ -1712,6 +1719,113 @@ end
     @overlay WASM_METHOD_TABLE function Base.hash(data::String, h::UInt)
         return _wasm_string_fnv1a(data, h)
     end
+end
+
+# ─── String concatenation Overlay ───────────────────────────────────────────
+# Why: Base._string (the Vararg backend of string(...) and String * SubString)
+#      copies bytes through pointer arithmetic over the parts; the compiled
+#      form null-derefs or traps for every multi-part call (gap 284d3e7059cd,
+#      WASMMAKIE W-005 — even string("ab","cd") failed; only the dedicated
+#      String*String path worked). Build bytes via codeunit reads instead.
+
+@overlay WASM_METHOD_TABLE function Base._string(parts::Union{Char, SubString{String}, String, Symbol}...)
+    out = UInt8[]
+    for p in parts
+        if p isa Char
+            u = reinterpret(UInt32, p)
+            nb = u == 0x00000000 ? 1 : (4 - (trailing_zeros(u) >> 3))
+            i = 1
+            while i <= nb
+                push!(out, UInt8((u >> (8 * (4 - i))) & 0xFF))
+                i += 1
+            end
+        elseif p isa String
+            for i in 1:ncodeunits(p)
+                push!(out, codeunit(p, i))
+            end
+        elseif p isa SubString{String}
+            for i in 1:ncodeunits(p)
+                push!(out, codeunit(p, i))
+            end
+        else  # Symbol — represented as a string in WasmGC
+            s = String(p)
+            for i in 1:ncodeunits(s)
+                push!(out, codeunit(s, i))
+            end
+        end
+    end
+    return String(out)
+end
+
+# Concrete 2-arg specializations: the Vararg method's invoke widens elements
+# to the Union (heterogeneous-union tuple reads still miscompile — the
+# hetero-Dict class), so give inference concrete signatures to prefer for the
+# common mixed pairs ("m" * substring, str * char, ...).
+@inline function _wasm_append_str!(out::Vector{UInt8}, s::Union{String, SubString{String}})
+    for i in 1:ncodeunits(s)
+        push!(out, codeunit(s, i))
+    end
+    return out
+end
+@inline function _wasm_append_char!(out::Vector{UInt8}, c::Char)
+    u = reinterpret(UInt32, c)
+    nb = u == 0x00000000 ? 1 : (4 - (trailing_zeros(u) >> 3))
+    i = 1
+    while i <= nb
+        push!(out, UInt8((u >> (8 * (4 - i))) & 0xFF))
+        i += 1
+    end
+    return out
+end
+@overlay WASM_METHOD_TABLE function Base._string(a::String, b::SubString{String})
+    return String(_wasm_append_str!(_wasm_append_str!(UInt8[], a), b))
+end
+@overlay WASM_METHOD_TABLE function Base._string(a::SubString{String}, b::String)
+    return String(_wasm_append_str!(_wasm_append_str!(UInt8[], a), b))
+end
+@overlay WASM_METHOD_TABLE function Base._string(a::String, b::Char)
+    return String(_wasm_append_char!(_wasm_append_str!(UInt8[], a), b))
+end
+@overlay WASM_METHOD_TABLE function Base._string(a::Char, b::String)
+    return String(_wasm_append_str!(_wasm_append_char!(UInt8[], a), b))
+end
+
+# String(::SubString) inlines an unsafe_string pointer conversion ("cannot
+# convert NULL to string" guard) that null-derefs in WasmGC — copy bytes.
+@overlay WASM_METHOD_TABLE function Base.String(s::SubString{String})
+    out = UInt8[]
+    for i in 1:ncodeunits(s)
+        push!(out, codeunit(s, i))
+    end
+    return String(out)
+end
+
+# ─── MemoryRef slot-clear Overlay ───────────────────────────────────────────
+# Why: Base._unsetindex!(::MemoryRef) nulls freed slots for the native GC. It
+#      reads DataType layout metadata (getfield(Memory{T}, :layout) via
+#      datatype_arrayelem/datatype_layoutsize) BEFORE its isbits early-return,
+#      and those reads stub → uncatchable trap (gap 450889a9cb7e: Ryu
+#      writeshortest's merged IR inlines it on the fixed-decimal path).
+#      WasmGC tracks the backing array as a whole — slot clearing is a no-op.
+# Cost: ref elements in freed slots stay reachable until the container dies
+#      (same accepted trade-off as the _deleteend! overlay below).
+@overlay WASM_METHOD_TABLE function Base._unsetindex!(A::MemoryRef{T}) where T
+    return A
+end
+
+# ─── Vector shrink Overlay ──────────────────────────────────────────────────
+# Why: shrinking resize! inlines Base._deleteend! whose freed-slot clearing
+#      (atomic_pointerset GC bookkeeping) stubs to a runtime trap (gap
+#      4c40e07c9230, WASMMAKIE T-005). In the WasmGC layout a Vector is
+#      struct{array, size} with capacity ≥ size — shrinking is just a size
+#      update; the GC tracks the backing array as a whole.
+# Cost: ref-typed elements in the hidden capacity stay reachable until the
+#      vector itself dies (bounded by capacity; same class as sizehint!).
+
+@overlay WASM_METHOD_TABLE function Base._deleteend!(a::Vector{T}, delta::Int) where T
+    n = length(a)
+    setfield!(a, :size, (n - delta,))
+    return nothing
 end
 
 # ─── Byte-vector membership Overlay ─────────────────────────────────────────

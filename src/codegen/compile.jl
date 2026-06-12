@@ -381,6 +381,9 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     :getindex_continued, :_string, :string_index_err,
     # BF-6000: SizeUnknown collect (filtered comprehensions) + foldr
     :grow_to!, :_foldl_impl,
+    # P3 gap 5663ffe988fc: HasShape collect for non-isbits eltypes (String
+    # comprehensions) re-dispatches through collect/collect_to_with_first!
+    :collect, :_collect, :collect_to_with_first!, :collect_to!,
     # FOUND-5001: sym_in needed for kwarg validation in count/argmax/argmin/etc.
     :sym_in,
     # FOUND-5001: unsigned overlay (bitcast) needed by gcd, lcm, strip, titlecase, etc.
@@ -1521,8 +1524,8 @@ function compile_module(functions::Vector;
                 get_string_array_type!(mod, type_registry)
             elseif is_struct_type(T)
                 register_struct_type!(mod, type_registry, T)
-            elseif T <: Array
-                # Vector/Array is now a struct with (ref, size) for setfield! support
+            elseif T <: Vector
+                # Vector (1-D only — matrices use register_matrix_type! below)
                 register_vector_type!(mod, type_registry, T)
             elseif T <: AbstractVector && T isa DataType
                 # Other AbstractVector types (SubArray, UnitRange, etc.) - register as regular struct
@@ -1543,8 +1546,8 @@ function compile_module(functions::Vector;
             get_string_array_type!(mod, type_registry)
         elseif is_struct_type(return_type)
             register_struct_type!(mod, type_registry, return_type)
-        elseif return_type !== Union{} && return_type <: Array
-            # Vector/Array is now a struct with (ref, size) for setfield! support
+        elseif return_type !== Union{} && return_type <: Vector
+            # Vector (1-D only — matrices use register_matrix_type! below)
             register_vector_type!(mod, type_registry, return_type)
         elseif return_type !== Union{} && return_type <: AbstractVector && return_type isa DataType
             # Other AbstractVector types (SubArray, UnitRange, etc.) - register as regular struct
@@ -1885,8 +1888,10 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
                 get_string_array_type!(mod, type_registry)
             elseif is_struct_type(T)
                 register_struct_type!(mod, type_registry, T)
-            elseif T <: Array
+            elseif T <: Vector
                 register_vector_type!(mod, type_registry, T)
+            elseif T <: Array && T isa DataType
+                register_matrix_type!(mod, type_registry, T)
             elseif T === String
                 get_string_array_type!(mod, type_registry)
             end
@@ -1895,8 +1900,10 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
         # Register return type
         if is_struct_type(return_type)
             register_struct_type!(mod, type_registry, return_type)
-        elseif return_type !== Union{} && return_type <: Array
+        elseif return_type !== Union{} && return_type <: Vector
             register_vector_type!(mod, type_registry, return_type)
+        elseif return_type !== Union{} && return_type <: Array && return_type isa DataType
+            register_matrix_type!(mod, type_registry, return_type)
         elseif return_type === String
             get_string_array_type!(mod, type_registry)
         end
@@ -2262,8 +2269,10 @@ function compile_function_into!(f::Function, arg_types::Tuple, mod::WasmModule,
     for T in actual_arg_types
         if is_closure_type(T)
             register_closure_type!(mod, type_registry, T)
-        elseif T <: Array
+        elseif T <: Vector
             register_vector_type!(mod, type_registry, T)
+        elseif T <: Array && T isa DataType
+            register_matrix_type!(mod, type_registry, T)
         elseif is_struct_type(T)
             register_struct_type!(mod, type_registry, T)
         elseif T === String
@@ -2273,8 +2282,10 @@ function compile_function_into!(f::Function, arg_types::Tuple, mod::WasmModule,
 
     # Register return type
     if return_type !== Nothing && return_type !== Union{}
-        if return_type <: Array
+        if return_type <: Vector
             register_vector_type!(mod, type_registry, return_type)
+        elseif return_type <: Array && return_type isa DataType
+            register_matrix_type!(mod, type_registry, return_type)
         elseif is_struct_type(return_type)
             register_struct_type!(mod, type_registry, return_type)
         elseif return_type === String
@@ -2369,13 +2380,32 @@ function _autodiscover_closure_deps!(closure::Function, code_info::Core.CodeInfo
         push!(compiled, key)
 
         try
-            typed_results = Base.code_typed(f, arg_types)
-            isempty(typed_results) && continue
-            dep_code_info, dep_return_type = typed_results[1]
+            # WASMMAKIE E-003: use the SAME IR entry compile_module uses
+            # (constructor/closure handling) instead of bare code_typed, and
+            # pre-register parameter/return struct types — missing
+            # registration produced 'Unknown struct type reference' for
+            # constructor deps (TickLabel, SubString)
+            dep_code_info, dep_return_type = get_typed_ir(f, arg_types;
+                optimize=true, interp=get_wasm_interpreter())
+            dep_code_info === nothing && continue
             dep_return_type === Union{} && continue
+            for T in arg_types
+                if T isa DataType
+                    if is_struct_type(T)
+                        register_struct_type!(mod, type_registry, T)
+                    elseif T <: Vector
+                        register_vector_type!(mod, type_registry, T)
+                    elseif T === String
+                        get_string_array_type!(mod, type_registry)
+                    end
+                end
+            end
+            if dep_return_type isa DataType && is_struct_type(dep_return_type)
+                register_struct_type!(mod, type_registry, dep_return_type)
+            end
             push!(dep_data, (f, arg_types, name, dep_code_info, dep_return_type))
         catch e
-            @debug "compile_closure_body: skipping dependency $name — $e"
+            @warn "compile_closure_body: skipping dependency $name — $e"
         end
     end
 
@@ -2388,20 +2418,51 @@ function _autodiscover_closure_deps!(closure::Function, code_info::Core.CodeInfo
         register_function!(func_registry, name, f, arg_types, func_idx, dep_return_type)
     end
 
-    # Pass 2: compile function bodies (all cross-call targets now registered)
+    # Pass 1.5 (WASMMAKIE E-003): append a typed `unreachable` placeholder
+    # SLOT for every dep up front. Body compilation below can itself create
+    # helper functions (string hash/iterate, vector helpers, …) which APPEND
+    # to mod.functions — with sequential add_function! that shifted every
+    # later dep above its reserved index and cross-calls hit the WRONG
+    # functions (validation: 'not enough arguments on the stack' /
+    # 'expected i64, found i32'). Reserve-then-replace makes reserved
+    # indices unconditionally stable.
+    slot_positions = Vector{Int}(undef, length(dep_data))
+    slot_ok = Vector{Bool}(undef, length(dep_data))
+    for (i, (f, arg_types, name, _, dep_return_type)) in enumerate(dep_data)
+        # unconvertible signatures (e.g. Vararg in code_typed tuples) can
+        # never compile OR be validly called — reserve an empty-sig slot so
+        # index alignment holds, and skip the body
+        param_types, result_types, ok = try
+            (WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in arg_types],
+             dep_return_type === Nothing ? WasmValType[] : WasmValType[get_concrete_wasm_type(dep_return_type, mod, type_registry)],
+             true)
+        catch e
+            @warn "compile_closure_body: unconvertible dep signature $name — $e"
+            (WasmValType[], WasmValType[], false)
+        end
+        add_function!(mod, param_types, result_types, WasmValType[],
+                      UInt8[0x00, 0x0b])  # unreachable; end
+        slot_positions[i] = length(mod.functions)
+        slot_ok[i] = ok
+    end
+
+    # Pass 2: compile bodies and REPLACE each placeholder in place (failed
+    # bodies keep the placeholder — calling the failed dep traps loudly
+    # instead of corrupting unrelated calls)
     for (i, (f, arg_types, name, dep_code_info, dep_return_type)) in enumerate(dep_data)
+        slot_ok[i] || continue   # unconvertible signature — placeholder stays
         func_idx = n_base + UInt32(i - 1)
         try
             dep_ctx = CompilationContext(dep_code_info, arg_types, dep_return_type, mod, type_registry;
                                          func_registry=func_registry, func_idx=func_idx, func_ref=f)
             dep_body = generate_body(dep_ctx)
-
-            param_types = WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in arg_types]
-            result_types = dep_return_type === Nothing ? WasmValType[] : WasmValType[get_concrete_wasm_type(dep_return_type, mod, type_registry)]
-
-            add_function!(mod, param_types, result_types, dep_ctx.locals, dep_body)
+            slot = slot_positions[i]
+            placeholder = mod.functions[slot]
+            mod.functions[slot] = WasmFunction(placeholder.type_idx,
+                                               WasmValType[l for l in dep_ctx.locals],
+                                               dep_body)
         catch e
-            @debug "compile_closure_body: error compiling dependency $name — $e"
+            @warn "compile_closure_body: error compiling dependency $name — $e"
         end
     end
 end
@@ -2572,8 +2633,10 @@ function build_frozen_state(ir_entries::Vector)::FrozenCompilationState
                 get_string_array_type!(mod, type_registry)
             elseif is_struct_type(T)
                 register_struct_type!(mod, type_registry, T)
-            elseif T <: Array
+            elseif T <: Vector
                 register_vector_type!(mod, type_registry, T)
+            elseif T <: Array && T isa DataType
+                register_matrix_type!(mod, type_registry, T)
             elseif T === String
                 get_string_array_type!(mod, type_registry)
             end
@@ -2582,8 +2645,10 @@ function build_frozen_state(ir_entries::Vector)::FrozenCompilationState
         # Register return type
         if is_struct_type(return_type)
             register_struct_type!(mod, type_registry, return_type)
-        elseif return_type !== Union{} && return_type <: Array
+        elseif return_type !== Union{} && return_type <: Vector
             register_vector_type!(mod, type_registry, return_type)
+        elseif return_type !== Union{} && return_type <: Array && return_type isa DataType
+            register_matrix_type!(mod, type_registry, return_type)
         elseif return_type === String
             get_string_array_type!(mod, type_registry)
         end

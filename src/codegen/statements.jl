@@ -33,6 +33,68 @@ function extract_foreigncall_name(name_arg)::Union{Symbol, Nothing}
 end
 
 """
+    _trace_memmove_ptr(arg, ctx) -> (vector_value, [(is_add, offset_value)...]) | nothing
+
+Walk a pointer SSA chain (bitcast/add_ptr/sub_ptr over
+getfield(vec,:ref)→:ptr_or_offset) back to its backing Vector. Returns
+nothing unless the base is a Vector with 1-byte elements (memmove counts
+bytes; element index == byte offset only for elsize 1).
+"""
+function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext)
+    # Walk permissively (through bitcast/add_ptr/sub_ptr/PiNode and any phi
+    # edge) looking ONLY for the backing vector's identity. Offsets are NOT
+    # collected: in WasmGC the fake base pointer (getfield :ptr_or_offset)
+    # compiles to 0, so the POINTER VALUE ITSELF is the byte offset — callers
+    # compile the original pointer arg as the array.copy offset.
+    _mm_dbg = haskey(ENV, "WT_TRACE_MM")
+    _fail = function (why, what)
+        _mm_dbg && println(stderr, "  MMtrace FAIL [", why, "]: ", repr(what)[1:min(end, 110)])
+        return nothing
+    end
+    cur = arg
+    for _ in 1:48
+        cur isa Core.SSAValue || return _fail("non-ssa", cur)
+        st = ctx.code_info.code[cur.id]
+        _mm_dbg && println(stderr, "  MMtrace %", cur.id, " = ", repr(st)[1:min(end, 100)])
+        if st isa Core.PiNode
+            cur = st.val
+        elseif st isa Core.PhiNode
+            (length(st.values) >= 1 && isassigned(st.values, 1)) || return _fail("phi-unassigned", st)
+            cur = st.values[1]
+        elseif st isa Expr && st.head === :call && length(st.args) >= 2
+            cf = st.args[1]
+            cfn = cf isa GlobalRef ? cf.name : cf
+            if cfn === :bitcast
+                cur = st.args[3]
+            elseif cfn === :add_ptr || cfn === :sub_ptr
+                cur = st.args[2]
+            elseif cfn === :getfield && length(st.args) >= 3
+                fld = st.args[3] isa QuoteNode ? st.args[3].value : st.args[3]
+                if fld === :ptr_or_offset || fld === :ptr || fld === :mem
+                    # memoryref.ptr_or_offset, memory.ptr, memoryref.mem — all
+                    # hops toward the backing vector; all compile to offset-0
+                    # bases in WasmGC.
+                    cur = st.args[2]
+                elseif fld === :ref
+                    vec = st.args[2]
+                    vt = infer_value_type(vec, ctx)
+                    (vt isa DataType && vt <: Vector &&
+                     (eltype(vt) === UInt8 || eltype(vt) === Int8)) || return _fail("not-bytevec: $vt", vec)
+                    return vec
+                else
+                    return _fail("getfield-fld=$fld", st)
+                end
+            else
+                return _fail("call-fn=$cfn", st)
+            end
+        else
+            return _fail("stmt-kind", st)
+        end
+    end
+    return _fail("depth", arg)
+end
+
+"""
 Compile a single IR statement to Wasm bytecode.
 """
 function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
@@ -595,6 +657,9 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
         ctx.last_stmt_was_stub = false  # PURE-908: reset before dispatch
         if stmt.head === :call
             stmt_bytes = compile_call(stmt, idx, ctx)
+            if haskey(ENV, "WT_TRACE_MM") && !isempty(stmt_bytes) && stmt_bytes[1] == Opcode.UNREACHABLE
+                println(stderr, "UNREACH idx=$idx stmt=", repr(stmt)[1:min(end,110)])
+            end
         elseif stmt.head === :invoke
             stmt_bytes = compile_invoke(stmt, idx, ctx)
         elseif stmt.head === :new
@@ -877,14 +942,18 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
 
                 # Check if stmt_bytes ends with struct_get whose result type is incompatible
                 # with the target local. struct_get = [0xFB, 0x02, type_leb, field_leb]
+                # P3 gap a6c6091b2a80: FORWARD-parse to the last instruction — the
+                # backward 0xFB 0x02 scan misread `local.get 379` (LEB 0xFB 0x02!)
+                # as a struct_get, decoded garbage type/field, and nulled the value
+                # of an ht_keyindex2_shorthash! invoke (composition-only null deref:
+                # only modules with enough locals reach index 379). Same misparse
+                # class as the i32.const-32 byte-scan bug (gap a1b2c32const).
                 if !needs_type_safe_default && length(stmt_bytes) >= 4 && local_wasm_type isa ConcreteRef
-                    # Find the last struct_get in stmt_bytes by scanning backward for 0xFB 0x02
                     sg_pos = 0
-                    for si in (length(stmt_bytes) - 3):-1:1
-                        if stmt_bytes[si] == Opcode.GC_PREFIX && stmt_bytes[si + 1] == Opcode.STRUCT_GET
-                            sg_pos = si
-                            break
-                        end
+                    local _sg_li = _last_instr_start(stmt_bytes)
+                    if _sg_li > 0 && _sg_li + 1 <= length(stmt_bytes) &&
+                       stmt_bytes[_sg_li] == Opcode.GC_PREFIX && stmt_bytes[_sg_li + 1] == Opcode.STRUCT_GET
+                        sg_pos = _sg_li
                     end
                     if sg_pos > 0 && sg_pos + 2 <= length(stmt_bytes)
                         # Decode type_idx LEB128
@@ -1206,6 +1275,8 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                 end
 
                 if needs_type_safe_default
+                    haskey(ENV, "WT_TRACE_NULLDEF") && println(stderr,
+                        "NULLDEF idx=$idx local_type=$local_wasm_type stmt=", repr(stmt)[1:min(end,120)])
                     ssa_type_mismatch = true
                     # Emit type-safe default instead of the incompatible value
                     if local_wasm_type isa ConcreteRef
@@ -3396,6 +3467,44 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
         push!(bytes, 0xFC)  # saturating truncation prefix
         push!(bytes, 0x07)  # i64.trunc_sat_f64_u
         return bytes
+    end
+
+    # P3 gap 450889a9cb7e: memmove(dest, src, n) over Vector{UInt8} storage —
+    # Ryu's writeshortest shifts digit bytes in-buffer (decimal point
+    # insertion). Trace both pointers through add_ptr/sub_ptr chains to the
+    # backing vector and emit array.copy (overlap-safe per the wasm spec).
+    if name === :memmove && length(expr.args) >= 8
+        _mm_d = _trace_memmove_ptr(expr.args[6], ctx)
+        _mm_s = _trace_memmove_ptr(expr.args[7], ctx)
+        if _mm_d !== nothing && _mm_s !== nothing
+            _arr_t = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
+            _mm_emit_arr! = function (vec)
+                append!(bytes, compile_value(vec, ctx))
+                _vinfo = ctx.type_registry.structs[infer_value_type(vec, ctx)]
+                push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
+                append!(bytes, encode_leb128_unsigned(_vinfo.wasm_type_idx))
+                append!(bytes, encode_leb128_unsigned(1))  # field 1 = data array
+                push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.REF_CAST_NULL)
+                append!(bytes, encode_leb128_signed(Int64(_arr_t)))
+            end
+            _mm_emit_ptr_off! = function (ptr_arg)
+                # fake base pointer compiles to 0 → pointer value == byte offset
+                append!(bytes, compile_value(ptr_arg, ctx))
+                push!(bytes, Opcode.I32_WRAP_I64)
+            end
+            _mm_emit_arr!(_mm_d); _mm_emit_ptr_off!(expr.args[6])
+            _mm_emit_arr!(_mm_s); _mm_emit_ptr_off!(expr.args[7])
+            append!(bytes, compile_value(expr.args[8], ctx))
+            local _mm_nt = infer_value_type(expr.args[8], ctx)
+            (_mm_nt === UInt64 || _mm_nt === Int64 || _mm_nt === Int) &&
+                push!(bytes, Opcode.I32_WRAP_I64)
+            push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.ARRAY_COPY)
+            append!(bytes, encode_leb128_unsigned(_arr_t))
+            append!(bytes, encode_leb128_unsigned(_arr_t))
+            # memmove returns the dest pointer — fake i64 0 (consumers ignore it)
+            push!(bytes, Opcode.I64_CONST); push!(bytes, 0x00)
+            return bytes
+        end
     end
 
     # PURE-9065: Base.memhash(ptr, len, seed) → UInt64 string hash

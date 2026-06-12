@@ -224,7 +224,7 @@ end
 # sign-extend from julia_width before ashr; lshr also honours the julia_width
 # over-shift threshold (shr_u of a width-bit value by ≥ width = 0).
 function _emit_shift_guarded!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, is32::Bool, kind::Symbol;
-                              julia_width::Int = (is32 ? 32 : 64))
+                              julia_width::Int = (is32 ? 32 : 64), signed_narrow::Bool = false)
     wconst = is32 ? Opcode.I32_CONST : Opcode.I64_CONST
     wltu   = is32 ? Opcode.I32_LT_U : Opcode.I64_LT_U
     wand   = is32 ? Opcode.I32_AND : Opcode.I64_AND
@@ -267,9 +267,19 @@ function _emit_shift_guarded!(bytes::Vector{UInt8}, ctx::AbstractCompilationCont
         _wc(thr)                                 # [result, 0, shift, thr]
         push!(bytes, wltu)                       # [result, 0, cond]
         push!(bytes, Opcode.SELECT)              # [cond? result : 0]
-        if kind === :shl && narrow
-            _wc((Int64(1) << thr) - 1)           # [result, mask]  (2^width - 1)
-            push!(bytes, wand)                   # [result & mask]  truncate to width
+        if narrow && (kind === :shl || (kind === :lshr && signed_narrow))
+            # P3 (found probing da22976c7cd6): a SIGNED narrow result must be
+            # re-sign-extended, not zero-masked — `Int8(-1) << 0` masked to
+            # 0xFF read back as 255. extend8_s/16_s ignores the spilled high
+            # bits, so it replaces the mask. lshr needs it too: the shifted
+            # bits are width-canonical but bit thr-1 can be set (shift 0 of
+            # 0x80 → Int8 -128, not 128).
+            if signed_narrow && is32 && (thr == 8 || thr == 16)
+                push!(bytes, thr == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
+            elseif kind === :shl
+                _wc((Int64(1) << thr) - 1)       # [result, mask]  (2^width - 1)
+                push!(bytes, wand)               # [result & mask]  truncate to width
+            end
         end
     end
     return bytes
@@ -1898,6 +1908,43 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     func = raw_type.val
                 end
             end
+        end
+    end
+
+    # P3 gap 450889a9cb7e: `getglobal(mod, :name)` builtin (how typed IR reads
+    # const module globals like Base.Ryu.DIGIT_TABLE16) had NO handler and fell
+    # through to the unknown-call stub → every Ryu string(::Float64) trapped.
+    # With constant module + symbol args, resolve at compile time and compile
+    # the VALUE — compile_value materializes vector/struct/scalar constants.
+    if is_func(func, :getglobal) && length(args) >= 2
+        _gg_mod = args[1] isa QuoteNode ? args[1].value :
+                  args[1] isa GlobalRef ? (isdefined(args[1].mod, args[1].name) ?
+                                           getfield(args[1].mod, args[1].name) : args[1]) :
+                  args[1]
+        _gg_name = args[2] isa QuoteNode ? args[2].value : args[2]
+        if _gg_mod isa Module && _gg_name isa Symbol && isdefined(_gg_mod, _gg_name) &&
+           isconst(_gg_mod, _gg_name)
+            _gg_val = getglobal(_gg_mod, _gg_name)
+            append!(bytes, compile_value(_gg_val, ctx))
+            return bytes
+        end
+    end
+
+    # P3 gap 450889a9cb7e: getfield(::DataType-literal, :layout) — the layout
+    # pointer is compile-time host metadata; its only consumers are the
+    # pointerref loads folded in _try_fold_layout_pointerref. Emit a benign
+    # fake pointer instead of an unreachable stub (which killed the rest of
+    # the block as dead code).
+    if (is_func(func, :getfield) || is_func(func, :getproperty)) && length(args) >= 2
+        local _gf_dt = args[1] isa QuoteNode ? args[1].value : args[1]
+        local _gf_fld = args[2] isa QuoteNode ? args[2].value : args[2]
+        if _gf_dt isa DataType && _gf_fld === :layout
+            # non-null fake: the inlined `dt.layout == C_NULL && throw(...)`
+            # guard must not fire; the pointer is never dereferenced (loads
+            # are folded).
+            push!(bytes, Opcode.I64_CONST)
+            push!(bytes, 0x01)
+            return bytes
         end
     end
 
@@ -4184,10 +4231,66 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.ARRAY_GET_U)
             append!(bytes, encode_leb128_unsigned(string_arr_type))
-        else
-            push!(bytes, Opcode.UNREACHABLE)
-            ctx.last_stmt_was_stub = true  # PURE-908
+            return bytes
         end
+        # P3 gap 450889a9cb7e: DataType layout-metadata loads
+        # (datatype_layoutsize/arrayelem in inlined _unsetindex!) — the layout
+        # pointer is compile-time host metadata; fold the whole load.
+        local _pr_fold = _try_fold_layout_pointerref(ptr_arg, ctx)
+        if _pr_fold !== nothing
+            append!(bytes, compile_value(_pr_fold, ctx))
+            return bytes
+        end
+        # P3 gap 450889a9cb7e: byte reads through Vector{UInt8} storage pointers
+        # (Ryu digit readback). Fake base pointers compile to 0, so the pointer
+        # VALUE is the 0-based byte offset.
+        local _pr_vec = ptr_arg !== nothing ? _trace_memmove_ptr(ptr_arg, ctx) : nothing
+        if _pr_vec !== nothing
+            local _pr_arr_t = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
+            append!(bytes, compile_value(_pr_vec, ctx))
+            local _pr_vinfo = ctx.type_registry.structs[infer_value_type(_pr_vec, ctx)]
+            push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
+            append!(bytes, encode_leb128_unsigned(_pr_vinfo.wasm_type_idx))
+            append!(bytes, encode_leb128_unsigned(1))
+            push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.REF_CAST_NULL)
+            append!(bytes, encode_leb128_signed(Int64(_pr_arr_t)))
+            append!(bytes, compile_value(ptr_arg, ctx))
+            push!(bytes, Opcode.I32_WRAP_I64)
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ARRAY_GET_U)
+            append!(bytes, encode_leb128_unsigned(_pr_arr_t))
+            return bytes
+        end
+        push!(bytes, Opcode.UNREACHABLE)
+        ctx.last_stmt_was_stub = true  # PURE-908
+        return bytes
+    elseif func isa GlobalRef && func.name === :pointerset
+        # P3 gap 450889a9cb7e: byte writes through Vector{UInt8} storage
+        # pointers (Ryu digit emission). pointerset(ptr, value, i, align)
+        # returns the pointer; consumers ignore it (fake i64 0).
+        local _ps_ptr = length(args) >= 1 ? args[1] : nothing
+        local _ps_vec = _ps_ptr !== nothing ? _trace_memmove_ptr(_ps_ptr, ctx) : nothing
+        local _ps_vt = length(args) >= 2 ? infer_value_type(args[2], ctx) : nothing
+        if _ps_vec !== nothing && (_ps_vt === UInt8 || _ps_vt === Int8)
+            local _ps_arr_t = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
+            append!(bytes, compile_value(_ps_vec, ctx))
+            local _ps_vinfo = ctx.type_registry.structs[infer_value_type(_ps_vec, ctx)]
+            push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
+            append!(bytes, encode_leb128_unsigned(_ps_vinfo.wasm_type_idx))
+            append!(bytes, encode_leb128_unsigned(1))
+            push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.REF_CAST_NULL)
+            append!(bytes, encode_leb128_signed(Int64(_ps_arr_t)))
+            append!(bytes, compile_value(_ps_ptr, ctx))
+            push!(bytes, Opcode.I32_WRAP_I64)
+            append!(bytes, compile_value(args[2], ctx))
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ARRAY_SET)
+            append!(bytes, encode_leb128_unsigned(_ps_arr_t))
+            push!(bytes, Opcode.I64_CONST); push!(bytes, 0x00)
+            return bytes
+        end
+        push!(bytes, Opcode.UNREACHABLE)
+        ctx.last_stmt_was_stub = true  # PURE-908
         return bytes
     end
 
@@ -5024,7 +5127,8 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 end
             end
             _emit_shift_guarded!(bytes, ctx, is_32bit, :shl;
-                                 julia_width = _julia_int_width(arg_type, is_32bit))   # over-shift → 0 + narrow truncation
+                                 julia_width = _julia_int_width(arg_type, is_32bit),
+                                 signed_narrow = arg_type isa Type && arg_type <: Signed)   # over-shift → 0 + narrow truncation
         end
 
     elseif is_func(func, :ashr_int)  # arithmetic shift right
@@ -5057,7 +5161,8 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 end
             end
             _emit_shift_guarded!(bytes, ctx, is_32bit, :lshr;
-                                 julia_width = _julia_int_width(arg_type, is_32bit))   # over-shift → 0 (Julia semantics)
+                                 julia_width = _julia_int_width(arg_type, is_32bit),
+                                 signed_narrow = arg_type isa Type && arg_type <: Signed)   # over-shift → 0 (Julia semantics)
         end
 
     # Count leading/trailing zeros (used in Char conversion)
@@ -5282,21 +5387,49 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         else
             target_type_ref
         end
+        # P3 gap da22976c7cd6: sub-32-bit values live in i32 locals that can
+        # carry dirty high bits (e.g. `0x01 + 0xff` leaves 0x100 — add_int does
+        # not re-narrow). zext_int takes the BITS of the source width, so mask
+        # to that width before extending (`x << Int64(0x01 + x)` shifted by 256
+        # instead of 0 — over-shift gave 0 where native wraps the count).
+        _zx_src = length(args) >= 2 ? infer_value_type(args[2], ctx) : nothing
+        _zx_mask = (_zx_src === UInt8 || _zx_src === Int8) ? Int64(0xFF) :
+                   (_zx_src === UInt16 || _zx_src === Int16) ? Int64(0xFFFF) : Int64(0)
         if target_type === Int64 || target_type === UInt64
             # Extending to 64-bit - emit extend instruction
             # PURE-324: Skip extend if source is already i64 (e.g., from widened phi local)
             src_wasm_z = length(args) >= 2 ? get_phi_edge_wasm_type(args[2], ctx) : nothing
             if src_wasm_z !== I64
+                if _zx_mask != 0
+                    push!(bytes, Opcode.I32_CONST)
+                    append!(bytes, encode_leb128_signed(_zx_mask))
+                    push!(bytes, Opcode.I32_AND)
+                end
                 push!(bytes, Opcode.I64_EXTEND_I32_U)
+            end
+        elseif target_type === Int32 || target_type === UInt32
+            # Same-register-class extension: mask the source width so dirty
+            # carry bits don't leak into the wider type
+            if _zx_mask != 0 && get_phi_edge_wasm_type(args[2], ctx) !== I64
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(_zx_mask))
+                push!(bytes, Opcode.I32_AND)
             end
         elseif target_type === Int128 || target_type === UInt128
             # Extending to 128-bit - create struct with (typeId, lo=value, hi=0)
             # The value is already on the stack (i64), need to create 128-bit struct
             source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : UInt64
 
-            # If source is 32-bit, extend to 64-bit first
+            # If source is 32-bit or narrower, extend to 64-bit first
             # PURE-325: Bool also maps to i32, so include it here
-            if source_type === Int32 || source_type === UInt32 || source_type === Bool
+            # P3 da22976c7cd6: 8/16-bit sources also live in i32 — mask their
+            # width (dirty carry bits) before the unsigned extend
+            if _zx_mask != 0
+                push!(bytes, Opcode.I32_CONST)
+                append!(bytes, encode_leb128_signed(_zx_mask))
+                push!(bytes, Opcode.I32_AND)
+                push!(bytes, Opcode.I64_EXTEND_I32_U)
+            elseif source_type === Int32 || source_type === UInt32 || source_type === Bool
                 push!(bytes, Opcode.I64_EXTEND_I32_U)
             end
 
@@ -5766,9 +5899,14 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # Fallback: if getfield failed (e.g., GlobalRef from anonymous module),
         # try looking up by name string in func_registry. This handles import stubs
         # like compiled_get_prop_string_id referenced from re-exported modules.
+        # WASMMAKIE E-003: the name match MUST also match arity — with broad
+        # registries (65 canvas ops incl. names like width/height/fill/stroke/
+        # rect/save/translate) the bare-name redirect hijacked unrelated
+        # same-named calls and emitted arity-mismatched call instructions
+        # (validation: 'not enough arguments on the stack').
         if called_func === nothing
             target_by_name = get_function(ctx.func_registry, string(func.name))
-            if target_by_name !== nothing
+            if target_by_name !== nothing && length(target_by_name.arg_types) == length(args)
                 called_func = target_by_name.func_ref
             end
         end
@@ -6537,3 +6675,40 @@ function _emit_apply_iterate_reduce!(bytes::Vector{UInt8}, container_arg, contai
     append!(bytes, encode_leb128_unsigned(acc_local))
 end
 
+
+"""
+    _try_fold_layout_pointerref(ptr_arg, ctx) -> DataTypeLayout | nothing
+
+P3 gap 450889a9cb7e: fold `unsafe_load(convert(Ptr{DataTypeLayout},
+dt.layout))` (the datatype_layoutsize / datatype_arrayelem idiom) when `dt`
+is a DataType literal — the layout struct is immutable host metadata, fully
+known at compile time. Returns the host-loaded DataTypeLayout for literal
+materialization, or nothing if the chain doesn't match.
+"""
+function _try_fold_layout_pointerref(ptr_arg, ctx::AbstractCompilationContext)
+    cur = ptr_arg
+    for _ in 1:4
+        cur isa Core.SSAValue || return nothing
+        st = ctx.code_info.code[cur.id]
+        st isa Expr && st.head === :call || return nothing
+        cf = st.args[1]
+        cfn = cf isa GlobalRef ? cf.name : cf
+        if cfn === :bitcast && length(st.args) >= 3
+            cur = st.args[3]
+        elseif cfn === :getfield && length(st.args) >= 3
+            dt = st.args[2]
+            dt isa QuoteNode && (dt = dt.value)
+            if dt isa GlobalRef
+                dt = isdefined(dt.mod, dt.name) ? getfield(dt.mod, dt.name) : nothing
+            end
+            fld = st.args[3] isa QuoteNode ? st.args[3].value : st.args[3]
+            (dt isa DataType && fld === :layout) || return nothing
+            lay = try getfield(dt, :layout) catch; return nothing end
+            lay == C_NULL && return nothing
+            return unsafe_load(convert(Ptr{Base.DataTypeLayout}, lay))
+        else
+            return nothing
+        end
+    end
+    return nothing
+end

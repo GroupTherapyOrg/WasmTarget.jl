@@ -1,32 +1,16 @@
 ---
-id: 464d3b1b41ec
+id: c9f2efb08deb
 status: fixed
 category: wrong_value
 kind: wrong_value
-construct: "wrong_value: `if isodd(first([Int8(0), Int8(0), Int8(0)])) & haskey(Dict(0 => 0, 0 => 0), 0)\n    if haskey(Dict(x => 0, Int32(0) => 0), first([Int32(0), Int32(0), Int32(0)]))\n        try\n            div(Int32(0), Int32(0))\n        catch\n            Int32(0)\n        end\n    else\n        x\n    end\nelse\n    try\n        div(x, x)\n    catch\n        Int32(0)\n    end\nend` :: Int32"
+construct: "wrong_value: `sin(sinh(x))` :: Float64"
 location: "test/fuzz (generated)"
 fn_name: repro
-arg_types: "(Int32,)"
-first_seen: sweep-stmt-2
+arg_types: "(Float64,)"
+first_seen: sweep-expr-2
 ---
 
-# Gap `464d3b1b41ec` — wrong_value: `if isodd(first([Int8(0), Int8(0), Int8(0)])) & haskey(Dict(0 => 0, 0 => 0), 0)
-    if haskey(Dict(x => 0, Int32(0) => 0), first([Int32(0), Int32(0), Int32(0)]))
-        try
-            div(Int32(0), Int32(0))
-        catch
-            Int32(0)
-        end
-    else
-        x
-    end
-else
-    try
-        div(x, x)
-    catch
-        Int32(0)
-    end
-end` :: Int32
+# Gap `c9f2efb08deb` — wrong_value: `sin(sinh(x))` :: Float64
 
 **Category:** `wrong_value` &nbsp;•&nbsp; **Kind:** `wrong_value` &nbsp;•&nbsp; **Location:** `test/fuzz (generated)`
 
@@ -41,32 +25,16 @@ include(joinpath("test", "fuzz", "bridge.jl"));      using .FuzzBridge
 include(joinpath("test", "fuzz", "bridge_args.jl")); using .FuzzBridgeArgs
 include(joinpath("test", "fuzz", "structpool.jl"));  using .FuzzStructPool
 FuzzStructPool.build_pool!()
-repro(x::Int32) = if isodd(first([Int8(0), Int8(0), Int8(0)])) & haskey(Dict(0 => 0, 0 => 0), 0)
-    if haskey(Dict(x => 0, Int32(0) => 0), first([Int32(0), Int32(0), Int32(0)]))
-        try
-            div(Int32(0), Int32(0))
-        catch
-            Int32(0)
-        end
-    else
-        x
-    end
-else
-    try
-        div(x, x)
-    catch
-        Int32(0)
-    end
-end
-_x = Int32(2147483647)
+repro(x::Float64) = sin(sinh(x))
+_x = 100.0
 _c = deepcopy(_x)
 _nat = try (:ok, repro(_c)); catch e; (:throw, e); end
-_rt = Core.Compiler.widenconst(Base.code_typed(repro, (Int32,))[1][2])
+_rt = Core.Compiler.widenconst(Base.code_typed(repro, (Float64,))[1][2])
 _rt === Union{} && (_rt = Int64)   # always-throws body: result never walked, any rettype compiles
-_rr = FuzzBridgeArgs.bridge_run_args(repro, (Int32,), [(deepcopy(_x),)]; rettype = _rt)
+_rr = FuzzBridgeArgs.bridge_run_args(repro, (Float64,), [(deepcopy(_x),)]; rettype = _rt)
 _rr isa Vector || error("bridge could not run reproducer: " * string(_rr))
 _res = _rr[1]
-_pd = FuzzBridgeArgs.ismutable_shape(Int32) ? FuzzBridge.descriptor(Int32)[1] : nothing
+_pd = FuzzBridgeArgs.ismutable_shape(Float64) ? FuzzBridge.descriptor(Float64)[1] : nothing
 _ok = _nat[1] === :throw ? (_res[1] === :trap) :
     (_res[1] === :ok &&
      FuzzBridge.tree_matches(FuzzBridge.descriptor(_rt)[1], _nat[2], _res[2]) &&
@@ -76,7 +44,7 @@ _ok || error("WasmTarget gap @ x=$_x : native=$(_nat[1] === :throw ? :throw : _n
 
 ## Diagnostic
 ```
-at x=2147483647: native=1  wasm=2147483647
+at x=100.0: native=-0.7219067166708869  wasm=0.19554083386575674
 ```
 
 ## Work on this
