@@ -90,7 +90,10 @@ function trim_compile_plan(entries_named::Vector)
 
     functions = Any[]
     ir_cache = IdDict{Any, Tuple{Core.CodeInfo, Any}}()
-    used_names = Set{String}()
+    # Pre-seed with entry names: a discovered function processed before its
+    # same-named entry must not claim the entry's export name (duplicate-export
+    # validation failure in multi-function modules).
+    used_names = Set{String}(values(entry_keys))
     i = 1
     while i + 1 <= length(codeinfos)
         ci, src = codeinfos[i], codeinfos[i + 1]

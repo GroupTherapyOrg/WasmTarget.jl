@@ -291,11 +291,11 @@ function ci_fuzz_passes(; types = (Int64, Float64), depth = 2, max_examples = 30
     return allpass
 end
 
-# --- Discovery-mode differential: :legacy vs :trim --------------------------
-# For each generated body where the LEGACY pipeline is clean (native == wasm),
-# require the TRIM-collected pipeline to agree with native too. A failure
-# shrinks to a minimal body where the two discovery modes diverge.
-function _trim_agrees(body, ::Type{T0}) where {T0}
+# --- Discovery-mode differential: :trim (default) vs :legacy ----------------
+# For each generated body where the DEFAULT (:trim) pipeline is clean
+# (native == wasm), require the legacy pipeline to agree with native too.
+# A failure shrinks to a minimal body where the two discovery modes diverge.
+function _other_mode_agrees(body, ::Type{T0}; mode::Symbol = :legacy) where {T0}
     fn, _, _ = make_function(body, T0)
     samples = sample_inputs(T0)
     rt = try
@@ -312,7 +312,7 @@ function _trim_agrees(body, ::Type{T0}) where {T0}
         end
     end
     all(n -> n[1] === :ok, natives) || return true   # throwy bodies: out of scope here
-    wres = FuzzBridge.bridge_run(fn, (T0,), samples; rettype = rt, discovery = :trim)
+    wres = FuzzBridge.bridge_run(fn, (T0,), samples; rettype = rt, discovery = mode)
     wres === :no_node && return true
     wres isa Vector || return false                  # compile/exec error under :trim only
     desc = FuzzBridge.descriptor(rt)[1]
@@ -330,9 +330,9 @@ function discovery_differential(; types = (Int64, Float64), depth = 2,
     for (i, T0) in enumerate(types)
         gen = gen_program(T0; depth = depth)
         res = @check rng=Xoshiro(seed + i) max_examples=max_examples function disc_prop(body = gen)
-            any(h -> h in exclude, _call_heads(body)) && return true  # documented trim residuals
-            differential(body, T0).category === :ok || return true   # legacy not clean → out of scope
-            _trim_agrees(body, T0)
+            any(h -> h in exclude, _call_heads(body)) && return true  # documented residuals
+            differential(body, T0).category === :ok || return true   # default mode not clean → out of scope
+            _other_mode_agrees(body, T0)
         end
         if something(res.result) isa Supposition.Fail
             allpass = false

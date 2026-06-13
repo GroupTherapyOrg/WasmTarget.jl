@@ -135,7 +135,7 @@ Functions can call each other within the module.
 function compile_multi(functions::Vector; optimize=false, stub_names::Set{String}=Set{String}(),
                        return_registries::Bool=false, optimize_ir::Bool=true,
                        register_ir_types::Bool=false, strict::Bool=true, validate::Bool=true,
-                       discovery::Symbol=:legacy)
+                       discovery::Symbol=:trim)
     result = compile_module(functions; stub_names=stub_names, return_registries=return_registries,
                            optimize_ir=optimize_ir, register_ir_types=register_ir_types, strict=strict,
                            discovery=discovery)

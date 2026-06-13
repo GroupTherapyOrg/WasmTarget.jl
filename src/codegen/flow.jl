@@ -195,16 +195,17 @@ function generate_branched_loops(ctx::AbstractCompilationContext, first_header::
             append!(bytes, compile_statement(stmt, i, ctx))
 
             # Drop unused values
-            if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
+            if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke) && !ctx.last_stmt_was_stub
+                # P6-ioprint: unified with the main-path contract — the crude
+                # `stmt_type !== Nothing` check dropped on an empty stack for
+                # handlers that push no value (memoryrefset! et al.).
                 stmt_type = get(ctx.ssa_types, i, Any)
-                if stmt_type !== Nothing
-                    is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
-                    if !is_nothing_union
-                        if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
-                            use_count = get(ssa_use_count, i, 0)
-                            if use_count == 0
-                                push!(bytes, Opcode.DROP)
-                            end
+                is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
+                if !is_nothing_union && statement_produces_wasm_value(stmt, i, ctx)
+                    if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
+                        use_count = get(ssa_use_count, i, 0)
+                        if use_count == 0
+                            push!(bytes, Opcode.DROP)
                         end
                     end
                 end
@@ -283,16 +284,17 @@ function generate_branched_loops(ctx::AbstractCompilationContext, first_header::
             append!(bytes, compile_statement(stmt, i, ctx))
 
             # Drop unused values
-            if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
+            if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke) && !ctx.last_stmt_was_stub
+                # P6-ioprint: unified with the main-path contract — the crude
+                # `stmt_type !== Nothing` check dropped on an empty stack for
+                # handlers that push no value (memoryrefset! et al.).
                 stmt_type = get(ctx.ssa_types, i, Any)
-                if stmt_type !== Nothing
-                    is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
-                    if !is_nothing_union
-                        if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
-                            use_count = get(ssa_use_count, i, 0)
-                            if use_count == 0
-                                push!(bytes, Opcode.DROP)
-                            end
+                is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
+                if !is_nothing_union && statement_produces_wasm_value(stmt, i, ctx)
+                    if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
+                        use_count = get(ssa_use_count, i, 0)
+                        if use_count == 0
+                            push!(bytes, Opcode.DROP)
                         end
                     end
                 end
@@ -2183,16 +2185,17 @@ function generate_if_then_else(ctx::AbstractCompilationContext, blocks::Vector{B
                     append!(bytes, compile_statement(stmt, i, ctx))
 
                     # Drop unused values from calls
-                    if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
+                    # P6-ioprint: unified with the main-path contract — the crude
+                    # `stmt_type !== Nothing` check dropped on an empty stack for
+                    # handlers that push no value (memoryrefset! et al.).
+                    if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke) && !ctx.last_stmt_was_stub
                         stmt_type = get(ctx.ssa_types, i, Any)
-                        if stmt_type !== Nothing
-                            is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
-                            if !is_nothing_union
-                                if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
-                                    use_count = get(ssa_use_count, i, 0)
-                                    if use_count == 0
-                                        push!(bytes, Opcode.DROP)
-                                    end
+                        is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
+                        if !is_nothing_union && statement_produces_wasm_value(stmt, i, ctx)
+                            if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
+                                use_count = get(ssa_use_count, i, 0)
+                                if use_count == 0
+                                    push!(bytes, Opcode.DROP)
                                 end
                             end
                         end

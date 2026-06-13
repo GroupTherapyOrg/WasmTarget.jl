@@ -280,8 +280,8 @@ const bytes = fs.readFileSync('$(escape_string(wasm_path))');
 
 async function validate() {
     try {
-        const importObject = { Math: { pow: Math.pow } };
-        const wasmModule = await WebAssembly.instantiate(bytes, importObject);
+        const importObject = { Math: { pow: Math.pow }, io: { write_string(){}, write_int(){}, write_float(){}, write_bool(){}, write_newline(){}, write_nothing(){} } };
+        const wasmModule = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
         console.log("VALID");
         process.exit(0);
     } catch (e) {
@@ -754,8 +754,8 @@ function _generate_bridge_driver(func_name, args, arg_types, return_vec_eltype)
     # reading a file and console.logging.
     lines = String[]
     push!(lines, "  try {")
-    push!(lines, "    const importObject = { Math: { pow: Math.pow } };")
-    push!(lines, "    const wasmModule = await WebAssembly.instantiate(bytes, importObject);")
+    push!(lines, "    const importObject = { Math: { pow: Math.pow }, io: { write_string(){}, write_int(){}, write_float(){}, write_bool(){}, write_newline(){}, write_nothing(){} } };")
+    push!(lines, "    const wasmModule = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });")
     push!(lines, "    const e = wasmModule.instance.exports;")
 
     # Marshal each argument
