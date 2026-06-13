@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.8](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.7...v0.3.8) (2026-06-13)
+
+
+### Features
+
+* make trim collection the default discovery ([be7ecd4](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/be7ecd41986f7db0fba67e2f714621af6bb50346))
+
 ## [0.3.7](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.6...v0.3.7) (2026-06-12)
 
 
