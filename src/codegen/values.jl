@@ -245,6 +245,9 @@ end
 """
 Compile a value reference (SSA, Argument, or Literal).
 """
+# object-identity stack for struct-constant compilation (cycle/depth guard)
+const _VALUE_COMPILE_STACK = Vector{Any}()
+
 function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
     bytes = UInt8[]
 
@@ -999,6 +1002,24 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         # Struct constant - create it with struct.new
         T = typeof(val)
 
+        # 1f6e77980994 family: struct CONSTANTS with cyclic/unboundedly deep
+        # object graphs (Luxor/Karnak/Graphs values captured in Makie figures)
+        # recursed compile_value to a StackOverflow. Guard by object identity
+        # AND depth; refuse with a NAMED error so pipelines degrade honestly.
+        if any(x -> x === val, _VALUE_COMPILE_STACK)
+            throw(WasmCompileError(WasmDiagnostic(:unsupported_type, string(nameof(T)),
+                "cyclic struct constant of type $(T) (object graph references itself)",
+                nothing, nothing)))
+        end
+        if length(_VALUE_COMPILE_STACK) > 200
+            _tail = join((string(nameof(typeof(x))) for x in _VALUE_COMPILE_STACK[end-7:end]), " → ")
+            throw(WasmCompileError(WasmDiagnostic(:unsupported_type, string(nameof(T)),
+                "struct constant nesting exceeded depth 200 (… → $(_tail) → $(T))",
+                nothing, nothing)))
+        end
+        push!(_VALUE_COMPILE_STACK, val)
+        try
+
         # Ensure struct type is registered and get its type index
         info = register_struct_type!(ctx.mod, ctx.type_registry, T)
         type_idx = info.wasm_type_idx
@@ -1221,6 +1242,9 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_NEW)
         append!(bytes, encode_leb128_unsigned(type_idx))
+        finally
+            pop!(_VALUE_COMPILE_STACK)
+        end
     end
 
     return bytes

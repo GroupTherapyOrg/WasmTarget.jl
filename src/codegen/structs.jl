@@ -143,9 +143,40 @@ end
 """
 Register a Julia struct type in the Wasm module.
 """
+# Cycle guard for register_struct_type!: the haskey fast-path only helps AFTER
+# a registration completes, so mutually/self-recursive struct types (Luxor/
+# Karnak/Graphs object graphs inside Makie figures) recursed to StackOverflow.
+# WasmGC rec-groups could support these properly (future); until then, refuse
+# with a NAMED error so pipelines degrade honestly instead of crashing.
+const _STRUCT_REG_STACK = Vector{DataType}()
+
 function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataType)
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
+
+    if T in _STRUCT_REG_STACK
+        throw(WasmCompileError(WasmDiagnostic(:unsupported_type, string(nameof(T)),
+            "recursive struct type $(T) (registration cycle: $(join(_STRUCT_REG_STACK, " → ")) → $(T)); WasmGC rec-group support not implemented",
+            nothing, nothing)))
+    end
+    if length(_STRUCT_REG_STACK) > 120
+        # not a cycle — unbounded DESCENT through ever-new parametric types
+        # (each nesting level mints a fresh type, so the cycle check never
+        # fires). Name the tail of the chain so the growth pattern is visible.
+        tail = join((string(nameof(t)) for t in _STRUCT_REG_STACK[end-7:end]), " → ")
+        throw(WasmCompileError(WasmDiagnostic(:unsupported_type, string(nameof(T)),
+            "struct type registration exceeded depth 120 (type-descent, last: … → $(tail) → $(T))",
+            nothing, nothing)))
+    end
+    push!(_STRUCT_REG_STACK, T)
+    try
+        return _register_struct_type_inner!(mod, registry, T)
+    finally
+        pop!(_STRUCT_REG_STACK)
+    end
+end
+
+function _register_struct_type_inner!(mod::WasmModule, registry::TypeRegistry, T::DataType)
 
     # PURE-049: MemoryRef/Memory should NOT be registered as struct types.
     # They map to array types in WasmGC. Guard against callers that use
