@@ -35,10 +35,12 @@
              `optimize=true` runs `wasm-opt` for an ~80–90% size reduction (requires Binaryen)."
         ),
         api_entry(
-            "compile_multi(functions::Vector; optimize=false, ...)",
+            "compile_multi(functions::Vector; optimize=false, discovery=:trim, ...)",
             "Compile multiple `(f, arg_types[, name])` entries into one module. Functions in the same call share the WasmGC \
              type space and can call each other directly — this is the entry point for vector-bridge patterns and any \
-             multi-function island."
+             multi-function island. Callee discovery defaults to `:trim` — the upstream closed-world collection \
+             (`Compiler.typeinf_ext_toplevel`, the same machinery behind `juliac --trim`) walks every reachable invoke in \
+             one consistent inference world. Pass `discovery=:legacy` for the previous curated-whitelist walker."
         ),
         api_entry(
             "compile_from_codeinfo(code_info::Core.CodeInfo, return_type::Type, ...)",
