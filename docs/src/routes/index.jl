@@ -32,9 +32,9 @@
             H2(:class => "text-2xl font-serif font-semibold text-warm-900 dark:text-warm-100", "How It Works"),
             P(:class => "text-warm-600 dark:text-warm-400 leading-relaxed",
                 "Julia's compiler does the heavy lifting — parsing, macro expansion, type inference, optimization. ",
-                "WasmTarget gets the fully type-inferred IR via ",
-                Code(:class => "text-accent-500 font-mono", "Base.code_typed()"),
-                " and translates it to WasmGC bytecode."
+                "WasmTarget collects the closed world of your entry points with the same machinery that powers ",
+                Code(:class => "text-accent-500 font-mono", "juliac --trim"),
+                " upstream, then translates each function's fully type-inferred IR to WasmGC bytecode."
             ),
             Pre(:class => "bg-warm-900 dark:bg-warm-950 text-warm-200 p-6 rounded-lg overflow-x-auto border border-warm-800",
                 Code(:class => "language-text text-sm font-mono",
@@ -68,10 +68,10 @@ write("sin.wasm", bytes)""")
                 Div(:class => "w-10 h-10 rounded-lg bg-accent-100 dark:bg-accent-900/50 flex items-center justify-center mb-4",
                     RawHtml("""<svg class="w-5 h-5 text-accent-600 dark:text-accent-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>""")
                 ),
-                H3(:class => "font-semibold mb-2 text-warm-900 dark:text-warm-100", "176 functions, 2409 tests"),
+                H3(:class => "font-semibold mb-2 text-warm-900 dark:text-warm-100", "2,500+ tests per Julia version"),
                 P(:class => "text-warm-600 dark:text-warm-400 text-sm leading-relaxed",
-                    "127 native paths (real Base IR), 48 overlay reimplementations, 1 blocked. ",
-                    "Verified across Int32 / Int64 / UInt32 / UInt64 / Float32 / Float64.")
+                    "Run against 1.12 and 1.13. A 588-entry differential-fuzz coverage matrix all passes, ",
+                    "plus Statistics / Dates / Random stdlib extensions verified bit-exact vs native.")
             ),
             Div(:class => "border border-warm-200 dark:border-warm-800 rounded-lg p-6 bg-warm-100/50 dark:bg-warm-900/50",
                 Div(:class => "w-10 h-10 rounded-lg bg-accent-secondary-100 dark:bg-accent-secondary-900/50 flex items-center justify-center mb-4",

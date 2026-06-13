@@ -18,9 +18,11 @@
     PageWithTOC(sections, Div(:class => "space-y-10",
         H1(:class => "text-3xl font-serif font-bold text-warm-900 dark:text-warm-100", "Manual"),
         P(:class => "text-warm-600 dark:text-warm-400",
-            "WasmTarget.jl reads fully-inferred IR from ",
-            Code(:class => code_inline, "Base.code_typed()"),
-            " and translates each concrete Julia type to its WASM counterpart. ",
+            "WasmTarget.jl collects the closed world of your entry points with the upstream trim machinery (",
+            Code(:class => code_inline, "Compiler.typeinf_ext_toplevel"),
+            ", the same collection behind ",
+            Code(:class => code_inline, "juliac --trim"),
+            "), then translates each function's fully-inferred IR — and each concrete Julia type — to its WASM counterpart. ",
             "This page covers type mappings, control flow, the supported math + collections surfaces, and JS interop."),
 
         # ─────────────────────────── Type Mappings ───────────────────────────

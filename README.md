@@ -24,11 +24,11 @@ Julia source → Julia compiler (parse, lower, infer) → Fully typed IR → Was
 
 Julia's compiler does the hard work — parsing, macro expansion, type inference, optimization. WasmTarget gets fully type-inferred IR and translates it. A function reaches Wasm through one of three paths:
 
-1. **Direct compilation (the default).** The function's own typed IR — arithmetic, control flow, loops, structs, tuples, closures, try/catch — translates statement-by-statement to Wasm instructions. This is how *your* code compiles, and how most of Base compiles too, because Julia inlines aggressively: a call like `sum(v)` usually arrives already flattened into plain loops inside the caller's IR.
+1. **Direct compilation.** The function's own typed IR — arithmetic, control flow, loops, structs, tuples, closures, try/catch — translates statement-by-statement to Wasm instructions. This is how *your* code compiles, and how most of Base compiles too, because Julia inlines aggressively: a call like `sum(v)` usually arrives already flattened into plain loops inside the caller's IR.
 
-2. **Auto-discovered callees.** When a Base call is too large to inline, it stays in the IR as a real `:invoke`. WasmTarget walks these, compiles each callee as its own Wasm function from *its* typed IR, and links the calls — recursively. A curated whitelist controls which Base internals are eligible (Dict hashing, sorting internals, checked arithmetic, string search, integer parsing, …), so a single `Dict(k => v)` in your code transparently pulls in and compiles the real `ht_keyindex2_shorthash!` from Base.
+2. **Closed-world trim collection (the default discovery).** WasmTarget feeds your entry points to the *same* closed-world collection machinery that powers `juliac --trim` upstream (`Compiler.typeinf_ext_toplevel` / `CompilationQueue` — see [JuliaLang/julia#62087](https://github.com/JuliaLang/julia/issues/62087), where this strategy is laid out). The compiler walks every reachable `:invoke` in a single consistent inference world and hands back `(CodeInstance, CodeInfo)` pairs for the whole call graph; WasmTarget compiles each one as its own Wasm function and links the calls. Nothing is hand-curated: `Statistics.quantile`, `sort!` internals, Dict hashing, string search — the entire reachable world is collected the way the compiler itself sees it. The previous curated-whitelist discovery remains available via `compile_multi(...; discovery=:legacy)`.
 
-3. **Method overlays (~100 methods).** For Base methods whose real implementation can't translate — they reach into GC internals, `ccall` into libjulia/libc, use pointer arithmetic, or rely on lookup tables WasmGC can't address — WasmTarget ships replacement implementations via Julia's [`OverlayMethodTable`](https://github.com/JuliaGPU/GPUCompiler.jl), the same mechanism CUDA.jl and AMDGPU.jl use. Overlays are resolved during inference, so codegen never sees the original. They are *semantically faithful* substitutes, e.g. `Base.Math.pow_body` is re-implemented as the same compensated power-by-squaring algorithm (bit-identical results), and `reinterpret` becomes a direct `Core.bitcast`.
+3. **Method overlays (~100 methods).** For Base methods whose real implementation can't translate — they reach into GC internals, `ccall` into libjulia/libc, use pointer arithmetic, or rely on lookup tables WasmGC can't address — WasmTarget ships replacement implementations via Julia's [`OverlayMethodTable`](https://github.com/JuliaGPU/GPUCompiler.jl), the same mechanism CUDA.jl and AMDGPU.jl use. Overlays are resolved *during inference* — including inside the trim collection — so codegen never sees the original. They are *semantically faithful* substitutes, e.g. `Base.Math.pow_body` is re-implemented as the same compensated power-by-squaring algorithm (bit-identical results), and `reinterpret` becomes a direct `Core.bitcast`.
 
 Where overlays currently live, by area:
 
@@ -91,7 +91,19 @@ Coverage is tracked by a **differential fuzzer**, not a hand-maintained list. Th
 | Iterators | `collect`, `enumerate`, `zip`, `pairs`, `Iterators.take`/`drop`/`filter`/`map`/`flatten`, ranges |
 | Control flow | nested if/else, while loops with accumulators, try/catch/finally (including nested chains), early returns, closures over all of the above |
 
-Every signature's status lives in [`test/fuzz/COVERAGE.md`](test/fuzz/COVERAGE.md), regenerated from fuzzing runs: an entry is `pass` only when it appears in at least one randomly-generated program whose Wasm output **matched native Julia exactly** — value, thrown-ness, and argument mutations. Current matrix: **588 of 589 entries pass** (the remainder unsampled in the last run, not failing), with **0 known divergences** and 179 fixed-divergence postmortems in [`test/fuzz/failures/`](test/fuzz/failures/).
+Every signature's status lives in [`test/fuzz/COVERAGE.md`](test/fuzz/COVERAGE.md), regenerated from fuzzing runs: an entry is `pass` only when it appears in at least one randomly-generated program whose Wasm output **matched native Julia exactly** — value, thrown-ness, and argument mutations. Current matrix: **all 588 entries pass**, with **0 known divergences** and 240+ fixed-divergence postmortems in [`test/fuzz/failures/`](test/fuzz/failures/). A bounded `discovery_differential()` additionally cross-checks the trim and legacy pipelines against each other on generated programs.
+
+## Standard Library Integrations
+
+Stdlib support ships as zero-dependency [package extensions](https://pkgdocs.julialang.org/v1/creating-packages/#Conditional-loading-of-code-in-packages-(Extensions)) (weakdeps) — loading the stdlib activates the extension, nothing is required otherwise:
+
+| Stdlib | Status | Notes |
+|:-------|:-------|:------|
+| `Statistics` | `mean`, `var`, `std`, `cor`, `middle`, `median`, `quantile` | bit-exact vs native, both Julia versions |
+| `Dates` | construction, arithmetic, accessors, `string(::Date)`/`(::DateTime)` rendering | `Dates.format` pending |
+| `Random` | seeded `Xoshiro`: `rand` (Int/Float/Bool/ranges), `randn`, stream advancement | identical streams vs native on 1.12; 1.13 pending one IR-shape item |
+
+These passed largely *because of* the trim collection — e.g. `quantile` (which needs `sort!` internals, kwarg bodies, and `Core.kwcall`) compiles with zero special-casing.
 
 ## Language Features
 
@@ -161,6 +173,15 @@ compile(f, (T,); strict=false)   # permissive: emit runtime-trap stubs
 **`validate=true` (default).** Every compiled module is checked with
 `wasm-tools validate`; a reject raises `WasmValidationError` rather than handing
 back malformed bytes.
+
+**`discovery=:trim` (default).** Callee discovery uses the upstream closed-world
+trim collection; pass `discovery=:legacy` for the previous curated-whitelist
+walker. Because the trim collection compiles the *full* reachable world
+(including print/show paths), emitted modules may import the standardized
+`wasm:js-string` builtins and a small `io` module — embedders should instantiate
+with `WebAssembly.instantiate(bytes, imports, { builtins: ['js-string'] })` and
+may stub the `io` functions (`write_string`, `write_int`, `write_float`,
+`write_bool`, `write_newline`, `write_nothing`).
 
 **Differential fuzzing.** `test/fuzz/` generates *well-typed* random compositions of
 Base functions — expressions, statements, loops, try/catch, closures, structs — and
