@@ -31,7 +31,7 @@ immutable args) — or `:unsupported` / `(:compile_error => e)` / `:no_node`.
 """
 function bridge_run_args(fn, argtypes::Tuple, inputs::Vector; rettype::Type,
                          strict::Bool = true, timeout::Real = DEFAULT_TIMEOUT, opt = false,
-                         discovery::Symbol = :legacy)
+                         discovery::Symbol = :trim)
     NODE_OK || return :no_node
     rp = Bridge.descriptor(rettype)
     rp === nothing && return :unsupported

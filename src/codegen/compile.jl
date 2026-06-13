@@ -1412,7 +1412,7 @@ function compile_module(functions::Vector;
                         optimize_ir::Bool=true,
                         register_ir_types::Bool=false,
                         strict::Bool=true,
-                        discovery::Symbol=:legacy
+                        discovery::Symbol=:trim
                         )
     # P5-trim: discovery=:trim replaces the homegrown dependency walk +
     # AUTODISCOVER whitelist with the upstream closed-world collection

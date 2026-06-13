@@ -1934,6 +1934,10 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
             end
         end
         return StructRef
+    elseif T isa DataType && T.name.name === :CodeUnits && length(T.parameters) >= 1 && T.parameters[1] === UInt8
+        # P6-trim: CodeUnits{UInt8,String} ≡ the byte array (identity wrapper).
+        type_idx = get_string_array_type!(mod, registry)
+        return ConcreteRef(type_idx, true)
     elseif T isa DataType && (T.name.name === :MemoryRef || T.name.name === :GenericMemoryRef)
         # MemoryRef{T} / GenericMemoryRef maps to array type for element T
         # IMPORTANT: Check BEFORE AbstractArray since MemoryRef <: AbstractArray

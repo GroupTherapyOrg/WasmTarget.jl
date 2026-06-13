@@ -2363,6 +2363,25 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
 
             # BF-2000: repeat(String, Int64) → str_repeat
             if _name_early === :repeat && length(args) == 2
+                # P6-trim: repeat(::Char, n) — the pad path inside the real Base
+                # lpad/rpad bodies (now trim-compiled). Char is UTF-8 left-packed
+                # in UInt32 (' ' = 0x20000000): byte = char >> 24, then a
+                # byte-filled array.new (same single-byte assumption as str_lpad).
+                local _rep_at = try infer_value_type(args[1], ctx) catch; nothing end
+                if _rep_at === Char
+                    bytes = UInt8[]
+                    str_t = get_string_array_type!(ctx.mod, ctx.type_registry)
+                    append!(bytes, compile_value(args[1], ctx))   # char i32 (left-packed)
+                    push!(bytes, Opcode.I32_CONST)
+                    append!(bytes, encode_leb128_signed(24))
+                    push!(bytes, Opcode.I32_SHR_U)                # utf8 byte
+                    append!(bytes, compile_value(args[2], ctx))   # count i64
+                    push!(bytes, Opcode.I32_WRAP_I64)
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.ARRAY_NEW)                # fill (value, len)
+                    append!(bytes, encode_leb128_unsigned(str_t))
+                    return bytes
+                end
                 return _compile_invoke_str_repeat([args[1], args[2]], ctx)
             end
 
@@ -2452,6 +2471,25 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
             push!(bytes, UInt8(AnyRef))
         else
             arg_bytes = compile_value(arg, ctx)
+            # P6-ioprint: function/type singleton args compile to EMPTY bytes, but
+            # trim-collected callees keep the param in their wasm signature (legacy
+            # discovery skipped such functions entirely, so this never fired before).
+            # Push ref.null of the param's wasm type to keep the call aligned.
+            if isempty(arg_bytes) && param_types !== nothing && arg_idx <= length(param_types)
+                local _sp_jt = try infer_value_type(arg, ctx) catch; nothing end
+                if _sp_jt isa DataType && Base.issingletontype(_sp_jt)
+                    local _sp_pt = param_types[arg_idx]
+                    local _sp_w = get_concrete_wasm_type(_sp_pt isa Type ? _sp_pt : _sp_jt,
+                                                         ctx.mod, ctx.type_registry)
+                    if _sp_w isa ConcreteRef
+                        push!(bytes, Opcode.REF_NULL)
+                        append!(bytes, encode_leb128_signed(Int64(_sp_w.type_idx)))
+                    elseif _sp_w === AnyRef || _sp_w === StructRef || _sp_w === ExternRef || _sp_w === EqRef
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, UInt8(_sp_w))
+                    end
+                end
+            end
             append!(bytes, arg_bytes)
             # Check if argument's actual Wasm type matches expected param type
             # If both are ConcreteRef but with different type indices, insert ref.cast
@@ -4105,6 +4143,14 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
             # PURE-9040: println/print → JS IO bridge imports
             elseif name === :println || name === :print
                 bytes = _compile_invoke_print(name, args, ctx)
+                # print returns `nothing`; the io imports are void. If this SSA
+                # has a local (the nothing value is USED downstream — common in
+                # trim-collected show machinery), push its representation so the
+                # statement wrapper's local.set has a value to consume.
+                if haskey(ctx.ssa_locals, idx)
+                    push!(bytes, Opcode.REF_NULL)
+                    push!(bytes, 0x6E)  # any
+                end
 
             # PURE-9041: show(x) → IO bridge imports (like print, no newline)
             # show(42) displays "42", show(true) displays "true", show(nothing) displays "nothing"
@@ -4169,6 +4215,12 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         else
                             @debug "show: unsupported argument type $arg_type, skipping"
                         end
+                    end
+                    # show returns `nothing`; io imports are void — same contract
+                    # as the print handler above.
+                    if haskey(ctx.ssa_locals, idx)
+                        push!(bytes, Opcode.REF_NULL)
+                        push!(bytes, 0x6E)  # any
                     end
                 else
                     bytes = UInt8[]

@@ -404,6 +404,12 @@ function julia_to_wasm_type_concrete(T, ctx::AbstractCompilationContext)::WasmVa
         # Strings and Symbols are WasmGC arrays of bytes (not structs)
         type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
         return ConcreteRef(type_idx, true)
+    elseif T isa DataType && T.name.name === :CodeUnits && length(T.parameters) >= 1 && T.parameters[1] === UInt8
+        # P6-trim: CodeUnits{UInt8,String} is an identity wrapper over the byte
+        # array (same contract as Memory) — trim-collected string internals
+        # (_searchindex et al.) construct and consume it directly.
+        type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+        return ConcreteRef(type_idx, true)
     elseif T isa DataType && (T.name.name === :MemoryRef || T.name.name === :GenericMemoryRef)
         # MemoryRef{T} maps to array type for element T
         elem_type = T.name.name === :GenericMemoryRef ? T.parameters[2] : T.parameters[1]
@@ -2218,13 +2224,16 @@ function statement_produces_wasm_value(stmt::Expr, idx::Int, ctx::AbstractCompil
     # so this function must return false to prevent spurious DROP on empty stack.
     if stmt.head === :call && length(stmt.args) >= 1
         _f = stmt.args[1]
-        if _f isa GlobalRef && _f.name === :memoryrefset!
+        # P6-ioprint: the function position may be a literal function object
+        # (trim-collected consistent-world IR) rather than a GlobalRef.
+        _fname = _f isa GlobalRef ? _f.name : (_f isa Function ? nameof(_f) : nothing)
+        if _fname === :memoryrefset!
             return false
         end
         # PURE-9065: Nothing-typed multi-arg memoryrefnew produces empty bytes
         # when unused (skipped by PURE-9065 in compile_call). Return false to
         # prevent flow.jl from adding a spurious DROP on empty stack.
-        if _f isa GlobalRef && _f.name === :memoryrefnew && length(stmt.args) >= 4
+        if _fname === :memoryrefnew && length(stmt.args) >= 4
             _mr_type = get(ctx.ssa_types, idx, Any)
             if _mr_type isa DataType && (
                 (_mr_type.name.name === :MemoryRef && length(_mr_type.parameters) >= 1 && _mr_type.parameters[1] === Nothing) ||

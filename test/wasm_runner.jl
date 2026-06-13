@@ -217,7 +217,8 @@ function run_wasm_single(bytes::Vector{UInt8}, fname::AbstractString, js_args::A
     src = """
     $_ENC_JS
     $import_js
-    const { instance } = await WebAssembly.instantiate(bytes, importObject);
+    if (!importObject.io) importObject.io = { write_string(){}, write_int(){}, write_float(){}, write_bool(){}, write_newline(){}, write_nothing(){} };
+    const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
     const f = instance.exports['$fname'];
     if (typeof f !== 'function') return [{ trap: 'export not a function: $fname' }];
     try { return [{ ok: JSON.parse(JSON.stringify(f($js_args), enc)) }]; }

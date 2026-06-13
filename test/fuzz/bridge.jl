@@ -34,7 +34,7 @@ if `rettype` is outside the bridge universe, or `(:compile_error => e)` /
 """
 function bridge_run(fn, argtypes::Tuple, inputs::Vector; rettype::Type,
                     strict::Bool = true, timeout::Real = DEFAULT_TIMEOUT, opt = false,
-                    discovery::Symbol = :legacy)
+                    discovery::Symbol = :trim)
     NODE_OK || return :no_node
     dp = descriptor(rettype)
     dp === nothing && return :unsupported

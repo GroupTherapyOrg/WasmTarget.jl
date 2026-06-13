@@ -2767,6 +2767,18 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 return bytes
             end
 
+            # P6-trim: CodeUnits{UInt8,String} is an identity wrapper over the
+            # byte array — getfield(cu, :s) is the array itself. Must run BEFORE
+            # the generic struct_get path (CodeUnits is no longer a struct).
+            if obj_type isa DataType && obj_type.name.name === :CodeUnits &&
+               length(obj_type.parameters) >= 1 && obj_type.parameters[1] === UInt8
+                local _cu_field0 = field_ref isa QuoteNode ? field_ref.value : field_ref
+                if _cu_field0 === :s
+                    append!(bytes, compile_value(obj_arg, ctx))
+                    return bytes
+                end
+            end
+
             # PURE-325: AbstractArray subtypes that are pure structs (e.g., UnitRange)
             # have named fields like :start, :stop — handle via struct_get
             if isconcretetype(obj_type) && isstructtype(obj_type)

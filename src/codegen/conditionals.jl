@@ -171,7 +171,7 @@ function generate_linear_flow(ctx::AbstractCompilationContext, blocks::Vector{Ba
                     stmt_type = get(ctx.ssa_types, i, Any)
                     if stmt_type !== Nothing
                         is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
-                        if !is_nothing_union
+                        if !is_nothing_union && statement_produces_wasm_value(stmt, i, ctx)
                             if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                                 use_count = get(ssa_use_count, i, 0)
                                 if use_count == 0
@@ -516,7 +516,7 @@ function generate_void_flow(ctx::AbstractCompilationContext, blocks::Vector{Basi
                             stmt_type = get(ctx.ssa_types, j, Nothing)
                             if stmt_type !== Nothing  # Only skip if type is definitely Nothing
                                 is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
-                                if !is_nothing_union
+                                if !is_nothing_union && statement_produces_wasm_value(inner, j, ctx)
                                     if !haskey(ctx.ssa_locals, j) && !haskey(ctx.phi_locals, j)
                                         use_count = get(ssa_use_count, j, 0)
                                         if use_count == 0
@@ -568,7 +568,7 @@ function generate_void_flow(ctx::AbstractCompilationContext, blocks::Vector{Basi
             stmt_type = get(ctx.ssa_types, i, Nothing)
             if stmt_type !== Nothing  # Only skip if type is definitely Nothing
                 is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
-                if !is_nothing_union
+                if !is_nothing_union && statement_produces_wasm_value(stmt, i, ctx)
                     if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                         use_count = get(ssa_use_count, i, 0)
                         if use_count == 0
@@ -986,7 +986,7 @@ function generate_and_pattern(ctx::AbstractCompilationContext, blocks, code, con
                 stmt_type = get(ctx.ssa_types, j, Any)
                 if stmt_type !== Nothing
                     is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
-                    if !is_nothing_union
+                    if !is_nothing_union && statement_produces_wasm_value(stmt, j, ctx)
                         if !haskey(ctx.ssa_locals, j) && !haskey(ctx.phi_locals, j)
                             use_count = get(ssa_use_count, j, 0)
                             if use_count == 0
@@ -1036,7 +1036,7 @@ function generate_and_pattern(ctx::AbstractCompilationContext, blocks, code, con
                 stmt_type = get(ctx.ssa_types, i, Any)
                 if stmt_type !== Nothing
                     is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
-                    if !is_nothing_union
+                    if !is_nothing_union && statement_produces_wasm_value(stmt, i, ctx)
                         if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                             use_count = get(ssa_use_count, i, 0)
                             if use_count == 0
@@ -1171,7 +1171,7 @@ function generate_and_pattern(ctx::AbstractCompilationContext, blocks, code, con
                     stmt_type = get(ctx.ssa_types, i, Any)
                     if stmt_type !== Nothing
                         is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
-                        if !is_nothing_union
+                        if !is_nothing_union && statement_produces_wasm_value(stmt, i, ctx)
                             if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                                 use_count = get(ssa_use_count, i, 0)
                                 if use_count == 0
@@ -1328,7 +1328,7 @@ function generate_switch_pattern(ctx::AbstractCompilationContext, blocks, code, 
                 stmt_type = get(ctx.ssa_types, i, Any)
                 if stmt_type !== Nothing
                     is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
-                    if !is_nothing_union
+                    if !is_nothing_union && statement_produces_wasm_value(stmt, i, ctx)
                         if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                             use_count = get(ssa_use_count, i, 0)
                             if use_count == 0
@@ -1382,7 +1382,7 @@ function generate_switch_pattern(ctx::AbstractCompilationContext, blocks, code, 
                         stmt_type = get(ctx.ssa_types, i, Any)
                         if stmt_type !== Nothing
                             is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
-                            if !is_nothing_union
+                            if !is_nothing_union && statement_produces_wasm_value(stmt, i, ctx)
                                 if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                                     use_count = get(ssa_use_count, i, 0)
                                     if use_count == 0
@@ -1412,7 +1412,7 @@ function generate_switch_pattern(ctx::AbstractCompilationContext, blocks, code, 
                     stmt_type = get(ctx.ssa_types, i, Any)
                     if stmt_type !== Nothing
                         is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
-                        if !is_nothing_union
+                        if !is_nothing_union && statement_produces_wasm_value(stmt, i, ctx)
                             if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                                 use_count = get(ssa_use_count, i, 0)
                                 if use_count == 0
@@ -1461,7 +1461,7 @@ function generate_switch_pattern(ctx::AbstractCompilationContext, blocks, code, 
                     stmt_type = get(ctx.ssa_types, i, Any)
                     if stmt_type !== Nothing
                         is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
-                        if !is_nothing_union
+                        if !is_nothing_union && statement_produces_wasm_value(stmt, i, ctx)
                             if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                                 use_count = get(ssa_use_count, i, 0)
                                 if use_count == 0
@@ -1912,7 +1912,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                     stmt_type = get(ctx.ssa_types, i, Any)
                     if stmt_type !== Nothing && stmt_type !== Union{}
                         is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
-                        if !is_nothing_union
+                        if !is_nothing_union && statement_produces_wasm_value(stmt, i, ctx)
                             if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                                 use_count = get(ssa_use_count, i, 0)
                                 if use_count == 0
@@ -2036,7 +2036,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                             stmt_type = get(ctx.ssa_types, i, Any)
                             if stmt_type !== Nothing && stmt_type !== Union{}
                                 is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
-                                if !is_nothing_union
+                                if !is_nothing_union && statement_produces_wasm_value(stmt, i, ctx)
                                     if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                                         use_count = get(ssa_use_count, i, 0)
                                         if use_count == 0
@@ -2119,7 +2119,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                         stmt_type = get(ctx.ssa_types, i, Any)
                         if stmt_type !== Nothing && stmt_type !== Union{}
                             is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
-                            if !is_nothing_union
+                            if !is_nothing_union && statement_produces_wasm_value(stmt, i, ctx)
                                 if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                                     use_count = get(ssa_use_count, i, 0)
                                     if use_count == 0
@@ -2143,7 +2143,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                 stmt_type = get(ctx.ssa_types, i, Any)
                 if stmt_type !== Nothing
                     is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
-                    if !is_nothing_union
+                    if !is_nothing_union && statement_produces_wasm_value(stmt, i, ctx)
                         if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                             use_count = get(ssa_use_count, i, 0)
                             if use_count == 0
@@ -3021,7 +3021,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                             stmt_type = get(ctx.ssa_types, i, Any)
                             if stmt_type !== Nothing
                                 is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
-                                if !is_nothing_union
+                                if !is_nothing_union && statement_produces_wasm_value(stmt, i, ctx)
                                     if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                                         use_count = get(ssa_use_count, i, 0)
                                         if use_count == 0
@@ -3127,7 +3127,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                 stmt_type = get(ctx.ssa_types, i, Any)
                                 if stmt_type !== Nothing
                                     is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
-                                    if !is_nothing_union
+                                    if !is_nothing_union && statement_produces_wasm_value(stmt, i, ctx)
                                         if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                                             use_count = get(ssa_use_count, i, 0)
                                             if use_count == 0
@@ -3187,7 +3187,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                         stmt_type = get(ctx.ssa_types, i, Any)
                         if stmt_type !== Nothing
                             is_nothing_union = stmt_type isa Union && Nothing in Base.uniontypes(stmt_type)
-                            if !is_nothing_union
+                            if !is_nothing_union && statement_produces_wasm_value(stmt, i, ctx)
                                 if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                                     use_count = get(ssa_use_count, i, 0)
                                     if use_count == 0

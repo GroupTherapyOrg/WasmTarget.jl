@@ -991,12 +991,55 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
 
     elseif typeof(val) isa DataType && typeof(val).name.name in (:MemoryRef, :GenericMemoryRef, :Memory, :GenericMemory)
         # PURE-049: MemoryRef/Memory constants map to array types, not struct types.
-        # These appear as captured closure fields. Emit ref.null of the array type.
+        # P6-ioprint: materialize the contents (the old ref.null emission silently
+        # dropped them — Base's constant IdSet/show tables arrived empty). Large
+        # memories fall back to null to avoid bytecode blowup.
         T = typeof(val)
         elem_type = T.name.name in (:GenericMemoryRef, :GenericMemory) ? T.parameters[2] : T.parameters[1]
         array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-        push!(bytes, Opcode.REF_NULL)
-        append!(bytes, encode_leb128_signed(Int64(array_type_idx)))
+        mem = T.name.name in (:MemoryRef, :GenericMemoryRef) ? getfield(val, :mem) : val
+        n_mem = length(mem)
+        if n_mem == 0 || n_mem > 4096
+            n_mem > 4096 && @debug "Memory constant too large to materialize ($n_mem elements) — emitting null" T
+            push!(bytes, Opcode.REF_NULL)
+            append!(bytes, encode_leb128_signed(Int64(array_type_idx)))
+        else
+            arr_type_def = ctx.mod.types[array_type_idx + 1]
+            for i in 1:n_mem
+                el_bytes = UInt8[]
+                defined = isassigned(mem, i)
+                if defined
+                    el_bytes = compile_value(mem[i], ctx)
+                end
+                if !defined || isempty(el_bytes)
+                    # undef slot (or uncompilable element) — type-correct default
+                    empty!(el_bytes)
+                    evt = arr_type_def isa ArrayType ? arr_type_def.elem.valtype : nothing
+                    if evt === I32
+                        push!(el_bytes, Opcode.I32_CONST, 0x00)
+                    elseif evt === I64
+                        push!(el_bytes, Opcode.I64_CONST, 0x00)
+                    elseif evt === F32
+                        push!(el_bytes, Opcode.F32_CONST)
+                        append!(el_bytes, reinterpret(UInt8, [Float32(0)]))
+                    elseif evt === F64
+                        push!(el_bytes, Opcode.F64_CONST)
+                        append!(el_bytes, reinterpret(UInt8, [Float64(0)]))
+                    elseif evt isa ConcreteRef
+                        push!(el_bytes, Opcode.REF_NULL)
+                        append!(el_bytes, encode_leb128_signed(Int64(evt.type_idx)))
+                    else
+                        push!(el_bytes, Opcode.REF_NULL)
+                        push!(el_bytes, 0x6E)  # any
+                    end
+                end
+                append!(bytes, el_bytes)
+            end
+            push!(bytes, Opcode.GC_PREFIX)
+            push!(bytes, Opcode.ARRAY_NEW_FIXED)
+            append!(bytes, encode_leb128_unsigned(array_type_idx))
+            append!(bytes, encode_leb128_unsigned(n_mem))
+        end
 
     elseif isstructtype(typeof(val)) && !isa(val, Function) && !isa(val, Module)
         # Struct constant - create it with struct.new
@@ -1088,6 +1131,30 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
             end
             field_val = getfield(val, field_name)
             field_val_bytes = compile_value(field_val, ctx)
+            # P6-ioprint: Union-typed field (no Nothing variant) registered as a
+            # tagged-union box (typeId, tag, anyref) — wrap the concrete value.
+            # The constant's runtime type gives the exact tag.
+            local _cub_ft = fieldtype(T, fi)
+            if _cub_ft isa Union && !isempty(field_val_bytes)
+                local _cub_info = get(ctx.type_registry.unions, _cub_ft, nothing)
+                local _cub_wfi = fi + Int(info.field_offset)
+                if _cub_info !== nothing && struct_type_def isa StructType &&
+                   _cub_wfi <= length(struct_type_def.fields) &&
+                   (struct_type_def.fields[_cub_wfi].valtype isa ConcreteRef) &&
+                   Int(struct_type_def.fields[_cub_wfi].valtype.type_idx) == Int(_cub_info.wasm_type_idx) &&
+                   (has_ref_producing_gc_op(field_val_bytes) || field_val_bytes[1] == Opcode.REF_NULL)
+                    _cub_boxed = UInt8[]
+                    push!(_cub_boxed, Opcode.I32_CONST)
+                    append!(_cub_boxed, encode_leb128_signed(Int64(0)))   # typeId
+                    push!(_cub_boxed, Opcode.I32_CONST)
+                    append!(_cub_boxed, encode_leb128_signed(Int64(get(_cub_info.tag_map, typeof(field_val), Int32(0)))))
+                    append!(_cub_boxed, field_val_bytes)                   # value (ref ⊑ anyref)
+                    push!(_cub_boxed, Opcode.GC_PREFIX)
+                    push!(_cub_boxed, Opcode.STRUCT_NEW)
+                    append!(_cub_boxed, encode_leb128_unsigned(_cub_info.wasm_type_idx))
+                    field_val_bytes = _cub_boxed
+                end
+            end
             # TRUE-TI-001: If compile_value produced no bytes (e.g., Module, Function),
             # emit ref.null for the field's expected type
             if isempty(field_val_bytes)
