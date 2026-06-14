@@ -252,10 +252,17 @@ function emit_wrap_union_value(ctx, value_type::Type, union_type::Union)::Vector
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.REF_I31)
         elseif value_wasm_type === F32 || value_wasm_type === F64
-            # PURE-6024: Float in anyref field — drop value, emit ref.null any
+            # PURE-701d: Float member of a tagged union. The old code DROPPED the
+            # value and stored null — silent data loss for any Union{Float,...}.
+            # i31ref can't hold a float, so box it into a {typeId,value} numeric box
+            # (anyref-compatible); emit_unwrap_union_value's F64/F32 branch unboxes it.
+            # Reorder to box layout: drop the on-stack float, push typeId, reload, new.
             push!(bytes, Opcode.DROP)
-            push!(bytes, Opcode.REF_NULL)
-            push!(bytes, UInt8(AnyRef))
+            local box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, value_wasm_type)
+            push!(bytes, Opcode.I32_CONST); push!(bytes, 0x00)  # box typeId
+            push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(scratch_local))
+            push!(bytes, Opcode.GC_PREFIX, Opcode.STRUCT_NEW)
+            append!(bytes, encode_leb128_unsigned(box_idx))
         elseif value_wasm_type === ExternRef
             # ExternRef must be converted to anyref via any_convert_extern
             push!(bytes, Opcode.GC_PREFIX)
@@ -332,10 +339,19 @@ function emit_unwrap_union_value(ctx, union_type::Union, target_type::Type)::Vec
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.I31_GET_S)
         push!(bytes, Opcode.I64_EXTEND_I32_S)
-    elseif target_wasm_type === ExternRef
-        # PURE-6025: Convert anyref → externref via extern.convert_any.
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+    elseif target_wasm_type === F64 || target_wasm_type === F32
+        # PURE-701d: Float member of a tagged union. i31ref can't hold a float, so
+        # emit_wrap_union_value boxes it into a {typeId,value} numeric box; unbox
+        # symmetrically: anyref → (ref null $box) → struct.get value (field 1).
+        # (Without this branch NO cast was emitted — the raw anyref value field fed
+        # an f64 consumer and failed validation: Base.print_to_string reading a
+        # Union field narrowed to Float64, e.g. WasmMakie axis-tick formatting.)
+        box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, target_wasm_type)
+        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL)
+        append!(bytes, encode_leb128_signed(Int64(box_idx)))
+        push!(bytes, Opcode.GC_PREFIX, Opcode.STRUCT_GET)
+        append!(bytes, encode_leb128_unsigned(box_idx))
+        append!(bytes, encode_leb128_unsigned(1))  # field 1 = value (0=typeId)
     end
 
     return bytes

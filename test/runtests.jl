@@ -128,6 +128,16 @@ struct TestLine; p1::TestPoint2D; p2::TestPoint2D; end
 # (guards the _register_struct_type_impl! Int128/UInt128 field branch).
 struct _WTI128Box; x::Int128; n::Int64; end
 struct _WTU128Box; x::UInt128; n::Int64; end
+# WASMTARGET-FUZZ: tagged-union FLOAT members round-trip (wrap boxes the float into
+# a numeric box, unwrap unboxes it) — the old code DROPPED floats → silent data loss.
+_wt_uf(a::Int64)::Int64 = begin
+    x::Union{Float64,String} = a > 0 ? (Float64(a) + 0.5) : "neg"
+    x isa Float64 ? Int64(round(x * 2.0)) : Int64(-1)
+end
+_wt_uf32(a::Int64)::Int64 = begin
+    x::Union{Float32,Int64} = a > 0 ? Float32(a) * 1.5f0 : a
+    x isa Float32 ? Int64(round(x)) : Int64(-7)
+end
 # @generated must be top-level (illegal inside a phase function), so hoist it.
 @generated function f_gen(x)
     x <: Int64 ? :(x * Int64(2)) : :(x * 3.0)
@@ -7428,6 +7438,30 @@ console.log(JSON.stringify({
                 strict=true, validate=true, optimize=false); true)
             _mk_u128(a::Int64)::Int64 = _WTU128Box(UInt128(a), a).n
             @test (WasmTarget.compile_multi(Any[(_mk_u128, (Int64,), "_mk_u128")];
+                strict=true, validate=true, optimize=false); true)
+        end
+
+        @testset "Tagged-union Float member round-trip (WASMTARGET-FUZZ)" begin
+            # emit_wrap_union_value used to DROP a Float member and store null (silent
+            # data loss); emit_unwrap_union_value had no F64/F32 branch (validation
+            # failure: anyref value field → f64 consumer). Both now box/unbox the float
+            # via a {typeId,value} numeric box. Surfaced by Base.print_to_string's
+            # Union formatting state (WasmMakie canvas axis ticks).
+            @test compare_julia_wasm(_wt_uf, Int64(5)).pass     # Float64 member: 11
+            @test compare_julia_wasm(_wt_uf, Int64(-3)).pass    # String member: -1
+            @test compare_julia_wasm(_wt_uf32, Int64(4)).pass   # Float32 member: 6
+            @test compare_julia_wasm(_wt_uf32, Int64(-1)).pass  # Int64 member: -7
+        end
+
+        @testset "string(::Complex) compiles (typeinfo overlay, WASMTARGET-FUZZ)" begin
+            # structref-param fix + the nonnothing_nonmissing_typeinfo overlay make
+            # string(::Complex) emit a VALID module (was: struct.get on a structref
+            # `show` param, then a dead-value underflow in nonnothing_nonmissing_typeinfo).
+            # Validate-only: RUNNING needs the wasm:js-string builtin import (a harness
+            # limitation, present in PlutoIslands' runtime), but the module is well-formed.
+            # Closes the codegen half of gap cfd419793b0d (fractals "0.9 + 0.4im" label).
+            _wt_scplx(x::Int64)::Int64 = Int64(ncodeunits(string(complex(0.9, 0.4 + Float64(x)))))
+            @test (WasmTarget.compile_multi(Any[(_wt_scplx, (Int64,), "_wt_scplx")];
                 strict=true, validate=true, optimize=false); true)
         end
 

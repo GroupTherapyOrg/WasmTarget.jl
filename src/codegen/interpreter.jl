@@ -489,6 +489,24 @@ end
     Core.bitcast(Out, x)
 end
 
+# ─── show typeinfo overlay ────────────────────────────────────────────────
+# Why: `Base.nonnothing_nonmissing_typeinfo(io) =
+#      nonmissingtype(nonnothingtype(get(io,:typeinfo,Any)))` does RUNTIME type
+#      subtraction (typesplit over the type lattice), which the backend can't
+#      lower — it stubs to `unreachable` and the surrounding block underflows
+#      (`ref.is_null` with nothing on the stack: the dead-value/stackifier class).
+#      It's called from `print(io, ::Float64)` (func print_3), so the invalid
+#      body poisons the WHOLE module (WasmMakie canvas axis ticks; string(::Complex)
+#      hits the same func). For a plain IOBuffer — which is what the float/Complex
+#      formatting paths use — `get(io,:typeinfo,Any)` is `Any` and
+#      `nonmissingtype(nonnothingtype(Any)) === Any`, so returning `Any` is exact.
+#      (Only typeinfo-CONTEXT container display would differ; the PlutoIslands
+#      oracle byte-compares and degrades those rather than shipping them wrong.)
+#      Inference const-folds the result, so callers' typeinfo branches collapse.
+# Remove when: runtime type-subtraction (nonnothingtype/nonmissingtype) compiles,
+#      or the dead-value-across-block-boundary stackifier defect is fixed.
+@overlay WASM_METHOD_TABLE Base.nonnothing_nonmissing_typeinfo(io::IO) = Any
+
 # ─── Shift Overlays (deterministic dispatch) ──────────────────────────────
 # Why: under CC.OverlayMethodTable, `x << n` / `x >> n` with an Int64 amount
 #      resolves to a raw-intrinsic-bodied method instead of Base's guarded

@@ -203,15 +203,26 @@ the larger bucket and is *not* fuzzer-tractable.
      baseline 38/65 survey was on an OLDER WT where canvas still compiled.
      Int128 *arithmetic on a field value* is a SEPARATE op gap (Int128 `÷`/`%`
      trap/mis-validate) — not needed for canvas, which only stores the field.
-  2. **`print_to_string_1` f64/anyref — OPEN (next).** V8 rejects the figure at
-     instantiate: `print_to_string_1: local.set[0] expected f64, found struct.get
-     of anyref`. The axis-tick number-formatting path reads a Float64 from a struct
-     field typed `anyref` (boxed) without unboxing — a module-context-sensitive
-     type-precision/unbox bug (string(::Float64) works standalone; same print/
-     IOBuffer machinery area as the median/Printf notes). wasm-tools accepts it;
-     only V8 rejects, so WT's validate misses it. NEEDS a minimal module-context
-     repro before fixing.
-  Canvas won't ship until the rest of this chain clears; bug 1 of N done.
+  2. **tagged-union FLOAT member — FIXED.** `print_to_string_1` failed
+     `local.set expected f64, found struct.get of anyref`. Root: `emit_wrap_union_value`
+     DROPPED a Float member and stored null (silent data loss for ANY `Union{Float,…}`),
+     and `emit_unwrap_union_value` had no F64/F32 branch. Both now box/unbox the float via
+     a `{typeId,value}` numeric box (unions.jl). Verified Union{Float64,String} +
+     Union{Float32,Int64} round-trip; guarded by `@testset "Tagged-union Float member
+     round-trip"`. (Mixed `Union{Int64,Float64}` is a SEPARATE remaining issue — int uses
+     i31, float uses box, and the unwrapped-value local mistypes; was already broken.)
+  3. **`nonnothing_nonmissing_typeinfo` dead-value — FIXED via overlay.** Runtime type
+     subtraction (`nonmissingtype∘nonnothingtype`) can't lower → stubbed `unreachable` →
+     block underflow (the dead-value/stackifier class, shared with median/Printf). Overlaid
+     to `= Any` (exact for plain-IOBuffer float/Complex formatting; inference const-folds).
+     **This also closes the codegen half of `cfd419793b0d` — string(::Complex) now compiles
+     + validates.**
+  4. **`TwicePrecision` arith — OPEN (next).** func `$TwicePrecision`:
+     `i64.shr_s` with a `(ref null $type)` operand (ref-vs-i64 type confusion) — the
+     high-precision range/tick arithmetic. `expected i64, found (ref null $type)`.
+  Canvas won't ship until the rest of this chain clears; bugs 1–3 of N done, bug 4 open.
+  **Canvas is a LONG chain** (each fix exposes the next deep Base-machinery bug:
+  Int128 → union-float → typeinfo → TwicePrecision → …) — multi-fix effort.
 - **`string(::Complex{Float64})`** — gap **`cfd419793b0d`**, PARTIALLY progressed
   (2026-06-13 campaign). Reframed: `string(::Float64)`/Ryu now works standalone
   AND in module-context (the `19d59e9a61b3` unbalanced-control-frames defect is
