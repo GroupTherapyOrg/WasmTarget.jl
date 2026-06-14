@@ -2632,6 +2632,23 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                     # which expects anyref input and would fail on externref.
                     append!(bytes, field_bytes)
                     field_bytes = UInt8[]  # Already appended — prevent catch-all
+                elseif actual_field_wasm isa ConcreteRef && src_type !== nothing &&
+                       (src_type === StructRef || src_type === AnyRef || src_type === EqRef)
+                    # PURE-701b: field expects a CONCRETE struct ref but the source
+                    # local/param is abstract (structref/anyref/eqref). This hits
+                    # "numeric struct" types like RGB{N0f8}/Complex/Rational whose
+                    # params are typed `structref` by get_concrete_wasm_type (they are
+                    # `<: Number`, so is_struct_type returns false) while the struct
+                    # field is registered with the concrete type. Without a cast,
+                    # struct.new fails:
+                    #   struct.new[k] expected (ref null T), found local.get of type structref
+                    # ref.cast null $T narrows it (no-op when already T, traps otherwise),
+                    # mirroring emit_ref_cast_if_structref! on the struct.get side.
+                    append!(bytes, field_bytes)
+                    push!(bytes, Opcode.GC_PREFIX)
+                    push!(bytes, Opcode.REF_CAST_NULL)
+                    append!(bytes, encode_leb128_signed(Int64(actual_field_wasm.type_idx)))
+                    field_bytes = UInt8[]  # Already appended
                 end
             end
             # PURE-6025: Handle global.get sources (0x23) for externref field conversion.
@@ -2775,19 +2792,6 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
         # PURE-9024: n_provided counts Julia fields. typeId (field 0) was already pushed above.
         # Missing Wasm fields start after typeId offset + provided Julia fields.
         n_wasm_provided = n_provided + Int(info.field_offset)
-        # DEBUG: trace ALL struct_new emissions with 2 externref fields
-        # PURE-9024: typeId is now field[1], so 2 Julia externref fields means 3 total Wasm fields
-        if n_required == 3 && struct_type_def.fields[2].valtype === ExternRef && struct_type_def.fields[3].valtype === ExternRef
-            println("DEBUG_STRUCT_NEW_2EXTERN: struct_type=$struct_type type_idx=$(info.wasm_type_idx) n_provided=$n_provided bytes_len=$(length(bytes)) idx=$idx")
-            # Count how many ref_null extern (D0 6F) appear in the bytes
-            n_ref_nulls = 0
-            for bi in 1:(length(bytes)-1)
-                if bytes[bi] == 0xD0 && bytes[bi+1] == 0x6F
-                    n_ref_nulls += 1
-                end
-            end
-            println("  ref_null_extern_count=$n_ref_nulls stacktrace=$(join(string.(stacktrace()[1:min(8, end)]), " <- "))")
-        end
         for fi in (n_wasm_provided + 1):n_required
             missing_field_type = struct_type_def.fields[fi].valtype
             if missing_field_type isa ConcreteRef

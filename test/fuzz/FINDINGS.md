@@ -16,8 +16,11 @@ than the gap count:
 1. **Unicode `Char` tables (feature)** — `uppercase('é')` (`ff2542499cc2`),
    `isspace('é')` (`bc93362af34e`), `isdigit(uppercase('é'))` (`6bd3c602cf17`). Char
    case/category for codepoints ≥ 0x80 needs Unicode tables; ASCII works.
-2. **Float→string / Ryu (feature)** — `string(::Float64)` (`19d59e9a61b3`); needs
-   `Base.Ryu`. `string(::Int64)` works.
+2. **Float→string / Ryu** — `string(::Float64)` (`19d59e9a61b3`) — NOW WORKS
+   (2026-06-13 campaign re-check: `string(0.0/1.5/12345.678/-0.5/0.1)` all bit-exact
+   vs native, standalone AND with bridge accessors in-module). The old "writeshortest
+   unbalanced control frames in module-context" defect is gone. `19d59e9a61b3` itself is
+   marked fixed; leaving this list entry only as a historical pointer.
 3. **map-kernel-dependency codegen** — a *compiled* function mis-executes when pulled
    in as a `map` kernel: `length(::String)` (`3b005c4957f7`), `atan`/`asin` with a
    constant arg (`5511171c8055`), and `Dict`-in-kernel (`a771b83dda7c`, `f3829eae0fbb`).
@@ -38,6 +41,24 @@ runtime narrow-shift bug it resembles is **fixed** (see below).
 
 ## Fixed (verified-closed via the loop)
 
+- **structref-vs-concrete-ref type precision on `<: Number` structs (Pluto campaign,
+  2026-06-13)** — `Complex`, `Rational`, `RGB{N0f8}`/`N0f8` are `<: Number`, so
+  `is_struct_type` returns false and `get_concrete_wasm_type` types them as the abstract
+  `structref` wherever they appear as a function PARAM or bridge-ctor arg — while the
+  struct registry / field types use the concrete `(ref null $T)`. Two emission sites then
+  mismatched: (a) `struct.get $T` against a `structref` param (Base `show(::Complex)`
+  reads `z.re`/`z.im` — `func $show` param declared `structref`); (b) `struct.new $Outer`
+  with a `structref` field value (PI Bridge ctors `_mk_…RGB…N0f8`, fractals Complex
+  labels). Fixed with abstract→concrete `ref.cast null $T`: extended
+  `emit_ref_cast_if_structref!` (context.jl) to the `Core.Argument`/param case, and added
+  the matching ConcreteRef branch on the struct.new field path (statements.jl). The cast
+  is a no-op when the value is already `$T` and traps otherwise (sound). Verified:
+  `Bridge._make_ctor(RGB{N0f8})` + Base-only `Complex{Rational{Int64}}` ctor & field read
+  now validate; closes the **RGB{N0f8} struct.new** gap (FINDINGS Class 2) and the
+  type-precision half of **`cfd419793b0d`** (Complex display — its remaining show-machinery
+  dead-value bug stays open). Guarded by `@testset "Numeric-struct field struct.new/
+  struct.get (WASMTARGET-FUZZ)"`. Also removed a stray `DEBUG_STRUCT_NEW_2EXTERN` stdout
+  `println` left in `compile_new`.
 - **`sinh`/`cosh`/`tanh`(Float64) hyperbolic** — were value-stubs (no native
   codegen): `sinh(x)` emitted nothing on the stack, so `hypot(Inf, sinh(x))`
   failed wasm validation ("expected f64 but nothing on stack"). Implemented via
@@ -175,11 +196,15 @@ the larger bucket and is *not* fuzzer-tractable.
   target** (multiple groups). Repro needs the canvas compile path
   (`compile_module` + canvas2d imports); standalone minimization is TODO — the
   `_canvas_probe_fn` path in `PlutoIslands/src/compile.jl` is the entry.
-- **`string(::Complex{Float64})`** — recorded gap **`cfd419793b0d`**. Verified
-  exec_error; fractals' `0.9 + 0.4im` label. Downstream of the open Ryu gap
-  `19d59e9a61b3` (`string(::Float64)`) — auto-closes once Ryu + complex
-  `a+bim` formatting land. (Note: Complex *arithmetic*/iteration COMPILES and
-  runs bit-exact — verified — so only the DISPLAY is the gap.)
+- **`string(::Complex{Float64})`** — gap **`cfd419793b0d`**, PARTIALLY progressed
+  (2026-06-13 campaign). Reframed: `string(::Float64)`/Ryu now works standalone
+  AND in module-context (the `19d59e9a61b3` unbalanced-control-frames defect is
+  gone — verified), so this is NOT downstream of Ryu. It hid TWO bugs: (1) the
+  structref-vs-concrete type-precision bug — **FIXED** (see Fixed section); (2) a
+  show-machinery dead-value defect in `nonnothing_nonmissing_typeinfo` (`block`
+  stubbed to `unreachable` then `ref.is_null` on an empty stack) — **STILL OPEN**,
+  same class as median/Printf `format`. Gap stays open on (2). (Complex
+  *arithmetic*/iteration compiles + runs bit-exact — only DISPLAY is gated.)
 - **`compile_multi` array-vs-func type-index collision** — `func N failed to
   validate: expected array type at index 6, found (func (param (ref null (id 6))
   i32 i32) (result (ref extern)))`. When an assembled module contains BOTH an
@@ -193,13 +218,17 @@ the larger bucket and is *not* fuzzer-tractable.
   the conv1d module (func 8, offset 0x696).
 
 ### Class 2 — color-type codegen (needs ColorTypes/FixedPointNumbers in a fuzz env)
-- **`RGB{N0f8}` `struct.new` mismatch** — `struct.new[1] expected type
-  (ref null 30), found local.get of type structref` for
-  `_mk_ColorTypes_RGB_FixedPointNumbers_N0f8_`. Notebooks: fractals, conv2d,
-  images. `N0f8` (FixedPoint) wraps a `UInt8`; the generated constructor
-  mistypes the field ref. Needs ColorTypes+FixedPointNumbers in a color
-  sub-env to minimize. Related to `a9bf645b1003` (Matrix{NTuple{4,Float64}}
-  pixel access).
+- **`RGB{N0f8}` `struct.new` mismatch** — **FIXED (2026-06-13 campaign).**
+  `struct.new[1] expected type (ref null 30), found local.get of type structref`
+  for `_mk_ColorTypes_RGB_FixedPointNumbers_N0f8_`. Root: `N0f8`/`RGB` are
+  `<: Number` STRUCTS, so `is_struct_type` returns false and
+  `get_concrete_wasm_type` types the bridge-ctor params `structref` while the
+  struct field is the concrete N0f8 ref. Fixed with the abstract→concrete
+  `ref.cast` on the struct.new field path (statements.jl) — the same fix that
+  closed the Complex-param half. Reproduced+verified via
+  `Bridge._make_ctor(RGB{N0f8})` and the Base-only `Complex{Rational{Int64}}`
+  ctor; guarded by `@testset "Numeric-struct field struct.new/struct.get"`.
+  Still distinct: `a9bf645b1003` (Matrix{NTuple{4,Float64}} pixel access).
 
 ### Class 3 — library-internals coverage gaps (NOT fuzzer-tractable)
 Heavy library code inlined into the recompute closure, using reflection/identity

@@ -2069,6 +2069,20 @@ function emit_ref_cast_if_structref!(bytes::Vector{UInt8}, val, target_type_idx:
                 local_wasm_type = ctx.locals[arr_idx]
             end
         end
+    elseif val isa Core.Argument
+        # PURE-701b: the operand is a function PARAMETER. Its declared wasm slot
+        # type can be abstract (structref/anyref) when the method was specialized
+        # on an abstract value arg (e.g. `show(::IO, x)` where the body narrows x
+        # to a concrete struct via inference) — the body then emits `struct.get
+        # $Concrete` against a `structref` param and validation fails. Resolve the
+        # param's DECLARED wasm type the same way the signature builder does
+        # (compile.jl) so the cast matches the slot, not the (ideal) concrete type.
+        arg_idx = ctx.is_compiled_closure ? val.n : val.n - 1
+        if arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
+            T = ctx.arg_types[arg_idx]
+            local_wasm_type = (T isa Union && needs_anyref_boxing(T)) ? AnyRef :
+                get_concrete_wasm_type(T, ctx.mod, ctx.type_registry)
+        end
     end
     if local_wasm_type === StructRef || local_wasm_type === AnyRef
         # Value on stack is structref/anyref, but struct_get/array_get needs (ref null $target_type_idx)

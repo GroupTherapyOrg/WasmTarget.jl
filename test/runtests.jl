@@ -7390,6 +7390,27 @@ console.log(JSON.stringify({
             @test _hyp_close(_t60_sinh32, 1.0f0)
         end
 
+        @testset "Numeric-struct field struct.new/struct.get (WASMTARGET-FUZZ)" begin
+            # `<: Number` STRUCTS (Complex, Rational, RGB{N0f8}) are classified
+            # non-struct by is_struct_type, so get_concrete_wasm_type types them
+            # `structref` as params / bridge-ctor args — while the struct registry
+            # uses the concrete type. Without ref.cast bridges this mismatches at
+            #   struct.new[k] expected (ref null T) found local.get of type structref
+            # (PI bridge ctors: RGB{N0f8} pixels, fractals Complex labels) and at
+            #   struct.get expected (ref null T) found structref
+            # (Base `show(::Complex)` reads z.re/z.im off a structref param).
+            # Base-only repro: Complex{Rational{Int64}} — its fields are themselves
+            # `<: Real` structs, so the ctor arg / field type is a concrete struct ref.
+            _mk_crat(re::Rational{Int64}, im::Rational{Int64}) = Complex{Rational{Int64}}(re, im)
+            @test (WasmTarget.compile_multi(
+                Any[(_mk_crat, (Rational{Int64}, Rational{Int64}), "_mk_crat")];
+                strict=true, validate=true, optimize=false); true)            # struct.new field cast
+            _re_num(z::Complex{Rational{Int64}})::Int64 = numerator(real(z))
+            @test (WasmTarget.compile_multi(
+                Any[(_re_num, (Complex{Rational{Int64}},), "_re_num")];
+                strict=true, validate=true, optimize=false); true)            # struct.get on structref param
+        end
+
         # Cofunctions, Hyperbolic inverse, Other inverse trig, Hyperbolic cofunctions
         # — REMOVED (placeholder @test_broken false stubs)
 
