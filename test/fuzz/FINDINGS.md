@@ -158,6 +158,90 @@ depth-5+ fuzz sweep over boundscheck-arm + jump-target compositions is
 the likely organic reproducer source; until then this note is the
 tracking entry.
 
+## PlutoIslands featured-corpus → WT work-list (2026-06-13)
+
+Source: the 30 non-shipping bond groups of the PlutoIslands featured corpus
+(35/65 ship after the PI bind fixes). Triage of every WT-side degradation
+reason in `PlutoIslands/tools/ISLAND_SURVEY.md`. The blockers split into four
+classes — **only Classes 1–2 are conventional codegen/fuzzer work**; Class 3 is
+the larger bucket and is *not* fuzzer-tractable.
+
+### Class 1 — genuine WT codegen bugs
+- **Canvas-render `i64`/`f64` mismatch** — `canvas render compile failed: func N
+  failed to validate: type mismatch: expected i64, found f64`. Notebooks:
+  turtles-art (2 groups), conv1d, Titration figure. WasmMakie drawing code
+  compiled through the `canvas2d` import surface emits an `f64` where `i64` is
+  expected (an index/count computed in float). **Highest-value genuine codegen
+  target** (multiple groups). Repro needs the canvas compile path
+  (`compile_module` + canvas2d imports); standalone minimization is TODO — the
+  `_canvas_probe_fn` path in `PlutoIslands/src/compile.jl` is the entry.
+- **`string(::Complex{Float64})`** — recorded gap **`cfd419793b0d`**. Verified
+  exec_error; fractals' `0.9 + 0.4im` label. Downstream of the open Ryu gap
+  `19d59e9a61b3` (`string(::Float64)`) — auto-closes once Ryu + complex
+  `a+bim` formatting land. (Note: Complex *arithmetic*/iteration COMPILES and
+  runs bit-exact — verified — so only the DISPLAY is the gap.)
+- **`compile_multi` array-vs-func type-index collision** — `func N failed to
+  validate: expected array type at index 6, found (func (param (ref null (id 6))
+  i32 i32) (result (ref extern)))`. When an assembled module contains BOTH an
+  array-constant type AND a bridge/tree-walk accessor func type (`(result (ref
+  extern))`), the type-table index management collides. Hit by Collatz (baseline)
+  and by conv1d the moment PlutoIslands' partial-eval baked a *vector* constant
+  (so PI now gates `_bakeable_const` to scalars/strings/tuples and re-allows
+  vectors only after this is fixed). Not reproduced by a 3-entry `compile_multi`
+  with a vector-indexing fn + string accessors — the trigger needs the specific
+  bridge arg-descriptor / tree-walk accessor arrangement; minimization TODO from
+  the conv1d module (func 8, offset 0x696).
+
+### Class 2 — color-type codegen (needs ColorTypes/FixedPointNumbers in a fuzz env)
+- **`RGB{N0f8}` `struct.new` mismatch** — `struct.new[1] expected type
+  (ref null 30), found local.get of type structref` for
+  `_mk_ColorTypes_RGB_FixedPointNumbers_N0f8_`. Notebooks: fractals, conv2d,
+  images. `N0f8` (FixedPoint) wraps a `UInt8`; the generated constructor
+  mistypes the field ref. Needs ColorTypes+FixedPointNumbers in a color
+  sub-env to minimize. Related to `a9bf645b1003` (Matrix{NTuple{4,Float64}}
+  pixel access).
+
+### Class 3 — library-internals coverage gaps (NOT fuzzer-tractable)
+Heavy library code inlined into the recompute closure, using reflection/identity
+with no WasmGC lowering. WT already reports these honestly ("file this construct
+as a coverage gap").
+- **`objectid` / `jl_object_id`** — SymbolicUtils hashconsing (newton ×11),
+  ImageTransformations (dither), Collatz Dict-with-custom-keys. ~3 notebooks.
+- **cyclic `Method` constant** — `cannot compile Method: cyclic struct constant
+  (object graph references itself)`. Figure renders capturing a `Method` object
+  as a compile-time constant. Collatz ×9, Titration ×4, images.
+- **`string(::Markdown.MD)` / show machinery** — Basic math's `stacktrace+object`
+  cell rendering markdown.
+- **`UInt128` field too large** — images. Bare `UInt128` arith AND a
+  `UInt128` struct field both compile standalone, so the trigger is a specific
+  deep library struct (unminimized).
+
+**KEY STRATEGIC INSIGHT:** Class 3 is ~8–10 groups and is mostly NOT WT-fixable
+via the fuzzer. Two sub-cases:
+- **Bond-INDEPENDENT producers** (symbolic diff computed once, an image loaded,
+  a constant table built): PI currently inlines this code into the recompute as
+  CODE, dragging objectid/Method/show into the wasm — but the VALUE is identical
+  across all bond settings. The PI lever is **export-time partial evaluation**:
+  evaluate bond-independent upstream once and bake the resulting value as a
+  constant (same spirit as the finite-transform baking), so the producer code is
+  never compiled. Unblocks the subset where the heavy library is upstream of,
+  not inside, the bond→body path.
+- **Bond-DEPENDENT use** (the body genuinely calls into the library per bond
+  value — e.g. `imresize` keyed by a slider): a true WT coverage gap; needs
+  `objectid`/`Method` stub support or is fundamentally non-compilable.
+(Both filed as PlutoIslands work-items; the partial-eval one is high-value.)
+
+### Class 4 — already-tracked / not WT
+`string(::Float64)` Ryu (`19d59e9a61b3`), Matrix{NTuple} pixel access
+(`a9bf645b1003`), svg/table output mimes (PI mime support, not WT),
+bond-defines-bond (PI feature).
+
+### Generator-coverage suggestions (organic discovery)
+- `Complex{Float64}` arithmetic + `string(::Complex)` (iteration works; display
+  is the gap — `cfd419793b0d`).
+- ColorTypes `RGB` / FixedPoint `N0f8` construction (needs a color sub-generator
+  + deps).
+
 ## P4-stdlib: Printf probe results (stdlib #4 scouting)
 
 1.12 out-of-box via bridge probes: **float formats PASS** (`%.3f`, `%e`
