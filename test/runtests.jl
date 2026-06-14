@@ -124,6 +124,10 @@ mutable struct TestCounter; value::Int64; end
 mutable struct TestNode; value::Int64; next::Union{TestNode, Nothing}; end
 struct TestPoint2D; x::Float64; y::Float64; end
 struct TestLine; p1::TestPoint2D; p2::TestPoint2D; end
+# WASMTARGET-FUZZ: structs with 128-bit fields — register as int128 struct ref
+# (guards the _register_struct_type_impl! Int128/UInt128 field branch).
+struct _WTI128Box; x::Int128; n::Int64; end
+struct _WTU128Box; x::UInt128; n::Int64; end
 # @generated must be top-level (illegal inside a phase function), so hoist it.
 @generated function f_gen(x)
     x <: Int64 ? :(x * Int64(2)) : :(x * 3.0)
@@ -7409,6 +7413,22 @@ console.log(JSON.stringify({
             @test (WasmTarget.compile_multi(
                 Any[(_re_num, (Complex{Rational{Int64}},), "_re_num")];
                 strict=true, validate=true, optimize=false); true)            # struct.get on structref param
+        end
+
+        @testset "Int128/UInt128 struct field registration (WASMTARGET-FUZZ)" begin
+            # _register_struct_type_impl! lacked the Int128/UInt128 → int128 struct
+            # ref branch that register_tuple_type! has, so a struct holding a 128-bit
+            # field hit the isprimitivetype size check and errored ("Primitive type
+            # too large for Wasm field: Int128"). Surfaced by WasmMakie canvas render
+            # structs (turtles/conv1d/conv2d/newton figures carry a 128-bit field).
+            # Guard validates registration + struct.new/struct.get of the field's
+            # sibling; Int128 *arithmetic* on the field is a separate op gap.
+            _mk_i128(a::Int64)::Int64 = _WTI128Box(Int128(a), a).n
+            @test (WasmTarget.compile_multi(Any[(_mk_i128, (Int64,), "_mk_i128")];
+                strict=true, validate=true, optimize=false); true)
+            _mk_u128(a::Int64)::Int64 = _WTU128Box(UInt128(a), a).n
+            @test (WasmTarget.compile_multi(Any[(_mk_u128, (Int64,), "_mk_u128")];
+                strict=true, validate=true, optimize=false); true)
         end
 
         # Cofunctions, Hyperbolic inverse, Other inverse trig, Hyperbolic cofunctions

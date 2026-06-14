@@ -600,6 +600,16 @@ function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T:
         elseif ft === Nothing
             # Nothing is a singleton type — no data, represent as i32 placeholder
             wasm_vt = I32
+        elseif ft === Int128 || ft === UInt128
+            # WBUILD-5401: 128-bit integers are WasmGC {lo,hi} structs, not wasm
+            # primitives. register_tuple_type! already maps Int128/UInt128 tuple
+            # ELEMENTS to the int128 struct ref; struct FIELDS must do the same, or
+            # a struct holding an Int128 field hits the isprimitivetype size check
+            # below and errors ("Primitive type too large for Wasm field: Int128").
+            # Surfaced by WasmMakie canvas render structs (turtles/conv1d/conv2d/
+            # newton figures), which carry a 128-bit field.
+            int128_info = register_int128_type!(mod, registry, ft)
+            wasm_vt = ConcreteRef(int128_info.wasm_type_idx, true)
         elseif isprimitivetype(ft)
             # Custom primitive types (e.g., JuliaSyntax.Kind) - map by size
             sz = sizeof(ft)

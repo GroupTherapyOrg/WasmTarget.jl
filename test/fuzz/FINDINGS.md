@@ -188,14 +188,30 @@ classes — **only Classes 1–2 are conventional codegen/fuzzer work**; Class 3
 the larger bucket and is *not* fuzzer-tractable.
 
 ### Class 1 — genuine WT codegen bugs
-- **Canvas-render `i64`/`f64` mismatch** — `canvas render compile failed: func N
-  failed to validate: type mismatch: expected i64, found f64`. Notebooks:
-  turtles-art (2 groups), conv1d, Titration figure. WasmMakie drawing code
-  compiled through the `canvas2d` import surface emits an `f64` where `i64` is
-  expected (an index/count computed in float). **Highest-value genuine codegen
-  target** (multiple groups). Repro needs the canvas compile path
-  (`compile_module` + canvas2d imports); standalone minimization is TODO — the
-  `_canvas_probe_fn` path in `PlutoIslands/src/compile.jl` is the entry.
+- **Canvas-render: a MULTI-BUG CHAIN (2026-06-14 campaign).** The figure-render
+  path (WasmMakie `render!` compiled via `compile_module` + canvas2d imports —
+  turtles ×4, conv1d, conv2d ×4, newton figures, Titration) is gated by a CHAIN
+  of codegen bugs, fixed one at a time via WasmMakie's `compile_with_canvas`
+  harness + a focused W-002 differential (host RecordingCtx stream vs wasm
+  command stream in node):
+  1. **Int128/UInt128 struct FIELD registration — FIXED.** `_register_struct_type_impl!`
+     lacked the `Int128|UInt128 → int128 struct ref` branch that `register_tuple_type!`
+     has, so a render struct with a 128-bit field errored "Primitive type too large
+     for Wasm field: Int128 (16 bytes)". Added the branch (structs.jl). NOTE this
+     is a PRE-EXISTING main regression — `git`-confirmed the identical failure at
+     main 1531b26, and the old "i64/f64 mismatch" symptom is gone/superseded; the
+     baseline 38/65 survey was on an OLDER WT where canvas still compiled.
+     Int128 *arithmetic on a field value* is a SEPARATE op gap (Int128 `÷`/`%`
+     trap/mis-validate) — not needed for canvas, which only stores the field.
+  2. **`print_to_string_1` f64/anyref — OPEN (next).** V8 rejects the figure at
+     instantiate: `print_to_string_1: local.set[0] expected f64, found struct.get
+     of anyref`. The axis-tick number-formatting path reads a Float64 from a struct
+     field typed `anyref` (boxed) without unboxing — a module-context-sensitive
+     type-precision/unbox bug (string(::Float64) works standalone; same print/
+     IOBuffer machinery area as the median/Printf notes). wasm-tools accepts it;
+     only V8 rejects, so WT's validate misses it. NEEDS a minimal module-context
+     repro before fixing.
+  Canvas won't ship until the rest of this chain clears; bug 1 of N done.
 - **`string(::Complex{Float64})`** — gap **`cfd419793b0d`**, PARTIALLY progressed
   (2026-06-13 campaign). Reframed: `string(::Float64)`/Ryu now works standalone
   AND in module-context (the `19d59e9a61b3` unbalanced-control-frames defect is
