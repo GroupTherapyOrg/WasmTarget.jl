@@ -5539,18 +5539,27 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         end
 
     elseif is_func(func, :ashr_int)  # arithmetic shift right
-        if length(args) >= 2
-            shift_type = infer_value_type(args[2], ctx)
-            if is_32bit && (shift_type === Int64 || shift_type === UInt64)
-                # Truncate i64 shift amount to i32
-                push!(bytes, Opcode.I32_WRAP_I64)
-            elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
-                # Extend i32 shift amount to i64 (Wasm requires matching types)
-                push!(bytes, Opcode.I64_EXTEND_I32_S)
+        if is_128bit
+            # 128-bit arithmetic right shift: stack has [x_struct, n_i64]. shl_int
+            # and lshr_int already special-cased 128-bit; ashr_int did not, so signed
+            # `Int128 >> n` fell through to the i64 guard and emitted `i64.shr_s` on
+            # the struct ref (validation: expected i64, found (ref null $int128) —
+            # WasmMakie TwicePrecision range/tick widemul path).
+            append!(bytes, emit_int128_ashr(ctx, arg_type))
+        else
+            if length(args) >= 2
+                shift_type = infer_value_type(args[2], ctx)
+                if is_32bit && (shift_type === Int64 || shift_type === UInt64)
+                    # Truncate i64 shift amount to i32
+                    push!(bytes, Opcode.I32_WRAP_I64)
+                elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
+                    # Extend i32 shift amount to i64 (Wasm requires matching types)
+                    push!(bytes, Opcode.I64_EXTEND_I32_S)
+                end
             end
+            _emit_shift_guarded!(bytes, ctx, is_32bit, :ashr;
+                                 julia_width = _julia_int_width(arg_type, is_32bit))   # over-shift → sign-fill; narrow input sign-extended
         end
-        _emit_shift_guarded!(bytes, ctx, is_32bit, :ashr;
-                             julia_width = _julia_int_width(arg_type, is_32bit))   # over-shift → sign-fill; narrow input sign-extended
 
     elseif is_func(func, :lshr_int)  # logical shift right
         if is_128bit

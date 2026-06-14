@@ -138,6 +138,11 @@ _wt_uf32(a::Int64)::Int64 = begin
     x::Union{Float32,Int64} = a > 0 ? Float32(a) * 1.5f0 : a
     x isa Float32 ? Int64(round(x)) : Int64(-7)
 end
+# WASMTARGET-FUZZ: signed Int128 arithmetic right shift (emit_int128_ashr) — ashr_int
+# lacked the is_128bit branch shl_int/lshr_int had, so `Int128 >>` hit i64.shr_s on
+# the struct ref. Sign-fill across the n<64 / n>=64 boundary, incl. negatives.
+_wt_i128ashr_big(a::Int64)::Int64  = Int64((Int128(a) << 80) >> 80)            # n>=64, recovers sign
+_wt_i128ashr_neg(a::Int64)::Int64  = Int64(((-(Int128(abs(a)) << 50) - Int128(1)) >> 55) & Int128(typemax(Int64)))
 # @generated must be top-level (illegal inside a phase function), so hoist it.
 @generated function f_gen(x)
     x <: Int64 ? :(x * Int64(2)) : :(x * 3.0)
@@ -7463,6 +7468,17 @@ console.log(JSON.stringify({
             _wt_scplx(x::Int64)::Int64 = Int64(ncodeunits(string(complex(0.9, 0.4 + Float64(x)))))
             @test (WasmTarget.compile_multi(Any[(_wt_scplx, (Int64,), "_wt_scplx")];
                 strict=true, validate=true, optimize=false); true)
+        end
+
+        @testset "Int128 arithmetic right shift (WASMTARGET-FUZZ)" begin
+            # emit_int128_ashr: ashr_int gained the is_128bit branch (was missing,
+            # unlike shl_int/lshr_int) → signed Int128 >> now sign-fills correctly
+            # instead of i64.shr_s on the struct ref. (WasmMakie TwicePrecision
+            # range/tick widemul path; canvas figures now validate.)
+            @test compare_julia_wasm(_wt_i128ashr_big, Int64(123456789)).pass
+            @test compare_julia_wasm(_wt_i128ashr_big, Int64(-987654321)).pass
+            @test compare_julia_wasm(_wt_i128ashr_neg, Int64(123456789)).pass
+            @test compare_julia_wasm(_wt_i128ashr_neg, Int64(-987654321)).pass
         end
 
         # Cofunctions, Hyperbolic inverse, Other inverse trig, Hyperbolic cofunctions
