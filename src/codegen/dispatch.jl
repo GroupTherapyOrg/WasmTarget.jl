@@ -391,7 +391,7 @@ function emit_i32_array_init(array_type_idx::UInt32, values::AbstractVector)::Ve
         push!(bytes, Opcode.I32_CONST)
         append!(bytes, encode_leb128_signed(Int32(0)))  # default value
         push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_unsigned(UInt32(n)))  # length
+        append!(bytes, encode_leb128_signed(Int32(n)))  # length (i32.const → signed LEB)
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.ARRAY_NEW)
         append!(bytes, encode_leb128_unsigned(array_type_idx))

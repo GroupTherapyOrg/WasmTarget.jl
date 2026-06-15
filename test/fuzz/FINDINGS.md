@@ -41,6 +41,22 @@ runtime narrow-shift bug it resembles is **fixed** (see below).
 
 ## Fixed (verified-closed via the loop)
 
+- **`i32.const` length operand for string/Symbol/array literals was UNSIGNED-LEB
+  encoded (Pluto campaign, 2026-06-15)** — `compile_value` for `String`/`Symbol`
+  (codegen/values.jl) and the large-array path (codegen/dispatch.jl) emitted the
+  `array.new_data`/`array.new` LENGTH via `encode_leb128_unsigned`, but `i32.const`
+  operands are **signed LEB128** (`s33`). A literal whose length lands in the band
+  where unsigned-LEB ≠ signed-LEB — most commonly **[64,127]** (1-byte unsigned-LEB
+  with bit-6 set: e.g. 90 → `0x5A`, signed-decodes to **−38**) — produced a NEGATIVE
+  length → `array.new_data` with a huge unsigned count → `"requested new array is too
+  large"` trap at RUNTIME. **Validation passed**, so it was invisible until executed;
+  short literals (<64) coincidentally encoded identically, hiding it for a long time.
+  Surfaced by PlutoIslands interactive-feedback cells (admonition HTML segments are
+  ~89/102/217/230 bytes). Fix: `encode_leb128_signed(Int32(len))` at all three sites.
+  Regression: `test/runtests.jl` "String literal length — i32.const signed-LEB"
+  (runs in node; asserts wasm == native for a 90-char literal). NOTE: `array.new_fixed`
+  *immediate* counts and type/segment/local indices are genuinely u32 — left unsigned.
+
 - **structref-vs-concrete-ref type precision on `<: Number` structs (Pluto campaign,
   2026-06-13)** — `Complex`, `Rational`, `RGB{N0f8}`/`N0f8` are `<: Number`, so
   `is_struct_type` returns false and `get_concrete_wasm_type` types them as the abstract

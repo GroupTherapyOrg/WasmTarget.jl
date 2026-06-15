@@ -2572,6 +2572,29 @@ begin
             @test validate_wasm(wasm_bytes)
         end
 
+        # Regression: a string literal's array.new_data LENGTH operand is an
+        # i32.const, which must be SIGNED LEB128. It was unsigned-encoded, so a
+        # literal length in [64,127] (1-byte unsigned-LEB with bit-6 set, e.g. 90)
+        # decoded NEGATIVE → array.new_data with a huge unsigned length →
+        # "requested new array is too large" trap at runtime (VALIDATION PASSED).
+        # Medium-length literals (admonition HTML in PlutoIslands feedback cells)
+        # hit it; short literals (<64) coincidentally encoded fine, hiding it.
+        @noinline function str_mid_literal(x::Int64)::Int64
+            # 90-char literal (in the broken [64,127] band) built at runtime via
+            # the concat, then measured — forces the array.new_data emission.
+            return Int64(ncodeunits("abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghij" * string(x)))
+        end
+
+        @testset "String literal length — i32.const signed-LEB" begin
+            wasm_bytes = WasmTarget.compile(str_mid_literal, (Int64,))
+            @test validate_wasm(wasm_bytes)
+            if NODE_CMD !== nothing
+                for xv in (Int64(5), Int64(42), Int64(123456))
+                    @test run_wasm(wasm_bytes, "str_mid_literal", xv) == str_mid_literal(xv)
+                end
+            end
+        end
+
         # String equality
         @noinline function str_equal(a::String, b::String)::Bool
             return a == b

@@ -541,7 +541,11 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
             push!(bytes, Opcode.I32_CONST)
             push!(bytes, 0x00)  # offset 0 (start of segment)
             push!(bytes, Opcode.I32_CONST)
-            append!(bytes, encode_leb128_unsigned(n_bytes))
+            # i32.const operands are SIGNED LEB128 — unsigned-encoding a length in
+            # [64,127] (and other bands) decodes negative → array.new_data with a
+            # huge unsigned length → "array too large" trap (medium-length string
+            # literals, e.g. admonition HTML).
+            append!(bytes, encode_leb128_signed(Int32(n_bytes)))
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.ARRAY_NEW_DATA)
             append!(bytes, encode_leb128_unsigned(type_idx))
@@ -637,7 +641,8 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
             push!(bytes, Opcode.I32_CONST)
             push!(bytes, 0x00)
             push!(bytes, Opcode.I32_CONST)
-            append!(bytes, encode_leb128_unsigned(n_bytes))
+            # i32.const operands are SIGNED LEB128 (see String path above).
+            append!(bytes, encode_leb128_signed(Int32(n_bytes)))
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.ARRAY_NEW_DATA)
             append!(bytes, encode_leb128_unsigned(type_idx))
