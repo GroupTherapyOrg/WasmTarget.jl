@@ -164,6 +164,24 @@ _wt_anyvec_len(a::Int64)::Int64 = Int64(length(Any[a, "x", a]))
 # array the field used to map to → struct.new mismatched. Field is now AnyRef.
 struct _WTAbsVecField; content::Vector; end
 _wt_absvecfield(n::Int64)::Int64 = Int64(length(_WTAbsVecField([n, n + 1, n + 2]).content))
+# WASMTARGET-FUZZ: heterogeneous tuple whose element-union is ALL-STRUCT
+# (Union{Dog,Cat}) — canonical rep is StructRef, NOT a tagged union. The
+# hetero-tuple index must push the raw struct ref (subtype of structref), else the
+# consumer's union-split isa/π cast traps "illegal cast". `Any[Dog(n),Cat(n)]` +
+# dispatch (markdown content node lists hit this with Paragraph/Bold/… unions).
+abstract type _WTAnimal end
+struct _WTDog <: _WTAnimal; x::Int64; end
+struct _WTCat <: _WTAnimal; x::Int64; end
+_wt_speak(d::_WTDog)::Int64 = d.x + 1
+_wt_speak(c::_WTCat)::Int64 = c.x + 2
+_wt_anystruct(n::Int64)::Int64 = begin
+    xs = Any[_WTDog(n), _WTCat(n), _WTDog(n + 10)]
+    s = 0
+    for a in xs
+        s += _wt_speak(a)::Int64
+    end
+    s
+end
 # @generated must be top-level (illegal inside a phase function), so hoist it.
 @generated function f_gen(x)
     x <: Int64 ? :(x * Int64(2)) : :(x * 3.0)
@@ -7512,6 +7530,9 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_wt_htup, Int64(7)).pass        # 7+12+17 = 36
             @test compare_julia_wasm(_wt_htup, Int64(0)).pass        # 0+5+10 = 15
             @test compare_julia_wasm(_wt_anyvec_len, Int64(3)).pass  # length(Any[3,"x",3]) = 3
+            # all-struct element union → StructRef canonical rep (not tagged union)
+            @test compare_julia_wasm(_wt_anystruct, Int64(5)).pass   # 6+7+16 = 29
+            @test compare_julia_wasm(_wt_anystruct, Int64(2)).pass
         end
 
         @testset "Abstract ::Vector struct field (WASMTARGET-FUZZ)" begin

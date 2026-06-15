@@ -3065,8 +3065,30 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     if length(elem_types) >= 2
                         U = Union{elem_types...}
                         if U isa Union
-                            union_info = get_union_type!(ctx.mod, ctx.type_registry, U)
-                            union_wasm = ConcreteRef(union_info.wasm_type_idx, true)
+                            # Produce the value in the CANONICAL representation of the
+                            # getfield's INFERRED SSA result type — that is exactly what
+                            # the SSA local was allocated as (julia_to_wasm_type_concrete),
+                            # so the if-block result matches the local and there's no store
+                            # mismatch. (Anchoring on Union{fieldtypes…} instead diverges
+                            # from inference — e.g. Dates date-format parsing, where the
+                            # inferred result is a tagged union but fieldtypes look
+                            # all-struct.) For a tagged-union rep, tag-wrap each field; for
+                            # StructRef (all-struct union, e.g. Union{Dog,Cat}) push the raw
+                            # struct ref (subtype of structref) — tag-wrapping it would make
+                            # the consumer's isa/π cast trap "illegal cast".
+                            _ssa_t = get(ctx.ssa_types, idx, nothing)
+                            local Ueff
+                            if _ssa_t isa Type && _ssa_t !== Union{}
+                                union_wasm = julia_to_wasm_type_concrete(_ssa_t, ctx)
+                                Ueff = _ssa_t isa Union ? _ssa_t : U
+                            else
+                                union_wasm = get_concrete_wasm_type(U, ctx.mod, ctx.type_registry)
+                                Ueff = U
+                            end
+                            is_tagged_union = union_wasm isa ConcreteRef &&
+                                Ueff isa Union &&
+                                haskey(ctx.type_registry.unions, Ueff) &&
+                                union_wasm.type_idx == ctx.type_registry.unions[Ueff].wasm_type_idx
 
                             # tuple value → tuple_local
                             append!(bytes, compile_value(obj_arg, ctx))
@@ -3093,7 +3115,33 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                                 push!(bytes, Opcode.STRUCT_GET)
                                 append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
                                 append!(bytes, encode_leb128_unsigned(i + Int(info.field_offset)))
-                                append!(bytes, emit_wrap_union_value(ctx, elem_types[i + 1], U))
+                                if is_tagged_union
+                                    append!(bytes, emit_wrap_union_value(ctx, elem_types[i + 1], Ueff))
+                                else
+                                    # Coerce the raw field value to U's canonical wasm rep.
+                                    fw = julia_to_wasm_type_concrete(elem_types[i + 1], ctx)
+                                    if union_wasm === AnyRef
+                                        if fw === I64
+                                            push!(bytes, Opcode.I32_WRAP_I64, Opcode.GC_PREFIX, Opcode.REF_I31)
+                                        elseif fw === I32
+                                            push!(bytes, Opcode.GC_PREFIX, Opcode.REF_I31)
+                                        elseif fw === F32 || fw === F64
+                                            box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, fw)
+                                            sc = length(ctx.locals) + ctx.n_params
+                                            push!(ctx.locals, fw)
+                                            push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(sc))
+                                            push!(bytes, Opcode.I32_CONST, 0x00)
+                                            push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(sc))
+                                            push!(bytes, Opcode.GC_PREFIX, Opcode.STRUCT_NEW)
+                                            append!(bytes, encode_leb128_unsigned(box_idx))
+                                        elseif fw === ExternRef
+                                            push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+                                        end
+                                        # ConcreteRef/StructRef field is already anyref-compatible
+                                    end
+                                    # union_wasm === StructRef / numeric: the raw field value
+                                    # is already a subtype / the right type — push as-is.
+                                end
                             end
                             # nested if-chain: idx==0 ? wrap(f0) : idx==1 ? wrap(f1) : … : wrap(fN-1)
                             for i in 0:(n_fields - 2)
