@@ -182,6 +182,26 @@ _wt_anystruct(n::Int64)::Int64 = begin
     end
     s
 end
+# WASMTARGET-FUZZ: inline typeId DYNAMIC DISPATCH. With >4 methods over an Any-typed
+# value, Julia emits a `dynamic` call (can't union-split). WT discovers the
+# concrete-struct specializations in the trim collection and emits a runtime typeId
+# switch over them (each branch ref.casts + calls the matching specialization).
+# Underlies Markdown.plain/show recursion over heterogeneous AST nodes.
+abstract type _WTShape end
+struct _WTSa <: _WTShape; v::Int64; end
+struct _WTSb <: _WTShape; v::Int64; end
+struct _WTSc <: _WTShape; v::Int64; end
+struct _WTSd <: _WTShape; v::Int64; end
+struct _WTSe <: _WTShape; v::Int64; end
+_wt_gv(x::_WTSa)::Int64 = x.v + 1
+_wt_gv(x::_WTSb)::Int64 = x.v + 2
+_wt_gv(x::_WTSc)::Int64 = x.v + 3
+_wt_gv(x::_WTSd)::Int64 = x.v + 4
+_wt_gv(x::_WTSe)::Int64 = x.v + 5
+_wt_dyndispatch(n::Int64)::Int64 =
+    _wt_gv(Any[_WTSa(n), _WTSc(n), _WTSe(n)][1])::Int64 +
+    _wt_gv(Any[_WTSa(n), _WTSc(n), _WTSe(n)][2])::Int64 +
+    _wt_gv(Any[_WTSa(n), _WTSc(n), _WTSe(n)][3])::Int64
 # @generated must be top-level (illegal inside a phase function), so hoist it.
 @generated function f_gen(x)
     x <: Int64 ? :(x * Int64(2)) : :(x * 3.0)
@@ -7533,6 +7553,21 @@ console.log(JSON.stringify({
             # all-struct element union → StructRef canonical rep (not tagged union)
             @test compare_julia_wasm(_wt_anystruct, Int64(5)).pass   # 6+7+16 = 29
             @test compare_julia_wasm(_wt_anystruct, Int64(2)).pass
+        end
+
+        @testset "Inline typeId dynamic dispatch (WASMTARGET-FUZZ)" begin
+            # `dynamic` call over >4 methods: trim collection discovers the
+            # concrete-struct specializations, call site emits a typeId switch.
+            # GATED: the discovery is off by default (perturbs base inference); enable
+            # it for this self-contained struct-only case (no string deps to perturb).
+            _prev_dd = get(ENV, "WT_DYNDISPATCH", nothing)
+            ENV["WT_DYNDISPATCH"] = "1"
+            try
+                @test compare_julia_wasm(_wt_dyndispatch, Int64(5)).pass   # 6+8+10 = 24
+                @test compare_julia_wasm(_wt_dyndispatch, Int64(0)).pass   # 1+3+5 = 9
+            finally
+                _prev_dd === nothing ? delete!(ENV, "WT_DYNDISPATCH") : (ENV["WT_DYNDISPATCH"] = _prev_dd)
+            end
         end
 
         @testset "Abstract ::Vector struct field (WASMTARGET-FUZZ)" begin

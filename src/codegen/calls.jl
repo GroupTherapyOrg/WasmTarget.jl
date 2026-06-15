@@ -1880,6 +1880,154 @@ function _compile_call_symbol(args, bytes::Vector{UInt8}, ctx::AbstractCompilati
     return nothing
 end
 
+# WASMTARGET dynamic dispatch (typeId switch). When a `dynamic` :call to a generic
+# function can't resolve to a single specialization (an abstract/Any arg), instead
+# of emitting `unreachable`, dispatch at runtime over the compiled specializations:
+# read the dispatch arg's typeId (every struct carries an i32 typeId in field 0) and
+# call the matching specialization. Surfaced by Markdown.plain/show recursing over
+# heterogeneous AST nodes (md"…" rendering) and any `Any[…]`-of-structs + g(elt).
+# Returns the bytes (result left in the inferred SSA wasm type), or nothing if the
+# call doesn't qualify (caller then falls back to the `unreachable` stub).
+function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_func,
+                                     args, call_arg_types, idx::Int)
+    (ctx.func_registry === nothing || ctx.type_registry.base_struct_idx === nothing) && return nothing
+    base_idx = ctx.type_registry.base_struct_idx
+    n = length(args)
+    # Dispatch position = the single abstract/Any arg in the call's inferred types.
+    absp = Int[p for p in 1:n if !(call_arg_types[p] isa DataType && isconcretetype(call_arg_types[p]))]
+    length(absp) == 1 || return nothing      # multi-arg dispatch unsupported (v0)
+    dpos = absp[1]
+    # Candidate specializations: matching arity, matching every NON-dispatch arg to
+    # this call site (so candidates from OTHER call sites — e.g. a different io type —
+    # don't pollute the switch), differing on the dispatch arg.
+    cands = FunctionInfo[]
+    for (ref, infos) in ctx.func_registry.by_ref
+        ref === called_func || continue
+        for info in infos
+            length(info.arg_types) == n || continue
+            all(j -> j == dpos || info.arg_types[j] == call_arg_types[j], 1:n) || continue
+            push!(cands, info)
+        end
+    end
+    length(cands) < 2 && return nothing
+    # Each candidate's dispatch type must be a concrete struct with a typeId and a
+    # registered concrete wasm type (so emit_typeof! / ref.cast are valid).
+    branches = Tuple{Int32, ConcreteRef, FunctionInfo}[]
+    for c in cands
+        Tc = c.arg_types[dpos]
+        (Tc isa DataType && isconcretetype(Tc) && isstructtype(Tc) && !(Tc <: Tuple) &&
+         Tc !== String && Tc !== Symbol) || return nothing
+        cw = get_concrete_wasm_type(Tc, ctx.mod, ctx.type_registry)
+        cw isa ConcreteRef || return nothing
+        tid = ensure_type_id!(ctx.type_registry, Tc)
+        tid > 0 || return nothing
+        push!(branches, (tid, cw, c))
+    end
+
+    result_julia = get(ctx.ssa_types, idx, nothing)
+    result_wasm = (result_julia isa Type && result_julia !== Nothing && result_julia !== Union{}) ?
+        get_concrete_wasm_type(result_julia, ctx.mod, ctx.type_registry) : nothing
+
+    # value-coercion helper: from-wasm on stack → to-wasm.
+    coerce! = (b, from, to) -> begin
+        from === to && return
+        if to === AnyRef || to === EqRef
+            if from === I32 || from === I64 || from === F32 || from === F64
+                # Box numerics into a {typeId, value} numeric box — the canonical
+                # Any-int/float representation WT consumers unbox via struct.get
+                # (matches calls.jl:6606). (ref.i31 is the WRONG rep here: the
+                # consumer does `ref.cast (ref $box); struct.get $box 1`.)
+                bx = get_numeric_box_type!(ctx.mod, ctx.type_registry, from)
+                sc = length(ctx.locals) + ctx.n_params; push!(ctx.locals, from)
+                push!(b, Opcode.LOCAL_SET); append!(b, encode_leb128_unsigned(sc))
+                emit_box_type_id!(b, ctx.type_registry, from)   # typeId field 0
+                push!(b, Opcode.LOCAL_GET); append!(b, encode_leb128_unsigned(sc))
+                push!(b, Opcode.GC_PREFIX, Opcode.STRUCT_NEW); append!(b, encode_leb128_unsigned(bx))
+            elseif from === ExternRef
+                push!(b, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+            end  # ConcreteRef/StructRef already anyref-compatible
+        elseif to isa ConcreteRef && (from isa ConcreteRef || from === StructRef || from === AnyRef || from === EqRef)
+            push!(b, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL); append!(b, encode_leb128_signed(Int64(to.type_idx)))
+        end
+    end
+    push_default! = (b, to) -> begin
+        if to isa ConcreteRef
+            push!(b, Opcode.REF_NULL); append!(b, encode_leb128_signed(Int64(to.type_idx)))
+        elseif to === AnyRef || to === StructRef || to === ArrayRef || to === ExternRef || to === EqRef
+            push!(b, Opcode.REF_NULL, UInt8(to))
+        elseif to === I64
+            push!(b, Opcode.I64_CONST, 0x00)
+        elseif to === F64
+            push!(b, Opcode.F64_CONST); append!(b, UInt8[0,0,0,0,0,0,0,0])
+        elseif to === F32
+            push!(b, Opcode.F32_CONST); append!(b, UInt8[0,0,0,0])
+        else
+            push!(b, Opcode.I32_CONST, 0x00)
+        end
+    end
+
+    bytes = UInt8[]
+    # Compile every arg into a local (reused across branches).
+    arg_locals = Int[]
+    for (j, arg) in enumerate(args)
+        append!(bytes, compile_value(arg, ctx))
+        if j == dpos
+            cur = julia_to_wasm_type_concrete(call_arg_types[j], ctx)
+            cur === ExternRef && push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+            aw = AnyRef
+        else
+            aw = julia_to_wasm_type_concrete(call_arg_types[j], ctx)
+        end
+        l = length(ctx.locals) + ctx.n_params; push!(ctx.locals, aw)
+        push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(l))
+        push!(arg_locals, l)
+    end
+    # Read dispatch typeId into a local.
+    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(arg_locals[dpos]))
+    emit_typeof!(bytes, base_idx)
+    tid_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I32)
+    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(tid_local))
+
+    blocktype = result_wasm === nothing ? UInt8[0x40] : encode_block_type(result_wasm)
+    emit_branch = (tid, cw, c) -> begin
+        for (j, l) in enumerate(arg_locals)
+            push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(l))
+            if j == dpos
+                push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL); append!(bytes, encode_leb128_signed(Int64(cw.type_idx)))
+            end
+        end
+        push!(bytes, Opcode.CALL); append!(bytes, encode_leb128_unsigned(c.wasm_idx))
+        rj = c.return_type
+        rw = (rj === Nothing || rj === Union{}) ? nothing : get_concrete_wasm_type(rj, ctx.mod, ctx.type_registry)
+        if result_wasm === nothing
+            rw !== nothing && push!(bytes, Opcode.DROP)
+        elseif rw === nothing
+            push_default!(bytes, result_wasm)
+        else
+            coerce!(bytes, rw, result_wasm)
+        end
+    end
+    # Guarded if-chain over all branches; final else = unreachable (no method).
+    nb = length(branches)
+    for (tid, cw, c) in branches
+        push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(tid_local))
+        push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(tid)))
+        push!(bytes, Opcode.I32_EQ)
+        push!(bytes, Opcode.IF); append!(bytes, blocktype)
+        emit_branch(tid, cw, c)
+        push!(bytes, Opcode.ELSE)
+    end
+    push!(bytes, Opcode.UNREACHABLE)
+    for _ in 1:nb; push!(bytes, Opcode.END); end
+    # Heuristic-safe tail: land result in a scratch local, end with local.get.
+    if result_wasm !== nothing
+        rl = length(ctx.locals) + ctx.n_params; push!(ctx.locals, result_wasm)
+        push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(rl))
+        push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(rl))
+    end
+    return bytes
+end
+
 """
 Compile a function call expression.
 """
@@ -2975,10 +3123,19 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                         # For constant tuple (GlobalRef), create a WasmGC array and access it
                         # The tuple value needs to be compiled as an array first
 
-                        # Get or create array type for this element type
-                        # Use concrete types for String elements to match tuple field types
+                        # Get or create array type for this element type.
+                        # The array element type MUST equal the tuple's actual field
+                        # wasm type (what the struct.get below yields), else
+                        # array.new_fixed mismatches. For String, get_string_ref_array_type!'s
+                        # arrays[Vector{String}] cache can be polluted (array-of-Vector{String}-
+                        # struct) by other registrations → build an array of the REAL field
+                        # valtype instead. (Surfaced by Markdown plain over String tuples and
+                        # STRESS string-transform funcs once dynamic-dispatch discovery compiles
+                        # those specializations.)
                         array_type_idx = if elem_type === String
-                            get_string_ref_array_type!(ctx.mod, ctx.type_registry)
+                            local _tst = ctx.mod.types[Int(info.wasm_type_idx) + 1]
+                            local _fvt = _tst.fields[Int(info.field_offset) + 1].valtype
+                            add_array_type!(ctx.mod, _fvt, true)
                         else
                             get_array_type!(ctx.mod, ctx.type_registry, elem_type)
                         end
@@ -4687,10 +4844,23 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             if sizeof(_psg_te) == sizeof(_psg_tp) && sizeof(_psg_te) in (4, 8)
                 local _psg_arr = get_array_type!(ctx.mod, ctx.type_registry, _psg_te)
                 append!(bytes, compile_value(_psg_vec, ctx))
-                local _psg_vinfo = ctx.type_registry.structs[_psg_vt]
-                push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
-                append!(bytes, encode_leb128_unsigned(_psg_vinfo.wasm_type_idx))
-                append!(bytes, encode_leb128_unsigned(1))
+                # A Memory/GenericMemory value IS the raw data array (no vector-struct
+                # wrapper) — just cast it. A Vector is a {typeId, data-array, size}
+                # struct → struct.get field 1 to reach the array. (The old code did an
+                # unconditional `structs[_psg_vt]` direct lookup, which both crashed on
+                # Memory and was ORDER-DEPENDENT — KeyError when a perturbed compile
+                # order left _psg_vt unregistered. Register-or-guard fixes both.)
+                local _psg_is_mem = _psg_vt isa DataType &&
+                    _psg_vt.name.name in (:Memory, :GenericMemory, :MemoryRef, :GenericMemoryRef)
+                if !_psg_is_mem
+                    if !haskey(ctx.type_registry.structs, _psg_vt)
+                        register_struct_type!(ctx.mod, ctx.type_registry, _psg_vt)
+                    end
+                    local _psg_vinfo = ctx.type_registry.structs[_psg_vt]
+                    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
+                    append!(bytes, encode_leb128_unsigned(_psg_vinfo.wasm_type_idx))
+                    append!(bytes, encode_leb128_unsigned(1))
+                end
                 push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.REF_CAST_NULL)
                 append!(bytes, encode_leb128_signed(Int64(_psg_arr)))
                 append!(bytes, compile_value(_ps_ptr, ctx))      # i64 byte offset
@@ -6518,6 +6688,17 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                                            expected_return=_exp_ret_c isa Type ? _exp_ret_c : nothing)
             end
 
+            # WASMTARGET dynamic dispatch: a polymorphic call (exactly one abstract/Any
+            # arg, ≥2 concrete-struct candidate specializations) must NOT collapse to a
+            # single fuzzy-matched target — get_function would pick ONE method and call
+            # it for every runtime type (the shared-layout ref.cast doesn't even trap).
+            # Emit a runtime typeId switch over the candidates instead. Returns nothing
+            # (falls through) for ordinary monomorphic calls.
+            _disp_early = _try_inline_typeid_dispatch(ctx, called_func, args, call_arg_types, idx)
+            if _disp_early !== nothing
+                return _disp_early
+            end
+
             if target_info !== nothing
                 # Push arguments with type checking
                 for (arg_idx, arg) in enumerate(args)
@@ -6824,6 +7005,14 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     end
                 end
                 if !_dyneq_ok
+                # WASMTARGET dynamic dispatch: before giving up, try an inline typeId
+                # switch over the compiled specializations (the dynamic call dispatches
+                # on a concrete-struct arg at runtime). Unblocks Markdown.plain/show
+                # recursion over heterogeneous AST nodes (md"…" rendering).
+                _disp = _try_inline_typeid_dispatch(ctx, called_func, args, call_arg_types, idx)
+                if _disp !== nothing
+                    bytes = _disp
+                else
                 # No matching signature - likely dead code from Union type branches
                 # Emit unreachable instead of error (the branch won't be taken at runtime)
                 # PURE-605: Suppress warning for known-safe dynamic dispatch paths where
@@ -6835,6 +7024,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 bytes = UInt8[]
                 push!(bytes, Opcode.UNREACHABLE)
                 ctx.last_stmt_was_stub = true  # PURE-908
+                end
                 end
             end
         else

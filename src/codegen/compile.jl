@@ -1776,9 +1776,17 @@ function compile_module(functions::Vector;
     # Track export names to avoid duplicates (WASM requires unique export names)
     export_name_counts = Dict{String, Int}()
 
+    # WASMTARGET dynamic dispatch: module func indices of discovery-added functions
+    # (see _TRIM_ISOLATED_FUNCS). After assembly, any of these whose bytecode fails
+    # validation is stubbed (a latent-bug in discovery-pulled-in code shouldn't fail
+    # the whole module — entries + their normal deps stay strict).
+    isolated_indices = Set{UInt32}()
+    _isolated_set = _TRIM_ISOLATED_FUNCS[]
+
     # Second pass: compile function bodies
     for (i, (f, arg_types, name, code_info, return_type, global_args, is_closure)) in enumerate(function_data)
         func_idx = UInt32(n_imports + n_existing + i - 1)
+        _this_isolated = !isempty(_isolated_set) && (f, arg_types) in _isolated_set
         # Check if this is an intrinsic function that needs special code generation
         intrinsic_body = is_intrinsic_function(f) ? generate_intrinsic_body(f, arg_types, mod, type_registry) : nothing
 
@@ -1841,8 +1849,24 @@ function compile_module(functions::Vector;
                                     func_registry=func_registry, func_idx=func_idx, func_ref=f,
                                     global_args=global_args, is_compiled_closure=is_closure,
                                     module_globals=module_globals, strict=strict)
-            body = generate_body(ctx)
-            locals = ctx.locals
+            # WASMTARGET dynamic dispatch: ISOLATE discovery-added functions (dispatch
+            # candidates + their transitive deps, pulled in only by the dynamic-dispatch
+            # collection). A latent-bug codegen crash in such a function stubs JUST it
+            # (→ trap only if that runtime type is actually dispatched here), instead of
+            # failing the whole module. Entries + their normal deps stay strict.
+            if _this_isolated
+                try
+                    body = generate_body(ctx)
+                    locals = ctx.locals
+                catch _iso_e
+                    @debug "WASMTARGET: stubbing isolated discovery-added function (codegen crash)" f arg_types _iso_e
+                    body = UInt8[Opcode.UNREACHABLE, Opcode.END]
+                    locals = WasmValType[]
+                end
+            else
+                body = generate_body(ctx)
+                locals = ctx.locals
+            end
         end
 
         # Get param/result types (skip WasmGlobal args)
@@ -1861,6 +1885,7 @@ function compile_module(functions::Vector;
 
         # Add function to module
         actual_idx = add_function!(mod, param_types, result_types, locals, body)
+        _this_isolated && push!(isolated_indices, actual_idx)
 
         # Export the function with a unique name
         export_name = name
@@ -1894,10 +1919,48 @@ function compile_module(functions::Vector;
     clear_char_array_type!()
     clear_utf8_to_js_func!()
 
+    # WASMTARGET dynamic dispatch: stub any discovery-added function whose ASSEMBLED
+    # bytecode fails validation (invalid-but-non-crashing codegen not caught by the
+    # per-function try/catch above). A latent WT codegen bug in code pulled in only by
+    # the dynamic-dispatch discovery stubs that one function (→ trap only if its type is
+    # actually dispatched at runtime) instead of failing the whole module. Entries +
+    # their normal deps stay strict (a validation failure there is rethrown).
+    if !isempty(isolated_indices)
+        _stub_invalid_isolated_funcs!(mod, isolated_indices, n_imports)
+    end
+
     if return_registries
         return (mod, type_registry, func_registry, dispatch_registry)
     end
     return mod
+end
+
+# Validate the assembled module; while a DISCOVERY-ADDED (isolated) function fails
+# validation, replace its body with an `unreachable` stub and re-validate. A failure
+# in a non-isolated function is rethrown (genuine bug, not hidden).
+function _stub_invalid_isolated_funcs!(mod::WasmModule, isolated_indices::Set{UInt32},
+                                       n_imports::Int; max_iters::Int=512)
+    pending = copy(isolated_indices)
+    for _ in 1:max_iters
+        bytes = to_bytes(mod)
+        err = try
+            validate_wasm_bytes(bytes; label="dispatch-isolation")
+            nothing
+        catch e
+            e
+        end
+        err === nothing && return
+        m = match(r"func (\d+) failed to validate", sprint(showerror, err))
+        m === nothing && throw(err)                 # not a per-func error → rethrow
+        fidx = parse(UInt32, m.captures[1])
+        (fidx in pending) || throw(err)             # non-isolated func invalid → genuine bug
+        li = Int(fidx) - n_imports + 1
+        (1 <= li <= length(mod.functions)) || throw(err)
+        old = mod.functions[li]
+        mod.functions[li] = WasmFunction(old.type_idx, WasmValType[], UInt8[Opcode.UNREACHABLE, Opcode.END])
+        delete!(pending, fidx)
+    end
+    throw(ErrorException("dispatch-isolation: exceeded $(max_iters) stub iterations"))
 end
 
 """
