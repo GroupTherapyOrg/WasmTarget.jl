@@ -572,12 +572,22 @@ function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T:
                 wasm_vt = ExternRef  # fallback
             end
         elseif ft <: AbstractVector && !(ft isa Union)
-            # Generic AbstractVector without concrete type - use raw array
+            # Abstract/UnionAll vector FIELD (e.g. `content::Vector` in
+            # Markdown.Admonition). The concrete runtime value is some Vector{T},
+            # which WT represents as a vector-STRUCT (register_vector_type! → a
+            # {typeId, data-array, size} struct), NOT a raw array. Vector-structs
+            # for different element types are independent struct types with no
+            # shared supertype and incompatible (invariant) data-array fields, so
+            # the field cannot be any one concrete vector-struct nor a raw array —
+            # storing a Vector{MD} struct into a raw-array field mismatches at
+            # struct.new. Type it as the universal ref instead (same treatment as
+            # an `Any` field): every vector-struct is a subtype, so stores need no
+            # cast and reads downcast off the inferred SSA type.
+            # (Surfaced by Basic-mathematics Admonition content: `expected (ref
+            # null $rawarray), found (ref null $Vector{MD}-struct)` at func 9.)
             # PURE-046: Check !(ft isa Union) because Union{Memory{UInt8}, Memory{UInt16}, ...}
             # would match ft <: AbstractVector but should be handled as a tagged union instead.
-            elem_type = eltype(ft)
-            array_type_idx = get_array_type!(mod, registry, elem_type)
-            wasm_vt = ConcreteRef(array_type_idx, true)  # nullable reference
+            wasm_vt = AnyRef
         elseif ft === String || ft === Symbol
             # Strings and Symbols are WasmGC byte arrays
             str_type_idx = get_string_array_type!(mod, registry)

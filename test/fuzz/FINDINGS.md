@@ -59,6 +59,32 @@ runtime narrow-shift bug it resembles is **fixed** (see below).
   dead-value bug stays open). Guarded by `@testset "Numeric-struct field struct.new/
   struct.get (WASMTARGET-FUZZ)"`. Also removed a stray `DEBUG_STRUCT_NEW_2EXTERN` stdout
   `println` left in `compile_new`.
+- **heterogeneous-tuple runtime indexing + union-representation consistency (Pluto
+  campaign, 2026-06-15)** — three coupled fixes that turn `Any[a, "x", a]` and
+  `md"…$x…$y…"` interpolation from a hard `unreachable`/null-deref into working code
+  (Basic-mathematics `:n` cell). (1) **Abstract `::Vector` struct FIELD** (e.g.
+  `Markdown.Admonition.content::Vector`, a UnionAll) mapped to a raw array, but every
+  Julia `Vector{T}` *value* is a vector-STRUCT (register_vector_type!) with no shared
+  supertype — `struct.new` mismatched (`expected (ref $rawarray), found (ref
+  $Vector{T}-struct)`). Now → `AnyRef` (structs.jl, `_register_struct_type_impl!`).
+  (2) **Heterogeneous tuple + dynamic index**: `getfield(::Tuple{A,B,…}, i::Int)`
+  (only homogeneous tuples were supported) now emits a runtime if-chain on `i` that
+  reads field `i` and wraps it into `Union{fieldtypes…}` via `emit_wrap_union_value`,
+  so the existing `isa`/π consumers work (calls.jl). `Base.getindex(Any, vals...)`
+  loops exactly this. (3) **`get_concrete_wasm_type` ↔ `julia_to_wasm_type_concrete`
+  union agreement**: the former returned `AnyRef` for a heterogeneous union while the
+  latter (the SSA-local allocator) used the tagged-union STRUCT — so the final SSA
+  store saw a false type mismatch, DROPped the value and substituted `ref.null` →
+  null deref. `get_concrete_wasm_type`'s multi-variant-union branch now mirrors the
+  local allocator (types.jl). Guarded by `@testset "Heterogeneous tuple runtime-index
+  → tagged union"` + `@testset "Abstract ::Vector struct field"`. **Still open** above
+  this: `string(::Markdown.MD)` / `Markdown.plain` recurse `plain(io, content[i])`
+  over heterogeneous AST nodes (Paragraph/Bold/Admonition/…) — WT compiles the
+  recursive call as a single static call with `ref.cast (ref null $MD)`, so it traps
+  ("illegal cast") on a Paragraph. Full markdown rendering needs runtime dynamic
+  dispatch over the AST node types (open-world) — a separate, larger gap; and a
+  CONSTANT heterogeneous tuple with a runtime index still traps (the `obj_arg` is a
+  `Core.Const`, a different compile path than the param-built tuple).
 - **`sinh`/`cosh`/`tanh`(Float64) hyperbolic** — were value-stubs (no native
   codegen): `sinh(x)` emitted nothing on the stack, so `hypot(Inf, sinh(x))`
   failed wasm validation ("expected f64 but nothing on stack"). Implemented via

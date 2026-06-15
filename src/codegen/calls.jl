@@ -3053,7 +3053,79 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
 
                         return bytes
                     end
-                    # Non-homogeneous tuple with dynamic index - fall through to error
+                    # Heterogeneous tuple + dynamic index → produce a tagged-union
+                    # value `Union{fieldtypes...}` via a runtime switch on the index.
+                    # `getfield(::Tuple{A,B,...}, i::Int)` infers to exactly this union,
+                    # and the consumers (`isa`, π-narrowing, memoryrefset!) already
+                    # speak the tagged-union ABI — so wrapping each field into the union
+                    # makes them work unchanged. Surfaced by `Any[a,"x",a]` /
+                    # `md"...$x...$y..."` interpolation (Pluto featured corpus): these
+                    # lower to `Base.getindex(T, vals...)` which loops `vals[i]` over a
+                    # heterogeneous tuple — previously emitted `unreachable`.
+                    if length(elem_types) >= 2
+                        U = Union{elem_types...}
+                        if U isa Union
+                            union_info = get_union_type!(ctx.mod, ctx.type_registry, U)
+                            union_wasm = ConcreteRef(union_info.wasm_type_idx, true)
+
+                            # tuple value → tuple_local
+                            append!(bytes, compile_value(obj_arg, ctx))
+                            tuple_local = length(ctx.locals) + ctx.n_params
+                            push!(ctx.locals, julia_to_wasm_type_concrete(obj_type, ctx))
+                            push!(bytes, Opcode.LOCAL_SET)
+                            append!(bytes, encode_leb128_unsigned(tuple_local))
+
+                            # index (1-based i64) → 0-based i32 → idx_local
+                            append!(bytes, compile_value(field_ref, ctx))
+                            push!(bytes, Opcode.I64_CONST); push!(bytes, 0x01)
+                            push!(bytes, Opcode.I64_SUB)
+                            push!(bytes, Opcode.I32_WRAP_I64)
+                            idx_local = length(ctx.locals) + ctx.n_params
+                            push!(ctx.locals, I32)
+                            push!(bytes, Opcode.LOCAL_SET)
+                            append!(bytes, encode_leb128_unsigned(idx_local))
+
+                            n_fields = length(elem_types)
+                            emit_field_wrap = i -> begin
+                                push!(bytes, Opcode.LOCAL_GET)
+                                append!(bytes, encode_leb128_unsigned(tuple_local))
+                                push!(bytes, Opcode.GC_PREFIX)
+                                push!(bytes, Opcode.STRUCT_GET)
+                                append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
+                                append!(bytes, encode_leb128_unsigned(i + Int(info.field_offset)))
+                                append!(bytes, emit_wrap_union_value(ctx, elem_types[i + 1], U))
+                            end
+                            # nested if-chain: idx==0 ? wrap(f0) : idx==1 ? wrap(f1) : … : wrap(fN-1)
+                            for i in 0:(n_fields - 2)
+                                push!(bytes, Opcode.LOCAL_GET)
+                                append!(bytes, encode_leb128_unsigned(idx_local))
+                                push!(bytes, Opcode.I32_CONST)
+                                append!(bytes, encode_leb128_signed(Int64(i)))
+                                push!(bytes, Opcode.I32_EQ)
+                                push!(bytes, Opcode.IF)
+                                append!(bytes, encode_block_type(union_wasm))
+                                emit_field_wrap(i)
+                                push!(bytes, Opcode.ELSE)
+                            end
+                            emit_field_wrap(n_fields - 1)  # last field = else-default
+                            for _ in 1:(n_fields - 1)
+                                push!(bytes, Opcode.END)
+                            end
+                            # Land the union result in a scratch local and end with a
+                            # clean `local.get`. The if/else block ends in END, which the
+                            # statement-assignment heuristics (which peek at the tail
+                            # instruction to infer the produced type) mis-parse — they'd
+                            # drop the value and substitute ref.null. A trailing local.get
+                            # of the correctly-typed scratch is unambiguous.
+                            result_local = length(ctx.locals) + ctx.n_params
+                            push!(ctx.locals, union_wasm)
+                            push!(bytes, Opcode.LOCAL_SET)
+                            append!(bytes, encode_leb128_unsigned(result_local))
+                            push!(bytes, Opcode.LOCAL_GET)
+                            append!(bytes, encode_leb128_unsigned(result_local))
+                            return bytes
+                        end
+                    end
                 elseif field_idx !== nothing && field_idx >= 1 && field_idx <= length(info.field_names)
                     append!(bytes, compile_value(obj_arg, ctx))
                     push!(bytes, Opcode.GC_PREFIX)

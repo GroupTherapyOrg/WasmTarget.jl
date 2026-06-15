@@ -2004,8 +2004,36 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
             # Union{Nothing, T} -> concrete type of T (nullable reference)
             return get_concrete_wasm_type(inner_type, mod, registry)
         else
-            # Multi-variant union - fall back to generic type
-            return julia_to_wasm_type(T)
+            # Multi-variant union. MUST agree with julia_to_wasm_type_concrete
+            # (which allocates the SSA local for the union value): if the two
+            # disagree, the final SSA store sees a false type mismatch, DROPs the
+            # value and substitutes ref.null → null-deref at runtime. The plain
+            # julia_to_wasm_type() fallback returns AnyRef for HETEROGENEOUS unions
+            # (e.g. Union{Int64,String}) while the local is the tagged-union STRUCT.
+            # Mirror the local allocator's cases here. Surfaced by heterogeneous
+            # tuple indexing — `Any[a,"x",a]` / `md"…$x…$y…"` interpolation.
+            non_nothing_u = filter(t -> t !== Nothing, Base.uniontypes(T))
+            all_numeric_u = !isempty(non_nothing_u) && all(non_nothing_u) do t
+                wt = julia_to_wasm_type(t)
+                wt === I32 || wt === I64 || wt === F32 || wt === F64
+            end
+            if all_numeric_u
+                # Numeric-only union: widest numeric type, no boxing.
+                return julia_to_wasm_type(T)
+            end
+            if all(t -> t isa DataType && t <: Type, non_nothing_u) && registry.jl_datatype_idx !== nothing
+                # Union of Type{T} values → JlDataType struct ref.
+                return ConcreteRef(registry.jl_datatype_idx, true)
+            end
+            is_all_struct = all(non_nothing_u) do t
+                (isconcretetype(t) && isstructtype(t) && t !== String && t !== Symbol) || t <: Tuple
+            end
+            if is_all_struct
+                return StructRef
+            end
+            # Heterogeneous non-numeric union → tagged-union struct ref.
+            union_info = get_union_type!(mod, registry, T)
+            return ConcreteRef(union_info.wasm_type_idx, true)
         end
     elseif T === Core.SimpleVector
         # PURE-9064: Core.SimpleVector maps to $JlSVec array type when JlType hierarchy is active.

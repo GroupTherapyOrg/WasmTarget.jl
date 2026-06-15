@@ -143,6 +143,27 @@ end
 # the struct ref. Sign-fill across the n<64 / n>=64 boundary, incl. negatives.
 _wt_i128ashr_big(a::Int64)::Int64  = Int64((Int128(a) << 80) >> 80)            # n>=64, recovers sign
 _wt_i128ashr_neg(a::Int64)::Int64  = Int64(((-(Int128(abs(a)) << 50) - Int128(1)) >> 55) & Int128(typemax(Int64)))
+# WASMTARGET-FUZZ: heterogeneous tuple with a RUNTIME index → tagged union. A
+# param-built Tuple{Int,String,…} indexed at runtime (`t[i]`) infers Union{Int,String};
+# previously emitted `unreachable`. Now field i is wrapped into the union so isa/π
+# consume it. `Base.getindex(Any, vals...)` (the `Any[…]` literal) and md-string
+# interpolation lower to exactly this loop. Pairs with the get_concrete_wasm_type ↔
+# julia_to_wasm_type_concrete union-rep agreement (else the SSA store dropped it → null).
+_wt_htup(a::Int64)::Int64 = begin
+    t = (a, "x", a + 5, "y", a + 10)
+    s = 0
+    for i in 1:5
+        v = t[i]
+        if v isa Int64; s += v; end
+    end
+    s
+end
+_wt_anyvec_len(a::Int64)::Int64 = Int64(length(Any[a, "x", a]))
+# WASMTARGET-FUZZ: abstract/UnionAll `::Vector` struct FIELD (like
+# Markdown.Admonition.content). A Vector{T} value is a vector-STRUCT, not the raw
+# array the field used to map to → struct.new mismatched. Field is now AnyRef.
+struct _WTAbsVecField; content::Vector; end
+_wt_absvecfield(n::Int64)::Int64 = Int64(length(_WTAbsVecField([n, n + 1, n + 2]).content))
 # @generated must be top-level (illegal inside a phase function), so hoist it.
 @generated function f_gen(x)
     x <: Int64 ? :(x * Int64(2)) : :(x * 3.0)
@@ -7479,6 +7500,27 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_wt_i128ashr_big, Int64(-987654321)).pass
             @test compare_julia_wasm(_wt_i128ashr_neg, Int64(123456789)).pass
             @test compare_julia_wasm(_wt_i128ashr_neg, Int64(-987654321)).pass
+        end
+
+        @testset "Heterogeneous tuple runtime-index → tagged union (WASMTARGET-FUZZ)" begin
+            # getfield(::Tuple{A,B,…}, i::Int) with a runtime i → Union{A,B,…} tagged
+            # union (only homogeneous tuples were supported; heterogeneous emitted
+            # `unreachable`). Plus get_concrete_wasm_type ↔ julia_to_wasm_type_concrete
+            # union-rep agreement — else the final SSA store sees a false type mismatch,
+            # DROPs the value and substitutes ref.null → null deref. Underlies `Any[…]`
+            # construction and md"…$x…$y…" interpolation (Basic-mathematics `:n` cell).
+            @test compare_julia_wasm(_wt_htup, Int64(7)).pass        # 7+12+17 = 36
+            @test compare_julia_wasm(_wt_htup, Int64(0)).pass        # 0+5+10 = 15
+            @test compare_julia_wasm(_wt_anyvec_len, Int64(3)).pass  # length(Any[3,"x",3]) = 3
+        end
+
+        @testset "Abstract ::Vector struct field (WASMTARGET-FUZZ)" begin
+            # An abstract/UnionAll `::Vector` field (Markdown.Admonition.content) maps to
+            # AnyRef — a Vector{T} value is a vector-STRUCT with no shared supertype, so
+            # the old raw-array field type mismatched at struct.new (`expected (ref
+            # $rawarray), found (ref $Vector{T}-struct)`).
+            @test compare_julia_wasm(_wt_absvecfield, Int64(5)).pass   # length = 3
+            @test compare_julia_wasm(_wt_absvecfield, Int64(0)).pass
         end
 
         # Cofunctions, Hyperbolic inverse, Other inverse trig, Hyperbolic cofunctions
