@@ -260,6 +260,17 @@ function _build_arg!(accs, names, T::Type)
         nf = _acc!(accs, names, "_mkv_new_$m", _make_vnew(T), (Int64,))
         sf = _acc!(accs, names, "_mkv_set_$m", _make_vset(T), (T, Int64, E))
         return Dict("k" => "vec", "new" => nf, "set" => sf, "el" => el)
+    elseif T <: Matrix && isconcretetype(T)
+        # 2D bond (convolution filters, image matrices). WT compiles 2D Array
+        # construction + (i,j) indexing, so this is bridge-only: marshal as
+        # new(rows,cols) + set(i,j,x) over a row-major element stream.
+        E = eltype(T)
+        el = _build_arg!(accs, names, E)
+        el === nothing && return nothing
+        m = _mangle(T)
+        nf = _acc!(accs, names, "_mkm_new_$m", _make_mnew(T), (Int64, Int64))
+        sf = _acc!(accs, names, "_mkm_set_$m", _make_mset(T), (T, Int64, Int64, E))
+        return Dict("k" => "mat", "new" => nf, "set" => sf, "el" => el)
     elseif (isstructtype(T) || T <: Tuple) && isconcretetype(T)
         n = fieldcount(T)
         fs = Any[]
@@ -290,6 +301,21 @@ function _make_vset(::Type{T}) where {T<:Vector}
         f = Symbol("_vsetfn_", _mangle(T))
         E = eltype(T)
         @eval (function $f(v::$T, i::Int64, x::$E)::Int64; v[Int(i)] = x; Int64(0); end)
+    end
+end
+
+function _make_mnew(::Type{T}) where {T<:Matrix}
+    get!(_FN_CACHE, (:mnew, T)) do
+        f = Symbol("_mnewfn_", _mangle(T))
+        @eval (function $f(r::Int64, c::Int64)::$T; $T(undef, Int(r), Int(c)); end)
+    end
+end
+
+function _make_mset(::Type{T}) where {T<:Matrix}
+    get!(_FN_CACHE, (:mset, T)) do
+        f = Symbol("_msetfn_", _mangle(T))
+        E = eltype(T)
+        @eval (function $f(m::$T, i::Int64, j::Int64, x::$E)::Int64; m[Int(i), Int(j)] = x; Int64(0); end)
     end
 end
 
@@ -327,6 +353,10 @@ function value_to_tree(d, v)
         return Dict("f" => Any[value_to_tree(d["fs"][i]["d"], getfield(v, i)) for i in eachindex(d["fs"])])
     elseif k == "vec"
         return Dict("a" => Any[value_to_tree(d["el"], x) for x in v])
+    elseif k == "mat"
+        r, c = size(v)
+        return Dict("r" => r, "c" => c,
+                    "a" => Any[value_to_tree(d["el"], v[i, j]) for i in 1:r for j in 1:c])  # row-major
     end
     error("value_to_tree: bad kind $k")
 end
@@ -351,13 +381,19 @@ const build = (d, t) => {
       for (let i = 0; i < t.a.length; i++) ex[d.set](v, BigInt(i + 1), build(d.el, t.a[i]));
       return v;
     }
+    case 'mat': {
+      const m = ex[d.new](BigInt(t.r), BigInt(t.c));
+      let p = 0;
+      for (let i = 1; i <= t.r; i++) for (let j = 1; j <= t.c; j++) ex[d.set](m, BigInt(i), BigInt(j), build(d.el, t.a[p++]));  // row-major
+      return m;
+    }
     default: throw new Error('bad-arg-desc-kind ' + d.k);
   }
 };
 """
 
 # ── Mutability: which arg types need post-call re-reads ──────────────────────
-ismutable_shape(T::Type) = T <: Vector || (isstructtype(T) && ismutabletype(T))
+ismutable_shape(T::Type) = T <: Array || (isstructtype(T) && ismutabletype(T))
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Decode + compare (Julia side)
