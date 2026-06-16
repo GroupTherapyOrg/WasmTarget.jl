@@ -10735,6 +10735,42 @@ console.log(JSON.stringify({
         @test compare_julia_wasm(_wt_ho_entry, 5).pass
     end
 
+    # Downstream regression (WasmMakie figure islands via Therapy): a byte-fixer
+    # pass must not corrupt a `select_t`/`if` REF type operand. Type index 167
+    # LEB128-encodes as `0xA7 0x01`, and 0xA7 is also `i32.wrap_i64`'s opcode, so
+    # fix_i32_wrap_after_i32_ops — which lacked select_t/ref-blocktype operand
+    # skipping — walked INTO the operand, saw 0xA7, and stripped it, rewriting
+    # `(ref null 167)` → `(ref null 1)`. That broke the 2×2 reactive dashboard
+    # island ("type mismatch: expected (ref null $A), found (ref null $B)").
+    @pphase "Phase 76: select_t / if-blocktype operand preservation (downstream)" begin
+        fixwrap = WasmTarget.fix_i32_wrap_after_i32_ops
+        SELECT_T = 0x1c; REF_NULL = 0x63; WRAP = 0xa7; IFOP = 0x04; ENDOP = 0x0b
+        leb167 = UInt8[0xa7, 0x01]  # unsigned LEB128 of type index 167
+
+        @testset "select_t (ref null 167) operand survives the wrap fixer" begin
+            # local.get 0/1/2 ; select_t 1 (ref null 167) ; ref.cast 167 ; end
+            sel = UInt8[0x20,0x00, 0x20,0x01, 0x20,0x02,
+                        SELECT_T, 0x01, REF_NULL, leb167...,
+                        0xfb, 0x17, leb167...,  # ref.cast 167
+                        ENDOP]
+            out = fixwrap(copy(sel))
+            @test out == sel                                  # untouched
+            si = findfirst(==(SELECT_T), out)
+            @test out[si:si+4] == UInt8[SELECT_T, 0x01, REF_NULL, 0xa7, 0x01]
+        end
+
+        @testset "if (ref null 167) blocktype operand survives" begin
+            blk = UInt8[IFOP, REF_NULL, leb167..., 0x20,0x00, ENDOP, ENDOP]
+            @test fixwrap(copy(blk)) == blk
+        end
+
+        @testset "a genuinely spurious i32.wrap_i64 is still stripped" begin
+            # i32.eq (i32-producing, 0x46) followed by i32.wrap_i64 → wrap removed
+            spur = UInt8[0x20,0x00, 0x20,0x01, 0x46, WRAP, ENDOP]
+            @test fixwrap(copy(spur)) == UInt8[0x20,0x00, 0x20,0x01, 0x46, ENDOP]
+        end
+    end
+
 end  # end of phase-registration block
 
 # The dedicated fuzz pass (WT_FUZZ=1) skips the codegen phases entirely — it exists

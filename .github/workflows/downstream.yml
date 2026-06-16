@@ -1,0 +1,79 @@
+name: Downstream
+# Reactant.jl-style downstream integration testing. WasmTarget is a compiler;
+# the packages that compile THROUGH it (WasmMakie figures, Therapy reactive
+# islands) are where a codegen regression actually shows up. So run THEIR test
+# suites against this checkout of WasmTarget — a green WasmTarget unit suite is
+# necessary but not sufficient. Pairs with the in-suite regression in
+# test/runtests.jl (Phase 76: select_t / if-blocktype operand preservation),
+# which locks the specific bug this guards against.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+defaults:
+  run:
+    shell: bash
+jobs:
+  downstream:
+    name: ${{ matrix.pkg }} (downstream)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pkg: [WasmMakie.jl, Therapy.jl]
+    steps:
+      # This WasmTarget checkout is the version under test. The downstream test
+      # environments resolve it via a sibling path (WasmMakie's test [sources]
+      # points at ../../WasmTarget.jl) or via Pkg.develop (Therapy), so their
+      # suites exercise THIS codegen rather than a registered release.
+      - uses: actions/checkout@v4
+        with:
+          path: WasmTarget.jl
+      - uses: actions/checkout@v4
+        with:
+          repository: GroupTherapyOrg/WasmMakie.jl
+          path: WasmMakie.jl
+      - uses: actions/checkout@v4
+        with:
+          repository: GroupTherapyOrg/Therapy.jl
+          path: Therapy.jl
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+      - uses: julia-actions/cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-tools
+
+      # WasmMakie's suite compiles dozens of real Makie figures through
+      # WasmTarget and validates every emitted module — the densest downstream
+      # codegen signal. Its test env already sources WasmTarget from
+      # ../../WasmTarget.jl (this checkout).
+      - name: WasmMakie.jl test suite
+        if: matrix.pkg == 'WasmMakie.jl'
+        working-directory: WasmMakie.jl
+        env:
+          WASMMAKIE_SKIP_C002: '1'
+        run: |
+          julia --project=test -e 'import Pkg; Pkg.instantiate()'
+          julia --project=test test/c002_parity.jl
+          julia --project=test test/runtests.jl || julia --project=test test/runtests.jl
+
+      # Therapy compiles reactive @island components (the dashboard that the
+      # select_t fix unblocked). Point its env at this WasmTarget and run its
+      # suite.
+      - name: Therapy.jl test suite
+        if: matrix.pkg == 'Therapy.jl'
+        working-directory: Therapy.jl
+        run: |
+          julia --project=. -e 'import Pkg; Pkg.develop(Pkg.PackageSpec(path="../WasmTarget.jl")); Pkg.instantiate()'
+          julia --project=. -e 'import Pkg; Pkg.test()'
