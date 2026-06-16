@@ -444,12 +444,49 @@ function fix_i32_wrap_after_i32_ops(bytes::Vector{UInt8})::Vector{UInt8}
                 i += 1
                 done && break
             end
-        elseif op == 0x02 || op == 0x03 || op == 0x04  # block/loop/if — 1 byte blocktype
+        elseif op == 0x1C  # select_t: count:LEB then `count` valtypes (1 byte, or 0x63/0x64 + heaptype LEB)
+            # Skip the whole instruction. Without this the scanner walks INTO the
+            # type operands: a (ref null $T) operand is 0x63 + LEB, and that LEB's
+            # first byte is 0xA7 for type index 167 (=i32.wrap_i64's opcode), which
+            # this pass then strips as a "spurious wrap" — corrupting the select's
+            # result type (ref null 167 → ref null 1, "type mismatch: expected
+            # (ref null $A), found (ref null $B)" in reactive figure islands).
+            last_opcode = 0x00
+            i += 1
+            cnt = 0; sh = 0
+            while i <= length(bytes)
+                b = bytes[i]; push!(result, b); i += 1
+                cnt |= Int(b & 0x7f) << sh
+                (b & 0x80) == 0 && break
+                sh += 7
+            end
+            for _ in 1:cnt
+                i <= length(bytes) || break
+                vt = bytes[i]; push!(result, vt); i += 1
+                if vt == 0x63 || vt == 0x64  # (ref null ht)/(ref ht): heaptype LEB follows
+                    while i <= length(bytes)
+                        push!(result, bytes[i])
+                        done = (bytes[i] & 0x80) == 0
+                        i += 1
+                        done && break
+                    end
+                end
+            end
+        elseif op == 0x02 || op == 0x03 || op == 0x04  # block/loop/if — blocktype
             last_opcode = op
             i += 1
             if i <= length(bytes)
-                push!(result, bytes[i])
-                i += 1
+                bt = bytes[i]; push!(result, bt); i += 1
+                # ref-typed blocktypes ((ref null ht)/(ref ht)) carry a heaptype LEB
+                # beyond the first byte; skipping only 1 byte desyncs the scanner.
+                if bt == 0x63 || bt == 0x64
+                    while i <= length(bytes)
+                        push!(result, bytes[i])
+                        done = (bytes[i] & 0x80) == 0
+                        i += 1
+                        done && break
+                    end
+                end
             end
         else
             # Single-byte instruction (no operands): comparisons, arithmetic, drops, etc.
