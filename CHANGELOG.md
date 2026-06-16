@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.9](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.8...v0.3.9) (2026-06-16)
+
+
+### Bug Fixes
+
+* don't corrupt select_t / if ref-type operands in the wrap fixer ([9a5bf8b](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/9a5bf8b2746d7fa8a4bf6f53326ee9c67a77f8bf))
+* don't corrupt select_t / if ref-type operands in the wrap fixer ([5ea46b2](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/5ea46b2f8d36c3f57221f666c890eee3e4a9f7de))
+
 ## [0.3.8](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.7...v0.3.8) (2026-06-13)
 
 
