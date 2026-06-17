@@ -130,6 +130,14 @@ An autonomous agent told "make the differential pass" can cheat. These are
    `generators.jl`/`statements.jl`/`catalogue.jl` with human review). It does **not**
    edit the oracle match logic, the strict-mode fatality table, or delete/skip tests.
 
+**Guard-flag policy (Dale, 2026-06-17):** the **P0 harness tasks (G1/G2/G3) are
+sanctioned** to modify the harness itself (diagnostics.jl fatality table, property.jl
+oracle/sampling, canon.jl/ledger.jl dedup) — `loop_guard.sh` *will* flag them; show the
+diff and proceed **without** a hard stop. The hard-**STOP-and-ask** is reserved for guard
+flags during **real gap-fix iterations**, where touching the oracle/generators/fatality
+table IS a cheat. Once G1–G3 land, any guard flag is presumed a cheat until a human says
+otherwise.
+
 ---
 
 ## 4. One iteration — the runbook
