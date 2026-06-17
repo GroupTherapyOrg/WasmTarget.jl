@@ -591,6 +591,8 @@ if abspath(PROGRAM_FILE) == @__FILE__
         verify()
     elseif length(ARGS) >= 1 && ARGS[1] == "coverage"
         write_coverage!()
+    elseif length(ARGS) >= 1 && ARGS[1] == "rank"
+        Ledger.rank_gaps()
     elseif length(ARGS) >= 1 && ARGS[1] == "sweep"
         # Optional second arg: per-worker time budget in seconds (default 1800).
         sweep_parallel(time_budget = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 1800)

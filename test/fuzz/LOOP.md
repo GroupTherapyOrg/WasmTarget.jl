@@ -218,6 +218,15 @@ the same Int32-keyed-Dict-with-`sum`-key collision). Fix:
   runs (the module-sensitivity caveat in `ledger.jl:247-256`), tag it `unstable` and
   exclude from the green metric until a human confirms.
 
+**Implemented (G3):** `julia --project=test/fuzz test/fuzz/run.jl rank` →
+`Ledger.rank_gaps()` groups open gaps into root-cause **families** and ranks by
+`count × (tier+1)`. Run it at the start of each gap-fix iteration and work the top row.
+*Precise per-diagnostic-site dedup is DEFERRED* (it needs compile-time instrumentation to
+capture the `(kind, julia_loc)` of the failing site — runtime traps carry no site in the
+ledger). It isn't blocking: fixing a high-fan-in root auto-closes its whole cluster via
+`verify`, which dissolves the flood. Revisit only if near-duplicate gaps keep accreting
+*after* the known roots (abstract-Dict-key, median) are closed.
+
 ---
 
 ## 7. Roadmap — P0 guardrail hardening first, then the frontier
