@@ -1,5 +1,10 @@
 # Differential fuzzer — the self-fulfilling correctness loop
 
+> **Driving an autonomous campaign?** Read **`LOOP.md`** first — it is the operational
+> contract for the WasmTarget soundness `/loop` (tiered subset, anti-reward-hacking
+> guardrails, per-iteration runbook, KPI). `loop_guard.sh` enforces the mechanical
+> guardrails each iteration. This README describes the apparatus those drive.
+
 Generates **well-typed** random compositions of Base functions and checks each
 against native Julia. Native is both the **oracle** (the right answer) and the
 **validity filter** (if it doesn't infer/run, the program is discarded before
