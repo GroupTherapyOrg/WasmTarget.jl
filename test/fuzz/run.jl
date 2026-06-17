@@ -32,6 +32,7 @@ include(joinpath(FUZZ_DIR, "generators.jl"));  using .FuzzGen
 include(joinpath(FUZZ_DIR, "statements.jl"));  using .FuzzStatements
 include(joinpath(FUZZ_DIR, "canon.jl"));       using .FuzzCanon
 FuzzStructPool.build_pool!()   # deterministic (seeded) — same pool every process
+include(joinpath(FUZZ_DIR, "oracle_policy.jl")); using .FuzzOraclePolicy
 include(joinpath(FUZZ_DIR, "property.jl"));     using .FuzzProperty
 include(joinpath(FUZZ_DIR, "ledger.jl"));       using .Ledger
 

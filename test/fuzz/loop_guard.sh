@@ -22,6 +22,15 @@ added="$(printf '%s\n' "$diff" | grep -E '^\+' | grep -vE '^\+\+\+' || true)"
 flagged=0
 report() { printf 'GUARD  ✗ %s\n' "$1"; flagged=1; }
 
+# 0. Frozen oracle policy: tolerances are hash-pinned so the loop can't widen them
+#    to bury a divergence. Any change must be a deliberate human re-pin.
+pol="test/fuzz/oracle_policy.jl"; polsha="test/fuzz/oracle_policy.jl.sha256"
+if [ -f "$pol" ] && [ -f "$polsha" ]; then
+  want="$(tr -d '[:space:]' < "$polsha")"
+  got="$(shasum -a 256 "$pol" | awk '{print $1}')"
+  [ "$want" = "$got" ] || report "oracle_policy.jl changed (sha $got != pinned $want) — tolerances are FROZEN; re-pin deliberately"
+fi
+
 # 1. Oracle bypass.
 printf '%s\n' "$added" | grep -nqE 'strict[[:space:]]*=[[:space:]]*false' \
   && report "introduces strict=false — bypasses the soundness gate"
