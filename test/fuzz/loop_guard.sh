@@ -63,6 +63,12 @@ printf '%s\n' "$added" | grep -nqE 'soundness_fatal|TRIM_ENTRY_NAMES|_fatal[[:sp
 printf '%s\n' "$added" | grep -nqE '@test_skip|@test_broken' \
   && report "adds @test_skip/@test_broken — not a fix"
 
+# 8. Reproducer-weakening: edits to the verify reproducer harness can fake-close gaps
+#    (legit only for verify-completeness fixes like adding stdlib imports — confirm intent).
+if git diff "$base" -- test/fuzz/ledger.jl 2>/dev/null | grep -qE '_run_reproducer|verify_gaps|_set_status'; then
+  report "edits ledger.jl verify/reproducer logic — confirm it's not weakening gap verification"
+fi
+
 if [ "$flagged" -eq 1 ]; then
   echo "loop_guard: SUSPICIOUS DIFF — stop and get human review before committing."
   exit 1
