@@ -926,6 +926,72 @@ function compare_julia_wasm_vec(f, args...; optimize::Bool=false)
 end
 
 """
+    compare_julia_wasm_bridge(f, args...; rettype=nothing, optimize=false) -> NamedTuple
+
+Robust differential check for `f` over scalar args (Int/Float/Bool/Char) whose
+RETURN is ANY bridge-supported type — `String`, structs, `Vector`, tuples, nested
+combos — not just the scalars/`_bv_` vectors `compare_julia_wasm`/`_vec` handle.
+
+Uses the in-package bit-exact `WasmTarget.Bridge` (`descriptor` → `WALK_JS` →
+`tree_matches`), i.e. the SAME transport PlutoIslands and the differential fuzzer
+use. This is what lets real island cells (which return strings/HTML/structs) be
+exercised directly in WT's own unit suite instead of only in downstream CI: the
+plain harness `JSON.stringify`s a WasmGC array/struct ref to `"undefined"`, while
+the bridge walks it field-by-field.
+
+Returns `(pass, expected, actual, skipped, wasm_size)`. When Node is unavailable,
+`skipped=true, pass=true`. A native throw is matched by a wasm trap.
+"""
+function compare_julia_wasm_bridge(f, args...; rettype=nothing, optimize::Bool=false)
+    if !WasmRunner.runner_available()
+        return (pass=true, expected=nothing, actual=nothing, skipped=true, wasm_size=0)
+    end
+    arg_types = map(typeof, args)
+    nat = try (true, f(args...)) catch e; (false, e) end
+    rt = rettype === nothing ?
+        Core.Compiler.widenconst(Base.code_typed(f, Tuple(arg_types))[1][2]) : rettype
+    rt === Union{} && (rt = Int64)
+    dp = WasmTarget.Bridge.descriptor(rt)
+    dp === nothing && error("compare_julia_wasm_bridge: return type $rt is outside the bridge universe")
+    desc, accs = dp
+    fname = string(nameof(f))
+    func_list = Any[(f, Tuple(arg_types), fname)]
+    append!(func_list, accs)
+    bytes = WasmTarget.compile_multi(func_list; strict=true, validate=true, optimize=optimize)
+    inputs_js = "[[" * join((format_js_arg(a) for a in args), ", ") * "]]"
+    driver = """
+    const inputs = $(inputs_js);
+    const _io = { write_string(){}, write_int(){}, write_float(){}, write_bool(){}, write_newline(){}, write_nothing(){} };
+    const importObject = { Math: { pow: Math.pow }, io: _io };
+    const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
+    const ex = instance.exports;
+    const f = ex['$fname'];
+    const desc = $(JSON.json(desc));
+    $(WasmTarget.Bridge.WALK_JS)
+    return inputs.map(args => {
+        try { return { ok: walk(desc, f(...args)) }; }
+        catch (e) { return { trap: String(e && e.message || e) }; }
+    });
+    """
+    status, results = WasmRunner.run_driver_batch(bytes, driver; ninputs=1)
+    status === :nonode && return (pass=true, expected=(nat[1] ? nat[2] : :throw),
+                                  actual=nothing, skipped=true, wasm_size=length(bytes))
+    if status === :error
+        return (pass = !nat[1], expected=(nat[1] ? nat[2] : :throw),
+                actual="WASM_ERROR", skipped=false, wasm_size=length(bytes))
+    end
+    r = results[1]
+    if haskey(r, "trap")
+        return (pass = !nat[1], expected=(nat[1] ? nat[2] : :throw),
+                actual="trap: " * string(get(r, "trap", "?")), skipped=false, wasm_size=length(bytes))
+    end
+    walked = r["ok"]
+    pass = nat[1] && WasmTarget.Bridge.tree_matches(desc, nat[2], walked)
+    return (pass=pass, expected=(nat[1] ? nat[2] : :throw),
+            actual=walked, skipped=false, wasm_size=length(bytes))
+end
+
+"""
 Parse a value to Float64, handling string markers for NaN/Inf.
 """
 function _parse_f64(x)

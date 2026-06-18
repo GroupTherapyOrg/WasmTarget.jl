@@ -7565,6 +7565,23 @@ console.log(JSON.stringify({
                 strict=true, validate=true, optimize=false); true)
         end
 
+        @testset "PlutoIslands fractals island — full String via bridge (WASMTARGET-INTEGRATION)" begin
+            # Robust in-WT integration fixture for the PlutoIslands fractals island
+            # (@bind c ComplexNumberPicker(default=.9+.4im)): the island reactively
+            # computes c = t(point.x) - im*t(point.y), t(x)=(x-150)/120, and renders
+            # string(c) — the "0.9 + 0.4im" label the island survey flagged as wasm "".
+            # Uses compare_julia_wasm_bridge (the in-package bit-exact WasmTarget.Bridge,
+            # the SAME transport PI uses) so the FULL String return is decoded + compared
+            # byte-for-byte — not a scalar proxy. Previously impossible in WT's unit suite:
+            # the plain harness JSON.stringifies a WasmGC array ref to "undefined". This is
+            # the real fractals cell, exercising Float64 arith + complex() + string(::Complex).
+            _wt_pi_fractals_clabel(px::Float64, py::Float64)::String =
+                string(complex((px - 150.0) / 120.0, -((py - 150.0) / 120.0)))
+            @test compare_julia_wasm_bridge(_wt_pi_fractals_clabel, 258.0, 102.0; rettype=String).pass  # default → "0.9 + 0.4im"
+            @test compare_julia_wasm_bridge(_wt_pi_fractals_clabel, 270.0,  30.0; rettype=String).pass  # "1.0 + 1.0im"
+            @test compare_julia_wasm_bridge(_wt_pi_fractals_clabel, 150.0, 270.0; rettype=String).pass  # negative imag → " - "
+        end
+
         @testset "Int128 arithmetic right shift (WASMTARGET-FUZZ)" begin
             # emit_int128_ashr: ashr_int gained the is_128bit branch (was missing,
             # unlike shl_int/lshr_int) → signed Int128 >> now sign-fills correctly
