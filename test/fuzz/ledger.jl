@@ -23,7 +23,7 @@
 
 module Ledger
 
-export Gap, gap_id, record_gap!, verify_gaps!, regenerate_index!, open_gaps, load_gaps
+export Gap, gap_id, record_gap!, verify_gaps!, regenerate_index!, open_gaps, load_gaps, rank_gaps
 
 const LEDGER_DIR = joinpath(@__DIR__, "failures")
 
@@ -204,6 +204,52 @@ end
 
 open_gaps() = filter(g -> get(g, "status", "open") == "open", load_gaps())
 
+# --- Leverage ranking (G3) ---------------------------------------------------
+# Group OPEN gaps into coarse root-cause FAMILIES and rank by leverage
+# (count × (tier+1)), so the loop fixes the highest-fan-in root first instead of
+# the easiest shrink — e.g. ~10 abstract-Dict-key gaps share ONE root, so closing
+# it clears the whole cluster. The family tag is a transparent keyword rollup over
+# the construct; precise per-diagnostic-site dedup would need compile-time
+# instrumentation (DEFERRED — in practice fixing a high-fan-in root dissolves its
+# cluster, which is the point of ranking). Tier weight up-ranks frontier work so a
+# lone T1/T2 gap isn't buried under T0 polish. See test/fuzz/LOOP.md §6.
+const GAP_FAMILIES = [
+    ("abstract-Dict key (Int-widen)", r"Dict\(.*Int(8|16|32)", 0),
+    ("median / quantile",             r"median\(|quantile\(",   0),
+    ("Complex display",               r"Complex",               2),
+    ("Matrix / hvcat element",        r"Matrix|hvcat",          0),
+    ("dynamic dispatch",              r"dispatch|dynamic",      1),
+    ("closure dependency pass",       r"closure",               1),
+]
+_gap_family(g) = begin
+    c = get(g, "construct", "")
+    for (name, re, tier) in GAP_FAMILIES
+        occursin(re, c) && return (name, tier)
+    end
+    ("other (singleton)", 0)
+end
+
+"""
+    rank_gaps(; io=stdout) -> Vector
+
+Print OPEN gaps grouped by root-cause family, ranked by leverage
+(`count × (tier+1)`). The loop should work the top row first.
+"""
+function rank_gaps(; io = stdout)
+    gaps = filter(g -> get(g, "status", "open") == "open", load_gaps())
+    groups = Dict{Tuple{String,Int},Vector{String}}()
+    for g in gaps
+        push!(get!(groups, _gap_family(g), String[]), get(g, "id", "?"))
+    end
+    ranked = sort(collect(groups); by = kv -> -(length(kv.second) * (kv.first[2] + 1)))
+    println(io, "Open-gap leverage ranking — $(length(gaps)) open · score = count × (tier+1)")
+    for ((name, tier), ids) in ranked
+        println(io, "  [score $(length(ids) * (tier + 1)) | $(length(ids))×T$tier]  $name")
+        println(io, "        ", join(ids, "  "))
+    end
+    return ranked
+end
+
 function _extract_first_code_block(text::AbstractString)
     m = match(r"```julia\n(.*?)\n```"s, text)
     return m === nothing ? "" : m.captures[1]
@@ -265,6 +311,13 @@ function _run_reproducer(snippet::AbstractString)
     m = Module(gensym(:gap))
     try
         Core.eval(m, :(using WasmTarget))
+        # Stdlibs the fuzz catalogue compiles against (Statistics/Dates/Random): a
+        # stdlib reproducer (e.g. `median(...)`) references these, so WITHOUT importing
+        # them the snippet can't resolve the function and the gap can NEVER auto-close —
+        # a false-OPEN regardless of compiler progress (the code may compile fine). Load
+        # them here so verify reflects reality. try-guarded so a missing stdlib (e.g. when
+        # run from a leaner env) never aborts the whole reproducer.
+        try; Core.eval(m, :(using Statistics, Dates, Random)); catch; end
         for f in _PRELOAD                              # full bridge stack — the universal
             Base.include(m, f)                         # reproducers depend on all of it
         end

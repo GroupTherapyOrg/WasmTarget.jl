@@ -139,6 +139,13 @@ end
 
 # --- The choke point --------------------------------------------------------
 
+# G1 (soundness): paranoid stub mode. When `WT_PARANOID_STUBS` is set, NO
+# value-stub is ever downgraded — every `:value_stub` is fatal under strict,
+# regardless of entry/discovered status (closes the downgrade hole in
+# `record_unsupported!`). Off by default so normal compiles are unchanged; the
+# autonomous soundness `/loop` + CI run with it ON. See test/fuzz/LOOP.md §7.
+_paranoid_stubs() = get(ENV, "WT_PARANOID_STUBS", "0") != "0"
+
 """
     record_unsupported!(ctx, kind, construct; idx=0, detail=nothing, soundness_fatal=(kind===:value_stub)) -> Nothing
 
@@ -172,8 +179,13 @@ function record_unsupported!(ctx, kind::Symbol, construct::AbstractString;
     # machinery) the whitelist never compiled. On DISCOVERED (non-entry)
     # functions, downgrade value-stubs to loud runtime stubs for parity with
     # legacy behavior; entry functions keep full strictness.
+    #
+    # G1 (soundness): the downgrade below is a hole — a buried wrong-value stub on
+    # a discovered function compiles "clean" and only traps off-sample. Paranoid
+    # mode (`_paranoid_stubs()`) SKIPS the downgrade so EVERY value-stub stays
+    # fatal under strict. See test/fuzz/LOOP.md §7.
     local _fatal = ctx.strict && soundness_fatal
-    if _fatal && kind === :value_stub
+    if _fatal && kind === :value_stub && !_paranoid_stubs()
         local _entries = TRIM_ENTRY_NAMES[]
         if _entries !== nothing && !(_ctx_func_name(ctx) in _entries)
             _fatal = false

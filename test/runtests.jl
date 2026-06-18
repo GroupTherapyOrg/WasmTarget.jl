@@ -128,6 +128,12 @@ struct TestLine; p1::TestPoint2D; p2::TestPoint2D; end
 # (guards the _register_struct_type_impl! Int128/UInt128 field branch).
 struct _WTI128Box; x::Int128; n::Int64; end
 struct _WTU128Box; x::UInt128; n::Int64; end
+
+# Phase 77 (G1 soundness): a value-stub (`objectid`/jl_object_id) in a DISCOVERED
+# (non-entry) callee. Compiles by default (the downgrade), but must stay FATAL
+# under WT_PARANOID_STUBS=1. Top-level so trim sees _g1_objid as a non-entry MI.
+@noinline _g1_objid(c::TestCounter)::UInt64 = objectid(c)
+_g1_entry(n::Int64)::UInt64 = _g1_objid(TestCounter(n))
 # WASMTARGET-FUZZ: tagged-union FLOAT members round-trip (wrap boxes the float into
 # a numeric box, unwrap unboxes it) — the old code DROPPED floats → silent data loss.
 _wt_uf(a::Int64)::Int64 = begin
@@ -10768,6 +10774,31 @@ console.log(JSON.stringify({
             # i32.eq (i32-producing, 0x46) followed by i32.wrap_i64 → wrap removed
             spur = UInt8[0x20,0x00, 0x20,0x01, 0x46, WRAP, ENDOP]
             @test fixwrap(copy(spur)) == UInt8[0x20,0x00, 0x20,0x01, 0x46, ENDOP]
+        end
+    end
+
+    # Soundness guard (G1): a wrong-value stub buried in a DISCOVERED (non-entry)
+    # function used to compile "clean" via the downgrade in diagnostics.jl, only
+    # trapping off-sample. WT_PARANOID_STUBS=1 must keep EVERY value-stub fatal so
+    # the autonomous /loop + CI can't be reward-hacked into masking. See
+    # test/fuzz/LOOP.md §7. (objectid on a discovered TestCounter is the value-stub.)
+    @pphase "Phase 77: G1 paranoid value-stub fatality (soundness)" begin
+        @testset "Phase 77: paranoid mode makes discovered value-stubs fatal" begin
+            _g1_try() = try
+                WasmTarget.compile(_g1_entry, (Int64,); strict=true); :ok
+            catch e
+                e isa WasmTarget.WasmCompileError ? :rejected : rethrow()
+            end
+            _save = get(ENV, "WT_PARANOID_STUBS", nothing)
+            try
+                delete!(ENV, "WT_PARANOID_STUBS")
+                @test _g1_try() === :ok           # default: downgraded → compiles
+                ENV["WT_PARANOID_STUBS"] = "1"
+                @test _g1_try() === :rejected     # paranoid: value-stub stays fatal
+            finally
+                _save === nothing ? delete!(ENV, "WT_PARANOID_STUBS") :
+                                    (ENV["WT_PARANOID_STUBS"] = _save)
+            end
         end
     end
 

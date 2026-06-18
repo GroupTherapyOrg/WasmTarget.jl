@@ -35,6 +35,9 @@ using ..FuzzHarness: compile_and_run, compile_and_run_vec
 using ..FuzzBridge: bridge_run, descriptor, tree_matches, tree_decode, bridge_supported
 using ..FuzzBridgeArgs: bridge_run_args, args_supported, ismutable_shape
 using ..FuzzGen: make_function, sample_inputs, make_function_natural, vector_inputs
+# Float-match tolerances live in the HASH-PINNED frozen oracle policy (loop_guard.sh
+# guards it) so the autonomous /loop can't widen them to bury a divergence.
+using ..FuzzOraclePolicy: ORACLE_RTOL, ORACLE_ATOL
 
 struct Outcome
     category::Symbol            # :ok :wrong_value :runtime_trap :divergent_throw :compile_error :skip
@@ -56,7 +59,7 @@ function vals_match(a, b)
         (isnan(fa) && isnan(fb)) && return true
         (isinf(fa) && isinf(fb) && sign(fa) == sign(fb)) && return true
         fa == fb && return true
-        return isapprox(fa, fb; rtol = 1e-9, atol = 1e-12)
+        return isapprox(fa, fb; rtol = ORACLE_RTOL, atol = ORACLE_ATOL)
     end
     return a == b
 end

@@ -1,5 +1,10 @@
 # Phase 1 Roadmap — A Fast, Full-Language Supposition Fuzzing Environment
 
+> **Historical (Phase 1 build-out, complete).** The apparatus this describes is built and
+> green. The *operating* plan for driving it autonomously is now **`LOOP.md`** (tiered
+> subset, guardrails, `/loop` runbook). Read that to do work; read this for apparatus design
+> rationale.
+
 > **Goal of Phase 1.** A *speedy*, *robust* differential-fuzzing apparatus that exercises
 > the **full Julia language** as WasmTarget claims to support it — not a handful of Base
 > scalar ops, but arbitrary well-typed compositions across primitives, collections,

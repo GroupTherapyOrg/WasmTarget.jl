@@ -1,6 +1,6 @@
 ---
 id: cf0b9bbd2e46
-status: open
+status: fixed
 category: compile_error
 kind: compile_error
 construct: "compile_error: `Int64(abs(median([0, x, x])))` :: Int64"

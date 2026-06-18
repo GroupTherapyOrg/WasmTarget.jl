@@ -1,6 +1,6 @@
 ---
 id: 30bcdba144eb
-status: open
+status: fixed
 category: compile_error
 kind: compile_error
 construct: "compile_error: `if isodd(Int8(0))\n    0.0\nelse\n    try\n        median([0, 0, 0])\n    catch\n        x\n    end\nend` :: Float64"

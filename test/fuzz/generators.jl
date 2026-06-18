@@ -17,11 +17,12 @@
 
 module FuzzGen
 
-export gen_program, sample_inputs, make_function
+export gen_program, sample_inputs, make_function, rotate_inputs!
 export gen_natural, make_function_natural, vector_inputs
 
 using Supposition
 using Supposition: Data
+using Random: Xoshiro
 # The op catalogue (tagged, per-module data — see catalogue.jl) and the seeded
 # struct pool are the two halves of the type universe this generator walks.
 using ..FuzzCatalogue
@@ -268,16 +269,58 @@ function _edges(::Type{T}) where {T}
     error("no edge values for type $T")
 end
 
-sample_inputs(::Type{T}) where {T} = Tuple[(v,) for v in _edges(T)]
-vector_inputs(::Type{E}) where {E} = Tuple[(v,) for v in _edges(Vector{E})]
+# --- Input rotation (G2b) ----------------------------------------------------
+# OFF by default (ROTATE_SEED == 0): sample_inputs == the fixed edge lists, so the
+# CI bounded-fuzz path (ci_fuzz_passes) stays fully deterministic. A discovery
+# sweep calls rotate_inputs!(seed) to APPEND a few seeded-random inputs per type,
+# so a wrong-value stub that only fires OFF the fixed edge set surfaces over runs
+# (kills sample overfitting — test/fuzz/LOOP.md §7 G2). Found gaps record their
+# concrete input, so reproducers stay deterministic regardless of rotation.
+const ROTATE_SEED = Ref{UInt64}(0)
+rotate_inputs!(seed::Integer) = (ROTATE_SEED[] = UInt64(seed); nothing)
 
-sample_inputs(::Type{Int64}) =
+_rand_val(rng, ::Type) = nothing                          # type we can't draw → no rotation
+_rand_val(rng, ::Type{T}) where {T<:Integer} = rand(rng, T)
+_rand_val(rng, ::Type{Bool})                 = rand(rng, Bool)
+_rand_val(rng, ::Type{Char})                 = rand(rng, 'a':'z')
+function _rand_val(rng, ::Type{T}) where {T<:AbstractFloat}
+    rand(rng, Bool) && return rand(rng, (T(Inf), T(-Inf), T(NaN), zero(T)))
+    T(rand(rng, (-1, 1)) * rand(rng) * exp10(rand(rng, -18:18)))
+end
+
+function _rotated_extra(::Type{T}, n::Int = 4) where {T}
+    ROTATE_SEED[] == 0 && return Tuple[]
+    rng = Xoshiro(ROTATE_SEED[] ⊻ hash(T))
+    out = Tuple[]
+    for _ in 1:n
+        v = _rand_val(rng, T)
+        v === nothing && return Tuple[]                   # unsupported type → no extras
+        push!(out, (v,))
+    end
+    out
+end
+function _rotated_vextra(::Type{E}, n::Int = 3) where {E}
+    ROTATE_SEED[] == 0 && return Tuple[]
+    _rand_val(Xoshiro(0), E) === nothing && return Tuple[]   # element type we can't draw
+    rng = Xoshiro(ROTATE_SEED[] ⊻ hash(Vector{E}))
+    Tuple[(E[_rand_val(rng, E) for _ in 1:rand(rng, 0:5)],) for _ in 1:n]
+end
+
+_base_sample_inputs(::Type{T}) where {T} = Tuple[(v,) for v in _edges(T)]
+_base_vector_inputs(::Type{E}) where {E} = Tuple[(v,) for v in _edges(Vector{E})]
+
+_base_sample_inputs(::Type{Int64}) =
     [(0,), (1,), (-1,), (2,), (-3,), (7,), (-128,), (1000,),
      (typemax(Int64),), (typemin(Int64),), (typemax(Int64) - 1,)]
 
-sample_inputs(::Type{Float64}) =
+_base_sample_inputs(::Type{Float64}) =
     [(0.0,), (1.0,), (-1.0,), (2.0,), (0.5,), (-0.5,), (3.5,), (-3.5,),
      (1e300,), (-1e300,), (1e-300,), (Inf,), (-Inf,), (NaN,), (100.0,), (1e8,)]
+
+# Wrappers: base edges + (when rotation is on) seeded-random extras. When off,
+# return the base list verbatim (no vcat → identical type/contents as before).
+sample_inputs(::Type{T}) where {T} =
+    (r = _rotated_extra(T); isempty(r) ? _base_sample_inputs(T) : vcat(_base_sample_inputs(T), r))
 
 # --- Natural-signature programs: f(v::IN) = <RET expr using v> ---------------
 # The input is a real value (e.g. a Vector passed via the marshalling bridge),
@@ -296,15 +339,17 @@ end
 
 # Edge-biased inputs for Vector arguments: empty, singleton, sorted, reverse,
 # duplicate-laden, extreme values, longer.
-vector_inputs(::Type{Int64}) = Tuple[
+_base_vector_inputs(::Type{Int64}) = Tuple[
     (Int64[],), ([0],), ([1],), ([-1],), ([5, 3, 8, 1],), ([3, 3, 3],),
     ([-9, 2, 0, 2, -9],), ([typemax(Int64), typemin(Int64), 0],),
     ([10, 9, 8, 7, 6, 5, 4, 3, 2, 1],), ([1, 2, 3, 4, 5],), ([-100, 100],),
 ]
-vector_inputs(::Type{Float64}) = Tuple[
+_base_vector_inputs(::Type{Float64}) = Tuple[
     (Float64[],), ([0.0],), ([1.5, -2.5, 3.5],), ([Inf, -Inf, NaN],),
     ([1.0, 1.0, 1.0],), ([-0.0, 0.0],), ([1e300, -1e300, 0.5],),
     ([5.0, 4.0, 3.0, 2.0, 1.0],), ([3.14, 2.71, 1.41],),
 ]
+vector_inputs(::Type{E}) where {E} =
+    (r = _rotated_vextra(E); isempty(r) ? _base_vector_inputs(E) : vcat(_base_vector_inputs(E), r))
 
 end # module FuzzGen

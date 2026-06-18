@@ -32,6 +32,7 @@ include(joinpath(FUZZ_DIR, "generators.jl"));  using .FuzzGen
 include(joinpath(FUZZ_DIR, "statements.jl"));  using .FuzzStatements
 include(joinpath(FUZZ_DIR, "canon.jl"));       using .FuzzCanon
 FuzzStructPool.build_pool!()   # deterministic (seeded) — same pool every process
+include(joinpath(FUZZ_DIR, "oracle_policy.jl")); using .FuzzOraclePolicy
 include(joinpath(FUZZ_DIR, "property.jl"));     using .FuzzProperty
 include(joinpath(FUZZ_DIR, "ledger.jl"));       using .Ledger
 
@@ -179,6 +180,7 @@ end
 # Natural-signature sweep: Vector inputs, multiple return types, many seeds (temp DBs).
 function sweep_natural(; k::Int = 6, depth = 4, max_examples = 50)
     FuzzHarness.NODE_OK || (@warn "Node.js unavailable"; return)
+    rotate_inputs!(rand(RandomDevice(), UInt64))   # G2b: vary inputs each sweep
     specs = [(Vector{Int64}, Int64), (Vector{Int64}, Vector{Int64}), (Vector{Int64}, Bool),
              (Vector{Float64}, Float64), (Vector{Float64}, Vector{Float64})]
     before = Set(get(g, "id", "") for g in Ledger.load_gaps())
@@ -209,6 +211,7 @@ end
 # before fixing any. Records each distinct gap to the real ledger.
 function sweep(; k::Int = 8, types = (Int64, Float64), depth = 4, max_examples = 80)
     FuzzHarness.NODE_OK || (@warn "Node.js unavailable"; return)
+    rotate_inputs!(rand(RandomDevice(), UInt64))   # G2b: vary inputs each sweep
     before = Set(get(g, "id", "") for g in Ledger.load_gaps())
     for s in 1:k
         run_id = string("sweep-", s, "-d", depth)
@@ -270,6 +273,7 @@ _hits_known_gap(body, known) = FuzzCanon.hits_canon(body, known)
 
 function ci_fuzz_passes(; types = (Int64, Float64), depth = 2, max_examples = 30, seed = 0xCD)
     FuzzHarness.NODE_OK || return true   # skip cleanly where Node is unavailable
+    rotate_inputs!(0)   # G2b: CI must stay deterministic — never rotate inputs here
     tmp = mktempdir()
     # seed the temp DB with the committed corpus so known counterexamples replay first
     if isdir(CORPUS_DIR)
@@ -461,6 +465,7 @@ is stochastic re-sampling, so a truncated sweep is still a valid sweep.
 function sweep_full(; shard = nothing, seeds::Int = 4, depth = 3, max_examples = 60,
                     time_budget::Int = 0)
     FuzzHarness.NODE_OK || (@warn "Node.js unavailable"; return)
+    rotate_inputs!(rand(RandomDevice(), UInt64))   # G2b: vary inputs each sweep (per worker)
     jobs = _sweep_jobs(seeds = seeds)
     mine = [k for k in eachindex(jobs)
             if shard === nothing || (k - 1) % shard[2] == shard[1]]
@@ -586,6 +591,8 @@ if abspath(PROGRAM_FILE) == @__FILE__
         verify()
     elseif length(ARGS) >= 1 && ARGS[1] == "coverage"
         write_coverage!()
+    elseif length(ARGS) >= 1 && ARGS[1] == "rank"
+        Ledger.rank_gaps()
     elseif length(ARGS) >= 1 && ARGS[1] == "sweep"
         # Optional second arg: per-worker time budget in seconds (default 1800).
         sweep_parallel(time_budget = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 1800)

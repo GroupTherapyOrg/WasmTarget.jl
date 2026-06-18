@@ -1733,9 +1733,14 @@ function compile_module(functions::Vector;
     # Functions are added in order, so index = n_imports + n_existing + position - 1
     n_imports = length(mod.imports)
     n_existing = length(mod.functions)  # PURE-9065: includes pre-created helper functions
+    # T1.1 step 2: discovery-added dynamic-dispatch candidates (beyond the base
+    # collection) register as is_candidate=true → visible to the call-site typeId
+    # switch (by_ref) but invisible to get_function cross-call resolution.
+    _disp_cands = _TRIM_ISOLATED_FUNCS[]
     for (i, (f, arg_types, name, _, return_type, _, _)) in enumerate(function_data)
         func_idx = UInt32(n_imports + n_existing + i - 1)
-        register_function!(func_registry, name, f, arg_types, func_idx, return_type)
+        register_function!(func_registry, name, f, arg_types, func_idx, return_type;
+                           is_candidate = (!isempty(_disp_cands) && (f, arg_types) in _disp_cands))
     end
 
     # PURE-9060: Build dispatch tables for megamorphic functions (>8 specializations)
