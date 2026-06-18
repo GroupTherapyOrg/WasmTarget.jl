@@ -83,7 +83,13 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
             length(absp) == 1 || continue
             p = absp[1]
             ms = try collect(methods(g, Tuple{atypes...})) catch; Method[] end
-            (0 < length(ms) <= 32) || continue
+            # Reconcile with PURE-9060: a function with ≥9 applicable methods is
+            # MEGAMORPHIC and handled by the existing call_indirect dispatch table
+            # (build_dispatch_tables threshold=9). Leave those to PURE-9060 — adding
+            # inline-typeId candidates for them both double-handles the call AND pulls
+            # in unreachable specializations that collide with the megamorphic export
+            # naming (duplicate-export). Discovery owns only the ≤8-method case.
+            (0 < length(ms) <= 8) || continue
             for m in ms
                 msig = try collect(Base.unwrap_unionall(m.sig).parameters) catch; continue end
                 length(msig) == length(atypes) + 1 || continue
@@ -130,8 +136,11 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false)
     # (distinct cache_owner) + merge leaves every base pair byte-identical, so enabling
     # discovery cannot change how base functions compile (the COLLECTION layer). Registry
     # isolation — so candidates don't perturb base get_function cross-call resolution — is
-    # step 2; until that lands the gate stays OFF by default.
-    if get(ENV, "WT_DYNDISPATCH", "0") != "0"
+    # step 2 (FunctionInfo.is_candidate). With layers 1+2 in place, plus discovery yielding
+    # to PURE-9060 for megamorphic (≥9-method) functions, the base pass is byte-identical
+    # whether or not discovery runs — so dynamic dispatch is ON BY DEFAULT (WT_DYNDISPATCH=0
+    # to disable).
+    if get(ENV, "WT_DYNDISPATCH", "1") != "0"
         base_mis = Set{Any}()
         for k in 1:2:length(codeinfos)
             codeinfos[k] isa Core.CodeInstance && push!(base_mis, codeinfos[k].def)
@@ -217,6 +226,7 @@ function trim_compile_plan(entries_named::Vector)
     # same-named entry must not claim the entry's export name (duplicate-export
     # validation failure in multi-function modules).
     used_names = Set{String}(values(entry_keys))
+    seen_sigs = Set{Tuple{Any, Any}}()   # T1.1 step 3: dedup the function list by (f, arg_types)
     i = 1
     pair_no = 0
     while i + 1 <= length(codeinfos)
@@ -240,6 +250,12 @@ function trim_compile_plan(entries_named::Vector)
             continue
         end
         arg_types = Tuple(sig.parameters[2:end])
+        # T1.1 step 3: a discovery candidate can duplicate an explicitly-listed
+        # specialization (e.g. compile_multi entries + a megamorphic dynamic call's
+        # candidates) → duplicate wasm export. Dedup by (f, arg_types); the first
+        # occurrence wins (entries/base pairs are processed first).
+        (f, arg_types) in seen_sigs && continue
+        push!(seen_sigs, (f, arg_types))
         # name: requested for entries, deduped method name otherwise
         name = get(entry_keys, mi, nothing)
         if name === nothing
