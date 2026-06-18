@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.10](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.9...v0.3.10) (2026-06-18)
+
+
+### Features
+
+* soundness loop — guardrails, dynamic dispatch on by default, ledger/verify hygiene, PlutoIslands integration ([9e12dc1](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/9e12dc11a2c5bd11857c1d7ddc3bb6298e2bb35a))
+
 ## [0.3.9](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.8...v0.3.9) (2026-06-16)
 
 
