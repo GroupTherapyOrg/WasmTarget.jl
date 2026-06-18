@@ -51,10 +51,52 @@ closure-dep i64/i32 in `compile_closure_body` (1), Matrix/hvcat element trap (1)
 
 **Honest corrections to the plan below:** §2's "Frontier budget (mandatory)" was NEVER built
 (the generator isn't tier-parameterized) — treat as a TODO, not a requirement; the loop reaches
-the frontier via the ranked open-gap queue. §5(b) in-repo PI fixtures are BLOCKED on a
-`js-string` harness limit (`run_wasm_with_imports` lacks the builtins, so string-island cells
-trap there — `compare_julia_wasm` can't run them); §5(a) (PI in `downstream.yml`) is DONE and
-serves as the integration test.
+the frontier via the ranked open-gap queue. §5(a) (PI in `downstream.yml`) is DONE. §5(b)
+in-repo PI fixtures — once "BLOCKED on js-string" — are now **DONE** (2026-06-18): the real
+blocker was that the unit harness only decoded SCALAR returns, fixed by wiring the in-package
+bit-exact `WasmTarget.Bridge` into `compare_julia_wasm_bridge`. See the new section below —
+**this is now the loop's primary, product-grounded KPI.**
+
+---
+
+## 0.5 ⭐ PI ISLAND FIXTURES — the product-grounded loop KPI (2026-06-18, current driver)
+
+**The loop now targets REAL PlutoIslands island cells directly, in WT's own test suite.**
+This resolves Lesson #2 ("synthetic gaps ≠ product impact") at the root: the unit of work is
+a **PI island piece**, and the KPI is **"PI pieces green: N / total"** (not synthetic ledger
+count). The synthetic fuzzer stays as the soundness *backstop* (finds new bugs); PI fixtures
+drive *priority*.
+
+**Mechanism (no PI/Pluto dependency in WT):**
+1. **Harvester** (`PlutoIslands.jl/tools/harvest_wt_fixtures.jl`, run in PI's Pluto env)
+   walks every featured notebook → every `@bind` group → every extracted cell, emitting
+   `WasmTarget.jl/test/integration/pi_island_fixtures.json`: `{notebook, bonds, argtypes,
+   preamble, cell{fn_src, rettype, samples, GOLDEN native outputs}}`. Failing/extract-failed
+   pieces are recorded too (status tracked, never dropped).
+2. **WT test** (`test/integration/pi_islands.jl`, run from `runtests.jl`) evals each piece's
+   fn (+ preamble + a vendored `PlutoIslands._plain_body`/`_html_body` shim), compiles via
+   `compile_multi`, runs through the in-package bridge (`compare_julia_wasm_bridge`), and
+   classifies: `green` / `mismatch` / `runtime_trap` / `compile_fail` / `outside_bridge` /
+   `nonscalar_args` / `extract_fail`. A drift guard asserts the vendored fn reproduces the
+   captured golden.
+3. **Status LOCK** (`pi_island_status.json`): the testset asserts each piece's live status ==
+   locked status, so a `green→fail` (regression) AND a `fail→green` (unrecorded fix) BOTH
+   fail the suite. Known-failing pieces don't redden CI in steady state; any FLIP is loud.
+
+**The loop iteration becomes:** read the status table → pick the highest-value FAILING piece
+(cluster by status reason — `compile_fail`/`runtime_trap`/`outside_bridge`/`nonscalar_args`
+are the work-item families) → diagnose → fix WT codegen → piece flips `green` →
+`julia --project=. test/integration/regen_pi_lock.jl` → commit lock → regress forever.
+
+**Current state (2026-06-18):** 9 pieces from the 2 light notebooks (Interactivity, Basic
+mathematics): **7 green**, 1 `mismatch` (`string(typeof(x))` → empty; Type-name/Type-as-value
+gap = a real work item), 1 `nonscalar_args` (6-bond String/Bool/DateTime group — needs
+`bridge_run_args`-style arg bridging). **Full-corpus harvest is PENDING** (task #40): the
+heavier notebooks (PlutoUI, newton, fractals, convolution, images, dither, turtles, Titration)
+returned 0 groups because their embedded Pluto package envs didn't run in the harvest session —
+re-run the harvester after warming those envs (e.g. via `tools/island_survey.jl`).
+**Re-harvest:** `cd PlutoIslands.jl && julia --project=. tools/harvest_wt_fixtures.jl` then
+regen the lock. KPI today: **7/9 green** (will grow to the full ~38-shipping / 65-total corpus).
 
 ---
 

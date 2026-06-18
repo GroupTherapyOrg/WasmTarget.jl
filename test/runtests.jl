@@ -112,6 +112,7 @@ using Dates: Dates, @dateformat_str
 _wt_shard0() && include("test_aqua.jl")
 
 include("utils.jl")
+include(joinpath(@__DIR__, "integration", "pi_islands.jl"))  # PlutoIslands island fixtures
 
 # ── Parallel-phase infrastructure (process sharding) ─────────────────────────
 # Test fixtures hoisted from inside phase testsets — `struct`/`using` are illegal
@@ -7580,6 +7581,35 @@ console.log(JSON.stringify({
             @test compare_julia_wasm_bridge(_wt_pi_fractals_clabel, 258.0, 102.0; rettype=String).pass  # default → "0.9 + 0.4im"
             @test compare_julia_wasm_bridge(_wt_pi_fractals_clabel, 270.0,  30.0; rettype=String).pass  # "1.0 + 1.0im"
             @test compare_julia_wasm_bridge(_wt_pi_fractals_clabel, 150.0, 270.0; rettype=String).pass  # negative imag → " - "
+        end
+
+        @testset "PlutoIslands island fixtures — status-locked corpus (WASMTARGET-INTEGRATION)" begin
+            # Real PI featured-corpus island cells (harvested by PlutoIslands.jl/tools/
+            # harvest_wt_fixtures.jl → test/integration/pi_island_fixtures.json), each
+            # tested DIRECTLY against WT codegen via the in-package bridge. A per-piece
+            # status LOCK (pi_island_status.json) makes BOTH regressions (green→fail) and
+            # newly-fixed pieces (fail→green) trip the suite — so every PI binding is
+            # tracked, passing or failing. The loop's product KPI is "PI pieces green:
+            # N/total". To update after a (re-)harvest or codegen fix that flips a piece:
+            # `julia --project=. test/integration/regen_pi_lock.jl` and commit the lock.
+            # Node-gated (skips cleanly when the wasm runner is unavailable).
+            if WasmRunner.runner_available() && isfile(PI_FIX)
+                statuses = pi_all_statuses()
+                @test !isempty(statuses)
+                lock = isfile(PI_LOCK) ? JSON.parsefile(PI_LOCK) : Dict{String,Any}()
+                @info "PlutoIslands island fixtures" total=length(statuses) green=count(s -> s.status == "green", statuses)
+                for s in statuses
+                    rec = get(lock, s.key, nothing)
+                    if rec === nothing
+                        @warn "PI island piece missing from lock — run test/integration/regen_pi_lock.jl" key = s.key status = s.status
+                        @test false
+                    else
+                        _ok = s.status == rec["status"]
+                        _ok || @warn "PI island piece status FLIP" key = s.key live = s.status locked = rec["status"] detail = s.detail
+                        @test _ok
+                    end
+                end
+            end
         end
 
         @testset "Int128 arithmetic right shift (WASMTARGET-FUZZ)" begin

@@ -942,7 +942,7 @@ the bridge walks it field-by-field.
 Returns `(pass, expected, actual, skipped, wasm_size)`. When Node is unavailable,
 `skipped=true, pass=true`. A native throw is matched by a wasm trap.
 """
-function compare_julia_wasm_bridge(f, args...; rettype=nothing, optimize::Bool=false)
+function compare_julia_wasm_bridge(f, args...; rettype=nothing, name=nothing, optimize::Bool=false)
     if !WasmRunner.runner_available()
         return (pass=true, expected=nothing, actual=nothing, skipped=true, wasm_size=0)
     end
@@ -954,7 +954,9 @@ function compare_julia_wasm_bridge(f, args...; rettype=nothing, optimize::Bool=f
     dp = WasmTarget.Bridge.descriptor(rt)
     dp === nothing && error("compare_julia_wasm_bridge: return type $rt is outside the bridge universe")
     desc, accs = dp
-    fname = string(nameof(f))
+    # Anonymous fns (e.g. PI island cells extracted as `function (n::Int64,) … end`)
+    # have a gensym nameof; callers pass an explicit `name` for the wasm export.
+    fname = name === nothing ? string(nameof(f)) : name
     func_list = Any[(f, Tuple(arg_types), fname)]
     append!(func_list, accs)
     bytes = WasmTarget.compile_multi(func_list; strict=true, validate=true, optimize=optimize)

@@ -1,0 +1,375 @@
+[
+  {
+    "argtypes": [
+      "Int64",
+      "String",
+      "Bool",
+      "String",
+      "String",
+      "Dates.DateTime"
+    ],
+    "bonds": [
+      "a",
+      "b",
+      "c",
+      "d",
+      "e",
+      "f"
+    ],
+    "cells": [
+      {
+        "cell_id": "ede8009e-7f15-11ea-192a-a5c6135a9dcf",
+        "extract_ok": true,
+        "fn_src": "function (a::Int64, b::String, c::Bool, d::String, e::String, f::Dates.DateTime)\n    var\"##cellval#397\" = (a, b, c, d, e, f)\n    return var\"##cellval#397\"\nend",
+        "golden": [
+          "(50, \"\", false, \"one\", \"#000000\", Dates.DateTime(\"2026-01-01T00:00:00\"))",
+          "(100, \"\", false, \"one\", \"#000000\", Dates.DateTime(\"2026-01-01T00:00:00\"))",
+          "(50, \"123\", false, \"one\", \"#000000\", Dates.DateTime(\"2026-01-01T00:00:00\"))",
+          "(50, \"\", true, \"one\", \"#000000\", Dates.DateTime(\"2026-01-01T00:00:00\"))"
+        ],
+        "kind": "tree",
+        "mime": "application/vnd.pluto.tree+object",
+        "reasons": [],
+        "rettype": "Tuple{Int64, String, Bool, String, String, Dates.DateTime}",
+        "samples": [
+          [
+            "50",
+            "\"\"",
+            "false",
+            "\"one\"",
+            "\"#000000\"",
+            "Dates.DateTime(\"2026-01-01T00:00:00\")"
+          ],
+          [
+            "100",
+            "\"\"",
+            "false",
+            "\"one\"",
+            "\"#000000\"",
+            "Dates.DateTime(\"2026-01-01T00:00:00\")"
+          ],
+          [
+            "50",
+            "\"123\"",
+            "false",
+            "\"one\"",
+            "\"#000000\"",
+            "Dates.DateTime(\"2026-01-01T00:00:00\")"
+          ],
+          [
+            "50",
+            "\"\"",
+            "true",
+            "\"one\"",
+            "\"#000000\"",
+            "Dates.DateTime(\"2026-01-01T00:00:00\")"
+          ]
+        ]
+      }
+    ],
+    "group": 1,
+    "group_ok": true,
+    "group_reasons": [],
+    "notebook": "Interactivity with HTML.jl",
+    "preamble": []
+  },
+  {
+    "argtypes": [
+      "Int64"
+    ],
+    "bonds": [
+      "counter"
+    ],
+    "cells": [
+      {
+        "cell_id": "5bd8b261-a89d-46a3-bb59-c95a1801c881",
+        "extract_ok": true,
+        "fn_src": "function (counter::Int64,)\n    var\"##cellval#398\" = counter\n    return (PlutoIslands._plain_body)(var\"##cellval#398\")\nend",
+        "golden": [
+          "\"0\"",
+          "\"1\"",
+          "\"2\""
+        ],
+        "kind": "string",
+        "mime": "text/plain",
+        "reasons": [],
+        "rettype": "String",
+        "samples": [
+          [
+            "0"
+          ],
+          [
+            "1"
+          ],
+          [
+            "2"
+          ]
+        ]
+      }
+    ],
+    "group": 2,
+    "group_ok": true,
+    "group_reasons": [],
+    "notebook": "Interactivity with HTML.jl",
+    "preamble": []
+  },
+  {
+    "argtypes": [
+      "Int64"
+    ],
+    "bonds": [
+      "limited"
+    ],
+    "cells": [
+      {
+        "cell_id": "f39435d3-ed67-45f1-ae56-49cf5ec69d6e",
+        "extract_ok": true,
+        "fn_src": "function (limited::Int64,)\n    var\"##cellval#399\" = limited\n    return (PlutoIslands._plain_body)(var\"##cellval#399\")\nend",
+        "golden": [
+          "\"2\"",
+          "\"0\"",
+          "\"5\""
+        ],
+        "kind": "string",
+        "mime": "text/plain",
+        "reasons": [],
+        "rettype": "String",
+        "samples": [
+          [
+            "2"
+          ],
+          [
+            "0"
+          ],
+          [
+            "5"
+          ]
+        ]
+      }
+    ],
+    "group": 3,
+    "group_ok": true,
+    "group_reasons": [],
+    "notebook": "Interactivity with HTML.jl",
+    "preamble": []
+  },
+  {
+    "argtypes": [
+      "Int64"
+    ],
+    "bonds": [
+      "limited_counter"
+    ],
+    "cells": [
+      {
+        "cell_id": "901c2b84-14b8-4deb-89d6-705a4972582c",
+        "extract_ok": true,
+        "fn_src": "function (limited_counter::Int64,)\n    var\"##cellval#400\" = limited_counter\n    return (PlutoIslands._plain_body)(var\"##cellval#400\")\nend",
+        "golden": [
+          "\"0\"",
+          "\"1\"",
+          "\"2\""
+        ],
+        "kind": "string",
+        "mime": "text/plain",
+        "reasons": [],
+        "rettype": "String",
+        "samples": [
+          [
+            "0"
+          ],
+          [
+            "1"
+          ],
+          [
+            "2"
+          ]
+        ]
+      }
+    ],
+    "group": 4,
+    "group_ok": true,
+    "group_reasons": [],
+    "notebook": "Interactivity with HTML.jl",
+    "preamble": []
+  },
+  {
+    "argtypes": [
+      "Int64",
+      "Int64"
+    ],
+    "bonds": [
+      "x1",
+      "x2"
+    ],
+    "cells": [
+      {
+        "cell_id": "3297233b-9567-4d5e-8138-93ebe20fed48",
+        "extract_ok": true,
+        "fn_src": "function (x1::Int64, x2::Int64)\n    var\"##cellval#401\" = (x1, x2)\n    return var\"##cellval#401\"\nend",
+        "golden": [
+          "(75, 75)",
+          "(100, 75)",
+          "(75, 100)"
+        ],
+        "kind": "tree",
+        "mime": "application/vnd.pluto.tree+object",
+        "reasons": [],
+        "rettype": "Tuple{Int64, Int64}",
+        "samples": [
+          [
+            "75",
+            "75"
+          ],
+          [
+            "100",
+            "75"
+          ],
+          [
+            "75",
+            "100"
+          ]
+        ]
+      }
+    ],
+    "group": 5,
+    "group_ok": true,
+    "group_reasons": [],
+    "notebook": "Interactivity with HTML.jl",
+    "preamble": []
+  },
+  {
+    "argtypes": [
+      "Int64"
+    ],
+    "bonds": [
+      "x"
+    ],
+    "cells": [
+      {
+        "cell_id": "cb1fd532-7eac-11ea-307c-ab16b1977819",
+        "extract_ok": true,
+        "fn_src": "function (x::Int64,)\n    var\"##cellval#402\" = x\n    return (PlutoIslands._plain_body)(var\"##cellval#402\")\nend",
+        "golden": [
+          "\"50\"",
+          "\"0\"",
+          "\"100\""
+        ],
+        "kind": "string",
+        "mime": "text/plain",
+        "reasons": [],
+        "rettype": "String",
+        "samples": [
+          [
+            "50"
+          ],
+          [
+            "0"
+          ],
+          [
+            "100"
+          ]
+        ]
+      },
+      {
+        "cell_id": "1ebba747-47f8-4ecd-809d-359e6d803ddc",
+        "extract_ok": true,
+        "fn_src": "function (x::Int64,)\n    y = x ^ 2\n    var\"##cellval#403\" = y\n    return (PlutoIslands._plain_body)(var\"##cellval#403\")\nend",
+        "golden": [
+          "\"2500\"",
+          "\"0\"",
+          "\"10000\""
+        ],
+        "kind": "string",
+        "mime": "text/plain",
+        "reasons": [],
+        "rettype": "String",
+        "samples": [
+          [
+            "50"
+          ],
+          [
+            "0"
+          ],
+          [
+            "100"
+          ]
+        ]
+      },
+      {
+        "cell_id": "cb65a4ee-02e5-4779-8728-b994d8af645d",
+        "extract_ok": true,
+        "fn_src": "function (x::Int64,)\n    var\"##cellval#404\" = typeof(x)\n    return (PlutoIslands._plain_body)(var\"##cellval#404\")\nend",
+        "golden": [
+          "\"Int64\"",
+          "\"Int64\"",
+          "\"Int64\""
+        ],
+        "kind": "string",
+        "mime": "text/plain",
+        "reasons": [],
+        "rettype": "String",
+        "samples": [
+          [
+            "50"
+          ],
+          [
+            "0"
+          ],
+          [
+            "100"
+          ]
+        ]
+      }
+    ],
+    "group": 6,
+    "group_ok": true,
+    "group_reasons": [],
+    "notebook": "Interactivity with HTML.jl",
+    "preamble": []
+  },
+  {
+    "argtypes": [
+      "Int64"
+    ],
+    "bonds": [
+      "n"
+    ],
+    "cells": [
+      {
+        "cell_id": "e80986c6-d509-11ea-12e3-f79a54b5ab31",
+        "extract_ok": true,
+        "fn_src": "function (n::Int64,)\n    return if pieces(n) == (n * (n + 1)) / 2 + 1\n            (((\"<div class=\\\"markdown\\\"><p><em>Testing...</em></p>\\n<p><strong>For \" * string(n)) * \" cuts, you predict \") * string(pieces(n))) * \" pieces.</strong></p>\\n<div class=\\\"admonition correct\\\"><p class=\\\"admonition-title\\\">Got it!</p><p>Well done&#33;</p>\\n\\n</div>\\n\\n</div>\"\n        else\n            (((((\"<div class=\\\"markdown\\\"><p><em>Testing...</em></p>\\n<p><strong>For \" * string(n)) * \" cuts, you predict \") * string(pieces(n))) * \" pieces.</strong></p>\\n<div class=\\\"admonition danger\\\"><p class=\\\"admonition-title\\\">Keep working on it!</p><p>The answer should be \") * string(Int((n * (n + 1)) / 2 + 1))) * \".</p>\\n\\n</div>\\n\\n</div>\"\n        end\nend",
+        "golden": [
+          "\"<div class=\\\"markdown\\\"><p><em>Testing...</em></p>\\n<p><strong>For 25 cuts, you predict 25 pieces.</strong></p>\\n<div class=\\\"admonition danger\\\"><p class=\\\"admonition-title\\\">Keep working on it!</p><p>The answer should be 326.</p>\\n\\n</div>\\n\\n</div>\"",
+          "\"<div class=\\\"markdown\\\"><p><em>Testing...</em></p>\\n<p><strong>For 0 cuts, you predict 0 pieces.</strong></p>\\n<div class=\\\"admonition danger\\\"><p class=\\\"admonition-title\\\">Keep working on it!</p><p>The answer should be 1.</p>\\n\\n</div>\\n\\n</div>\"",
+          "\"<div class=\\\"markdown\\\"><p><em>Testing...</em></p>\\n<p><strong>For 50 cuts, you predict 50 pieces.</strong></p>\\n<div class=\\\"admonition danger\\\"><p class=\\\"admonition-title\\\">Keep working on it!</p><p>The answer should be 1276.</p>\\n\\n</div>\\n\\n</div>\""
+        ],
+        "kind": "string",
+        "mime": "application/vnd.pluto.stacktrace+object",
+        "reasons": [],
+        "rettype": "String",
+        "samples": [
+          [
+            "25"
+          ],
+          [
+            "0"
+          ],
+          [
+            "50"
+          ]
+        ]
+      }
+    ],
+    "group": 1,
+    "group_ok": true,
+    "group_reasons": [],
+    "notebook": "Basic mathematics.jl",
+    "preamble": [
+      "function pieces(n)\n    #= none:1 =#\n    #= none:2 =#\n    return n\nend",
+      "keep_working(text = md\"The answer is not quite right.\") = begin\n        #= none:1 =#\n        Markdown.MD(Markdown.Admonition(\"danger\", \"Keep working on it!\", [text]))\n    end",
+      "correct(text = md\"Great! You got the right answer! Let's move on to the next section.\") = begin\n        #= none:1 =#\n        Markdown.MD(Markdown.Admonition(\"correct\", \"Got it!\", [text]))\n    end"
+    ]
+  }
+]
