@@ -119,27 +119,48 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false)
     CC.compile!(codeinfos, workqueue; invokelatest_queue)
     CC.compile!(codeinfos, invokelatest_queue; invokelatest_queue)
     _TRIM_BASE_PAIRS[] = length(codeinfos) ÷ 2   # everything after this is discovery-added
-    # WASMTARGET dynamic dispatch: iteratively collect specializations reached only
-    # via dynamic calls (newly-compiled methods may themselves dynamic-dispatch, so
-    # loop to a fixpoint; `seen` + the inference cache dedupe so it converges fast).
-    seen_disp = Set{Any}()
     # WASMTARGET dynamic dispatch — GATED OFF BY DEFAULT (set WT_DYNDISPATCH=1 to enable).
-    # The candidate discovery (re-running CC.compile!) PERTURBS base inference: it changes
-    # how already-collected functions compile, exposing order-dependent codegen bugs across
-    # unrelated code (lpad/reduce_empty, string transforms) → suite regression. Off by
-    # default = identical to the prior behaviour (no perturbation); the call-site typeId
-    # switch then never fires (no candidates in func_registry). The machinery is proven
-    # (a 5-method dynamic call dispatches correctly with it ON) and awaits a NON-PERTURBING
-    # discovery (separate collection + merge, not re-running CC.compile! on the shared interp).
+    # T1.1 step 1 (NON-PERTURBING collection): specializations reached only via `dynamic`
+    # calls (markdown plain/show over heterogeneous AST nodes, abstract-keyed Dict
+    # hash/isequal, …) are collected in a SEPARATE interpreter + collection, then only the
+    # NEW (CodeInstance, CodeInfo) pairs are MERGED into `codeinfos` (deduped by
+    # MethodInstance). The previous approach re-ran CC.compile! on the SHARED `interp`
+    # after the base pass, which perturbed base inference (re-collected already-present MIs
+    # with different IR → order-dependent codegen bugs in unrelated code). A fresh interp
+    # (distinct cache_owner) + merge leaves every base pair byte-identical, so enabling
+    # discovery cannot change how base functions compile (the COLLECTION layer). Registry
+    # isolation — so candidates don't perturb base get_function cross-call resolution — is
+    # step 2; until that lands the gate stays OFF by default.
     if get(ENV, "WT_DYNDISPATCH", "0") != "0"
-    for _round in 1:8
-        extra = _dynamic_dispatch_candidate_mis(codeinfos, seen_disp)
-        isempty(extra) && break
-        wq = CC.CompilationQueue(; interp)
-        append!(wq, extra)
-        CC.compile!(codeinfos, wq; invokelatest_queue)
-        CC.compile!(codeinfos, invokelatest_queue; invokelatest_queue)
-    end
+        base_mis = Set{Any}()
+        for k in 1:2:length(codeinfos)
+            codeinfos[k] isa Core.CodeInstance && push!(base_mis, codeinfos[k].def)
+        end
+        seen_disp = Set{Any}()   # dedup candidate MIs across fixpoint rounds
+        for _round in 1:8
+            extra = _dynamic_dispatch_candidate_mis(codeinfos, seen_disp)
+            extra = Any[mi for mi in extra if !(mi in base_mis)]
+            isempty(extra) && break
+            # Fresh interpreter (its own cache_owner) — never touches the base partition.
+            cand_interp = WasmInterpreter(Base.RefValue(0))
+            cand_ci = Any[]
+            cand_wq = CC.CompilationQueue(; interp = cand_interp)
+            cand_ilq = CC.CompilationQueue(; interp = cand_interp)
+            append!(cand_wq, extra)
+            CC.compile!(cand_ci, cand_wq; invokelatest_queue = cand_ilq)
+            CC.compile!(cand_ci, cand_ilq; invokelatest_queue = cand_ilq)
+            # Merge only NEW pairs (dedup by MI) so base pairs are never duplicated.
+            added = false
+            for k in 1:2:length(cand_ci)
+                (cand_ci[k] isa Core.CodeInstance && cand_ci[k + 1] isa Core.CodeInfo) || continue
+                mi = cand_ci[k].def
+                mi in base_mis && continue
+                push!(base_mis, mi)
+                push!(codeinfos, cand_ci[k], cand_ci[k + 1])
+                added = true
+            end
+            added || break
+        end
     end
     if verify
         CC.verify_typeinf_trim(codeinfos, #= onlywarn =# false)
