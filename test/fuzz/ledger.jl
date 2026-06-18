@@ -311,6 +311,13 @@ function _run_reproducer(snippet::AbstractString)
     m = Module(gensym(:gap))
     try
         Core.eval(m, :(using WasmTarget))
+        # Stdlibs the fuzz catalogue compiles against (Statistics/Dates/Random): a
+        # stdlib reproducer (e.g. `median(...)`) references these, so WITHOUT importing
+        # them the snippet can't resolve the function and the gap can NEVER auto-close —
+        # a false-OPEN regardless of compiler progress (the code may compile fine). Load
+        # them here so verify reflects reality. try-guarded so a missing stdlib (e.g. when
+        # run from a leaner env) never aborts the whole reproducer.
+        try; Core.eval(m, :(using Statistics, Dates, Random)); catch; end
         for f in _PRELOAD                              # full bridge stack — the universal
             Base.include(m, f)                         # reproducers depend on all of it
         end
