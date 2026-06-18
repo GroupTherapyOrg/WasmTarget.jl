@@ -102,6 +102,51 @@ end
     return (a * b) * c
 end
 
+# ─── string(::Complex) Overlay ─────────────────────────────────────────────
+# Why: string(z::Complex) routes through show(io::IOBuffer, ::Complex), i.e. the
+#      general Base IOBuffer string-building machinery (ensureroom growth +
+#      jl_string_ptr/jl_string_to_genericmemory memmove + take!) that WT does not
+#      implement — empty IOBuffer() yields a null .data array → trap. (gap
+#      cfd419793b0d, PlutoIslands fractal labels like "0.9 + 0.4im".)
+# How:  byte-assemble the result directly, reusing string(::Real) for the parts
+#      (which WT supports via the Ryu/StringVector overlays). The wrapper logic
+#      mirrors Base.show(io, ::Complex) EXACTLY (sign on imag, " + "/" - ", the
+#      "*" separator for non-finite/non-Integer imag, "im" suffix) so the
+#      differential oracle agrees. Non-compact form (what string() produces).
+# Remove when: codegen handles Base IOBuffer string construction.
+@noinline @overlay WASM_METHOD_TABLE function Base.string(z::Complex)
+    r = real(z)
+    i = imag(z)
+    rs = string(r)
+    neg = signbit(i) && !isnan(i)
+    ia = neg ? -i : i
+    is = string(ia)
+    # Base appends "*" unless imag is a non-Bool Integer or a finite AbstractFloat.
+    star = !((isa(i, Integer) && !isa(i, Bool)) || (isa(i, AbstractFloat) && isfinite(i)))
+    bytes = UInt8[]
+    k = 1
+    nr = ncodeunits(rs)
+    while k <= nr
+        push!(bytes, codeunit(rs, k))
+        k += 1
+    end
+    push!(bytes, UInt8(' '))
+    push!(bytes, neg ? UInt8('-') : UInt8('+'))
+    push!(bytes, UInt8(' '))
+    k = 1
+    ni = ncodeunits(is)
+    while k <= ni
+        push!(bytes, codeunit(is, k))
+        k += 1
+    end
+    if star
+        push!(bytes, UInt8('*'))
+    end
+    push!(bytes, UInt8('i'))
+    push!(bytes, UInt8('m'))
+    return String(bytes)
+end
+
 # ─── String Comparison Overlays ────────────────────────────────────────────
 # Base implementations use foreigncall :memcmp which can't run in WASM.
 # Pure Julia byte-by-byte comparisons using ncodeunits + codeunit.

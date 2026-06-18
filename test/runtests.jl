@@ -7546,15 +7546,22 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_wt_uf32, Int64(-1)).pass  # Int64 member: -7
         end
 
-        @testset "string(::Complex) compiles (typeinfo overlay, WASMTARGET-FUZZ)" begin
-            # structref-param fix + the nonnothing_nonmissing_typeinfo overlay make
-            # string(::Complex) emit a VALID module (was: struct.get on a structref
-            # `show` param, then a dead-value underflow in nonnothing_nonmissing_typeinfo).
-            # Validate-only: RUNNING needs the wasm:js-string builtin import (a harness
-            # limitation, present in PlutoIslands' runtime), but the module is well-formed.
-            # Closes the codegen half of gap cfd419793b0d (fractals "0.9 + 0.4im" label).
-            _wt_scplx(x::Int64)::Int64 = Int64(ncodeunits(string(complex(0.9, 0.4 + Float64(x)))))
-            @test (WasmTarget.compile_multi(Any[(_wt_scplx, (Int64,), "_wt_scplx")];
+        @testset "string(::Complex) runs byte-exact (overlay, WASMTARGET-FUZZ)" begin
+            # gap cfd419793b0d (fractals "0.9 + 0.4im" label): the string(::Complex)
+            # OVERLAY byte-assembles string(real) + " + "/" - " + string(|imag|) +
+            # ["*"] + "im", mirroring Base.show(::Complex) EXACTLY but bypassing the
+            # unsupported Base IOBuffer string-building path (empty IOBuffer() → null
+            # .data array → trap; jl_string_ptr/jl_string_to_genericmemory memmove +
+            # take! stubs). Scalars (len / codeunit) so the default harness execs
+            # WITHOUT js-string; the full byte-exact differential across edge cases
+            # (negative imag, Inf/NaN → "*im", integer-valued) is in the fuzz bridge.
+            _wt_scplx_len(x::Int64)::Int64 = Int64(ncodeunits(string(complex(0.9, 0.4 + Float64(x)))))
+            _wt_scplx_cu(x::Int64)::Int64  = Int64(codeunit(string(complex(0.9, 0.4 + Float64(x))), 1 + x))
+            @test compare_julia_wasm(_wt_scplx_len, Int64(0)).pass   # len("0.9 + 0.4im") = 11
+            @test compare_julia_wasm(_wt_scplx_cu,  Int64(0)).pass   # byte 1 = '0'
+            @test compare_julia_wasm(_wt_scplx_cu,  Int64(4)).pass   # byte 5 = '+'
+            @test compare_julia_wasm(_wt_scplx_cu,  Int64(9)).pass   # byte 10 = 'i'
+            @test (WasmTarget.compile_multi(Any[(_wt_scplx_len, (Int64,), "_wt_scplx_len")];
                 strict=true, validate=true, optimize=false); true)
         end
 
