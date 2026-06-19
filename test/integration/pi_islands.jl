@@ -32,15 +32,6 @@ const PI_LOCK = joinpath(@__DIR__, "pi_island_status.json")
 # arg bridging — tracked as `nonscalar_args` until that lands. Compared by NAME
 # (string), not by eval'd Type, so classification is deterministic even when an
 # exotic argtype (e.g. Dates.DateTime) can't be resolved in the sandbox.
-# Bond-input arg types the in-package bridge can marshal (via arg_descriptor +
-# value_to_tree + BUILD_JS in compare_julia_wasm_bridge_args). Matched by NAME so
-# classification is deterministic (no eval of exotic argtypes in the sandbox).
-# Vector/Tuple/NamedTuple/struct args are bridgeable too but left as nonscalar_args
-# for now (less common as bonds; would need eval to build samples).
-const _PI_BRIDGE_ARG_NAMES = ("Int64", "Int32", "Int16", "Int8",
-                              "UInt64", "UInt32", "UInt16", "UInt8",
-                              "Float64", "Float32", "Bool", "Char", "String", "Symbol")
-
 # Faithful vendored copy of PI's cell-body renderers (PlutoIslands.jl/src/extract.jl
 # `_plain_body`/`_html_body`) so harvested cells that call `PlutoIslands._plain_body`
 # resolve WITHOUT a PI/Pluto dependency. Quoted Expr (not a string) to avoid escape
@@ -62,11 +53,21 @@ function pi_classify(group, cell)
     fn_src = get(cell, "fn_src", nothing)
     fn_src === nothing && return ("extract_fail", join(get(cell, "reasons", String[]), "; "))
     haskey(cell, "eval_err") && return ("harvest_eval_fail", String(cell["eval_err"]))
-    # Decide nonscalar_args FIRST, from argtype NAMES — deterministic and free of
-    # sandbox import state (an exotic argtype like Dates.DateTime/Matrix{…} otherwise
-    # flips classification depending on whether its module loads in the sandbox).
+    # Decide nonscalar_args from the ACTUAL bridge descriptor (not a scalar name
+    # list) so bridgeable parametric bonds — Vector{String}, @NamedTuple{…},
+    # ComplexF64 — are tested too. argtypes are eval'd in `Main` (which reliably has
+    # the stdlibs in BOTH the regen script and the runtests context → deterministic;
+    # the gensym sandbox's `import Dates` was flaky). Matrix/Function/etc. have no
+    # arg_descriptor → stay nonscalar_args.
     argnames = String.(get(group, "argtypes", String[]))
-    all(a -> a in _PI_BRIDGE_ARG_NAMES, argnames) || return ("nonscalar_args", join(argnames, ","))
+    local argTs
+    try
+        argTs = Tuple(Core.eval(Main, Meta.parse(a)) for a in argnames)
+    catch e
+        return ("nonscalar_args", "argtype: " * first(sprint(showerror, e), 80))
+    end
+    all(T -> WasmTarget.Bridge.arg_descriptor(T) !== nothing, argTs) ||
+        return ("nonscalar_args", join(argnames, ","))
     sb = Module(gensym(:pi))
     try Core.eval(sb, :(import Markdown)) catch end
     try Core.eval(sb, :(import Dates)) catch end
@@ -74,12 +75,10 @@ function pi_classify(group, cell)
     for ex in get(group, "preamble", String[])
         try Core.eval(sb, Meta.parse(ex)) catch end
     end
-    local f, rt, argTs
+    local f, rt
     try
         f = Core.eval(sb, Meta.parse(fn_src))
         rt = Core.eval(sb, Meta.parse(get(cell, "rettype", "Nothing")))
-        # bridgeable arg names are all Base types → eval reliably in the sandbox
-        argTs = Tuple(Core.eval(sb, Meta.parse(a)) for a in argnames)
     catch e
         return ("eval_fail", first(sprint(showerror, e), 200))
     end

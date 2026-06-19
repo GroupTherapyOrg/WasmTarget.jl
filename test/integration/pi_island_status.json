@@ -17,7 +17,7 @@
   },
   "CollatzConjecture.jl#1#45ca6e2a-6a58-475e-9c02-4925e71625bd": {
     "notebook": "CollatzConjecture.jl",
-    "status": "nonscalar_args"
+    "status": "native_err"
   },
   "CollatzConjecture.jl#1#50a423ad-ca90-4015-9ef6-577f60e4efe7": {
     "notebook": "CollatzConjecture.jl",
@@ -25,7 +25,7 @@
   },
   "CollatzConjecture.jl#1#5f074850-b967-4de5-8ca3-b85a74052499": {
     "notebook": "CollatzConjecture.jl",
-    "status": "nonscalar_args"
+    "status": "runtime_trap"
   },
   "CollatzConjecture.jl#1#6693800b-e2bc-46e4-b5f8-004184ef472b": {
     "notebook": "CollatzConjecture.jl",
@@ -33,7 +33,7 @@
   },
   "CollatzConjecture.jl#1#66fe673a-7679-4c55-bf59-146a8dd1241c": {
     "notebook": "CollatzConjecture.jl",
-    "status": "nonscalar_args"
+    "status": "native_err"
   },
   "CollatzConjecture.jl#1#6d225dce-3362-4f5d-bba9-0b5312f6be5a": {
     "notebook": "CollatzConjecture.jl",
@@ -49,7 +49,7 @@
   },
   "CollatzConjecture.jl#1#af0c36ee-0534-4143-b59b-4ee041ef0f04": {
     "notebook": "CollatzConjecture.jl",
-    "status": "nonscalar_args"
+    "status": "eval_fail"
   },
   "CollatzConjecture.jl#1#f21f1e3e-a3ab-458e-a101-ce824731f0b6": {
     "notebook": "CollatzConjecture.jl",
@@ -69,7 +69,7 @@
   },
   "CollatzConjecture.jl#2#45ca6e2a-6a58-475e-9c02-4925e71625bd": {
     "notebook": "CollatzConjecture.jl",
-    "status": "nonscalar_args"
+    "status": "native_err"
   },
   "CollatzConjecture.jl#2#50a423ad-ca90-4015-9ef6-577f60e4efe7": {
     "notebook": "CollatzConjecture.jl",
@@ -77,7 +77,7 @@
   },
   "CollatzConjecture.jl#2#5f074850-b967-4de5-8ca3-b85a74052499": {
     "notebook": "CollatzConjecture.jl",
-    "status": "nonscalar_args"
+    "status": "native_err"
   },
   "CollatzConjecture.jl#2#6693800b-e2bc-46e4-b5f8-004184ef472b": {
     "notebook": "CollatzConjecture.jl",
@@ -85,7 +85,7 @@
   },
   "CollatzConjecture.jl#2#66fe673a-7679-4c55-bf59-146a8dd1241c": {
     "notebook": "CollatzConjecture.jl",
-    "status": "nonscalar_args"
+    "status": "native_err"
   },
   "CollatzConjecture.jl#2#6d225dce-3362-4f5d-bba9-0b5312f6be5a": {
     "notebook": "CollatzConjecture.jl",
@@ -101,7 +101,7 @@
   },
   "CollatzConjecture.jl#2#af0c36ee-0534-4143-b59b-4ee041ef0f04": {
     "notebook": "CollatzConjecture.jl",
-    "status": "nonscalar_args"
+    "status": "eval_fail"
   },
   "CollatzConjecture.jl#2#f21f1e3e-a3ab-458e-a101-ce824731f0b6": {
     "notebook": "CollatzConjecture.jl",
@@ -121,11 +121,11 @@
   },
   "CollatzConjecture.jl#3#45ca6e2a-6a58-475e-9c02-4925e71625bd": {
     "notebook": "CollatzConjecture.jl",
-    "status": "nonscalar_args"
+    "status": "native_err"
   },
   "CollatzConjecture.jl#3#5f074850-b967-4de5-8ca3-b85a74052499": {
     "notebook": "CollatzConjecture.jl",
-    "status": "nonscalar_args"
+    "status": "runtime_trap"
   },
   "CollatzConjecture.jl#3#6693800b-e2bc-46e4-b5f8-004184ef472b": {
     "notebook": "CollatzConjecture.jl",
@@ -133,7 +133,7 @@
   },
   "CollatzConjecture.jl#3#66fe673a-7679-4c55-bf59-146a8dd1241c": {
     "notebook": "CollatzConjecture.jl",
-    "status": "nonscalar_args"
+    "status": "native_err"
   },
   "CollatzConjecture.jl#3#6d225dce-3362-4f5d-bba9-0b5312f6be5a": {
     "notebook": "CollatzConjecture.jl",
@@ -141,7 +141,7 @@
   },
   "CollatzConjecture.jl#3#af0c36ee-0534-4143-b59b-4ee041ef0f04": {
     "notebook": "CollatzConjecture.jl",
-    "status": "nonscalar_args"
+    "status": "eval_fail"
   },
   "CollatzConjecture.jl#3#f21f1e3e-a3ab-458e-a101-ce824731f0b6": {
     "notebook": "CollatzConjecture.jl",
@@ -161,11 +161,11 @@
   },
   "CollatzConjecture.jl#4#45ca6e2a-6a58-475e-9c02-4925e71625bd": {
     "notebook": "CollatzConjecture.jl",
-    "status": "nonscalar_args"
+    "status": "native_err"
   },
   "CollatzConjecture.jl#4#5f074850-b967-4de5-8ca3-b85a74052499": {
     "notebook": "CollatzConjecture.jl",
-    "status": "nonscalar_args"
+    "status": "runtime_trap"
   },
   "CollatzConjecture.jl#4#6693800b-e2bc-46e4-b5f8-004184ef472b": {
     "notebook": "CollatzConjecture.jl",
@@ -173,7 +173,7 @@
   },
   "CollatzConjecture.jl#4#66fe673a-7679-4c55-bf59-146a8dd1241c": {
     "notebook": "CollatzConjecture.jl",
-    "status": "nonscalar_args"
+    "status": "native_err"
   },
   "CollatzConjecture.jl#4#6d225dce-3362-4f5d-bba9-0b5312f6be5a": {
     "notebook": "CollatzConjecture.jl",
@@ -181,7 +181,7 @@
   },
   "CollatzConjecture.jl#4#af0c36ee-0534-4143-b59b-4ee041ef0f04": {
     "notebook": "CollatzConjecture.jl",
-    "status": "nonscalar_args"
+    "status": "eval_fail"
   },
   "CollatzConjecture.jl#4#f21f1e3e-a3ab-458e-a101-ce824731f0b6": {
     "notebook": "CollatzConjecture.jl",
@@ -201,11 +201,11 @@
   },
   "CollatzConjecture.jl#5#45ca6e2a-6a58-475e-9c02-4925e71625bd": {
     "notebook": "CollatzConjecture.jl",
-    "status": "nonscalar_args"
+    "status": "native_err"
   },
   "CollatzConjecture.jl#5#5f074850-b967-4de5-8ca3-b85a74052499": {
     "notebook": "CollatzConjecture.jl",
-    "status": "nonscalar_args"
+    "status": "runtime_trap"
   },
   "CollatzConjecture.jl#5#6693800b-e2bc-46e4-b5f8-004184ef472b": {
     "notebook": "CollatzConjecture.jl",
@@ -213,7 +213,7 @@
   },
   "CollatzConjecture.jl#5#66fe673a-7679-4c55-bf59-146a8dd1241c": {
     "notebook": "CollatzConjecture.jl",
-    "status": "nonscalar_args"
+    "status": "native_err"
   },
   "CollatzConjecture.jl#5#6d225dce-3362-4f5d-bba9-0b5312f6be5a": {
     "notebook": "CollatzConjecture.jl",
@@ -221,7 +221,7 @@
   },
   "CollatzConjecture.jl#5#af0c36ee-0534-4143-b59b-4ee041ef0f04": {
     "notebook": "CollatzConjecture.jl",
-    "status": "nonscalar_args"
+    "status": "eval_fail"
   },
   "CollatzConjecture.jl#5#f21f1e3e-a3ab-458e-a101-ce824731f0b6": {
     "notebook": "CollatzConjecture.jl",
@@ -241,11 +241,11 @@
   },
   "CollatzConjecture.jl#6#45ca6e2a-6a58-475e-9c02-4925e71625bd": {
     "notebook": "CollatzConjecture.jl",
-    "status": "nonscalar_args"
+    "status": "native_err"
   },
   "CollatzConjecture.jl#6#5f074850-b967-4de5-8ca3-b85a74052499": {
     "notebook": "CollatzConjecture.jl",
-    "status": "nonscalar_args"
+    "status": "runtime_trap"
   },
   "CollatzConjecture.jl#6#6693800b-e2bc-46e4-b5f8-004184ef472b": {
     "notebook": "CollatzConjecture.jl",
@@ -253,7 +253,7 @@
   },
   "CollatzConjecture.jl#6#66fe673a-7679-4c55-bf59-146a8dd1241c": {
     "notebook": "CollatzConjecture.jl",
-    "status": "nonscalar_args"
+    "status": "native_err"
   },
   "CollatzConjecture.jl#6#6d225dce-3362-4f5d-bba9-0b5312f6be5a": {
     "notebook": "CollatzConjecture.jl",
@@ -261,7 +261,7 @@
   },
   "CollatzConjecture.jl#6#af0c36ee-0534-4143-b59b-4ee041ef0f04": {
     "notebook": "CollatzConjecture.jl",
-    "status": "nonscalar_args"
+    "status": "eval_fail"
   },
   "CollatzConjecture.jl#6#f21f1e3e-a3ab-458e-a101-ce824731f0b6": {
     "notebook": "CollatzConjecture.jl",
@@ -269,7 +269,7 @@
   },
   "Interactivity with HTML.jl#1#ede8009e-7f15-11ea-192a-a5c6135a9dcf": {
     "notebook": "Interactivity with HTML.jl",
-    "status": "nonscalar_args"
+    "status": "golden_drift"
   },
   "Interactivity with HTML.jl#2#5bd8b261-a89d-46a3-bb59-c95a1801c881": {
     "notebook": "Interactivity with HTML.jl",
@@ -305,7 +305,7 @@
   },
   "PlutoUI.jl.jl#10#44591b34-cc50-11ea-2005-2f7075e6f2db": {
     "notebook": "PlutoUI.jl.jl",
-    "status": "nonscalar_args"
+    "status": "runtime_trap"
   },
   "PlutoUI.jl.jl#12#3dcd7002-c765-11ea-323d-a1fb49409011": {
     "notebook": "PlutoUI.jl.jl",
@@ -325,11 +325,11 @@
   },
   "PlutoUI.jl.jl#15#a4eac824-ba87-473a-b39a-783c4de3f933": {
     "notebook": "PlutoUI.jl.jl",
-    "status": "nonscalar_args"
+    "status": "green"
   },
   "PlutoUI.jl.jl#15#f9052ed8-84cc-4cca-abb2-9363aafc6040": {
     "notebook": "PlutoUI.jl.jl",
-    "status": "nonscalar_args"
+    "status": "green"
   },
   "PlutoUI.jl.jl#16#49e7cd06-c760-11ea-3f5d-2741d94278a6": {
     "notebook": "PlutoUI.jl.jl",
@@ -357,11 +357,11 @@
   },
   "PlutoUI.jl.jl#21#a20e30f2-f0fe-11ea-0ca7-c5195c9eb24a": {
     "notebook": "PlutoUI.jl.jl",
-    "status": "nonscalar_args"
+    "status": "green"
   },
   "PlutoUI.jl.jl#22#b7788c4c-feb6-45cd-87ca-ae28c5ba3d07": {
     "notebook": "PlutoUI.jl.jl",
-    "status": "nonscalar_args"
+    "status": "runtime_trap"
   },
   "PlutoUI.jl.jl#23#3c68b25c-c761-11ea-226a-4f46579a6732": {
     "notebook": "PlutoUI.jl.jl",
@@ -393,7 +393,7 @@
   },
   "PlutoUI.jl.jl#5#9128d2c1-364c-4446-baaa-6d0593edda47": {
     "notebook": "PlutoUI.jl.jl",
-    "status": "nonscalar_args"
+    "status": "runtime_trap"
   },
   "PlutoUI.jl.jl#6#dcda9ad2-c763-11ea-3ec6-093b823ba66d": {
     "notebook": "PlutoUI.jl.jl",
@@ -401,7 +401,7 @@
   },
   "PlutoUI.jl.jl#7#2c7811cb-d9ea-470c-8cb7-2b3803489f3f": {
     "notebook": "PlutoUI.jl.jl",
-    "status": "nonscalar_args"
+    "status": "green"
   },
   "PlutoUI.jl.jl#8#bb356b12-c765-11ea-2c36-697f4314bb93": {
     "notebook": "PlutoUI.jl.jl",
@@ -485,27 +485,27 @@
   },
   "convolution_2d.jl#1#4b560bf2-00d9-4440-9589-834cd9177f66": {
     "notebook": "convolution_2d.jl",
-    "status": "nonscalar_args"
+    "status": "native_err"
   },
   "convolution_2d.jl#1#5737939b-0bb9-4ddf-8948-6356e60d79f3": {
     "notebook": "convolution_2d.jl",
-    "status": "nonscalar_args"
+    "status": "eval_fail"
   },
   "convolution_2d.jl#1#6c31cbb0-01ed-40cf-b400-3ed6b7c79ecc": {
     "notebook": "convolution_2d.jl",
-    "status": "nonscalar_args"
+    "status": "native_err"
   },
   "convolution_2d.jl#1#6ff88cb3-7cca-4091-b914-10c4bdc0d9d2": {
     "notebook": "convolution_2d.jl",
-    "status": "nonscalar_args"
+    "status": "native_err"
   },
   "convolution_2d.jl#1#8ae0248f-6eba-4941-85f4-b21be3c7e725": {
     "notebook": "convolution_2d.jl",
-    "status": "nonscalar_args"
+    "status": "native_err"
   },
   "convolution_2d.jl#1#9d42dd93-98b4-40db-9d3f-8917d6f72354": {
     "notebook": "convolution_2d.jl",
-    "status": "nonscalar_args"
+    "status": "outside_bridge"
   },
   "convolution_2d.jl#1#9edf2fce-715a-46fc-bc5f-d58e08de789b": {
     "notebook": "convolution_2d.jl",
@@ -513,7 +513,7 @@
   },
   "convolution_2d.jl#1#ef0bea69-6dfd-4526-a96e-6607771660fe": {
     "notebook": "convolution_2d.jl",
-    "status": "nonscalar_args"
+    "status": "native_err"
   },
   "convolution_2d.jl#2#4b560bf2-00d9-4440-9589-834cd9177f66": {
     "notebook": "convolution_2d.jl",
@@ -549,67 +549,67 @@
   },
   "convolution_2d.jl#4#4b560bf2-00d9-4440-9589-834cd9177f66": {
     "notebook": "convolution_2d.jl",
-    "status": "nonscalar_args"
+    "status": "native_err"
   },
   "convolution_2d.jl#4#6c31cbb0-01ed-40cf-b400-3ed6b7c79ecc": {
     "notebook": "convolution_2d.jl",
-    "status": "nonscalar_args"
+    "status": "native_err"
   },
   "convolution_2d.jl#4#6ff88cb3-7cca-4091-b914-10c4bdc0d9d2": {
     "notebook": "convolution_2d.jl",
-    "status": "nonscalar_args"
+    "status": "native_err"
   },
   "convolution_2d.jl#4#8ae0248f-6eba-4941-85f4-b21be3c7e725": {
     "notebook": "convolution_2d.jl",
-    "status": "nonscalar_args"
+    "status": "native_err"
   },
   "convolution_2d.jl#4#9d42dd93-98b4-40db-9d3f-8917d6f72354": {
     "notebook": "convolution_2d.jl",
-    "status": "nonscalar_args"
+    "status": "outside_bridge"
   },
   "convolution_2d.jl#4#ef0bea69-6dfd-4526-a96e-6607771660fe": {
     "notebook": "convolution_2d.jl",
-    "status": "nonscalar_args"
+    "status": "native_err"
   },
   "dither.jl#1#354f38ba-a8cf-4405-a0ef-1ec243f18acf": {
     "notebook": "dither.jl",
-    "status": "nonscalar_args"
+    "status": "outside_bridge"
   },
   "dither.jl#1#57a15a1a-32d8-4a75-9a65-18363a3c8f03": {
     "notebook": "dither.jl",
-    "status": "nonscalar_args"
+    "status": "native_err"
   },
   "dither.jl#1#7d1ced8c-8a33-4429-b8fb-f06eb4bc7b1b": {
     "notebook": "dither.jl",
-    "status": "nonscalar_args"
+    "status": "runtime_trap"
   },
   "dither.jl#1#93e576e2-d5f0-44d9-8747-93ecefc51a8c": {
     "notebook": "dither.jl",
-    "status": "nonscalar_args"
+    "status": "outside_bridge"
   },
   "dither.jl#1#c4799684-46b7-4783-99de-c8946e7067de": {
     "notebook": "dither.jl",
-    "status": "nonscalar_args"
+    "status": "outside_bridge"
   },
   "fractals.jl#1#4693d328-0907-4d62-b8e4-dcccff803b59": {
     "notebook": "fractals.jl",
-    "status": "nonscalar_args"
+    "status": "eval_fail"
   },
   "fractals.jl#1#78da1442-19df-464f-8099-407b50d99303": {
     "notebook": "fractals.jl",
-    "status": "nonscalar_args"
+    "status": "eval_fail"
   },
   "fractals.jl#1#9155d298-7758-4715-913f-9624c22450bb": {
     "notebook": "fractals.jl",
-    "status": "nonscalar_args"
+    "status": "green"
   },
   "fractals.jl#2#3dc2f13d-0238-444d-b440-5e7e2df0618f": {
     "notebook": "fractals.jl",
-    "status": "nonscalar_args"
+    "status": "green"
   },
   "fractals.jl#2#8899561d-42e7-4397-a649-8800461c6649": {
     "notebook": "fractals.jl",
-    "status": "nonscalar_args"
+    "status": "eval_fail"
   },
   "fractals.jl#3#221742a5-146e-4d7d-8d50-0f7bd5a30cb5": {
     "notebook": "fractals.jl",
@@ -665,11 +665,11 @@
   },
   "images.jl#4#2ac47b91-bbc3-49ae-9bf5-4def30ff46f4": {
     "notebook": "images.jl",
-    "status": "nonscalar_args"
+    "status": "eval_fail"
   },
   "images.jl#4#93b18ee8-f11c-40e2-b292-562798100ba4": {
     "notebook": "images.jl",
-    "status": "nonscalar_args"
+    "status": "eval_fail"
   },
   "images.jl#5#ff9eea3f-cab0-4030-8337-f519b94316c5": {
     "notebook": "images.jl",
