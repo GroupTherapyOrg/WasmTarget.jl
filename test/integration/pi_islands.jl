@@ -32,7 +32,14 @@ const PI_LOCK = joinpath(@__DIR__, "pi_island_status.json")
 # arg bridging — tracked as `nonscalar_args` until that lands. Compared by NAME
 # (string), not by eval'd Type, so classification is deterministic even when an
 # exotic argtype (e.g. Dates.DateTime) can't be resolved in the sandbox.
-const _PI_SCALAR_ARG_NAMES = ("Int64", "Int32", "Float64", "Float32")
+# Bond-input arg types the in-package bridge can marshal (via arg_descriptor +
+# value_to_tree + BUILD_JS in compare_julia_wasm_bridge_args). Matched by NAME so
+# classification is deterministic (no eval of exotic argtypes in the sandbox).
+# Vector/Tuple/NamedTuple/struct args are bridgeable too but left as nonscalar_args
+# for now (less common as bonds; would need eval to build samples).
+const _PI_BRIDGE_ARG_NAMES = ("Int64", "Int32", "Int16", "Int8",
+                              "UInt64", "UInt32", "UInt16", "UInt8",
+                              "Float64", "Float32", "Bool", "Char", "String", "Symbol")
 
 # Faithful vendored copy of PI's cell-body renderers (PlutoIslands.jl/src/extract.jl
 # `_plain_body`/`_html_body`) so harvested cells that call `PlutoIslands._plain_body`
@@ -56,10 +63,10 @@ function pi_classify(group, cell)
     fn_src === nothing && return ("extract_fail", join(get(cell, "reasons", String[]), "; "))
     haskey(cell, "eval_err") && return ("harvest_eval_fail", String(cell["eval_err"]))
     # Decide nonscalar_args FIRST, from argtype NAMES — deterministic and free of
-    # sandbox import state (the 6-bond Dates.DateTime group otherwise flips to
-    # eval_fail when `using Dates` doesn't take in the sandbox).
+    # sandbox import state (an exotic argtype like Dates.DateTime/Matrix{…} otherwise
+    # flips classification depending on whether its module loads in the sandbox).
     argnames = String.(get(group, "argtypes", String[]))
-    all(a -> a in _PI_SCALAR_ARG_NAMES, argnames) || return ("nonscalar_args", join(argnames, ","))
+    all(a -> a in _PI_BRIDGE_ARG_NAMES, argnames) || return ("nonscalar_args", join(argnames, ","))
     sb = Module(gensym(:pi))
     try Core.eval(sb, :(import Markdown)) catch end
     try Core.eval(sb, :(import Dates)) catch end
@@ -67,10 +74,12 @@ function pi_classify(group, cell)
     for ex in get(group, "preamble", String[])
         try Core.eval(sb, Meta.parse(ex)) catch end
     end
-    local f, rt
+    local f, rt, argTs
     try
         f = Core.eval(sb, Meta.parse(fn_src))
         rt = Core.eval(sb, Meta.parse(get(cell, "rettype", "Nothing")))
+        # bridgeable arg names are all Base types → eval reliably in the sandbox
+        argTs = Tuple(Core.eval(sb, Meta.parse(a)) for a in argnames)
     catch e
         return ("eval_fail", first(sprint(showerror, e), 200))
     end
@@ -84,7 +93,9 @@ function pi_classify(group, cell)
     for (si, srep) in enumerate(samples)
         local args
         try
-            args = Tuple(Core.eval(sb, Meta.parse(x)) for x in srep)
+            # build each arg with its DECLARED type (sample reprs lose narrow-int
+            # width — repr(Int32(5))=="5" — so convert to argTs[k])
+            args = Tuple(convert(argTs[k], Core.eval(sb, Meta.parse(srep[k]))) for k in eachindex(argTs))
         catch e
             return ("eval_fail", first(sprint(showerror, e), 200))
         end
@@ -97,7 +108,7 @@ function pi_classify(group, cell)
         end
         local r
         try
-            r = Base.invokelatest(compare_julia_wasm_bridge, f, args...; rettype = rt, name = name)
+            r = Base.invokelatest(compare_julia_wasm_bridge_args, f, args...; rettype = rt, name = name)
         catch e
             return ("compile_fail", first(sprint(showerror, e), 200))
         end
