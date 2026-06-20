@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.11](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.10...v0.3.11) (2026-06-20)
+
+
+### Features
+
+* **codegen:** string(::Complex) overlay + PlutoIslands island-fixtures testbed ([ed84425](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/ed844259c475fcc144b8b7188a9f7aa781028c48))
+* **codegen:** string(::Complex) via byte-assembly overlay (closes cfd419793b0d) ([a9736ef](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/a9736ef56503c3b8be6b6592aacc450d44972e01))
+
 ## [0.3.10](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.9...v0.3.10) (2026-06-18)
 
 
