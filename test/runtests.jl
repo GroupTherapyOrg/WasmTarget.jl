@@ -112,6 +112,7 @@ using Dates: Dates, @dateformat_str
 _wt_shard0() && include("test_aqua.jl")
 
 include("utils.jl")
+include(joinpath(@__DIR__, "integration", "pi_islands.jl"))  # PlutoIslands island fixtures
 
 # ── Parallel-phase infrastructure (process sharding) ─────────────────────────
 # Test fixtures hoisted from inside phase testsets — `struct`/`using` are illegal
@@ -7546,16 +7547,69 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_wt_uf32, Int64(-1)).pass  # Int64 member: -7
         end
 
-        @testset "string(::Complex) compiles (typeinfo overlay, WASMTARGET-FUZZ)" begin
-            # structref-param fix + the nonnothing_nonmissing_typeinfo overlay make
-            # string(::Complex) emit a VALID module (was: struct.get on a structref
-            # `show` param, then a dead-value underflow in nonnothing_nonmissing_typeinfo).
-            # Validate-only: RUNNING needs the wasm:js-string builtin import (a harness
-            # limitation, present in PlutoIslands' runtime), but the module is well-formed.
-            # Closes the codegen half of gap cfd419793b0d (fractals "0.9 + 0.4im" label).
-            _wt_scplx(x::Int64)::Int64 = Int64(ncodeunits(string(complex(0.9, 0.4 + Float64(x)))))
-            @test (WasmTarget.compile_multi(Any[(_wt_scplx, (Int64,), "_wt_scplx")];
+        @testset "string(::Complex) runs byte-exact (overlay, WASMTARGET-FUZZ)" begin
+            # gap cfd419793b0d (fractals "0.9 + 0.4im" label): the string(::Complex)
+            # OVERLAY byte-assembles string(real) + " + "/" - " + string(|imag|) +
+            # ["*"] + "im", mirroring Base.show(::Complex) EXACTLY but bypassing the
+            # unsupported Base IOBuffer string-building path (empty IOBuffer() → null
+            # .data array → trap; jl_string_ptr/jl_string_to_genericmemory memmove +
+            # take! stubs). Scalars (len / codeunit) so the default harness execs
+            # WITHOUT js-string; the full byte-exact differential across edge cases
+            # (negative imag, Inf/NaN → "*im", integer-valued) is in the fuzz bridge.
+            _wt_scplx_len(x::Int64)::Int64 = Int64(ncodeunits(string(complex(0.9, 0.4 + Float64(x)))))
+            _wt_scplx_cu(x::Int64)::Int64  = Int64(codeunit(string(complex(0.9, 0.4 + Float64(x))), 1 + x))
+            @test compare_julia_wasm(_wt_scplx_len, Int64(0)).pass   # len("0.9 + 0.4im") = 11
+            @test compare_julia_wasm(_wt_scplx_cu,  Int64(0)).pass   # byte 1 = '0'
+            @test compare_julia_wasm(_wt_scplx_cu,  Int64(4)).pass   # byte 5 = '+'
+            @test compare_julia_wasm(_wt_scplx_cu,  Int64(9)).pass   # byte 10 = 'i'
+            @test (WasmTarget.compile_multi(Any[(_wt_scplx_len, (Int64,), "_wt_scplx_len")];
                 strict=true, validate=true, optimize=false); true)
+        end
+
+        @testset "PlutoIslands fractals island — full String via bridge (WASMTARGET-INTEGRATION)" begin
+            # Robust in-WT integration fixture for the PlutoIslands fractals island
+            # (@bind c ComplexNumberPicker(default=.9+.4im)): the island reactively
+            # computes c = t(point.x) - im*t(point.y), t(x)=(x-150)/120, and renders
+            # string(c) — the "0.9 + 0.4im" label the island survey flagged as wasm "".
+            # Uses compare_julia_wasm_bridge (the in-package bit-exact WasmTarget.Bridge,
+            # the SAME transport PI uses) so the FULL String return is decoded + compared
+            # byte-for-byte — not a scalar proxy. Previously impossible in WT's unit suite:
+            # the plain harness JSON.stringifies a WasmGC array ref to "undefined". This is
+            # the real fractals cell, exercising Float64 arith + complex() + string(::Complex).
+            _wt_pi_fractals_clabel(px::Float64, py::Float64)::String =
+                string(complex((px - 150.0) / 120.0, -((py - 150.0) / 120.0)))
+            @test compare_julia_wasm_bridge(_wt_pi_fractals_clabel, 258.0, 102.0; rettype=String).pass  # default → "0.9 + 0.4im"
+            @test compare_julia_wasm_bridge(_wt_pi_fractals_clabel, 270.0,  30.0; rettype=String).pass  # "1.0 + 1.0im"
+            @test compare_julia_wasm_bridge(_wt_pi_fractals_clabel, 150.0, 270.0; rettype=String).pass  # negative imag → " - "
+        end
+
+        @testset "PlutoIslands island fixtures — status-locked corpus (WASMTARGET-INTEGRATION)" begin
+            # Real PI featured-corpus island cells (harvested by PlutoIslands.jl/tools/
+            # harvest_wt_fixtures.jl → test/integration/pi_island_fixtures.json), each
+            # tested DIRECTLY against WT codegen via the in-package bridge. A per-piece
+            # status LOCK (pi_island_status.json) makes BOTH regressions (green→fail) and
+            # newly-fixed pieces (fail→green) trip the suite — so every PI binding is
+            # tracked, passing or failing. The loop's product KPI is "PI pieces green:
+            # N/total". To update after a (re-)harvest or codegen fix that flips a piece:
+            # `julia --project=. test/integration/regen_pi_lock.jl` and commit the lock.
+            # Node-gated (skips cleanly when the wasm runner is unavailable).
+            if WasmRunner.runner_available() && isfile(PI_FIX)
+                statuses = pi_all_statuses()
+                @test !isempty(statuses)
+                lock = isfile(PI_LOCK) ? JSON.parsefile(PI_LOCK) : Dict{String,Any}()
+                @info "PlutoIslands island fixtures" total=length(statuses) green=count(s -> s.status == "green", statuses)
+                for s in statuses
+                    rec = get(lock, s.key, nothing)
+                    if rec === nothing
+                        @warn "PI island piece missing from lock — run test/integration/regen_pi_lock.jl" key = s.key status = s.status
+                        @test false
+                    else
+                        _ok = s.status == rec["status"]
+                        _ok || @warn "PI island piece status FLIP" key = s.key live = s.status locked = rec["status"] detail = s.detail
+                        @test _ok
+                    end
+                end
+            end
         end
 
         @testset "Int128 arithmetic right shift (WASMTARGET-FUZZ)" begin

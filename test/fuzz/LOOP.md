@@ -15,6 +15,91 @@ This file is the **operational contract** for that loop. Read it every iteration
 
 ---
 
+## ⭐ CURRENT STATE & LESSONS (2026-06-18, post-v0.3.10 — read FIRST; trust this where the older sections below conflict)
+
+The lower sections were written BEFORE the work. This block is the up-to-date overlay.
+
+**Done + RELEASED (v0.3.10, registered in General):** P0 guardrails — G1 paranoid value-stubs
+(`WT_PARANOID_STUBS`), G2 frozen hash-pinned oracle + sweep input rotation, G3 `run.jl rank`
+leverage ranking. Dynamic dispatch **ON by default** (`WT_DYNDISPATCH=0` to disable):
+non-perturbing collection + registry isolation (`FunctionInfo.is_candidate`) + PURE-9060
+reconciliation (discovery yields to call_indirect for ≥9-method fns) — verified safe on
+WT-suite + WasmMakie + PlutoIslands gate-on. median/quantile cluster closed. PlutoIslands
+added to `downstream.yml`. **Open gaps: 15** (was 22). Everything in §7-P0 and T1.1 below is
+COMPLETE — do not redo it.
+
+**Remaining = the DEEP TAIL (the real frontier; each a genuine multi-iteration codegen fix):**
+abstract-Dict-key cluster (11 — needs PRIMITIVE megamorphic `hash`/`isequal` dispatch over
+Int32/Int64 abstract `Signed` keys; a *different* mechanism than the struct typeId dispatch
+just shipped), Complex→Ryu reachable-`unreachable` (1), dispatch-ladder `1f6e77980994` (1),
+closure-dep i64/i32 in `compile_closure_body` (1), Matrix/hvcat element trap (1).
+
+**LESSONS from the v0.3.10 run — APPLY THESE:**
+1. **FALSE-OPEN TRIAGE before grinding.** Some "open" gaps are already-fixed code `verify`
+   can't see — `verify` has session-cache + missing-import **false-negatives** (the median
+   cluster was 7 such: verify lacked `using Statistics`). Before treating a gap as a codegen
+   bug: (a) reproduce in a **FRESH process** (not just `verify`); (b) confirm the verify/harness
+   env is complete (stdlib imports; `js-string` builtins). Cheap real wins; avoids deep grinds
+   on already-fixed code.
+2. **Synthetic gaps ≠ product impact.** Dynamic dispatch landed + is safe but closed ZERO
+   ledger gaps AND zero PI wins (Dict needs primitive dispatch; PI sidesteps markdown dispatch
+   via its md-skeleton). Do NOT equate ledger progress with the PI/Therapy goal — periodically
+   validate against REAL downstream (now wired: `downstream.yml` runs PI/WasmMakie/Therapy).
+3. **`rank` count MISLEADS.** The highest-count clusters were the HARDEST or mis-tiered (Dict
+   ranked T0 but is T1-dispatch; median was a false-open). Re-verify a gap's tier/reality by
+   reproducing before committing to a deep grind.
+
+**Honest corrections to the plan below:** §2's "Frontier budget (mandatory)" was NEVER built
+(the generator isn't tier-parameterized) — treat as a TODO, not a requirement; the loop reaches
+the frontier via the ranked open-gap queue. §5(a) (PI in `downstream.yml`) is DONE. §5(b)
+in-repo PI fixtures — once "BLOCKED on js-string" — are now **DONE** (2026-06-18): the real
+blocker was that the unit harness only decoded SCALAR returns, fixed by wiring the in-package
+bit-exact `WasmTarget.Bridge` into `compare_julia_wasm_bridge`. See the new section below —
+**this is now the loop's primary, product-grounded KPI.**
+
+---
+
+## 0.5 ⭐ PI ISLAND FIXTURES — the product-grounded loop KPI (2026-06-18, current driver)
+
+**The loop now targets REAL PlutoIslands island cells directly, in WT's own test suite.**
+This resolves Lesson #2 ("synthetic gaps ≠ product impact") at the root: the unit of work is
+a **PI island piece**, and the KPI is **"PI pieces green: N / total"** (not synthetic ledger
+count). The synthetic fuzzer stays as the soundness *backstop* (finds new bugs); PI fixtures
+drive *priority*.
+
+**Mechanism (no PI/Pluto dependency in WT):**
+1. **Harvester** (`PlutoIslands.jl/tools/harvest_wt_fixtures.jl`, run in PI's Pluto env)
+   walks every featured notebook → every `@bind` group → every extracted cell, emitting
+   `WasmTarget.jl/test/integration/pi_island_fixtures.json`: `{notebook, bonds, argtypes,
+   preamble, cell{fn_src, rettype, samples, GOLDEN native outputs}}`. Failing/extract-failed
+   pieces are recorded too (status tracked, never dropped).
+2. **WT test** (`test/integration/pi_islands.jl`, run from `runtests.jl`) evals each piece's
+   fn (+ preamble + a vendored `PlutoIslands._plain_body`/`_html_body` shim), compiles via
+   `compile_multi`, runs through the in-package bridge (`compare_julia_wasm_bridge`), and
+   classifies: `green` / `mismatch` / `runtime_trap` / `compile_fail` / `outside_bridge` /
+   `nonscalar_args` / `extract_fail`. A drift guard asserts the vendored fn reproduces the
+   captured golden.
+3. **Status LOCK** (`pi_island_status.json`): the testset asserts each piece's live status ==
+   locked status, so a `green→fail` (regression) AND a `fail→green` (unrecorded fix) BOTH
+   fail the suite. Known-failing pieces don't redden CI in steady state; any FLIP is loud.
+
+**The loop iteration becomes:** read the status table → pick the highest-value FAILING piece
+(cluster by status reason — `compile_fail`/`runtime_trap`/`outside_bridge`/`nonscalar_args`
+are the work-item families) → diagnose → fix WT codegen → piece flips `green` →
+`julia --project=. test/integration/regen_pi_lock.jl` → commit lock → regress forever.
+
+**Current state (2026-06-18):** 9 pieces from the 2 light notebooks (Interactivity, Basic
+mathematics): **7 green**, 1 `mismatch` (`string(typeof(x))` → empty; Type-name/Type-as-value
+gap = a real work item), 1 `nonscalar_args` (6-bond String/Bool/DateTime group — needs
+`bridge_run_args`-style arg bridging). **Full-corpus harvest is PENDING** (task #40): the
+heavier notebooks (PlutoUI, newton, fractals, convolution, images, dither, turtles, Titration)
+returned 0 groups because their embedded Pluto package envs didn't run in the harvest session —
+re-run the harvester after warming those envs (e.g. via `tools/island_survey.jl`).
+**Re-harvest:** `cd PlutoIslands.jl && julia --project=. tools/harvest_wt_fixtures.jl` then
+regen the lock. KPI today: **7/9 green** (will grow to the full ~38-shipping / 65-total corpus).
+
+---
+
 ## 0. Read this first — what already exists (DO NOT rebuild)
 
 The apparatus in `test/fuzz/` already implements the entire core loop, and it works
@@ -257,16 +342,18 @@ iterations, with the human watching):**
 ## 8. Launch — the `/loop` invocation
 
 ```
-/loop Harden WasmTarget per test/fuzz/LOOP.md, working on branch wt-soundness-loop.
-Each iteration, follow §4 exactly: run loop_guard preflight; if a §7 P0 task (G1/G2/G3)
-is unfinished do the next one, else pick the single highest-leverage open gap by the §6
-ranking (diagnostic-site fan-in × tier) and also honor the §2 frontier budget; reproduce
-and confirm it throws; fix src/codegen/** with strict semantics — NEVER strict=false, a
-:value_stub, an unreachable mask, or an edit to the oracle/generator input lists (§3);
-recompile, confirm the repro runs, then verify + the guarding shard + full sharded suite
-green + a confirming sweep; run loop_guard.sh on the diff and STOP/ask me if it flags a
-cheat or the suite goes red and you can't fix it within the iteration; commit with the
-Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com> trailer and write
-root-cause into the gap's ## Analysis. Then continue. KPI = open gaps → 0 at the current
-tier AND capabilities pulled from the next tier in (§1), not just gaps closed.
+/loop Harden WasmTarget per test/fuzz/LOOP.md (read the CURRENT STATE & LESSONS block first),
+working on branch wt-soundness-loop-2. P0 guardrails + dynamic dispatch are DONE (v0.3.10) —
+don't redo them. Each iteration: run loop_guard preflight; pick the highest-leverage open gap
+by `run.jl rank`; FALSE-OPEN-TRIAGE it first (reproduce in a FRESH process + check the
+verify/harness env is complete — stdlib imports, js-string — per lesson 1) and if it's a
+false-open, fix the verify/harness (not codegen) and move on; otherwise reproduce + confirm it
+throws, fix src/codegen/** with strict semantics — NEVER strict=false, a :value_stub, an
+unreachable mask, or an edit to the oracle/generator/reproducer logic (§3); recompile, confirm
+the repro runs, then verify + the guarding shard + full sharded suite green + a confirming
+sweep; run loop_guard.sh and STOP/ask me if it flags a cheat or the suite goes red and you
+can't fix it within the iteration; commit with the Co-Authored-By: Claude Opus 4.8 (1M
+context) <noreply@anthropic.com> trailer and write root-cause into the gap's ## Analysis.
+Remaining tail: Dict-primitive-dispatch (11), Complex/Ryu unreachable, dispatch-ladder,
+closure-dep i64/i32, Matrix/hvcat. Don't conflate ledger progress with PI impact (lesson 2).
 ```
