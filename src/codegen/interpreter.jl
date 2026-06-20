@@ -188,6 +188,55 @@ end
     return String(bytes)
 end
 
+# Why: `string(::Vector{String})` (PI dither island shows its colour palette via
+#      `_plain_body(colorscheme)`) hits the same array-show trap.
+# How: byte-assemble `["e1", "e2", …]`, quoting each element as show(io, ::String)
+#      does — escape `"`, `\`, `$`. SOUND-OR-TRAP: show keeps non-ASCII printable
+#      bytes verbatim but escapes non-printable ones via `\uXXXX`, which needs
+#      Unicode printability tables WT lacks. Rather than risk silently-wrong bytes,
+#      this is bit-exact for printable-ASCII elements (0x20–0x7e, the dither hex
+#      colours) and TRAPS loudly on any control/≥0x80 byte. Empty ⇒ `String[]`.
+# Remove when: codegen handles Base IOBuffer / Unicode-aware escape_string (#39).
+@noinline @overlay WASM_METHOD_TABLE function Base.string(v::Vector{String})
+    n = length(v)
+    bytes = UInt8[]
+    if n == 0
+        for c in (UInt8('S'), UInt8('t'), UInt8('r'), UInt8('i'), UInt8('n'),
+                  UInt8('g'), UInt8('['), UInt8(']'))
+            push!(bytes, c)
+        end
+        return String(bytes)
+    end
+    push!(bytes, UInt8('['))
+    i = 1
+    while i <= n
+        s = v[i]
+        push!(bytes, UInt8('"'))
+        m = ncodeunits(s)
+        k = 1
+        while k <= m
+            b = codeunit(s, k)
+            if b < 0x20 || b > 0x7e
+                # control or non-ASCII: needs escape_string's Unicode-aware logic
+                error("string(::Vector{String}): non-printable-ASCII element unsupported")
+            end
+            if b == UInt8('"') || b == UInt8('\\') || b == UInt8('$')
+                push!(bytes, UInt8('\\'))
+            end
+            push!(bytes, b)
+            k += 1
+        end
+        push!(bytes, UInt8('"'))
+        if i < n
+            push!(bytes, UInt8(','))
+            push!(bytes, UInt8(' '))
+        end
+        i += 1
+    end
+    push!(bytes, UInt8(']'))
+    return String(bytes)
+end
+
 # Why: `string(nothing)` / `_plain_body(nothing)` routes through Base's `print`/
 #      `show(::Nothing)` → IOBuffer, trapping (null deref) in WT. (PI PlutoUI island.)
 # How: it's the constant "nothing"; return it directly.
