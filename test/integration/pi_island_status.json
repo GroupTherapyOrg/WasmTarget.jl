@@ -305,7 +305,7 @@
   },
   "PlutoUI.jl.jl#10#44591b34-cc50-11ea-2005-2f7075e6f2db": {
     "notebook": "PlutoUI.jl.jl",
-    "status": "runtime_trap"
+    "status": "green"
   },
   "PlutoUI.jl.jl#12#3dcd7002-c765-11ea-323d-a1fb49409011": {
     "notebook": "PlutoUI.jl.jl",
@@ -469,7 +469,7 @@
   },
   "convolution_1d.jl#1#9fab3bbb-5c7f-4464-97c9-847f52754845": {
     "notebook": "convolution_1d.jl",
-    "status": "runtime_trap"
+    "status": "green"
   },
   "convolution_1d.jl#1#a60029d5-ae8d-4704-bef1-076949712c37": {
     "notebook": "convolution_1d.jl",

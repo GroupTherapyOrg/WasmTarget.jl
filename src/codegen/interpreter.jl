@@ -147,6 +147,54 @@ end
     return String(bytes)
 end
 
+# Why: `string(::Vector{Int64})` (and `_plain_body(v)=string(v)` in PI island
+#      cells, e.g. convolution_1d `treatment_in = [a1_s, …]`) goes through Base's
+#      array-show → IOBuffer machinery, which WT can't codegen → trap "unreachable".
+# How: byte-assemble the one-line array repr `[e1, e2, …]`, reusing string(::Int64)
+#      (line ~1643) for each element — bit-exact with `show(io, ::Vector{Int64})`.
+#      Scoped to the DEFAULT eltype (Int64): a `Vector{Int64}` shows WITHOUT the
+#      `Int64[…]` type prefix that non-default eltypes (Int32, Bool) get, so a bare
+#      element `string` is correct here and would be WRONG for those. The empty
+#      vector is the one exception — Base shows `Int64[]` — handled explicitly.
+# Remove when: codegen handles Base IOBuffer / array-show string construction (#39).
+@noinline @overlay WASM_METHOD_TABLE function Base.string(v::Vector{Int64})
+    n = length(v)
+    bytes = UInt8[]
+    if n == 0
+        # empty array shows with the eltype prefix: `Int64[]`
+        for c in (UInt8('I'), UInt8('n'), UInt8('t'), UInt8('6'), UInt8('4'),
+                  UInt8('['), UInt8(']'))
+            push!(bytes, c)
+        end
+        return String(bytes)
+    end
+    push!(bytes, UInt8('['))
+    i = 1
+    while i <= n
+        es = string(v[i])
+        m = ncodeunits(es)
+        k = 1
+        while k <= m
+            push!(bytes, codeunit(es, k))
+            k += 1
+        end
+        if i < n
+            push!(bytes, UInt8(','))
+            push!(bytes, UInt8(' '))
+        end
+        i += 1
+    end
+    push!(bytes, UInt8(']'))
+    return String(bytes)
+end
+
+# Why: `string(nothing)` / `_plain_body(nothing)` routes through Base's `print`/
+#      `show(::Nothing)` → IOBuffer, trapping (null deref) in WT. (PI PlutoUI island.)
+# How: it's the constant "nothing"; return it directly.
+@overlay WASM_METHOD_TABLE function Base.string(::Nothing)
+    return "nothing"
+end
+
 # ─── String Comparison Overlays ────────────────────────────────────────────
 # Base implementations use foreigncall :memcmp which can't run in WASM.
 # Pure Julia byte-by-byte comparisons using ncodeunits + codeunit.
