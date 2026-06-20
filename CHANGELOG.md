@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.12](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.11...v0.3.12) (2026-06-20)
+
+
+### Features
+
+* **codegen:** [v...] splat-collect + array-show overlays (PI 30→33) ([c489c22](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/c489c2202760b8d97287e47f1577778a1665bc6b))
+* **codegen:** [v...] splat-collect for Vector + string(::Vector{String}) ([677b1ae](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/677b1ae2cda9679ae6284a7eac07156df6e098ba))
+* **codegen:** collect + range-slice for ref-element (String) vectors ([b5fe8e3](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/b5fe8e3de1efcb5d7cfd2dd4897d8e1efe9135c5))
+* **codegen:** string(::Vector{Int64}) + string(::Nothing) overlays ([4a09462](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/4a09462fd57f92de48d21313b740920210d9cb81))
+
+
+### Bug Fixes
+
+* **codegen:** repeat(::Char, n) corrupts multibyte chars (soundness) ([2fc8292](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/2fc82927bff6d1c2a78f50e8fa92c33fdff5f758))
+
 ## [0.3.11](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.10...v0.3.11) (2026-06-20)
 
 
