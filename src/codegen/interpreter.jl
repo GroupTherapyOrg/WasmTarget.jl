@@ -244,6 +244,35 @@ end
     return "nothing"
 end
 
+# Why: `collect(::Vector{T})` for a REFERENCE element type (String, …) routes through
+#      similar + copyto!, whose Memory allocation null-derefs in WT (the String-array
+#      null-Memory class); isbits eltypes (Int, Float) are fine. `collect` of a Vector
+#      is just a shallow copy, and WT's element-by-element `copy` overlay works for ALL
+#      eltypes. (PI convolution_1d `collect([emoji…])`.)
+# How: route to copy. Only matches an explicit collect of a concrete Vector — generator
+#      comprehensions lower to collect(::Generator), unaffected.
+@overlay WASM_METHOD_TABLE function Base.collect(v::Vector{T}) where {T}
+    return copy(v)
+end
+
+# Why: `v[a:b]` on a Vector{String} (and other ref-element vectors) routes through
+#      similar + copyto!, hitting the same null-Memory bug → null-deref trap. (PI
+#      convolution_1d `(collect([…]))[1:len]`.) isbits-eltype slices use the working
+#      array path and are left untouched (this overlay is String-scoped).
+# How: build the slice element-by-element via push! (a verified-working path for
+#      String vectors). An out-of-range index traps on the element read, matching
+#      Base's BoundsError (the differential oracle treats a native throw as a trap).
+@overlay WASM_METHOD_TABLE function Base.getindex(v::Vector{String}, r::UnitRange{Int})
+    out = String[]
+    i = first(r)
+    stop = last(r)
+    while i <= stop
+        push!(out, v[i])
+        i += 1
+    end
+    return out
+end
+
 # ─── String Comparison Overlays ────────────────────────────────────────────
 # Base implementations use foreigncall :memcmp which can't run in WASM.
 # Pure Julia byte-by-byte comparisons using ncodeunits + codeunit.
