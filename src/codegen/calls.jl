@@ -6569,20 +6569,27 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.STRUCT_NEW)
             append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
-        # Only handle single-container Vector{T} splatting with known binary intrinsics
+        # Single-container Vector{T} splatting: vector-literal collect (`[v...]`)
+        # or a known binary-reduce intrinsic.
         elseif length(args) == 3 && container_type <: Vector && container_type isa DataType
             elem_type = eltype(container_type)
-            # Resolve target function to a WASM opcode for binary reduce
             target_name = target_func isa GlobalRef ? target_func.name : nothing
-            reduce_op = _get_binary_reduce_opcode(target_name, elem_type)
+            target_mod  = target_func isa GlobalRef ? target_func.mod  : nothing
 
-            if reduce_op !== nothing
-                # Emit inline reduce loop: acc = v[1]; for i in 2:length(v), acc = op(acc, v[i])
-                _emit_apply_iterate_reduce!(bytes, container_arg, container_type, elem_type, reduce_op, ctx)
+            if target_name === :vect && target_mod === Base
+                # `[v...]` ⇒ Base.vect(v...) ⇒ a shallow copy of the vector.
+                _emit_apply_iterate_vect!(bytes, container_arg, container_type, ctx)
             else
-                # Unknown target function — can't reduce, trap
-                push!(bytes, Opcode.UNREACHABLE)
-                ctx.last_stmt_was_stub = true
+                # Resolve target function to a WASM opcode for binary reduce
+                reduce_op = _get_binary_reduce_opcode(target_name, elem_type)
+                if reduce_op !== nothing
+                    # Emit inline reduce loop: acc = v[1]; for i in 2:length(v), acc = op(acc, v[i])
+                    _emit_apply_iterate_reduce!(bytes, container_arg, container_type, elem_type, reduce_op, ctx)
+                else
+                    # Unknown target function — can't reduce, trap
+                    push!(bytes, Opcode.UNREACHABLE)
+                    ctx.last_stmt_was_stub = true
+                end
             end
         else
             # Multiple containers or non-Vector type — not supported yet, trap
@@ -7542,6 +7549,86 @@ function _emit_apply_iterate_reduce!(bytes::Vector{UInt8}, container_arg, contai
     # Step 7: Push accumulator as result
     push!(bytes, Opcode.LOCAL_GET)
     append!(bytes, encode_leb128_unsigned(acc_local))
+end
+
+"""
+Emit a shallow copy for _apply_iterate(iterate, Base.vect, vec::Vector{T}) — i.e.
+the `[v...]` splat-collect idiom, which for a single Vector argument is exactly
+`copy(v)`: a new Vector{T} with the same elements.
+
+Builds the result struct { typeId, data_array, size_tuple } from `vec`:
+  * typeId   — copied from the source (field 0)
+  * data_array — a fresh array.new_default of the LOGICAL length (read from the
+    size tuple, not array.len, since the backing array may carry extra capacity),
+    populated via array.copy
+  * size_tuple — reused from the source (Tuple{Int64} is immutable → safe to share)
+
+Allocates 4 temporary locals: vec_ref, src_arr, len (i32), new_arr.
+"""
+function _emit_apply_iterate_vect!(bytes::Vector{UInt8}, container_arg, container_type::DataType, ctx)
+    vec_info  = get(ctx.type_registry.structs, container_type, nothing)
+    elem_type = eltype(container_type)
+    arr_type_idx = get(ctx.type_registry.arrays, elem_type, nothing)
+    size_info = get(ctx.type_registry.structs, Tuple{Int64}, nothing)
+    if vec_info === nothing || arr_type_idx === nothing || size_info === nothing
+        push!(bytes, Opcode.UNREACHABLE)
+        ctx.last_stmt_was_stub = true
+        return
+    end
+    vec_type_idx = vec_info.wasm_type_idx
+    field_offset = vec_info.field_offset           # 1: data array (0 = typeId, 2 = size)
+    size_type_idx = size_info.wasm_type_idx
+    size_field_offset = size_info.field_offset
+
+    vec_ref_local = UInt32(ctx.n_params + length(ctx.locals)); push!(ctx.locals, ConcreteRef(vec_type_idx, true))
+    src_arr_local = UInt32(ctx.n_params + length(ctx.locals)); push!(ctx.locals, ConcreteRef(arr_type_idx, true))
+    len_local     = UInt32(ctx.n_params + length(ctx.locals)); push!(ctx.locals, I32)
+    new_arr_local = UInt32(ctx.n_params + length(ctx.locals)); push!(ctx.locals, ConcreteRef(arr_type_idx, true))
+
+    # vec_ref = container
+    append!(bytes, compile_value(container_arg, ctx))
+    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(vec_ref_local))
+
+    # src_arr = vec_ref.data  (field_offset)
+    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(vec_ref_local))
+    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(vec_type_idx)); append!(bytes, encode_leb128_unsigned(field_offset))
+    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(src_arr_local))
+
+    # len = vec_ref.size[1]  (vec → size tuple → i64 → i32)
+    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(vec_ref_local))
+    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(vec_type_idx)); append!(bytes, encode_leb128_unsigned(field_offset + 1))
+    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(size_type_idx)); append!(bytes, encode_leb128_unsigned(size_field_offset))
+    push!(bytes, Opcode.I32_WRAP_I64)
+    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(len_local))
+
+    # new_arr = array.new_default(arr_type, len)
+    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(len_local))
+    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
+    append!(bytes, encode_leb128_unsigned(arr_type_idx))
+    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(new_arr_local))
+
+    # array.copy(new_arr, 0, src_arr, 0, len)
+    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(new_arr_local))
+    push!(bytes, Opcode.I32_CONST, 0x00)
+    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(src_arr_local))
+    push!(bytes, Opcode.I32_CONST, 0x00)
+    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(len_local))
+    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.ARRAY_COPY)
+    append!(bytes, encode_leb128_unsigned(arr_type_idx)); append!(bytes, encode_leb128_unsigned(arr_type_idx))
+
+    # result = struct.new vec_type_idx [ typeId(src), new_arr, size_tuple(src) ]
+    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(vec_ref_local))
+    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(vec_type_idx)); append!(bytes, encode_leb128_unsigned(field_offset - 1))  # typeId
+    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(new_arr_local))
+    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(vec_ref_local))
+    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
+    append!(bytes, encode_leb128_unsigned(vec_type_idx)); append!(bytes, encode_leb128_unsigned(field_offset + 1))  # size tuple
+    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_NEW)
+    append!(bytes, encode_leb128_unsigned(vec_type_idx))
 end
 
 

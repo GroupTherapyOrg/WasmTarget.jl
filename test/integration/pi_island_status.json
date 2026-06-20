@@ -305,7 +305,7 @@
   },
   "PlutoUI.jl.jl#10#44591b34-cc50-11ea-2005-2f7075e6f2db": {
     "notebook": "PlutoUI.jl.jl",
-    "status": "runtime_trap"
+    "status": "green"
   },
   "PlutoUI.jl.jl#12#3dcd7002-c765-11ea-323d-a1fb49409011": {
     "notebook": "PlutoUI.jl.jl",
@@ -453,11 +453,11 @@
   },
   "convolution_1d.jl#1#380ba7f0-76e6-47ec-98e2-e6c6a3b7f2d5": {
     "notebook": "convolution_1d.jl",
-    "status": "runtime_trap"
+    "status": "green"
   },
   "convolution_1d.jl#1#472b52d8-e787-4a93-83d8-c53e977a143c": {
     "notebook": "convolution_1d.jl",
-    "status": "runtime_trap"
+    "status": "green"
   },
   "convolution_1d.jl#1#6b243243-8f26-4f2d-8727-564f0701b302": {
     "notebook": "convolution_1d.jl",
@@ -465,15 +465,15 @@
   },
   "convolution_1d.jl#1#9274ed36-a28e-42f3-879f-167d5afa6fc7": {
     "notebook": "convolution_1d.jl",
-    "status": "mismatch"
+    "status": "green"
   },
   "convolution_1d.jl#1#9fab3bbb-5c7f-4464-97c9-847f52754845": {
     "notebook": "convolution_1d.jl",
-    "status": "runtime_trap"
+    "status": "green"
   },
   "convolution_1d.jl#1#a60029d5-ae8d-4704-bef1-076949712c37": {
     "notebook": "convolution_1d.jl",
-    "status": "runtime_trap"
+    "status": "green"
   },
   "convolution_1d.jl#1#ceb05a23-93b8-4423-a5f9-f6e3d961d0c6": {
     "notebook": "convolution_1d.jl",
@@ -581,7 +581,7 @@
   },
   "dither.jl#1#7d1ced8c-8a33-4429-b8fb-f06eb4bc7b1b": {
     "notebook": "dither.jl",
-    "status": "runtime_trap"
+    "status": "green"
   },
   "dither.jl#1#93e576e2-d5f0-44d9-8747-93ecefc51a8c": {
     "notebook": "dither.jl",

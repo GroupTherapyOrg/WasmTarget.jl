@@ -147,6 +147,132 @@ end
     return String(bytes)
 end
 
+# Why: `string(::Vector{Int64})` (and `_plain_body(v)=string(v)` in PI island
+#      cells, e.g. convolution_1d `treatment_in = [a1_s, …]`) goes through Base's
+#      array-show → IOBuffer machinery, which WT can't codegen → trap "unreachable".
+# How: byte-assemble the one-line array repr `[e1, e2, …]`, reusing string(::Int64)
+#      (line ~1643) for each element — bit-exact with `show(io, ::Vector{Int64})`.
+#      Scoped to the DEFAULT eltype (Int64): a `Vector{Int64}` shows WITHOUT the
+#      `Int64[…]` type prefix that non-default eltypes (Int32, Bool) get, so a bare
+#      element `string` is correct here and would be WRONG for those. The empty
+#      vector is the one exception — Base shows `Int64[]` — handled explicitly.
+# Remove when: codegen handles Base IOBuffer / array-show string construction (#39).
+@noinline @overlay WASM_METHOD_TABLE function Base.string(v::Vector{Int64})
+    n = length(v)
+    bytes = UInt8[]
+    if n == 0
+        # empty array shows with the eltype prefix: `Int64[]`
+        for c in (UInt8('I'), UInt8('n'), UInt8('t'), UInt8('6'), UInt8('4'),
+                  UInt8('['), UInt8(']'))
+            push!(bytes, c)
+        end
+        return String(bytes)
+    end
+    push!(bytes, UInt8('['))
+    i = 1
+    while i <= n
+        es = string(v[i])
+        m = ncodeunits(es)
+        k = 1
+        while k <= m
+            push!(bytes, codeunit(es, k))
+            k += 1
+        end
+        if i < n
+            push!(bytes, UInt8(','))
+            push!(bytes, UInt8(' '))
+        end
+        i += 1
+    end
+    push!(bytes, UInt8(']'))
+    return String(bytes)
+end
+
+# Why: `string(::Vector{String})` (PI dither island shows its colour palette via
+#      `_plain_body(colorscheme)`) hits the same array-show trap.
+# How: byte-assemble `["e1", "e2", …]`, quoting each element as show(io, ::String)
+#      does — escape `"`, `\`, `$`. SOUND-OR-TRAP: show keeps non-ASCII printable
+#      bytes verbatim but escapes non-printable ones via `\uXXXX`, which needs
+#      Unicode printability tables WT lacks. Rather than risk silently-wrong bytes,
+#      this is bit-exact for printable-ASCII elements (0x20–0x7e, the dither hex
+#      colours) and TRAPS loudly on any control/≥0x80 byte. Empty ⇒ `String[]`.
+# Remove when: codegen handles Base IOBuffer / Unicode-aware escape_string (#39).
+@noinline @overlay WASM_METHOD_TABLE function Base.string(v::Vector{String})
+    n = length(v)
+    bytes = UInt8[]
+    if n == 0
+        for c in (UInt8('S'), UInt8('t'), UInt8('r'), UInt8('i'), UInt8('n'),
+                  UInt8('g'), UInt8('['), UInt8(']'))
+            push!(bytes, c)
+        end
+        return String(bytes)
+    end
+    push!(bytes, UInt8('['))
+    i = 1
+    while i <= n
+        s = v[i]
+        push!(bytes, UInt8('"'))
+        m = ncodeunits(s)
+        k = 1
+        while k <= m
+            b = codeunit(s, k)
+            if b < 0x20 || b > 0x7e
+                # control or non-ASCII: needs escape_string's Unicode-aware logic
+                error("string(::Vector{String}): non-printable-ASCII element unsupported")
+            end
+            if b == UInt8('"') || b == UInt8('\\') || b == UInt8('$')
+                push!(bytes, UInt8('\\'))
+            end
+            push!(bytes, b)
+            k += 1
+        end
+        push!(bytes, UInt8('"'))
+        if i < n
+            push!(bytes, UInt8(','))
+            push!(bytes, UInt8(' '))
+        end
+        i += 1
+    end
+    push!(bytes, UInt8(']'))
+    return String(bytes)
+end
+
+# Why: `string(nothing)` / `_plain_body(nothing)` routes through Base's `print`/
+#      `show(::Nothing)` → IOBuffer, trapping (null deref) in WT. (PI PlutoUI island.)
+# How: it's the constant "nothing"; return it directly.
+@overlay WASM_METHOD_TABLE function Base.string(::Nothing)
+    return "nothing"
+end
+
+# Why: `collect(::Vector{T})` for a REFERENCE element type (String, …) routes through
+#      similar + copyto!, whose Memory allocation null-derefs in WT (the String-array
+#      null-Memory class); isbits eltypes (Int, Float) are fine. `collect` of a Vector
+#      is just a shallow copy, and WT's element-by-element `copy` overlay works for ALL
+#      eltypes. (PI convolution_1d `collect([emoji…])`.)
+# How: route to copy. Only matches an explicit collect of a concrete Vector — generator
+#      comprehensions lower to collect(::Generator), unaffected.
+@overlay WASM_METHOD_TABLE function Base.collect(v::Vector{T}) where {T}
+    return copy(v)
+end
+
+# Why: `v[a:b]` on a Vector{String} (and other ref-element vectors) routes through
+#      similar + copyto!, hitting the same null-Memory bug → null-deref trap. (PI
+#      convolution_1d `(collect([…]))[1:len]`.) isbits-eltype slices use the working
+#      array path and are left untouched (this overlay is String-scoped).
+# How: build the slice element-by-element via push! (a verified-working path for
+#      String vectors). An out-of-range index traps on the element read, matching
+#      Base's BoundsError (the differential oracle treats a native throw as a trap).
+@overlay WASM_METHOD_TABLE function Base.getindex(v::Vector{String}, r::UnitRange{Int})
+    out = String[]
+    i = first(r)
+    stop = last(r)
+    while i <= stop
+        push!(out, v[i])
+        i += 1
+    end
+    return out
+end
+
 # ─── String Comparison Overlays ────────────────────────────────────────────
 # Base implementations use foreigncall :memcmp which can't run in WASM.
 # Pure Julia byte-by-byte comparisons using ncodeunits + codeunit.
@@ -1606,6 +1732,31 @@ end
     slen = ncodeunits(s)
     slen == 0 && return ""
     n <= 0 && return ""
+    bytes = UInt8[]
+    rep = 1
+    while rep <= n
+        i = 1
+        while i <= slen
+            push!(bytes, codeunit(s, i))
+            i += 1
+        end
+        rep += 1
+    end
+    return String(bytes)
+end
+
+# ─── repeat(Char,Int) Overlay ───────────────────────────────────────────
+# Why: WT's repeat(::Char, n) codegen (invoke.jl) assumes a SINGLE-byte char —
+#      it array.new-fills n copies of just the char's FIRST UTF-8 byte
+#      (char >> 24). That silently CORRUPTS any multibyte char: repeat('💊', 3)
+#      gave [240,240,240] instead of the full 4-byte 'pill' three times (PI
+#      convolution_1d `repeat('💊', i)`). Emit the char's full UTF-8 bytes n times.
+# How: go through string(c) (1-char String) and replicate its codeunits — same
+#      byte-assembly as the repeat(::String) overlay; correct for any char width.
+@overlay WASM_METHOD_TABLE function Base.repeat(c::Char, n::Int)
+    n <= 0 && return ""
+    s = string(c)
+    slen = ncodeunits(s)
     bytes = UInt8[]
     rep = 1
     while rep <= n
