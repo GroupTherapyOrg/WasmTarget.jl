@@ -465,7 +465,7 @@
   },
   "convolution_1d.jl#1#9274ed36-a28e-42f3-879f-167d5afa6fc7": {
     "notebook": "convolution_1d.jl",
-    "status": "mismatch"
+    "status": "green"
   },
   "convolution_1d.jl#1#9fab3bbb-5c7f-4464-97c9-847f52754845": {
     "notebook": "convolution_1d.jl",

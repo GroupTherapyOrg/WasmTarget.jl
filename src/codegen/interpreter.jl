@@ -1745,6 +1745,31 @@ end
     return String(bytes)
 end
 
+# ─── repeat(Char,Int) Overlay ───────────────────────────────────────────
+# Why: WT's repeat(::Char, n) codegen (invoke.jl) assumes a SINGLE-byte char —
+#      it array.new-fills n copies of just the char's FIRST UTF-8 byte
+#      (char >> 24). That silently CORRUPTS any multibyte char: repeat('💊', 3)
+#      gave [240,240,240] instead of the full 4-byte 'pill' three times (PI
+#      convolution_1d `repeat('💊', i)`). Emit the char's full UTF-8 bytes n times.
+# How: go through string(c) (1-char String) and replicate its codeunits — same
+#      byte-assembly as the repeat(::String) overlay; correct for any char width.
+@overlay WASM_METHOD_TABLE function Base.repeat(c::Char, n::Int)
+    n <= 0 && return ""
+    s = string(c)
+    slen = ncodeunits(s)
+    bytes = UInt8[]
+    rep = 1
+    while rep <= n
+        i = 1
+        while i <= slen
+            push!(bytes, codeunit(s, i))
+            i += 1
+        end
+        rep += 1
+    end
+    return String(bytes)
+end
+
 # ─── first(String,Int) Overlay ──────────────────────────────────────────
 # Why: Base.first(::String, ::Int) uses nextind/SubString dispatch that triggers
 #      codegen failures. Simple codeunit copy suffices for ASCII strings.
