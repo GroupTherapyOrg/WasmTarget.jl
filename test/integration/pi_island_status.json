@@ -297,7 +297,7 @@
   },
   "Interactivity with HTML.jl#6#cb65a4ee-02e5-4779-8728-b994d8af645d": {
     "notebook": "Interactivity with HTML.jl",
-    "status": "mismatch"
+    "status": "green"
   },
   "PlutoUI.jl.jl#1#c07c5a9e-61f9-4247-86e7-7c3f9956d0ff": {
     "notebook": "PlutoUI.jl.jl",

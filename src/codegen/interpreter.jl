@@ -2039,6 +2039,26 @@ end
     return String(out)
 end
 
+# ─── Type-name rendering Overlays ─────────────────────────────────────────────
+# Why: `string(typeof(x))`, `"$(typeof(x))"`, `show(io, T)` etc. all route through
+#      Base's type-show machinery, which navigates DataType→TypeName→Symbol at
+#      runtime — WT can't materialize the name and produces an EMPTY string (PI
+#      Interactivity island: wasm "" != native "Int64"). But the type is ALWAYS a
+#      compile-time constant at the call site (typeof of a typed value), so the name
+#      is a compile-time literal.
+# Fix: a @generated helper bakes `string(T)` as a String literal at specialization
+#      time; overlay string/show of a Type to use it. Covers string(), repr(),
+#      interpolation, and embedded `print(io, T)` (all funnel through show).
+# Remove when: WT can navigate DataType.name.name to a string at runtime.
+@generated _wt_type_name_str(::Type{T}) where {T} = :($(string(T)))
+
+@overlay WASM_METHOD_TABLE Base.string(::Type{T}) where {T} = _wt_type_name_str(T)
+
+@overlay WASM_METHOD_TABLE function Base.show(io::IO, ::Type{T}) where {T}
+    print(io, _wt_type_name_str(T))
+    return nothing
+end
+
 # Concrete 2-arg specializations: the Vararg method's invoke widens elements
 # to the Union (heterogeneous-union tuple reads still miscompile — the
 # hetero-Dict class), so give inference concrete signatures to prefer for the
