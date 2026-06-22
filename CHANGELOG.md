@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.15](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.14...v0.3.15) (2026-06-22)
+
+
+### Miscellaneous Chores
+
+* release WasmTarget 0.3.15 ([da0f8d1](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/da0f8d155f99f35eac055b5f987144f764bd0b51))
+
 ## [0.3.14](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.13...v0.3.14) (2026-06-22)
 
 
