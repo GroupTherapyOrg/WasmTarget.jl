@@ -36,6 +36,35 @@ Base.Experimental.@MethodTable(WASM_METHOD_TABLE)
     return d
 end
 
+# ─── hvcat Overlay (Tuple-element matrices) ─────────────────────────────────
+# A 2-D matrix literal of TUPLE elements — e.g. WasmMakie's RGBA image data
+# `[(r,g,b,a) (r,g,b,a); …]` — lowers to `Base.hvcat((nc,nc,…), tup, tup, …)`,
+# which routes through `Base._typed_hvncat_dims` (1000+ stmts). WT stubs that to
+# `unreachable` (and whitelisting it sends discovery into a recursive-type
+# StackOverflow), so the matrix traps at runtime (gap a9bf645b1003, WASMMAKIE
+# W-005). The known-working path is `Matrix{T}(undef, m, n)` + element stores;
+# this overlay reconstructs the rectangular matrix that way. Scoped to
+# `values::T... where T<:Tuple` so numeric hvcat (already working) is untouched.
+# Ragged row specs (which native rejects) throw here too → parity, never a wrong
+# shape. Remove when codegen handles `_typed_hvncat` without the StackOverflow.
+@overlay WASM_METHOD_TABLE function Base.hvcat(rows::Tuple{Vararg{Int}}, values::T...) where {T<:Tuple}
+    nc = rows[1]
+    for r in rows
+        r == nc || throw(ArgumentError("hvcat: row lengths must be uniform"))
+    end
+    n = length(values)
+    nr = n ÷ nc
+    m = Matrix{T}(undef, nr, nc)
+    k = 1
+    for i in 1:nr
+        for j in 1:nc
+            m[i, j] = values[k]
+            k += 1
+        end
+    end
+    return m
+end
+
 # ─── Sort Overlay ──────────────────────────────────────────────────────────
 # Base.sort! dispatches through InsertionSort/MergeSort/By/Lt/Order —
 # deep dispatch chains that produce hundreds of IR statements.
@@ -2206,6 +2235,15 @@ CC.codegen_cache(interp::WasmInterpreter) = interp.codegen
 # Disable concrete eval (GPUCompiler pattern).
 # Without this, the compiler constant-folds calls using Base implementation,
 # bypassing overlays.
+#
+# DEFERRED (2026-06-22, wt-soundness-loop-4): an overlay-aware exception that folds
+# pure TYPE-LEVEL calls (to fix the `cor` cluster — `one(float(nonmissingtype(T)))`
+# leaking as `dynamic` dispatch on Type values) passed full Pkg.test on Julia 1.12
+# but REGRESSED Julia 1.13-rc1 string-overlay codegen (repeat/lpad/rpad/chop/split/
+# join/string-chains errored — concrete-eval perturbs WT's version-specific string
+# IR shapes). Reverted to the blanket `:none`; the cor root cause + the type-level
+# fold approach are recorded in test/fuzz/failures/3fd2f07bfc5c.md — re-attempt only
+# with a Julia 1.13 environment available to verify against.
 function CC.concrete_eval_eligible(interp::WasmInterpreter,
         @nospecialize(f), result::CC.MethodCallResult, arginfo::CC.ArgInfo,
         sv::Union{CC.InferenceState, CC.IRInterpretationState})

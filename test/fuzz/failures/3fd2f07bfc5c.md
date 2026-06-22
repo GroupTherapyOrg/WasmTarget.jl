@@ -59,4 +59,30 @@ julia --project=test/fuzz test/fuzz/run.jl verify
 ```
 
 ## Analysis
-_(No analysis yet. Add root-cause notes below the `## Analysis` heading — they are PRESERVED across re-records.)_
+**ROOT-CAUSED 2026-06-22 (wt-soundness-loop-4); fix DEFERRED (1.13 regression).** Lead gap of the
+`cor` cluster (`5d7d44dd7cb2 96ce40f373de eadbce55d36d`, all `compile_error`); related Dict-`get`
+`ef3c54645d9f`. Triage: general `cor` — `cor(a,b)`/`cor([x,x,x])`/1-arg `cor(a)` all fail; `cov`/
+`var`/`mean` are fine.
+
+**Mechanism:** `Statistics.cor`'s result type is `one(float(nonmissingtype(eltype)))`. The native
+optimizer concrete-evaluates that whole chain to a constant. WT's `WasmInterpreter` disables
+concrete-eval (GPUCompiler `:none`), so those pure TYPE-LEVEL calls stay as runtime `dynamic`
+dispatch on Type VALUES that WT can't lower → `unreachable` stub → relooper leaves a successor BB's
+consumer (`ref.is_null`/`i32.eqz`) with an empty operand stack → `WasmValidationError: expected a
+type but nothing on stack`. (Confirmed via `code_ircode` vs the trim CodeInfo:
+`%17 = dynamic float(%15::Any)`, `%18 = dynamic one(%17)`.)
+
+**Attempted fix (REVERTED):** make `concrete_eval_eligible` fold calls whose args are ALL Type
+values (`src/codegen/interpreter.jl`). It closed all 4 cor gaps + passed FULL Pkg.test on **Julia
+1.12**, but REGRESSED **Julia 1.13-rc1**: WT's overlaid string codegen (repeat/lpad/rpad/chop/
+reverse/split/join + string chains) errored — concrete-eval perturbs WT's version-specific string
+IR shapes (the fold differs across compiler versions). A first, broader version of the fix (defer to
+the default for all non-overlay calls) had also regressed `string(::Complex)`/`rand`/`quantile`/the
+fuzzer on 1.12. Reverted to the blanket `:none`.
+
+**To re-attempt:** needs a Julia 1.13 environment to verify against (the regression only shows on
+1.13). Options: (a) narrow the fold further so it can't touch any IR feeding a WT string/overlay
+codegen path; (b) overlay `Statistics.cor` directly (1-arg returns `one(float(T))` for the concrete
+eltype; 2-arg routes through `corm`) to sidestep the Type-level machinery entirely without changing
+global inference — likely the safer path. Full notes in the `[[wt-soundness-loop]]` memory ▶▶ CYCLE 1
+block.
