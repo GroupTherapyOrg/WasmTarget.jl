@@ -1,6 +1,6 @@
 ---
 id: eadbce55d36d
-status: open
+status: fixed
 category: compile_error
 kind: compile_error
 construct: "compile_error: `if 0 in [0, 0, 0]\n    Int8(0) == Int8(0)\nelse\n    begin\n        v_be = cor([0.0, 0.0, 0.0], [0.0, 0.0, 0.0])\n        true\n    end\nend` :: Bool"
@@ -73,4 +73,8 @@ julia --project=test/fuzz test/fuzz/run.jl verify
 ```
 
 ## Analysis
-_(No analysis yet. Add root-cause notes below the `## Analysis` heading — they are PRESERVED across re-records.)_
+**FIXED 2026-06-22 (wt-soundness-loop-4).** `cor` cluster — root cause + fix in
+[`3fd2f07bfc5c`](3fd2f07bfc5c.md): `WasmInterpreter` disabled concrete-eval
+unconditionally, so `Statistics.cor`'s `one(float(nonmissingtype(eltype)))` leaked as
+`dynamic` dispatch on Type values → `unreachable` stub → empty-stack validation error.
+Fixed by making `concrete_eval_eligible` overlay-aware. Auto-closed via `run.jl verify`.

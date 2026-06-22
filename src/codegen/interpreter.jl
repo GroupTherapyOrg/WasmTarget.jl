@@ -2203,13 +2203,64 @@ CC.cache_owner(interp::WasmInterpreter) = interp.cache_token
 CC.method_table(interp::WasmInterpreter) = interp.method_table
 CC.codegen_cache(interp::WasmInterpreter) = interp.codegen
 
-# Disable concrete eval (GPUCompiler pattern).
-# Without this, the compiler constant-folds calls using Base implementation,
-# bypassing overlays.
+# Concrete-eval eligibility — disabled by default (GPUCompiler pattern), with one
+# narrow, SAFE exception: PURE TYPE-LEVEL computations.
+#
+# Why `:none` is the default: WT overlays many runtime functions and folding a call
+# via its HOST implementation would bypass the overlay (and the default
+# `concrete_eval_eligible` does NOT reliably refuse overlaid calls in this setup —
+# verified empirically: deferring to it regressed `string(::Complex)`, `rand`,
+# `quantile`, and the differential fuzzer). So for any call touching runtime VALUES
+# we keep `:none`.
+#
+# The narrow exception: calls whose arguments are ALL Type values
+# (`nonmissingtype(Float64)`, `float(::Type)`, `one(::Type{Float64})`, …). These are
+# pure type-system queries — deterministic, overlay-free (WT overlays operate on
+# runtime values, never on the type lattice), and the host computes exactly what WT
+# would. Folding them is sound and matches native. Leaving them UNfolded is what
+# broke `Statistics.cor`: its result type `one(float(nonmissingtype(eltype)))` stayed
+# as runtime `dynamic` dispatch on Type values that WT can't lower → `unreachable`
+# stub → empty operand stack → `WasmValidationError` (the `cor` cluster:
+# 3fd2f07bfc5c, 5d7d44dd7cb2, 96ce40f373de, eadbce55d36d + Dict-`get` ef3c54645d9f).
+# Even for these we keep the default's effect/const checks (via `@invoke`) plus a
+# belt-and-suspenders overlay guard.
 function CC.concrete_eval_eligible(interp::WasmInterpreter,
         @nospecialize(f), result::CC.MethodCallResult, arginfo::CC.ArgInfo,
         sv::Union{CC.InferenceState, CC.IRInterpretationState})
+    if _is_type_level_call(arginfo) && !_resolves_to_wasm_overlay(result)
+        return @invoke CC.concrete_eval_eligible(interp::CC.AbstractInterpreter,
+            f::Any, result::CC.MethodCallResult, arginfo::CC.ArgInfo,
+            sv::Union{CC.InferenceState, CC.IRInterpretationState})
+    end
     return :none
+end
+
+# True iff every non-function argument is a Type VALUE (a constant `Type`, or a
+# `Type{X}` singleton lattice element) — i.e. a pure type-system computation.
+function _is_type_level_call(arginfo::CC.ArgInfo)
+    ats = arginfo.argtypes
+    length(ats) >= 2 || return false      # need at least one real argument
+    for i in 2:length(ats)                # skip slot 1 (the function itself)
+        _type_valued(ats[i]) || return false
+    end
+    return true
+end
+
+function _type_valued(@nospecialize a)
+    a isa Core.Const && return a.val isa Type
+    return isa(a, Type) && a <: Type && a !== Union{}
+end
+
+# True iff the method `result` resolved to is a WasmTarget overlay. Defensive: the
+# `edge` may be absent or a bare MethodInstance depending on inference phase.
+function _resolves_to_wasm_overlay(result::CC.MethodCallResult)
+    edge = result.edge
+    edge === nothing && return false
+    mi = edge isa Core.CodeInstance ? edge.def : edge
+    mi isa Core.MethodInstance || return false
+    m = mi.def
+    m isa Method || return false
+    return isdefined(m, :external_mt) && getfield(m, :external_mt) === WASM_METHOD_TABLE
 end
 
 """
