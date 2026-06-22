@@ -1443,6 +1443,20 @@ function compile_module(functions::Vector;
     if existing_module !== nothing
         mod = existing_module
     else
+        # SOUNDNESS: reset all per-module task-local caches BEFORE building a fresh
+        # module. These are cleared on the success path at end-of-module (below), but
+        # NOT in a finally — so a PRIOR compile that threw before reaching the clears
+        # leaks a stale type/func index into this fresh module. The PI pipeline compiles
+        # many cells in one task with many throwing compiles, so the stale
+        # `_CHAR_ARRAY_TYPE_IDX` (i16-char-array index) got baked into this module's
+        # `utf8_to_js` helper as `array.new_default <stale>`, where that slot is now the
+        # `fromCharCodeArray` *func* type → "expected array type at index N, found (func …)".
+        # Clearing at the start of every fresh-module build makes each compile leak-proof.
+        clear_io_imports!()
+        clear_rng_globals!()
+        clear_perf_now!()
+        clear_char_array_type!()
+        clear_utf8_to_js_func!()
         mod = WasmModule()
         # WASM-060: Add Math.pow import for float power operations
         # This enables x^y for Float32/Float64 types
