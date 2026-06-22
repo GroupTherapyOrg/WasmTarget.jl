@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.13](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.12...v0.3.13) (2026-06-22)
+
+
+### Features
+
+* **codegen:** string(::Vector{Float64}) array-show overlay ([#40](https://github.com/GroupTherapyOrg/WasmTarget.jl/issues/40)) ([95c6a4d](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/95c6a4ddc40bfbef2506fb60f007256fefc4d700))
+
+
+### Bug Fixes
+
+* **codegen:** reset module-level io/type caches at start of each fresh compile ([#41](https://github.com/GroupTherapyOrg/WasmTarget.jl/issues/41)) ([f677465](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/f6774659fb35151f93b7da5300b64bab8887f8f1))
+
 ## [0.3.12](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.11...v0.3.12) (2026-06-20)
 
 
