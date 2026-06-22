@@ -36,6 +36,35 @@ Base.Experimental.@MethodTable(WASM_METHOD_TABLE)
     return d
 end
 
+# ─── hvcat Overlay (Tuple-element matrices) ─────────────────────────────────
+# A 2-D matrix literal of TUPLE elements — e.g. WasmMakie's RGBA image data
+# `[(r,g,b,a) (r,g,b,a); …]` — lowers to `Base.hvcat((nc,nc,…), tup, tup, …)`,
+# which routes through `Base._typed_hvncat_dims` (1000+ stmts). WT stubs that to
+# `unreachable` (and whitelisting it sends discovery into a recursive-type
+# StackOverflow), so the matrix traps at runtime (gap a9bf645b1003, WASMMAKIE
+# W-005). The known-working path is `Matrix{T}(undef, m, n)` + element stores;
+# this overlay reconstructs the rectangular matrix that way. Scoped to
+# `values::T... where T<:Tuple` so numeric hvcat (already working) is untouched.
+# Ragged row specs (which native rejects) throw here too → parity, never a wrong
+# shape. Remove when codegen handles `_typed_hvncat` without the StackOverflow.
+@overlay WASM_METHOD_TABLE function Base.hvcat(rows::Tuple{Vararg{Int}}, values::T...) where {T<:Tuple}
+    nc = rows[1]
+    for r in rows
+        r == nc || throw(ArgumentError("hvcat: row lengths must be uniform"))
+    end
+    n = length(values)
+    nr = n ÷ nc
+    m = Matrix{T}(undef, nr, nc)
+    k = 1
+    for i in 1:nr
+        for j in 1:nc
+            m[i, j] = values[k]
+            k += 1
+        end
+    end
+    return m
+end
+
 # ─── Sort Overlay ──────────────────────────────────────────────────────────
 # Base.sort! dispatches through InsertionSort/MergeSort/By/Lt/Order —
 # deep dispatch chains that produce hundreds of IR statements.
