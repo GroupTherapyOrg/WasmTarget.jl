@@ -188,6 +188,41 @@ end
     return String(bytes)
 end
 
+# Why: same array-show trap for `string(::Vector{Float64})` (PI numeric island cells
+#      that display a vector of measurements/features, e.g. EEG band powers).
+# How: byte-assemble `[e1, e2, …]` reusing string(::Float64) (Ryu) per element —
+#      bit-exact with show(io, ::Vector{Float64}). Float64 is the default float
+#      eltype → no `Float64[…]` prefix for non-empty; empty shows `Float64[]`.
+@noinline @overlay WASM_METHOD_TABLE function Base.string(v::Vector{Float64})
+    n = length(v)
+    bytes = UInt8[]
+    if n == 0
+        for c in (UInt8('F'), UInt8('l'), UInt8('o'), UInt8('a'), UInt8('t'),
+                  UInt8('6'), UInt8('4'), UInt8('['), UInt8(']'))
+            push!(bytes, c)
+        end
+        return String(bytes)
+    end
+    push!(bytes, UInt8('['))
+    i = 1
+    while i <= n
+        es = string(v[i])
+        m = ncodeunits(es)
+        k = 1
+        while k <= m
+            push!(bytes, codeunit(es, k))
+            k += 1
+        end
+        if i < n
+            push!(bytes, UInt8(','))
+            push!(bytes, UInt8(' '))
+        end
+        i += 1
+    end
+    push!(bytes, UInt8(']'))
+    return String(bytes)
+end
+
 # Why: `string(::Vector{String})` (PI dither island shows its colour palette via
 #      `_plain_body(colorscheme)`) hits the same array-show trap.
 # How: byte-assemble `["e1", "e2", …]`, quoting each element as show(io, ::String)
