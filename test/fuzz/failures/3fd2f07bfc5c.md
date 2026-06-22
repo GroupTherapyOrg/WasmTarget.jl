@@ -1,6 +1,6 @@
 ---
 id: 3fd2f07bfc5c
-status: open
+status: fixed
 category: compile_error
 kind: compile_error
 construct: "compile_error: `cor([0.0, 0.0, 0.0], [0.0, x, x])` :: Float64"
@@ -59,10 +59,9 @@ julia --project=test/fuzz test/fuzz/run.jl verify
 ```
 
 ## Analysis
-**ROOT-CAUSED 2026-06-22 (wt-soundness-loop-4); fix DEFERRED (1.13 regression).** Lead gap of the
-`cor` cluster (`5d7d44dd7cb2 96ce40f373de eadbce55d36d`, all `compile_error`); related Dict-`get`
-`ef3c54645d9f`. Triage: general `cor` — `cor(a,b)`/`cor([x,x,x])`/1-arg `cor(a)` all fail; `cov`/
-`var`/`mean` are fine.
+**ROOT-CAUSED + FIXED 2026-06-22 (wt-soundness-loop-4) via a `Statistics.cor`→`corm` overlay.** Lead
+gap of the `cor` cluster (`5d7d44dd7cb2 96ce40f373de eadbce55d36d`, all `compile_error`). Triage:
+general `cor` — `cor(a,b)`/`cor([x,x,x])`/1-arg `cor(a)` all fail; `cov`/`var`/`mean` are fine.
 
 **Mechanism:** `Statistics.cor`'s result type is `one(float(nonmissingtype(eltype)))`. The native
 optimizer concrete-evaluates that whole chain to a constant. WT's `WasmInterpreter` disables
@@ -72,17 +71,22 @@ consumer (`ref.is_null`/`i32.eqz`) with an empty operand stack → `WasmValidati
 type but nothing on stack`. (Confirmed via `code_ircode` vs the trim CodeInfo:
 `%17 = dynamic float(%15::Any)`, `%18 = dynamic one(%17)`.)
 
-**Attempted fix (REVERTED):** make `concrete_eval_eligible` fold calls whose args are ALL Type
-values (`src/codegen/interpreter.jl`). It closed all 4 cor gaps + passed FULL Pkg.test on **Julia
-1.12**, but REGRESSED **Julia 1.13-rc1**: WT's overlaid string codegen (repeat/lpad/rpad/chop/
-reverse/split/join + string chains) errored — concrete-eval perturbs WT's version-specific string
-IR shapes (the fold differs across compiler versions). A first, broader version of the fix (defer to
-the default for all non-overlay calls) had also regressed `string(::Complex)`/`rand`/`quantile`/the
-fuzzer on 1.12. Reverted to the blanket `:none`.
+**Fix history.** A first attempt made `concrete_eval_eligible` fold all-Type-args calls
+(`src/codegen/interpreter.jl`) — it closed all 4 cor gaps + passed full Pkg.test on Julia 1.12 but
+REGRESSED Julia 1.13-rc1 (WT's overlaid string codegen errored; global concrete-eval perturbs WT's
+version-specific string IR shapes). REVERTED. (An even broader earlier variant also regressed
+`string(::Complex)`/`rand`/`quantile`/the fuzzer on 1.12.) **Lesson: changes to global inference
+config are version-fragile and must clear the full CI matrix, not just 1.12-local.**
 
-**To re-attempt:** needs a Julia 1.13 environment to verify against (the regression only shows on
-1.13). Options: (a) narrow the fold further so it can't touch any IR feeding a WT string/overlay
-codegen path; (b) overlay `Statistics.cor` directly (1-arg returns `one(float(T))` for the concrete
-eltype; 2-arg routes through `corm`) to sidestep the Type-level machinery entirely without changing
-global inference — likely the safer path. Full notes in the `[[wt-soundness-loop]]` memory ▶▶ CYCLE 1
-block.
+**The shipped fix (`ext/WasmTargetStatisticsExt.jl`):** a LOCAL overlay
+`Statistics.cor(x::AbstractVector, y::AbstractVector) = Statistics.corm(x, mean(x), y, mean(y))`.
+The leak lived entirely in cor's `x===y → one(float(nonmissingtype(eltype)))` fast path; `corm` is
+the actual computation and is value-level throughout (it compiles cleanly, like `cov`/`var`/`mean`).
+`corm(x,mean(x),y,mean(y))` is BIT-EXACT equal to native `cor(x,y)` for every input — general
+(0.83…), anti-correlation (−1.0), equal-values (1.0), the `x===y` case (`clampcor`→exactly 1.0), and
+the zero-variance gap input (NaN==NaN) — verified via the bridge. No global-inference change, so it's
+1.13-safe (same kind as the existing median/quantile reroutes). 1-arg `cor(x)` is intentionally NOT
+overlaid (no ledger gap; its value-independent `one(float(eltype))` genuinely needs the type-level
+path — failing to compile there is loud, not a wrong value). NOTE: the Statistics extension must be
+PRECOMPILED in the fuzz env for `run.jl verify` to see the overlay (a stale `test/fuzz` Manifest
+hides it; `Pkg.resolve()` in that env precompiles it — the ext loads fine in the main/Pkg.test env).
