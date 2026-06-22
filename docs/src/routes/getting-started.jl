@@ -14,11 +14,11 @@
         # ── Installation ──
         H2(:id => "installation", :class => "text-xl font-semibold text-warm-800 dark:text-warm-200", "Installation"),
         Pre(:class => code_block, Code(:class => "language-julia", """using Pkg
-Pkg.add(url="https://github.com/GroupTherapyOrg/WasmTarget.jl")""")),
+Pkg.add("WasmTarget")  # registered in the General registry""")),
         Div(:class => "border border-warm-200 dark:border-warm-800 rounded-lg p-5 space-y-2 bg-warm-100/50 dark:bg-warm-900/50",
             P(:class => "text-sm font-semibold text-warm-800 dark:text-warm-200", "Requirements"),
             Ul(:class => "list-disc ml-5 space-y-1 text-sm text-warm-600 dark:text-warm-400",
-                Li("Julia 1.12 (required — IR format is version-specific)"),
+                Li("Julia 1.12 or 1.13 (required — the typed-IR format is version-specific; both run in CI)"),
                 Li("Node.js 22+ or a WasmGC-capable browser (Chrome 119+, Firefox 120+)")
             ),
             P(:class => "text-sm font-semibold text-warm-800 dark:text-warm-200 pt-2", "Optional"),

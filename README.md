@@ -76,6 +76,16 @@ bytes = compile_multi([
 ])
 ```
 
+## What It Powers
+
+WasmTarget compiles real, third-party Julia — not just toy kernels — to interactive WebAssembly that runs entirely client-side:
+
+- **[PlutoIslands.jl](https://github.com/GroupTherapyOrg/PlutoIslands.jl)** turns reactive Pluto notebooks into self-contained WasmGC "islands." The featured-notebook gallery — image processing, 2-D convolution, Mandelbrot/Julia fractals, dithering, Newton's method — recomputes live as you move the sliders, with **no Julia server**. **→ [Live gallery](https://grouptherapyorg.github.io/PlutoIslands.jl/)**
+- **[WasmMakie.jl](https://github.com/GroupTherapyOrg/WasmMakie.jl)** compiles a Makie-style plotting API (`lines!`, `scatter!`, `image!`, `heatmap!`) to an HTML canvas through WasmTarget.
+- **[Therapy.jl](https://github.com/GroupTherapyOrg/Therapy.jl)** is a web framework that compiles `@island` components at build time.
+
+These double as integration tests: every release is re-checked against the full featured-notebook corpus, so "compiles real Julia" stays true rather than aspirational.
+
 ## Coverage
 
 Coverage is tracked by a **differential fuzzer**, not a hand-maintained list. The fuzzer holds a catalogue of ~590 Base operation signatures across these areas:
@@ -91,7 +101,7 @@ Coverage is tracked by a **differential fuzzer**, not a hand-maintained list. Th
 | Iterators | `collect`, `enumerate`, `zip`, `pairs`, `Iterators.take`/`drop`/`filter`/`map`/`flatten`, ranges |
 | Control flow | nested if/else, while loops with accumulators, try/catch/finally (including nested chains), early returns, closures over all of the above |
 
-Every signature's status lives in [`test/fuzz/COVERAGE.md`](test/fuzz/COVERAGE.md), regenerated from fuzzing runs: an entry is `pass` only when it appears in at least one randomly-generated program whose Wasm output **matched native Julia exactly** — value, thrown-ness, and argument mutations. Current matrix: **all 588 entries pass**, with **0 known divergences** and 240+ fixed-divergence postmortems in [`test/fuzz/failures/`](test/fuzz/failures/). A bounded `discovery_differential()` additionally cross-checks the trim and legacy pipelines against each other on generated programs.
+Every signature's status lives in [`test/fuzz/COVERAGE.md`](test/fuzz/COVERAGE.md), regenerated from fuzzing runs: an entry is `pass` only when it appears in at least one randomly-generated program whose Wasm output **matched native Julia exactly** — value, thrown-ness, and argument mutations. Current matrix: **all 588 entries pass**, with **0 silent divergences** — every known unsupported construct fails *loudly* (a compile error or a trap), never miscompiles. The ledger in [`test/fuzz/failures/`](test/fuzz/failures/) holds 240+ caught-and-shrunk divergence postmortems, each a self-reproducing case that auto-closes when fixed. A bounded `discovery_differential()` additionally cross-checks the trim and legacy pipelines against each other on generated programs.
 
 ## Standard Library Integrations
 

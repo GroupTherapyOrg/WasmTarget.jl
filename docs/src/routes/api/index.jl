@@ -29,10 +29,14 @@
         # ── Core Compilation ──
         H2(:id => "compile", :class => "text-xl font-semibold text-warm-800 dark:text-warm-200", "Core Compilation"),
         api_entry(
-            "compile(f, arg_types::Tuple; optimize=false, optimize_ir::Bool=true) -> Vector{UInt8}",
+            "compile(f, arg_types::Tuple; optimize=false, optimize_ir=true, strict=true, validate=true) -> Vector{UInt8}",
             "Compile a single Julia function for the given concrete argument-type tuple to a self-contained WASM module. \
              The result is a binary `Vector{UInt8}` ready to write to disk and instantiate via `WebAssembly.instantiate`. \
-             `optimize=true` runs `wasm-opt` for an ~80–90% size reduction (requires Binaryen)."
+             `optimize=true` runs `wasm-opt` for an ~80–90% size reduction (requires Binaryen). \
+             Soundness defaults: `strict=true` raises a `WasmCompileError` (naming the construct + source location) rather \
+             than emit a wrong value for an unsupported construct — pass `strict=false` for permissive stub-and-trap; \
+             `validate=true` runs `wasm-tools validate` on the output and raises `WasmValidationError` instead of returning \
+             malformed bytes."
         ),
         api_entry(
             "compile_multi(functions::Vector; optimize=false, discovery=:trim, ...)",

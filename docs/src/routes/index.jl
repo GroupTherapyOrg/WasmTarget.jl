@@ -14,12 +14,18 @@
                 A(:href => "https://dart.dev/web/wasm", :target => "_blank", :class => "text-accent-500 hover:text-accent-600 underline", "dart2wasm"),
                 ". Powers ",
                 A(:href => "https://github.com/GroupTherapyOrg/Therapy.jl", :target => "_blank", :class => "text-accent-500 hover:text-accent-600 underline", "Therapy.jl"),
-                " for build-time island compilation."
+                ", and turns real Pluto notebooks into interactive WASM islands via ",
+                A(:href => "https://github.com/GroupTherapyOrg/PlutoIslands.jl", :target => "_blank", :class => "text-accent-500 hover:text-accent-600 underline", "PlutoIslands.jl"),
+                "."
             ),
-            Div(:class => "flex gap-4 justify-center pt-4",
+            Div(:class => "flex flex-wrap gap-4 justify-center pt-4",
                 A(:href => "/WasmTarget.jl/getting-started/",
                     :class => "px-6 py-3 bg-accent-600 hover:bg-accent-700 text-white rounded-lg font-medium transition-colors",
                     "Get Started"
+                ),
+                A(:href => "https://grouptherapyorg.github.io/PlutoIslands.jl/", :target => "_blank",
+                    :class => "px-6 py-3 border border-warm-300 dark:border-warm-700 rounded-lg font-medium text-warm-700 dark:text-warm-300 hover:bg-warm-100 dark:hover:bg-warm-900 transition-colors",
+                    "Live Gallery"
                 ),
                 A(:href => "https://github.com/GroupTherapyOrg/WasmTarget.jl", :target => "_blank",
                     :class => "px-6 py-3 border border-warm-300 dark:border-warm-700 rounded-lg font-medium text-warm-700 dark:text-warm-300 hover:bg-warm-100 dark:hover:bg-warm-900 transition-colors",
