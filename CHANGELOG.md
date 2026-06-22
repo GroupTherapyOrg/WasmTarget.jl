@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.14](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.13...v0.3.14) (2026-06-22)
+
+
+### Miscellaneous Chores
+
+* record sweep gaps + release 0.3.14 ([cf2d431](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/cf2d431f3e5520fc4287f81592e0bb0e61144265))
+
 ## [0.3.13](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.12...v0.3.13) (2026-06-22)
 
 
