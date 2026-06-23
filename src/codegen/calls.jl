@@ -7029,10 +7029,19 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 # These are dead code branches in WasmGC context (we compile with concrete types).
                 _has_abstract = any(t -> t === Any || !isconcretetype(t), call_arg_types)
                 @debug "CROSS-CALL UNREACHABLE: $(func) with arg types $(call_arg_types) (in func_$(ctx.func_idx))$((_has_abstract ? " [abstract-suppressed]" : ""))"
-                # PURE-908: Clear pre-pushed args before emitting UNREACHABLE.
-                bytes = UInt8[]
-                push!(bytes, Opcode.UNREACHABLE)
-                ctx.last_stmt_was_stub = true  # PURE-908
+                bytes = UInt8[]  # PURE-908: clear pre-pushed args
+                if get(ctx.ssa_types, idx, Any) === Union{}
+                    # always-throws callee (Category-B parity) — sound silent trap.
+                    push!(bytes, Opcode.UNREACHABLE)
+                    ctx.last_stmt_was_stub = true
+                else
+                    # Unresolved dynamic call returning a value = un-lowerable dynamic dispatch
+                    # (boxing / type instability — abstract-keyed Dict `dict_with_eltype` lands
+                    # here). emit_unsupported_stub!'s must-execute gate loud-rejects only when
+                    # definitely executed; dead Union-branch calls stay sound silent traps.
+                    emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+                        "unresolved dynamic call `$(func)` $(call_arg_types) — dynamic dispatch / type instability WT cannot lower"; idx=idx)
+                end
                 end
                 end
             end

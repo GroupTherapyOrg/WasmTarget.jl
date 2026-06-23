@@ -126,3 +126,29 @@ mul/div/rem/add/sub, `Base.pointerset`, `Core.svec`, parse_float/int/uint_litera
 Any/externref (boxed) operand, `:new` of a non-constant/unresolvable struct type. Full
 Pkg.test green; PI fixtures hitting these correctly flip `runtime_trap → compile_fail`
 (loud, source-attributed); ZERO green regressions.
+
+## BREAKTHROUGH (2026-06-23) — reachability gate makes batch 4 SOUND; abstract-Dict reclassified
+Batch 4's over-rejection was a *reachability* problem, now solved with new machinery:
+`stmt_must_execute(code, idx)` (generate.jl) — a statement's basic block **dominates every
+normal-return block** ⇒ it's executed on every returning call. `emit_unsupported_stub!` now
+gates on it: **loud-reject only when the construct is must-execute**, else sound silent trap.
+A working function can never have a must-execute trap-stub (it would trap on every call), so
+this provably never regresses valid code, while still rejecting the straight-line abstract
+dynamic-dispatch that the cluster is made of.
+
+Results (all verified):
+- The WasmMakie over-rejection (`Base.unsigned`'s `_apply_iterate` arm — non-must-execute)
+  is gone; `unsigned`/`prod`/dead-branch `svec` all compile.
+- Batch 4 (cross-call `dict_with_eltype` stub) RE-ADDED behind the gate → abstract-Dict
+  now loud-rejects.
+- Full `Pkg.test` GREEN (all 10 shards, incl. PI fixtures); **0 PI flips** (no regression).
+- `run.jl verify`: **14 gaps → out_of_subset** (the entire abstract-Dict-key cluster:
+  01e4e1bb61d3 05b2b084ef65 20775d3ec5b2 418e48316c5c 46a251368b26 5df51f98936b 879dc00b3440
+  a70595550bd8 b85535ae7df7 cb567b610585 dcdf78e15830 e6c8c6edaeaa edf2c277a170 ef3c54645d9f).
+  3 still open are GENUINE bugs (not abstract-Dict): 18f59462d179 (typed-CONCRETE-Dict
+  mis-compile — real codegen bug), 1f6e77980994 + 8558c726082d (closure paths).
+
+⇒ The abstract-Dict-key cluster is FULLY + SOUNDLY resolved: no longer silent traps, now
+loud `WasmCompileError`s = out-of-subset. Rewrite `Dict(Int32(0)=>0, 0=>0)` as
+`Dict{Int,Int}(0=>0, 0=>0)` (one concrete key type) and it compiles. Ledger machinery
+(ledger.jl `_run_reproducer` → :fixed/:out_of_subset/:open) auto-reclassifies any loud reject.

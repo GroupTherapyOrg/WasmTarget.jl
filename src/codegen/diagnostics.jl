@@ -184,8 +184,16 @@ function record_unsupported!(ctx, kind::Symbol, construct::AbstractString;
     # a discovered function compiles "clean" and only traps off-sample. Paranoid
     # mode (`_paranoid_stubs()`) SKIPS the downgrade so EVERY value-stub stays
     # fatal under strict. See test/fuzz/LOOP.md §7.
+    # Strict Approach A — ENTRY-STRICT, DEPENDENCY-PERMISSIVE. Loud-reject only the
+    # ENTRY's own unsupported constructs. A DISCOVERED/dependency function may carry an
+    # un-lowerable construct on a path that is dead IN THE MODULE (the function is compiled
+    # because it's in the static callgraph, but never actually called for the entry's real
+    # args — e.g. `Base._reinterpret_padding` pulled in by a WasmMakie figure). Rejecting
+    # those would fail the whole compile for code that runs fine; downgrade them to a sound
+    # silent trap and let the runtime differential fuzzer catch any genuinely-reachable one.
+    # (Generalized from the value_stub-only downgrade.) Paranoid mode keeps everything fatal.
     local _fatal = ctx.strict && soundness_fatal
-    if _fatal && kind === :value_stub && !_paranoid_stubs()
+    if _fatal && !_paranoid_stubs()
         local _entries = TRIM_ENTRY_NAMES[]
         if _entries !== nothing && !(_ctx_func_name(ctx) in _entries)
             _fatal = false
@@ -219,8 +227,17 @@ helpers) — those stay bare `unreachable` (sound; erroring would reject most of
 function emit_unsupported_stub!(ctx, bytes::Vector{UInt8}, kind::Symbol,
                                 construct::AbstractString; idx::Int=0, detail=nothing,
                                 soundness_fatal::Bool=true)
+    # Strict Approach A — REACHABILITY GATE: only loud-reject (fatal) when the construct
+    # is DEFINITELY executed on a returning call (`stmt_must_execute`). A non-must-execute
+    # stub is a sound *silent* trap: it sits on a branch WT can't prove dead (e.g. a Base
+    # dependency's fallback path that's never taken for the actual args — `Base.unsigned`'s
+    # `_apply_iterate` arm), and rejecting it would over-reject working code (the batch-4
+    # boundary). A working function can't have a must-execute trap-stub, so this never
+    # regresses valid code. See `stmt_must_execute` + test/fuzz/STRICT_MODE_INVENTORY.md.
+    local _code = try ctx.code_info.code catch; nothing end
+    local _me = idx > 0 && _code !== nothing && stmt_must_execute(_code, idx)
     record_unsupported!(ctx, kind, construct; idx=idx, detail=detail,
-                        soundness_fatal=soundness_fatal)
+                        soundness_fatal=(soundness_fatal && _me))
     push!(bytes, Opcode.UNREACHABLE)
     ctx.last_stmt_was_stub = true
     return nothing
