@@ -4968,8 +4968,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             (:checked_smul_int, :checked_umul_int, :checked_sadd_int, :checked_uadd_int,
              :checked_ssub_int, :checked_usub_int, :checked_sdiv_int, :checked_udiv_int,
              :sdiv_int, :udiv_int, :srem_int, :urem_int)
-        push!(bytes, Opcode.UNREACHABLE)
-        ctx.last_stmt_was_stub = true  # PURE-908
+        # 128-bit checked/div/rem arithmetic unsupported. Loud reject (returns a value natively).
+        emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+            "128-bit checked/division/remainder arithmetic (Int128/UInt128)"; idx=idx)
         return bytes
     end
 
@@ -5236,10 +5237,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     # Overflow detection: ((a ^ result) & (b ^ result)) has sign bit set
     elseif is_func(func, :checked_sadd_int) || is_func(func, :checked_uadd_int)
         if is_128bit
-            # PURE-908: Clear pre-pushed args
-            bytes = UInt8[]
-            push!(bytes, Opcode.UNREACHABLE)
-            ctx.last_stmt_was_stub = true  # PURE-908
+            bytes = UInt8[]  # PURE-908: clear pre-pushed args
+            emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+                "128-bit checked addition (Int128/UInt128)"; idx=idx)
         else
             is_signed = is_func(func, :checked_sadd_int)
             local_type = is_32bit ? I32 : I64
@@ -5312,10 +5312,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     # Signed overflow: ((a ^ b) & (a ^ result)) has sign bit set
     elseif is_func(func, :checked_ssub_int) || is_func(func, :checked_usub_int)
         if is_128bit
-            # PURE-908: Clear pre-pushed args
-            bytes = UInt8[]
-            push!(bytes, Opcode.UNREACHABLE)
-            ctx.last_stmt_was_stub = true  # PURE-908
+            bytes = UInt8[]  # PURE-908: clear pre-pushed args
+            emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+                "128-bit checked subtraction (Int128/UInt128)"; idx=idx)
         else
             is_signed = is_func(func, :checked_ssub_int)
             local_type = is_32bit ? I32 : I64
@@ -6590,15 +6589,15 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     # Emit inline reduce loop: acc = v[1]; for i in 2:length(v), acc = op(acc, v[i])
                     _emit_apply_iterate_reduce!(bytes, container_arg, container_type, elem_type, reduce_op, ctx)
                 else
-                    # Unknown target function — can't reduce, trap
-                    push!(bytes, Opcode.UNREACHABLE)
-                    ctx.last_stmt_was_stub = true
+                    # Unknown reduce target — can't lower. Loud reject (reduce returns a value natively).
+                    emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+                        "_apply_iterate reduce over an unsupported operator/target"; idx=idx)
                 end
             end
         else
-            # Multiple containers or non-Vector type — not supported yet, trap
-            push!(bytes, Opcode.UNREACHABLE)
-            ctx.last_stmt_was_stub = true
+            # Multiple containers / non-Vector — not supported. Loud reject (returns a value natively).
+            emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+                "_apply_iterate over multiple containers or a non-Vector iterable"; idx=idx)
         end
 
     # Core.svec — genuinely unsupported. Loud reject (returns a SimpleVector natively).
