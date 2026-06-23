@@ -99,3 +99,30 @@ uncatchable traps — closes the residual without rejecting. Not needed now.
 
 **Net effect on the plan:** only Category C (~20 real-operation stubs) flips to LOUD;
 Categories A (structural) and B (native-throws) stay as-is; Category D verified per-site.
+
+## BATCH-4 RESULT (2026-06-23) — the dynamic-dispatch cross-call stub CANNOT be made loud
+Converting the unresolved-cross-call stub (calls.jl ~7036, where `dict_with_eltype` and
+other dynamic dispatch land) to a loud reject — even with a `Union{}`-return (always-throws)
+guard — **OVER-REJECTS valid code**: full Pkg.test failed 6 shards + the fuzz pass, and a
+GREEN PI fixture (`dither.jl#1`) regressed to `compile_fail`. Root: this site is
+overwhelmingly **dead Union-branch code the IR can't prove dead** (its own comment says so),
+not reachable dynamic dispatch — and WT has no static reachability analysis to tell the
+abstract-Dict `dict_with_eltype` (reachable) apart from a dead-branch `f(::WrongUnionMember)`
+(never executed). The `Union{}` guard only catches the always-throws subset; value-returning
+dead-branch calls are everywhere. **Batch 4 REVERTED.**
+
+Consequence: the abstract-Dict-key cluster (and general type-instability dynamic dispatch)
+**stays a silent trap (deferred), NOT reclassified to out_of_subset** — the loud-reject floor
+can't reach it without reachability analysis or actually compiling it (the gated dyndispatch
+frontier). Approach A's clean wins are the DEFINITE-unsupported operations (batches 1–3).
+The `out_of_subset` ledger machinery (designed: `_run_reproducer` → :fixed/:out_of_subset
+[caught WasmCompileError]/:open) is DEFERRED — with batch 4 reverted it would reclassify ~0
+current ledger gaps.
+
+## SHIPPED (batches 1–3) — Approach A for definite-unsupported operations
+Loud `WasmCompileError` (strict, default) instead of silent `unreachable` for: Int128 checked
+mul/div/rem/add/sub, `Base.pointerset`, `Core.svec`, parse_float/int/uint_literal,
+`_apply_iterate` (unknown reduce target / multi-container), numeric intrinsic on an
+Any/externref (boxed) operand, `:new` of a non-constant/unresolvable struct type. Full
+Pkg.test green; PI fixtures hitting these correctly flip `runtime_trap → compile_fail`
+(loud, source-attributed); ZERO green regressions.
