@@ -4512,10 +4512,10 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                            is_func(func, :xor_int) || is_func(func, :and_int)
     if is_numeric_intrinsic && (arg_type === Any ||
                                  (!isprimitivetype(arg_type) && !is_128bit && !(arg_type <: Integer)))
-        # Type-confused code path - externref used as numeric
-        # Emit unreachable since we can't do numeric ops on externref
-        push!(bytes, Opcode.UNREACHABLE)
-        ctx.last_stmt_was_stub = true  # PURE-908
+        # An Any/externref value used in a numeric intrinsic (boxing / type instability).
+        # Loud reject — natively the op runs on the concrete value, so a silent trap diverges.
+        emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+            "numeric intrinsic on a non-concrete (Any/boxed) operand — type instability"; idx=idx)
         return bytes
     end
 
@@ -5120,11 +5120,11 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             if arg1_ssa isa Core.SSAValue && haskey(ctx.ssa_types, arg1_ssa.id)
                 local ssa_type = ctx.ssa_types[arg1_ssa.id]
                 if ssa_type === Any
-                    @info "PURE-046: Emitting UNREACHABLE for externref in numeric intrinsic (SSA type is Any)"
-                    # PURE-908: Clear pre-pushed args
-                    bytes = UInt8[]
-                    push!(bytes, Opcode.UNREACHABLE)
-                    ctx.last_stmt_was_stub = true  # PURE-908
+                    # externref/Any operand in a numeric intrinsic (SSA type is Any) —
+                    # boxing / type instability. Loud reject.
+                    bytes = UInt8[]  # PURE-908: clear pre-pushed args
+                    emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+                        "numeric intrinsic on an Any-typed (boxed) operand — type instability"; idx=idx)
                     return bytes
                 end
             end
@@ -5145,10 +5145,10 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             if offset_chk2 >= 0 && offset_chk2 < length(ctx.locals)
                 local lt_chk2 = ctx.locals[offset_chk2 + 1]
                 if lt_chk2 === ExternRef
-                    # PURE-908: Clear pre-pushed args
-                    bytes = UInt8[]
-                    push!(bytes, Opcode.UNREACHABLE)
-                    ctx.last_stmt_was_stub = true  # PURE-908
+                    # externref-typed local fed to a numeric intrinsic — boxing. Loud reject.
+                    bytes = UInt8[]  # PURE-908: clear pre-pushed args
+                    emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+                        "numeric intrinsic on an externref (boxed) local — type instability"; idx=idx)
                     return bytes
                 end
             end

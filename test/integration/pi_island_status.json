@@ -25,7 +25,7 @@
   },
   "CollatzConjecture.jl#1#5f074850-b967-4de5-8ca3-b85a74052499": {
     "notebook": "CollatzConjecture.jl",
-    "status": "runtime_trap"
+    "status": "compile_fail"
   },
   "CollatzConjecture.jl#1#6693800b-e2bc-46e4-b5f8-004184ef472b": {
     "notebook": "CollatzConjecture.jl",
@@ -125,7 +125,7 @@
   },
   "CollatzConjecture.jl#3#5f074850-b967-4de5-8ca3-b85a74052499": {
     "notebook": "CollatzConjecture.jl",
-    "status": "runtime_trap"
+    "status": "compile_fail"
   },
   "CollatzConjecture.jl#3#6693800b-e2bc-46e4-b5f8-004184ef472b": {
     "notebook": "CollatzConjecture.jl",
@@ -165,7 +165,7 @@
   },
   "CollatzConjecture.jl#4#5f074850-b967-4de5-8ca3-b85a74052499": {
     "notebook": "CollatzConjecture.jl",
-    "status": "runtime_trap"
+    "status": "compile_fail"
   },
   "CollatzConjecture.jl#4#6693800b-e2bc-46e4-b5f8-004184ef472b": {
     "notebook": "CollatzConjecture.jl",
@@ -205,7 +205,7 @@
   },
   "CollatzConjecture.jl#5#5f074850-b967-4de5-8ca3-b85a74052499": {
     "notebook": "CollatzConjecture.jl",
-    "status": "runtime_trap"
+    "status": "compile_fail"
   },
   "CollatzConjecture.jl#5#6693800b-e2bc-46e4-b5f8-004184ef472b": {
     "notebook": "CollatzConjecture.jl",
@@ -245,7 +245,7 @@
   },
   "CollatzConjecture.jl#6#5f074850-b967-4de5-8ca3-b85a74052499": {
     "notebook": "CollatzConjecture.jl",
-    "status": "runtime_trap"
+    "status": "compile_fail"
   },
   "CollatzConjecture.jl#6#6693800b-e2bc-46e4-b5f8-004184ef472b": {
     "notebook": "CollatzConjecture.jl",
