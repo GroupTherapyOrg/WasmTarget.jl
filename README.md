@@ -168,17 +168,34 @@ dispatch) are not supported and trap or raise a compile error:
 
 WasmTarget aims to be **correct-or-loud, never silently wrong**.
 
-**`strict=true` (default).** When codegen meets a construct that would compile to a
-*wrong value* (e.g. `objectid`, a non-zero `memset`), `compile` raises a
-`WasmCompileError` naming the construct and its source location instead of emitting
-it. Julia exceptions compile to *catchable* Wasm exceptions (a shared exception
-tag), so `try`/`catch` over throwing Base code behaves like native; only genuinely
-unsupported constructs trap. Pass `strict=false` for permissive stub-and-trap.
+**`strict=true` (default).** When codegen meets a construct it cannot lower to a
+faithful result, `compile` raises a `WasmCompileError` naming the construct and its
+source location instead of silently emitting a trap. This covers both *wrong-value*
+stubs (e.g. `objectid`, a non-zero `memset`) and *genuinely-unsupported operations*
+that would otherwise return a value natively (128-bit checked arithmetic, raw
+`pointerset`, `Core.svec`, `:new` of a non-constant type, a numeric op on a boxed/
+`Any` operand, …) — the guiding principle is **narrow-but-bulletproof: if it
+compiles, it's faithful to the Julia; if it can't, it tells you, up front.** Julia
+exceptions compile to *catchable* Wasm exceptions (a shared exception tag), so
+`try`/`catch` over throwing Base code behaves like native; ubiquitous dead
+error-arms (`@boundscheck`/DomainError that the IR can't prove dead) keep a sound
+silent trap rather than rejecting most of `Base`. Pass `strict=false` for permissive
+stub-and-trap.
 
 ```julia
 compile(f, (T,))                 # strict + validated (default)
 compile(f, (T,); strict=false)   # permissive: emit runtime-trap stubs
 ```
+
+**Author pre-flight (optional).** Because WasmTarget rejects type-unstable / boxed /
+dynamically-dispatched code rather than guessing, the fastest way to know a function
+is in-subset *before* compiling is to check it for type stability and dynamic
+dispatch with the standard Julia tooling — [JET.jl](https://github.com/aviatesk/JET.jl)
+(`@report_call`), [AllocCheck.jl](https://github.com/JuliaLang/AllocCheck.jl)
+(`@check_allocs` flags object creation **and dynamic dispatch**), or
+[DispatchDoctor.jl](https://github.com/MilesCranmer/DispatchDoctor.jl) (`@stable`).
+WasmTarget ships none of this machinery itself; these are author-side linters that
+make code "stricter" in exactly the way the compiler wants.
 
 **`validate=true` (default).** Every compiled module is checked with
 `wasm-tools validate`; a reject raises `WasmValidationError` rather than handing

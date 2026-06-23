@@ -1781,9 +1781,11 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
         if ssa_type isa DataType && ssa_type <: Type && length(ssa_type.parameters) >= 1
             ssa_type.parameters[1]
         else
-            @debug "Stubbing :new with dynamic SSAValue type: $struct_type_ref ($ssa_type)"
-            push!(bytes, Opcode.UNREACHABLE)
-            ctx.last_stmt_was_stub = true  # PURE-908
+            # :new of a struct whose type isn't statically known (dynamic SSAValue type) —
+            # type instability. Loud reject (constructs an object natively).
+            emit_unsupported_stub!(ctx, bytes, :unsupported_type,
+                "struct construction (:new) with a non-constant type — type instability"; idx=idx,
+                detail=ssa_type)
             return bytes
         end
     elseif struct_type_ref isa Core.Argument
@@ -1795,9 +1797,11 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
         if new_ssa_type isa DataType && isconcretetype(new_ssa_type) && isstructtype(new_ssa_type)
             new_ssa_type
         else
-            @debug "Stubbing :new with unresolvable Core.Argument type: $struct_type_ref ($new_ssa_type)"
-            push!(bytes, Opcode.UNREACHABLE)
-            ctx.last_stmt_was_stub = true  # PURE-908
+            # :new where the constructed type (Core.Argument #self#) can't be resolved to a
+            # concrete struct — type instability. Loud reject.
+            emit_unsupported_stub!(ctx, bytes, :unsupported_type,
+                "struct construction (:new) with an unresolvable type — type instability"; idx=idx,
+                detail=new_ssa_type)
             return bytes
         end
     else

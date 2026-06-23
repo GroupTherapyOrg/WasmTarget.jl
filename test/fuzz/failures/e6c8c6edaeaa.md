@@ -1,6 +1,6 @@
 ---
 id: e6c8c6edaeaa
-status: open
+status: out_of_subset
 category: runtime_trap
 kind: runtime_trap
 construct: "runtime_trap: `isodd(abs(length(Dict(sum([Int32(0), Int32(0), Int32(0)]) => 0, Int32(0) => 0))))` :: Bool"

@@ -4437,19 +4437,17 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
             # Handle JuliaSyntax internal functions that have complex implementations
             # These are intercepted and compiled as simplified stubs
             elseif name === :parse_float_literal
-                # WBUILD-8001: Float literal parsing not implemented.
-                # Original uses ccall(:jl_strtod_c) which can't compile to Wasm.
-                # Deferred — not needed for Therapy.jl.
-                push!(bytes, Opcode.UNREACHABLE)
-                ctx.last_stmt_was_stub = true
+                # WBUILD-8001: Float literal parsing not implemented (orig uses
+                # ccall(:jl_strtod_c)). Strict Approach A — loud reject (returns a
+                # value natively, so a silent trap would diverge).
+                emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+                    "parse_float_literal (JuliaSyntax float parsing — needs jl_strtod_c)"; idx=idx)
 
             elseif name === :parse_int_literal ||
                    name === :parse_uint_literal
                 # WBUILD-8001: Int/uint literal parsing not implemented.
-                # Requires compiling JuliaSyntax's string-to-integer logic.
-                # Deferred — not needed for Therapy.jl.
-                push!(bytes, Opcode.UNREACHABLE)
-                ctx.last_stmt_was_stub = true
+                emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+                    "parse_int/uint_literal (JuliaSyntax integer parsing)"; idx=idx)
 
             # Handle unalias — identity in WasmGC (arrays never alias)
             # unalias(dest, src) checks if dest and src share backing memory

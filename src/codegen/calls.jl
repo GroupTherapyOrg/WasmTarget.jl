@@ -652,11 +652,11 @@ Modifies `bytes` in-place.
 """
 function _compile_call_checked_mul(func, args, bytes::Vector{UInt8}, ctx::AbstractCompilationContext, is_128bit::Bool, is_32bit::Bool)::Nothing
     if is_128bit
-        # 128-bit checked mul: not supported, emit unreachable
-        # PURE-908: Clear pre-pushed args
-        empty!(bytes)
-        push!(bytes, Opcode.UNREACHABLE)
-        ctx.last_stmt_was_stub = true  # PURE-908
+        # 128-bit checked mul: not supported. Strict-mode Approach A — loud reject
+        # (natively returns a value, so a silent trap would diverge).
+        empty!(bytes)  # PURE-908: clear pre-pushed args
+        emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+                               "128-bit checked multiply (Int128/UInt128)")
     else
         is_signed = is_func(func, :checked_smul_int)
         local_type = is_32bit ? I32 : I64
@@ -4512,10 +4512,10 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                            is_func(func, :xor_int) || is_func(func, :and_int)
     if is_numeric_intrinsic && (arg_type === Any ||
                                  (!isprimitivetype(arg_type) && !is_128bit && !(arg_type <: Integer)))
-        # Type-confused code path - externref used as numeric
-        # Emit unreachable since we can't do numeric ops on externref
-        push!(bytes, Opcode.UNREACHABLE)
-        ctx.last_stmt_was_stub = true  # PURE-908
+        # An Any/externref value used in a numeric intrinsic (boxing / type instability).
+        # Loud reject — natively the op runs on the concrete value, so a silent trap diverges.
+        emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+            "numeric intrinsic on a non-concrete (Any/boxed) operand — type instability"; idx=idx)
         return bytes
     end
 
@@ -4968,8 +4968,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             (:checked_smul_int, :checked_umul_int, :checked_sadd_int, :checked_uadd_int,
              :checked_ssub_int, :checked_usub_int, :checked_sdiv_int, :checked_udiv_int,
              :sdiv_int, :udiv_int, :srem_int, :urem_int)
-        push!(bytes, Opcode.UNREACHABLE)
-        ctx.last_stmt_was_stub = true  # PURE-908
+        # 128-bit checked/div/rem arithmetic unsupported. Loud reject (returns a value natively).
+        emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+            "128-bit checked/division/remainder arithmetic (Int128/UInt128)"; idx=idx)
         return bytes
     end
 
@@ -5119,11 +5120,11 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             if arg1_ssa isa Core.SSAValue && haskey(ctx.ssa_types, arg1_ssa.id)
                 local ssa_type = ctx.ssa_types[arg1_ssa.id]
                 if ssa_type === Any
-                    @info "PURE-046: Emitting UNREACHABLE for externref in numeric intrinsic (SSA type is Any)"
-                    # PURE-908: Clear pre-pushed args
-                    bytes = UInt8[]
-                    push!(bytes, Opcode.UNREACHABLE)
-                    ctx.last_stmt_was_stub = true  # PURE-908
+                    # externref/Any operand in a numeric intrinsic (SSA type is Any) —
+                    # boxing / type instability. Loud reject.
+                    bytes = UInt8[]  # PURE-908: clear pre-pushed args
+                    emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+                        "numeric intrinsic on an Any-typed (boxed) operand — type instability"; idx=idx)
                     return bytes
                 end
             end
@@ -5144,10 +5145,10 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             if offset_chk2 >= 0 && offset_chk2 < length(ctx.locals)
                 local lt_chk2 = ctx.locals[offset_chk2 + 1]
                 if lt_chk2 === ExternRef
-                    # PURE-908: Clear pre-pushed args
-                    bytes = UInt8[]
-                    push!(bytes, Opcode.UNREACHABLE)
-                    ctx.last_stmt_was_stub = true  # PURE-908
+                    # externref-typed local fed to a numeric intrinsic — boxing. Loud reject.
+                    bytes = UInt8[]  # PURE-908: clear pre-pushed args
+                    emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+                        "numeric intrinsic on an externref (boxed) local — type instability"; idx=idx)
                     return bytes
                 end
             end
@@ -5236,10 +5237,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     # Overflow detection: ((a ^ result) & (b ^ result)) has sign bit set
     elseif is_func(func, :checked_sadd_int) || is_func(func, :checked_uadd_int)
         if is_128bit
-            # PURE-908: Clear pre-pushed args
-            bytes = UInt8[]
-            push!(bytes, Opcode.UNREACHABLE)
-            ctx.last_stmt_was_stub = true  # PURE-908
+            bytes = UInt8[]  # PURE-908: clear pre-pushed args
+            emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+                "128-bit checked addition (Int128/UInt128)"; idx=idx)
         else
             is_signed = is_func(func, :checked_sadd_int)
             local_type = is_32bit ? I32 : I64
@@ -5312,10 +5312,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     # Signed overflow: ((a ^ b) & (a ^ result)) has sign bit set
     elseif is_func(func, :checked_ssub_int) || is_func(func, :checked_usub_int)
         if is_128bit
-            # PURE-908: Clear pre-pushed args
-            bytes = UInt8[]
-            push!(bytes, Opcode.UNREACHABLE)
-            ctx.last_stmt_was_stub = true  # PURE-908
+            bytes = UInt8[]  # PURE-908: clear pre-pushed args
+            emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+                "128-bit checked subtraction (Int128/UInt128)"; idx=idx)
         else
             is_signed = is_func(func, :checked_ssub_int)
             local_type = is_32bit ? I32 : I64
@@ -6480,10 +6479,10 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     # Base.pointerset - write to pointer
     # WasmGC has no linear memory — pointer ops are invalid. Trap at runtime.
     elseif func isa GlobalRef && func.name === :pointerset
-        # PURE-908: Clear pre-pushed args
-        bytes = UInt8[]
-        push!(bytes, Opcode.UNREACHABLE)
-        ctx.last_stmt_was_stub = true  # PURE-908
+        # WasmGC has no linear memory — pointer write is unsupported. Loud reject.
+        bytes = UInt8[]  # PURE-908: clear pre-pushed args
+        emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+            "Base.pointerset (raw pointer write — no linear memory in WasmGC)"; idx=idx)
 
     # PURE-1102: throw_methoderror — emit throw (catchable) instead of unreachable
     elseif func isa GlobalRef && func.name === :throw_methoderror
@@ -6590,23 +6589,22 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     # Emit inline reduce loop: acc = v[1]; for i in 2:length(v), acc = op(acc, v[i])
                     _emit_apply_iterate_reduce!(bytes, container_arg, container_type, elem_type, reduce_op, ctx)
                 else
-                    # Unknown target function — can't reduce, trap
-                    push!(bytes, Opcode.UNREACHABLE)
-                    ctx.last_stmt_was_stub = true
+                    # Unknown reduce target — can't lower. Loud reject (reduce returns a value natively).
+                    emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+                        "_apply_iterate reduce over an unsupported operator/target"; idx=idx)
                 end
             end
         else
-            # Multiple containers or non-Vector type — not supported yet, trap
-            push!(bytes, Opcode.UNREACHABLE)
-            ctx.last_stmt_was_stub = true
+            # Multiple containers / non-Vector — not supported. Loud reject (returns a value natively).
+            emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+                "_apply_iterate over multiple containers or a non-Vector iterable"; idx=idx)
         end
 
-    # Core.svec — genuinely unsupported, trap
+    # Core.svec — genuinely unsupported. Loud reject (returns a SimpleVector natively).
     elseif func isa GlobalRef && func.name === :svec && func.mod === Core
-        # PURE-908: Clear pre-pushed args
-        bytes = UInt8[]
-        push!(bytes, Opcode.UNREACHABLE)
-        ctx.last_stmt_was_stub = true  # PURE-908
+        bytes = UInt8[]  # PURE-908: clear pre-pushed args
+        emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+            "Core.svec (SimpleVector construction)"; idx=idx)
 
     # PURE-604/605: Core builtins re-exported through Base (isdefined, getfield, setfield!).
     # These are dead code paths from dynamic dispatch — trap silently in WasmGC.
@@ -7031,10 +7029,19 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 # These are dead code branches in WasmGC context (we compile with concrete types).
                 _has_abstract = any(t -> t === Any || !isconcretetype(t), call_arg_types)
                 @debug "CROSS-CALL UNREACHABLE: $(func) with arg types $(call_arg_types) (in func_$(ctx.func_idx))$((_has_abstract ? " [abstract-suppressed]" : ""))"
-                # PURE-908: Clear pre-pushed args before emitting UNREACHABLE.
-                bytes = UInt8[]
-                push!(bytes, Opcode.UNREACHABLE)
-                ctx.last_stmt_was_stub = true  # PURE-908
+                bytes = UInt8[]  # PURE-908: clear pre-pushed args
+                if get(ctx.ssa_types, idx, Any) === Union{}
+                    # always-throws callee (Category-B parity) — sound silent trap.
+                    push!(bytes, Opcode.UNREACHABLE)
+                    ctx.last_stmt_was_stub = true
+                else
+                    # Unresolved dynamic call returning a value = un-lowerable dynamic dispatch
+                    # (boxing / type instability — abstract-keyed Dict `dict_with_eltype` lands
+                    # here). emit_unsupported_stub!'s must-execute gate loud-rejects only when
+                    # definitely executed; dead Union-branch calls stay sound silent traps.
+                    emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+                        "unresolved dynamic call `$(func)` $(call_arg_types) — dynamic dispatch / type instability WT cannot lower"; idx=idx)
+                end
                 end
                 end
             end
