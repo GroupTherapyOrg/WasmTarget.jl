@@ -79,3 +79,23 @@ Add `emit_unsupported_stub!(ctx, bytes, kind, construct; idx, soundness_fatal=tr
 (record → throws under strict → else emit unreachable + set last_stmt_was_stub), convert the
 Category-C sites to it, resolve Category-D per-site, then gate on full Pkg.test + downstream CI
 (over-rejection of valid code is the risk).
+
+## DECISION RESOLVED (2026-06-23) — Category B stays PRAGMATIC (data-backed)
+`test/fuzz/strict_pure_probe.jl` measured the "maximally pure" blast radius (make
+native-throws/`Union{}`-return stubs fatal) on 20 ordinary functions:
+
+**PURE rejects 11/20**, including `sqrt`, `log`, `v[1]`, `v[end]`, `sum`, `maximum`,
+`s*"x"`, `length(s)`, `parse(Int,s)` (308 throw-arms across 25 fns!), `floor(Int,x)`,
+`sort`. Survivors are only error-path-free arithmetic (`1/x`, `div`, `%`, `x^3`, `abs`,
+`clamp`, `muladd`, polynomials). Cause: every one carries `@boundscheck`/DomainError/
+InexactError arms the IR can't prove dead — traps that never fire on valid inputs.
+
+⇒ **Pure is a non-starter** (it rejects basic indexing/strings/math). Category B stays
+NON-FATAL (keep the silent `unreachable`). Residual gap: an uncatchable wasm trap vs a
+catchable native throw — but ONLY when the error path is both *reached* and *caught*; the
+differential fuzzer already guards try/catch parity. FUTURE (best-of-both, deferred):
+compile throw-arms to real *catchable* wasm exceptions so they're faithful instead of
+uncatchable traps — closes the residual without rejecting. Not needed now.
+
+**Net effect on the plan:** only Category C (~20 real-operation stubs) flips to LOUD;
+Categories A (structural) and B (native-throws) stay as-is; Category D verified per-site.
