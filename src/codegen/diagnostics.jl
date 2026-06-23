@@ -198,3 +198,30 @@ function record_unsupported!(ctx, kind::Symbol, construct::AbstractString;
     end
     return nothing
 end
+
+"""
+    emit_unsupported_stub!(ctx, bytes, kind, construct; idx=0, detail=nothing, soundness_fatal=true) -> Nothing
+
+Category-C funnel (strict-mode Approach A). Use this — instead of a bare
+`push!(bytes, Opcode.UNREACHABLE)` — whenever the stub replaces a construct that would
+**return a value natively** but WT cannot lower (Int128 ops, externref-as-numeric/boxing,
+`Core.svec`, `:new` of an unresolved type, the typeId dispatch-ladder miss, deferred parse
+intrinsics, …). Routes through [`record_unsupported!`] so under `strict=true` (the default)
+it raises a source-attributed [`WasmCompileError`]; under `strict=false` it records the
+diagnostic and emits the legacy `unreachable` trap, marking `ctx.last_stmt_was_stub` so the
+downstream dead-code handling is unchanged.
+
+Do NOT use this for (A) structural dead-code unreachables (genuinely-unreachable points the
+validator requires) or (B) native-throws parity stubs (`Union{}`-return / `throw_*`/`kwerr`
+helpers) — those stay bare `unreachable` (sound; erroring would reject most of Base — see
+`test/fuzz/STRICT_MODE_INVENTORY.md`).
+"""
+function emit_unsupported_stub!(ctx, bytes::Vector{UInt8}, kind::Symbol,
+                                construct::AbstractString; idx::Int=0, detail=nothing,
+                                soundness_fatal::Bool=true)
+    record_unsupported!(ctx, kind, construct; idx=idx, detail=detail,
+                        soundness_fatal=soundness_fatal)
+    push!(bytes, Opcode.UNREACHABLE)
+    ctx.last_stmt_was_stub = true
+    return nothing
+end

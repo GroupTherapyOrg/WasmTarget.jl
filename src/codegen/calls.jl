@@ -652,11 +652,11 @@ Modifies `bytes` in-place.
 """
 function _compile_call_checked_mul(func, args, bytes::Vector{UInt8}, ctx::AbstractCompilationContext, is_128bit::Bool, is_32bit::Bool)::Nothing
     if is_128bit
-        # 128-bit checked mul: not supported, emit unreachable
-        # PURE-908: Clear pre-pushed args
-        empty!(bytes)
-        push!(bytes, Opcode.UNREACHABLE)
-        ctx.last_stmt_was_stub = true  # PURE-908
+        # 128-bit checked mul: not supported. Strict-mode Approach A — loud reject
+        # (natively returns a value, so a silent trap would diverge).
+        empty!(bytes)  # PURE-908: clear pre-pushed args
+        emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+                               "128-bit checked multiply (Int128/UInt128)")
     else
         is_signed = is_func(func, :checked_smul_int)
         local_type = is_32bit ? I32 : I64
@@ -6480,10 +6480,10 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     # Base.pointerset - write to pointer
     # WasmGC has no linear memory — pointer ops are invalid. Trap at runtime.
     elseif func isa GlobalRef && func.name === :pointerset
-        # PURE-908: Clear pre-pushed args
-        bytes = UInt8[]
-        push!(bytes, Opcode.UNREACHABLE)
-        ctx.last_stmt_was_stub = true  # PURE-908
+        # WasmGC has no linear memory — pointer write is unsupported. Loud reject.
+        bytes = UInt8[]  # PURE-908: clear pre-pushed args
+        emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+            "Base.pointerset (raw pointer write — no linear memory in WasmGC)"; idx=idx)
 
     # PURE-1102: throw_methoderror — emit throw (catchable) instead of unreachable
     elseif func isa GlobalRef && func.name === :throw_methoderror
@@ -6601,12 +6601,11 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             ctx.last_stmt_was_stub = true
         end
 
-    # Core.svec — genuinely unsupported, trap
+    # Core.svec — genuinely unsupported. Loud reject (returns a SimpleVector natively).
     elseif func isa GlobalRef && func.name === :svec && func.mod === Core
-        # PURE-908: Clear pre-pushed args
-        bytes = UInt8[]
-        push!(bytes, Opcode.UNREACHABLE)
-        ctx.last_stmt_was_stub = true  # PURE-908
+        bytes = UInt8[]  # PURE-908: clear pre-pushed args
+        emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+            "Core.svec (SimpleVector construction)"; idx=idx)
 
     # PURE-604/605: Core builtins re-exported through Base (isdefined, getfield, setfield!).
     # These are dead code paths from dynamic dispatch — trap silently in WasmGC.

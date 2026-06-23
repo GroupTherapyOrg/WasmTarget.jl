@@ -621,7 +621,7 @@
   },
   "fractals.jl#3#ee4df211-020e-43d4-a41d-513fbd6f31b7": {
     "notebook": "fractals.jl",
-    "status": "runtime_trap"
+    "status": "compile_fail"
   },
   "fractals.jl#4#2e7f10f3-eb4d-40e0-ae48-c0b4563b99c4": {
     "notebook": "fractals.jl",
