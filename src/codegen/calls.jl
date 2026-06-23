@@ -3104,8 +3104,12 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 # Get the field index (1-indexed in Julia)
                 field_idx = if field_ref isa Integer
                     field_ref
-                elseif field_ref isa Core.SSAValue
-                    # Dynamic index - will be handled below for homogeneous tuples
+                elseif field_ref isa Core.SSAValue || field_ref isa Core.Argument
+                    # Dynamic index - will be handled below for homogeneous tuples.
+                    # `Core.Argument`: the index is a bare function parameter, e.g.
+                    # `f(x) = (31,28,…)[x]` → `getfield(tuple, _2, boundscheck)` (gap
+                    # d4409a896f5b — daysinmonth's DAYSINMONTH[m] lookup table). Without
+                    # this the arg-indexed case fell to `nothing` → unreachable stub.
                     :dynamic
                 else
                     nothing
