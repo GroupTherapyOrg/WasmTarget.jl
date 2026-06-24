@@ -1,0 +1,98 @@
+[
+  {
+    "complete": true,
+    "errored_bind_cells": [],
+    "extracted": 12,
+    "notebook": "Interactivity with HTML.jl",
+    "registered": 12,
+    "registered_not_extracted": []
+  },
+  {
+    "complete": true,
+    "errored_bind_cells": [],
+    "extracted": 1,
+    "notebook": "Basic mathematics.jl",
+    "registered": 1,
+    "registered_not_extracted": []
+  },
+  {
+    "complete": true,
+    "errored_bind_cells": [],
+    "extracted": 22,
+    "notebook": "CollatzConjecture.jl",
+    "registered": 22,
+    "registered_not_extracted": []
+  },
+  {
+    "complete": true,
+    "errored_bind_cells": [],
+    "extracted": 3,
+    "notebook": "newton.jl",
+    "registered": 3,
+    "registered_not_extracted": []
+  },
+  {
+    "complete": true,
+    "errored_bind_cells": [],
+    "extracted": 28,
+    "notebook": "PlutoUI.jl.jl",
+    "registered": 28,
+    "registered_not_extracted": []
+  },
+  {
+    "complete": true,
+    "errored_bind_cells": [],
+    "extracted": 17,
+    "notebook": "fractals.jl",
+    "registered": 17,
+    "registered_not_extracted": []
+  },
+  {
+    "complete": true,
+    "errored_bind_cells": [],
+    "extracted": 12,
+    "notebook": "convolution_1d.jl",
+    "registered": 12,
+    "registered_not_extracted": []
+  },
+  {
+    "complete": true,
+    "errored_bind_cells": [],
+    "extracted": 5,
+    "notebook": "convolution_2d.jl",
+    "registered": 5,
+    "registered_not_extracted": []
+  },
+  {
+    "complete": true,
+    "errored_bind_cells": [],
+    "extracted": 13,
+    "notebook": "images.jl",
+    "registered": 13,
+    "registered_not_extracted": []
+  },
+  {
+    "complete": true,
+    "errored_bind_cells": [],
+    "extracted": 2,
+    "notebook": "dither.jl",
+    "registered": 2,
+    "registered_not_extracted": []
+  },
+  {
+    "complete": true,
+    "errored_bind_cells": [],
+    "extracted": 6,
+    "notebook": "turtles-art.jl",
+    "registered": 6,
+    "registered_not_extracted": []
+  },
+  {
+    "complete": true,
+    "errored_bind_cells": [],
+    "extracted": 5,
+    "notebook": "Titration.jl",
+    "registered": 5,
+    "registered_not_extracted": []
+  }
+]

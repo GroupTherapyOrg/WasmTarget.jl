@@ -3,17 +3,9 @@
     "notebook": "Basic mathematics.jl",
     "status": "green"
   },
-  "CollatzConjecture.jl#1#1b48b435-e959-477f-a8d2-3507da73fc28": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "harvest_eval_fail"
-  },
-  "CollatzConjecture.jl#1#1c3f1bea-f1ba-4d64-90ad-584391c01da5": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "extract_fail"
-  },
   "CollatzConjecture.jl#1#3550fe19-261e-4069-9bf6-6417dcaac102": {
     "notebook": "CollatzConjecture.jl",
-    "status": "extract_fail"
+    "status": "native_err"
   },
   "CollatzConjecture.jl#1#45ca6e2a-6a58-475e-9c02-4925e71625bd": {
     "notebook": "CollatzConjecture.jl",
@@ -23,49 +15,21 @@
     "notebook": "CollatzConjecture.jl",
     "status": "harvest_eval_fail"
   },
-  "CollatzConjecture.jl#1#5f074850-b967-4de5-8ca3-b85a74052499": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "runtime_trap"
-  },
-  "CollatzConjecture.jl#1#6693800b-e2bc-46e4-b5f8-004184ef472b": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "harvest_eval_fail"
-  },
   "CollatzConjecture.jl#1#66fe673a-7679-4c55-bf59-146a8dd1241c": {
     "notebook": "CollatzConjecture.jl",
     "status": "native_err"
   },
   "CollatzConjecture.jl#1#6d225dce-3362-4f5d-bba9-0b5312f6be5a": {
     "notebook": "CollatzConjecture.jl",
-    "status": "harvest_eval_fail"
+    "status": "native_err"
   },
   "CollatzConjecture.jl#1#7dbfb4dc-c9d0-464d-83b2-18db90d76878": {
     "notebook": "CollatzConjecture.jl",
     "status": "extract_fail"
   },
-  "CollatzConjecture.jl#1#8a64e9e3-477e-4a7e-97f7-61cf5e428731": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "harvest_eval_fail"
-  },
-  "CollatzConjecture.jl#1#af0c36ee-0534-4143-b59b-4ee041ef0f04": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "eval_fail"
-  },
-  "CollatzConjecture.jl#1#f21f1e3e-a3ab-458e-a101-ce824731f0b6": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "extract_fail"
-  },
-  "CollatzConjecture.jl#2#1b48b435-e959-477f-a8d2-3507da73fc28": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "harvest_eval_fail"
-  },
-  "CollatzConjecture.jl#2#1c3f1bea-f1ba-4d64-90ad-584391c01da5": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "extract_fail"
-  },
   "CollatzConjecture.jl#2#3550fe19-261e-4069-9bf6-6417dcaac102": {
     "notebook": "CollatzConjecture.jl",
-    "status": "extract_fail"
+    "status": "native_err"
   },
   "CollatzConjecture.jl#2#45ca6e2a-6a58-475e-9c02-4925e71625bd": {
     "notebook": "CollatzConjecture.jl",
@@ -75,61 +39,25 @@
     "notebook": "CollatzConjecture.jl",
     "status": "harvest_eval_fail"
   },
-  "CollatzConjecture.jl#2#5f074850-b967-4de5-8ca3-b85a74052499": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "native_err"
-  },
-  "CollatzConjecture.jl#2#6693800b-e2bc-46e4-b5f8-004184ef472b": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "harvest_eval_fail"
-  },
   "CollatzConjecture.jl#2#66fe673a-7679-4c55-bf59-146a8dd1241c": {
     "notebook": "CollatzConjecture.jl",
     "status": "native_err"
   },
   "CollatzConjecture.jl#2#6d225dce-3362-4f5d-bba9-0b5312f6be5a": {
     "notebook": "CollatzConjecture.jl",
-    "status": "harvest_eval_fail"
+    "status": "native_err"
   },
   "CollatzConjecture.jl#2#7dbfb4dc-c9d0-464d-83b2-18db90d76878": {
     "notebook": "CollatzConjecture.jl",
     "status": "extract_fail"
   },
-  "CollatzConjecture.jl#2#8a64e9e3-477e-4a7e-97f7-61cf5e428731": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "harvest_eval_fail"
-  },
-  "CollatzConjecture.jl#2#af0c36ee-0534-4143-b59b-4ee041ef0f04": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "eval_fail"
-  },
-  "CollatzConjecture.jl#2#f21f1e3e-a3ab-458e-a101-ce824731f0b6": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "extract_fail"
-  },
-  "CollatzConjecture.jl#3#1b48b435-e959-477f-a8d2-3507da73fc28": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "harvest_eval_fail"
-  },
-  "CollatzConjecture.jl#3#1c3f1bea-f1ba-4d64-90ad-584391c01da5": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "extract_fail"
-  },
   "CollatzConjecture.jl#3#3550fe19-261e-4069-9bf6-6417dcaac102": {
     "notebook": "CollatzConjecture.jl",
-    "status": "extract_fail"
+    "status": "native_err"
   },
   "CollatzConjecture.jl#3#45ca6e2a-6a58-475e-9c02-4925e71625bd": {
     "notebook": "CollatzConjecture.jl",
     "status": "native_err"
-  },
-  "CollatzConjecture.jl#3#5f074850-b967-4de5-8ca3-b85a74052499": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "runtime_trap"
-  },
-  "CollatzConjecture.jl#3#6693800b-e2bc-46e4-b5f8-004184ef472b": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "harvest_eval_fail"
   },
   "CollatzConjecture.jl#3#66fe673a-7679-4c55-bf59-146a8dd1241c": {
     "notebook": "CollatzConjecture.jl",
@@ -137,39 +65,15 @@
   },
   "CollatzConjecture.jl#3#6d225dce-3362-4f5d-bba9-0b5312f6be5a": {
     "notebook": "CollatzConjecture.jl",
-    "status": "harvest_eval_fail"
-  },
-  "CollatzConjecture.jl#3#af0c36ee-0534-4143-b59b-4ee041ef0f04": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "eval_fail"
-  },
-  "CollatzConjecture.jl#3#f21f1e3e-a3ab-458e-a101-ce824731f0b6": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "extract_fail"
-  },
-  "CollatzConjecture.jl#4#1b48b435-e959-477f-a8d2-3507da73fc28": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "harvest_eval_fail"
-  },
-  "CollatzConjecture.jl#4#1c3f1bea-f1ba-4d64-90ad-584391c01da5": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "extract_fail"
+    "status": "native_err"
   },
   "CollatzConjecture.jl#4#3550fe19-261e-4069-9bf6-6417dcaac102": {
     "notebook": "CollatzConjecture.jl",
-    "status": "extract_fail"
+    "status": "native_err"
   },
   "CollatzConjecture.jl#4#45ca6e2a-6a58-475e-9c02-4925e71625bd": {
     "notebook": "CollatzConjecture.jl",
     "status": "native_err"
-  },
-  "CollatzConjecture.jl#4#5f074850-b967-4de5-8ca3-b85a74052499": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "runtime_trap"
-  },
-  "CollatzConjecture.jl#4#6693800b-e2bc-46e4-b5f8-004184ef472b": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "harvest_eval_fail"
   },
   "CollatzConjecture.jl#4#66fe673a-7679-4c55-bf59-146a8dd1241c": {
     "notebook": "CollatzConjecture.jl",
@@ -177,39 +81,15 @@
   },
   "CollatzConjecture.jl#4#6d225dce-3362-4f5d-bba9-0b5312f6be5a": {
     "notebook": "CollatzConjecture.jl",
-    "status": "harvest_eval_fail"
-  },
-  "CollatzConjecture.jl#4#af0c36ee-0534-4143-b59b-4ee041ef0f04": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "eval_fail"
-  },
-  "CollatzConjecture.jl#4#f21f1e3e-a3ab-458e-a101-ce824731f0b6": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "extract_fail"
-  },
-  "CollatzConjecture.jl#5#1b48b435-e959-477f-a8d2-3507da73fc28": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "harvest_eval_fail"
-  },
-  "CollatzConjecture.jl#5#1c3f1bea-f1ba-4d64-90ad-584391c01da5": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "extract_fail"
+    "status": "native_err"
   },
   "CollatzConjecture.jl#5#3550fe19-261e-4069-9bf6-6417dcaac102": {
     "notebook": "CollatzConjecture.jl",
-    "status": "extract_fail"
+    "status": "native_err"
   },
   "CollatzConjecture.jl#5#45ca6e2a-6a58-475e-9c02-4925e71625bd": {
     "notebook": "CollatzConjecture.jl",
     "status": "native_err"
-  },
-  "CollatzConjecture.jl#5#5f074850-b967-4de5-8ca3-b85a74052499": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "runtime_trap"
-  },
-  "CollatzConjecture.jl#5#6693800b-e2bc-46e4-b5f8-004184ef472b": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "harvest_eval_fail"
   },
   "CollatzConjecture.jl#5#66fe673a-7679-4c55-bf59-146a8dd1241c": {
     "notebook": "CollatzConjecture.jl",
@@ -217,55 +97,7 @@
   },
   "CollatzConjecture.jl#5#6d225dce-3362-4f5d-bba9-0b5312f6be5a": {
     "notebook": "CollatzConjecture.jl",
-    "status": "harvest_eval_fail"
-  },
-  "CollatzConjecture.jl#5#af0c36ee-0534-4143-b59b-4ee041ef0f04": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "eval_fail"
-  },
-  "CollatzConjecture.jl#5#f21f1e3e-a3ab-458e-a101-ce824731f0b6": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "extract_fail"
-  },
-  "CollatzConjecture.jl#6#1b48b435-e959-477f-a8d2-3507da73fc28": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "harvest_eval_fail"
-  },
-  "CollatzConjecture.jl#6#1c3f1bea-f1ba-4d64-90ad-584391c01da5": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "extract_fail"
-  },
-  "CollatzConjecture.jl#6#3550fe19-261e-4069-9bf6-6417dcaac102": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "extract_fail"
-  },
-  "CollatzConjecture.jl#6#45ca6e2a-6a58-475e-9c02-4925e71625bd": {
-    "notebook": "CollatzConjecture.jl",
     "status": "native_err"
-  },
-  "CollatzConjecture.jl#6#5f074850-b967-4de5-8ca3-b85a74052499": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "runtime_trap"
-  },
-  "CollatzConjecture.jl#6#6693800b-e2bc-46e4-b5f8-004184ef472b": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "harvest_eval_fail"
-  },
-  "CollatzConjecture.jl#6#66fe673a-7679-4c55-bf59-146a8dd1241c": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "native_err"
-  },
-  "CollatzConjecture.jl#6#6d225dce-3362-4f5d-bba9-0b5312f6be5a": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "harvest_eval_fail"
-  },
-  "CollatzConjecture.jl#6#af0c36ee-0534-4143-b59b-4ee041ef0f04": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "eval_fail"
-  },
-  "CollatzConjecture.jl#6#f21f1e3e-a3ab-458e-a101-ce824731f0b6": {
-    "notebook": "CollatzConjecture.jl",
-    "status": "extract_fail"
   },
   "Interactivity with HTML.jl#1#ede8009e-7f15-11ea-192a-a5c6135a9dcf": {
     "notebook": "Interactivity with HTML.jl",
@@ -417,39 +249,19 @@
   },
   "Titration.jl#1#02c0320c-7c56-4fe5-8f8c-9ab0f733b28e": {
     "notebook": "Titration.jl",
-    "status": "harvest_eval_fail"
+    "status": "native_err"
   },
-  "Titration.jl#1#2ffcfcc2-ac5f-4293-bab0-3fede68c115a": {
+  "Titration.jl#1#f153b4b8-7ba0-11eb-37ec-4f1a3dbe20e8": {
     "notebook": "Titration.jl",
-    "status": "extract_fail"
+    "status": "golden_drift"
   },
-  "Titration.jl#1#4127a0c7-897b-41c2-9319-2b1c48369699": {
+  "Titration.jl#1#f153b4b8-7ba0-11eb-37ec-4f1a3dbe20e9": {
     "notebook": "Titration.jl",
-    "status": "harvest_eval_fail"
-  },
-  "Titration.jl#1#41bed3bd-75f9-4b1a-9ea8-786b338b7503": {
-    "notebook": "Titration.jl",
-    "status": "harvest_eval_fail"
-  },
-  "Titration.jl#1#6ebfa6d8-b4a7-4d5e-8d3d-ccf0ba596f25": {
-    "notebook": "Titration.jl",
-    "status": "extract_fail"
-  },
-  "Titration.jl#1#831198d1-d22c-42b5-a198-3bd34139eb0e": {
-    "notebook": "Titration.jl",
-    "status": "extract_fail"
-  },
-  "Titration.jl#1#9dee0462-b5af-4962-a65b-7ac7b2faf3df": {
-    "notebook": "Titration.jl",
-    "status": "harvest_eval_fail"
-  },
-  "Titration.jl#1#af04638c-2615-4195-a45e-d6d85af6d6cd": {
-    "notebook": "Titration.jl",
-    "status": "harvest_eval_fail"
+    "status": "golden_drift"
   },
   "convolution_1d.jl#1#0dd8235c-c09b-49ae-b02a-4bbb285970a6": {
     "notebook": "convolution_1d.jl",
-    "status": "runtime_trap"
+    "status": "green"
   },
   "convolution_1d.jl#1#380ba7f0-76e6-47ec-98e2-e6c6a3b7f2d5": {
     "notebook": "convolution_1d.jl",
@@ -475,107 +287,35 @@
     "notebook": "convolution_1d.jl",
     "status": "green"
   },
-  "convolution_1d.jl#1#ceb05a23-93b8-4423-a5f9-f6e3d961d0c6": {
-    "notebook": "convolution_1d.jl",
-    "status": "native_err"
-  },
   "convolution_1d.jl#1#f0d08486-0086-48da-baeb-169f3812d0ea": {
     "notebook": "convolution_1d.jl",
     "status": "eval_fail"
   },
-  "convolution_2d.jl#1#4b560bf2-00d9-4440-9589-834cd9177f66": {
+  "convolution_2d.jl#1#88933746-6028-11eb-32de-13eb6ff43e29": {
     "notebook": "convolution_2d.jl",
     "status": "native_err"
   },
-  "convolution_2d.jl#1#5737939b-0bb9-4ddf-8948-6356e60d79f3": {
-    "notebook": "convolution_2d.jl",
-    "status": "eval_fail"
-  },
-  "convolution_2d.jl#1#6c31cbb0-01ed-40cf-b400-3ed6b7c79ecc": {
+  "convolution_2d.jl#2#d1174f21-5c74-4934-acdf-716671cfc2db": {
     "notebook": "convolution_2d.jl",
     "status": "native_err"
   },
-  "convolution_2d.jl#1#6ff88cb3-7cca-4091-b914-10c4bdc0d9d2": {
+  "convolution_2d.jl#3#4b560bf2-00d9-4440-9589-834cd9177f66": {
     "notebook": "convolution_2d.jl",
     "status": "native_err"
   },
-  "convolution_2d.jl#1#8ae0248f-6eba-4941-85f4-b21be3c7e725": {
+  "convolution_2d.jl#3#702ab37f-bbeb-4197-807a-b45207598cb1": {
     "notebook": "convolution_2d.jl",
     "status": "native_err"
   },
-  "convolution_2d.jl#1#9d42dd93-98b4-40db-9d3f-8917d6f72354": {
-    "notebook": "convolution_2d.jl",
-    "status": "outside_bridge"
-  },
-  "convolution_2d.jl#1#9edf2fce-715a-46fc-bc5f-d58e08de789b": {
-    "notebook": "convolution_2d.jl",
-    "status": "extract_fail"
-  },
-  "convolution_2d.jl#1#ef0bea69-6dfd-4526-a96e-6607771660fe": {
+  "convolution_2d.jl#4#96a4b35a-5a3a-4ad0-9ffe-306db46d1c03": {
     "notebook": "convolution_2d.jl",
     "status": "native_err"
   },
-  "convolution_2d.jl#2#4b560bf2-00d9-4440-9589-834cd9177f66": {
-    "notebook": "convolution_2d.jl",
-    "status": "native_err"
-  },
-  "convolution_2d.jl#2#5737939b-0bb9-4ddf-8948-6356e60d79f3": {
-    "notebook": "convolution_2d.jl",
-    "status": "eval_fail"
-  },
-  "convolution_2d.jl#2#6ff88cb3-7cca-4091-b914-10c4bdc0d9d2": {
-    "notebook": "convolution_2d.jl",
-    "status": "native_err"
-  },
-  "convolution_2d.jl#2#8ae0248f-6eba-4941-85f4-b21be3c7e725": {
-    "notebook": "convolution_2d.jl",
-    "status": "native_err"
-  },
-  "convolution_2d.jl#2#9d42dd93-98b4-40db-9d3f-8917d6f72354": {
-    "notebook": "convolution_2d.jl",
-    "status": "outside_bridge"
-  },
-  "convolution_2d.jl#2#9edf2fce-715a-46fc-bc5f-d58e08de789b": {
-    "notebook": "convolution_2d.jl",
-    "status": "extract_fail"
-  },
-  "convolution_2d.jl#2#ef0bea69-6dfd-4526-a96e-6607771660fe": {
-    "notebook": "convolution_2d.jl",
-    "status": "native_err"
-  },
-  "convolution_2d.jl#3#96a4b35a-5a3a-4ad0-9ffe-306db46d1c03": {
-    "notebook": "convolution_2d.jl",
-    "status": "native_err"
-  },
-  "convolution_2d.jl#4#4b560bf2-00d9-4440-9589-834cd9177f66": {
-    "notebook": "convolution_2d.jl",
-    "status": "native_err"
-  },
-  "convolution_2d.jl#4#6c31cbb0-01ed-40cf-b400-3ed6b7c79ecc": {
-    "notebook": "convolution_2d.jl",
-    "status": "native_err"
-  },
-  "convolution_2d.jl#4#6ff88cb3-7cca-4091-b914-10c4bdc0d9d2": {
-    "notebook": "convolution_2d.jl",
-    "status": "native_err"
-  },
-  "convolution_2d.jl#4#8ae0248f-6eba-4941-85f4-b21be3c7e725": {
-    "notebook": "convolution_2d.jl",
-    "status": "native_err"
-  },
-  "convolution_2d.jl#4#9d42dd93-98b4-40db-9d3f-8917d6f72354": {
-    "notebook": "convolution_2d.jl",
-    "status": "outside_bridge"
-  },
-  "convolution_2d.jl#4#ef0bea69-6dfd-4526-a96e-6607771660fe": {
-    "notebook": "convolution_2d.jl",
-    "status": "native_err"
-  },
-  "dither.jl#1#354f38ba-a8cf-4405-a0ef-1ec243f18acf": {
+  "dither.jl#1#0210462f-851b-4e2b-ba99-d7ade531fe11": {
     "notebook": "dither.jl",
-    "status": "outside_bridge"
+    "status": "native_err"
   },
-  "dither.jl#1#57a15a1a-32d8-4a75-9a65-18363a3c8f03": {
+  "dither.jl#1#09cbe381-c39e-4431-a9d3-624091ea42d0": {
     "notebook": "dither.jl",
     "status": "native_err"
   },
@@ -583,13 +323,21 @@
     "notebook": "dither.jl",
     "status": "green"
   },
-  "dither.jl#1#93e576e2-d5f0-44d9-8747-93ecefc51a8c": {
+  "dither.jl#1#8a718f57-740b-43a8-9f05-6c699f982220": {
     "notebook": "dither.jl",
-    "status": "outside_bridge"
+    "status": "native_err"
+  },
+  "dither.jl#1#a52bdeb6-35c4-4a70-bfa4-469912b30b27": {
+    "notebook": "dither.jl",
+    "status": "green"
   },
   "dither.jl#1#c4799684-46b7-4783-99de-c8946e7067de": {
     "notebook": "dither.jl",
-    "status": "outside_bridge"
+    "status": "green"
+  },
+  "dither.jl#1#ce25faed-be1c-4b74-9c3c-968638eb7813": {
+    "notebook": "dither.jl",
+    "status": "green"
   },
   "fractals.jl#1#4693d328-0907-4d62-b8e4-dcccff803b59": {
     "notebook": "fractals.jl",
@@ -607,10 +355,6 @@
     "notebook": "fractals.jl",
     "status": "green"
   },
-  "fractals.jl#2#8899561d-42e7-4397-a649-8800461c6649": {
-    "notebook": "fractals.jl",
-    "status": "eval_fail"
-  },
   "fractals.jl#3#221742a5-146e-4d7d-8d50-0f7bd5a30cb5": {
     "notebook": "fractals.jl",
     "status": "eval_fail"
@@ -623,129 +367,93 @@
     "notebook": "fractals.jl",
     "status": "runtime_trap"
   },
-  "fractals.jl#4#2e7f10f3-eb4d-40e0-ae48-c0b4563b99c4": {
+  "fractals.jl#4#8899561d-42e7-4397-a649-8800461c6649": {
+    "notebook": "fractals.jl",
+    "status": "native_err"
+  },
+  "fractals.jl#5#d3b2c4e5-9066-4c2f-b14a-3e2c7f8a5d93": {
+    "notebook": "fractals.jl",
+    "status": "native_err"
+  },
+  "fractals.jl#6#2e7f10f3-eb4d-40e0-ae48-c0b4563b99c4": {
     "notebook": "fractals.jl",
     "status": "golden_drift"
   },
-  "fractals.jl#4#4135244d-fb5a-4e8d-ad4b-c4046781b70c": {
+  "fractals.jl#6#4135244d-fb5a-4e8d-ad4b-c4046781b70c": {
     "notebook": "fractals.jl",
     "status": "runtime_trap"
   },
-  "fractals.jl#4#b2a95d75-a254-4918-96d2-7ec5c2a60d8a": {
+  "fractals.jl#6#b2a95d75-a254-4918-96d2-7ec5c2a60d8a": {
     "notebook": "fractals.jl",
     "status": "golden_drift"
   },
-  "fractals.jl#4#cf1f1d8a-c462-47b1-9e17-ea88357570aa": {
+  "fractals.jl#6#cf1f1d8a-c462-47b1-9e17-ea88357570aa": {
     "notebook": "fractals.jl",
     "status": "golden_drift"
   },
-  "fractals.jl#4#d81173b4-8847-4c17-9a30-5e20c6f313dd": {
+  "fractals.jl#6#d81173b4-8847-4c17-9a30-5e20c6f313dd": {
     "notebook": "fractals.jl",
     "status": "golden_drift"
   },
-  "fractals.jl#5#57819281-a466-4f6c-af96-ffe512594270": {
+  "fractals.jl#7#57819281-a466-4f6c-af96-ffe512594270": {
     "notebook": "fractals.jl",
     "status": "eval_fail"
   },
-  "images.jl#1#94b77934-713e-11eb-18cf-c5dc5e7afc5b": {
+  "images.jl#1#88933746-6028-11eb-32de-13eb6ff43e29": {
+    "notebook": "images.jl",
+    "status": "native_err"
+  },
+  "images.jl#2#ab9af0f6-64c9-11eb-13d3-5dbdb75a69a7": {
+    "notebook": "images.jl",
+    "status": "native_err"
+  },
+  "images.jl#3#94b77934-713e-11eb-18cf-c5dc5e7afc5b": {
     "notebook": "images.jl",
     "status": "green"
   },
-  "images.jl#1#ff762861-b186-4eb0-9582-0ce66ca10f60": {
+  "images.jl#3#ff762861-b186-4eb0-9582-0ce66ca10f60": {
     "notebook": "images.jl",
-    "status": "eval_fail"
-  },
-  "images.jl#2#6224c74b-8915-4983-abf0-30e6ba04a46d": {
-    "notebook": "images.jl",
-    "status": "eval_fail"
-  },
-  "images.jl#3#88933746-6028-11eb-32de-13eb6ff43e29": {
-    "notebook": "images.jl",
-    "status": "outside_bridge"
-  },
-  "images.jl#4#2ac47b91-bbc3-49ae-9bf5-4def30ff46f4": {
-    "notebook": "images.jl",
-    "status": "eval_fail"
+    "status": "native_err"
   },
   "images.jl#4#93b18ee8-f11c-40e2-b292-562798100ba4": {
     "notebook": "images.jl",
-    "status": "eval_fail"
+    "status": "native_err"
   },
-  "images.jl#5#ff9eea3f-cab0-4030-8337-f519b94316c5": {
+  "images.jl#5#1bd53326-d705-4d1a-bf8f-5d7f2a4e696f": {
     "notebook": "images.jl",
     "status": "native_err"
   },
-  "newton.jl#1#63dbf052-7c32-11eb-1062-5b3581d38f70": {
-    "notebook": "newton.jl",
-    "status": "harvest_eval_fail"
-  },
-  "newton.jl#1#6dc89964-7c30-11eb-0a41-8d97b210ed34": {
-    "notebook": "newton.jl",
-    "status": "runtime_trap"
-  },
-  "newton.jl#1#9371f930-7c30-11eb-1f77-c7f31b97ea26": {
-    "notebook": "newton.jl",
-    "status": "harvest_eval_fail"
-  },
-  "newton.jl#1#98158a38-7c30-11eb-0796-2335e97ec6d0": {
-    "notebook": "newton.jl",
-    "status": "harvest_eval_fail"
-  },
-  "newton.jl#1#d35e0cc8-7c30-11eb-28d3-17c9e221ea62": {
-    "notebook": "newton.jl",
-    "status": "extract_fail"
-  },
-  "newton.jl#1#db26375a-7c30-11eb-066e-ab9e8ded3356": {
-    "notebook": "newton.jl",
-    "status": "harvest_eval_fail"
-  },
-  "newton.jl#1#e18f2470-7c31-11eb-2b74-d59d00d20ba4": {
-    "notebook": "newton.jl",
-    "status": "harvest_eval_fail"
-  },
-  "newton.jl#1#ea741018-7c30-11eb-3912-a50475e6ec49": {
-    "notebook": "newton.jl",
-    "status": "harvest_eval_fail"
-  },
-  "newton.jl#2#ec6c6328-7b9c-11eb-1c69-dba12ae522ad": {
-    "notebook": "newton.jl",
+  "images.jl#6#d1174f21-5c74-4934-acdf-716671cfc2db": {
+    "notebook": "images.jl",
     "status": "native_err"
   },
-  "newton.jl#3#ecb40aea-7b9c-11eb-1476-e54faf32d91c": {
-    "notebook": "newton.jl",
+  "images.jl#7#ff9eea3f-cab0-4030-8337-f519b94316c5": {
+    "notebook": "images.jl",
     "status": "native_err"
   },
-  "newton.jl#4#09b97be8-7c2e-11eb-05fd-65bbd097afb8": {
-    "notebook": "newton.jl",
-    "status": "harvest_eval_fail"
-  },
-  "newton.jl#4#18ce2fac-7c2e-11eb-03d2-b3a674621662": {
-    "notebook": "newton.jl",
-    "status": "harvest_eval_fail"
-  },
-  "newton.jl#4#35b5c5c6-7c3f-11eb-2723-4b406a809114": {
-    "notebook": "newton.jl",
-    "status": "harvest_eval_fail"
-  },
-  "newton.jl#4#3828b94c-7c2d-11eb-2e01-79038b0f5226": {
-    "notebook": "newton.jl",
-    "status": "harvest_eval_fail"
-  },
-  "newton.jl#4#ed605b90-7c3e-11eb-34e9-776a05a177dd": {
-    "notebook": "newton.jl",
-    "status": "harvest_eval_fail"
-  },
-  "newton.jl#5#02b1b470-7c31-11eb-28f4-411956f73f12": {
+  "newton.jl#1#2e2e5f0e-7c31-11eb-0da7-770b07ee6202": {
     "notebook": "newton.jl",
     "status": "golden_drift"
   },
-  "newton.jl#5#07a754da-7c31-11eb-0394-4bef4d79fc30": {
+  "newton.jl#1#2fb40dc6-7c2f-11eb-2469-8deb4db59b5c": {
     "notebook": "newton.jl",
-    "status": "outside_bridge"
+    "status": "golden_drift"
   },
-  "newton.jl#5#5faa2784-7c31-11eb-34f1-3f8224dbdbde": {
+  "newton.jl#1#9bfafcc0-7ba2-11eb-1b67-e3a3803ead08": {
     "notebook": "newton.jl",
-    "status": "outside_bridge"
+    "status": "golden_drift"
+  },
+  "newton.jl#1#f153b4b8-7ba0-11eb-37ec-4f1a3dbe20e8": {
+    "notebook": "newton.jl",
+    "status": "golden_drift"
+  },
+  "newton.jl#1#f153b4b8-7ba0-11eb-37ec-4f1a3dbe20e9": {
+    "notebook": "newton.jl",
+    "status": "golden_drift"
+  },
+  "newton.jl#1#f25af026-7b9c-11eb-1f11-77a8b06b2d71": {
+    "notebook": "newton.jl",
+    "status": "native_err"
   },
   "turtles-art.jl#1#70402e12-22c2-47fd-99be-aa6cd15ce2c3": {
     "notebook": "turtles-art.jl",
