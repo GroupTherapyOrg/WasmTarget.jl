@@ -5,11 +5,11 @@
   },
   "CollatzConjecture.jl#1#3550fe19-261e-4069-9bf6-6417dcaac102": {
     "notebook": "CollatzConjecture.jl",
-    "status": "native_err"
+    "status": "wasmmakie_island"
   },
   "CollatzConjecture.jl#1#45ca6e2a-6a58-475e-9c02-4925e71625bd": {
     "notebook": "CollatzConjecture.jl",
-    "status": "native_err"
+    "status": "wasmmakie_island"
   },
   "CollatzConjecture.jl#1#50a423ad-ca90-4015-9ef6-577f60e4efe7": {
     "notebook": "CollatzConjecture.jl",
@@ -17,11 +17,11 @@
   },
   "CollatzConjecture.jl#1#66fe673a-7679-4c55-bf59-146a8dd1241c": {
     "notebook": "CollatzConjecture.jl",
-    "status": "native_err"
+    "status": "wasmmakie_island"
   },
   "CollatzConjecture.jl#1#6d225dce-3362-4f5d-bba9-0b5312f6be5a": {
     "notebook": "CollatzConjecture.jl",
-    "status": "native_err"
+    "status": "wasmmakie_island"
   },
   "CollatzConjecture.jl#1#7dbfb4dc-c9d0-464d-83b2-18db90d76878": {
     "notebook": "CollatzConjecture.jl",
@@ -29,11 +29,11 @@
   },
   "CollatzConjecture.jl#2#3550fe19-261e-4069-9bf6-6417dcaac102": {
     "notebook": "CollatzConjecture.jl",
-    "status": "native_err"
+    "status": "wasmmakie_island"
   },
   "CollatzConjecture.jl#2#45ca6e2a-6a58-475e-9c02-4925e71625bd": {
     "notebook": "CollatzConjecture.jl",
-    "status": "native_err"
+    "status": "wasmmakie_island"
   },
   "CollatzConjecture.jl#2#50a423ad-ca90-4015-9ef6-577f60e4efe7": {
     "notebook": "CollatzConjecture.jl",
@@ -41,11 +41,11 @@
   },
   "CollatzConjecture.jl#2#66fe673a-7679-4c55-bf59-146a8dd1241c": {
     "notebook": "CollatzConjecture.jl",
-    "status": "native_err"
+    "status": "wasmmakie_island"
   },
   "CollatzConjecture.jl#2#6d225dce-3362-4f5d-bba9-0b5312f6be5a": {
     "notebook": "CollatzConjecture.jl",
-    "status": "native_err"
+    "status": "wasmmakie_island"
   },
   "CollatzConjecture.jl#2#7dbfb4dc-c9d0-464d-83b2-18db90d76878": {
     "notebook": "CollatzConjecture.jl",
@@ -53,51 +53,51 @@
   },
   "CollatzConjecture.jl#3#3550fe19-261e-4069-9bf6-6417dcaac102": {
     "notebook": "CollatzConjecture.jl",
-    "status": "native_err"
+    "status": "wasmmakie_island"
   },
   "CollatzConjecture.jl#3#45ca6e2a-6a58-475e-9c02-4925e71625bd": {
     "notebook": "CollatzConjecture.jl",
-    "status": "native_err"
+    "status": "wasmmakie_island"
   },
   "CollatzConjecture.jl#3#66fe673a-7679-4c55-bf59-146a8dd1241c": {
     "notebook": "CollatzConjecture.jl",
-    "status": "native_err"
+    "status": "wasmmakie_island"
   },
   "CollatzConjecture.jl#3#6d225dce-3362-4f5d-bba9-0b5312f6be5a": {
     "notebook": "CollatzConjecture.jl",
-    "status": "native_err"
+    "status": "wasmmakie_island"
   },
   "CollatzConjecture.jl#4#3550fe19-261e-4069-9bf6-6417dcaac102": {
     "notebook": "CollatzConjecture.jl",
-    "status": "native_err"
+    "status": "wasmmakie_island"
   },
   "CollatzConjecture.jl#4#45ca6e2a-6a58-475e-9c02-4925e71625bd": {
     "notebook": "CollatzConjecture.jl",
-    "status": "native_err"
+    "status": "wasmmakie_island"
   },
   "CollatzConjecture.jl#4#66fe673a-7679-4c55-bf59-146a8dd1241c": {
     "notebook": "CollatzConjecture.jl",
-    "status": "native_err"
+    "status": "wasmmakie_island"
   },
   "CollatzConjecture.jl#4#6d225dce-3362-4f5d-bba9-0b5312f6be5a": {
     "notebook": "CollatzConjecture.jl",
-    "status": "native_err"
+    "status": "wasmmakie_island"
   },
   "CollatzConjecture.jl#5#3550fe19-261e-4069-9bf6-6417dcaac102": {
     "notebook": "CollatzConjecture.jl",
-    "status": "native_err"
+    "status": "wasmmakie_island"
   },
   "CollatzConjecture.jl#5#45ca6e2a-6a58-475e-9c02-4925e71625bd": {
     "notebook": "CollatzConjecture.jl",
-    "status": "native_err"
+    "status": "wasmmakie_island"
   },
   "CollatzConjecture.jl#5#66fe673a-7679-4c55-bf59-146a8dd1241c": {
     "notebook": "CollatzConjecture.jl",
-    "status": "native_err"
+    "status": "wasmmakie_island"
   },
   "CollatzConjecture.jl#5#6d225dce-3362-4f5d-bba9-0b5312f6be5a": {
     "notebook": "CollatzConjecture.jl",
-    "status": "native_err"
+    "status": "wasmmakie_island"
   },
   "Interactivity with HTML.jl#1#ede8009e-7f15-11ea-192a-a5c6135a9dcf": {
     "notebook": "Interactivity with HTML.jl",
@@ -249,7 +249,7 @@
   },
   "Titration.jl#1#02c0320c-7c56-4fe5-8f8c-9ab0f733b28e": {
     "notebook": "Titration.jl",
-    "status": "native_err"
+    "status": "wasmmakie_island"
   },
   "Titration.jl#1#f153b4b8-7ba0-11eb-37ec-4f1a3dbe20e8": {
     "notebook": "Titration.jl",
@@ -273,7 +273,7 @@
   },
   "convolution_1d.jl#1#6b243243-8f26-4f2d-8727-564f0701b302": {
     "notebook": "convolution_1d.jl",
-    "status": "native_err"
+    "status": "wasmmakie_island"
   },
   "convolution_1d.jl#1#9274ed36-a28e-42f3-879f-167d5afa6fc7": {
     "notebook": "convolution_1d.jl",
@@ -453,7 +453,7 @@
   },
   "newton.jl#1#f25af026-7b9c-11eb-1f11-77a8b06b2d71": {
     "notebook": "newton.jl",
-    "status": "native_err"
+    "status": "wasmmakie_island"
   },
   "turtles-art.jl#1#70402e12-22c2-47fd-99be-aa6cd15ce2c3": {
     "notebook": "turtles-art.jl",

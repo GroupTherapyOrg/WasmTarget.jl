@@ -49,10 +49,30 @@ const _PI_SHIM = :(
 
 # Classify ONE harvested cell against current WT codegen → (status, detail).
 # Kept free of @test so the lock generator and the testset share identical logic.
+# WasmMakie viz markers. A cell that constructs a Figure or calls a `!`-plotter
+# produces canvas commands, verified by PlutoIslands' OWN `differential_oracle`
+# (which runs where WasmMakie is loaded) — NOT by this scalar bridge (WasmTarget
+# can't depend on WasmMakie). Scalar/string island cells never contain these.
+const _WM_VIZ_MARKERS = (
+    "WasmMakie", "Figure(", "Axis(", "render!(", "lines!(", "scatter!(", "barplot!(",
+    "heatmap!(", "image!(", "hist!(", "contour!(", "contourf!(", "surface!(", "mesh!(",
+    "band!(", "pie!(", "boxplot!(", "violin!(", "hlines!(", "vlines!(", "hspan!(", "vspan!(",
+    "stairs!(", "errorbars!(", "scatterlines!(", "linesegments!(", "stem!(", "density!(",
+)
+_is_viz_cell(cell) = (fn = String(get(cell, "fn_src", ""));
+                      any(m -> occursin(m, fn), _WM_VIZ_MARKERS))
+
 function pi_classify(group, cell)
     fn_src = get(cell, "fn_src", nothing)
     fn_src === nothing && return ("extract_fail", join(get(cell, "reasons", String[]), "; "))
     haskey(cell, "eval_err") && return ("harvest_eval_fail", String(cell["eval_err"]))
+    # WasmMakie islands ARE compiled by WT — they're just verified by PlutoIslands'
+    # canvas oracle (`differential_oracle`, where WasmMakie is a dep) rather than by
+    # this scalar bridge (WT's test env can't import WasmMakie — circular dep). Bucket
+    # them as `wasmmakie_island` so `native_err` counts only real scalar-codegen
+    # failures, not supported viz islands verified elsewhere.
+    _is_viz_cell(cell) && return ("wasmmakie_island",
+        "WasmMakie island — compiled by WT, verified by PlutoIslands' canvas oracle (not the scalar bridge)")
     # Decide nonscalar_args from the ACTUAL bridge descriptor (not a scalar name
     # list) so bridgeable parametric bonds — Vector{String}, @NamedTuple{…},
     # ComplexF64 — are tested too. argtypes are eval'd in `Main` (which reliably has
