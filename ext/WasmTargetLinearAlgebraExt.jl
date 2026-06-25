@@ -153,6 +153,49 @@ end
 @overlay WasmTarget.WASM_METHOD_TABLE Base.inv(A::Matrix{Float64}) = _wt_lu_inv(A)
 @overlay WasmTarget.WASM_METHOD_TABLE Base.:\(A::Matrix{Float64}, b::Vector{Float64}) = _wt_lu_solve(A, b)
 @overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.svdvals(A::Matrix{Float64}) = _wt_osj_svdvals(A)
+
+# full (thin) SVD via one-sided Jacobi, tracking V (and U = A·V/Σ). Singular
+# vectors are sign/order-ambiguous vs LAPACK, but A ≈ U·Diagonal(S)·Vᵀ
+# reconstructs exactly (verified that way). Transpose-aware so the Jacobi runs on
+# the tall orientation; SVD(A0) is reassembled from svd(A0ᵀ) when wide.
+function _wt_osj_svd(A0::Matrix{Float64})
+    tr = size(A0, 1) < size(A0, 2)
+    A = tr ? permutedims(A0) : copy(A0)   # m >= n
+    m = size(A, 1); n = size(A, 2)
+    V = Matrix{Float64}(LinearAlgebra.I, n, n)
+    @inbounds for _ in 1:60
+        conv = true
+        for p in 1:n-1, q in p+1:n
+            app = 0.0; aqq = 0.0; apq = 0.0
+            for i in 1:m; aip = A[i, p]; aiq = A[i, q]; app += aip*aip; aqq += aiq*aiq; apq += aip*aiq; end
+            (apq == 0.0 || abs(apq) < 1.0e-15 * sqrt(app * aqq)) && continue
+            conv = false
+            τ = (aqq - app) / (2apq); t = sign(τ) / (abs(τ) + sqrt(1 + τ*τ))
+            c = 1.0 / sqrt(1 + t*t); s = c * t
+            for i in 1:m; aip = A[i, p]; aiq = A[i, q]; A[i, p] = c*aip - s*aiq; A[i, q] = s*aip + c*aiq; end
+            for i in 1:n; vip = V[i, p]; viq = V[i, q]; V[i, p] = c*vip - s*viq; V[i, q] = s*vip + c*viq; end
+        end
+        conv && break
+    end
+    S = Vector{Float64}(undef, n); U = Matrix{Float64}(undef, m, n)
+    @inbounds for j in 1:n
+        nj = 0.0; for i in 1:m; nj += A[i, j]*A[i, j]; end
+        sj = sqrt(nj); S[j] = sj
+        if sj > 0.0; for i in 1:m; U[i, j] = A[i, j] / sj; end else; for i in 1:m; U[i, j] = 0.0; end; end
+    end
+    @inbounds for i in 1:n-1   # sort S descending; reorder U, V columns in step
+        mi = i; for j in i+1:n; if S[j] > S[mi]; mi = j; end; end
+        if mi != i
+            S[i], S[mi] = S[mi], S[i]
+            for k in 1:m; U[k, i], U[k, mi] = U[k, mi], U[k, i]; end
+            for k in 1:n; V[k, i], V[k, mi] = V[k, mi], V[k, i]; end
+        end
+    end
+    tr ? LinearAlgebra.SVD(V, S, permutedims(U)) : LinearAlgebra.SVD(U, S, permutedims(V))
+end
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.svd(A::Matrix{Float64}; full::Bool=false, alg=nothing)
+    _wt_osj_svd(A)
+end
 @overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.eigvals(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}; sortby=nothing)
     _wt_jacobi_eigvals(_wt_sym_to_dense(A))
 end
@@ -162,6 +205,40 @@ end
     last(_wt_jacobi_eigvals(_wt_sym_to_dense(A)))
 @overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.eigmin(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}) =
     first(_wt_jacobi_eigvals(_wt_sym_to_dense(A)))
+
+# full symmetric eigendecomposition: Jacobi, accumulating the rotation matrix V.
+# Returns (values ascending, vectors). eigenvectors are sign/order-ambiguous vs
+# LAPACK, but A ≈ V·Diagonal(d)·Vᵀ reconstructs exactly (verified that way).
+function _wt_jacobi_eigen(A::Matrix{Float64})
+    n = size(A, 1); V = Matrix{Float64}(LinearAlgebra.I, n, n)
+    @inbounds for _ in 1:80
+        off = 0.0
+        for p in 1:n-1, q in p+1:n; off += A[p, q] * A[p, q]; end
+        off < 1.0e-28 && break
+        for p in 1:n-1, q in p+1:n
+            apq = A[p, q]; apq == 0.0 && continue
+            θ = (A[q, q] - A[p, p]) / (2apq)
+            t = θ == 0.0 ? 1.0 : sign(θ) / (abs(θ) + sqrt(θ * θ + 1))
+            c = 1.0 / sqrt(t * t + 1); s = t * c
+            for k in 1:n; akp = A[k, p]; akq = A[k, q]; A[k, p] = c*akp - s*akq; A[k, q] = s*akp + c*akq; end
+            for k in 1:n; apk = A[p, k]; aqk = A[q, k]; A[p, k] = c*apk - s*aqk; A[q, k] = s*apk + c*aqk; end
+            for k in 1:n; vkp = V[k, p]; vkq = V[k, q]; V[k, p] = c*vkp - s*vkq; V[k, q] = s*vkp + c*vkq; end
+        end
+    end
+    d = Float64[A[i, i] for i in 1:n]
+    @inbounds for i in 1:n-1   # selection sort ascending; reorder V columns in step
+        mi = i; for j in i+1:n; if d[j] < d[mi]; mi = j; end; end
+        if mi != i
+            d[i], d[mi] = d[mi], d[i]
+            for k in 1:n; V[k, i], V[k, mi] = V[k, mi], V[k, i]; end
+        end
+    end
+    (d, V)
+end
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.eigen(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}; sortby=nothing)
+    d, V = _wt_jacobi_eigen(_wt_sym_to_dense(A))
+    LinearAlgebra.Eigen(d, V)
+end
 
 # ── factorization OBJECTS (lu, cholesky) — reroute to a WT-compilable factor and
 # overlay the object's downstream solve. lu(A) → Base generic_lufact! (returns a

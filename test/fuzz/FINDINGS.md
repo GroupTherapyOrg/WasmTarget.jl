@@ -525,6 +525,10 @@ shipped overlay is oracle-verified; the boundary surface either loud-rejects
 - factorization OBJECTS `lu`/`cholesky`: `lu(A)\b`, `det(lu(A))`,
   `cholesky(A)\b`, `det(cholesky(A))` — lu→`generic_lufact!` (real LU object),
   cholesky→hand-rolled upper factor; downstream `\(::LU/::Cholesky, b)` overlaid.
+- `eigen(::Symmetric)` + `svd` OBJECTS — Jacobi (eigen) / one-sided Jacobi (svd)
+  accumulating the rotation matrix; build `Eigen`/`SVD` from EXPLICIT vectors.
+  Vectors are sign/order-ambiguous vs LAPACK but verified via RECONSTRUCTION
+  (`V·Λ·Vᵀ ≈ A`, `U·diag(S)·Vt ≈ A`) + `.values`/`.S` vs LAPACK. Float64.
 - predicates: `issymmetric` `ishermitian` `isdiag` `istriu` `istril`
 - structured-type OPS + dense CONVERSION: `Diagonal*vec/mat`, `Symmetric*vec`,
   `Upper-/LowerTriangular*vec`, and `Matrix(::Diagonal/::Symmetric/::Hermitian/
@@ -539,17 +543,16 @@ shipped overlay is oracle-verified; the boundary surface either loud-rejects
   from native by ~1e-7 (Float32 eps) > oracle rtol 1e-9 → not oracle-verifiable.
 
 ⛔ BOUNDARY — NOT supported (loud-reject via validation error, OR needs work):
-- factorization OBJECTS `qr`/`svd`/`eigen`/`schur`/`lq`/`hessenberg`/
-  `bunchkaufman`/`ldlt`/`factorize` — store packed-LAPACK form (Householder
-  reflectors / eigenvectors), hard to build as real objects + sign/order-ambiguous
-  vs LAPACK. Their VALUES ship (svdvals/eigvals). (lu/cholesky DO ship — explicit
-  factors; see supported.) `qr`/`eigen`/`svd` objects would need reconstruction
-  verification — a future batch.
+- factorization OBJECTS `qr`/`schur`/`lq`/`hessenberg`/`bunchkaufman`/`ldlt`/
+  `factorize` — `qr` stores packed Householder reflectors (`.Q` hard to build as a
+  real object); schur/lq/hessenberg/bunchkaufman are niche. (lu/cholesky/eigen/svd
+  DO ship — explicit factors/vectors; see supported.)
+- `pinv`/`nullspace` — SVD-based; `svd` ships but pinv uses a different SVD entry +
+  singular-value thresholding → needs a dedicated overlay (future, tractable now
+  that svd works).
 - in-place `mul!`/`ldiv!`/`rdiv!`/`lmul!`/`rmul!`/`axpy!`/`axpby!` (mutating;
   moderate); structured ops beyond matvec (Tridiagonal/Bidiagonal/SymTridiagonal);
   `kron!` — not yet covered (tractable follow-ups).
-- `pinv` `nullspace` — need full SVD U/V (only `svdvals` ships). pinv via normal
-  equations is UNSOUND for rank-deficient (not shipped).
 - `sylvester` `lyap` — Bartels–Stewart needs `schur` (object). `lowrankupdate/
   downdate`, `givens` `rotate!` `reflect!`, in-place `mul!`/`ldiv!`/`rdiv!`/
   `lmul!`/`rmul!`/`axpy!`/`axpby!`, `condskeel` `isbanded` `diagind` `diagview`

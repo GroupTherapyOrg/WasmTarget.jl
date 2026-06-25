@@ -104,6 +104,12 @@ _la_hpart(m)   = Matrix(hermitianpart(m))
 _la_symv(m, x) = Symmetric(m) * x
 _la_uptv(m, x) = UpperTriangular(m) * x
 _la_lotv(m, x) = LowerTriangular(m) * x
+# eigen(Symmetric): verify via reconstruction (sign/order-invariant) + values
+_la_eigrec(m) = (F = eigen(Symmetric(m)); F.vectors * (Diagonal(F.values) * permutedims(F.vectors)))
+_la_eigvalo(m) = eigen(Symmetric(m)).values
+# svd: verify via reconstruction U·diag(S)·Vt ≈ A (sign/order-invariant) + .S
+_la_svdrec(m) = (F = svd(m); F.U * (Diagonal(F.S) * F.Vt))
+_la_svdS(m)   = svd(m).S
 
 function run_linalg_matrix_tests(; reps::Int = 40)
     FuzzHarness.NODE_OK || (@test_skip true; return)
@@ -192,5 +198,13 @@ function run_linalg_matrix_tests(; reps::Int = 40)
         @test _la_diff(_la_symv, (_MF, _VF), smv, _VF)   # Symmetric*vec
         @test _la_diff(_la_uptv, (_MF, _VF), smv, _VF)   # UpperTriangular*vec
         @test _la_diff(_la_lotv, (_MF, _VF), smv, _VF)   # LowerTriangular*vec
+    end
+    @testset "eigen(Symmetric) object" begin
+        @test _la_diff(_la_eigrec,  (_MF,), sq, _MF)   # V·Λ·Vᵀ ≈ A (recon)
+        @test _la_diff(_la_eigvalo, (_MF,), sq, _VF)   # .values vs LAPACK
+    end
+    @testset "svd object" begin
+        @test _la_diff(_la_svdrec, (_MF,), rect, _MF)   # U·diag(S)·Vt ≈ A (recon)
+        @test _la_diff(_la_svdS,   (_MF,), rect, _VF)   # .S vs LAPACK
     end
 end
