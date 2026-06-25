@@ -112,6 +112,17 @@ function _build!(accs, names, T::Type)
         lf = _make_vlen(T);  l = _acc!(accs, names, "_vlen_$m", lf, (T,))
         gf = _make_vget(T);  g = _acc!(accs, names, "_vget_$m", gf, (T, Int64))
         return Dict("k" => "vec", "len" => l, "get" => g, "el" => el)
+    elseif T <: Matrix && isconcretetype(T)
+        # 2-D return: read dims + (i,j) element stream (row-major), mirroring the
+        # arg-side `mat` marshalling. WT compiles size()/[i,j] on 2-D Array.
+        E = eltype(T)
+        m = _mangle(T)
+        el = _build!(accs, names, E)
+        el === nothing && return nothing
+        rf = _make_mrows(T); r = _acc!(accs, names, "_mrows_$m", rf, (T,))
+        cf = _make_mcols(T); c = _acc!(accs, names, "_mcols_$m", cf, (T,))
+        gf = _make_mget(T);  g = _acc!(accs, names, "_mget_$m", gf, (T, Int64, Int64))
+        return Dict("k" => "mat", "rows" => r, "cols" => c, "get" => g, "el" => el)
     elseif T isa Union
         # all-int unions transport as the widest member — codegen widens the
         # wasm return to the largest int; String(v) handles number and BigInt.
@@ -172,6 +183,28 @@ function _make_vget(::Type{T}) where {T<:Vector}
     end
 end
 
+function _make_mrows(::Type{T}) where {T<:Matrix}
+    get!(_FN_CACHE, (:mrows, T)) do
+        f = Symbol("_mrowsfn_", _mangle(T))
+        @eval (function $f(m::$T)::Int64; Int64(size(m, 1)); end)
+    end
+end
+
+function _make_mcols(::Type{T}) where {T<:Matrix}
+    get!(_FN_CACHE, (:mcols, T)) do
+        f = Symbol("_mcolsfn_", _mangle(T))
+        @eval (function $f(m::$T)::Int64; Int64(size(m, 2)); end)
+    end
+end
+
+function _make_mget(::Type{T}) where {T<:Matrix}
+    get!(_FN_CACHE, (:mget, T)) do
+        f = Symbol("_mgetfn_", _mangle(T))
+        E = eltype(T)
+        @eval (function $f(m::$T, i::Int64, j::Int64)::$E; m[Int(i), Int(j)]; end)
+    end
+end
+
 function _make_fget(::Type{T}, i::Int) where {T}
     get!(_FN_CACHE, (:fget, T, i)) do
         f = Symbol("_fgetfn_", _mangle(T), "_", i)
@@ -206,6 +239,11 @@ const walk = (d, v) => {
       const n = Number(ex[d.len](v)); const a = [];
       for (let i = 1; i <= n; i++) a.push(walk(d.el, ex[d.get](v, BigInt(i))));
       return { a: a };
+    }
+    case 'mat': {
+      const r = Number(ex[d.rows](v)); const c = Number(ex[d.cols](v)); const a = [];
+      for (let i = 1; i <= r; i++) for (let j = 1; j <= c; j++) a.push(walk(d.el, ex[d.get](v, BigInt(i), BigInt(j))));
+      return { r: r, c: c, a: a };   // row-major, mirrors value_to_tree
     }
     default: return { err: 'bad-desc-kind ' + d.k };
   }
@@ -440,6 +478,16 @@ function tree_matches(d, native, tree)::Bool
         ta = tree["a"]
         length(native) == length(ta) || return false
         return all(tree_matches(d["el"], native[i], ta[i]) for i in eachindex(ta))
+    elseif k == "mat"
+        (size(native, 1) == tree["r"] && size(native, 2) == tree["c"]) || return false
+        ta = tree["a"]
+        length(ta) == length(native) || return false
+        p = 1
+        for i in 1:tree["r"], j in 1:tree["c"]   # row-major
+            tree_matches(d["el"], native[i, j], ta[p]) || return false
+            p += 1
+        end
+        return true
     end
     return false
 end
@@ -455,6 +503,12 @@ function tree_decode(d, tree)
     k == "str" && return String(UInt8.(tree["s"]))
     k == "fields" && return Tuple(tree_decode(d["fs"][i]["d"], tree["f"][i]) for i in eachindex(d["fs"]))
     k == "vec" && return Any[tree_decode(d["el"], t) for t in tree["a"]]
+    if k == "mat"
+        r, c = tree["r"], tree["c"]
+        M = Matrix{Any}(undef, r, c); p = 1
+        for i in 1:r, j in 1:c; M[i, j] = tree_decode(d["el"], tree["a"][p]); p += 1; end
+        return M
+    end
     return tree
 end
 

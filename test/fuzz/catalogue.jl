@@ -150,6 +150,9 @@ function _build()
             add(:std, (VT,), Float64; mod = :stats)
             add(:quantile, (VT, Float64), Float64; mod = :stats, throws = true)
             add(:cor, (VT, VT), Float64; mod = :stats, throws = true)   # length mismatch throws
+            add(:cov, (VT, VT), Float64; mod = :stats, throws = true)   # covariance; len mismatch throws
+            add(:stdm, (VT, Float64), Float64; mod = :stats)            # std w/ provided mean
+            add(:varm, (VT, Float64), Float64; mod = :stats)            # var w/ provided mean
         end
         add(:sort, (VT,), VT; mod = :vector); add(:reverse, (VT,), VT; mod = :vector)
         add(:unique, (VT,), VT; mod = :vector)
@@ -177,6 +180,34 @@ function _build()
         add(:argmin, (VT,), Int64; mod = :vector, throws = true)
         add(:cumsum, (VT,), VT; mod = :vector)
     end
+    # ── P4-stdlib: LinearAlgebra (vector value-level surface; names resolve in
+    # Main via `using LinearAlgebra` in the fuzz runner). All entries VERIFIED
+    # against native under the differential oracle (`_float_match`: bit-identical
+    # or ULP-tolerant rtol 1e-9 for floats; EXACT for ints) across random +
+    # overflow/underflow-edge inputs. norm/normalize/cross dispatch to
+    # LinearAlgebra's GENERIC (pure-Julia) methods (generic.jl), and integer
+    # `dot` is the generic path too — WT lowers them from the real impls, no
+    # overlay. cross(len≠3) and dot(len-mismatch) throw DimensionMismatch →
+    # throws=true (verified throw-parity: wasm traps exactly when native throws).
+    #
+    # FLOAT `dot` IS shipped, via an `ext/` OVERLAY (WasmTargetLinearAlgebraExt):
+    # dot(::Vector{<:BlasFloat}) dispatches to BLAS (matmul.jl), a ccall WT cannot
+    # lower (it otherwise compiles to a SILENT 0.0 — a strict-mode hole, see
+    # FINDINGS.md). The overlay reroutes to Base's OWN generic `dot` via `invoke`
+    # — value-identical to BLAS modulo summation-order rounding, which the
+    # oracle tolerates (rtol 1e-9). Verified: reroute matches native 200/200 on
+    # well-conditioned + wild inputs, 0/5000 exceed rtol at catalogue lengths.
+    add(:norm, (Vector{Float64},), Float64; mod = :linalg)
+    add(:norm, (Vector{Float32},), Float32; mod = :linalg)
+    add(:norm, (Vector{Int64},), Float64; mod = :linalg)
+    add(:normalize, (Vector{Float64},), Vector{Float64}; mod = :linalg)
+    add(:normalize, (Vector{Float32},), Vector{Float32}; mod = :linalg)
+    add(:cross, (Vector{Float64}, Vector{Float64}), Vector{Float64}; mod = :linalg, throws = true)
+    add(:cross, (Vector{Float32}, Vector{Float32}), Vector{Float32}; mod = :linalg, throws = true)
+    add(:dot, (Vector{Int64}, Vector{Int64}), Int64; mod = :linalg, throws = true)
+    add(:dot, (Vector{Int32}, Vector{Int32}), Int32; mod = :linalg, throws = true)
+    add(:dot, (Vector{Float64}, Vector{Float64}), Float64; mod = :linalg, throws = true)  # ext overlay → generic
+    add(:dot, (Vector{Float32}, Vector{Float32}), Float32; mod = :linalg, throws = true)  # ext overlay → generic
     # Dict{K,V}
     for (K, V) in DICT_KV
         DT = Dict{K,V}

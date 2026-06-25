@@ -332,6 +332,13 @@ budget before treating `unseen` as a coverage hole).
 | `Int32` | `Int64` | `Int32` | pass |
 | `Int64` | `Float64` | `Int64` | pass |
 
+## dates
+
+| op | args | ret | status |
+|---|---|---|---|
+| `isleapyear` | `Int64` | `Bool` | pass |
+| `daysinmonth` | `Int64, Int64` | `Int64` | pass |
+
 ## dict
 
 | op | args | ret | status |
@@ -366,6 +373,22 @@ budget before treating `unseen` as a coverage hole).
 | `haskey` | `Dict{String, String}, String` | `Bool` | pass |
 | `get` | `Dict{String, String}, String, String` | `String` | pass |
 | `getindex` | `Dict{String, String}, String` | `String` | pass |
+
+## linalg
+
+| op | args | ret | status |
+|---|---|---|---|
+| `norm` | `Vector{Float64}` | `Float64` | pass |
+| `norm` | `Vector{Float32}` | `Float32` | pass |
+| `norm` | `Vector{Int64}` | `Float64` | pass |
+| `normalize` | `Vector{Float64}` | `Vector{Float64}` | pass |
+| `normalize` | `Vector{Float32}` | `Vector{Float32}` | pass |
+| `cross` | `Vector{Float64}, Vector{Float64}` | `Vector{Float64}` | pass |
+| `cross` | `Vector{Float32}, Vector{Float32}` | `Vector{Float32}` | pass |
+| `dot` | `Vector{Int64}, Vector{Int64}` | `Int64` | pass |
+| `dot` | `Vector{Int32}, Vector{Int32}` | `Int32` | pass |
+| `dot` | `Vector{Float64}, Vector{Float64}` | `Float64` | pass |
+| `dot` | `Vector{Float32}, Vector{Float32}` | `Float32` | pass |
 
 ## math
 
@@ -443,6 +466,19 @@ budget before treating `unseen` as a coverage hole).
 | `length` | `Set{String}` | `Int64` | pass |
 | `isempty` | `Set{String}` | `Bool` | pass |
 | `in` | `String, Set{String}` | `Bool` | pass |
+
+## stats
+
+| op | args | ret | status |
+|---|---|---|---|
+| `mean` | `Vector{Int64}` | `Float64` | pass |
+| `mean` | `Vector{Float64}` | `Float64` | pass |
+| `median` | `Vector{Float64}` | `Float64` | pass |
+| `middle` | `Vector{Float64}` | `Float64` | pass |
+| `var` | `Vector{Float64}` | `Float64` | pass |
+| `std` | `Vector{Float64}` | `Float64` | pass |
+| `quantile` | `Vector{Float64}, Float64` | `Float64` | pass |
+| `cor` | `Vector{Float64}, Vector{Float64}` | `Float64` | pass |
 
 ## string
 
@@ -656,4 +692,4 @@ budget before treating `unseen` as a coverage hole).
 | `argmin` | `Vector{Float32}` | `Int64` | pass |
 | `cumsum` | `Vector{Float32}` | `Vector{Float32}` | pass |
 
-**Totals:** 588 pass · 1 unseen
+**Totals:** 609 pass · 1 unseen

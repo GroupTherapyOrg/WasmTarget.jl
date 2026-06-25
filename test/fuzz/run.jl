@@ -20,6 +20,7 @@ using Supposition, Random
 using WasmTarget   # discovery_differential needs disable_cache!
 using Statistics   # P4-stdlib: catalogue :stats entries resolve in Main
 using Dates: isleapyear, daysinmonth   # P4-stdlib: :dates entries
+using LinearAlgebra: norm, normalize, dot, cross   # P4-stdlib: :linalg entries
 using Supposition: Data
 
 const FUZZ_DIR = @__DIR__

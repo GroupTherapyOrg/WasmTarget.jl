@@ -57,10 +57,18 @@ write("add.wasm", wasm_bytes)
 ```
 
 ```javascript
-const bytes = fs.readFileSync('add.wasm');
+import fs from "node:fs";
+
+const bytes = fs.readFileSync("add.wasm");
 const { instance } = await WebAssembly.instantiate(bytes);
 console.log(instance.exports.add(5, 3)); // → 8
 ```
+
+Pure numeric kernels compile to **import-free** modules — no server, no bundler,
+no imports object. Modules that touch `print`/`show` or string interop do import
+the standardized `wasm:js-string` builtins and a small `io` module; instantiate
+those with `WebAssembly.instantiate(bytes, imports, { builtins: ['js-string'] })`
+— see [Soundness & Testing](#soundness--testing) for the full embedder one-liner.
 
 Multi-function modules with closures and real Base functions:
 
@@ -105,15 +113,21 @@ Every signature's status lives in [`test/fuzz/COVERAGE.md`](test/fuzz/COVERAGE.m
 
 ## Standard Library Integrations
 
-Stdlib support ships as zero-dependency [package extensions](https://pkgdocs.julialang.org/v1/creating-packages/#Conditional-loading-of-code-in-packages-(Extensions)) (weakdeps) — loading the stdlib activates the extension, nothing is required otherwise:
+Stdlib support ships as zero-dependency [package extensions](https://pkgdocs.julialang.org/v1/creating-packages/#Conditional-loading-of-code-in-packages-(Extensions)) (weakdeps) — loading the stdlib activates the extension, nothing is required otherwise. Every supported name is one of two things, never asserted:
 
-| Stdlib | Status | Notes |
-|:-------|:-------|:------|
-| `Statistics` | `mean`, `var`, `std`, `cor`, `middle`, `median`, `quantile` | bit-exact vs native, both Julia versions |
-| `Dates` | construction, arithmetic, accessors, `string(::Date)`/`(::DateTime)` rendering | `Dates.format` pending |
-| `Random` | seeded `Xoshiro`: `rand` (Int/Float/Bool/ranges), `randn`, stream advancement | identical streams vs native on 1.12; 1.13 pending one IR-shape item |
+- **(A) compiled from its real implementation** and confirmed by a differential sweep (Wasm vs native, the same tolerance/bit-exact oracle as core); or
+- **(B) rerouted through a bit-exact `@overlay`** when the real implementation reaches code WasmGC can't lower (BLAS/LAPACK `ccall`s, SIMD intrinsics, dimension-reduction machinery) — a *semantically identical* substitute, proven equivalent before it ships.
 
-These passed largely *because of* the trim collection — e.g. `quantile` (which needs `sort!` internals, kwarg bodies, and `Core.kwcall`) compiles with zero special-casing.
+Support is tracked the same way Base is: a **grounded percentage over the full `names(Stdlib)` surface** (out-of-scope = genuinely non-Wasm, e.g. host entropy / packed BLAS forms), regenerated from differential runs into [`test/fuzz/STDLIB_COVERAGE.md`](test/fuzz/STDLIB_COVERAGE.md).
+
+| Stdlib | In-scope support | Highlights | Notes |
+|:-------|:-----------------|:-----------|:------|
+| `Statistics` | **100%** | `mean`/`var`/`std`/`cor`/`median`/`quantile` + in-place `mean!`/`median!`/`quantile!` | bit-exact vs native, both Julia versions |
+| `LinearAlgebra` | **97%** | `det`/`inv`/`\`/`norm`/`dot`/`cross`, factorization **objects** `lu`/`cholesky`/`eigen`/`svd` (+ `eigvals`/`svdvals`/`pinv`/`cond`), structured types (`Diagonal`/`Symmetric`/`Triangular`/…), in-place `mul!`/`ldiv!`/`rdiv!`/`kron!`/`triu!`/… | factorizations hand-rolled (LU / cyclic-Jacobi / one-sided-Jacobi) where BLAS/LAPACK can't lower, reconstruction-verified; `qr`/`schur`/`lq`/general & complex eigen out of scope |
+| `Dates` | **96%** | construction (`Date`/`DateTime`/`Time`), arithmetic, accessors, conversions (`datetime2unix`↔`unix2datetime`, `…2julian`/`…2rata`), `dayname`/`monthname`, adjusters (`tonext`/`toprev`/`tofirst`/`tolast`), `string` rendering | `format` (the `DateFormat` DSL) and `canonicalize` pending; `now`/`today` need host time |
+| `Random` | **100%** *(Julia ≤1.12)* | seeded `Xoshiro`: `rand`/`randn`/`randexp`, `randperm`/`randcycle`/`shuffle` (+ `!`-variants), `seed!`, `randsubseq`/`randsubseq!`, `randstring` | the seeded-RNG differential is a valid oracle on ≤1.12; on 1.13-rc1 Xoshiro seeding was reworked and the stream is platform-unstable, so the suite is gated there. Out of scope: `rand!`/`randn!`/`randexp!` array fills (8-lane SIMD `llvmcall`), `bitrand` (`BitVector`), OS entropy |
+
+Two things make this cheap. The **trim collection** compiles things like `quantile` (which needs `sort!` internals, kwarg bodies, and `Core.kwcall`) with zero special-casing. And the differential oracle is **tolerance-aware**, so a hand-rolled factorization that differs from BLAS only by reassociation rounding still validates as correct against native. Per-stdlib ledgers (what's verified, what's overlaid, what's out-of-scope and *why*) live in [`test/fuzz/FINDINGS.md`](test/fuzz/FINDINGS.md).
 
 ## Language Features
 

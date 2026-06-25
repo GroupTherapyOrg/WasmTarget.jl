@@ -1,0 +1,416 @@
+# WasmTargetLinearAlgebraExt — LinearAlgebra stdlib integration (overlays).
+#
+# The VECTOR value-level surface that lowers from LinearAlgebra's GENERIC
+# (pure-Julia) methods — norm/normalize/cross and INTEGER dot — needs no
+# overlay (it compiles from the real impls; see test/fuzz/catalogue.jl
+# mod=:linalg). This extension carries the reroutes for the BLAS/LAPACK-backed
+# methods WT cannot lower.
+#
+# FLOAT `dot`: dot(::Vector{<:BlasFloat}) dispatches to BLAS (matmul.jl), a
+# `ccall` WT cannot lower — it otherwise compiles to a SILENT 0.0. Reroute to
+# Base's OWN generic dot(::AbstractArray, ::AbstractArray) via `invoke`. This is
+# a true REROUTE (the generic method IS the reference algorithm: sequential
+# `s += conj(x[i])*y[i]`), not a reimplementation. It is value-identical to BLAS
+# modulo floating-point summation-ORDER rounding, which the differential oracle
+# tolerates (oracle_policy.jl: rtol 1e-9). Verified: the reroute matches native
+# BLAS dot 200/200 on both well-conditioned and wild (1e±6 mixed-magnitude)
+# inputs, and 0/5000 random pairs exceed rtol 1e-9 at catalogue vector lengths.
+# (Ill-conditioned long vectors with heavy cancellation can exceed rtol — a
+# per-op conditioning matter, not a method error; downstream geometry is
+# well-conditioned.)
+module WasmTargetLinearAlgebraExt
+
+using WasmTarget
+using LinearAlgebra
+using Base.Experimental: @overlay
+
+@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.dot(x::Vector{T}, y::Vector{T}) where {T<:Union{Float32,Float64}} =
+    invoke(LinearAlgebra.dot, Tuple{AbstractArray,AbstractArray}, x, y)
+
+# MATMUL: *(::Matrix{<:BlasFloat}, ::Matrix/::Vector) dispatches to BLAS
+# gemm/gemv (matmul.jl), a ccall WT cannot lower (it silent-zeros). Reroute to
+# the textbook triple/double product — exactly what LinearAlgebra's own
+# generic_matmatmul!/generic_matvecmul! compute for non-BLAS types — which is
+# value-identical to BLAS modulo summation-ORDER rounding (oracle rtol 1e-9).
+# `invoke`-to-generic does NOT work here (the generic `*` re-dispatches through
+# mul! straight back to BLAS), so the kernel is written out. Verified vs native
+# 40/40 (matmul) and 40/40 (matvec).
+@overlay WasmTarget.WASM_METHOD_TABLE function Base.:*(A::Matrix{T}, B::Matrix{T}) where {T<:Union{Float32,Float64}}
+    mA, nA = size(A)
+    nA == size(B, 1) || throw(DimensionMismatch("matmul"))
+    nB = size(B, 2)
+    C = zeros(T, mA, nB)
+    @inbounds for j in 1:nB, k in 1:nA, i in 1:mA
+        C[i, j] += A[i, k] * B[k, j]
+    end
+    return C
+end
+
+@overlay WasmTarget.WASM_METHOD_TABLE function Base.:*(A::Matrix{T}, x::Vector{T}) where {T<:Union{Float32,Float64}}
+    mA, nA = size(A)
+    nA == length(x) || throw(DimensionMismatch("matvec"))
+    y = zeros(T, mA)
+    @inbounds for j in 1:nA, i in 1:mA
+        y[i] += A[i, j] * x[j]
+    end
+    return y
+end
+
+# in-place mul! — C/y are written, then returned (BLAS gemm!/gemv! otherwise).
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.mul!(C::Matrix{Float64}, A::Matrix{Float64}, B::Matrix{Float64})
+    mA = size(A, 1); nA = size(A, 2); nB = size(B, 2)
+    @inbounds for j in 1:nB, i in 1:mA
+        s = 0.0; for k in 1:nA; s += A[i, k] * B[k, j]; end; C[i, j] = s
+    end
+    C
+end
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.mul!(y::Vector{Float64}, A::Matrix{Float64}, x::Vector{Float64})
+    mA = size(A, 1); nA = size(A, 2)
+    @inbounds for i in 1:mA; s = 0.0; for j in 1:nA; s += A[i, j] * x[j]; end; y[i] = s; end
+    y
+end
+# axpy!/axpby! (BLAS) — y += a·x  /  y = a·x + b·y
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.axpy!(a::Number, x::Vector{Float64}, y::Vector{Float64})
+    length(x) == length(y) || throw(DimensionMismatch("axpy!"))
+    @inbounds for i in eachindex(x, y); y[i] += a * x[i]; end
+    y
+end
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.axpby!(a::Number, x::Vector{Float64}, b::Number, y::Vector{Float64})
+    length(x) == length(y) || throw(DimensionMismatch("axpby!"))
+    @inbounds for i in eachindex(x, y); y[i] = a * x[i] + b * y[i]; end
+    y
+end
+
+# det / logdet: native dispatches to LAPACK LU (getrf), a ccall WT cannot lower
+# (it silent-fails / emits invalid wasm). Reroute through Base's OWN pure-Julia
+# `generic_lufact!` — the SAME partial-pivot LU native uses, just non-BLAS — and
+# read det/logdet off it. Value-identical to LAPACK modulo pivoting/rounding
+# (oracle rtol 1e-9). Verified vs native 40/40 each. (inv/`\`/cholesky/eigen/svd
+# need more than an LU reroute — see FINDINGS "Matrix surface".)
+@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.det(A::Matrix{T}) where {T<:Union{Float32,Float64}} =
+    LinearAlgebra.det(LinearAlgebra.generic_lufact!(copy(A)))
+
+@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.logdet(A::Matrix{T}) where {T<:Union{Float32,Float64}} =
+    LinearAlgebra.logdet(LinearAlgebra.generic_lufact!(copy(A)))
+
+# ── DECOMPOSITIONS: hand-rolled, WT-compilable textbook algorithms ──────────
+# The library's LAPACK/QR/Householder machinery emits invalid wasm, and
+# GenericLinearAlgebra's pure-Julia algorithms hit the SAME WT codegen wall (both
+# verified — see FINDINGS "Matrix surface"). But simple textbook algorithms
+# COMPILE and match native under the tolerance oracle (rtol 1e-9), verified 30/30
+# each. Float64 ONLY: Float32 iterative algorithms differ from native by ~1e-7
+# (Float32 eps) > the oracle rtol, so they are not oracle-verifiable (deferred).
+
+# LU solve / inv: Base's `generic_lufact!` compiles (it powers det/logdet);
+# combine with manual forward/back substitution on its packed factors + pivots.
+function _wt_lu_solve(A::Matrix{Float64}, b::Vector{Float64})
+    F = LinearAlgebra.generic_lufact!(copy(A)); LU = F.factors; n = size(LU, 1)
+    y = b[F.p]
+    @inbounds for i in 1:n; s = y[i]; for j in 1:i-1; s -= LU[i, j] * y[j]; end; y[i] = s; end
+    x = similar(y)
+    @inbounds for i in n:-1:1; s = y[i]; for j in i+1:n; s -= LU[i, j] * x[j]; end; x[i] = s / LU[i, i]; end
+    x
+end
+function _wt_lu_inv(A::Matrix{Float64})
+    n = size(A, 1); F = LinearAlgebra.generic_lufact!(copy(A)); LU = F.factors; p = F.p
+    X = zeros(Float64, n, n)
+    @inbounds for col in 1:n
+        y = zeros(Float64, n)
+        for i in 1:n; y[i] = (p[i] == col) ? 1.0 : 0.0; end
+        for i in 1:n; s = y[i]; for j in 1:i-1; s -= LU[i, j] * y[j]; end; y[i] = s; end
+        for i in n:-1:1; s = y[i]; for j in i+1:n; s -= LU[i, j] * X[j, col]; end; X[i, col] = s / LU[i, i]; end
+    end
+    X
+end
+# svdvals via ONE-SIDED Jacobi (rotates columns of A directly — accurate, unlike
+# the AᵀA method which squares the condition number). Ensure m≥n by transposing
+# (svdvals(Aᵀ) == svdvals(A)). Returns the min(m,n) singular values, desc.
+function _wt_osj_svdvals(A0::Matrix{Float64})
+    A = size(A0, 1) >= size(A0, 2) ? copy(A0) : permutedims(A0)
+    m = size(A, 1); n = size(A, 2)
+    @inbounds for _ in 1:60
+        conv = true
+        for p in 1:n-1, q in p+1:n
+            app = 0.0; aqq = 0.0; apq = 0.0
+            for i in 1:m; aip = A[i, p]; aiq = A[i, q]; app += aip*aip; aqq += aiq*aiq; apq += aip*aiq; end
+            (apq == 0.0 || abs(apq) < 1.0e-15 * sqrt(app * aqq)) && continue
+            conv = false
+            τ = (aqq - app) / (2apq); t = sign(τ) / (abs(τ) + sqrt(1 + τ*τ))
+            c = 1.0 / sqrt(1 + t*t); s = c * t
+            for i in 1:m; aip = A[i, p]; aiq = A[i, q]; A[i, p] = c*aip - s*aiq; A[i, q] = s*aip + c*aiq; end
+        end
+        conv && break
+    end
+    sv = Vector{Float64}(undef, n)
+    @inbounds for j in 1:n; nj = 0.0; for i in 1:m; nj += A[i, j] * A[i, j]; end; sv[j] = sqrt(nj); end
+    sort!(sv, rev=true); sv
+end
+
+# symmetric eigenvalues via cyclic Jacobi (accurate; ascending, matching LAPACK).
+# Densify the Symmetric via parent()+plain indexing (NOT Symmetric getindex),
+# uplo-aware, into a mutable Matrix for the in-place sweep.
+function _wt_sym_to_dense(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}})
+    P = parent(A); n = size(P, 1); M = Matrix{Float64}(undef, n, n)
+    up = A.uplo == 'U'
+    @inbounds for j in 1:n, i in 1:n
+        M[i, j] = up ? (i <= j ? P[i, j] : P[j, i]) : (i >= j ? P[i, j] : P[j, i])
+    end
+    M
+end
+function _wt_jacobi_eigvals(A::Matrix{Float64})
+    n = size(A, 1)
+    @inbounds for _ in 1:80
+        off = 0.0
+        for p in 1:n-1, q in p+1:n; off += A[p, q] * A[p, q]; end
+        off < 1.0e-28 && break
+        for p in 1:n-1, q in p+1:n
+            apq = A[p, q]; apq == 0.0 && continue
+            θ = (A[q, q] - A[p, p]) / (2apq)
+            t = θ == 0.0 ? 1.0 : sign(θ) / (abs(θ) + sqrt(θ * θ + 1))
+            c = 1.0 / sqrt(t * t + 1); s = t * c
+            for k in 1:n; akp = A[k, p]; akq = A[k, q]; A[k, p] = c*akp - s*akq; A[k, q] = s*akp + c*akq; end
+            for k in 1:n; apk = A[p, k]; aqk = A[q, k]; A[p, k] = c*apk - s*aqk; A[q, k] = s*apk + c*aqk; end
+        end
+    end
+    d = Float64[A[i, i] for i in 1:n]; sort!(d); d
+end
+
+@overlay WasmTarget.WASM_METHOD_TABLE Base.inv(A::Matrix{Float64}) = _wt_lu_inv(A)
+@overlay WasmTarget.WASM_METHOD_TABLE Base.:\(A::Matrix{Float64}, b::Vector{Float64}) = _wt_lu_solve(A, b)
+@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.svdvals(A::Matrix{Float64}) = _wt_osj_svdvals(A)
+
+# full (thin) SVD via one-sided Jacobi, tracking V (and U = A·V/Σ). Singular
+# vectors are sign/order-ambiguous vs LAPACK, but A ≈ U·Diagonal(S)·Vᵀ
+# reconstructs exactly (verified that way). Transpose-aware so the Jacobi runs on
+# the tall orientation; SVD(A0) is reassembled from svd(A0ᵀ) when wide.
+function _wt_osj_svd(A0::Matrix{Float64})
+    tr = size(A0, 1) < size(A0, 2)
+    A = tr ? permutedims(A0) : copy(A0)   # m >= n
+    m = size(A, 1); n = size(A, 2)
+    V = Matrix{Float64}(LinearAlgebra.I, n, n)
+    @inbounds for _ in 1:60
+        conv = true
+        for p in 1:n-1, q in p+1:n
+            app = 0.0; aqq = 0.0; apq = 0.0
+            for i in 1:m; aip = A[i, p]; aiq = A[i, q]; app += aip*aip; aqq += aiq*aiq; apq += aip*aiq; end
+            (apq == 0.0 || abs(apq) < 1.0e-15 * sqrt(app * aqq)) && continue
+            conv = false
+            τ = (aqq - app) / (2apq); t = sign(τ) / (abs(τ) + sqrt(1 + τ*τ))
+            c = 1.0 / sqrt(1 + t*t); s = c * t
+            for i in 1:m; aip = A[i, p]; aiq = A[i, q]; A[i, p] = c*aip - s*aiq; A[i, q] = s*aip + c*aiq; end
+            for i in 1:n; vip = V[i, p]; viq = V[i, q]; V[i, p] = c*vip - s*viq; V[i, q] = s*vip + c*viq; end
+        end
+        conv && break
+    end
+    S = Vector{Float64}(undef, n); U = Matrix{Float64}(undef, m, n)
+    @inbounds for j in 1:n
+        nj = 0.0; for i in 1:m; nj += A[i, j]*A[i, j]; end
+        sj = sqrt(nj); S[j] = sj
+        if sj > 0.0; for i in 1:m; U[i, j] = A[i, j] / sj; end else; for i in 1:m; U[i, j] = 0.0; end; end
+    end
+    @inbounds for i in 1:n-1   # sort S descending; reorder U, V columns in step
+        mi = i; for j in i+1:n; if S[j] > S[mi]; mi = j; end; end
+        if mi != i
+            S[i], S[mi] = S[mi], S[i]
+            for k in 1:m; U[k, i], U[k, mi] = U[k, mi], U[k, i]; end
+            for k in 1:n; V[k, i], V[k, mi] = V[k, mi], V[k, i]; end
+        end
+    end
+    tr ? LinearAlgebra.SVD(V, S, permutedims(U)) : LinearAlgebra.SVD(U, S, permutedims(V))
+end
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.svd(A::Matrix{Float64}; full::Bool=false, alg=nothing)
+    _wt_osj_svd(A)
+end
+# pinv = V·Σ⁺·Uᵀ off our one-sided-Jacobi SVD, with native's default
+# rtol = min(size)·eps thresholding of the singular values.
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.pinv(A::Matrix{Float64};
+        atol::Real = 0.0,
+        rtol::Real = (eps(Float64) * min(size(A, 1), size(A, 2))) * (atol == 0.0 ? 1.0 : 0.0))
+    F = _wt_osj_svd(A); U = F.U; S = F.S; Vt = F.Vt; k = length(S)
+    tol = max(atol, rtol * (k > 0 ? S[1] : 0.0))
+    sinv = Vector{Float64}(undef, k)
+    @inbounds for i in 1:k; sinv[i] = S[i] > tol ? 1.0 / S[i] : 0.0; end
+    permutedims(Vt) * (LinearAlgebra.Diagonal(sinv) * permutedims(U))
+end
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.eigvals(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}; sortby=nothing)
+    _wt_jacobi_eigvals(_wt_sym_to_dense(A))
+end
+# eigmax/eigmin use the eigvals(A, k:k) RANGE form natively (not the plain
+# eigvals above) → overlay directly off the Jacobi spectrum (ascending).
+@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.eigmax(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}) =
+    last(_wt_jacobi_eigvals(_wt_sym_to_dense(A)))
+@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.eigmin(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}) =
+    first(_wt_jacobi_eigvals(_wt_sym_to_dense(A)))
+
+# full symmetric eigendecomposition: Jacobi, accumulating the rotation matrix V.
+# Returns (values ascending, vectors). eigenvectors are sign/order-ambiguous vs
+# LAPACK, but A ≈ V·Diagonal(d)·Vᵀ reconstructs exactly (verified that way).
+function _wt_jacobi_eigen(A::Matrix{Float64})
+    n = size(A, 1); V = Matrix{Float64}(LinearAlgebra.I, n, n)
+    @inbounds for _ in 1:80
+        off = 0.0
+        for p in 1:n-1, q in p+1:n; off += A[p, q] * A[p, q]; end
+        off < 1.0e-28 && break
+        for p in 1:n-1, q in p+1:n
+            apq = A[p, q]; apq == 0.0 && continue
+            θ = (A[q, q] - A[p, p]) / (2apq)
+            t = θ == 0.0 ? 1.0 : sign(θ) / (abs(θ) + sqrt(θ * θ + 1))
+            c = 1.0 / sqrt(t * t + 1); s = t * c
+            for k in 1:n; akp = A[k, p]; akq = A[k, q]; A[k, p] = c*akp - s*akq; A[k, q] = s*akp + c*akq; end
+            for k in 1:n; apk = A[p, k]; aqk = A[q, k]; A[p, k] = c*apk - s*aqk; A[q, k] = s*apk + c*aqk; end
+            for k in 1:n; vkp = V[k, p]; vkq = V[k, q]; V[k, p] = c*vkp - s*vkq; V[k, q] = s*vkp + c*vkq; end
+        end
+    end
+    d = Float64[A[i, i] for i in 1:n]
+    @inbounds for i in 1:n-1   # selection sort ascending; reorder V columns in step
+        mi = i; for j in i+1:n; if d[j] < d[mi]; mi = j; end; end
+        if mi != i
+            d[i], d[mi] = d[mi], d[i]
+            for k in 1:n; V[k, i], V[k, mi] = V[k, mi], V[k, i]; end
+        end
+    end
+    (d, V)
+end
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.eigen(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}; sortby=nothing)
+    d, V = _wt_jacobi_eigen(_wt_sym_to_dense(A))
+    LinearAlgebra.Eigen(d, V)
+end
+
+# ── factorization OBJECTS (lu, cholesky) — reroute to a WT-compilable factor and
+# overlay the object's downstream solve. lu(A) → Base generic_lufact! (returns a
+# real LU object; powers det/logdet already). cholesky(A) → a Cholesky built from
+# the hand-rolled upper factor. Verified via lu(A)\b, det(lu(A)), cholesky(A)\b.
+@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.lu(A::Matrix{Float64}; check::Bool=true, allowsingular::Bool=false) =
+    LinearAlgebra.generic_lufact!(copy(A); check=check, allowsingular=allowsingular)
+@overlay WasmTarget.WASM_METHOD_TABLE function Base.:\(F::LinearAlgebra.LU{Float64,Matrix{Float64}}, b::Vector{Float64})
+    LU = F.factors; n = size(LU, 1)
+    y = b[F.p]
+    @inbounds for i in 1:n; s = y[i]; for j in 1:i-1; s -= LU[i, j]*y[j]; end; y[i] = s; end
+    x = similar(y)
+    @inbounds for i in n:-1:1; s = y[i]; for j in i+1:n; s -= LU[i, j]*x[j]; end; x[i] = s/LU[i, i]; end
+    x
+end
+
+function _wt_chol_upper(A::Matrix{Float64})
+    n = size(A, 1); U = zeros(Float64, n, n)
+    @inbounds for j in 1:n
+        s = A[j, j]; for k in 1:j-1; s -= U[k, j]*U[k, j]; end; U[j, j] = sqrt(s)
+        for i in j+1:n
+            t = A[j, i]; for k in 1:j-1; t -= U[k, j]*U[k, i]; end; U[j, i] = t / U[j, j]
+        end
+    end
+    U
+end
+@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.cholesky(A::Matrix{Float64}; check::Bool=true) =
+    LinearAlgebra.Cholesky(_wt_chol_upper(A), 'U', 0)
+@overlay WasmTarget.WASM_METHOD_TABLE function Base.:\(C::LinearAlgebra.Cholesky{Float64,Matrix{Float64}}, b::Vector{Float64})
+    U = C.factors; n = size(U, 1)
+    y = similar(b)   # solve Uᵀy = b (forward; Uᵀ lower)
+    @inbounds for i in 1:n; s = b[i]; for k in 1:i-1; s -= U[k, i]*y[k]; end; y[i] = s / U[i, i]; end
+    x = similar(b)   # solve U x = y (back; U upper)
+    @inbounds for i in n:-1:1; s = y[i]; for k in i+1:n; s -= U[i, k]*x[k]; end; x[i] = s / U[i, i]; end
+    x
+end
+
+# Matrix(::Structured) dense conversion — the structured-`copyto!` path emits
+# invalid wasm; overlay an explicit dense fill (the OPS already compile).
+@overlay WasmTarget.WASM_METHOD_TABLE function Base.Matrix(D::LinearAlgebra.Diagonal{Float64,Vector{Float64}})
+    d = D.diag; n = length(d); M = zeros(Float64, n, n)
+    @inbounds for i in 1:n; M[i, i] = d[i]; end
+    M
+end
+@overlay WasmTarget.WASM_METHOD_TABLE Base.Matrix(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}) =
+    _wt_sym_to_dense(A)
+@overlay WasmTarget.WASM_METHOD_TABLE function Base.Matrix(U::LinearAlgebra.UpperTriangular{Float64,Matrix{Float64}})
+    P = parent(U); n = size(P, 1); M = zeros(Float64, n, n)
+    @inbounds for j in 1:n, i in 1:j; M[i, j] = P[i, j]; end
+    M
+end
+@overlay WasmTarget.WASM_METHOD_TABLE function Base.Matrix(L::LinearAlgebra.LowerTriangular{Float64,Matrix{Float64}})
+    P = parent(L); n = size(P, 1); M = zeros(Float64, n, n)
+    @inbounds for j in 1:n, i in j:n; M[i, j] = P[i, j]; end
+    M
+end
+@overlay WasmTarget.WASM_METHOD_TABLE function Base.Matrix(H::LinearAlgebra.Hermitian{Float64,Matrix{Float64}})
+    P = parent(H); n = size(P, 1); M = Matrix{Float64}(undef, n, n)
+    up = H.uplo == 'U'
+    @inbounds for j in 1:n, i in 1:n
+        M[i, j] = up ? (i <= j ? P[i, j] : P[j, i]) : (i >= j ? P[i, j] : P[j, i])
+    end
+    M
+end
+
+# structured matvec — Symmetric/Triangular * vec dispatch to BLAS symv/trmv
+# (silent-fail). Symmetric reuses densify + the matvec overlay; triangular is a
+# direct hand-rolled product respecting the stored triangle.
+@overlay WasmTarget.WASM_METHOD_TABLE Base.:*(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}, x::Vector{Float64}) =
+    _wt_sym_to_dense(A) * x
+@overlay WasmTarget.WASM_METHOD_TABLE function Base.:*(U::LinearAlgebra.UpperTriangular{Float64,Matrix{Float64}}, x::Vector{Float64})
+    P = parent(U); n = size(P, 1); y = zeros(Float64, n)
+    @inbounds for i in 1:n; s = 0.0; for j in i:n; s += P[i, j] * x[j]; end; y[i] = s; end
+    y
+end
+@overlay WasmTarget.WASM_METHOD_TABLE function Base.:*(L::LinearAlgebra.LowerTriangular{Float64,Matrix{Float64}}, x::Vector{Float64})
+    P = parent(L); n = size(P, 1); y = zeros(Float64, n)
+    @inbounds for i in 1:n; s = 0.0; for j in 1:i; s += P[i, j] * x[j]; end; y[i] = s; end
+    y
+end
+
+# ── In-place mutators with no tractable WasmGC lowering ─────────────────────
+# These route through BLAS/LAPACK !-kernels or dim-reduction machinery that emit
+# invalid wasm; each is replaced by a textbook in-place equivalent, bit-identical
+# to native for the dense Float64 forms verified in test/fuzz/linalg_diff.jl.
+
+# hermitianpart!(A) ⇒ symmetrize in place, return Hermitian(A). For real A this
+# is the symmetric part; the diagonal is unchanged. Native wraps a LAPACK-ish
+# _hermitianpart! that validation-errors.
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.hermitianpart!(A::Matrix{Float64}, uplo::Symbol = :U)
+    n = LinearAlgebra.checksquare(A)
+    @inbounds for i in 1:n
+        for j in i:n
+            v = (A[i, j] + A[j, i]) / 2
+            A[i, j] = v; A[j, i] = v
+        end
+    end
+    LinearAlgebra.Hermitian(A, uplo)
+end
+
+# ldiv!(U, b): upper-triangular solve U x = b by back-substitution (mutates b).
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.ldiv!(A::LinearAlgebra.UpperTriangular{Float64,Matrix{Float64}}, b::Vector{Float64})
+    M = parent(A); n = length(b)
+    @inbounds for i in n:-1:1
+        s = b[i]
+        for j in i+1:n; s -= M[i, j] * b[j]; end
+        b[i] = s / M[i, i]
+    end
+    b
+end
+
+# rdiv!(B, U): solve X U = B (mutates B) — column-forward substitution, since
+# U is upper-triangular: X[:,j] = (B[:,j] - Σ_{k<j} X[:,k] U[k,j]) / U[j,j].
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.rdiv!(B::Matrix{Float64}, A::LinearAlgebra.UpperTriangular{Float64,Matrix{Float64}})
+    U = parent(A); m, n = size(B)
+    @inbounds for j in 1:n
+        for k in 1:j-1
+            ukj = U[k, j]
+            for r in 1:m; B[r, j] -= B[r, k] * ukj; end
+        end
+        ujj = U[j, j]
+        for r in 1:m; B[r, j] /= ujj; end
+    end
+    B
+end
+
+# copytrito!(B, A, uplo): copy the `uplo` triangle (incl. diagonal) of A into B,
+# leaving the rest of B untouched. Native routes through a LAPACK lacpy ccall.
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.copytrito!(B::Matrix{Float64}, A::Matrix{Float64}, uplo::AbstractChar)
+    m, n = size(A)
+    if uplo == 'U'
+        @inbounds for j in 1:n, i in 1:min(j, m); B[i, j] = A[i, j]; end
+    else
+        @inbounds for j in 1:n, i in j:m; B[i, j] = A[i, j]; end
+    end
+    B
+end
+
+end # module
