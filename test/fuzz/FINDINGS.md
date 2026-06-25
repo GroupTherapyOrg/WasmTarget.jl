@@ -469,10 +469,42 @@ SHIPPED (oracle-verified vs native, all in `linalg_diff.jl`):
   re-dispatches via `mul!` back to BLAS), so the kernel is written out; value-
   identical to BLAS modulo summation order (oracle rtol 1e-9), verified 40/40.
 
-STILL AHEAD: factorizations (`det`/`inv`/`\`/`lu`/`qr`/`svd`/`eigen`/`cholesky`/
-`rank`/`cond`/`pinv`) via GenericLinearAlgebra (prereq (2)); the 41 structured
-types (`Diagonal`/`Symmetric`/`Tridiagonal`/`Triangular`/`UniformScaling`); in-place
-`mul!`/`ldiv!`; strict-reject audit of `BLAS`/`LAPACK` submodules + `peakflops`.
+### Decomposition surface (Inc 5, 2026-06-24) — the codegen wall + the hand-rolled unlock
+
+**KEY FINDING:** the LAPACK paths AND GenericLinearAlgebra's pure-Julia algorithms
+BOTH hit WT codegen `WasmValidationError`s (or wrong values) — GLA is NOT the
+unlock (verified: `GLA.eigvals`→validation error, `GLA.svdvals`→mismatch). The
+library QR/Householder machinery is what WT can't compile. **BUT simple textbook
+algorithms compile + match native under the tolerance oracle** (rtol 1e-9):
+- hand-rolled back/forward substitution: OK 30/30
+- hand-rolled cyclic Jacobi (symmetric eigvals): OK 30/30
+- hand-rolled Cholesky factor: OK 30/30
+So the decomposition surface is feasible via HAND-ROLLED overlays, Float64-only
+(Float32 iterative algos differ from native by ~1e-7 > rtol → not oracle-verifiable).
+
+SHIPPED (ext overlays, hand-rolled, verified in `linalg_diff.jl`):
+- `det`/`logdet` — Base `generic_lufact!` (compiles) + det/logdet of it.
+- `inv` / `\` (solve) — `generic_lufact!` + manual forward/back substitution on
+  its packed factors & pivots. Float64. Verified 30/30 each.
+
+NEXT (cores verified-compilable; remaining work is INTERCEPTION + accuracy, not
+codegen feasibility):
+- `eigvals`/`eigen` (symmetric): the Jacobi kernel compiles + matches, but
+  `eigvals(A::Symmetric; sortby)` routes through KWARG-dispatch that a positional
+  `@overlay` does not intercept (still reaches LAPACK → validation error). Need to
+  overlay the right `eigvals!`/kwcall target.
+- `svdvals`/`svd`: via Jacobi on AᵀA is too inaccurate (squares the condition #;
+  12/30 exceed rtol) — needs ONE-SIDED Jacobi SVD (operates on A directly).
+- `cholesky`: factor computation compiles (mychol OK), but `cholesky(A)` returns
+  a `Cholesky` OBJECT — overlay must build + return it so `.U`/`.L`/`\` work.
+- `qr`: modified Gram-Schmidt (untried; simple loops, likely compiles).
+- general (nonsymmetric) `eigen` + COMPLEX spectra: Jacobi is symmetric-only;
+  needs real QR-iteration → likely the genuine out-of-scope boundary.
+
+STILL AHEAD beyond decompositions: 41 structured types
+(`Diagonal`/`Symmetric`/`Tridiagonal`/`Triangular`/`UniformScaling`); in-place
+`mul!`/`ldiv!`; `rank`/`cond`/`pinv`/`nullspace` (need svd); strict-reject audit
+of `BLAS`/`LAPACK` submodules + `peakflops`.
 
 ## P5-trim: differential matrix (discovery=:trim vs :legacy), 2026-06-12
 

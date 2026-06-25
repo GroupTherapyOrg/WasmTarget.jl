@@ -68,4 +68,41 @@ end
 @overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.logdet(A::Matrix{T}) where {T<:Union{Float32,Float64}} =
     LinearAlgebra.logdet(LinearAlgebra.generic_lufact!(copy(A)))
 
+# ── DECOMPOSITIONS: hand-rolled, WT-compilable textbook algorithms ──────────
+# The library's LAPACK/QR/Householder machinery emits invalid wasm, and
+# GenericLinearAlgebra's pure-Julia algorithms hit the SAME WT codegen wall (both
+# verified — see FINDINGS "Matrix surface"). But simple textbook algorithms
+# COMPILE and match native under the tolerance oracle (rtol 1e-9), verified 30/30
+# each. Float64 ONLY: Float32 iterative algorithms differ from native by ~1e-7
+# (Float32 eps) > the oracle rtol, so they are not oracle-verifiable (deferred).
+
+# LU solve / inv: Base's `generic_lufact!` compiles (it powers det/logdet);
+# combine with manual forward/back substitution on its packed factors + pivots.
+function _wt_lu_solve(A::Matrix{Float64}, b::Vector{Float64})
+    F = LinearAlgebra.generic_lufact!(copy(A)); LU = F.factors; n = size(LU, 1)
+    y = b[F.p]
+    @inbounds for i in 1:n; s = y[i]; for j in 1:i-1; s -= LU[i, j] * y[j]; end; y[i] = s; end
+    x = similar(y)
+    @inbounds for i in n:-1:1; s = y[i]; for j in i+1:n; s -= LU[i, j] * x[j]; end; x[i] = s / LU[i, i]; end
+    x
+end
+function _wt_lu_inv(A::Matrix{Float64})
+    n = size(A, 1); F = LinearAlgebra.generic_lufact!(copy(A)); LU = F.factors; p = F.p
+    X = zeros(Float64, n, n)
+    @inbounds for col in 1:n
+        y = zeros(Float64, n)
+        for i in 1:n; y[i] = (p[i] == col) ? 1.0 : 0.0; end
+        for i in 1:n; s = y[i]; for j in 1:i-1; s -= LU[i, j] * y[j]; end; y[i] = s; end
+        for i in n:-1:1; s = y[i]; for j in i+1:n; s -= LU[i, j] * X[j, col]; end; X[i, col] = s / LU[i, i]; end
+    end
+    X
+end
+@overlay WasmTarget.WASM_METHOD_TABLE Base.inv(A::Matrix{Float64}) = _wt_lu_inv(A)
+@overlay WasmTarget.WASM_METHOD_TABLE Base.:\(A::Matrix{Float64}, b::Vector{Float64}) = _wt_lu_solve(A, b)
+# NOTE: eigvals/eigen (symmetric) — the Jacobi kernel COMPILES + matches native
+# (verified), but `eigvals(A::Symmetric; sortby)` routes through kwarg-dispatch
+# that a positional @overlay does not intercept (it still reaches LAPACK →
+# WasmValidationError). The right interception target (eigvals!/the kwcall body)
+# is a separate follow-up. See FINDINGS "Matrix surface".
+
 end # module

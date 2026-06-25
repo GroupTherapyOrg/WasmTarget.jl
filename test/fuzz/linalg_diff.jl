@@ -79,6 +79,8 @@ _la_istriu(m)= istriu(m)
 _la_istril(m)= istril(m)
 _la_det(m)   = det(m)
 _la_logdet(m)= logdet(m)
+_la_inv(m)   = inv(m)
+_la_solve(A, b) = A \ b
 
 function run_linalg_matrix_tests(; reps::Int = 40)
     FuzzHarness.NODE_OK || (@test_skip true; return)
@@ -93,6 +95,7 @@ function run_linalg_matrix_tests(; reps::Int = 40)
     pmv  = [ (p = rand(rng, 2:4); q = rand(rng, 2:4); (_rmat(rng, p, q), _rvec(rng, q))) for _ in 1:reps ]
     dsq  = [ (n = rand(rng, 2:4); (_rdsq(rng, n),)) for _ in 1:reps ]
     sspd = [ (n = rand(rng, 2:4); (_rspd(rng, n),)) for _ in 1:reps ]
+    sbv  = [ (n = rand(rng, 2:4); (_rdsq(rng, n), _rvec(rng, n))) for _ in 1:reps ]
 
     @testset "matrix → matrix" begin
         @test _la_diff(_la_copy,  (_MF,),     rect,  _MF)
@@ -125,5 +128,9 @@ function run_linalg_matrix_tests(; reps::Int = 40)
     @testset "factorizations (ext overlay → generic LU)" begin
         @test _la_diff(_la_det,    (_MF,), dsq,  Float64)   # diagonally-dominant
         @test _la_diff(_la_logdet, (_MF,), sspd, Float64)   # SPD ⇒ det>0
+    end
+    @testset "decompositions (hand-rolled, Float64)" begin
+        @test _la_diff(_la_inv,    (_MF,),      dsq, _MF)        # LU + substitution
+        @test _la_diff(_la_solve,  (_MF, _VF),  sbv, _VF)        # LU solve
     end
 end
