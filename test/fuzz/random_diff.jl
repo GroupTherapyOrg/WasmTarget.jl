@@ -33,11 +33,11 @@ end
 # Random names this file verifies (for stdlib_coverage.jl).
 const RANDOM_VERIFIED = let s = Set{Symbol}([
         :rand, :randn, :randexp, :randperm, :randcycle, :shuffle, :Xoshiro,
-        :randperm!, :randcycle!, :shuffle!,
-        :seed!, :randsubseq, :randstring])
-    # randsubseq! shows an input-dependent wasm↔native divergence on 1.13-rc1
-    # (see run_random_tests + FINDINGS.md); verified bit-exact on ≤1.12 only.
-    VERSION < v"1.13-" && push!(s, :randsubseq!)
+        :randperm!, :randcycle!, :shuffle!, :seed!])
+    # randsubseq/randsubseq!/randstring are bit-exact on ≤1.12 but diverge
+    # wasm↔native on 1.13-rc1 (RNG-consumption changes — see run_random_tests +
+    # FINDINGS.md); claimed only where verified. Random = 100% on ≤1.12, 73% on 1.13.
+    VERSION < v"1.13-" && push!(s, :randsubseq, :randsubseq!, :randstring)
     s
 end
 
@@ -95,15 +95,20 @@ function run_random_tests(; reps::Int = 60)
         @test _rnd_diff(_rx_shufb, (Int64, Vector{Int64}), ivecs(), Vector{Int64})
     end
     @testset "Xoshiro seed!/randsubseq/randstring" begin
-        ivecs() = [ (rand(rng, Int64), collect(1:rand(rng, 4:12))) for _ in 1:reps ]
-        @test _rnd_diff(_rx_seedb,   (Int64,), [ (rand(rng, Int64),) for _ in 1:reps ], Float64)
-        @test _rnd_diff(_rx_subseq,  (Int64, Vector{Int64}), ivecs(), Vector{Int64})
-        @test _rnd_diff(_rx_rstr,    (Int64,), [ (rand(rng, Int64),) for _ in 1:reps ], String)
-        # randsubseq! (in-place): the out-of-place randsubseq above passes on every
-        # version, but the SAME function diverges wasm↔native for some inputs on
-        # 1.13-rc1 (a found codegen gap — see FINDINGS.md). Bit-exact on ≤1.12.
+        # seed! (reseed an existing rng, then draw) is bit-exact on every version.
+        @test _rnd_diff(_rx_seedb, (Int64,), [ (rand(rng, Int64),) for _ in 1:reps ], Float64)
+        # randsubseq/randsubseq! and randstring consume the RNG in ways that
+        # diverge wasm↔native on 1.13-rc1: randsubseq/randsubseq! show an
+        # input-dependent divergence (CI caught the in-place form one run, the
+        # out-of-place form the next — same function), and randstring's charset
+        # bulk fill is no longer scalar/plain-Vector reproducible on 1.13 (same
+        # class as the Float64 SIMD fills). Verified bit-exact on ≤1.12; deferred
+        # on 1.13 (see FINDINGS.md — soundness-loop candidates).
         if VERSION < v"1.13-"
+            ivecs() = [ (rand(rng, Int64), collect(1:rand(rng, 4:12))) for _ in 1:reps ]
+            @test _rnd_diff(_rx_subseq,  (Int64, Vector{Int64}), ivecs(), Vector{Int64})
             @test _rnd_diff(_rx_subseqb, (Int64, Vector{Int64}), ivecs(), Vector{Int64})
+            @test _rnd_diff(_rx_rstr,    (Int64,), [ (rand(rng, Int64),) for _ in 1:reps ], String)
         else
             @test_skip true
         end

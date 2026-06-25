@@ -712,31 +712,37 @@ denominator stays honest — out-of-scope is only genuine non-wasm (SIMD/llvmcal
 BLAS/LAPACK packed forms, BitVector, host entropy/wall-clock), never a tractable
 item reclassified to inflate the score.
 
-## Random — 1.13-rc1 regressions found by CI (2026-06-25, follow-up to the ≥95% campaign)
-The ≥95% Random work passed full `Pkg.test` on 1.12 but CI surfaced two 1.13-rc1
-failures (random_diff.jl). Both are the SAME class of issue as the SIMD array
-fills — native's RNG consumption on 1.13 differs from a scalar reproduction:
+## Random — 1.13-rc1 deferrals found by CI (2026-06-25, follow-up to the ≥95% campaign)
+The ≥95% Random work passed full `Pkg.test` on 1.12, but CI on **1.13-rc1**
+surfaced wasm↔native divergences in THREE of the new functions. All are the same
+class as the Float64 SIMD array fills — native's RNG consumption on 1.13 differs
+from any scalar/plain reproduction. Final resolution: claim them only on ≤1.12
+(verified), defer on 1.13 (documented boundary, NOT a wrong value). **seed!
+(reseed-then-draw) is bit-exact on BOTH versions and is kept.** Net: Random =
+100% on ≤1.12, 73% (8/11) on 1.13-rc1.
 
-  • **randstring** — FIXED. Native fills the string buffer via the COLLECTION
-    bulk fill `rand!(rng, view, chars)`. My first overlay drew the charset
-    byte-by-byte with the SCALAR sampler `rand(rng, CHARS)`; that matched native
-    on ≤1.12 but diverged on 1.13 (1.13 changed the collection bulk fill so
-    scalar ≠ bulk). Fix: the overlay now calls native's OWN `rand!(rng, v, chars)`
-    on a plain `Vector{UInt8}` — it IS native's fill, so it's version-robust
-    (re-verified bit-exact vs native on 1.12; CI confirms 1.13). LESSON (again):
-    never reproduce a fill with a scalar loop — call the native bulk routine, or
-    sweep past the threshold on EVERY supported Julia version.
+  • **randstring** — DEFERRED on 1.13. Native fills the buffer via the COLLECTION
+    bulk fill `rand!(rng, view, chars)`. Overlay v1 (scalar `rand(rng, CHARS)`
+    per byte) matched ≤1.12 but diverged on 1.13. Overlay v2 called native's OWN
+    `rand!(rng, v, chars)` on a plain `Vector{UInt8}` — re-verified bit-exact on
+    1.12, but CI showed it STILL diverges on 1.13 (and likely perturbs other
+    compiles): 1.13's collection bulk fill is not reproducible by either a scalar
+    loop OR a plain-Vector bulk fill. Same scalar/bulk trap as the SIMD fills.
+    Overlay gated to `@static if VERSION < v"1.13-"`.
 
-  • **randsubseq!** — DEFERRED on 1.13 (kept on ≤1.12). The out-of-place
-    `randsubseq` (which is literally `randsubseq!(rng, T[], A, p)`) passes its
-    differential on 1.13, but `randsubseq!` diverges wasm↔native for some inputs
-    on 1.13-rc1 — an input-dependent gap (likely 1.13 vectorizing the inner
-    `rand(r)<=p` loop into a bulk RNG draw WT can't match, same family as the
-    array fills). Could not reproduce locally: the `--project=test/fuzz` env on
-    1.13-rc1 fails to compile even `rand(Xoshiro(s))` (diverges from CI's test
-    env), so this needs CI-side or a fixed-env repro. `random_diff.jl` gates the
-    randsubseq! sweep to `VERSION < v"1.13-"` and `RANDOM_VERIFIED` drops it on
-    ≥1.13 (Random = 91% on 1.13-rc1, 100% on 1.12). SOUNDNESS-LOOP CANDIDATE:
-    root-cause the 1.13 randsubseq! divergence (is it the bulk-RNG-optimization
-    wall, or a genuine miscompile?). NB the local 1.13 test/fuzz env mismatch is
-    itself worth fixing so 1.13 can be exercised before pushing.
+  • **randsubseq / randsubseq!** — DEFERRED on 1.13. randsubseq IS
+    `randsubseq!(rng, T[], A, p)`. CI caught the in-place form failing one run and
+    the out-of-place form the next (different random inputs) — an input-dependent
+    divergence on 1.13-rc1 (likely 1.13 vectorizing the inner `rand(r)<=p` loop
+    into a bulk RNG draw WT can't match — same family as the array fills). Both
+    gated to <1.13.
+
+  Could NOT reproduce locally: the `--project=test/fuzz` env on 1.13-rc1 fails to
+  compile even `rand(Xoshiro(s))` (it compiles trivial functions, and CI's test
+  env compiles rand fine — so the local test/fuzz 1.13 env diverges from CI's
+  test env). LESSON: never reproduce an RNG fill with a scalar/plain loop — the
+  consumption can change between Julia versions even when the source looks
+  identical; sweep on EVERY supported version. SOUNDNESS-LOOP CANDIDATES: (a)
+  root-cause randsubseq/randstring 1.13 divergence (bulk-RNG-optimization wall vs
+  genuine miscompile); (b) fix the local 1.13 `--project=test/fuzz` env so 1.13
+  can be exercised before pushing (it currently can't compile the Random stack).
