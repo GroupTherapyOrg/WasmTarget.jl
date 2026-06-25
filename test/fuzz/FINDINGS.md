@@ -488,16 +488,18 @@ SHIPPED (ext overlays, hand-rolled, verified in `linalg_diff.jl`):
   its packed factors & pivots. Float64. Verified 30/30 each.
 - `svdvals` — ONE-SIDED Jacobi SVD (rotates columns of A directly; accurate,
   unlike AᵀA). Transpose when wide so m≥n. Float64. Verified 40/40 (tall/wide/sq).
-  `svdvals(::AbstractMatrix)` is positional, so the overlay intercepts cleanly.
+- `eigvals`/`eigmax`/`eigmin` (Symmetric) — cyclic Jacobi. The kwarg-dispatch
+  interception that blocked a positional overlay is SOLVED: write the overlay WITH
+  the kwarg signature (`eigvals(A::Symmetric; sortby=nothing)`) and it intercepts.
+  eigmax/eigmin use the `eigvals(A,k:k)` RANGE form → overlaid directly. Float64.
+- `cond`/`rank`/`opnorm(A,2)` — FREE: they call `svdvals` as a callee, so the
+  overlay applies (verified 30/30 each, no new code).
 
-NEXT (cores verified-compilable; remaining work is INTERCEPTION + object-build,
-not codegen feasibility):
-- `eigvals`/`eigen` (symmetric): the Jacobi kernel compiles + matches, but
-  `eigvals(A::Symmetric; sortby)` routes through KWARG-dispatch that a positional
-  `@overlay` does not intercept (still reaches LAPACK → validation error). Need to
-  overlay the right `eigvals!`/kwcall target. (svdvals had no such kwarg → shipped.)
-- `svd` (full U,S,V): the values ship (svdvals); the full factor object + U/V
-  (sign/ordering-ambiguous vs LAPACK) is a separate object-overlay task.
+NEXT (codegen feasibility cleared; remaining work is object-build + types):
+- factorization OBJECTS (`lu`/`qr`/`cholesky`/`eigen`/`svd`) — the VALUES ship;
+  the objects + their factor matrices (sign/order-ambiguous vs LAPACK) verify via
+  RECONSTRUCTION (A≈Q·R, A≈U·S·Vᵀ, A≈V·Λ·Vᵀ), a separate object-overlay task.
+- `pinv`/`nullspace` — need the full SVD U/V (object task above).
 - `cholesky`: factor computation compiles (mychol OK), but `cholesky(A)` returns
   a `Cholesky` OBJECT — overlay must build + return it so `.U`/`.L`/`\` work.
 - `qr`: modified Gram-Schmidt (untried; simple loops, likely compiles).

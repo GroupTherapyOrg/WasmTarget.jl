@@ -121,13 +121,46 @@ function _wt_osj_svdvals(A0::Matrix{Float64})
     sort!(sv, rev=true); sv
 end
 
+# symmetric eigenvalues via cyclic Jacobi (accurate; ascending, matching LAPACK).
+# Densify the Symmetric via parent()+plain indexing (NOT Symmetric getindex),
+# uplo-aware, into a mutable Matrix for the in-place sweep.
+function _wt_sym_to_dense(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}})
+    P = parent(A); n = size(P, 1); M = Matrix{Float64}(undef, n, n)
+    up = A.uplo == 'U'
+    @inbounds for j in 1:n, i in 1:n
+        M[i, j] = up ? (i <= j ? P[i, j] : P[j, i]) : (i >= j ? P[i, j] : P[j, i])
+    end
+    M
+end
+function _wt_jacobi_eigvals(A::Matrix{Float64})
+    n = size(A, 1)
+    @inbounds for _ in 1:80
+        off = 0.0
+        for p in 1:n-1, q in p+1:n; off += A[p, q] * A[p, q]; end
+        off < 1.0e-28 && break
+        for p in 1:n-1, q in p+1:n
+            apq = A[p, q]; apq == 0.0 && continue
+            θ = (A[q, q] - A[p, p]) / (2apq)
+            t = θ == 0.0 ? 1.0 : sign(θ) / (abs(θ) + sqrt(θ * θ + 1))
+            c = 1.0 / sqrt(t * t + 1); s = t * c
+            for k in 1:n; akp = A[k, p]; akq = A[k, q]; A[k, p] = c*akp - s*akq; A[k, q] = s*akp + c*akq; end
+            for k in 1:n; apk = A[p, k]; aqk = A[q, k]; A[p, k] = c*apk - s*aqk; A[q, k] = s*apk + c*aqk; end
+        end
+    end
+    d = Float64[A[i, i] for i in 1:n]; sort!(d); d
+end
+
 @overlay WasmTarget.WASM_METHOD_TABLE Base.inv(A::Matrix{Float64}) = _wt_lu_inv(A)
 @overlay WasmTarget.WASM_METHOD_TABLE Base.:\(A::Matrix{Float64}, b::Vector{Float64}) = _wt_lu_solve(A, b)
 @overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.svdvals(A::Matrix{Float64}) = _wt_osj_svdvals(A)
-# NOTE: eigvals/eigen (symmetric) — the Jacobi kernel COMPILES + matches native
-# (verified), but `eigvals(A::Symmetric; sortby)` routes through kwarg-dispatch
-# that a positional @overlay does not intercept (it still reaches LAPACK →
-# WasmValidationError). The right interception target (eigvals!/the kwcall body)
-# is a separate follow-up. See FINDINGS "Matrix surface".
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.eigvals(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}; sortby=nothing)
+    _wt_jacobi_eigvals(_wt_sym_to_dense(A))
+end
+# eigmax/eigmin use the eigvals(A, k:k) RANGE form natively (not the plain
+# eigvals above) → overlay directly off the Jacobi spectrum (ascending).
+@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.eigmax(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}) =
+    last(_wt_jacobi_eigvals(_wt_sym_to_dense(A)))
+@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.eigmin(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}) =
+    first(_wt_jacobi_eigvals(_wt_sym_to_dense(A)))
 
 end # module

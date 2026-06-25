@@ -82,6 +82,12 @@ _la_logdet(m)= logdet(m)
 _la_inv(m)   = inv(m)
 _la_solve(A, b) = A \ b
 _la_svdvals(m) = svdvals(m)
+_la_eigsym(m)= eigvals(Symmetric(m))
+_la_eigmax(m)= eigmax(Symmetric(m))
+_la_eigmin(m)= eigmin(Symmetric(m))
+_la_cond(m)  = cond(m)
+_la_rank(m)  = rank(m)
+_la_opn2(m)  = opnorm(m, 2)
 
 function run_linalg_matrix_tests(; reps::Int = 40)
     FuzzHarness.NODE_OK || (@test_skip true; return)
@@ -134,5 +140,13 @@ function run_linalg_matrix_tests(; reps::Int = 40)
         @test _la_diff(_la_inv,     (_MF,),     dsq,  _MF)       # LU + substitution
         @test _la_diff(_la_solve,   (_MF, _VF), sbv,  _VF)       # LU solve
         @test _la_diff(_la_svdvals, (_MF,),     rect, _VF)       # one-sided Jacobi SVD
+    end
+    @testset "spectral (value-returning; leverage eigvals/svdvals)" begin
+        @test _la_diff(_la_eigsym, (_MF,), sspd, _VF)      # symmetric Jacobi eigvals
+        @test _la_diff(_la_eigmax, (_MF,), sspd, Float64)
+        @test _la_diff(_la_eigmin, (_MF,), sspd, Float64)
+        @test _la_diff(_la_cond,   (_MF,), dsq,  Float64)  # σmax/σmin via svdvals
+        @test _la_diff(_la_rank,   (_MF,), dsq,  Int64)    # count svdvals>tol
+        @test _la_diff(_la_opn2,   (_MF,), dsq,  Float64)  # σmax via svdvals
     end
 end
