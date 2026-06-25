@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.16](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.15...v0.3.16) (2026-06-25)
+
+
+### Features
+
+* **stdlib:** LinearAlgebra integration + ≥95% coverage for LinearAlgebra/Statistics/Dates/Random ([#57](https://github.com/GroupTherapyOrg/WasmTarget.jl/issues/57)) ([aa3258d](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/aa3258d78a9739c34c40e8294acd5386b65fcbab))
+
 ## [0.3.15](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.14...v0.3.15) (2026-06-22)
 
 
