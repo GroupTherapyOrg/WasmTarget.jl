@@ -285,6 +285,31 @@ the larger bucket and is *not* fuzzer-tractable.
   with a vector-indexing fn + string accessors — the trigger needs the specific
   bridge arg-descriptor / tree-walk accessor arrangement; minimization TODO from
   the conv1d module (func 8, offset 0x696).
+- **Mutable-struct field mutation ACROSS RECURSION — OPEN (new, 2026-06-24).**
+  A self-recursive fn that reads a `mutable struct` field into a local, mutates
+  the field, recurses, then RESTORES the field from the local (`op = t.pos; …;
+  t.pos = op`) traps **`unreachable`** at runtime when the struct also has a
+  `push!`-ed `Vector` field; WITHOUT the vector field it instead fails wasm
+  validation (`func N failed to validate: type mismatch`). The IDENTICAL struct
+  mutation in a LINEAR loop (explicit work-stack) compiles + runs bit-exact — so
+  the trigger is RECURSION-specific, not the struct/NTuple/Vector ops (each of
+  which works standalone). Independent of NTuple-vs-scalar fields (both fail).
+  **Minimal runnable repro committed: `test/fuzz/repro_recursion_mutstruct.jl`**
+  (`run_recur` → `trap: unreachable`, `run_linear` control → pass; both native=255).
+  Discovered reframing the PlutoIslands "turtles-art" L-system fractal
+  (`lindenmayer`, binary recursion save/restoring turtle pos+heading); the notebook
+  was shipped by rewriting the recursion ITERATIVELY (explicit stack), so this is
+  noted for the loop, not blocking PI. Likely the dead-value/stackifier or a
+  local-liveness-across-call-frames class; START from the committed repro.
+- **(NOT a confirmed WT bug) turtles do-closure observation.** The same turtles
+  fractal trapped when shipped as a bond-capturing `do t … end` CLOSURE passed to
+  `turtle_drawing_fast(f::Function)` (allocating a `Vector{NTuple}` stack inside),
+  but compiled fine as a plain `let` block. Could NOT be minimized to a WT repro:
+  a closure that captures a param + allocates a `Vector{NTuple}` + mutates, passed
+  to a higher-order fn, compiles + runs correctly standalone (verified), and the
+  full turtle loop as a plain fn also compiles. So this is **harvester-path
+  suspected, NOT a confirmed WT codegen gap** — flag for the PI harvester if it
+  recurs; do not chase as a WT bug without a standalone repro.
 
 ### Class 2 — color-type codegen (needs ColorTypes/FixedPointNumbers in a fuzz env)
 - **`RGB{N0f8}` `struct.new` mismatch** — **FIXED (2026-06-13 campaign).**
