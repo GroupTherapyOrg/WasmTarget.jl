@@ -91,6 +91,10 @@ _la_opn2(m)  = opnorm(m, 2)
 _la_checksq(m) = LinearAlgebra.checksquare(m)
 _la_diagv(v, x) = Diagonal(v) * x
 _la_diagm2(v, M) = Diagonal(v) * M
+_la_lusolve(A, b) = lu(A) \ b
+_la_ludet(m)   = det(lu(m))
+_la_cholsolve(A, b) = cholesky(A) \ b
+_la_choldet(m) = det(cholesky(m))
 
 function run_linalg_matrix_tests(; reps::Int = 40)
     FuzzHarness.NODE_OK || (@test_skip true; return)
@@ -108,6 +112,7 @@ function run_linalg_matrix_tests(; reps::Int = 40)
     sbv  = [ (n = rand(rng, 2:4); (_rdsq(rng, n), _rvec(rng, n))) for _ in 1:reps ]
     dvv  = [ (n = rand(rng, 2:5); (_rvec(rng, n), _rvec(rng, n))) for _ in 1:reps ]
     dvm  = [ (n = rand(rng, 2:4); c = rand(rng, 2:4); (_rvec(rng, n), _rmat(rng, n, c))) for _ in 1:reps ]
+    spdv = [ (n = rand(rng, 2:4); (_rspd(rng, n), _rvec(rng, n))) for _ in 1:reps ]
 
     @testset "matrix → matrix" begin
         @test _la_diff(_la_copy,  (_MF,),     rect,  _MF)
@@ -158,5 +163,11 @@ function run_linalg_matrix_tests(; reps::Int = 40)
         @test _la_diff(_la_checksq, (_MF,), sq, Int64)             # checksquare
         @test _la_diff(_la_diagv,  (_VF, _VF), dvv, _VF)           # Diagonal(v)*vec
         @test _la_diff(_la_diagm2, (_VF, _MF), dvm, _MF)           # Diagonal(v)*mat
+    end
+    @testset "factorization objects (lu/cholesky)" begin
+        @test _la_diff(_la_lusolve,   (_MF, _VF), sbv,  _VF)       # lu(A)\b
+        @test _la_diff(_la_ludet,     (_MF,),     dsq,  Float64)   # det(lu(A))
+        @test _la_diff(_la_cholsolve, (_MF, _VF), spdv, _VF)       # cholesky(A)\b
+        @test _la_diff(_la_choldet,   (_MF,),     sspd, Float64)   # det(cholesky(A))
     end
 end

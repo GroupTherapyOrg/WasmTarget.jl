@@ -522,6 +522,9 @@ shipped overlay is oracle-verified; the boundary surface either loud-rejects
 - norms: `opnorm`(1/2/∞) `norm`(Frobenius) `cond`
 - factorization VALUES: `det` `logdet` `inv` `\`(solve) `svdvals` `eigvals`
   `eigmax` `eigmin` `rank`
+- factorization OBJECTS `lu`/`cholesky`: `lu(A)\b`, `det(lu(A))`,
+  `cholesky(A)\b`, `det(cholesky(A))` — lu→`generic_lufact!` (real LU object),
+  cholesky→hand-rolled upper factor; downstream `\(::LU/::Cholesky, b)` overlaid.
 - predicates: `issymmetric` `ishermitian` `isdiag` `istriu` `istril`
 - structured-type OPS: `Diagonal(v)*vec`, `Diagonal(v)*mat` (construction + ops
   compile; see boundary on `Matrix(::Structured)` conversion below)
@@ -534,11 +537,12 @@ shipped overlay is oracle-verified; the boundary surface either loud-rejects
   from native by ~1e-7 (Float32 eps) > oracle rtol 1e-9 → not oracle-verifiable.
 
 ⛔ BOUNDARY — NOT supported (loud-reject via validation error, OR needs work):
-- factorization OBJECTS: `lu` `qr` `svd` `eigen` `cholesky` `schur` `lq`
-  `hessenberg` `bunchkaufman` `ldlt` `factorize` — return packed-LAPACK-form
-  objects whose downstream methods (`ldiv!`, `.Q` reflectors) hit codegen gaps.
-  Their VALUES ship above (det/eigvals/svdvals). Tractable via object+downstream
-  overlays (lu/cholesky first; qr/eigen/svd via reconstruction) — a future batch.
+- factorization OBJECTS `qr`/`svd`/`eigen`/`schur`/`lq`/`hessenberg`/
+  `bunchkaufman`/`ldlt`/`factorize` — store packed-LAPACK form (Householder
+  reflectors / eigenvectors), hard to build as real objects + sign/order-ambiguous
+  vs LAPACK. Their VALUES ship (svdvals/eigvals). (lu/cholesky DO ship — explicit
+  factors; see supported.) `qr`/`eigen`/`svd` objects would need reconstruction
+  verification — a future batch.
 - `Matrix(::Diagonal/::Symmetric/::Triangular/::Hermitian)` dense conversion →
   WasmValidationError (a structured-`copyto!` codegen gap; the OPS work, the
   conversion doesn't). `hermitianpart` (returns Hermitian) hits the same.

@@ -163,4 +163,40 @@ end
 @overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.eigmin(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}) =
     first(_wt_jacobi_eigvals(_wt_sym_to_dense(A)))
 
+# ── factorization OBJECTS (lu, cholesky) — reroute to a WT-compilable factor and
+# overlay the object's downstream solve. lu(A) → Base generic_lufact! (returns a
+# real LU object; powers det/logdet already). cholesky(A) → a Cholesky built from
+# the hand-rolled upper factor. Verified via lu(A)\b, det(lu(A)), cholesky(A)\b.
+@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.lu(A::Matrix{Float64}; check::Bool=true, allowsingular::Bool=false) =
+    LinearAlgebra.generic_lufact!(copy(A); check=check, allowsingular=allowsingular)
+@overlay WasmTarget.WASM_METHOD_TABLE function Base.:\(F::LinearAlgebra.LU{Float64,Matrix{Float64}}, b::Vector{Float64})
+    LU = F.factors; n = size(LU, 1)
+    y = b[F.p]
+    @inbounds for i in 1:n; s = y[i]; for j in 1:i-1; s -= LU[i, j]*y[j]; end; y[i] = s; end
+    x = similar(y)
+    @inbounds for i in n:-1:1; s = y[i]; for j in i+1:n; s -= LU[i, j]*x[j]; end; x[i] = s/LU[i, i]; end
+    x
+end
+
+function _wt_chol_upper(A::Matrix{Float64})
+    n = size(A, 1); U = zeros(Float64, n, n)
+    @inbounds for j in 1:n
+        s = A[j, j]; for k in 1:j-1; s -= U[k, j]*U[k, j]; end; U[j, j] = sqrt(s)
+        for i in j+1:n
+            t = A[j, i]; for k in 1:j-1; t -= U[k, j]*U[k, i]; end; U[j, i] = t / U[j, j]
+        end
+    end
+    U
+end
+@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.cholesky(A::Matrix{Float64}; check::Bool=true) =
+    LinearAlgebra.Cholesky(_wt_chol_upper(A), 'U', 0)
+@overlay WasmTarget.WASM_METHOD_TABLE function Base.:\(C::LinearAlgebra.Cholesky{Float64,Matrix{Float64}}, b::Vector{Float64})
+    U = C.factors; n = size(U, 1)
+    y = similar(b)   # solve Uᵀy = b (forward; Uᵀ lower)
+    @inbounds for i in 1:n; s = b[i]; for k in 1:i-1; s -= U[k, i]*y[k]; end; y[i] = s / U[i, i]; end
+    x = similar(b)   # solve U x = y (back; U upper)
+    @inbounds for i in n:-1:1; s = y[i]; for k in i+1:n; s -= U[i, k]*x[k]; end; x[i] = s / U[i, i]; end
+    x
+end
+
 end # module
