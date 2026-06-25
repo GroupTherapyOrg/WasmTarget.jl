@@ -95,6 +95,10 @@ _la_lusolve(A, b) = lu(A) \ b
 _la_ludet(m)   = det(lu(m))
 _la_cholsolve(A, b) = cholesky(A) \ b
 _la_choldet(m) = det(cholesky(m))
+_la_mdiag(v)   = Matrix(Diagonal(v))
+_la_msym(m)    = Matrix(Symmetric(m))
+_la_mupp(m)    = Matrix(UpperTriangular(m))
+_la_mlow(m)    = Matrix(LowerTriangular(m))
 
 function run_linalg_matrix_tests(; reps::Int = 40)
     FuzzHarness.NODE_OK || (@test_skip true; return)
@@ -169,5 +173,11 @@ function run_linalg_matrix_tests(; reps::Int = 40)
         @test _la_diff(_la_ludet,     (_MF,),     dsq,  Float64)   # det(lu(A))
         @test _la_diff(_la_cholsolve, (_MF, _VF), spdv, _VF)       # cholesky(A)\b
         @test _la_diff(_la_choldet,   (_MF,),     sspd, Float64)   # det(cholesky(A))
+    end
+    @testset "Matrix(::Structured) conversions" begin
+        @test _la_diff(_la_mdiag, (_VF,), vins, _MF)   # Matrix(Diagonal(v))
+        @test _la_diff(_la_msym,  (_MF,), sq,   _MF)   # Matrix(Symmetric)
+        @test _la_diff(_la_mupp,  (_MF,), sq,   _MF)   # Matrix(UpperTriangular)
+        @test _la_diff(_la_mlow,  (_MF,), sq,   _MF)   # Matrix(LowerTriangular)
     end
 end

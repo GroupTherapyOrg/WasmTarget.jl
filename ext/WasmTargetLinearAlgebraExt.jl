@@ -199,4 +199,24 @@ end
     x
 end
 
+# Matrix(::Structured) dense conversion — the structured-`copyto!` path emits
+# invalid wasm; overlay an explicit dense fill (the OPS already compile).
+@overlay WasmTarget.WASM_METHOD_TABLE function Base.Matrix(D::LinearAlgebra.Diagonal{Float64,Vector{Float64}})
+    d = D.diag; n = length(d); M = zeros(Float64, n, n)
+    @inbounds for i in 1:n; M[i, i] = d[i]; end
+    M
+end
+@overlay WasmTarget.WASM_METHOD_TABLE Base.Matrix(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}) =
+    _wt_sym_to_dense(A)
+@overlay WasmTarget.WASM_METHOD_TABLE function Base.Matrix(U::LinearAlgebra.UpperTriangular{Float64,Matrix{Float64}})
+    P = parent(U); n = size(P, 1); M = zeros(Float64, n, n)
+    @inbounds for j in 1:n, i in 1:j; M[i, j] = P[i, j]; end
+    M
+end
+@overlay WasmTarget.WASM_METHOD_TABLE function Base.Matrix(L::LinearAlgebra.LowerTriangular{Float64,Matrix{Float64}})
+    P = parent(L); n = size(P, 1); M = zeros(Float64, n, n)
+    @inbounds for j in 1:n, i in j:n; M[i, j] = P[i, j]; end
+    M
+end
+
 end # module
