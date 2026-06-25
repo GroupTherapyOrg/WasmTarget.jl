@@ -68,4 +68,32 @@ end
     end
 end
 
+# NB the Float64-ARRAY in-place fills (rand!/randn!/randexp! on `Array{Float64}`)
+# are deliberately NOT overlaid. Native dispatches them to a hardware-vectorized
+# 8-lane SIMD bulk generator (`Random.xoshiro_bulk_simd`, threshold 64 bytes = 8
+# elements, built on `llvmcall` SIMD intrinsics WT can't lower) whose draw stream
+# PROVABLY differs from the scalar generator for n ≥ 8 (rand!) / n ≥ 7
+# (randn!/randexp!). A scalar-loop overlay is therefore NOT bit-identical, and
+# reproducing the fork+interleave (plus the Ziggurat array variants) would be a
+# second RNG — a latent wrong-value surface. Classified out-of-scope in
+# stdlib_coverage.jl; the SCALAR rand/randn/randexp remain fully verified.
+
+# ── randstring ──────────────────────────────────────────────────────────────
+# `randstring(rng, n)` builds a `Base.StringVector` and fills it via the charset
+# Sampler, a path that lowers to an `unreachable` stub (StringVector undef-buffer
+# + collection-sampler interplay). The default alphabet is the 62-byte
+# `[0-9 A-Z a-z]`; drawing one byte per position with the scalar collection
+# sampler `rand(rng, CHARS)` (verified to compile + match in wasm) reproduces
+# native `randstring`'s exact draw sequence — bit-identical String across 200
+# seeds (pure Julia) and the wasm differential sweep.
+const _WT_RANDSTRING_CHARS = UInt8['0':'9'; 'A':'Z'; 'a':'z']
+@overlay WasmTarget.WASM_METHOD_TABLE function Random.randstring(rng::Xoshiro, n::Integer)
+    v = Vector{UInt8}(undef, Int(n))
+    @inbounds for i in 1:Int(n)
+        v[i] = rand(rng, _WT_RANDSTRING_CHARS)
+    end
+    String(v)
+end
+@overlay WasmTarget.WASM_METHOD_TABLE Random.randstring(rng::Xoshiro) = Random.randstring(rng, 8)
+
 end # module

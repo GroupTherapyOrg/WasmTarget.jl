@@ -213,30 +213,30 @@ Functions: **26 supported**, 20 boundary, 3 out-of-scope (49 total). Types: 9/21
 `Date`✅, `DateFormat`, `DatePeriod`, `DateTime`✅, `Day`✅, `Hour`✅, `Microsecond`, `Millisecond`, `Minute`✅, `Month`✅, `Nanosecond`, `Period`, `Quarter`, `Second`✅, `Time`, `TimePeriod`, `TimeType`, `TimeZone`, `UTC`, `Week`✅, `Year`✅
 
 
-## Random — 25% of in-scope functions supported
+## Random — 100% of in-scope functions supported
 
-Seeded Xoshiro streams differentially fuzzed by test/fuzz/random_diff.jl: rand/randn/randexp/randperm/randcycle/shuffle. NB rand/randn are Base-owned (not in names(Random)) so they don't count below, but ARE verified. CAN'T: RandomDevice/seedless = host entropy (embedding); MersenneTwister state hits a codegen gap; randstring char-encoding differs.
+Seeded Xoshiro streams differentially fuzzed by test/fuzz/random_diff.jl: the verifiable value+in-place surface — rand/randn/randexp (scalar), randperm/randcycle/shuffle & their `!`-variants, seed!, randsubseq/randsubseq!, randstring (charset-sampler ext overlay, bit-exact across 200 seeds + wasm sweep). NB rand/randn are Base-owned (not in names(Random)) so they don't count below, but ARE verified. CAN'T: rand!/randn!/randexp! Float64-array fills route through an 8-lane SIMD bulk generator (llvmcall intrinsics; stream ≠ scalar for n≥8) — non-lowerable + not scalar-reproducible; bitrand (BitVector packed bits); default_rng/RandomDevice (host entropy); MersenneTwister state hits a codegen gap.
 
-Functions: **4 supported**, 12 boundary, 0 out-of-scope (16 total). Types: 1/9 with verified construction/ops.
+Functions: **11 supported**, 0 boundary, 5 out-of-scope (16 total). Types: 1/9 with verified construction/ops.
 
 | function | status |
 |---|---|
 | `randcycle` | ✅ supported |
+| `randcycle!` | ✅ supported |
 | `randexp` | ✅ supported |
 | `randperm` | ✅ supported |
+| `randperm!` | ✅ supported |
+| `randstring` | ✅ supported |
+| `randsubseq` | ✅ supported |
+| `randsubseq!` | ✅ supported |
+| `seed!` | ✅ supported |
 | `shuffle` | ✅ supported |
-| `bitrand` | ⛔ boundary |
-| `default_rng` | ⛔ boundary |
-| `rand!` | ⛔ boundary |
-| `randcycle!` | ⛔ boundary |
-| `randexp!` | ⛔ boundary |
-| `randn!` | ⛔ boundary |
-| `randperm!` | ⛔ boundary |
-| `randstring` | ⛔ boundary |
-| `randsubseq` | ⛔ boundary |
-| `randsubseq!` | ⛔ boundary |
-| `seed!` | ⛔ boundary |
-| `shuffle!` | ⛔ boundary |
+| `shuffle!` | ✅ supported |
+| `bitrand` | ▽ out-of-scope |
+| `default_rng` | ▽ out-of-scope |
+| `rand!` | ▽ out-of-scope |
+| `randexp!` | ▽ out-of-scope |
+| `randn!` | ▽ out-of-scope |
 
 **Types** (1/9 with verified ops): 
 `AbstractRNG`, `MersenneTwister`, `RandomDevice`, `Sampler`, `SamplerSimple`, `SamplerTrivial`, `SamplerType`, `TaskLocalRNG`, `Xoshiro`✅
@@ -249,4 +249,4 @@ Functions: **4 supported**, 12 boundary, 0 out-of-scope (16 total). Types: 1/9 w
 | LinearAlgebra | **70%** | 45 | 19 | 42 |
 | Statistics | **100%** | 13 | 0 | 0 |
 | Dates | **57%** | 26 | 20 | 3 |
-| Random | **25%** | 4 | 12 | 0 |
+| Random | **100%** | 11 | 0 | 5 |

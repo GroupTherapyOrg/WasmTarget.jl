@@ -31,7 +31,10 @@ function _rnd_diff(fn, argTs::Tuple, inputs::Vector, rettype)
 end
 
 # Random names this file verifies (for stdlib_coverage.jl).
-const RANDOM_VERIFIED = Set{Symbol}([:rand, :randn, :randexp, :randperm, :randcycle, :shuffle, :Xoshiro])
+const RANDOM_VERIFIED = Set{Symbol}([
+    :rand, :randn, :randexp, :randperm, :randcycle, :shuffle, :Xoshiro,
+    :randperm!, :randcycle!, :shuffle!,
+    :seed!, :randsubseq, :randsubseq!, :randstring])
 
 # seed → draw (the draw is a CALLEE so the seeded-stream path compiles)
 _rx_f(s)    = rand(Xoshiro(s))
@@ -46,6 +49,16 @@ _rx_exp(s)  = randexp(Xoshiro(s))
 _rx_perm(s) = randperm(Xoshiro(s), 9)
 _rx_cyc(s)  = randcycle(Xoshiro(s), 9)
 _rx_shuf(s, v) = shuffle(Xoshiro(s), v)
+# in-place permutation fills (seed → mutate a buffer)
+_rx_permb(s, p)  = randperm!(Xoshiro(s), p)
+_rx_cycb(s, p)   = randcycle!(Xoshiro(s), p)
+_rx_shufb(s, v)  = shuffle!(Xoshiro(s), v)
+# seed!(rng, seed): reseed an existing rng, then draw → must match native
+_rx_seedb(s)     = (r = Xoshiro(0); Random.seed!(r, s); rand(r))
+# subsequence sampling (out-of-place + in-place into a fresh sink)
+_rx_subseq(s, v)  = randsubseq(Xoshiro(s), v, 0.5)
+_rx_subseqb(s, v) = randsubseq!(Xoshiro(s), Int64[], v, 0.4)
+_rx_rstr(s)       = randstring(Xoshiro(s), 10)
 
 function run_random_tests(; reps::Int = 60)
     FuzzHarness.NODE_OK || (@test_skip true; return)
@@ -69,5 +82,18 @@ function run_random_tests(; reps::Int = 60)
         @test _rnd_diff(_rx_cyc,  (Int64,), seeds, Vector{Int64})
         @test _rnd_diff(_rx_shuf, (Int64, Vector{Int64}),
                         [ (rand(rng, Int64), collect(1:rand(rng, 4:12))) for _ in 1:reps ], Vector{Int64})
+    end
+    @testset "Xoshiro in-place permutations (randperm!/randcycle!/shuffle!)" begin
+        ivecs() = [ (rand(rng, Int64), collect(1:rand(rng, 4:12))) for _ in 1:reps ]
+        @test _rnd_diff(_rx_permb, (Int64, Vector{Int64}), ivecs(), Vector{Int64})
+        @test _rnd_diff(_rx_cycb,  (Int64, Vector{Int64}), ivecs(), Vector{Int64})
+        @test _rnd_diff(_rx_shufb, (Int64, Vector{Int64}), ivecs(), Vector{Int64})
+    end
+    @testset "Xoshiro seed!/randsubseq/randstring" begin
+        ivecs() = [ (rand(rng, Int64), collect(1:rand(rng, 4:12))) for _ in 1:reps ]
+        @test _rnd_diff(_rx_seedb,   (Int64,), [ (rand(rng, Int64),) for _ in 1:reps ], Float64)
+        @test _rnd_diff(_rx_subseq,  (Int64, Vector{Int64}), ivecs(), Vector{Int64})
+        @test _rnd_diff(_rx_subseqb, (Int64, Vector{Int64}), ivecs(), Vector{Int64})
+        @test _rnd_diff(_rx_rstr,    (Int64,), [ (rand(rng, Int64),) for _ in 1:reps ], String)
     end
 end

@@ -607,3 +607,40 @@ both versions): :trim agrees with :legacy everywhere, with median
 excluded as the one documented residual (deep show/print machinery,
 the IOBuffer campaign). Net: :trim is at parity-or-better with legacy
 on everything except median, on both versions.
+
+## Random — ≥95% campaign (stdlib, 2026-06-25) — 100% in-scope, SIMD-bulk-fill wall documented
+Drove Random from 25% → **100% of in-scope** (11 supported / 0 boundary / 5
+out-of-scope) via `test/fuzz/random_diff.jl` + a `randstring` ext overlay.
+Newly VERIFIED (differential, bit-exact vs native): randperm!/randcycle!/shuffle!
+(in-place permutation fills), seed!(rng, seed) (reseed-then-draw), randsubseq +
+randsubseq! (Bernoulli subsequence, out-of-place + into a fresh sink), and
+randstring (charset-sampler overlay — see below).
+
+`randstring(rng, n)` natively builds a `Base.StringVector` + fills via the
+charset Sampler → lowers to an `unreachable` stub. The default alphabet is the
+62-byte `[0-9 A-Z a-z]`; the ext overlay draws one byte per position with the
+SCALAR collection sampler `rand(rng, CHARS)` (verified to compile + match in
+wasm), reproducing native's exact draw sequence — bit-identical String across
+200 seeds (pure Julia) + the wasm sweep. (`Random.randstring(rng)` reroutes to
+`randstring(rng, 8)`.)
+
+OUT-OF-SCOPE with rigorous reasoning (the "sensible CAN'T" escape):
+  • **rand!/randn!/randexp! on `Array{Float64}`** — the genuinely interesting
+    one. Native dispatches array fills to a **hardware-vectorized 8-lane SIMD
+    bulk generator** (`Random.xoshiro_bulk` → `xoshiro_bulk_simd`,
+    `simdThreshold(Float64)=64` bytes = **8 elements**, built on `llvmcall`
+    SIMD intrinsics). Two independent blockers: (1) WT cannot lower the SIMD
+    `llvmcall`; (2) the SIMD path's stream **provably differs from the scalar
+    generator** — measured divergence begins at exactly n≥8 (rand!) / n≥7
+    (randn!/randexp!), i.e. the moment `len ≥ simdThreshold`. So a scalar-loop
+    overlay (which I built and REJECTED) is NOT bit-identical; it silently
+    passed at small n and failed at n≥8. Reproducing the `forkRand` 8-lane
+    seed + interleave (+ Ziggurat array variants for randn!/randexp!) would be
+    a *second* RNG implementation — a latent wrong-value surface worse than a
+    documented boundary. The SCALAR rand/randn/randexp stay fully verified;
+    only the bulk ARRAY fills are excluded. **Lesson: a scalar overlay that
+    matches at tested sizes can still diverge at untested sizes — always sweep
+    past the SIMD/bulk threshold before trusting a fill overlay.**
+  • **bitrand** — returns a `BitVector` (packed-bit representation, same wall
+    as core BitVector; even `collect(bitrand(...))` fails to compile).
+  • **default_rng / RandomDevice** — host/OS entropy, defers to embedding.

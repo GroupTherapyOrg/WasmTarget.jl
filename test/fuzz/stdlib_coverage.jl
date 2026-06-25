@@ -69,8 +69,18 @@ const SPECS = StdSpec[
         "Value layer (accessors / adjusters / arithmetic / construction) differentially fuzzed by test/fuzz/dates_diff.jl. now()/today() need host wall-clock (embedding import)."),
     StdSpec("Random", Random,
         RANDOM_VERIFIED,
-        Set([:RandomDevice]),   # OS entropy — host-dependent
-        "Seeded Xoshiro streams differentially fuzzed by test/fuzz/random_diff.jl: rand/randn/randexp/randperm/randcycle/shuffle. NB rand/randn are Base-owned (not in names(Random)) so they don't count below, but ARE verified. CAN'T: RandomDevice/seedless = host entropy (embedding); MersenneTwister state hits a codegen gap; randstring char-encoding differs."),
+        # genuine CAN'T:
+        #  • rand!/randn!/randexp! on Array{Float64}: native dispatches to a
+        #    hardware-vectorized 8-lane SIMD bulk generator (xoshiro_bulk_simd,
+        #    threshold 64B = 8 elts, built on `llvmcall` SIMD intrinsics WT can't
+        #    lower). Its stream PROVABLY differs from the scalar generator for
+        #    n≥8/7, so no scalar overlay is bit-identical; reproducing the
+        #    fork+interleave (+Ziggurat array variants) = a second RNG / latent
+        #    wrong-value surface. Scalar rand/randn/randexp ARE verified.
+        #  • bitrand: BitVector packed-bit representation (same wall as core).
+        #  • default_rng/RandomDevice: host/OS entropy (defers to embedding).
+        Set([:rand!, :randn!, :randexp!, :bitrand, :default_rng, :RandomDevice]),
+        "Seeded Xoshiro streams differentially fuzzed by test/fuzz/random_diff.jl: the verifiable value+in-place surface — rand/randn/randexp (scalar), randperm/randcycle/shuffle & their `!`-variants, seed!, randsubseq/randsubseq!, randstring (charset-sampler ext overlay, bit-exact across 200 seeds + wasm sweep). NB rand/randn are Base-owned (not in names(Random)) so they don't count below, but ARE verified. CAN'T: rand!/randn!/randexp! Float64-array fills route through an 8-lane SIMD bulk generator (llvmcall intrinsics; stream ≠ scalar for n≥8) — non-lowerable + not scalar-reproducible; bitrand (BitVector packed bits); default_rng/RandomDevice (host entropy); MersenneTwister state hits a codegen gap."),
 ]
 
 # is `nm` a Type / a Function / other, in module `M`?
