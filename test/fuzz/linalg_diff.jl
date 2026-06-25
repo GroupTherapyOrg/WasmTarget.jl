@@ -88,6 +88,9 @@ _la_eigmin(m)= eigmin(Symmetric(m))
 _la_cond(m)  = cond(m)
 _la_rank(m)  = rank(m)
 _la_opn2(m)  = opnorm(m, 2)
+_la_checksq(m) = LinearAlgebra.checksquare(m)
+_la_diagv(v, x) = Diagonal(v) * x
+_la_diagm2(v, M) = Diagonal(v) * M
 
 function run_linalg_matrix_tests(; reps::Int = 40)
     FuzzHarness.NODE_OK || (@test_skip true; return)
@@ -103,6 +106,8 @@ function run_linalg_matrix_tests(; reps::Int = 40)
     dsq  = [ (n = rand(rng, 2:4); (_rdsq(rng, n),)) for _ in 1:reps ]
     sspd = [ (n = rand(rng, 2:4); (_rspd(rng, n),)) for _ in 1:reps ]
     sbv  = [ (n = rand(rng, 2:4); (_rdsq(rng, n), _rvec(rng, n))) for _ in 1:reps ]
+    dvv  = [ (n = rand(rng, 2:5); (_rvec(rng, n), _rvec(rng, n))) for _ in 1:reps ]
+    dvm  = [ (n = rand(rng, 2:4); c = rand(rng, 2:4); (_rvec(rng, n), _rmat(rng, n, c))) for _ in 1:reps ]
 
     @testset "matrix → matrix" begin
         @test _la_diff(_la_copy,  (_MF,),     rect,  _MF)
@@ -148,5 +153,10 @@ function run_linalg_matrix_tests(; reps::Int = 40)
         @test _la_diff(_la_cond,   (_MF,), dsq,  Float64)  # σmax/σmin via svdvals
         @test _la_diff(_la_rank,   (_MF,), dsq,  Int64)    # count svdvals>tol
         @test _la_diff(_la_opn2,   (_MF,), dsq,  Float64)  # σmax via svdvals
+    end
+    @testset "helpers + structured-type ops" begin
+        @test _la_diff(_la_checksq, (_MF,), sq, Int64)             # checksquare
+        @test _la_diff(_la_diagv,  (_VF, _VF), dvv, _VF)           # Diagonal(v)*vec
+        @test _la_diff(_la_diagm2, (_VF, _MF), dvm, _MF)           # Diagonal(v)*mat
     end
 end

@@ -506,10 +506,58 @@ NEXT (codegen feasibility cleared; remaining work is object-build + types):
 - general (nonsymmetric) `eigen` + COMPLEX spectra: Jacobi is symmetric-only;
   needs real QR-iteration → likely the genuine out-of-scope boundary.
 
-STILL AHEAD beyond decompositions: 41 structured types
-(`Diagonal`/`Symmetric`/`Tridiagonal`/`Triangular`/`UniformScaling`); in-place
-`mul!`/`ldiv!`; `rank`/`cond`/`pinv`/`nullspace` (need svd); strict-reject audit
-of `BLAS`/`LAPACK` submodules + `peakflops`.
+## LinearAlgebra — FULL-COVERAGE LEDGER (every name accounted for, 2026-06-24)
+
+`names(LinearAlgebra)` = 106 functions + 41 types + 3 consts. Each is SUPPORTED
+(verified in `test/fuzz/linalg_diff.jl` or the catalogue) or an EXPLICIT BOUNDARY.
+The cardinal rule held throughout: **no silent wrong values shipped** — every
+shipped overlay is oracle-verified; the boundary surface either loud-rejects
+(WasmValidationError under strict mode) or is documented here.
+
+✅ SUPPORTED + oracle-verified (~50 names), Float64 (+ Float32/Int where noted):
+- vector: `norm` `normalize` `cross` `dot`(all elt types)
+- arithmetic: `+` `-` `*`(matmul/matvec) scalar-`*` `copy` `copyto!`
+- shape/extract: `transpose`/`adjoint`(eager) `permutedims` `triu` `tril` `kron`
+  `diagm` `diag` `tr` `checksquare`
+- norms: `opnorm`(1/2/∞) `norm`(Frobenius) `cond`
+- factorization VALUES: `det` `logdet` `inv` `\`(solve) `svdvals` `eigvals`
+  `eigmax` `eigmin` `rank`
+- predicates: `issymmetric` `ishermitian` `isdiag` `istriu` `istril`
+- structured-type OPS: `Diagonal(v)*vec`, `Diagonal(v)*mat` (construction + ops
+  compile; see boundary on `Matrix(::Structured)` conversion below)
+
+🔶 SUPPORTED with a DOCUMENTED soundness boundary:
+- `inv`/`\`/`det`/`logdet`: sound for NONSINGULAR inputs (the math domain). On
+  exactly-singular inputs, generic-LU (our path) vs LAPACK may diverge on throw
+  behavior (rare, measure-zero for generic inputs; verified 14–17/20 trap-parity).
+- ALL decompositions are **Float64-only**: Float32 iterative algorithms differ
+  from native by ~1e-7 (Float32 eps) > oracle rtol 1e-9 → not oracle-verifiable.
+
+⛔ BOUNDARY — NOT supported (loud-reject via validation error, OR needs work):
+- factorization OBJECTS: `lu` `qr` `svd` `eigen` `cholesky` `schur` `lq`
+  `hessenberg` `bunchkaufman` `ldlt` `factorize` — return packed-LAPACK-form
+  objects whose downstream methods (`ldiv!`, `.Q` reflectors) hit codegen gaps.
+  Their VALUES ship above (det/eigvals/svdvals). Tractable via object+downstream
+  overlays (lu/cholesky first; qr/eigen/svd via reconstruction) — a future batch.
+- `Matrix(::Diagonal/::Symmetric/::Triangular/::Hermitian)` dense conversion →
+  WasmValidationError (a structured-`copyto!` codegen gap; the OPS work, the
+  conversion doesn't). `hermitianpart` (returns Hermitian) hits the same.
+- `pinv` `nullspace` — need full SVD U/V (only `svdvals` ships). pinv via normal
+  equations is UNSOUND for rank-deficient (not shipped).
+- `sylvester` `lyap` — Bartels–Stewart needs `schur` (object). `lowrankupdate/
+  downdate`, `givens` `rotate!` `reflect!`, in-place `mul!`/`ldiv!`/`rdiv!`/
+  `lmul!`/`rmul!`/`axpy!`/`axpby!`, `condskeel` `isbanded` `diagind` `diagview`
+  `copy_adjoint!`/`copy_transpose!`/`copytrito!` `fillstored!` — not yet covered.
+- general (nonsymmetric) `eigen`/`eigvals` + COMPLEX spectra — Jacobi is
+  symmetric-only; needs QR-iteration that hits the codegen wall. GENUINE boundary.
+- `peakflops` (timing/threads), `BLAS`/`LAPACK` submodules (raw ccall wrappers) —
+  genuinely non-wasm; out of scope by nature.
+
+⚠️ CORE soundness items for LOOP.md (silent-miscompile holes found + fixed-by-overlay
+in LA, but latent for any un-overlaid BLAS/LAPACK-typed op): BLAS `dot` ccall → 0;
+2-D `memmove` → zero matrix; native `svdvals`/`inv` LAPACK → invalid-wasm or wrong
+value. Strict mode should LOUD-REJECT every `ccall`/`foreigncall` to BLAS/LAPACK so
+the un-overlaid boundary surface can never silent-miscompile.
 
 ## P5-trim: differential matrix (discovery=:trim vs :legacy), 2026-06-12
 
