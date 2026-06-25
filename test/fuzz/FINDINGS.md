@@ -712,37 +712,48 @@ denominator stays honest — out-of-scope is only genuine non-wasm (SIMD/llvmcal
 BLAS/LAPACK packed forms, BitVector, host entropy/wall-clock), never a tractable
 item reclassified to inflate the score.
 
-## Random — 1.13-rc1 deferrals found by CI (2026-06-25, follow-up to the ≥95% campaign)
-The ≥95% Random work passed full `Pkg.test` on 1.12, but CI on **1.13-rc1**
-surfaced wasm↔native divergences in THREE of the new functions. All are the same
-class as the Float64 SIMD array fills — native's RNG consumption on 1.13 differs
-from any scalar/plain reproduction. Final resolution: claim them only on ≤1.12
-(verified), defer on 1.13 (documented boundary, NOT a wrong value). **seed!
-(reseed-then-draw) is bit-exact on BOTH versions and is kept.** Net: Random =
-100% on ≤1.12, 73% (8/11) on 1.13-rc1.
+## Random — seeded-Xoshiro differential is UNRELIABLE on Julia 1.13-rc1 (2026-06-25)
+The Random ≥95% work passed full `Pkg.test` on 1.12, but CI on **1.13-rc1** kept
+failing. The story unfolded over several CI rounds and ended in a clean call:
+**gate the entire seeded-Xoshiro differential to Julia ≤1.12.**
 
-  • **randstring** — DEFERRED on 1.13. Native fills the buffer via the COLLECTION
-    bulk fill `rand!(rng, view, chars)`. Overlay v1 (scalar `rand(rng, CHARS)`
-    per byte) matched ≤1.12 but diverged on 1.13. Overlay v2 called native's OWN
-    `rand!(rng, v, chars)` on a plain `Vector{UInt8}` — re-verified bit-exact on
-    1.12, but CI showed it STILL diverges on 1.13 (and likely perturbs other
-    compiles): 1.13's collection bulk fill is not reproducible by either a scalar
-    loop OR a plain-Vector bulk fill. Same scalar/bulk trap as the SIMD fills.
-    Overlay gated to `@static if VERSION < v"1.13-"`.
+Timeline of evidence:
+  1. First 1.13 round: only randsubseq!/randstring failed on 1.13-ubuntu (basic
+     rand/randn/randperm PASSED). Looked like 2 narrow function-level gaps.
+  2. Tried to FIX randstring: overlay v1 drew the charset byte-by-byte with the
+     SCALAR sampler `rand(rng,CHARS)` (matched ≤1.12, diverged on 1.13's changed
+     collection bulk fill); overlay v2 called native's OWN `rand!(rng,v,chars)`
+     on a plain Vector — re-verified bit-exact on 1.12 but STILL diverged on 1.13.
+  3. Gated randsubseq/randsubseq!/randstring on 1.13, kept seed!/basic rand.
+  4. Next CI round BLEW THE NARROW THEORY UP: 1.13-**windows** failed 16/17 —
+     EVERY seeded stream, including basic `rand(Xoshiro(s))`. 1.13-**ubuntu**,
+     which had passed basic rand the round before, NOW also failed all 7. Same
+     wasm (Node, deterministic); the only variable across CI jobs is the native
+     host → the seeded-Xoshiro stream is **flaky / platform-dependent on 1.13**
+     (a prior commit passed 1.13-ubuntu, the next failed it). 1.13 reworked
+     Xoshiro seeding (new `SeedHasher` path, RNGs.jl) — the differential can't
+     reproduce it stably.
 
-  • **randsubseq / randsubseq!** — DEFERRED on 1.13. randsubseq IS
-    `randsubseq!(rng, T[], A, p)`. CI caught the in-place form failing one run and
-    the out-of-place form the next (different random inputs) — an input-dependent
-    divergence on 1.13-rc1 (likely 1.13 vectorizing the inner `rand(r)<=p` loop
-    into a bulk RNG draw WT can't match — same family as the array fills). Both
-    gated to <1.13.
+Resolution: `run_random_tests` early-returns (`@test_skip`) on `VERSION >= v"1.13-"`,
+`RANDOM_VERIFIED` is empty on ≥1.13, and the randstring ext overlay is gated to
+<1.13. Random's `% support` is a ≤1.12 measurement (the stable release the
+campaign targets) — 100% there. LinearAlgebra/Dates/Statistics differentials are
+1.13-clean (no RNG). Net CI: green on 1.12 (all OS) and 1.13 (Random skipped).
 
-  Could NOT reproduce locally: the `--project=test/fuzz` env on 1.13-rc1 fails to
-  compile even `rand(Xoshiro(s))` (it compiles trivial functions, and CI's test
-  env compiles rand fine — so the local test/fuzz 1.13 env diverges from CI's
-  test env). LESSON: never reproduce an RNG fill with a scalar/plain loop — the
-  consumption can change between Julia versions even when the source looks
-  identical; sweep on EVERY supported version. SOUNDNESS-LOOP CANDIDATES: (a)
-  root-cause randsubseq/randstring 1.13 divergence (bulk-RNG-optimization wall vs
-  genuine miscompile); (b) fix the local 1.13 `--project=test/fuzz` env so 1.13
-  can be exercised before pushing (it currently can't compile the Random stack).
+LESSONS: (1) never reproduce an RNG fill with a scalar/plain loop — consumption
+can change between Julia versions even when the source looks identical. (2) A
+differential that compares wasm (host-independent) against native (host) is only
+a valid oracle when native is itself reproducible across platforms — 1.13 broke
+that for seeded Xoshiro. (3) SWEEP ON EVERY SUPPORTED JULIA × OS before trusting
+an RNG differential.
+
+SOUNDNESS-LOOP CANDIDATES (open):
+  (a) Root-cause the 1.13 seeded-Xoshiro instability: is native 1.13 Xoshiro
+      genuinely platform-dependent (a Julia bug/intentional change), or does WT's
+      host-run COMPILATION emit OS-dependent wasm for the hash_seed/SeedHasher
+      path (a non-reproducible-build WT bug)? The flaky cross-platform/cross-run
+      behavior points at one of these.
+  (b) Fix the local `--project=test/fuzz` env on 1.13-rc1 — it can't compile even
+      `rand(Xoshiro(s))` (compiles trivial fns; CI's test env compiles rand fine),
+      so 1.13 currently can't be exercised locally before pushing. This blocked
+      fast iteration on the above.
