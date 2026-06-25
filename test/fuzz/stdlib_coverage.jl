@@ -20,6 +20,7 @@ include(joinpath(_SCDIR, "catalogue.jl"));   using .FuzzCatalogue
 include(joinpath(_SCDIR, "linalg_diff.jl"))   # → LINALG_VERIFIED
 include(joinpath(_SCDIR, "dates_diff.jl"))    # → DATES_VERIFIED
 include(joinpath(_SCDIR, "random_diff.jl"))   # → RANDOM_VERIFIED
+include(joinpath(_SCDIR, "stats_diff.jl"))    # → STATS_VERIFIED
 
 # ── catalogue-verified names, grouped by the Base module a `mod` tag maps to ──
 const _CAT_BY_MOD = let d = Dict{Symbol,Set{Symbol}}()
@@ -59,9 +60,9 @@ const SPECS = StdSpec[
              :hermitian_type, :symmetric_type, :inertia, :issuccess]),
         "Matrix + factorization + structured-type surface verified by test/fuzz/linalg_diff.jl (61 differential sweeps): values (det/inv/\\/svdvals/eigvals/...), OBJECTS (lu/cholesky/eigen/svd via hand-rolled LU/Jacobi/one-sided-Jacobi, reconstruction-verified), pinv, in-place (mul!/triu!/tril!/lmul!/rmul!/axpy!/axpby!/normalize!), structured types. CAN'T (codegen wall, see out-of-scope): qr/schur/lq/hessenberg/bunchkaufman/ldlt packed forms, in-place LAPACK !-variants, general/complex eigen, sylvester/lyap."),
     StdSpec("Statistics", Statistics,
-        _catset(:stats),
+        union(_catset(:stats), STATS_VERIFIED),
         Set{Symbol}(),
-        "Verified via the catalogue (mod=:stats) — stochastic fuzzer composes + diffs vs native."),
+        "Non-! surface fuzzed by the catalogue (mod=:stats; stochastic compose+diff); in-place mean!/median!/quantile! by test/fuzz/stats_diff.jl (mean! via a row-means ext overlay)."),
     StdSpec("Dates", Dates,
         union(DATES_VERIFIED, _catset(:dates)),
         Set([:now, :today, :unix2datetime, :now]),   # wall-clock = host time (defer to embedding)

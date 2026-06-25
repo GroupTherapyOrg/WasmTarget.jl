@@ -53,3 +53,13 @@ end
         @test_skip true
     end
 end
+
+# Statistics in-place ops (mean!/median!/quantile!).
+@testset "Differential fuzz: Statistics in-place" begin
+    if FuzzHarness.NODE_OK
+        include(joinpath(@__DIR__, "fuzz", "stats_diff.jl"))
+        run_stats_tests()
+    else
+        @test_skip true
+    end
+end

@@ -129,27 +129,27 @@ Functions: **45 supported**, 19 boundary, 42 out-of-scope (106 total). Types: 5/
 `AbstractTriangular`, `Adjoint`, `Bidiagonal`, `BunchKaufman`, `Cholesky`, `CholeskyPivoted`, `ColumnNorm`, `Diagonal`✅, `Eigen`, `Factorization`, `GeneralizedEigen`, `GeneralizedSVD`, `GeneralizedSchur`, `Givens`, `Hermitian`✅, `Hessenberg`, `LAPACKException`, `LDLt`, `LQ`, `LU`, `LowerTriangular`✅, `NoPivot`, `PosDefException`, `QR`, `QRPivoted`, `RankDeficientException`, `RowMaximum`, `RowNonZero`, `SVD`, `Schur`, `SingularException`, `SymTridiagonal`, `Symmetric`✅, `Transpose`, `Tridiagonal`, `UniformScaling`, `UnitLowerTriangular`, `UnitUpperTriangular`, `UpperHessenberg`, `UpperTriangular`✅, `ZeroPivotException`
 
 
-## Statistics — 77% of in-scope functions supported
+## Statistics — 100% of in-scope functions supported
 
-Verified via the catalogue (mod=:stats) — stochastic fuzzer composes + diffs vs native.
+Non-! surface fuzzed by the catalogue (mod=:stats; stochastic compose+diff); in-place mean!/median!/quantile! by test/fuzz/stats_diff.jl (mean! via a row-means ext overlay).
 
-Functions: **10 supported**, 3 boundary, 0 out-of-scope (13 total). Types: 0/0 with verified construction/ops.
+Functions: **13 supported**, 0 boundary, 0 out-of-scope (13 total). Types: 0/0 with verified construction/ops.
 
 | function | status |
 |---|---|
 | `cor` | ✅ supported |
 | `cov` | ✅ supported |
 | `mean` | ✅ supported |
+| `mean!` | ✅ supported |
 | `median` | ✅ supported |
+| `median!` | ✅ supported |
 | `middle` | ✅ supported |
 | `quantile` | ✅ supported |
+| `quantile!` | ✅ supported |
 | `std` | ✅ supported |
 | `stdm` | ✅ supported |
 | `var` | ✅ supported |
 | `varm` | ✅ supported |
-| `mean!` | ⛔ boundary |
-| `median!` | ⛔ boundary |
-| `quantile!` | ⛔ boundary |
 
 ## Dates — 57% of in-scope functions supported
 
@@ -247,6 +247,6 @@ Functions: **4 supported**, 12 boundary, 0 out-of-scope (16 total). Types: 1/9 w
 | stdlib | % in-scope supported | supported | boundary | out-of-scope |
 |---|---|---|---|---|
 | LinearAlgebra | **70%** | 45 | 19 | 42 |
-| Statistics | **77%** | 10 | 3 | 0 |
+| Statistics | **100%** | 13 | 0 | 0 |
 | Dates | **57%** | 26 | 20 | 3 |
 | Random | **25%** | 4 | 12 | 0 |

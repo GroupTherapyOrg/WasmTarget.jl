@@ -39,4 +39,17 @@ using Base.Experimental: @overlay
         Statistics.quantile!(copy(v), p)
 end
 
+# mean!(r, A) reduces A into r via sum!+rescale; the dim-reduction machinery
+# emits invalid wasm. For the dest-vector / matrix form it is row-means
+# (r[i] = mean(A[i, :])) — written out explicitly. Bit-identical to native.
+@overlay WasmTarget.WASM_METHOD_TABLE function Statistics.mean!(r::Vector{Float64}, A::Matrix{Float64})
+    m = size(A, 1); n = size(A, 2)
+    @inbounds for i in 1:m
+        s = 0.0
+        for j in 1:n; s += A[i, j]; end
+        r[i] = s / n
+    end
+    r
+end
+
 end # module
