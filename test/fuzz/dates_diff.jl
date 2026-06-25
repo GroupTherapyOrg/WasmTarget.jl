@@ -49,7 +49,16 @@ const DATES_VERIFIED = Set{Symbol}([
     :quarterofyear, :firstdayofmonth, :lastdayofmonth, :firstdayofweek,
     :lastdayofweek, :firstdayofquarter, :lastdayofquarter, :firstdayofyear,
     :lastdayofyear, :isleapyear, :hour, :minute, :second, :millisecond,
-    :Date, :DateTime, :Day, :Month, :Year, :Week, :Hour, :Minute, :Second,
+    :microsecond, :nanosecond,
+    # epoch/calendar conversions (pure arithmetic, both directions)
+    :datetime2unix, :unix2datetime, :datetime2julian, :julian2datetime,
+    :datetime2rata, :rata2datetime,
+    # multi-field extractors (tuple returns)
+    :yearmonthday, :yearmonth, :monthday,
+    # locale names (ENGLISH-table ext overlays) + day-of-week adjusters (arithmetic overlays)
+    :dayname, :dayabbr, :monthname, :monthabbr,
+    :tofirst, :tolast, :tonext, :toprev,
+    :Date, :DateTime, :Time, :Day, :Month, :Year, :Week, :Hour, :Minute, :Second,
 ])
 
 # named wrappers (callee context) for arithmetic + construction
@@ -61,7 +70,31 @@ _dt_pWeek(d)  = d + Week(2)
 _dt_isleap(d) = isleapyear(d)
 _dt_mkdate(y, m, d)         = Date(y, m, d)
 _dt_mkdt(y, m, d, h, mi, s) = DateTime(y, m, d, h, mi, s)
+_dt_mktime(h, mi, s)        = Time(h, mi, s)
 _dt_datesub(a, b)           = Dates.value(a - b)   # day count (Int64)
+
+# epoch/calendar conversions (DateTime ↔ scalar, both directions)
+_dt_d2unix(dt) = datetime2unix(dt)
+_dt_d2jul(dt)  = datetime2julian(dt)
+_dt_d2rata(dt) = datetime2rata(dt)
+_dt_u2dt(x)    = unix2datetime(x)
+_dt_jul2d(x)   = julian2datetime(x)
+_dt_rata2d(x)  = rata2datetime(x)
+# multi-field extractors (tuple returns)
+_dt_ymd(d) = yearmonthday(d)
+_dt_ym(d)  = yearmonth(d)
+_dt_md(d)  = monthday(d)
+# Time sub-second accessors
+_rtime(rng) = Time(rand(rng, 0:23), rand(rng, 0:59), rand(rng, 0:59),
+                   rand(rng, 0:999), rand(rng, 0:999), rand(rng, 0:999))
+_dt_micros(t) = microsecond(t)
+_dt_nanos(t)  = nanosecond(t)
+# locale names (ENGLISH-table overlays) — Date → String
+_dt_dnm(d) = dayname(d);  _dt_dab(d) = dayabbr(d)
+_dt_mnm(d) = monthname(d); _dt_mab(d) = monthabbr(d)
+# day-of-week adjusters (arithmetic overlays) — Date → Date
+_dt_tofst(d) = tofirst(d, 1); _dt_tolst(d) = tolast(d, 7)
+_dt_tonxt(d) = tonext(d, 7);  _dt_toprv(d) = toprev(d, 1)
 
 function run_dates_tests(; reps::Int = 40)
     FuzzHarness.NODE_OK || (@test_skip true; return)
@@ -100,5 +133,37 @@ function run_dates_tests(; reps::Int = 40)
         @test _dt_diff(_dt_mkdt, (Int64, Int64, Int64, Int64, Int64, Int64),
                        [ (rand(rng, 1850:2200), rand(rng, 1:12), rand(rng, 1:28),
                           rand(rng, 0:23), rand(rng, 0:59), rand(rng, 0:59)) for _ in 1:reps ], DateTime)
+        @test _dt_diff(_dt_mktime, (Int64, Int64, Int64),
+                       [ (rand(rng, 0:23), rand(rng, 0:59), rand(rng, 0:59)) for _ in 1:reps ], Time)
+    end
+    @testset "epoch/calendar conversions" begin
+        @test _dt_diff(_dt_d2unix, (DateTime,), dts, Float64)
+        @test _dt_diff(_dt_d2jul,  (DateTime,), dts, Float64)
+        @test _dt_diff(_dt_d2rata, (DateTime,), dts, Int64)
+        @test _dt_diff(_dt_u2dt,   (Float64,), [ (datetime2unix(_rdt(rng)),)   for _ in 1:reps ], DateTime)
+        @test _dt_diff(_dt_jul2d,  (Float64,), [ (datetime2julian(_rdt(rng)),) for _ in 1:reps ], DateTime)
+        @test _dt_diff(_dt_rata2d, (Int64,),   [ (datetime2rata(_rdt(rng)),)   for _ in 1:reps ], DateTime)
+    end
+    @testset "multi-field extractors (tuples)" begin
+        @test _dt_diff(_dt_ymd, (Date,), dates, Tuple{Int64,Int64,Int64})
+        @test _dt_diff(_dt_ym,  (Date,), dates, Tuple{Int64,Int64})
+        @test _dt_diff(_dt_md,  (Date,), dates, Tuple{Int64,Int64})
+    end
+    @testset "Time sub-second accessors" begin
+        tms = [ (_rtime(rng),) for _ in 1:reps ]
+        @test _dt_diff(_dt_micros, (Time,), tms, Int64)
+        @test _dt_diff(_dt_nanos,  (Time,), tms, Int64)
+    end
+    @testset "locale names (ENGLISH overlays)" begin
+        @test _dt_diff(_dt_dnm, (Date,), dates, String)
+        @test _dt_diff(_dt_dab, (Date,), dates, String)
+        @test _dt_diff(_dt_mnm, (Date,), dates, String)
+        @test _dt_diff(_dt_mab, (Date,), dates, String)
+    end
+    @testset "day-of-week adjusters" begin
+        @test _dt_diff(_dt_tofst, (Date,), dates, Date)
+        @test _dt_diff(_dt_tolst, (Date,), dates, Date)
+        @test _dt_diff(_dt_tonxt, (Date,), dates, Date)
+        @test _dt_diff(_dt_toprv, (Date,), dates, Date)
     end
 end

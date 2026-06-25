@@ -644,3 +644,32 @@ OUT-OF-SCOPE with rigorous reasoning (the "sensible CAN'T" escape):
   • **bitrand** — returns a `BitVector` (packed-bit representation, same wall
     as core BitVector; even `collect(bitrand(...))` fails to compile).
   • **default_rng / RandomDevice** — host/OS entropy, defers to embedding.
+
+## Dates — ≥95% campaign (stdlib, 2026-06-25) — 96% in-scope
+Drove Dates from 57% → **96% of in-scope** (45 supported / 2 boundary / 2
+out-of-scope) via test/fuzz/dates_diff.jl sweeps + 8 ext overlays. Newly VERIFIED:
+  • Pure-arithmetic conversions (no host time — the inverse `unix2datetime` was
+    mis-classified out-of-scope, now corrected): datetime2unix/unix2datetime,
+    datetime2julian/julian2datetime, datetime2rata/rata2datetime.
+  • Multi-field tuple extractors: yearmonthday, yearmonth, monthday.
+  • Time sub-second accessors: microsecond, nanosecond (Time round-trips the bridge).
+  • LOCALE NAMES via ext overlays — dayname/dayabbr/monthname/monthabbr. Native
+    routes through `Dates.LOCALES[locale]` (a Dict{String,DateLocale} global) +
+    DateLocale struct fields behind a kwarg → `unreachable`. Default locale is
+    ENGLISH (fixed tables); overlay indexes hard-coded ENGLISH vectors by
+    dayofweek/month. Bit-identical to native (default locale="english").
+  • DAY-OF-WEEK ADJUSTERS via ext overlays — tofirst/tolast/tonext/toprev. Native
+    uses `adjust(ISDAYOFWEEK[dow], dt, step, n)`, a DateFunction predicate loop
+    (Method-as-value → "cannot compile Method"). The dow-Int forms are exact
+    modular arithmetic on the weekday cycle (`start ± mod(Δweekday, 7)` days,
+    anchored at firstday/lastday of the period) — bit-identical.
+
+BOUNDARY (deferred, honestly in-scope — NOT reclassified to game the %):
+  • format — the DateFormat token-DSL engine (arbitrary format strings → token
+    tuple dispatch). Reimplementing it is a large lift; deferred. (Base.string
+    overlays already give the canonical ISO Date/DateTime rendering.)
+  • canonicalize — CompoundPeriod normalization; the same Method-as-value wall as
+    the raw adjusters but over a heterogeneous Period vector. Deferred.
+OUT-OF-SCOPE: now/today (host wall-clock; embedding import, like Random entropy).
+Kwarg-overlay note: like LinearAlgebra eigvals, these overlays MUST be written
+with the kwarg signature (locale=/same=/of=) to intercept the kwarg-sorter entry.

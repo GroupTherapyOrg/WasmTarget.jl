@@ -151,15 +151,20 @@ Functions: **13 supported**, 0 boundary, 0 out-of-scope (13 total). Types: 0/0 w
 | `var` | ✅ supported |
 | `varm` | ✅ supported |
 
-## Dates — 57% of in-scope functions supported
+## Dates — 96% of in-scope functions supported
 
-Value layer (accessors / adjusters / arithmetic / construction) differentially fuzzed by test/fuzz/dates_diff.jl. now()/today() need host wall-clock (embedding import).
+Value layer differentially fuzzed by test/fuzz/dates_diff.jl: accessors, Date↔Date adjusters, arithmetic, construction (Date/DateTime/Time), epoch+calendar conversions (datetime2unix/unix2datetime/datetime2julian/julian2datetime/datetime2rata/rata2datetime — pure arithmetic, both directions), multi-field tuple extractors (yearmonthday/yearmonth/monthday), Time sub-second accessors (microsecond/nanosecond), locale names (dayname/dayabbr/monthname/monthabbr via ENGLISH-table ext overlays), and day-of-week adjusters (tofirst/tolast/tonext/toprev via modular-arithmetic ext overlays). now()/today() need host wall-clock (embedding import). BOUNDARY (deferred, not yet verified): format (the DateFormat token-DSL engine) and canonicalize (CompoundPeriod normalization — a Method-as-value the generator can't yet compile).
 
-Functions: **26 supported**, 20 boundary, 3 out-of-scope (49 total). Types: 9/21 with verified construction/ops.
+Functions: **45 supported**, 2 boundary, 2 out-of-scope (49 total). Types: 10/21 with verified construction/ops.
 
 | function | status |
 |---|---|
+| `datetime2julian` | ✅ supported |
+| `datetime2rata` | ✅ supported |
+| `datetime2unix` | ✅ supported |
 | `day` | ✅ supported |
+| `dayabbr` | ✅ supported |
+| `dayname` | ✅ supported |
 | `dayofmonth` | ✅ supported |
 | `dayofquarter` | ✅ supported |
 | `dayofweek` | ✅ supported |
@@ -174,43 +179,38 @@ Functions: **26 supported**, 20 boundary, 3 out-of-scope (49 total). Types: 9/21
 | `firstdayofyear` | ✅ supported |
 | `hour` | ✅ supported |
 | `isleapyear` | ✅ supported |
+| `julian2datetime` | ✅ supported |
 | `lastdayofmonth` | ✅ supported |
 | `lastdayofquarter` | ✅ supported |
 | `lastdayofweek` | ✅ supported |
 | `lastdayofyear` | ✅ supported |
+| `microsecond` | ✅ supported |
 | `millisecond` | ✅ supported |
 | `minute` | ✅ supported |
 | `month` | ✅ supported |
+| `monthabbr` | ✅ supported |
+| `monthday` | ✅ supported |
+| `monthname` | ✅ supported |
+| `nanosecond` | ✅ supported |
 | `quarterofyear` | ✅ supported |
+| `rata2datetime` | ✅ supported |
 | `second` | ✅ supported |
+| `tofirst` | ✅ supported |
+| `tolast` | ✅ supported |
+| `tonext` | ✅ supported |
+| `toprev` | ✅ supported |
+| `unix2datetime` | ✅ supported |
 | `week` | ✅ supported |
 | `year` | ✅ supported |
+| `yearmonth` | ✅ supported |
+| `yearmonthday` | ✅ supported |
 | `canonicalize` | ⛔ boundary |
-| `datetime2julian` | ⛔ boundary |
-| `datetime2rata` | ⛔ boundary |
-| `datetime2unix` | ⛔ boundary |
-| `dayabbr` | ⛔ boundary |
-| `dayname` | ⛔ boundary |
 | `format` | ⛔ boundary |
-| `julian2datetime` | ⛔ boundary |
-| `microsecond` | ⛔ boundary |
-| `monthabbr` | ⛔ boundary |
-| `monthday` | ⛔ boundary |
-| `monthname` | ⛔ boundary |
-| `nanosecond` | ⛔ boundary |
 | `now` | ▽ out-of-scope |
-| `rata2datetime` | ⛔ boundary |
 | `today` | ▽ out-of-scope |
-| `tofirst` | ⛔ boundary |
-| `tolast` | ⛔ boundary |
-| `tonext` | ⛔ boundary |
-| `toprev` | ⛔ boundary |
-| `unix2datetime` | ▽ out-of-scope |
-| `yearmonth` | ⛔ boundary |
-| `yearmonthday` | ⛔ boundary |
 
-**Types** (9/21 with verified ops): 
-`Date`✅, `DateFormat`, `DatePeriod`, `DateTime`✅, `Day`✅, `Hour`✅, `Microsecond`, `Millisecond`, `Minute`✅, `Month`✅, `Nanosecond`, `Period`, `Quarter`, `Second`✅, `Time`, `TimePeriod`, `TimeType`, `TimeZone`, `UTC`, `Week`✅, `Year`✅
+**Types** (10/21 with verified ops): 
+`Date`✅, `DateFormat`, `DatePeriod`, `DateTime`✅, `Day`✅, `Hour`✅, `Microsecond`, `Millisecond`, `Minute`✅, `Month`✅, `Nanosecond`, `Period`, `Quarter`, `Second`✅, `Time`✅, `TimePeriod`, `TimeType`, `TimeZone`, `UTC`, `Week`✅, `Year`✅
 
 
 ## Random — 100% of in-scope functions supported
@@ -248,5 +248,5 @@ Functions: **11 supported**, 0 boundary, 5 out-of-scope (16 total). Types: 1/9 w
 |---|---|---|---|---|
 | LinearAlgebra | **70%** | 45 | 19 | 42 |
 | Statistics | **100%** | 13 | 0 | 0 |
-| Dates | **57%** | 26 | 20 | 3 |
+| Dates | **96%** | 45 | 2 | 2 |
 | Random | **100%** | 11 | 0 | 5 |
