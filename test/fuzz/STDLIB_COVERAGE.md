@@ -10,14 +10,15 @@ genuinely non-wasm (BLAS/LAPACK ccall plumbing, threads/timing, I/O).
 **% support = supported / (supported + boundary)** — i.e. of the in-scope
 surface (out-of-scope excluded). Types listed separately.
 
-## LinearAlgebra — 70% of in-scope functions supported
+## LinearAlgebra — 97% of in-scope functions supported
 
-Matrix + factorization + structured-type surface verified by test/fuzz/linalg_diff.jl (61 differential sweeps): values (det/inv/\/svdvals/eigvals/...), OBJECTS (lu/cholesky/eigen/svd via hand-rolled LU/Jacobi/one-sided-Jacobi, reconstruction-verified), pinv, in-place (mul!/triu!/tril!/lmul!/rmul!/axpy!/axpby!/normalize!), structured types. CAN'T (codegen wall, see out-of-scope): qr/schur/lq/hessenberg/bunchkaufman/ldlt packed forms, in-place LAPACK !-variants, general/complex eigen, sylvester/lyap.
+Matrix + factorization + structured-type surface verified by test/fuzz/linalg_diff.jl (90+ differential sweeps): values (det/inv/\/svdvals/eigvals/...), OBJECTS (lu/cholesky/eigen/svd via hand-rolled LU/Jacobi/one-sided-Jacobi, reconstruction-verified), pinv, in-place (mul!/triu!/tril!/lmul!/rmul!/axpy!/axpby!/normalize!). ≥95% campaign added: operators ⋅/×/\, lowercase lazy wrappers symmetric/hermitian, in-place copies/fills copyto!/copytrito!/fillstored!/copy_transpose!/copy_adjoint!, Givens rotate!/reflect!, kron!, isbanded, and triangular-solve/symmetrize overlays ldiv!/rdiv!/hermitianpart!. CAN'T (codegen wall, see out-of-scope): qr/schur/lq/hessenberg/bunchkaufman/ldlt packed forms, in-place LAPACK !-variants, general/complex eigen, sylvester/lyap. BOUNDARY (deferred): `/` (general matrix right-division) and `convert` (generic, weak to claim).
 
-Functions: **45 supported**, 19 boundary, 42 out-of-scope (106 total). Types: 5/41 with verified construction/ops.
+Functions: **62 supported**, 2 boundary, 42 out-of-scope (106 total). Types: 5/41 with verified construction/ops.
 
 | function | status |
 |---|---|
+| `\` | ✅ supported |
 | `adjoint` | ✅ supported |
 | `adjoint!` | ✅ supported |
 | `axpby!` | ✅ supported |
@@ -26,6 +27,10 @@ Functions: **45 supported**, 19 boundary, 42 out-of-scope (106 total). Types: 5/
 | `cholesky` | ✅ supported |
 | `cond` | ✅ supported |
 | `condskeel` | ✅ supported |
+| `copy_adjoint!` | ✅ supported |
+| `copy_transpose!` | ✅ supported |
+| `copyto!` | ✅ supported |
+| `copytrito!` | ✅ supported |
 | `cross` | ✅ supported |
 | `det` | ✅ supported |
 | `diag` | ✅ supported |
@@ -35,13 +40,19 @@ Functions: **45 supported**, 19 boundary, 42 out-of-scope (106 total). Types: 5/
 | `eigmax` | ✅ supported |
 | `eigmin` | ✅ supported |
 | `eigvals` | ✅ supported |
+| `fillstored!` | ✅ supported |
+| `hermitian` | ✅ supported |
 | `hermitianpart` | ✅ supported |
+| `hermitianpart!` | ✅ supported |
+| `isbanded` | ✅ supported |
 | `isdiag` | ✅ supported |
 | `ishermitian` | ✅ supported |
 | `issymmetric` | ✅ supported |
 | `istril` | ✅ supported |
 | `istriu` | ✅ supported |
 | `kron` | ✅ supported |
+| `kron!` | ✅ supported |
+| `ldiv!` | ✅ supported |
 | `lmul!` | ✅ supported |
 | `logabsdet` | ✅ supported |
 | `logdet` | ✅ supported |
@@ -53,9 +64,13 @@ Functions: **45 supported**, 19 boundary, 42 out-of-scope (106 total). Types: 5/
 | `opnorm` | ✅ supported |
 | `pinv` | ✅ supported |
 | `rank` | ✅ supported |
+| `rdiv!` | ✅ supported |
+| `reflect!` | ✅ supported |
 | `rmul!` | ✅ supported |
+| `rotate!` | ✅ supported |
 | `svd` | ✅ supported |
 | `svdvals` | ✅ supported |
+| `symmetric` | ✅ supported |
 | `tr` | ✅ supported |
 | `transpose` | ✅ supported |
 | `transpose!` | ✅ supported |
@@ -63,37 +78,28 @@ Functions: **45 supported**, 19 boundary, 42 out-of-scope (106 total). Types: 5/
 | `tril!` | ✅ supported |
 | `triu` | ✅ supported |
 | `triu!` | ✅ supported |
+| `×` | ✅ supported |
+| `⋅` | ✅ supported |
 | `/` | ⛔ boundary |
-| `\` | ⛔ boundary |
 | `bunchkaufman` | ▽ out-of-scope |
 | `bunchkaufman!` | ▽ out-of-scope |
 | `cholesky!` | ▽ out-of-scope |
 | `convert` | ⛔ boundary |
-| `copy_adjoint!` | ⛔ boundary |
-| `copy_transpose!` | ⛔ boundary |
-| `copyto!` | ⛔ boundary |
-| `copytrito!` | ⛔ boundary |
 | `diagind` | ▽ out-of-scope |
 | `diagview` | ▽ out-of-scope |
 | `eigen!` | ▽ out-of-scope |
 | `eigvals!` | ▽ out-of-scope |
 | `eigvecs` | ▽ out-of-scope |
 | `factorize` | ▽ out-of-scope |
-| `fillstored!` | ⛔ boundary |
 | `givens` | ▽ out-of-scope |
 | `haszero` | ▽ out-of-scope |
-| `hermitian` | ⛔ boundary |
 | `hermitian_type` | ▽ out-of-scope |
-| `hermitianpart!` | ⛔ boundary |
 | `hessenberg` | ▽ out-of-scope |
 | `hessenberg!` | ▽ out-of-scope |
 | `inertia` | ▽ out-of-scope |
-| `isbanded` | ⛔ boundary |
 | `isposdef` | ▽ out-of-scope |
 | `isposdef!` | ▽ out-of-scope |
 | `issuccess` | ▽ out-of-scope |
-| `kron!` | ⛔ boundary |
-| `ldiv!` | ⛔ boundary |
 | `ldlt` | ▽ out-of-scope |
 | `ldlt!` | ▽ out-of-scope |
 | `lowrankdowndate` | ▽ out-of-scope |
@@ -111,19 +117,13 @@ Functions: **45 supported**, 19 boundary, 42 out-of-scope (106 total). Types: 5/
 | `peakflops` | ▽ out-of-scope |
 | `qr` | ▽ out-of-scope |
 | `qr!` | ▽ out-of-scope |
-| `rdiv!` | ⛔ boundary |
-| `reflect!` | ⛔ boundary |
-| `rotate!` | ⛔ boundary |
 | `schur` | ▽ out-of-scope |
 | `schur!` | ▽ out-of-scope |
 | `svd!` | ▽ out-of-scope |
 | `svdvals!` | ▽ out-of-scope |
 | `sylvester` | ▽ out-of-scope |
-| `symmetric` | ⛔ boundary |
 | `symmetric_type` | ▽ out-of-scope |
 | `zeroslike` | ▽ out-of-scope |
-| `×` | ⛔ boundary |
-| `⋅` | ⛔ boundary |
 
 **Types** (5/41 with verified ops): 
 `AbstractTriangular`, `Adjoint`, `Bidiagonal`, `BunchKaufman`, `Cholesky`, `CholeskyPivoted`, `ColumnNorm`, `Diagonal`✅, `Eigen`, `Factorization`, `GeneralizedEigen`, `GeneralizedSVD`, `GeneralizedSchur`, `Givens`, `Hermitian`✅, `Hessenberg`, `LAPACKException`, `LDLt`, `LQ`, `LU`, `LowerTriangular`✅, `NoPivot`, `PosDefException`, `QR`, `QRPivoted`, `RankDeficientException`, `RowMaximum`, `RowNonZero`, `SVD`, `Schur`, `SingularException`, `SymTridiagonal`, `Symmetric`✅, `Transpose`, `Tridiagonal`, `UniformScaling`, `UnitLowerTriangular`, `UnitUpperTriangular`, `UpperHessenberg`, `UpperTriangular`✅, `ZeroPivotException`
@@ -246,7 +246,7 @@ Functions: **11 supported**, 0 boundary, 5 out-of-scope (16 total). Types: 1/9 w
 
 | stdlib | % in-scope supported | supported | boundary | out-of-scope |
 |---|---|---|---|---|
-| LinearAlgebra | **70%** | 45 | 19 | 42 |
+| LinearAlgebra | **97%** | 62 | 2 | 42 |
 | Statistics | **100%** | 13 | 0 | 0 |
 | Dates | **96%** | 45 | 2 | 2 |
 | Random | **100%** | 11 | 0 | 5 |

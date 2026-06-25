@@ -356,4 +356,61 @@ end
     y
 end
 
+# ── In-place mutators with no tractable WasmGC lowering ─────────────────────
+# These route through BLAS/LAPACK !-kernels or dim-reduction machinery that emit
+# invalid wasm; each is replaced by a textbook in-place equivalent, bit-identical
+# to native for the dense Float64 forms verified in test/fuzz/linalg_diff.jl.
+
+# hermitianpart!(A) ⇒ symmetrize in place, return Hermitian(A). For real A this
+# is the symmetric part; the diagonal is unchanged. Native wraps a LAPACK-ish
+# _hermitianpart! that validation-errors.
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.hermitianpart!(A::Matrix{Float64}, uplo::Symbol = :U)
+    n = LinearAlgebra.checksquare(A)
+    @inbounds for i in 1:n
+        for j in i:n
+            v = (A[i, j] + A[j, i]) / 2
+            A[i, j] = v; A[j, i] = v
+        end
+    end
+    LinearAlgebra.Hermitian(A, uplo)
+end
+
+# ldiv!(U, b): upper-triangular solve U x = b by back-substitution (mutates b).
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.ldiv!(A::LinearAlgebra.UpperTriangular{Float64,Matrix{Float64}}, b::Vector{Float64})
+    M = parent(A); n = length(b)
+    @inbounds for i in n:-1:1
+        s = b[i]
+        for j in i+1:n; s -= M[i, j] * b[j]; end
+        b[i] = s / M[i, i]
+    end
+    b
+end
+
+# rdiv!(B, U): solve X U = B (mutates B) — column-forward substitution, since
+# U is upper-triangular: X[:,j] = (B[:,j] - Σ_{k<j} X[:,k] U[k,j]) / U[j,j].
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.rdiv!(B::Matrix{Float64}, A::LinearAlgebra.UpperTriangular{Float64,Matrix{Float64}})
+    U = parent(A); m, n = size(B)
+    @inbounds for j in 1:n
+        for k in 1:j-1
+            ukj = U[k, j]
+            for r in 1:m; B[r, j] -= B[r, k] * ukj; end
+        end
+        ujj = U[j, j]
+        for r in 1:m; B[r, j] /= ujj; end
+    end
+    B
+end
+
+# copytrito!(B, A, uplo): copy the `uplo` triangle (incl. diagonal) of A into B,
+# leaving the rest of B untouched. Native routes through a LAPACK lacpy ccall.
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.copytrito!(B::Matrix{Float64}, A::Matrix{Float64}, uplo::AbstractChar)
+    m, n = size(A)
+    if uplo == 'U'
+        @inbounds for j in 1:n, i in 1:min(j, m); B[i, j] = A[i, j]; end
+    else
+        @inbounds for j in 1:n, i in j:m; B[i, j] = A[i, j]; end
+    end
+    B
+end
+
 end # module

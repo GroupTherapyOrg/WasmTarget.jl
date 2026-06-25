@@ -35,6 +35,11 @@ const LINALG_VERIFIED = Set{Symbol}([
     :rank, :checksquare, :hermitianpart, :lu, :cholesky, :eigen, :svd, :pinv, :mul!,
     :triu!, :tril!, :normalize!, :lmul!, :rmul!, :axpy!, :axpby!,
     :logabsdet, :condskeel, :transpose!, :adjoint!,
+    # ≥95% campaign: operators, lowercase lazy wrappers, in-place mutators, predicates
+    Symbol("⋅"), Symbol("×"), Symbol("\\"),
+    :symmetric, :hermitian, :copyto!, :kron!, :rotate!, :reflect!,
+    :copy_transpose!, :copy_adjoint!, :fillstored!, :isbanded,
+    :hermitianpart!, :ldiv!, :rdiv!, :copytrito!,
     # structured TYPES whose construction / ops / dense conversion are verified:
     :Diagonal, :Symmetric, :Hermitian, :UpperTriangular, :LowerTriangular,
 ])
@@ -146,6 +151,25 @@ _la_logabsd(m) = logabsdet(m)
 _la_condsk(m)  = condskeel(m)
 _la_transb(B, A) = transpose!(B, A)
 _la_adjb(B, A)   = adjoint!(B, A)
+# ── ≥95% campaign: remaining boundary surface ──
+_la_dotop(a, b)   = a ⋅ b                                  # ⋅  (== dot)
+_la_crossop(a, b) = a × b                                  # ×  (== cross)
+_la_symw(m)  = Matrix(LinearAlgebra.symmetric(m, :U))      # lowercase lazy wrapper
+_la_hermw(m) = Matrix(LinearAlgebra.hermitian(m, :U))
+_la_copytob(d, s)  = copyto!(d, s)
+_la_kronb(C, a, b) = kron!(C, a, b)
+_la_rotateb(x, y)  = (LinearAlgebra.rotate!(x, y, 0.6, 0.8); x)   # Givens rotation
+_la_reflectb(x, y) = (LinearAlgebra.reflect!(x, y, 0.6, 0.8); x)  # Givens reflection
+_la_copytrb(A) = (B = zeros(size(A, 2), size(A, 1));
+                  LinearAlgebra.copy_transpose!(B, 1:size(A, 2), 1:size(A, 1), A, 1:size(A, 1), 1:size(A, 2)); B)
+_la_copyadb(A) = (B = zeros(size(A, 2), size(A, 1));
+                  LinearAlgebra.copy_adjoint!(B, 1:size(A, 2), 1:size(A, 1), A, 1:size(A, 1), 1:size(A, 2)); B)
+_la_fillstb(m, x) = LinearAlgebra.fillstored!(m, x)
+_la_isbandb(m)    = LinearAlgebra.isbanded(m, -1, 1)
+_la_hpartbang(m)  = Matrix(LinearAlgebra.hermitianpart!(m))       # in-place symmetrize
+_la_ldivb(U, b)   = ldiv!(UpperTriangular(U), b)                  # U x = b
+_la_rdivb(A, U)   = rdiv!(A, UpperTriangular(U))                  # X U = A
+_la_copytritob(d, s) = LinearAlgebra.copytrito!(d, s, 'U')
 
 function run_linalg_matrix_tests(; reps::Int = 40)
     FuzzHarness.NODE_OK || (@test_skip true; return)
@@ -274,5 +298,35 @@ function run_linalg_matrix_tests(; reps::Int = 40)
         @test _la_diff(_la_condsk,  (_MF,), dsq, Float64)                  # condskeel
         @test _la_diff(_la_transb, (_MF, _MF), tpd, _MF)                   # transpose!(B,A)
         @test _la_diff(_la_adjb,   (_MF, _MF), tpd, _MF)                   # adjoint!(B,A)
+    end
+    @testset "operators + lazy wrappers (⋅ × symmetric hermitian)" begin
+        v3 = [ (_rvec(rng, 3), _rvec(rng, 3)) for _ in 1:reps ]
+        @test _la_diff(_la_dotop,   (_VF, _VF), dvv, Float64)   # ⋅
+        @test _la_diff(_la_crossop, (_VF, _VF), v3,  _VF)       # ×
+        @test _la_diff(_la_symw,  (_MF,), sq, _MF)              # symmetric(A,:U)
+        @test _la_diff(_la_hermw, (_MF,), sq, _MF)              # hermitian(A,:U)
+    end
+    @testset "in-place copies/fills (copyto!/copytrito!/fillstored!/copy_transpose!/copy_adjoint!)" begin
+        cpp = [ (n = rand(rng, 2:3); (zeros(n, n), _rmat(rng, n, n))) for _ in 1:reps ]
+        fmx = [ (n = rand(rng, 2:3); (_rmat(rng, n, n), 2rand(rng) - 1)) for _ in 1:reps ]
+        @test _la_diff(_la_copytob,    (_MF, _MF), cpp, _MF)    # copyto!
+        @test _la_diff(_la_copytritob, (_MF, _MF), cpp, _MF)    # copytrito!(_, _, 'U')
+        @test _la_diff(_la_fillstb,    (_MF, Float64), fmx, _MF) # fillstored!
+        @test _la_diff(_la_copytrb, (_MF,), rect, _MF)          # copy_transpose!
+        @test _la_diff(_la_copyadb, (_MF,), rect, _MF)          # copy_adjoint!
+    end
+    @testset "Givens (rotate!/reflect!) + isbanded + kron!" begin
+        vv2 = [ (n = rand(rng, 2:5); (_rvec(rng, n), _rvec(rng, n))) for _ in 1:reps ]
+        krn = [ (zeros(4, 4), _rmat(rng, 2, 2), _rmat(rng, 2, 2)) for _ in 1:reps ]
+        @test _la_diff(_la_rotateb,  (_VF, _VF), vv2, _VF)      # rotate!
+        @test _la_diff(_la_reflectb, (_VF, _VF), vv2, _VF)      # reflect!
+        @test _la_diff(_la_isbandb,  (_MF,), sq, Bool)          # isbanded
+        @test _la_diff(_la_kronb,    (_MF, _MF, _MF), krn, _MF) # kron!(C,A,B)
+    end
+    @testset "triangular solves + hermitianpart! (ldiv!/rdiv!/hermitianpart!)" begin
+        rdv = [ (n = rand(rng, 2:3); (_rmat(rng, n, n), _rdsq(rng, n))) for _ in 1:reps ]  # B, U independent
+        @test _la_diff(_la_ldivb,     (_MF, _VF), sbv, _VF)     # ldiv!(UpperTri, b)
+        @test _la_diff(_la_rdivb,     (_MF, _MF), rdv, _MF)     # rdiv!(B, UpperTri)
+        @test _la_diff(_la_hpartbang, (_MF,), sq, _MF)          # hermitianpart!
     end
 end

@@ -673,3 +673,41 @@ BOUNDARY (deferred, honestly in-scope — NOT reclassified to game the %):
 OUT-OF-SCOPE: now/today (host wall-clock; embedding import, like Random entropy).
 Kwarg-overlay note: like LinearAlgebra eigvals, these overlays MUST be written
 with the kwarg signature (locale=/same=/of=) to intercept the kwarg-sorter entry.
+
+## LinearAlgebra — ≥95% campaign (stdlib, 2026-06-25) — 97% in-scope
+Drove LA from 70% → **97% of in-scope** (62 supported / 2 boundary / 42
+out-of-scope) by verifying 17 of the 19 remaining boundary names in
+test/fuzz/linalg_diff.jl (+16 sweeps). Three classes:
+  • Compiled as-is (no overlay) — just needed grounded tests: ⋅ (==dot),
+    × (==cross), \ (already tested via _la_solve, symbol now in the set),
+    copyto!, kron!, rotate!, reflect!, copy_transpose!, copy_adjoint!,
+    fillstored!, isbanded. (NB fillstored!/isbanded are `public` not `exported`
+    — names(LinearAlgebra) lists them but `using` does NOT bring them in; the
+    fuzz wrappers qualify them `LinearAlgebra.x`.)
+  • Lowercase lazy wrappers symmetric/hermitian — verified via Matrix(·).
+  • Four ext overlays (in-place mutators whose native paths route through
+    BLAS/LAPACK !-kernels → invalid wasm), each a textbook in-place equivalent,
+    bit-identical for dense Float64: hermitianpart! (symmetrize → Hermitian),
+    ldiv!(UpperTriangular,b) (back-substitution), rdiv!(B,UpperTriangular)
+    (column-forward substitution), copytrito!(B,A,uplo) (triangle copy).
+
+Probe gotchas recorded: copytrito!/hermitianpart!/ldiv!/rdiv! all MISMATCH/SETUP
+without the overlay (BLAS kernels); the rdiv! differential MUST use independent
+B and U matrices — `(m, m)` aliasing corrupts U as rdiv! mutates B.
+
+BOUNDARY (deferred, honestly in-scope — NOT gamed to out-of-scope):
+  • `/` (general matrix right-division A/B) — needs a matrix-RHS LU solve
+    (column-wise (B'\A')'); the single-RHS _wt_lu_solve covers vectors only.
+    Tractable next increment.
+  • `convert` — generic Base function; a meaningful LA-specific claim needs a
+    structured-source convert, deferred (weak to claim via identity).
+The 42 out-of-scope are unchanged (qr/schur/lq/hessenberg/bunchkaufman/ldlt
+packed forms, LAPACK !-variants, general/complex eigen, sylvester/lyap, host).
+
+### Campaign status: ALL FOUR shipped stdlibs ≥95% (2026-06-25)
+LinearAlgebra 97% · Statistics 100% · Dates 96% · Random 100%. Each grounded in
+a real differential test (catalogue compose+diff OR a *_diff.jl sweep), same
+bit-exact/tolerance oracle as core. The "% = supported/(supported+boundary)"
+denominator stays honest — out-of-scope is only genuine non-wasm (SIMD/llvmcall,
+BLAS/LAPACK packed forms, BitVector, host entropy/wall-clock), never a tractable
+item reclassified to inflate the score.
