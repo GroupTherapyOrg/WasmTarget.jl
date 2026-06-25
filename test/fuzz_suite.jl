@@ -33,3 +33,23 @@ end
         @test_skip true
     end
 end
+
+# Dates value layer — Date/DateTime values the catalogue generator can't produce.
+@testset "Differential fuzz: Dates value layer" begin
+    if FuzzHarness.NODE_OK
+        include(joinpath(@__DIR__, "fuzz", "dates_diff.jl"))
+        run_dates_tests()
+    else
+        @test_skip true
+    end
+end
+
+# Random — seeded Xoshiro streams (RNG state the catalogue can't produce).
+@testset "Differential fuzz: Random seeded streams" begin
+    if FuzzHarness.NODE_OK
+        include(joinpath(@__DIR__, "fuzz", "random_diff.jl"))
+        run_random_tests()
+    else
+        @test_skip true
+    end
+end

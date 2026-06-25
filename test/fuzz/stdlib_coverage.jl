@@ -18,6 +18,8 @@ using LinearAlgebra, Statistics, Dates, Random
 const _SCDIR = @__DIR__
 include(joinpath(_SCDIR, "catalogue.jl"));   using .FuzzCatalogue
 include(joinpath(_SCDIR, "linalg_diff.jl"))   # → LINALG_VERIFIED
+include(joinpath(_SCDIR, "dates_diff.jl"))    # → DATES_VERIFIED
+include(joinpath(_SCDIR, "random_diff.jl"))   # → RANDOM_VERIFIED
 
 # ── catalogue-verified names, grouped by the Base module a `mod` tag maps to ──
 const _CAT_BY_MOD = let d = Dict{Symbol,Set{Symbol}}()
@@ -47,13 +49,13 @@ const SPECS = StdSpec[
         Set{Symbol}(),
         "Verified via the catalogue (mod=:stats) — stochastic fuzzer composes + diffs vs native."),
     StdSpec("Dates", Dates,
-        _catset(:dates),
-        Set{Symbol}(),
-        "Verified via the catalogue (mod=:dates). Date/DateTime value layer compiles from real impls; differential coverage is being widened."),
+        union(DATES_VERIFIED, _catset(:dates)),
+        Set([:now, :today, :unix2datetime, :now]),   # wall-clock = host time (defer to embedding)
+        "Value layer (accessors / adjusters / arithmetic / construction) differentially fuzzed by test/fuzz/dates_diff.jl. now()/today() need host wall-clock (embedding import)."),
     StdSpec("Random", Random,
-        Set([:Xoshiro, :MersenneTwister, :seed!, :TaskLocalRNG]),
-        Set([:RandomDevice]),
-        "Seeded Xoshiro/MT streams verified via the Random ext + bridge tests; OS-entropy RNGs defer to embedding imports."),
+        RANDOM_VERIFIED,
+        Set([:RandomDevice]),   # OS entropy — host-dependent
+        "Seeded Xoshiro streams differentially fuzzed by test/fuzz/random_diff.jl: rand/randn/randexp/randperm/randcycle/shuffle. NB rand/randn are Base-owned (not in names(Random)) so they don't count below, but ARE verified. CAN'T: RandomDevice/seedless = host entropy (embedding); MersenneTwister state hits a codegen gap; randstring char-encoding differs."),
 ]
 
 # is `nm` a Type / a Function / other, in module `M`?

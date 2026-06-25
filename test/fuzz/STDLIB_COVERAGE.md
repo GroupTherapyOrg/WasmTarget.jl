@@ -129,117 +129,117 @@ Functions: **34 supported**, 71 boundary, 1 out-of-scope (106 total). Types: 5/4
 `AbstractTriangular`, `Adjoint`, `Bidiagonal`, `BunchKaufman`, `Cholesky`, `CholeskyPivoted`, `ColumnNorm`, `Diagonal`✅, `Eigen`, `Factorization`, `GeneralizedEigen`, `GeneralizedSVD`, `GeneralizedSchur`, `Givens`, `Hermitian`✅, `Hessenberg`, `LAPACKException`, `LDLt`, `LQ`, `LU`, `LowerTriangular`✅, `NoPivot`, `PosDefException`, `QR`, `QRPivoted`, `RankDeficientException`, `RowMaximum`, `RowNonZero`, `SVD`, `Schur`, `SingularException`, `SymTridiagonal`, `Symmetric`✅, `Transpose`, `Tridiagonal`, `UniformScaling`, `UnitLowerTriangular`, `UnitUpperTriangular`, `UpperHessenberg`, `UpperTriangular`✅, `ZeroPivotException`
 
 
-## Statistics — 54% of in-scope functions supported
+## Statistics — 77% of in-scope functions supported
 
 Verified via the catalogue (mod=:stats) — stochastic fuzzer composes + diffs vs native.
 
-Functions: **7 supported**, 6 boundary, 0 out-of-scope (13 total). Types: 0/0 with verified construction/ops.
+Functions: **10 supported**, 3 boundary, 0 out-of-scope (13 total). Types: 0/0 with verified construction/ops.
 
 | function | status |
 |---|---|
 | `cor` | ✅ supported |
+| `cov` | ✅ supported |
 | `mean` | ✅ supported |
 | `median` | ✅ supported |
 | `middle` | ✅ supported |
 | `quantile` | ✅ supported |
 | `std` | ✅ supported |
+| `stdm` | ✅ supported |
 | `var` | ✅ supported |
-| `cov` | ⛔ boundary |
+| `varm` | ✅ supported |
 | `mean!` | ⛔ boundary |
 | `median!` | ⛔ boundary |
 | `quantile!` | ⛔ boundary |
-| `stdm` | ⛔ boundary |
-| `varm` | ⛔ boundary |
 
-## Dates — 4% of in-scope functions supported
+## Dates — 57% of in-scope functions supported
 
-Verified via the catalogue (mod=:dates). Date/DateTime value layer compiles from real impls; differential coverage is being widened.
+Value layer (accessors / adjusters / arithmetic / construction) differentially fuzzed by test/fuzz/dates_diff.jl. now()/today() need host wall-clock (embedding import).
 
-Functions: **2 supported**, 47 boundary, 0 out-of-scope (49 total). Types: 0/21 with verified construction/ops.
+Functions: **26 supported**, 20 boundary, 3 out-of-scope (49 total). Types: 9/21 with verified construction/ops.
 
 | function | status |
 |---|---|
+| `day` | ✅ supported |
+| `dayofmonth` | ✅ supported |
+| `dayofquarter` | ✅ supported |
+| `dayofweek` | ✅ supported |
+| `dayofweekofmonth` | ✅ supported |
+| `dayofyear` | ✅ supported |
 | `daysinmonth` | ✅ supported |
+| `daysinyear` | ✅ supported |
+| `daysofweekinmonth` | ✅ supported |
+| `firstdayofmonth` | ✅ supported |
+| `firstdayofquarter` | ✅ supported |
+| `firstdayofweek` | ✅ supported |
+| `firstdayofyear` | ✅ supported |
+| `hour` | ✅ supported |
 | `isleapyear` | ✅ supported |
+| `lastdayofmonth` | ✅ supported |
+| `lastdayofquarter` | ✅ supported |
+| `lastdayofweek` | ✅ supported |
+| `lastdayofyear` | ✅ supported |
+| `millisecond` | ✅ supported |
+| `minute` | ✅ supported |
+| `month` | ✅ supported |
+| `quarterofyear` | ✅ supported |
+| `second` | ✅ supported |
+| `week` | ✅ supported |
+| `year` | ✅ supported |
 | `canonicalize` | ⛔ boundary |
 | `datetime2julian` | ⛔ boundary |
 | `datetime2rata` | ⛔ boundary |
 | `datetime2unix` | ⛔ boundary |
-| `day` | ⛔ boundary |
 | `dayabbr` | ⛔ boundary |
 | `dayname` | ⛔ boundary |
-| `dayofmonth` | ⛔ boundary |
-| `dayofquarter` | ⛔ boundary |
-| `dayofweek` | ⛔ boundary |
-| `dayofweekofmonth` | ⛔ boundary |
-| `dayofyear` | ⛔ boundary |
-| `daysinyear` | ⛔ boundary |
-| `daysofweekinmonth` | ⛔ boundary |
-| `firstdayofmonth` | ⛔ boundary |
-| `firstdayofquarter` | ⛔ boundary |
-| `firstdayofweek` | ⛔ boundary |
-| `firstdayofyear` | ⛔ boundary |
 | `format` | ⛔ boundary |
-| `hour` | ⛔ boundary |
 | `julian2datetime` | ⛔ boundary |
-| `lastdayofmonth` | ⛔ boundary |
-| `lastdayofquarter` | ⛔ boundary |
-| `lastdayofweek` | ⛔ boundary |
-| `lastdayofyear` | ⛔ boundary |
 | `microsecond` | ⛔ boundary |
-| `millisecond` | ⛔ boundary |
-| `minute` | ⛔ boundary |
-| `month` | ⛔ boundary |
 | `monthabbr` | ⛔ boundary |
 | `monthday` | ⛔ boundary |
 | `monthname` | ⛔ boundary |
 | `nanosecond` | ⛔ boundary |
-| `now` | ⛔ boundary |
-| `quarterofyear` | ⛔ boundary |
+| `now` | ▽ out-of-scope |
 | `rata2datetime` | ⛔ boundary |
-| `second` | ⛔ boundary |
-| `today` | ⛔ boundary |
+| `today` | ▽ out-of-scope |
 | `tofirst` | ⛔ boundary |
 | `tolast` | ⛔ boundary |
 | `tonext` | ⛔ boundary |
 | `toprev` | ⛔ boundary |
-| `unix2datetime` | ⛔ boundary |
-| `week` | ⛔ boundary |
-| `year` | ⛔ boundary |
+| `unix2datetime` | ▽ out-of-scope |
 | `yearmonth` | ⛔ boundary |
 | `yearmonthday` | ⛔ boundary |
 
-**Types** (0/21 with verified ops): 
-`Date`, `DateFormat`, `DatePeriod`, `DateTime`, `Day`, `Hour`, `Microsecond`, `Millisecond`, `Minute`, `Month`, `Nanosecond`, `Period`, `Quarter`, `Second`, `Time`, `TimePeriod`, `TimeType`, `TimeZone`, `UTC`, `Week`, `Year`
+**Types** (9/21 with verified ops): 
+`Date`✅, `DateFormat`, `DatePeriod`, `DateTime`✅, `Day`✅, `Hour`✅, `Microsecond`, `Millisecond`, `Minute`✅, `Month`✅, `Nanosecond`, `Period`, `Quarter`, `Second`✅, `Time`, `TimePeriod`, `TimeType`, `TimeZone`, `UTC`, `Week`✅, `Year`✅
 
 
-## Random — 6% of in-scope functions supported
+## Random — 25% of in-scope functions supported
 
-Seeded Xoshiro/MT streams verified via the Random ext + bridge tests; OS-entropy RNGs defer to embedding imports.
+Seeded Xoshiro streams differentially fuzzed by test/fuzz/random_diff.jl: rand/randn/randexp/randperm/randcycle/shuffle. NB rand/randn are Base-owned (not in names(Random)) so they don't count below, but ARE verified. CAN'T: RandomDevice/seedless = host entropy (embedding); MersenneTwister state hits a codegen gap; randstring char-encoding differs.
 
-Functions: **1 supported**, 15 boundary, 0 out-of-scope (16 total). Types: 3/9 with verified construction/ops.
+Functions: **4 supported**, 12 boundary, 0 out-of-scope (16 total). Types: 1/9 with verified construction/ops.
 
 | function | status |
 |---|---|
-| `seed!` | ✅ supported |
+| `randcycle` | ✅ supported |
+| `randexp` | ✅ supported |
+| `randperm` | ✅ supported |
+| `shuffle` | ✅ supported |
 | `bitrand` | ⛔ boundary |
 | `default_rng` | ⛔ boundary |
 | `rand!` | ⛔ boundary |
-| `randcycle` | ⛔ boundary |
 | `randcycle!` | ⛔ boundary |
-| `randexp` | ⛔ boundary |
 | `randexp!` | ⛔ boundary |
 | `randn!` | ⛔ boundary |
-| `randperm` | ⛔ boundary |
 | `randperm!` | ⛔ boundary |
 | `randstring` | ⛔ boundary |
 | `randsubseq` | ⛔ boundary |
 | `randsubseq!` | ⛔ boundary |
-| `shuffle` | ⛔ boundary |
+| `seed!` | ⛔ boundary |
 | `shuffle!` | ⛔ boundary |
 
-**Types** (3/9 with verified ops): 
-`AbstractRNG`, `MersenneTwister`✅, `RandomDevice`, `Sampler`, `SamplerSimple`, `SamplerTrivial`, `SamplerType`, `TaskLocalRNG`✅, `Xoshiro`✅
+**Types** (1/9 with verified ops): 
+`AbstractRNG`, `MersenneTwister`, `RandomDevice`, `Sampler`, `SamplerSimple`, `SamplerTrivial`, `SamplerType`, `TaskLocalRNG`, `Xoshiro`✅
 
 
 ## Summary
@@ -247,6 +247,6 @@ Functions: **1 supported**, 15 boundary, 0 out-of-scope (16 total). Types: 3/9 w
 | stdlib | % in-scope supported | supported | boundary | out-of-scope |
 |---|---|---|---|---|
 | LinearAlgebra | **32%** | 34 | 71 | 1 |
-| Statistics | **54%** | 7 | 6 | 0 |
-| Dates | **4%** | 2 | 47 | 0 |
-| Random | **6%** | 1 | 15 | 0 |
+| Statistics | **77%** | 10 | 3 | 0 |
+| Dates | **57%** | 26 | 20 | 3 |
+| Random | **25%** | 4 | 12 | 0 |

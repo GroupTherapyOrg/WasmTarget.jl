@@ -150,6 +150,9 @@ function _build()
             add(:std, (VT,), Float64; mod = :stats)
             add(:quantile, (VT, Float64), Float64; mod = :stats, throws = true)
             add(:cor, (VT, VT), Float64; mod = :stats, throws = true)   # length mismatch throws
+            add(:cov, (VT, VT), Float64; mod = :stats, throws = true)   # covariance; len mismatch throws
+            add(:stdm, (VT, Float64), Float64; mod = :stats)            # std w/ provided mean
+            add(:varm, (VT, Float64), Float64; mod = :stats)            # var w/ provided mean
         end
         add(:sort, (VT,), VT; mod = :vector); add(:reverse, (VT,), VT; mod = :vector)
         add(:unique, (VT,), VT; mod = :vector)
