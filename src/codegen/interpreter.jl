@@ -1221,6 +1221,45 @@ end
     return result
 end
 
+# ─── copy/copyto!(Matrix) Overlay ─────────────────────────────────────────
+# Why: like copy(::Vector) above, Base.copy(::Matrix) and
+#      copyto!(::Matrix, ::Matrix) bulk-copy via foreigncall(:memmove). WASM has
+#      none, and (unlike the 1-D path) the 2-D memmove silently produced a ZERO
+#      matrix — a wrong-value miscompile that blocked triu/tril/copy and any
+#      matrix op routing through copy. Element-wise LINEAR-index copy is
+#      bit-identical to memmove (dense column-major), verified vs native.
+# Remove when: codegen lowers the 2-D memmove foreigncall.
+@overlay WASM_METHOD_TABLE function Base.copy(m::Matrix{T}) where T
+    result = similar(m)
+    @inbounds for i in eachindex(m)
+        result[i] = m[i]
+    end
+    return result
+end
+
+@overlay WASM_METHOD_TABLE function Base.copyto!(dest::Matrix{T}, src::Matrix{T}) where T
+    @inbounds for i in eachindex(src)
+        dest[i] = src[i]
+    end
+    return dest
+end
+
+# ─── (+)(Matrix, Matrix) Overlay ──────────────────────────────────────────
+# Why: Base.:+(A::Array, Bs::Array...) is VARARGS — the splat routes 2-D
+#      addition through a broadcast/`afoldl` instantiation that silently
+#      produced a ZERO matrix (the 2-arg `-(A,B)` and scalar `*` take a clean
+#      path and already work). Element-wise add is bit-identical and unblocks
+#      matrix `+`. (Only the Matrix+Matrix case; vectors already work.)
+# Remove when: codegen handles the varargs (+) broadcast instantiation for 2-D.
+@overlay WASM_METHOD_TABLE function Base.:+(a::Matrix{T}, b::Matrix{T}) where T
+    size(a) == size(b) || throw(DimensionMismatch("matrix add"))
+    r = similar(a)
+    @inbounds for i in eachindex(a)
+        r[i] = a[i] + b[i]
+    end
+    return r
+end
+
 # ─── filter Overlay ───────────────────────────────────────────────────────
 # Why: Base.filter creates new vectors using internal copy/resize machinery with foreigncalls.
 #      Pure Julia loop with push! overlay handles this cleanly.

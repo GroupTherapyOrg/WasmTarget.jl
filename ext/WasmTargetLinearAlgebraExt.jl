@@ -27,4 +27,33 @@ using Base.Experimental: @overlay
 @overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.dot(x::Vector{T}, y::Vector{T}) where {T<:Union{Float32,Float64}} =
     invoke(LinearAlgebra.dot, Tuple{AbstractArray,AbstractArray}, x, y)
 
+# MATMUL: *(::Matrix{<:BlasFloat}, ::Matrix/::Vector) dispatches to BLAS
+# gemm/gemv (matmul.jl), a ccall WT cannot lower (it silent-zeros). Reroute to
+# the textbook triple/double product — exactly what LinearAlgebra's own
+# generic_matmatmul!/generic_matvecmul! compute for non-BLAS types — which is
+# value-identical to BLAS modulo summation-ORDER rounding (oracle rtol 1e-9).
+# `invoke`-to-generic does NOT work here (the generic `*` re-dispatches through
+# mul! straight back to BLAS), so the kernel is written out. Verified vs native
+# 40/40 (matmul) and 40/40 (matvec).
+@overlay WasmTarget.WASM_METHOD_TABLE function Base.:*(A::Matrix{T}, B::Matrix{T}) where {T<:Union{Float32,Float64}}
+    mA, nA = size(A)
+    nA == size(B, 1) || throw(DimensionMismatch("matmul"))
+    nB = size(B, 2)
+    C = zeros(T, mA, nB)
+    @inbounds for j in 1:nB, k in 1:nA, i in 1:mA
+        C[i, j] += A[i, k] * B[k, j]
+    end
+    return C
+end
+
+@overlay WasmTarget.WASM_METHOD_TABLE function Base.:*(A::Matrix{T}, x::Vector{T}) where {T<:Union{Float32,Float64}}
+    mA, nA = size(A)
+    nA == length(x) || throw(DimensionMismatch("matvec"))
+    y = zeros(T, mA)
+    @inbounds for j in 1:nA, i in 1:mA
+        y[i] += A[i, j] * x[j]
+    end
+    return y
+end
+
 end # module

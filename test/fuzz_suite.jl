@@ -18,3 +18,18 @@
         @test_skip true
     end
 end
+
+# LinearAlgebra MATRIX surface — verified by direct differential sweeps (the
+# generator does Vector, not Matrix). run.jl above already loaded the bridge
+# modules into this scope.
+# Named "Differential fuzz: …" so runtests.jl's fuzz-log echo (which greps for
+# "Differential fuzz") surfaces its Pass/Total summary line.
+@testset "Differential fuzz: LinearAlgebra matrix" begin
+    if FuzzHarness.NODE_OK
+        include(joinpath(@__DIR__, "fuzz", "linalg_diff.jl"))
+        run_linalg_matrix_tests()
+    else
+        @info "LinearAlgebra matrix differential skipped — Node.js unavailable"
+        @test_skip true
+    end
+end

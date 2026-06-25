@@ -441,6 +441,39 @@ call LAPACK/BLAS directly with NO Base generic fallback, so they need
 GenericLinearAlgebra.jl's pure-Julia impls overlaid (weakdep + ext), verified
 under the tolerance oracle.
 
+### Matrix surface progress (Inc 3–4, 2026-06-24) — SHIPPED
+
+Prereq (1) cleared: `src/bridge.jl` now has return-side `mat` support (descriptor
++ rows/cols/get accessors + WALK_JS + `tree_matches`/`tree_decode`), mirroring the
+arg side. The matrix surface is verified by `test/fuzz/linalg_diff.jl` (direct
+differential sweeps; the generator does Vector, not Matrix), wired into the fuzz
+pass via `fuzz_suite.jl`. Each op is wrapped in a NAMED function so it is a
+CALLEE — overlays apply to callees, NOT to a bare op compiled as the bridge entry
+(real cell functions always CALL these ops, so this matches downstream).
+
+SHIPPED (oracle-verified vs native, all in `linalg_diff.jl`):
+- Pure (Approach A, no overlay): `permutedims`/transpose, `triu`, `tril`, `kron`,
+  `diagm`, `diag`, `tr`, `opnorm(M,1)`, `opnorm(M,Inf)`, `norm(M)` (Frobenius),
+  predicates `issymmetric`/`ishermitian`/`isdiag`/`istriu`/`istril`; matrix `-`,
+  scalar `*`, unary `-`.
+- Core overlays (`interpreter.jl`, mirror the `copy(::Vector)` one): `copy(::Matrix)`,
+  `copyto!(::Matrix,::Matrix)`, `+(::Matrix,::Matrix)`. **Why:** the 2-D `memmove`
+  foreigncall + the VARARGS `+(A::Array,Bs::Array...)` broadcast instantiation
+  silently produced a ZERO matrix (1-D copy/`-`/scalar-`*` already worked) — a
+  wrong-value miscompile that blocked `triu`/`tril`/`copy`/`+`. Element-wise loops
+  are bit-identical. (Another strict-mode silent-zero hole, like the `dot` BLAS
+  ccall — same flag for LOOP.md.)
+- Ext overlays (`WasmTargetLinearAlgebraExt`, BLAS reroute): matmul `*(::Matrix,::Matrix)`
+  and matvec `*(::Matrix,::Vector)` → the textbook triple/double product (what
+  `generic_matmatmul!` computes). `invoke`-to-generic does NOT work (generic `*`
+  re-dispatches via `mul!` back to BLAS), so the kernel is written out; value-
+  identical to BLAS modulo summation order (oracle rtol 1e-9), verified 40/40.
+
+STILL AHEAD: factorizations (`det`/`inv`/`\`/`lu`/`qr`/`svd`/`eigen`/`cholesky`/
+`rank`/`cond`/`pinv`) via GenericLinearAlgebra (prereq (2)); the 41 structured
+types (`Diagonal`/`Symmetric`/`Tridiagonal`/`Triangular`/`UniformScaling`); in-place
+`mul!`/`ldiv!`; strict-reject audit of `BLAS`/`LAPACK` submodules + `peakflops`.
+
 ## P5-trim: differential matrix (discovery=:trim vs :legacy), 2026-06-12
 
 | surface | 1.13 :trim | 1.12 :trim | legacy baseline |
