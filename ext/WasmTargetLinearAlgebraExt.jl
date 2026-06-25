@@ -69,6 +69,17 @@ end
     @inbounds for i in 1:mA; s = 0.0; for j in 1:nA; s += A[i, j] * x[j]; end; y[i] = s; end
     y
 end
+# axpy!/axpby! (BLAS) — y += a·x  /  y = a·x + b·y
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.axpy!(a::Number, x::Vector{Float64}, y::Vector{Float64})
+    length(x) == length(y) || throw(DimensionMismatch("axpy!"))
+    @inbounds for i in eachindex(x, y); y[i] += a * x[i]; end
+    y
+end
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.axpby!(a::Number, x::Vector{Float64}, b::Number, y::Vector{Float64})
+    length(x) == length(y) || throw(DimensionMismatch("axpby!"))
+    @inbounds for i in eachindex(x, y); y[i] = a * x[i] + b * y[i]; end
+    y
+end
 
 # det / logdet: native dispatches to LAPACK LU (getrf), a ccall WT cannot lower
 # (it silent-fails / emits invalid wasm). Reroute through Base's OWN pure-Julia

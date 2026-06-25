@@ -33,6 +33,8 @@ const LINALG_VERIFIED = Set{Symbol}([
     :diagm, :diag, :tr, :opnorm, :issymmetric, :ishermitian, :isdiag, :istriu,
     :istril, :det, :logdet, :inv, :svdvals, :eigvals, :eigmax, :eigmin, :cond,
     :rank, :checksquare, :hermitianpart, :lu, :cholesky, :eigen, :svd, :pinv, :mul!,
+    :triu!, :tril!, :normalize!, :lmul!, :rmul!, :axpy!, :axpby!,
+    :logabsdet, :condskeel, :transpose!, :adjoint!,
     # structured TYPES whose construction / ops / dense conversion are verified:
     :Diagonal, :Symmetric, :Hermitian, :UpperTriangular, :LowerTriangular,
 ])
@@ -133,6 +135,17 @@ _la_svdS(m)   = svd(m).S
 _la_pinv(m)   = pinv(m)
 _la_mulm(C, A, Bm) = mul!(C, A, Bm)
 _la_mulv(y, A, x)  = mul!(y, A, x)
+_la_triub(m)   = triu!(m)
+_la_trilb(m)   = tril!(m)
+_la_normb(v)   = normalize!(v)
+_la_lmul(a, m) = lmul!(a, m)
+_la_rmul(m, a) = rmul!(m, a)
+_la_axpy(a, x, y)     = axpy!(a, x, y)
+_la_axpby(a, x, b, y) = axpby!(a, x, b, y)
+_la_logabsd(m) = logabsdet(m)
+_la_condsk(m)  = condskeel(m)
+_la_transb(B, A) = transpose!(B, A)
+_la_adjb(B, A)   = adjoint!(B, A)
 
 function run_linalg_matrix_tests(; reps::Int = 40)
     FuzzHarness.NODE_OK || (@test_skip true; return)
@@ -241,5 +254,25 @@ function run_linalg_matrix_tests(; reps::Int = 40)
                 (zeros(a), _rmat(rng, a, k), _rvec(rng, k))) for _ in 1:reps ]
         @test _la_diff(_la_mulm, (_MF, _MF, _MF), mmm, _MF)   # mul!(C,A,B)
         @test _la_diff(_la_mulv, (_VF, _MF, _VF), mmv, _VF)   # mul!(y,A,x)
+    end
+    @testset "in-place !-variants" begin
+        lmm  = [ (n = rand(rng, 2:4); (2rand(rng) - 1, _rmat(rng, n, n))) for _ in 1:reps ]
+        rmm  = [ (n = rand(rng, 2:4); (_rmat(rng, n, n), 2rand(rng) - 1)) for _ in 1:reps ]
+        axy  = [ (n = rand(rng, 2:6); (2rand(rng) - 1, _rvec(rng, n), _rvec(rng, n))) for _ in 1:reps ]
+        axby = [ (n = rand(rng, 2:6); (2rand(rng) - 1, _rvec(rng, n), 2rand(rng) - 1, _rvec(rng, n))) for _ in 1:reps ]
+        @test _la_diff(_la_triub, (_MF,), sq,   _MF)                       # triu!
+        @test _la_diff(_la_trilb, (_MF,), sq,   _MF)                       # tril!
+        @test _la_diff(_la_normb, (_VF,), vins, _VF)                       # normalize!
+        @test _la_diff(_la_lmul,  (Float64, _MF), lmm,  _MF)              # lmul!(a,M)
+        @test _la_diff(_la_rmul,  (_MF, Float64), rmm,  _MF)              # rmul!(M,a)
+        @test _la_diff(_la_axpy,  (Float64, _VF, _VF), axy,  _VF)         # axpy!
+        @test _la_diff(_la_axpby, (Float64, _VF, Float64, _VF), axby, _VF) # axpby!
+    end
+    @testset "more helpers" begin
+        tpd = [ (r = rand(rng, 2:4); c = rand(rng, 2:4); (zeros(c, r), _rmat(rng, r, c))) for _ in 1:reps ]
+        @test _la_diff(_la_logabsd, (_MF,), dsq, Tuple{Float64,Float64})   # logabsdet (via generic LU)
+        @test _la_diff(_la_condsk,  (_MF,), dsq, Float64)                  # condskeel
+        @test _la_diff(_la_transb, (_MF, _MF), tpd, _MF)                   # transpose!(B,A)
+        @test _la_diff(_la_adjb,   (_MF, _MF), tpd, _MF)                   # adjoint!(B,A)
     end
 end

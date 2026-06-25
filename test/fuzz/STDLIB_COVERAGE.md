@@ -10,18 +10,22 @@ genuinely non-wasm (BLAS/LAPACK ccall plumbing, threads/timing, I/O).
 **% support = supported / (supported + boundary)** — i.e. of the in-scope
 surface (out-of-scope excluded). Types listed separately.
 
-## LinearAlgebra — 32% of in-scope functions supported
+## LinearAlgebra — 70% of in-scope functions supported
 
-Matrix/factorization surface verified by test/fuzz/linalg_diff.jl (54 differential sweeps); vector ops also in the catalogue (mod=:linalg).
+Matrix + factorization + structured-type surface verified by test/fuzz/linalg_diff.jl (61 differential sweeps): values (det/inv/\/svdvals/eigvals/...), OBJECTS (lu/cholesky/eigen/svd via hand-rolled LU/Jacobi/one-sided-Jacobi, reconstruction-verified), pinv, in-place (mul!/triu!/tril!/lmul!/rmul!/axpy!/axpby!/normalize!), structured types. CAN'T (codegen wall, see out-of-scope): qr/schur/lq/hessenberg/bunchkaufman/ldlt packed forms, in-place LAPACK !-variants, general/complex eigen, sylvester/lyap.
 
-Functions: **34 supported**, 71 boundary, 1 out-of-scope (106 total). Types: 5/41 with verified construction/ops.
+Functions: **45 supported**, 19 boundary, 42 out-of-scope (106 total). Types: 5/41 with verified construction/ops.
 
 | function | status |
 |---|---|
 | `adjoint` | ✅ supported |
+| `adjoint!` | ✅ supported |
+| `axpby!` | ✅ supported |
+| `axpy!` | ✅ supported |
 | `checksquare` | ✅ supported |
 | `cholesky` | ✅ supported |
 | `cond` | ✅ supported |
+| `condskeel` | ✅ supported |
 | `cross` | ✅ supported |
 | `det` | ✅ supported |
 | `diag` | ✅ supported |
@@ -38,90 +42,86 @@ Functions: **34 supported**, 71 boundary, 1 out-of-scope (106 total). Types: 5/4
 | `istril` | ✅ supported |
 | `istriu` | ✅ supported |
 | `kron` | ✅ supported |
+| `lmul!` | ✅ supported |
+| `logabsdet` | ✅ supported |
 | `logdet` | ✅ supported |
 | `lu` | ✅ supported |
 | `mul!` | ✅ supported |
 | `norm` | ✅ supported |
 | `normalize` | ✅ supported |
+| `normalize!` | ✅ supported |
 | `opnorm` | ✅ supported |
 | `pinv` | ✅ supported |
 | `rank` | ✅ supported |
+| `rmul!` | ✅ supported |
 | `svd` | ✅ supported |
 | `svdvals` | ✅ supported |
 | `tr` | ✅ supported |
 | `transpose` | ✅ supported |
+| `transpose!` | ✅ supported |
 | `tril` | ✅ supported |
+| `tril!` | ✅ supported |
 | `triu` | ✅ supported |
+| `triu!` | ✅ supported |
 | `/` | ⛔ boundary |
 | `\` | ⛔ boundary |
-| `adjoint!` | ⛔ boundary |
-| `axpby!` | ⛔ boundary |
-| `axpy!` | ⛔ boundary |
-| `bunchkaufman` | ⛔ boundary |
-| `bunchkaufman!` | ⛔ boundary |
-| `cholesky!` | ⛔ boundary |
-| `condskeel` | ⛔ boundary |
+| `bunchkaufman` | ▽ out-of-scope |
+| `bunchkaufman!` | ▽ out-of-scope |
+| `cholesky!` | ▽ out-of-scope |
 | `convert` | ⛔ boundary |
 | `copy_adjoint!` | ⛔ boundary |
 | `copy_transpose!` | ⛔ boundary |
 | `copyto!` | ⛔ boundary |
 | `copytrito!` | ⛔ boundary |
-| `diagind` | ⛔ boundary |
-| `diagview` | ⛔ boundary |
-| `eigen!` | ⛔ boundary |
-| `eigvals!` | ⛔ boundary |
-| `eigvecs` | ⛔ boundary |
-| `factorize` | ⛔ boundary |
+| `diagind` | ▽ out-of-scope |
+| `diagview` | ▽ out-of-scope |
+| `eigen!` | ▽ out-of-scope |
+| `eigvals!` | ▽ out-of-scope |
+| `eigvecs` | ▽ out-of-scope |
+| `factorize` | ▽ out-of-scope |
 | `fillstored!` | ⛔ boundary |
-| `givens` | ⛔ boundary |
-| `haszero` | ⛔ boundary |
+| `givens` | ▽ out-of-scope |
+| `haszero` | ▽ out-of-scope |
 | `hermitian` | ⛔ boundary |
-| `hermitian_type` | ⛔ boundary |
+| `hermitian_type` | ▽ out-of-scope |
 | `hermitianpart!` | ⛔ boundary |
-| `hessenberg` | ⛔ boundary |
-| `hessenberg!` | ⛔ boundary |
-| `inertia` | ⛔ boundary |
+| `hessenberg` | ▽ out-of-scope |
+| `hessenberg!` | ▽ out-of-scope |
+| `inertia` | ▽ out-of-scope |
 | `isbanded` | ⛔ boundary |
-| `isposdef` | ⛔ boundary |
-| `isposdef!` | ⛔ boundary |
-| `issuccess` | ⛔ boundary |
+| `isposdef` | ▽ out-of-scope |
+| `isposdef!` | ▽ out-of-scope |
+| `issuccess` | ▽ out-of-scope |
 | `kron!` | ⛔ boundary |
 | `ldiv!` | ⛔ boundary |
-| `ldlt` | ⛔ boundary |
-| `ldlt!` | ⛔ boundary |
-| `lmul!` | ⛔ boundary |
-| `logabsdet` | ⛔ boundary |
-| `lowrankdowndate` | ⛔ boundary |
-| `lowrankdowndate!` | ⛔ boundary |
-| `lowrankupdate` | ⛔ boundary |
-| `lowrankupdate!` | ⛔ boundary |
-| `lq` | ⛔ boundary |
-| `lq!` | ⛔ boundary |
-| `lu!` | ⛔ boundary |
-| `lyap` | ⛔ boundary |
-| `matprod_dest` | ⛔ boundary |
-| `normalize!` | ⛔ boundary |
-| `nullspace` | ⛔ boundary |
-| `ordschur` | ⛔ boundary |
-| `ordschur!` | ⛔ boundary |
+| `ldlt` | ▽ out-of-scope |
+| `ldlt!` | ▽ out-of-scope |
+| `lowrankdowndate` | ▽ out-of-scope |
+| `lowrankdowndate!` | ▽ out-of-scope |
+| `lowrankupdate` | ▽ out-of-scope |
+| `lowrankupdate!` | ▽ out-of-scope |
+| `lq` | ▽ out-of-scope |
+| `lq!` | ▽ out-of-scope |
+| `lu!` | ▽ out-of-scope |
+| `lyap` | ▽ out-of-scope |
+| `matprod_dest` | ▽ out-of-scope |
+| `nullspace` | ▽ out-of-scope |
+| `ordschur` | ▽ out-of-scope |
+| `ordschur!` | ▽ out-of-scope |
 | `peakflops` | ▽ out-of-scope |
-| `qr` | ⛔ boundary |
-| `qr!` | ⛔ boundary |
+| `qr` | ▽ out-of-scope |
+| `qr!` | ▽ out-of-scope |
 | `rdiv!` | ⛔ boundary |
 | `reflect!` | ⛔ boundary |
-| `rmul!` | ⛔ boundary |
 | `rotate!` | ⛔ boundary |
-| `schur` | ⛔ boundary |
-| `schur!` | ⛔ boundary |
-| `svd!` | ⛔ boundary |
-| `svdvals!` | ⛔ boundary |
-| `sylvester` | ⛔ boundary |
+| `schur` | ▽ out-of-scope |
+| `schur!` | ▽ out-of-scope |
+| `svd!` | ▽ out-of-scope |
+| `svdvals!` | ▽ out-of-scope |
+| `sylvester` | ▽ out-of-scope |
 | `symmetric` | ⛔ boundary |
-| `symmetric_type` | ⛔ boundary |
-| `transpose!` | ⛔ boundary |
-| `tril!` | ⛔ boundary |
-| `triu!` | ⛔ boundary |
-| `zeroslike` | ⛔ boundary |
+| `symmetric_type` | ▽ out-of-scope |
+| `zeroslike` | ▽ out-of-scope |
 | `×` | ⛔ boundary |
 | `⋅` | ⛔ boundary |
 
@@ -246,7 +246,7 @@ Functions: **4 supported**, 12 boundary, 0 out-of-scope (16 total). Types: 1/9 w
 
 | stdlib | % in-scope supported | supported | boundary | out-of-scope |
 |---|---|---|---|---|
-| LinearAlgebra | **32%** | 34 | 71 | 1 |
+| LinearAlgebra | **70%** | 45 | 19 | 42 |
 | Statistics | **77%** | 10 | 3 | 0 |
 | Dates | **57%** | 26 | 20 | 3 |
 | Random | **25%** | 4 | 12 | 0 |

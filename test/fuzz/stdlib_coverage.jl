@@ -42,8 +42,22 @@ end
 const SPECS = StdSpec[
     StdSpec("LinearAlgebra", LinearAlgebra,
         union(LINALG_VERIFIED, _catset(:linalg)),
-        Set([:BLAS, :LAPACK, :peakflops]),
-        "Matrix/factorization surface verified by test/fuzz/linalg_diff.jl (54 differential sweeps); vector ops also in the catalogue (mod=:linalg)."),
+        # genuine CAN'T: LAPACK-packed factorizations WT can't lower (Householder
+        # reflectors / Schur form) and have no tractable hand-roll; in-place
+        # LAPACK `!`-variants of the object factorizations; general/complex eigen
+        # (Jacobi is symmetric-only); matrix equations needing Schur; host/timing.
+        Set([:peakflops,
+             :qr, :qr!, :lq, :lq!, :schur, :schur!, :ordschur, :ordschur!,
+             :hessenberg, :hessenberg!, :bunchkaufman, :bunchkaufman!, :ldlt, :ldlt!,
+             :factorize, :lu!, :svd!, :svdvals!, :eigen!, :eigvals!, :eigvecs,
+             :cholesky!, :sylvester, :lyap, :nullspace, :lowrankupdate,
+             :lowrankupdate!, :lowrankdowndate, :lowrankdowndate!,
+             :givens, :diagind, :diagview,
+             # isposdef routes through cholesky's LAPACK check (validation error);
+             # the rest are internal type-computers / dispatch helpers, not value ops.
+             :isposdef, :isposdef!, :matprod_dest, :zeroslike, :haszero,
+             :hermitian_type, :symmetric_type, :inertia, :issuccess]),
+        "Matrix + factorization + structured-type surface verified by test/fuzz/linalg_diff.jl (61 differential sweeps): values (det/inv/\\/svdvals/eigvals/...), OBJECTS (lu/cholesky/eigen/svd via hand-rolled LU/Jacobi/one-sided-Jacobi, reconstruction-verified), pinv, in-place (mul!/triu!/tril!/lmul!/rmul!/axpy!/axpby!/normalize!), structured types. CAN'T (codegen wall, see out-of-scope): qr/schur/lq/hessenberg/bunchkaufman/ldlt packed forms, in-place LAPACK !-variants, general/complex eigen, sylvester/lyap."),
     StdSpec("Statistics", Statistics,
         _catset(:stats),
         Set{Symbol}(),
