@@ -59,4 +59,21 @@ end
     SparseMatrixCSC{Float64,Int64}(m, n, colptr, rowval, nzval)
 end
 
+# (3) The generic OUTER constructor `SparseMatrixCSC(m, n, colptr, rowval, nzval)`
+# computes `Tv = eltype(nzval)` / `Ti = promote_type(...)` at runtime and builds
+# `SparseMatrixCSC{Tv,Ti}(...)` via a runtime `Core.apply_type`. WT disables
+# concrete-eval (to respect overlays), so those type-level calls survive as
+# runtime apply_type, which WT mis-lowers → a SILENTLY WRONG struct (right shape,
+# wrong field contents). Every result-building op that funnels through this outer
+# ctor (copy / scalar·sparse / sparse·sparse / dropzeros / …) is affected. Route
+# it straight to the concrete inner ctor (Tv=Float64, Ti=Int64 are statically the
+# only types WT compiles); bit-identical for well-formed Float64/Int64 CSCs (the
+# outer ctor's extra work — sparse_check + an over-length resize! that never fires
+# for valid buffers — is redundant here). Requires the `is_struct_type` carve-out
+# (src/codegen/structs.jl) that registers SparseMatrixCSC as a real 5-field struct.
+@overlay WasmTarget.WASM_METHOD_TABLE function SparseArrays.SparseMatrixCSC(
+        m::Integer, n::Integer, colptr::Vector{Int64}, rowval::Vector{Int64}, nzval::Vector{Float64})
+    SparseMatrixCSC{Float64,Int64}(Int(m), Int(n), colptr, rowval, nzval)
+end
+
 end # module

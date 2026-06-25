@@ -788,3 +788,33 @@ SOUNDNESS-LOOP CANDIDATE: the `Vector{Type}[3]` is a WT internal crash worth
 root-causing (an arg-count/type-vector indexing bug in some codegen path). The
 genuine wall remains `\`/factorizations (SuiteSparse C library → needs pure-Julia
 sparse LU/KLU).
+
+## SparseArrays — STEP 2 (the elegant fix, 2026-06-25)
+The step-1 "Vector{Type}[3]" crash on result-building ops turned out to be a
+clean WT bug + a clean overlay, NOT a hand-roll job — found by stepping back:
+
+  • CORE: `is_struct_type` (src/codegen/structs.jl) excluded EVERY AbstractArray
+    subtype from real struct registration, so SparseMatrixCSC (a 5-field struct
+    that merely IMPLEMENTS the array interface) got WT's 2-field array layout →
+    its 5-field result-`:new` crashed compile_new. Carve the sparse types out.
+    Verified SAFE (diagnostic: field access / nnz / densify / matvec all stay
+    correct with it; full-suite regression-gated green).
+  • EXT: the generic outer ctor `SparseMatrixCSC(m,n,colptr,rowval,nzval)` computes
+    `Tv=eltype(nzval)`/`Ti=promote_type(...)` at runtime and builds `{Tv,Ti}(...)`
+    via a runtime `Core.apply_type`. WT disables concrete-eval (to respect
+    overlays), so that survives as runtime apply_type → SILENTLY WRONG struct
+    (right shape, wrong contents — every result op through this ctor was wrong).
+    Route to the concrete inner ctor. Bit-identical for Float64/Int64 CSCs.
+
+Unlocked CORRECT (differentially verified): sparse*sparse (MATMUL), scalar*sparse,
+copy, dropzeros, spzeros. SparseArrays 25→35%.
+
+REMAINING (step 3) — same root, deeper: `+`/`-`/`transpose`/`spdiagm`/`hcat`/
+`vcat`/`blockdiag` allocate via `spzeros(Tv,Ti,…)` / `SparseMatrixCSC{Tv,Ti}(…)`
+with RUNTIME-but-INFERABLE type params. The ELEGANT endgame is a WT const-fold:
+when an SSA value infers to `Type{X}` with concrete X (which inference already
+knows), emit the constant X instead of a dynamic `apply_type`/dynamic call. That
+ONE codegen improvement unlocks all the remaining sparse result-ops generically —
+and retroactively simplifies the `cor` / `sparse_check_Ti` overlays (same class).
+LESSON (recurring): step back and analyze the ROOT; the pure WT fix is usually
+hiding under what looks like N separate op failures.

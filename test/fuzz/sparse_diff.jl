@@ -40,7 +40,8 @@ _sp_rvec(rng, n)    = Float64[2rand(rng) - 1 for _ in 1:n]
 
 # SparseArrays names this file verifies (for stdlib_coverage.jl). `sparse`/`nnz`
 # directly; the value ops below ground that sparse arithmetic is correct.
-const SPARSE_VERIFIED = Set{Symbol}([:sparse, :nnz, :issparse, :nonzeros, :rowvals])
+const SPARSE_VERIFIED = Set{Symbol}([:sparse, :nnz, :issparse, :nonzeros, :rowvals,
+    :spzeros, :dropzeros])
 
 # dense-in / dense-out wrappers, sparse used internally
 _sp_round(A)   = Matrix(sparse(A))            # construct + densify (round-trip)
@@ -52,6 +53,13 @@ _sp_sum(A)     = sum(sparse(A))               # full reduction
 _sp_max(A)     = maximum(abs, sparse(A))      # mapped reduction
 _sp_mv(A, x)   = sparse(A) * x                # sparse · vector
 _sp_spdense(A) = Matrix(sparse(A) * Matrix(sparse(A)))  # sparse · dense
+# result-building ops (unlocked by the is_struct_type carve-out + the outer-ctor
+# overlay) — each builds a NEW sparse result, compared densified
+_sp_matmul(A, B) = Matrix(sparse(A) * sparse(B))   # sparse · sparse → sparse
+_sp_scale(A)     = Matrix(2.5 * sparse(A))         # scalar · sparse
+_sp_copy(A)      = Matrix(copy(sparse(A)))         # copy
+_sp_drop(A)      = Matrix(dropzeros(sparse(A)))    # dropzeros
+_sp_spz(n)       = Matrix(spzeros(n, n))           # spzeros
 
 function run_sparse_tests(; reps::Int = 40)
     FuzzHarness.NODE_OK || (@test_skip true; return)
@@ -70,5 +78,13 @@ function run_sparse_tests(; reps::Int = 40)
         @test _sp_diff(_sp_max,     (Matrix{Float64},), sq(), Float64)        # maximum(abs,·)
         @test _sp_diff(_sp_mv,      (Matrix{Float64}, Vector{Float64}), sqv(), Vector{Float64})  # S·x
         @test _sp_diff(_sp_spdense, (Matrix{Float64},), sq(), Matrix{Float64})  # S·dense
+    end
+    @testset "result-building ops (carve-out + outer-ctor overlay)" begin
+        ssq() = [ (n = rand(rng, 2:4); (_sp_rmat(rng, n, n), _sp_rmat(rng, n, n))) for _ in 1:reps ]
+        @test _sp_diff(_sp_matmul, (Matrix{Float64}, Matrix{Float64}), ssq(), Matrix{Float64})  # S·S
+        @test _sp_diff(_sp_scale,  (Matrix{Float64},), sq(), Matrix{Float64})                   # a·S
+        @test _sp_diff(_sp_copy,   (Matrix{Float64},), sq(), Matrix{Float64})                   # copy
+        @test _sp_diff(_sp_drop,   (Matrix{Float64},), sq(), Matrix{Float64})                   # dropzeros
+        @test _sp_diff(_sp_spz,    (Int64,), [ (rand(rng, 2:6),) for _ in 1:reps ], Matrix{Float64})  # spzeros
     end
 end
