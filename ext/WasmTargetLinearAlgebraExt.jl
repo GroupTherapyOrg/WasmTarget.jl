@@ -56,6 +56,20 @@ end
     return y
 end
 
+# in-place mul! — C/y are written, then returned (BLAS gemm!/gemv! otherwise).
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.mul!(C::Matrix{Float64}, A::Matrix{Float64}, B::Matrix{Float64})
+    mA = size(A, 1); nA = size(A, 2); nB = size(B, 2)
+    @inbounds for j in 1:nB, i in 1:mA
+        s = 0.0; for k in 1:nA; s += A[i, k] * B[k, j]; end; C[i, j] = s
+    end
+    C
+end
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.mul!(y::Vector{Float64}, A::Matrix{Float64}, x::Vector{Float64})
+    mA = size(A, 1); nA = size(A, 2)
+    @inbounds for i in 1:mA; s = 0.0; for j in 1:nA; s += A[i, j] * x[j]; end; y[i] = s; end
+    y
+end
+
 # det / logdet: native dispatches to LAPACK LU (getrf), a ccall WT cannot lower
 # (it silent-fails / emits invalid wasm). Reroute through Base's OWN pure-Julia
 # `generic_lufact!` — the SAME partial-pivot LU native uses, just non-BLAS — and

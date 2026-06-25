@@ -117,6 +117,8 @@ _la_eigvalo(m) = eigen(Symmetric(m)).values
 _la_svdrec(m) = (F = svd(m); F.U * (Diagonal(F.S) * F.Vt))
 _la_svdS(m)   = svd(m).S
 _la_pinv(m)   = pinv(m)
+_la_mulm(C, A, Bm) = mul!(C, A, Bm)
+_la_mulv(y, A, x)  = mul!(y, A, x)
 
 function run_linalg_matrix_tests(; reps::Int = 40)
     FuzzHarness.NODE_OK || (@test_skip true; return)
@@ -217,5 +219,13 @@ function run_linalg_matrix_tests(; reps::Int = 40)
     @testset "pinv (via svd)" begin
         frm = [ (r = rand(rng, 2:4); c = rand(rng, 2:4); (_rfr(rng, r, c),)) for _ in 1:reps ]
         @test _la_diff(_la_pinv, (_MF,), frm, _MF)   # V·Σ⁺·Uᵀ
+    end
+    @testset "in-place mul!" begin
+        mmm = [ (a = rand(rng, 2:4); k = rand(rng, 2:4); b = rand(rng, 2:4);
+                (zeros(a, b), _rmat(rng, a, k), _rmat(rng, k, b))) for _ in 1:reps ]
+        mmv = [ (a = rand(rng, 2:4); k = rand(rng, 2:4);
+                (zeros(a), _rmat(rng, a, k), _rvec(rng, k))) for _ in 1:reps ]
+        @test _la_diff(_la_mulm, (_MF, _MF, _MF), mmm, _MF)   # mul!(C,A,B)
+        @test _la_diff(_la_mulv, (_VF, _MF, _VF), mmv, _VF)   # mul!(y,A,x)
     end
 end

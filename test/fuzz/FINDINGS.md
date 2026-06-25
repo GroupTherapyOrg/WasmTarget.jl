@@ -517,6 +517,7 @@ shipped overlay is oracle-verified; the boundary surface either loud-rejects
 ✅ SUPPORTED + oracle-verified (~50 names), Float64 (+ Float32/Int where noted):
 - vector: `norm` `normalize` `cross` `dot`(all elt types)
 - arithmetic: `+` `-` `*`(matmul/matvec) scalar-`*` `copy` `copyto!`
+  `mul!`(in-place matmul + matvec)
 - shape/extract: `transpose`/`adjoint`(eager) `permutedims` `triu` `tril` `kron`
   `diagm` `diag` `tr` `checksquare`
 - norms: `opnorm`(1/2/∞) `norm`(Frobenius) `cond`
@@ -550,9 +551,9 @@ shipped overlay is oracle-verified; the boundary surface either loud-rejects
 - `nullspace` — SVD-based; the null-space basis is rotation/sign-ambiguous vs
   LAPACK (and returns an n×0 matrix for full rank) → not cleanly differential-
   verifiable (boundary).
-- in-place `mul!`/`ldiv!`/`rdiv!`/`lmul!`/`rmul!`/`axpy!`/`axpby!` (mutating;
-  moderate); structured ops beyond matvec (Tridiagonal/Bidiagonal/SymTridiagonal);
-  `kron!` — not yet covered (tractable follow-ups).
+- in-place `ldiv!`/`rdiv!`/`lmul!`/`rmul!`/`axpy!`/`axpby!` (mutating; `mul!`
+  ships, the rest are tractable follow-ups via the same pattern); structured ops
+  beyond matvec (Tridiagonal/Bidiagonal/SymTridiagonal); `kron!`.
 - `sylvester` `lyap` — Bartels–Stewart needs `schur` (object). `lowrankupdate/
   downdate`, `givens` `rotate!` `reflect!`, in-place `mul!`/`ldiv!`/`rdiv!`/
   `lmul!`/`rmul!`/`axpy!`/`axpby!`, `condskeel` `isbanded` `diagind` `diagview`
