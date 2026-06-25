@@ -14,13 +14,14 @@
 # per stdlib and over the FULL surface with a real support percentage.
 
 using WasmTarget   # linalg_diff.jl references WasmTarget.Bridge at include time
-using LinearAlgebra, Statistics, Dates, Random
+using LinearAlgebra, Statistics, Dates, Random, SparseArrays
 const _SCDIR = @__DIR__
 include(joinpath(_SCDIR, "catalogue.jl"));   using .FuzzCatalogue
 include(joinpath(_SCDIR, "linalg_diff.jl"))   # → LINALG_VERIFIED
 include(joinpath(_SCDIR, "dates_diff.jl"))    # → DATES_VERIFIED
 include(joinpath(_SCDIR, "random_diff.jl"))   # → RANDOM_VERIFIED
 include(joinpath(_SCDIR, "stats_diff.jl"))    # → STATS_VERIFIED
+include(joinpath(_SCDIR, "sparse_diff.jl"))   # → SPARSE_VERIFIED
 
 # ── catalogue-verified names, grouped by the Base module a `mod` tag maps to ──
 const _CAT_BY_MOD = let d = Dict{Symbol,Set{Symbol}}()
@@ -81,6 +82,15 @@ const SPECS = StdSpec[
         #  • default_rng/RandomDevice: host/OS entropy (defers to embedding).
         Set([:rand!, :randn!, :randexp!, :bitrand, :default_rng, :RandomDevice]),
         "Seeded Xoshiro streams differentially fuzzed by test/fuzz/random_diff.jl on Julia ≤1.12: rand/randn/randexp (scalar), randperm/randcycle/shuffle & their `!`-variants, seed!, randsubseq/randsubseq!, randstring (ext overlay via native's OWN collection bulk fill). NB rand/randn are Base-owned (not in names(Random)) so they don't count below, but ARE verified. VERSION CAVEAT: the ENTIRE seeded-Xoshiro differential is gated to ≤1.12 — on Julia 1.13-rc1 it is broadly UNRELIABLE (CI shows flaky wasm↔native divergences across all seeded streams, even basic rand(Xoshiro(s)), and across platforms; 1.13 reworked Xoshiro seeding via a new SeedHasher path the differential can't reproduce stably). So RANDOM_VERIFIED is empty on ≥1.13 and this % is a ≤1.12 measurement (the stable release the campaign targets); the 1.13-rc1 instability is logged in FINDINGS as a soundness-loop candidate. CAN'T (all versions): rand!/randn!/randexp! Float64-array fills route through an 8-lane SIMD bulk generator (llvmcall intrinsics; stream ≠ scalar for n≥8); bitrand (BitVector packed bits); default_rng/RandomDevice (host entropy); MersenneTwister state hits a codegen gap."),
+    StdSpec("SparseArrays", SparseArrays,
+        SPARSE_VERIFIED,
+        # genuine CAN'T (for now): sprand/sprandn route through the Random
+        # seeded-Xoshiro differential which is itself gated (see Random); the
+        # SuiteSparse-backed factorizations (reached via `\`, not a name here) are
+        # a C library that needs a pure-Julia sparse LU. fkeep!/ftranspose! take
+        # function arguments (closures the generator can't compose).
+        Set([:sprand, :sprandn]),
+        "FOUNDATION (step 1) differentially fuzzed by test/fuzz/sparse_diff.jl: `sparse(::Matrix)` construction is unlocked by 2 ext overlays (sparse_check_Ti — drop the Ti-parameterized `throwTi` closure; + a hand-rolled dense→CSC sidestepping the generic path's dynamic getfield), after which nnz/issparse/nonzeros/rowvals + reductions (sum/maximum) + sparse·vector + sparse·dense compile from the real impls and match native. BOUNDARY (next increments): ops that BUILD a new sparse result (sparse*sparse, sparse±sparse, transpose, scalar*sparse) trip a WT codegen crash (`BoundsError: Vector{Type}[3]`) in the generic result-CSC construction — to be hand-rolled like the LinearAlgebra factorizations; plus spzeros/spdiagm/blockdiag/permute/dropzeros!/findnz/nzrange. CAN'T: `\`/factorizations (SuiteSparse C library)."),
 ]
 
 # is `nm` a Type / a Function / other, in module `M`?

@@ -242,6 +242,41 @@ Functions: **11 supported**, 0 boundary, 5 out-of-scope (16 total). Types: 1/9 w
 `AbstractRNG`, `MersenneTwister`, `RandomDevice`, `Sampler`, `SamplerSimple`, `SamplerTrivial`, `SamplerType`, `TaskLocalRNG`, `Xoshiro`✅
 
 
+## SparseArrays — 25% of in-scope functions supported
+
+FOUNDATION (step 1) differentially fuzzed by test/fuzz/sparse_diff.jl: `sparse(::Matrix)` construction is unlocked by 2 ext overlays (sparse_check_Ti — drop the Ti-parameterized `throwTi` closure; + a hand-rolled dense→CSC sidestepping the generic path's dynamic getfield), after which nnz/issparse/nonzeros/rowvals + reductions (sum/maximum) + sparse·vector + sparse·dense compile from the real impls and match native. BOUNDARY (next increments): ops that BUILD a new sparse result (sparse*sparse, sparse±sparse, transpose, scalar*sparse) trip a WT codegen crash (`BoundsError: Vector{Type}[3]`) in the generic result-CSC construction — to be hand-rolled like the LinearAlgebra factorizations; plus spzeros/spdiagm/blockdiag/permute/dropzeros!/findnz/nzrange. CAN'T: ``/factorizations (SuiteSparse C library).
+
+Functions: **5 supported**, 15 boundary, 2 out-of-scope (22 total). Types: 0/5 with verified construction/ops.
+
+| function | status |
+|---|---|
+| `issparse` | ✅ supported |
+| `nnz` | ✅ supported |
+| `nonzeros` | ✅ supported |
+| `rowvals` | ✅ supported |
+| `sparse` | ✅ supported |
+| `blockdiag` | ⛔ boundary |
+| `droptol!` | ⛔ boundary |
+| `dropzeros` | ⛔ boundary |
+| `dropzeros!` | ⛔ boundary |
+| `findnz` | ⛔ boundary |
+| `fkeep!` | ⛔ boundary |
+| `ftranspose!` | ⛔ boundary |
+| `nzrange` | ⛔ boundary |
+| `permute` | ⛔ boundary |
+| `sparse_hcat` | ⛔ boundary |
+| `sparse_hvcat` | ⛔ boundary |
+| `sparse_vcat` | ⛔ boundary |
+| `sparsevec` | ⛔ boundary |
+| `spdiagm` | ⛔ boundary |
+| `sprand` | ▽ out-of-scope |
+| `sprandn` | ▽ out-of-scope |
+| `spzeros` | ⛔ boundary |
+
+**Types** (0/5 with verified ops): 
+`AbstractSparseArray`, `AbstractSparseMatrix`, `AbstractSparseVector`, `SparseMatrixCSC`, `SparseVector`
+
+
 ## Summary
 
 | stdlib | % in-scope supported | supported | boundary | out-of-scope |
@@ -250,3 +285,4 @@ Functions: **11 supported**, 0 boundary, 5 out-of-scope (16 total). Types: 1/9 w
 | Statistics | **100%** | 13 | 0 | 0 |
 | Dates | **96%** | 45 | 2 | 2 |
 | Random | **100%** | 11 | 0 | 5 |
+| SparseArrays | **25%** | 5 | 15 | 2 |

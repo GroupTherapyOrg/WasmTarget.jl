@@ -1,0 +1,74 @@
+# ============================================================================
+# Differential fuzz of the SparseArrays stdlib — FOUNDATION (step 1).
+# ============================================================================
+# SparseArrays construction (`sparse(::Matrix)`) is unlocked by two overlays in
+# ext/WasmTargetSparseArraysExt.jl (sparse_check_Ti + a hand-rolled dense→CSC).
+# Once a CSC exists, the READ/REDUCE/MATVEC paths compile from the real
+# SparseArrays implementations. This file differentially verifies that
+# foundation (wasm vs native, same oracle as core): construction round-trips,
+# nnz, reductions, sparse·vector, sparse·dense.
+#
+# Tested dense-in / dense-out (sparse used INTERNALLY) so the matrix bridge can
+# marshal inputs/outputs — mirrors how linalg_diff verifies factorization objects.
+# Loaded by fuzz_suite.jl AFTER fuzz/run.jl. Entry: run_sparse_tests().
+# Exports SPARSE_VERIFIED for stdlib_coverage.jl.
+
+using SparseArrays
+using LinearAlgebra
+using Random
+using Test
+
+const _SP_B = WasmTarget.Bridge
+
+function _sp_diff(fn, argTs::Tuple, inputs::Vector, rettype)
+    res = bridge_run_args(fn, argTs, inputs; rettype = rettype)
+    res isa Vector || return false
+    rdesc = _SP_B.descriptor(rettype)[1]
+    for (i, r) in enumerate(res)
+        a = inputs[i]
+        nat = try (true, fn(deepcopy.(a)...)) catch; (false, nothing) end
+        ok = r[1] === :ok ? (nat[1] && _SP_B.tree_matches(rdesc, nat[2], r[2])) : !nat[1]
+        ok || return false
+    end
+    return true
+end
+
+# deterministic sparse-ish dense generators (≈half the entries zeroed)
+_sp_rmat(rng, m, n) = (A = Float64[2rand(rng) - 1 for _ in 1:m, _ in 1:n];
+                       for i in eachindex(A); rand(rng) < 0.5 && (A[i] = 0.0); end; A)
+_sp_rvec(rng, n)    = Float64[2rand(rng) - 1 for _ in 1:n]
+
+# SparseArrays names this file verifies (for stdlib_coverage.jl). `sparse`/`nnz`
+# directly; the value ops below ground that sparse arithmetic is correct.
+const SPARSE_VERIFIED = Set{Symbol}([:sparse, :nnz, :issparse, :nonzeros, :rowvals])
+
+# dense-in / dense-out wrappers, sparse used internally
+_sp_round(A)   = Matrix(sparse(A))            # construct + densify (round-trip)
+_sp_nnz(A)     = nnz(sparse(A))               # structural nonzero count
+_sp_isspar(A)  = issparse(sparse(A))          # predicate (always true)
+_sp_nzsum(A)   = sum(nonzeros(sparse(A)))     # nonzeros() + reduce
+_sp_rowsum(A)  = sum(rowvals(sparse(A)))      # rowvals() + reduce (Int)
+_sp_sum(A)     = sum(sparse(A))               # full reduction
+_sp_max(A)     = maximum(abs, sparse(A))      # mapped reduction
+_sp_mv(A, x)   = sparse(A) * x                # sparse · vector
+_sp_spdense(A) = Matrix(sparse(A) * Matrix(sparse(A)))  # sparse · dense
+
+function run_sparse_tests(; reps::Int = 40)
+    FuzzHarness.NODE_OK || (@test_skip true; return)
+    rng = MersenneTwister(0x5A11)
+    sq()  = [ (n = rand(rng, 2:5); (_sp_rmat(rng, n, n),)) for _ in 1:reps ]
+    sqv() = [ (n = rand(rng, 2:5); (_sp_rmat(rng, n, n), _sp_rvec(rng, n))) for _ in 1:reps ]
+    @testset "construction + queries" begin
+        @test _sp_diff(_sp_round,  (Matrix{Float64},), sq(), Matrix{Float64})  # sparse + Matrix
+        @test _sp_diff(_sp_nnz,    (Matrix{Float64},), sq(), Int64)            # nnz
+        @test _sp_diff(_sp_isspar, (Matrix{Float64},), sq(), Bool)            # issparse
+        @test _sp_diff(_sp_nzsum,  (Matrix{Float64},), sq(), Float64)         # nonzeros
+        @test _sp_diff(_sp_rowsum, (Matrix{Float64},), sq(), Int64)           # rowvals
+    end
+    @testset "reductions + products" begin
+        @test _sp_diff(_sp_sum,     (Matrix{Float64},), sq(), Float64)        # sum
+        @test _sp_diff(_sp_max,     (Matrix{Float64},), sq(), Float64)        # maximum(abs,·)
+        @test _sp_diff(_sp_mv,      (Matrix{Float64}, Vector{Float64}), sqv(), Vector{Float64})  # S·x
+        @test _sp_diff(_sp_spdense, (Matrix{Float64},), sq(), Matrix{Float64})  # S·dense
+    end
+end

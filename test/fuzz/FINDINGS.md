@@ -757,3 +757,34 @@ SOUNDNESS-LOOP CANDIDATES (open):
       `rand(Xoshiro(s))` (compiles trivial fns; CI's test env compiles rand fine),
       so 1.13 currently can't be exercised locally before pushing. This blocked
       fast iteration on the above.
+
+## SparseArrays — integration STEP 1 (foundation, 2026-06-25) — toward SciML
+First stdlib of the SciML push. Goal: sparse Jacobians + sparse linear systems.
+The blocker is at the very bottom — constructing a `SparseMatrixCSC` at all:
+
+  • `SparseMatrixCSC` inner ctor calls `sparse_check_Ti(m, n, Ti)`, which builds a
+    `Ti`-parameterized inner closure `throwTi` whose type is formed via
+    `Core.apply_type` on a runtime Type → WT can't lower (same class as the `cor`
+    type-instability). WT only compiles Ti=Int64, where bounds always hold →
+    OVERLAY with inline validation, no closure.
+  • The generic dense→CSC `sparse(::AbstractMatrix)` path additionally trips an
+    unresolved dynamic `getfield(::SparseMatrixCSC, ::Symbol)` → OVERLAY
+    `sparse(::Matrix{Float64})` with a textbook column-scan CSC build via the
+    (now-compilable) low-level constructor. Bit-identical to native.
+
+With those two overlays (ext/WasmTargetSparseArraysExt.jl), the READ/REDUCE/MATVEC
+paths compile from the REAL SparseArrays impls (static field access + loops):
+construction round-trip, nnz, issparse, nonzeros, rowvals, sum, maximum(abs,·),
+sparse·vector, sparse·dense — all differentially verified (sparse_diff.jl, 9/9).
+
+NEXT BLOCKER (step 2): ops that BUILD A NEW sparse result — sparse*sparse,
+sparse±sparse, transpose(sparse), scalar*sparse, sparse\b — trip a WT CODEGEN
+CRASH (not a clean error): `BoundsError: attempt to access 2-element Vector{Type}
+at index [3]`, raised inside WT's codegen for the generic result-CSC construction.
+Pattern is crisp: ops returning a sparse result crash; ops returning dense/scalar
+work. Plan = hand-roll each result-building op on the CSC fields (the LinearAlgebra
+factorization playbook): _wt_spmatmul / _wt_spadd / _wt_sptranspose / scalar-mul.
+SOUNDNESS-LOOP CANDIDATE: the `Vector{Type}[3]` is a WT internal crash worth
+root-causing (an arg-count/type-vector indexing bug in some codegen path). The
+genuine wall remains `\`/factorizations (SuiteSparse C library → needs pure-Julia
+sparse LU/KLU).
