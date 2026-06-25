@@ -382,6 +382,65 @@ should attribute via a stacktrace instrument inside emit_phi_local_set!
 fold). Printf integration is otherwise the established playbook once
 this one shape is fixed.
 
+## P4-stdlib: LinearAlgebra integration (stdlib #5, 2026-06-24) — SHIPPED (Approach A, no overlay)
+
+Vector value-level surface, VERIFIED against native across random +
+overflow/underflow-edge inputs under the differential oracle (`Bridge.tree_matches`
+→ `_float_match`: bit-identical or ULP-tolerant rtol 1e-9 for floats, EXACT for
+ints — the same oracle the fuzzer uses). Probes `/tmp/probe_la2.jl`,
+`probe_la3.jl`. Catalogue entries added under `mod = :linalg`
+(`test/fuzz/catalogue.jl`); runner gains `using LinearAlgebra: norm, normalize,
+dot, cross`. NO ext / overlay — these all lower from LinearAlgebra's REAL
+(generic, pure-Julia) implementations. (norm/normalize run the SAME generic
+algorithm as native, so they agree bit-identically modulo at most FMA-contraction
+1-ULP drift; integer `dot` agrees exactly.)
+
+SHIPPED (Approach A, oracle-verified, regression-guarded by the catalogue):
+- `norm(::Vector{Float64})→Float64`, `norm(::Vector{Float32})→Float32`,
+  `norm(::Vector{Int64})→Float64` — dispatch to generic `norm(itr)`
+  (generic.jl:708), NOT BLAS. The scaling path holds even on the
+  `1e300`/`1e-300`/mixed-scale edges (158/158 inputs each).
+- `normalize(::Vector{Float64/Float32})` — generic (158/158).
+- `cross(::Vector{Float64/Float32}×2)` — generic; `throws=true`: length≠3
+  raises `DimensionMismatch` and **wasm traps in parity** (verified 5/5 bad
+  lengths trap).
+- `dot(::Vector{Int64}×2)→Int64`, `dot(::Vector{Int32}×2)→Int32` — the
+  GENERIC `dot(::AbstractArray,::AbstractArray)` path (generic.jl:983), exact
+  integer arithmetic (150/150 + 140/140); `throws=true`: length-mismatch
+  raises and wasm traps in parity (verified 4/4).
+
+NEXT (overlay track, NOT in this commit) — `dot(::Vector{Float64/Float32}×2)`:
+- Native dispatches to **BLAS** `dot` (matmul.jl:18, `where T<:BlasFloat`),
+  a `ccall` WT cannot lower.
+- **Strict-mode soundness hole (separate core finding):** under `strict=true`
+  it currently compiles to a **SILENT `0.0`** (every input → `{"x":"0"}`,
+  80/80) instead of loud-rejecting the BLAS `foreigncall`. This is exactly
+  the silent-miscompile strict mode (#52) is meant to forbid — a `ccall`/
+  `foreigncall` to BLAS should be a definite-unsupported loud reject. Flag
+  for the soundness loop (LOOP.md); NOT specific to `dot` (any BLAS-typed
+  LinearAlgebra entry hits it).
+- **The overlay (Dale's GenericLinearAlgebra lever):** the differential oracle
+  is tolerance-based (`oracle_policy.jl`: rtol 1e-9), so a pure-Julia reroute
+  that differs from BLAS only by reassociation rounding PASSES for
+  well-conditioned inputs. Reroute `dot(::Vector{<:BlasFloat})` to Base's OWN
+  generic `dot(::AbstractArray,::AbstractArray)` (via `invoke`) in a new
+  `ext/WasmTargetLinearAlgebraExt.jl`; GenericLinearAlgebra itself is only
+  needed for the factorization surface below (Base has no generic fallback
+  there). **Caveat — conditioning, not method:** generic vs BLAS differ on
+  2213/5000 random pairs (worst rel ~2e-4) but only on ill-conditioned inputs
+  with heavy cancellation; those few exceed rtol 1e-9 and are a per-op
+  tolerance / generator-conditioning question (human-pinned oracle file), not
+  a reason to skip the overlay. Downstream (WasmMakie/PI geometry) is
+  well-conditioned. See memory `wt-genericlinearalgebra-overlay-lever`.
+
+Matrix / factorization surface (`*`, `det`, `tr`, `svd`, `eigen`, `qr`, `lu`,
+matrix `norm`/`opnorm`) — the GenericLinearAlgebra-overlay track proper, gated
+on TWO prerequisites: (1) the bridge generators cover `Vector` but not 2-D
+`Matrix` yet (needs `arg_descriptor`/`value_to_tree` 2-D support); (2) these
+call LAPACK/BLAS directly with NO Base generic fallback, so they need
+GenericLinearAlgebra.jl's pure-Julia impls overlaid (weakdep + ext), verified
+under the tolerance oracle.
+
 ## P5-trim: differential matrix (discovery=:trim vs :legacy), 2026-06-12
 
 | surface | 1.13 :trim | 1.12 :trim | legacy baseline |

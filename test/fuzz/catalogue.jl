@@ -177,6 +177,33 @@ function _build()
         add(:argmin, (VT,), Int64; mod = :vector, throws = true)
         add(:cumsum, (VT,), VT; mod = :vector)
     end
+    # ── P4-stdlib: LinearAlgebra (vector value-level surface; names resolve in
+    # Main via `using LinearAlgebra` in the fuzz runner). All entries VERIFIED
+    # against native under the differential oracle (`_float_match`: bit-identical
+    # or ULP-tolerant rtol 1e-9 for floats; EXACT for ints) across random +
+    # overflow/underflow-edge inputs. norm/normalize/cross dispatch to
+    # LinearAlgebra's GENERIC (pure-Julia) methods (generic.jl), and integer
+    # `dot` is the generic path too — WT lowers them from the real impls, no
+    # overlay. cross(len≠3) and dot(len-mismatch) throw DimensionMismatch →
+    # throws=true (verified throw-parity: wasm traps exactly when native throws).
+    #
+    # FLOAT `dot` is absent from THIS (Approach-A, overlay-free) commit:
+    # dot(::Vector{<:BlasFloat}) dispatches to BLAS (matmul.jl), a ccall WT
+    # cannot lower — and it currently compiles to a SILENT 0.0 (a strict-mode
+    # hole, see FINDINGS.md). It is the NEXT increment via an `ext/` overlay
+    # rerouting to Base's OWN generic `dot` method, verified under the tolerance
+    # oracle (rtol 1e-9) — NOT bit-exact, since BLAS reorders summation
+    # (generic vs BLAS differ on 2213/5000 random pairs, worst rel ~2e-4 on
+    # ill-conditioned inputs). See FINDINGS.md "P4-stdlib: LinearAlgebra".
+    add(:norm, (Vector{Float64},), Float64; mod = :linalg)
+    add(:norm, (Vector{Float32},), Float32; mod = :linalg)
+    add(:norm, (Vector{Int64},), Float64; mod = :linalg)
+    add(:normalize, (Vector{Float64},), Vector{Float64}; mod = :linalg)
+    add(:normalize, (Vector{Float32},), Vector{Float32}; mod = :linalg)
+    add(:cross, (Vector{Float64}, Vector{Float64}), Vector{Float64}; mod = :linalg, throws = true)
+    add(:cross, (Vector{Float32}, Vector{Float32}), Vector{Float32}; mod = :linalg, throws = true)
+    add(:dot, (Vector{Int64}, Vector{Int64}), Int64; mod = :linalg, throws = true)
+    add(:dot, (Vector{Int32}, Vector{Int32}), Int32; mod = :linalg, throws = true)
     # Dict{K,V}
     for (K, V) in DICT_KV
         DT = Dict{K,V}
