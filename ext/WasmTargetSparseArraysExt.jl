@@ -76,4 +76,29 @@ end
     SparseMatrixCSC{Float64,Int64}(Int(m), Int(n), colptr, rowval, nzval)
 end
 
+# (4) transpose via a counting-sort CSC transpose, built with the concrete inner
+# ctor. Native `permutedims`/`copy(transpose(·))` routes through `halfperm!`,
+# which miscompiles under WT; this is the textbook bucketed transpose and is
+# bit-identical (column-major, sorted rows).
+@overlay WasmTarget.WASM_METHOD_TABLE function Base.permutedims(A::SparseMatrixCSC{Float64,Int64})
+    m = A.m; n = A.n; nz = length(A.nzval)
+    Tcol = zeros(Int64, m + 1)
+    @inbounds for k in 1:nz
+        Tcol[A.rowval[k] + 1] += 1
+    end
+    Tcol[1] = 1
+    @inbounds for i in 1:m
+        Tcol[i + 1] += Tcol[i]
+    end
+    Trow = Vector{Int64}(undef, nz); Tval = Vector{Float64}(undef, nz)
+    nxt = copy(Tcol)
+    @inbounds for j in 1:n
+        for k in A.colptr[j]:(A.colptr[j+1]-1)
+            i = A.rowval[k]; d = nxt[i]
+            Trow[d] = j; Tval[d] = A.nzval[k]; nxt[i] += 1
+        end
+    end
+    SparseMatrixCSC{Float64,Int64}(n, m, Tcol, Trow, Tval)
+end
+
 end # module

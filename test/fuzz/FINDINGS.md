@@ -818,3 +818,21 @@ ONE codegen improvement unlocks all the remaining sparse result-ops generically 
 and retroactively simplifies the `cor` / `sparse_check_Ti` overlays (same class).
 LESSON (recurring): step back and analyze the ROOT; the pure WT fix is usually
 hiding under what looks like N separate op failures.
+
+## SparseArrays — STEP 3 (2026-06-25): transpose + queries → 55%
+Added (verified, full-suite-gated): transpose (ext overlay — counting-sort CSC
+transpose via the concrete inner ctor; native halfperm! miscompiles), and the
+no-overlay-needed names findnz / droptol! / sparsevec / nzrange (compile straight
+from the real impls once construction is sound). SparseArrays 35→55% (11 sup).
+
+OPEN — `+`/`-` dispatch subtlety: native `+(A::SparseMatrixCSCUnion, B::...) =
+map(+, A, B)` (sparsematrix.jl:2264; SparseMatrixCSCUnion = Union{SparseMatrixCSC,
+SubArray{…}}). A hand-rolled merge-add overlay on `SparseMatrixCSC{Float64,Int64}`
+(verified correct algorithm) does NOT intercept — it MISMATCHes, meaning WT
+resolves to the native `map`-based method (which miscompiles) instead of the
+overlay. The concrete overlay should be more specific than the Union method, so
+this is a WT overlay-resolution subtlety with Union-typed base methods (or the
+trivial one-liner `+` being inlined before the overlay applies). NEXT: either fix
+WT overlay resolution for Union-typed methods, or overlay `map`/the higher-order
+machinery, or find the right interception level. Remaining boundary:
++/-/spdiagm/hcat/vcat/blockdiag/permute/dropzeros!/blockdiag.

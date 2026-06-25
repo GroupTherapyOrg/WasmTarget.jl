@@ -41,7 +41,7 @@ _sp_rvec(rng, n)    = Float64[2rand(rng) - 1 for _ in 1:n]
 # SparseArrays names this file verifies (for stdlib_coverage.jl). `sparse`/`nnz`
 # directly; the value ops below ground that sparse arithmetic is correct.
 const SPARSE_VERIFIED = Set{Symbol}([:sparse, :nnz, :issparse, :nonzeros, :rowvals,
-    :spzeros, :dropzeros])
+    :spzeros, :dropzeros, :findnz, :droptol!, :sparsevec, :nzrange])
 
 # dense-in / dense-out wrappers, sparse used internally
 _sp_round(A)   = Matrix(sparse(A))            # construct + densify (round-trip)
@@ -60,6 +60,11 @@ _sp_scale(A)     = Matrix(2.5 * sparse(A))         # scalar · sparse
 _sp_copy(A)      = Matrix(copy(sparse(A)))         # copy
 _sp_drop(A)      = Matrix(dropzeros(sparse(A)))    # dropzeros
 _sp_spz(n)       = Matrix(spzeros(n, n))           # spzeros
+_sp_transpose(A) = Matrix(permutedims(sparse(A)))  # CSC transpose (ext overlay)
+_sp_findnz(A)    = sum(findnz(sparse(A))[3])       # findnz (3rd = values)
+_sp_droptol(A)   = Matrix(droptol!(sparse(A), 0.4))# droptol!
+_sp_spvec(v)     = Vector(sparsevec(v))            # sparsevec round-trip
+_sp_nzrange(A)   = (S = sparse(A); s = 0; for j in 1:S.n; s += length(nzrange(S, j)); end; s)  # nzrange
 
 function run_sparse_tests(; reps::Int = 40)
     FuzzHarness.NODE_OK || (@test_skip true; return)
@@ -86,5 +91,13 @@ function run_sparse_tests(; reps::Int = 40)
         @test _sp_diff(_sp_copy,   (Matrix{Float64},), sq(), Matrix{Float64})                   # copy
         @test _sp_diff(_sp_drop,   (Matrix{Float64},), sq(), Matrix{Float64})                   # dropzeros
         @test _sp_diff(_sp_spz,    (Int64,), [ (rand(rng, 2:6),) for _ in 1:reps ], Matrix{Float64})  # spzeros
+    end
+    @testset "transpose / queries / mutators" begin
+        @test _sp_diff(_sp_transpose, (Matrix{Float64},), sq(), Matrix{Float64})  # permutedims (ext overlay)
+        @test _sp_diff(_sp_findnz,    (Matrix{Float64},), sq(), Float64)          # findnz
+        @test _sp_diff(_sp_droptol,   (Matrix{Float64},), sq(), Matrix{Float64})  # droptol!
+        @test _sp_diff(_sp_nzrange,   (Matrix{Float64},), sq(), Int64)            # nzrange
+        @test _sp_diff(_sp_spvec, (Vector{Float64},),
+                       [ (_sp_rvec(rng, rand(rng, 3:7)),) for _ in 1:reps ], Vector{Float64})  # sparsevec
     end
 end
