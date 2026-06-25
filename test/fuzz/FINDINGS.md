@@ -521,7 +521,7 @@ shipped overlay is oracle-verified; the boundary surface either loud-rejects
   `diagm` `diag` `tr` `checksquare`
 - norms: `opnorm`(1/2/∞) `norm`(Frobenius) `cond`
 - factorization VALUES: `det` `logdet` `inv` `\`(solve) `svdvals` `eigvals`
-  `eigmax` `eigmin` `rank`
+  `eigmax` `eigmin` `rank` `pinv` (pinv = V·Σ⁺·Uᵀ off the one-sided-Jacobi svd)
 - factorization OBJECTS `lu`/`cholesky`: `lu(A)\b`, `det(lu(A))`,
   `cholesky(A)\b`, `det(cholesky(A))` — lu→`generic_lufact!` (real LU object),
   cholesky→hand-rolled upper factor; downstream `\(::LU/::Cholesky, b)` overlaid.
@@ -547,9 +547,9 @@ shipped overlay is oracle-verified; the boundary surface either loud-rejects
   `factorize` — `qr` stores packed Householder reflectors (`.Q` hard to build as a
   real object); schur/lq/hessenberg/bunchkaufman are niche. (lu/cholesky/eigen/svd
   DO ship — explicit factors/vectors; see supported.)
-- `pinv`/`nullspace` — SVD-based; `svd` ships but pinv uses a different SVD entry +
-  singular-value thresholding → needs a dedicated overlay (future, tractable now
-  that svd works).
+- `nullspace` — SVD-based; the null-space basis is rotation/sign-ambiguous vs
+  LAPACK (and returns an n×0 matrix for full rank) → not cleanly differential-
+  verifiable (boundary).
 - in-place `mul!`/`ldiv!`/`rdiv!`/`lmul!`/`rmul!`/`axpy!`/`axpby!` (mutating;
   moderate); structured ops beyond matvec (Tridiagonal/Bidiagonal/SymTridiagonal);
   `kron!` — not yet covered (tractable follow-ups).

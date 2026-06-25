@@ -196,6 +196,17 @@ end
 @overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.svd(A::Matrix{Float64}; full::Bool=false, alg=nothing)
     _wt_osj_svd(A)
 end
+# pinv = V·Σ⁺·Uᵀ off our one-sided-Jacobi SVD, with native's default
+# rtol = min(size)·eps thresholding of the singular values.
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.pinv(A::Matrix{Float64};
+        atol::Real = 0.0,
+        rtol::Real = (eps(Float64) * min(size(A, 1), size(A, 2))) * (atol == 0.0 ? 1.0 : 0.0))
+    F = _wt_osj_svd(A); U = F.U; S = F.S; Vt = F.Vt; k = length(S)
+    tol = max(atol, rtol * (k > 0 ? S[1] : 0.0))
+    sinv = Vector{Float64}(undef, k)
+    @inbounds for i in 1:k; sinv[i] = S[i] > tol ? 1.0 / S[i] : 0.0; end
+    permutedims(Vt) * (LinearAlgebra.Diagonal(sinv) * permutedims(U))
+end
 @overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.eigvals(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}; sortby=nothing)
     _wt_jacobi_eigvals(_wt_sym_to_dense(A))
 end

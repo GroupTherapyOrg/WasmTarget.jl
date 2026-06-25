@@ -52,6 +52,12 @@ function _rspd(rng, n)
     M = _rmat(rng, n, n)
     M * M' + n * Matrix{Float64}(I, n, n)
 end
+# full-rank, well-conditioned rectangular (pinv)
+function _rfr(rng, r, c)
+    A = _rmat(rng, r, c)
+    @inbounds for i in 1:min(r, c); A[i, i] += max(r, c); end
+    A
+end
 
 const _MF = Matrix{Float64}
 const _VF = Vector{Float64}
@@ -110,6 +116,7 @@ _la_eigvalo(m) = eigen(Symmetric(m)).values
 # svd: verify via reconstruction U·diag(S)·Vt ≈ A (sign/order-invariant) + .S
 _la_svdrec(m) = (F = svd(m); F.U * (Diagonal(F.S) * F.Vt))
 _la_svdS(m)   = svd(m).S
+_la_pinv(m)   = pinv(m)
 
 function run_linalg_matrix_tests(; reps::Int = 40)
     FuzzHarness.NODE_OK || (@test_skip true; return)
@@ -206,5 +213,9 @@ function run_linalg_matrix_tests(; reps::Int = 40)
     @testset "svd object" begin
         @test _la_diff(_la_svdrec, (_MF,), rect, _MF)   # U·diag(S)·Vt ≈ A (recon)
         @test _la_diff(_la_svdS,   (_MF,), rect, _VF)   # .S vs LAPACK
+    end
+    @testset "pinv (via svd)" begin
+        frm = [ (r = rand(rng, 2:4); c = rand(rng, 2:4); (_rfr(rng, r, c),)) for _ in 1:reps ]
+        @test _la_diff(_la_pinv, (_MF,), frm, _MF)   # V·Σ⁺·Uᵀ
     end
 end
