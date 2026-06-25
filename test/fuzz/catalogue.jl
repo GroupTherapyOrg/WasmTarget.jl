@@ -187,14 +187,13 @@ function _build()
     # overlay. cross(len≠3) and dot(len-mismatch) throw DimensionMismatch →
     # throws=true (verified throw-parity: wasm traps exactly when native throws).
     #
-    # FLOAT `dot` is absent from THIS (Approach-A, overlay-free) commit:
-    # dot(::Vector{<:BlasFloat}) dispatches to BLAS (matmul.jl), a ccall WT
-    # cannot lower — and it currently compiles to a SILENT 0.0 (a strict-mode
-    # hole, see FINDINGS.md). It is the NEXT increment via an `ext/` overlay
-    # rerouting to Base's OWN generic `dot` method, verified under the tolerance
-    # oracle (rtol 1e-9) — NOT bit-exact, since BLAS reorders summation
-    # (generic vs BLAS differ on 2213/5000 random pairs, worst rel ~2e-4 on
-    # ill-conditioned inputs). See FINDINGS.md "P4-stdlib: LinearAlgebra".
+    # FLOAT `dot` IS shipped, via an `ext/` OVERLAY (WasmTargetLinearAlgebraExt):
+    # dot(::Vector{<:BlasFloat}) dispatches to BLAS (matmul.jl), a ccall WT cannot
+    # lower (it otherwise compiles to a SILENT 0.0 — a strict-mode hole, see
+    # FINDINGS.md). The overlay reroutes to Base's OWN generic `dot` via `invoke`
+    # — value-identical to BLAS modulo summation-order rounding, which the
+    # oracle tolerates (rtol 1e-9). Verified: reroute matches native 200/200 on
+    # well-conditioned + wild inputs, 0/5000 exceed rtol at catalogue lengths.
     add(:norm, (Vector{Float64},), Float64; mod = :linalg)
     add(:norm, (Vector{Float32},), Float32; mod = :linalg)
     add(:norm, (Vector{Int64},), Float64; mod = :linalg)
@@ -204,6 +203,8 @@ function _build()
     add(:cross, (Vector{Float32}, Vector{Float32}), Vector{Float32}; mod = :linalg, throws = true)
     add(:dot, (Vector{Int64}, Vector{Int64}), Int64; mod = :linalg, throws = true)
     add(:dot, (Vector{Int32}, Vector{Int32}), Int32; mod = :linalg, throws = true)
+    add(:dot, (Vector{Float64}, Vector{Float64}), Float64; mod = :linalg, throws = true)  # ext overlay → generic
+    add(:dot, (Vector{Float32}, Vector{Float32}), Float32; mod = :linalg, throws = true)  # ext overlay → generic
     # Dict{K,V}
     for (K, V) in DICT_KV
         DT = Dict{K,V}

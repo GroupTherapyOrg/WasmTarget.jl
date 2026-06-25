@@ -9,12 +9,14 @@ PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
 
 [weakdeps]
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 
 [extensions]
 WasmTargetDatesExt = "Dates"
+WasmTargetLinearAlgebraExt = "LinearAlgebra"
 WasmTargetRandomExt = ["Random", "SHA"]
 WasmTargetStatisticsExt = "Statistics"
 

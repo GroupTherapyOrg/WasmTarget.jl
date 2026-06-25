@@ -187,7 +187,7 @@ budget before treating `unseen` as a coverage hole).
 |---|---|---|---|
 | `&` | `Bool, Bool` | `Bool` | pass |
 | `|` | `Bool, Bool` | `Bool` | pass |
-| `!` | `Bool` | `Bool` | pass |
+| `!` | `Bool` | `Bool` | unseen |
 | `xor` | `Bool, Bool` | `Bool` | pass |
 | `==` | `Bool, Bool` | `Bool` | pass |
 | `ifelse` | `Bool, Int64, Int64` | `Int64` | pass |
@@ -387,6 +387,8 @@ budget before treating `unseen` as a coverage hole).
 | `cross` | `Vector{Float32}, Vector{Float32}` | `Vector{Float32}` | pass |
 | `dot` | `Vector{Int64}, Vector{Int64}` | `Int64` | pass |
 | `dot` | `Vector{Int32}, Vector{Int32}` | `Int32` | pass |
+| `dot` | `Vector{Float64}, Vector{Float64}` | `Float64` | pass |
+| `dot` | `Vector{Float32}, Vector{Float32}` | `Float32` | pass |
 
 ## math
 
@@ -412,7 +414,7 @@ budget before treating `unseen` as a coverage hole).
 | `log2` | `Float32` | `Float32` | pass |
 | `log10` | `Float32` | `Float32` | pass |
 | `log1p` | `Float32` | `Float32` | pass |
-| `floor` | `Float32` | `Float32` | unseen |
+| `floor` | `Float32` | `Float32` | pass |
 | `ceil` | `Float32` | `Float32` | pass |
 | `round` | `Float32` | `Float32` | pass |
 | `trunc` | `Float32` | `Float32` | pass |
@@ -441,7 +443,7 @@ budget before treating `unseen` as a coverage hole).
 | `log2` | `Float64` | `Float64` | pass |
 | `log10` | `Float64` | `Float64` | pass |
 | `log1p` | `Float64` | `Float64` | pass |
-| `floor` | `Float64` | `Float64` | unseen |
+| `floor` | `Float64` | `Float64` | pass |
 | `ceil` | `Float64` | `Float64` | pass |
 | `round` | `Float64` | `Float64` | pass |
 | `trunc` | `Float64` | `Float64` | pass |
@@ -690,4 +692,4 @@ budget before treating `unseen` as a coverage hole).
 | `argmin` | `Vector{Float32}` | `Int64` | pass |
 | `cumsum` | `Vector{Float32}` | `Vector{Float32}` | pass |
 
-**Totals:** 606 pass · 2 unseen
+**Totals:** 609 pass · 1 unseen
