@@ -1458,9 +1458,22 @@ function compile_module(functions::Vector;
         clear_char_array_type!()
         clear_utf8_to_js_func!()
         mod = WasmModule()
-        # WASM-060: Add Math.pow import for float power operations
-        # This enables x^y for Float32/Float64 types
-        add_import!(mod, "Math", "pow", NumType[F64, F64], NumType[F64])
+        # WASM-060 (issue #56): the `Math.pow` import was historically emitted in
+        # EVERY module to back float `^`. That path now compiles `pow_body`
+        # directly (P2-batch20 — the host `Math.pow` is 3 ulp off), so NOTHING
+        # calls this import: even `x^y` produces zero `call $Math.pow` (verified
+        # across Float64/Float32/Int/literal pow). Emitting it anyway is pure dead
+        # weight AND forces every embedder to supply `{ Math: { pow } }` at
+        # instantiation even for a trivial `a + b` (a module that imports nothing
+        # must be instantiated with no imports object — declaring an unused import
+        # breaks `WebAssembly.instantiate(bytes)`). Only emit it when the embedder
+        # is wiring imports via `import_stubs`, where a precomputed `wasm_idx` may
+        # assume `Math.pow` sits at import index 0 — keep that ABI stable. On the
+        # raw `compile`/`compile_multi` path the module is now genuinely
+        # import-free for pure code, and the README example works as-written.
+        if !isempty(import_stubs)
+            add_import!(mod, "Math", "pow", NumType[F64, F64], NumType[F64])
+        end
     end
     type_registry = TypeRegistry()
     func_registry = FunctionRegistry()

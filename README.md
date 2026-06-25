@@ -60,18 +60,15 @@ write("add.wasm", wasm_bytes)
 import fs from "node:fs";
 
 const bytes = fs.readFileSync("add.wasm");
-// Every WasmTarget module imports `Math.pow` (it backs the float `^`/`pow`
-// path); supply it even for modules that never call `^`.
-const { instance } = await WebAssembly.instantiate(bytes, {
-  Math: { pow: Math.pow },
-});
+const { instance } = await WebAssembly.instantiate(bytes);
 console.log(instance.exports.add(5, 3)); // → 8
 ```
 
-The import object is the only setup the runtime needs — no server, no
-bundler. Modules that touch `print`/`show` or string interop additionally
-import the standardized `wasm:js-string` builtins and a small `io` module; see
-[Soundness & Testing](#soundness--testing) for the full embedder one-liner.
+Pure numeric kernels compile to **import-free** modules — no server, no bundler,
+no imports object. Modules that touch `print`/`show` or string interop do import
+the standardized `wasm:js-string` builtins and a small `io` module; instantiate
+those with `WebAssembly.instantiate(bytes, imports, { builtins: ['js-string'] })`
+— see [Soundness & Testing](#soundness--testing) for the full embedder one-liner.
 
 Multi-function modules with closures and real Base functions:
 
