@@ -41,6 +41,17 @@ end
 # deterministic generators
 _rmat(rng, r, c) = Float64[2 * rand(rng) - 1 for _ in 1:r, _ in 1:c]
 _rvec(rng, n)    = Float64[2 * rand(rng) - 1 for _ in 1:n]
+# diagonally-dominant square (well-conditioned, invertible, stable det)
+function _rdsq(rng, n)
+    A = _rmat(rng, n, n)
+    @inbounds for i in 1:n; A[i, i] += n; end
+    A
+end
+# symmetric positive-definite (logdet/cholesky need det > 0)
+function _rspd(rng, n)
+    M = _rmat(rng, n, n)
+    M * M' + n * Matrix{Float64}(I, n, n)
+end
 
 const _MF = Matrix{Float64}
 const _VF = Vector{Float64}
@@ -66,6 +77,8 @@ _la_isherm(m)= ishermitian(m)
 _la_isdiag(m)= isdiag(m)
 _la_istriu(m)= istriu(m)
 _la_istril(m)= istril(m)
+_la_det(m)   = det(m)
+_la_logdet(m)= logdet(m)
 
 function run_linalg_matrix_tests(; reps::Int = 40)
     FuzzHarness.NODE_OK || (@test_skip true; return)
@@ -78,6 +91,8 @@ function run_linalg_matrix_tests(; reps::Int = 40)
     pmm  = [ (p = rand(rng, 2:4); q = rand(rng, 2:4); s = rand(rng, 2:4);
              (_rmat(rng, p, q), _rmat(rng, q, s))) for _ in 1:reps ]
     pmv  = [ (p = rand(rng, 2:4); q = rand(rng, 2:4); (_rmat(rng, p, q), _rvec(rng, q))) for _ in 1:reps ]
+    dsq  = [ (n = rand(rng, 2:4); (_rdsq(rng, n),)) for _ in 1:reps ]
+    sspd = [ (n = rand(rng, 2:4); (_rspd(rng, n),)) for _ in 1:reps ]
 
     @testset "matrix → matrix" begin
         @test _la_diff(_la_copy,  (_MF,),     rect,  _MF)
@@ -106,5 +121,9 @@ function run_linalg_matrix_tests(; reps::Int = 40)
         @test _la_diff(_la_isdiag, (_MF,), sq, Bool)
         @test _la_diff(_la_istriu, (_MF,), sq, Bool)
         @test _la_diff(_la_istril, (_MF,), sq, Bool)
+    end
+    @testset "factorizations (ext overlay → generic LU)" begin
+        @test _la_diff(_la_det,    (_MF,), dsq,  Float64)   # diagonally-dominant
+        @test _la_diff(_la_logdet, (_MF,), sspd, Float64)   # SPD ⇒ det>0
     end
 end

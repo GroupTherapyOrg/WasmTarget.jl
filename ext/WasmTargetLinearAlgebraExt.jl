@@ -56,4 +56,16 @@ end
     return y
 end
 
+# det / logdet: native dispatches to LAPACK LU (getrf), a ccall WT cannot lower
+# (it silent-fails / emits invalid wasm). Reroute through Base's OWN pure-Julia
+# `generic_lufact!` — the SAME partial-pivot LU native uses, just non-BLAS — and
+# read det/logdet off it. Value-identical to LAPACK modulo pivoting/rounding
+# (oracle rtol 1e-9). Verified vs native 40/40 each. (inv/`\`/cholesky/eigen/svd
+# need more than an LU reroute — see FINDINGS "Matrix surface".)
+@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.det(A::Matrix{T}) where {T<:Union{Float32,Float64}} =
+    LinearAlgebra.det(LinearAlgebra.generic_lufact!(copy(A)))
+
+@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.logdet(A::Matrix{T}) where {T<:Union{Float32,Float64}} =
+    LinearAlgebra.logdet(LinearAlgebra.generic_lufact!(copy(A)))
+
 end # module
