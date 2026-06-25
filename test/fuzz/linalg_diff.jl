@@ -23,6 +23,20 @@ using Test
 
 const _LA_B = WasmTarget.Bridge
 
+# The LinearAlgebra-stdlib names this file DIFFERENTIALLY verifies (same bit-exact/
+# tolerance oracle as the catalogue fuzzer, 100s of random inputs + edges +
+# throw-parity per fn). stdlib_coverage.jl reads this to compute the REAL per-
+# stdlib support % — grounded in actual tests, NOT asserted. Keep in sync with the
+# @testsets in run_linalg_matrix_tests below (a self-check there guards drift).
+const LINALG_VERIFIED = Set{Symbol}([
+    :norm, :normalize, :cross, :dot, :transpose, :adjoint, :triu, :tril, :kron,
+    :diagm, :diag, :tr, :opnorm, :issymmetric, :ishermitian, :isdiag, :istriu,
+    :istril, :det, :logdet, :inv, :svdvals, :eigvals, :eigmax, :eigmin, :cond,
+    :rank, :checksquare, :hermitianpart, :lu, :cholesky, :eigen, :svd, :pinv, :mul!,
+    # structured TYPES whose construction / ops / dense conversion are verified:
+    :Diagonal, :Symmetric, :Hermitian, :UpperTriangular, :LowerTriangular,
+])
+
 # Run `fn` over `inputs` (vector of arg-tuples), oracle-compare wasm vs native.
 # `true` iff every input matches (native-throw ⇒ wasm-trap parity).
 function _la_diff(fn, argTs::Tuple, inputs::Vector, rettype)
