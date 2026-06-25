@@ -97,8 +97,33 @@ function _wt_lu_inv(A::Matrix{Float64})
     end
     X
 end
+# svdvals via ONE-SIDED Jacobi (rotates columns of A directly — accurate, unlike
+# the AᵀA method which squares the condition number). Ensure m≥n by transposing
+# (svdvals(Aᵀ) == svdvals(A)). Returns the min(m,n) singular values, desc.
+function _wt_osj_svdvals(A0::Matrix{Float64})
+    A = size(A0, 1) >= size(A0, 2) ? copy(A0) : permutedims(A0)
+    m = size(A, 1); n = size(A, 2)
+    @inbounds for _ in 1:60
+        conv = true
+        for p in 1:n-1, q in p+1:n
+            app = 0.0; aqq = 0.0; apq = 0.0
+            for i in 1:m; aip = A[i, p]; aiq = A[i, q]; app += aip*aip; aqq += aiq*aiq; apq += aip*aiq; end
+            (apq == 0.0 || abs(apq) < 1.0e-15 * sqrt(app * aqq)) && continue
+            conv = false
+            τ = (aqq - app) / (2apq); t = sign(τ) / (abs(τ) + sqrt(1 + τ*τ))
+            c = 1.0 / sqrt(1 + t*t); s = c * t
+            for i in 1:m; aip = A[i, p]; aiq = A[i, q]; A[i, p] = c*aip - s*aiq; A[i, q] = s*aip + c*aiq; end
+        end
+        conv && break
+    end
+    sv = Vector{Float64}(undef, n)
+    @inbounds for j in 1:n; nj = 0.0; for i in 1:m; nj += A[i, j] * A[i, j]; end; sv[j] = sqrt(nj); end
+    sort!(sv, rev=true); sv
+end
+
 @overlay WasmTarget.WASM_METHOD_TABLE Base.inv(A::Matrix{Float64}) = _wt_lu_inv(A)
 @overlay WasmTarget.WASM_METHOD_TABLE Base.:\(A::Matrix{Float64}, b::Vector{Float64}) = _wt_lu_solve(A, b)
+@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.svdvals(A::Matrix{Float64}) = _wt_osj_svdvals(A)
 # NOTE: eigvals/eigen (symmetric) — the Jacobi kernel COMPILES + matches native
 # (verified), but `eigvals(A::Symmetric; sortby)` routes through kwarg-dispatch
 # that a positional @overlay does not intercept (it still reaches LAPACK →

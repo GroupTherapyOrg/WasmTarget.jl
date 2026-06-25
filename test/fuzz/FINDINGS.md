@@ -486,15 +486,18 @@ SHIPPED (ext overlays, hand-rolled, verified in `linalg_diff.jl`):
 - `det`/`logdet` — Base `generic_lufact!` (compiles) + det/logdet of it.
 - `inv` / `\` (solve) — `generic_lufact!` + manual forward/back substitution on
   its packed factors & pivots. Float64. Verified 30/30 each.
+- `svdvals` — ONE-SIDED Jacobi SVD (rotates columns of A directly; accurate,
+  unlike AᵀA). Transpose when wide so m≥n. Float64. Verified 40/40 (tall/wide/sq).
+  `svdvals(::AbstractMatrix)` is positional, so the overlay intercepts cleanly.
 
-NEXT (cores verified-compilable; remaining work is INTERCEPTION + accuracy, not
-codegen feasibility):
+NEXT (cores verified-compilable; remaining work is INTERCEPTION + object-build,
+not codegen feasibility):
 - `eigvals`/`eigen` (symmetric): the Jacobi kernel compiles + matches, but
   `eigvals(A::Symmetric; sortby)` routes through KWARG-dispatch that a positional
   `@overlay` does not intercept (still reaches LAPACK → validation error). Need to
-  overlay the right `eigvals!`/kwcall target.
-- `svdvals`/`svd`: via Jacobi on AᵀA is too inaccurate (squares the condition #;
-  12/30 exceed rtol) — needs ONE-SIDED Jacobi SVD (operates on A directly).
+  overlay the right `eigvals!`/kwcall target. (svdvals had no such kwarg → shipped.)
+- `svd` (full U,S,V): the values ship (svdvals); the full factor object + U/V
+  (sign/ordering-ambiguous vs LAPACK) is a separate object-overlay task.
 - `cholesky`: factor computation compiles (mychol OK), but `cholesky(A)` returns
   a `Cholesky` OBJECT — overlay must build + return it so `.U`/`.L`/`\` work.
 - `qr`: modified Gram-Schmidt (untried; simple loops, likely compiles).

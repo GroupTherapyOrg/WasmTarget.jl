@@ -81,6 +81,7 @@ _la_det(m)   = det(m)
 _la_logdet(m)= logdet(m)
 _la_inv(m)   = inv(m)
 _la_solve(A, b) = A \ b
+_la_svdvals(m) = svdvals(m)
 
 function run_linalg_matrix_tests(; reps::Int = 40)
     FuzzHarness.NODE_OK || (@test_skip true; return)
@@ -130,7 +131,8 @@ function run_linalg_matrix_tests(; reps::Int = 40)
         @test _la_diff(_la_logdet, (_MF,), sspd, Float64)   # SPD ⇒ det>0
     end
     @testset "decompositions (hand-rolled, Float64)" begin
-        @test _la_diff(_la_inv,    (_MF,),      dsq, _MF)        # LU + substitution
-        @test _la_diff(_la_solve,  (_MF, _VF),  sbv, _VF)        # LU solve
+        @test _la_diff(_la_inv,     (_MF,),     dsq,  _MF)       # LU + substitution
+        @test _la_diff(_la_solve,   (_MF, _VF), sbv,  _VF)       # LU solve
+        @test _la_diff(_la_svdvals, (_MF,),     rect, _VF)       # one-sided Jacobi SVD
     end
 end
