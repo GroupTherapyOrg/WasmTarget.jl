@@ -79,19 +79,21 @@ end
 # stdlib_coverage.jl; the SCALAR rand/randn/randexp remain fully verified.
 
 # ── randstring ──────────────────────────────────────────────────────────────
-# `randstring(rng, n)` builds a `Base.StringVector` and fills it via the charset
-# Sampler, a path that lowers to an `unreachable` stub (StringVector undef-buffer
-# + collection-sampler interplay). The default alphabet is the 62-byte
-# `[0-9 A-Z a-z]`; drawing one byte per position with the scalar collection
-# sampler `rand(rng, CHARS)` (verified to compile + match in wasm) reproduces
-# native `randstring`'s exact draw sequence — bit-identical String across 200
-# seeds (pure Julia) and the wasm differential sweep.
+# `randstring(rng, n)` builds a `Base._string_n` buffer and fills it via
+# `rand!(rng, UnsafeView(ptr, n), chars)`, a path that lowers to an `unreachable`
+# stub (the StringVector/UnsafeView undef-buffer interplay). The default alphabet
+# is the 62-byte `[0-9 A-Z a-z]`. The overlay fills a plain `Vector{UInt8}` with
+# the SAME collection bulk fill `rand!(rng, v, chars)` that native uses — so it
+# consumes the IDENTICAL RNG draw sequence as native `randstring` (verified to
+# compile + match native across seeds). NB an earlier version drew the charset
+# byte-by-byte via the SCALAR sampler `rand(rng, CHARS)`; that matched native on
+# ≤1.12 but DIVERGED on 1.13 (1.13 changed the collection bulk fill so scalar ≠
+# bulk — the same scalar/bulk trap as the Float64 SIMD fills). Calling native's
+# own `rand!(rng, v, chars)` is version-robust: it IS native's fill.
 const _WT_RANDSTRING_CHARS = UInt8['0':'9'; 'A':'Z'; 'a':'z']
 @overlay WasmTarget.WASM_METHOD_TABLE function Random.randstring(rng::Xoshiro, n::Integer)
     v = Vector{UInt8}(undef, Int(n))
-    @inbounds for i in 1:Int(n)
-        v[i] = rand(rng, _WT_RANDSTRING_CHARS)
-    end
+    Random.rand!(rng, v, _WT_RANDSTRING_CHARS)
     String(v)
 end
 @overlay WasmTarget.WASM_METHOD_TABLE Random.randstring(rng::Xoshiro) = Random.randstring(rng, 8)

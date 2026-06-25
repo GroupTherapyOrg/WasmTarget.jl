@@ -711,3 +711,32 @@ bit-exact/tolerance oracle as core. The "% = supported/(supported+boundary)"
 denominator stays honest — out-of-scope is only genuine non-wasm (SIMD/llvmcall,
 BLAS/LAPACK packed forms, BitVector, host entropy/wall-clock), never a tractable
 item reclassified to inflate the score.
+
+## Random — 1.13-rc1 regressions found by CI (2026-06-25, follow-up to the ≥95% campaign)
+The ≥95% Random work passed full `Pkg.test` on 1.12 but CI surfaced two 1.13-rc1
+failures (random_diff.jl). Both are the SAME class of issue as the SIMD array
+fills — native's RNG consumption on 1.13 differs from a scalar reproduction:
+
+  • **randstring** — FIXED. Native fills the string buffer via the COLLECTION
+    bulk fill `rand!(rng, view, chars)`. My first overlay drew the charset
+    byte-by-byte with the SCALAR sampler `rand(rng, CHARS)`; that matched native
+    on ≤1.12 but diverged on 1.13 (1.13 changed the collection bulk fill so
+    scalar ≠ bulk). Fix: the overlay now calls native's OWN `rand!(rng, v, chars)`
+    on a plain `Vector{UInt8}` — it IS native's fill, so it's version-robust
+    (re-verified bit-exact vs native on 1.12; CI confirms 1.13). LESSON (again):
+    never reproduce a fill with a scalar loop — call the native bulk routine, or
+    sweep past the threshold on EVERY supported Julia version.
+
+  • **randsubseq!** — DEFERRED on 1.13 (kept on ≤1.12). The out-of-place
+    `randsubseq` (which is literally `randsubseq!(rng, T[], A, p)`) passes its
+    differential on 1.13, but `randsubseq!` diverges wasm↔native for some inputs
+    on 1.13-rc1 — an input-dependent gap (likely 1.13 vectorizing the inner
+    `rand(r)<=p` loop into a bulk RNG draw WT can't match, same family as the
+    array fills). Could not reproduce locally: the `--project=test/fuzz` env on
+    1.13-rc1 fails to compile even `rand(Xoshiro(s))` (diverges from CI's test
+    env), so this needs CI-side or a fixed-env repro. `random_diff.jl` gates the
+    randsubseq! sweep to `VERSION < v"1.13-"` and `RANDOM_VERIFIED` drops it on
+    ≥1.13 (Random = 91% on 1.13-rc1, 100% on 1.12). SOUNDNESS-LOOP CANDIDATE:
+    root-cause the 1.13 randsubseq! divergence (is it the bulk-RNG-optimization
+    wall, or a genuine miscompile?). NB the local 1.13 test/fuzz env mismatch is
+    itself worth fixing so 1.13 can be exercised before pushing.
