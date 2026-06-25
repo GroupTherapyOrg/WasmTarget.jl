@@ -99,6 +99,11 @@ _la_mdiag(v)   = Matrix(Diagonal(v))
 _la_msym(m)    = Matrix(Symmetric(m))
 _la_mupp(m)    = Matrix(UpperTriangular(m))
 _la_mlow(m)    = Matrix(LowerTriangular(m))
+_la_mherm(m)   = Matrix(Hermitian(m))
+_la_hpart(m)   = Matrix(hermitianpart(m))
+_la_symv(m, x) = Symmetric(m) * x
+_la_uptv(m, x) = UpperTriangular(m) * x
+_la_lotv(m, x) = LowerTriangular(m) * x
 
 function run_linalg_matrix_tests(; reps::Int = 40)
     FuzzHarness.NODE_OK || (@test_skip true; return)
@@ -117,6 +122,7 @@ function run_linalg_matrix_tests(; reps::Int = 40)
     dvv  = [ (n = rand(rng, 2:5); (_rvec(rng, n), _rvec(rng, n))) for _ in 1:reps ]
     dvm  = [ (n = rand(rng, 2:4); c = rand(rng, 2:4); (_rvec(rng, n), _rmat(rng, n, c))) for _ in 1:reps ]
     spdv = [ (n = rand(rng, 2:4); (_rspd(rng, n), _rvec(rng, n))) for _ in 1:reps ]
+    smv  = [ (n = rand(rng, 2:4); (_rmat(rng, n, n), _rvec(rng, n))) for _ in 1:reps ]
 
     @testset "matrix → matrix" begin
         @test _la_diff(_la_copy,  (_MF,),     rect,  _MF)
@@ -179,5 +185,12 @@ function run_linalg_matrix_tests(; reps::Int = 40)
         @test _la_diff(_la_msym,  (_MF,), sq,   _MF)   # Matrix(Symmetric)
         @test _la_diff(_la_mupp,  (_MF,), sq,   _MF)   # Matrix(UpperTriangular)
         @test _la_diff(_la_mlow,  (_MF,), sq,   _MF)   # Matrix(LowerTriangular)
+        @test _la_diff(_la_mherm, (_MF,), sq,   _MF)   # Matrix(Hermitian)
+        @test _la_diff(_la_hpart, (_MF,), sq,   _MF)   # Matrix(hermitianpart)
+    end
+    @testset "structured matvec" begin
+        @test _la_diff(_la_symv, (_MF, _VF), smv, _VF)   # Symmetric*vec
+        @test _la_diff(_la_uptv, (_MF, _VF), smv, _VF)   # UpperTriangular*vec
+        @test _la_diff(_la_lotv, (_MF, _VF), smv, _VF)   # LowerTriangular*vec
     end
 end

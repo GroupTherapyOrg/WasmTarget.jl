@@ -526,9 +526,10 @@ shipped overlay is oracle-verified; the boundary surface either loud-rejects
   `cholesky(A)\b`, `det(cholesky(A))` — lu→`generic_lufact!` (real LU object),
   cholesky→hand-rolled upper factor; downstream `\(::LU/::Cholesky, b)` overlaid.
 - predicates: `issymmetric` `ishermitian` `isdiag` `istriu` `istril`
-- structured-type OPS + dense CONVERSION: `Diagonal(v)*vec`, `Diagonal(v)*mat`,
-  and `Matrix(::Diagonal/::Symmetric/::UpperTriangular/::LowerTriangular)` (the
-  conversions overlay an explicit dense fill, bypassing the structured-copyto! gap)
+- structured-type OPS + dense CONVERSION: `Diagonal*vec/mat`, `Symmetric*vec`,
+  `Upper-/LowerTriangular*vec`, and `Matrix(::Diagonal/::Symmetric/::Hermitian/
+  ::Upper-/::LowerTriangular)` + `hermitianpart` (conversions overlay an explicit
+  dense fill / hand-rolled structured matvec, bypassing the BLAS/copyto! gaps)
 
 🔶 SUPPORTED with a DOCUMENTED soundness boundary:
 - `inv`/`\`/`det`/`logdet`: sound for NONSINGULAR inputs (the math domain). On
@@ -544,9 +545,9 @@ shipped overlay is oracle-verified; the boundary surface either loud-rejects
   vs LAPACK. Their VALUES ship (svdvals/eigvals). (lu/cholesky DO ship — explicit
   factors; see supported.) `qr`/`eigen`/`svd` objects would need reconstruction
   verification — a future batch.
-- `Matrix(::Hermitian)` + `hermitianpart` (returns Hermitian) — the structured-
-  copyto! gap; same explicit-fill overlay pattern as the SHIPPED Diagonal/
-  Symmetric/Triangular conversions would clear them (future).
+- in-place `mul!`/`ldiv!`/`rdiv!`/`lmul!`/`rmul!`/`axpy!`/`axpby!` (mutating;
+  moderate); structured ops beyond matvec (Tridiagonal/Bidiagonal/SymTridiagonal);
+  `kron!` — not yet covered (tractable follow-ups).
 - `pinv` `nullspace` — need full SVD U/V (only `svdvals` ships). pinv via normal
   equations is UNSOUND for rank-deficient (not shipped).
 - `sylvester` `lyap` — Bartels–Stewart needs `schur` (object). `lowrankupdate/

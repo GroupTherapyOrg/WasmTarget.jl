@@ -218,5 +218,29 @@ end
     @inbounds for j in 1:n, i in j:n; M[i, j] = P[i, j]; end
     M
 end
+@overlay WasmTarget.WASM_METHOD_TABLE function Base.Matrix(H::LinearAlgebra.Hermitian{Float64,Matrix{Float64}})
+    P = parent(H); n = size(P, 1); M = Matrix{Float64}(undef, n, n)
+    up = H.uplo == 'U'
+    @inbounds for j in 1:n, i in 1:n
+        M[i, j] = up ? (i <= j ? P[i, j] : P[j, i]) : (i >= j ? P[i, j] : P[j, i])
+    end
+    M
+end
+
+# structured matvec — Symmetric/Triangular * vec dispatch to BLAS symv/trmv
+# (silent-fail). Symmetric reuses densify + the matvec overlay; triangular is a
+# direct hand-rolled product respecting the stored triangle.
+@overlay WasmTarget.WASM_METHOD_TABLE Base.:*(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}, x::Vector{Float64}) =
+    _wt_sym_to_dense(A) * x
+@overlay WasmTarget.WASM_METHOD_TABLE function Base.:*(U::LinearAlgebra.UpperTriangular{Float64,Matrix{Float64}}, x::Vector{Float64})
+    P = parent(U); n = size(P, 1); y = zeros(Float64, n)
+    @inbounds for i in 1:n; s = 0.0; for j in i:n; s += P[i, j] * x[j]; end; y[i] = s; end
+    y
+end
+@overlay WasmTarget.WASM_METHOD_TABLE function Base.:*(L::LinearAlgebra.LowerTriangular{Float64,Matrix{Float64}}, x::Vector{Float64})
+    P = parent(L); n = size(P, 1); y = zeros(Float64, n)
+    @inbounds for i in 1:n; s = 0.0; for j in 1:i; s += P[i, j] * x[j]; end; y[i] = s; end
+    y
+end
 
 end # module
