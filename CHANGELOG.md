@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.19](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.18...v0.3.19) (2026-06-26)
+
+
+### Features
+
+* interactive in-browser examples + memo dep auto-discovery + faster CI ([#64](https://github.com/GroupTherapyOrg/WasmTarget.jl/issues/64)) ([bfc9c8e](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/bfc9c8e8c7b9fff149fa028709165a18ac75abae))
+
 ## [0.3.18](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.17...v0.3.18) (2026-06-26)
 
 
