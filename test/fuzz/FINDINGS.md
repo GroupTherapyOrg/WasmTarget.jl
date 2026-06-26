@@ -859,3 +859,21 @@ this is specific to the map-based +/-. SOUNDNESS/CODEGEN CANDIDATE: root-cause w
 WT's overlay resolution doesn't shadow these (overlay-vs-inline ordering, or
 overlay-vs-Union specificity). Until then, sparse element-wise +/- is unsupported
 — a real gap for SciML matrix assembly worth flagging despite the clean %.
+
+## SparseArrays — STEP 7 (2026-06-25): sparse +/- WORK + a found WT loop bug
+The "+/- resist overlay" conclusion was WRONG, caught by a sentinel diagnostic:
+overlay `Base.:+(::SparseMatrixCSC{Float64,Int64}, ::…) = <2×2 sentinel>` and the
+wasm result WAS the sentinel (decoded 4631107791820423168 == 42.0) — so the
+overlay intercepts fine. The real blocker: my MERGE LOOP hung. A two-pointer merge
+`while ka<kae || kb<kbe` with `ka`/`kb` incremented inside `if/elseif/else`
+branches INFINITE-LOOPS in wasm (the bridge timed out) — the in-branch pointer
+increments don't thread back to the `while` header in WT's codegen. Rewriting as
+definite `for` loops over each column + a dense accumulator + `sort!` (all
+known-good) compiles and is bit-identical. sparse +/- now differentially verified.
+
+⚠ FOUND WT CODEGEN BUG (soundness-loop candidate): a `while` loop whose loop
+counter is mutated only inside nested `if/elseif/else` arms can fail to terminate
+in wasm — the mutation isn't observed at the loop header across iterations. Worth
+a minimal repro + fix (it silently HANGS rather than mis-lowering loudly, which is
+the worst failure mode). LESSON: when a sparse/array op "won't intercept", sentinel
+the overlay FIRST — it may be running and just hanging/mis-looping, not bypassed.

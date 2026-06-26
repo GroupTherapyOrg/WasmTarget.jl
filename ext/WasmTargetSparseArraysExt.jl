@@ -174,10 +174,37 @@ end
     _SMF(m, n, cp, rv, nv)
 end
 
-# NB sparse `+`/`-` (Base operators, NOT in names(SparseArrays)) are `map(+,A,B)`
-# on the SparseMatrixCSCUnion alias and resist overlay interception at every level
-# tried (concrete/abstract/parametric/Union/map-typeof) — a WT overlay-vs-inline
-# limitation with the multi-layer sparse `map` machinery. Sparse `*` works
-# (matmul, step 2); `+`/`-` remain a known gap, documented in FINDINGS.md.
+# sparse `+`/`-` (Base operators). The overlay DOES intercept (the earlier "won't
+# intercept" was a red herring) — the blocker was the MERGE LOOP: a `while ka<kae
+# || kb<kbe` two-pointer merge with the pointers `ka`/`kb` incremented inside
+# `if/elseif/else` branches INFINITE-LOOPS in wasm (a WT codegen bug — the
+# in-branch increments don't thread back to the while header; see FINDINGS).
+# Rewritten as definite `for` loops + a dense accumulator + sort! (all known-good),
+# it compiles and is bit-identical (union pattern; native drops cancellation zeros
+# but the dense Matrix is identical).
+_wt_spaddsub(A::_SMF, B::_SMF, sub::Bool) = begin
+    m = A.m; n = A.n
+    cp = Vector{Int64}(undef, n + 1); cp[1] = 1; rv = Int64[]; nv = Float64[]
+    work = zeros(Float64, m); seen = zeros(Bool, m)
+    @inbounds for j in 1:n
+        rows = Int64[]
+        for k in A.colptr[j]:(A.colptr[j+1]-1)
+            r = A.rowval[k]
+            if !seen[r]; seen[r] = true; work[r] = 0.0; push!(rows, r); end
+            work[r] += A.nzval[k]
+        end
+        for k in B.colptr[j]:(B.colptr[j+1]-1)
+            r = B.rowval[k]
+            if !seen[r]; seen[r] = true; work[r] = 0.0; push!(rows, r); end
+            work[r] += sub ? -B.nzval[k] : B.nzval[k]
+        end
+        sort!(rows)
+        for r in rows; push!(rv, r); push!(nv, work[r]); seen[r] = false; end
+        cp[j + 1] = length(rv) + 1
+    end
+    _SMF(m, n, cp, rv, nv)
+end
+@overlay WasmTarget.WASM_METHOD_TABLE Base.:+(A::_SMF, B::_SMF) = _wt_spaddsub(A, B, false)
+@overlay WasmTarget.WASM_METHOD_TABLE Base.:-(A::_SMF, B::_SMF) = _wt_spaddsub(A, B, true)
 
 end # module
