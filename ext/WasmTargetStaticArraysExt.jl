@@ -24,11 +24,9 @@
 # Verified bit/tolerance-identical to native — see test/fuzz/staticarrays_diff.jl.
 # This is what unblocks SimpleDiffEq's SimpleTsit5 (its Butcher tableau lives in
 # SVector{6/21/22} coefficient caches). Scope: fully-parameterized `SVector{N,T}`
-# for N ≥ 2 (construction positional/tuple/converting, getindex, iterate/
-# destructure, arithmetic, broadcast). The degenerate single-element `SVector{1}`
-# traps inside StaticArrays' L==1 construction under WT — a WT-core struct-codegen
-# corner tracked separately in test/fuzz/FINDINGS.md, NOT used by any solver here.
-# SMatrix / MArray are future scope.
+# (all N ≥ 1, including the degenerate single-element vector) — construction
+# (positional / tuple / converting-eltype), getindex, iterate/destructure,
+# arithmetic and broadcast. SMatrix / MArray are future scope.
 module WasmTargetStaticArraysExt
 
 using WasmTarget
