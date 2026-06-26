@@ -113,8 +113,9 @@ const _SMF = SparseMatrixCSC{Float64,Int64}
     _SMF(n, n, collect(Int64, 1:(n + 1)), collect(Int64, 1:n), copy(v))
 end
 
-# hcat([A B]): concatenate columns (shared #rows).
-@overlay WasmTarget.WASM_METHOD_TABLE function Base.hcat(A::_SMF, B::_SMF)
+# hcat([A B]): concatenate columns (shared #rows). Base.hcat AND the SparseArrays
+# name sparse_hcat both route here.
+_wt_sphcat(A::_SMF, B::_SMF) = begin
     m = A.m; nA = A.n; nB = B.n; n = nA + nB
     cp = Vector{Int64}(undef, n + 1)
     @inbounds for j in 1:(nA + 1); cp[j] = A.colptr[j]; end
@@ -122,9 +123,11 @@ end
     @inbounds for j in 1:nB; cp[nA + 1 + j] = B.colptr[j + 1] + off; end
     _SMF(m, n, cp, vcat(A.rowval, B.rowval), vcat(A.nzval, B.nzval))
 end
+@overlay WasmTarget.WASM_METHOD_TABLE Base.hcat(A::_SMF, B::_SMF) = _wt_sphcat(A, B)
+@overlay WasmTarget.WASM_METHOD_TABLE SparseArrays.sparse_hcat(A::_SMF, B::_SMF) = _wt_sphcat(A, B)
 
 # vcat([A; B]): concatenate rows (shared #cols), interleaving per column.
-@overlay WasmTarget.WASM_METHOD_TABLE function Base.vcat(A::_SMF, B::_SMF)
+_wt_spvcat(A::_SMF, B::_SMF) = begin
     mA = A.m; n = A.n; m = mA + B.m
     cp = Vector{Int64}(undef, n + 1); cp[1] = 1; rv = Int64[]; nv = Float64[]
     @inbounds for j in 1:n
@@ -134,6 +137,8 @@ end
     end
     _SMF(m, n, cp, rv, nv)
 end
+@overlay WasmTarget.WASM_METHOD_TABLE Base.vcat(A::_SMF, B::_SMF) = _wt_spvcat(A, B)
+@overlay WasmTarget.WASM_METHOD_TABLE SparseArrays.sparse_vcat(A::_SMF, B::_SMF) = _wt_spvcat(A, B)
 
 # blockdiag([A 0; 0 B]).
 @overlay WasmTarget.WASM_METHOD_TABLE function SparseArrays.blockdiag(A::_SMF, B::_SMF)
