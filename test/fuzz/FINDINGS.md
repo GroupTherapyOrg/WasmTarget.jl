@@ -964,3 +964,45 @@ NB this does NOT reach the SciML/SimpleDiffEq `ODEProblem` construction: its
 `isinplace` is kwarg METHOD-ARITY reflection whose args aren't const, so
 concrete-eval can't fold it even when forced. That needs a concrete-construction
 ext overlay (sparse-style) — a separate effort.
+
+## SciMLBase + SimpleDiffEq — FOUNDATION CRACKED (2026-06-26, branch wt-sciml-simplediffeq)
+Real SciML ODE solve runs BIT-IDENTICAL to native in wasm. SCALAR ODEs fully
+working; vector systems pending (the vector ODESolution). Builds on the
+type-level concrete-eval fold (this branch). NOT PR'd until full support.
+
+PROVEN RECIPE (verified: `solve(ODEProblem((u,p,t)->-u, u0, (0.0,1.0)), SimpleRK4(); dt=0.05).u[end]`
+→ wasm 0.36787946114753967 == native 0.3678794611475396):
+
+  1. CORE FOLD (committed, interpreter.jl): whitelist now includes `_compute_eltype`
+     (the solve kwarg-Pairs eltype). The fold folds `apply_type`/`isinplace`-type-param/
+     `_compute_eltype`-when-const. It does NOT reach the OUTER `ODEProblem(f,...)`
+     ctor (raw-f `isinplace` = kwarg method-arity reflection, non-const, won't fold).
+
+  2. OVERLAY: outer ODEProblem ctor -> CONCRETE construction. Build the ODEFunction
+     explicitly (no reflection) then `ODEProblem{false}(odef, u0, tspan)` — the inner
+     ctor's `isinplace(odef::ODEFunction{false})` is a TYPE-PARAM fold (the core fold
+     handles it). Validated: the explicit ODEFunction/ODEProblem match native exactly.
+       @inline _wt_odefunc(f::F) where {F} = SciMLBase.ODEFunction{false, SciMLBase.AutoSpecialize, F,
+           LinearAlgebra.UniformScaling{Bool}, Nothing×12, typeof(SciMLBase.DEFAULT_OBSERVED), Nothing×4}(
+           f, LinearAlgebra.I, nothing×12, SciMLBase.DEFAULT_OBSERVED, nothing×4)   # 19 field args
+       @overlay WMT SciMLBase.ODEProblem(f::F, u0, tspan::Tuple{Float64,Float64}) where {F} =
+           SciMLBase.ODEProblem{false}(_wt_odefunc(f), u0, tspan)
+
+  3. OVERLAY: generic solve -> `DiffEqBase.__solve` directly (bypasses DiffEqBase's
+     get_concrete_problem/solve_call kwarg-Pairs machinery, which builds a Pairs type
+     from a RUNTIME kwargs NamedTuple → unfoldable). `solve` is re-exported, overlay
+     `SciMLBase.solve`. SimpleDiffEq's `DiffEqBase.__solve(prob, ::SimpleRK4; dt)` is the
+     clean integrator (time grid + step! loop + build_solution).
+       @overlay WMT SciMLBase.solve(prob::SciMLBase.ODEProblem, alg::SimpleRK4; dt, kw...) =
+           DiffEqBase.__solve(prob, alg; dt=dt)
+
+  Weakdeps for the ext: SimpleDiffEq, SciMLBase, DiffEqBase, LinearAlgebra.
+
+⚠ VECTOR-SYSTEM BLOCKER (next): `Vector{Float64}` state → `build_solution` makes an
+ODESolution{Float64,2,Vector{Vector{Float64}},...,LinearInterpolation{...},...} (20+
+params) whose field access (`sol.u`, even literal `getfield(sol,:u)`) lowers to a
+DYNAMIC getfield — build_solution type-instability for vectors. Scalar ODESolution was
+concrete. NEXT: overlay build_solution / the solution-access for the vector case
+(maybe a dense=false / simpler-solution path), then generalize solvers
+(SimpleEuler/SimpleTsit5), formalize WasmTargetSimpleDiffEqExt, and the FULL
+simplediffeq_diff.jl differential harness + coverage + CI (same rigor as the other libs).
