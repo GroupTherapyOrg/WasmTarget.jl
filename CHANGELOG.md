@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.20](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.19...v0.3.20) (2026-06-26)
+
+
+### Bug Fixes
+
+* skip js() interop intrinsic in closure dep auto-discovery (0.3.19 regression) ([#66](https://github.com/GroupTherapyOrg/WasmTarget.jl/issues/66)) ([6510a24](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/6510a24917241798f186f3003c9b17b840a38732))
+
 ## [0.3.19](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.18...v0.3.19) (2026-06-26)
 
 
