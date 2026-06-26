@@ -42,7 +42,8 @@ _sp_rvec(rng, n)    = Float64[2rand(rng) - 1 for _ in 1:n]
 # directly; the value ops below ground that sparse arithmetic is correct.
 const SPARSE_VERIFIED = Set{Symbol}([:sparse, :nnz, :issparse, :nonzeros, :rowvals,
     :spzeros, :dropzeros, :findnz, :droptol!, :sparsevec, :nzrange,
-    :spdiagm, :blockdiag, :sparse_hcat, :sparse_vcat, :dropzeros!, :permute])
+    :spdiagm, :blockdiag, :sparse_hcat, :sparse_vcat, :dropzeros!, :permute,
+    :fkeep!, :ftranspose!, :sparse_hvcat])
 
 # dense-in / dense-out wrappers, sparse used internally
 _sp_round(A)   = Matrix(sparse(A))            # construct + densify (round-trip)
@@ -77,6 +78,18 @@ _sp_spvcat(A, Bm)= Matrix(sparse_vcat(sparse(A), sparse(Bm)))  # sparse_vcat
 _sp_dropb(A)     = Matrix(dropzeros!(sparse(A)))               # dropzeros! (in-place)
 _sp_permute(A)   = (S = sparse(A); n = S.n;                    # permute (A[p,q])
                     Matrix(permute(S, collect(Int64, n:-1:1), collect(Int64, 1:n))))
+_sp_fkeep(A)     = Matrix(fkeep!((i, j, v) -> abs(v) > 0.3, sparse(A)))   # fkeep! (concrete predicate)
+_sp_ftrans(A)    = (S = sparse(A); X = copy(permutedims(S));   # ftranspose! (concrete op)
+                    ftranspose!(X, S, x -> 2.0 * x); Matrix(X))
+_sp_hvcat(A, Bm) = Matrix(sparse_hvcat((2,), sparse(A), sparse(Bm)))      # sparse_hvcat [A B]
+# multi-op compositions — output of one op feeds the next
+_sp_cmb1(A, Bm, C) = Matrix(sparse(A) * sparse(Bm) + permutedims(sparse(C)))   # matmul→transpose→add
+_sp_cmb2(A, Bm)    = Matrix(dropzeros(sparse(A) - sparse(Bm)))                 # sub→dropzeros
+_sp_cmb3(A, Bm)    = Matrix(2.0 * sparse(A) + sparse(Bm) * sparse(Bm))         # scale + matmul→add
+_sp_cmb4(A, Bm)    = nnz(sparse(A) + sparse(Bm))                               # add→nnz
+_sp_cmb5(A, Bm)    = sum(nonzeros(sparse_hcat(sparse(A), sparse(Bm))))         # hcat→nonzeros→sum
+_sp_cmb6(A)        = Matrix(permutedims(permutedims(sparse(A))))               # transpose→transpose
+_sp_cmb7(A, Bm)    = Matrix(permutedims(blockdiag(sparse(A), sparse(A) * sparse(Bm))))  # matmul→blockdiag→transpose
 
 function run_sparse_tests(; reps::Int = 40)
     FuzzHarness.NODE_OK || (@test_skip true; return)
@@ -125,5 +138,22 @@ function run_sparse_tests(; reps::Int = 40)
         @test _sp_diff(_sp_spvcat,  (Matrix{Float64}, Matrix{Float64}), pair(), Matrix{Float64})  # sparse_vcat
         @test _sp_diff(_sp_dropb,   (Matrix{Float64},), sq(), Matrix{Float64})                    # dropzeros!
         @test _sp_diff(_sp_permute, (Matrix{Float64},), sq(), Matrix{Float64})                   # permute
+        @test _sp_diff(_sp_fkeep,   (Matrix{Float64},), sq(), Matrix{Float64})                   # fkeep!
+        @test _sp_diff(_sp_ftrans,  (Matrix{Float64},), sq(), Matrix{Float64})                   # ftranspose!
+    end
+    @testset "compositions (multi-op combos)" begin
+        # chain VERIFIED ops so the OUTPUT of one feeds the next — proves they
+        # compose (a CSC result built by op X is a valid input to op Y), not just
+        # that each works in isolation. All differential (wasm vs native).
+        c2() = [ (n = rand(rng, 2:3); (_sp_rmat(rng, n, n), _sp_rmat(rng, n, n))) for _ in 1:reps ]
+        c3() = [ (n = rand(rng, 2:3); (_sp_rmat(rng, n, n), _sp_rmat(rng, n, n), _sp_rmat(rng, n, n))) for _ in 1:reps ]
+        @test _sp_diff(_sp_hvcat, (Matrix{Float64}, Matrix{Float64}), c2(), Matrix{Float64})      # sparse_hvcat
+        @test _sp_diff(_sp_cmb1, (Matrix{Float64}, Matrix{Float64}, Matrix{Float64}), c3(), Matrix{Float64})  # A*B + Cᵀ
+        @test _sp_diff(_sp_cmb2, (Matrix{Float64}, Matrix{Float64}), c2(), Matrix{Float64})       # dropzeros(A - B)
+        @test _sp_diff(_sp_cmb3, (Matrix{Float64}, Matrix{Float64}), c2(), Matrix{Float64})       # 2A + B*B
+        @test _sp_diff(_sp_cmb4, (Matrix{Float64}, Matrix{Float64}), c2(), Int64)                 # nnz(A + B)
+        @test _sp_diff(_sp_cmb5, (Matrix{Float64}, Matrix{Float64}), c2(), Float64)               # sum(nonzeros(hcat(A,B)))
+        @test _sp_diff(_sp_cmb6, (Matrix{Float64},), sq(), Matrix{Float64})                       # (Aᵀ)ᵀ
+        @test _sp_diff(_sp_cmb7, (Matrix{Float64}, Matrix{Float64}), c2(), Matrix{Float64})       # blockdiag(A, A*B)ᵀ
     end
 end
