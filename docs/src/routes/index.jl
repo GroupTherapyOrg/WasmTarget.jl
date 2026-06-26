@@ -33,6 +33,23 @@
                 )
             )
         ),
+        # Featured island — a live Lorenz attractor solved AND drawn entirely in wasm
+        Div(:class => "max-w-4xl mx-auto space-y-5",
+            Div(:class => "text-center space-y-2",
+                H2(:class => "text-2xl md:text-3xl font-serif font-semibold text-warm-900 dark:text-warm-100",
+                    "A Lorenz attractor, live in your browser"),
+                P(:class => "text-warm-600 dark:text-warm-400 max-w-2xl mx-auto leading-relaxed",
+                    "Drag σ and ρ. The differential equation is re-solved by ",
+                    A(:href => "https://github.com/SciML/SimpleDiffEq.jl", :target => "_blank", :class => "text-accent-500 hover:text-accent-600 underline", "SimpleDiffEq"),
+                    "'s Runge–Kutta integrator over a ",
+                    A(:href => "https://github.com/JuliaArrays/StaticArrays.jl", :target => "_blank", :class => "text-accent-500 hover:text-accent-600 underline", "StaticArrays"),
+                    " state and re-drawn by ",
+                    A(:href => "https://github.com/GroupTherapyOrg/WasmMakie.jl", :target => "_blank", :class => "text-accent-500 hover:text-accent-600 underline", "WasmMakie"),
+                    " — the whole solve-and-plot loop compiled to WebAssembly by WasmTarget. No server, no precomputed frames."
+                )
+            ),
+            ExampleLorenz()
+        ),
         # How It Works — pipeline + quick example side-by-side feel via stacked blocks
         Div(:class => "max-w-3xl mx-auto space-y-6",
             H2(:class => "text-2xl font-serif font-semibold text-warm-900 dark:text-warm-100", "How It Works"),
@@ -77,7 +94,8 @@ write("sin.wasm", bytes)""")
                 H3(:class => "font-semibold mb-2 text-warm-900 dark:text-warm-100", "2,500+ tests per Julia version"),
                 P(:class => "text-warm-600 dark:text-warm-400 text-sm leading-relaxed",
                     "Run against 1.12 and 1.13. A 588-entry differential-fuzz coverage matrix all passes, ",
-                    "plus Statistics / Dates / Random stdlib extensions verified bit-exact vs native.")
+                    "plus stdlib (Statistics / LinearAlgebra / Dates / Random / SparseArrays) and SciML ",
+                    "(ForwardDiff / StaticArrays / SimpleDiffEq) extensions verified vs native.")
             ),
             Div(:class => "border border-warm-200 dark:border-warm-800 rounded-lg p-6 bg-warm-100/50 dark:bg-warm-900/50",
                 Div(:class => "w-10 h-10 rounded-lg bg-accent-secondary-100 dark:bg-accent-secondary-900/50 flex items-center justify-center mb-4",
