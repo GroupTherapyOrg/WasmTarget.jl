@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.18](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.17...v0.3.18) (2026-06-26)
+
+
+### Features
+
+* **sciml:** ForwardDiff integration - first SciML library, 100% in-scope ([#62](https://github.com/GroupTherapyOrg/WasmTarget.jl/issues/62)) ([800e7e6](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/800e7e63cb07a0340fddad89363d726999782b57))
+
 ## [0.3.17](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.16...v0.3.17) (2026-06-26)
 
 
