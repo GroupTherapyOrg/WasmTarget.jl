@@ -1,5 +1,8 @@
 [deps]
 FileWatching = "7b1f6079-737a-58dc-b8bc-7a2ca5c1b5ee"
+ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 Therapy = "b2c3d4e5-f6a7-8901-bcde-f12345678901"
 WasmTarget = "9f3a1415-1112-405b-ae89-c61daf9872bd"
 
@@ -7,5 +10,6 @@ WasmTarget = "9f3a1415-1112-405b-ae89-c61daf9872bd"
 WasmTarget = {path = ".."}
 
 [compat]
+ForwardDiff = "0.10, 1"
 Therapy = "0.1"
 julia = "~1.12"
