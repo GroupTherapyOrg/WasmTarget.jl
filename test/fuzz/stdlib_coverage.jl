@@ -14,13 +14,14 @@
 # per stdlib and over the FULL surface with a real support percentage.
 
 using WasmTarget   # linalg_diff.jl references WasmTarget.Bridge at include time
-using LinearAlgebra, Statistics, Dates, Random
+using LinearAlgebra, Statistics, Dates, Random, SparseArrays
 const _SCDIR = @__DIR__
 include(joinpath(_SCDIR, "catalogue.jl"));   using .FuzzCatalogue
 include(joinpath(_SCDIR, "linalg_diff.jl"))   # → LINALG_VERIFIED
 include(joinpath(_SCDIR, "dates_diff.jl"))    # → DATES_VERIFIED
 include(joinpath(_SCDIR, "random_diff.jl"))   # → RANDOM_VERIFIED
 include(joinpath(_SCDIR, "stats_diff.jl"))    # → STATS_VERIFIED
+include(joinpath(_SCDIR, "sparse_diff.jl"))   # → SPARSE_VERIFIED
 
 # ── catalogue-verified names, grouped by the Base module a `mod` tag maps to ──
 const _CAT_BY_MOD = let d = Dict{Symbol,Set{Symbol}}()
@@ -81,6 +82,16 @@ const SPECS = StdSpec[
         #  • default_rng/RandomDevice: host/OS entropy (defers to embedding).
         Set([:rand!, :randn!, :randexp!, :bitrand, :default_rng, :RandomDevice]),
         "Seeded Xoshiro streams differentially fuzzed by test/fuzz/random_diff.jl on Julia ≤1.12: rand/randn/randexp (scalar), randperm/randcycle/shuffle & their `!`-variants, seed!, randsubseq/randsubseq!, randstring (ext overlay via native's OWN collection bulk fill). NB rand/randn are Base-owned (not in names(Random)) so they don't count below, but ARE verified. VERSION CAVEAT: the ENTIRE seeded-Xoshiro differential is gated to ≤1.12 — on Julia 1.13-rc1 it is broadly UNRELIABLE (CI shows flaky wasm↔native divergences across all seeded streams, even basic rand(Xoshiro(s)), and across platforms; 1.13 reworked Xoshiro seeding via a new SeedHasher path the differential can't reproduce stably). So RANDOM_VERIFIED is empty on ≥1.13 and this % is a ≤1.12 measurement (the stable release the campaign targets); the 1.13-rc1 instability is logged in FINDINGS as a soundness-loop candidate. CAN'T (all versions): rand!/randn!/randexp! Float64-array fills route through an 8-lane SIMD bulk generator (llvmcall intrinsics; stream ≠ scalar for n≥8); bitrand (BitVector packed bits); default_rng/RandomDevice (host entropy); MersenneTwister state hits a codegen gap."),
+    StdSpec("SparseArrays", SparseArrays,
+        SPARSE_VERIFIED,
+        # genuine CAN'T: sprand/sprandn build the sparse pattern via a randomized
+        # sampling whose RNG consumption diverges wasm↔native (same class as the
+        # Random SIMD array fills — MEASURED to mismatch). fkeep!/ftranspose! (which
+        # take a predicate/op closure) ARE verified with concrete closures.
+        # SuiteSparse-backed `\`/factorizations (a C library, reached via `\` not a
+        # name here) need a pure-Julia sparse LU.
+        Set([:sprand, :sprandn]),
+        "Differentially fuzzed by test/fuzz/sparse_diff.jl (each name = a wasm-vs-native sweep over randomized sparse inputs, same oracle as core). Construction `sparse(::Matrix)` + read/reduce/matvec (nnz/issparse/nonzeros/rowvals/sum/maximum/sparse·vector/sparse·dense) via 2 ext overlays (sparse_check_Ti + hand-rolled dense→CSC). RESULT ops via an ELEGANT core+ext pair — a narrow `is_struct_type` carve-out (register SparseMatrixCSC as its real 5-field struct, not WT's 2-field array layout) + an outer-ctor overlay (route to the concrete inner ctor, sidestepping a runtime `apply_type` WT mis-lowers): unlocks matmul/scalar·sparse/copy. Per-op CSC overlays: transpose, spdiagm, hcat/vcat (+ sparse_hcat/sparse_vcat), blockdiag, permute. Plus findnz/droptol!/dropzeros!/sparsevec/nzrange/spzeros/fkeep!/ftranspose!/sparse_hvcat direct, and sparse `+`/`-` (Base operators — not in this names-%, but differentially verified: a dense-accumulator merge after the two-pointer `while` version exposed a WT loop-codegen bug, see FINDINGS). MULTI-OP COMBOS also fuzzed (A*B+Cᵀ, dropzeros(A-B), 2A+B*B, nnz(A+B), blockdiag(A,A*B)ᵀ, …) so the ops are proven to compose, not just work in isolation. CAN'T: `\`/factorizations (SuiteSparse C library); sprand/sprandn (RNG consumption diverges wasm↔native, same class as the Random SIMD fills)."),
 ]
 
 # is `nm` a Type / a Function / other, in module `M`?

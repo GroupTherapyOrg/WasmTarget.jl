@@ -8,6 +8,17 @@ function is_struct_type(T::Type)::Bool
     T === Nothing && return false
     T === Char && return false
 
+    # Struct-backed AbstractArray implementations (SparseMatrixCSC/SparseVector are
+    # real multi-field structs that merely IMPLEMENT the array interface) must
+    # register with their REAL fields, not WT's 2-field wasm-array layout. Carve
+    # them out BEFORE the blanket AbstractArray exclusion below (which is for the
+    # dense Array/Vector types WT maps to wasm arrays). Without this, the 5-field
+    # `:new` that builds a sparse RESULT (sparse*sparse / copy / transpose / …)
+    # mismatches a 2-field registration → compile_new crash. Narrow + verified safe
+    # (field access, nnz, densify, matvec all stay correct — see WasmTargetSparseArraysExt).
+    if T isa DataType && T.name.name in (:SparseMatrixCSC, :SparseVector, :FixedSparseCSC)
+        return isconcretetype(T) && isstructtype(T)
+    end
     # Arrays, strings, and symbols have special handling - not user structs
     T <: AbstractArray && return false
     T === String && return false

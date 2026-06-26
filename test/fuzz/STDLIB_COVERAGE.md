@@ -242,6 +242,41 @@ Functions: **11 supported**, 0 boundary, 5 out-of-scope (16 total). Types: 1/9 w
 `AbstractRNG`, `MersenneTwister`, `RandomDevice`, `Sampler`, `SamplerSimple`, `SamplerTrivial`, `SamplerType`, `TaskLocalRNG`, `Xoshiro`✅
 
 
+## SparseArrays — 100% of in-scope functions supported
+
+Differentially fuzzed by test/fuzz/sparse_diff.jl (each name = a wasm-vs-native sweep over randomized sparse inputs, same oracle as core). Construction `sparse(::Matrix)` + read/reduce/matvec (nnz/issparse/nonzeros/rowvals/sum/maximum/sparse·vector/sparse·dense) via 2 ext overlays (sparse_check_Ti + hand-rolled dense→CSC). RESULT ops via an ELEGANT core+ext pair — a narrow `is_struct_type` carve-out (register SparseMatrixCSC as its real 5-field struct, not WT's 2-field array layout) + an outer-ctor overlay (route to the concrete inner ctor, sidestepping a runtime `apply_type` WT mis-lowers): unlocks matmul/scalar·sparse/copy. Per-op CSC overlays: transpose, spdiagm, hcat/vcat (+ sparse_hcat/sparse_vcat), blockdiag, permute. Plus findnz/droptol!/dropzeros!/sparsevec/nzrange/spzeros/fkeep!/ftranspose!/sparse_hvcat direct, and sparse `+`/`-` (Base operators — not in this names-%, but differentially verified: a dense-accumulator merge after the two-pointer `while` version exposed a WT loop-codegen bug, see FINDINGS). MULTI-OP COMBOS also fuzzed (A*B+Cᵀ, dropzeros(A-B), 2A+B*B, nnz(A+B), blockdiag(A,A*B)ᵀ, …) so the ops are proven to compose, not just work in isolation. CAN'T: ``/factorizations (SuiteSparse C library); sprand/sprandn (RNG consumption diverges wasm↔native, same class as the Random SIMD fills).
+
+Functions: **20 supported**, 0 boundary, 2 out-of-scope (22 total). Types: 0/5 with verified construction/ops.
+
+| function | status |
+|---|---|
+| `blockdiag` | ✅ supported |
+| `droptol!` | ✅ supported |
+| `dropzeros` | ✅ supported |
+| `dropzeros!` | ✅ supported |
+| `findnz` | ✅ supported |
+| `fkeep!` | ✅ supported |
+| `ftranspose!` | ✅ supported |
+| `issparse` | ✅ supported |
+| `nnz` | ✅ supported |
+| `nonzeros` | ✅ supported |
+| `nzrange` | ✅ supported |
+| `permute` | ✅ supported |
+| `rowvals` | ✅ supported |
+| `sparse` | ✅ supported |
+| `sparse_hcat` | ✅ supported |
+| `sparse_hvcat` | ✅ supported |
+| `sparse_vcat` | ✅ supported |
+| `sparsevec` | ✅ supported |
+| `spdiagm` | ✅ supported |
+| `spzeros` | ✅ supported |
+| `sprand` | ▽ out-of-scope |
+| `sprandn` | ▽ out-of-scope |
+
+**Types** (0/5 with verified ops): 
+`AbstractSparseArray`, `AbstractSparseMatrix`, `AbstractSparseVector`, `SparseMatrixCSC`, `SparseVector`
+
+
 ## Summary
 
 | stdlib | % in-scope supported | supported | boundary | out-of-scope |
@@ -250,3 +285,4 @@ Functions: **11 supported**, 0 boundary, 5 out-of-scope (16 total). Types: 1/9 w
 | Statistics | **100%** | 13 | 0 | 0 |
 | Dates | **96%** | 45 | 2 | 2 |
 | Random | **100%** | 11 | 0 | 5 |
+| SparseArrays | **100%** | 20 | 0 | 2 |

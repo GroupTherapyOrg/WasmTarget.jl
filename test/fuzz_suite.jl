@@ -63,3 +63,13 @@ end
         @test_skip true
     end
 end
+
+# SparseArrays foundation — sparse construction + read/reduce/matvec.
+@testset "Differential fuzz: SparseArrays" begin
+    if FuzzHarness.NODE_OK
+        include(joinpath(@__DIR__, "fuzz", "sparse_diff.jl"))
+        run_sparse_tests()
+    else
+        @test_skip true
+    end
+end

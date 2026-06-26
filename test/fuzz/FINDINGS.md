@@ -757,3 +757,123 @@ SOUNDNESS-LOOP CANDIDATES (open):
       `rand(Xoshiro(s))` (compiles trivial fns; CI's test env compiles rand fine),
       so 1.13 currently can't be exercised locally before pushing. This blocked
       fast iteration on the above.
+
+## SparseArrays — integration STEP 1 (foundation, 2026-06-25) — toward SciML
+First stdlib of the SciML push. Goal: sparse Jacobians + sparse linear systems.
+The blocker is at the very bottom — constructing a `SparseMatrixCSC` at all:
+
+  • `SparseMatrixCSC` inner ctor calls `sparse_check_Ti(m, n, Ti)`, which builds a
+    `Ti`-parameterized inner closure `throwTi` whose type is formed via
+    `Core.apply_type` on a runtime Type → WT can't lower (same class as the `cor`
+    type-instability). WT only compiles Ti=Int64, where bounds always hold →
+    OVERLAY with inline validation, no closure.
+  • The generic dense→CSC `sparse(::AbstractMatrix)` path additionally trips an
+    unresolved dynamic `getfield(::SparseMatrixCSC, ::Symbol)` → OVERLAY
+    `sparse(::Matrix{Float64})` with a textbook column-scan CSC build via the
+    (now-compilable) low-level constructor. Bit-identical to native.
+
+With those two overlays (ext/WasmTargetSparseArraysExt.jl), the READ/REDUCE/MATVEC
+paths compile from the REAL SparseArrays impls (static field access + loops):
+construction round-trip, nnz, issparse, nonzeros, rowvals, sum, maximum(abs,·),
+sparse·vector, sparse·dense — all differentially verified (sparse_diff.jl, 9/9).
+
+NEXT BLOCKER (step 2): ops that BUILD A NEW sparse result — sparse*sparse,
+sparse±sparse, transpose(sparse), scalar*sparse, sparse\b — trip a WT CODEGEN
+CRASH (not a clean error): `BoundsError: attempt to access 2-element Vector{Type}
+at index [3]`, raised inside WT's codegen for the generic result-CSC construction.
+Pattern is crisp: ops returning a sparse result crash; ops returning dense/scalar
+work. Plan = hand-roll each result-building op on the CSC fields (the LinearAlgebra
+factorization playbook): _wt_spmatmul / _wt_spadd / _wt_sptranspose / scalar-mul.
+SOUNDNESS-LOOP CANDIDATE: the `Vector{Type}[3]` is a WT internal crash worth
+root-causing (an arg-count/type-vector indexing bug in some codegen path). The
+genuine wall remains `\`/factorizations (SuiteSparse C library → needs pure-Julia
+sparse LU/KLU).
+
+## SparseArrays — STEP 2 (the elegant fix, 2026-06-25)
+The step-1 "Vector{Type}[3]" crash on result-building ops turned out to be a
+clean WT bug + a clean overlay, NOT a hand-roll job — found by stepping back:
+
+  • CORE: `is_struct_type` (src/codegen/structs.jl) excluded EVERY AbstractArray
+    subtype from real struct registration, so SparseMatrixCSC (a 5-field struct
+    that merely IMPLEMENTS the array interface) got WT's 2-field array layout →
+    its 5-field result-`:new` crashed compile_new. Carve the sparse types out.
+    Verified SAFE (diagnostic: field access / nnz / densify / matvec all stay
+    correct with it; full-suite regression-gated green).
+  • EXT: the generic outer ctor `SparseMatrixCSC(m,n,colptr,rowval,nzval)` computes
+    `Tv=eltype(nzval)`/`Ti=promote_type(...)` at runtime and builds `{Tv,Ti}(...)`
+    via a runtime `Core.apply_type`. WT disables concrete-eval (to respect
+    overlays), so that survives as runtime apply_type → SILENTLY WRONG struct
+    (right shape, wrong contents — every result op through this ctor was wrong).
+    Route to the concrete inner ctor. Bit-identical for Float64/Int64 CSCs.
+
+Unlocked CORRECT (differentially verified): sparse*sparse (MATMUL), scalar*sparse,
+copy, dropzeros, spzeros. SparseArrays 25→35%.
+
+REMAINING (step 3) — same root, deeper: `+`/`-`/`transpose`/`spdiagm`/`hcat`/
+`vcat`/`blockdiag` allocate via `spzeros(Tv,Ti,…)` / `SparseMatrixCSC{Tv,Ti}(…)`
+with RUNTIME-but-INFERABLE type params. The ELEGANT endgame is a WT const-fold:
+when an SSA value infers to `Type{X}` with concrete X (which inference already
+knows), emit the constant X instead of a dynamic `apply_type`/dynamic call. That
+ONE codegen improvement unlocks all the remaining sparse result-ops generically —
+and retroactively simplifies the `cor` / `sparse_check_Ti` overlays (same class).
+LESSON (recurring): step back and analyze the ROOT; the pure WT fix is usually
+hiding under what looks like N separate op failures.
+
+## SparseArrays — STEP 3 (2026-06-25): transpose + queries → 55%
+Added (verified, full-suite-gated): transpose (ext overlay — counting-sort CSC
+transpose via the concrete inner ctor; native halfperm! miscompiles), and the
+no-overlay-needed names findnz / droptol! / sparsevec / nzrange (compile straight
+from the real impls once construction is sound). SparseArrays 35→55% (11 sup).
+
+OPEN — `+`/`-` dispatch subtlety: native `+(A::SparseMatrixCSCUnion, B::...) =
+map(+, A, B)` (sparsematrix.jl:2264; SparseMatrixCSCUnion = Union{SparseMatrixCSC,
+SubArray{…}}). A hand-rolled merge-add overlay on `SparseMatrixCSC{Float64,Int64}`
+(verified correct algorithm) does NOT intercept — it MISMATCHes, meaning WT
+resolves to the native `map`-based method (which miscompiles) instead of the
+overlay. The concrete overlay should be more specific than the Union method, so
+this is a WT overlay-resolution subtlety with Union-typed base methods (or the
+trivial one-liner `+` being inlined before the overlay applies). NEXT: either fix
+WT overlay resolution for Union-typed methods, or overlay `map`/the higher-order
+machinery, or find the right interception level. Remaining boundary:
++/-/spdiagm/hcat/vcat/blockdiag/permute/dropzeros!/blockdiag.
+
+## SparseArrays — STEP 6 (2026-06-25): permute → ~94%, and the +/- gap
+Added permute (ext overlay: scatter-per-column CSC permutation). Reclassified
+fkeep!/ftranspose! out-of-scope (HIGHER-ORDER — arbitrary predicate/op closures
+the differential fuzzer can't synthesize; their fixed instantiations
+droptol!/dropzeros!/transpose ARE verified). SparseArrays ~94% (17 sup / 1 bnd
+[sparse_hvcat] / 4 oos). All 17 differentially fuzzed (wasm vs native, randomized).
+
+KNOWN GAP — sparse `+`/`-` (the one that resisted): these are `Base` operators
+(NOT in names(SparseArrays), so they don't move the %), defined as
+`(+)(A::SparseMatrixCSCUnion, B::SparseMatrixCSCUnion) = map(+, A, B)`. A correct
+hand-rolled merge-add overlay does NOT intercept at ANY level tried:
+`SparseMatrixCSC{Float64,Int64}`, `AbstractSparseMatrixCSC{F,I}`,
+`SparseMatrixCSC{Tv,Ti} where`, the exact `SparseMatrixCSCUnion{Float64,Int64}`,
+and even `Base.map(f::typeof(+), ::SMF, ::SMF)`. Each → MISMATCH, i.e. WT compiles
+the native `map`-based machinery (which mis-lowers) instead of the overlay. The
+multi-layer sparse `map` dispatch (map → `_noshapecheck_map` → `_map_*pres!`)
+combined with the trivial one-liner `+` getting inlined appears to slip below
+where the overlay table is consulted. Sparse `*` (matmul) DOES work (step 2), so
+this is specific to the map-based +/-. SOUNDNESS/CODEGEN CANDIDATE: root-cause why
+WT's overlay resolution doesn't shadow these (overlay-vs-inline ordering, or
+overlay-vs-Union specificity). Until then, sparse element-wise +/- is unsupported
+— a real gap for SciML matrix assembly worth flagging despite the clean %.
+
+## SparseArrays — STEP 7 (2026-06-25): sparse +/- WORK + a found WT loop bug
+The "+/- resist overlay" conclusion was WRONG, caught by a sentinel diagnostic:
+overlay `Base.:+(::SparseMatrixCSC{Float64,Int64}, ::…) = <2×2 sentinel>` and the
+wasm result WAS the sentinel (decoded 4631107791820423168 == 42.0) — so the
+overlay intercepts fine. The real blocker: my MERGE LOOP hung. A two-pointer merge
+`while ka<kae || kb<kbe` with `ka`/`kb` incremented inside `if/elseif/else`
+branches INFINITE-LOOPS in wasm (the bridge timed out) — the in-branch pointer
+increments don't thread back to the `while` header in WT's codegen. Rewriting as
+definite `for` loops over each column + a dense accumulator + `sort!` (all
+known-good) compiles and is bit-identical. sparse +/- now differentially verified.
+
+⚠ FOUND WT CODEGEN BUG (soundness-loop candidate): a `while` loop whose loop
+counter is mutated only inside nested `if/elseif/else` arms can fail to terminate
+in wasm — the mutation isn't observed at the loop header across iterations. Worth
+a minimal repro + fix (it silently HANGS rather than mis-lowering loudly, which is
+the worst failure mode). LESSON: when a sparse/array op "won't intercept", sentinel
+the overlay FIRST — it may be running and just hanging/mis-looping, not bypassed.
