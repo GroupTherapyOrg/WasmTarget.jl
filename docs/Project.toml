@@ -13,8 +13,6 @@ WasmTarget = "9f3a1415-1112-405b-ae89-c61daf9872bd"
 
 [sources]
 WasmTarget = {path = ".."}
-Therapy = {path = "../../Therapy.jl"}
-WasmMakie = {path = "../../WasmMakie.jl"}
 
 [compat]
 DiffEqBase = "6, 7"
@@ -22,6 +20,6 @@ ForwardDiff = "0.10, 1"
 SciMLBase = "2, 3"
 SimpleDiffEq = "1"
 StaticArrays = "1"
-Therapy = "0.1"
+Therapy = "0.2"
 WasmMakie = "0.1"
 julia = "~1.12"
