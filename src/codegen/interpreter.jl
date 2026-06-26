@@ -2302,6 +2302,7 @@ function _is_typelevel_foldable(@nospecialize(f))::Bool
     f === Base.promote_type   && return true
     (isdefined(Base, :typesplit) && f === Base.typesplit) && return true
     f === Base.eltype && return true
+    (isdefined(Base, :_compute_eltype) && f === Base._compute_eltype) && return true
     # float/one fold only on a Type arg — concrete-eval fires ONLY on constant
     # args, so the value forms (one(::Float64)) never reach the fold here.
     f === Base.float && return true
