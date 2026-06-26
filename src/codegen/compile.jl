@@ -296,6 +296,11 @@ const SKIP_AUTODISCOVER_METHODS = Set([
     :println, :print,
     # PURE-9041: show/repr handled via JS imports
     :show,
+    # Therapy.jl `js()` interop intrinsic — a no-op in Julia, emitted as inline
+    # JS / a wasm import by generate_body, NEVER compiled as a function. Without
+    # this, closure dep auto-discovery tries to compile `js` and produces an
+    # invalid module (the DarkModeToggle island's `js(…, set_dark)` effect).
+    :js,
     # WBUILD-3001: Error constructors from sort/collections internals
     :DimensionMismatch,
     # WBUILD-3001: sizehint! is a memory optimization hint — no-op in WasmGC
@@ -2355,7 +2360,8 @@ function compile_closure_body(
     # are appended to the module + registered so the body's call sites resolve.
     # Callers that already pass a registry are unaffected.
     effective_func_registry = func_registry === nothing ? FunctionRegistry() : func_registry
-    _autodiscover_closure_deps!(closure, code_info, mod, type_registry, effective_func_registry)
+    _autodiscover_closure_deps!(closure, code_info, mod, type_registry, effective_func_registry;
+                                invoke_imports = invoke_imports)
 
     # Check if the closure captures non-signal fields (e.g., Vector{String} props).
     # If so, pass the closure struct as parameter 0 (Leptos/dart2wasm pattern):
@@ -2481,7 +2487,8 @@ discover_dependencies path.
 """
 function _autodiscover_closure_deps!(closure::Function, code_info::Core.CodeInfo,
                                      mod::WasmModule, type_registry::TypeRegistry,
-                                     func_registry::FunctionRegistry)
+                                     func_registry::FunctionRegistry;
+                                     invoke_imports::Dict{Int, UInt32} = Dict{Int, UInt32}())
     # Collect all invoke targets from the closure's IR
     deps = Vector{Tuple{Any, Tuple, String}}()
     seen = Set{Tuple{Any, Tuple}}()
@@ -2494,7 +2501,13 @@ function _autodiscover_closure_deps!(closure::Function, code_info::Core.CodeInfo
     # Reuse check_and_add_external_method! to discover both Base whitelisted
     # methods AND user-package methods (e.g., WasmPlot kwarg wrappers)
     _to_scan_tmp = Vector{Tuple{Any, Tuple, String}}()
-    for stmt in code_info.code
+    for (stmt_idx, stmt) in enumerate(code_info.code)
+        # Skip invokes already wired as WASM imports (Therapy.jl `js()` interop):
+        # they are emitted as `call <import>`, NOT compiled as functions. Without
+        # this, auto-discovery tries to COMPILE `js` (a no-op-in-Julia interop
+        # intrinsic) as a real function and produces an invalid module
+        # (e.g. the DarkModeToggle island's `js(…, set_dark)` effect).
+        haskey(invoke_imports, stmt_idx) && continue
         if stmt isa Expr && stmt.head === :invoke && length(stmt.args) >= 2
             mi_or_ci = stmt.args[1]
             mi = if mi_or_ci isa Core.MethodInstance
