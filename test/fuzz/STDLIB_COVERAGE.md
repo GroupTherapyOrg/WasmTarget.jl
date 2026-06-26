@@ -277,6 +277,23 @@ Functions: **20 supported**, 0 boundary, 2 out-of-scope (22 total). Types: 0/5 w
 `AbstractSparseArray`, `AbstractSparseMatrix`, `AbstractSparseVector`, `SparseMatrixCSC`, `SparseVector`
 
 
+## ForwardDiff — 100% of in-scope functions supported
+
+FIRST SciML library. Forward-mode autodiff in the browser — EXACT derivatives, no host, no finite differences. `names(ForwardDiff)` is empty (the API is qualified-access only), so the surface below is ForwardDiff's documented public AD operations, each a wasm-vs-native differential sweep in test/fuzz/forwarddiff_diff.jl. `derivative` compiles straight from the real impl (single-partial `Dual` seed). `gradient`/`jacobian`/`hessian` (+ the in-place `!` forms) are ext overlays: native routes them through the chunk/`Config` machinery, which embeds a cyclic `Method` constant WT can't emit — so we reuse the working single-partial `Dual` seed one input direction at a time (Partials{1} × N), BIT-IDENTICAL to native's Partials{N} vector mode (forward-mode partials never cross slots); `hessian` is forward-over-forward with two distinct tags. The whole value path is unlocked by a narrow `is_struct_type` carve-out (src/codegen/structs.jl) registering `Dual`/`Partials` as their real structs — without it `<:Number` routes them to `structref` and a `Dual[…]` array literal fails wasm validation (a systemic core fix: every custom `<:Number` struct benefits). The `Dual` number interface (value/partials) is exercised in every sweep; COMBOS verified too (‖∇f‖, J·x, a hand 2×2 Newton step J⁻¹F, gradient through a named helper). OUT-OF-SCOPE: the `GradientConfig`/`JacobianConfig`/`HessianConfig`/`Chunk` preallocation API (advanced chunk-size tuning — the cyclic-`Method` `@generated` seeder; unnecessary, the standard API covers the same results).
+
+Functions: **8 supported**, 0 boundary, 0 out-of-scope (8 total). Types: 0/0 with verified construction/ops.
+
+| function | status |
+|---|---|
+| `derivative` | ✅ supported |
+| `derivative!` | ✅ supported |
+| `gradient` | ✅ supported |
+| `gradient!` | ✅ supported |
+| `hessian` | ✅ supported |
+| `hessian!` | ✅ supported |
+| `jacobian` | ✅ supported |
+| `jacobian!` | ✅ supported |
+
 ## Summary
 
 | stdlib | % in-scope supported | supported | boundary | out-of-scope |
@@ -286,3 +303,4 @@ Functions: **20 supported**, 0 boundary, 2 out-of-scope (22 total). Types: 0/5 w
 | Dates | **96%** | 45 | 2 | 2 |
 | Random | **100%** | 11 | 0 | 5 |
 | SparseArrays | **100%** | 20 | 0 | 2 |
+| ForwardDiff | **100%** | 8 | 0 | 0 |

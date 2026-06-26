@@ -2,6 +2,19 @@
 Check if a type is a user-defined struct (not a primitive or special type).
 """
 function is_struct_type(T::Type)::Bool
+    # ForwardDiff.Dual / Partials are real multi-field structs that merely happen
+    # to be `<: Number` / `<: AbstractVector`. Like the SparseMatrixCSC carve-out
+    # below, they must register with their REAL fields (concrete struct refs).
+    # Without this they fall to the `<:Number` / `<:AbstractArray` exclusions and
+    # get the `structref` treatment, which leaves intermediate Dual values typed
+    # `structref` in locals — so building a `Dual[a, b]` array literal (or any
+    # struct.new whose field is a Dual) fails wasm validation
+    # ("expected (ref null T), found structref"). Concrete registration makes the
+    # whole forward-mode AD value path (gradient/Jacobian) type-consistent. Narrow
+    # (two named types) + full-regression-gated — see WasmTargetForwardDiffExt.
+    if T isa DataType && T.name.name in (:Dual, :Partials)
+        return isconcretetype(T) && isstructtype(T)
+    end
     # Primitive types are not structs
     T <: Number && return false
     T === Bool && return false
