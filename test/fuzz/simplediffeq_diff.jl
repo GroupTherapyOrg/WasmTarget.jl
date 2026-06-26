@@ -56,6 +56,11 @@ _sde_osc(u, p, t)      = [-u[2], u[1]]                        # vector  harmonic
 _sde_lv(u, p, t)       = [1.5u[1] - u[1]*u[2], u[1]*u[2] - 3.0u[2]]   # Lotka–Volterra predator–prey
 _sde_pend(u, p, t)     = [u[2], -sin(u[1])]                   # vector  nonlinear pendulum
 _sde_oscS(u, p, t)     = SVector{2,Float64}(-u[2], u[1])      # SVector-state harmonic oscillator
+# parameterized rhs — coefficients fed through `p` (NTuple), not closure capture:
+_sde_pdecay(u, p, t)   = -p[1] * u                            # scalar  u' = -k·u
+_sde_plorenz(u, p, t)  = SVector{3,Float64}(p[1]*(u[2]-u[1]), # SVector Lorenz (σ,ρ,β = p)
+                                            u[1]*(p[2]-u[3])-u[2],
+                                            u[1]*u[2]-p[3]*u[3])
 
 # ----- generate a wrapper per (ODE, solver): solve INSIDE, return final state ---
 # Short, bounded, non-chaotic integrations keep the @muladd/FMA ULP drift inside
@@ -74,6 +79,12 @@ for S in _SDE_SOLVERS
     # SVector-state: return a scalar reduction of the final SVector state.
     @eval $(Symbol("_sde_oscS_", S))(a::Float64) =
         sum(solve(ODEProblem(_sde_oscS, SVector{2,Float64}(a, 0.0), (0.0, 1.0)), $S(); dt = 0.05).u[end])
+    # parameterized (4-arg ODEProblem, p::NTuple): scalar decay rate + Lorenz σ-sweep.
+    @eval $(Symbol("_sde_pdecay_", S))(k::Float64) =
+        solve(ODEProblem(_sde_pdecay, 1.0, (0.0, 1.0), (k,)), $S(); dt = 0.05).u[end]
+    @eval $(Symbol("_sde_plorenz_", S))(sig::Float64) =
+        sum(solve(ODEProblem(_sde_plorenz, SVector{3,Float64}(1.0, 1.0, 1.0), (0.0, 1.0),
+                             (sig, 28.0, 2.6666666666666665)), $S(); dt = 0.01).u[end])
 end
 
 function run_simplediffeq_tests(; reps::Int = 30)
@@ -91,6 +102,10 @@ function run_simplediffeq_tests(; reps::Int = 30)
             @test _sde_diff(getfield(@__MODULE__, Symbol("_sde_pend_", S)), (Float64,), ic(), Vector{Float64})
             # SVector state → Float64 (reduction)
             @test _sde_diff(getfield(@__MODULE__, Symbol("_sde_oscS_", S)), (Float64,), ic(), Float64)
+            # parameterized (4-arg ODEProblem, p::NTuple) — scalar + SVector-Lorenz
+            @test _sde_diff(getfield(@__MODULE__, Symbol("_sde_pdecay_", S)),  (Float64,), ic(), Float64)
+            @test _sde_diff(getfield(@__MODULE__, Symbol("_sde_plorenz_", S)), (Float64,),
+                            [ (8.0 + rand(rng) * 6.0,) for _ in 1:reps ], Float64)   # σ ∈ (8,14)
         end
     end
 end

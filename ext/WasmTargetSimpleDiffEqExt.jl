@@ -71,6 +71,12 @@ end
 @overlay WMT SB.ODEProblem(f::F, u0, tspan::Tuple{Float64, Float64}) where {F} =
     SB.ODEProblem{false}(_wt_odefunc(f), u0, tspan)
 
+# (2b) parameterized form `ODEProblem(f, u0, tspan, p)` — the idiomatic way to feed
+# coefficients to a top-level rhs `f(u, p, t)` (no closure capture, which WT can't
+# lower as an ODEFunction field). p flows through to the concrete ODEProblem{false}.
+@overlay WMT SB.ODEProblem(f::F, u0, tspan::Tuple{Float64, Float64}, p) where {F} =
+    SB.ODEProblem{false}(_wt_odefunc(f), u0, tspan, p)
+
 # (3) generic solve → __solve (bypass the kwarg-Pairs machinery).
 @overlay WMT SB.solve(prob::SB.ODEProblem, alg::_WT_SOLVERS; dt, kw...) =
     DiffEqBase.__solve(prob, alg; dt = dt)

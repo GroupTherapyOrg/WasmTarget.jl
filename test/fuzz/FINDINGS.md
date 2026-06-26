@@ -1015,7 +1015,15 @@ VERIFIED: 5 solvers (SimpleEuler/SimpleRK4/SimpleTsit5/LoopEuler/LoopRK4) × sca
 all wasm==native within the tolerance oracle (the @muladd/FMA fuse drifts ~1-2 ULP/step,
 well inside ORACLE tolerance for the bounded non-chaotic integrations used).
 
+PARAMETERIZED ODEs: `ODEProblem(f, u0, tspan, p)` (4-arg) is overlaid too, so a
+top-level rhs `f(u,p,t)` gets its coefficients through `p` instead of closure capture
+(a param-capturing rhs CLOSURE traps as an ODEFunction field — WT can't lower it).
+`p` must be a SCALAR or NTuple — a Vector `p` fails wasm validation (`expected i64,
+found ref` threading the Vector through ODEProblem.p); NTuple `p=(σ,ρ,β)` is the
+supported form (verified across all 5 solvers in simplediffeq_diff.jl). This is what
+the docs homepage Lorenz island uses (σ/ρ sliders → re-solve in wasm → WasmMakie).
+
 COMPAT NOTE: the ODEFunction is constructed by CONCRETE field layout (21 type params),
 so the ext is version-sensitive to SciMLBase — re-verify the construction on bumps
 (compat pinned SciMLBase="2,3"). SCOPE: fixed-step solvers only; adaptive SimpleATsit5
-(error-control + dense interp) and SMatrix/MArray are future scope.
+(error-control + dense interp), Vector-typed `p`, and SMatrix/MArray are future scope.
