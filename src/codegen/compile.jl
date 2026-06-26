@@ -2345,11 +2345,17 @@ function compile_closure_body(
     # For void handlers (like Therapy.jl event handlers), override return type
     return_type = void_return ? Nothing : inferred_return_type
 
-    # If func_registry provided, auto-discover dependencies from the closure's IR
-    # and compile them into the existing module (same as compile_module does)
-    if func_registry !== nothing
-        _autodiscover_closure_deps!(closure, code_info, mod, type_registry, func_registry)
-    end
+    # Auto-discover and compile the closure's dependencies (sin/exp/sqrt/det,
+    # stdlib reductions, …) into the module — the same transitive discovery
+    # compile_module does. When the caller supplies no registry (e.g. Therapy's
+    # memo compilation, _compile_memo_wasm), create one locally: without it,
+    # EVERY non-inlined call in the closure body stubs to `unreachable`, so a
+    # memo could only use functions Julia happened to inline (plain arithmetic),
+    # and any `sin`/`std`/`det`/… silently trapped at runtime. Discovered deps
+    # are appended to the module + registered so the body's call sites resolve.
+    # Callers that already pass a registry are unaffected.
+    effective_func_registry = func_registry === nothing ? FunctionRegistry() : func_registry
+    _autodiscover_closure_deps!(closure, code_info, mod, type_registry, effective_func_registry)
 
     # Check if the closure captures non-signal fields (e.g., Vector{String} props).
     # If so, pass the closure struct as parameter 0 (Leptos/dart2wasm pattern):
@@ -2381,7 +2387,7 @@ function compile_closure_body(
         return_type,
         mod,
         type_registry;
-        func_registry = func_registry,
+        func_registry = effective_func_registry,
         is_compiled_closure = has_non_signal_captures,
         captured_signal_fields = captured_signal_fields,
         dom_bindings = dom_bindings,

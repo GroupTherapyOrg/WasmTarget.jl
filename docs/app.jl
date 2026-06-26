@@ -17,6 +17,14 @@ end
 
 using Therapy
 
+# Loaded so WasmTarget's weakdep extensions (Statistics / LinearAlgebra /
+# ForwardDiff) activate in THIS process — the interactive examples on /examples/
+# are @island components whose create_memo bodies call these libraries, and
+# WasmTarget compiles them to WasmGC against the live overlay method table here.
+using Statistics
+using LinearAlgebra
+using ForwardDiff
+
 cd(@__DIR__)
 
 # =============================================================================

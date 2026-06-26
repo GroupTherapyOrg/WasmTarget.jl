@@ -34,8 +34,13 @@ jobs:
         with:
           node-version: '22'
 
+      # Prebuilt binary (seconds) instead of `cargo install wasm-tools`, which
+      # compiled wasm-tools from source on every job (~5-10 min x 6 matrix jobs,
+      # never cached). Matches what downstream.yml already uses.
       - name: Install wasm-tools
-        run: cargo install wasm-tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-tools
 
       - name: Install Binaryen (wasm-opt)
         shell: bash
