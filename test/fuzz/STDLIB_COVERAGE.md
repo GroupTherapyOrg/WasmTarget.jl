@@ -242,11 +242,11 @@ Functions: **11 supported**, 0 boundary, 5 out-of-scope (16 total). Types: 1/9 w
 `AbstractRNG`, `MersenneTwister`, `RandomDevice`, `Sampler`, `SamplerSimple`, `SamplerTrivial`, `SamplerType`, `TaskLocalRNG`, `Xoshiro`✅
 
 
-## SparseArrays — 80% of in-scope functions supported
+## SparseArrays — 94% of in-scope functions supported
 
-Differentially fuzzed by test/fuzz/sparse_diff.jl. Construction `sparse(::Matrix)` + the read/reduce/matvec surface (nnz/issparse/nonzeros/rowvals/sum/maximum/sparse·vector/sparse·dense) via 2 ext overlays (sparse_check_Ti + hand-rolled dense→CSC). RESULT-BUILDING ops (sparse*sparse incl. MATMUL, scalar*sparse, copy, dropzeros, spzeros) unlocked by an ELEGANT pair: a core `is_struct_type` carve-out (register SparseMatrixCSC as its real 5-field struct, not WT's 2-field array layout — fixes the compile_new crash; narrow + regression-gated) + an outer-ctor overlay (route `SparseMatrixCSC(m,n,cp,rv,nv)` to the concrete inner ctor, sidestepping a runtime `apply_type` WT mis-lowers). BOUNDARY (next): `+`/`-`/`transpose`/`spdiagm`/`hcat`/`vcat`/`blockdiag` allocate via `spzeros(Tv,Ti,…)`/`{Tv,Ti}(…)` with RUNTIME type params — the same root one level deeper; the real fix is a WT const-fold of inferable `eltype`/`promote_type`/`apply_type` (would unlock them all generically). CAN'T: ``/factorizations (SuiteSparse C library).
+Differentially fuzzed by test/fuzz/sparse_diff.jl (each name = a wasm-vs-native sweep over randomized sparse inputs, same oracle as core). Construction `sparse(::Matrix)` + read/reduce/matvec (nnz/issparse/nonzeros/rowvals/sum/maximum/sparse·vector/sparse·dense) via 2 ext overlays (sparse_check_Ti + hand-rolled dense→CSC). RESULT ops via an ELEGANT core+ext pair — a narrow `is_struct_type` carve-out (register SparseMatrixCSC as its real 5-field struct, not WT's 2-field array layout) + an outer-ctor overlay (route to the concrete inner ctor, sidestepping a runtime `apply_type` WT mis-lowers): unlocks matmul/scalar·sparse/copy. Per-op CSC overlays: transpose, spdiagm, hcat/vcat (+ sparse_hcat/sparse_vcat), blockdiag, permute. Plus findnz/droptol!/dropzeros!/sparsevec/nzrange/spzeros direct. KNOWN GAP (not in this %, they're Base operators): sparse `+`/`-` — `map(+,A,B)` on the SparseMatrixCSCUnion alias resists overlay interception at every level (a WT overlay-vs-inline limitation; FINDINGS). BOUNDARY: sparse_hvcat (grid-concat varargs). CAN'T: ``/factorizations (SuiteSparse C library); fkeep!/ftranspose! (arbitrary closures); sprand/sprandn (gated Random).
 
-Functions: **16 supported**, 4 boundary, 2 out-of-scope (22 total). Types: 0/5 with verified construction/ops.
+Functions: **17 supported**, 1 boundary, 4 out-of-scope (22 total). Types: 0/5 with verified construction/ops.
 
 | function | status |
 |---|---|
@@ -259,6 +259,7 @@ Functions: **16 supported**, 4 boundary, 2 out-of-scope (22 total). Types: 0/5 w
 | `nnz` | ✅ supported |
 | `nonzeros` | ✅ supported |
 | `nzrange` | ✅ supported |
+| `permute` | ✅ supported |
 | `rowvals` | ✅ supported |
 | `sparse` | ✅ supported |
 | `sparse_hcat` | ✅ supported |
@@ -266,9 +267,8 @@ Functions: **16 supported**, 4 boundary, 2 out-of-scope (22 total). Types: 0/5 w
 | `sparsevec` | ✅ supported |
 | `spdiagm` | ✅ supported |
 | `spzeros` | ✅ supported |
-| `fkeep!` | ⛔ boundary |
-| `ftranspose!` | ⛔ boundary |
-| `permute` | ⛔ boundary |
+| `fkeep!` | ▽ out-of-scope |
+| `ftranspose!` | ▽ out-of-scope |
 | `sparse_hvcat` | ⛔ boundary |
 | `sprand` | ▽ out-of-scope |
 | `sprandn` | ▽ out-of-scope |
@@ -285,4 +285,4 @@ Functions: **16 supported**, 4 boundary, 2 out-of-scope (22 total). Types: 0/5 w
 | Statistics | **100%** | 13 | 0 | 0 |
 | Dates | **96%** | 45 | 2 | 2 |
 | Random | **100%** | 11 | 0 | 5 |
-| SparseArrays | **80%** | 16 | 4 | 2 |
+| SparseArrays | **94%** | 17 | 1 | 4 |

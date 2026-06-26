@@ -42,7 +42,7 @@ _sp_rvec(rng, n)    = Float64[2rand(rng) - 1 for _ in 1:n]
 # directly; the value ops below ground that sparse arithmetic is correct.
 const SPARSE_VERIFIED = Set{Symbol}([:sparse, :nnz, :issparse, :nonzeros, :rowvals,
     :spzeros, :dropzeros, :findnz, :droptol!, :sparsevec, :nzrange,
-    :spdiagm, :blockdiag, :sparse_hcat, :sparse_vcat, :dropzeros!])
+    :spdiagm, :blockdiag, :sparse_hcat, :sparse_vcat, :dropzeros!, :permute])
 
 # dense-in / dense-out wrappers, sparse used internally
 _sp_round(A)   = Matrix(sparse(A))            # construct + densify (round-trip)
@@ -73,6 +73,8 @@ _sp_blockd(A, Bm)= Matrix(blockdiag(sparse(A), sparse(Bm)))# blockdiag (ext over
 _sp_sphcat(A, Bm)= Matrix(sparse_hcat(sparse(A), sparse(Bm)))  # sparse_hcat
 _sp_spvcat(A, Bm)= Matrix(sparse_vcat(sparse(A), sparse(Bm)))  # sparse_vcat
 _sp_dropb(A)     = Matrix(dropzeros!(sparse(A)))               # dropzeros! (in-place)
+_sp_permute(A)   = (S = sparse(A); n = S.n;                    # permute (A[p,q])
+                    Matrix(permute(S, collect(Int64, n:-1:1), collect(Int64, 1:n))))
 
 function run_sparse_tests(; reps::Int = 40)
     FuzzHarness.NODE_OK || (@test_skip true; return)
@@ -118,5 +120,6 @@ function run_sparse_tests(; reps::Int = 40)
         @test _sp_diff(_sp_sphcat,  (Matrix{Float64}, Matrix{Float64}), pair(), Matrix{Float64})  # sparse_hcat
         @test _sp_diff(_sp_spvcat,  (Matrix{Float64}, Matrix{Float64}), pair(), Matrix{Float64})  # sparse_vcat
         @test _sp_diff(_sp_dropb,   (Matrix{Float64},), sq(), Matrix{Float64})                    # dropzeros!
+        @test _sp_diff(_sp_permute, (Matrix{Float64},), sq(), Matrix{Float64})                   # permute
     end
 end

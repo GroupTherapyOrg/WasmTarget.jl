@@ -836,3 +836,26 @@ trivial one-liner `+` being inlined before the overlay applies). NEXT: either fi
 WT overlay resolution for Union-typed methods, or overlay `map`/the higher-order
 machinery, or find the right interception level. Remaining boundary:
 +/-/spdiagm/hcat/vcat/blockdiag/permute/dropzeros!/blockdiag.
+
+## SparseArrays — STEP 6 (2026-06-25): permute → ~94%, and the +/- gap
+Added permute (ext overlay: scatter-per-column CSC permutation). Reclassified
+fkeep!/ftranspose! out-of-scope (HIGHER-ORDER — arbitrary predicate/op closures
+the differential fuzzer can't synthesize; their fixed instantiations
+droptol!/dropzeros!/transpose ARE verified). SparseArrays ~94% (17 sup / 1 bnd
+[sparse_hvcat] / 4 oos). All 17 differentially fuzzed (wasm vs native, randomized).
+
+KNOWN GAP — sparse `+`/`-` (the one that resisted): these are `Base` operators
+(NOT in names(SparseArrays), so they don't move the %), defined as
+`(+)(A::SparseMatrixCSCUnion, B::SparseMatrixCSCUnion) = map(+, A, B)`. A correct
+hand-rolled merge-add overlay does NOT intercept at ANY level tried:
+`SparseMatrixCSC{Float64,Int64}`, `AbstractSparseMatrixCSC{F,I}`,
+`SparseMatrixCSC{Tv,Ti} where`, the exact `SparseMatrixCSCUnion{Float64,Int64}`,
+and even `Base.map(f::typeof(+), ::SMF, ::SMF)`. Each → MISMATCH, i.e. WT compiles
+the native `map`-based machinery (which mis-lowers) instead of the overlay. The
+multi-layer sparse `map` dispatch (map → `_noshapecheck_map` → `_map_*pres!`)
+combined with the trivial one-liner `+` getting inlined appears to slip below
+where the overlay table is consulted. Sparse `*` (matmul) DOES work (step 2), so
+this is specific to the map-based +/-. SOUNDNESS/CODEGEN CANDIDATE: root-cause why
+WT's overlay resolution doesn't shadow these (overlay-vs-inline ordering, or
+overlay-vs-Union specificity). Until then, sparse element-wise +/- is unsupported
+— a real gap for SciML matrix assembly worth flagging despite the clean %.

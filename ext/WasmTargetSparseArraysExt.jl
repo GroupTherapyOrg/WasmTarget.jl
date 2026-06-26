@@ -155,4 +155,29 @@ end
     _SMF(m, n, cp, rv, nv)
 end
 
+# permute(A, p, q) = A[p, q] — bilateral row/col permutation. Native routes through
+# the runtime-parametric halfperm/permute! machinery; this scatters each permuted
+# column and re-emits in sorted-row order. Bit-identical.
+@overlay WasmTarget.WASM_METHOD_TABLE function SparseArrays.permute(A::_SMF, p::Vector{Int64}, q::Vector{Int64})
+    m = A.m; n = A.n; invp = invperm(p)
+    cp = Vector{Int64}(undef, n + 1); cp[1] = 1; rv = Int64[]; nv = Float64[]
+    work = zeros(Float64, m)
+    @inbounds for jnew in 1:n
+        jold = q[jnew]; rows = Int64[]
+        for k in A.colptr[jold]:(A.colptr[jold+1]-1)
+            nr = invp[A.rowval[k]]; work[nr] = A.nzval[k]; push!(rows, nr)
+        end
+        sort!(rows)
+        for r in rows; push!(rv, r); push!(nv, work[r]); end
+        cp[jnew + 1] = length(rv) + 1
+    end
+    _SMF(m, n, cp, rv, nv)
+end
+
+# NB sparse `+`/`-` (Base operators, NOT in names(SparseArrays)) are `map(+,A,B)`
+# on the SparseMatrixCSCUnion alias and resist overlay interception at every level
+# tried (concrete/abstract/parametric/Union/map-typeof) — a WT overlay-vs-inline
+# limitation with the multi-layer sparse `map` machinery. Sparse `*` works
+# (matmul, step 2); `+`/`-` remain a known gap, documented in FINDINGS.md.
+
 end # module
