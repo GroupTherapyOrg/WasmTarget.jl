@@ -965,44 +965,57 @@ NB this does NOT reach the SciML/SimpleDiffEq `ODEProblem` construction: its
 concrete-eval can't fold it even when forced. That needs a concrete-construction
 ext overlay (sparse-style) — a separate effort.
 
-## SciMLBase + SimpleDiffEq — FOUNDATION CRACKED (2026-06-26, branch wt-sciml-simplediffeq)
-Real SciML ODE solve runs BIT-IDENTICAL to native in wasm. SCALAR ODEs fully
-working; vector systems pending (the vector ODESolution). Builds on the
-type-level concrete-eval fold (this branch). NOT PR'd until full support.
+## SciMLBase + SimpleDiffEq + StaticArrays — SHIPPED (2026-06-26, branch wt-sciml-simplediffeq)
+Real SciML ODE solve runs in wasm, bit/tolerance-identical to native, for EVERY
+fixed-step solver and EVERY state representation — nothing dropped. Four libraries
+landed together (DiffEqBase, SciMLBase, SimpleDiffEq, StaticArrays); exts
+`WasmTargetSimpleDiffEqExt` + `WasmTargetStaticArraysExt`; harnesses
+`test/fuzz/simplediffeq_diff.jl` (5 solvers × {scalar, Vector, SVector} ODEs) +
+`test/fuzz/staticarrays_diff.jl` (the SVector surface). Coverage: both 100% in-scope.
 
-PROVEN RECIPE (verified: `solve(ODEProblem((u,p,t)->-u, u0, (0.0,1.0)), SimpleRK4(); dt=0.05).u[end]`
-→ wasm 0.36787946114753967 == native 0.3678794611475396):
+THREE LEVERS for the SciMLBase abstraction (the user-facing `ODEProblem`/`solve`):
 
-  1. CORE FOLD (committed, interpreter.jl): whitelist now includes `_compute_eltype`
-     (the solve kwarg-Pairs eltype). The fold folds `apply_type`/`isinplace`-type-param/
-     `_compute_eltype`-when-const. It does NOT reach the OUTER `ODEProblem(f,...)`
-     ctor (raw-f `isinplace` = kwarg method-arity reflection, non-const, won't fold).
+  1. CORE FOLD (src/codegen/interpreter.jl): a curated whitelist re-enables
+     concrete-eval for pure type-level fns (`apply_type`/`_compute_sparams`/`_svec_ref`/
+     `eltype`/`_compute_eltype`/`isinplace`-type-param/…) that WT had left as `dynamic`
+     Type-value dispatch (concrete-eval is globally off in WT to protect overlays).
+     Folds the ODEProblem/ODEFunction type computations native folds away.
 
-  2. OVERLAY: outer ODEProblem ctor -> CONCRETE construction. Build the ODEFunction
-     explicitly (no reflection) then `ODEProblem{false}(odef, u0, tspan)` — the inner
-     ctor's `isinplace(odef::ODEFunction{false})` is a TYPE-PARAM fold (the core fold
-     handles it). Validated: the explicit ODEFunction/ODEProblem match native exactly.
-       @inline _wt_odefunc(f::F) where {F} = SciMLBase.ODEFunction{false, SciMLBase.AutoSpecialize, F,
-           LinearAlgebra.UniformScaling{Bool}, Nothing×12, typeof(SciMLBase.DEFAULT_OBSERVED), Nothing×4}(
-           f, LinearAlgebra.I, nothing×12, SciMLBase.DEFAULT_OBSERVED, nothing×4)   # 19 field args
-       @overlay WMT SciMLBase.ODEProblem(f::F, u0, tspan::Tuple{Float64,Float64}) where {F} =
-           SciMLBase.ODEProblem{false}(_wt_odefunc(f), u0, tspan)
+  2. OVERLAY ODEProblem(f,u0,tspan) → CONCRETE construction (ext): the OUTER ctor runs
+     `isinplace(f)` on a RAW function (kwarg method-arity reflection the fold can't
+     reach). Build the ODEFunction explicitly (19 field args, no reflection) then
+     `ODEProblem{false}(odef, …)` — the inner ctor's `isinplace(::ODEFunction{false})`
+     is just the type-param `iip`, which the fold handles. Byte-identical to native's.
 
-  3. OVERLAY: generic solve -> `DiffEqBase.__solve` directly (bypasses DiffEqBase's
-     get_concrete_problem/solve_call kwarg-Pairs machinery, which builds a Pairs type
-     from a RUNTIME kwargs NamedTuple → unfoldable). `solve` is re-exported, overlay
-     `SciMLBase.solve`. SimpleDiffEq's `DiffEqBase.__solve(prob, ::SimpleRK4; dt)` is the
-     clean integrator (time grid + step! loop + build_solution).
-       @overlay WMT SciMLBase.solve(prob::SciMLBase.ODEProblem, alg::SimpleRK4; dt, kw...) =
-           DiffEqBase.__solve(prob, alg; dt=dt)
+  3. OVERLAY solve(prob, alg; dt) → `DiffEqBase.__solve` directly (ext): bypasses the
+     get_concrete_problem/solve_call kwarg-Pairs machinery (a Pairs type from a RUNTIME
+     kwargs NamedTuple → unfoldable). `__solve` is the clean integrator and — unlike the
+     full `solve` (which native ALSO infers `Any`) — infers a CONCRETE ODESolution, so
+     `sol.u[end]` returns an unboxed value at the wasm boundary.
 
-  Weakdeps for the ext: SimpleDiffEq, SciMLBase, DiffEqBase, LinearAlgebra.
+  Plus `_ARRAY_STRUCT_CARVEOUT` (an extensible registry added to is_struct_type): the
+  SciML solution types (ODESolution/LinearInterpolation/DiffEqArray/VectorOfArray) are
+  `<:AbstractArray` but real multi-field structs, so without it `sol.u`/`sol.t` lower to
+  DYNAMIC getfield (the original vector-system blocker). Same lever fixes StaticArrays.
 
-⚠ VECTOR-SYSTEM BLOCKER (next): `Vector{Float64}` state → `build_solution` makes an
-ODESolution{Float64,2,Vector{Vector{Float64}},...,LinearInterpolation{...},...} (20+
-params) whose field access (`sol.u`, even literal `getfield(sol,:u)`) lowers to a
-DYNAMIC getfield — build_solution type-instability for vectors. Scalar ODESolution was
-concrete. NEXT: overlay build_solution / the solution-access for the vector case
-(maybe a dense=false / simpler-solution path), then generalize solvers
-(SimpleEuler/SimpleTsit5), formalize WasmTargetSimpleDiffEqExt, and the FULL
-simplediffeq_diff.jl differential harness + coverage + CI (same rigor as the other libs).
+STATICARRAYS (what unblocked SimpleTsit5 — its Butcher tableau is in SVector{6/21/22}):
+  `SVector{N,T} === SArray{Tuple{N},T,1,N}` is an NTuple-backed struct, not a heap array.
+  (a) register `:SArray` in `_ARRAY_STRUCT_CARVEOUT` → concrete struct layout, not the
+      generic 2-field array layout (else `.data` NTuple unreachable → getindex traps);
+  (b) overlay `StaticArrays.construct_type` for an already-parameterized `SArray` to the
+      IDENTITY. Native folds construct_type's type-level machinery (adapt_size/
+      adapt_eltype/typeintersect/has_size) to the concrete `Type{SVector{N,T}}`; WT's
+      interpreter infers `Any`, boxing the whole SVector and every getindex off it. The
+      identity overlay re-concretises it for ALL N (incl. degenerate SVector{1}). NB the
+      construct_type overlay is what makes N=1 work — an alternate invoke-based ctor
+      overlay traps at N=1 (the `Vararg{Any,1}` self-collides on the recursive call).
+
+VERIFIED: 5 solvers (SimpleEuler/SimpleRK4/SimpleTsit5/LoopEuler/LoopRK4) × scalar
+(decay/logistic) + Vector-state (oscillator/Lotka-Volterra/pendulum) + SVector-state,
+all wasm==native within the tolerance oracle (the @muladd/FMA fuse drifts ~1-2 ULP/step,
+well inside ORACLE tolerance for the bounded non-chaotic integrations used).
+
+COMPAT NOTE: the ODEFunction is constructed by CONCRETE field layout (21 type params),
+so the ext is version-sensitive to SciMLBase — re-verify the construction on bumps
+(compat pinned SciMLBase="2,3"). SCOPE: fixed-step solvers only; adaptive SimpleATsit5
+(error-control + dense interp) and SMatrix/MArray are future scope.

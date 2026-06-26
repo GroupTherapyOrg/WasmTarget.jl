@@ -84,3 +84,26 @@ end
         @test_skip true
     end
 end
+
+# StaticArrays — the SVector surface (construction/getindex/destructure/arith/
+# broadcast), the NTuple-backed-struct carve-out + construct_type overlay.
+@testset "Differential fuzz: StaticArrays" begin
+    if FuzzHarness.NODE_OK
+        include(joinpath(@__DIR__, "fuzz", "staticarrays_diff.jl"))
+        run_staticarrays_tests()
+    else
+        @test_skip true
+    end
+end
+
+# SimpleDiffEq (+ SciMLBase/DiffEqBase) — fixed-step ODE solvers: solve real ODEs
+# in wasm via every solver (Euler/RK4/Tsit5/LoopEuler/LoopRK4) for scalar, Vector
+# and SVector states, compared wasm-vs-native against the real SimpleDiffEq.
+@testset "Differential fuzz: SimpleDiffEq" begin
+    if FuzzHarness.NODE_OK
+        include(joinpath(@__DIR__, "fuzz", "simplediffeq_diff.jl"))
+        run_simplediffeq_tests()
+    else
+        @test_skip true
+    end
+end
