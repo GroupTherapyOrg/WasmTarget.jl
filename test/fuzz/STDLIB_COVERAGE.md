@@ -242,14 +242,15 @@ Functions: **11 supported**, 0 boundary, 5 out-of-scope (16 total). Types: 1/9 w
 `AbstractRNG`, `MersenneTwister`, `RandomDevice`, `Sampler`, `SamplerSimple`, `SamplerTrivial`, `SamplerType`, `TaskLocalRNG`, `Xoshiro`✅
 
 
-## SparseArrays — 55% of in-scope functions supported
+## SparseArrays — 65% of in-scope functions supported
 
 Differentially fuzzed by test/fuzz/sparse_diff.jl. Construction `sparse(::Matrix)` + the read/reduce/matvec surface (nnz/issparse/nonzeros/rowvals/sum/maximum/sparse·vector/sparse·dense) via 2 ext overlays (sparse_check_Ti + hand-rolled dense→CSC). RESULT-BUILDING ops (sparse*sparse incl. MATMUL, scalar*sparse, copy, dropzeros, spzeros) unlocked by an ELEGANT pair: a core `is_struct_type` carve-out (register SparseMatrixCSC as its real 5-field struct, not WT's 2-field array layout — fixes the compile_new crash; narrow + regression-gated) + an outer-ctor overlay (route `SparseMatrixCSC(m,n,cp,rv,nv)` to the concrete inner ctor, sidestepping a runtime `apply_type` WT mis-lowers). BOUNDARY (next): `+`/`-`/`transpose`/`spdiagm`/`hcat`/`vcat`/`blockdiag` allocate via `spzeros(Tv,Ti,…)`/`{Tv,Ti}(…)` with RUNTIME type params — the same root one level deeper; the real fix is a WT const-fold of inferable `eltype`/`promote_type`/`apply_type` (would unlock them all generically). CAN'T: ``/factorizations (SuiteSparse C library).
 
-Functions: **11 supported**, 9 boundary, 2 out-of-scope (22 total). Types: 0/5 with verified construction/ops.
+Functions: **13 supported**, 7 boundary, 2 out-of-scope (22 total). Types: 0/5 with verified construction/ops.
 
 | function | status |
 |---|---|
+| `blockdiag` | ✅ supported |
 | `droptol!` | ✅ supported |
 | `dropzeros` | ✅ supported |
 | `findnz` | ✅ supported |
@@ -260,8 +261,8 @@ Functions: **11 supported**, 9 boundary, 2 out-of-scope (22 total). Types: 0/5 w
 | `rowvals` | ✅ supported |
 | `sparse` | ✅ supported |
 | `sparsevec` | ✅ supported |
+| `spdiagm` | ✅ supported |
 | `spzeros` | ✅ supported |
-| `blockdiag` | ⛔ boundary |
 | `dropzeros!` | ⛔ boundary |
 | `fkeep!` | ⛔ boundary |
 | `ftranspose!` | ⛔ boundary |
@@ -269,7 +270,6 @@ Functions: **11 supported**, 9 boundary, 2 out-of-scope (22 total). Types: 0/5 w
 | `sparse_hcat` | ⛔ boundary |
 | `sparse_hvcat` | ⛔ boundary |
 | `sparse_vcat` | ⛔ boundary |
-| `spdiagm` | ⛔ boundary |
 | `sprand` | ▽ out-of-scope |
 | `sprandn` | ▽ out-of-scope |
 
@@ -285,4 +285,4 @@ Functions: **11 supported**, 9 boundary, 2 out-of-scope (22 total). Types: 0/5 w
 | Statistics | **100%** | 13 | 0 | 0 |
 | Dates | **96%** | 45 | 2 | 2 |
 | Random | **100%** | 11 | 0 | 5 |
-| SparseArrays | **55%** | 11 | 9 | 2 |
+| SparseArrays | **65%** | 13 | 7 | 2 |

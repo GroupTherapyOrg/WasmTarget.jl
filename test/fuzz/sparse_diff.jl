@@ -41,7 +41,8 @@ _sp_rvec(rng, n)    = Float64[2rand(rng) - 1 for _ in 1:n]
 # SparseArrays names this file verifies (for stdlib_coverage.jl). `sparse`/`nnz`
 # directly; the value ops below ground that sparse arithmetic is correct.
 const SPARSE_VERIFIED = Set{Symbol}([:sparse, :nnz, :issparse, :nonzeros, :rowvals,
-    :spzeros, :dropzeros, :findnz, :droptol!, :sparsevec, :nzrange])
+    :spzeros, :dropzeros, :findnz, :droptol!, :sparsevec, :nzrange,
+    :spdiagm, :blockdiag])
 
 # dense-in / dense-out wrappers, sparse used internally
 _sp_round(A)   = Matrix(sparse(A))            # construct + densify (round-trip)
@@ -65,6 +66,10 @@ _sp_findnz(A)    = sum(findnz(sparse(A))[3])       # findnz (3rd = values)
 _sp_droptol(A)   = Matrix(droptol!(sparse(A), 0.4))# droptol!
 _sp_spvec(v)     = Vector(sparsevec(v))            # sparsevec round-trip
 _sp_nzrange(A)   = (S = sparse(A); s = 0; for j in 1:S.n; s += length(nzrange(S, j)); end; s)  # nzrange
+_sp_spdiagm(v)   = Matrix(spdiagm(0 => v))            # spdiagm (ext overlay)
+_sp_hcat(A, Bm)  = Matrix(hcat(sparse(A), sparse(Bm)))     # hcat (ext overlay)
+_sp_vcat(A, Bm)  = Matrix(vcat(sparse(A), sparse(Bm)))     # vcat (ext overlay)
+_sp_blockd(A, Bm)= Matrix(blockdiag(sparse(A), sparse(Bm)))# blockdiag (ext overlay)
 
 function run_sparse_tests(; reps::Int = 40)
     FuzzHarness.NODE_OK || (@test_skip true; return)
@@ -99,5 +104,13 @@ function run_sparse_tests(; reps::Int = 40)
         @test _sp_diff(_sp_nzrange,   (Matrix{Float64},), sq(), Int64)            # nzrange
         @test _sp_diff(_sp_spvec, (Vector{Float64},),
                        [ (_sp_rvec(rng, rand(rng, 3:7)),) for _ in 1:reps ], Vector{Float64})  # sparsevec
+    end
+    @testset "construction / concatenation (ext overlays)" begin
+        pair() = [ (n = rand(rng, 2:4); (_sp_rmat(rng, n, n), _sp_rmat(rng, n, n))) for _ in 1:reps ]
+        @test _sp_diff(_sp_spdiagm, (Vector{Float64},),
+                       [ (_sp_rvec(rng, rand(rng, 2:5)),) for _ in 1:reps ], Matrix{Float64})  # spdiagm
+        @test _sp_diff(_sp_hcat,    (Matrix{Float64}, Matrix{Float64}), pair(), Matrix{Float64})  # hcat
+        @test _sp_diff(_sp_vcat,    (Matrix{Float64}, Matrix{Float64}), pair(), Matrix{Float64})  # vcat
+        @test _sp_diff(_sp_blockd,  (Matrix{Float64}, Matrix{Float64}), pair(), Matrix{Float64})  # blockdiag
     end
 end

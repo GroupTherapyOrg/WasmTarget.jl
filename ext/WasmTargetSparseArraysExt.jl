@@ -101,4 +101,53 @@ end
     SparseMatrixCSC{Float64,Int64}(n, m, Tcol, Trow, Tval)
 end
 
+# (5) Construction/concatenation ops whose native builders route through the
+# runtime-parametric allocation WT mis-lowers (spdiagm/hcat/vcat/blockdiag).
+# Each is a direct CSC assembly via the concrete inner ctor — bit-identical.
+const _SMF = SparseMatrixCSC{Float64,Int64}
+
+# spdiagm(0 => v): square matrix with v on the main diagonal.
+@overlay WasmTarget.WASM_METHOD_TABLE function SparseArrays.spdiagm(p::Pair{Int64,Vector{Float64}})
+    p.first == 0 || throw(ArgumentError("WasmTarget spdiagm overlay supports diagonal 0 only"))
+    v = p.second; n = length(v)
+    _SMF(n, n, collect(Int64, 1:(n + 1)), collect(Int64, 1:n), copy(v))
+end
+
+# hcat([A B]): concatenate columns (shared #rows).
+@overlay WasmTarget.WASM_METHOD_TABLE function Base.hcat(A::_SMF, B::_SMF)
+    m = A.m; nA = A.n; nB = B.n; n = nA + nB
+    cp = Vector{Int64}(undef, n + 1)
+    @inbounds for j in 1:(nA + 1); cp[j] = A.colptr[j]; end
+    off = A.colptr[nA + 1] - 1
+    @inbounds for j in 1:nB; cp[nA + 1 + j] = B.colptr[j + 1] + off; end
+    _SMF(m, n, cp, vcat(A.rowval, B.rowval), vcat(A.nzval, B.nzval))
+end
+
+# vcat([A; B]): concatenate rows (shared #cols), interleaving per column.
+@overlay WasmTarget.WASM_METHOD_TABLE function Base.vcat(A::_SMF, B::_SMF)
+    mA = A.m; n = A.n; m = mA + B.m
+    cp = Vector{Int64}(undef, n + 1); cp[1] = 1; rv = Int64[]; nv = Float64[]
+    @inbounds for j in 1:n
+        for k in A.colptr[j]:(A.colptr[j+1]-1); push!(rv, A.rowval[k]); push!(nv, A.nzval[k]); end
+        for k in B.colptr[j]:(B.colptr[j+1]-1); push!(rv, B.rowval[k] + mA); push!(nv, B.nzval[k]); end
+        cp[j + 1] = length(rv) + 1
+    end
+    _SMF(m, n, cp, rv, nv)
+end
+
+# blockdiag([A 0; 0 B]).
+@overlay WasmTarget.WASM_METHOD_TABLE function SparseArrays.blockdiag(A::_SMF, B::_SMF)
+    mA = A.m; nA = A.n; m = mA + B.m; n = nA + B.n
+    cp = Vector{Int64}(undef, n + 1); cp[1] = 1; rv = Int64[]; nv = Float64[]
+    @inbounds for j in 1:nA
+        for k in A.colptr[j]:(A.colptr[j+1]-1); push!(rv, A.rowval[k]); push!(nv, A.nzval[k]); end
+        cp[j + 1] = length(rv) + 1
+    end
+    @inbounds for j in 1:B.n
+        for k in B.colptr[j]:(B.colptr[j+1]-1); push!(rv, B.rowval[k] + mA); push!(nv, B.nzval[k]); end
+        cp[nA + j + 1] = length(rv) + 1
+    end
+    _SMF(m, n, cp, rv, nv)
+end
+
 end # module
