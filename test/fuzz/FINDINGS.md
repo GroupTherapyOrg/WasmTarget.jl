@@ -877,3 +877,58 @@ in wasm — the mutation isn't observed at the loop header across iterations. Wo
 a minimal repro + fix (it silently HANGS rather than mis-lowering loudly, which is
 the worst failure mode). LESSON: when a sparse/array op "won't intercept", sentinel
 the overlay FIRST — it may be running and just hanging/mis-looping, not bypassed.
+
+## ForwardDiff — integration (FIRST SciML library, 2026-06-26) — 100% in-scope
+Forward-mode autodiff in a frozen wasm module: `derivative`/`gradient`/`jacobian`/
+`hessian` (+ in-place `!` forms), all wasm-vs-native differential (test/fuzz/
+forwarddiff_diff.jl, 27 sweeps incl. Rosenbrock grad/Hess, a 2×2 Newton step
+`J⁻¹F`, `‖∇f‖`, `J·x`, gradient through a named helper). ForwardDiff 1.x; wired
+as a weakdep ext (ext/WasmTargetForwardDiffExt.jl).
+
+What compiles vs. what's overlaid:
+ • `derivative(f, ::Real)` compiles STRAIGHT from the real impl — it seeds a
+   single-partial `Dual{T}(x, 1)` and reads back one partial; plain dual arithmetic.
+ • `gradient`/`jacobian`/`hessian` do NOT compile natively: for a length-N input
+   they build a `Partials{N}` seed through the chunk/`Config`/`@generated`
+   machinery, which embeds a cyclic `Method` constant WT rejects
+   ("cannot compile `Method` … object graph references itself"). OVERLAY: reuse
+   the single-partial seed one input direction at a time (`Partials{1}` × N).
+   Forward-mode partials NEVER cross slots (output partial k depends only on input
+   slot k), so single-seed-per-direction is BIT-IDENTICAL to native vector mode.
+   `hessian` = forward-over-forward with two DISTINCT tags (inner T1 over Float64,
+   outer T2 over `Dual{T1}`); each entry seeds e_j in the inner value and e_i in
+   the outer partial, result's outer-partial's inner-partial = ∂²f/∂xᵢ∂xⱼ.
+ • In-place `gradient!`/`jacobian!`/`hessian!`/`derivative!` route through the same
+   chunk machinery → overlaid to the alloc forms + `copyto!`.
+
+★ CORE FIX (systemic, full-suite-gated): array literals of `<:Number`/`<:Number`-
+  STRUCT element types failed wasm validation. `is_struct_type` returned false for
+  ALL `T <: Number` (intended for primitive Int/Float), so `Dual` (a real 2-field
+  struct that's `<: Real`) got the `structref` treatment — its values stayed typed
+  `structref` in locals, and building a `Dual[a, b]` array literal (or any
+  `struct.new` whose field is a Dual) tripped
+  "type mismatch: expected (ref null $T), found structref". Plain structs were fine;
+  `<:Number` structs (Dual, and by the same token Complex/Rational/RGB) were not.
+  FIX: a narrow carve-out in `is_struct_type` (src/codegen/structs.jl) — types named
+  `:Dual`/`:Partials` register as their REAL concrete structs (mirrors the
+  SparseMatrixCSC carve-out). One-line, isolated (the new check returns early only
+  for those two names; every other type hits byte-identical logic → Complex/Rational
+  provably unaffected), full Pkg.test green. This makes the whole AD value path
+  type-consistent at once instead of needing per-emission-site casts. (The general
+  bug — array-of-`<:Number`-struct literals — remains for OTHER custom Number types
+  like Measurements; a future general fix is the `memoryrefset!`/`struct.new` field
+  `ref.cast` narrowing, PURE-701b's sibling. Filed.)
+
+⚠ SOUNDNESS FINDING (silent miscompile): native `ForwardDiff.hessian(f, x)`
+  COMPILES under WT but returns WRONG VALUES (its nested-Dual seeding via the chunk
+  path mis-lowers silently — no crash, no trap). Caught by the differential sweep
+  (mismatch, not error). Mitigated by overlaying `hessian` with explicit
+  forward-over-forward single-partial seeding (verified bit-identical). The native
+  path's silent divergence is a soundness-loop candidate: WT compiles ForwardDiff's
+  `@generated` Hessian seeder to something that runs but is incorrect — the worst
+  failure mode. Until root-caused, the overlay is the safe route.
+
+OUT-OF-SCOPE: the `GradientConfig`/`JacobianConfig`/`HessianConfig`/`Chunk`
+preallocation API (chunk-size tuning — the cyclic-`Method` `@generated` seeder;
+unnecessary, the standard API yields the same results). Future: nested/higher-order
+beyond Hessian; `Dual` over non-Float64 value types at the bridge boundary.

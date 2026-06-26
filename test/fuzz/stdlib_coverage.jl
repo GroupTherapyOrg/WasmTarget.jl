@@ -14,7 +14,7 @@
 # per stdlib and over the FULL surface with a real support percentage.
 
 using WasmTarget   # linalg_diff.jl references WasmTarget.Bridge at include time
-using LinearAlgebra, Statistics, Dates, Random, SparseArrays
+using LinearAlgebra, Statistics, Dates, Random, SparseArrays, ForwardDiff
 const _SCDIR = @__DIR__
 include(joinpath(_SCDIR, "catalogue.jl"));   using .FuzzCatalogue
 include(joinpath(_SCDIR, "linalg_diff.jl"))   # → LINALG_VERIFIED
@@ -22,6 +22,7 @@ include(joinpath(_SCDIR, "dates_diff.jl"))    # → DATES_VERIFIED
 include(joinpath(_SCDIR, "random_diff.jl"))   # → RANDOM_VERIFIED
 include(joinpath(_SCDIR, "stats_diff.jl"))    # → STATS_VERIFIED
 include(joinpath(_SCDIR, "sparse_diff.jl"))   # → SPARSE_VERIFIED
+include(joinpath(_SCDIR, "forwarddiff_diff.jl"))  # → FORWARDDIFF_VERIFIED
 
 # ── catalogue-verified names, grouped by the Base module a `mod` tag maps to ──
 const _CAT_BY_MOD = let d = Dict{Symbol,Set{Symbol}}()
@@ -39,7 +40,12 @@ struct StdSpec
     verified::Set{Symbol}    # has a real differential test
     outofscope::Set{Symbol}  # genuinely non-wasm — loud-reject boundary
     note::String
+    api::Vector{Symbol}      # explicit function surface (when names(mod) is empty,
+                             # e.g. ForwardDiff whose API is qualified-access only);
+                             # empty ⇒ enumerate names(mod) as usual
 end
+# default api = Symbol[] — existing stdlib specs enumerate names(mod)
+StdSpec(name, mod, verified, oos, note) = StdSpec(name, mod, verified, oos, note, Symbol[])
 
 const SPECS = StdSpec[
     StdSpec("LinearAlgebra", LinearAlgebra,
@@ -92,6 +98,11 @@ const SPECS = StdSpec[
         # name here) need a pure-Julia sparse LU.
         Set([:sprand, :sprandn]),
         "Differentially fuzzed by test/fuzz/sparse_diff.jl (each name = a wasm-vs-native sweep over randomized sparse inputs, same oracle as core). Construction `sparse(::Matrix)` + read/reduce/matvec (nnz/issparse/nonzeros/rowvals/sum/maximum/sparse·vector/sparse·dense) via 2 ext overlays (sparse_check_Ti + hand-rolled dense→CSC). RESULT ops via an ELEGANT core+ext pair — a narrow `is_struct_type` carve-out (register SparseMatrixCSC as its real 5-field struct, not WT's 2-field array layout) + an outer-ctor overlay (route to the concrete inner ctor, sidestepping a runtime `apply_type` WT mis-lowers): unlocks matmul/scalar·sparse/copy. Per-op CSC overlays: transpose, spdiagm, hcat/vcat (+ sparse_hcat/sparse_vcat), blockdiag, permute. Plus findnz/droptol!/dropzeros!/sparsevec/nzrange/spzeros/fkeep!/ftranspose!/sparse_hvcat direct, and sparse `+`/`-` (Base operators — not in this names-%, but differentially verified: a dense-accumulator merge after the two-pointer `while` version exposed a WT loop-codegen bug, see FINDINGS). MULTI-OP COMBOS also fuzzed (A*B+Cᵀ, dropzeros(A-B), 2A+B*B, nnz(A+B), blockdiag(A,A*B)ᵀ, …) so the ops are proven to compose, not just work in isolation. CAN'T: `\`/factorizations (SuiteSparse C library); sprand/sprandn (RNG consumption diverges wasm↔native, same class as the Random SIMD fills)."),
+    StdSpec("ForwardDiff", ForwardDiff,
+        FORWARDDIFF_VERIFIED,
+        Set{Symbol}(),
+        "FIRST SciML library. Forward-mode autodiff in the browser — EXACT derivatives, no host, no finite differences. `names(ForwardDiff)` is empty (the API is qualified-access only), so the surface below is ForwardDiff's documented public AD operations, each a wasm-vs-native differential sweep in test/fuzz/forwarddiff_diff.jl. `derivative` compiles straight from the real impl (single-partial `Dual` seed). `gradient`/`jacobian`/`hessian` (+ the in-place `!` forms) are ext overlays: native routes them through the chunk/`Config` machinery, which embeds a cyclic `Method` constant WT can't emit — so we reuse the working single-partial `Dual` seed one input direction at a time (Partials{1} × N), BIT-IDENTICAL to native's Partials{N} vector mode (forward-mode partials never cross slots); `hessian` is forward-over-forward with two distinct tags. The whole value path is unlocked by a narrow `is_struct_type` carve-out (src/codegen/structs.jl) registering `Dual`/`Partials` as their real structs — without it `<:Number` routes them to `structref` and a `Dual[…]` array literal fails wasm validation (a systemic core fix: every custom `<:Number` struct benefits). The `Dual` number interface (value/partials) is exercised in every sweep; COMBOS verified too (‖∇f‖, J·x, a hand 2×2 Newton step J⁻¹F, gradient through a named helper). OUT-OF-SCOPE: the `GradientConfig`/`JacobianConfig`/`HessianConfig`/`Chunk` preallocation API (advanced chunk-size tuning — the cyclic-`Method` `@generated` seeder; unnecessary, the standard API covers the same results).",
+        [:derivative, :derivative!, :gradient, :gradient!, :jacobian, :jacobian!, :hessian, :hessian!]),
 ]
 
 # is `nm` a Type / a Function / other, in module `M`?
@@ -124,11 +135,18 @@ open(joinpath(_SCDIR, "STDLIB_COVERAGE.md"), "w") do io
 
     summary = Tuple{String,Int,Int,Int,Int}[]
     for spec in SPECS
-        ns = sort([n for n in names(spec.mod)
-                   if n !== Symbol(spec.name) && !startswith(string(n), "@") &&
-                      _kind(spec.mod, n) !== :undef])
-        funcs = [n for n in ns if _kind(spec.mod, n) === :func]
-        types = [n for n in ns if _kind(spec.mod, n) === :type]
+        local funcs, types
+        if !isempty(spec.api)
+            # explicit-surface stdlib (names(mod) empty) — count the curated API
+            funcs = sort(spec.api)
+            types = Symbol[]
+        else
+            ns = sort([n for n in names(spec.mod)
+                       if n !== Symbol(spec.name) && !startswith(string(n), "@") &&
+                          _kind(spec.mod, n) !== :undef])
+            funcs = [n for n in ns if _kind(spec.mod, n) === :func]
+            types = [n for n in ns if _kind(spec.mod, n) === :type]
+        end
         rows = [(n, classify(spec, n)) for n in funcs]
         sup = count(r -> r[2] == "supported", rows)
         bnd = count(r -> r[2] == "boundary", rows)

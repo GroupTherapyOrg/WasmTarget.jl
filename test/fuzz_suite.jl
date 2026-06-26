@@ -73,3 +73,14 @@ end
         @test_skip true
     end
 end
+
+# ForwardDiff (first SciML library) — forward-mode autodiff: derivative/gradient/
+# jacobian, each compared wasm-vs-native against the real ForwardDiff.
+@testset "Differential fuzz: ForwardDiff" begin
+    if FuzzHarness.NODE_OK
+        include(joinpath(@__DIR__, "fuzz", "forwarddiff_diff.jl"))
+        run_forwarddiff_tests()
+    else
+        @test_skip true
+    end
+end
