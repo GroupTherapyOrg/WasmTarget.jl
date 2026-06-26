@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.17](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.16...v0.3.17) (2026-06-26)
+
+
+### Miscellaneous Chores
+
+* re-cut release 0.3.17 (SparseArrays) ([#60](https://github.com/GroupTherapyOrg/WasmTarget.jl/issues/60)) ([68bcf25](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/68bcf25847450740458b83fef36347bfb7e65d12))
+
 ## [0.3.16](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.15...v0.3.16) (2026-06-25)
 
 
