@@ -207,4 +207,22 @@ end
 @overlay WasmTarget.WASM_METHOD_TABLE Base.:+(A::_SMF, B::_SMF) = _wt_spaddsub(A, B, false)
 @overlay WasmTarget.WASM_METHOD_TABLE Base.:-(A::_SMF, B::_SMF) = _wt_spaddsub(A, B, true)
 
+# sparse · DENSE matrix → dense. The native CSC·dense product is bit-exact on
+# ≤1.12 but DIVERGES on 1.13-rc1 (a 1.13-specific codegen difference in that
+# method — sparse·sparse matmul is unaffected). Hand-roll the column-wise CSC·dense
+# product (definite loops) for a version-robust, bit-identical result.
+@overlay WasmTarget.WASM_METHOD_TABLE function Base.:*(S::_SMF, D::Matrix{Float64})
+    m = S.m; k = S.n; n = size(D, 2)
+    C = zeros(Float64, m, n)
+    @inbounds for j in 1:n
+        for col in 1:k
+            dcj = D[col, j]
+            for t in S.colptr[col]:(S.colptr[col+1]-1)
+                C[S.rowval[t], j] += S.nzval[t] * dcj
+            end
+        end
+    end
+    C
+end
+
 end # module
