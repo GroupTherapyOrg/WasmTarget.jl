@@ -208,16 +208,19 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
        !(stmt isa Core.GotoNode) && !(stmt isa Core.GotoIfNot) && !(stmt isa Core.PhiNode) &&
        !(stmt isa Core.PhiCNode) && !(stmt isa Core.UpsilonNode) && !(stmt isa Core.NewvarNode)
         if haskey(ctx.slot_locals, _slot_assign_id)
-            append!(bytes, compile_value(stmt, ctx))
-            push!(bytes, Opcode.LOCAL_SET)
-            append!(bytes, encode_leb128_unsigned(ctx.slot_locals[_slot_assign_id]))
+            # MIGRATED: compile_value bridges via emit_raw!; slot local.set typed on `b`.
+            emit_raw!(b, compile_value(stmt, ctx); pushes=WasmValType[infer_value_wasm_type(stmt, ctx)])
+            local_set!(b, ctx.slot_locals[_slot_assign_id])
         end
         emit_raw!(b, bytes)
         return builder_code(b)
     end
 
     if stmt isa Core.ReturnNode
-        # DEBUG: Trace compile_statement ReturnNode handler
+        # MIGRATED: ReturnNode emits straight-line via typed methods on `b`. External
+        # emit_*! helpers (emit_numeric_to_externref!, emit_box_type_id!) and compile_value
+        # bridge through a local temp buffer + emit_raw!. `bytes` stays empty for this branch
+        # (the trailing slot-assign/n_drops common code below appends after, order-preserved).
         if isdefined(stmt, :val)
             # Check function return type
             func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
@@ -226,74 +229,62 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
 
             if func_ret_wasm === ExternRef && is_numeric_val
                 # PURE-325: Box numeric value for ExternRef return (handles nothing too)
-                emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
+                _rb = UInt8[]; emit_numeric_to_externref!(_rb, stmt.val, val_wasm, ctx)
+                emit_raw!(b, _rb; pushes=WasmValType[ExternRef])
             elseif func_ret_wasm isa ConcreteRef && is_numeric_val
                 # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
-                push!(bytes, Opcode.REF_NULL)
-                append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                ref_null!(b, Int64(func_ret_wasm.type_idx), func_ret_wasm)
             elseif func_ret_wasm === AnyRef && is_numeric_val
                 # PURE-9030: Box numeric value for AnyRef return (Union{Int,Float} return type).
                 # Push typeId, push value, struct.new BoxedXxx → anyref.
                 local _ret_box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-                emit_box_type_id!(bytes, ctx.type_registry, val_wasm)
-                append!(bytes, compile_value(stmt.val, ctx))
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.STRUCT_NEW)
-                append!(bytes, encode_leb128_unsigned(_ret_box_idx))
+                _bb = UInt8[]; emit_box_type_id!(_bb, ctx.type_registry, val_wasm)
+                emit_raw!(b, _bb; pushes=WasmValType[I32])
+                emit_raw!(b, compile_value(stmt.val, ctx); pushes=(val_wasm === nothing ? WasmValType[] : WasmValType[val_wasm]))
+                struct_new!(b, _ret_box_idx, WasmValType[])
             elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                 # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
-                push!(bytes, Opcode.REF_NULL)
-                push!(bytes, UInt8(func_ret_wasm))
+                ref_null!(b, func_ret_wasm)
             else
                 val_bytes = compile_value(stmt.val, ctx)
                 if isempty(val_bytes)
                     # TRUE-INT-002: compile_value produced empty bytes (stubbed SSA value on dead path).
                     # Push a type-correct default so `return` has a value on the stack.
                     if func_ret_wasm isa ConcreteRef
-                        push!(bytes, Opcode.REF_NULL)
-                        append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                        ref_null!(b, Int64(func_ret_wasm.type_idx), func_ret_wasm)
                     elseif func_ret_wasm === AnyRef || func_ret_wasm === EqRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(func_ret_wasm))
+                        ref_null!(b, func_ret_wasm)
                     elseif func_ret_wasm === ExternRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, 0x6F)  # externref
+                        ref_null!(b, ExternRef)  # externref (0x6F)
                     elseif func_ret_wasm === I32
-                        push!(bytes, Opcode.I32_CONST)
-                        push!(bytes, 0x00)
+                        i32_const!(b, 0)
                     elseif func_ret_wasm === I64
-                        push!(bytes, Opcode.I64_CONST)
-                        push!(bytes, 0x00)
+                        i64_const!(b, 0)
                     elseif func_ret_wasm === F32
-                        push!(bytes, Opcode.F32_CONST)
-                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+                        f32_const!(b, 0.0f0)
                     elseif func_ret_wasm === F64
-                        push!(bytes, Opcode.F64_CONST)
-                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                        f64_const!(b, 0.0)
                     end
                 else
-                    append!(bytes, val_bytes)
+                    emit_raw!(b, val_bytes; pushes=(val_wasm === nothing ? WasmValType[] : WasmValType[val_wasm]))
                 end
                 # If function returns externref but value is a concrete ref, convert
                 if func_ret_wasm === ExternRef && val_wasm !== ExternRef
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                    extern_convert_any!(b)
                 # PURE-207: If value is I32 but return is I64, extend
                 elseif val_wasm === I32 && func_ret_wasm === I64
-                    push!(bytes, Opcode.I64_EXTEND_I32_S)
+                    num!(b, Opcode.I64_EXTEND_I32_S)
                 # PARSE-001: If function returns ConcreteRef but value is eqref/structref/anyref,
                 # cast to match the declared return type. This happens when Union{Nothing, T}
                 # phi nodes produce eqref but the return type is (ref null T_idx).
                 elseif func_ret_wasm isa ConcreteRef && !(val_wasm isa ConcreteRef)
                     if val_wasm === EqRef || val_wasm === StructRef || val_wasm === AnyRef || val_wasm === ArrayRef
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.REF_CAST_NULL)
-                        append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                        ref_cast!(b, Int64(func_ret_wasm.type_idx), true)
                     end
                 end
             end
         end
-        push!(bytes, Opcode.RETURN)
+        return_!(b)
 
     elseif stmt isa Core.GotoNode
         # Unconditional branch - handled by control flow analysis
@@ -311,9 +302,10 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                 if phic_stmt isa Core.PhiCNode && haskey(ctx.phi_locals, phic_idx)
                     for v in phic_stmt.values
                         if v isa Core.SSAValue && v.id == idx
-                            append!(bytes, compile_value(stmt.val, ctx))
-                            push!(bytes, Opcode.LOCAL_SET)
-                            append!(bytes, encode_leb128_unsigned(ctx.phi_locals[phic_idx]))
+                            # MIGRATED: compile_value bridges via emit_raw!; local.set typed.
+                            emit_raw!(b, compile_value(stmt.val, ctx);
+                                      pushes=WasmValType[infer_value_wasm_type(stmt.val, ctx)])
+                            local_set!(b, ctx.phi_locals[phic_idx])
                             @goto upsilon_done
                         end
                     end
@@ -369,102 +361,74 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     end
                 end
                 if is_multi_value_src || (pi_local_type !== nothing && val_wasm_type !== nothing && !wasm_types_compatible(pi_local_type, val_wasm_type))
+                    # MIGRATED: PiNode narrowing branches emit straight-line via typed methods
+                    # on `b`; compile_value / emit_unwrap_union_value bridge through emit_raw!.
                     # PURE-324: I64→I32 narrowing — PiNode narrows a widened phi (I64) to a
                     # smaller numeric type (I32). Emit the actual value with i32_wrap_i64.
                     if !is_multi_value_src && val_wasm_type === I64 && pi_local_type === I32
-                        val_bytes = compile_value(stmt.val, ctx)
-                        append!(bytes, val_bytes)
-                        push!(bytes, Opcode.I32_WRAP_I64)
+                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[I64])
+                        num!(b, Opcode.I32_WRAP_I64)
                     # PURE-9030: F64→I32 narrowing — PiNode narrows a widened phi (F64) to I32.
                     # Occurs in Union{Int32, Float64} dispatch where phi is F64 (widened).
                     elseif !is_multi_value_src && val_wasm_type === F64 && pi_local_type === I32
-                        val_bytes = compile_value(stmt.val, ctx)
-                        append!(bytes, val_bytes)
-                        push!(bytes, Opcode.I32_TRUNC_F64_S)
+                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[F64])
+                        num!(b, Opcode.I32_TRUNC_F64_S)
                     # PURE-9030: F64→I64 narrowing — PiNode narrows a widened phi (F64) to I64.
                     elseif !is_multi_value_src && val_wasm_type === F64 && pi_local_type === I64
-                        val_bytes = compile_value(stmt.val, ctx)
-                        append!(bytes, val_bytes)
-                        push!(bytes, Opcode.I64_TRUNC_F64_S)
+                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[F64])
+                        num!(b, Opcode.I64_TRUNC_F64_S)
                     # PURE-9030: F32→I32 narrowing — PiNode narrows a widened phi (F32) to I32.
                     elseif !is_multi_value_src && val_wasm_type === F32 && pi_local_type === I32
-                        val_bytes = compile_value(stmt.val, ctx)
-                        append!(bytes, val_bytes)
-                        push!(bytes, Opcode.I32_TRUNC_F32_S)
+                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[F32])
+                        num!(b, Opcode.I32_TRUNC_F32_S)
                     # PURE-325: PiNode narrowing from ExternRef → numeric (I64/I32/F64/F32).
                     # The externref holds a boxed numeric value. Unbox via any_convert_extern +
                     # ref_cast to box type + struct_get field 0.
                     elseif !is_multi_value_src && val_wasm_type === ExternRef && (pi_local_type === I64 || pi_local_type === I32 || pi_local_type === F64 || pi_local_type === F32)
-                        val_bytes = compile_value(stmt.val, ctx)
-                        append!(bytes, val_bytes)
+                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[ExternRef])
                         local box_type_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, pi_local_type)
-                        append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.REF_CAST_NULL)
-                        append!(bytes, encode_leb128_signed(Int64(box_type_idx)))
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.STRUCT_GET)
-                        append!(bytes, encode_leb128_unsigned(box_type_idx))
-                        append!(bytes, encode_leb128_unsigned(UInt32(1)))  # field 1 (0=typeId, 1=value)
+                        any_convert_extern!(b)
+                        ref_cast!(b, Int64(box_type_idx), true)
+                        struct_get!(b, box_type_idx, UInt32(1), pi_local_type)  # field 1 (0=typeId, 1=value)
                     # PURE-9030: PiNode narrowing from AnyRef → numeric (I64/I32/F64/F32).
                     # The anyref holds a boxed numeric value (WasmGC struct with typeId + value).
                     # Unbox via ref.cast to box type + struct_get field 1.
                     # This handles Union{Int32, Float64} dispatch where the param is anyref.
                     elseif !is_multi_value_src && val_wasm_type === AnyRef && (pi_local_type === I64 || pi_local_type === I32 || pi_local_type === F64 || pi_local_type === F32)
-                        val_bytes = compile_value(stmt.val, ctx)
-                        append!(bytes, val_bytes)
+                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
                         local box_type_idx_any = get_numeric_box_type!(ctx.mod, ctx.type_registry, pi_local_type)
                         # anyref → ref.cast (ref $BoxedXxx) → struct.get field 1
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.REF_CAST)  # non-null cast (inside isa-guarded branch)
-                        append!(bytes, encode_leb128_signed(Int64(box_type_idx_any)))
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.STRUCT_GET)
-                        append!(bytes, encode_leb128_unsigned(box_type_idx_any))
-                        append!(bytes, encode_leb128_unsigned(UInt32(1)))  # field 1 (0=typeId, 1=value)
+                        ref_cast!(b, Int64(box_type_idx_any), false)  # non-null cast (inside isa-guarded branch)
+                        struct_get!(b, box_type_idx_any, UInt32(1), pi_local_type)  # field 1 (0=typeId, 1=value)
                     # PURE-9030: PiNode narrowing from AnyRef → ConcreteRef.
                     # Example: anyref → String, anyref → MyStruct
                     elseif !is_multi_value_src && val_wasm_type === AnyRef && pi_local_type isa ConcreteRef
-                        val_bytes = compile_value(stmt.val, ctx)
-                        append!(bytes, val_bytes)
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.REF_CAST_NULL)
-                        append!(bytes, encode_leb128_signed(Int64(pi_local_type.type_idx)))
+                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
+                        ref_cast!(b, Int64(pi_local_type.type_idx), true)
                     # PURE-321: PiNode narrowing from ExternRef → ConcreteRef means the value
                     # IS available as externref and just needs conversion (not ref.null).
                     # Example: PiNode(%198, String) narrows Any (externref) → String (array<i32>).
                     elseif !is_multi_value_src && val_wasm_type === ExternRef && pi_local_type isa ConcreteRef
-                        val_bytes = compile_value(stmt.val, ctx)
-                        append!(bytes, val_bytes)
-                        append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
-                        append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.REF_CAST_NULL])
-                        append!(bytes, encode_leb128_signed(Int64(pi_local_type.type_idx)))
+                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[ExternRef])
+                        any_convert_extern!(b)
+                        ref_cast!(b, Int64(pi_local_type.type_idx), true)
                     # PURE-9032: PiNode narrowing from ArrayRef → ConcreteRef.
                     # Example: arrayref (from struct field typed AbstractString) → (ref null $str_array)
                     # This occurs when getfield returns an abstract ref type but PiNode narrows it.
                     elseif !is_multi_value_src && val_wasm_type === ArrayRef && pi_local_type isa ConcreteRef
-                        val_bytes = compile_value(stmt.val, ctx)
-                        append!(bytes, val_bytes)
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.REF_CAST_NULL)
-                        append!(bytes, encode_leb128_signed(Int64(pi_local_type.type_idx)))
+                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[ArrayRef])
+                        ref_cast!(b, Int64(pi_local_type.type_idx), true)
                     # PURE-9032: PiNode narrowing from StructRef → ConcreteRef.
                     # Example: structref (from :the_exception with Union type) → concrete exception struct
                     elseif !is_multi_value_src && val_wasm_type === StructRef && pi_local_type isa ConcreteRef
-                        val_bytes = compile_value(stmt.val, ctx)
-                        append!(bytes, val_bytes)
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.REF_CAST_NULL)
-                        append!(bytes, encode_leb128_signed(Int64(pi_local_type.type_idx)))
+                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[StructRef])
+                        ref_cast!(b, Int64(pi_local_type.type_idx), true)
                     # CG-003d: PiNode narrowing from EqRef → ConcreteRef.
                     # Example: Union{Nothing, TestNode} (eqref local) → TestNode after null check.
                     # This occurs because Union{Nothing, T} locals use EqRef (RC1 fix).
                     elseif !is_multi_value_src && val_wasm_type === EqRef && pi_local_type isa ConcreteRef
-                        val_bytes = compile_value(stmt.val, ctx)
-                        append!(bytes, val_bytes)
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.REF_CAST_NULL)
-                        append!(bytes, encode_leb128_signed(Int64(pi_local_type.type_idx)))
+                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[EqRef])
+                        ref_cast!(b, Int64(pi_local_type.type_idx), true)
                     # PURE-6024: Tagged union unwrapping — PiNode narrows Union{A,B} to variant.
                     # Source is a ConcreteRef (tagged union struct), target is the extracted variant.
                     # Example: π(%53::Union{AbstractString,Symbol}, Symbol) needs struct.get + cast.
@@ -479,40 +443,32 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                             end
                         end
                         if src_julia_type isa Union && needs_tagged_union(src_julia_type)
-                            val_bytes = compile_value(stmt.val, ctx)
-                            append!(bytes, val_bytes)
-                            append!(bytes, emit_unwrap_union_value(ctx, src_julia_type, stmt.typ))
+                            emit_raw!(b, compile_value(stmt.val, ctx); pushes=(val_wasm_type === nothing ? WasmValType[] : WasmValType[val_wasm_type]))
+                            emit_raw!(b, emit_unwrap_union_value(ctx, src_julia_type, stmt.typ);
+                                      pops=1, pushes=(pi_local_type === nothing ? WasmValType[] : WasmValType[pi_local_type]))
                         elseif pi_local_type isa ConcreteRef
-                            push!(bytes, Opcode.REF_NULL)
-                            append!(bytes, encode_leb128_signed(Int64(pi_local_type.type_idx)))
+                            ref_null!(b, Int64(pi_local_type.type_idx), pi_local_type)
                         elseif pi_local_type === ArrayRef
-                            push!(bytes, Opcode.REF_NULL, UInt8(ArrayRef))
+                            ref_null!(b, ArrayRef)
                         elseif pi_local_type === StructRef
-                            push!(bytes, Opcode.REF_NULL, UInt8(StructRef))
+                            ref_null!(b, StructRef)
                         else
-                            push!(bytes, Opcode.REF_NULL, UInt8(ExternRef))
+                            ref_null!(b, ExternRef)
                         end
                     elseif pi_local_type === ExternRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ExternRef))
+                        ref_null!(b, ExternRef)
                     elseif pi_local_type === AnyRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(AnyRef))
+                        ref_null!(b, AnyRef)
                     elseif pi_local_type === I64
-                        push!(bytes, Opcode.I64_CONST)
-                        push!(bytes, 0x00)
+                        i64_const!(b, 0)
                     elseif pi_local_type === I32
-                        push!(bytes, Opcode.I32_CONST)
-                        push!(bytes, 0x00)
+                        i32_const!(b, 0)
                     elseif pi_local_type === F64
-                        push!(bytes, Opcode.F64_CONST)
-                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                        f64_const!(b, 0.0)
                     elseif pi_local_type === F32
-                        push!(bytes, Opcode.F32_CONST)
-                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+                        f32_const!(b, 0.0f0)
                     else
-                        push!(bytes, Opcode.I32_CONST)
-                        push!(bytes, 0x00)
+                        i32_const!(b, 0)
                     end
                 else
                     val_bytes = compile_value(stmt.val, ctx)
@@ -542,35 +498,25 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     if is_multi_value_bytes
                         # Multi-value source: emit type-safe default for the local's type
                         if pi_local_type isa ConcreteRef
-                            push!(bytes, Opcode.REF_NULL)
-                            append!(bytes, encode_leb128_signed(Int64(pi_local_type.type_idx)))
+                            ref_null!(b, Int64(pi_local_type.type_idx), pi_local_type)
                         elseif pi_local_type === StructRef
-                            push!(bytes, Opcode.REF_NULL)
-                            push!(bytes, UInt8(StructRef))
+                            ref_null!(b, StructRef)
                         elseif pi_local_type === ArrayRef
-                            push!(bytes, Opcode.REF_NULL)
-                            push!(bytes, UInt8(ArrayRef))
+                            ref_null!(b, ArrayRef)
                         elseif pi_local_type === ExternRef
-                            push!(bytes, Opcode.REF_NULL)
-                            push!(bytes, UInt8(ExternRef))
+                            ref_null!(b, ExternRef)
                         elseif pi_local_type === AnyRef
-                            push!(bytes, Opcode.REF_NULL)
-                            push!(bytes, UInt8(AnyRef))
+                            ref_null!(b, AnyRef)
                         elseif pi_local_type === I64
-                            push!(bytes, Opcode.I64_CONST)
-                            push!(bytes, 0x00)
+                            i64_const!(b, 0)
                         elseif pi_local_type === I32
-                            push!(bytes, Opcode.I32_CONST)
-                            push!(bytes, 0x00)
+                            i32_const!(b, 0)
                         elseif pi_local_type === F64
-                            push!(bytes, Opcode.F64_CONST)
-                            append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                            f64_const!(b, 0.0)
                         elseif pi_local_type === F32
-                            push!(bytes, Opcode.F32_CONST)
-                            append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+                            f32_const!(b, 0.0f0)
                         else
-                            push!(bytes, Opcode.I32_CONST)
-                            push!(bytes, 0x00)
+                            i32_const!(b, 0)
                         end
                     # Safety: if compile_value produced a numeric value (i32_const, i64_const,
                     # or local.get of numeric local) but pi_local_type is a ref type,
@@ -609,28 +555,24 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                         if is_numeric_val
                             # Replace with ref.null of the correct type
                             if pi_local_type isa ConcreteRef
-                                push!(bytes, Opcode.REF_NULL)
-                                append!(bytes, encode_leb128_signed(Int64(pi_local_type.type_idx)))
+                                ref_null!(b, Int64(pi_local_type.type_idx), pi_local_type)
                             elseif pi_local_type === ArrayRef
-                                push!(bytes, Opcode.REF_NULL)
-                                push!(bytes, UInt8(ArrayRef))
+                                ref_null!(b, ArrayRef)
                             elseif pi_local_type === ExternRef
-                                emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
+                                _ne = UInt8[]; emit_numeric_to_externref!(_ne, stmt.val, val_wasm, ctx)
+                                emit_raw!(b, _ne; pushes=WasmValType[ExternRef])
                             elseif pi_local_type === AnyRef
-                                push!(bytes, Opcode.REF_NULL)
-                                push!(bytes, UInt8(AnyRef))
+                                ref_null!(b, AnyRef)
                             elseif pi_local_type === EqRef
-                                push!(bytes, Opcode.REF_NULL)
-                                push!(bytes, UInt8(EqRef))
+                                ref_null!(b, EqRef)
                             else
-                                push!(bytes, Opcode.REF_NULL)
-                                push!(bytes, UInt8(StructRef))
+                                ref_null!(b, StructRef)
                             end
                         else
-                            append!(bytes, val_bytes)
+                            emit_raw!(b, val_bytes; pushes=WasmValType[infer_value_wasm_type(stmt.val, ctx)])
                         end
                     else
-                        append!(bytes, val_bytes)
+                        emit_raw!(b, val_bytes; pushes=WasmValType[infer_value_wasm_type(stmt.val, ctx)])
                     end
                 end
             end
@@ -641,8 +583,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
         # If this SSA value needs a local, store it (and remove from stack)
         if haskey(ctx.ssa_locals, idx)
             local_idx = ctx.ssa_locals[idx]
-            push!(bytes, Opcode.LOCAL_SET)  # Use SET not TEE to not leave on stack
-            append!(bytes, encode_leb128_unsigned(local_idx))
+            local_set!(b, local_idx)  # Use SET not TEE to not leave on stack
         end
 
     elseif stmt isa Core.NewvarNode
@@ -656,18 +597,19 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
         # TODO: Implement full try/catch with try_table instruction
 
     elseif stmt isa GlobalRef
+        # MIGRATED: straight-line global.get/local.set via typed methods on `b`; the
+        # value_bytes safety-scan stays a local buffer (byte-inspecting) then bridges via
+        # emit_raw!. `bytes` stays empty for this branch (trailing common code appends after).
         # GlobalRef statement - check if it's a module-level global first
         key = (stmt.mod, stmt.name)
         global_idx = _lookup_module_global(ctx.module_globals, key)
         if global_idx !== nothing
-            push!(bytes, Opcode.GLOBAL_GET)
-            append!(bytes, encode_leb128_unsigned(global_idx))
+            global_get!(b, global_idx, AnyRef)
 
             # If this SSA value needs a local, store it
             if haskey(ctx.ssa_locals, idx)
                 local_idx = ctx.ssa_locals[idx]
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(local_idx))
+                local_set!(b, local_idx)
             end
         else
             # Regular GlobalRef - evaluate the constant and push it
@@ -716,14 +658,13 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     end
                 end
 
-                append!(bytes, value_bytes)
+                emit_raw!(b, value_bytes; pushes=(isempty(value_bytes) ? WasmValType[] : WasmValType[infer_value_wasm_type(val, ctx)]))
 
                 # If this SSA value needs a local, store it (only if we actually pushed a value)
                 # compile_value returns empty bytes for Functions, Types, etc.
                 if !isempty(value_bytes) && haskey(ctx.ssa_locals, idx)
                     local_idx = ctx.ssa_locals[idx]
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(local_idx))
+                    local_set!(b, local_idx)
                 end
             catch
                 # If we can't evaluate, it might be a type reference which has no runtime value

@@ -1591,9 +1591,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
     # Used by Therapy.jl to wire js() calls as WASM imports (Leptos pattern).
     if haskey(ctx.invoke_imports, idx)
         import_idx = ctx.invoke_imports[idx]
-        push!(bytes, Opcode.CALL)
-        append!(bytes, encode_leb128_unsigned(import_idx))
-        return bytes
+        bii = InstrBuilder(; func_name="compile_invoke", strict=false)
+        call!(bii, import_idx, WasmValType[], WasmValType[])
+        return builder_code(bii)
     end
 
     args = expr.args[3:end]
@@ -1607,18 +1607,18 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
         # Signal getter: no args, returns the signal value
         if haskey(ctx.signal_ssa_getters, ssa_id) && isempty(args)
             global_idx = ctx.signal_ssa_getters[ssa_id]
-            push!(bytes, Opcode.GLOBAL_GET)
-            append!(bytes, encode_leb128_unsigned(global_idx))
-            return bytes
+            bsg = InstrBuilder(; func_name="compile_invoke", strict=false)
+            global_get!(bsg, global_idx, AnyRef)
+            return builder_code(bsg)
         end
         # Signal setter: one arg, sets the signal value
         if haskey(ctx.signal_ssa_setters, ssa_id) && length(args) == 1
             global_idx = ctx.signal_ssa_setters[ssa_id]
+            bss2 = InstrBuilder(; func_name="compile_invoke", strict=false)
             # Compile the argument (the new value)
-            append!(bytes, compile_value(args[1], ctx))
+            emit_raw!(bss2, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
             # Store to global
-            push!(bytes, Opcode.GLOBAL_SET)
-            append!(bytes, encode_leb128_unsigned(global_idx))
+            global_set!(bss2, global_idx)
 
             # Inject DOM update calls for this signal (Therapy.jl reactive updates)
             if haskey(ctx.dom_bindings, global_idx)
@@ -1628,24 +1628,20 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 for (import_idx, const_args) in ctx.dom_bindings[global_idx]
                     # Push constant arguments (e.g., hydration key)
                     for arg in const_args
-                        push!(bytes, Opcode.I32_CONST)
-                        append!(bytes, encode_leb128_signed(Int(arg)))
+                        i32_const!(bss2, Int(arg))
                     end
                     # Push the signal value (re-read from global)
-                    push!(bytes, Opcode.GLOBAL_GET)
-                    append!(bytes, encode_leb128_unsigned(global_idx))
+                    global_get!(bss2, global_idx, AnyRef)
                     # Convert to f64 for DOM imports (all DOM imports expect f64)
-                    append!(bytes, emit_convert_to_f64(global_type))
+                    emit_raw!(bss2, emit_convert_to_f64(global_type); pops=1, pushes=WasmValType[F64])
                     # Call the DOM import function
-                    push!(bytes, Opcode.CALL)
-                    append!(bytes, encode_leb128_unsigned(import_idx))
+                    call!(bss2, import_idx, WasmValType[], WasmValType[])
                 end
             end
 
             # Setter returns the value in Therapy.jl, so re-read it
-            push!(bytes, Opcode.GLOBAL_GET)
-            append!(bytes, encode_leb128_unsigned(global_idx))
-            return bytes
+            global_get!(bss2, global_idx, AnyRef)
+            return builder_code(bss2)
         end
     end
 
@@ -2460,8 +2456,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                                 last_arg = args[n_args]
 
                                 if last_target_wasm === ExternRef && (last_actual_wasm isa ConcreteRef || last_actual_wasm === StructRef || last_actual_wasm === ArrayRef || last_actual_wasm === AnyRef)
-                                    push!(bytes, Opcode.GC_PREFIX)
-                                    push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                    blca = InstrBuilder(; func_name="compile_invoke", strict=false)
+                                    extern_convert_any!(blca)
+                                    append!(bytes, builder_code(blca))
                                 elseif last_target_wasm === ExternRef && last_actual_wasm === ExternRef && last_arg isa Core.SSAValue
                                     # Check actual local type for the last arg
                                     if haskey(ctx.ssa_locals, last_arg.id)
@@ -2470,8 +2467,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                                         if local_arr_idx >= 1 && local_arr_idx <= length(ctx.locals)
                                             actual_local_wasm = ctx.locals[local_arr_idx]
                                             if actual_local_wasm isa ConcreteRef || actual_local_wasm === StructRef || actual_local_wasm === ArrayRef || actual_local_wasm === AnyRef
-                                                push!(bytes, Opcode.GC_PREFIX)
-                                                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                                blca2 = InstrBuilder(; func_name="compile_invoke", strict=false)
+                                                extern_convert_any!(blca2)
+                                                append!(bytes, builder_code(blca2))
                                             end
                                         end
                                     end
@@ -2523,8 +2521,8 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         end
 
                         # Cross-function call - emit call instruction with target index
-                        push!(bytes, Opcode.CALL)
-                        append!(bytes, encode_leb128_unsigned(target_info.wasm_idx))
+                        bcc = InstrBuilder(; func_name="compile_invoke", strict=false)
+                        call!(bcc, target_info.wasm_idx, WasmValType[], WasmValType[])
                         cross_call_handled = true
                         # PURE-6024: If callee returns Union{} (Bottom), it always throws/traps.
                         # The Wasm func type has no result, so code after is unreachable.
@@ -2534,7 +2532,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         # be Union{} (e.g., Any in unoptimized IR), so setting the flag would
                         # incorrectly trigger dead code detection and skip block structures.
                         if target_info.return_type === Union{}
-                            push!(bytes, Opcode.UNREACHABLE)
+                            unreachable!(bcc)
                         end
                         # PURE-220: Unused cross-call return values are dropped by
                         # the stackifier (statement_produces_wasm_value + use_count==0).
@@ -2555,15 +2553,14 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                                     ret_wasm = julia_to_wasm_type(target_info.return_type)
                                     if ret_wasm === ExternRef
                                         # Function returns externref, local expects concrete ref
-                                        append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
-                                        append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.REF_CAST_NULL])
-                                        append!(bytes, encode_leb128_signed(Int64(target_local_type.type_idx)))
+                                        any_convert_extern!(bcc)
+                                        ref_cast!(bcc, Int64(target_local_type.type_idx), true)
                                     end
                                 elseif target_local_type === AnyRef
                                     ret_wasm = julia_to_wasm_type(target_info.return_type)
                                     if ret_wasm === ExternRef
                                         # PURE-908: Function returns externref, local expects anyref
-                                        append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                                        any_convert_extern!(bcc)
                                     end
                                 elseif target_local_type === ExternRef && func_ref isa Core.Argument
                                     # PURE-220: Higher-order call returns concrete ref but local expects externref
@@ -2572,19 +2569,20 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                                     # extern_convert_any expects anyref input, not externref.
                                     callee_ret_wasm = julia_to_wasm_type(target_info.return_type)
                                     if callee_ret_wasm !== ExternRef
-                                        append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.EXTERN_CONVERT_ANY])
+                                        extern_convert_any!(bcc)
                                     end
                                 end
                             end
                         end
+                        append!(bytes, builder_code(bcc))
                     end
                 end
             end
 
             if is_self_call
                 # Self-recursive call - emit call instruction
-                push!(bytes, Opcode.CALL)
-                append!(bytes, encode_leb128_unsigned(ctx.func_idx))
+                bsc2 = InstrBuilder(; func_name="compile_invoke", strict=false)
+                call!(bsc2, ctx.func_idx, WasmValType[], WasmValType[])
                 # PURE-908: Bridge return type for self-calls (externref→anyref)
                 if haskey(ctx.ssa_locals, idx)
                     local_idx_val = ctx.ssa_locals[idx]
@@ -2594,30 +2592,34 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         if target_local_type === AnyRef && ctx.return_type !== nothing
                             ret_wasm = julia_to_wasm_type(ctx.return_type)
                             if ret_wasm === ExternRef
-                                append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                                any_convert_extern!(bsc2)
                             end
                         elseif target_local_type isa ConcreteRef && ctx.return_type !== nothing
                             ret_wasm = julia_to_wasm_type(ctx.return_type)
                             if ret_wasm === ExternRef
-                                append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
-                                append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.REF_CAST_NULL])
-                                append!(bytes, encode_leb128_signed(Int64(target_local_type.type_idx)))
+                                any_convert_extern!(bsc2)
+                                ref_cast!(bsc2, Int64(target_local_type.type_idx), true)
                             end
                         end
                     end
                 end
+                append!(bytes, builder_code(bsc2))
             elseif cross_call_handled
                 # Already handled above
 
             elseif name === :+ || name === :add_int
-                push!(bytes, is_32bit ? Opcode.I32_ADD : Opcode.I64_ADD)
+                badd = InstrBuilder(; func_name="compile_invoke", strict=false)
+                num!(badd, is_32bit ? Opcode.I32_ADD : Opcode.I64_ADD)
+                append!(bytes, builder_code(badd))
             elseif name === :- || name === :sub_int
                 if length(args) == 1
                     # WBUILD-3001: Unary negation -(x) → 0 - x
                     pushfirst!(bytes, is_32bit ? Opcode.I32_CONST : Opcode.I64_CONST)
                     insert!(bytes, 2, 0x00)  # LEB128 for 0
                 end
-                push!(bytes, is_32bit ? Opcode.I32_SUB : Opcode.I64_SUB)
+                bsub3 = InstrBuilder(; func_name="compile_invoke", strict=false)
+                num!(bsub3, is_32bit ? Opcode.I32_SUB : Opcode.I64_SUB)
+                append!(bytes, builder_code(bsub3))
             elseif (name === :* || name === :mul_int) && length(args) == 2 &&
                    (infer_value_type(args[1], ctx) === String || infer_value_type(args[1], ctx) === Symbol) &&
                    (infer_value_type(args[2], ctx) === String || infer_value_type(args[2], ctx) === Symbol)
@@ -2630,7 +2632,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 emit_raw!(bcat, compile_string_concat(args[1], args[2], ctx); pushes=WasmValType[AnyRef])
                 return builder_code(bcat)
             elseif name === :* || name === :mul_int
-                push!(bytes, is_32bit ? Opcode.I32_MUL : Opcode.I64_MUL)
+                bmul = InstrBuilder(; func_name="compile_invoke", strict=false)
+                num!(bmul, is_32bit ? Opcode.I32_MUL : Opcode.I64_MUL)
+                append!(bytes, builder_code(bmul))
             elseif name === :throw_boundserror || name === :throw || name === :throw_inexacterror ||
                    name === :throw_complex_domainerror || name === :throw_complex_domainerror_neg1 ||
                    name === :throw_exp_domainerror || name === :_throw_argerror ||
@@ -2675,20 +2679,22 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         if arg1_type === Float32
                             # First arg is f32, need to insert promotion before second arg
                             # This is tricky with stack order. For now, just promote both
-                            bytes = UInt8[]  # Reset
-                            append!(bytes, compile_value(args[1], ctx))
-                            push!(bytes, 0xBB)  # f64.promote_f32
-                            append!(bytes, compile_value(args[2], ctx))
+                            bpow = InstrBuilder(; func_name="compile_invoke", strict=false)  # Reset
+                            emit_raw!(bpow, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+                            num!(bpow, Opcode.F64_PROMOTE_F32)  # f64.promote_f32 (0xBB)
+                            emit_raw!(bpow, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
                             if arg2_type === Float32
-                                push!(bytes, 0xBB)  # f64.promote_f32
+                                num!(bpow, Opcode.F64_PROMOTE_F32)  # f64.promote_f32 (0xBB)
                             end
+                            bytes = builder_code(bpow)
                         end
-                        push!(bytes, Opcode.CALL)
-                        append!(bytes, encode_leb128_unsigned(pow_import_idx))
+                        bpow2 = InstrBuilder(; func_name="compile_invoke", strict=false)
+                        call!(bpow2, pow_import_idx, WasmValType[], WasmValType[])
                         # Convert back to f32 if needed
                         if arg1_type === Float32
-                            push!(bytes, 0xB6)  # f32.demote_f64
+                            num!(bpow2, Opcode.F32_DEMOTE_F64)  # f32.demote_f64 (0xB6)
                         end
+                        append!(bytes, builder_code(bpow2))
                     else
                         # No pow import - emit approximation using exp(y * log(x))
                         # This is hacky but works for basic cases
@@ -2711,17 +2717,15 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 # Vector length is handled in calls.jl via struct_get on size field
                 # Other AbstractVector subtypes (StepRange, SubArray, ReinterpretArray)
                 # must go through cross-function call to their specific length() method
+                blen = InstrBuilder(; func_name="compile_invoke", strict=false)
                 if arg_type === Any || arg_type === Union{}
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.ANY_CONVERT_EXTERN)  # externref → anyref
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.REF_CAST_NULL)       # anyref → (ref null array)
-                    push!(bytes, UInt8(ArrayRef))
+                    any_convert_extern!(blen)        # externref → anyref
+                    ref_cast!(blen, ArrayRef, true)  # anyref → (ref null array)
                 end
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_LEN)
+                array_len!(blen)
                 # array.len returns i32, extend to i64 for Julia's Int
-                push!(bytes, Opcode.I64_EXTEND_I32_S)
+                num!(blen, Opcode.I64_EXTEND_I32_S)
+                append!(bytes, builder_code(blen))
 
             # String concatenation: string * string -> string
             # Julia compiles string concatenation to Base._string
@@ -2751,14 +2755,13 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
                 arg_type = infer_value_type(args[1], ctx)
 
+                basc = InstrBuilder(; func_name="compile_invoke", strict=false)
+
                 # If the argument is a CodeUnits struct, extract the String field.
                 if arg_type !== String && arg_type !== Symbol
                     if haskey(ctx.type_registry.structs, arg_type)
                         cu_info = ctx.type_registry.structs[arg_type]
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.STRUCT_GET)
-                        append!(bytes, encode_leb128_unsigned(cu_info.wasm_type_idx))
-                        append!(bytes, encode_leb128_unsigned(1))  # field 1 = :s (String) (field 0 = typeId)
+                        struct_get!(basc, cu_info.wasm_type_idx, UInt32(1), I32)  # field 1 = :s (String) (field 0 = typeId)
                     end
                 end
 
@@ -2770,84 +2773,60 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 i_local = allocate_local!(ctx, I32)
 
                 # Store string
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(str_local))
+                local_set!(basc, str_local)
 
                 # len = array.len(str)
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(str_local))
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_LEN)
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(len_local))
+                local_get!(basc, str_local)
+                array_len!(basc)
+                local_set!(basc, len_local)
 
                 # accum = 0
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(accum_local))
+                i32_const!(basc, 0)
+                local_set!(basc, accum_local)
 
                 # i = 0
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(i_local))
+                i32_const!(basc, 0)
+                local_set!(basc, i_local)
 
                 # block $exit
-                push!(bytes, Opcode.BLOCK)
-                push!(bytes, 0x40)  # void
+                block!(basc, 0x40)  # void
                 #   loop $loop
-                push!(bytes, Opcode.LOOP)
-                push!(bytes, 0x40)  # void
+                loop!(basc, 0x40)  # void
 
                 #     br_if $exit (i >= len)
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(i_local))
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(len_local))
-                push!(bytes, Opcode.I32_GE_S)
-                push!(bytes, Opcode.BR_IF)
-                push!(bytes, 0x01)  # break to outer block
+                local_get!(basc, i_local)
+                local_get!(basc, len_local)
+                num!(basc, Opcode.I32_GE_S)
+                br_if!(basc, 1)  # break to outer block
 
                 #     accum |= array.get(str, i)
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(accum_local))
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(str_local))
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(i_local))
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_GET_U)
-                append!(bytes, encode_leb128_unsigned(str_type_idx))
-                push!(bytes, Opcode.I32_OR)
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(accum_local))
+                local_get!(basc, accum_local)
+                local_get!(basc, str_local)
+                local_get!(basc, i_local)
+                array_get!(basc, str_type_idx, I32; signed=false)
+                num!(basc, Opcode.I32_OR)
+                local_set!(basc, accum_local)
 
                 #     i++
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(i_local))
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x01)
-                push!(bytes, Opcode.I32_ADD)
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(i_local))
+                local_get!(basc, i_local)
+                i32_const!(basc, 1)
+                num!(basc, Opcode.I32_ADD)
+                local_set!(basc, i_local)
 
                 #     br $loop
-                push!(bytes, Opcode.BR)
-                push!(bytes, 0x00)  # continue loop
+                br!(basc, 0)  # continue loop
 
                 #   end loop
-                push!(bytes, Opcode.END)
+                end_block!(basc)
                 # end block
-                push!(bytes, Opcode.END)
+                end_block!(basc)
 
                 # result = (accum < 0x80) ? 1 : 0
                 # accum < 128 means all bytes are ASCII
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(accum_local))
-                push!(bytes, Opcode.I32_CONST)
-                append!(bytes, encode_leb128_signed(0x80))
-                push!(bytes, Opcode.I32_LT_U)  # unsigned comparison: accum < 0x80
+                local_get!(basc, accum_local)
+                i32_const!(basc, 0x80)
+                num!(basc, Opcode.I32_LT_U)  # unsigned comparison: accum < 0x80
+                append!(bytes, builder_code(basc))
 
             # String equality comparison
             elseif name === :(==) && length(args) == 2 &&
@@ -2863,19 +2842,18 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
 
                 # Compile string arg (already pushed by args loop)
                 # Compile index arg and convert to 0-based
+                bchr = InstrBuilder(; func_name="compile_invoke", strict=false)
                 idx_type = infer_value_type(args[2], ctx)
                 if idx_type === Int64 || idx_type === Int
                     # Convert Int64 to Int32 and subtract 1
-                    push!(bytes, Opcode.I32_WRAP_I64)
+                    num!(bchr, Opcode.I32_WRAP_I64)
                 end
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x01)  # 1
-                push!(bytes, Opcode.I32_SUB)  # index - 1 for 0-based
+                i32_const!(bchr, 1)  # 1
+                num!(bchr, Opcode.I32_SUB)  # index - 1 for 0-based
 
                 # array.get
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_GET_U)
-                append!(bytes, encode_leb128_unsigned(str_type_idx))
+                array_get!(bchr, str_type_idx, I32; signed=false)
+                append!(bytes, builder_code(bchr))
 
             # WasmTarget string operations - str_setchar!(s, i, c) -> Nothing
             elseif name === :str_setchar! && length(args) == 3
@@ -2918,8 +2896,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
             elseif name === :str_len && length(args) == 1
                 # Get string length as Int32
                 # Arg already compiled, just emit array.len
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_LEN)
+                blen2 = InstrBuilder(; func_name="compile_invoke", strict=false)
+                array_len!(blen2)
+                append!(bytes, builder_code(blen2))
 
             # WasmTarget string operations - str_new(len) -> String
             elseif name === :str_new && length(args) == 1
@@ -2927,15 +2906,15 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
 
                 # Length arg already compiled
+                bnew = InstrBuilder(; func_name="compile_invoke", strict=false)
                 len_type = infer_value_type(args[1], ctx)
                 if len_type === Int64 || len_type === Int
-                    push!(bytes, Opcode.I32_WRAP_I64)
+                    num!(bnew, Opcode.I32_WRAP_I64)
                 end
 
                 # array.new_default creates array filled with default value (0 for i32)
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
-                append!(bytes, encode_leb128_unsigned(str_type_idx))
+                array_new_default!(bnew, str_type_idx)
+                append!(bytes, builder_code(bnew))
 
             # WasmTarget string operations - str_copy(src, src_pos, dst, dst_pos, len) -> Nothing
             elseif name === :str_copy && length(args) == 5
@@ -3125,18 +3104,17 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
 
                 # Convert index to 0-based
+                bget = InstrBuilder(; func_name="compile_invoke", strict=false)
                 idx_type = infer_value_type(args[2], ctx)
                 if idx_type === Int64 || idx_type === Int
-                    push!(bytes, Opcode.I32_WRAP_I64)
+                    num!(bget, Opcode.I32_WRAP_I64)
                 end
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x01)
-                push!(bytes, Opcode.I32_SUB)  # index - 1
+                i32_const!(bget, 1)
+                num!(bget, Opcode.I32_SUB)  # index - 1
 
                 # array.get (use ARRAY_GET_U for packed i8 arrays like UInt8)
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, elem_type === UInt8 ? Opcode.ARRAY_GET_U : Opcode.ARRAY_GET)
-                append!(bytes, encode_leb128_unsigned(arr_type_idx))
+                array_get!(bget, arr_type_idx, I32; signed=(elem_type === UInt8 ? false : nothing))
+                append!(bytes, builder_code(bget))
 
             # arr_set!(arr, i, val) -> Nothing
             elseif name === :arr_set! && length(args) == 3
@@ -3219,8 +3197,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
             # arr_len(arr) -> Int32
             elseif name === :arr_len && length(args) == 1
                 # Arg already compiled, just emit array.len
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_LEN)
+                blen3 = InstrBuilder(; func_name="compile_invoke", strict=false)
+                array_len!(blen3)
+                append!(bytes, builder_code(blen3))
 
             # Math domain error functions — throw catchably (tag 0), matching native
             # semantics. These used to push NaN ("graceful degradation"), but the IR
@@ -3628,22 +3607,20 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                    name === :throw || name === :rethrow ||
                    name === :_throw_not_readable || name === :_throw_not_writable
                 ensure_exception_tag!(ctx.mod)
+                bthr2 = InstrBuilder(; func_name="compile_invoke", strict=false)
                 if name === :rethrow
                     # PURE-9034: rethrow() preserves the exception in the global —
                     # just re-throw without overwriting. The caught exception is
                     # already in $current_exn from the original throw.
-                    push!(bytes, Opcode.THROW)
-                    append!(bytes, encode_leb128_unsigned(0))  # tag index 0
+                    throw_!(bthr2, 0)  # tag index 0
                 else
                     # PURE-9032: Stash ref.null any as exception placeholder
                     exn_global = ensure_exception_global!(ctx.mod)
-                    push!(bytes, 0xD0)  # ref.null
-                    push!(bytes, 0x6E)  # any
-                    push!(bytes, Opcode.GLOBAL_SET)
-                    append!(bytes, encode_leb128_unsigned(exn_global))
-                    push!(bytes, Opcode.THROW)
-                    append!(bytes, encode_leb128_unsigned(0))  # tag index 0
+                    ref_null!(bthr2, AnyRef)  # ref.null any (0xD0 0x6E)
+                    global_set!(bthr2, exn_global)
+                    throw_!(bthr2, 0)  # tag index 0
                 end
+                append!(bytes, builder_code(bthr2))
                 ctx.last_stmt_was_stub = true  # PURE-908
 
             # PURE-9040: println/print → JS IO bridge imports
@@ -3654,8 +3631,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 # trim-collected show machinery), push its representation so the
                 # statement wrapper's local.set has a value to consume.
                 if haskey(ctx.ssa_locals, idx)
-                    push!(bytes, Opcode.REF_NULL)
-                    push!(bytes, 0x6E)  # any
+                    bpn = InstrBuilder(; func_name="compile_invoke", strict=false)
+                    ref_null!(bpn, AnyRef)  # ref.null any (0xD0 0x6E)
+                    append!(bytes, builder_code(bpn))
                 end
 
             # PURE-9041: show(x) → IO bridge imports (like print, no newline)
@@ -3740,7 +3718,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
             # so multi-byte continuation shouldn't be needed. If hit, it means
             # a code path assumes byte-level string access.
             elseif name === :getindex_continued
-                push!(bytes, Opcode.UNREACHABLE)
+                bgic = InstrBuilder(; func_name="compile_invoke", strict=false)
+                unreachable!(bgic)
+                append!(bytes, builder_code(bgic))
                 ctx.last_stmt_was_stub = true
 
             # Handle print_to_string (used in string interpolation / error messages)
@@ -3953,7 +3933,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 func_ref = expr.args[2]
                 if func_ref isa Core.SSAValue
                     if !haskey(ctx.ssa_locals, func_ref.id) && !haskey(ctx.phi_locals, func_ref.id)
-                        push!(bytes, Opcode.DROP)
+                        bgrd = InstrBuilder(; func_name="compile_invoke", strict=false)
+                        drop!(bgrd)
+                        append!(bytes, builder_code(bgrd))
                     end
                 end
 
@@ -3992,85 +3974,61 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     old_cap_local = allocate_local!(ctx, I32)
                     vec_scratch_local = allocate_local!(ctx, ConcreteRef(vec_type_idx, true))
 
+                    bgr = InstrBuilder(; func_name="compile_invoke", strict=false)
+
                     # 1. Get the vector and store in local
-                    append!(bytes, compile_value(vec_arg, ctx))
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL)
+                    emit_raw!(bgr, compile_value(vec_arg, ctx); pushes=WasmValType[infer_value_wasm_type(vec_arg, ctx)])
                     # PURE-045: heap type for ref.cast must use signed LEB128
-                    append!(bytes, encode_leb128_signed(Int64(vec_type_idx)))
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(vec_scratch_local))
+                    ref_cast!(bgr, Int64(vec_type_idx), true)
+                    local_set!(bgr, vec_scratch_local)
 
                     # 2. Get old backing array and store
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(vec_scratch_local))
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.STRUCT_GET)
-                    append!(bytes, encode_leb128_unsigned(vec_type_idx))
-                    append!(bytes, encode_leb128_unsigned(1))  # field 1 = array ref (field 0 = typeId)
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL)
+                    local_get!(bgr, vec_scratch_local)
+                    struct_get!(bgr, vec_type_idx, UInt32(1), ConcreteRef(UInt32(arr_type_idx), true))  # field 1 = array ref (field 0 = typeId)
                     # PURE-045: heap type for ref.cast must use signed LEB128
-                    append!(bytes, encode_leb128_signed(Int64(arr_type_idx)))
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(old_arr_local))
+                    ref_cast!(bgr, Int64(arr_type_idx), true)
+                    local_set!(bgr, old_arr_local)
 
                     # 3. Get old capacity
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(old_arr_local))
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.ARRAY_LEN)
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(old_cap_local))
+                    local_get!(bgr, old_arr_local)
+                    array_len!(bgr)
+                    local_set!(bgr, old_cap_local)
 
                     # 4. New capacity = max(old_cap * 2, old_cap + 4)
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(old_cap_local))
-                    push!(bytes, Opcode.I32_CONST)
-                    append!(bytes, encode_leb128_signed(Int64(2)))
-                    push!(bytes, Opcode.I32_MUL)
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(old_cap_local))
-                    push!(bytes, Opcode.I32_CONST)
-                    append!(bytes, encode_leb128_signed(Int64(4)))
-                    push!(bytes, Opcode.I32_ADD)
+                    local_get!(bgr, old_cap_local)
+                    i32_const!(bgr, 2)
+                    num!(bgr, Opcode.I32_MUL)
+                    local_get!(bgr, old_cap_local)
+                    i32_const!(bgr, 4)
+                    num!(bgr, Opcode.I32_ADD)
                     # select: [val_true, val_false, cond] -> val_true if cond!=0
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(old_cap_local))
-                    push!(bytes, Opcode.I32_CONST)
-                    append!(bytes, encode_leb128_signed(Int64(2)))
-                    push!(bytes, Opcode.I32_MUL)
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(old_cap_local))
-                    push!(bytes, Opcode.I32_CONST)
-                    append!(bytes, encode_leb128_signed(Int64(4)))
-                    push!(bytes, Opcode.I32_ADD)
-                    push!(bytes, Opcode.I32_GE_S)
-                    push!(bytes, Opcode.SELECT)
+                    local_get!(bgr, old_cap_local)
+                    i32_const!(bgr, 2)
+                    num!(bgr, Opcode.I32_MUL)
+                    local_get!(bgr, old_cap_local)
+                    i32_const!(bgr, 4)
+                    num!(bgr, Opcode.I32_ADD)
+                    num!(bgr, Opcode.I32_GE_S)
+                    select!(bgr)
 
                     # 5. Create new array with new capacity
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.ARRAY_NEW_DEFAULT)
-                    append!(bytes, encode_leb128_unsigned(arr_type_idx))
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(new_arr_local))
+                    array_new_default!(bgr, arr_type_idx)
+                    local_set!(bgr, new_arr_local)
 
                     # 6. Copy old elements: array.copy [dst, dst_off, src, src_off, len]
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(new_arr_local))
-                    push!(bytes, Opcode.I32_CONST, 0x00)  # dst_off = 0
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(old_arr_local))
-                    push!(bytes, Opcode.I32_CONST, 0x00)  # src_off = 0
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(old_cap_local))
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.ARRAY_COPY)
-                    append!(bytes, encode_leb128_unsigned(arr_type_idx))
-                    append!(bytes, encode_leb128_unsigned(arr_type_idx))
+                    local_get!(bgr, new_arr_local)
+                    i32_const!(bgr, 0)  # dst_off = 0
+                    local_get!(bgr, old_arr_local)
+                    i32_const!(bgr, 0)  # src_off = 0
+                    local_get!(bgr, old_cap_local)
+                    array_copy!(bgr, arr_type_idx, arr_type_idx)
 
                     # 7. Update vector's backing array field
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(vec_scratch_local))
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(new_arr_local))
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.STRUCT_SET)
-                    append!(bytes, encode_leb128_unsigned(vec_type_idx))
-                    append!(bytes, encode_leb128_unsigned(1))  # field 1 = array ref (field 0 = typeId)
+                    local_get!(bgr, vec_scratch_local)
+                    local_get!(bgr, new_arr_local)
+                    struct_set!(bgr, vec_type_idx, UInt32(1), ConcreteRef(UInt32(arr_type_idx), true))  # field 1 = array ref (field 0 = typeId)
+
+                    append!(bytes, builder_code(bgr))
 
                     # 8. Growth code is side-effect only — no wasm value produced.
                     #    Mark the SSA type as Nothing so statement_produces_wasm_value
@@ -4086,7 +4044,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
 
                 else
                     # Fallback: can't determine vector type — emit unreachable
-                    push!(bytes, Opcode.UNREACHABLE)
+                    bgrf = InstrBuilder(; func_name="compile_invoke", strict=false)
+                    unreachable!(bgrf)
+                    append!(bytes, builder_code(bgrf))
                     ctx.last_stmt_was_stub = true  # PURE-908
                 end
 
@@ -4206,14 +4166,16 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         end
                     end
                     # struct.new
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.STRUCT_NEW)
-                    append!(bytes, encode_leb128_unsigned(_ctor_sinfo.wasm_type_idx))
+                    bscn = InstrBuilder(; func_name="compile_invoke", strict=false)
+                    struct_new!(bscn, _ctor_sinfo.wasm_type_idx, WasmValType[])
+                    append!(bytes, builder_code(bscn))
                 else
                     # Registration failed — codegen cannot lay out this struct type.
                     record_unsupported!(ctx, :unsupported_type,
                         "struct constructor for `$(_ctor_target)` (type registration failed)"; idx=idx, detail=expr)
-                    push!(bytes, Opcode.UNREACHABLE)
+                    bscnf = InstrBuilder(; func_name="compile_invoke", strict=false)
+                    unreachable!(bscnf)
+                    append!(bytes, builder_code(bscnf))
                     ctx.last_stmt_was_stub = true
                 end
 
@@ -4263,7 +4225,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 record_unsupported!(ctx, :unsupported_method,
                     "method `$name`" * (mi !== nothing ? " for $(mi.specTypes)" : "");
                     idx=idx, detail=expr)
-                push!(bytes, Opcode.UNREACHABLE)
+                bunk = InstrBuilder(; func_name="compile_invoke", strict=false)
+                unreachable!(bunk)
+                append!(bytes, builder_code(bunk))
                 ctx.last_stmt_was_stub = true  # PURE-908
             end
         end

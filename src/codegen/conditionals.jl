@@ -59,7 +59,7 @@ function generate_linear_flow(ctx::AbstractCompilationContext, blocks::Vector{Ba
                     elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
                         unreachable!(rb)
                     else
-                        emit_raw!(rb, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm_type])
+                        emit_raw!(rb, compile_value(stmt.val, ctx); pushes=(val_wasm_type === nothing ? WasmValType[] : WasmValType[val_wasm_type]))
                         if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
                             extern_convert_any!(rb)
                         elseif val_wasm_type === I32 && func_ret_wasm === I64
@@ -241,7 +241,7 @@ function generate_void_flow(ctx::AbstractCompilationContext, blocks::Vector{Basi
                     # PURE-9030: Box numeric value for AnyRef return
                     local _ret_box_c1 = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
                     tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, val_wasm); emit_raw!(b, tb; pushes=WasmValType[I32])
-                    emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm])
+                    emit_raw!(b, compile_value(stmt.val, ctx); pushes=(val_wasm === nothing ? WasmValType[] : WasmValType[val_wasm]))
                     struct_new!(b, _ret_box_c1, WasmValType[])
                 elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                     # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
@@ -824,7 +824,7 @@ function compile_ternary_for_phi(ctx::AbstractCompilationContext, code, cond_idx
             # Local type doesn't match expected - emit ref.null of expected type
             ref_null!(b, Int64(wasm_type.type_idx), ConcreteRef(UInt32(wasm_type.type_idx), true))
         else
-            emit_raw!(b, value_bytes; pushes=WasmValType[wasm_type])
+            emit_raw!(b, value_bytes; pushes=(wasm_type === nothing ? WasmValType[] : WasmValType[wasm_type]))
             # Ensure value matches block type
             if wasm_type === I32 && !isempty(value_bytes) && value_bytes[1] == Opcode.I64_CONST
                 num!(b, Opcode.I32_WRAP_I64)
@@ -881,7 +881,7 @@ function compile_ternary_for_phi(ctx::AbstractCompilationContext, code, cond_idx
             # Local type doesn't match expected - emit ref.null of expected type
             ref_null!(b, Int64(wasm_type.type_idx), ConcreteRef(UInt32(wasm_type.type_idx), true))
         else
-            emit_raw!(b, value_bytes; pushes=WasmValType[wasm_type])
+            emit_raw!(b, value_bytes; pushes=(wasm_type === nothing ? WasmValType[] : WasmValType[wasm_type]))
             # Ensure value matches block type
             if wasm_type === I32 && !isempty(value_bytes) && value_bytes[1] == Opcode.I64_CONST
                 num!(b, Opcode.I32_WRAP_I64)
@@ -1434,14 +1434,14 @@ function generate_switch_pattern(ctx::AbstractCompilationContext, blocks, code, 
 
         # Else branch: recurse to next case
         else_!(ib)
-        emit_raw!(ib, gen_case(case_idx + 1); pushes=WasmValType[result_type])
+        emit_raw!(ib, gen_case(case_idx + 1); pushes=(result_type === nothing ? WasmValType[] : WasmValType[result_type]))
 
         end_block!(ib)
 
         return builder_code(ib)
     end
 
-    emit_raw!(b, gen_case(1); pushes=WasmValType[result_type])
+    emit_raw!(b, gen_case(1); pushes=(result_type === nothing ? WasmValType[] : WasmValType[result_type]))
     return_!(b)
 
     return builder_code(b)
@@ -1830,7 +1830,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                         # PURE-9030: Box numeric value for AnyRef return
                         local _ret_box_c2 = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
                         tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, val_wasm); emit_raw!(b, tb; pushes=WasmValType[I32])
-                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm])
+                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=(val_wasm === nothing ? WasmValType[] : WasmValType[val_wasm]))
                         struct_new!(b, _ret_box_c2, WasmValType[])
                     elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                         # PURE-045: Numeric to abstract ref - return ref.null of the abstract type

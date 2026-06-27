@@ -1640,7 +1640,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     unreachable!(b)
                 else
                     val_bytes = compile_value(term.val, ctx)
-                    emit_raw!(b, val_bytes; pushes=WasmValType[val_wasm_type])
+                    emit_raw!(b, val_bytes; pushes=(val_wasm_type === nothing ? WasmValType[] : WasmValType[val_wasm_type]))
                     if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
                         is_externref_local = false
                         if length(val_bytes) >= 2 && val_bytes[1] == 0x20

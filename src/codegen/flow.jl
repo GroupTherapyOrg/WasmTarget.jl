@@ -145,7 +145,7 @@ function generate_branched_loops(ctx::AbstractCompilationContext, first_header::
                 elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
                     unreachable!(b)
                 else
-                    emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm_type])
+                    emit_raw!(b, compile_value(stmt.val, ctx); pushes=(val_wasm_type === nothing ? WasmValType[] : WasmValType[val_wasm_type]))
                     if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
                         extern_convert_any!(b)
                     elseif val_wasm_type === I32 && func_ret_wasm === I64
@@ -240,7 +240,7 @@ function generate_branched_loops(ctx::AbstractCompilationContext, first_header::
                 elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
                     unreachable!(b)
                 else
-                    emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm_type])
+                    emit_raw!(b, compile_value(stmt.val, ctx); pushes=(val_wasm_type === nothing ? WasmValType[] : WasmValType[val_wasm_type]))
                     if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
                         extern_convert_any!(b)
                     elseif val_wasm_type === I32 && func_ret_wasm === I64
@@ -500,7 +500,7 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
             if !isempty(value_bytes)
                 # PURE-9028: Push correct DFS typeId as field 0
                 let tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, edge_val_type); emit_raw!(lb, tb; pushes=WasmValType[I32]); end
-                emit_raw!(lb, value_bytes; pushes=WasmValType[edge_val_type])
+                emit_raw!(lb, value_bytes; pushes=(edge_val_type === nothing ? WasmValType[] : WasmValType[edge_val_type]))
                 box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
                 struct_new!(lb, box_type, WasmValType[])
                 extern_convert_any!(lb)
@@ -522,7 +522,7 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
             value_bytes = compile_value(val, ctx)
             if !isempty(value_bytes)
                 let tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, edge_val_type); emit_raw!(lb, tb; pushes=WasmValType[I32]); end
-                emit_raw!(lb, value_bytes; pushes=WasmValType[edge_val_type])
+                emit_raw!(lb, value_bytes; pushes=(edge_val_type === nothing ? WasmValType[] : WasmValType[edge_val_type]))
                 box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
                 struct_new!(lb, box_type, WasmValType[])
                 local_set!(lb, local_idx)
@@ -535,7 +535,7 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
             @debug "PURE-3113 FIX A: phi=$phi_ssa_idx edge_val_type=$edge_val_type phi_local_type=$phi_local_type"
             value_bytes = compile_value(val, ctx)
             if !isempty(value_bytes)
-                emit_raw!(lb, value_bytes; pushes=WasmValType[edge_val_type])
+                emit_raw!(lb, value_bytes; pushes=(edge_val_type === nothing ? WasmValType[] : WasmValType[edge_val_type]))
                 # ref.null is already externref — don't wrap
                 if !(value_bytes[1] == Opcode.REF_NULL)
                     extern_convert_any!(lb)
@@ -552,13 +552,13 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
                     # ref.null can't be cast — emit type-appropriate null instead
                     ref_null!(lb, Int64(phi_local_type.type_idx), phi_local_type)
                 else
-                    emit_raw!(lb, value_bytes; pushes=WasmValType[edge_val_type])
+                    emit_raw!(lb, value_bytes; pushes=(edge_val_type === nothing ? WasmValType[] : WasmValType[edge_val_type]))
                     # REF_CAST_NULL with UNSIGNED-LEB idx (preserve exact original bytes;
                     # the typed ref_cast! encodes signed, so bridge this site).
                     let cb = UInt8[]
                         push!(cb, Opcode.GC_PREFIX); push!(cb, Opcode.REF_CAST_NULL)
                         append!(cb, encode_leb128_unsigned(phi_local_type.type_idx))
-                        emit_raw!(lb, cb; pops=1, pushes=WasmValType[phi_local_type])
+                        emit_raw!(lb, cb; pops=1, pushes=(phi_local_type === nothing ? WasmValType[] : WasmValType[phi_local_type]))
                     end
                 end
                 local_set!(lb, local_idx)
@@ -610,7 +610,7 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
                         if !isempty(vb)
                             # PURE-9028: Push correct DFS typeId as field 0
                             let tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, val_local_type); emit_raw!(lb, tb; pushes=WasmValType[I32]); end
-                            emit_raw!(lb, vb; pushes=WasmValType[val_local_type])
+                            emit_raw!(lb, vb; pushes=(val_local_type === nothing ? WasmValType[] : WasmValType[val_local_type]))
                             box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_local_type)
                             struct_new!(lb, box_type, WasmValType[])
                             extern_convert_any!(lb)
@@ -733,7 +733,7 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
                     # PURE-325: Box numeric local.get for ExternRef phi local
                     # PURE-9028: Push correct DFS typeId as field 0
                     let tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, actual_val_type); emit_raw!(lb, tb; pushes=WasmValType[I32]); end
-                    emit_raw!(lb, value_bytes; pushes=WasmValType[actual_val_type])
+                    emit_raw!(lb, value_bytes; pushes=(actual_val_type === nothing ? WasmValType[] : WasmValType[actual_val_type]))
                     box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, actual_val_type)
                     struct_new!(lb, box_type, WasmValType[])
                     extern_convert_any!(lb)
@@ -741,7 +741,7 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
                     return _ret(true)
                 elseif phi_local_type === ExternRef && (actual_val_type isa ConcreteRef || actual_val_type === StructRef || actual_val_type === ArrayRef || actual_val_type === AnyRef)
                     # PURE-3113: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion
-                    emit_raw!(lb, value_bytes; pushes=WasmValType[actual_val_type])
+                    emit_raw!(lb, value_bytes; pushes=(actual_val_type === nothing ? WasmValType[] : WasmValType[actual_val_type]))
                     if !(value_bytes[1] == Opcode.REF_NULL)
                         extern_convert_any!(lb)
                     end
@@ -795,7 +795,7 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
             if _final_arr_idx >= 1 && _final_arr_idx <= length(ctx.locals)
                 _final_src_type = ctx.locals[_final_arr_idx]
                 if _final_src_type isa ConcreteRef || _final_src_type === StructRef || _final_src_type === ArrayRef || _final_src_type === AnyRef
-                    emit_raw!(lb, value_bytes; pushes=WasmValType[_final_src_type])
+                    emit_raw!(lb, value_bytes; pushes=(_final_src_type === nothing ? WasmValType[] : WasmValType[_final_src_type]))
                     extern_convert_any!(lb)
                     local_set!(lb, local_idx)
                     return _ret(true)
