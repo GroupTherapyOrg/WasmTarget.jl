@@ -1932,10 +1932,13 @@ PURE-9036: Emit capture_stack() + global.set at a throw site.
 Call this before emitting the `throw` instruction to capture the stack trace.
 """
 function emit_capture_stack!(bytes::Vector{UInt8}, capture_import_idx::UInt32, trace_global_idx::UInt32)
-    push!(bytes, Opcode.CALL)
-    append!(bytes, encode_leb128_unsigned(capture_import_idx))
-    push!(bytes, Opcode.GLOBAL_SET)
-    append!(bytes, encode_leb128_unsigned(trace_global_idx))
+    b = InstrBuilder(; func_name="emit_capture_stack!", strict=false)
+    # capture_stack() -> externref-on-stack; global.set consumes it. Emitted
+    # mid-stream into a caller buffer, so build into a local builder then splice.
+    call!(b, capture_import_idx, WasmValType[], WasmValType[ExternRef])
+    global_set!(b, trace_global_idx)
+    append!(bytes, builder_code(b))
+    return bytes
 end
 
 """
@@ -1959,6 +1962,7 @@ Structure:
 # then arm (gap f80bce91645e). Mirrors the PURE-9032 handling from the simple
 # no-merge generator.
 function _compile_catch_region!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, code, from::Int, to::Int)
+    b = InstrBuilder(; func_name="_compile_catch_region!", strict=false)
     i = from
     while i <= to
         stmt = code[i]
@@ -1968,40 +1972,40 @@ function _compile_catch_region!(bytes::Vector{UInt8}, ctx::AbstractCompilationCo
         end
         if stmt isa Core.GotoIfNot
             else_target = stmt.dest
-            append!(bytes, compile_condition_to_i32(stmt.cond, ctx))
+            emit_raw!(b, compile_condition_to_i32(stmt.cond, ctx); pushes=WasmValType[I32])
             then_start = i + 1
             then_end = min(else_target - 1, to)
             then_has_return = any(code[j] isa Core.ReturnNode for j in then_start:then_end)
-            push!(bytes, Opcode.IF)
-            push!(bytes, 0x40)
+            if_!(b)
             for j in then_start:then_end
                 ts = code[j]
                 if ts !== nothing && !(ts isa Expr && ts.head === :pop_exception)
-                    append!(bytes, compile_statement(ts, j, ctx))
+                    emit_raw!(b, compile_statement(ts, j, ctx))
                 end
             end
             if then_has_return
                 # Then arm exits the function — no else arm needed; continue at dest
-                push!(bytes, Opcode.END)
+                end_block!(b)
                 ctx.last_stmt_was_stub = false
                 i = else_target
             else
-                push!(bytes, Opcode.ELSE)
+                else_!(b)
                 for j in else_target:to
                     es = code[j]
                     if es !== nothing && !(es isa Expr && es.head === :pop_exception)
-                        append!(bytes, compile_statement(es, j, ctx))
+                        emit_raw!(b, compile_statement(es, j, ctx))
                     end
                 end
-                push!(bytes, Opcode.END)
+                end_block!(b)
                 ctx.last_stmt_was_stub = false
                 i = to + 1
             end
         else
-            append!(bytes, compile_statement(stmt, i, ctx))
+            emit_raw!(b, compile_statement(stmt, i, ctx))
             i += 1
         end
     end
+    append!(bytes, builder_code(b))
     return bytes
 end
 

@@ -1514,10 +1514,9 @@ function compile_module(functions::Vector;
                             # Use struct_new_default to safely initialize all fields to defaults
                             # (0 for numerics, null for refs). The global is mutable and gets
                             # patched at runtime, so exact field values don't matter here.
-                            init_bytes = UInt8[]
-                            push!(init_bytes, Opcode.GC_PREFIX)
-                            push!(init_bytes, Opcode.STRUCT_NEW_DEFAULT)
-                            append!(init_bytes, encode_leb128_unsigned(type_idx))
+                            _init_b = InstrBuilder(; func_name="module_global_init", strict=false)
+                            struct_new_default!(_init_b, type_idx)
+                            init_bytes = builder_code(_init_b)
 
                             # Add global with reference type
                             global_idx = add_global_ref!(mod, type_idx, true, init_bytes; nullable=false)
@@ -1694,12 +1693,12 @@ function compile_module(functions::Vector;
             # must be able to catch it (an unreachable here was an uncatchable trap).
             ensure_exception_tag!(mod)
             _exn_g = ensure_exception_global!(mod)
-            body = UInt8[0xD0, 0x6E]                       # ref.null any
-            push!(body, Opcode.GLOBAL_SET)
-            append!(body, encode_leb128_unsigned(_exn_g))
-            push!(body, Opcode.THROW)
-            append!(body, encode_leb128_unsigned(0))
-            push!(body, Opcode.END)
+            _stub_b = InstrBuilder(; func_name="union_bottom_throw_stub", strict=false)
+            ref_null!(_stub_b, AnyRef)                     # ref.null any (0xD0 0x6E)
+            global_set!(_stub_b, _exn_g)                  # global.set _exn_g
+            throw_!(_stub_b, 0; inputs=WasmValType[AnyRef])  # throw 0 (tag pops the exnref)
+            end_block!(_stub_b)                           # end
+            body = builder_code(_stub_b)
             locals = WasmValType[]
         elseif intrinsic_body !== nothing
             # Use the intrinsic body directly
@@ -1914,10 +1913,9 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
                     if _lookup_module_global(module_globals, key) === nothing
                         info = register_struct_type!(mod, type_registry, T)
                         type_idx = info.wasm_type_idx
-                        init_bytes = UInt8[]
-                        push!(init_bytes, Opcode.GC_PREFIX)
-                        push!(init_bytes, Opcode.STRUCT_NEW_DEFAULT)
-                        append!(init_bytes, encode_leb128_unsigned(type_idx))
+                        _init_b = InstrBuilder(; func_name="module_global_init", strict=false)
+                        struct_new_default!(_init_b, type_idx)
+                        init_bytes = builder_code(_init_b)
                         global_idx = add_global_ref!(mod, type_idx, true, init_bytes; nullable=false)
                         push!(module_globals, (key, global_idx))
                     end
@@ -2805,10 +2803,9 @@ function compile_module_from_ir_frozen(ir_entries::Vector, frozen::FrozenCompila
                         if _lookup_module_global(module_globals, key) === nothing
                             info = register_struct_type!(mod, type_registry, T)
                             type_idx = info.wasm_type_idx
-                            init_bytes = UInt8[]
-                            push!(init_bytes, Opcode.GC_PREFIX)
-                            push!(init_bytes, Opcode.STRUCT_NEW_DEFAULT)
-                            append!(init_bytes, encode_leb128_unsigned(type_idx))
+                            _init_b = InstrBuilder(; func_name="module_global_init", strict=false)
+                            struct_new_default!(_init_b, type_idx)
+                            init_bytes = builder_code(_init_b)
                             global_idx = add_global_ref!(mod, type_idx, true, init_bytes; nullable=false)
                             push!(module_globals, (key, global_idx))
                         end

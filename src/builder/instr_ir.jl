@@ -55,6 +55,12 @@ struct BrTable <: WasmInstr; targets::Vector{UInt32}; default::UInt32; end
 struct Return  <: WasmInstr; end
 struct Call    <: WasmInstr; idx::UInt32; end
 struct CallIndirect <: WasmInstr; type_idx::UInt32; table_idx::UInt32; end
+# call_ref (Wasm GC, 0x14): a typed call through a (ref $type) on the stack.
+# dart2wasm CallRef.serialize writes 0x14 + writeTypeIndex(type) (unsigned LEB type idx).
+struct CallRef <: WasmInstr; type_idx::UInt32; end
+# br_on_null (0xD5) / br_on_non_null (0xD6): branch on the nullability of the top ref.
+struct BrOnNull    <: WasmInstr; depth::UInt32; end
+struct BrOnNonNull <: WasmInstr; depth::UInt32; end
 
 # ── exception handling (Wasm 3.0) ──────────────────────────────────────────────────
 # A try_table catch clause (dart2wasm TryTableCatch): a kind byte + immediates.
@@ -101,11 +107,40 @@ struct ArrayFill <: WasmInstr; idx::UInt32; end
 struct RefCastConcrete <: WasmInstr; idx::Int64; nullable::Bool; end
 struct RefCastAbstract <: WasmInstr; heaptype_byte::UInt8; nullable::Bool; end
 struct RefTest <: WasmInstr; idx::Int64; nullable::Bool; end
+# br_on_cast (0xFB 0x18) / br_on_cast_fail (0xFB 0x19): a cast that branches on
+# success/failure. dart2wasm BrOnCast(.serialize): GC_PREFIX, op, flags byte
+# (bit0 = src nullable, bit1 = dst nullable), unsigned label, then the SOURCE heaptype
+# and the TARGET heaptype, each written as `s.write(heapType)` — a single on-wire byte for
+# an abstract heaptype or a signed-LEB s33 for a concrete type index. The caller already
+# has those heaptype bytes (exactly as for ref.cast / ref.null), so carry them verbatim.
+struct BrOnCast     <: WasmInstr; flags::UInt8; depth::UInt32; src_heap::Vector{UInt8}; dst_heap::Vector{UInt8}; end
+struct BrOnCastFail <: WasmInstr; flags::UInt8; depth::UInt32; src_heap::Vector{UInt8}; dst_heap::Vector{UInt8}; end
 struct AnyConvertExtern <: WasmInstr; end
 struct ExternConvertAny <: WasmInstr; end
 struct RefI31  <: WasmInstr; end
 struct I31GetS <: WasmInstr; end
 struct I31GetU <: WasmInstr; end
+
+# ── table ──────────────────────────────────────────────────────────────────────────
+# dart2wasm Table{Get,Set,Size,Grow,Fill}.serialize. get/set are unprefixed (0x25/0x26);
+# size/grow/fill are FC-prefixed (0xFC 0x10/0x0F/0x11). All write an unsigned table index.
+struct TableGet  <: WasmInstr; idx::UInt32; end
+struct TableSet  <: WasmInstr; idx::UInt32; end
+struct TableSize <: WasmInstr; idx::UInt32; end
+struct TableGrow <: WasmInstr; idx::UInt32; end
+struct TableFill <: WasmInstr; idx::UInt32; end
+
+# ── bulk memory (0xFC prefix) ────────────────────────────────────────────────────────
+# dart2wasm Memory{Init,Copy,Fill}/DataDrop.serialize: FC_PREFIX, then an UNSIGNED sub-op
+# (note: dart2wasm writes the sub-op via writeUnsigned, single-byte LEB == the raw byte for
+# these small values), then the immediates. memory.init writes seg then mem; data.drop seg;
+# memory.copy dst-mem then src-mem; memory.fill mem.
+struct MemoryInit <: WasmInstr; seg::UInt32; mem::UInt32; end
+struct DataDrop   <: WasmInstr; seg::UInt32; end
+struct MemoryCopy <: WasmInstr; dst_mem::UInt32; src_mem::UInt32; end
+struct MemoryFill <: WasmInstr; mem::UInt32; end
+# array.new_elem (0xFB 0x0A): [offset:i32 length:i32] -> [(ref $type)] from an elem segment.
+struct ArrayNewElem <: WasmInstr; idx::UInt32; seg::UInt32; end
 
 # ── transitional bridge (deleted when every emitter is migrated) ──────────────────
 # Pre-encoded bytes spliced from an un-migrated callee (compile_value, etc.). A real
@@ -119,12 +154,15 @@ import .InstrIR: WasmInstr,
     I32Const, I64Const, F32Const, F64Const, NumOp, Drop, Select, SelectWithType,
     LocalGet, LocalSet, LocalTee, GlobalGet, GlobalSet,
     Unreachable, Nop, Block, Loop, If, Else, End, Br, BrIf, BrTable, Return, Call, CallIndirect,
+    CallRef, BrOnNull, BrOnNonNull,
     TryCatch, TryTable, Throw, ThrowRef, Rethrow,
     RefNullAbstract, RefNullConcrete, RefFunc, RefIsNull, RefAsNonNull,
     StructNew, StructNewDefault, StructGet, StructSet,
-    ArrayNew, ArrayNewDefault, ArrayNewFixed, ArrayNewData, ArrayGet, ArraySet, ArrayLen, ArrayCopy, ArrayFill,
-    RefCastConcrete, RefCastAbstract, RefTest, AnyConvertExtern, ExternConvertAny,
-    RefI31, I31GetS, I31GetU, RawBytes
+    ArrayNew, ArrayNewDefault, ArrayNewFixed, ArrayNewData, ArrayNewElem, ArrayGet, ArraySet, ArrayLen, ArrayCopy, ArrayFill,
+    RefCastConcrete, RefCastAbstract, RefTest, BrOnCast, BrOnCastFail, AnyConvertExtern, ExternConvertAny,
+    RefI31, I31GetS, I31GetU,
+    TableGet, TableSet, TableSize, TableGrow, TableFill,
+    MemoryInit, DataDrop, MemoryCopy, MemoryFill, RawBytes
 
 # encode!(code, instr): append this instruction's exact on-wire bytes (dart2wasm `serialize`).
 @inline _u!(code, n) = append!(code, encode_leb128_unsigned(n))
@@ -161,6 +199,9 @@ end
 encode!(c::Vector{UInt8}, ::Return) = push!(c, Opcode.RETURN)
 encode!(c::Vector{UInt8}, i::Call)  = (push!(c, Opcode.CALL); _u!(c, i.idx))
 encode!(c::Vector{UInt8}, i::CallIndirect) = (push!(c, Opcode.CALL_INDIRECT); _u!(c, i.type_idx); _u!(c, i.table_idx))
+encode!(c::Vector{UInt8}, i::CallRef)     = (push!(c, Opcode.CALL_REF); _u!(c, i.type_idx))
+encode!(c::Vector{UInt8}, i::BrOnNull)    = (push!(c, Opcode.BR_ON_NULL);     _u!(c, i.depth))
+encode!(c::Vector{UInt8}, i::BrOnNonNull) = (push!(c, Opcode.BR_ON_NON_NULL); _u!(c, i.depth))
 # try_table: 0x1F, blocktype, vec(catch). Each catch = kind byte + immediates (dart2wasm
 # TryTableCatch.serialize): catch/catch_ref write tag then label; the *_all kinds write only label.
 function _encode_catch!(c::Vector{UInt8}, k::TryCatch)
@@ -192,6 +233,7 @@ encode!(c::Vector{UInt8}, i::ArrayNew)        = (push!(c, Opcode.GC_PREFIX); pus
 encode!(c::Vector{UInt8}, i::ArrayNewDefault) = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.ARRAY_NEW_DEFAULT); _u!(c, i.idx))
 encode!(c::Vector{UInt8}, i::ArrayNewFixed)   = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.ARRAY_NEW_FIXED); _u!(c, i.idx); _u!(c, i.n))
 encode!(c::Vector{UInt8}, i::ArrayNewData)    = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.ARRAY_NEW_DATA); _u!(c, i.idx); _u!(c, i.seg))
+encode!(c::Vector{UInt8}, i::ArrayNewElem)    = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.ARRAY_NEW_ELEM); _u!(c, i.idx); _u!(c, i.seg))
 encode!(c::Vector{UInt8}, i::ArrayGet) = (push!(c, Opcode.GC_PREFIX); push!(c, i.op); _u!(c, i.idx))
 encode!(c::Vector{UInt8}, i::ArraySet) = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.ARRAY_SET); _u!(c, i.idx))
 encode!(c::Vector{UInt8}, ::ArrayLen)  = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.ARRAY_LEN))
@@ -200,11 +242,27 @@ encode!(c::Vector{UInt8}, i::ArrayFill) = (push!(c, Opcode.GC_PREFIX); push!(c, 
 encode!(c::Vector{UInt8}, i::RefCastConcrete) = (push!(c, Opcode.GC_PREFIX); push!(c, i.nullable ? Opcode.REF_CAST_NULL : Opcode.REF_CAST); _s!(c, i.idx))
 encode!(c::Vector{UInt8}, i::RefCastAbstract) = (push!(c, Opcode.GC_PREFIX); push!(c, i.nullable ? Opcode.REF_CAST_NULL : Opcode.REF_CAST); push!(c, i.heaptype_byte))
 encode!(c::Vector{UInt8}, i::RefTest) = (push!(c, Opcode.GC_PREFIX); push!(c, i.nullable ? Opcode.REF_TEST_NULL : Opcode.REF_TEST); _s!(c, i.idx))
+# br_on_cast / br_on_cast_fail: GC_PREFIX, op, flags byte, unsigned label, src heaptype bytes,
+# dst heaptype bytes (dart2wasm BrOnCast.serialize). Heaptype bytes are caller-supplied verbatim.
+encode!(c::Vector{UInt8}, i::BrOnCast)     = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.BR_ON_CAST);      push!(c, i.flags); _u!(c, i.depth); append!(c, i.src_heap); append!(c, i.dst_heap))
+encode!(c::Vector{UInt8}, i::BrOnCastFail) = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.BR_ON_CAST_FAIL); push!(c, i.flags); _u!(c, i.depth); append!(c, i.src_heap); append!(c, i.dst_heap))
 encode!(c::Vector{UInt8}, ::AnyConvertExtern) = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.ANY_CONVERT_EXTERN))
 encode!(c::Vector{UInt8}, ::ExternConvertAny) = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.EXTERN_CONVERT_ANY))
 encode!(c::Vector{UInt8}, ::RefI31)  = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.REF_I31))
 encode!(c::Vector{UInt8}, ::I31GetS) = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.I31_GET_S))
 encode!(c::Vector{UInt8}, ::I31GetU) = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.I31_GET_U))
+# table: get/set unprefixed; size/grow/fill FC-prefixed. All write an unsigned table index.
+encode!(c::Vector{UInt8}, i::TableGet)  = (push!(c, Opcode.TABLE_GET); _u!(c, i.idx))
+encode!(c::Vector{UInt8}, i::TableSet)  = (push!(c, Opcode.TABLE_SET); _u!(c, i.idx))
+encode!(c::Vector{UInt8}, i::TableSize) = (push!(c, Opcode.FC_PREFIX); _u!(c, UInt32(Opcode.TABLE_SIZE)); _u!(c, i.idx))
+encode!(c::Vector{UInt8}, i::TableGrow) = (push!(c, Opcode.FC_PREFIX); _u!(c, UInt32(Opcode.TABLE_GROW)); _u!(c, i.idx))
+encode!(c::Vector{UInt8}, i::TableFill) = (push!(c, Opcode.FC_PREFIX); _u!(c, UInt32(Opcode.TABLE_FILL)); _u!(c, i.idx))
+# bulk memory: FC_PREFIX, unsigned sub-op, then immediates (dart2wasm writes the sub-op via
+# writeUnsigned — single-byte LEB == the raw byte for these values).
+encode!(c::Vector{UInt8}, i::MemoryInit) = (push!(c, Opcode.FC_PREFIX); _u!(c, UInt32(Opcode.MEMORY_INIT)); _u!(c, i.seg); _u!(c, i.mem))
+encode!(c::Vector{UInt8}, i::DataDrop)   = (push!(c, Opcode.FC_PREFIX); _u!(c, UInt32(Opcode.DATA_DROP));   _u!(c, i.seg))
+encode!(c::Vector{UInt8}, i::MemoryCopy) = (push!(c, Opcode.FC_PREFIX); _u!(c, UInt32(Opcode.MEMORY_COPY)); _u!(c, i.dst_mem); _u!(c, i.src_mem))
+encode!(c::Vector{UInt8}, i::MemoryFill) = (push!(c, Opcode.FC_PREFIX); _u!(c, UInt32(Opcode.MEMORY_FILL)); _u!(c, i.mem))
 encode!(c::Vector{UInt8}, i::RawBytes) = append!(c, i.bytes)
 
 # mnemonic(instr): symbolic WAT-ish text (dart2wasm `printTo`) — for builder_diagnose /
@@ -235,6 +293,9 @@ mnemonic(i::BrTable) = "br_table $(i.targets) $(i.default)"
 mnemonic(::Return) = "return"
 mnemonic(i::Call)  = "call $(i.idx)"
 mnemonic(i::CallIndirect) = "call_indirect (type $(i.type_idx)) (table $(i.table_idx))"
+mnemonic(i::CallRef)     = "call_ref \$$(i.type_idx)"
+mnemonic(i::BrOnNull)    = "br_on_null $(i.depth)"
+mnemonic(i::BrOnNonNull) = "br_on_non_null $(i.depth)"
 _catch_mnemonic(k::TryCatch) =
     k.kind == Opcode.CATCH         ? "catch $(k.tag) $(k.label)" :
     k.kind == Opcode.CATCH_REF     ? "catch_ref $(k.tag) $(k.label)" :
@@ -258,6 +319,7 @@ mnemonic(i::ArrayNew)        = "array.new \$$(i.idx)"
 mnemonic(i::ArrayNewDefault) = "array.new_default \$$(i.idx)"
 mnemonic(i::ArrayNewFixed)   = "array.new_fixed \$$(i.idx) $(i.n)"
 mnemonic(i::ArrayNewData)    = "array.new_data \$$(i.idx) $(i.seg)"
+mnemonic(i::ArrayNewElem)    = "array.new_elem \$$(i.idx) $(i.seg)"
 mnemonic(i::ArrayGet) = "array.get \$$(i.idx)"
 mnemonic(i::ArraySet) = "array.set \$$(i.idx)"
 mnemonic(::ArrayLen)  = "array.len"
@@ -266,9 +328,20 @@ mnemonic(i::ArrayFill) = "array.fill \$$(i.idx)"
 mnemonic(i::RefCastConcrete) = "ref.cast$(i.nullable ? " null" : "") \$$(i.idx)"
 mnemonic(i::RefCastAbstract) = "ref.cast$(i.nullable ? " null" : "") 0x$(string(i.heaptype_byte, base=16))"
 mnemonic(i::RefTest) = "ref.test$(i.nullable ? " null" : "") \$$(i.idx)"
+mnemonic(i::BrOnCast)     = "br_on_cast $(i.depth) (flags 0x$(string(i.flags, base=16)))"
+mnemonic(i::BrOnCastFail) = "br_on_cast_fail $(i.depth) (flags 0x$(string(i.flags, base=16)))"
 mnemonic(::AnyConvertExtern) = "any.convert_extern"
 mnemonic(::ExternConvertAny) = "extern.convert_any"
 mnemonic(::RefI31)  = "ref.i31"
 mnemonic(::I31GetS) = "i31.get_s"
 mnemonic(::I31GetU) = "i31.get_u"
+mnemonic(i::TableGet)  = "table.get $(i.idx)"
+mnemonic(i::TableSet)  = "table.set $(i.idx)"
+mnemonic(i::TableSize) = "table.size $(i.idx)"
+mnemonic(i::TableGrow) = "table.grow $(i.idx)"
+mnemonic(i::TableFill) = "table.fill $(i.idx)"
+mnemonic(i::MemoryInit) = "memory.init $(i.seg) $(i.mem)"
+mnemonic(i::DataDrop)   = "data.drop $(i.seg)"
+mnemonic(i::MemoryCopy) = "memory.copy $(i.dst_mem) $(i.src_mem)"
+mnemonic(i::MemoryFill) = "memory.fill $(i.mem)"
 mnemonic(i::RawBytes) = "<raw $(length(i.bytes))B>"

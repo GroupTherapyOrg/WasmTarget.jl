@@ -242,6 +242,37 @@ function call_indirect!(b::InstrBuilder, type_idx::Integer, table_idx::Integer, 
     _emit!(b, InstrIR.CallIndirect(UInt32(type_idx), UInt32(table_idx)))
 end
 
+# call_ref: pop the (ref $type) callee, then params, push results. The caller supplies the
+# signature it already knows (same contract as call!/call_indirect!), and `type_idx` is the
+# function-type index (dart2wasm CallRef writes the type index after 0x14).
+function call_ref!(b::InstrBuilder, type_idx::Integer, params::Vector{<:Any}, results::Vector{<:Any})
+    if b.v.reachable
+        validate_pop_any!(b.v)  # the (ref $type) function reference on top
+        for p in reverse(params); validate_pop!(b.v, p); end
+        for r in results; validate_push!(b.v, r); end
+    end
+    _emit!(b, InstrIR.CallRef(UInt32(type_idx)))
+end
+
+# br_on_null: [(ref null ht)] -> [(ref ht)] on fallthrough; branches to `depth` with the
+# null stripped (dart2wasm br_on_null). On fallthrough the top becomes non-null; reachability
+# stays true (conditional). Validate the branch target like br_if! (without popping the value).
+function br_on_null!(b::InstrBuilder, depth::Integer)
+    if b.v.reachable
+        t = validate_pop_any!(b.v)
+        nn = t isa ConcreteRef ? ConcreteRef(t.type_idx, false) : (t === nothing ? AnyRef : t)
+        validate_push!(b.v, nn)
+    end
+    _emit!(b, InstrIR.BrOnNull(UInt32(depth)))
+end
+
+# br_on_non_null: [(ref null ht)] -> [] on fallthrough; branches to `depth` carrying the
+# non-null ref (dart2wasm br_on_non_null). On fallthrough the ref is consumed; reachable stays.
+function br_on_non_null!(b::InstrBuilder, depth::Integer)
+    b.v.reachable && validate_pop_any!(b.v)
+    _emit!(b, InstrIR.BrOnNonNull(UInt32(depth)))
+end
+
 # ── Parametric: typed select ──────────────────────────────────────────────────────
 # select (typed, 0x1C): pop i32 condition, pop T, pop T, push T — same operand-stack
 # effect as untyped select (the validator's SELECT/SELECT_T path is shared). `type_bytes`
@@ -376,6 +407,85 @@ end
 function array_fill!(b::InstrBuilder, type_idx::Integer, elem_type::WasmValType)
     validate_gc_instruction!(b.v, Opcode.ARRAY_FILL, (type_idx, elem_type))
     _emit!(b, InstrIR.ArrayFill(UInt32(type_idx)))
+end
+# array.new_elem $type $seg : [offset:i32 length:i32] -> [(ref $type)] (sibling of array.new_data).
+function array_new_elem!(b::InstrBuilder, type_idx::Integer, seg_idx::Integer)
+    if b.v.reachable
+        validate_pop!(b.v, I32); validate_pop!(b.v, I32)
+        validate_push!(b.v, ConcreteRef(UInt32(type_idx), false))
+    end
+    _emit!(b, InstrIR.ArrayNewElem(UInt32(type_idx), UInt32(seg_idx)))
+end
+
+# br_on_cast / br_on_cast_fail: a cast that branches on success/failure (dart2wasm br_on_cast).
+# `src_heap`/`dst_heap` are the EXACT on-wire source/target heaptype bytes the caller already
+# has (a single byte for an abstract heaptype, or `encode_leb128_signed(type_idx)` for a
+# concrete type index). `src_nullable`/`dst_nullable` build the flags byte (bit0 src, bit1 dst).
+# Stack model (fallthrough): the top ref takes the *fallthrough* result type; the branch edge's
+# arity is checked at the target label exactly as br!/br_if! do. Reachability stays true.
+function _br_on_cast_flags(src_nullable::Bool, dst_nullable::Bool)::UInt8
+    UInt8((src_nullable ? 0x01 : 0x00) | (dst_nullable ? 0x02 : 0x00))
+end
+function br_on_cast!(b::InstrBuilder, depth::Integer, src_heap::Vector{UInt8}, dst_heap::Vector{UInt8},
+                     dst_reftype::WasmValType; src_nullable::Bool=true, dst_nullable::Bool=false)
+    # br_on_cast: branches when the cast SUCCEEDS; on fallthrough the value FAILED the cast, so
+    # the top keeps the source ref type (we leave it untouched). dart2wasm verifies the branch
+    # carries dst_reftype; here we model fallthrough (no net stack change) + record the op.
+    flags = _br_on_cast_flags(src_nullable, dst_nullable)
+    _emit!(b, InstrIR.BrOnCast(flags, UInt32(depth), copy(src_heap), copy(dst_heap)))
+end
+function br_on_cast_fail!(b::InstrBuilder, depth::Integer, src_heap::Vector{UInt8}, dst_heap::Vector{UInt8},
+                          dst_reftype::WasmValType; src_nullable::Bool=true, dst_nullable::Bool=false)
+    # br_on_cast_fail: branches when the cast FAILS; on fallthrough the value SUCCEEDED, so the
+    # top is refined to dst_reftype.
+    if b.v.reachable
+        validate_pop_any!(b.v); validate_push!(b.v, dst_reftype)
+    end
+    flags = _br_on_cast_flags(src_nullable, dst_nullable)
+    _emit!(b, InstrIR.BrOnCastFail(flags, UInt32(depth), copy(src_heap), copy(dst_heap)))
+end
+
+# ── Table ─────────────────────────────────────────────────────────────────────────
+# table.get $t : [i32] -> [elemtype]; the caller supplies the table's element type.
+function table_get!(b::InstrBuilder, table_idx::Integer, elem_type::WasmValType)
+    if b.v.reachable; validate_pop!(b.v, I32); validate_push!(b.v, elem_type); end
+    _emit!(b, InstrIR.TableGet(UInt32(table_idx)))
+end
+# table.set $t : [i32 elemtype] -> []
+function table_set!(b::InstrBuilder, table_idx::Integer)
+    if b.v.reachable; validate_pop_any!(b.v); validate_pop!(b.v, I32); end
+    _emit!(b, InstrIR.TableSet(UInt32(table_idx)))
+end
+# table.size $t : [] -> [i32]
+table_size!(b::InstrBuilder, table_idx::Integer) = (validate_push!(b.v, I32); _emit!(b, InstrIR.TableSize(UInt32(table_idx))))
+# table.grow $t : [elemtype i32] -> [i32]
+function table_grow!(b::InstrBuilder, table_idx::Integer)
+    if b.v.reachable; validate_pop!(b.v, I32); validate_pop_any!(b.v); validate_push!(b.v, I32); end
+    _emit!(b, InstrIR.TableGrow(UInt32(table_idx)))
+end
+# table.fill $t : [i32 elemtype i32] -> []
+function table_fill!(b::InstrBuilder, table_idx::Integer)
+    if b.v.reachable; validate_pop!(b.v, I32); validate_pop_any!(b.v); validate_pop!(b.v, I32); end
+    _emit!(b, InstrIR.TableFill(UInt32(table_idx)))
+end
+
+# ── Bulk memory ───────────────────────────────────────────────────────────────────
+# memory.init $seg $mem : [dst:i32 src_off:i32 len:i32] -> []
+function memory_init!(b::InstrBuilder, seg_idx::Integer, mem_idx::Integer=0)
+    if b.v.reachable; validate_pop!(b.v, I32); validate_pop!(b.v, I32); validate_pop!(b.v, I32); end
+    _emit!(b, InstrIR.MemoryInit(UInt32(seg_idx), UInt32(mem_idx)))
+end
+# data.drop $seg : [] -> []
+data_drop!(b::InstrBuilder, seg_idx::Integer) = _emit!(b, InstrIR.DataDrop(UInt32(seg_idx)))
+# memory.copy $dst $src : [dst:i32 src:i32 len:i32] -> []
+function memory_copy!(b::InstrBuilder, dst_mem::Integer=0, src_mem::Integer=0)
+    if b.v.reachable; validate_pop!(b.v, I32); validate_pop!(b.v, I32); validate_pop!(b.v, I32); end
+    _emit!(b, InstrIR.MemoryCopy(UInt32(dst_mem), UInt32(src_mem)))
+end
+# memory.fill $mem : [dst:i32 val:i32 len:i32] -> []
+function memory_fill!(b::InstrBuilder, mem_idx::Integer=0)
+    if b.v.reachable; validate_pop!(b.v, I32); validate_pop!(b.v, I32); validate_pop!(b.v, I32); end
+    _emit!(b, InstrIR.MemoryFill(UInt32(mem_idx)))
 end
 
 # ════════════════════════════════════════════════════════════════════════════════

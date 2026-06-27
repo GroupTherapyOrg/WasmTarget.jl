@@ -22,6 +22,13 @@ module Opcode
     const RETURN = 0x0F
     const CALL = 0x10
     const CALL_INDIRECT = 0x11
+    const CALL_REF = 0x14        # call_ref type_idx - typed function-reference call (Wasm GC)
+    const BR_ON_NULL = 0xD5      # br_on_null label - branch if ref is null
+    const BR_ON_NON_NULL = 0xD6  # br_on_non_null label - branch if ref is non-null
+
+    # Reference-typed table access
+    const TABLE_GET = 0x25       # table.get table_idx
+    const TABLE_SET = 0x26       # table.set table_idx
 
     # Exception handling instructions (Wasm 3.0)
     const THROW = 0x08         # throw tag_idx - throw exception with tag

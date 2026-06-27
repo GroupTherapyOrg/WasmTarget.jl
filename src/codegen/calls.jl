@@ -106,20 +106,21 @@ end
 function _emit_normalise_narrow_pair!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext,
                                       signed::Bool, julia_width::Int)
     julia_width < 32 || return bytes
-    b = UInt32(allocate_local!(ctx, I32))
+    bld = InstrBuilder(; func_name="_emit_normalise_narrow_pair!", strict=false)
+    li = UInt32(allocate_local!(ctx, I32))
     function norm!()
         if signed
-            push!(bytes, julia_width == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
+            num!(bld, julia_width == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
         else
-            push!(bytes, Opcode.I32_CONST)
-            append!(bytes, encode_leb128_signed(Int64((1 << julia_width) - 1)))
-            push!(bytes, Opcode.I32_AND)
+            i32_const!(bld, Int64((1 << julia_width) - 1))
+            num!(bld, Opcode.I32_AND)
         end
     end
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(b))   # [a]
-    norm!()                                                                      # [a*]
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(b))   # [a*, b]
-    norm!()                                                                      # [a*, b*]
+    local_set!(bld, li)   # [a]
+    norm!()               # [a*]
+    local_get!(bld, li)   # [a*, b]
+    norm!()               # [a*, b*]
+    append!(bytes, builder_code(bld))
     return bytes
 end
 
@@ -131,19 +132,18 @@ function _emit_throw_error_struct!(bytes::Vector{UInt8}, ctx::AbstractCompilatio
     ensure_exception_tag!(ctx.mod)
     exn_global = ensure_exception_global!(ctx.mod)
     info = register_struct_type!(ctx.mod, ctx.type_registry, T)
+    bld = InstrBuilder(; func_name="_emit_throw_error_struct!", strict=false)
     if info !== nothing
-        emit_type_id!(bytes, ctx.type_registry, T)
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_NEW)
-        append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
+        tb = UInt8[]
+        emit_type_id!(tb, ctx.type_registry, T)
+        emit_raw!(bld, tb; pushes=WasmValType[I32])
+        struct_new!(bld, info.wasm_type_idx, WasmValType[])
     else
-        push!(bytes, Opcode.REF_NULL)
-        push!(bytes, UInt8(AnyRef))
+        ref_null!(bld, AnyRef)
     end
-    push!(bytes, Opcode.GLOBAL_SET)
-    append!(bytes, encode_leb128_unsigned(exn_global))
-    push!(bytes, Opcode.THROW)
-    append!(bytes, encode_leb128_unsigned(0))
+    global_set!(bld, exn_global)
+    throw_!(bld, 0)
+    append!(bytes, builder_code(bld))
     return bytes
 end
 
@@ -159,37 +159,43 @@ end
 function _emit_div_guard!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, is32::Bool;
                           check_overflow::Bool=false, julia_width::Int=(is32 ? 32 : 64))
     lt     = is32 ? I32 : I64
-    wconst = is32 ? Opcode.I32_CONST : Opcode.I64_CONST
+    wconst!(blr, v) = is32 ? i32_const!(blr, v) : i64_const!(blr, v)
     weqz   = is32 ? Opcode.I32_EQZ : Opcode.I64_EQZ
     weq    = is32 ? Opcode.I32_EQ : Opcode.I64_EQ
     la = UInt32(allocate_local!(ctx, lt))
     lb = UInt32(allocate_local!(ctx, lt))
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(lb))  # [a]
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(la))  # []
+    bld = InstrBuilder(; func_name="_emit_div_guard!", strict=false)
+    local_set!(bld, lb)  # [a]
+    local_set!(bld, la)  # []
     # b == 0 → throw DivideError
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(lb))
-    push!(bytes, weqz)
-    push!(bytes, Opcode.IF)
-    push!(bytes, 0x40)  # void
-    _emit_throw_error_struct!(bytes, ctx, DivideError)
-    push!(bytes, Opcode.END)
+    local_get!(bld, lb)
+    num!(bld, weqz)
+    if_!(bld)
+    let tb = UInt8[]
+        _emit_throw_error_struct!(tb, ctx, DivideError)
+        emit_raw!(bld, tb)
+    end
+    end_block!(bld)
     if check_overflow
         # a == typemin(width) && b == -1 → throw DivideError
         tmin = julia_width >= 64 ? typemin(Int64) : -(Int64(1) << (julia_width - 1))
-        push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(la))
-        push!(bytes, wconst); append!(bytes, encode_leb128_signed(tmin))
-        push!(bytes, weq)
-        push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(lb))
-        push!(bytes, wconst); append!(bytes, encode_leb128_signed(-1))
-        push!(bytes, weq)
-        push!(bytes, Opcode.I32_AND)
-        push!(bytes, Opcode.IF)
-        push!(bytes, 0x40)  # void
-        _emit_throw_error_struct!(bytes, ctx, DivideError)
-        push!(bytes, Opcode.END)
+        local_get!(bld, la)
+        wconst!(bld, tmin)
+        num!(bld, weq)
+        local_get!(bld, lb)
+        wconst!(bld, -1)
+        num!(bld, weq)
+        num!(bld, Opcode.I32_AND)
+        if_!(bld)
+        let tb = UInt8[]
+            _emit_throw_error_struct!(tb, ctx, DivideError)
+            emit_raw!(bld, tb)
+        end
+        end_block!(bld)
     end
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(la))
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(lb))
+    local_get!(bld, la)
+    local_get!(bld, lb)
+    append!(bytes, builder_code(bld))
     return bytes
 end
 
@@ -225,7 +231,6 @@ end
 # over-shift threshold (shr_u of a width-bit value by ≥ width = 0).
 function _emit_shift_guarded!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, is32::Bool, kind::Symbol;
                               julia_width::Int = (is32 ? 32 : 64), signed_narrow::Bool = false)
-    wconst = is32 ? Opcode.I32_CONST : Opcode.I64_CONST
     wltu   = is32 ? Opcode.I32_LT_U : Opcode.I64_LT_U
     wand   = is32 ? Opcode.I32_AND : Opcode.I64_AND
     width  = is32 ? 32 : 64
@@ -235,16 +240,18 @@ function _emit_shift_guarded!(bytes::Vector{UInt8}, ctx::AbstractCompilationCont
     shop   = kind === :shl  ? (is32 ? Opcode.I32_SHL : Opcode.I64_SHL) :
              kind === :lshr ? (is32 ? Opcode.I32_SHR_U : Opcode.I64_SHR_U) :
                               (is32 ? Opcode.I32_SHR_S : Opcode.I64_SHR_S)
-    _lset(op, i) = (push!(bytes, op); append!(bytes, encode_leb128_unsigned(i)))
-    _wc(v) = (push!(bytes, wconst); append!(bytes, encode_leb128_signed(Int64(v))))
+    bld = InstrBuilder(; func_name="_emit_shift_guarded!", strict=false)
+    _lset(op, i) = op === Opcode.LOCAL_SET ? local_set!(bld, i) :
+                   op === Opcode.LOCAL_TEE ? local_tee!(bld, i) : local_get!(bld, i)
+    _wc(v) = is32 ? i32_const!(bld, Int64(v)) : i64_const!(bld, Int64(v))
     if narrow && (kind === :lshr || (kind === :ashr && is32 && (thr == 8 || thr == 16)))
         # Normalise the value (under the shift amount): stash shift, fix value, restore.
         _lset(Opcode.LOCAL_SET, sl)              # [value]
         if kind === :lshr
             _wc((Int64(1) << thr) - 1)
-            push!(bytes, wand)                   # zero out junk above julia_width
+            num!(bld, wand)                      # zero out junk above julia_width
         else  # ashr: replicate bit thr-1 upward so shr_s sign-fills correctly
-            push!(bytes, thr == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
+            num!(bld, thr == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
         end
         _lset(Opcode.LOCAL_GET, sl)              # [value', shift]
     end
@@ -255,18 +262,18 @@ function _emit_shift_guarded!(bytes::Vector{UInt8}, ctx::AbstractCompilationCont
         _wc(width - 1)                           # [value, shift, w-1]   (b = w-1)
         _lset(Opcode.LOCAL_GET, sl)              # [value, shift, w-1, shift]
         _wc(width)                               # [..., width]
-        push!(bytes, wltu)                       # [value, shift, w-1, cond]
-        push!(bytes, Opcode.SELECT)              # [value, cond? shift : w-1]
-        push!(bytes, shop)                       # [value >>s clamped]
+        num!(bld, wltu)                          # [value, shift, w-1, cond]
+        select!(bld)                             # [value, cond? shift : w-1]
+        num!(bld, shop)                          # [value >>s clamped]
     else
         # [value, shift] → [result] → select(result, 0, shift < thr)
         _lset(Opcode.LOCAL_TEE, sl)              # [value, shift]  (shift saved)
-        push!(bytes, shop)                       # [result]
+        num!(bld, shop)                          # [result]
         _wc(0)                                   # [result, 0]
         _lset(Opcode.LOCAL_GET, sl)              # [result, 0, shift]
         _wc(thr)                                 # [result, 0, shift, thr]
-        push!(bytes, wltu)                       # [result, 0, cond]
-        push!(bytes, Opcode.SELECT)              # [cond? result : 0]
+        num!(bld, wltu)                          # [result, 0, cond]
+        select!(bld)                             # [cond? result : 0]
         if narrow && (kind === :shl || (kind === :lshr && signed_narrow))
             # P3 (found probing da22976c7cd6): a SIGNED narrow result must be
             # re-sign-extended, not zero-masked — `Int8(-1) << 0` masked to
@@ -275,13 +282,14 @@ function _emit_shift_guarded!(bytes::Vector{UInt8}, ctx::AbstractCompilationCont
             # bits are width-canonical but bit thr-1 can be set (shift 0 of
             # 0x80 → Int8 -128, not 128).
             if signed_narrow && is32 && (thr == 8 || thr == 16)
-                push!(bytes, thr == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
+                num!(bld, thr == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
             elseif kind === :shl
                 _wc((Int64(1) << thr) - 1)       # [result, mask]  (2^width - 1)
-                push!(bytes, wand)               # [result & mask]  truncate to width
+                num!(bld, wand)                  # [result & mask]  truncate to width
             end
         end
     end
+    append!(bytes, builder_code(bld))
     return bytes
 end
 
@@ -292,15 +300,15 @@ end
 # the unshifted value. Stack: [.., amount_i64] → [.., amount_i32].
 function _emit_wrap_shift_amount_saturating!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, julia_width::Int)
     amt = UInt32(allocate_local!(ctx, I64))
-    _g(op, i) = (push!(bytes, op); append!(bytes, encode_leb128_unsigned(i)))
-    _c(v) = (push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(Int64(v))))
-    _g(Opcode.LOCAL_TEE, amt)                    # [amount]
-    _c(julia_width)                              # [amount, jw]
-    _g(Opcode.LOCAL_GET, amt)                    # [amount, jw, amount]
-    _c(julia_width)                              # [amount, jw, amount, jw]
-    push!(bytes, Opcode.I64_LT_U)                # [amount, jw, cond]   cond = amount <u jw
-    push!(bytes, Opcode.SELECT)                  # [cond ? amount : jw]
-    push!(bytes, Opcode.I32_WRAP_I64)            # [amount_i32]
+    bld = InstrBuilder(; func_name="_emit_wrap_shift_amount_saturating!", strict=false)
+    local_tee!(bld, amt)                         # [amount]
+    i64_const!(bld, Int64(julia_width))          # [amount, jw]
+    local_get!(bld, amt)                         # [amount, jw, amount]
+    i64_const!(bld, Int64(julia_width))          # [amount, jw, amount, jw]
+    num!(bld, Opcode.I64_LT_U)                   # [amount, jw, cond]   cond = amount <u jw
+    select!(bld)                                 # [cond ? amount : jw]
+    num!(bld, Opcode.I32_WRAP_I64)               # [amount_i32]
+    append!(bytes, builder_code(bld))
     return bytes
 end
 
@@ -570,95 +578,71 @@ function _compile_call_checked_mul(func, args, bytes::Vector{UInt8}, ctx::Abstra
         local_a = allocate_local!(ctx, local_type)
         local_b = allocate_local!(ctx, local_type)
         local_result = allocate_local!(ctx, local_type)
+        bld = InstrBuilder(; func_name="_compile_call_checked_mul", strict=false)
 
         # Save b, save a, compute a*b, save result
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(local_b))
-        push!(bytes, Opcode.LOCAL_TEE)
-        append!(bytes, encode_leb128_unsigned(local_a))
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(local_b))
-        push!(bytes, is_32bit ? Opcode.I32_MUL : Opcode.I64_MUL)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(local_result))
+        local_set!(bld, local_b)
+        local_tee!(bld, local_a)
+        local_get!(bld, local_b)
+        num!(bld, is_32bit ? Opcode.I32_MUL : Opcode.I64_MUL)
+        local_set!(bld, local_result)
 
         # Push typeId for Tuple struct (field 0 = typeId)
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x00)  # typeId
+        i32_const!(bld, 0)  # typeId
         # Push result back for tuple field 1
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(local_result))
+        local_get!(bld, local_result)
 
         # Overflow detection for mul
         if is_signed
             # Signed mul overflow: if a==0: false; if a==-1: b==MIN; else: result/a != b
             # Use if/else chain: a.eqz ? 0 : (a==-1 ? (b==MIN) : (result/a != b))
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(local_a))
-            push!(bytes, is_32bit ? Opcode.I32_EQZ : Opcode.I64_EQZ)
-            push!(bytes, Opcode.IF)
-            push!(bytes, UInt8(I32))  # result type i32
+            local_get!(bld, local_a)
+            num!(bld, is_32bit ? Opcode.I32_EQZ : Opcode.I64_EQZ)
+            if_!(bld, I32)  # result type i32
             # a == 0 → no overflow
-            push!(bytes, Opcode.I32_CONST)
-            push!(bytes, 0x00)
-            push!(bytes, Opcode.ELSE)
+            i32_const!(bld, 0)
+            else_!(bld)
             # Check a == -1
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(local_a))
+            local_get!(bld, local_a)
             if is_32bit
-                push!(bytes, Opcode.I32_CONST)
-                append!(bytes, encode_leb128_signed(-1))
-                push!(bytes, Opcode.I32_EQ)
+                i32_const!(bld, -1)
+                num!(bld, Opcode.I32_EQ)
             else
-                push!(bytes, Opcode.I64_CONST)
-                append!(bytes, encode_leb128_signed(-1))
-                push!(bytes, Opcode.I64_EQ)
+                i64_const!(bld, -1)
+                num!(bld, Opcode.I64_EQ)
             end
-            push!(bytes, Opcode.IF)
-            push!(bytes, UInt8(I32))  # result type i32
+            if_!(bld, I32)  # result type i32
             # a == -1 → overflow iff b == MIN_INT
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(local_b))
+            local_get!(bld, local_b)
             if is_32bit
-                push!(bytes, Opcode.I32_CONST)
-                append!(bytes, encode_leb128_signed(typemin(Int32)))
-                push!(bytes, Opcode.I32_EQ)
+                i32_const!(bld, typemin(Int32))
+                num!(bld, Opcode.I32_EQ)
             else
-                push!(bytes, Opcode.I64_CONST)
-                append!(bytes, encode_leb128_signed(typemin(Int64)))
-                push!(bytes, Opcode.I64_EQ)
+                i64_const!(bld, typemin(Int64))
+                num!(bld, Opcode.I64_EQ)
             end
-            push!(bytes, Opcode.ELSE)
+            else_!(bld)
             # General case: overflow = result / a != b
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(local_result))
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(local_a))
-            push!(bytes, is_32bit ? Opcode.I32_DIV_S : Opcode.I64_DIV_S)
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(local_b))
-            push!(bytes, is_32bit ? Opcode.I32_NE : Opcode.I64_NE)
-            push!(bytes, Opcode.END)  # end inner if/else
-            push!(bytes, Opcode.END)  # end outer if/else
+            local_get!(bld, local_result)
+            local_get!(bld, local_a)
+            num!(bld, is_32bit ? Opcode.I32_DIV_S : Opcode.I64_DIV_S)
+            local_get!(bld, local_b)
+            num!(bld, is_32bit ? Opcode.I32_NE : Opcode.I64_NE)
+            end_block!(bld)  # end inner if/else
+            end_block!(bld)  # end outer if/else
         else
             # Unsigned mul overflow: if a==0: false; else: result/a != b
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(local_a))
-            push!(bytes, is_32bit ? Opcode.I32_EQZ : Opcode.I64_EQZ)
-            push!(bytes, Opcode.IF)
-            push!(bytes, UInt8(I32))  # result type i32
-            push!(bytes, Opcode.I32_CONST)
-            push!(bytes, 0x00)
-            push!(bytes, Opcode.ELSE)
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(local_result))
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(local_a))
-            push!(bytes, is_32bit ? Opcode.I32_DIV_U : Opcode.I64_DIV_U)
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(local_b))
-            push!(bytes, is_32bit ? Opcode.I32_NE : Opcode.I64_NE)
-            push!(bytes, Opcode.END)  # end if/else
+            local_get!(bld, local_a)
+            num!(bld, is_32bit ? Opcode.I32_EQZ : Opcode.I64_EQZ)
+            if_!(bld, I32)  # result type i32
+            i32_const!(bld, 0)
+            else_!(bld)
+            local_get!(bld, local_result)
+            local_get!(bld, local_a)
+            num!(bld, is_32bit ? Opcode.I32_DIV_U : Opcode.I64_DIV_U)
+            local_get!(bld, local_b)
+            num!(bld, is_32bit ? Opcode.I32_NE : Opcode.I64_NE)
+            end_block!(bld)  # end if/else
         end
 
         tuple_type = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
@@ -666,9 +650,8 @@ function _compile_call_checked_mul(func, args, bytes::Vector{UInt8}, ctx::Abstra
             register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
         end
         tuple_info = ctx.type_registry.structs[tuple_type]
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_NEW)
-        append!(bytes, encode_leb128_unsigned(tuple_info.wasm_type_idx))
+        struct_new!(bld, tuple_info.wasm_type_idx, WasmValType[])
+        append!(bytes, builder_code(bld))
     end
     return nothing
 end
@@ -684,121 +667,98 @@ function _compile_call_flipsign(args, bytes::Vector{UInt8}, ctx::AbstractCompila
     # Formula: (x xor signbit) - signbit where signbit = y >> 63 (all 1s if negative)
     # We need both x and y on stack, but they've been pushed as: [x, y]
 
+    bld = InstrBuilder(; func_name="_compile_call_flipsign", strict=false)
     if is_128bit
         # For 128-bit, check if y's hi word is negative
         # flipsign_int(x, y) = y < 0 ? -x : x
         type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
+        struct_rt = julia_to_wasm_type_concrete(arg_type, ctx)
 
         # Pop y struct to local
         y_struct_local = length(ctx.locals) + ctx.n_params
         push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(y_struct_local))
+        local_set!(bld, y_struct_local)
 
         # Pop x struct to local
         x_struct_local = length(ctx.locals) + ctx.n_params
         push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(x_struct_local))
+        local_set!(bld, x_struct_local)
 
         # Get y's hi part to check sign
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(y_struct_local))
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_GET)
-        append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(2))  # Field 2 = hi (0=typeId, 1=lo)
+        local_get!(bld, y_struct_local)
+        struct_get!(bld, type_idx, 2, I64)  # Field 2 = hi (0=typeId, 1=lo)
 
         # Check if negative (hi < 0)
-        push!(bytes, Opcode.I64_CONST)
-        push!(bytes, 0x00)
-        push!(bytes, Opcode.I64_LT_S)
+        i64_const!(bld, 0)
+        num!(bld, Opcode.I64_LT_S)
 
         # Store condition
         is_neg_local = length(ctx.locals) + ctx.n_params
         push!(ctx.locals, I32)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(is_neg_local))
+        local_set!(bld, is_neg_local)
 
         # Compute -x using emit_int128_neg
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(x_struct_local))
-        append!(bytes, emit_int128_neg(ctx, arg_type))
+        local_get!(bld, x_struct_local)
+        emit_raw!(bld, emit_int128_neg(ctx, arg_type); pops=1, pushes=WasmValType[struct_rt])
 
         # Store negated x
         neg_x_local = length(ctx.locals) + ctx.n_params
         push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(neg_x_local))
+        local_set!(bld, neg_x_local)
 
         # Allocate result local
         result_local = length(ctx.locals) + ctx.n_params
         push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
 
         # if is_neg { result = neg_x } else { result = x }
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(is_neg_local))
-        push!(bytes, Opcode.IF)
-        push!(bytes, 0x40)  # void
+        local_get!(bld, is_neg_local)
+        if_!(bld)  # void
 
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(neg_x_local))
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(result_local))
+        local_get!(bld, neg_x_local)
+        local_set!(bld, result_local)
 
-        push!(bytes, Opcode.ELSE)
+        else_!(bld)
 
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(x_struct_local))
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(result_local))
+        local_get!(bld, x_struct_local)
+        local_set!(bld, result_local)
 
-        push!(bytes, Opcode.END)
+        end_block!(bld)
 
         # Push result
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(result_local))
+        local_get!(bld, result_local)
 
     else
         # Pop y to local, check sign, conditionally negate x
         y_local = length(ctx.locals) + ctx.n_params
         push!(ctx.locals, is_32bit ? I32 : I64)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(y_local))
+        local_set!(bld, y_local)
 
         x_local = length(ctx.locals) + ctx.n_params
         push!(ctx.locals, is_32bit ? I32 : I64)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(x_local))
+        local_set!(bld, x_local)
 
         # Compute signbit = y >> (bits-1) (arithmetic shift gives all 1s if negative)
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(y_local))
+        local_get!(bld, y_local)
         if is_32bit
-            push!(bytes, Opcode.I32_CONST)
-            push!(bytes, 31)
-            push!(bytes, Opcode.I32_SHR_S)
+            i32_const!(bld, 31)
+            num!(bld, Opcode.I32_SHR_S)
         else
-            push!(bytes, Opcode.I64_CONST)
-            push!(bytes, 63)
-            push!(bytes, Opcode.I64_SHR_S)
+            i64_const!(bld, 63)
+            num!(bld, Opcode.I64_SHR_S)
         end
 
         signbit_local = length(ctx.locals) + ctx.n_params
         push!(ctx.locals, is_32bit ? I32 : I64)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(signbit_local))
+        local_set!(bld, signbit_local)
 
         # result = (x xor signbit) - signbit
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(x_local))
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(signbit_local))
-        push!(bytes, is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(signbit_local))
-        push!(bytes, is_32bit ? Opcode.I32_SUB : Opcode.I64_SUB)
+        local_get!(bld, x_local)
+        local_get!(bld, signbit_local)
+        num!(bld, is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
+        local_get!(bld, signbit_local)
+        num!(bld, is_32bit ? Opcode.I32_SUB : Opcode.I64_SUB)
     end
+    append!(bytes, builder_code(bld))
     return nothing
 end
 
@@ -809,12 +769,13 @@ Extracted handler for :(===) identity comparison (the post-arg-push branch).
 Modifies `bytes` in-place.
 """
 function _compile_call_egaleq(args, bytes::Vector{UInt8}, ctx::AbstractCompilationContext, is_128bit::Bool, is_32bit::Bool, arg_type)::Nothing
+    bld = InstrBuilder(; func_name="_compile_call_egaleq", strict=false)
     if is_128bit
-        append!(bytes, emit_int128_eq(ctx, arg_type))
+        emit_raw!(bld, emit_int128_eq(ctx, arg_type); pops=2, pushes=WasmValType[I32])
     elseif arg_type === Float64
-        push!(bytes, Opcode.F64_EQ)
+        num!(bld, Opcode.F64_EQ)
     elseif arg_type === Float32
-        push!(bytes, Opcode.F32_EQ)
+        num!(bld, Opcode.F32_EQ)
     else
         local arg2_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
         local arg1_is_ref = is_ref_type_or_union(arg_type) && arg_type !== Nothing
@@ -823,10 +784,10 @@ function _compile_call_egaleq(args, bytes::Vector{UInt8}, ctx::AbstractCompilati
         # Quick check: if one arg is ref-typed and other is Nothing (compiles to i32),
         # they can't be equal via ref.eq OR i32/i64 eq. Drop both and return false.
         if (arg1_is_ref && arg2_type === Nothing) || (arg2_is_ref && arg_type === Nothing)
-            push!(bytes, Opcode.DROP)
-            push!(bytes, Opcode.DROP)
-            push!(bytes, Opcode.I32_CONST)
-            push!(bytes, 0x00)
+            drop!(bld)
+            drop!(bld)
+            i32_const!(bld, 0)
+            append!(bytes, builder_code(bld))
             return nothing
         end
 
@@ -889,59 +850,52 @@ function _compile_call_egaleq(args, bytes::Vector{UInt8}, ctx::AbstractCompilati
             end
             # If Wasm types mismatch (one ref, one not), drop both and return false
             if a1_is_ref != a2_is_ref
-                push!(bytes, Opcode.DROP)
-                push!(bytes, Opcode.DROP)
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
+                drop!(bld)
+                drop!(bld)
+                i32_const!(bld, 0)
+                append!(bytes, builder_code(bld))
                 return nothing
             elseif a1_is_ref && a2_is_ref
                 # Both refs - need ref.eq, but anyref/externref require casting to eqref first
                 if a1_is_anyref_fp && a2_is_anyref_fp
                     # Both anyref: cast both to eqref
                     local _fp_tmp = allocate_local!(ctx, EqRef)
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(_fp_tmp))
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(_fp_tmp))
+                    ref_cast!(bld, EqRef, true)
+                    local_set!(bld, _fp_tmp)
+                    ref_cast!(bld, EqRef, true)
+                    local_get!(bld, _fp_tmp)
                 elseif a1_is_externref_fp && a2_is_externref_fp
                     # Both externref: convert to anyref then cast to eqref
                     local _fp_tmp2 = allocate_local!(ctx, EqRef)
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(_fp_tmp2))
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(_fp_tmp2))
+                    any_convert_extern!(bld)
+                    ref_cast!(bld, EqRef, true)
+                    local_set!(bld, _fp_tmp2)
+                    any_convert_extern!(bld)
+                    ref_cast!(bld, EqRef, true)
+                    local_get!(bld, _fp_tmp2)
                 elseif a1_is_anyref_fp
                     # arg1 anyref, arg2 concrete/eqref: save arg2, cast arg1, restore
                     local _fp_tmp3 = allocate_local!(ctx, EqRef)
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(_fp_tmp3))
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(_fp_tmp3))
+                    local_set!(bld, _fp_tmp3)
+                    ref_cast!(bld, EqRef, true)
+                    local_get!(bld, _fp_tmp3)
                 elseif a2_is_anyref_fp
                     # arg2 anyref: cast to eqref
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                    ref_cast!(bld, EqRef, true)
                 elseif a1_is_externref_fp
                     # arg1 externref: save arg2, convert+cast arg1, restore
                     local _fp_tmp4 = allocate_local!(ctx, EqRef)
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(_fp_tmp4))
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(_fp_tmp4))
+                    local_set!(bld, _fp_tmp4)
+                    any_convert_extern!(bld)
+                    ref_cast!(bld, EqRef, true)
+                    local_get!(bld, _fp_tmp4)
                 elseif a2_is_externref_fp
                     # arg2 externref: convert+cast
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
-                    push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
+                    any_convert_extern!(bld)
+                    ref_cast!(bld, EqRef, true)
                 end
-                push!(bytes, Opcode.REF_EQ)
+                num!(bld, Opcode.REF_EQ)
+                append!(bytes, builder_code(bld))
                 return nothing
             end
             # Both numeric - fall through to normal handling
@@ -1083,132 +1037,109 @@ function _compile_call_egaleq(args, bytes::Vector{UInt8}, ctx::AbstractCompilati
                 # Save both args to locals (arg2 is on top, arg1 below)
                 local egal_local2 = allocate_local!(ctx, egal_wasm_type)
                 local egal_local1 = allocate_local!(ctx, egal_wasm_type)
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(egal_local2))
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(egal_local1))
+                local_set!(bld, egal_local2)
+                local_set!(bld, egal_local1)
                 local n_fields = length(egal_info.field_types)
                 for fi in 1:n_fields
                     local egal_ft = egal_info.field_types[fi]
                     local egal_wt = julia_to_wasm_type(egal_ft)
                     # Get wasm field index (accounts for typeId at field 0)
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(egal_local1))
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.STRUCT_GET)
-                    append!(bytes, encode_leb128_unsigned(egal_type_idx))
-                    append!(bytes, encode_leb128_unsigned(wasm_field_idx(egal_info, fi)))
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(egal_local2))
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.STRUCT_GET)
-                    append!(bytes, encode_leb128_unsigned(egal_type_idx))
-                    append!(bytes, encode_leb128_unsigned(wasm_field_idx(egal_info, fi)))
+                    local_get!(bld, egal_local1)
+                    struct_get!(bld, egal_type_idx, wasm_field_idx(egal_info, fi), egal_wt)
+                    local_get!(bld, egal_local2)
+                    struct_get!(bld, egal_type_idx, wasm_field_idx(egal_info, fi), egal_wt)
                     # Compare with type-appropriate opcode
                     if egal_wt === I32
-                        push!(bytes, Opcode.I32_EQ)
+                        num!(bld, Opcode.I32_EQ)
                     elseif egal_wt === I64
-                        push!(bytes, Opcode.I64_EQ)
+                        num!(bld, Opcode.I64_EQ)
                     elseif egal_wt === F32
-                        push!(bytes, Opcode.F32_EQ)
+                        num!(bld, Opcode.F32_EQ)
                     elseif egal_wt === F64
-                        push!(bytes, Opcode.F64_EQ)
+                        num!(bld, Opcode.F64_EQ)
                     elseif egal_wt === ExternRef
                         # PURE-6024: externref fields need conversion to eqref for ref.eq
                         local egal_tmp = allocate_local!(ctx, EqRef)
-                        push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
-                        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                        push!(bytes, Opcode.LOCAL_SET)
-                        append!(bytes, encode_leb128_unsigned(egal_tmp))
-                        push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
-                        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                        push!(bytes, Opcode.LOCAL_GET)
-                        append!(bytes, encode_leb128_unsigned(egal_tmp))
-                        push!(bytes, Opcode.REF_EQ)
+                        any_convert_extern!(bld)
+                        ref_cast!(bld, EqRef, true)
+                        local_set!(bld, egal_tmp)
+                        any_convert_extern!(bld)
+                        ref_cast!(bld, EqRef, true)
+                        local_get!(bld, egal_tmp)
+                        num!(bld, Opcode.REF_EQ)
                     else
                         # Ref-typed field (nested struct, string, etc.): use ref.eq
-                        push!(bytes, Opcode.REF_EQ)
+                        num!(bld, Opcode.REF_EQ)
                     end
                     # AND with previous field results (skip for first field)
                     if fi > 1
-                        push!(bytes, Opcode.I32_AND)
+                        num!(bld, Opcode.I32_AND)
                     end
                 end
                 # Handle zero-field structs (singleton types): always equal
                 if n_fields == 0
-                    push!(bytes, Opcode.I32_CONST)
-                    push!(bytes, 0x01)
+                    i32_const!(bld, 1)
                 end
             elseif arg1_is_anyref && arg2_is_anyref
                 # PURE-9064: Both anyref — cast to eqref before ref.eq
                 # anyref is supertype of eqref, so ref.cast works directly (no any.convert_extern)
                 local tmp_eq_a = allocate_local!(ctx, EqRef)
-                push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(tmp_eq_a))
-                push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(tmp_eq_a))
-                push!(bytes, Opcode.REF_EQ)
+                ref_cast!(bld, EqRef, true)
+                local_set!(bld, tmp_eq_a)
+                ref_cast!(bld, EqRef, true)
+                local_get!(bld, tmp_eq_a)
+                num!(bld, Opcode.REF_EQ)
             elseif arg1_is_externref && arg2_is_externref
                 # ref.eq requires eqref operands. externref is NOT eqref.
                 # Convert externref → anyref → eqref before ref.eq
                 # Both externref: convert arg2 (top), save, convert arg1, restore
                 local tmp_eq = allocate_local!(ctx, EqRef)
-                push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
-                push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(tmp_eq))
+                any_convert_extern!(bld)
+                ref_cast!(bld, EqRef, true)
+                local_set!(bld, tmp_eq)
                 # Now arg1 (externref) is on top
-                push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
-                push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(tmp_eq))
-                push!(bytes, Opcode.REF_EQ)
+                any_convert_extern!(bld)
+                ref_cast!(bld, EqRef, true)
+                local_get!(bld, tmp_eq)
+                num!(bld, Opcode.REF_EQ)
             elseif arg1_is_externref
                 # arg1 is externref (under arg2 on stack): save arg2, convert arg1, restore arg2
                 local tmp_eq2 = allocate_local!(ctx, EqRef)
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(tmp_eq2))
-                push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
-                push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(tmp_eq2))
-                push!(bytes, Opcode.REF_EQ)
+                local_set!(bld, tmp_eq2)
+                any_convert_extern!(bld)
+                ref_cast!(bld, EqRef, true)
+                local_get!(bld, tmp_eq2)
+                num!(bld, Opcode.REF_EQ)
             elseif arg2_is_externref
                 # arg2 is externref (top of stack): just convert it
-                push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
-                push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                push!(bytes, Opcode.REF_EQ)
+                any_convert_extern!(bld)
+                ref_cast!(bld, EqRef, true)
+                num!(bld, Opcode.REF_EQ)
             elseif arg1_is_anyref
                 # PURE-9064: arg1 anyref (under arg2 on stack): save arg2, cast arg1, restore
                 local tmp_eq_a2 = allocate_local!(ctx, EqRef)
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(tmp_eq_a2))
-                push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(tmp_eq_a2))
-                push!(bytes, Opcode.REF_EQ)
+                local_set!(bld, tmp_eq_a2)
+                ref_cast!(bld, EqRef, true)
+                local_get!(bld, tmp_eq_a2)
+                num!(bld, Opcode.REF_EQ)
             elseif arg2_is_anyref
                 # PURE-9064: arg2 anyref (top of stack): cast to eqref
-                push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL, UInt8(EqRef))
-                push!(bytes, Opcode.REF_EQ)
+                ref_cast!(bld, EqRef, true)
+                num!(bld, Opcode.REF_EQ)
             else
                 # Both are non-externref, non-anyref refs (mutable structs, arrays, etc.): identity comparison
-                push!(bytes, Opcode.REF_EQ)
+                num!(bld, Opcode.REF_EQ)
             end
         elseif arg1_wasm_is_ref && !arg2_wasm_is_ref
             # Comparing ref with non-ref: type mismatch, drop both and push false
-            push!(bytes, Opcode.DROP)
-            push!(bytes, Opcode.DROP)
-            push!(bytes, Opcode.I32_CONST)
-            push!(bytes, 0x00)
+            drop!(bld)
+            drop!(bld)
+            i32_const!(bld, 0)
         elseif !arg1_wasm_is_ref && arg2_wasm_is_ref
             # Comparing non-ref with ref: type mismatch, drop both and push false
-            push!(bytes, Opcode.DROP)
-            push!(bytes, Opcode.DROP)
-            push!(bytes, Opcode.I32_CONST)
-            push!(bytes, 0x00)
+            drop!(bld)
+            drop!(bld)
+            i32_const!(bld, 0)
         else
             # Both args are numeric. Check actual Wasm types to select correct opcode.
             # Julia type inference (is_32bit) may differ from actual Wasm local types.
@@ -1297,30 +1228,30 @@ function _compile_call_egaleq(args, bytes::Vector{UInt8}, ctx::AbstractCompilati
                 # arg1 is a ref type but Julia treated it as numeric (e.g. Core.IntrinsicFunction
                 # stored as ExternRef). A ref value can never equal a numeric constant, so drop
                 # both args and return false.
-                push!(bytes, Opcode.DROP)
-                push!(bytes, Opcode.DROP)
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
+                drop!(bld)
+                drop!(bld)
+                i32_const!(bld, 0)
             elseif arg1_actual_32bit && arg2_actual_32bit
                 # Both i32 - use i32_eq
-                push!(bytes, Opcode.I32_EQ)
+                num!(bld, Opcode.I32_EQ)
             elseif arg1_actual_32bit && !arg2_actual_32bit
                 # arg1 is i32, arg2 is i64 - extend arg1 to i64
                 # But arg1 is already on stack below arg2. We need to swap and extend.
                 # Simpler: just compare as i32 if we can truncate arg2
                 # Since arg2 is on top of stack, wrap it to i32
-                push!(bytes, Opcode.I32_WRAP_I64)
-                push!(bytes, Opcode.I32_EQ)
+                num!(bld, Opcode.I32_WRAP_I64)
+                num!(bld, Opcode.I32_EQ)
             elseif !arg1_actual_32bit && arg2_actual_32bit
                 # arg1 is i64, arg2 is i32 - extend arg2 (on top of stack) to i64
-                push!(bytes, Opcode.I64_EXTEND_I32_S)
-                push!(bytes, Opcode.I64_EQ)
+                num!(bld, Opcode.I64_EXTEND_I32_S)
+                num!(bld, Opcode.I64_EQ)
             else
                 # Both i64 - use i64_eq
-                push!(bytes, Opcode.I64_EQ)
+                num!(bld, Opcode.I64_EQ)
             end
         end
     end
+    append!(bytes, builder_code(bld))
     return nothing
 end
 
@@ -1349,72 +1280,63 @@ function _compile_call_fpext(args, bytes::Vector{UInt8}, ctx::AbstractCompilatio
         # Stack: [i32 = Float16 bits]
         # Strategy: extract sign, exp, mant; build f32 bits; reinterpret; promote
 
+        bld = InstrBuilder(; func_name="_compile_call_fpext", strict=false)
         # Save the Float16 bits to a temp local
         local_idx = length(ctx.locals) + ctx.n_params
         push!(ctx.locals, I32)
         h_local = local_idx
-        push!(bytes, Opcode.LOCAL_TEE)
-        append!(bytes, encode_leb128_unsigned(UInt64(h_local)))
+        local_tee!(bld, h_local)
 
         # Extract sign: (h >> 15) << 31
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(UInt64(h_local)))
-        push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(15)))
-        push!(bytes, Opcode.I32_SHR_U)
-        push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(31)))
-        push!(bytes, Opcode.I32_SHL)
+        local_get!(bld, h_local)
+        i32_const!(bld, Int64(15))
+        num!(bld, Opcode.I32_SHR_U)
+        i32_const!(bld, Int64(31))
+        num!(bld, Opcode.I32_SHL)
         # Stack: [h, sign_bit]
 
         # Extract exp: (h >> 10) & 0x1f
         local_idx2 = length(ctx.locals) + ctx.n_params
         push!(ctx.locals, I32)
         sign_local = local_idx2
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(UInt64(sign_local)))
+        local_set!(bld, sign_local)
 
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(UInt64(h_local)))
-        push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(10)))
-        push!(bytes, Opcode.I32_SHR_U)
-        push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(0x1f)))
-        push!(bytes, Opcode.I32_AND)
+        local_get!(bld, h_local)
+        i32_const!(bld, Int64(10))
+        num!(bld, Opcode.I32_SHR_U)
+        i32_const!(bld, Int64(0x1f))
+        num!(bld, Opcode.I32_AND)
 
         local_idx3 = length(ctx.locals) + ctx.n_params
         push!(ctx.locals, I32)
         exp_local = local_idx3
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(UInt64(exp_local)))
+        local_set!(bld, exp_local)
 
         # Extract mant: h & 0x3ff
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(UInt64(h_local)))
-        push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(0x3ff)))
-        push!(bytes, Opcode.I32_AND)
+        local_get!(bld, h_local)
+        i32_const!(bld, Int64(0x3ff))
+        num!(bld, Opcode.I32_AND)
 
         local_idx4 = length(ctx.locals) + ctx.n_params
         push!(ctx.locals, I32)
         mant_local = local_idx4
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(UInt64(mant_local)))
+        local_set!(bld, mant_local)
 
         # Build f32 bits for normalized case:
         # sign_bit | ((exp + 112) << 23) | (mant << 13)
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(UInt64(sign_local)))
+        local_get!(bld, sign_local)
 
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(UInt64(exp_local)))
-        push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(112)))
-        push!(bytes, Opcode.I32_ADD)
-        push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(23)))
-        push!(bytes, Opcode.I32_SHL)
-        push!(bytes, Opcode.I32_OR)
+        local_get!(bld, exp_local)
+        i32_const!(bld, Int64(112))
+        num!(bld, Opcode.I32_ADD)
+        i32_const!(bld, Int64(23))
+        num!(bld, Opcode.I32_SHL)
+        num!(bld, Opcode.I32_OR)
 
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(UInt64(mant_local)))
-        push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(13)))
-        push!(bytes, Opcode.I32_SHL)
-        push!(bytes, Opcode.I32_OR)
+        local_get!(bld, mant_local)
+        i32_const!(bld, Int64(13))
+        num!(bld, Opcode.I32_SHL)
+        num!(bld, Opcode.I32_OR)
         # Stack: [normalized_f32_bits]
 
         # Handle zero case: if exp==0 && mant==0, use sign_bit only
@@ -1425,11 +1347,15 @@ function _compile_call_fpext(args, bytes::Vector{UInt8}, ctx::AbstractCompilatio
         # This is acceptable for validation and practical correctness.
 
         # Reinterpret i32 → f32, then promote f32 → f64
-        push!(bytes, Opcode.F32_REINTERPRET_I32)  # 0xBE
-        push!(bytes, 0xBB)  # f64.promote_f32
+        num!(bld, Opcode.F32_REINTERPRET_I32)  # 0xBE
+        num!(bld, 0xBB)  # f64.promote_f32
+        append!(bytes, builder_code(bld))
     else
         # Float32 → Float64 (standard case)
-        push!(bytes, 0xBB)  # f64.promote_f32
+        let bld = InstrBuilder(; func_name="_compile_call_fpext", strict=false)
+            num!(bld, 0xBB)  # f64.promote_f32
+            append!(bytes, builder_code(bld))
+        end
     end
     return nothing
 end
@@ -1458,6 +1384,8 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
     # Get the type of the value being checked (for detecting tagged unions)
     value_type = get_ssa_type(ctx, value_arg)
 
+    bld = InstrBuilder(; func_name="_compile_call_isa", strict=false)
+
     # Check if this is a tagged union check
     # NOTE: The value argument is already on the stack from the loop that pushes all args
     if value_type isa Union && needs_tagged_union(value_type) && haskey(ctx.type_registry.unions, value_type)
@@ -1469,23 +1397,16 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
             # Value is already on stack (tagged union struct)
             # PURE-701: Value may be structref if from a union-typed local.
             # Insert ref.cast null to narrow before struct_get.
-            push!(bytes, Opcode.GC_PREFIX)
-            push!(bytes, Opcode.REF_CAST_NULL)
-            append!(bytes, encode_leb128_signed(Int64(union_info.wasm_type_idx)))
+            ref_cast!(bld, Int64(union_info.wasm_type_idx), true)
             # Get the tag field (PURE-9024: field 1 due to typeId at field 0)
-            push!(bytes, Opcode.GC_PREFIX)
-            push!(bytes, Opcode.STRUCT_GET)
-            append!(bytes, encode_leb128_unsigned(union_info.wasm_type_idx))
-            append!(bytes, encode_leb128_unsigned(1))  # field 1 is tag (0=typeId, 1=tag, 2=value)
+            struct_get!(bld, union_info.wasm_type_idx, 1, I32)  # field 1 is tag (0=typeId, 1=tag, 2=value)
             # Compare tag to expected value
-            push!(bytes, Opcode.I32_CONST)
-            append!(bytes, encode_leb128_signed(Int64(expected_tag)))
-            push!(bytes, Opcode.I32_EQ)
+            i32_const!(bld, Int64(expected_tag))
+            num!(bld, Opcode.I32_EQ)
         else
             # Type not in this union - drop value and return false
-            push!(bytes, Opcode.DROP)
-            push!(bytes, Opcode.I32_CONST)
-            push!(bytes, 0x00)
+            drop!(bld)
+            i32_const!(bld, 0)
         end
     elseif check_type === Nothing
         # isa(x, Nothing) -> ref.is_null
@@ -1503,11 +1424,10 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
         end
         if isa_val_wasm !== nothing && (isa_val_wasm === I64 || isa_val_wasm === I32 || isa_val_wasm === F64 || isa_val_wasm === F32)
             # Numeric value on stack — can never be Nothing. Drop + push false.
-            push!(bytes, Opcode.DROP)
-            push!(bytes, Opcode.I32_CONST)
-            push!(bytes, 0x00)
+            drop!(bld)
+            i32_const!(bld, 0)
         else
-            push!(bytes, Opcode.REF_IS_NULL)
+            ref_is_null!(bld)
         end
     elseif check_type !== nothing && isconcretetype(check_type)
         # isa(x, ConcreteType) -> type check
@@ -1539,9 +1459,8 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
         end
         if isa2_val_wasm !== nothing && (isa2_val_wasm === I64 || isa2_val_wasm === I32 || isa2_val_wasm === F64 || isa2_val_wasm === F32)
             # Numeric value on stack — can never be Nothing, so isa(x, T) is true. Drop + push true.
-            push!(bytes, Opcode.DROP)
-            push!(bytes, Opcode.I32_CONST)
-            push!(bytes, 0x01)
+            drop!(bld)
+            i32_const!(bld, 1)
         elseif isa2_val_wasm === ExternRef
             # PURE-324: Value is externref (Any-typed field). Need proper type check.
             # PURE-9032: For Exception subtypes with DFS typeIds, use typeId comparison
@@ -1550,29 +1469,27 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
             local _isa2_check_tid = get_type_id(ctx.type_registry, check_type)
             if _isa2_check_tid > 0 && check_type <: Exception && ctx.type_registry.base_struct_idx !== nothing
                 # typeId-based check: extract typeId from exception struct + compare
-                append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
-                emit_typeof!(bytes, ctx.type_registry.base_struct_idx)
-                push!(bytes, Opcode.I32_CONST)
-                append!(bytes, encode_leb128_signed(Int64(_isa2_check_tid)))
-                push!(bytes, Opcode.I32_EQ)
+                any_convert_extern!(bld)
+                let tb = UInt8[]
+                    emit_typeof!(tb, ctx.type_registry.base_struct_idx)
+                    emit_raw!(bld, tb; pops=1, pushes=WasmValType[I32])
+                end
+                i32_const!(bld, Int64(_isa2_check_tid))
+                num!(bld, Opcode.I32_EQ)
             else
                 local target_wasm = get_concrete_wasm_type(check_type, ctx.mod, ctx.type_registry)
                 if target_wasm isa ConcreteRef
-                    append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
-                    push!(bytes, Opcode.GC_PREFIX)
+                    any_convert_extern!(bld)
                     # PURE-325: Use REF_TEST (non-nullable) instead of REF_TEST_NULL.
-                    push!(bytes, Opcode.REF_TEST)
-                    append!(bytes, encode_leb128_signed(Int64(target_wasm.type_idx)))
+                    ref_test!(bld, Int64(target_wasm.type_idx), false)
                 elseif haskey(ctx.type_registry.numeric_boxes, target_wasm)
                     local box_type_idx = ctx.type_registry.numeric_boxes[target_wasm]
-                    append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.REF_TEST)
-                    append!(bytes, encode_leb128_signed(Int64(box_type_idx)))
+                    any_convert_extern!(bld)
+                    ref_test!(bld, Int64(box_type_idx), false)
                 else
                     # Fallback: non-null check for non-concrete wasm types
-                    push!(bytes, Opcode.REF_IS_NULL)
-                    push!(bytes, Opcode.I32_EQZ)
+                    ref_is_null!(bld)
+                    num!(bld, Opcode.I32_EQZ)
                 end
             end
         elseif isa2_val_wasm === AnyRef || isa2_val_wasm isa ConcreteRef || isa2_val_wasm === StructRef
@@ -1584,15 +1501,11 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
                 local _box_wasm = julia_to_wasm_type(check_type)
                 if haskey(ctx.type_registry.numeric_boxes, _box_wasm)
                     local _box_idx = ctx.type_registry.numeric_boxes[_box_wasm]
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.REF_TEST)
-                    append!(bytes, encode_leb128_signed(Int64(_box_idx)))
+                    ref_test!(bld, Int64(_box_idx), false)
                 else
                     # Box type not registered yet — register it
                     local _box_idx2 = get_numeric_box_type!(ctx.mod, ctx.type_registry, _box_wasm)
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.REF_TEST)
-                    append!(bytes, encode_leb128_signed(Int64(_box_idx2)))
+                    ref_test!(bld, Int64(_box_idx2), false)
                 end
             elseif target_wasm_isa isa ConcreteRef
                 # Struct type: test against the concrete struct type.
@@ -1612,51 +1525,34 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
                     local _tmp_idx = UInt32(length(ctx.locals) + ctx.n_params)
                     push!(ctx.locals, AnyRef)
                     # Emit: local.tee $tmp → ref.test → if (i32) → reload+cast+typeId check → else 0 → end
-                    push!(bytes, Opcode.LOCAL_TEE)
-                    append!(bytes, encode_leb128_unsigned(_tmp_idx))
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.REF_TEST)
-                    append!(bytes, encode_leb128_signed(Int64(target_wasm_isa.type_idx)))
-                    push!(bytes, Opcode.IF)
-                    push!(bytes, 0x7F)  # result type i32
+                    local_tee!(bld, _tmp_idx)
+                    ref_test!(bld, Int64(target_wasm_isa.type_idx), false)
+                    if_!(bld, I32)  # result type i32
                     # Inside if-true: reload, cast, get typeId, compare
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(_tmp_idx))
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.REF_CAST)
-                    append!(bytes, encode_leb128_signed(Int64(target_wasm_isa.type_idx)))
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.STRUCT_GET)
-                    append!(bytes, encode_leb128_unsigned(target_wasm_isa.type_idx))
-                    append!(bytes, encode_leb128_unsigned(UInt32(0)))  # field 0 = typeId
-                    push!(bytes, Opcode.I32_CONST)
-                    append!(bytes, encode_leb128_signed(Int64(_tid)))
-                    push!(bytes, Opcode.I32_EQ)
-                    push!(bytes, Opcode.ELSE)
-                    push!(bytes, Opcode.I32_CONST)
-                    push!(bytes, 0x00)  # false
-                    push!(bytes, Opcode.END)
+                    local_get!(bld, _tmp_idx)
+                    ref_cast!(bld, Int64(target_wasm_isa.type_idx), false)
+                    struct_get!(bld, target_wasm_isa.type_idx, UInt32(0), I32)  # field 0 = typeId
+                    i32_const!(bld, Int64(_tid))
+                    num!(bld, Opcode.I32_EQ)
+                    else_!(bld)
+                    i32_const!(bld, 0)  # false
+                    end_block!(bld)
                 else
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.REF_TEST)
-                    append!(bytes, encode_leb128_signed(Int64(target_wasm_isa.type_idx)))
+                    ref_test!(bld, Int64(target_wasm_isa.type_idx), false)
                 end
             elseif check_type === String || check_type === Symbol || check_type <: AbstractString
                 # String/Symbol: test against the string array type
                 local _str_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.REF_TEST)
-                append!(bytes, encode_leb128_signed(Int64(_str_idx)))
+                ref_test!(bld, Int64(_str_idx), false)
             else
                 # Unknown concrete type — can't test, return false
-                push!(bytes, Opcode.DROP)
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
+                drop!(bld)
+                i32_const!(bld, 0)
             end
         else
             # For Union{Nothing, T}, checking isa(x, T) is equivalent to !isnull
-            push!(bytes, Opcode.REF_IS_NULL)
-            push!(bytes, Opcode.I32_EQZ)  # negate: 1->0, 0->1
+            ref_is_null!(bld)
+            num!(bld, Opcode.I32_EQZ)  # negate: 1->0, 0->1
         end
     elseif check_type !== nothing && !isconcretetype(check_type)
         # Abstract type check (e.g. Integer, AbstractFloat, Number, Real)
@@ -1683,9 +1579,8 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
         if isa3_val_wasm !== nothing && (isa3_val_wasm === I64 || isa3_val_wasm === I32 || isa3_val_wasm === F64 || isa3_val_wasm === F32)
             # Unboxed numeric — check if representative Julia type is a subtype
             local _jt = get(_wasm_julia, isa3_val_wasm, nothing)
-            push!(bytes, Opcode.DROP)
-            push!(bytes, Opcode.I32_CONST)
-            push!(bytes, (_jt !== nothing && _jt <: check_type) ? 0x01 : 0x00)
+            drop!(bld)
+            i32_const!(bld, (_jt !== nothing && _jt <: check_type) ? 1 : 0)
         elseif isa3_val_wasm === ExternRef && isa3_local_idx !== nothing
             # Boxed externref — test each numeric box type that is a subtype of check_type
             local _boxes = UInt32[]
@@ -1693,19 +1588,15 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
                 local _jt2 = get(_wasm_julia, wt, nothing)
                 _jt2 !== nothing && _jt2 <: check_type && push!(_boxes, box_idx)
             end
-            push!(bytes, Opcode.DROP)
+            drop!(bld)
             if isempty(_boxes)
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
+                i32_const!(bld, 0)
             else
                 for (i, box_idx) in enumerate(_boxes)
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(UInt32(isa3_local_idx)))
-                    append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.REF_TEST)
-                    append!(bytes, encode_leb128_signed(Int64(box_idx)))
-                    i > 1 && push!(bytes, Opcode.I32_OR)
+                    local_get!(bld, UInt32(isa3_local_idx))
+                    any_convert_extern!(bld)
+                    ref_test!(bld, Int64(box_idx), false)
+                    i > 1 && num!(bld, Opcode.I32_OR)
                 end
             end
         elseif (isa3_val_wasm === AnyRef || isa3_val_wasm isa ConcreteRef || isa3_val_wasm === StructRef) &&
@@ -1721,12 +1612,9 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
                 # hierarchy structs ($JlDataType, $JlUnion, etc.) since they don't
                 # inherit from $JlBase. Use ref.test first; if not $JlBase, return false.
                 local _isa_guard_local = allocate_local!(ctx, AnyRef)
-                push!(bytes, Opcode.LOCAL_TEE)
-                append!(bytes, encode_leb128_unsigned(_isa_guard_local))
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.REF_TEST)  # ref.test (ref $JlBase)
-                append!(bytes, encode_leb128_signed(Int64(_base_idx)))
-                push!(bytes, Opcode.I32_EQZ)
+                local_tee!(bld, _isa_guard_local)
+                ref_test!(bld, Int64(_base_idx), false)  # ref.test (ref $JlBase)
+                num!(bld, Opcode.I32_EQZ)
                 # if NOT a $JlBase struct → push 0 (false)
                 local _isa_guard_block = UInt8[]
                 push!(_isa_guard_block, Opcode.I32_CONST)
@@ -1749,29 +1637,26 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
                 push!(_isa_dfs_block, Opcode.I32_LE_S)
                 push!(_isa_dfs_block, Opcode.I32_AND)
                 # Emit if-else: if (not $JlBase) { 0 } else { dfs_check }
-                push!(bytes, Opcode.IF)
-                push!(bytes, 0x7F)  # i32 result type
-                append!(bytes, _isa_guard_block)
-                push!(bytes, Opcode.ELSE)
-                append!(bytes, _isa_dfs_block)
-                push!(bytes, Opcode.END)
+                if_!(bld, I32)  # i32 result type
+                emit_raw!(bld, _isa_guard_block; pushes=WasmValType[I32])
+                else_!(bld)
+                emit_raw!(bld, _isa_dfs_block; pushes=WasmValType[I32])
+                end_block!(bld)
             else
                 # No DFS range for this abstract type — return false
-                push!(bytes, Opcode.DROP)
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
+                drop!(bld)
+                i32_const!(bld, 0)
             end
         else
-            push!(bytes, Opcode.DROP)
-            push!(bytes, Opcode.I32_CONST)
-            push!(bytes, 0x00)
+            drop!(bld)
+            i32_const!(bld, 0)
         end
     else
         # Unknown type - drop value and return false
-        push!(bytes, Opcode.DROP)
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x00)
+        drop!(bld)
+        i32_const!(bld, 0)
     end
+    append!(bytes, builder_code(bld))
     return nothing
 end
 
@@ -7322,10 +7207,11 @@ Allocates 5 temporary locals: vec_ref, arr_ref, len (i32), loop_i (i32), acc.
 """
 function _emit_apply_iterate_reduce!(bytes::Vector{UInt8}, container_arg, container_type::DataType,
                                       elem_type::Type, reduce_op::UInt8, ctx)
+    bld = InstrBuilder(; func_name="_emit_apply_iterate_reduce!", strict=false)
     # Get WasmGC type indices for the vector struct and its fields
     vec_info = get(ctx.type_registry.structs, container_type, nothing)
     if vec_info === nothing
-        push!(bytes, Opcode.UNREACHABLE)
+        unreachable!(bld); append!(bytes, builder_code(bld))
         ctx.last_stmt_was_stub = true
         return
     end
@@ -7335,7 +7221,7 @@ function _emit_apply_iterate_reduce!(bytes::Vector{UInt8}, container_arg, contai
     # Data array type index
     arr_type_idx = get(ctx.type_registry.arrays, elem_type, nothing)
     if arr_type_idx === nothing
-        push!(bytes, Opcode.UNREACHABLE)
+        unreachable!(bld); append!(bytes, builder_code(bld))
         ctx.last_stmt_was_stub = true
         return
     end
@@ -7344,7 +7230,7 @@ function _emit_apply_iterate_reduce!(bytes::Vector{UInt8}, container_arg, contai
     size_tuple_type = Tuple{Int64}
     size_info = get(ctx.type_registry.structs, size_tuple_type, nothing)
     if size_info === nothing
-        push!(bytes, Opcode.UNREACHABLE)
+        unreachable!(bld); append!(bytes, builder_code(bld))
         ctx.last_stmt_was_stub = true
         return
     end
@@ -7373,101 +7259,64 @@ function _emit_apply_iterate_reduce!(bytes::Vector{UInt8}, container_arg, contai
     # --- Emit WASM bytecode ---
 
     # Step 1: Compile and store the container reference
-    append!(bytes, compile_value(container_arg, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(vec_ref_local))
+    emit_raw!(bld, compile_value(container_arg, ctx); pushes=WasmValType[ConcreteRef(vec_type_idx, true)])
+    local_set!(bld, vec_ref_local)
 
     # Step 2: Get the data array reference
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(vec_ref_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.STRUCT_GET)
-    append!(bytes, encode_leb128_unsigned(vec_type_idx))
-    append!(bytes, encode_leb128_unsigned(field_offset))  # data array field
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(arr_ref_local))
+    local_get!(bld, vec_ref_local)
+    struct_get!(bld, vec_type_idx, field_offset, ConcreteRef(arr_type_idx, true))  # data array field
+    local_set!(bld, arr_ref_local)
 
     # Step 3: Get the length (vec → size tuple → i64 length → i32)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(vec_ref_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.STRUCT_GET)
-    append!(bytes, encode_leb128_unsigned(vec_type_idx))
-    append!(bytes, encode_leb128_unsigned(field_offset + 1))  # size tuple field
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.STRUCT_GET)
-    append!(bytes, encode_leb128_unsigned(size_type_idx))
-    append!(bytes, encode_leb128_unsigned(size_field_offset))  # i64 length
-    push!(bytes, Opcode.I32_WRAP_I64)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(len_local))
+    local_get!(bld, vec_ref_local)
+    struct_get!(bld, vec_type_idx, field_offset + 1, ConcreteRef(size_type_idx, true))  # size tuple field
+    struct_get!(bld, size_type_idx, size_field_offset, I64)  # i64 length
+    num!(bld, Opcode.I32_WRAP_I64)
+    local_set!(bld, len_local)
 
     # Step 4: Initialize accumulator = arr[0] (first element)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(arr_ref_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_GET)
-    append!(bytes, encode_leb128_unsigned(arr_type_idx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(acc_local))
+    local_get!(bld, arr_ref_local)
+    i32_const!(bld, 0)
+    array_get!(bld, arr_type_idx, elem_wasm_type)
+    local_set!(bld, acc_local)
 
     # Step 5: Initialize loop counter i = 1
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(loop_i_local))
+    i32_const!(bld, 1)
+    local_set!(bld, loop_i_local)
 
     # Step 6: block { loop { if i >= len: br 1; acc = op(acc, arr[i]); i++; br 0 } }
-    push!(bytes, Opcode.BLOCK)
-    push!(bytes, 0x40)  # void blocktype
-
-    push!(bytes, Opcode.LOOP)
-    push!(bytes, 0x40)  # void blocktype
+    block!(bld)  # void blocktype
+    loop!(bld)  # void blocktype
 
     # if i >= len, exit loop
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(loop_i_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(len_local))
-    push!(bytes, Opcode.I32_GE_S)
-    push!(bytes, Opcode.BR_IF)
-    append!(bytes, encode_leb128_unsigned(UInt32(1)))  # br 1 = exit block
+    local_get!(bld, loop_i_local)
+    local_get!(bld, len_local)
+    num!(bld, Opcode.I32_GE_S)
+    br_if!(bld, 1)  # br 1 = exit block
 
     # acc = op(acc, arr[i])
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(acc_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(arr_ref_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(loop_i_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_GET)
-    append!(bytes, encode_leb128_unsigned(arr_type_idx))
-    push!(bytes, reduce_op)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(acc_local))
+    local_get!(bld, acc_local)
+    local_get!(bld, arr_ref_local)
+    local_get!(bld, loop_i_local)
+    array_get!(bld, arr_type_idx, elem_wasm_type)
+    num!(bld, reduce_op)
+    local_set!(bld, acc_local)
 
     # i++
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(loop_i_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.I32_ADD)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(loop_i_local))
+    local_get!(bld, loop_i_local)
+    i32_const!(bld, 1)
+    num!(bld, Opcode.I32_ADD)
+    local_set!(bld, loop_i_local)
 
     # br 0 = continue loop
-    push!(bytes, Opcode.BR)
-    append!(bytes, encode_leb128_unsigned(UInt32(0)))
+    br!(bld, 0)
 
-    push!(bytes, Opcode.END)  # end loop
-    push!(bytes, Opcode.END)  # end block
+    end_block!(bld)  # end loop
+    end_block!(bld)  # end block
 
     # Step 7: Push accumulator as result
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(acc_local))
+    local_get!(bld, acc_local)
+    append!(bytes, builder_code(bld))
 end
 
 """
@@ -7489,8 +7338,9 @@ function _emit_apply_iterate_vect!(bytes::Vector{UInt8}, container_arg, containe
     elem_type = eltype(container_type)
     arr_type_idx = get(ctx.type_registry.arrays, elem_type, nothing)
     size_info = get(ctx.type_registry.structs, Tuple{Int64}, nothing)
+    bld = InstrBuilder(; func_name="_emit_apply_iterate_vect!", strict=false)
     if vec_info === nothing || arr_type_idx === nothing || size_info === nothing
-        push!(bytes, Opcode.UNREACHABLE)
+        unreachable!(bld); append!(bytes, builder_code(bld))
         ctx.last_stmt_was_stub = true
         return
     end
@@ -7505,49 +7355,42 @@ function _emit_apply_iterate_vect!(bytes::Vector{UInt8}, container_arg, containe
     new_arr_local = UInt32(ctx.n_params + length(ctx.locals)); push!(ctx.locals, ConcreteRef(arr_type_idx, true))
 
     # vec_ref = container
-    append!(bytes, compile_value(container_arg, ctx))
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(vec_ref_local))
+    emit_raw!(bld, compile_value(container_arg, ctx); pushes=WasmValType[ConcreteRef(vec_type_idx, true)])
+    local_set!(bld, vec_ref_local)
 
     # src_arr = vec_ref.data  (field_offset)
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(vec_ref_local))
-    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
-    append!(bytes, encode_leb128_unsigned(vec_type_idx)); append!(bytes, encode_leb128_unsigned(field_offset))
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(src_arr_local))
+    local_get!(bld, vec_ref_local)
+    struct_get!(bld, vec_type_idx, field_offset, ConcreteRef(arr_type_idx, true))
+    local_set!(bld, src_arr_local)
 
     # len = vec_ref.size[1]  (vec → size tuple → i64 → i32)
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(vec_ref_local))
-    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
-    append!(bytes, encode_leb128_unsigned(vec_type_idx)); append!(bytes, encode_leb128_unsigned(field_offset + 1))
-    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
-    append!(bytes, encode_leb128_unsigned(size_type_idx)); append!(bytes, encode_leb128_unsigned(size_field_offset))
-    push!(bytes, Opcode.I32_WRAP_I64)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(len_local))
+    local_get!(bld, vec_ref_local)
+    struct_get!(bld, vec_type_idx, field_offset + 1, ConcreteRef(size_type_idx, true))
+    struct_get!(bld, size_type_idx, size_field_offset, I64)
+    num!(bld, Opcode.I32_WRAP_I64)
+    local_set!(bld, len_local)
 
     # new_arr = array.new_default(arr_type, len)
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(len_local))
-    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
-    append!(bytes, encode_leb128_unsigned(arr_type_idx))
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(new_arr_local))
+    local_get!(bld, len_local)
+    array_new_default!(bld, arr_type_idx)
+    local_set!(bld, new_arr_local)
 
     # array.copy(new_arr, 0, src_arr, 0, len)
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(new_arr_local))
-    push!(bytes, Opcode.I32_CONST, 0x00)
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(src_arr_local))
-    push!(bytes, Opcode.I32_CONST, 0x00)
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(len_local))
-    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.ARRAY_COPY)
-    append!(bytes, encode_leb128_unsigned(arr_type_idx)); append!(bytes, encode_leb128_unsigned(arr_type_idx))
+    local_get!(bld, new_arr_local)
+    i32_const!(bld, 0)
+    local_get!(bld, src_arr_local)
+    i32_const!(bld, 0)
+    local_get!(bld, len_local)
+    array_copy!(bld, arr_type_idx, arr_type_idx)
 
     # result = struct.new vec_type_idx [ typeId(src), new_arr, size_tuple(src) ]
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(vec_ref_local))
-    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
-    append!(bytes, encode_leb128_unsigned(vec_type_idx)); append!(bytes, encode_leb128_unsigned(field_offset - 1))  # typeId
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(new_arr_local))
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(vec_ref_local))
-    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
-    append!(bytes, encode_leb128_unsigned(vec_type_idx)); append!(bytes, encode_leb128_unsigned(field_offset + 1))  # size tuple
-    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_NEW)
-    append!(bytes, encode_leb128_unsigned(vec_type_idx))
+    local_get!(bld, vec_ref_local)
+    struct_get!(bld, vec_type_idx, field_offset - 1, I32)  # typeId
+    local_get!(bld, new_arr_local)
+    local_get!(bld, vec_ref_local)
+    struct_get!(bld, vec_type_idx, field_offset + 1, ConcreteRef(size_type_idx, true))  # size tuple
+    struct_new!(bld, vec_type_idx, WasmValType[])
+    append!(bytes, builder_code(bld))
 end
 
 

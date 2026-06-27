@@ -470,8 +470,14 @@ If the edge value is i32 but the local is i64, adds I64_EXTEND_I32_S.
 Returns true if the store was emitted, false if skipped.
 """
 function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::AbstractCompilationContext)::Bool
+    # Migrated onto the typed InstrBuilder: all straight-line emission goes onto the
+    # local builder `lb`; the byte-INSPECTING branches (which scan `value_bytes` from
+    # compile_value) keep their raw buffers; at every exit we flush lb into the
+    # passed-in `bytes` accumulator (byte-identical splice). _ret wraps each return.
+    lb = InstrBuilder(; func_name="emit_phi_local_set!", strict=false)
+    _ret = (x) -> (append!(bytes, builder_code(lb)); x)
     if !haskey(ctx.phi_locals, phi_ssa_idx)
-        return false
+        return _ret(false)
     end
     local_idx = ctx.phi_locals[phi_ssa_idx]
     phi_local_type = ctx.locals[local_idx - ctx.n_params + 1]
@@ -493,113 +499,95 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
             value_bytes = compile_value(val, ctx)
             if !isempty(value_bytes)
                 # PURE-9028: Push correct DFS typeId as field 0
-                emit_box_type_id!(bytes, ctx.type_registry, edge_val_type)
-                append!(bytes, value_bytes)
+                let tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, edge_val_type); emit_raw!(lb, tb; pushes=WasmValType[I32]); end
+                emit_raw!(lb, value_bytes; pushes=WasmValType[edge_val_type])
                 box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.STRUCT_NEW)
-                append!(bytes, encode_leb128_unsigned(box_type))
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(local_idx))
-                return true
+                struct_new!(lb, box_type, WasmValType[])
+                extern_convert_any!(lb)
+                local_set!(lb, local_idx)
+                return _ret(true)
             end
-            return false
+            return _ret(false)
         elseif phi_local_type === AnyRef && (edge_val_type === I32 || edge_val_type === I64 || edge_val_type === F32 || edge_val_type === F64)
             # SELFHOST-008: Box numeric value for AnyRef phi local (Union{Nothing,T}).
             # When nothing is compiled as i32.const 0 but the phi local is anyref,
             # we need ref.null any for nothing, or boxing for real numeric values.
             if (val === nothing || (val isa GlobalRef && val.name === :nothing))
                 # nothing → ref.null any
-                push!(bytes, Opcode.REF_NULL)
-                push!(bytes, UInt8(AnyRef))
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(local_idx))
-                return true
+                ref_null!(lb, AnyRef)
+                local_set!(lb, local_idx)
+                return _ret(true)
             end
             # Real numeric value → box to anyref via struct.new
             value_bytes = compile_value(val, ctx)
             if !isempty(value_bytes)
-                emit_box_type_id!(bytes, ctx.type_registry, edge_val_type)
-                append!(bytes, value_bytes)
+                let tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, edge_val_type); emit_raw!(lb, tb; pushes=WasmValType[I32]); end
+                emit_raw!(lb, value_bytes; pushes=WasmValType[edge_val_type])
                 box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.STRUCT_NEW)
-                append!(bytes, encode_leb128_unsigned(box_type))
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(local_idx))
-                return true
+                struct_new!(lb, box_type, WasmValType[])
+                local_set!(lb, local_idx)
+                return _ret(true)
             end
-            return false
+            return _ret(false)
         elseif phi_local_type === ExternRef && (edge_val_type isa ConcreteRef || edge_val_type === StructRef || edge_val_type === ArrayRef || edge_val_type === AnyRef)
             # PURE-3113: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion
             # Mirrors the handling in set_phi_locals_for_edge! (line 10213) and compile_phi_value (line 9825)
             @debug "PURE-3113 FIX A: phi=$phi_ssa_idx edge_val_type=$edge_val_type phi_local_type=$phi_local_type"
             value_bytes = compile_value(val, ctx)
             if !isempty(value_bytes)
-                append!(bytes, value_bytes)
+                emit_raw!(lb, value_bytes; pushes=WasmValType[edge_val_type])
                 # ref.null is already externref — don't wrap
                 if !(value_bytes[1] == Opcode.REF_NULL)
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                    extern_convert_any!(lb)
                 end
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(local_idx))
-                return true
+                local_set!(lb, local_idx)
+                return _ret(true)
             end
-            return false
+            return _ret(false)
         elseif phi_local_type isa ConcreteRef && (edge_val_type === AnyRef || edge_val_type === EqRef || edge_val_type === StructRef || edge_val_type === ArrayRef)
             # AnyRef/EqRef/StructRef/ArrayRef → ConcreteRef: narrow with ref.cast_nullable
             value_bytes = compile_value(val, ctx)
             if !isempty(value_bytes)
                 if value_bytes[1] == Opcode.REF_NULL
                     # ref.null can't be cast — emit type-appropriate null instead
-                    push!(bytes, Opcode.REF_NULL)
-                    append!(bytes, encode_leb128_signed(Int64(phi_local_type.type_idx)))
+                    ref_null!(lb, Int64(phi_local_type.type_idx), phi_local_type)
                 else
-                    append!(bytes, value_bytes)
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.REF_CAST_NULL)
-                    append!(bytes, encode_leb128_unsigned(phi_local_type.type_idx))
+                    emit_raw!(lb, value_bytes; pushes=WasmValType[edge_val_type])
+                    # REF_CAST_NULL with UNSIGNED-LEB idx (preserve exact original bytes;
+                    # the typed ref_cast! encodes signed, so bridge this site).
+                    let cb = UInt8[]
+                        push!(cb, Opcode.GC_PREFIX); push!(cb, Opcode.REF_CAST_NULL)
+                        append!(cb, encode_leb128_unsigned(phi_local_type.type_idx))
+                        emit_raw!(lb, cb; pops=1, pushes=WasmValType[phi_local_type])
+                    end
                 end
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(local_idx))
-                return true
+                local_set!(lb, local_idx)
+                return _ret(true)
             end
-            return false
+            return _ret(false)
         else
             # PURE-6025: Type mismatch — emit type-safe default instead of skipping.
             # Skipping leaves the local uninitialized, but we need a valid value
             # for the Wasm type checker (e.g., ConcreteRef local must have ref.null, not i32).
             if phi_local_type isa ConcreteRef
-                push!(bytes, Opcode.REF_NULL)
-                append!(bytes, encode_leb128_signed(Int64(phi_local_type.type_idx)))
+                ref_null!(lb, Int64(phi_local_type.type_idx), phi_local_type)
             elseif phi_local_type === StructRef
-                push!(bytes, Opcode.REF_NULL)
-                push!(bytes, UInt8(StructRef))
+                ref_null!(lb, StructRef)
             elseif phi_local_type === ArrayRef
-                push!(bytes, Opcode.REF_NULL)
-                push!(bytes, UInt8(ArrayRef))
+                ref_null!(lb, ArrayRef)
             elseif phi_local_type === ExternRef
-                push!(bytes, Opcode.REF_NULL)
-                push!(bytes, UInt8(ExternRef))
+                ref_null!(lb, ExternRef)
             elseif phi_local_type === AnyRef
-                push!(bytes, Opcode.REF_NULL)
-                push!(bytes, UInt8(AnyRef))
+                ref_null!(lb, AnyRef)
             elseif phi_local_type === I64
-                push!(bytes, Opcode.I64_CONST)
-                push!(bytes, 0x00)
+                i64_const!(lb, 0)
             elseif phi_local_type === I32
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
+                i32_const!(lb, 0)
             else
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
+                i32_const!(lb, 0)
             end
-            push!(bytes, Opcode.LOCAL_SET)
-            append!(bytes, encode_leb128_unsigned(local_idx))
-            return true
+            local_set!(lb, local_idx)
+            return _ret(true)
         end
     end
 
@@ -621,54 +609,39 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
                         vb = compile_value(val, ctx)
                         if !isempty(vb)
                             # PURE-9028: Push correct DFS typeId as field 0
-                            emit_box_type_id!(bytes, ctx.type_registry, val_local_type)
-                            append!(bytes, vb)
+                            let tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, val_local_type); emit_raw!(lb, tb; pushes=WasmValType[I32]); end
+                            emit_raw!(lb, vb; pushes=WasmValType[val_local_type])
                             box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_local_type)
-                            push!(bytes, Opcode.GC_PREFIX)
-                            push!(bytes, Opcode.STRUCT_NEW)
-                            append!(bytes, encode_leb128_unsigned(box_type))
-                            push!(bytes, Opcode.GC_PREFIX)
-                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
-                            push!(bytes, Opcode.LOCAL_SET)
-                            append!(bytes, encode_leb128_unsigned(local_idx))
-                            return true
+                            struct_new!(lb, box_type, WasmValType[])
+                            extern_convert_any!(lb)
+                            local_set!(lb, local_idx)
+                            return _ret(true)
                         end
                     end
                     # Incompatible: emit type-safe default for phi local type
                     if phi_local_type isa ConcreteRef
-                        push!(bytes, Opcode.REF_NULL)
-                        append!(bytes, encode_leb128_signed(Int64(phi_local_type.type_idx)))
+                        ref_null!(lb, Int64(phi_local_type.type_idx), phi_local_type)
                     elseif phi_local_type === StructRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(StructRef))
+                        ref_null!(lb, StructRef)
                     elseif phi_local_type === ArrayRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ArrayRef))
+                        ref_null!(lb, ArrayRef)
                     elseif phi_local_type === ExternRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ExternRef))
+                        ref_null!(lb, ExternRef)
                     elseif phi_local_type === AnyRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(AnyRef))
+                        ref_null!(lb, AnyRef)
                     elseif phi_local_type === I64
-                        push!(bytes, Opcode.I64_CONST)
-                        push!(bytes, 0x00)
+                        i64_const!(lb, 0)
                     elseif phi_local_type === I32
-                        push!(bytes, Opcode.I32_CONST)
-                        push!(bytes, 0x00)
+                        i32_const!(lb, 0)
                     elseif phi_local_type === F64
-                        push!(bytes, Opcode.F64_CONST)
-                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                        f64_const!(lb, 0.0)
                     elseif phi_local_type === F32
-                        push!(bytes, Opcode.F32_CONST)
-                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+                        f32_const!(lb, 0.0)
                     else
-                        push!(bytes, Opcode.I32_CONST)
-                        push!(bytes, 0x00)
+                        i32_const!(lb, 0)
                     end
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(local_idx))
-                    return true
+                    local_set!(lb, local_idx)
+                    return _ret(true)
                 end
             end
         end
@@ -676,7 +649,7 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
 
     value_bytes = compile_value(val, ctx)
     if isempty(value_bytes)
-        return false
+        return _ret(false)
     end
 
     # Safety check: if compile_value produced MULTIPLE local_get instructions
@@ -701,39 +674,28 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
         if _all_local_gets && _multi_pos > length(value_bytes) && _multi_count > 1
             # Multi-value: emit type-safe default for phi local instead
             if phi_local_type isa ConcreteRef
-                push!(bytes, Opcode.REF_NULL)
-                append!(bytes, encode_leb128_signed(Int64(phi_local_type.type_idx)))
+                ref_null!(lb, Int64(phi_local_type.type_idx), phi_local_type)
             elseif phi_local_type === ExternRef
-                push!(bytes, Opcode.REF_NULL)
-                push!(bytes, UInt8(ExternRef))
+                ref_null!(lb, ExternRef)
             elseif phi_local_type === StructRef
-                push!(bytes, Opcode.REF_NULL)
-                push!(bytes, UInt8(StructRef))
+                ref_null!(lb, StructRef)
             elseif phi_local_type === ArrayRef
-                push!(bytes, Opcode.REF_NULL)
-                push!(bytes, UInt8(ArrayRef))
+                ref_null!(lb, ArrayRef)
             elseif phi_local_type === AnyRef
-                push!(bytes, Opcode.REF_NULL)
-                push!(bytes, UInt8(AnyRef))
+                ref_null!(lb, AnyRef)
             elseif phi_local_type === I64
-                push!(bytes, Opcode.I64_CONST)
-                push!(bytes, 0x00)
+                i64_const!(lb, 0)
             elseif phi_local_type === I32
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
+                i32_const!(lb, 0)
             elseif phi_local_type === F64
-                push!(bytes, Opcode.F64_CONST)
-                append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                f64_const!(lb, 0.0)
             elseif phi_local_type === F32
-                push!(bytes, Opcode.F32_CONST)
-                append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+                f32_const!(lb, 0.0)
             else
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
+                i32_const!(lb, 0)
             end
-            push!(bytes, Opcode.LOCAL_SET)
-            append!(bytes, encode_leb128_unsigned(local_idx))
-            return true
+            local_set!(lb, local_idx)
+            return _ret(true)
         end
     end
 
@@ -770,63 +732,46 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
                 elseif phi_local_type === ExternRef && (actual_val_type === I32 || actual_val_type === I64 || actual_val_type === F32 || actual_val_type === F64)
                     # PURE-325: Box numeric local.get for ExternRef phi local
                     # PURE-9028: Push correct DFS typeId as field 0
-                    emit_box_type_id!(bytes, ctx.type_registry, actual_val_type)
-                    append!(bytes, value_bytes)
+                    let tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, actual_val_type); emit_raw!(lb, tb; pushes=WasmValType[I32]); end
+                    emit_raw!(lb, value_bytes; pushes=WasmValType[actual_val_type])
                     box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, actual_val_type)
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.STRUCT_NEW)
-                    append!(bytes, encode_leb128_unsigned(box_type))
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.EXTERN_CONVERT_ANY)
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(local_idx))
-                    return true
+                    struct_new!(lb, box_type, WasmValType[])
+                    extern_convert_any!(lb)
+                    local_set!(lb, local_idx)
+                    return _ret(true)
                 elseif phi_local_type === ExternRef && (actual_val_type isa ConcreteRef || actual_val_type === StructRef || actual_val_type === ArrayRef || actual_val_type === AnyRef)
                     # PURE-3113: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion
-                    append!(bytes, value_bytes)
+                    emit_raw!(lb, value_bytes; pushes=WasmValType[actual_val_type])
                     if !(value_bytes[1] == Opcode.REF_NULL)
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        extern_convert_any!(lb)
                     end
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(local_idx))
-                    return true
+                    local_set!(lb, local_idx)
+                    return _ret(true)
                 else
                     # Incompatible actual type: emit type-safe default
                     if phi_local_type isa ConcreteRef
-                        push!(bytes, Opcode.REF_NULL)
-                        append!(bytes, encode_leb128_signed(Int64(phi_local_type.type_idx)))
+                        ref_null!(lb, Int64(phi_local_type.type_idx), phi_local_type)
                     elseif phi_local_type === ExternRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ExternRef))
+                        ref_null!(lb, ExternRef)
                     elseif phi_local_type === StructRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(StructRef))
+                        ref_null!(lb, StructRef)
                     elseif phi_local_type === ArrayRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ArrayRef))
+                        ref_null!(lb, ArrayRef)
                     elseif phi_local_type === AnyRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(AnyRef))
+                        ref_null!(lb, AnyRef)
                     elseif phi_local_type === I64
-                        push!(bytes, Opcode.I64_CONST)
-                        push!(bytes, 0x00)
+                        i64_const!(lb, 0)
                     elseif phi_local_type === I32
-                        push!(bytes, Opcode.I32_CONST)
-                        push!(bytes, 0x00)
+                        i32_const!(lb, 0)
                     elseif phi_local_type === F64
-                        push!(bytes, Opcode.F64_CONST)
-                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                        f64_const!(lb, 0.0)
                     elseif phi_local_type === F32
-                        push!(bytes, Opcode.F32_CONST)
-                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+                        f32_const!(lb, 0.0)
                     else
-                        push!(bytes, Opcode.I32_CONST)
-                        push!(bytes, 0x00)
+                        i32_const!(lb, 0)
                     end
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(local_idx))
-                    return true
+                    local_set!(lb, local_idx)
+                    return _ret(true)
                 end
         end
     end
@@ -850,12 +795,10 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
             if _final_arr_idx >= 1 && _final_arr_idx <= length(ctx.locals)
                 _final_src_type = ctx.locals[_final_arr_idx]
                 if _final_src_type isa ConcreteRef || _final_src_type === StructRef || _final_src_type === ArrayRef || _final_src_type === AnyRef
-                    append!(bytes, value_bytes)
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.EXTERN_CONVERT_ANY)
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(local_idx))
-                    return true
+                    emit_raw!(lb, value_bytes; pushes=WasmValType[_final_src_type])
+                    extern_convert_any!(lb)
+                    local_set!(lb, local_idx)
+                    return _ret(true)
                 end
             end
         end
@@ -868,42 +811,36 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
     if !isempty(value_bytes) && (phi_local_type isa ConcreteRef || phi_local_type === StructRef || phi_local_type === ArrayRef || phi_local_type === AnyRef) &&
        (value_bytes[1] == Opcode.I32_CONST || value_bytes[1] == Opcode.I64_CONST || value_bytes[1] == Opcode.F32_CONST || value_bytes[1] == Opcode.F64_CONST)
         if phi_local_type isa ConcreteRef
-            push!(bytes, Opcode.REF_NULL)
-            append!(bytes, encode_leb128_signed(Int64(phi_local_type.type_idx)))
+            ref_null!(lb, Int64(phi_local_type.type_idx), phi_local_type)
         elseif phi_local_type === StructRef
-            push!(bytes, Opcode.REF_NULL)
-            push!(bytes, UInt8(StructRef))
+            ref_null!(lb, StructRef)
         elseif phi_local_type === ArrayRef
-            push!(bytes, Opcode.REF_NULL)
-            push!(bytes, UInt8(ArrayRef))
+            ref_null!(lb, ArrayRef)
         elseif phi_local_type === AnyRef
-            push!(bytes, Opcode.REF_NULL)
-            push!(bytes, UInt8(AnyRef))
+            ref_null!(lb, AnyRef)
         end
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(local_idx))
-        return true
+        local_set!(lb, local_idx)
+        return _ret(true)
     end
 
-    append!(bytes, value_bytes)
+    emit_raw!(lb, value_bytes; pushes=WasmValType[edge_val_type === nothing ? AnyRef : edge_val_type])
     # Widen numeric types if needed
     # PURE-324: Skip extend if value bytes are already the target type (e.g., i64_const default)
     if edge_val_type !== nothing && phi_local_type === I64 && edge_val_type === I32 && (isempty(value_bytes) || value_bytes[1] != Opcode.I64_CONST)
-        push!(bytes, Opcode.I64_EXTEND_I32_S)
+        num!(lb, Opcode.I64_EXTEND_I32_S)
     elseif edge_val_type !== nothing && phi_local_type === F64 && edge_val_type === I64
-        push!(bytes, Opcode.F64_CONVERT_I64_S)
+        num!(lb, Opcode.F64_CONVERT_I64_S)
     elseif edge_val_type !== nothing && phi_local_type === F64 && edge_val_type === I32
-        push!(bytes, Opcode.F64_CONVERT_I32_S)
+        num!(lb, Opcode.F64_CONVERT_I32_S)
     elseif edge_val_type !== nothing && phi_local_type === F64 && edge_val_type === F32
-        push!(bytes, Opcode.F64_PROMOTE_F32)
+        num!(lb, Opcode.F64_PROMOTE_F32)
     elseif edge_val_type !== nothing && phi_local_type === F32 && edge_val_type === I64
-        push!(bytes, Opcode.F32_CONVERT_I64_S)
+        num!(lb, Opcode.F32_CONVERT_I64_S)
     elseif edge_val_type !== nothing && phi_local_type === F32 && edge_val_type === I32
-        push!(bytes, Opcode.F32_CONVERT_I32_S)
+        num!(lb, Opcode.F32_CONVERT_I32_S)
     end
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(local_idx))
-    return true
+    local_set!(lb, local_idx)
+    return _ret(true)
 end
 
 function generate_loop_code(ctx::AbstractCompilationContext)::Vector{UInt8}
