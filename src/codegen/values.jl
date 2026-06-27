@@ -173,6 +173,9 @@ When the condition SSA value has an anyref/externref local (because Julia typed 
 the raw compile_value would push anyref, but i32.eqz needs i32. This helper unboxes via
 ref.cast + struct.get when needed.
 """
+# MIGRATED to InstrBuilder (Phase 1, dart2wasm-style typed emission). The shared
+# builder is threaded once the callers migrate; for now a fragment builder validates
+# this emitter's stack in isolation (compile_value bridged via its known pushed type).
 function compile_condition_to_i32(cond, ctx::AbstractCompilationContext)::Vector{UInt8}
     if haskey(ENV, "WT_TRACE_CONDSTUB") && ctx.last_stmt_was_stub
         println(stderr, "CONDSTUB cond=", first(repr(cond), 30))
@@ -180,7 +183,10 @@ function compile_condition_to_i32(cond, ctx::AbstractCompilationContext)::Vector
             println(stderr, "   ", fr)
         end
     end
-    bytes = compile_value(cond, ctx)
+    b = InstrBuilder(; func_name="compile_condition_to_i32", strict=_wt_builder_strict())
+    set_context!(b, "GotoIfNot cond → i32")
+    # bridge the (still-raw) compile_value with its known pushed type
+    emit_raw!(b, compile_value(cond, ctx); pushes=WasmValType[infer_value_wasm_type(cond, ctx)])
     # Check if the condition value is in a non-i32 local
     if cond isa Core.SSAValue
         local_idx = get(ctx.ssa_locals, cond.id, nothing)
@@ -192,54 +198,31 @@ function compile_condition_to_i32(cond, ctx::AbstractCompilationContext)::Vector
             if local_offset >= 0 && local_offset < length(ctx.locals)
                 local_type = ctx.locals[local_offset + 1]
                 if local_type === AnyRef || local_type === ExternRef
-                    # Value is anyref/externref but should be i32 (Bool).
-                    # Unbox: ref.cast (ref null $i32_box) → struct.get $i32_box 0
-                    if local_type === ExternRef
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.ANY_CONVERT_EXTERN)
-                    end
+                    # Value is anyref/externref but should be i32 (Bool). Unbox.
+                    local_type === ExternRef && any_convert_extern!(b)
                     box_type_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, I32)
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.REF_CAST_NULL)
-                    append!(bytes, encode_leb128_signed(Int64(box_type_idx)))
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.STRUCT_GET)
-                    append!(bytes, encode_leb128_unsigned(box_type_idx))
-                    append!(bytes, encode_leb128_unsigned(1))  # PURE-9024: field 1 (0=typeId, 1=value)
+                    ref_cast!(b, box_type_idx, true)
+                    struct_get!(b, box_type_idx, 1, I32)  # field 1 (0=typeId, 1=value)
                 elseif local_type isa ConcreteRef
-                    # PURE-6025: Value is a concrete ref (tagged union struct) but should
-                    # be i32 (Bool). This happens when a stubbed call's result local was
-                    # allocated as a tagged union (e.g., Union{Bool, Nothing} → struct{i32, anyref})
-                    # but the GotoIfNot condition expects i32. Extract i32 tag from field 0.
-                    # PURE-9024: Field 0 is now typeId. Tag is at field 1.
-                    # Check that the struct has at least 3 fields (typeId, tag, value = tagged union)
+                    # PURE-6025: tagged-union concrete ref → extract i32 tag from field 1.
                     type_idx = local_type.type_idx
                     if type_idx + 1 <= length(ctx.mod.types)
                         mod_type = ctx.mod.types[type_idx + 1]
                         if mod_type isa StructType && length(mod_type.fields) >= 3 && mod_type.fields[2].valtype === I32
-                            push!(bytes, Opcode.GC_PREFIX)
-                            push!(bytes, Opcode.STRUCT_GET)
-                            append!(bytes, encode_leb128_unsigned(type_idx))
-                            append!(bytes, encode_leb128_unsigned(1))  # field 1 (tag, after typeId at 0)
+                            struct_get!(b, type_idx, 1, I32)  # field 1 (tag, after typeId at 0)
                         else
-                            # Not a tagged union — drop the ref and push i32 default
-                            push!(bytes, Opcode.DROP)
-                            push!(bytes, Opcode.I32_CONST, 0x00)
+                            drop!(b); i32_const!(b, 0)        # not a tagged union — default
                         end
                     else
-                        # Unknown type — drop and push i32 default
-                        push!(bytes, Opcode.DROP)
-                        push!(bytes, Opcode.I32_CONST, 0x00)
+                        drop!(b); i32_const!(b, 0)            # unknown type — default
                     end
                 elseif local_type === StructRef || local_type === ArrayRef
-                    # PURE-6025: Abstract ref in condition — drop and push i32 default
-                    push!(bytes, Opcode.DROP)
-                    push!(bytes, Opcode.I32_CONST, 0x00)
+                    drop!(b); i32_const!(b, 0)                # abstract ref — default
                 end
             end
         end
     end
-    return bytes
+    return builder_code(b)
 end
 
 """

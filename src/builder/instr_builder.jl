@@ -71,6 +71,17 @@ end
 
 builder_code(b::InstrBuilder) = b.code
 set_strict!(b::InstrBuilder, s::Bool) = (b.strict = s; b)
+
+"""
+    _wt_builder_strict() -> Bool
+
+Default strict-mode for migrated emitters. OFF by default (collect mode → the live
+operand-stack model tracks every op for diagnostics but never throws, so migration is
+regression-free), ON when `WT_BUILDER_STRICT` is set in the environment (turns the model
+into a hard gate that pinpoints the offending Julia statement + stack snapshot — the
+"tons of clarity" bug finder).
+"""
+_wt_builder_strict() = get(ENV, "WT_BUILDER_STRICT", "") != ""
 "Set the high-level context (Julia statement) the next emits belong to — surfaces in errors."
 set_context!(b::InstrBuilder, ctx::AbstractString) = (b.context = String(ctx); b)
 
