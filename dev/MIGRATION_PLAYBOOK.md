@@ -111,6 +111,12 @@ Rules:
   you hit an op with no method, bridge it via `emit_raw!`. (Touching shared files = conflict.)
 - **carry/value left on the stack across local.set of OTHER values** is fine — the model
   tracks it; just emit the ops in order.
+- **`pushes` must never wrap a possibly-`nothing` value** (round-4 regression): when you bridge
+  with `emit_raw!(b, buf; pushes=WasmValType[val])` and `val` comes from a lookup that can return
+  `nothing` (`get_phi_edge_wasm_type`, `get_concrete_wasm_type`, any `get_*_wasm_type`), guard it:
+  `pushes = val === nothing ? WasmValType[] : WasmValType[val]`. `WasmValType[nothing]` throws at
+  construction. This is byte-safe (pushes only feeds the model). Type CONSTANTS (I32/AnyRef/…) and
+  `infer_value_wasm_type(...)` calls are always non-nothing — no guard needed there.
 
 ## Verify (per the loop, not per agent)
 Byte-identity is checked centrally: compile the frozen corpus, sha each, diff against the
