@@ -11,21 +11,33 @@
 # effects (struct_new reads the field types), `end_block!` enforces
 # height == base + outputs. See dev/WASM_BUILDER_MIGRATION.md.
 
-export InstrBuilder, builder_code, set_strict!, StackImbalanceError
+export InstrBuilder, builder_code, set_strict!, StackImbalanceError,
+       set_context!, builder_diagnose
 
 """
     StackImbalanceError
 
 Thrown by an `InstrBuilder` in strict mode when an emit would unbalance/mistype the
 operand stack — the build-time, source-located equivalent of `wasm-tools`'
-"values remaining on stack" (caught at the emit site, not post-hoc).
+"values remaining on stack", but caught AT THE EMIT SITE with the offending Julia
+statement, the live operand-stack snapshot, and the byte offset. This is the
+precision bug-finder for WasmTarget: where wasm-tools says "func 14 @ 0xcc18",
+this says which Julia statement and what was on the stack.
 """
 struct StackImbalanceError <: Exception
     func_name::String
-    message::String
+    context::String        # the Julia statement / high-level op being emitted
+    message::String        # the specific validator complaint(s)
+    stack::Vector{String}  # operand-stack snapshot (types, bottom→top) at failure
+    byte_offset::Int       # length(code) at failure
 end
-Base.showerror(io::IO, e::StackImbalanceError) =
-    print(io, "StackImbalanceError in `$(e.func_name)`:\n  $(e.message)")
+function Base.showerror(io::IO, e::StackImbalanceError)
+    print(io, "StackImbalanceError in `$(e.func_name)`")
+    isempty(e.context) || print(io, "\n  while emitting: ", e.context)
+    print(io, "\n  ", replace(e.message, "\n  " => "\n  "))
+    print(io, "\n  operand stack (bottom→top): [", join(e.stack, ", "), "]")
+    print(io, "\n  at byte offset 0x", string(e.byte_offset, base=16))
+end
 
 """
     InstrBuilder
@@ -41,6 +53,8 @@ mutable struct InstrBuilder
     locals::Vector{WasmValType}   # param + local types, indexed by local index
     strict::Bool                  # throw on stack imbalance (migrated funcs) vs collect
     func_name::String
+    context::String               # current Julia stmt/op being emitted (for diagnostics)
+    trace::Union{Nothing, Vector{String}}  # opt-in full emit log (WT_BUILDER_TRACE)
 end
 
 function InstrBuilder(param_types::Vector{<:Any}=WasmValType[],
@@ -51,20 +65,59 @@ function InstrBuilder(param_types::Vector{<:Any}=WasmValType[],
     # Seed the outermost label as a :block whose results are the function results,
     # so end-of-function balance is checked against the declared results.
     push!(v.labels, ValidatorLabel(:block, 0, WasmValType[r for r in result_types], true))
-    InstrBuilder(UInt8[], v, locals, strict, func_name)
+    trace = haskey(ENV, "WT_BUILDER_TRACE") ? String[] : nothing
+    InstrBuilder(UInt8[], v, locals, strict, func_name, "", trace)
 end
 
 builder_code(b::InstrBuilder) = b.code
 set_strict!(b::InstrBuilder, s::Bool) = (b.strict = s; b)
+"Set the high-level context (Julia statement) the next emits belong to — surfaces in errors."
+set_context!(b::InstrBuilder, ctx::AbstractString) = (b.context = String(ctx); b)
 
-# Throw the collected validator errors (if strict) with source context, then clear.
+_stack_snapshot(b::InstrBuilder) = String[string(t) for t in b.v.stack]
+
+# Throw the collected validator errors (if strict) with rich source context, else collect.
 @inline function _check!(b::InstrBuilder)
+    if b.trace !== nothing
+        top = isempty(b.v.stack) ? "-" : string(b.v.stack[end])
+        push!(b.trace, "off=0x$(string(length(b.code), base=16)) h=$(length(b.v.stack)) top=$top | $(b.context)")
+    end
     if b.strict && has_errors(b.v)
         msg = join(b.v.errors, "\n  ")
         empty!(b.v.errors)
-        throw(StackImbalanceError(b.func_name, msg))
+        throw(StackImbalanceError(b.func_name, b.context, msg, _stack_snapshot(b), length(b.code)))
     end
     return b
+end
+
+"""
+    builder_diagnose(b) -> String
+
+Full human-readable post-mortem of a builder's state — the operand-stack snapshot,
+the open control-flow labels (with their base heights/result types), reachability,
+the byte length, and any collected (non-strict) errors. Use this to pin a codegen
+bug to an exact statement + stack shape with no wasm-tools round-trip.
+"""
+function builder_diagnose(b::InstrBuilder)::String
+    io = IOBuffer()
+    println(io, "InstrBuilder `$(b.func_name)` — $(length(b.code)) bytes, reachable=$(b.v.reachable)")
+    isempty(b.context) || println(io, "  context: ", b.context)
+    println(io, "  operand stack (bottom→top): [", join(_stack_snapshot(b), ", "), "]")
+    if !isempty(b.v.labels)
+        println(io, "  open blocks (outer→inner):")
+        for (i, l) in enumerate(b.v.labels)
+            println(io, "    [$i] $(l.kind) base=$(l.stack_height_at_entry) results=$(l.result_types) reachable=$(l.reachable_at_entry)")
+        end
+    end
+    if has_errors(b.v)
+        println(io, "  collected errors:")
+        for e in b.v.errors; println(io, "    - ", e); end
+    end
+    if b.trace !== nothing && !isempty(b.trace)
+        println(io, "  emit trace (last 40):")
+        for s in last(b.trace, 40); println(io, "    ", s); end
+    end
+    String(take!(io))
 end
 
 # Register a local's type so local.get/set/tee can be typed. idx is 0-based.
