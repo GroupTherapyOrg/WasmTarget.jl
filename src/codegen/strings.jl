@@ -175,8 +175,13 @@ function emit_jl_string_to_js!(bytes::Vector{UInt8}, decode_func_idx::UInt32, tm
     end
     # Stack: [i8_arr_ref]
     # Call $utf8_to_js(i8_arr_ref) → (ref extern)
-    push!(bytes, Opcode.CALL)
-    append!(bytes, encode_leb128_unsigned(helper_idx))
+    # MIGRATED to InstrBuilder (typed). call! emits CALL + leb_u(helper_idx), byte-identical.
+    # This is an external emit_*!(bytes,...) helper that mutates the caller's buffer, so we
+    # build into a local collect-mode builder and splice the result (no seeding needed; the
+    # caller's bridge already declares the [i8_arr_ref] → [externref] stack effect).
+    ib = InstrBuilder(; func_name="emit_jl_string_to_js", strict=false)
+    call!(ib, helper_idx, WasmValType[], WasmValType[])
+    append!(bytes, builder_code(ib))
 end
 
 """
@@ -192,8 +197,12 @@ only the decode (Julia→JS) direction is needed for println output.
 function emit_js_to_jl_string!(bytes::Vector{UInt8}, encode_func_idx::UInt32)
     # Stack: [externref]
     # Call encodeStringToUTF8Array(externref) → (ref $str_arr)
-    push!(bytes, Opcode.CALL)
-    append!(bytes, encode_leb128_unsigned(encode_func_idx))
+    # MIGRATED to InstrBuilder (typed). call! emits CALL + leb_u(encode_func_idx), byte-identical.
+    # External emit_*!(bytes,...) helper that mutates the caller's buffer → build into a local
+    # collect-mode builder and splice (caller's bridge declares the [externref] → [str_arr] effect).
+    ib = InstrBuilder(; func_name="emit_js_to_jl_string", strict=false)
+    call!(ib, encode_func_idx, WasmValType[], WasmValType[])
+    append!(bytes, builder_code(ib))
 end
 
 # ============================================================================

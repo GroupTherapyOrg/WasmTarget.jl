@@ -42,20 +42,20 @@ bytes; element index == byte offset only for elsize 1).
 """
 # Emit the backing wasm ARRAY ref for a walk result: Vector{T} structs read
 # field 1 (.ref); Memory{T} values ARE the array. Always cast to `arr_t`.
-function _emit_backing_array!(bytes::Vector{UInt8}, vec, ctx::AbstractCompilationContext, arr_t)
+# MIGRATED to InstrBuilder: emits typed struct.get/ref.cast directly onto the
+# caller's builder `b`; compile_value splices bridge via emit_raw!. Byte-identical
+# (struct.get field 1 = 0xFB 0x02 leb_u(t) leb_u(1); ref.cast null = 0xFB REF_CAST_NULL leb_s(arr_t)).
+function _emit_backing_array!(b::InstrBuilder, vec, ctx::AbstractCompilationContext, arr_t)
     vt = infer_value_type(vec, ctx)
-    append!(bytes, compile_value(vec, ctx))
+    emit_raw!(b, compile_value(vec, ctx))
     is_mem = vt isa DataType && (vt.name.name === :Memory || vt.name.name === :GenericMemory ||
                                  vt.name.name === :MemoryRef || vt.name.name === :GenericMemoryRef)
     if !is_mem
         vinfo = ctx.type_registry.structs[vt]
-        push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
-        append!(bytes, encode_leb128_unsigned(vinfo.wasm_type_idx))
-        append!(bytes, encode_leb128_unsigned(1))
+        struct_get!(b, vinfo.wasm_type_idx, UInt32(1), ConcreteRef(UInt32(arr_t), true))
     end
-    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.REF_CAST_NULL)
-    append!(bytes, encode_leb128_signed(Int64(arr_t)))
-    return bytes
+    ref_cast!(b, Int64(arr_t), true)
+    return b
 end
 
 function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
@@ -1683,30 +1683,26 @@ Compile a struct construction expression (%new).
 """
 # P2-batch17: type-correct default for an exception field whose value can't be
 # represented (see the Exception branch of compile_new).
-function _exn_field_null_or_zero!(bytes::Vector{UInt8}, fwasm)
+# MIGRATED to InstrBuilder: emits the typed zero-const / ref.null directly onto the
+# caller's builder `b`. Byte-identical: i32.const 0 = 41 00, f32/f64.const 0 = const op
+# + 4/8 zero bytes, ref.null concrete = D0 leb_s(idx), ref.null abstract = D0 heaptype-byte.
+function _exn_field_null_or_zero!(b::InstrBuilder, fwasm)
     if fwasm === I32
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x00)
+        i32_const!(b, 0)
     elseif fwasm === I64
-        push!(bytes, Opcode.I64_CONST)
-        push!(bytes, 0x00)
+        i64_const!(b, 0)
     elseif fwasm === F32
-        push!(bytes, Opcode.F32_CONST)
-        append!(bytes, zeros(UInt8, 4))
+        f32_const!(b, 0.0f0)
     elseif fwasm === F64
-        push!(bytes, Opcode.F64_CONST)
-        append!(bytes, zeros(UInt8, 8))
+        f64_const!(b, 0.0)
     elseif fwasm isa ConcreteRef
-        push!(bytes, Opcode.REF_NULL)
-        append!(bytes, encode_leb128_signed(Int64(fwasm.type_idx)))
+        ref_null!(b, Int64(fwasm.type_idx), fwasm)
     elseif fwasm === ExternRef || fwasm === StructRef || fwasm === ArrayRef || fwasm === AnyRef || fwasm === EqRef
-        push!(bytes, Opcode.REF_NULL)
-        push!(bytes, UInt8(fwasm))
+        ref_null!(b, fwasm)
     else
-        push!(bytes, Opcode.REF_NULL)
-        push!(bytes, UInt8(StructRef))
+        ref_null!(b, StructRef)
     end
-    return bytes
+    return b
 end
 
 function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
@@ -2046,9 +2042,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 end
             end
             if !_emitted
-                _fnz = UInt8[]
-                _exn_field_null_or_zero!(_fnz, _fwasm)
-                emit_raw!(b, _fnz)
+                _exn_field_null_or_zero!(b, _fwasm)
             end
         end
         # :new may carry FEWER args than fields (trailing fields undef) — pad
@@ -2056,9 +2050,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
         # validate ("expected anyref, found i32").
         _n_wasm_fields = length(_exn_def.fields)
         for _pad_fi in (length(field_values) + Int(_exn_info.field_offset) + 1):_n_wasm_fields
-            _fnz = UInt8[]
-            _exn_field_null_or_zero!(_fnz, _exn_def.fields[_pad_fi].valtype)
-            emit_raw!(b, _fnz)
+            _exn_field_null_or_zero!(b, _exn_def.fields[_pad_fi].valtype)
         end
         struct_new!(b, _exn_info.wasm_type_idx, WasmValType[])
         return builder_code(b)
@@ -3280,9 +3272,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 local _mmv_arr = get_array_type!(ctx.mod, ctx.type_registry, _mmv_te)
                 local _mmv_sh = trailing_zeros(sizeof(_mmv_te))
                 local _mmv_emit_arr = vec -> begin
-                    _bka = UInt8[]
-                    _emit_backing_array!(_bka, vec, ctx, _mmv_arr)
-                    emit_raw!(b, _bka)
+                    _emit_backing_array!(b, vec, ctx, _mmv_arr)
                 end
                 local _mmv_emit_off = a -> begin
                     emit_raw!(b, compile_value(a, ctx))
@@ -3476,9 +3466,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
         if _mm_d !== nothing && _mm_s !== nothing
             _arr_t = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
             _mm_emit_arr! = function (vec)
-                _bka = UInt8[]
-                _emit_backing_array!(_bka, vec, ctx, _arr_t)
-                emit_raw!(b, _bka)
+                _emit_backing_array!(b, vec, ctx, _arr_t)
             end
             _mm_emit_ptr_off! = function (ptr_arg)
                 # fake base pointer compiles to 0 → pointer value == byte offset

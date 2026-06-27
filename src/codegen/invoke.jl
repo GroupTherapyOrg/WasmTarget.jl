@@ -3123,20 +3123,21 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
 
                 # Recompile in correct order for array.set: arr, index-1, val
-                bytes = UInt8[]
+                bas = InstrBuilder(; func_name="compile_invoke", strict=false)
+                local _arrset_elem_w = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
+                local _arrset_elem_w2 = _arrset_elem_w isa WasmValType ? _arrset_elem_w : AnyRef
 
                 # Array ref
-                append!(bytes, compile_value(args[1], ctx))
+                emit_raw!(bas, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
 
                 # Index (convert to 0-based)
-                append!(bytes, compile_value(args[2], ctx))
+                emit_raw!(bas, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
                 idx_type = infer_value_type(args[2], ctx)
                 if idx_type === Int64 || idx_type === Int
-                    push!(bytes, Opcode.I32_WRAP_I64)
+                    num!(bas, Opcode.I32_WRAP_I64)
                 end
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x01)
-                push!(bytes, Opcode.I32_SUB)
+                i32_const!(bas, 1)
+                num!(bas, Opcode.I32_SUB)
 
                 # Value
                 local val_bytes = compile_value(args[3], ctx)
@@ -3149,11 +3150,11 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         local shift_v = 0
                         local pos_v = 2
                         while pos_v <= length(val_bytes)
-                            b = val_bytes[pos_v]
-                            src_idx_v |= (Int(b & 0x7f) << shift_v)
+                            byt = val_bytes[pos_v]
+                            src_idx_v |= (Int(byt & 0x7f) << shift_v)
                             shift_v += 7
                             pos_v += 1
-                            (b & 0x80) == 0 && break
+                            (byt & 0x80) == 0 && break
                         end
                         if pos_v - 1 == length(val_bytes)
                             # PURE-048: Use correct n_params offset for ctx.locals lookup
@@ -3176,23 +3177,22 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     local is_numeric_val = arrset_src_wasm === I64 || arrset_src_wasm === I32 || arrset_src_wasm === F64 || arrset_src_wasm === F32
                     local is_already_externref_val = arrset_src_wasm === ExternRef
                     if is_numeric_val
-                        emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
+                        local _n2e = UInt8[]; emit_numeric_to_externref!(_n2e, stmt.val, val_wasm, ctx)
+                        emit_raw!(bas, _n2e; pushes=WasmValType[ExternRef])
                     else
-                        append!(bytes, val_bytes)
+                        emit_raw!(bas, val_bytes; pushes=WasmValType[infer_value_wasm_type(args[3], ctx)])
                         # PURE-048: Skip extern_convert_any if value is already externref
                         if !is_already_externref_val
-                            push!(bytes, Opcode.GC_PREFIX)
-                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                            extern_convert_any!(bas)
                         end
                     end
                 else
-                    append!(bytes, val_bytes)
+                    emit_raw!(bas, val_bytes; pushes=WasmValType[infer_value_wasm_type(args[3], ctx)])
                 end
 
                 # array.set
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_SET)
-                append!(bytes, encode_leb128_unsigned(arr_type_idx))
+                array_set!(bas, arr_type_idx, _arrset_elem_w2)
+                bytes = builder_code(bas)
 
             # arr_len(arr) -> Int32
             elseif name === :arr_len && length(args) == 1
@@ -3306,7 +3306,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                    name === :InexactError || name === :ErrorException || name === :KeyError ||
                    name === :MethodError || name === :AssertionError || name === :AssertionError ||
                    name === :StackOverflowError || name === :OutOfMemoryError || name === :UndefVarError
-                bytes = UInt8[]  # Clear pre-compiled args (we re-compile below for correct field order)
+                bec = InstrBuilder(; func_name="compile_invoke", strict=false)  # Clear pre-compiled args (we re-compile below for correct field order)
                 local _ctor_type = nothing
                 if name === :BoundsError; _ctor_type = BoundsError
                 elseif name === :ArgumentError; _ctor_type = ArgumentError
@@ -3325,7 +3325,8 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 local _ctor_info = _ctor_type !== nothing ? register_struct_type!(ctx.mod, ctx.type_registry, _ctor_type) : nothing
                 if _ctor_info !== nothing
                     # Push typeId (field 0)
-                    emit_type_id!(bytes, ctx.type_registry, _ctor_type)
+                    local _tid_ec = UInt8[]; emit_type_id!(_tid_ec, ctx.type_registry, _ctor_type)
+                    emit_raw!(bec, _tid_ec; pushes=WasmValType[I32])
                     # Push remaining fields: for msg-based exceptions, compile the msg arg as string array
                     nfields = length(fieldnames(_ctor_type))
                     # the ACTUAL wasm field types decide bridging/null heap types
@@ -3342,13 +3343,13 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                             local _is_numeric_val = _val_wasm === I32 || _val_wasm === I64 || _val_wasm === F32 || _val_wasm === F64
                             # WBUILD-1011: Box numeric values for Any/abstract-typed struct fields
                             if _is_numeric_val && (_ft_ctor === Any || isabstracttype(_ft_ctor))
-                                emit_numeric_to_anyref!(bytes, args[fi], _val_wasm, ctx)
+                                local _na_ec = UInt8[]; emit_numeric_to_anyref!(_na_ec, args[fi], _val_wasm, ctx)
+                                emit_raw!(bec, _na_ec; pushes=WasmValType[AnyRef])
                                 if _ctor_field_wasm(fi) === ExternRef
-                                    push!(bytes, Opcode.GC_PREFIX)
-                                    push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                    extern_convert_any!(bec)
                                 end
                             else
-                                append!(bytes, compile_value(args[fi], ctx))
+                                emit_raw!(bec, compile_value(args[fi], ctx); pushes=WasmValType[_val_wasm])
                                 # WASMMAKIE E-003: Any fields map to EXTERNREF — a
                                 # concrete ref (e.g. BoundsError(LinearIndices(...), i)
                                 # in wilkinson's range indexing) fails struct.new
@@ -3356,8 +3357,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                                 if _ctor_field_wasm(fi) === ExternRef &&
                                    (_val_wasm isa ConcreteRef || _val_wasm === StructRef ||
                                     _val_wasm === ArrayRef || _val_wasm === AnyRef || _val_wasm === EqRef)
-                                    push!(bytes, Opcode.GC_PREFIX)
-                                    push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                    extern_convert_any!(bec)
                                 end
                             end
                         else
@@ -3366,33 +3366,28 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                             local _ft = fieldtype(_ctor_type, fi)
                             local _fw = _ctor_field_wasm(fi)
                             if _fw === I32
-                                push!(bytes, Opcode.I32_CONST, 0x00)
+                                i32_const!(bec, 0)
                             elseif _fw === I64
-                                push!(bytes, Opcode.I64_CONST, 0x00)
+                                i64_const!(bec, 0)
                             elseif _fw === ExternRef
-                                push!(bytes, Opcode.REF_NULL)
-                                push!(bytes, UInt8(ExternRef))
+                                ref_null!(bec, ExternRef)
                             elseif _fw isa ConcreteRef
-                                push!(bytes, Opcode.REF_NULL)
-                                append!(bytes, encode_leb128_signed(Int64(_fw.type_idx)))
+                                ref_null!(bec, Int64(_fw.type_idx), ConcreteRef(UInt32(_fw.type_idx), true))
                             elseif _ft === Int32 || _ft === Bool
-                                push!(bytes, Opcode.I32_CONST, 0x00)
+                                i32_const!(bec, 0)
                             elseif _ft === Int64 || _ft === UInt64
-                                push!(bytes, Opcode.I64_CONST, 0x00)
+                                i64_const!(bec, 0)
                             else
-                                push!(bytes, Opcode.REF_NULL)
-                                push!(bytes, UInt8(AnyRef))
+                                ref_null!(bec, AnyRef)
                             end
                         end
                     end
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.STRUCT_NEW)
-                    append!(bytes, encode_leb128_unsigned(_ctor_info.wasm_type_idx))
+                    struct_new!(bec, _ctor_info.wasm_type_idx, WasmValType[])
                 else
                     # Fallback: can't register type, create a dummy anyref (ref.null any)
-                    push!(bytes, Opcode.REF_NULL)
-                    push!(bytes, UInt8(AnyRef))
+                    ref_null!(bec, AnyRef)
                 end
+                bytes = builder_code(bec)
                 # NOTE: Do NOT throw here and do NOT set last_stmt_was_stub.
                 # The IR has a separate throw() call that consumes this value.
 
