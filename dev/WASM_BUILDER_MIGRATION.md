@@ -140,3 +140,41 @@ model) and the full WT emission inventory (per-file `push!`/`Opcode` counts, the
 catalogue with file:line, the flow-generator analysis) are in the planning research; the
 crux to replicate is the **type-directed GC stack-effect computation** (`struct_new` reads
 `StructType.fields`) and the **`_verifyEndOfBlock` balance invariant**.
+
+## Progress log (leaf-first migration, branch `wt-wasm-builder`)
+
+Verification recipe per batch (regression-free guarantee = **byte-identical** output):
+`/tmp/str_digest.jl` compiles a corpus → sha256; `git stash` the migration, build
+baseline, `git stash pop`, rebuild, `diff`. Then re-run with `WT_BUILDER_STRICT=1` to
+prove the live model AGREES (no `StackImbalanceError`, identical bytes).
+
+- **compile_condition_to_i32** (`values.jl`) — first real-codegen migration. Establishes
+  the shim pattern: a produce-on-stack fragment builds into a fresh `InstrBuilder`,
+  bridges the un-migrated `compile_value` via `emit_raw!(…; pushes=[infer_value_wasm_type])`,
+  returns `builder_code(b)`. Callers unchanged (`::Vector{UInt8}`).
+- **unions.jl** (whole file) — `emit_wrap_union_value` + `emit_unwrap_union_value`.
+  Establishes the consume-from-stack pattern via `seed_input!` (model the value the
+  un-migrated caller left on the stack). 0 raw emit sites remain.
+- **strings.jl** — `compile_string_concat_with_locals` + `compile_string_equal`
+  (control-flow-heavy: if/else/block/loop/br). Deleted dead `compile_string_concat`
+  inline body (~70 lines built `bytes` then discarded it → thin delegator).
+
+### Builder API added during migration (single API, dart2wasm-faithful)
+- `ref_null!(b, rt::RefType)` / `ref_cast!(b, rt::RefType, nullable)` — abstract heaptypes
+  (any/i31/array/struct): the enum value IS the on-wire byte → push raw, not LEB.
+- `seed_input!(b, types)` — model upstream-produced stack values, no bytes.
+- `_wt_builder_strict()` — collect by default (regression-free), hard-gate on `WT_BUILDER_STRICT`.
+
+### BUG found + fixed via migration (the payoff)
+`block!`/`loop!`/`if_!` LEB-encoded the blocktype → `if_!(0x7F)` emitted `04 ff 00`
+instead of the correct single byte `04 7f`. Value-type/void blocktypes are single
+on-wire bytes; `ConcreteRef` results are multi-byte (`0x63/0x64`+idx). Now encode via
+the SAME `encode_block_type` the rest of codegen uses. Regression-guarded in the
+InstrBuilder testset. (This is exactly why we migrate onto a typed model: latent
+emit bugs surface at the emit layer with clarity.)
+
+### Next targets (remaining are large atomic units)
+`compile_value` (values.jl) → calls.jl/invoke.jl dispatch → int128.jl → statements.jl →
+the flow generators (conditionals.jl/flow.jl/stackified.jl — these reach the 1.13
+Vector-state ODE acceptance gate). The `emit_*!(bytes,…)` helpers (types.jl/strings.jl)
+are NOT standalone leaves — delete them top-down as their callers migrate.
