@@ -177,9 +177,9 @@ Stack: [value] -> [tagged_union_struct]
 The value is first converted to anyref (via extern.convert_any if needed),
 then wrapped with its type tag.
 """
+# MIGRATED to InstrBuilder (typed, dart2wasm-style). Consumes the value the caller left
+# on the stack (seed_input!); emits a tagged-union struct. Byte-identical to before.
 function emit_wrap_union_value(ctx, value_type::Type, union_type::Union)::Vector{UInt8}
-    bytes = UInt8[]
-
     # Get or register the union type
     union_info = get_union_type!(ctx.mod, ctx.type_registry, union_type)
     tag = get_union_tag(union_info, value_type)
@@ -198,86 +198,58 @@ function emit_wrap_union_value(ctx, value_type::Type, union_type::Union)::Vector
         # Check if value is already a compatible tagged union struct on the stack.
         # This happens when val_type == union_type (value already wrapped elsewhere).
         if value_type isa Union && value_type <: union_type
-            return bytes  # Value is already a properly tagged union struct; no re-wrap needed
+            return UInt8[]  # Value is already a properly tagged union struct; no re-wrap needed
         end
         # Truly incompatible type (dead code path from imprecise type inference).
         # Convert to anyref and use tag 0 so compilation succeeds.
-        # This branch should never execute for valid inputs (it's type-inference dead code).
         tag = Int32(0)
     end
 
+    b = InstrBuilder(; func_name="emit_wrap_union_value", strict=_wt_builder_strict())
+    set_context!(b, "wrap $(value_type) → $(union_type)")
+    # union struct layout: typeId(i32), tag(i32 mutable), value(anyref)
+    union_fields = WasmValType[I32, I32, AnyRef]
+
     # For Nothing, we need to create a null anyref
     if value_type === Nothing
-        # Drop any value on stack (Nothing has no value)
-        # PURE-9024: Push typeId (0 placeholder)
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int64(0)))
-        # Push tag (0 for Nothing)
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int64(tag)))
-        # Push null anyref for the value
-        push!(bytes, Opcode.REF_NULL)
-        push!(bytes, UInt8(AnyRef))  # anyref
+        i32_const!(b, 0)            # PURE-9024: typeId (0 placeholder)
+        i32_const!(b, Int64(tag))   # tag (0 for Nothing)
+        ref_null!(b, AnyRef)        # null anyref value
     else
-        # Value is on stack - need to save it, push typeId + tag, then restore value
-        # Allocate a scratch local for the value
+        # Value is on stack — save it, push typeId + tag, then restore + box.
         scratch_local = length(ctx.locals) + ctx.n_params
         value_wasm_type = julia_to_wasm_type_concrete(value_type, ctx)
         push!(ctx.locals, value_wasm_type)
+        seed_input!(b, WasmValType[value_wasm_type])  # caller left the value on the stack
+        builder_set_local_type!(b, scratch_local, value_wasm_type)
 
-        # Store value to scratch local
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(scratch_local))
-
-        # PURE-9024: Push typeId (0 placeholder)
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int64(0)))
-
-        # Push tag
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int64(tag)))
-
-        # Reload value and convert to anyref
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(scratch_local))
+        local_set!(b, scratch_local)
+        i32_const!(b, 0)             # PURE-9024: typeId (0 placeholder)
+        i32_const!(b, Int64(tag))    # tag
+        local_get!(b, scratch_local) # reload value
 
         # Convert to anyref if needed
         if value_wasm_type === I32
-            # PURE-6024: Box i32 into i31ref (subtype of anyref) using ref.i31
-            push!(bytes, Opcode.GC_PREFIX)
-            push!(bytes, Opcode.REF_I31)
+            ref_i31!(b)                                  # PURE-6024: box i32 → i31ref
         elseif value_wasm_type === I64
-            # PURE-6024: Truncate i64 to i32, then box via ref.i31
-            push!(bytes, Opcode.I32_WRAP_I64)
-            push!(bytes, Opcode.GC_PREFIX)
-            push!(bytes, Opcode.REF_I31)
+            num!(b, Opcode.I32_WRAP_I64); ref_i31!(b)    # PURE-6024: trunc then box
         elseif value_wasm_type === F32 || value_wasm_type === F64
-            # PURE-701d: Float member of a tagged union. The old code DROPPED the
-            # value and stored null — silent data loss for any Union{Float,...}.
-            # i31ref can't hold a float, so box it into a {typeId,value} numeric box
-            # (anyref-compatible); emit_unwrap_union_value's F64/F32 branch unboxes it.
-            # Reorder to box layout: drop the on-stack float, push typeId, reload, new.
-            push!(bytes, Opcode.DROP)
-            local box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, value_wasm_type)
-            push!(bytes, Opcode.I32_CONST); push!(bytes, 0x00)  # box typeId
-            push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(scratch_local))
-            push!(bytes, Opcode.GC_PREFIX, Opcode.STRUCT_NEW)
-            append!(bytes, encode_leb128_unsigned(box_idx))
+            # PURE-701d: float can't go in i31ref → box into {typeId,value} numeric box.
+            drop!(b)
+            box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, value_wasm_type)
+            i32_const!(b, 0)                             # box typeId
+            local_get!(b, scratch_local)
+            struct_new!(b, box_idx, WasmValType[I32, value_wasm_type])
         elseif value_wasm_type === ExternRef
-            # ExternRef must be converted to anyref via any_convert_extern
-            push!(bytes, Opcode.GC_PREFIX)
-            push!(bytes, Opcode.ANY_CONVERT_EXTERN)
+            any_convert_extern!(b)                       # externref → anyref
         elseif value_wasm_type isa ConcreteRef || value_wasm_type isa RefType
             # Struct/array refs are subtypes of anyref — no conversion needed
         end
     end
 
     # Create the tagged union struct
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.STRUCT_NEW)
-    append!(bytes, encode_leb128_unsigned(union_info.wasm_type_idx))
-
-    return bytes
+    struct_new!(b, union_info.wasm_type_idx, union_fields)
+    return builder_code(b)
 end
 
 """
@@ -287,73 +259,48 @@ Stack: [tagged_union_struct] -> [value]
 Extracts the value field and casts it to the expected type.
 Note: Caller should verify type via isa() first for safety.
 """
+# MIGRATED to InstrBuilder (typed, dart2wasm-style). Consumes the tagged-union struct the
+# caller left on the stack (seed_input!); emits the unboxed target value. Byte-identical.
 function emit_unwrap_union_value(ctx, union_type::Union, target_type::Type)::Vector{UInt8}
-    bytes = UInt8[]
-
-    # Handle Nothing specially - just check if null
+    # Handle Nothing specially - just drop the union struct
     if target_type === Nothing
-        # For Nothing, we just need to verify it's null (via isa check done elsewhere)
-        # Return nothing meaningful - the caller knows it's Nothing
-        push!(bytes, Opcode.DROP)  # Drop the union struct
-        return bytes
+        b = InstrBuilder(; func_name="emit_unwrap_union_value", strict=_wt_builder_strict())
+        seed_input!(b, WasmValType[AnyRef])  # the union struct on the stack
+        drop!(b)
+        return builder_code(b)
     end
 
     # Get the union info
     union_info = get_union_type!(ctx.mod, ctx.type_registry, union_type)
 
+    b = InstrBuilder(; func_name="emit_unwrap_union_value", strict=_wt_builder_strict())
+    set_context!(b, "unwrap $(union_type) → $(target_type)")
+    seed_input!(b, WasmValType[ConcreteRef(UInt32(union_info.wasm_type_idx), true)])
+
     # Get the value field (PURE-9024: field 2 due to typeId at field 0)
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.STRUCT_GET)
-    append!(bytes, encode_leb128_unsigned(union_info.wasm_type_idx))
-    append!(bytes, encode_leb128_unsigned(2))  # field 2 is value (0=typeId, 1=tag, 2=value)
+    struct_get!(b, union_info.wasm_type_idx, 2, AnyRef)
 
     # Cast anyref to the target type
     target_wasm_type = julia_to_wasm_type_concrete(target_type, ctx)
     if target_wasm_type isa ConcreteRef
         # Cast anyref to concrete type using ref.cast / ref.cast_null
-        # The immediate is a heaptype (just the type index), not a reftype
-        push!(bytes, Opcode.GC_PREFIX)
-        if target_wasm_type.nullable
-            push!(bytes, Opcode.REF_CAST_NULL)
-        else
-            push!(bytes, Opcode.REF_CAST)
-        end
-        append!(bytes, encode_leb128_signed(Int64(target_wasm_type.type_idx)))
+        ref_cast!(b, target_wasm_type.type_idx, target_wasm_type.nullable)
     elseif target_wasm_type === ArrayRef || target_wasm_type === StructRef
-        # PURE-6024: Cast anyref to abstract arrayref/structref.
-        # Needed for abstract types (e.g., AbstractString → ArrayRef).
-        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL)
-        push!(bytes, UInt8(target_wasm_type))
+        # PURE-6024: cast anyref → abstract arrayref/structref (e.g. AbstractString → ArrayRef)
+        ref_cast!(b, target_wasm_type, true)
     elseif target_wasm_type === I32
-        # PURE-6025: Unbox i31ref → i32. Value was boxed via ref.i31 in emit_wrap_union_value.
-        # anyref → (ref null i31) → i32
-        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL)
-        push!(bytes, UInt8(I31Ref))  # heaptype: i31
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.I31_GET_S)
+        # PURE-6025: unbox i31ref → i32 (boxed via ref.i31 in emit_wrap_union_value)
+        ref_cast!(b, I31Ref, true); i31_get_s!(b)
     elseif target_wasm_type === I64
-        # PURE-6025: Unbox i31ref → i32 → i64. Value was boxed via i32.wrap_i64 + ref.i31.
-        # anyref → (ref null i31) → i32 → i64
-        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL)
-        push!(bytes, UInt8(I31Ref))  # heaptype: i31
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.I31_GET_S)
-        push!(bytes, Opcode.I64_EXTEND_I32_S)
+        # PURE-6025: unbox i31ref → i32 → i64 (boxed via i32.wrap_i64 + ref.i31)
+        ref_cast!(b, I31Ref, true); i31_get_s!(b); num!(b, Opcode.I64_EXTEND_I32_S)
     elseif target_wasm_type === F64 || target_wasm_type === F32
-        # PURE-701d: Float member of a tagged union. i31ref can't hold a float, so
-        # emit_wrap_union_value boxes it into a {typeId,value} numeric box; unbox
-        # symmetrically: anyref → (ref null $box) → struct.get value (field 1).
-        # (Without this branch NO cast was emitted — the raw anyref value field fed
-        # an f64 consumer and failed validation: Base.print_to_string reading a
-        # Union field narrowed to Float64, e.g. WasmMakie axis-tick formatting.)
+        # PURE-701d: float boxed into a {typeId,value} numeric box → unbox symmetrically.
         box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, target_wasm_type)
-        push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL)
-        append!(bytes, encode_leb128_signed(Int64(box_idx)))
-        push!(bytes, Opcode.GC_PREFIX, Opcode.STRUCT_GET)
-        append!(bytes, encode_leb128_unsigned(box_idx))
-        append!(bytes, encode_leb128_unsigned(1))  # field 1 = value (0=typeId)
+        ref_cast!(b, box_idx, true)
+        struct_get!(b, box_idx, 1, target_wasm_type)  # field 1 = value (0=typeId)
     end
 
-    return bytes
+    return builder_code(b)
 end
 

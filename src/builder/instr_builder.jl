@@ -239,6 +239,11 @@ end
 # ════════════════════════════════════════════════════════════════════════════════
 ref_null!(b::InstrBuilder, heaptype::Integer, reftype::WasmValType) =
     (_op!(b, Opcode.REF_NULL); _leb_s!(b, heaptype); validate_push!(b.v, reftype); _check!(b))
+# Abstract-heaptype ref.null (any/struct/array/i31/...): the RefType enum value IS the
+# single on-wire heaptype byte (dart2wasm encodes HeapType directly), so push it raw —
+# NOT LEB-encoded (LEB of 0x6E would be two bytes). Mirrors push!(bytes, UInt8(rt)).
+ref_null!(b::InstrBuilder, rt::RefType) =
+    (_op!(b, Opcode.REF_NULL); _op!(b, UInt8(rt)); validate_push!(b.v, rt); _check!(b))
 ref_func!(b::InstrBuilder, func_idx::Integer, reftype::WasmValType) =
     (_op!(b, Opcode.REF_FUNC); _leb_u!(b, func_idx); validate_push!(b.v, reftype); _check!(b))
 ref_is_null!(b::InstrBuilder) = (_op!(b, Opcode.REF_IS_NULL); validate_pop_any!(b.v); validate_push!(b.v, I32); _check!(b))
@@ -298,6 +303,14 @@ function ref_cast!(b::InstrBuilder, type_idx::Integer, nullable::Bool)
     _op!(b, Opcode.GC_PREFIX); _op!(b, op); _leb_s!(b, type_idx)
     validate_gc_instruction!(b.v, op, ConcreteRef(UInt32(type_idx), nullable)); _check!(b)
 end
+# Cast to an abstract heaptype (i31/array/struct/...): the RefType enum value is the
+# single on-wire heaptype byte. Pops a ref, pushes the abstract target type.
+function ref_cast!(b::InstrBuilder, rt::RefType, nullable::Bool)
+    op = nullable ? Opcode.REF_CAST_NULL : Opcode.REF_CAST
+    _op!(b, Opcode.GC_PREFIX); _op!(b, op); _op!(b, UInt8(rt))
+    if b.v.reachable; validate_pop_any!(b.v); validate_push!(b.v, rt); end
+    _check!(b)
+end
 any_convert_extern!(b::InstrBuilder) = (_op!(b, Opcode.GC_PREFIX); _op!(b, Opcode.ANY_CONVERT_EXTERN); validate_gc_instruction!(b.v, Opcode.ANY_CONVERT_EXTERN); _check!(b))
 extern_convert_any!(b::InstrBuilder) = (_op!(b, Opcode.GC_PREFIX); _op!(b, Opcode.EXTERN_CONVERT_ANY); validate_gc_instruction!(b.v, Opcode.EXTERN_CONVERT_ANY); _check!(b))
 select!(b::InstrBuilder) = (_op!(b, Opcode.SELECT); validate_instruction!(b.v, Opcode.SELECT); _check!(b))
@@ -328,4 +341,12 @@ function emit_raw!(b::InstrBuilder, raw::Vector{UInt8}; pops::Integer=0, pushes:
     for _ in 1:pops; validate_pop_any!(b.v); end
     for p in pushes; validate_push!(b.v, p); end
     _check!(b)
+end
+
+# Seed the model with stack values produced UPSTREAM (no bytes emitted). For fragment
+# emitters that consume a value the (not-yet-migrated) caller already left on the stack,
+# so the model starts from the true incoming stack rather than empty.
+function seed_input!(b::InstrBuilder, types::Vector{<:Any})
+    for t in types; validate_push!(b.v, t); end
+    b
 end
