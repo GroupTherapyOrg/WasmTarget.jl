@@ -208,3 +208,24 @@ inspection works); (3) verify against the BROAD corpus `/tmp/cv_digest.jl` (20 v
 kinds: Char, all int widths, Int128/UInt128, floats, strings, Symbol, Tuple, unions,
 loops) AND run the full test suite (the real oracle for the rare branches). Baseline
 captured in `/tmp/cv_baseline.txt`.
+
+## compile_value MIGRATED ✅ (the central emitter — done, not deferred)
+
+Done in one chunked pass (file compiles only at the end; intermediate inconsistency is
+fine). BYTE-IDENTICAL across 19 deterministic value kinds. Approach that made the
+byte-coupled giant tractable: simple branches → typed methods; byte-INSPECTING branches
+(Dict/Vector/Memory/struct constants) keep their local UInt8[] buffers and splice via
+emit_raw!/RawBytes; external helpers bridged by local closures (_emit_tid!, _narrow!);
+nested Dict helpers → builder closures. Added ArrayNewData + array_new_data!.
+
+### Migration status snapshot (branch wt-wasm-builder)
+DONE (byte-identical, committed): instruction-IR ADT (instr_ir.jl) · compile_condition_to_i32 ·
+unions.jl · strings.jl (concat/equal) · **compile_value** · blocktype bug fix · ArrayNewData.
+Remaining raw emit sites ≈ 6,806, concentrated in giant dispatchers:
+  statements.jl  → compile_statement (~1580 ln) · compile_new (~1080) · compile_foreigncall (~1080)
+  calls.jl (1811) · invoke.jl (1573) · int128.jl (17 self-contained emit_int128_* ≈700) ·
+  compile.jl (413) · flow.jl/conditionals.jl/stackified.jl (flow generators → 1.13 gate) ·
+  types.jl/dispatch.jl/generate.jl.
+Each giant is the SAME chunked pattern compile_value used. int128.jl is the most
+mechanical next batch (regular pop-structs-to-locals → i64 lo/hi arithmetic; seed_input!
+the 2 operands). The flow generators are where the 1.13 Vector-state ODE acceptance gate lives.
