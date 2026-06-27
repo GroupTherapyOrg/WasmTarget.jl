@@ -231,6 +231,17 @@ function call!(b::InstrBuilder, func_idx::Integer, params::Vector{<:Any}, result
     _emit!(b, InstrIR.Call(UInt32(func_idx)))
 end
 
+# call_indirect: pop table-index (i32) then params, push results. Caller supplies the
+# signature it already knows (same as call!).
+function call_indirect!(b::InstrBuilder, type_idx::Integer, table_idx::Integer, params::Vector{<:Any}, results::Vector{<:Any})
+    if b.v.reachable
+        validate_pop!(b.v, I32)  # the function index into the table
+        for p in reverse(params); validate_pop!(b.v, p); end
+        for r in results; validate_push!(b.v, r); end
+    end
+    _emit!(b, InstrIR.CallIndirect(UInt32(type_idx), UInt32(table_idx)))
+end
+
 # ── Reference ───────────────────────────────────────────────────────────────────
 ref_null!(b::InstrBuilder, heaptype::Integer, reftype::WasmValType) =
     (validate_push!(b.v, reftype); _emit!(b, InstrIR.RefNullConcrete(Int64(heaptype))))

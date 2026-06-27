@@ -49,6 +49,7 @@ struct BrIf  <: WasmInstr; depth::UInt32; end
 struct BrTable <: WasmInstr; targets::Vector{UInt32}; default::UInt32; end
 struct Return  <: WasmInstr; end
 struct Call    <: WasmInstr; idx::UInt32; end
+struct CallIndirect <: WasmInstr; type_idx::UInt32; table_idx::UInt32; end
 
 # ── reference ────────────────────────────────────────────────────────────────────
 # ref.null with an abstract heaptype: heaptype_byte is the raw on-wire byte (e.g. 0x6E any).
@@ -94,7 +95,7 @@ end # module InstrIR
 import .InstrIR: WasmInstr,
     I32Const, I64Const, F32Const, F64Const, NumOp, Drop, Select,
     LocalGet, LocalSet, LocalTee, GlobalGet, GlobalSet,
-    Unreachable, Nop, Block, Loop, If, Else, End, Br, BrIf, BrTable, Return, Call,
+    Unreachable, Nop, Block, Loop, If, Else, End, Br, BrIf, BrTable, Return, Call, CallIndirect,
     RefNullAbstract, RefNullConcrete, RefFunc, RefIsNull, RefAsNonNull,
     StructNew, StructNewDefault, StructGet, StructSet,
     ArrayNew, ArrayNewDefault, ArrayNewFixed, ArrayNewData, ArrayGet, ArraySet, ArrayLen, ArrayCopy, ArrayFill,
@@ -133,6 +134,7 @@ function encode!(c::Vector{UInt8}, i::BrTable)
 end
 encode!(c::Vector{UInt8}, ::Return) = push!(c, Opcode.RETURN)
 encode!(c::Vector{UInt8}, i::Call)  = (push!(c, Opcode.CALL); _u!(c, i.idx))
+encode!(c::Vector{UInt8}, i::CallIndirect) = (push!(c, Opcode.CALL_INDIRECT); _u!(c, i.type_idx); _u!(c, i.table_idx))
 encode!(c::Vector{UInt8}, i::RefNullAbstract) = (push!(c, Opcode.REF_NULL); push!(c, i.heaptype_byte))
 encode!(c::Vector{UInt8}, i::RefNullConcrete) = (push!(c, Opcode.REF_NULL); _s!(c, i.heaptype))
 encode!(c::Vector{UInt8}, i::RefFunc)   = (push!(c, Opcode.REF_FUNC); _u!(c, i.idx))
@@ -187,6 +189,7 @@ mnemonic(i::BrIf)  = "br_if $(i.depth)"
 mnemonic(i::BrTable) = "br_table $(i.targets) $(i.default)"
 mnemonic(::Return) = "return"
 mnemonic(i::Call)  = "call $(i.idx)"
+mnemonic(i::CallIndirect) = "call_indirect (type $(i.type_idx)) (table $(i.table_idx))"
 mnemonic(i::RefNullAbstract) = "ref.null 0x$(string(i.heaptype_byte, base=16))"
 mnemonic(i::RefNullConcrete) = "ref.null \$$(i.heaptype)"
 mnemonic(i::RefFunc)   = "ref.func $(i.idx)"
