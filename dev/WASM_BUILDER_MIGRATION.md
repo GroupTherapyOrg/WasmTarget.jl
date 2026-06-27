@@ -229,3 +229,20 @@ Remaining raw emit sites ≈ 6,806, concentrated in giant dispatchers:
 Each giant is the SAME chunked pattern compile_value used. int128.jl is the most
 mechanical next batch (regular pop-structs-to-locals → i64 lo/hi arithmetic; seed_input!
 the 2 operands). The flow generators are where the 1.13 Vector-state ODE acceptance gate lives.
+
+## int128.jl FULLY MIGRATED ✅ (first giant file complete, 0 raw sites)
+
+All 17 emit_int128_* ops on the InstrBuilder, byte-identical (stash-baseline verified):
+add/sub (carry/borrow), mul (Knuth 32-bit halves, carry-on-stack), neg, eq/ne, slt/ult,
+sle/ule (compose slt/ult+eq via emit_raw! pops=2), and/or/xor, shl/lshr/ashr (SELECT-based
+mod-64-safe), ctlz. Proves the method on EVERY shape: linear, carry-on-stack, select
+control flow, and emitter-composition. Pattern per op: seed_input! the struct operand(s),
+struct.get lo/hi, typed i64 arithmetic, struct.new; scratch locals typed for strict-mode
+accuracy.
+
+### Remaining (~6,106 sites) — the mega-dispatchers + flow
+calls.jl (1811) · invoke.jl (1573) · statements.jl trio compile_statement(~1580)/
+compile_new(~1080)/compile_foreigncall(~1080) · compile.jl(413) · flow.jl/conditionals.jl/
+stackified.jl (flow generators — 1.13 gate) · dispatch.jl(276, mostly emit_*!(bytes,…)
+buffer helpers — delete top-down) · types.jl/generate.jl/strings.jl(remaining helpers).
+Same chunked method; each mega-dispatcher is a compile_value-scale effort.
