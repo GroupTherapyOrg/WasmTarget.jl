@@ -1027,3 +1027,43 @@ COMPAT NOTE: the ODEFunction is constructed by CONCRETE field layout (21 type pa
 so the ext is version-sensitive to SciMLBase — re-verify the construction on bumps
 (compat pinned SciMLBase="2,3"). SCOPE: fixed-step solvers only; adaptive SimpleATsit5
 (error-control + dense interp), Vector-typed `p`, and SMatrix/MArray are future scope.
+
+## Vector-state ODE solving — WT-CORE 1.13 codegen bug (OPEN, gated; 2026-06-26)
+Compiling a SimpleDiffEq solve over a `Vector{Float64}` state, e.g.
+`solve(ODEProblem((u,p,t)->[-u[2],u[1]], [a,0.0], (0.0,1.0)), SimpleRK4(); dt=0.05)`,
+emits INVALID wasm on Julia ≥1.13: `wasm-tools` → "type mismatch: values remaining on
+stack at end of block". On 1.12 it compiles + runs bit-correct. Affects the MULTI-STAGE
+solvers (SimpleRK4 / SimpleTsit5 / LoopRK4 — many Vector temporaries); single-stage
+SimpleEuler/LoopEuler dodge it. Scalar / SVector-state / parameterized ODE solving all
+pass on 1.13. LOUD/SOUND — a compile-time validation error, never a silent miscompile
+(the cardinal invariant holds). The 1.13 matrix caught it; gated in
+test/fuzz/simplediffeq_diff.jl (`VERSION >= v"1.13.0-"`) pending the WT-core fix.
+
+ROOT CAUSE — DEFINITIVE (via `WT_DUMP_IR` of `#__solve#NN` + hand-traced wasm stack
+through the failing block, both Julia versions): a Vector `.ref` field write
+(`struct.set 15 1`, type 15 = the `Vector{Float64}` wrapper {typeId, mut f64-array, mut
+size}) returns the just-set memref, and WT's codegen STACK-THREADS that memref directly
+into a FOLLOWING `array.set` as its array operand — a reuse optimization with NO
+IR-level representation (the array.set does not reference the setfield!'s SSA). 1.13's
+tighter optimizer (≈540 fewer stmts / 30 fewer `Core.tuple` than 1.12, identical
+mutation-op counts) reorders this block so that in one case the threaded value is NOT
+consumed → it orphans at the block `end`.
+
+WHY IT IS SUB-IR (proven — three IR-level fixes all fail; for the follow-up): guarding
+the setfield! result-push on `haskey(ssa_locals,idx)` (memoryrefset!'s working PURE-6024
+pattern), OR `haskey OR count_ssa_uses!`, OR doing it only for the Vector `.ref`/`.size`
+handlers, ALL flip the error OVERFLOW ("values remaining") → UNDERFLOW ("expected a type
+but nothing on stack") at the very next `array.set` — because that array.set consumes
+the threaded memref with NO IR use, so `haskey`/`count_ssa_uses` cannot distinguish
+"threaded into the next op (KEEP)" from "genuinely orphaned (DROP)" — both are
+`haskey=false, uses=0`. memoryrefset! gets away with its `haskey` guard because its
+results are never threaded this way; setfield!-`:ref` results are. THE FIX must live in
+WT's codegen stack model: either make `array.set`/`memoryrefset!` take its array operand
+from a real local/IR-ref instead of the threaded setfield! result (so the result is
+freely droppable when unused), or add a real stack-height/balance pass that drops
+block-end excess. Not an IR-use heuristic. WT already drops the 40+ other unused
+`memoryrefset!` results in this same func fine — so it's a narrow threading interaction,
+not generic unused-result handling. Reduces no further than the full multi-stage
+`__solve` (plain Vector-copy-in-a-loop compiles clean on 1.13). Repro funcs export as
+`#__solve#NN`. Diagnostic: add an env-gated CodeInfo dump in compile.jl's function_data
+loop (`WT_DUMP_IR=__solve#`) to re-obtain the IR.
