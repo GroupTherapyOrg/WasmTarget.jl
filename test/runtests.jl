@@ -1408,6 +1408,9 @@ begin
             bbi = WT.InstrBuilder(; func_name="bti"); WT.i32_const!(bbi, 1)
             WT.if_!(bbi, 0x7F; results=WT.WasmValType[WT.I32]); WT.i32_const!(bbi, 0); WT.end_block!(bbi)
             @test WT.builder_code(bbi) == UInt8[WT.Opcode.I32_CONST, 0x01, WT.Opcode.IF, 0x7F, WT.Opcode.I32_CONST, 0x00, WT.Opcode.END]
+            # instruction-IR ADT (dart2wasm ir/ layer): records typed instrs + symbolic disasm
+            @test all(i -> i isa WT.InstrIR.WasmInstr, bbi.instrs)
+            @test WT.builder_disasm(bbi) == ["i32.const 1", "if 127", "i32.const 0", "end"]
         end
 
         @testset "LEB128 Encoding" begin
