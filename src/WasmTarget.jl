@@ -7,6 +7,7 @@ include("builder/types.jl")
 include("builder/writer.jl")
 include("builder/instructions.jl")
 include("builder/validator.jl")
+include("builder/instr_ir.jl")
 include("builder/instr_builder.jl")
 
 # Codegen - Julia IR to Wasm bytecode

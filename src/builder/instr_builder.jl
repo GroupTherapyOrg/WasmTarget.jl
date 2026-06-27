@@ -1,17 +1,19 @@
-# InstrBuilder — a dart2wasm-`wasm_builder`-style typed instruction emitter.
+# InstrBuilder — dart2wasm `wasm_builder`'s InstructionsBuilder, 1:1.
 #
-# THE one emission layer (replacing raw `push!(bytes, Opcode.X)` + the emergent
-# stack-balance heuristics). Each emit method BOTH appends bytes to `.code` AND
-# updates an explicit operand-stack model (reusing `WasmStackValidator`'s per-opcode
-# pop/push logic — composition, not duplication). When `strict`, a stack imbalance
-# THROWS at the emit site with Julia source context; during migration it collects so
+# dart2wasm's three layers: builder/ (typed methods that validate + record) → ir/
+# (the Instruction objects) → serialize/ (bytes). This is that:
+#   - each typed method validates the operand stack (reusing WasmStackValidator's
+#     per-opcode pop/push logic — composition, not duplication) and RECORDS an
+#     InstrIR.WasmInstr into `b.instrs` (the ir/ layer);
+#   - `builder_code` serializes `b.instrs` to bytes (the serialize/ layer) via the
+#     per-class `encode!` methods in instr_ir.jl.
+# One representation, no parallel byte path. When `strict`, a stack imbalance THROWS at
+# the emit site with Julia source context; during migration it collects so
 # partially-migrated functions still build, with the model staying live.
 #
-# Mirrors dart2wasm's InstructionsBuilder: typed methods, type-directed GC stack
-# effects (struct_new reads the field types), `end_block!` enforces
-# height == base + outputs. See dev/WASM_BUILDER_MIGRATION.md.
+# See dev/WASM_BUILDER_MIGRATION.md.
 
-export InstrBuilder, builder_code, set_strict!, StackImbalanceError,
+export InstrBuilder, builder_code, builder_disasm, set_strict!, StackImbalanceError,
        set_context!, builder_diagnose
 
 """
@@ -29,7 +31,7 @@ struct StackImbalanceError <: Exception
     context::String        # the Julia statement / high-level op being emitted
     message::String        # the specific validator complaint(s)
     stack::Vector{String}  # operand-stack snapshot (types, bottom→top) at failure
-    byte_offset::Int       # length(code) at failure
+    byte_offset::Int       # serialized byte length at failure
 end
 function Base.showerror(io::IO, e::StackImbalanceError)
     print(io, "StackImbalanceError in `$(e.func_name)`")
@@ -42,18 +44,18 @@ end
 """
     InstrBuilder
 
-Live, self-validating WebAssembly instruction emitter. `.code` is the function body
-bytes; `.v` is the operand-stack model (`WasmStackValidator`); `.locals` types
-`local.get/set/tee`; GC ops take their field/element types directly (caller has them,
-exactly as it does today when emitting).
+Live, self-validating WebAssembly instruction emitter. `.instrs` is the ir/ instruction
+stream (serialized to bytes by `builder_code`); `.v` is the operand-stack model
+(`WasmStackValidator`); `.locals` types `local.get/set/tee`; GC ops take their
+field/element types directly (caller has them, exactly as it does when emitting).
 """
 mutable struct InstrBuilder
-    code::Vector{UInt8}
+    instrs::Vector{InstrIR.WasmInstr}   # the ir/ layer — serialized on demand
     v::WasmStackValidator
-    locals::Vector{WasmValType}   # param + local types, indexed by local index
-    strict::Bool                  # throw on stack imbalance (migrated funcs) vs collect
+    locals::Vector{WasmValType}         # param + local types, indexed by local index
+    strict::Bool                        # throw on stack imbalance (migrated funcs) vs collect
     func_name::String
-    context::String               # current Julia stmt/op being emitted (for diagnostics)
+    context::String                     # current Julia stmt/op being emitted (diagnostics)
     trace::Union{Nothing, Vector{String}}  # opt-in full emit log (WT_BUILDER_TRACE)
 end
 
@@ -66,10 +68,21 @@ function InstrBuilder(param_types::Vector{<:Any}=WasmValType[],
     # so end-of-function balance is checked against the declared results.
     push!(v.labels, ValidatorLabel(:block, 0, WasmValType[r for r in result_types], true))
     trace = haskey(ENV, "WT_BUILDER_TRACE") ? String[] : nothing
-    InstrBuilder(UInt8[], v, locals, strict, func_name, "", trace)
+    InstrBuilder(InstrIR.WasmInstr[], v, locals, strict, func_name, "", trace)
 end
 
-builder_code(b::InstrBuilder) = b.code
+# serialize/ layer: turn the recorded instruction stream into bytes.
+function builder_code(b::InstrBuilder)::Vector{UInt8}
+    code = UInt8[]
+    for instr in b.instrs
+        encode!(code, instr)
+    end
+    code
+end
+# symbolic disassembly (dart2wasm printTo) — clarity for tracking codegen bugs.
+builder_disasm(b::InstrBuilder)::Vector{String} = String[mnemonic(i) for i in b.instrs]
+_byte_len(b::InstrBuilder)::Int = length(builder_code(b))
+
 set_strict!(b::InstrBuilder, s::Bool) = (b.strict = s; b)
 
 """
@@ -87,16 +100,23 @@ set_context!(b::InstrBuilder, ctx::AbstractString) = (b.context = String(ctx); b
 
 _stack_snapshot(b::InstrBuilder) = String[string(t) for t in b.v.stack]
 
-# Throw the collected validator errors (if strict) with rich source context, else collect.
-@inline function _check!(b::InstrBuilder)
+# Record an instruction (ir/ layer) + trace, then enforce strictness. Validation has
+# already run against the operand-stack model by the calling method.
+@inline function _emit!(b::InstrBuilder, instr::InstrIR.WasmInstr)
+    push!(b.instrs, instr)
     if b.trace !== nothing
         top = isempty(b.v.stack) ? "-" : string(b.v.stack[end])
-        push!(b.trace, "off=0x$(string(length(b.code), base=16)) h=$(length(b.v.stack)) top=$top | $(b.context)")
+        push!(b.trace, "[$(length(b.instrs))] $(mnemonic(instr))   h=$(length(b.v.stack)) top=$top | $(b.context)")
     end
+    return _check!(b)
+end
+
+# Throw the collected validator errors (if strict) with rich source context, else collect.
+@inline function _check!(b::InstrBuilder)
     if b.strict && has_errors(b.v)
         msg = join(b.v.errors, "\n  ")
         empty!(b.v.errors)
-        throw(StackImbalanceError(b.func_name, b.context, msg, _stack_snapshot(b), length(b.code)))
+        throw(StackImbalanceError(b.func_name, b.context, msg, _stack_snapshot(b), _byte_len(b)))
     end
     return b
 end
@@ -104,14 +124,14 @@ end
 """
     builder_diagnose(b) -> String
 
-Full human-readable post-mortem of a builder's state — the operand-stack snapshot,
-the open control-flow labels (with their base heights/result types), reachability,
-the byte length, and any collected (non-strict) errors. Use this to pin a codegen
-bug to an exact statement + stack shape with no wasm-tools round-trip.
+Full human-readable post-mortem of a builder's state — the symbolic instruction tail,
+the operand-stack snapshot, the open control-flow labels (with their base heights/result
+types), reachability, the byte length, and any collected (non-strict) errors. Pins a
+codegen bug to an exact statement + stack shape with no wasm-tools round-trip.
 """
 function builder_diagnose(b::InstrBuilder)::String
     io = IOBuffer()
-    println(io, "InstrBuilder `$(b.func_name)` — $(length(b.code)) bytes, reachable=$(b.v.reachable)")
+    println(io, "InstrBuilder `$(b.func_name)` — $(length(b.instrs)) instrs / $(_byte_len(b)) bytes, reachable=$(b.v.reachable)")
     isempty(b.context) || println(io, "  context: ", b.context)
     println(io, "  operand stack (bottom→top): [", join(_stack_snapshot(b), ", "), "]")
     if !isempty(b.v.labels)
@@ -120,13 +140,14 @@ function builder_diagnose(b::InstrBuilder)::String
             println(io, "    [$i] $(l.kind) base=$(l.stack_height_at_entry) results=$(l.result_types) reachable=$(l.reachable_at_entry)")
         end
     end
+    dis = builder_disasm(b)
+    if !isempty(dis)
+        println(io, "  instruction tail (last 40, symbolic):")
+        for s in last(dis, 40); println(io, "    ", s); end
+    end
     if has_errors(b.v)
         println(io, "  collected errors:")
         for e in b.v.errors; println(io, "    - ", e); end
-    end
-    if b.trace !== nothing && !isempty(b.trace)
-        println(io, "  emit trace (last 40):")
-        for s in last(b.trace, 40); println(io, "    ", s); end
     end
     String(take!(io))
 end
@@ -143,212 +164,174 @@ function builder_set_local_type!(b::InstrBuilder, idx::Integer, typ::WasmValType
     b.locals[idx + 1] = typ
 end
 
-# ── raw opcode appenders (internal) ────────────────────────────────────────────
-@inline _op!(b::InstrBuilder, op::UInt8) = push!(b.code, op)
-@inline _leb_u!(b::InstrBuilder, n::Integer) = append!(b.code, encode_leb128_unsigned(n))
-@inline _leb_s!(b::InstrBuilder, n::Integer) = append!(b.code, encode_leb128_signed(n))
-
 # ════════════════════════════════════════════════════════════════════════════════
-# Numeric
+# Typed emit methods — validate the operand stack, then record the ir/ instruction.
+# (dart2wasm InstructionsBuilder: same names, same type-directed GC stack effects.)
 # ════════════════════════════════════════════════════════════════════════════════
-i32_const!(b::InstrBuilder, v::Integer) = (_op!(b, Opcode.I32_CONST); _leb_s!(b, Int64(v)); validate_push!(b.v, I32); _check!(b))
-i64_const!(b::InstrBuilder, v::Integer) = (_op!(b, Opcode.I64_CONST); _leb_s!(b, Int64(v)); validate_push!(b.v, I64); _check!(b))
-function f32_const!(b::InstrBuilder, x::Real)
-    _op!(b, Opcode.F32_CONST); append!(b.code, reinterpret(UInt8, [Float32(x)])); validate_push!(b.v, F32); _check!(b)
-end
-function f64_const!(b::InstrBuilder, x::Real)
-    _op!(b, Opcode.F64_CONST); append!(b.code, reinterpret(UInt8, [Float64(x)])); validate_push!(b.v, F64); _check!(b)
-end
 
+# ── Numeric ─────────────────────────────────────────────────────────────────────
+i32_const!(b::InstrBuilder, v::Integer) = (validate_push!(b.v, I32); _emit!(b, InstrIR.I32Const(Int64(v))))
+i64_const!(b::InstrBuilder, v::Integer) = (validate_push!(b.v, I64); _emit!(b, InstrIR.I64Const(Int64(v))))
+f32_const!(b::InstrBuilder, x::Real) = (validate_push!(b.v, F32); _emit!(b, InstrIR.F32Const(Float32(x))))
+f64_const!(b::InstrBuilder, x::Real) = (validate_push!(b.v, F64); _emit!(b, InstrIR.F64Const(Float64(x))))
 # Generic numeric/comparison/conversion op (no immediates): reuse validate_instruction!.
-function num!(b::InstrBuilder, op::UInt8)
-    _op!(b, op); validate_instruction!(b.v, op); _check!(b)
-end
+num!(b::InstrBuilder, op::UInt8) = (validate_instruction!(b.v, op); _emit!(b, InstrIR.NumOp(op)))
 
-# ════════════════════════════════════════════════════════════════════════════════
-# Parametric
-# ════════════════════════════════════════════════════════════════════════════════
-drop!(b::InstrBuilder) = (_op!(b, Opcode.DROP); validate_pop_any!(b.v); _check!(b))
+# ── Parametric ──────────────────────────────────────────────────────────────────
+drop!(b::InstrBuilder) = (validate_pop_any!(b.v); _emit!(b, InstrIR.Drop()))
+select!(b::InstrBuilder) = (validate_instruction!(b.v, Opcode.SELECT); _emit!(b, InstrIR.Select()))
 
-# ════════════════════════════════════════════════════════════════════════════════
-# Variable
-# ════════════════════════════════════════════════════════════════════════════════
+# ── Variable ────────────────────────────────────────────────────────────────────
 function local_get!(b::InstrBuilder, idx::Integer)
-    _op!(b, Opcode.LOCAL_GET); _leb_u!(b, idx)
     validate_push!(b.v, (idx + 1) <= length(b.locals) ? b.locals[idx + 1] : AnyRef)
-    _check!(b)
+    _emit!(b, InstrIR.LocalGet(UInt32(idx)))
 end
-local_set!(b::InstrBuilder, idx::Integer) = (_op!(b, Opcode.LOCAL_SET); _leb_u!(b, idx); validate_pop_any!(b.v); _check!(b))
+local_set!(b::InstrBuilder, idx::Integer) = (validate_pop_any!(b.v); _emit!(b, InstrIR.LocalSet(UInt32(idx))))
 function local_tee!(b::InstrBuilder, idx::Integer)
-    _op!(b, Opcode.LOCAL_TEE); _leb_u!(b, idx)
     # dart2wasm: local_tee(l) is [l.type] → [l.type]
     lt = (idx + 1) <= length(b.locals) ? b.locals[idx + 1] : AnyRef
     validate_pop!(b.v, lt); validate_push!(b.v, lt)
-    _check!(b)
+    _emit!(b, InstrIR.LocalTee(UInt32(idx)))
 end
-global_get!(b::InstrBuilder, idx::Integer, typ::WasmValType) = (_op!(b, Opcode.GLOBAL_GET); _leb_u!(b, idx); validate_push!(b.v, typ); _check!(b))
-global_set!(b::InstrBuilder, idx::Integer) = (_op!(b, Opcode.GLOBAL_SET); _leb_u!(b, idx); validate_pop_any!(b.v); _check!(b))
+global_get!(b::InstrBuilder, idx::Integer, typ::WasmValType) = (validate_push!(b.v, typ); _emit!(b, InstrIR.GlobalGet(UInt32(idx))))
+global_set!(b::InstrBuilder, idx::Integer) = (validate_pop_any!(b.v); _emit!(b, InstrIR.GlobalSet(UInt32(idx))))
 
-# ════════════════════════════════════════════════════════════════════════════════
-# Control flow
-# ════════════════════════════════════════════════════════════════════════════════
-unreachable!(b::InstrBuilder) = (_op!(b, Opcode.UNREACHABLE); b.v.reachable = false; _check!(b))
-nop!(b::InstrBuilder) = (_op!(b, Opcode.NOP); _check!(b))
+# ── Control flow ────────────────────────────────────────────────────────────────
+unreachable!(b::InstrBuilder) = (b.v.reachable = false; _emit!(b, InstrIR.Unreachable()))
+nop!(b::InstrBuilder) = _emit!(b, InstrIR.Nop())
 
-# block/loop/if blocktype: a value-type/void immediate is a SINGLE on-wire byte (0x40
-# void, 0x7F i32, …) — NOT a LEB-encoded int — and a ConcreteRef result is multi-byte
-# (0x63/0x64 + idx). Encode via the SAME encode_block_type the rest of codegen uses, so
-# bytes are identical. `results` feeds the validator's end-balance check. Pass the
-# blocktype as the void byte 0x40 or a WasmValType (e.g. I32, ConcreteRef(...)).
+# block/loop/if: blocktype is a void byte 0x40 or a WasmValType (I32, ConcreteRef(...));
+# encode_block_type (in serialize) handles the single-byte vs multi-byte distinction.
+# `results` feeds the validator's end-balance check.
 function block!(b::InstrBuilder, blocktype=0x40; results::Vector{<:Any}=WasmValType[])
-    _op!(b, Opcode.BLOCK); append!(b.code, encode_block_type(blocktype))
-    validate_block_start!(b.v, :block, WasmValType[r for r in results]); _check!(b)
+    validate_block_start!(b.v, :block, WasmValType[r for r in results]); _emit!(b, InstrIR.Block(blocktype))
 end
 function loop!(b::InstrBuilder, blocktype=0x40; results::Vector{<:Any}=WasmValType[])
-    _op!(b, Opcode.LOOP); append!(b.code, encode_block_type(blocktype))
-    validate_block_start!(b.v, :loop, WasmValType[r for r in results]); _check!(b)
+    validate_block_start!(b.v, :loop, WasmValType[r for r in results]); _emit!(b, InstrIR.Loop(blocktype))
 end
 function if_!(b::InstrBuilder, blocktype=0x40; results::Vector{<:Any}=WasmValType[])
-    _op!(b, Opcode.IF); append!(b.code, encode_block_type(blocktype))
-    validate_if_start!(b.v, WasmValType[r for r in results]); _check!(b)
+    validate_if_start!(b.v, WasmValType[r for r in results]); _emit!(b, InstrIR.If(blocktype))
 end
-else_!(b::InstrBuilder) = (_op!(b, Opcode.ELSE); validate_else!(b.v); _check!(b))
-end_block!(b::InstrBuilder) = (_op!(b, Opcode.END); validate_block_end!(b.v); _check!(b))
-br!(b::InstrBuilder, depth::Integer) = (_op!(b, Opcode.BR); _leb_u!(b, depth); validate_br!(b.v, Int(depth)); _check!(b))
-br_if!(b::InstrBuilder, depth::Integer) = (_op!(b, Opcode.BR_IF); _leb_u!(b, depth); validate_br_if!(b.v, Int(depth)); _check!(b))
+else_!(b::InstrBuilder) = (validate_else!(b.v); _emit!(b, InstrIR.Else()))
+end_block!(b::InstrBuilder) = (validate_block_end!(b.v); _emit!(b, InstrIR.End()))
+br!(b::InstrBuilder, depth::Integer) = (validate_br!(b.v, Int(depth)); _emit!(b, InstrIR.Br(UInt32(depth))))
+br_if!(b::InstrBuilder, depth::Integer) = (validate_br_if!(b.v, Int(depth)); _emit!(b, InstrIR.BrIf(UInt32(depth))))
 function br_table!(b::InstrBuilder, targets::Vector{<:Integer}, default::Integer)
-    _op!(b, Opcode.BR_TABLE); _leb_u!(b, length(targets))
-    for t in targets; _leb_u!(b, t); end
-    _leb_u!(b, default)
     if b.v.reachable; validate_pop!(b.v, I32); b.v.reachable = false; end
-    _check!(b)
+    _emit!(b, InstrIR.BrTable(UInt32[UInt32(t) for t in targets], UInt32(default)))
 end
-function return_!(b::InstrBuilder)
-    _op!(b, Opcode.RETURN); b.v.reachable = false; _check!(b)
-end
+return_!(b::InstrBuilder) = (b.v.reachable = false; _emit!(b, InstrIR.Return()))
 
 # call: pop params, push results (caller supplies the signature it already knows).
 function call!(b::InstrBuilder, func_idx::Integer, params::Vector{<:Any}, results::Vector{<:Any})
-    _op!(b, Opcode.CALL); _leb_u!(b, func_idx)
     if b.v.reachable
         for p in reverse(params); validate_pop!(b.v, p); end
         for r in results; validate_push!(b.v, r); end
     end
-    _check!(b)
+    _emit!(b, InstrIR.Call(UInt32(func_idx)))
 end
 
-# ════════════════════════════════════════════════════════════════════════════════
-# Reference
-# ════════════════════════════════════════════════════════════════════════════════
+# ── Reference ───────────────────────────────────────────────────────────────────
 ref_null!(b::InstrBuilder, heaptype::Integer, reftype::WasmValType) =
-    (_op!(b, Opcode.REF_NULL); _leb_s!(b, heaptype); validate_push!(b.v, reftype); _check!(b))
+    (validate_push!(b.v, reftype); _emit!(b, InstrIR.RefNullConcrete(Int64(heaptype))))
 # Abstract-heaptype ref.null (any/struct/array/i31/...): the RefType enum value IS the
-# single on-wire heaptype byte (dart2wasm encodes HeapType directly), so push it raw —
-# NOT LEB-encoded (LEB of 0x6E would be two bytes). Mirrors push!(bytes, UInt8(rt)).
+# single on-wire heaptype byte (dart2wasm encodes HeapType directly).
 ref_null!(b::InstrBuilder, rt::RefType) =
-    (_op!(b, Opcode.REF_NULL); _op!(b, UInt8(rt)); validate_push!(b.v, rt); _check!(b))
+    (validate_push!(b.v, rt); _emit!(b, InstrIR.RefNullAbstract(UInt8(rt))))
 ref_func!(b::InstrBuilder, func_idx::Integer, reftype::WasmValType) =
-    (_op!(b, Opcode.REF_FUNC); _leb_u!(b, func_idx); validate_push!(b.v, reftype); _check!(b))
-ref_is_null!(b::InstrBuilder) = (_op!(b, Opcode.REF_IS_NULL); validate_pop_any!(b.v); validate_push!(b.v, I32); _check!(b))
+    (validate_push!(b.v, reftype); _emit!(b, InstrIR.RefFunc(UInt32(func_idx))))
+ref_is_null!(b::InstrBuilder) = (validate_pop_any!(b.v); validate_push!(b.v, I32); _emit!(b, InstrIR.RefIsNull()))
 # dart2wasm: ref_as_non_null output = actual top-of-stack with nullability=false.
 function ref_as_non_null!(b::InstrBuilder)
-    _op!(b, Opcode.REF_AS_NON_NULL)
     t = validate_pop_any!(b.v)
     nn = t isa ConcreteRef ? ConcreteRef(t.type_idx, false) : (t === nothing ? AnyRef : t)
     validate_push!(b.v, nn)
-    _check!(b)
+    _emit!(b, InstrIR.RefAsNonNull())
 end
 
-# ════════════════════════════════════════════════════════════════════════════════
-# WasmGC (type-directed; caller passes the resolved field/element types it already has)
-# ════════════════════════════════════════════════════════════════════════════════
+# ── WasmGC (type-directed; caller passes the resolved field/element types it has) ──
 function struct_new!(b::InstrBuilder, type_idx::Integer, field_types::Vector{<:Any})
-    _op!(b, Opcode.GC_PREFIX); _op!(b, Opcode.STRUCT_NEW); _leb_u!(b, type_idx)
-    validate_gc_instruction!(b.v, Opcode.STRUCT_NEW, (type_idx, WasmValType[f for f in field_types])); _check!(b)
+    validate_gc_instruction!(b.v, Opcode.STRUCT_NEW, (type_idx, WasmValType[f for f in field_types]))
+    _emit!(b, InstrIR.StructNew(UInt32(type_idx)))
 end
 function struct_new_default!(b::InstrBuilder, type_idx::Integer)
-    _op!(b, Opcode.GC_PREFIX); _op!(b, Opcode.STRUCT_NEW_DEFAULT); _leb_u!(b, type_idx)
-    validate_gc_instruction!(b.v, Opcode.STRUCT_NEW_DEFAULT, type_idx); _check!(b)
+    validate_gc_instruction!(b.v, Opcode.STRUCT_NEW_DEFAULT, type_idx)
+    _emit!(b, InstrIR.StructNewDefault(UInt32(type_idx)))
 end
 function struct_get!(b::InstrBuilder, type_idx::Integer, field_idx::Integer, field_type::WasmValType; signed::Union{Nothing,Bool}=nothing)
     op = signed === nothing ? Opcode.STRUCT_GET : (signed ? Opcode.STRUCT_GET_S : Opcode.STRUCT_GET_U)
-    _op!(b, Opcode.GC_PREFIX); _op!(b, op); _leb_u!(b, type_idx); _leb_u!(b, field_idx)
-    validate_gc_instruction!(b.v, op, (type_idx, field_type)); _check!(b)
+    validate_gc_instruction!(b.v, op, (type_idx, field_type))
+    _emit!(b, InstrIR.StructGet(UInt32(type_idx), UInt32(field_idx), op))
 end
 function struct_set!(b::InstrBuilder, type_idx::Integer, field_idx::Integer, field_type::WasmValType)
-    _op!(b, Opcode.GC_PREFIX); _op!(b, Opcode.STRUCT_SET); _leb_u!(b, type_idx); _leb_u!(b, field_idx)
-    validate_gc_instruction!(b.v, Opcode.STRUCT_SET, (type_idx, field_type)); _check!(b)
+    validate_gc_instruction!(b.v, Opcode.STRUCT_SET, (type_idx, field_type))
+    _emit!(b, InstrIR.StructSet(UInt32(type_idx), UInt32(field_idx)))
 end
 function array_new!(b::InstrBuilder, type_idx::Integer, elem_type::WasmValType)
-    _op!(b, Opcode.GC_PREFIX); _op!(b, Opcode.ARRAY_NEW); _leb_u!(b, type_idx)
-    validate_gc_instruction!(b.v, Opcode.ARRAY_NEW, (type_idx, elem_type)); _check!(b)
+    validate_gc_instruction!(b.v, Opcode.ARRAY_NEW, (type_idx, elem_type))
+    _emit!(b, InstrIR.ArrayNew(UInt32(type_idx)))
 end
 function array_new_default!(b::InstrBuilder, type_idx::Integer)
-    _op!(b, Opcode.GC_PREFIX); _op!(b, Opcode.ARRAY_NEW_DEFAULT); _leb_u!(b, type_idx)
-    validate_gc_instruction!(b.v, Opcode.ARRAY_NEW_DEFAULT, type_idx); _check!(b)
+    validate_gc_instruction!(b.v, Opcode.ARRAY_NEW_DEFAULT, type_idx)
+    _emit!(b, InstrIR.ArrayNewDefault(UInt32(type_idx)))
 end
 function array_new_fixed!(b::InstrBuilder, type_idx::Integer, n::Integer, elem_type::WasmValType)
-    _op!(b, Opcode.GC_PREFIX); _op!(b, Opcode.ARRAY_NEW_FIXED); _leb_u!(b, type_idx); _leb_u!(b, n)
-    validate_gc_instruction!(b.v, Opcode.ARRAY_NEW_FIXED, (type_idx, elem_type, n)); _check!(b)
+    validate_gc_instruction!(b.v, Opcode.ARRAY_NEW_FIXED, (type_idx, elem_type, n))
+    _emit!(b, InstrIR.ArrayNewFixed(UInt32(type_idx), UInt32(n)))
 end
 function array_get!(b::InstrBuilder, type_idx::Integer, elem_type::WasmValType; signed::Union{Nothing,Bool}=nothing)
     op = signed === nothing ? Opcode.ARRAY_GET : (signed ? Opcode.ARRAY_GET_S : Opcode.ARRAY_GET_U)
-    _op!(b, Opcode.GC_PREFIX); _op!(b, op); _leb_u!(b, type_idx)
-    validate_gc_instruction!(b.v, op, (type_idx, elem_type)); _check!(b)
+    validate_gc_instruction!(b.v, op, (type_idx, elem_type))
+    _emit!(b, InstrIR.ArrayGet(UInt32(type_idx), op))
 end
 function array_set!(b::InstrBuilder, type_idx::Integer, elem_type::WasmValType)
-    _op!(b, Opcode.GC_PREFIX); _op!(b, Opcode.ARRAY_SET); _leb_u!(b, type_idx)
-    validate_gc_instruction!(b.v, Opcode.ARRAY_SET, (type_idx, elem_type)); _check!(b)
+    validate_gc_instruction!(b.v, Opcode.ARRAY_SET, (type_idx, elem_type))
+    _emit!(b, InstrIR.ArraySet(UInt32(type_idx)))
 end
-array_len!(b::InstrBuilder) = (_op!(b, Opcode.GC_PREFIX); _op!(b, Opcode.ARRAY_LEN); validate_gc_instruction!(b.v, Opcode.ARRAY_LEN); _check!(b))
+array_len!(b::InstrBuilder) = (validate_gc_instruction!(b.v, Opcode.ARRAY_LEN); _emit!(b, InstrIR.ArrayLen()))
 function ref_cast!(b::InstrBuilder, type_idx::Integer, nullable::Bool)
     op = nullable ? Opcode.REF_CAST_NULL : Opcode.REF_CAST
-    _op!(b, Opcode.GC_PREFIX); _op!(b, op); _leb_s!(b, type_idx)
-    validate_gc_instruction!(b.v, op, ConcreteRef(UInt32(type_idx), nullable)); _check!(b)
+    validate_gc_instruction!(b.v, op, ConcreteRef(UInt32(type_idx), nullable))
+    _emit!(b, InstrIR.RefCastConcrete(Int64(type_idx), nullable))
 end
-# Cast to an abstract heaptype (i31/array/struct/...): the RefType enum value is the
-# single on-wire heaptype byte. Pops a ref, pushes the abstract target type.
+# Cast to an abstract heaptype (i31/array/struct/...): single on-wire heaptype byte.
 function ref_cast!(b::InstrBuilder, rt::RefType, nullable::Bool)
-    op = nullable ? Opcode.REF_CAST_NULL : Opcode.REF_CAST
-    _op!(b, Opcode.GC_PREFIX); _op!(b, op); _op!(b, UInt8(rt))
     if b.v.reachable; validate_pop_any!(b.v); validate_push!(b.v, rt); end
-    _check!(b)
+    _emit!(b, InstrIR.RefCastAbstract(UInt8(rt), nullable))
 end
-any_convert_extern!(b::InstrBuilder) = (_op!(b, Opcode.GC_PREFIX); _op!(b, Opcode.ANY_CONVERT_EXTERN); validate_gc_instruction!(b.v, Opcode.ANY_CONVERT_EXTERN); _check!(b))
-extern_convert_any!(b::InstrBuilder) = (_op!(b, Opcode.GC_PREFIX); _op!(b, Opcode.EXTERN_CONVERT_ANY); validate_gc_instruction!(b.v, Opcode.EXTERN_CONVERT_ANY); _check!(b))
-select!(b::InstrBuilder) = (_op!(b, Opcode.SELECT); validate_instruction!(b.v, Opcode.SELECT); _check!(b))
 function ref_test!(b::InstrBuilder, type_idx::Integer, nullable::Bool)
     op = nullable ? Opcode.REF_TEST_NULL : Opcode.REF_TEST
-    _op!(b, Opcode.GC_PREFIX); _op!(b, op); _leb_s!(b, type_idx)
-    validate_gc_instruction!(b.v, op); _check!(b)
+    validate_gc_instruction!(b.v, op)
+    _emit!(b, InstrIR.RefTest(Int64(type_idx), nullable))
 end
-ref_i31!(b::InstrBuilder) = (_op!(b, Opcode.GC_PREFIX); _op!(b, Opcode.REF_I31); validate_gc_instruction!(b.v, Opcode.REF_I31); _check!(b))
-i31_get_s!(b::InstrBuilder) = (_op!(b, Opcode.GC_PREFIX); _op!(b, Opcode.I31_GET_S); validate_gc_instruction!(b.v, Opcode.I31_GET_S); _check!(b))
-i31_get_u!(b::InstrBuilder) = (_op!(b, Opcode.GC_PREFIX); _op!(b, Opcode.I31_GET_U); validate_gc_instruction!(b.v, Opcode.I31_GET_U); _check!(b))
+any_convert_extern!(b::InstrBuilder) = (validate_gc_instruction!(b.v, Opcode.ANY_CONVERT_EXTERN); _emit!(b, InstrIR.AnyConvertExtern()))
+extern_convert_any!(b::InstrBuilder) = (validate_gc_instruction!(b.v, Opcode.EXTERN_CONVERT_ANY); _emit!(b, InstrIR.ExternConvertAny()))
+ref_i31!(b::InstrBuilder) = (validate_gc_instruction!(b.v, Opcode.REF_I31); _emit!(b, InstrIR.RefI31()))
+i31_get_s!(b::InstrBuilder) = (validate_gc_instruction!(b.v, Opcode.I31_GET_S); _emit!(b, InstrIR.I31GetS()))
+i31_get_u!(b::InstrBuilder) = (validate_gc_instruction!(b.v, Opcode.I31_GET_U); _emit!(b, InstrIR.I31GetU()))
 function array_copy!(b::InstrBuilder, dst_type_idx::Integer, src_type_idx::Integer)
-    _op!(b, Opcode.GC_PREFIX); _op!(b, Opcode.ARRAY_COPY); _leb_u!(b, dst_type_idx); _leb_u!(b, src_type_idx)
-    validate_gc_instruction!(b.v, Opcode.ARRAY_COPY, (dst_type_idx, src_type_idx)); _check!(b)
+    validate_gc_instruction!(b.v, Opcode.ARRAY_COPY, (dst_type_idx, src_type_idx))
+    _emit!(b, InstrIR.ArrayCopy(UInt32(dst_type_idx), UInt32(src_type_idx)))
 end
 function array_fill!(b::InstrBuilder, type_idx::Integer, elem_type::WasmValType)
-    _op!(b, Opcode.GC_PREFIX); _op!(b, Opcode.ARRAY_FILL); _leb_u!(b, type_idx)
-    validate_gc_instruction!(b.v, Opcode.ARRAY_FILL, (type_idx, elem_type)); _check!(b)
+    validate_gc_instruction!(b.v, Opcode.ARRAY_FILL, (type_idx, elem_type))
+    _emit!(b, InstrIR.ArrayFill(UInt32(type_idx)))
 end
 
 # ════════════════════════════════════════════════════════════════════════════════
-# Transitional bridge: splice already-built raw bytes from an un-migrated callee,
-# advancing the stack model by an explicit (pops, pushes) effect the caller supplies.
+# Transitional bridge: splice already-built raw bytes from an un-migrated callee as a
+# RawBytes instruction, advancing the stack model by an explicit (pops, pushes) effect.
 # Deleted once every emitter is migrated (Phase 6).
 # ════════════════════════════════════════════════════════════════════════════════
 function emit_raw!(b::InstrBuilder, raw::Vector{UInt8}; pops::Integer=0, pushes::Vector{<:Any}=WasmValType[])
-    append!(b.code, raw)
     for _ in 1:pops; validate_pop_any!(b.v); end
     for p in pushes; validate_push!(b.v, p); end
-    _check!(b)
+    _emit!(b, InstrIR.RawBytes(raw))
 end
 
-# Seed the model with stack values produced UPSTREAM (no bytes emitted). For fragment
-# emitters that consume a value the (not-yet-migrated) caller already left on the stack,
-# so the model starts from the true incoming stack rather than empty.
+# Seed the model with stack values produced UPSTREAM (no instruction emitted). For
+# fragment emitters that consume a value the (not-yet-migrated) caller already left on
+# the stack, so the model starts from the true incoming stack rather than empty.
 function seed_input!(b::InstrBuilder, types::Vector{<:Any})
     for t in types; validate_push!(b.v, t); end
     b
