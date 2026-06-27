@@ -1334,7 +1334,7 @@ Extract: println/print handler. Emits JS IO bridge imports.
 function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationContext)::Vector{UInt8}
     io = get_io_imports()
     if io !== nothing
-        bytes = UInt8[]
+        b = InstrBuilder(; func_name="_compile_invoke_print", strict=false)
         for arg in args
             # Determine argument type
             arg_type = nothing
@@ -1361,39 +1361,32 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
 
             if arg_type === String || arg_type === Symbol
                 # String: compile value, convert to JS string via decoder, call write_string
-                append!(bytes, compile_value(arg, ctx))
+                emit_raw!(b, compile_value(arg, ctx); pushes=WasmValType[infer_value_wasm_type(arg, ctx)])
                 # Need a temp local for tee
                 tmp_local = UInt32(allocate_local!(ctx, ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true)))
-                emit_jl_string_to_js!(bytes, io.decode_idx, tmp_local)
+                _sb = UInt8[]; emit_jl_string_to_js!(_sb, io.decode_idx, tmp_local); emit_raw!(b, _sb; pops=1, pushes=WasmValType[ExternRef])
                 # (ref extern) is subtype of externref — no conversion needed
-                push!(bytes, Opcode.CALL)
-                append!(bytes, encode_leb128_unsigned(io.write_string_idx))
+                call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
             elseif arg_type === Int64 || arg_type === Int || arg_type === UInt64
-                append!(bytes, compile_value(arg, ctx))
-                push!(bytes, Opcode.CALL)
-                append!(bytes, encode_leb128_unsigned(io.write_int_idx))
+                emit_raw!(b, compile_value(arg, ctx); pushes=WasmValType[infer_value_wasm_type(arg, ctx)])
+                call!(b, io.write_int_idx, WasmValType[I64], WasmValType[])
             elseif arg_type === Int32
-                append!(bytes, compile_value(arg, ctx))
-                push!(bytes, Opcode.I64_EXTEND_I32_S)
-                push!(bytes, Opcode.CALL)
-                append!(bytes, encode_leb128_unsigned(io.write_int_idx))
+                emit_raw!(b, compile_value(arg, ctx); pushes=WasmValType[infer_value_wasm_type(arg, ctx)])
+                num!(b, Opcode.I64_EXTEND_I32_S)
+                call!(b, io.write_int_idx, WasmValType[I64], WasmValType[])
             elseif arg_type === Float64
-                append!(bytes, compile_value(arg, ctx))
-                push!(bytes, Opcode.CALL)
-                append!(bytes, encode_leb128_unsigned(io.write_float_idx))
+                emit_raw!(b, compile_value(arg, ctx); pushes=WasmValType[infer_value_wasm_type(arg, ctx)])
+                call!(b, io.write_float_idx, WasmValType[F64], WasmValType[])
             elseif arg_type === Float32
-                append!(bytes, compile_value(arg, ctx))
-                push!(bytes, Opcode.F64_PROMOTE_F32)
-                push!(bytes, Opcode.CALL)
-                append!(bytes, encode_leb128_unsigned(io.write_float_idx))
+                emit_raw!(b, compile_value(arg, ctx); pushes=WasmValType[infer_value_wasm_type(arg, ctx)])
+                num!(b, Opcode.F64_PROMOTE_F32)
+                call!(b, io.write_float_idx, WasmValType[F64], WasmValType[])
             elseif arg_type === Bool
-                append!(bytes, compile_value(arg, ctx))
-                push!(bytes, Opcode.CALL)
-                append!(bytes, encode_leb128_unsigned(io.write_bool_idx))
+                emit_raw!(b, compile_value(arg, ctx); pushes=WasmValType[infer_value_wasm_type(arg, ctx)])
+                call!(b, io.write_bool_idx, WasmValType[I32], WasmValType[])
             elseif arg_type === Nothing
                 # PURE-9041: println(nothing) → write "nothing"
-                push!(bytes, Opcode.CALL)
-                append!(bytes, encode_leb128_unsigned(io.write_nothing_idx))
+                call!(b, io.write_nothing_idx, WasmValType[], WasmValType[])
             elseif arg_type !== nothing && arg_type <: Vector
                 # PURE-9067: Vector display — emit "[e1, e2, ...]"
                 elem_type = eltype(arg_type)
@@ -1404,7 +1397,7 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
                 data_array_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
 
                 # Compile the vector value onto stack
-                append!(bytes, compile_value(arg, ctx))
+                emit_raw!(b, compile_value(arg, ctx); pushes=WasmValType[infer_value_wasm_type(arg, ctx)])
 
                 # Allocate locals: vec_ref, data_arr, len, i, tmp_str
                 vec_local = UInt32(allocate_local!(ctx, ConcreteRef(vec_type_idx, true)))
@@ -1414,125 +1407,91 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
                 str_tmp_local = UInt32(allocate_local!(ctx, ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true)))
 
                 # Store vec ref
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(vec_local))
+                local_set!(b, vec_local)
 
                 # Get data array: struct.get field 1 (after typeId at field 0)
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(vec_local))
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.STRUCT_GET)
-                append!(bytes, encode_leb128_unsigned(vec_type_idx))
-                append!(bytes, encode_leb128_unsigned(UInt32(1)))  # field 1 = data array
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(data_local))
+                local_get!(b, vec_local)
+                struct_get!(b, vec_type_idx, UInt32(1), ConcreteRef(UInt32(data_array_idx), true))  # field 1 = data array
+                local_set!(b, data_local)
 
                 # Get length: array.len
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(data_local))
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, Opcode.ARRAY_LEN)
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(len_local))
+                local_get!(b, data_local)
+                array_len!(b)
+                local_set!(b, len_local)
 
                 # Write "["
-                append!(bytes, compile_value("[", ctx))
-                emit_jl_string_to_js!(bytes, io.decode_idx, str_tmp_local)
-                push!(bytes, Opcode.CALL)
-                append!(bytes, encode_leb128_unsigned(io.write_string_idx))
+                emit_raw!(b, compile_value("[", ctx); pushes=WasmValType[infer_value_wasm_type("[", ctx)])
+                _sb = UInt8[]; emit_jl_string_to_js!(_sb, io.decode_idx, str_tmp_local); emit_raw!(b, _sb; pops=1, pushes=WasmValType[ExternRef])
+                call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
 
                 # Initialize i = 0
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(i_local))
+                i32_const!(b, 0)
+                local_set!(b, i_local)
 
                 # Loop: block { loop { ... } }
-                push!(bytes, Opcode.BLOCK)   # block (label 1 = break)
-                push!(bytes, 0x40)            # void
-                push!(bytes, Opcode.LOOP)     # loop (label 0 = continue)
-                push!(bytes, 0x40)            # void
+                block!(b, 0x40)   # block (label 1 = break)
+                loop!(b, 0x40)    # loop (label 0 = continue)
 
                 # if i >= len, break
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(i_local))
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(len_local))
-                push!(bytes, Opcode.I32_GE_S)
-                push!(bytes, Opcode.BR_IF)
-                push!(bytes, 0x01)  # break to outer block
+                local_get!(b, i_local)
+                local_get!(b, len_local)
+                num!(b, Opcode.I32_GE_S)
+                br_if!(b, 1)  # break to outer block
 
                 # if i > 0, write ", "
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(i_local))
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
-                push!(bytes, Opcode.I32_NE)
-                push!(bytes, Opcode.IF)
-                push!(bytes, 0x40)  # void
-                append!(bytes, compile_value(", ", ctx))
-                emit_jl_string_to_js!(bytes, io.decode_idx, str_tmp_local)
-                push!(bytes, Opcode.CALL)
-                append!(bytes, encode_leb128_unsigned(io.write_string_idx))
-                push!(bytes, Opcode.END)  # end if
+                local_get!(b, i_local)
+                i32_const!(b, 0)
+                num!(b, Opcode.I32_NE)
+                if_!(b, 0x40)  # void
+                emit_raw!(b, compile_value(", ", ctx); pushes=WasmValType[infer_value_wasm_type(", ", ctx)])
+                _sb2 = UInt8[]; emit_jl_string_to_js!(_sb2, io.decode_idx, str_tmp_local); emit_raw!(b, _sb2; pops=1, pushes=WasmValType[ExternRef])
+                call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
+                end_block!(b)  # end if
 
                 # Get element: data_arr[i]
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(data_local))
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(i_local))
-                push!(bytes, Opcode.GC_PREFIX)
-                push!(bytes, elem_type === UInt8 ? Opcode.ARRAY_GET_U : Opcode.ARRAY_GET)
-                append!(bytes, encode_leb128_unsigned(data_array_idx))
+                local_get!(b, data_local)
+                local_get!(b, i_local)
+                _elem_wt = (elem_type === Float64) ? F64 : (elem_type === Float32) ? F32 :
+                           (elem_type === Int64 || elem_type === Int || elem_type === UInt64) ? I64 : I32
+                array_get!(b, data_array_idx, _elem_wt; signed=(elem_type === UInt8 ? false : nothing))
 
                 # Display element based on element type
                 if elem_type === Int32
-                    push!(bytes, Opcode.I64_EXTEND_I32_S)
-                    push!(bytes, Opcode.CALL)
-                    append!(bytes, encode_leb128_unsigned(io.write_int_idx))
+                    num!(b, Opcode.I64_EXTEND_I32_S)
+                    call!(b, io.write_int_idx, WasmValType[I64], WasmValType[])
                 elseif elem_type === Int64 || elem_type === Int || elem_type === UInt64
-                    push!(bytes, Opcode.CALL)
-                    append!(bytes, encode_leb128_unsigned(io.write_int_idx))
+                    call!(b, io.write_int_idx, WasmValType[I64], WasmValType[])
                 elseif elem_type === Float64
-                    push!(bytes, Opcode.CALL)
-                    append!(bytes, encode_leb128_unsigned(io.write_float_idx))
+                    call!(b, io.write_float_idx, WasmValType[F64], WasmValType[])
                 elseif elem_type === Float32
-                    push!(bytes, Opcode.F64_PROMOTE_F32)
-                    push!(bytes, Opcode.CALL)
-                    append!(bytes, encode_leb128_unsigned(io.write_float_idx))
+                    num!(b, Opcode.F64_PROMOTE_F32)
+                    call!(b, io.write_float_idx, WasmValType[F64], WasmValType[])
                 elseif elem_type === Bool
-                    push!(bytes, Opcode.CALL)
-                    append!(bytes, encode_leb128_unsigned(io.write_bool_idx))
+                    call!(b, io.write_bool_idx, WasmValType[I32], WasmValType[])
                 else
                     # Unsupported element type — just write "?"
-                    push!(bytes, Opcode.DROP)
-                    append!(bytes, compile_value("?", ctx))
-                    emit_jl_string_to_js!(bytes, io.decode_idx, str_tmp_local)
-                    push!(bytes, Opcode.CALL)
-                    append!(bytes, encode_leb128_unsigned(io.write_string_idx))
+                    drop!(b)
+                    emit_raw!(b, compile_value("?", ctx); pushes=WasmValType[infer_value_wasm_type("?", ctx)])
+                    _sb3 = UInt8[]; emit_jl_string_to_js!(_sb3, io.decode_idx, str_tmp_local); emit_raw!(b, _sb3; pops=1, pushes=WasmValType[ExternRef])
+                    call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                 end
 
                 # i += 1
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(i_local))
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x01)
-                push!(bytes, Opcode.I32_ADD)
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(i_local))
+                local_get!(b, i_local)
+                i32_const!(b, 1)
+                num!(b, Opcode.I32_ADD)
+                local_set!(b, i_local)
 
                 # Branch back to loop
-                push!(bytes, Opcode.BR)
-                push!(bytes, 0x00)  # continue loop
+                br!(b, 0)  # continue loop
 
-                push!(bytes, Opcode.END)  # end loop
-                push!(bytes, Opcode.END)  # end block
+                end_block!(b)  # end loop
+                end_block!(b)  # end block
 
                 # Write "]"
-                append!(bytes, compile_value("]", ctx))
-                emit_jl_string_to_js!(bytes, io.decode_idx, str_tmp_local)
-                push!(bytes, Opcode.CALL)
-                append!(bytes, encode_leb128_unsigned(io.write_string_idx))
+                emit_raw!(b, compile_value("]", ctx); pushes=WasmValType[infer_value_wasm_type("]", ctx)])
+                _sb4 = UInt8[]; emit_jl_string_to_js!(_sb4, io.decode_idx, str_tmp_local); emit_raw!(b, _sb4; pops=1, pushes=WasmValType[ExternRef])
+                call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
             elseif arg_type !== nothing && arg_type <: Tuple && arg_type isa DataType
                 # PURE-9067: Tuple display — emit "(e1, e2, ...)"
                 tuple_info = register_tuple_type!(ctx.mod, ctx.type_registry, arg_type)
@@ -1541,75 +1500,62 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
                     elem_types = arg_type.parameters
 
                     # Compile tuple value and store in local
-                    append!(bytes, compile_value(arg, ctx))
+                    emit_raw!(b, compile_value(arg, ctx); pushes=WasmValType[infer_value_wasm_type(arg, ctx)])
                     tup_local = UInt32(allocate_local!(ctx, ConcreteRef(tuple_type_idx, true)))
                     str_tmp_local2 = UInt32(allocate_local!(ctx, ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true)))
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(tup_local))
+                    local_set!(b, tup_local)
 
                     # Write "("
-                    append!(bytes, compile_value("(", ctx))
-                    emit_jl_string_to_js!(bytes, io.decode_idx, str_tmp_local2)
-                    push!(bytes, Opcode.CALL)
-                    append!(bytes, encode_leb128_unsigned(io.write_string_idx))
+                    emit_raw!(b, compile_value("(", ctx); pushes=WasmValType[infer_value_wasm_type("(", ctx)])
+                    _tb1 = UInt8[]; emit_jl_string_to_js!(_tb1, io.decode_idx, str_tmp_local2); emit_raw!(b, _tb1; pops=1, pushes=WasmValType[ExternRef])
+                    call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
 
                     for (fi, et) in enumerate(elem_types)
                         # Write ", " separator (after first element)
                         if fi > 1
-                            append!(bytes, compile_value(", ", ctx))
-                            emit_jl_string_to_js!(bytes, io.decode_idx, str_tmp_local2)
-                            push!(bytes, Opcode.CALL)
-                            append!(bytes, encode_leb128_unsigned(io.write_string_idx))
+                            emit_raw!(b, compile_value(", ", ctx); pushes=WasmValType[infer_value_wasm_type(", ", ctx)])
+                            _tb2 = UInt8[]; emit_jl_string_to_js!(_tb2, io.decode_idx, str_tmp_local2); emit_raw!(b, _tb2; pops=1, pushes=WasmValType[ExternRef])
+                            call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                         end
 
                         # Get field: struct.get (field index = fi because of typeId at 0)
-                        push!(bytes, Opcode.LOCAL_GET)
-                        append!(bytes, encode_leb128_unsigned(tup_local))
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.STRUCT_GET)
-                        append!(bytes, encode_leb128_unsigned(tuple_type_idx))
-                        append!(bytes, encode_leb128_unsigned(UInt32(fi)))  # field fi (1-based = after typeId)
+                        local_get!(b, tup_local)
+                        _et_wt = (et === Float64) ? F64 : (et === Float32) ? F32 :
+                                 (et === Int64 || et === Int || et === UInt64) ? I64 : I32
+                        struct_get!(b, tuple_type_idx, UInt32(fi), _et_wt)  # field fi (1-based = after typeId)
 
                         # Write element based on type
                         if et === Int32
-                            push!(bytes, Opcode.I64_EXTEND_I32_S)
-                            push!(bytes, Opcode.CALL)
-                            append!(bytes, encode_leb128_unsigned(io.write_int_idx))
+                            num!(b, Opcode.I64_EXTEND_I32_S)
+                            call!(b, io.write_int_idx, WasmValType[I64], WasmValType[])
                         elseif et === Int64 || et === Int || et === UInt64
-                            push!(bytes, Opcode.CALL)
-                            append!(bytes, encode_leb128_unsigned(io.write_int_idx))
+                            call!(b, io.write_int_idx, WasmValType[I64], WasmValType[])
                         elseif et === Float64
-                            push!(bytes, Opcode.CALL)
-                            append!(bytes, encode_leb128_unsigned(io.write_float_idx))
+                            call!(b, io.write_float_idx, WasmValType[F64], WasmValType[])
                         elseif et === Float32
-                            push!(bytes, Opcode.F64_PROMOTE_F32)
-                            push!(bytes, Opcode.CALL)
-                            append!(bytes, encode_leb128_unsigned(io.write_float_idx))
+                            num!(b, Opcode.F64_PROMOTE_F32)
+                            call!(b, io.write_float_idx, WasmValType[F64], WasmValType[])
                         elseif et === Bool
-                            push!(bytes, Opcode.CALL)
-                            append!(bytes, encode_leb128_unsigned(io.write_bool_idx))
+                            call!(b, io.write_bool_idx, WasmValType[I32], WasmValType[])
                         else
-                            push!(bytes, Opcode.DROP)
-                            append!(bytes, compile_value("?", ctx))
-                            emit_jl_string_to_js!(bytes, io.decode_idx, str_tmp_local2)
-                            push!(bytes, Opcode.CALL)
-                            append!(bytes, encode_leb128_unsigned(io.write_string_idx))
+                            drop!(b)
+                            emit_raw!(b, compile_value("?", ctx); pushes=WasmValType[infer_value_wasm_type("?", ctx)])
+                            _tb3 = UInt8[]; emit_jl_string_to_js!(_tb3, io.decode_idx, str_tmp_local2); emit_raw!(b, _tb3; pops=1, pushes=WasmValType[ExternRef])
+                            call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                         end
                     end
 
                     # Single-element tuple gets trailing comma: (1,)
                     if length(elem_types) == 1
-                        append!(bytes, compile_value(",", ctx))
-                        emit_jl_string_to_js!(bytes, io.decode_idx, str_tmp_local2)
-                        push!(bytes, Opcode.CALL)
-                        append!(bytes, encode_leb128_unsigned(io.write_string_idx))
+                        emit_raw!(b, compile_value(",", ctx); pushes=WasmValType[infer_value_wasm_type(",", ctx)])
+                        _tb4 = UInt8[]; emit_jl_string_to_js!(_tb4, io.decode_idx, str_tmp_local2); emit_raw!(b, _tb4; pops=1, pushes=WasmValType[ExternRef])
+                        call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                     end
 
                     # Write ")"
-                    append!(bytes, compile_value(")", ctx))
-                    emit_jl_string_to_js!(bytes, io.decode_idx, str_tmp_local2)
-                    push!(bytes, Opcode.CALL)
-                    append!(bytes, encode_leb128_unsigned(io.write_string_idx))
+                    emit_raw!(b, compile_value(")", ctx); pushes=WasmValType[infer_value_wasm_type(")", ctx)])
+                    _tb5 = UInt8[]; emit_jl_string_to_js!(_tb5, io.decode_idx, str_tmp_local2); emit_raw!(b, _tb5; pops=1, pushes=WasmValType[ExternRef])
+                    call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                 else
                     @debug "println/print: unsupported Tuple type $arg_type, skipping"
                 end
@@ -1619,15 +1565,13 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
             end
         end
         if name === :println
-            push!(bytes, Opcode.CALL)
-            append!(bytes, encode_leb128_unsigned(io.write_newline_idx))
+            call!(b, io.write_newline_idx, WasmValType[], WasmValType[])
         end
+        return builder_code(b)
     else
         # No IO imports — stub as no-op
-        bytes = UInt8[]
+        return UInt8[]
     end
-
-    return bytes
 end
 
 """

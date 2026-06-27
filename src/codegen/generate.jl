@@ -2302,62 +2302,55 @@ function generate_branch_split_try(ctx::AbstractCompilationContext, blocks::Vect
                                    code, then_chain::Vector{TryRegion},
                                    else_chain::Vector{TryRegion},
                                    branch_idx::Int)::Vector{UInt8}
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="generate_branch_split_try", strict=false)
     ensure_exception_tag!(ctx.mod)
     ensure_exception_global!(ctx.mod)
     else_start = (code[branch_idx]::Core.GotoIfNot).dest
 
-    function _emit_try_table!(body_blocks::Vector{BasicBlock})
-        push!(bytes, Opcode.BLOCK)
-        push!(bytes, 0x40)
-        push!(bytes, Opcode.TRY_TABLE)
-        push!(bytes, 0x40)
-        append!(bytes, encode_leb128_unsigned(1))
-        push!(bytes, Opcode.CATCH_ALL)
-        append!(bytes, encode_leb128_unsigned(0))
-        append!(bytes, generate_stackified_flow(ctx, body_blocks, code))
-        push!(bytes, Opcode.END)   # try_table
-        push!(bytes, Opcode.END)   # catch landing block
-        ctx.last_stmt_was_stub = false
-    end
-
     # One arm = a (possibly empty) CHAIN of try regions plus its surrounding
     # code, all paths returning (guarded at dispatch). P2-batch25 (gap
     # 589873788e5c): an arm can hold try-in-catch chains, not just one try.
+    function _emit_try_table!(body_blocks::Vector{BasicBlock})
+        block!(b)
+        try_table!(b, InstrIR.TryCatch[catch_all_clause(0)])
+        emit_raw!(b, generate_stackified_flow(ctx, body_blocks, code))
+        end_block!(b)   # try_table
+        end_block!(b)   # catch landing block
+        ctx.last_stmt_was_stub = false
+    end
+
     function _emit_arm!(lo::Int, chain::Vector{TryRegion}, hi::Int)
         if isempty(chain)
-            arm_blocks = [b for b in blocks if b.start_idx >= lo && b.start_idx <= hi]
-            append!(bytes, generate_stackified_flow(ctx, arm_blocks, code))
+            arm_blocks = [b2 for b2 in blocks if b2.start_idx >= lo && b2.start_idx <= hi]
+            emit_raw!(b, generate_stackified_flow(ctx, arm_blocks, code))
             ctx.last_stmt_was_stub = false
         else
-            _emit_chain_levels!(bytes, ctx, blocks, code, chain, lo, hi, _emit_try_table!)
+            _emit_chain_levels!(b, ctx, blocks, code, chain, lo, hi, _emit_try_table!)
         end
     end
 
     # Pre-branch code (may contain loops — stackified), truncated at the branch.
     pre = BasicBlock[]
-    for b in blocks
-        if b.end_idx < branch_idx
-            push!(pre, b)
-        elseif b.start_idx <= branch_idx <= b.end_idx && b.start_idx < branch_idx
-            push!(pre, BasicBlock(b.start_idx, branch_idx - 1, nothing))
+    for b2 in blocks
+        if b2.end_idx < branch_idx
+            push!(pre, b2)
+        elseif b2.start_idx <= branch_idx <= b2.end_idx && b2.start_idx < branch_idx
+            push!(pre, BasicBlock(b2.start_idx, branch_idx - 1, nothing))
         end
     end
     if !isempty(pre)
-        append!(bytes, generate_stackified_flow(ctx, pre, code; trailing_unreachable=false))
+        emit_raw!(b, generate_stackified_flow(ctx, pre, code; trailing_unreachable=false))
         ctx.last_stmt_was_stub = false
     end
 
-    push!(bytes, Opcode.BLOCK)   # $else
-    push!(bytes, 0x40)
-    append!(bytes, compile_condition_to_i32((code[branch_idx]::Core.GotoIfNot).cond, ctx))
-    push!(bytes, Opcode.I32_EQZ)
-    push!(bytes, Opcode.BR_IF)
-    append!(bytes, encode_leb128_unsigned(0))
+    block!(b)   # $else
+    emit_raw!(b, compile_condition_to_i32((code[branch_idx]::Core.GotoIfNot).cond, ctx); pushes=WasmValType[I32])
+    num!(b, Opcode.I32_EQZ)
+    br_if!(b, 0)
     _emit_arm!(branch_idx + 1, then_chain, else_start - 1)   # then arm — all paths return
-    push!(bytes, Opcode.END)     # $else
+    end_block!(b)   # $else
     _emit_arm!(else_start, else_chain, length(code))          # else arm — all paths return
-    return bytes
+    return builder_code(b)
 end
 
 # P2-batch18 (generalised to N levels in P2-batch24, gap a38002fd0ef2):
@@ -2585,7 +2578,7 @@ end
 
 function generate_catch_try_chain(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
                                   code, chain::Vector{TryRegion})::Vector{UInt8}
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="generate_catch_try_chain", strict=false)
     ensure_exception_tag!(ctx.mod)
     ensure_exception_global!(ctx.mod)
 
@@ -2595,22 +2588,17 @@ function generate_catch_try_chain(ctx::AbstractCompilationContext, blocks::Vecto
     # linear statement walk silently flattens. The normal path inside each body
     # RETURNS (guarded at the dispatch site), so the try_table needs no result.
     function _emit_try_table_region!(body_blocks::Vector{BasicBlock})
-        push!(bytes, Opcode.BLOCK)
-        push!(bytes, 0x40)
-        push!(bytes, Opcode.TRY_TABLE)
-        push!(bytes, 0x40)
-        append!(bytes, encode_leb128_unsigned(1))
-        push!(bytes, Opcode.CATCH_ALL)
-        append!(bytes, encode_leb128_unsigned(0))
-        append!(bytes, generate_stackified_flow(ctx, body_blocks, code))
-        push!(bytes, Opcode.END)   # try_table
-        push!(bytes, Opcode.END)   # catch landing block
+        block!(b)
+        try_table!(b, InstrIR.TryCatch[catch_all_clause(0)])
+        emit_raw!(b, generate_stackified_flow(ctx, body_blocks, code))
+        end_block!(b)   # try_table
+        end_block!(b)   # catch landing block
         ctx.last_stmt_was_stub = false
     end
 
-    _emit_chain_levels!(bytes, ctx, blocks, code, chain, 1, length(code),
+    _emit_chain_levels!(b, ctx, blocks, code, chain, 1, length(code),
                         _emit_try_table_region!)
-    return bytes
+    return builder_code(b)
 end
 
 # Shared chain emission bounded to [lo, hi] (P2-batch25: arms of a branch-split
@@ -2623,7 +2611,7 @@ end
 # the prefix, tail into the try body, keeping fill-loop phi edges keyed on the
 # tail's last statement resolvable (gap 90fa5e0f6382). The catch tail is
 # stackified (gap fdc7171b283f: fill loops in catch arms).
-function _emit_chain_levels!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext,
+function _emit_chain_levels!(b::InstrBuilder, ctx::AbstractCompilationContext,
                              blocks::Vector{BasicBlock}, code,
                              chain::Vector{TryRegion}, lo0::Int, hi::Int,
                              emit_try_table!::Function)
@@ -2631,35 +2619,35 @@ function _emit_chain_levels!(bytes::Vector{UInt8}, ctx::AbstractCompilationConte
         lo = k == 1 ? lo0 : chain[k-1].catch_dest
         pre = BasicBlock[]
         head = nothing
-        for b in blocks
-            b.start_idx >= lo || continue
-            b.start_idx < r.catch_dest || continue
-            if b.end_idx < r.enter_idx
-                push!(pre, b)
-            elseif b.start_idx <= r.enter_idx <= b.end_idx
-                b.start_idx < r.enter_idx &&
-                    push!(pre, BasicBlock(b.start_idx, r.enter_idx - 1, nothing))
-                r.enter_idx < b.end_idx &&
-                    (head = BasicBlock(r.enter_idx + 1, b.end_idx, b.terminator))
+        for b2 in blocks
+            b2.start_idx >= lo || continue
+            b2.start_idx < r.catch_dest || continue
+            if b2.end_idx < r.enter_idx
+                push!(pre, b2)
+            elseif b2.start_idx <= r.enter_idx <= b2.end_idx
+                b2.start_idx < r.enter_idx &&
+                    push!(pre, BasicBlock(b2.start_idx, r.enter_idx - 1, nothing))
+                r.enter_idx < b2.end_idx &&
+                    (head = BasicBlock(r.enter_idx + 1, b2.end_idx, b2.terminator))
             end
         end
         if !isempty(pre)
             # Falls through into this level's try_table — no trailing unreachable.
-            append!(bytes, generate_stackified_flow(ctx, pre, code;
-                                                    trailing_unreachable=false))
+            emit_raw!(b, generate_stackified_flow(ctx, pre, code;
+                                                  trailing_unreachable=false))
             ctx.last_stmt_was_stub = false
         end
-        body = [b for b in blocks
-                if b.start_idx > r.enter_idx && b.start_idx < r.catch_dest]
+        body = [b2 for b2 in blocks
+                if b2.start_idx > r.enter_idx && b2.start_idx < r.catch_dest]
         head !== nothing && pushfirst!(body, head)
         emit_try_table!(body)
     end
 
-    tail_blocks = [b for b in blocks
-                   if b.start_idx >= chain[end].catch_dest && b.start_idx <= hi]
-    append!(bytes, generate_stackified_flow(ctx, tail_blocks, code))
+    tail_blocks = [b2 for b2 in blocks
+                   if b2.start_idx >= chain[end].catch_dest && b2.start_idx <= hi]
+    emit_raw!(b, generate_stackified_flow(ctx, tail_blocks, code))
     ctx.last_stmt_was_stub = false
-    return bytes
+    return b
 end
 
 # P3 gaps ff6dc9760825 / 73a575f2d651: merge-phi variant of the catch-try
@@ -2680,14 +2668,14 @@ end
 # return-style block and recurses into its catch arm.
 function generate_catch_try_chain_merge(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
                                         code, chain::Vector{TryRegion})::Vector{UInt8}
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="generate_catch_try_chain_merge", strict=false)
     ensure_exception_tag!(ctx.mod)
     ensure_exception_global!(ctx.mod)
-    _emit_merge_chain_level!(bytes, ctx, blocks, code, chain, 1, 1, length(code))
-    return bytes
+    _emit_merge_chain_level!(b, ctx, blocks, code, chain, 1, 1, length(code))
+    return builder_code(b)
 end
 
-function _emit_merge_chain_level!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext,
+function _emit_merge_chain_level!(b::InstrBuilder, ctx::AbstractCompilationContext,
                                   blocks::Vector{BasicBlock}, code,
                                   chain::Vector{TryRegion}, k::Int, lo::Int, hi::Int)
     r = chain[k]
@@ -2706,41 +2694,36 @@ function _emit_merge_chain_level!(bytes::Vector{UInt8}, ctx::AbstractCompilation
     # Pre code [lo .. enter-1], splitting the block that spans the EnterNode
     pre = BasicBlock[]
     head = nothing
-    for b in blocks
-        b.start_idx >= lo || continue
-        b.start_idx < r.catch_dest || continue
-        if b.end_idx < r.enter_idx
-            push!(pre, b)
-        elseif b.start_idx <= r.enter_idx <= b.end_idx
-            b.start_idx < r.enter_idx &&
-                push!(pre, BasicBlock(b.start_idx, r.enter_idx - 1, nothing))
-            r.enter_idx < b.end_idx &&
-                (head = BasicBlock(r.enter_idx + 1, b.end_idx, b.terminator))
+    for b2 in blocks
+        b2.start_idx >= lo || continue
+        b2.start_idx < r.catch_dest || continue
+        if b2.end_idx < r.enter_idx
+            push!(pre, b2)
+        elseif b2.start_idx <= r.enter_idx <= b2.end_idx
+            b2.start_idx < r.enter_idx &&
+                push!(pre, BasicBlock(b2.start_idx, r.enter_idx - 1, nothing))
+            r.enter_idx < b2.end_idx &&
+                (head = BasicBlock(r.enter_idx + 1, b2.end_idx, b2.terminator))
         end
     end
     if !isempty(pre)
-        append!(bytes, generate_stackified_flow(ctx, pre, code;
-                                                trailing_unreachable=false))
+        emit_raw!(b, generate_stackified_flow(ctx, pre, code;
+                                              trailing_unreachable=false))
         ctx.last_stmt_was_stub = false
     end
-    body = [b for b in blocks
-            if b.start_idx > r.enter_idx && b.start_idx < r.catch_dest]
+    body = [b2 for b2 in blocks
+            if b2.start_idx > r.enter_idx && b2.start_idx < r.catch_dest]
     head !== nothing && pushfirst!(body, head)
 
     arm_hi = mk == 0 ? hi : mk - 1
     _has_inner = k < length(chain) && chain[k+1].enter_idx >= r.catch_dest &&
                  chain[k+1].enter_idx <= arm_hi
 
-    mk > 0 && (push!(bytes, Opcode.BLOCK); push!(bytes, 0x40))   # $merge_k
-    push!(bytes, Opcode.BLOCK)   # $ck — catch landing
-    push!(bytes, 0x40)
-    push!(bytes, Opcode.TRY_TABLE)
-    push!(bytes, 0x40)
-    append!(bytes, encode_leb128_unsigned(1))
-    push!(bytes, Opcode.CATCH_ALL)
-    append!(bytes, encode_leb128_unsigned(0))
-    append!(bytes, generate_stackified_flow(ctx, body, code;
-                                            trailing_unreachable=(mk == 0)))
+    mk > 0 && block!(b)   # $merge_k
+    block!(b)   # $ck — catch landing
+    try_table!(b, InstrIR.TryCatch[catch_all_clause(0)])
+    emit_raw!(b, generate_stackified_flow(ctx, body, code;
+                                          trailing_unreachable=(mk == 0)))
     ctx.last_stmt_was_stub = false
     if mk > 0
         # Normal completion: the merge target is outside the body subset, so
@@ -2753,33 +2736,34 @@ function _emit_merge_chain_level!(bytes::Vector{UInt8}, ctx::AbstractCompilation
             for (j, e) in enumerate(st.edges)
                 ei = Int(e)
                 if r.enter_idx < ei && ei < r.catch_dest && isassigned(st.values, j)
-                    emit_phi_local_set!(bytes, st.values[j], i, ctx)
+                    tmp = UInt8[]
+                    emit_phi_local_set!(tmp, st.values[j], i, ctx)
+                    emit_raw!(b, tmp)
                     break
                 end
             end
         end
-        push!(bytes, Opcode.BR)
-        append!(bytes, encode_leb128_unsigned(2))
+        br!(b, 2)
     end
-    push!(bytes, Opcode.END)   # try_table
-    push!(bytes, Opcode.END)   # $ck
+    end_block!(b)   # try_table
+    end_block!(b)   # $ck
     ctx.last_stmt_was_stub = false
 
     # Catch arm [catch_dest .. arm_hi]: the next level nests here, else plain
     if _has_inner
-        _emit_merge_chain_level!(bytes, ctx, blocks, code, chain, k + 1,
+        _emit_merge_chain_level!(b, ctx, blocks, code, chain, k + 1,
                                  r.catch_dest, arm_hi)
     else
-        arm_blocks = [b for b in blocks
-                      if b.start_idx >= r.catch_dest && b.start_idx <= arm_hi]
+        arm_blocks = [b2 for b2 in blocks
+                      if b2.start_idx >= r.catch_dest && b2.start_idx <= arm_hi]
         if !isempty(arm_blocks)
             # Never pad the arm with a trailing unreachable: when an ENCLOSING
             # level has a merge, the arm falls through into that level's
             # catch-side phi stores (a pad trapped the whole catch path of a
             # return-style inner level — ff6dc9760825 on 1.13). A returning
             # arm emits its own RETURN; the function-end pad covers the rest.
-            append!(bytes, generate_stackified_flow(ctx, arm_blocks, code;
-                                                    trailing_unreachable=false))
+            emit_raw!(b, generate_stackified_flow(ctx, arm_blocks, code;
+                                                  trailing_unreachable=false))
             ctx.last_stmt_was_stub = false
         end
     end
@@ -2792,30 +2776,32 @@ function _emit_merge_chain_level!(bytes::Vector{UInt8}, ctx::AbstractCompilation
             haskey(ctx.phi_locals, i) || continue
             for (j, e) in enumerate(st.edges)
                 if r.catch_dest <= Int(e) < mk && isassigned(st.values, j)
-                    emit_phi_local_set!(bytes, st.values[j], i, ctx)
+                    tmp = UInt8[]
+                    emit_phi_local_set!(tmp, st.values[j], i, ctx)
+                    emit_raw!(b, tmp)
                     break
                 end
             end
         end
-        push!(bytes, Opcode.END)   # $merge_k
+        end_block!(b)   # $merge_k
         ctx.last_stmt_was_stub = false
         # Post-merge [mk .. hi]: phi reads, conversions, return — or, for an
         # inner level, the code that flows on inside the ENCLOSING catch arm.
         if any(i -> code[i] isa Core.GotoIfNot || code[i] isa Core.GotoNode, mk:hi)
-            pm_blocks = [b for b in blocks if b.start_idx >= mk && b.start_idx <= hi]
-            append!(bytes, generate_stackified_flow(ctx, pm_blocks, code;
-                                                    trailing_unreachable=false))
+            pm_blocks = [b2 for b2 in blocks if b2.start_idx >= mk && b2.start_idx <= hi]
+            emit_raw!(b, generate_stackified_flow(ctx, pm_blocks, code;
+                                                  trailing_unreachable=false))
         else
             for i in mk:hi
                 stmt = code[i]
                 if stmt !== nothing
                     stmt isa Expr && stmt.head === :pop_exception && continue
-                    append!(bytes, compile_statement(stmt, i, ctx))
+                    emit_raw!(b, compile_statement(stmt, i, ctx))
                 end
             end
         end
     end
-    return bytes
+    return b
 end
 
 function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}

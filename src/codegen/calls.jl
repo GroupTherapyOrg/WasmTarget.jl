@@ -1873,66 +1873,67 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
         end
     end
 
-    bytes = UInt8[]
+    bld = InstrBuilder(; func_name="_try_inline_typeid_dispatch", strict=false)
     # Compile every arg into a local (reused across branches).
     arg_locals = Int[]
     for (j, arg) in enumerate(args)
-        append!(bytes, compile_value(arg, ctx))
         if j == dpos
             cur = julia_to_wasm_type_concrete(call_arg_types[j], ctx)
-            cur === ExternRef && push!(bytes, Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN)
+            emit_raw!(bld, compile_value(arg, ctx); pushes=WasmValType[cur])
+            cur === ExternRef && any_convert_extern!(bld)
             aw = AnyRef
         else
             aw = julia_to_wasm_type_concrete(call_arg_types[j], ctx)
+            emit_raw!(bld, compile_value(arg, ctx); pushes=WasmValType[aw])
         end
         l = length(ctx.locals) + ctx.n_params; push!(ctx.locals, aw)
-        push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(l))
+        local_set!(bld, l)
         push!(arg_locals, l)
     end
     # Read dispatch typeId into a local.
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(arg_locals[dpos]))
-    emit_typeof!(bytes, base_idx)
+    local_get!(bld, arg_locals[dpos])
+    tof = UInt8[]; emit_typeof!(tof, base_idx); emit_raw!(bld, tof; pops=1, pushes=WasmValType[I32])
     tid_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I32)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(tid_local))
+    local_set!(bld, tid_local)
 
-    blocktype = result_wasm === nothing ? UInt8[0x40] : encode_block_type(result_wasm)
-    emit_branch = (tid, cw, c) -> begin
+    emit_branch = (b, tid, cw, c) -> begin
         for (j, l) in enumerate(arg_locals)
-            push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(l))
+            push!(b, Opcode.LOCAL_GET); append!(b, encode_leb128_unsigned(l))
             if j == dpos
-                push!(bytes, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL); append!(bytes, encode_leb128_signed(Int64(cw.type_idx)))
+                push!(b, Opcode.GC_PREFIX, Opcode.REF_CAST_NULL); append!(b, encode_leb128_signed(Int64(cw.type_idx)))
             end
         end
-        push!(bytes, Opcode.CALL); append!(bytes, encode_leb128_unsigned(c.wasm_idx))
+        push!(b, Opcode.CALL); append!(b, encode_leb128_unsigned(c.wasm_idx))
         rj = c.return_type
         rw = (rj === Nothing || rj === Union{}) ? nothing : get_concrete_wasm_type(rj, ctx.mod, ctx.type_registry)
         if result_wasm === nothing
-            rw !== nothing && push!(bytes, Opcode.DROP)
+            rw !== nothing && push!(b, Opcode.DROP)
         elseif rw === nothing
-            push_default!(bytes, result_wasm)
+            push_default!(b, result_wasm)
         else
-            coerce!(bytes, rw, result_wasm)
+            coerce!(b, rw, result_wasm)
         end
     end
     # Guarded if-chain over all branches; final else = unreachable (no method).
     nb = length(branches)
     for (tid, cw, c) in branches
-        push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(tid_local))
-        push!(bytes, Opcode.I32_CONST); append!(bytes, encode_leb128_signed(Int64(tid)))
-        push!(bytes, Opcode.I32_EQ)
-        push!(bytes, Opcode.IF); append!(bytes, blocktype)
-        emit_branch(tid, cw, c)
-        push!(bytes, Opcode.ELSE)
+        local_get!(bld, tid_local)
+        i32_const!(bld, Int64(tid))
+        num!(bld, Opcode.I32_EQ)
+        if_!(bld, result_wasm === nothing ? 0x40 : result_wasm)
+        bbr = UInt8[]; emit_branch(bbr, tid, cw, c)
+        emit_raw!(bld, bbr; pushes=(result_wasm === nothing ? WasmValType[] : WasmValType[result_wasm]))
+        else_!(bld)
     end
-    push!(bytes, Opcode.UNREACHABLE)
-    for _ in 1:nb; push!(bytes, Opcode.END); end
+    unreachable!(bld)
+    for _ in 1:nb; end_block!(bld); end
     # Heuristic-safe tail: land result in a scratch local, end with local.get.
     if result_wasm !== nothing
         rl = length(ctx.locals) + ctx.n_params; push!(ctx.locals, result_wasm)
-        push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(rl))
-        push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(rl))
+        local_set!(bld, rl)
+        local_get!(bld, rl)
     end
-    return bytes
+    return builder_code(bld)
 end
 
 """

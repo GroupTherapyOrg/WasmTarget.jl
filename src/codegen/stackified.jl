@@ -1801,7 +1801,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # DEBUG: trace DROP emissions
                 _dbg_fn = try string(ctx.func_name) catch; "" end
                 if contains(_dbg_fn, "test_if_call")
-                    _drop_count = count(b -> b == 0x1a, stmt_bytes)
+                    _drop_count = count(byt -> byt == 0x1a, stmt_bytes)
                     if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
                         @warn "STACKIFIED-DROP stmt=$i head=$(stmt.head) drops_in_stmt_bytes=$(_drop_count) stmt_bytes_len=$(length(stmt_bytes)) last2=$(length(stmt_bytes) >= 2 ? (stmt_bytes[end-1], stmt_bytes[end]) : ()) has_ssa=$(haskey(ctx.ssa_locals, i))" maxlog=20
                     end

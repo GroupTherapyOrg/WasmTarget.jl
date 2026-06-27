@@ -882,34 +882,33 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         else
             arr_type_def = ctx.mod.types[array_type_idx + 1]
             for i in 1:n_mem
+                # el_bytes holds the recursive compile_value result and is INSPECTED
+                # via isempty below — keep it as a local buffer (byte-inspecting branch).
                 el_bytes = UInt8[]
                 defined = isassigned(mem, i)
                 if defined
                     el_bytes = compile_value(mem[i], ctx)
                 end
                 if !defined || isempty(el_bytes)
-                    # undef slot (or uncompilable element) — type-correct default
-                    empty!(el_bytes)
+                    # undef slot (or uncompilable element) — type-correct default.
+                    # Straight-line emission: emit the typed default directly on `b`.
                     evt = arr_type_def isa ArrayType ? arr_type_def.elem.valtype : nothing
                     if evt === I32
-                        push!(el_bytes, Opcode.I32_CONST, 0x00)
+                        i32_const!(b, 0)
                     elseif evt === I64
-                        push!(el_bytes, Opcode.I64_CONST, 0x00)
+                        i64_const!(b, 0)
                     elseif evt === F32
-                        push!(el_bytes, Opcode.F32_CONST)
-                        append!(el_bytes, reinterpret(UInt8, [Float32(0)]))
+                        f32_const!(b, Float32(0))
                     elseif evt === F64
-                        push!(el_bytes, Opcode.F64_CONST)
-                        append!(el_bytes, reinterpret(UInt8, [Float64(0)]))
+                        f64_const!(b, Float64(0))
                     elseif evt isa ConcreteRef
-                        push!(el_bytes, Opcode.REF_NULL)
-                        append!(el_bytes, encode_leb128_signed(Int64(evt.type_idx)))
+                        ref_null!(b, Int64(evt.type_idx), ConcreteRef(UInt32(evt.type_idx), true))
                     else
-                        push!(el_bytes, Opcode.REF_NULL)
-                        push!(el_bytes, 0x6E)  # any
+                        ref_null!(b, AnyRef)  # 0x6E any
                     end
+                else
+                    emit_raw!(b, el_bytes; pushes=WasmValType[AnyRef])
                 end
-                emit_raw!(b, el_bytes; pushes=WasmValType[AnyRef])
             end
             array_new_fixed!(b, array_type_idx, n_mem, AnyRef)
         end
