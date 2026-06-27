@@ -195,18 +195,21 @@ global_set!(b::InstrBuilder, idx::Integer) = (_op!(b, Opcode.GLOBAL_SET); _leb_u
 unreachable!(b::InstrBuilder) = (_op!(b, Opcode.UNREACHABLE); b.v.reachable = false; _check!(b))
 nop!(b::InstrBuilder) = (_op!(b, Opcode.NOP); _check!(b))
 
-# block/loop with an (immediate) blocktype byte already chosen by the caller (most WT
-# blocks are void → 0x40). result_types feeds the validator's end-balance check.
-function block!(b::InstrBuilder, blocktype::Integer=0x40; results::Vector{<:Any}=WasmValType[])
-    _op!(b, Opcode.BLOCK); _leb_s!(b, blocktype)
+# block/loop/if blocktype: a value-type/void immediate is a SINGLE on-wire byte (0x40
+# void, 0x7F i32, …) — NOT a LEB-encoded int — and a ConcreteRef result is multi-byte
+# (0x63/0x64 + idx). Encode via the SAME encode_block_type the rest of codegen uses, so
+# bytes are identical. `results` feeds the validator's end-balance check. Pass the
+# blocktype as the void byte 0x40 or a WasmValType (e.g. I32, ConcreteRef(...)).
+function block!(b::InstrBuilder, blocktype=0x40; results::Vector{<:Any}=WasmValType[])
+    _op!(b, Opcode.BLOCK); append!(b.code, encode_block_type(blocktype))
     validate_block_start!(b.v, :block, WasmValType[r for r in results]); _check!(b)
 end
-function loop!(b::InstrBuilder, blocktype::Integer=0x40; results::Vector{<:Any}=WasmValType[])
-    _op!(b, Opcode.LOOP); _leb_s!(b, blocktype)
+function loop!(b::InstrBuilder, blocktype=0x40; results::Vector{<:Any}=WasmValType[])
+    _op!(b, Opcode.LOOP); append!(b.code, encode_block_type(blocktype))
     validate_block_start!(b.v, :loop, WasmValType[r for r in results]); _check!(b)
 end
-function if_!(b::InstrBuilder, blocktype::Integer=0x40; results::Vector{<:Any}=WasmValType[])
-    _op!(b, Opcode.IF); _leb_s!(b, blocktype)
+function if_!(b::InstrBuilder, blocktype=0x40; results::Vector{<:Any}=WasmValType[])
+    _op!(b, Opcode.IF); append!(b.code, encode_block_type(blocktype))
     validate_if_start!(b.v, WasmValType[r for r in results]); _check!(b)
 end
 else_!(b::InstrBuilder) = (_op!(b, Opcode.ELSE); validate_else!(b.v); _check!(b))
