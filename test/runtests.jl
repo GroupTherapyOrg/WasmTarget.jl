@@ -1375,6 +1375,34 @@ begin
     # ========================================================================
     @pphase "Phase 1: Test Harness Infrastructure" begin
 
+        @testset "InstrBuilder (typed wasm builder, dart2wasm-style)" begin
+            WT = WasmTarget
+            # function-end balance: x*x+1 leaves exactly the one f64 result
+            b = WT.InstrBuilder(WT.WasmValType[WT.F64], WT.WasmValType[WT.F64]; func_name="sq1", strict=true)
+            WT.local_get!(b, 0); WT.local_get!(b, 0); WT.num!(b, WT.Opcode.F64_MUL)
+            WT.f64_const!(b, 1.0); WT.num!(b, WT.Opcode.F64_ADD)
+            @test WT.stack_height(b.v) == 1
+            WT.end_block!(b)                       # balanced → no throw
+            @test length(WT.builder_code(b)) > 0
+            # strict imbalance throws at the emit site
+            b2 = WT.InstrBuilder(; func_name="bad", strict=true)
+            @test_throws WT.StackImbalanceError WT.num!(b2, WT.Opcode.I32_ADD)
+            # GC type-directed effect: struct.new consumes its N fields, pushes (ref t)
+            b3 = WT.InstrBuilder(; func_name="sn", strict=false)
+            WT.i32_const!(b3, 0); WT.i64_const!(b3, 7)
+            WT.struct_new!(b3, 2, WT.WasmValType[WT.I32, WT.I64])
+            @test WT.stack_height(b3.v) == 1 && !WT.has_errors(b3.v)
+            # dart2wasm base-guard: cannot pop past a block boundary
+            b4 = WT.InstrBuilder(; func_name="bg", strict=false)
+            WT.block!(b4); WT.drop!(b4)
+            @test WT.has_errors(b4.v)
+            # rich diagnostics carry the Julia-statement context
+            b5 = WT.InstrBuilder(; func_name="diag", strict=true)
+            WT.set_context!(b5, "stmt-X")
+            err = try; WT.drop!(b5); nothing; catch e; e; end
+            @test err isa WT.StackImbalanceError && occursin("stmt-X", sprint(showerror, err))
+        end
+
         @testset "LEB128 Encoding" begin
             # Test unsigned LEB128
             @test WasmTarget.encode_leb128_unsigned(0) == [0x00]
