@@ -843,7 +843,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         return nothing
     end
     fname = nameof(f)
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="generate_intrinsic_body", strict=false)
     extra_locals = WasmValType[]
 
     # Get string array type for string operations
@@ -854,20 +854,15 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         # Gets character at 1-based index
         # local 0 = string (array ref)
         # local 1 = index (i32)
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x00)  # string
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x01)  # index
+        local_get!(b, 0)  # string
+        local_get!(b, 1)  # index
         # Subtract 1 for 0-based indexing
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x01)
-        push!(bytes, Opcode.I32_SUB)
+        i32_const!(b, 1)
+        num!(b, Opcode.I32_SUB)
         # array.get_u (packed i8 → i32)
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_GET_U)
-        append!(bytes, encode_leb128_unsigned(str_type_idx))
-        push!(bytes, Opcode.END)
-        return (bytes, extra_locals)
+        array_get!(b, str_type_idx, I32; signed=false)
+        end_block!(b)
+        return (builder_code(b), extra_locals)
 
     elseif fname === :str_getchar
         # str_getchar(s::String, i::Int32)::Int32
@@ -879,212 +874,144 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         push!(extra_locals, I32)  # local 3: idx0
 
         # idx0 = i - 1 (convert 1-based to 0-based)
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x01)  # i
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x01)
-        push!(bytes, Opcode.I32_SUB)
-        push!(bytes, Opcode.LOCAL_SET)
-        push!(bytes, 0x03)  # idx0
+        local_get!(b, 1)  # i
+        i32_const!(b, 1)
+        num!(b, Opcode.I32_SUB)
+        local_set!(b, 3)  # idx0
 
         # b0 = s[idx0] (array.get_u)
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x00)  # string
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x03)  # idx0
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_GET_U)
-        append!(bytes, encode_leb128_unsigned(str_type_idx))
-        push!(bytes, Opcode.LOCAL_SET)
-        push!(bytes, 0x02)  # b0
+        local_get!(b, 0)  # string
+        local_get!(b, 3)  # idx0
+        array_get!(b, str_type_idx, I32; signed=false)
+        local_set!(b, 2)  # b0
 
         # if b0 < 0x80: return b0 (ASCII)
         # else if b0 < 0xE0: 2-byte
         # else if b0 < 0xF0: 3-byte
         # else: 4-byte
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x02)  # b0
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int32(0x80)))
-        push!(bytes, Opcode.I32_LT_U)
-        push!(bytes, Opcode.IF)
-        push!(bytes, UInt8(I32))  # result type i32
+        local_get!(b, 2)  # b0
+        i32_const!(b, Int32(0x80))
+        num!(b, Opcode.I32_LT_U)
+        if_!(b, UInt8(I32))  # result type i32
 
         # === ASCII: return b0 ===
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x02)  # b0
+        local_get!(b, 2)  # b0
 
-        push!(bytes, Opcode.ELSE)
+        else_!(b)
 
         # Check if 2-byte (b0 < 0xE0)
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x02)  # b0
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int32(0xE0)))
-        push!(bytes, Opcode.I32_LT_U)
-        push!(bytes, Opcode.IF)
-        push!(bytes, UInt8(I32))
+        local_get!(b, 2)  # b0
+        i32_const!(b, Int32(0xE0))
+        num!(b, Opcode.I32_LT_U)
+        if_!(b, UInt8(I32))
 
         # === 2-byte: ((b0 & 0x1F) << 6) | (s[idx0+1] & 0x3F) ===
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x02)  # b0
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x1F)
-        push!(bytes, Opcode.I32_AND)
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x06)
-        push!(bytes, Opcode.I32_SHL)
+        local_get!(b, 2)  # b0
+        i32_const!(b, 0x1F)
+        num!(b, Opcode.I32_AND)
+        i32_const!(b, 0x06)
+        num!(b, Opcode.I32_SHL)
         # s[idx0+1] & 0x3F
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x00)  # string
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x03)  # idx0
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x01)
-        push!(bytes, Opcode.I32_ADD)
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_GET_U)
-        append!(bytes, encode_leb128_unsigned(str_type_idx))
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x3F)
-        push!(bytes, Opcode.I32_AND)
-        push!(bytes, Opcode.I32_OR)
+        local_get!(b, 0)  # string
+        local_get!(b, 3)  # idx0
+        i32_const!(b, 1)
+        num!(b, Opcode.I32_ADD)
+        array_get!(b, str_type_idx, I32; signed=false)
+        i32_const!(b, 0x3F)
+        num!(b, Opcode.I32_AND)
+        num!(b, Opcode.I32_OR)
 
-        push!(bytes, Opcode.ELSE)
+        else_!(b)
 
         # Check if 3-byte (b0 < 0xF0)
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x02)  # b0
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int32(0xF0)))
-        push!(bytes, Opcode.I32_LT_U)
-        push!(bytes, Opcode.IF)
-        push!(bytes, UInt8(I32))
+        local_get!(b, 2)  # b0
+        i32_const!(b, Int32(0xF0))
+        num!(b, Opcode.I32_LT_U)
+        if_!(b, UInt8(I32))
 
         # === 3-byte: ((b0 & 0x0F) << 12) | ((s[idx0+1] & 0x3F) << 6) | (s[idx0+2] & 0x3F) ===
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x02)  # b0
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x0F)
-        push!(bytes, Opcode.I32_AND)
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x0C)  # 12
-        push!(bytes, Opcode.I32_SHL)
+        local_get!(b, 2)  # b0
+        i32_const!(b, 0x0F)
+        num!(b, Opcode.I32_AND)
+        i32_const!(b, 0x0C)  # 12
+        num!(b, Opcode.I32_SHL)
         # (s[idx0+1] & 0x3F) << 6
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x00)
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x03)
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x01)
-        push!(bytes, Opcode.I32_ADD)
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_GET_U)
-        append!(bytes, encode_leb128_unsigned(str_type_idx))
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x3F)
-        push!(bytes, Opcode.I32_AND)
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x06)
-        push!(bytes, Opcode.I32_SHL)
-        push!(bytes, Opcode.I32_OR)
+        local_get!(b, 0)
+        local_get!(b, 3)
+        i32_const!(b, 1)
+        num!(b, Opcode.I32_ADD)
+        array_get!(b, str_type_idx, I32; signed=false)
+        i32_const!(b, 0x3F)
+        num!(b, Opcode.I32_AND)
+        i32_const!(b, 0x06)
+        num!(b, Opcode.I32_SHL)
+        num!(b, Opcode.I32_OR)
         # s[idx0+2] & 0x3F
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x00)
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x03)
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x02)
-        push!(bytes, Opcode.I32_ADD)
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_GET_U)
-        append!(bytes, encode_leb128_unsigned(str_type_idx))
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x3F)
-        push!(bytes, Opcode.I32_AND)
-        push!(bytes, Opcode.I32_OR)
+        local_get!(b, 0)
+        local_get!(b, 3)
+        i32_const!(b, 2)
+        num!(b, Opcode.I32_ADD)
+        array_get!(b, str_type_idx, I32; signed=false)
+        i32_const!(b, 0x3F)
+        num!(b, Opcode.I32_AND)
+        num!(b, Opcode.I32_OR)
 
-        push!(bytes, Opcode.ELSE)
+        else_!(b)
 
         # === 4-byte: ((b0 & 0x07) << 18) | ((s[idx0+1] & 0x3F) << 12) | ((s[idx0+2] & 0x3F) << 6) | (s[idx0+3] & 0x3F) ===
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x02)  # b0
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x07)
-        push!(bytes, Opcode.I32_AND)
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x12)  # 18
-        push!(bytes, Opcode.I32_SHL)
+        local_get!(b, 2)  # b0
+        i32_const!(b, 0x07)
+        num!(b, Opcode.I32_AND)
+        i32_const!(b, 0x12)  # 18
+        num!(b, Opcode.I32_SHL)
         # (s[idx0+1] & 0x3F) << 12
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x00)
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x03)
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x01)
-        push!(bytes, Opcode.I32_ADD)
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_GET_U)
-        append!(bytes, encode_leb128_unsigned(str_type_idx))
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x3F)
-        push!(bytes, Opcode.I32_AND)
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x0C)  # 12
-        push!(bytes, Opcode.I32_SHL)
-        push!(bytes, Opcode.I32_OR)
+        local_get!(b, 0)
+        local_get!(b, 3)
+        i32_const!(b, 1)
+        num!(b, Opcode.I32_ADD)
+        array_get!(b, str_type_idx, I32; signed=false)
+        i32_const!(b, 0x3F)
+        num!(b, Opcode.I32_AND)
+        i32_const!(b, 0x0C)  # 12
+        num!(b, Opcode.I32_SHL)
+        num!(b, Opcode.I32_OR)
         # (s[idx0+2] & 0x3F) << 6
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x00)
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x03)
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x02)
-        push!(bytes, Opcode.I32_ADD)
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_GET_U)
-        append!(bytes, encode_leb128_unsigned(str_type_idx))
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x3F)
-        push!(bytes, Opcode.I32_AND)
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x06)
-        push!(bytes, Opcode.I32_SHL)
-        push!(bytes, Opcode.I32_OR)
+        local_get!(b, 0)
+        local_get!(b, 3)
+        i32_const!(b, 2)
+        num!(b, Opcode.I32_ADD)
+        array_get!(b, str_type_idx, I32; signed=false)
+        i32_const!(b, 0x3F)
+        num!(b, Opcode.I32_AND)
+        i32_const!(b, 0x06)
+        num!(b, Opcode.I32_SHL)
+        num!(b, Opcode.I32_OR)
         # s[idx0+3] & 0x3F
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x00)
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x03)
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x03)
-        push!(bytes, Opcode.I32_ADD)
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_GET_U)
-        append!(bytes, encode_leb128_unsigned(str_type_idx))
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x3F)
-        push!(bytes, Opcode.I32_AND)
-        push!(bytes, Opcode.I32_OR)
+        local_get!(b, 0)
+        local_get!(b, 3)
+        i32_const!(b, 3)
+        num!(b, Opcode.I32_ADD)
+        array_get!(b, str_type_idx, I32; signed=false)
+        i32_const!(b, 0x3F)
+        num!(b, Opcode.I32_AND)
+        num!(b, Opcode.I32_OR)
 
-        push!(bytes, Opcode.END)  # end 3-byte if/else (4-byte)
-        push!(bytes, Opcode.END)  # end 2-byte if/else (3/4-byte)
-        push!(bytes, Opcode.END)  # end ASCII if/else (multi-byte)
+        end_block!(b)  # end 3-byte if/else (4-byte)
+        end_block!(b)  # end 2-byte if/else (3/4-byte)
+        end_block!(b)  # end ASCII if/else (multi-byte)
 
-        push!(bytes, Opcode.END)  # end function
-        return (bytes, extra_locals)
+        end_block!(b)  # end function
+        return (builder_code(b), extra_locals)
 
     elseif fname === :str_len
         # str_len(s::String)::Int32
         # Returns byte length of string (ncodeunits)
         # local 0 = string (array ref)
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x00)  # string
+        local_get!(b, 0)  # string
         # array.len
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_LEN)
-        push!(bytes, Opcode.END)
-        return (bytes, extra_locals)
+        array_len!(b)
+        end_block!(b)
+        return (builder_code(b), extra_locals)
 
     elseif fname === :str_charlen
         # str_charlen(s::String)::Int32
@@ -1097,82 +1024,58 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         push!(extra_locals, I32)  # local 3: len
 
         # len = array.len(s)
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x00)
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_LEN)
-        push!(bytes, Opcode.LOCAL_SET)
-        push!(bytes, 0x03)  # len
+        local_get!(b, 0)
+        array_len!(b)
+        local_set!(b, 3)  # len
 
         # i = 0, count = 0 (already zero-initialized)
 
         # block $exit (result i32)
-        push!(bytes, Opcode.BLOCK)
-        push!(bytes, UInt8(I32))
+        block!(b, UInt8(I32))
 
         # loop $loop (void)
-        push!(bytes, Opcode.LOOP)
-        push!(bytes, 0x40)
+        loop!(b)
 
         # if i >= len: break with count
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x01)  # i
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x03)  # len
-        push!(bytes, Opcode.I32_GE_U)
-        push!(bytes, Opcode.IF)
-        push!(bytes, 0x40)
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x02)  # count
-        push!(bytes, Opcode.BR)
-        push!(bytes, 0x02)  # br $exit
-        push!(bytes, Opcode.END)
+        local_get!(b, 1)  # i
+        local_get!(b, 3)  # len
+        num!(b, Opcode.I32_GE_U)
+        if_!(b)
+        local_get!(b, 2)  # count
+        br!(b, 2)  # br $exit
+        end_block!(b)
 
         # byte = s[i]; if (byte & 0xC0) != 0x80: count++
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x00)  # string
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x01)  # i
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_GET_U)
-        append!(bytes, encode_leb128_unsigned(str_type_idx))
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int32(0xC0)))
-        push!(bytes, Opcode.I32_AND)
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int32(0x80)))
-        push!(bytes, Opcode.I32_NE)
-        push!(bytes, Opcode.IF)
-        push!(bytes, 0x40)
+        local_get!(b, 0)  # string
+        local_get!(b, 1)  # i
+        array_get!(b, str_type_idx, I32; signed=false)
+        i32_const!(b, Int32(0xC0))
+        num!(b, Opcode.I32_AND)
+        i32_const!(b, Int32(0x80))
+        num!(b, Opcode.I32_NE)
+        if_!(b)
         # count++
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x02)
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x01)
-        push!(bytes, Opcode.I32_ADD)
-        push!(bytes, Opcode.LOCAL_SET)
-        push!(bytes, 0x02)
-        push!(bytes, Opcode.END)
+        local_get!(b, 2)
+        i32_const!(b, 1)
+        num!(b, Opcode.I32_ADD)
+        local_set!(b, 2)
+        end_block!(b)
 
         # i++
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x01)
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x01)
-        push!(bytes, Opcode.I32_ADD)
-        push!(bytes, Opcode.LOCAL_SET)
-        push!(bytes, 0x01)
+        local_get!(b, 1)
+        i32_const!(b, 1)
+        num!(b, Opcode.I32_ADD)
+        local_set!(b, 1)
 
         # continue loop
-        push!(bytes, Opcode.BR)
-        push!(bytes, 0x00)
+        br!(b, 0)
 
-        push!(bytes, Opcode.END)  # end loop
-        push!(bytes, Opcode.UNREACHABLE)
-        push!(bytes, Opcode.END)  # end block
+        end_block!(b)  # end loop
+        unreachable!(b)
+        end_block!(b)  # end block
 
-        push!(bytes, Opcode.END)  # end function
-        return (bytes, extra_locals)
+        end_block!(b)  # end function
+        return (builder_code(b), extra_locals)
 
     elseif fname === :str_eq
         # str_eq(a::String, b::String)::Bool
@@ -1181,129 +1084,89 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         push!(extra_locals, I32)  # local 2: loop counter i
 
         # Compare lengths first: if a.len != b.len, return false
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x00)  # a
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_LEN)
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x01)  # b
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_LEN)
-        push!(bytes, Opcode.I32_NE)
-        push!(bytes, Opcode.IF)
-        push!(bytes, UInt8(I32))  # result type i32
+        local_get!(b, 0)  # a
+        array_len!(b)
+        local_get!(b, 1)  # b
+        array_len!(b)
+        num!(b, Opcode.I32_NE)
+        if_!(b, UInt8(I32))  # result type i32
         # Lengths differ → return 0 (false)
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x00)
-        push!(bytes, Opcode.ELSE)
+        i32_const!(b, 0)
+        else_!(b)
 
         # Lengths equal — loop to compare elements
         # i = 0
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x00)
-        push!(bytes, Opcode.LOCAL_SET)
-        push!(bytes, 0x02)  # i = 0
+        i32_const!(b, 0)
+        local_set!(b, 2)  # i = 0
 
         # block $exit (result i32) — for early return of false
-        push!(bytes, Opcode.BLOCK)
-        push!(bytes, UInt8(I32))  # result type i32
+        block!(b, UInt8(I32))  # result type i32
 
         # loop $loop (void)
-        push!(bytes, Opcode.LOOP)
-        push!(bytes, 0x40)  # void block type
+        loop!(b)  # void block type
 
         # if i >= a.len → break out with true (all matched)
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x02)  # i
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x00)  # a
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_LEN)
-        push!(bytes, Opcode.I32_GE_U)
-        push!(bytes, Opcode.IF)
-        push!(bytes, 0x40)  # void
+        local_get!(b, 2)  # i
+        local_get!(b, 0)  # a
+        array_len!(b)
+        num!(b, Opcode.I32_GE_U)
+        if_!(b)  # void
         # Done — push 1 (true) and break out of block
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x01)
-        push!(bytes, Opcode.BR)
-        push!(bytes, 0x02)  # br $exit (block depth 2: if=0, loop=1, block=2)
-        push!(bytes, Opcode.END)  # end if
+        i32_const!(b, 1)
+        br!(b, 2)  # br $exit (block depth 2: if=0, loop=1, block=2)
+        end_block!(b)  # end if
 
         # Compare a[i] vs b[i] (array.get_u for packed i8)
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x00)  # a
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x02)  # i
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_GET_U)
-        append!(bytes, encode_leb128_unsigned(str_type_idx))
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x01)  # b
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x02)  # i
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_GET_U)
-        append!(bytes, encode_leb128_unsigned(str_type_idx))
-        push!(bytes, Opcode.I32_NE)
-        push!(bytes, Opcode.IF)
-        push!(bytes, 0x40)  # void
+        local_get!(b, 0)  # a
+        local_get!(b, 2)  # i
+        array_get!(b, str_type_idx, I32; signed=false)
+        local_get!(b, 1)  # b
+        local_get!(b, 2)  # i
+        array_get!(b, str_type_idx, I32; signed=false)
+        num!(b, Opcode.I32_NE)
+        if_!(b)  # void
         # Mismatch — push 0 (false) and break out of block
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x00)
-        push!(bytes, Opcode.BR)
-        push!(bytes, 0x02)  # br $exit (block depth 2: if=0, loop=1, block=2)
-        push!(bytes, Opcode.END)  # end if
+        i32_const!(b, 0)
+        br!(b, 2)  # br $exit (block depth 2: if=0, loop=1, block=2)
+        end_block!(b)  # end if
 
         # i++
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x02)  # i
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x01)
-        push!(bytes, Opcode.I32_ADD)
-        push!(bytes, Opcode.LOCAL_SET)
-        push!(bytes, 0x02)  # i = i + 1
+        local_get!(b, 2)  # i
+        i32_const!(b, 1)
+        num!(b, Opcode.I32_ADD)
+        local_set!(b, 2)  # i = i + 1
 
         # br $loop (continue)
-        push!(bytes, Opcode.BR)
-        push!(bytes, 0x00)  # br to loop (depth 0 from here)
-        push!(bytes, Opcode.END)  # end loop
-        push!(bytes, Opcode.UNREACHABLE)  # all loop paths branch — unreachable
-        push!(bytes, Opcode.END)  # end block
+        br!(b, 0)  # br to loop (depth 0 from here)
+        end_block!(b)  # end loop
+        unreachable!(b)  # all loop paths branch — unreachable
+        end_block!(b)  # end block
 
-        push!(bytes, Opcode.END)  # end if/else (lengths equal)
-        push!(bytes, Opcode.END)  # end function
-        return (bytes, extra_locals)
+        end_block!(b)  # end if/else (lengths equal)
+        end_block!(b)  # end function
+        return (builder_code(b), extra_locals)
 
     elseif fname === :str_new
         # str_new(len::Int32)::String
         # Create new string array of given length
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x00)  # length
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
-        append!(bytes, encode_leb128_unsigned(str_type_idx))
-        push!(bytes, Opcode.END)
-        return (bytes, extra_locals)
+        local_get!(b, 0)  # length
+        array_new_default!(b, str_type_idx)
+        end_block!(b)
+        return (builder_code(b), extra_locals)
 
     elseif fname === :str_setchar!
         # str_setchar!(s::String, i::Int32, c::Int32)::Nothing
         # Sets character at 1-based index
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x00)  # string
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x01)  # index
+        local_get!(b, 0)  # string
+        local_get!(b, 1)  # index
         # Subtract 1 for 0-based indexing
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x01)
-        push!(bytes, Opcode.I32_SUB)
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x02)  # char
+        i32_const!(b, 1)
+        num!(b, Opcode.I32_SUB)
+        local_get!(b, 2)  # char
         # array.set
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_SET)
-        append!(bytes, encode_leb128_unsigned(str_type_idx))
-        push!(bytes, Opcode.END)
-        return (bytes, extra_locals)
+        array_set!(b, str_type_idx, I32)
+        end_block!(b)
+        return (builder_code(b), extra_locals)
 
     elseif fname === :str_concat
         # str_concat(a::String, b::String)::String
@@ -1315,75 +1178,48 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         push!(extra_locals, str_ref_type)  # local 3: result array ref
 
         # len_a = array.len(a)
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x00)  # a
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_LEN)
-        push!(bytes, Opcode.LOCAL_SET)
-        push!(bytes, 0x02)  # len_a
+        local_get!(b, 0)  # a
+        array_len!(b)
+        local_set!(b, 2)  # len_a
 
         # result = array.new_default(len_a + array.len(b))
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x02)  # len_a
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x01)  # b
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_LEN)
-        push!(bytes, Opcode.I32_ADD)
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
-        append!(bytes, encode_leb128_unsigned(str_type_idx))
-        push!(bytes, Opcode.LOCAL_SET)
-        push!(bytes, 0x03)  # result
+        local_get!(b, 2)  # len_a
+        local_get!(b, 1)  # b
+        array_len!(b)
+        num!(b, Opcode.I32_ADD)
+        array_new_default!(b, str_type_idx)
+        local_set!(b, 3)  # result
 
         # array.copy(result, 0, a, 0, len_a)
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x03)  # dst: result
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x00)  # dst_offset: 0
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x00)  # src: a
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x00)  # src_offset: 0
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x02)  # len: len_a
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_COPY)
-        append!(bytes, encode_leb128_unsigned(str_type_idx))  # dst type
-        append!(bytes, encode_leb128_unsigned(str_type_idx))  # src type
+        local_get!(b, 3)  # dst: result
+        i32_const!(b, 0)  # dst_offset: 0
+        local_get!(b, 0)  # src: a
+        i32_const!(b, 0)  # src_offset: 0
+        local_get!(b, 2)  # len: len_a
+        array_copy!(b, str_type_idx, str_type_idx)  # dst type, src type
 
         # array.copy(result, len_a, b, 0, array.len(b))
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x03)  # dst: result
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x02)  # dst_offset: len_a
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x01)  # src: b
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x00)  # src_offset: 0
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x01)  # b
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_LEN)  # len: array.len(b)
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_COPY)
-        append!(bytes, encode_leb128_unsigned(str_type_idx))  # dst type
-        append!(bytes, encode_leb128_unsigned(str_type_idx))  # src type
+        local_get!(b, 3)  # dst: result
+        local_get!(b, 2)  # dst_offset: len_a
+        local_get!(b, 1)  # src: b
+        i32_const!(b, 0)  # src_offset: 0
+        local_get!(b, 1)  # b
+        array_len!(b)  # len: array.len(b)
+        array_copy!(b, str_type_idx, str_type_idx)  # dst type, src type
 
         # return result
-        push!(bytes, Opcode.LOCAL_GET)
-        push!(bytes, 0x03)  # result
-        push!(bytes, Opcode.END)
-        return (bytes, extra_locals)
+        local_get!(b, 3)  # result
+        end_block!(b)
+        return (builder_code(b), extra_locals)
 
     elseif fname === :str_substr
         # WBUILD-8001: str_substr intrinsic body not implemented.
         # The inline version at call sites properly implements this using
         # array.new + array.copy. This path is only hit when str_substr is
         # called as a standalone function (not inlined at call site).
-        push!(bytes, Opcode.UNREACHABLE)
-        push!(bytes, Opcode.END)
-        return (bytes, extra_locals)
+        unreachable!(b)
+        end_block!(b)
+        return (builder_code(b), extra_locals)
     end
 
     return nothing
@@ -3699,33 +3535,31 @@ function run_selfhost_v2()::Vector{UInt8}
     # 5. Compile f(x::Int64)=x*x+1 using REAL WasmTarget compile_value.
     # compile_statement(::Expr) is 25K stmts and fails validation.
     # Instead: compile_value for args (validates individually) + intrinsic opcode.
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="run_selfhost_v2", strict=false)
 
     # Statement 1: mul_int(Arg(2), Arg(2)) → i64.mul
     arg2 = Core.Argument(2)
-    append!(bytes, compile_value(arg2, ctx))  # REAL compile_value → local.get 0
-    append!(bytes, compile_value(arg2, ctx))  # REAL compile_value → local.get 0
-    push!(bytes, Opcode.I64_MUL)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(UInt32(ctx.ssa_locals[1])))
+    emit_raw!(b, compile_value(arg2, ctx); pushes=WasmValType[I64])  # REAL compile_value → local.get 0
+    emit_raw!(b, compile_value(arg2, ctx); pushes=WasmValType[I64])  # REAL compile_value → local.get 0
+    num!(b, Opcode.I64_MUL)
+    local_set!(b, ctx.ssa_locals[1])
 
     # Statement 2: add_int(SSA(1), Int64(1)) → i64.add
     ssa1 = Core.SSAValue(1)
     lit1 = Int64(1)
-    append!(bytes, compile_value(ssa1, ctx))   # REAL compile_value → local.get 1
-    append!(bytes, compile_value(lit1, ctx))   # REAL compile_value → i64.const 1
-    push!(bytes, Opcode.I64_ADD)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(UInt32(ctx.ssa_locals[2])))
+    emit_raw!(b, compile_value(ssa1, ctx); pushes=WasmValType[I64])   # REAL compile_value → local.get 1
+    emit_raw!(b, compile_value(lit1, ctx); pushes=WasmValType[I64])   # REAL compile_value → i64.const 1
+    num!(b, Opcode.I64_ADD)
+    local_set!(b, ctx.ssa_locals[2])
 
     # Statement 3: return SSA(2) — use REAL compile_statement for ReturnNode
     ret_node = Core.ReturnNode(Core.SSAValue(2))
-    append!(bytes, compile_statement(ret_node, 3, ctx))
+    emit_raw!(b, compile_statement(ret_node, 3, ctx); pops=1)
 
-    push!(bytes, Opcode.END)
+    end_block!(b)
 
     # 6. Serialize to WASM binary (no fix passes — proven identical for MVP)
-    return to_bytes_mvp(bytes, ctx.locals)
+    return to_bytes_mvp(builder_code(b), ctx.locals)
 end
 
 """
@@ -3786,45 +3620,38 @@ function run_selfhost_final()::Vector{UInt8}
     # 5. Emit bytecode for f(x::Int64) = x*x+1
     # These are the EXACT bytes that compile_value/compile_call/compile_statement produce.
     # compile_statement(::Any,...) can't be used because Vector{Any} elements are untyped.
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="run_selfhost_final", strict=false)
 
     # Statement 1: mul_int(Argument(2), Argument(2)) → SSA[1]
     # compile_value(Argument(2)) → local.get 0 (param index 0 = arg 2)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(UInt32(0)))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(UInt32(0)))
+    local_get!(b, 0)
+    local_get!(b, 0)
     # compile_call intrinsic: mul_int on i64 → i64.mul
-    push!(bytes, Opcode.I64_MUL)
+    num!(b, Opcode.I64_MUL)
     # local.set for SSA[1] → local index 1 (from ssa_locals)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(UInt32(ctx.ssa_locals[1])))
+    local_set!(b, ctx.ssa_locals[1])
 
     # Statement 2: add_int(SSAValue(1), Int64(1)) → SSA[2]
     # compile_value(SSAValue(1)) → local.get 1
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(UInt32(ctx.ssa_locals[1])))
+    local_get!(b, ctx.ssa_locals[1])
     # compile_value(Int64(1)) → i64.const 1
-    push!(bytes, Opcode.I64_CONST)
-    append!(bytes, encode_leb128_unsigned(UInt32(1)))
+    i64_const!(b, 1)
     # compile_call intrinsic: add_int on i64 → i64.add
-    push!(bytes, Opcode.I64_ADD)
+    num!(b, Opcode.I64_ADD)
     # local.set for SSA[2] → local index 2
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(UInt32(ctx.ssa_locals[2])))
+    local_set!(b, ctx.ssa_locals[2])
 
     # Statement 3: return SSAValue(2)
     # compile_value(SSAValue(2)) → local.get 2
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(UInt32(ctx.ssa_locals[2])))
+    local_get!(b, ctx.ssa_locals[2])
     # return
-    push!(bytes, Opcode.RETURN)
-    push!(bytes, Opcode.END)
+    return_!(b)
+    end_block!(b)
 
     # 6. Serialize to WASM binary via REAL to_bytes_mvp_i64
     # Specialized version that hardcodes [i64, i64] locals to avoid
     # cross-function Vector{WasmValType} null dereference in WasmGC.
-    return to_bytes_mvp_i64(bytes)
+    return to_bytes_mvp_i64(builder_code(b))
 end
 
 """
@@ -3938,152 +3765,125 @@ end
 
 # --- Test 1: identity — f(x::Int64)::Int64 = x ---
 function run_selfhost_identity()::Vector{UInt8}
-    bytes = UInt8[]
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(UInt32(0)))
-    push!(bytes, Opcode.RETURN)
-    push!(bytes, Opcode.END)
-    return to_bytes_mvp_flex(bytes, Int32(1), Int32(0), Int32(0x7e))
+    b = InstrBuilder(; func_name="run_selfhost_identity", strict=false)
+    local_get!(b, 0)
+    return_!(b)
+    end_block!(b)
+    return to_bytes_mvp_flex(builder_code(b), Int32(1), Int32(0), Int32(0x7e))
 end
 
 # --- Test 2: constant — f()::Int64 = 42 ---
 function run_selfhost_constant()::Vector{UInt8}
-    bytes = UInt8[]
-    push!(bytes, Opcode.I64_CONST)
-    append!(bytes, encode_leb128_unsigned(UInt32(42)))
-    push!(bytes, Opcode.RETURN)
-    push!(bytes, Opcode.END)
-    return to_bytes_mvp_flex(bytes, Int32(0), Int32(0), Int32(0x7e))
+    b = InstrBuilder(; func_name="run_selfhost_constant", strict=false)
+    i64_const!(b, 42)
+    return_!(b)
+    end_block!(b)
+    return to_bytes_mvp_flex(builder_code(b), Int32(0), Int32(0), Int32(0x7e))
 end
 
 # --- Test 3: add_one — f(x::Int64)::Int64 = x + 1 ---
 function run_selfhost_add_one()::Vector{UInt8}
-    bytes = UInt8[]
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(UInt32(0)))
-    push!(bytes, Opcode.I64_CONST)
-    append!(bytes, encode_leb128_unsigned(UInt32(1)))
-    push!(bytes, Opcode.I64_ADD)
-    push!(bytes, Opcode.RETURN)
-    push!(bytes, Opcode.END)
-    return to_bytes_mvp_flex(bytes, Int32(1), Int32(0), Int32(0x7e))
+    b = InstrBuilder(; func_name="run_selfhost_add_one", strict=false)
+    local_get!(b, 0)
+    i64_const!(b, 1)
+    num!(b, Opcode.I64_ADD)
+    return_!(b)
+    end_block!(b)
+    return to_bytes_mvp_flex(builder_code(b), Int32(1), Int32(0), Int32(0x7e))
 end
 
 # --- Test 4: double — f(x::Int64)::Int64 = x + x ---
 function run_selfhost_double()::Vector{UInt8}
-    bytes = UInt8[]
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(UInt32(0)))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(UInt32(0)))
-    push!(bytes, Opcode.I64_ADD)
-    push!(bytes, Opcode.RETURN)
-    push!(bytes, Opcode.END)
-    return to_bytes_mvp_flex(bytes, Int32(1), Int32(0), Int32(0x7e))
+    b = InstrBuilder(; func_name="run_selfhost_double", strict=false)
+    local_get!(b, 0)
+    local_get!(b, 0)
+    num!(b, Opcode.I64_ADD)
+    return_!(b)
+    end_block!(b)
+    return to_bytes_mvp_flex(builder_code(b), Int32(1), Int32(0), Int32(0x7e))
 end
 
 # --- Test 5: negate — f(x::Int64)::Int64 = 0 - x ---
 function run_selfhost_negate()::Vector{UInt8}
-    bytes = UInt8[]
-    push!(bytes, Opcode.I64_CONST)
-    append!(bytes, encode_leb128_unsigned(UInt32(0)))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(UInt32(0)))
-    push!(bytes, Opcode.I64_SUB)
-    push!(bytes, Opcode.RETURN)
-    push!(bytes, Opcode.END)
-    return to_bytes_mvp_flex(bytes, Int32(1), Int32(0), Int32(0x7e))
+    b = InstrBuilder(; func_name="run_selfhost_negate", strict=false)
+    i64_const!(b, 0)
+    local_get!(b, 0)
+    num!(b, Opcode.I64_SUB)
+    return_!(b)
+    end_block!(b)
+    return to_bytes_mvp_flex(builder_code(b), Int32(1), Int32(0), Int32(0x7e))
 end
 
 # --- Test 6: add — f(x::Int64, y::Int64)::Int64 = x + y ---
 function run_selfhost_add()::Vector{UInt8}
-    bytes = UInt8[]
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(UInt32(0)))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(UInt32(1)))
-    push!(bytes, Opcode.I64_ADD)
-    push!(bytes, Opcode.RETURN)
-    push!(bytes, Opcode.END)
-    return to_bytes_mvp_flex(bytes, Int32(2), Int32(0), Int32(0x7e))
+    b = InstrBuilder(; func_name="run_selfhost_add", strict=false)
+    local_get!(b, 0)
+    local_get!(b, 1)
+    num!(b, Opcode.I64_ADD)
+    return_!(b)
+    end_block!(b)
+    return to_bytes_mvp_flex(builder_code(b), Int32(2), Int32(0), Int32(0x7e))
 end
 
 # --- Test 7: multiply — f(x::Int64, y::Int64)::Int64 = x * y ---
 function run_selfhost_multiply()::Vector{UInt8}
-    bytes = UInt8[]
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(UInt32(0)))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(UInt32(1)))
-    push!(bytes, Opcode.I64_MUL)
-    push!(bytes, Opcode.RETURN)
-    push!(bytes, Opcode.END)
-    return to_bytes_mvp_flex(bytes, Int32(2), Int32(0), Int32(0x7e))
+    b = InstrBuilder(; func_name="run_selfhost_multiply", strict=false)
+    local_get!(b, 0)
+    local_get!(b, 1)
+    num!(b, Opcode.I64_MUL)
+    return_!(b)
+    end_block!(b)
+    return to_bytes_mvp_flex(builder_code(b), Int32(2), Int32(0), Int32(0x7e))
 end
 
 # --- Test 8: polynomial — f(x::Int64)::Int64 = x*x + x + 1 ---
 function run_selfhost_polynomial()::Vector{UInt8}
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="run_selfhost_polynomial", strict=false)
     # SSA[1] = x*x → local 1
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(UInt32(0)))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(UInt32(0)))
-    push!(bytes, Opcode.I64_MUL)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(UInt32(1)))
+    local_get!(b, 0)
+    local_get!(b, 0)
+    num!(b, Opcode.I64_MUL)
+    local_set!(b, 1)
     # SSA[2] = SSA[1] + x → local 2
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(UInt32(1)))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(UInt32(0)))
-    push!(bytes, Opcode.I64_ADD)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(UInt32(2)))
+    local_get!(b, 1)
+    local_get!(b, 0)
+    num!(b, Opcode.I64_ADD)
+    local_set!(b, 2)
     # SSA[3] = SSA[2] + 1 → return
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(UInt32(2)))
-    push!(bytes, Opcode.I64_CONST)
-    append!(bytes, encode_leb128_unsigned(UInt32(1)))
-    push!(bytes, Opcode.I64_ADD)
-    push!(bytes, Opcode.RETURN)
-    push!(bytes, Opcode.END)
-    return to_bytes_mvp_flex(bytes, Int32(1), Int32(2), Int32(0x7e))
+    local_get!(b, 2)
+    i64_const!(b, 1)
+    num!(b, Opcode.I64_ADD)
+    return_!(b)
+    end_block!(b)
+    return to_bytes_mvp_flex(builder_code(b), Int32(1), Int32(2), Int32(0x7e))
 end
 
 # --- Test 9: cube — f(x::Int64)::Int64 = x * x * x ---
 function run_selfhost_cube()::Vector{UInt8}
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="run_selfhost_cube", strict=false)
     # SSA[1] = x*x → local 1
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(UInt32(0)))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(UInt32(0)))
-    push!(bytes, Opcode.I64_MUL)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(UInt32(1)))
+    local_get!(b, 0)
+    local_get!(b, 0)
+    num!(b, Opcode.I64_MUL)
+    local_set!(b, 1)
     # SSA[2] = SSA[1] * x → return
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(UInt32(1)))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(UInt32(0)))
-    push!(bytes, Opcode.I64_MUL)
-    push!(bytes, Opcode.RETURN)
-    push!(bytes, Opcode.END)
-    return to_bytes_mvp_flex(bytes, Int32(1), Int32(1), Int32(0x7e))
+    local_get!(b, 1)
+    local_get!(b, 0)
+    num!(b, Opcode.I64_MUL)
+    return_!(b)
+    end_block!(b)
+    return to_bytes_mvp_flex(builder_code(b), Int32(1), Int32(1), Int32(0x7e))
 end
 
 # --- Test 10: float_add — f(x::Float64, y::Float64)::Float64 = x + y ---
 function run_selfhost_float_add()::Vector{UInt8}
-    bytes = UInt8[]
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(UInt32(0)))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(UInt32(1)))
-    push!(bytes, Opcode.F64_ADD)
-    push!(bytes, Opcode.RETURN)
-    push!(bytes, Opcode.END)
-    return to_bytes_mvp_flex(bytes, Int32(2), Int32(0), Int32(0x7c))
+    b = InstrBuilder(; func_name="run_selfhost_float_add", strict=false)
+    local_get!(b, 0)
+    local_get!(b, 1)
+    num!(b, Opcode.F64_ADD)
+    return_!(b)
+    end_block!(b)
+    return to_bytes_mvp_flex(builder_code(b), Int32(2), Int32(0), Int32(0x7c))
 end
 
 # ============================================================================

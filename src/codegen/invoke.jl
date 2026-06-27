@@ -4,7 +4,7 @@ Extract: str_hash(s) -> Int32. Compute string hash using Java-style: h = 31 * h 
 function _compile_invoke_str_hash(args, ctx::AbstractCompilationContext)::Vector{UInt8}
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
 
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="_compile_invoke_str_hash", strict=_wt_builder_strict())
 
     # Allocate locals for this operation
     str_local = ctx.n_params + length(ctx.locals)
@@ -19,91 +19,71 @@ function _compile_invoke_str_hash(args, ctx::AbstractCompilationContext)::Vector
     i_local = ctx.n_params + length(ctx.locals)
     push!(ctx.locals, I32)  # loop index
 
+    builder_set_local_type!(b, str_local, ConcreteRef(UInt32(str_type_idx), true))
+    builder_set_local_type!(b, len_local, I32)
+    builder_set_local_type!(b, hash_local, I32)
+    builder_set_local_type!(b, i_local, I32)
+
     # Store string reference
-    append!(bytes, compile_value(args[1], ctx))
-    push!(bytes, Opcode.LOCAL_TEE)
-    append!(bytes, encode_leb128_unsigned(str_local))
+    emit_raw!(b, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+    local_tee!(b, str_local)
 
     # Get length
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_LEN)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(len_local))
+    array_len!(b)
+    local_set!(b, len_local)
 
     # Initialize hash = 0
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(hash_local))
+    i32_const!(b, 0)
+    local_set!(b, hash_local)
 
     # Initialize i = 0
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(i_local))
+    i32_const!(b, 0)
+    local_set!(b, i_local)
 
     # Loop over characters
-    push!(bytes, Opcode.BLOCK)  # outer block for exit
-    push!(bytes, 0x40)  # void
-    push!(bytes, Opcode.LOOP)  # loop
-    push!(bytes, 0x40)  # void
+    block!(b, 0x40)  # outer block for exit
+    loop!(b, 0x40)  # loop
 
     # Check i < len
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(len_local))
-    push!(bytes, Opcode.I32_GE_S)
-    push!(bytes, Opcode.BR_IF)
-    push!(bytes, 0x01)  # break to outer block if done
+    local_get!(b, i_local)
+    local_get!(b, len_local)
+    num!(b, Opcode.I32_GE_S)
+    br_if!(b, 1)  # break to outer block if done
 
     # hash = 31 * hash + char[i]
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(hash_local))
-    push!(bytes, Opcode.I32_CONST)
-    append!(bytes, encode_leb128_signed(31))
-    push!(bytes, Opcode.I32_MUL)
+    local_get!(b, hash_local)
+    i32_const!(b, 31)
+    num!(b, Opcode.I32_MUL)
 
     # Get char at index i (0-based)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(str_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_GET_U)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    local_get!(b, str_local)
+    local_get!(b, i_local)
+    array_get!(b, str_type_idx, I32; signed=false)
 
-    push!(bytes, Opcode.I32_ADD)
+    num!(b, Opcode.I32_ADD)
 
     # Mask to positive: & 0x7FFFFFFF
-    push!(bytes, Opcode.I32_CONST)
-    append!(bytes, encode_leb128_signed(0x7FFFFFFF))
-    push!(bytes, Opcode.I32_AND)
+    i32_const!(b, 0x7FFFFFFF)
+    num!(b, Opcode.I32_AND)
 
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(hash_local))
+    local_set!(b, hash_local)
 
     # i++
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.I32_ADD)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(i_local))
+    local_get!(b, i_local)
+    i32_const!(b, 1)
+    num!(b, Opcode.I32_ADD)
+    local_set!(b, i_local)
 
     # Continue loop
-    push!(bytes, Opcode.BR)
-    push!(bytes, 0x00)
+    br!(b, 0)
 
-    push!(bytes, Opcode.END)  # end loop
-    push!(bytes, Opcode.END)  # end block
+    end_block!(b)  # end loop
+    end_block!(b)  # end block
 
     # Return hash
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(hash_local))
+    local_get!(b, hash_local)
 
-    return bytes
+    return builder_code(b)
 end
 
 """
@@ -111,7 +91,7 @@ Extract: str_find(haystack, needle) -> Int32. Returns 1-based position or 0 if n
 """
 function _compile_invoke_str_find(args, ctx::AbstractCompilationContext)::Vector{UInt8}
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="_compile_invoke_str_find", strict=_wt_builder_strict())
 
     # Allocate locals
     haystack_local = ctx.n_params + length(ctx.locals)
@@ -133,201 +113,149 @@ function _compile_invoke_str_find(args, ctx::AbstractCompilationContext)::Vector
     last_start_local = ctx.n_params + length(ctx.locals)
     push!(ctx.locals, I32)
 
+    strref = ConcreteRef(UInt32(str_type_idx), true)
+    builder_set_local_type!(b, haystack_local, strref)
+    builder_set_local_type!(b, needle_local, strref)
+    builder_set_local_type!(b, haystack_len_local, I32)
+    builder_set_local_type!(b, needle_len_local, I32)
+    builder_set_local_type!(b, i_local, I32)
+    builder_set_local_type!(b, j_local, I32)
+    builder_set_local_type!(b, found_local, I32)
+    builder_set_local_type!(b, result_local, I32)
+    builder_set_local_type!(b, last_start_local, I32)
+
     # Store haystack
-    append!(bytes, compile_value(args[1], ctx))
-    push!(bytes, Opcode.LOCAL_TEE)
-    append!(bytes, encode_leb128_unsigned(haystack_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_LEN)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(haystack_len_local))
+    emit_raw!(b, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+    local_tee!(b, haystack_local)
+    array_len!(b)
+    local_set!(b, haystack_len_local)
 
     # Store needle
-    append!(bytes, compile_value(args[2], ctx))
-    push!(bytes, Opcode.LOCAL_TEE)
-    append!(bytes, encode_leb128_unsigned(needle_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_LEN)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(needle_len_local))
+    emit_raw!(b, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
+    local_tee!(b, needle_local)
+    array_len!(b)
+    local_set!(b, needle_len_local)
 
     # Initialize result = 0
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(result_local))
+    i32_const!(b, 0)
+    local_set!(b, result_local)
 
     # If needle_len == 0, return 1
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(needle_len_local))
-    push!(bytes, Opcode.I32_EQZ)
-    push!(bytes, Opcode.IF)
-    push!(bytes, 0x40)  # void
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(result_local))
-    push!(bytes, Opcode.ELSE)
+    local_get!(b, needle_len_local)
+    num!(b, Opcode.I32_EQZ)
+    if_!(b, 0x40)  # void
+    i32_const!(b, 1)
+    local_set!(b, result_local)
+    else_!(b)
 
     # Check if needle_len > haystack_len - skip search if so
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(needle_len_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(haystack_len_local))
-    push!(bytes, Opcode.I32_GT_S)
-    push!(bytes, Opcode.IF)
-    push!(bytes, 0x40)  # void
+    local_get!(b, needle_len_local)
+    local_get!(b, haystack_len_local)
+    num!(b, Opcode.I32_GT_S)
+    if_!(b, 0x40)  # void
     # result stays 0
-    push!(bytes, Opcode.ELSE)
+    else_!(b)
 
     # Calculate last_start = haystack_len - needle_len + 1 (1-based)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(haystack_len_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(needle_len_local))
-    push!(bytes, Opcode.I32_SUB)
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.I32_ADD)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(last_start_local))
+    local_get!(b, haystack_len_local)
+    local_get!(b, needle_len_local)
+    num!(b, Opcode.I32_SUB)
+    i32_const!(b, 1)
+    num!(b, Opcode.I32_ADD)
+    local_set!(b, last_start_local)
 
     # Initialize i = 1 (1-based)
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(i_local))
+    i32_const!(b, 1)
+    local_set!(b, i_local)
 
     # Outer loop over haystack positions
-    push!(bytes, Opcode.BLOCK)  # outer block for exit
-    push!(bytes, 0x40)
-    push!(bytes, Opcode.LOOP)  # outer loop
-    push!(bytes, 0x40)
+    block!(b, 0x40)  # outer block for exit
+    loop!(b, 0x40)  # outer loop
 
     # Check i <= last_start
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(last_start_local))
-    push!(bytes, Opcode.I32_GT_S)
-    push!(bytes, Opcode.BR_IF)
-    push!(bytes, 0x01)  # break outer block if done
+    local_get!(b, i_local)
+    local_get!(b, last_start_local)
+    num!(b, Opcode.I32_GT_S)
+    br_if!(b, 1)  # break outer block if done
 
     # found = 1
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(found_local))
+    i32_const!(b, 1)
+    local_set!(b, found_local)
 
     # j = 0 (0-based index into needle)
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(j_local))
+    i32_const!(b, 0)
+    local_set!(b, j_local)
 
     # Inner loop - compare needle chars
-    push!(bytes, Opcode.BLOCK)  # inner block for break
-    push!(bytes, 0x40)
-    push!(bytes, Opcode.LOOP)  # inner loop
-    push!(bytes, 0x40)
+    block!(b, 0x40)  # inner block for break
+    loop!(b, 0x40)  # inner loop
 
     # Check j < needle_len
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(j_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(needle_len_local))
-    push!(bytes, Opcode.I32_GE_S)
-    push!(bytes, Opcode.BR_IF)
-    push!(bytes, 0x01)  # break inner block if done
+    local_get!(b, j_local)
+    local_get!(b, needle_len_local)
+    num!(b, Opcode.I32_GE_S)
+    br_if!(b, 1)  # break inner block if done
 
     # Compare haystack[i + j - 1] with needle[j] (0-based array access)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(haystack_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(j_local))
-    push!(bytes, Opcode.I32_ADD)
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.I32_SUB)  # i + j - 1 for 0-based
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_GET_U)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    local_get!(b, haystack_local)
+    local_get!(b, i_local)
+    local_get!(b, j_local)
+    num!(b, Opcode.I32_ADD)
+    i32_const!(b, 1)
+    num!(b, Opcode.I32_SUB)  # i + j - 1 for 0-based
+    array_get!(b, str_type_idx, I32; signed=false)
 
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(needle_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(j_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_GET_U)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    local_get!(b, needle_local)
+    local_get!(b, j_local)
+    array_get!(b, str_type_idx, I32; signed=false)
 
-    push!(bytes, Opcode.I32_NE)
-    push!(bytes, Opcode.IF)
-    push!(bytes, 0x40)
+    num!(b, Opcode.I32_NE)
+    if_!(b, 0x40)
     # Characters don't match - set found = 0 and break
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(found_local))
-    push!(bytes, Opcode.BR)
-    push!(bytes, 0x02)  # break inner block
-    push!(bytes, Opcode.END)  # end if
+    i32_const!(b, 0)
+    local_set!(b, found_local)
+    br!(b, 2)  # break inner block
+    end_block!(b)  # end if
 
     # j++
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(j_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.I32_ADD)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(j_local))
+    local_get!(b, j_local)
+    i32_const!(b, 1)
+    num!(b, Opcode.I32_ADD)
+    local_set!(b, j_local)
 
     # Continue inner loop
-    push!(bytes, Opcode.BR)
-    push!(bytes, 0x00)
+    br!(b, 0)
 
-    push!(bytes, Opcode.END)  # end inner loop
-    push!(bytes, Opcode.END)  # end inner block
+    end_block!(b)  # end inner loop
+    end_block!(b)  # end inner block
 
     # If found, set result = i and break outer
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(found_local))
-    push!(bytes, Opcode.IF)
-    push!(bytes, 0x40)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(result_local))
-    push!(bytes, Opcode.BR)
-    push!(bytes, 0x02)  # break outer block (depth: if=0, loop=1, block=2)
-    push!(bytes, Opcode.END)
+    local_get!(b, found_local)
+    if_!(b, 0x40)
+    local_get!(b, i_local)
+    local_set!(b, result_local)
+    br!(b, 2)  # break outer block (depth: if=0, loop=1, block=2)
+    end_block!(b)
 
     # i++
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.I32_ADD)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(i_local))
+    local_get!(b, i_local)
+    i32_const!(b, 1)
+    num!(b, Opcode.I32_ADD)
+    local_set!(b, i_local)
 
     # Continue outer loop
-    push!(bytes, Opcode.BR)
-    push!(bytes, 0x00)
+    br!(b, 0)
 
-    push!(bytes, Opcode.END)  # end outer loop
-    push!(bytes, Opcode.END)  # end outer block
+    end_block!(b)  # end outer loop
+    end_block!(b)  # end outer block
 
-    push!(bytes, Opcode.END)  # end else (needle not too long)
-    push!(bytes, Opcode.END)  # end else (needle not empty)
+    end_block!(b)  # end else (needle not too long)
+    end_block!(b)  # end else (needle not empty)
 
     # Return result
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_local))
+    local_get!(b, result_local)
 
-    return bytes
+    return builder_code(b)
 end
 
 """
@@ -335,7 +263,7 @@ Extract: str_contains(haystack, needle) -> Bool. Returns true if needle is found
 """
 function _compile_invoke_str_contains(args, ctx::AbstractCompilationContext)::Vector{UInt8}
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="_compile_invoke_str_contains", strict=_wt_builder_strict())
 
     # Reuse str_find implementation by comparing result > 0
     # Allocate locals
@@ -358,191 +286,141 @@ function _compile_invoke_str_contains(args, ctx::AbstractCompilationContext)::Ve
     last_start_local = ctx.n_params + length(ctx.locals)
     push!(ctx.locals, I32)
 
+    strref = ConcreteRef(UInt32(str_type_idx), true)
+    builder_set_local_type!(b, haystack_local, strref)
+    builder_set_local_type!(b, needle_local, strref)
+    builder_set_local_type!(b, haystack_len_local, I32)
+    builder_set_local_type!(b, needle_len_local, I32)
+    builder_set_local_type!(b, i_local, I32)
+    builder_set_local_type!(b, j_local, I32)
+    builder_set_local_type!(b, found_local, I32)
+    builder_set_local_type!(b, result_local, I32)
+    builder_set_local_type!(b, last_start_local, I32)
+
     # Store haystack
-    append!(bytes, compile_value(args[1], ctx))
-    push!(bytes, Opcode.LOCAL_TEE)
-    append!(bytes, encode_leb128_unsigned(haystack_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_LEN)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(haystack_len_local))
+    emit_raw!(b, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+    local_tee!(b, haystack_local)
+    array_len!(b)
+    local_set!(b, haystack_len_local)
 
     # Store needle
-    append!(bytes, compile_value(args[2], ctx))
-    push!(bytes, Opcode.LOCAL_TEE)
-    append!(bytes, encode_leb128_unsigned(needle_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_LEN)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(needle_len_local))
+    emit_raw!(b, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
+    local_tee!(b, needle_local)
+    array_len!(b)
+    local_set!(b, needle_len_local)
 
     # Initialize result = 0 (false)
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(result_local))
+    i32_const!(b, 0)
+    local_set!(b, result_local)
 
     # If needle_len == 0, return true (1)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(needle_len_local))
-    push!(bytes, Opcode.I32_EQZ)
-    push!(bytes, Opcode.IF)
-    push!(bytes, 0x40)
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(result_local))
-    push!(bytes, Opcode.ELSE)
+    local_get!(b, needle_len_local)
+    num!(b, Opcode.I32_EQZ)
+    if_!(b, 0x40)
+    i32_const!(b, 1)
+    local_set!(b, result_local)
+    else_!(b)
 
     # Check if needle_len > haystack_len - return false if so
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(needle_len_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(haystack_len_local))
-    push!(bytes, Opcode.I32_GT_S)
-    push!(bytes, Opcode.I32_EQZ)  # NOT greater
-    push!(bytes, Opcode.IF)
-    push!(bytes, 0x40)
+    local_get!(b, needle_len_local)
+    local_get!(b, haystack_len_local)
+    num!(b, Opcode.I32_GT_S)
+    num!(b, Opcode.I32_EQZ)  # NOT greater
+    if_!(b, 0x40)
 
     # Calculate last_start = haystack_len - needle_len
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(haystack_len_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(needle_len_local))
-    push!(bytes, Opcode.I32_SUB)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(last_start_local))
+    local_get!(b, haystack_len_local)
+    local_get!(b, needle_len_local)
+    num!(b, Opcode.I32_SUB)
+    local_set!(b, last_start_local)
 
     # Initialize i = 0 (0-based)
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(i_local))
+    i32_const!(b, 0)
+    local_set!(b, i_local)
 
     # Outer loop
-    push!(bytes, Opcode.BLOCK)
-    push!(bytes, 0x40)
-    push!(bytes, Opcode.LOOP)
-    push!(bytes, 0x40)
+    block!(b, 0x40)
+    loop!(b, 0x40)
 
     # Check i <= last_start
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(last_start_local))
-    push!(bytes, Opcode.I32_GT_S)
-    push!(bytes, Opcode.BR_IF)
-    push!(bytes, 0x01)
+    local_get!(b, i_local)
+    local_get!(b, last_start_local)
+    num!(b, Opcode.I32_GT_S)
+    br_if!(b, 1)
 
     # found = 1
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(found_local))
+    i32_const!(b, 1)
+    local_set!(b, found_local)
 
     # j = 0
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(j_local))
+    i32_const!(b, 0)
+    local_set!(b, j_local)
 
     # Inner loop
-    push!(bytes, Opcode.BLOCK)
-    push!(bytes, 0x40)
-    push!(bytes, Opcode.LOOP)
-    push!(bytes, 0x40)
+    block!(b, 0x40)
+    loop!(b, 0x40)
 
     # Check j < needle_len
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(j_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(needle_len_local))
-    push!(bytes, Opcode.I32_GE_S)
-    push!(bytes, Opcode.BR_IF)
-    push!(bytes, 0x01)
+    local_get!(b, j_local)
+    local_get!(b, needle_len_local)
+    num!(b, Opcode.I32_GE_S)
+    br_if!(b, 1)
 
     # Compare haystack[i + j] with needle[j]
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(haystack_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(j_local))
-    push!(bytes, Opcode.I32_ADD)
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_GET_U)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    local_get!(b, haystack_local)
+    local_get!(b, i_local)
+    local_get!(b, j_local)
+    num!(b, Opcode.I32_ADD)
+    array_get!(b, str_type_idx, I32; signed=false)
 
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(needle_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(j_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_GET_U)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    local_get!(b, needle_local)
+    local_get!(b, j_local)
+    array_get!(b, str_type_idx, I32; signed=false)
 
-    push!(bytes, Opcode.I32_NE)
-    push!(bytes, Opcode.IF)
-    push!(bytes, 0x40)
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(found_local))
-    push!(bytes, Opcode.BR)
-    push!(bytes, 0x02)
-    push!(bytes, Opcode.END)
+    num!(b, Opcode.I32_NE)
+    if_!(b, 0x40)
+    i32_const!(b, 0)
+    local_set!(b, found_local)
+    br!(b, 2)
+    end_block!(b)
 
     # j++
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(j_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.I32_ADD)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(j_local))
+    local_get!(b, j_local)
+    i32_const!(b, 1)
+    num!(b, Opcode.I32_ADD)
+    local_set!(b, j_local)
 
-    push!(bytes, Opcode.BR)
-    push!(bytes, 0x00)
+    br!(b, 0)
 
-    push!(bytes, Opcode.END)  # end inner loop
-    push!(bytes, Opcode.END)  # end inner block
+    end_block!(b)  # end inner loop
+    end_block!(b)  # end inner block
 
     # If found, set result = 1 and break
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(found_local))
-    push!(bytes, Opcode.IF)
-    push!(bytes, 0x40)
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(result_local))
-    push!(bytes, Opcode.BR)
-    push!(bytes, 0x02)  # break outer block (depth: if=0, loop=1, block=2)
-    push!(bytes, Opcode.END)
+    local_get!(b, found_local)
+    if_!(b, 0x40)
+    i32_const!(b, 1)
+    local_set!(b, result_local)
+    br!(b, 2)  # break outer block (depth: if=0, loop=1, block=2)
+    end_block!(b)
 
     # i++
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.I32_ADD)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(i_local))
+    local_get!(b, i_local)
+    i32_const!(b, 1)
+    num!(b, Opcode.I32_ADD)
+    local_set!(b, i_local)
 
-    push!(bytes, Opcode.BR)
-    push!(bytes, 0x00)
+    br!(b, 0)
 
-    push!(bytes, Opcode.END)  # end outer loop
-    push!(bytes, Opcode.END)  # end outer block
+    end_block!(b)  # end outer loop
+    end_block!(b)  # end outer block
 
-    push!(bytes, Opcode.END)  # end if (needle not too long)
-    push!(bytes, Opcode.END)  # end else (needle not empty)
+    end_block!(b)  # end if (needle not too long)
+    end_block!(b)  # end else (needle not empty)
 
     # Return result (0 or 1 as i32, which is Bool in wasm)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_local))
+    local_get!(b, result_local)
 
-    return bytes
+    return builder_code(b)
 end
 
 """
@@ -550,7 +428,7 @@ Extract: str_startswith(s, prefix) -> Bool.
 """
 function _compile_invoke_str_startswith(args, ctx::AbstractCompilationContext)::Vector{UInt8}
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="_compile_invoke_str_startswith", strict=_wt_builder_strict())
 
     # Allocate locals
     s_local = ctx.n_params + length(ctx.locals)
@@ -566,114 +444,85 @@ function _compile_invoke_str_startswith(args, ctx::AbstractCompilationContext)::
     result_local = ctx.n_params + length(ctx.locals)
     push!(ctx.locals, I32)
 
+    strref = ConcreteRef(UInt32(str_type_idx), true)
+    builder_set_local_type!(b, s_local, strref)
+    builder_set_local_type!(b, prefix_local, strref)
+    builder_set_local_type!(b, s_len_local, I32)
+    builder_set_local_type!(b, prefix_len_local, I32)
+    builder_set_local_type!(b, i_local, I32)
+    builder_set_local_type!(b, result_local, I32)
+
     # Store s
-    append!(bytes, compile_value(args[1], ctx))
-    push!(bytes, Opcode.LOCAL_TEE)
-    append!(bytes, encode_leb128_unsigned(s_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_LEN)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(s_len_local))
+    emit_raw!(b, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+    local_tee!(b, s_local)
+    array_len!(b)
+    local_set!(b, s_len_local)
 
     # Store prefix
-    append!(bytes, compile_value(args[2], ctx))
-    push!(bytes, Opcode.LOCAL_TEE)
-    append!(bytes, encode_leb128_unsigned(prefix_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_LEN)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(prefix_len_local))
+    emit_raw!(b, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
+    local_tee!(b, prefix_local)
+    array_len!(b)
+    local_set!(b, prefix_len_local)
 
     # Default result = 1 (true)
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(result_local))
+    i32_const!(b, 1)
+    local_set!(b, result_local)
 
     # If prefix_len > s_len, return false
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(prefix_len_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_len_local))
-    push!(bytes, Opcode.I32_GT_S)
-    push!(bytes, Opcode.IF)
-    push!(bytes, 0x40)
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(result_local))
-    push!(bytes, Opcode.ELSE)
+    local_get!(b, prefix_len_local)
+    local_get!(b, s_len_local)
+    num!(b, Opcode.I32_GT_S)
+    if_!(b, 0x40)
+    i32_const!(b, 0)
+    local_set!(b, result_local)
+    else_!(b)
 
     # i = 0
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(i_local))
+    i32_const!(b, 0)
+    local_set!(b, i_local)
 
     # Loop
-    push!(bytes, Opcode.BLOCK)
-    push!(bytes, 0x40)
-    push!(bytes, Opcode.LOOP)
-    push!(bytes, 0x40)
+    block!(b, 0x40)
+    loop!(b, 0x40)
 
     # Check i < prefix_len
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(prefix_len_local))
-    push!(bytes, Opcode.I32_GE_S)
-    push!(bytes, Opcode.BR_IF)
-    push!(bytes, 0x01)
+    local_get!(b, i_local)
+    local_get!(b, prefix_len_local)
+    num!(b, Opcode.I32_GE_S)
+    br_if!(b, 1)
 
     # Compare s[i] with prefix[i]
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_GET_U)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    local_get!(b, s_local)
+    local_get!(b, i_local)
+    array_get!(b, str_type_idx, I32; signed=false)
 
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(prefix_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_GET_U)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    local_get!(b, prefix_local)
+    local_get!(b, i_local)
+    array_get!(b, str_type_idx, I32; signed=false)
 
-    push!(bytes, Opcode.I32_NE)
-    push!(bytes, Opcode.IF)
-    push!(bytes, 0x40)
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(result_local))
-    push!(bytes, Opcode.BR)
-    push!(bytes, 0x02)  # break out of loop
-    push!(bytes, Opcode.END)
+    num!(b, Opcode.I32_NE)
+    if_!(b, 0x40)
+    i32_const!(b, 0)
+    local_set!(b, result_local)
+    br!(b, 2)  # break out of loop
+    end_block!(b)
 
     # i++
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.I32_ADD)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(i_local))
+    local_get!(b, i_local)
+    i32_const!(b, 1)
+    num!(b, Opcode.I32_ADD)
+    local_set!(b, i_local)
 
-    push!(bytes, Opcode.BR)
-    push!(bytes, 0x00)
+    br!(b, 0)
 
-    push!(bytes, Opcode.END)  # end loop
-    push!(bytes, Opcode.END)  # end block
-    push!(bytes, Opcode.END)  # end else
+    end_block!(b)  # end loop
+    end_block!(b)  # end block
+    end_block!(b)  # end else
 
     # Return result
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_local))
+    local_get!(b, result_local)
 
-    return bytes
+    return builder_code(b)
 end
 
 """
@@ -681,7 +530,7 @@ Extract: str_endswith(s, suffix) -> Bool.
 """
 function _compile_invoke_str_endswith(args, ctx::AbstractCompilationContext)::Vector{UInt8}
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="_compile_invoke_str_endswith", strict=_wt_builder_strict())
 
     # Allocate locals
     s_local = ctx.n_params + length(ctx.locals)
@@ -699,126 +548,94 @@ function _compile_invoke_str_endswith(args, ctx::AbstractCompilationContext)::Ve
     result_local = ctx.n_params + length(ctx.locals)
     push!(ctx.locals, I32)
 
+    strref = ConcreteRef(UInt32(str_type_idx), true)
+    builder_set_local_type!(b, s_local, strref)
+    builder_set_local_type!(b, suffix_local, strref)
+    builder_set_local_type!(b, s_len_local, I32)
+    builder_set_local_type!(b, suffix_len_local, I32)
+    builder_set_local_type!(b, start_pos_local, I32)
+    builder_set_local_type!(b, i_local, I32)
+    builder_set_local_type!(b, result_local, I32)
+
     # Store s
-    append!(bytes, compile_value(args[1], ctx))
-    push!(bytes, Opcode.LOCAL_TEE)
-    append!(bytes, encode_leb128_unsigned(s_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_LEN)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(s_len_local))
+    emit_raw!(b, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+    local_tee!(b, s_local)
+    array_len!(b)
+    local_set!(b, s_len_local)
 
     # Store suffix
-    append!(bytes, compile_value(args[2], ctx))
-    push!(bytes, Opcode.LOCAL_TEE)
-    append!(bytes, encode_leb128_unsigned(suffix_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_LEN)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(suffix_len_local))
+    emit_raw!(b, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
+    local_tee!(b, suffix_local)
+    array_len!(b)
+    local_set!(b, suffix_len_local)
 
     # Default result = 1 (true)
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(result_local))
+    i32_const!(b, 1)
+    local_set!(b, result_local)
 
     # If suffix_len > s_len, return false
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(suffix_len_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_len_local))
-    push!(bytes, Opcode.I32_GT_S)
-    push!(bytes, Opcode.IF)
-    push!(bytes, 0x40)
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(result_local))
-    push!(bytes, Opcode.ELSE)
+    local_get!(b, suffix_len_local)
+    local_get!(b, s_len_local)
+    num!(b, Opcode.I32_GT_S)
+    if_!(b, 0x40)
+    i32_const!(b, 0)
+    local_set!(b, result_local)
+    else_!(b)
 
     # Calculate start_pos = s_len - suffix_len (0-based start in s)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_len_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(suffix_len_local))
-    push!(bytes, Opcode.I32_SUB)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(start_pos_local))
+    local_get!(b, s_len_local)
+    local_get!(b, suffix_len_local)
+    num!(b, Opcode.I32_SUB)
+    local_set!(b, start_pos_local)
 
     # i = 0
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(i_local))
+    i32_const!(b, 0)
+    local_set!(b, i_local)
 
     # Loop
-    push!(bytes, Opcode.BLOCK)
-    push!(bytes, 0x40)
-    push!(bytes, Opcode.LOOP)
-    push!(bytes, 0x40)
+    block!(b, 0x40)
+    loop!(b, 0x40)
 
     # Check i < suffix_len
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(suffix_len_local))
-    push!(bytes, Opcode.I32_GE_S)
-    push!(bytes, Opcode.BR_IF)
-    push!(bytes, 0x01)
+    local_get!(b, i_local)
+    local_get!(b, suffix_len_local)
+    num!(b, Opcode.I32_GE_S)
+    br_if!(b, 1)
 
     # Compare s[start_pos + i] with suffix[i]
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(start_pos_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.I32_ADD)
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_GET_U)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    local_get!(b, s_local)
+    local_get!(b, start_pos_local)
+    local_get!(b, i_local)
+    num!(b, Opcode.I32_ADD)
+    array_get!(b, str_type_idx, I32; signed=false)
 
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(suffix_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_GET_U)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    local_get!(b, suffix_local)
+    local_get!(b, i_local)
+    array_get!(b, str_type_idx, I32; signed=false)
 
-    push!(bytes, Opcode.I32_NE)
-    push!(bytes, Opcode.IF)
-    push!(bytes, 0x40)
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(result_local))
-    push!(bytes, Opcode.BR)
-    push!(bytes, 0x02)
-    push!(bytes, Opcode.END)
+    num!(b, Opcode.I32_NE)
+    if_!(b, 0x40)
+    i32_const!(b, 0)
+    local_set!(b, result_local)
+    br!(b, 2)
+    end_block!(b)
 
     # i++
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.I32_ADD)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(i_local))
+    local_get!(b, i_local)
+    i32_const!(b, 1)
+    num!(b, Opcode.I32_ADD)
+    local_set!(b, i_local)
 
-    push!(bytes, Opcode.BR)
-    push!(bytes, 0x00)
+    br!(b, 0)
 
-    push!(bytes, Opcode.END)  # end loop
-    push!(bytes, Opcode.END)  # end block
-    push!(bytes, Opcode.END)  # end else
+    end_block!(b)  # end loop
+    end_block!(b)  # end block
+    end_block!(b)  # end else
 
     # Return result
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_local))
+    local_get!(b, result_local)
 
-    return bytes
+    return builder_code(b)
 end
 
 """
@@ -827,7 +644,7 @@ Uses WasmGC array.new_default + loop with array.copy.
 """
 function _compile_invoke_str_repeat(args, ctx::AbstractCompilationContext)::Vector{UInt8}
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="_compile_invoke_str_repeat", strict=_wt_builder_strict())
 
     # Allocate locals
     s_local = ctx.n_params + length(ctx.locals)
@@ -841,100 +658,77 @@ function _compile_invoke_str_repeat(args, ctx::AbstractCompilationContext)::Vect
     i_local = ctx.n_params + length(ctx.locals)
     push!(ctx.locals, I32)
 
+    strref = ConcreteRef(UInt32(str_type_idx), true)
+    builder_set_local_type!(b, s_local, strref)
+    builder_set_local_type!(b, result_local, strref)
+    builder_set_local_type!(b, s_len_local, I32)
+    builder_set_local_type!(b, n_local, I32)
+    builder_set_local_type!(b, i_local, I32)
+
     # Store s and get its length
-    append!(bytes, compile_value(args[1], ctx))
-    push!(bytes, Opcode.LOCAL_TEE)
-    append!(bytes, encode_leb128_unsigned(s_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_LEN)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(s_len_local))
+    emit_raw!(b, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+    local_tee!(b, s_local)
+    array_len!(b)
+    local_set!(b, s_len_local)
 
     # Store n as i32
-    append!(bytes, compile_value(args[2], ctx))
+    emit_raw!(b, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
     n_type = infer_value_type(args[2], ctx)
     if n_type === Int64 || n_type === Int
-        push!(bytes, Opcode.I32_WRAP_I64)
+        num!(b, Opcode.I32_WRAP_I64)
     end
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(n_local))
+    local_set!(b, n_local)
 
     # Create result array of size s_len * n
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_len_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(n_local))
-    push!(bytes, Opcode.I32_MUL)
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(result_local))
+    local_get!(b, s_len_local)
+    local_get!(b, n_local)
+    num!(b, Opcode.I32_MUL)
+    array_new_default!(b, str_type_idx)
+    local_set!(b, result_local)
 
     # i = 0
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(i_local))
+    i32_const!(b, 0)
+    local_set!(b, i_local)
 
     # Loop: while i < n, copy s into result at offset i * s_len
-    push!(bytes, Opcode.BLOCK)
-    push!(bytes, 0x40)
-    push!(bytes, Opcode.LOOP)
-    push!(bytes, 0x40)
+    block!(b, 0x40)
+    loop!(b, 0x40)
 
     # if i >= n, break
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(n_local))
-    push!(bytes, Opcode.I32_GE_S)
-    push!(bytes, Opcode.BR_IF)
-    push!(bytes, 0x01)  # break to outer block
+    local_get!(b, i_local)
+    local_get!(b, n_local)
+    num!(b, Opcode.I32_GE_S)
+    br_if!(b, 1)  # break to outer block
 
     # array.copy: dst=result, dst_off=i*s_len, src=s, src_off=0, len=s_len
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_local))
+    local_get!(b, result_local)
     # dst_off = i * s_len
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_len_local))
-    push!(bytes, Opcode.I32_MUL)
+    local_get!(b, i_local)
+    local_get!(b, s_len_local)
+    num!(b, Opcode.I32_MUL)
     # src
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_local))
+    local_get!(b, s_local)
     # src_off = 0
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
+    i32_const!(b, 0)
     # len = s_len
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_len_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_COPY)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    local_get!(b, s_len_local)
+    array_copy!(b, str_type_idx, str_type_idx)
 
     # i++
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.I32_ADD)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(i_local))
+    local_get!(b, i_local)
+    i32_const!(b, 1)
+    num!(b, Opcode.I32_ADD)
+    local_set!(b, i_local)
 
-    push!(bytes, Opcode.BR)
-    push!(bytes, 0x00)  # continue loop
+    br!(b, 0)  # continue loop
 
-    push!(bytes, Opcode.END)  # end loop
-    push!(bytes, Opcode.END)  # end block
+    end_block!(b)  # end loop
+    end_block!(b)  # end block
 
     # Return result
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_local))
+    local_get!(b, result_local)
 
-    return bytes
+    return builder_code(b)
 end
 
 """
@@ -942,7 +736,7 @@ BF-2000: lpad(s, n, c) -> String. Left-pad string s to length n with char c.
 """
 function _compile_invoke_str_lpad(args, ctx::AbstractCompilationContext)::Vector{UInt8}
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="_compile_invoke_str_lpad", strict=_wt_builder_strict())
 
     # Allocate locals
     s_local = ctx.n_params + length(ctx.locals)
@@ -960,115 +754,90 @@ function _compile_invoke_str_lpad(args, ctx::AbstractCompilationContext)::Vector
     i_local = ctx.n_params + length(ctx.locals)
     push!(ctx.locals, I32)
 
+    strref = ConcreteRef(UInt32(str_type_idx), true)
+    builder_set_local_type!(b, s_local, strref)
+    builder_set_local_type!(b, result_local, strref)
+    builder_set_local_type!(b, s_len_local, I32)
+    builder_set_local_type!(b, n_local, I32)
+    builder_set_local_type!(b, pad_len_local, I32)
+    builder_set_local_type!(b, c_local, I32)
+    builder_set_local_type!(b, i_local, I32)
+
     # Store s and get its length
-    append!(bytes, compile_value(args[1], ctx))
-    push!(bytes, Opcode.LOCAL_TEE)
-    append!(bytes, encode_leb128_unsigned(s_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_LEN)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(s_len_local))
+    emit_raw!(b, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+    local_tee!(b, s_local)
+    array_len!(b)
+    local_set!(b, s_len_local)
 
     # Store n as i32
-    append!(bytes, compile_value(args[2], ctx))
+    emit_raw!(b, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
     n_type = infer_value_type(args[2], ctx)
     if n_type === Int64 || n_type === Int
-        push!(bytes, Opcode.I32_WRAP_I64)
+        num!(b, Opcode.I32_WRAP_I64)
     end
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(n_local))
+    local_set!(b, n_local)
 
     # Store pad char as i32 (convert from Julia Char encoding to UTF-8 byte)
     # Julia Char is UTF-8 left-packed in UInt32: ' ' = 0x20000000. Need byte = 0x20.
     char_arg = args[3]
     if char_arg isa Char
         # Compile-time conversion: extract codepoint directly
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int32(UInt32(char_arg))))
+        i32_const!(b, Int32(UInt32(char_arg)))
     else
         # Runtime: compile_value gives Julia encoding, shift right 24 for ASCII
-        append!(bytes, compile_value(char_arg, ctx))
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int32(24)))
-        push!(bytes, Opcode.I32_SHR_U)
+        emit_raw!(b, compile_value(char_arg, ctx); pushes=WasmValType[infer_value_wasm_type(char_arg, ctx)])
+        i32_const!(b, Int32(24))
+        num!(b, Opcode.I32_SHR_U)
     end
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(c_local))
+    local_set!(b, c_local)
 
     # If s_len >= n, result = s (no padding)
     # Else, create padded result
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_len_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(n_local))
-    push!(bytes, Opcode.I32_GE_S)
-    push!(bytes, Opcode.IF)
-    push!(bytes, 0x40)  # void
+    local_get!(b, s_len_local)
+    local_get!(b, n_local)
+    num!(b, Opcode.I32_GE_S)
+    if_!(b, 0x40)  # void
 
     # result = s
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_local))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(result_local))
+    local_get!(b, s_local)
+    local_set!(b, result_local)
 
-    push!(bytes, Opcode.ELSE)
+    else_!(b)
 
     # pad_len = n - s_len
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(n_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_len_local))
-    push!(bytes, Opcode.I32_SUB)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(pad_len_local))
+    local_get!(b, n_local)
+    local_get!(b, s_len_local)
+    num!(b, Opcode.I32_SUB)
+    local_set!(b, pad_len_local)
 
     # Create result array of size n
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(n_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(result_local))
+    local_get!(b, n_local)
+    array_new_default!(b, str_type_idx)
+    local_set!(b, result_local)
 
     # Fill first pad_len chars with c using array.fill
     # array.fill: [ref, offset, value, count]
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)  # offset = 0
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(c_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(pad_len_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_FILL)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    local_get!(b, result_local)
+    i32_const!(b, 0)  # offset = 0
+    local_get!(b, c_local)
+    local_get!(b, pad_len_local)
+    array_fill!(b, str_type_idx, I32)
 
     # Copy s into result at offset pad_len
     # array.copy: [dst, dst_off, src, src_off, len]
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(pad_len_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)  # src_off = 0
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_len_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_COPY)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    local_get!(b, result_local)
+    local_get!(b, pad_len_local)
+    local_get!(b, s_local)
+    i32_const!(b, 0)  # src_off = 0
+    local_get!(b, s_len_local)
+    array_copy!(b, str_type_idx, str_type_idx)
 
-    push!(bytes, Opcode.END)  # end if/else
+    end_block!(b)  # end if/else
 
     # Return result
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_local))
+    local_get!(b, result_local)
 
-    return bytes
+    return builder_code(b)
 end
 
 """
@@ -1076,7 +845,7 @@ BF-2000: rpad(s, n, c) -> String. Right-pad string s to length n with char c.
 """
 function _compile_invoke_str_rpad(args, ctx::AbstractCompilationContext)::Vector{UInt8}
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="_compile_invoke_str_rpad", strict=_wt_builder_strict())
 
     # Allocate locals
     s_local = ctx.n_params + length(ctx.locals)
@@ -1090,102 +859,77 @@ function _compile_invoke_str_rpad(args, ctx::AbstractCompilationContext)::Vector
     c_local = ctx.n_params + length(ctx.locals)
     push!(ctx.locals, I32)
 
+    strref = ConcreteRef(UInt32(str_type_idx), true)
+    builder_set_local_type!(b, s_local, strref)
+    builder_set_local_type!(b, result_local, strref)
+    builder_set_local_type!(b, s_len_local, I32)
+    builder_set_local_type!(b, n_local, I32)
+    builder_set_local_type!(b, c_local, I32)
+
     # Store s and get its length
-    append!(bytes, compile_value(args[1], ctx))
-    push!(bytes, Opcode.LOCAL_TEE)
-    append!(bytes, encode_leb128_unsigned(s_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_LEN)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(s_len_local))
+    emit_raw!(b, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+    local_tee!(b, s_local)
+    array_len!(b)
+    local_set!(b, s_len_local)
 
     # Store n as i32
-    append!(bytes, compile_value(args[2], ctx))
+    emit_raw!(b, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
     n_type = infer_value_type(args[2], ctx)
     if n_type === Int64 || n_type === Int
-        push!(bytes, Opcode.I32_WRAP_I64)
+        num!(b, Opcode.I32_WRAP_I64)
     end
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(n_local))
+    local_set!(b, n_local)
 
     # Store pad char as i32 (convert from Julia Char encoding to UTF-8 byte)
     char_arg = args[3]
     if char_arg isa Char
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int32(UInt32(char_arg))))
+        i32_const!(b, Int32(UInt32(char_arg)))
     else
-        append!(bytes, compile_value(char_arg, ctx))
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int32(24)))
-        push!(bytes, Opcode.I32_SHR_U)
+        emit_raw!(b, compile_value(char_arg, ctx); pushes=WasmValType[infer_value_wasm_type(char_arg, ctx)])
+        i32_const!(b, Int32(24))
+        num!(b, Opcode.I32_SHR_U)
     end
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(c_local))
+    local_set!(b, c_local)
 
     # If s_len >= n, result = s (no padding)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_len_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(n_local))
-    push!(bytes, Opcode.I32_GE_S)
-    push!(bytes, Opcode.IF)
-    push!(bytes, 0x40)
+    local_get!(b, s_len_local)
+    local_get!(b, n_local)
+    num!(b, Opcode.I32_GE_S)
+    if_!(b, 0x40)
 
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_local))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(result_local))
+    local_get!(b, s_local)
+    local_set!(b, result_local)
 
-    push!(bytes, Opcode.ELSE)
+    else_!(b)
 
     # Create result array of size n
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(n_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(result_local))
+    local_get!(b, n_local)
+    array_new_default!(b, str_type_idx)
+    local_set!(b, result_local)
 
     # Copy s into result at offset 0
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)  # dst_off = 0
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)  # src_off = 0
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_len_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_COPY)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    local_get!(b, result_local)
+    i32_const!(b, 0)  # dst_off = 0
+    local_get!(b, s_local)
+    i32_const!(b, 0)  # src_off = 0
+    local_get!(b, s_len_local)
+    array_copy!(b, str_type_idx, str_type_idx)
 
     # Fill remaining with c: array.fill(result, s_len, c, n - s_len)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_len_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(c_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(n_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_len_local))
-    push!(bytes, Opcode.I32_SUB)
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_FILL)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    local_get!(b, result_local)
+    local_get!(b, s_len_local)
+    local_get!(b, c_local)
+    local_get!(b, n_local)
+    local_get!(b, s_len_local)
+    num!(b, Opcode.I32_SUB)
+    array_fill!(b, str_type_idx, I32)
 
-    push!(bytes, Opcode.END)  # end if/else
+    end_block!(b)  # end if/else
 
     # Return result
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_local))
+    local_get!(b, result_local)
 
-    return bytes
+    return builder_code(b)
 end
 
 """
@@ -1193,7 +937,7 @@ Extract: str_uppercase(s) -> String. Convert lowercase ASCII letters to uppercas
 """
 function _compile_invoke_str_uppercase(args, ctx::AbstractCompilationContext)::Vector{UInt8}
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="_compile_invoke_str_uppercase", strict=_wt_builder_strict())
 
     # Allocate locals
     s_local = ctx.n_params + length(ctx.locals)
@@ -1207,114 +951,84 @@ function _compile_invoke_str_uppercase(args, ctx::AbstractCompilationContext)::V
     c_local = ctx.n_params + length(ctx.locals)
     push!(ctx.locals, I32)
 
+    strref = ConcreteRef(UInt32(str_type_idx), true)
+    builder_set_local_type!(b, s_local, strref)
+    builder_set_local_type!(b, len_local, I32)
+    builder_set_local_type!(b, result_local, strref)
+    builder_set_local_type!(b, i_local, I32)
+    builder_set_local_type!(b, c_local, I32)
+
     # Store s and get length
-    append!(bytes, compile_value(args[1], ctx))
-    push!(bytes, Opcode.LOCAL_TEE)
-    append!(bytes, encode_leb128_unsigned(s_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_LEN)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(len_local))
+    emit_raw!(b, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+    local_tee!(b, s_local)
+    array_len!(b)
+    local_set!(b, len_local)
 
     # Create result string: array.new_default with same length
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(len_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(result_local))
+    local_get!(b, len_local)
+    array_new_default!(b, str_type_idx)
+    local_set!(b, result_local)
 
     # i = 0 (0-based for WASM)
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(i_local))
+    i32_const!(b, 0)
+    local_set!(b, i_local)
 
     # Loop: while i < len
-    push!(bytes, Opcode.BLOCK)  # block for break
-    push!(bytes, 0x40)  # void
-    push!(bytes, Opcode.LOOP)   # loop
-    push!(bytes, 0x40)  # void
+    block!(b, 0x40)  # block for break
+    loop!(b, 0x40)   # loop
 
     # Check i < len
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(len_local))
-    push!(bytes, Opcode.I32_GE_S)
-    push!(bytes, Opcode.BR_IF)
-    push!(bytes, 0x01)  # break if i >= len
+    local_get!(b, i_local)
+    local_get!(b, len_local)
+    num!(b, Opcode.I32_GE_S)
+    br_if!(b, 1)  # break if i >= len
 
     # c = s[i]
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_GET_U)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(c_local))
+    local_get!(b, s_local)
+    local_get!(b, i_local)
+    array_get!(b, str_type_idx, I32; signed=false)
+    local_set!(b, c_local)
 
     # Check if c is lowercase (97 <= c <= 122)
     # If so, convert to uppercase (c - 32)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(c_local))
-    push!(bytes, Opcode.I32_CONST)
-    append!(bytes, encode_leb128_signed(97))  # 'a'
-    push!(bytes, Opcode.I32_GE_S)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(c_local))
-    push!(bytes, Opcode.I32_CONST)
-    append!(bytes, encode_leb128_signed(122))  # 'z'
-    push!(bytes, Opcode.I32_LE_S)
-    push!(bytes, Opcode.I32_AND)
-    push!(bytes, Opcode.IF)
-    push!(bytes, 0x40)  # void
+    local_get!(b, c_local)
+    i32_const!(b, 97)  # 'a'
+    num!(b, Opcode.I32_GE_S)
+    local_get!(b, c_local)
+    i32_const!(b, 122)  # 'z'
+    num!(b, Opcode.I32_LE_S)
+    num!(b, Opcode.I32_AND)
+    if_!(b, 0x40)  # void
 
     # Convert to uppercase: c = c - 32
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(c_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x20)  # 32
-    push!(bytes, Opcode.I32_SUB)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(c_local))
+    local_get!(b, c_local)
+    i32_const!(b, 0x20)  # 32
+    num!(b, Opcode.I32_SUB)
+    local_set!(b, c_local)
 
-    push!(bytes, Opcode.END)  # end if
+    end_block!(b)  # end if
 
     # result[i] = c
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(c_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_SET)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    local_get!(b, result_local)
+    local_get!(b, i_local)
+    local_get!(b, c_local)
+    array_set!(b, str_type_idx, I32)
 
     # i++
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.I32_ADD)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(i_local))
+    local_get!(b, i_local)
+    i32_const!(b, 1)
+    num!(b, Opcode.I32_ADD)
+    local_set!(b, i_local)
 
-    push!(bytes, Opcode.BR)
-    push!(bytes, 0x00)  # continue loop
+    br!(b, 0)  # continue loop
 
-    push!(bytes, Opcode.END)  # end loop
-    push!(bytes, Opcode.END)  # end block
+    end_block!(b)  # end loop
+    end_block!(b)  # end block
 
     # Return result
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_local))
+    local_get!(b, result_local)
 
-    return bytes
+    return builder_code(b)
 end
 
 """
@@ -1322,7 +1036,7 @@ Extract: str_lowercase(s) -> String. Convert uppercase ASCII letters to lowercas
 """
 function _compile_invoke_str_lowercase(args, ctx::AbstractCompilationContext)::Vector{UInt8}
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="_compile_invoke_str_lowercase", strict=_wt_builder_strict())
 
     # Allocate locals
     s_local = ctx.n_params + length(ctx.locals)
@@ -1336,114 +1050,84 @@ function _compile_invoke_str_lowercase(args, ctx::AbstractCompilationContext)::V
     c_local = ctx.n_params + length(ctx.locals)
     push!(ctx.locals, I32)
 
+    strref = ConcreteRef(UInt32(str_type_idx), true)
+    builder_set_local_type!(b, s_local, strref)
+    builder_set_local_type!(b, len_local, I32)
+    builder_set_local_type!(b, result_local, strref)
+    builder_set_local_type!(b, i_local, I32)
+    builder_set_local_type!(b, c_local, I32)
+
     # Store s and get length
-    append!(bytes, compile_value(args[1], ctx))
-    push!(bytes, Opcode.LOCAL_TEE)
-    append!(bytes, encode_leb128_unsigned(s_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_LEN)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(len_local))
+    emit_raw!(b, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+    local_tee!(b, s_local)
+    array_len!(b)
+    local_set!(b, len_local)
 
     # Create result string: array.new_default with same length
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(len_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(result_local))
+    local_get!(b, len_local)
+    array_new_default!(b, str_type_idx)
+    local_set!(b, result_local)
 
     # i = 0 (0-based for WASM)
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(i_local))
+    i32_const!(b, 0)
+    local_set!(b, i_local)
 
     # Loop: while i < len
-    push!(bytes, Opcode.BLOCK)  # block for break
-    push!(bytes, 0x40)  # void
-    push!(bytes, Opcode.LOOP)   # loop
-    push!(bytes, 0x40)  # void
+    block!(b, 0x40)  # block for break
+    loop!(b, 0x40)   # loop
 
     # Check i < len
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(len_local))
-    push!(bytes, Opcode.I32_GE_S)
-    push!(bytes, Opcode.BR_IF)
-    push!(bytes, 0x01)  # break if i >= len
+    local_get!(b, i_local)
+    local_get!(b, len_local)
+    num!(b, Opcode.I32_GE_S)
+    br_if!(b, 1)  # break if i >= len
 
     # c = s[i]
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_GET_U)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(c_local))
+    local_get!(b, s_local)
+    local_get!(b, i_local)
+    array_get!(b, str_type_idx, I32; signed=false)
+    local_set!(b, c_local)
 
     # Check if c is uppercase (65 <= c <= 90)
     # If so, convert to lowercase (c + 32)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(c_local))
-    push!(bytes, Opcode.I32_CONST)
-    append!(bytes, encode_leb128_signed(65))  # 'A'
-    push!(bytes, Opcode.I32_GE_S)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(c_local))
-    push!(bytes, Opcode.I32_CONST)
-    append!(bytes, encode_leb128_signed(90))  # 'Z'
-    push!(bytes, Opcode.I32_LE_S)
-    push!(bytes, Opcode.I32_AND)
-    push!(bytes, Opcode.IF)
-    push!(bytes, 0x40)  # void
+    local_get!(b, c_local)
+    i32_const!(b, 65)  # 'A'
+    num!(b, Opcode.I32_GE_S)
+    local_get!(b, c_local)
+    i32_const!(b, 90)  # 'Z'
+    num!(b, Opcode.I32_LE_S)
+    num!(b, Opcode.I32_AND)
+    if_!(b, 0x40)  # void
 
     # Convert to lowercase: c = c + 32
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(c_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x20)  # 32
-    push!(bytes, Opcode.I32_ADD)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(c_local))
+    local_get!(b, c_local)
+    i32_const!(b, 0x20)  # 32
+    num!(b, Opcode.I32_ADD)
+    local_set!(b, c_local)
 
-    push!(bytes, Opcode.END)  # end if
+    end_block!(b)  # end if
 
     # result[i] = c
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(c_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_SET)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    local_get!(b, result_local)
+    local_get!(b, i_local)
+    local_get!(b, c_local)
+    array_set!(b, str_type_idx, I32)
 
     # i++
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.I32_ADD)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(i_local))
+    local_get!(b, i_local)
+    i32_const!(b, 1)
+    num!(b, Opcode.I32_ADD)
+    local_set!(b, i_local)
 
-    push!(bytes, Opcode.BR)
-    push!(bytes, 0x00)  # continue loop
+    br!(b, 0)  # continue loop
 
-    push!(bytes, Opcode.END)  # end loop
-    push!(bytes, Opcode.END)  # end block
+    end_block!(b)  # end loop
+    end_block!(b)  # end block
 
     # Return result
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_local))
+    local_get!(b, result_local)
 
-    return bytes
+    return builder_code(b)
 end
 
 """
@@ -1451,7 +1135,7 @@ Extract: str_trim(s) -> String. Remove leading and trailing ASCII whitespace.
 """
 function _compile_invoke_str_trim(args, ctx::AbstractCompilationContext)::Vector{UInt8}
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="_compile_invoke_str_trim", strict=_wt_builder_strict())
 
     # Allocate locals
     s_local = ctx.n_params + length(ctx.locals)
@@ -1469,250 +1153,179 @@ function _compile_invoke_str_trim(args, ctx::AbstractCompilationContext)::Vector
     c_local = ctx.n_params + length(ctx.locals)
     push!(ctx.locals, I32)
 
+    strref = ConcreteRef(UInt32(str_type_idx), true)
+    builder_set_local_type!(b, s_local, strref)
+    builder_set_local_type!(b, len_local, I32)
+    builder_set_local_type!(b, start_local, I32)
+    builder_set_local_type!(b, end_local, I32)
+    builder_set_local_type!(b, new_len_local, I32)
+    builder_set_local_type!(b, result_local, strref)
+    builder_set_local_type!(b, c_local, I32)
+
     # Store s and get length
-    append!(bytes, compile_value(args[1], ctx))
-    push!(bytes, Opcode.LOCAL_TEE)
-    append!(bytes, encode_leb128_unsigned(s_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_LEN)
-    push!(bytes, Opcode.LOCAL_TEE)
-    append!(bytes, encode_leb128_unsigned(len_local))
+    emit_raw!(b, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+    local_tee!(b, s_local)
+    array_len!(b)
+    local_tee!(b, len_local)
 
     # Check for empty string
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-    push!(bytes, Opcode.I32_EQ)
-    push!(bytes, Opcode.IF)
-    append!(bytes, encode_block_type(ConcreteRef(str_type_idx)))
+    i32_const!(b, 0)
+    num!(b, Opcode.I32_EQ)
+    if_!(b, ConcreteRef(str_type_idx); results=WasmValType[strref])
 
     # Return empty string (the original s)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_local))
+    local_get!(b, s_local)
 
-    push!(bytes, Opcode.ELSE)
+    else_!(b)
 
     # start = 0 (0-based)
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(start_local))
+    i32_const!(b, 0)
+    local_set!(b, start_local)
 
     # end = len - 1 (0-based, last valid index)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(len_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.I32_SUB)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(end_local))
+    local_get!(b, len_local)
+    i32_const!(b, 1)
+    num!(b, Opcode.I32_SUB)
+    local_set!(b, end_local)
 
     # Find start: skip leading whitespace
     # while start < len && is_whitespace(s[start])
-    push!(bytes, Opcode.BLOCK)
-    push!(bytes, 0x40)
-    push!(bytes, Opcode.LOOP)
-    push!(bytes, 0x40)
+    block!(b, 0x40)
+    loop!(b, 0x40)
 
     # Check start < len
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(start_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(len_local))
-    push!(bytes, Opcode.I32_GE_S)
-    push!(bytes, Opcode.BR_IF)
-    push!(bytes, 0x01)  # break if start >= len
+    local_get!(b, start_local)
+    local_get!(b, len_local)
+    num!(b, Opcode.I32_GE_S)
+    br_if!(b, 1)  # break if start >= len
 
     # c = s[start]
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(start_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_GET_U)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(c_local))
+    local_get!(b, s_local)
+    local_get!(b, start_local)
+    array_get!(b, str_type_idx, I32; signed=false)
+    local_set!(b, c_local)
 
     # Check if whitespace: c == 32 || c == 9 || c == 10 || c == 13
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(c_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x20)  # space
-    push!(bytes, Opcode.I32_EQ)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(c_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x09)  # tab
-    push!(bytes, Opcode.I32_EQ)
-    push!(bytes, Opcode.I32_OR)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(c_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x0a)  # newline
-    push!(bytes, Opcode.I32_EQ)
-    push!(bytes, Opcode.I32_OR)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(c_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x0d)  # carriage return
-    push!(bytes, Opcode.I32_EQ)
-    push!(bytes, Opcode.I32_OR)
+    local_get!(b, c_local)
+    i32_const!(b, 0x20)  # space
+    num!(b, Opcode.I32_EQ)
+    local_get!(b, c_local)
+    i32_const!(b, 0x09)  # tab
+    num!(b, Opcode.I32_EQ)
+    num!(b, Opcode.I32_OR)
+    local_get!(b, c_local)
+    i32_const!(b, 0x0a)  # newline
+    num!(b, Opcode.I32_EQ)
+    num!(b, Opcode.I32_OR)
+    local_get!(b, c_local)
+    i32_const!(b, 0x0d)  # carriage return
+    num!(b, Opcode.I32_EQ)
+    num!(b, Opcode.I32_OR)
 
     # If not whitespace, break
-    push!(bytes, Opcode.I32_EQZ)
-    push!(bytes, Opcode.BR_IF)
-    push!(bytes, 0x01)
+    num!(b, Opcode.I32_EQZ)
+    br_if!(b, 1)
 
     # start++
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(start_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.I32_ADD)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(start_local))
+    local_get!(b, start_local)
+    i32_const!(b, 1)
+    num!(b, Opcode.I32_ADD)
+    local_set!(b, start_local)
 
-    push!(bytes, Opcode.BR)
-    push!(bytes, 0x00)  # continue
+    br!(b, 0)  # continue
 
-    push!(bytes, Opcode.END)  # end loop
-    push!(bytes, Opcode.END)  # end block
+    end_block!(b)  # end loop
+    end_block!(b)  # end block
 
     # Check if all whitespace (start >= len)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(start_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(len_local))
-    push!(bytes, Opcode.I32_GE_S)
-    push!(bytes, Opcode.IF)
-    append!(bytes, encode_block_type(ConcreteRef(str_type_idx)))
+    local_get!(b, start_local)
+    local_get!(b, len_local)
+    num!(b, Opcode.I32_GE_S)
+    if_!(b, ConcreteRef(str_type_idx); results=WasmValType[strref])
 
     # Return empty string
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    i32_const!(b, 0)
+    array_new_default!(b, str_type_idx)
 
-    push!(bytes, Opcode.ELSE)
+    else_!(b)
 
     # Find end: skip trailing whitespace
     # while end >= start && is_whitespace(s[end])
-    push!(bytes, Opcode.BLOCK)
-    push!(bytes, 0x40)
-    push!(bytes, Opcode.LOOP)
-    push!(bytes, 0x40)
+    block!(b, 0x40)
+    loop!(b, 0x40)
 
     # Check end >= start
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(end_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(start_local))
-    push!(bytes, Opcode.I32_LT_S)
-    push!(bytes, Opcode.BR_IF)
-    push!(bytes, 0x01)  # break if end < start
+    local_get!(b, end_local)
+    local_get!(b, start_local)
+    num!(b, Opcode.I32_LT_S)
+    br_if!(b, 1)  # break if end < start
 
     # c = s[end]
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(end_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_GET_U)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(c_local))
+    local_get!(b, s_local)
+    local_get!(b, end_local)
+    array_get!(b, str_type_idx, I32; signed=false)
+    local_set!(b, c_local)
 
     # Check if whitespace
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(c_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x20)
-    push!(bytes, Opcode.I32_EQ)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(c_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x09)
-    push!(bytes, Opcode.I32_EQ)
-    push!(bytes, Opcode.I32_OR)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(c_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x0a)
-    push!(bytes, Opcode.I32_EQ)
-    push!(bytes, Opcode.I32_OR)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(c_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x0d)
-    push!(bytes, Opcode.I32_EQ)
-    push!(bytes, Opcode.I32_OR)
+    local_get!(b, c_local)
+    i32_const!(b, 0x20)
+    num!(b, Opcode.I32_EQ)
+    local_get!(b, c_local)
+    i32_const!(b, 0x09)
+    num!(b, Opcode.I32_EQ)
+    num!(b, Opcode.I32_OR)
+    local_get!(b, c_local)
+    i32_const!(b, 0x0a)
+    num!(b, Opcode.I32_EQ)
+    num!(b, Opcode.I32_OR)
+    local_get!(b, c_local)
+    i32_const!(b, 0x0d)
+    num!(b, Opcode.I32_EQ)
+    num!(b, Opcode.I32_OR)
 
     # If not whitespace, break
-    push!(bytes, Opcode.I32_EQZ)
-    push!(bytes, Opcode.BR_IF)
-    push!(bytes, 0x01)
+    num!(b, Opcode.I32_EQZ)
+    br_if!(b, 1)
 
     # end--
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(end_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.I32_SUB)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(end_local))
+    local_get!(b, end_local)
+    i32_const!(b, 1)
+    num!(b, Opcode.I32_SUB)
+    local_set!(b, end_local)
 
-    push!(bytes, Opcode.BR)
-    push!(bytes, 0x00)
+    br!(b, 0)
 
-    push!(bytes, Opcode.END)  # end loop
-    push!(bytes, Opcode.END)  # end block
+    end_block!(b)  # end loop
+    end_block!(b)  # end block
 
     # new_len = end - start + 1
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(end_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(start_local))
-    push!(bytes, Opcode.I32_SUB)
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.I32_ADD)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(new_len_local))
+    local_get!(b, end_local)
+    local_get!(b, start_local)
+    num!(b, Opcode.I32_SUB)
+    i32_const!(b, 1)
+    num!(b, Opcode.I32_ADD)
+    local_set!(b, new_len_local)
 
     # Create result array
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(new_len_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(result_local))
+    local_get!(b, new_len_local)
+    array_new_default!(b, str_type_idx)
+    local_set!(b, result_local)
 
     # array.copy: result[0..new_len] = s[start..start+new_len]
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)  # dst_offset = 0
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(s_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(start_local))  # src_offset = start
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(new_len_local))  # length
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_COPY)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    local_get!(b, result_local)
+    i32_const!(b, 0)  # dst_offset = 0
+    local_get!(b, s_local)
+    local_get!(b, start_local)  # src_offset = start
+    local_get!(b, new_len_local)  # length
+    array_copy!(b, str_type_idx, str_type_idx)
 
     # Return result
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_local))
+    local_get!(b, result_local)
 
-    push!(bytes, Opcode.END)  # end else (not all whitespace)
-    push!(bytes, Opcode.END)  # end else (not empty)
+    end_block!(b)  # end else (not all whitespace)
+    end_block!(b)  # end else (not empty)
 
-    return bytes
+    return builder_code(b)
 end
 
 """

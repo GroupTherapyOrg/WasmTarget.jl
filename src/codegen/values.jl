@@ -1051,10 +1051,10 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                             if field_val_bytes[scan_pos] == 0xFB && field_val_bytes[scan_pos+1] == 0x00
                                 sn_type_idx = 0; sn_shift = 0
                                 for bi in (scan_pos+2):length(field_val_bytes)
-                                    b = field_val_bytes[bi]
-                                    sn_type_idx |= (Int(b & 0x7f) << sn_shift)
+                                    byt = field_val_bytes[bi]
+                                    sn_type_idx |= (Int(byt & 0x7f) << sn_shift)
                                     sn_shift += 7
-                                    if (b & 0x80) == 0
+                                    if (byt & 0x80) == 0
                                         if bi == length(field_val_bytes)
                                             if expected_wasm isa ConcreteRef && sn_type_idx != expected_wasm.type_idx
                                                 need_replace = true
@@ -1084,10 +1084,10 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                         elseif first_byte == 0x20  # LOCAL_GET
                             src_idx = 0; shift = 0
                             for bi in 2:length(field_val_bytes)
-                                b = field_val_bytes[bi]
-                                src_idx |= (Int(b & 0x7f) << shift)
+                                byt = field_val_bytes[bi]
+                                src_idx |= (Int(byt & 0x7f) << shift)
                                 shift += 7
-                                (b & 0x80) == 0 && break
+                                (byt & 0x80) == 0 && break
                             end
                             arr_idx = src_idx - ctx.n_params + 1
                             if arr_idx >= 1 && arr_idx <= length(ctx.locals)

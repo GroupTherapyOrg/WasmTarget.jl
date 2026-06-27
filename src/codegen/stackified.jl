@@ -3,7 +3,10 @@ Generate code for more complex control flow patterns.
 Uses nested blocks with br instructions.
 """
 function generate_complex_flow(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
-    bytes = UInt8[]
+    # MIGRATED to InstrBuilder: this fn only splices whole-body sub-emitters via emit_raw!.
+    # strict=false (collect mode): the sub-emitters are full control-flow bodies whose
+    # operand-stack effect the fragment model can't track precisely, so we never gate.
+    b = InstrBuilder(; func_name="generate_complex_flow", strict=false)
 
     # For void return types WITHOUT loops (like event handlers), use a simpler approach:
     # just execute all statements in order and return at the end.
@@ -11,12 +14,12 @@ function generate_complex_flow(ctx::AbstractCompilationContext, blocks::Vector{B
     # generate_void_flow doesn't handle pre-loop phi initialization (single-edge phis
     # after if-then-else merge points stay at default 0, causing array bounds errors).
     if ctx.return_type === Nothing && !any(ctx.loop_headers)
-        append!(bytes, generate_void_flow(ctx, blocks, code))
-        return bytes
+        emit_raw!(b, generate_void_flow(ctx, blocks, code))
+        return builder_code(b)
     end
 
     # Count how many conditional branches we have
-    conditionals = [(i, b) for (i, b) in enumerate(blocks) if b.terminator isa Core.GotoIfNot]
+    conditionals = [(i, byt) for (i, byt) in enumerate(blocks) if byt.terminator isa Core.GotoIfNot]
 
     # For functions with loops or 3+ conditionals, use the stackifier algorithm.
     # The nested conditional generator handles simple if-else well (1 conditional),
@@ -38,15 +41,15 @@ function generate_complex_flow(ctx::AbstractCompilationContext, blocks::Vector{B
 
     # For simpler functions, use nested if-else (which works well for moderate complexity)
     if length(conditionals) >= 1
-        append!(bytes, generate_nested_conditionals(ctx, blocks, code, conditionals))
+        emit_raw!(b, generate_nested_conditionals(ctx, blocks, code, conditionals))
     else
         # Fallback: generate blocks sequentially
         for block in blocks
-            append!(bytes, generate_block_code(ctx, block))
+            emit_raw!(b, generate_block_code(ctx, block))
         end
     end
 
-    return bytes
+    return builder_code(b)
 end
 
 """
@@ -509,10 +512,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                         got_local_idx = 0
                                         shift = 0
                                         for bi in 2:length(phi_value_bytes)
-                                            b = phi_value_bytes[bi]
-                                            got_local_idx |= (Int(b & 0x7f) << shift)
+                                            byt = phi_value_bytes[bi]
+                                            got_local_idx |= (Int(byt & 0x7f) << shift)
                                             shift += 7
-                                            if (b & 0x80) == 0
+                                            if (byt & 0x80) == 0
                                                 break
                                             end
                                         end
@@ -635,7 +638,14 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # - We use nested if/else for these patterns
     # - For more complex patterns, we use labeled blocks
 
-    bytes = UInt8[]
+    # MIGRATED to InstrBuilder: the main accumulator is the typed builder `b`. The
+    # byte-INSPECTING helper closures (set_phi_locals_for_edge!, compile_phi_value,
+    # emit_phi_type_default, compile_block_statements) keep building their own local
+    # UInt8[] buffers — they LEB-decode + scan recursive results — and splice them into
+    # `b` via emit_raw!. strict=false (collect mode): a full control-flow body's stack
+    # effect can't be tracked precisely by the fragment model, so we never gate.
+    # Byte-identical to the prior raw emission.
+    b = InstrBuilder(; func_name="generate_stackified_flow", strict=false)
 
     # For very complex functions, use a dispatcher-style approach
     # Create a big block structure with all targets as labeled positions
@@ -764,8 +774,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
 
     # Open blocks for OUTER forward jump targets only (outermost first = largest target)
     for target in outer_targets
-        push!(bytes, Opcode.BLOCK)
-        push!(bytes, 0x40)  # void
+        block!(b)  # void
     end
 
     # Helper function to get current label depth for a forward jump target
@@ -1352,10 +1361,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 if !isempty(needs_temp) && length(phi_value_bytes) >= 2 && phi_value_bytes[1] == Opcode.LOCAL_GET
                                     _got_idx = 0; _shift = 0
                                     for bi in 2:length(phi_value_bytes)
-                                        b = phi_value_bytes[bi]
-                                        _got_idx |= (Int(b & 0x7f) << _shift)
+                                        byt = phi_value_bytes[bi]
+                                        _got_idx |= (Int(byt & 0x7f) << _shift)
                                         _shift += 7
-                                        if (b & 0x80) == 0; break; end
+                                        if (byt & 0x80) == 0; break; end
                                     end
                                     if haskey(needs_temp, _got_idx)
                                         phi_value_bytes = UInt8[Opcode.LOCAL_GET]
@@ -1391,10 +1400,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                         got_local_idx = 0
                                         shift = 0
                                         for bi in 2:length(phi_value_bytes)
-                                            b = phi_value_bytes[bi]
-                                            got_local_idx |= (Int(b & 0x7f) << shift)
+                                            byt = phi_value_bytes[bi]
+                                            got_local_idx |= (Int(byt & 0x7f) << shift)
                                             shift += 7
-                                            if (b & 0x80) == 0
+                                            if (byt & 0x80) == 0
                                                 break
                                             end
                                         end
@@ -1471,7 +1480,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                         # a GC instruction (e.g., array.new_data for Symbol constants
                                         # starts with i32.const for the offset argument but produces
                                         # a ref-typed value, not a numeric one).
-                                        if phi_val_is_numeric && any(b == Opcode.GC_PREFIX for b in phi_value_bytes)
+                                        if phi_val_is_numeric && any(byt == Opcode.GC_PREFIX for byt in phi_value_bytes)
                                             phi_val_is_numeric = false
                                         end
                                         if phi_is_ref && phi_val_is_numeric
@@ -1514,16 +1523,15 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # ("values remaining at end of block"). Wrap the subset in an EXIT block:
     # out-of-subset forward branches br to it, landing exactly where the
     # caller's continuation (e.g. the try_table) begins.
-    _subset_end = isempty(blocks) ? 0 : maximum(b.end_idx for b in blocks)
+    _subset_end = isempty(blocks) ? 0 : maximum(byt.end_idx for byt in blocks)
     _term_dest(t) = t isa Core.GotoIfNot ? t.dest : t isa Core.GotoNode ? t.label : 0
     needs_exit_block = any(begin
-                               d = _term_dest(b.terminator)
+                               d = _term_dest(byt.terminator)
                                d > _subset_end && get(stmt_to_block, d, nothing) === nothing
-                           end for b in blocks)
+                           end for byt in blocks)
     _exit_depth() = length(open_blocks) + length(open_loops)
     if needs_exit_block
-        push!(bytes, Opcode.BLOCK)
-        push!(bytes, 0x40)
+        block!(b)
     end
 
     # Now generate code for each block in order
@@ -1532,9 +1540,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         # (We close BEFORE generating code for the target block)
         while !isempty(open_blocks) && last(open_blocks) == block_idx
             pop!(open_blocks)
-            push!(bytes, Opcode.END)  # End the block for this target
+            end_block!(b)  # End the block for this target
             if _debug_stackified
-                @warn "  CLOSE block for target $block_idx, open_blocks=$open_blocks, bytes_len=$(length(bytes))"
+                @warn "  CLOSE block for target $block_idx, open_blocks=$open_blocks, bytes_len=$(_byte_len(b))"
             end
         end
 
@@ -1547,23 +1555,21 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         end
 
         if _debug_stackified
-            @warn "  BLOCK $block_idx [$(block.start_idx):$(block.end_idx)] term=$(typeof(block.terminator)) bytes=$(length(bytes)) open_blocks=$open_blocks open_loops=$open_loops"
+            @warn "  BLOCK $block_idx [$(block.start_idx):$(block.end_idx)] term=$(typeof(block.terminator)) bytes=$(_byte_len(b)) open_blocks=$open_blocks open_loops=$open_loops"
         end
 
         # Check if we're entering a loop
         is_loop_header = block_idx in loop_headers
 
         if is_loop_header
-            push!(bytes, Opcode.LOOP)
-            push!(bytes, 0x40)  # void
+            loop!(b)  # void
             push!(open_loops, block_idx)
 
             # Open BLOCKs for forward-jump targets INSIDE this loop
             if haskey(loop_inner_targets, block_idx)
                 inner_targets = loop_inner_targets[block_idx]
                 for target in inner_targets  # already sorted desc (largest first = outermost)
-                    push!(bytes, Opcode.BLOCK)
-                    push!(bytes, 0x40)  # void
+                    block!(b)  # void
                 end
                 # Push inner targets onto open_blocks (smallest last = innermost at top)
                 append!(open_blocks, inner_targets)
@@ -1723,10 +1729,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                         got_local_idx = 0
                                         shift = 0
                                         for bi in 2:length(phi_value_bytes)
-                                            b = phi_value_bytes[bi]
-                                            got_local_idx |= (Int(b & 0x7f) << shift)
+                                            byt = phi_value_bytes[bi]
+                                            got_local_idx |= (Int(byt & 0x7f) << shift)
                                             shift += 7
-                                            if (b & 0x80) == 0
+                                            if (byt & 0x80) == 0
                                                 break
                                             end
                                         end
@@ -1838,7 +1844,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 end
             end
         end
-        append!(bytes, block_bytes)
+        emit_raw!(b, block_bytes)
 
         # Handle the terminator
         term = block.terminator
@@ -1850,8 +1856,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             dest_block = get(stmt_to_block, term.dest, nothing)
             if dest_block !== nothing && dest_block > block_idx && dest_block in non_trivial_targets
                 label_depth = get_forward_label_depth(dest_block)
-                push!(bytes, Opcode.BR)
-                append!(bytes, encode_leb128_unsigned(label_depth))
+                br!(b, label_depth)
             end
             # Otherwise, it's just a fall-through to a live block - nothing needed
 
@@ -1871,15 +1876,14 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
                 if is_numeric_val && is_ref_ret
                     if func_ret_wasm === ExternRef
-                        emit_numeric_to_externref!(bytes, term.val, val_wasm_type, ctx)
+                        _eb = UInt8[]; emit_numeric_to_externref!(_eb, term.val, val_wasm_type, ctx)
+                        emit_raw!(b, _eb; pushes=WasmValType[ExternRef])
                     elseif func_ret_wasm isa ConcreteRef
-                        push!(bytes, Opcode.REF_NULL)
-                        append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                        ref_null!(b, Int64(func_ret_wasm.type_idx), ConcreteRef(UInt32(func_ret_wasm.type_idx), true))
                     else
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(func_ret_wasm))
+                        ref_null!(b, func_ret_wasm)
                     end
-                    push!(bytes, Opcode.RETURN)
+                    return_!(b)
                 # PURE-6024: Use func_ret_wasm (actual WASM function signature type) for
                 # return type compatibility, not ret_wasm_type (julia_to_wasm_type_concrete).
                 # These disagree for Union types like Union{Int128, Int64, BigInt} where
@@ -1887,19 +1891,19 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # The phi local is correctly overridden to I64 (line 5196), so the value
                 # on the stack IS I64, but checking against ConcreteRef incorrectly fails.
                 elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
-                    push!(bytes, Opcode.UNREACHABLE)
+                    unreachable!(b)
                 else
                     val_bytes = compile_value(term.val, ctx)
-                    append!(bytes, val_bytes)
+                    emit_raw!(b, val_bytes; pushes=WasmValType[val_wasm_type])
                     if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
                         is_externref_local = false
                         if length(val_bytes) >= 2 && val_bytes[1] == 0x20
                             src_idx = 0; shift = 0; leb_end = 0
                             for bi in 2:length(val_bytes)
-                                b = val_bytes[bi]
-                                src_idx |= (Int(b & 0x7f) << shift)
+                                byt = val_bytes[bi]
+                                src_idx |= (Int(byt & 0x7f) << shift)
                                 shift += 7
-                                if (b & 0x80) == 0
+                                if (byt & 0x80) == 0
                                     leb_end = bi
                                     break
                                 end
@@ -1920,35 +1924,30 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                             end
                         end
                         if !is_externref_local
-                            push!(bytes, Opcode.GC_PREFIX)
-                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                            extern_convert_any!(b)
                         end
                     elseif val_wasm_type === I32 && func_ret_wasm === I64
-                        push!(bytes, Opcode.I64_EXTEND_I32_S)
+                        num!(b, Opcode.I64_EXTEND_I32_S)
                     elseif val_wasm_type === I64 && func_ret_wasm === F64
-                        push!(bytes, Opcode.F64_CONVERT_I64_S)
+                        num!(b, Opcode.F64_CONVERT_I64_S)
                     elseif val_wasm_type === I32 && func_ret_wasm === F64
-                        push!(bytes, Opcode.F64_CONVERT_I32_S)
+                        num!(b, Opcode.F64_CONVERT_I32_S)
                     elseif val_wasm_type === F32 && func_ret_wasm === F64
-                        push!(bytes, Opcode.F64_PROMOTE_F32)
+                        num!(b, Opcode.F64_PROMOTE_F32)
                     elseif val_wasm_type === I64 && func_ret_wasm === F32
-                        push!(bytes, Opcode.F32_CONVERT_I64_S)
+                        num!(b, Opcode.F32_CONVERT_I64_S)
                     elseif val_wasm_type === I32 && func_ret_wasm === F32
-                        push!(bytes, Opcode.F32_CONVERT_I32_S)
+                        num!(b, Opcode.F32_CONVERT_I32_S)
                     # WBUILD-4000: Cast EqRef/StructRef to ConcreteRef for return
                     elseif (val_wasm_type === EqRef || val_wasm_type === StructRef || val_wasm_type === AnyRef) && func_ret_wasm isa ConcreteRef
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.REF_CAST_NULL)
-                        append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                        ref_cast!(b, Int64(func_ret_wasm.type_idx), true)
                     elseif val_wasm_type isa ConcreteRef && func_ret_wasm isa ConcreteRef && val_wasm_type != func_ret_wasm
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.REF_CAST_NULL)
-                        append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                        ref_cast!(b, Int64(func_ret_wasm.type_idx), true)
                     end
-                    push!(bytes, Opcode.RETURN)
+                    return_!(b)
                 end
             else
-                push!(bytes, Opcode.RETURN)
+                return_!(b)
             end
 
         elseif term isa Core.GotoIfNot
@@ -1963,12 +1962,12 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             has_phi = dest_block !== nothing && dest_has_phi_from_edge(dest_block, terminator_idx)
 
             if _debug_stackified
-                @warn "  GIN blk=$block_idx term_idx=$terminator_idx dest=$(term.dest) dest_block=$dest_block has_phi=$has_phi nontrivial=$(dest_block in non_trivial_targets) bytes=$(length(bytes))"
+                @warn "  GIN blk=$block_idx term_idx=$terminator_idx dest=$(term.dest) dest_block=$dest_block has_phi=$has_phi nontrivial=$(dest_block in non_trivial_targets) bytes=$(_byte_len(b))"
             end
 
             # Compile condition
             cond_bytes = compile_condition_to_i32(term.cond, ctx)
-            append!(bytes, cond_bytes)
+            emit_raw!(b, cond_bytes; pushes=WasmValType[I32])
 
             # If condition is TRUE, fall through to next block
             # If condition is FALSE, jump to dest
@@ -1978,67 +1977,61 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 if dest_block in non_trivial_targets
                     if has_phi
                         # Need to set phi values before jumping - use if/else
-                        push!(bytes, Opcode.IF)
-                        push!(bytes, 0x40)  # void
+                        if_!(b)  # void
                         # Then branch: condition true, fall through (empty)
-                        push!(bytes, Opcode.ELSE)
+                        else_!(b)
                         # Else branch: condition false, set all phi locals and jump
-                        set_phi_locals_for_edge!(bytes, dest_block, terminator_idx; target_stmt=term.dest)
+                        _sb = UInt8[]; set_phi_locals_for_edge!(_sb, dest_block, terminator_idx; target_stmt=term.dest)
+                        emit_raw!(b, _sb)
                         # Jump to destination (account for the if block we're inside)
                         label_depth = get_forward_label_depth(dest_block) + 1
-                        push!(bytes, Opcode.BR)
-                        append!(bytes, encode_leb128_unsigned(label_depth))
-                        push!(bytes, Opcode.END)
+                        br!(b, label_depth)
+                        end_block!(b)
                     else
                         # No phi - use br_if
                         label_depth = get_forward_label_depth(dest_block)
-                        push!(bytes, Opcode.I32_EQZ)  # Invert the condition
-                        push!(bytes, Opcode.BR_IF)
-                        append!(bytes, encode_leb128_unsigned(label_depth))
+                        num!(b, Opcode.I32_EQZ)  # Invert the condition
+                        br_if!(b, label_depth)
                     end
                 else
                     # Simple fall-through pattern - condition true continues, false skips
                     if has_phi
-                        push!(bytes, Opcode.IF)
-                        push!(bytes, 0x40)
-                        push!(bytes, Opcode.ELSE)
-                        set_phi_locals_for_edge!(bytes, dest_block, terminator_idx; target_stmt=term.dest)
-                        push!(bytes, Opcode.END)
+                        if_!(b)
+                        else_!(b)
+                        _sb = UInt8[]; set_phi_locals_for_edge!(_sb, dest_block, terminator_idx; target_stmt=term.dest)
+                        emit_raw!(b, _sb)
+                        end_block!(b)
                     else
-                        push!(bytes, Opcode.IF)
-                        push!(bytes, 0x40)
-                        push!(bytes, Opcode.END)
+                        if_!(b)
+                        end_block!(b)
                     end
                 end
             elseif dest_block !== nothing && dest_block <= block_idx
                 # Back edge (loop continuation condition)
                 if dest_block in loop_headers
                     if has_phi
-                        push!(bytes, Opcode.IF)
-                        push!(bytes, 0x40)
-                        push!(bytes, Opcode.ELSE)
-                        set_phi_locals_for_edge!(bytes, dest_block, terminator_idx; target_stmt=term.dest)
+                        if_!(b)
+                        else_!(b)
+                        _sb = UInt8[]; set_phi_locals_for_edge!(_sb, dest_block, terminator_idx; target_stmt=term.dest)
+                        emit_raw!(b, _sb)
                         label_depth = get_loop_label_depth(dest_block) + 1
-                        push!(bytes, Opcode.BR)
-                        append!(bytes, encode_leb128_unsigned(label_depth))
-                        push!(bytes, Opcode.END)
+                        br!(b, label_depth)
+                        end_block!(b)
                     else
                         label_depth = get_loop_label_depth(dest_block)
-                        push!(bytes, Opcode.I32_EQZ)
-                        push!(bytes, Opcode.BR_IF)
-                        append!(bytes, encode_leb128_unsigned(label_depth))
+                        num!(b, Opcode.I32_EQZ)
+                        br_if!(b, label_depth)
                     end
                 end
             elseif dest_block === nothing && needs_exit_block && term.dest > _subset_end
                 # P2-batch23: dest is beyond the compiled subset — branch to the
                 # exit block (the caller's continuation begins right after it).
-                push!(bytes, Opcode.I32_EQZ)
-                push!(bytes, Opcode.BR_IF)
-                append!(bytes, encode_leb128_unsigned(_exit_depth()))
+                num!(b, Opcode.I32_EQZ)
+                br_if!(b, _exit_depth())
             elseif dest_block === nothing
                 # Unresolvable dest: drop the compiled condition rather than
                 # orphaning it on the operand stack.
-                push!(bytes, Opcode.DROP)
+                drop!(b)
             end
 
             # PURE-314: GotoIfNot fall-through phi locals
@@ -2050,7 +2043,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             if next_fall_block <= length(blocks)
                 fall_has_phi = dest_has_phi_from_edge(next_fall_block, terminator_idx)
                 if fall_has_phi
-                    set_phi_locals_for_edge!(bytes, next_fall_block, terminator_idx)
+                    _sb = UInt8[]; set_phi_locals_for_edge!(_sb, next_fall_block, terminator_idx)
+                    emit_raw!(b, _sb)
                 end
             end
 
@@ -2067,7 +2061,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             # Set all phi values before jumping
             # Pass the actual target statement to find phi nodes (might be inside the block)
             if dest_block !== nothing
-                set_phi_locals_for_edge!(bytes, dest_block, terminator_idx; target_stmt=term.label)
+                _sb = UInt8[]; set_phi_locals_for_edge!(_sb, dest_block, terminator_idx; target_stmt=term.label)
+                emit_raw!(b, _sb)
             end
 
             if dest_block !== nothing && dest_block > block_idx
@@ -2107,12 +2102,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                             end
                         end
                         if ret_local !== nothing
-                            push!(bytes, Opcode.LOCAL_GET)
-                            append!(bytes, encode_leb128_unsigned(ret_local))
+                            local_get!(b, ret_local)
                             if func_ret_wasm isa ConcreteRef
-                                push!(bytes, Opcode.GC_PREFIX)
-                                push!(bytes, Opcode.REF_CAST_NULL)
-                                append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                                ref_cast!(b, Int64(func_ret_wasm.type_idx), true)
                             else
                                 # P2-batch24 (gap dc4aaea42654): the local can be
                                 # narrower than the function result (Int32 return
@@ -2123,23 +2115,21 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 _rl_wasm = _rl_arr >= 1 && _rl_arr <= length(ctx.locals) ?
                                            ctx.locals[_rl_arr] : nothing
                                 if _rl_wasm === I32 && func_ret_wasm === I64
-                                    push!(bytes, Opcode.I64_EXTEND_I32_S)
+                                    num!(b, Opcode.I64_EXTEND_I32_S)
                                 elseif _rl_wasm === I64 && func_ret_wasm === F64
-                                    push!(bytes, Opcode.F64_CONVERT_I64_S)
+                                    num!(b, Opcode.F64_CONVERT_I64_S)
                                 elseif _rl_wasm === I32 && func_ret_wasm === F64
-                                    push!(bytes, Opcode.F64_CONVERT_I32_S)
+                                    num!(b, Opcode.F64_CONVERT_I32_S)
                                 elseif _rl_wasm === F32 && func_ret_wasm === F64
-                                    push!(bytes, Opcode.F64_PROMOTE_F32)
+                                    num!(b, Opcode.F64_PROMOTE_F32)
                                 end
                             end
-                            push!(bytes, Opcode.RETURN)
+                            return_!(b)
                         else
-                            push!(bytes, Opcode.BR)
-                            append!(bytes, encode_leb128_unsigned(label_depth))
+                            br!(b, label_depth)
                         end
                     else
-                        push!(bytes, Opcode.BR)
-                        append!(bytes, encode_leb128_unsigned(label_depth))
+                        br!(b, label_depth)
                     end
                 end
                 # Otherwise, simple fall through - implicit
@@ -2147,14 +2137,12 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # Back edge (loop)
                 if dest_block in loop_headers
                     label_depth = get_loop_label_depth(dest_block)
-                    push!(bytes, Opcode.BR)
-                    append!(bytes, encode_leb128_unsigned(label_depth))
+                    br!(b, label_depth)
                 end
             elseif dest_block === nothing && needs_exit_block && term.label > _subset_end
                 # P2-batch23: unconditional jump beyond the compiled subset —
                 # branch to the exit block (the caller's continuation).
-                push!(bytes, Opcode.BR)
-                append!(bytes, encode_leb128_unsigned(_exit_depth()))
+                br!(b, _exit_depth())
             end
         else
             # No explicit terminator (GotoNode, GotoIfNot, ReturnNode)
@@ -2164,7 +2152,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             if next_block_idx <= length(blocks)
                 # The edge for fallthrough is the last statement of this block
                 terminator_idx = block.end_idx
-                set_phi_locals_for_edge!(bytes, next_block_idx, terminator_idx)
+                _sb = UInt8[]; set_phi_locals_for_edge!(_sb, next_block_idx, terminator_idx)
+                emit_raw!(b, _sb)
             end
         end
 
@@ -2176,11 +2165,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     for target in loop_inner_targets[dst]
                         if target in open_blocks
                             filter!(t -> t != target, open_blocks)
-                            push!(bytes, Opcode.END)  # End inner target block
+                            end_block!(b)  # End inner target block
                         end
                     end
                 end
-                push!(bytes, Opcode.END)  # End of loop
+                end_block!(b)  # End of loop
                 # Remove from open_loops
                 filter!(h -> h != dst, open_loops)
             end
@@ -2190,7 +2179,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # Close any remaining open blocks
     while !isempty(open_blocks)
         pop!(open_blocks)
-        push!(bytes, Opcode.END)
+        end_block!(b)
     end
 
     # WBUILD-3001: After all blocks close, control may reach here when a `br`
@@ -2200,12 +2189,12 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # to ensure br to the outermost block uses `return` instead of `br`.
     # P2-batch19: callers compiling a FALL-THROUGH region (the pre-branch code
     # of an exit-branch try/catch) opt out — for them this guard is live code.
-    trailing_unreachable && push!(bytes, Opcode.UNREACHABLE)
+    trailing_unreachable && unreachable!(b)
 
     # P2-batch23: close the subset exit block — out-of-subset branches land
     # here, i.e. exactly at the caller's continuation.
-    needs_exit_block && push!(bytes, Opcode.END)
+    needs_exit_block && end_block!(b)
 
-    return bytes
+    return builder_code(b)
 end
 

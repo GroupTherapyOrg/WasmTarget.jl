@@ -86,91 +86,72 @@ function create_utf8_to_js_helper!(mod::WasmModule, type_registry::TypeRegistry,
     # Locals: 0=param(i8arr), 1=len(i32), 2=i16arr(ref $i16arr), 3=i(i32)
     locals = WasmValType[I32, ConcreteRef(char_arr_type_idx, true), I32]
 
-    body = UInt8[]
     local_i8arr = UInt32(0)
     local_len = UInt32(1)
     local_i16arr = UInt32(2)
     local_i = UInt32(3)
 
+    # MIGRATED to InstrBuilder (typed). Full helper-function body: i8 UTF-8 array →
+    # i16 char array → fromCharCodeArray. Byte-identical to the raw emission below.
+    char_arr_ref = ConcreteRef(char_arr_type_idx, true)
+    b = InstrBuilder(WasmValType[i8arr_ref], WasmValType[NonNullExternRef];
+                     func_name="create_utf8_to_js_helper", strict=_wt_builder_strict())
+    builder_set_local_type!(b, local_len, I32)
+    builder_set_local_type!(b, local_i16arr, char_arr_ref)
+    builder_set_local_type!(b, local_i, I32)
+
     # len = i8arr.len
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(local_i8arr))
-    push!(body, Opcode.GC_PREFIX)
-    push!(body, Opcode.ARRAY_LEN)
-    push!(body, Opcode.LOCAL_TEE)
-    append!(body, encode_leb128_unsigned(local_len))
+    local_get!(b, local_i8arr)
+    array_len!(b)
+    local_tee!(b, local_len)
 
     # i16arr = array.new_default $i16arr len
-    push!(body, Opcode.GC_PREFIX)
-    push!(body, Opcode.ARRAY_NEW_DEFAULT)
-    append!(body, encode_leb128_unsigned(char_arr_type_idx))
-    push!(body, Opcode.LOCAL_SET)
-    append!(body, encode_leb128_unsigned(local_i16arr))
+    array_new_default!(b, char_arr_type_idx)
+    local_set!(b, local_i16arr)
 
     # i = 0
-    push!(body, Opcode.I32_CONST)
-    push!(body, 0x00)
-    push!(body, Opcode.LOCAL_SET)
-    append!(body, encode_leb128_unsigned(local_i))
+    i32_const!(b, 0)
+    local_set!(b, local_i)
 
     # block { loop {
-    push!(body, Opcode.BLOCK)
-    push!(body, 0x40)
-    push!(body, Opcode.LOOP)
-    push!(body, 0x40)
+    block!(b)
+    loop!(b)
 
     # if i >= len, break
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(local_i))
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(local_len))
-    push!(body, Opcode.I32_GE_U)
-    push!(body, Opcode.BR_IF)
-    push!(body, 0x01)
+    local_get!(b, local_i)
+    local_get!(b, local_len)
+    num!(b, Opcode.I32_GE_U)
+    br_if!(b, 1)
 
     # i16arr[i] = (i32)i8arr[i]  — array.get_u zero-extends, array.set truncates
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(local_i16arr))
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(local_i))
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(local_i8arr))
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(local_i))
-    push!(body, Opcode.GC_PREFIX)
-    push!(body, Opcode.ARRAY_GET_U)
-    append!(body, encode_leb128_unsigned(str_arr_type_idx))
-    push!(body, Opcode.GC_PREFIX)
-    push!(body, Opcode.ARRAY_SET)
-    append!(body, encode_leb128_unsigned(char_arr_type_idx))
+    local_get!(b, local_i16arr)
+    local_get!(b, local_i)
+    local_get!(b, local_i8arr)
+    local_get!(b, local_i)
+    array_get!(b, str_arr_type_idx, I32; signed=false)
+    array_set!(b, char_arr_type_idx, I32)
 
     # i++
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(local_i))
-    push!(body, Opcode.I32_CONST)
-    push!(body, 0x01)
-    push!(body, Opcode.I32_ADD)
-    push!(body, Opcode.LOCAL_SET)
-    append!(body, encode_leb128_unsigned(local_i))
+    local_get!(b, local_i)
+    i32_const!(b, 1)
+    num!(b, Opcode.I32_ADD)
+    local_set!(b, local_i)
 
     # br loop
-    push!(body, Opcode.BR)
-    push!(body, 0x00)
+    br!(b, 0)
 
-    push!(body, Opcode.END)  # end loop
-    push!(body, Opcode.END)  # end block
+    end_block!(b)  # end loop
+    end_block!(b)  # end block
 
     # return fromCharCodeArray(i16arr, 0, len)
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(local_i16arr))
-    push!(body, Opcode.I32_CONST)
-    push!(body, 0x00)
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(local_len))
-    push!(body, Opcode.CALL)
-    append!(body, encode_leb128_unsigned(decode_import_idx))
+    local_get!(b, local_i16arr)
+    i32_const!(b, 0)
+    local_get!(b, local_len)
+    call!(b, decode_import_idx,
+          WasmValType[char_arr_ref, I32, I32], WasmValType[NonNullExternRef])
 
-    push!(body, Opcode.END)  # end function
+    end_block!(b)  # end function
+    body = builder_code(b)
 
     func = WasmFunction(type_idx, locals, body)
     push!(mod.functions, func)

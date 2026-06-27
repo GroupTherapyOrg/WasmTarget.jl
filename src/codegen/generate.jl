@@ -2006,7 +2006,7 @@ function _compile_catch_region!(bytes::Vector{UInt8}, ctx::AbstractCompilationCo
 end
 
 function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code, region::TryRegion)::Vector{UInt8}
-    bytes = UInt8[]
+    bb = InstrBuilder(; func_name="generate_try_catch_stackified", strict=false)
     catch_dest = region.catch_dest
 
     # P2-batch16: merge-phi structure (port of PURE-9031 from the simple
@@ -2086,19 +2086,17 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
                     push!(pre_blocks, BasicBlock(b.start_idx, exit_idx - 1, nothing))
             end
         end
-        append!(bytes, generate_stackified_flow(ctx, pre_blocks, code; trailing_unreachable = false))
+        emit_raw!(bb, generate_stackified_flow(ctx, pre_blocks, code; trailing_unreachable = false))
         # P3 gap e1cc83db76ea: the pre subset can end with a catchable-throw
         # statement (boundscheck arm) that leaves last_stmt_was_stub=true —
         # compile_condition_to_i32 then dead-code-guards the CONDITION into a
         # bare `unreachable` and the whole if/try structure traps on entry.
         # The pre region falls through here alive; reset BEFORE the condition.
         ctx.last_stmt_was_stub = false
-        push!(bytes, Opcode.BLOCK)   # $else
-        push!(bytes, 0x40)
-        append!(bytes, compile_condition_to_i32((code[exit_idx]::Core.GotoIfNot).cond, ctx))
-        push!(bytes, Opcode.I32_EQZ)
-        push!(bytes, Opcode.BR_IF)
-        append!(bytes, encode_leb128_unsigned(0))
+        block!(bb)   # $else
+        emit_raw!(bb, compile_condition_to_i32((code[exit_idx]::Core.GotoIfNot).cond, ctx); pushes=WasmValType[I32])
+        num!(bb, Opcode.I32_EQZ)
+        br_if!(bb, 0)
         ctx.last_stmt_was_stub = false
     end
 
@@ -2124,26 +2122,20 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
         end
     end
     if !isempty(pre_try_blocks)
-        append!(bytes, generate_stackified_flow(ctx, pre_try_blocks, code;
-                                                trailing_unreachable=false))
+        emit_raw!(bb, generate_stackified_flow(ctx, pre_try_blocks, code;
+                                               trailing_unreachable=false))
         ctx.last_stmt_was_stub = false
     end
 
     if has_merge
-        push!(bytes, Opcode.BLOCK)   # $merge
-        push!(bytes, 0x40)
+        block!(bb)   # $merge
     end
 
     # Catch landing block (void) — catch_all branches here
-    push!(bytes, Opcode.BLOCK)
-    push!(bytes, 0x40)  # void
+    block!(bb)
 
     # try_table with catch_all → label 0 (catch_landing block)
-    push!(bytes, Opcode.TRY_TABLE)
-    push!(bytes, 0x40)  # void block type
-    append!(bytes, encode_leb128_unsigned(1))    # 1 catch clause
-    push!(bytes, Opcode.CATCH_ALL)               # catch_all type
-    append!(bytes, encode_leb128_unsigned(0))    # label index 0
+    try_table!(bb, InstrIR.TryCatch[catch_all_clause(0)])
 
     # Try-body blocks: strictly after the enter, before the catch handler.
     # Pre-try and pre-branch blocks are emitted above, outside the try_table.
@@ -2155,7 +2147,7 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
     # - phi locals set at every edge (GotoNode, GotoIfNot, fall-through)
     # - nested GotoIfNot properly generates if/else or br_if
     # - returns use RETURN opcode (exits function from within try_table)
-    append!(bytes, generate_stackified_flow(ctx, try_body_blocks, code))
+    emit_raw!(bb, generate_stackified_flow(ctx, try_body_blocks, code))
 
     if has_merge
         # Normal completion: the try-exit edge targets the merge block, which is
@@ -2167,20 +2159,19 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
             haskey(ctx.phi_locals, i) || continue
             for (k, e) in enumerate(st.edges)
                 if e < catch_dest && isassigned(st.values, k)
-                    emit_phi_local_set!(bytes, st.values[k], i, ctx)
+                    _tb = UInt8[]; emit_phi_local_set!(_tb, st.values[k], i, ctx); emit_raw!(bb, _tb)
                     break
                 end
             end
         end
-        push!(bytes, Opcode.BR)
-        append!(bytes, encode_leb128_unsigned(2))  # past catch_landing + catch → $merge end
+        br!(bb, 2)  # past catch_landing + catch → $merge end
     end
 
     # End try_table
-    push!(bytes, Opcode.END)
+    end_block!(bb)
 
     # End catch_landing block
-    push!(bytes, Opcode.END)
+    end_block!(bb)
 
     # PURE-9032-style: the catch handler is reachable via exception regardless
     # of any stub flags set while emitting the try body.
@@ -2201,10 +2192,10 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
         if _arm_complex
             catch_blocks = [b for b in blocks
                             if b.start_idx >= catch_dest && b.start_idx < merge_start]
-            append!(bytes, generate_stackified_flow(ctx, catch_blocks, code;
-                                                    trailing_unreachable = false))
+            emit_raw!(bb, generate_stackified_flow(ctx, catch_blocks, code;
+                                                   trailing_unreachable = false))
         else
-            _compile_catch_region!(bytes, ctx, code, catch_dest, merge_start - 1)
+            _tb = UInt8[]; _compile_catch_region!(_tb, ctx, code, catch_dest, merge_start - 1); emit_raw!(bb, _tb)
         end
     else
         # P2-batch19: self-contained catch arm (ends in return) — compile via
@@ -2213,17 +2204,17 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
         catch_blocks = [b for b in blocks
                         if b.start_idx >= catch_dest &&
                            (!has_exit_branch || b.start_idx < exit_dest)]
-        append!(bytes, generate_stackified_flow(ctx, catch_blocks, code))
+        emit_raw!(bb, generate_stackified_flow(ctx, catch_blocks, code))
     end
 
     if has_exit_branch
-        push!(bytes, Opcode.END)   # $else
+        end_block!(bb)   # $else
         ctx.last_stmt_was_stub = false
         # Post code: the else arm of the pre-try branch (returns). P2-batch21:
         # stackified — else arms can contain loops/begin blocks/nested ifs that
         # the linear walk flattened or rejected (gap 227929b3fbff family).
         post_blocks = [b for b in blocks if b.start_idx >= exit_dest]
-        append!(bytes, generate_stackified_flow(ctx, post_blocks, code))
+        emit_raw!(bb, generate_stackified_flow(ctx, post_blocks, code))
     end
 
     if has_merge
@@ -2234,12 +2225,12 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
             haskey(ctx.phi_locals, i) || continue
             for (k, e) in enumerate(st.edges)
                 if e >= catch_dest && isassigned(st.values, k)
-                    emit_phi_local_set!(bytes, st.values[k], i, ctx)
+                    _tb = UInt8[]; emit_phi_local_set!(_tb, st.values[k], i, ctx); emit_raw!(bb, _tb)
                     break
                 end
             end
         end
-        push!(bytes, Opcode.END)   # $merge
+        end_block!(bb)   # $merge
         ctx.last_stmt_was_stub = false
         # Post-merge code: phi reads, conversions, return.
         # P3 gap 40da73b299fc: the linear walk DROPS control flow — a
@@ -2252,8 +2243,8 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
         _pm_complex = any(i -> code[i] isa Core.GotoIfNot || code[i] isa Core.GotoNode, _pm_rng)
         if _pm_complex
             pm_blocks = [b for b in blocks if b.start_idx >= merge_start]
-            append!(bytes, generate_stackified_flow(ctx, pm_blocks, code;
-                                                    trailing_unreachable = false))
+            emit_raw!(bb, generate_stackified_flow(ctx, pm_blocks, code;
+                                                   trailing_unreachable = false))
         else
             for i in _pm_rng
                 stmt = code[i]
@@ -2261,13 +2252,13 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
                     if stmt isa Expr && stmt.head === :pop_exception
                         continue
                     end
-                    append!(bytes, compile_statement(stmt, i, ctx))
+                    emit_raw!(bb, compile_statement(stmt, i, ctx))
                 end
             end
         end
     end
 
-    return bytes
+    return builder_code(bb)
 end
 
 # P2-batch18: does the outer region's normal path (between :leave and the catch
@@ -2386,7 +2377,7 @@ end
 function generate_catch_arm_split(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
                                   code, outer::TryRegion, arm_regions::Vector{TryRegion},
                                   branch_idx::Int)::Vector{UInt8}
-    bytes = UInt8[]
+    bb = InstrBuilder(; func_name="generate_catch_arm_split", strict=false)
     ensure_exception_tag!(ctx.mod)
     ensure_exception_global!(ctx.mod)
 
@@ -2407,21 +2398,16 @@ function generate_catch_arm_split(ctx::AbstractCompilationContext, blocks::Vecto
         end
     end
     if !isempty(pre)
-        append!(bytes, generate_stackified_flow(ctx, pre, code; trailing_unreachable=false))
+        emit_raw!(bb, generate_stackified_flow(ctx, pre, code; trailing_unreachable=false))
         ctx.last_stmt_was_stub = false
     end
     body = [b for b in blocks if b.start_idx > r.enter_idx && b.start_idx < r.catch_dest]
     head !== nothing && pushfirst!(body, head)
-    push!(bytes, Opcode.BLOCK)
-    push!(bytes, 0x40)
-    push!(bytes, Opcode.TRY_TABLE)
-    push!(bytes, 0x40)
-    append!(bytes, encode_leb128_unsigned(1))
-    push!(bytes, Opcode.CATCH_ALL)
-    append!(bytes, encode_leb128_unsigned(0))
-    append!(bytes, generate_stackified_flow(ctx, body, code))
-    push!(bytes, Opcode.END)   # try_table
-    push!(bytes, Opcode.END)   # catch landing block
+    block!(bb)
+    try_table!(bb, InstrIR.TryCatch[catch_all_clause(0)])
+    emit_raw!(bb, generate_stackified_flow(ctx, body, code))
+    end_block!(bb)   # try_table
+    end_block!(bb)   # catch landing block
     ctx.last_stmt_was_stub = false
 
     # Catch arm: prefix + if/else split with per-arm chains, every path returns.
@@ -2429,9 +2415,9 @@ function generate_catch_arm_split(ctx::AbstractCompilationContext, blocks::Vecto
     then_chain = [q for q in arm_regions if q.enter_idx < bdest]
     else_chain = [q for q in arm_regions if q.enter_idx >= bdest]
     arm_blocks = [b for b in blocks if b.start_idx >= r.catch_dest]
-    append!(bytes, generate_branch_split_try(ctx, arm_blocks, code, then_chain,
-                                             else_chain, branch_idx))
-    return bytes
+    emit_raw!(bb, generate_branch_split_try(ctx, arm_blocks, code, then_chain,
+                                            else_chain, branch_idx))
+    return builder_code(bb)
 end
 
 # P3 gap 10cc64efe535: catch-arm split with a GotoNode skip and MERGING arms.
@@ -2452,7 +2438,7 @@ end
 function generate_catch_arm_skip_merge(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
                                        code, outer::TryRegion, inner::TryRegion,
                                        gin_idx::Int, skip_idx::Int, merge_idx::Int)::Vector{UInt8}
-    bytes = UInt8[]
+    bb = InstrBuilder(; func_name="generate_catch_arm_skip_merge", strict=false)
     ensure_exception_tag!(ctx.mod)
     ensure_exception_global!(ctx.mod)
 
@@ -2472,25 +2458,19 @@ function generate_catch_arm_skip_merge(ctx::AbstractCompilationContext, blocks::
         end
     end
     if !isempty(pre)
-        append!(bytes, generate_stackified_flow(ctx, pre, code; trailing_unreachable=false))
+        emit_raw!(bb, generate_stackified_flow(ctx, pre, code; trailing_unreachable=false))
         ctx.last_stmt_was_stub = false
     end
     body = [b for b in blocks if b.start_idx > r.enter_idx && b.start_idx < r.catch_dest]
     head !== nothing && pushfirst!(body, head)
-    push!(bytes, Opcode.BLOCK)
-    push!(bytes, 0x40)
-    push!(bytes, Opcode.TRY_TABLE)
-    push!(bytes, 0x40)
-    append!(bytes, encode_leb128_unsigned(1))
-    push!(bytes, Opcode.CATCH_ALL)
-    append!(bytes, encode_leb128_unsigned(0))
-    append!(bytes, generate_stackified_flow(ctx, body, code))
-    push!(bytes, Opcode.END)   # try_table
-    push!(bytes, Opcode.END)   # catch landing block
+    block!(bb)
+    try_table!(bb, InstrIR.TryCatch[catch_all_clause(0)])
+    emit_raw!(bb, generate_stackified_flow(ctx, body, code))
+    end_block!(bb)   # try_table
+    end_block!(bb)   # catch landing block
     ctx.last_stmt_was_stub = false
 
-    push!(bytes, Opcode.BLOCK)   # $armmerge
-    push!(bytes, 0x40)
+    block!(bb)   # $armmerge
     # Arm prefix [outer.catch_dest .. gin_idx-1], truncating the block that
     # carries the GotoIfNot terminator (emitted manually below)
     arm_pre = BasicBlock[]
@@ -2504,29 +2484,26 @@ function generate_catch_arm_skip_merge(ctx::AbstractCompilationContext, blocks::
         end
     end
     if !isempty(arm_pre)
-        append!(bytes, generate_stackified_flow(ctx, arm_pre, code; trailing_unreachable=false))
+        emit_raw!(bb, generate_stackified_flow(ctx, arm_pre, code; trailing_unreachable=false))
     end
     # e1cc class: the prefix can end with a catchable-throw arm — reset before
     # compiling the live condition.
     ctx.last_stmt_was_stub = false
-    push!(bytes, Opcode.BLOCK)   # $skiparm
-    push!(bytes, 0x40)
-    append!(bytes, compile_condition_to_i32((code[gin_idx]::Core.GotoIfNot).cond, ctx))
-    push!(bytes, Opcode.I32_EQZ)
-    push!(bytes, Opcode.BR_IF)
-    append!(bytes, encode_leb128_unsigned(0))   # !cond → inner-try arm
+    block!(bb)   # $skiparm
+    emit_raw!(bb, compile_condition_to_i32((code[gin_idx]::Core.GotoIfNot).cond, ctx); pushes=WasmValType[I32])
+    num!(bb, Opcode.I32_EQZ)
+    br_if!(bb, 0)   # !cond → inner-try arm
     ctx.last_stmt_was_stub = false
     # cond TRUE → skip edge: store the merge phi's skip-edge value, br $armmerge
     local _ph = code[merge_idx]::Core.PhiNode
     for (j, e) in enumerate(_ph.edges)
         if Int(e) == skip_idx && isassigned(_ph.values, j)
-            emit_phi_local_set!(bytes, _ph.values[j], merge_idx, ctx)
+            _tb = UInt8[]; emit_phi_local_set!(_tb, _ph.values[j], merge_idx, ctx); emit_raw!(bb, _tb)
             break
         end
     end
-    push!(bytes, Opcode.BR)
-    append!(bytes, encode_leb128_unsigned(1))   # past $skiparm → $armmerge end
-    push!(bytes, Opcode.END)   # $skiparm
+    br!(bb, 1)   # past $skiparm → $armmerge end
+    end_block!(bb)   # $skiparm
     ctx.last_stmt_was_stub = false
 
     # Inner region: prefix [gdest .. inner.enter-1] (ϒ etc.), then try_table
@@ -2545,71 +2522,65 @@ function generate_catch_arm_skip_merge(ctx::AbstractCompilationContext, blocks::
         end
     end
     if !isempty(in_pre)
-        append!(bytes, generate_stackified_flow(ctx, in_pre, code; trailing_unreachable=false))
+        emit_raw!(bb, generate_stackified_flow(ctx, in_pre, code; trailing_unreachable=false))
         ctx.last_stmt_was_stub = false
     end
     in_body = [b for b in blocks
                if b.start_idx > inner.enter_idx && b.start_idx < inner.catch_dest]
     in_head !== nothing && pushfirst!(in_body, in_head)
-    push!(bytes, Opcode.BLOCK)
-    push!(bytes, 0x40)
-    push!(bytes, Opcode.TRY_TABLE)
-    push!(bytes, 0x40)
-    append!(bytes, encode_leb128_unsigned(1))
-    push!(bytes, Opcode.CATCH_ALL)
-    append!(bytes, encode_leb128_unsigned(0))
-    append!(bytes, generate_stackified_flow(ctx, in_body, code;
-                                            trailing_unreachable=false))
+    block!(bb)
+    try_table!(bb, InstrIR.TryCatch[catch_all_clause(0)])
+    emit_raw!(bb, generate_stackified_flow(ctx, in_body, code;
+                                           trailing_unreachable=false))
     ctx.last_stmt_was_stub = false
     # If the inner body completes normally it merges too — store its phi
     # edge (an edge strictly inside the body range) and branch to $armmerge.
     local _had_body_edge = false
     for (j, e) in enumerate(_ph.edges)
         if inner.enter_idx < Int(e) && Int(e) < inner.catch_dest && isassigned(_ph.values, j)
-            emit_phi_local_set!(bytes, _ph.values[j], merge_idx, ctx)
+            _tb = UInt8[]; emit_phi_local_set!(_tb, _ph.values[j], merge_idx, ctx); emit_raw!(bb, _tb)
             _had_body_edge = true
             break
         end
     end
     if _had_body_edge
-        push!(bytes, Opcode.BR)
-        append!(bytes, encode_leb128_unsigned(2))   # try_table + $c2 → $armmerge
+        br!(bb, 2)   # try_table + $c2 → $armmerge
     end
-    push!(bytes, Opcode.END)   # try_table
-    push!(bytes, Opcode.END)   # $c2
+    end_block!(bb)   # try_table
+    end_block!(bb)   # $c2
     ctx.last_stmt_was_stub = false
     # Inner catch tail [inner.catch_dest .. merge-1], then the catch-edge store
     tail_blocks = [b for b in blocks
                    if b.start_idx >= inner.catch_dest && b.start_idx < merge_idx]
     if !isempty(tail_blocks)
-        append!(bytes, generate_stackified_flow(ctx, tail_blocks, code;
-                                                trailing_unreachable=false))
+        emit_raw!(bb, generate_stackified_flow(ctx, tail_blocks, code;
+                                               trailing_unreachable=false))
         ctx.last_stmt_was_stub = false
     end
     for (j, e) in enumerate(_ph.edges)
         if Int(e) >= inner.catch_dest && isassigned(_ph.values, j)
-            emit_phi_local_set!(bytes, _ph.values[j], merge_idx, ctx)
+            _tb = UInt8[]; emit_phi_local_set!(_tb, _ph.values[j], merge_idx, ctx); emit_raw!(bb, _tb)
             break
         end
     end
-    push!(bytes, Opcode.END)   # $armmerge
+    end_block!(bb)   # $armmerge
     ctx.last_stmt_was_stub = false
 
     # Post-merge [merge_idx ..]: phi reads, conversions, return
     if any(i -> code[i] isa Core.GotoIfNot || code[i] isa Core.GotoNode, merge_idx:length(code))
         pm_blocks = [b for b in blocks if b.start_idx >= merge_idx]
-        append!(bytes, generate_stackified_flow(ctx, pm_blocks, code;
-                                                trailing_unreachable=false))
+        emit_raw!(bb, generate_stackified_flow(ctx, pm_blocks, code;
+                                               trailing_unreachable=false))
     else
         for i in merge_idx:length(code)
             stmt = code[i]
             if stmt !== nothing
                 stmt isa Expr && stmt.head === :pop_exception && continue
-                append!(bytes, compile_statement(stmt, i, ctx))
+                emit_raw!(bb, compile_statement(stmt, i, ctx))
             end
         end
     end
-    return bytes
+    return builder_code(bb)
 end
 
 function generate_catch_try_chain(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
@@ -2848,7 +2819,7 @@ function _emit_merge_chain_level!(bytes::Vector{UInt8}, ctx::AbstractCompilation
 end
 
 function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
-    bytes = UInt8[]
+    bb = InstrBuilder(; func_name="generate_try_catch", strict=false)
     regions = find_try_regions(code)
 
     if isempty(regions)
@@ -3220,25 +3191,19 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
     if has_merge_phis
         # 3-block structure: merge block → catch landing → try_table
         # Merge block (void) — both paths converge after this block ends
-        push!(bytes, Opcode.BLOCK)
-        push!(bytes, 0x40)  # void
+        block!(bb)
 
         # Catch landing block (void) — catch_all branches here
-        push!(bytes, Opcode.BLOCK)
-        push!(bytes, 0x40)  # void
+        block!(bb)
 
         # try_table with catch_all → label 0 (catch landing)
-        push!(bytes, Opcode.TRY_TABLE)
-        push!(bytes, 0x40)  # void
-        append!(bytes, encode_leb128_unsigned(1))
-        push!(bytes, Opcode.CATCH_ALL)
-        append!(bytes, encode_leb128_unsigned(0))  # → catch landing block
+        try_table!(bb, InstrIR.TryCatch[catch_all_clause(0)])
 
         # Code BEFORE EnterNode
         for i in 1:(enter_idx-1)
             stmt = code[i]
             if stmt !== nothing && !(stmt isa Core.EnterNode)
-                append!(bytes, compile_statement(stmt, i, ctx))
+                emit_raw!(bb, compile_statement(stmt, i, ctx))
             end
         end
 
@@ -3251,10 +3216,10 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
                 continue
             end
             if stmt isa Core.GotoIfNot
-                append!(bytes, _compile_try_body_gotoifnot(stmt, i, leave_idx, code, ctx))
+                emit_raw!(bb, _compile_try_body_gotoifnot(stmt, i, leave_idx, code, ctx))
                 i = _advance_past_gotoifnot(stmt, i, leave_idx, code)
             else
-                append!(bytes, compile_statement(stmt, i, ctx))
+                emit_raw!(bb, compile_statement(stmt, i, ctx))
                 i += 1
             end
         end
@@ -3271,9 +3236,8 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
                     # This edge comes from the try-exit path
                     phi_val = phi_stmt.values[ei]
                     phi_local = ctx.phi_locals[phi_idx]
-                    append!(bytes, compile_value(phi_val, ctx))
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(phi_local))
+                    emit_raw!(bb, compile_value(phi_val, ctx); pushes=WasmValType[infer_value_wasm_type(phi_val, ctx)])
+                    local_set!(bb, phi_local)
                     break
                 end
             end
@@ -3281,21 +3245,20 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
 
         # br 2 → merge block end (skip catch handler)
         # Labels from inside try_table: 0=try_table, 1=catch_landing, 2=merge
-        push!(bytes, Opcode.BR)
-        append!(bytes, encode_leb128_unsigned(2))
+        br!(bb, 2)
 
         # End try_table
-        push!(bytes, Opcode.END)
+        end_block!(bb)
 
         # End catch landing block — catch_all lands here
-        push!(bytes, Opcode.END)
+        end_block!(bb)
 
         # PURE-9032: Reset dead code flag — catch handler is always reachable
         ctx.last_stmt_was_stub = false
 
         # Catch handler code (from catch_dest to merge_start-1)
         # P2-batch17: GotoIfNot-aware (conditional catch arms — gap f80bce91645e)
-        _compile_catch_region!(bytes, ctx, code, catch_dest, merge_start - 1)
+        _tb = UInt8[]; _compile_catch_region!(_tb, ctx, code, catch_dest, merge_start - 1); emit_raw!(bb, _tb)
 
         # SET catch phi locals
         for phi_idx in merge_phi_nodes
@@ -3306,9 +3269,8 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
                     # This edge comes from the catch path
                     phi_val = phi_stmt.values[ei]
                     phi_local = ctx.phi_locals[phi_idx]
-                    append!(bytes, compile_value(phi_val, ctx))
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(phi_local))
+                    emit_raw!(bb, compile_value(phi_val, ctx); pushes=WasmValType[infer_value_wasm_type(phi_val, ctx)])
+                    local_set!(bb, phi_local)
                     break
                 end
             end
@@ -3316,7 +3278,7 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
 
         # Fall through to merge block end
         # End merge block — both paths converge here
-        push!(bytes, Opcode.END)
+        end_block!(bb)
 
         # Post-merge code: read phi locals and compile remaining statements
         for i in merge_start:length(code)
@@ -3329,47 +3291,39 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
                 # If this phi has an SSA local, copy phi_local → ssa_local.
                 phi_local = ctx.phi_locals[i]
                 if haskey(ctx.ssa_locals, i)
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(phi_local))
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(ctx.ssa_locals[i]))
+                    local_get!(bb, phi_local)
+                    local_set!(bb, ctx.ssa_locals[i])
                 end
                 # Otherwise the phi_local is read directly when the value is used
             elseif stmt isa Core.ReturnNode
-                append!(bytes, compile_statement(stmt, i, ctx))
+                emit_raw!(bb, compile_statement(stmt, i, ctx))
             elseif stmt isa Expr && stmt.head === :pop_exception
                 continue
             else
-                append!(bytes, compile_statement(stmt, i, ctx))
+                emit_raw!(bb, compile_statement(stmt, i, ctx))
             end
         end
 
     else
         # No merge phis — use original 2-block structure
         # Outer block for the result value
-        push!(bytes, Opcode.BLOCK)
         if func_returns_void
-            push!(bytes, 0x40)
+            block!(bb)
         else
-            append!(bytes, encode_block_type(result_type_byte))
+            block!(bb, result_type_byte; results=WasmValType[result_type_byte])
         end
 
         # Inner void block for catch destination
-        push!(bytes, Opcode.BLOCK)
-        push!(bytes, 0x40)  # void result type
+        block!(bb)  # void result type
 
         # try_table with catch_all clause
-        push!(bytes, Opcode.TRY_TABLE)
-        push!(bytes, 0x40)  # void block type
-        append!(bytes, encode_leb128_unsigned(1))
-        push!(bytes, Opcode.CATCH_ALL)
-        append!(bytes, encode_leb128_unsigned(0))  # label index 0 (inner block)
+        try_table!(bb, InstrIR.TryCatch[catch_all_clause(0)])  # label index 0 (inner block)
 
         # Generate code BEFORE EnterNode
         for i in 1:(enter_idx-1)
             stmt = code[i]
             if stmt !== nothing && !(stmt isa Core.EnterNode)
-                append!(bytes, compile_statement(stmt, i, ctx))
+                emit_raw!(bb, compile_statement(stmt, i, ctx))
             end
         end
 
@@ -3382,10 +3336,10 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
                 continue
             end
             if stmt isa Core.GotoIfNot
-                append!(bytes, _compile_try_body_gotoifnot(stmt, i, leave_idx, code, ctx))
+                emit_raw!(bb, _compile_try_body_gotoifnot(stmt, i, leave_idx, code, ctx))
                 i = _advance_past_gotoifnot(stmt, i, leave_idx, code)
             else
-                append!(bytes, compile_statement(stmt, i, ctx))
+                emit_raw!(bb, compile_statement(stmt, i, ctx))
                 i += 1
             end
         end
@@ -3395,25 +3349,23 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
             stmt = code[i]
             if stmt !== nothing
                 if stmt isa Core.ReturnNode
-                    append!(bytes, compile_statement(stmt, i, ctx))
-                    push!(bytes, Opcode.BR)
-                    append!(bytes, encode_leb128_unsigned(1))
+                    emit_raw!(bb, compile_statement(stmt, i, ctx))
+                    br!(bb, 1)
                     break
                 else
-                    append!(bytes, compile_statement(stmt, i, ctx))
+                    emit_raw!(bb, compile_statement(stmt, i, ctx))
                 end
             end
         end
 
         # If no return in try body, branch past catch
-        push!(bytes, Opcode.BR)
-        append!(bytes, encode_leb128_unsigned(1))  # branch to outer block (past catch)
+        br!(bb, 1)  # branch to outer block (past catch)
 
         # End try_table
-        push!(bytes, Opcode.END)
+        end_block!(bb)
 
         # End inner (catch destination) block
-        push!(bytes, Opcode.END)
+        end_block!(bb)
 
         # PURE-9032: Reset dead code flag — catch handler is always reachable
         # (catch_all means ANY throw reaches here, regardless of what happened in try body)
@@ -3436,7 +3388,7 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
             if _catch_stmt isa Core.GotoIfNot
                 # Generate if/else for the conditional branch
                 local _else_target = _catch_stmt.dest
-                append!(bytes, compile_condition_to_i32(_catch_stmt.cond, ctx))
+                emit_raw!(bb, compile_condition_to_i32(_catch_stmt.cond, ctx); pushes=WasmValType[I32])
                 # Determine if the then-branch has a return/throw (one-way)
                 local _then_start = _catch_i + 1
                 local _then_has_return = false
@@ -3448,49 +3400,47 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
                 end
                 if _then_has_return
                     # Then-branch returns: just wrap in if/end (no else needed)
-                    push!(bytes, Opcode.IF)
-                    push!(bytes, 0x40)
+                    if_!(bb)
                     for _j in _then_start:min(_else_target - 1, length(code))
                         local _ts = code[_j]
                         if _ts !== nothing && !(_ts isa Expr && _ts.head === :pop_exception)
-                            append!(bytes, compile_statement(_ts, _j, ctx))
+                            emit_raw!(bb, compile_statement(_ts, _j, ctx))
                         end
                     end
-                    push!(bytes, Opcode.END)
+                    end_block!(bb)
                     ctx.last_stmt_was_stub = false
                     _catch_i = _else_target
                 else
                     # Both branches present: if/else/end
-                    push!(bytes, Opcode.IF)
-                    push!(bytes, 0x40)
+                    if_!(bb)
                     for _j in _then_start:min(_else_target - 1, length(code))
                         local _ts2 = code[_j]
                         if _ts2 !== nothing && !(_ts2 isa Expr && _ts2.head === :pop_exception)
-                            append!(bytes, compile_statement(_ts2, _j, ctx))
+                            emit_raw!(bb, compile_statement(_ts2, _j, ctx))
                         end
                     end
-                    push!(bytes, Opcode.ELSE)
+                    else_!(bb)
                     for _j in _else_target:length(code)
                         local _es = code[_j]
                         if _es !== nothing && !(_es isa Expr && _es.head === :pop_exception)
-                            append!(bytes, compile_statement(_es, _j, ctx))
+                            emit_raw!(bb, compile_statement(_es, _j, ctx))
                         end
                     end
-                    push!(bytes, Opcode.END)
+                    end_block!(bb)
                     ctx.last_stmt_was_stub = false
                     _catch_i = length(code) + 1  # done
                 end
             else
-                append!(bytes, compile_statement(_catch_stmt, _catch_i, ctx))
+                emit_raw!(bb, compile_statement(_catch_stmt, _catch_i, ctx))
                 _catch_i += 1
             end
         end
 
         # End outer block
-        push!(bytes, Opcode.END)
+        end_block!(bb)
     end
 
-    return bytes
+    return builder_code(bb)
 end
 
 # PURE-9033: Generate sequential (non-nested) try/catch regions.
@@ -3498,7 +3448,7 @@ end
 # Example: two sequential try/catch blocks in one function.
 function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
                                        code, regions::Vector{TryRegion})::Vector{UInt8}
-    bytes = UInt8[]
+    bb = InstrBuilder(; func_name="generate_sequential_try_catch", strict=false)
 
     # Ensure exception infrastructure
     ensure_exception_tag!(ctx.mod)
@@ -3517,7 +3467,7 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
         for i in (last_processed + 1):(enter_idx - 1)
             stmt = code[i]
             if stmt !== nothing && !(stmt isa Core.EnterNode)
-                append!(bytes, compile_statement(stmt, i, ctx))
+                emit_raw!(bb, compile_statement(stmt, i, ctx))
             end
         end
 
@@ -3543,17 +3493,11 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
 
         if has_merge_phis
             # 3-block structure: merge block → catch landing → try_table
-            push!(bytes, Opcode.BLOCK)
-            push!(bytes, 0x40)  # void
+            block!(bb)  # void
 
-            push!(bytes, Opcode.BLOCK)
-            push!(bytes, 0x40)  # void
+            block!(bb)  # void
 
-            push!(bytes, Opcode.TRY_TABLE)
-            push!(bytes, 0x40)  # void
-            append!(bytes, encode_leb128_unsigned(1))
-            push!(bytes, Opcode.CATCH_ALL)
-            append!(bytes, encode_leb128_unsigned(0))
+            try_table!(bb, InstrIR.TryCatch[catch_all_clause(0)])
 
             # Try body
             local _ti = enter_idx + 1
@@ -3564,10 +3508,10 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
                     continue
                 end
                 if stmt isa Core.GotoIfNot
-                    append!(bytes, _compile_try_body_gotoifnot(stmt, _ti, leave_idx, code, ctx))
+                    emit_raw!(bb, _compile_try_body_gotoifnot(stmt, _ti, leave_idx, code, ctx))
                     _ti = _advance_past_gotoifnot(stmt, _ti, leave_idx, code)
                 else
-                    append!(bytes, compile_statement(stmt, _ti, ctx))
+                    emit_raw!(bb, compile_statement(stmt, _ti, ctx))
                     _ti += 1
                 end
             end
@@ -3580,20 +3524,18 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
                     if edge_ssa in try_exit_range
                         phi_val = phi_stmt.values[ei]
                         phi_local = ctx.phi_locals[phi_idx]
-                        append!(bytes, compile_value(phi_val, ctx))
-                        push!(bytes, Opcode.LOCAL_SET)
-                        append!(bytes, encode_leb128_unsigned(phi_local))
+                        emit_raw!(bb, compile_value(phi_val, ctx); pushes=WasmValType[infer_value_wasm_type(phi_val, ctx)])
+                        local_set!(bb, phi_local)
                         break
                     end
                 end
             end
 
             # br 2 → merge block end
-            push!(bytes, Opcode.BR)
-            append!(bytes, encode_leb128_unsigned(2))
+            br!(bb, 2)
 
-            push!(bytes, Opcode.END)  # end try_table
-            push!(bytes, Opcode.END)  # end catch landing block
+            end_block!(bb)  # end try_table
+            end_block!(bb)  # end catch landing block
 
             ctx.last_stmt_was_stub = false
 
@@ -3605,7 +3547,7 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
                     if stmt isa Expr && stmt.head === :pop_exception
                         continue
                     end
-                    append!(bytes, compile_statement(stmt, i, ctx))
+                    emit_raw!(bb, compile_statement(stmt, i, ctx))
                 end
             end
 
@@ -3617,24 +3559,21 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
                     if edge_ssa >= catch_dest && edge_ssa < merge_start
                         phi_val = phi_stmt.values[ei]
                         phi_local = ctx.phi_locals[phi_idx]
-                        append!(bytes, compile_value(phi_val, ctx))
-                        push!(bytes, Opcode.LOCAL_SET)
-                        append!(bytes, encode_leb128_unsigned(phi_local))
+                        emit_raw!(bb, compile_value(phi_val, ctx); pushes=WasmValType[infer_value_wasm_type(phi_val, ctx)])
+                        local_set!(bb, phi_local)
                         break
                     end
                 end
             end
 
-            push!(bytes, Opcode.END)  # end merge block
+            end_block!(bb)  # end merge block
 
             # Read phi locals (copy to SSA locals if needed)
             for phi_idx in merge_phi_nodes
                 if haskey(ctx.ssa_locals, phi_idx)
                     phi_local = ctx.phi_locals[phi_idx]
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(phi_local))
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(ctx.ssa_locals[phi_idx]))
+                    local_get!(bb, phi_local)
+                    local_set!(bb, ctx.ssa_locals[phi_idx])
                 end
             end
 
@@ -3653,29 +3592,23 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
                 if stmt isa Expr && stmt.head === :pop_exception
                     continue
                 end
-                append!(bytes, compile_statement(stmt, i, ctx))
+                emit_raw!(bb, compile_statement(stmt, i, ctx))
             end
 
             last_processed = region_end
         else
             # No merge phis — use 2-block structure (direct return in both paths)
             # Void-return functions get a void wrapper (signature has no results).
-            push!(bytes, Opcode.BLOCK)
             if ctx.return_type === Nothing || ctx.return_type === Union{}
-                push!(bytes, 0x40)
+                block!(bb)
             else
-                append!(bytes, encode_block_type(
-                    get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)))
+                local _rt = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+                block!(bb, _rt; results=WasmValType[_rt])
             end
 
-            push!(bytes, Opcode.BLOCK)
-            push!(bytes, 0x40)
+            block!(bb)
 
-            push!(bytes, Opcode.TRY_TABLE)
-            push!(bytes, 0x40)
-            append!(bytes, encode_leb128_unsigned(1))
-            push!(bytes, Opcode.CATCH_ALL)
-            append!(bytes, encode_leb128_unsigned(0))
+            try_table!(bb, InstrIR.TryCatch[catch_all_clause(0)])
 
             # Try body
             local _ti2 = enter_idx + 1
@@ -3686,10 +3619,10 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
                     continue
                 end
                 if stmt isa Core.GotoIfNot
-                    append!(bytes, _compile_try_body_gotoifnot(stmt, _ti2, leave_idx, code, ctx))
+                    emit_raw!(bb, _compile_try_body_gotoifnot(stmt, _ti2, leave_idx, code, ctx))
                     _ti2 = _advance_past_gotoifnot(stmt, _ti2, leave_idx, code)
                 else
-                    append!(bytes, compile_statement(stmt, _ti2, ctx))
+                    emit_raw!(bb, compile_statement(stmt, _ti2, ctx))
                     _ti2 += 1
                 end
             end
@@ -3699,21 +3632,19 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
                 stmt = code[i]
                 if stmt !== nothing
                     if stmt isa Core.ReturnNode
-                        append!(bytes, compile_statement(stmt, i, ctx))
-                        push!(bytes, Opcode.BR)
-                        append!(bytes, encode_leb128_unsigned(1))
+                        emit_raw!(bb, compile_statement(stmt, i, ctx))
+                        br!(bb, 1)
                         break
                     else
-                        append!(bytes, compile_statement(stmt, i, ctx))
+                        emit_raw!(bb, compile_statement(stmt, i, ctx))
                     end
                 end
             end
 
-            push!(bytes, Opcode.BR)
-            append!(bytes, encode_leb128_unsigned(1))
+            br!(bb, 1)
 
-            push!(bytes, Opcode.END)  # end try_table
-            push!(bytes, Opcode.END)  # end catch landing
+            end_block!(bb)  # end try_table
+            end_block!(bb)  # end catch landing
 
             ctx.last_stmt_was_stub = false
 
@@ -3724,11 +3655,11 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
                     if stmt isa Expr && stmt.head === :pop_exception
                         continue
                     end
-                    append!(bytes, compile_statement(stmt, i, ctx))
+                    emit_raw!(bb, compile_statement(stmt, i, ctx))
                 end
             end
 
-            push!(bytes, Opcode.END)  # end outer block
+            end_block!(bb)  # end outer block
 
             last_processed = region_end
         end
@@ -3738,11 +3669,11 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
     for i in (last_processed + 1):length(code)
         stmt = code[i]
         if stmt !== nothing && !(stmt isa Expr && stmt.head === :pop_exception)
-            append!(bytes, compile_statement(stmt, i, ctx))
+            emit_raw!(bb, compile_statement(stmt, i, ctx))
         end
     end
 
-    return bytes
+    return builder_code(bb)
 end
 
 # PURE-9033: Generate nested try/catch (2-level nesting: inner try/catch inside outer try/catch).
@@ -3765,7 +3696,7 @@ end
 #
 function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
                                      code, outer::TryRegion, inner::TryRegion)::Vector{UInt8}
-    bytes = UInt8[]
+    bb = InstrBuilder(; func_name="generate_nested_try_catch_2", strict=false)
 
     # Ensure exception infrastructure
     ensure_exception_tag!(ctx.mod)
@@ -3784,21 +3715,16 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
         end
     end
     if !isempty(pre_outer)
-        append!(bytes, generate_stackified_flow(ctx, pre_outer, code;
-                                                trailing_unreachable=false))
+        emit_raw!(bb, generate_stackified_flow(ctx, pre_outer, code;
+                                               trailing_unreachable=false))
         ctx.last_stmt_was_stub = false
     end
 
     # === Outer catch landing block (void) ===
-    push!(bytes, Opcode.BLOCK)
-    push!(bytes, 0x40)
+    block!(bb)
 
     # === Outer try_table ===
-    push!(bytes, Opcode.TRY_TABLE)
-    push!(bytes, 0x40)  # void
-    append!(bytes, encode_leb128_unsigned(1))  # 1 catch clause
-    push!(bytes, Opcode.CATCH_ALL)
-    append!(bytes, encode_leb128_unsigned(0))  # → label 0 (outer catch landing)
+    try_table!(bb, InstrIR.TryCatch[catch_all_clause(0)])  # → label 0 (outer catch landing)
 
     # Code between outer enter and inner enter — stackified for the same
     # reason (the outer try body before the inner try can hold fill loops,
@@ -3828,38 +3754,30 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
         end
     end
     if !isempty(between)
-        append!(bytes, generate_stackified_flow(ctx, between, code;
-                                                trailing_unreachable=false))
+        emit_raw!(bb, generate_stackified_flow(ctx, between, code;
+                                               trailing_unreachable=false))
         ctx.last_stmt_was_stub = false
     end
 
     # If split: open the $else wrap — condition false branches past the
     # then-arm (the whole inner-try machinery) to the common tail.
     if body_branch > 0
-        push!(bytes, Opcode.BLOCK)
-        push!(bytes, 0x40)
-        append!(bytes, compile_condition_to_i32((code[body_branch]::Core.GotoIfNot).cond, ctx))
-        push!(bytes, Opcode.I32_EQZ)
-        push!(bytes, Opcode.BR_IF)
-        append!(bytes, encode_leb128_unsigned(0))
+        block!(bb)
+        emit_raw!(bb, compile_condition_to_i32((code[body_branch]::Core.GotoIfNot).cond, ctx); pushes=WasmValType[I32])
+        num!(bb, Opcode.I32_EQZ)
+        br_if!(bb, 0)
     end
 
     # === Skip block: the body's NORMAL exit branches past the inner catch
     # handler (P3 g2_nest: without it, falling out of the try_table also fell
     # through the landing block END into the handler).
-    push!(bytes, Opcode.BLOCK)
-    push!(bytes, 0x40)
+    block!(bb)
 
     # === Inner catch landing block (void) ===
-    push!(bytes, Opcode.BLOCK)
-    push!(bytes, 0x40)
+    block!(bb)
 
     # === Inner try_table ===
-    push!(bytes, Opcode.TRY_TABLE)
-    push!(bytes, 0x40)  # void
-    append!(bytes, encode_leb128_unsigned(1))  # 1 catch clause
-    push!(bytes, Opcode.CATCH_ALL)
-    append!(bytes, encode_leb128_unsigned(0))  # → label 0 (inner catch landing)
+    try_table!(bb, InstrIR.TryCatch[catch_all_clause(0)])  # → label 0 (inner catch landing)
 
     # Inner try body + normal exit — STACKIFIED (P2-batch25, gap 3bee390c7d25):
     # the body can contain vector-literal fill loops (try/finally inlines
@@ -3877,11 +3795,11 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
         end
     end
     _ib_head !== nothing && pushfirst!(inner_body, _ib_head)
-    append!(bytes, generate_stackified_flow(ctx, inner_body, code))
+    emit_raw!(bb, generate_stackified_flow(ctx, inner_body, code))
     ctx.last_stmt_was_stub = false
 
     # End inner try_table
-    push!(bytes, Opcode.END)
+    end_block!(bb)
 
     # P3 gap 5fe789cdb92c: when the inner-normal and inner-catch paths MERGE
     # at phis before the outer catch (un-inlined invokes in the catch arm keep
@@ -3907,17 +3825,16 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
             haskey(ctx.phi_locals, i) || continue
             for (k, e) in enumerate(st.edges)
                 if Int(e) < inner.catch_dest && isassigned(st.values, k)
-                    emit_phi_local_set!(bytes, st.values[k], i, ctx)
+                    _tb = UInt8[]; emit_phi_local_set!(_tb, st.values[k], i, ctx); emit_raw!(bb, _tb)
                     break
                 end
             end
         end
     end
-    push!(bytes, Opcode.BR)
-    append!(bytes, encode_leb128_unsigned(1))
+    br!(bb, 1)
 
     # End inner catch landing block
-    push!(bytes, Opcode.END)
+    end_block!(bb)
 
     # Reset dead code flag — inner catch handler is reachable
     ctx.last_stmt_was_stub = false
@@ -3940,8 +3857,8 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
         end
     end
     if !isempty(inner_catch)
-        append!(bytes, generate_stackified_flow(ctx, inner_catch, code;
-                                                trailing_unreachable=false))
+        emit_raw!(bb, generate_stackified_flow(ctx, inner_catch, code;
+                                               trailing_unreachable=false))
         ctx.last_stmt_was_stub = false
     end
     # Catch path: store merge-phi edges keyed inside the handler range.
@@ -3952,7 +3869,7 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
             haskey(ctx.phi_locals, i) || continue
             for (k, e) in enumerate(st.edges)
                 if inner.catch_dest <= Int(e) <= inner_catch_hi && isassigned(st.values, k)
-                    emit_phi_local_set!(bytes, st.values[k], i, ctx)
+                    _tb = UInt8[]; emit_phi_local_set!(_tb, st.values[k], i, ctx); emit_raw!(bb, _tb)
                     break
                 end
             end
@@ -3960,7 +3877,7 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
     end
 
     # End skip block (both paths land here, at the merge)
-    push!(bytes, Opcode.END)
+    end_block!(bb)
 
     # === Merge code (phis through the rest of the then-arm / outer body) ===
     _post_hi = body_branch > 0 ? min(body_bdest - 1, outer.catch_dest - 1) : outer.catch_dest - 1
@@ -3977,8 +3894,8 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
             end
         end
         if !isempty(merge_blocks)
-            append!(bytes, generate_stackified_flow(ctx, merge_blocks, code;
-                                                    trailing_unreachable=false))
+            emit_raw!(bb, generate_stackified_flow(ctx, merge_blocks, code;
+                                                   trailing_unreachable=false))
             ctx.last_stmt_was_stub = false
         end
     end
@@ -3986,7 +3903,7 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
     # Close the $else wrap and emit the common tail (else arm + shared
     # leave/return code) — the then path falls through into it as well.
     if body_branch > 0
-        push!(bytes, Opcode.END)   # $else
+        end_block!(bb)   # $else
         ctx.last_stmt_was_stub = false
         tail_blocks = BasicBlock[]
         for b in blocks
@@ -4000,17 +3917,17 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
             end
         end
         if !isempty(tail_blocks)
-            append!(bytes, generate_stackified_flow(ctx, tail_blocks, code;
-                                                    trailing_unreachable=false))
+            emit_raw!(bb, generate_stackified_flow(ctx, tail_blocks, code;
+                                                   trailing_unreachable=false))
             ctx.last_stmt_was_stub = false
         end
     end
 
     # End outer try_table
-    push!(bytes, Opcode.END)
+    end_block!(bb)
 
     # End outer catch landing block
-    push!(bytes, Opcode.END)
+    end_block!(bb)
 
     # Reset dead code flag — outer catch handler is reachable
     ctx.last_stmt_was_stub = false
@@ -4019,19 +3936,19 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
     # P3: stackified for the same linear-walk reasons as the inner handler.
     outer_catch = [b for b in blocks if b.start_idx >= outer.catch_dest]
     if !isempty(outer_catch)
-        append!(bytes, generate_stackified_flow(ctx, outer_catch, code))
+        emit_raw!(bb, generate_stackified_flow(ctx, outer_catch, code))
         ctx.last_stmt_was_stub = false
     end
 
-    return bytes
+    return builder_code(bb)
 end
 
 # PURE-9031: Helper — compile a GotoIfNot inside the try body
 function _compile_try_body_gotoifnot(stmt::Core.GotoIfNot, i::Int, leave_idx::Int, code, ctx::AbstractCompilationContext)::Vector{UInt8}
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="_compile_try_body_gotoifnot", strict=false)
     else_target = stmt.dest
 
-    append!(bytes, compile_condition_to_i32(stmt.cond, ctx))
+    emit_raw!(b, compile_condition_to_i32(stmt.cond, ctx); pushes=WasmValType[I32])
 
     then_start = i + 1
     then_end = min(else_target - 1, leave_idx - 1)
@@ -4060,51 +3977,48 @@ function _compile_try_body_gotoifnot(stmt::Core.GotoIfNot, i::Int, leave_idx::In
     # returned 0 — the Int32 range-check's else arm swallowed all the gcd work).
     merge_after = _try_goto_merge_target(stmt, i, leave_idx, code)
     if !(then_has_throw || then_has_return) && merge_after !== nothing
-        push!(bytes, Opcode.IF)
-        push!(bytes, 0x40)
+        if_!(b)
         for j in then_start:then_end
             if code[j] !== nothing
-                append!(bytes, compile_statement(code[j], j, ctx))
+                emit_raw!(b, compile_statement(code[j], j, ctx))
             end
         end
-        push!(bytes, Opcode.ELSE)
+        else_!(b)
         for j in else_target:(merge_after-1)
             if code[j] !== nothing
-                append!(bytes, compile_statement(code[j], j, ctx))
+                emit_raw!(b, compile_statement(code[j], j, ctx))
             end
         end
-        push!(bytes, Opcode.END)
+        end_block!(b)
         ctx.last_stmt_was_stub = false
     elseif then_has_throw || then_has_return
-        push!(bytes, Opcode.IF)
-        push!(bytes, 0x40)
+        if_!(b)
         for j in then_start:then_end
             if code[j] !== nothing
-                append!(bytes, compile_statement(code[j], j, ctx))
+                emit_raw!(b, compile_statement(code[j], j, ctx))
             end
         end
-        push!(bytes, Opcode.END)
+        end_block!(b)
         # PURE-9032: Reset dead code flag after if/end — the throw/error inside the
         # if block is a dead-end, but control resumes on the else path after end.
         ctx.last_stmt_was_stub = false
     else
-        push!(bytes, Opcode.IF)
-        push!(bytes, 0x40)
+        if_!(b)
         for j in then_start:then_end
             if code[j] !== nothing
-                append!(bytes, compile_statement(code[j], j, ctx))
+                emit_raw!(b, compile_statement(code[j], j, ctx))
             end
         end
-        push!(bytes, Opcode.ELSE)
+        else_!(b)
         for j in else_target:(leave_idx-1)
             if code[j] !== nothing
-                append!(bytes, compile_statement(code[j], j, ctx))
+                emit_raw!(b, compile_statement(code[j], j, ctx))
             end
         end
-        push!(bytes, Opcode.END)
+        end_block!(b)
         ctx.last_stmt_was_stub = false
     end
-    return bytes
+    return builder_code(b)
 end
 
 # PURE-9031: Helper — advance past a GotoIfNot in the try body

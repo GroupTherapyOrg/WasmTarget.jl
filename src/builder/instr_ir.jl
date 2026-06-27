@@ -28,6 +28,11 @@ struct NumOp    <: WasmInstr; op::UInt8; end   # generic no-immediate numeric/cm
 # ── parametric ───────────────────────────────────────────────────────────────────
 struct Drop   <: WasmInstr; end
 struct Select <: WasmInstr; end
+# Typed select (0x1C): carries the on-wire bytes of the single result valtype
+# (dart2wasm SelectWithType writes 0x1C, vec-len 1, then `write(type)`). The caller
+# already has the valtype bytes (e.g. 0x63 + signed-LEB type_idx), so carry them
+# verbatim — keeps this submodule dependency-free of the type-encoding layer.
+struct SelectWithType <: WasmInstr; type_bytes::Vector{UInt8}; end
 
 # ── variable ─────────────────────────────────────────────────────────────────────
 struct LocalGet  <: WasmInstr; idx::UInt32; end
@@ -50,6 +55,24 @@ struct BrTable <: WasmInstr; targets::Vector{UInt32}; default::UInt32; end
 struct Return  <: WasmInstr; end
 struct Call    <: WasmInstr; idx::UInt32; end
 struct CallIndirect <: WasmInstr; type_idx::UInt32; table_idx::UInt32; end
+
+# ── exception handling (Wasm 3.0) ──────────────────────────────────────────────────
+# A try_table catch clause (dart2wasm TryTableCatch): a kind byte + immediates.
+#   kind 0x00 catch          tag_idx label_idx   (pushes tag.inputs)
+#   kind 0x01 catch_ref      tag_idx label_idx   (pushes tag.inputs ++ exnref)
+#   kind 0x02 catch_all      label_idx           (pushes nothing)
+#   kind 0x03 catch_all_ref  label_idx           (pushes exnref)
+# `tag` is unused (and `0xffffffff`) for the *_all kinds.
+struct TryCatch
+    kind::UInt8
+    tag::UInt32
+    label::UInt32
+end
+# try_table: a block opener (blocktype: 0x40 byte or a WasmValType) plus the catch vec.
+struct TryTable <: WasmInstr; blocktype::Any; catches::Vector{TryCatch}; end
+struct Throw    <: WasmInstr; tag::UInt32; end
+struct ThrowRef <: WasmInstr; end
+struct Rethrow  <: WasmInstr; depth::UInt32; end
 
 # ── reference ────────────────────────────────────────────────────────────────────
 # ref.null with an abstract heaptype: heaptype_byte is the raw on-wire byte (e.g. 0x6E any).
@@ -93,9 +116,10 @@ end # module InstrIR
 
 # ── serialize layer (dart2wasm serialize/) + printTo, by multiple dispatch ─────────
 import .InstrIR: WasmInstr,
-    I32Const, I64Const, F32Const, F64Const, NumOp, Drop, Select,
+    I32Const, I64Const, F32Const, F64Const, NumOp, Drop, Select, SelectWithType,
     LocalGet, LocalSet, LocalTee, GlobalGet, GlobalSet,
     Unreachable, Nop, Block, Loop, If, Else, End, Br, BrIf, BrTable, Return, Call, CallIndirect,
+    TryCatch, TryTable, Throw, ThrowRef, Rethrow,
     RefNullAbstract, RefNullConcrete, RefFunc, RefIsNull, RefAsNonNull,
     StructNew, StructNewDefault, StructGet, StructSet,
     ArrayNew, ArrayNewDefault, ArrayNewFixed, ArrayNewData, ArrayGet, ArraySet, ArrayLen, ArrayCopy, ArrayFill,
@@ -113,6 +137,8 @@ encode!(c::Vector{UInt8}, i::F64Const) = (push!(c, Opcode.F64_CONST); append!(c,
 encode!(c::Vector{UInt8}, i::NumOp)    = push!(c, i.op)
 encode!(c::Vector{UInt8}, ::Drop)      = push!(c, Opcode.DROP)
 encode!(c::Vector{UInt8}, ::Select)    = push!(c, Opcode.SELECT)
+# select (typed): 0x1C, vec-len 1, then the result valtype bytes (dart2wasm SelectWithType).
+encode!(c::Vector{UInt8}, i::SelectWithType) = (push!(c, Opcode.SELECT_T); _u!(c, 1); append!(c, i.type_bytes))
 encode!(c::Vector{UInt8}, i::LocalGet)  = (push!(c, Opcode.LOCAL_GET);  _u!(c, i.idx))
 encode!(c::Vector{UInt8}, i::LocalSet)  = (push!(c, Opcode.LOCAL_SET);  _u!(c, i.idx))
 encode!(c::Vector{UInt8}, i::LocalTee)  = (push!(c, Opcode.LOCAL_TEE);  _u!(c, i.idx))
@@ -135,6 +161,24 @@ end
 encode!(c::Vector{UInt8}, ::Return) = push!(c, Opcode.RETURN)
 encode!(c::Vector{UInt8}, i::Call)  = (push!(c, Opcode.CALL); _u!(c, i.idx))
 encode!(c::Vector{UInt8}, i::CallIndirect) = (push!(c, Opcode.CALL_INDIRECT); _u!(c, i.type_idx); _u!(c, i.table_idx))
+# try_table: 0x1F, blocktype, vec(catch). Each catch = kind byte + immediates (dart2wasm
+# TryTableCatch.serialize): catch/catch_ref write tag then label; the *_all kinds write only label.
+function _encode_catch!(c::Vector{UInt8}, k::TryCatch)
+    push!(c, k.kind)
+    if k.kind == Opcode.CATCH || k.kind == Opcode.CATCH_REF
+        _u!(c, k.tag)
+    end
+    _u!(c, k.label)
+end
+function encode!(c::Vector{UInt8}, i::TryTable)
+    push!(c, Opcode.TRY_TABLE)
+    append!(c, encode_block_type(i.blocktype))
+    _u!(c, length(i.catches))
+    for k in i.catches; _encode_catch!(c, k); end
+end
+encode!(c::Vector{UInt8}, i::Throw)   = (push!(c, Opcode.THROW); _u!(c, i.tag))
+encode!(c::Vector{UInt8}, ::ThrowRef) = push!(c, Opcode.THROW_REF)
+encode!(c::Vector{UInt8}, i::Rethrow) = (push!(c, Opcode.RETHROW); _u!(c, i.depth))
 encode!(c::Vector{UInt8}, i::RefNullAbstract) = (push!(c, Opcode.REF_NULL); push!(c, i.heaptype_byte))
 encode!(c::Vector{UInt8}, i::RefNullConcrete) = (push!(c, Opcode.REF_NULL); _s!(c, i.heaptype))
 encode!(c::Vector{UInt8}, i::RefFunc)   = (push!(c, Opcode.REF_FUNC); _u!(c, i.idx))
@@ -172,6 +216,7 @@ mnemonic(i::F64Const) = "f64.const $(i.value)"
 mnemonic(i::NumOp)    = "num 0x$(string(i.op, base=16))"
 mnemonic(::Drop)   = "drop"
 mnemonic(::Select) = "select"
+mnemonic(i::SelectWithType) = "select (result <$(length(i.type_bytes))B>)"
 mnemonic(i::LocalGet)  = "local.get $(i.idx)"
 mnemonic(i::LocalSet)  = "local.set $(i.idx)"
 mnemonic(i::LocalTee)  = "local.tee $(i.idx)"
@@ -190,6 +235,16 @@ mnemonic(i::BrTable) = "br_table $(i.targets) $(i.default)"
 mnemonic(::Return) = "return"
 mnemonic(i::Call)  = "call $(i.idx)"
 mnemonic(i::CallIndirect) = "call_indirect (type $(i.type_idx)) (table $(i.table_idx))"
+_catch_mnemonic(k::TryCatch) =
+    k.kind == Opcode.CATCH         ? "catch $(k.tag) $(k.label)" :
+    k.kind == Opcode.CATCH_REF     ? "catch_ref $(k.tag) $(k.label)" :
+    k.kind == Opcode.CATCH_ALL     ? "catch_all $(k.label)" :
+    k.kind == Opcode.CATCH_ALL_REF ? "catch_all_ref $(k.label)" :
+                                     "catch?0x$(string(k.kind, base=16)) $(k.label)"
+mnemonic(i::TryTable) = "try_table $(i.blocktype) [" * join((_catch_mnemonic(k) for k in i.catches), ", ") * "]"
+mnemonic(i::Throw)   = "throw $(i.tag)"
+mnemonic(::ThrowRef) = "throw_ref"
+mnemonic(i::Rethrow) = "rethrow $(i.depth)"
 mnemonic(i::RefNullAbstract) = "ref.null 0x$(string(i.heaptype_byte, base=16))"
 mnemonic(i::RefNullConcrete) = "ref.null \$$(i.heaptype)"
 mnemonic(i::RefFunc)   = "ref.func $(i.idx)"

@@ -25,6 +25,7 @@ module Opcode
 
     # Exception handling instructions (Wasm 3.0)
     const THROW = 0x08         # throw tag_idx - throw exception with tag
+    const RETHROW = 0x09       # rethrow label_idx - re-throw caught exception (legacy)
     const THROW_REF = 0x0A     # throw_ref - rethrow exception from exnref
     const TRY_TABLE = 0x1F     # try_table blocktype catch* - structured exception handler
 

@@ -242,6 +242,47 @@ function call_indirect!(b::InstrBuilder, type_idx::Integer, table_idx::Integer, 
     _emit!(b, InstrIR.CallIndirect(UInt32(type_idx), UInt32(table_idx)))
 end
 
+# ── Parametric: typed select ──────────────────────────────────────────────────────
+# select (typed, 0x1C): pop i32 condition, pop T, pop T, push T — same operand-stack
+# effect as untyped select (the validator's SELECT/SELECT_T path is shared). `type_bytes`
+# are the EXACT on-wire result-valtype bytes the caller already has (e.g.
+# `[0x63, encode_leb128_signed(type_idx)...]` for a nullable concrete ref), serialized
+# verbatim after the 0x1C + vec-len-1 prefix (dart2wasm SelectWithType).
+function select_t!(b::InstrBuilder, type_bytes::Vector{UInt8})
+    validate_instruction!(b.v, Opcode.SELECT_T)
+    _emit!(b, InstrIR.SelectWithType(copy(type_bytes)))
+end
+
+# ── Exception handling (Wasm 3.0) ─────────────────────────────────────────────────
+# Catch-clause constructors a caller hands to `try_table!`. Label is the branch target
+# depth at the point of the try_table (dart2wasm passes a Label; here the caller resolves
+# it to a depth, exactly as it already does for br!/br_if!).
+catch_clause(tag::Integer, label::Integer)      = InstrIR.TryCatch(Opcode.CATCH,         UInt32(tag), UInt32(label))
+catch_ref_clause(tag::Integer, label::Integer)  = InstrIR.TryCatch(Opcode.CATCH_REF,     UInt32(tag), UInt32(label))
+catch_all_clause(label::Integer)                = InstrIR.TryCatch(Opcode.CATCH_ALL,     typemax(UInt32), UInt32(label))
+catch_all_ref_clause(label::Integer)            = InstrIR.TryCatch(Opcode.CATCH_ALL_REF, typemax(UInt32), UInt32(label))
+
+# try_table: a block opener carrying catch clauses (dart2wasm `try_table`). Blocktype is a
+# void byte 0x40 or a WasmValType; `results` feeds the validator's end-balance check. The
+# catch handlers branch OUT of the try_table to their target labels (validated at br time),
+# so here we only start the block label — matching how block!/loop! work.
+function try_table!(b::InstrBuilder, catches::Vector{InstrIR.TryCatch}, blocktype=0x40; results::Vector{<:Any}=WasmValType[])
+    validate_block_start!(b.v, :block, WasmValType[r for r in results])
+    _emit!(b, InstrIR.TryTable(blocktype, catches))
+end
+# throw tag: pop the tag's inputs (caller declares them), then unreachable (dart2wasm throw_).
+function throw_!(b::InstrBuilder, tag::Integer; inputs::Vector{<:Any}=WasmValType[])
+    if b.v.reachable
+        for t in reverse(inputs); validate_pop!(b.v, t); end
+    end
+    b.v.reachable = false
+    _emit!(b, InstrIR.Throw(UInt32(tag)))
+end
+# throw_ref: pop the exnref operand, then unreachable (dart2wasm throw_ref).
+throw_ref!(b::InstrBuilder) = (b.v.reachable && validate_pop_any!(b.v); b.v.reachable = false; _emit!(b, InstrIR.ThrowRef()))
+# rethrow label: no stack change, then unreachable (dart2wasm rethrow_).
+rethrow_!(b::InstrBuilder, depth::Integer) = (b.v.reachable = false; _emit!(b, InstrIR.Rethrow(UInt32(depth))))
+
 # ── Reference ───────────────────────────────────────────────────────────────────
 ref_null!(b::InstrBuilder, heaptype::Integer, reftype::WasmValType) =
     (validate_push!(b.v, reftype); _emit!(b, InstrIR.RefNullConcrete(Int64(heaptype))))

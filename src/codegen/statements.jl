@@ -152,6 +152,12 @@ end
 Compile a single IR statement to Wasm bytecode.
 """
 function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
+    # MIGRATED to InstrBuilder (byte-INSPECTING fn): `bytes` stays a local UInt8[]
+    # accumulator — every branch LEB-decodes / scans it (e.g. the n_drops debug loop,
+    # the trailing-local.get type checks, the DROP+UNREACHABLE bytecode probe) and
+    # external emit_*! helpers mutate it. Only the FINAL splice goes through the typed
+    # builder via emit_raw!, so the output is byte-identical. Stays strict=false.
+    b = InstrBuilder(; func_name="compile_statement", strict=false)
     bytes = UInt8[]
 
     # PURE-6027: Reset dead code guard at basic block boundaries.
@@ -183,7 +189,8 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
     # opcodes. Emit unreachable (not empty) so the validator stays in polymorphic stack mode.
     if ctx.last_stmt_was_stub
         push!(bytes, 0x00)  # unreachable — keeps stack polymorphic
-        return bytes
+        emit_raw!(b, bytes)
+        return builder_code(b)
     end
 
     # PURE-6024: Handle slot assignments in unoptimized IR (may_optimize=false).
@@ -205,7 +212,8 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
             push!(bytes, Opcode.LOCAL_SET)
             append!(bytes, encode_leb128_unsigned(ctx.slot_locals[_slot_assign_id]))
         end
-        return bytes
+        emit_raw!(b, bytes)
+        return builder_code(b)
     end
 
     if stmt isa Core.ReturnNode
@@ -579,10 +587,10 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                                 # Decode local index, check type
                                 src_idx = 0; shift = 0; leb_end = 0
                                 for bi in 2:length(val_bytes)
-                                    b = val_bytes[bi]
-                                    src_idx |= (Int(b & 0x7f) << shift)
+                                    byt = val_bytes[bi]
+                                    src_idx |= (Int(byt & 0x7f) << shift)
                                     shift += 7
-                                    if (b & 0x80) == 0
+                                    if (byt & 0x80) == 0
                                         leb_end = bi
                                         break
                                     end
@@ -820,10 +828,10 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     shift = 0
                     leb_end = 0
                     for bi in 2:length(stmt_bytes)
-                        b = stmt_bytes[bi]
-                        src_local_idx |= (Int(b & 0x7f) << shift)
+                        byt = stmt_bytes[bi]
+                        src_local_idx |= (Int(byt & 0x7f) << shift)
                         shift += 7
-                        if (b & 0x80) == 0
+                        if (byt & 0x80) == 0
                             leb_end = bi
                             break
                         end
@@ -971,10 +979,10 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                         local tlg_shift = 0
                         local tlg_end = 0
                         for bi in (si + 1):length(stmt_bytes)
-                            b = stmt_bytes[bi]
-                            tlg_idx |= (Int(b & 0x7f) << tlg_shift)
+                            byt = stmt_bytes[bi]
+                            tlg_idx |= (Int(byt & 0x7f) << tlg_shift)
                             tlg_shift += 7
-                            if (b & 0x80) == 0
+                            if (byt & 0x80) == 0
                                 tlg_end = bi
                                 break
                             end
@@ -1047,21 +1055,21 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                         sg_shift = 0
                         sg_bi = sg_pos + 2
                         while sg_bi <= length(stmt_bytes)
-                            b = stmt_bytes[sg_bi]
-                            sg_type_idx |= (Int(b & 0x7f) << sg_shift)
+                            byt = stmt_bytes[sg_bi]
+                            sg_type_idx |= (Int(byt & 0x7f) << sg_shift)
                             sg_shift += 7
                             sg_bi += 1
-                            (b & 0x80) == 0 && break
+                            (byt & 0x80) == 0 && break
                         end
                         # Decode field_idx LEB128
                         sg_field_idx = 0
                         sg_shift = 0
                         while sg_bi <= length(stmt_bytes)
-                            b = stmt_bytes[sg_bi]
-                            sg_field_idx |= (Int(b & 0x7f) << sg_shift)
+                            byt = stmt_bytes[sg_bi]
+                            sg_field_idx |= (Int(byt & 0x7f) << sg_shift)
                             sg_shift += 7
                             sg_bi += 1
-                            (b & 0x80) == 0 && break
+                            (byt & 0x80) == 0 && break
                         end
                         # Check: is the struct_get the LAST instruction? (sg_bi - 1 == length)
                         if sg_bi - 1 == length(stmt_bytes) && sg_type_idx + 1 <= length(ctx.mod.types)
@@ -1257,10 +1265,10 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                                     tlg_shift_rc = 0
                                     tlg_end_rc = 0
                                     for bi in (si + 1):length(stmt_bytes)
-                                        b = stmt_bytes[bi]
-                                        tlg_idx_rc |= (Int(b & 0x7f) << tlg_shift_rc)
+                                        byt = stmt_bytes[bi]
+                                        tlg_idx_rc |= (Int(byt & 0x7f) << tlg_shift_rc)
                                         tlg_shift_rc += 7
-                                        if (b & 0x80) == 0
+                                        if (byt & 0x80) == 0
                                             tlg_end_rc = bi
                                             break
                                         end
@@ -1287,10 +1295,10 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                                     call_shift_rc = 0
                                     call_end_rc = 0
                                     for bi in (si + 1):length(stmt_bytes)
-                                        b = stmt_bytes[bi]
-                                        call_idx_rc |= (Int(b & 0x7f) << call_shift_rc)
+                                        byt = stmt_bytes[bi]
+                                        call_idx_rc |= (Int(byt & 0x7f) << call_shift_rc)
                                         call_shift_rc += 7
-                                        if (b & 0x80) == 0
+                                        if (byt & 0x80) == 0
                                             call_end_rc = bi
                                             break
                                         end
@@ -1505,19 +1513,19 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                 # Parse first local_get
                 _fg_idx1 = 0; _fg_shift = 0; _fg_end1 = 0
                 for _bi in 2:length(stmt_bytes)
-                    b = stmt_bytes[_bi]
-                    _fg_idx1 |= (Int(b & 0x7f) << _fg_shift)
+                    byt = stmt_bytes[_bi]
+                    _fg_idx1 |= (Int(byt & 0x7f) << _fg_shift)
                     _fg_shift += 7
-                    if (b & 0x80) == 0; _fg_end1 = _bi; break; end
+                    if (byt & 0x80) == 0; _fg_end1 = _bi; break; end
                 end
                 if _fg_end1 > 0 && _fg_end1 < length(stmt_bytes) && stmt_bytes[_fg_end1 + 1] == 0x20
                     # Parse second local_get
                     _fg_idx2 = 0; _fg_shift = 0; _fg_end2 = 0
                     for _bi in (_fg_end1 + 2):length(stmt_bytes)
-                        b = stmt_bytes[_bi]
-                        _fg_idx2 |= (Int(b & 0x7f) << _fg_shift)
+                        byt = stmt_bytes[_bi]
+                        _fg_idx2 |= (Int(byt & 0x7f) << _fg_shift)
                         _fg_shift += 7
-                        if (b & 0x80) == 0; _fg_end2 = _bi; break; end
+                        if (byt & 0x80) == 0; _fg_end2 = _bi; break; end
                     end
                     pair_len = _fg_end2  # Length of the leading pair [get X, get Y]
                     if _fg_end2 > 0 && pair_len < length(stmt_bytes)
@@ -1725,7 +1733,8 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
         end
     end
 
-    return bytes
+    emit_raw!(b, bytes)
+    return builder_code(b)
 end
 
 """
@@ -1760,6 +1769,13 @@ function _exn_field_null_or_zero!(bytes::Vector{UInt8}, fwasm)
 end
 
 function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
+    # MIGRATED to InstrBuilder (byte-INSPECTING fn): `bytes` stays a local UInt8[]
+    # accumulator. Field-value branches build local `_bytes` buffers and LEB-decode
+    # them (the LOCAL_GET source-type checks), and external emit_*! helpers
+    # (emit_unsupported_stub!, emit_type_id!, _exn_field_null_or_zero!) mutate the
+    # accumulator. Only the FINAL splice (every return) goes through the typed builder
+    # via emit_raw!, so the output is byte-identical. Stays strict=false.
+    b = InstrBuilder(; func_name="compile_new", strict=false)
     bytes = UInt8[]
 
     # expr.args[1] is the type, rest are field values
@@ -1786,7 +1802,8 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
             emit_unsupported_stub!(ctx, bytes, :unsupported_type,
                 "struct construction (:new) with a non-constant type — type instability"; idx=idx,
                 detail=ssa_type)
-            return bytes
+            emit_raw!(b, bytes)
+            return builder_code(b)
         end
     elseif struct_type_ref isa Core.Argument
         # Constructor bodies reference the constructed type as Core.Argument(1)
@@ -1802,7 +1819,8 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
             emit_unsupported_stub!(ctx, bytes, :unsupported_type,
                 "struct construction (:new) with an unresolvable type — type instability"; idx=idx,
                 detail=new_ssa_type)
-            return bytes
+            emit_raw!(b, bytes)
+            return builder_code(b)
         end
     else
         error("Unknown struct type reference: $struct_type_ref")
@@ -1815,7 +1833,8 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
        length(struct_type.parameters) >= 1 && struct_type.parameters[1] === UInt8 &&
        length(field_values) >= 1
         append!(bytes, compile_value(field_values[1], ctx))
-        return bytes
+        emit_raw!(b, bytes)
+        return builder_code(b)
     end
 
     # Special case: Dict{K,V} construction
@@ -1888,7 +1907,8 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
         push!(bytes, Opcode.STRUCT_NEW)
         append!(bytes, encode_leb128_unsigned(dict_info.wasm_type_idx))
 
-        return bytes
+        emit_raw!(b, bytes)
+        return builder_code(b)
     end
 
     # Special case: Vector{T} construction
@@ -1933,10 +1953,10 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
         if length(field0_bytes) >= 2 && field0_bytes[1] == 0x20  # LOCAL_GET = 0x20
             src_idx = 0; shift = 0
             for bi in 2:length(field0_bytes)
-                b = field0_bytes[bi]
-                src_idx |= (Int(b & 0x7f) << shift)
+                byt = field0_bytes[bi]
+                src_idx |= (Int(byt & 0x7f) << shift)
                 shift += 7
-                (b & 0x80) == 0 && break
+                (byt & 0x80) == 0 && break
             end
             arr_idx = src_idx - ctx.n_params + 1
             if arr_idx >= 1 && arr_idx <= length(ctx.locals)
@@ -1984,10 +2004,10 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
             if length(field1_bytes) >= 2 && field1_bytes[1] == Opcode.LOCAL_GET
                 src_idx = 0; shift = 0
                 for bi in 2:length(field1_bytes)
-                    b = field1_bytes[bi]
-                    src_idx |= (Int(b & 0x7f) << shift)
+                    byt = field1_bytes[bi]
+                    src_idx |= (Int(byt & 0x7f) << shift)
                     shift += 7
-                    (b & 0x80) == 0 && break
+                    (byt & 0x80) == 0 && break
                 end
                 arr_idx = src_idx - ctx.n_params + 1
                 if arr_idx >= 1 && arr_idx <= length(ctx.locals)
@@ -2031,7 +2051,8 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_NEW)
         append!(bytes, encode_leb128_unsigned(vec_info.wasm_type_idx))
-        return bytes
+        emit_raw!(b, bytes)
+        return builder_code(b)
     end
 
     # PURE-049: MemoryRef/Memory construction — in WasmGC these are array refs, not structs.
@@ -2047,7 +2068,8 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
             push!(bytes, Opcode.REF_NULL)
             append!(bytes, encode_leb128_signed(Int64(array_type_idx)))
         end
-        return bytes
+        emit_raw!(b, bytes)
+        return builder_code(b)
     end
     if struct_type isa DataType && struct_type.name.name in (:Memory, :GenericMemory)
         # Memory{T} — emit ref.null of the array type (we can't construct raw memory in Wasm)
@@ -2055,7 +2077,8 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
         array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
         push!(bytes, Opcode.REF_NULL)
         append!(bytes, encode_leb128_signed(Int64(array_type_idx)))
-        return bytes
+        emit_raw!(b, bytes)
+        return builder_code(b)
     end
 
     # PURE-325 / P2-batch17: Error constructors used to compile to a bare
@@ -2077,7 +2100,8 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
         _exn_def = _exn_info === nothing ? nothing : ctx.mod.types[_exn_info.wasm_type_idx + 1]
         if _exn_info === nothing || !(_exn_def isa StructType)
             push!(bytes, Opcode.UNREACHABLE)
-            return bytes
+            emit_raw!(b, bytes)
+            return builder_code(b)
         end
         if _exn_info.field_offset > 0
             emit_type_id!(bytes, ctx.type_registry, struct_type)
@@ -2126,7 +2150,8 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
         push!(bytes, Opcode.GC_PREFIX)
         push!(bytes, Opcode.STRUCT_NEW)
         append!(bytes, encode_leb128_unsigned(_exn_info.wasm_type_idx))
-        return bytes
+        emit_raw!(b, bytes)
+        return builder_code(b)
     end
 
     # Get the registered struct info
@@ -2258,10 +2283,10 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 if inner_type !== nothing && length(val_bytes) >= 2 && val_bytes[1] == 0x20
                     src_idx = 0; shift = 0; leb_end = 0
                     for bi in 2:length(val_bytes)
-                        b = val_bytes[bi]
-                        src_idx |= (Int(b & 0x7f) << shift)
+                        byt = val_bytes[bi]
+                        src_idx |= (Int(byt & 0x7f) << shift)
                         shift += 7
-                        if (b & 0x80) == 0
+                        if (byt & 0x80) == 0
                             leb_end = bi
                             break
                         end
@@ -2363,10 +2388,10 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 elseif length(val_bytes) >= 2 && val_bytes[1] == 0x20
                     src_idx = 0; shift = 0; leb_end = 0
                     for bi in 2:length(val_bytes)
-                        b = val_bytes[bi]
-                        src_idx |= (Int(b & 0x7f) << shift)
+                        byt = val_bytes[bi]
+                        src_idx |= (Int(byt & 0x7f) << shift)
                         shift += 7
-                        if (b & 0x80) == 0
+                        if (byt & 0x80) == 0
                             leb_end = bi
                             break
                         end
@@ -2399,10 +2424,10 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                     if length(val_bytes) >= 2 && val_bytes[1] == 0x20
                         src_idx2 = 0; shift2 = 0; leb_end2 = 0
                         for bi in 2:length(val_bytes)
-                            b = val_bytes[bi]
-                            src_idx2 |= (Int(b & 0x7f) << shift2)
+                            byt = val_bytes[bi]
+                            src_idx2 |= (Int(byt & 0x7f) << shift2)
                             shift2 += 7
-                            if (b & 0x80) == 0
+                            if (byt & 0x80) == 0
                                 leb_end2 = bi
                                 break
                             end
@@ -2542,9 +2567,9 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                     if length(field_bytes) >= 2 && field_bytes[1] == 0x20
                         _ub_src = 0; _ub_sh = 0
                         for _bi in 2:length(field_bytes)
-                            b = field_bytes[_bi]
-                            _ub_src |= (Int(b & 0x7f) << _ub_sh); _ub_sh += 7
-                            (b & 0x80) == 0 && break
+                            byt = field_bytes[_bi]
+                            _ub_src |= (Int(byt & 0x7f) << _ub_sh); _ub_sh += 7
+                            (byt & 0x80) == 0 && break
                         end
                         _ub_arr = _ub_src - ctx.n_params + 1
                         if _ub_arr >= 1 && _ub_arr <= length(ctx.locals)
@@ -2571,10 +2596,10 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 # Decode source local index from LEB128
                 src_idx = 0; shift = 0
                 for bi in 2:length(field_bytes)
-                    b = field_bytes[bi]
-                    src_idx |= (Int(b & 0x7f) << shift)
+                    byt = field_bytes[bi]
+                    src_idx |= (Int(byt & 0x7f) << shift)
                     shift += 7
-                    (b & 0x80) == 0 && break
+                    (byt & 0x80) == 0 && break
                 end
                 # Determine source type: either from ctx.locals (SSA) or from params
                 src_type = nothing
@@ -2661,10 +2686,10 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 # Decode global index from LEB128
                 g_idx = 0; g_shift = 0
                 for bi in 2:length(field_bytes)
-                    b = field_bytes[bi]
-                    g_idx |= (Int(b & 0x7f) << g_shift)
+                    byt = field_bytes[bi]
+                    g_idx |= (Int(byt & 0x7f) << g_shift)
                     g_shift += 7
-                    (b & 0x80) == 0 && break
+                    (byt & 0x80) == 0 && break
                 end
                 if g_idx + 1 <= length(ctx.mod.globals)
                     g_type = ctx.mod.globals[g_idx + 1].valtype
@@ -2717,10 +2742,10 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 # Decode source local index
                 src_idx_906 = 0; shift_906 = 0; leb_end_906 = 0
                 for bi in 2:length(field_bytes)
-                    b = field_bytes[bi]
-                    src_idx_906 |= (Int(b & 0x7f) << shift_906)
+                    byt = field_bytes[bi]
+                    src_idx_906 |= (Int(byt & 0x7f) << shift_906)
                     shift_906 += 7
-                    if (b & 0x80) == 0
+                    if (byt & 0x80) == 0
                         leb_end_906 = bi
                         break
                     end
@@ -2837,7 +2862,8 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
     push!(bytes, Opcode.STRUCT_NEW)
     append!(bytes, encode_leb128_unsigned(info.wasm_type_idx))
 
-    return bytes
+    emit_raw!(b, bytes)
+    return builder_code(b)
 end
 
 """
@@ -2845,6 +2871,12 @@ Compile a foreign call expression.
 Handles specific patterns like jl_alloc_genericmemory for Vector allocation.
 """
 function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
+    # MIGRATED to InstrBuilder (byte-INSPECTING fn): `bytes` stays a local UInt8[]
+    # accumulator. Branches build local `_bytes` buffers and LEB-decode/scan them,
+    # and external emit_*! helpers mutate the accumulator. Only the FINAL splice
+    # (every return) goes through the typed builder via emit_raw!, so the output is
+    # byte-identical. Stays strict=false.
+    b = InstrBuilder(; func_name="compile_foreigncall", strict=false)
     bytes = UInt8[]
 
     # foreigncall format: Expr(:foreigncall, name, return_type, arg_types, nreq, calling_conv, args...)
@@ -2918,7 +2950,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
             append!(bytes, encode_leb128_unsigned(arr_type_idx))
 
-            return bytes
+            emit_raw!(b, bytes)
+            return builder_code(b)
         elseif name === :memset
             # WBUILD-5501: memset(ptr, value, size) — fill memory with a byte value.
             # CORRECT BY DESIGN for zero-fill: WasmGC arrays are zero-initialized by
@@ -2930,7 +2963,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 record_unsupported!(ctx, :value_stub, "memset with a non-zero constant fill value"; idx=idx, detail=expr)
                 push!(bytes, Opcode.UNREACHABLE)  # non-strict path: trap rather than mis-fill
                 ctx.last_stmt_was_stub = true
-                return bytes
+                emit_raw!(b, bytes)
+                return builder_code(b)
             end
             # Zero-fill no-op. memset returns the ptr, but only materialise it when
             # the result is actually stored (ssa_local exists). Unconditionally
@@ -2942,7 +2976,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             if length(expr.args) >= 6 && haskey(ctx.ssa_locals, idx)
                 append!(bytes, compile_value(expr.args[6], ctx))
             end
-            return bytes
+            emit_raw!(b, bytes)
+            return builder_code(b)
         elseif name === :jl_types_equal
             # jl_types_equal(T1, T2) → Int32. Base.Math's pow uses `T === Float16`
             # style checks that lower to this foreigncall. When both args are
@@ -2956,7 +2991,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 if t1 isa Type && t2 isa Type
                     push!(bytes, Opcode.I32_CONST)
                     push!(bytes, t1 === t2 ? 0x01 : 0x00)
-                    return bytes
+                    emit_raw!(b, bytes)
+                    return builder_code(b)
                 end
             end
             # Non-literal args: fall through to the unknown-foreigncall stub below
@@ -2970,7 +3006,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             record_unsupported!(ctx, :value_stub, "objectid / identity-hash (jl_object_id)"; idx=idx, detail=expr)
             push!(bytes, Opcode.UNREACHABLE)  # non-strict path: trap rather than return a fake hash
             ctx.last_stmt_was_stub = true
-            return bytes
+            emit_raw!(b, bytes)
+            return builder_code(b)
         elseif name === :jl_string_to_genericmemory
             # Convert String to Memory{UInt8}
             # In WasmGC, String and Memory{UInt8} both use the same byte array representation
@@ -2982,7 +3019,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 append!(bytes, compile_value(str_arg, ctx))
             end
 
-            return bytes
+            emit_raw!(b, bytes)
+            return builder_code(b)
         elseif name === :jl_alloc_string
             # PURE-317: jl_alloc_string(n::UInt64) -> String
             # Allocates a new String of n bytes. In WasmGC, String is array<i32>.
@@ -3002,7 +3040,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             push!(bytes, Opcode.GC_PREFIX)
             push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
             append!(bytes, encode_leb128_unsigned(str_arr_type))
-            return bytes
+            emit_raw!(b, bytes)
+            return builder_code(b)
         elseif name === :jl_string_ptr
             # jl_string_ptr(s) -> Ptr{UInt8}: get pointer to string bytes
             # In WasmGC, String is array<i32>. We emit i64.const 1 as base pointer.
@@ -3012,7 +3051,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             # The memchr handler uses base=1 arithmetic: array_index = ptr - 1.
             push!(bytes, Opcode.I64_CONST)
             push!(bytes, 0x01)
-            return bytes
+            emit_raw!(b, bytes)
+            return builder_code(b)
         elseif name === :jl_id_start_char
             # PURE-316: jl_id_start_char(c::UInt32) -> Int32
             # Checks if a Unicode codepoint is a valid identifier start character.
@@ -3072,7 +3112,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 push!(bytes, Opcode.I32_CONST)
                 push!(bytes, 0x00)
             end
-            return bytes
+            emit_raw!(b, bytes)
+            return builder_code(b)
         elseif name === :jl_id_char
             # PURE-316: jl_id_char(c::UInt32) -> Int32
             # Checks if a Unicode codepoint is a valid identifier continuation character.
@@ -3144,7 +3185,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 push!(bytes, Opcode.I32_CONST)
                 push!(bytes, 0x00)
             end
-            return bytes
+            emit_raw!(b, bytes)
+            return builder_code(b)
         elseif name === :jl_string_to_genericmemory
             # PURE-316: jl_string_to_genericmemory(s::String) -> Memory{UInt8}
             # Converts a String's underlying bytes to a Memory{UInt8}.
@@ -3155,7 +3197,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 str_arg = expr.args[6]
                 append!(bytes, compile_value(str_arg, ctx))
             end
-            return bytes
+            emit_raw!(b, bytes)
+            return builder_code(b)
         elseif name === :jl_genericmemory_to_string
             # PURE-325: jl_genericmemory_to_string(memory, n) -> String
             # Creates a String of exactly n bytes from a Memory{UInt8}.
@@ -3208,7 +3251,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 mem_arg = expr.args[6]
                 append!(bytes, compile_value(mem_arg, ctx))
             end
-            return bytes
+            emit_raw!(b, bytes)
+            return builder_code(b)
         elseif name === :jl_pchar_to_string
             # PURE-325: jl_pchar_to_string(ptr, n) -> String
             # Creates a String from a char pointer and length. In WasmGC, we trace
@@ -3256,7 +3300,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                     # Return the new array
                     push!(bytes, Opcode.LOCAL_GET)
                     append!(bytes, encode_leb128_unsigned(dest_local))
-                    return bytes
+                    emit_raw!(b, bytes)
+                    return builder_code(b)
                 end
                 # Fallback: the pointer might be directly compilable as a ref
                 append!(bytes, compile_value(ptr_arg, ctx))
@@ -3264,7 +3309,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 ptr_arg = expr.args[6]
                 append!(bytes, compile_value(ptr_arg, ctx))
             end
-            return bytes
+            emit_raw!(b, bytes)
+            return builder_code(b)
         elseif name === :utf8proc_grapheme_break_stateful
             # PURE-316: utf8proc_grapheme_break_stateful(c1::UInt32, c2::UInt32, state::Ref{Int32}) -> Bool
             # Returns true if there's a grapheme cluster break between c1 and c2.
@@ -3273,7 +3319,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             # as its own grapheme cluster, which is correct for ASCII/BMP parsing.
             push!(bytes, Opcode.I32_CONST)
             push!(bytes, 0x01)  # true = always a grapheme break
-            return bytes
+            emit_raw!(b, bytes)
+            return builder_code(b)
         elseif name === :jl_ptr_to_array_1d
             # PURE-324: jl_ptr_to_array_1d(type, ptr, len, own) -> Vector{T}
             # Creates a Vector from a raw pointer. In WasmGC, raw pointers don't exist.
@@ -3328,7 +3375,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                     push!(bytes, Opcode.GC_PREFIX)
                     push!(bytes, Opcode.STRUCT_NEW)
                     append!(bytes, encode_leb128_unsigned(vec_type_idx))
-                    return bytes
+                    emit_raw!(b, bytes)
+                    return builder_code(b)
                 end
             end
         end
@@ -3457,7 +3505,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             # Push result (the "pointer" or 0)
             push!(bytes, Opcode.LOCAL_GET)
             append!(bytes, encode_leb128_unsigned(result_local))
-            return bytes
+            emit_raw!(b, bytes)
+            return builder_code(b)
         end
     end
 
@@ -3504,7 +3553,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 append!(bytes, encode_leb128_unsigned(_mmv_arr))
                 # memmove returns dest ptr — fake i64 0
                 push!(bytes, Opcode.I64_CONST, 0x00)
-                return bytes
+                emit_raw!(b, bytes)
+                return builder_code(b)
             end
         end
 
@@ -3556,7 +3606,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 append!(bytes, encode_leb128_unsigned(arr_copy_type))
                 # memmove returns dest ptr — push i64.const 0
                 push!(bytes, Opcode.I64_CONST, 0x00)
-                return bytes
+                emit_raw!(b, bytes)
+                return builder_code(b)
             end
         end
 
@@ -3641,7 +3692,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             append!(bytes, encode_leb128_unsigned(arr_copy_type))  # src type
             # memmove returns dest ptr — push i64.const 0 as the result
             push!(bytes, Opcode.I64_CONST, 0x00)
-            return bytes
+            emit_raw!(b, bytes)
+            return builder_code(b)
         end
     end
 
@@ -3652,7 +3704,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
         if length(expr.args) >= 8
             gc_root = expr.args[8]
             append!(bytes, compile_value(gc_root, ctx))
-            return bytes
+            emit_raw!(b, bytes)
+            return builder_code(b)
         end
     end
 
@@ -3662,7 +3715,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
     if name === :jl_get_current_task
         # No bytecode needed — the Task value is phantom.
         # Mark this SSA so it doesn't get stored to a local.
-        return bytes
+        emit_raw!(b, bytes)
+        return builder_code(b)
     end
 
     # PURE-9042: jl_hrtime → performance.now() * 1e6 (nanoseconds as UInt64)
@@ -3678,7 +3732,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
         # Convert f64 → i64 (unsigned — trunc_sat to handle large values)
         push!(bytes, 0xFC)  # saturating truncation prefix
         push!(bytes, 0x07)  # i64.trunc_sat_f64_u
-        return bytes
+        emit_raw!(b, bytes)
+        return builder_code(b)
     end
 
     # P3 gap 450889a9cb7e: memmove(dest, src, n) over Vector{UInt8} storage —
@@ -3709,7 +3764,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             append!(bytes, encode_leb128_unsigned(_arr_t))
             # memmove returns the dest pointer — fake i64 0 (consumers ignore it)
             push!(bytes, Opcode.I64_CONST); push!(bytes, 0x00)
-            return bytes
+            emit_raw!(b, bytes)
+            return builder_code(b)
         end
     end
 
@@ -3758,7 +3814,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             end
             push!(bytes, Opcode.CALL)
             append!(bytes, encode_leb128_unsigned(hash_func_idx))
-            return bytes
+            emit_raw!(b, bytes)
+            return builder_code(b)
         end
         # If we can't trace the string, fall through to unreachable
     end
@@ -3800,7 +3857,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             push!(bytes, Opcode.ARRAY_COPY)
             append!(bytes, encode_leb128_unsigned(_gmc_arr))
             append!(bytes, encode_leb128_unsigned(_gmc_arr))
-            return bytes   # Cvoid — no value
+            emit_raw!(b, bytes)
+            return builder_code(b)   # Cvoid — no value
         end
     end
 
@@ -3828,7 +3886,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             local _ti_r = try typeintersect(_ti_a, _ti_b) catch; nothing end
             if _ti_r !== nothing
                 append!(bytes, compile_value(_ti_r, ctx))
-                return bytes
+                emit_raw!(b, bytes)
+                return builder_code(b)
             end
         end
     end
@@ -3838,7 +3897,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
         # pointerref/pointerset trace the object identity separately.
         push!(bytes, Opcode.I64_CONST)
         push!(bytes, 0x00)
-        return bytes
+        emit_raw!(b, bytes)
+        return builder_code(b)
     elseif _fc_sym === :jl_stored_inline && length(expr.args) >= 6
         # datatype_storedinline(T) — pure layout predicate; fold when the
         # type argument is a compile-time constant.
@@ -3850,7 +3910,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
         if _fc_t isa Type
             push!(bytes, Opcode.I32_CONST)
             push!(bytes, (try Base.allocatedinline(_fc_t) catch; false end) ? 0x01 : 0x00)
-            return bytes
+            emit_raw!(b, bytes)
+            return builder_code(b)
         end
     end
 
@@ -3913,7 +3974,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
     # digest its own zeros — input-independent output).
     record_unsupported!(ctx, :unsupported_method,
         "foreigncall `$(name)` (no handler; emitted type-default value)"; idx=idx, detail=expr)
-    return bytes
+    emit_raw!(b, bytes)
+    return builder_code(b)
 end
 
 """
