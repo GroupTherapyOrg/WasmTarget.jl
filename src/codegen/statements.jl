@@ -634,26 +634,10 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                                        local_wasm_type === AnyRef || local_wasm_type === EqRef)
                         if is_numeric_value && local_is_ref
                             # Replace numeric value with ref.null of the correct type
+                            # (typed via _append_default!; byte-identical; local_is_ref
+                            # guarantees a ref type, so the numeric/else arms are unreachable).
                             empty!(value_bytes)
-                            if local_wasm_type isa ConcreteRef
-                                push!(value_bytes, Opcode.REF_NULL)
-                                append!(value_bytes, encode_leb128_signed(Int64(local_wasm_type.type_idx)))
-                            elseif local_wasm_type === EqRef
-                                push!(value_bytes, Opcode.REF_NULL)
-                                push!(value_bytes, UInt8(EqRef))
-                            elseif local_wasm_type === StructRef
-                                push!(value_bytes, Opcode.REF_NULL)
-                                push!(value_bytes, UInt8(StructRef))
-                            elseif local_wasm_type === ArrayRef
-                                push!(value_bytes, Opcode.REF_NULL)
-                                push!(value_bytes, UInt8(ArrayRef))
-                            elseif local_wasm_type === AnyRef
-                                push!(value_bytes, Opcode.REF_NULL)
-                                push!(value_bytes, UInt8(AnyRef))
-                            elseif local_wasm_type === ExternRef
-                                push!(value_bytes, Opcode.REF_NULL)
-                                push!(value_bytes, UInt8(ExternRef))
-                            end
+                            _append_default!(value_bytes, local_wasm_type)
                         end
                     end
                 end
@@ -690,8 +674,9 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
             # wasm's array.get check is an UNCATCHABLE TRAP — skipping Julia's own
             # check branch meant getindex OOB could never reach the catchable
             # throw_boundserror path (gap 3ead683e6ff9 family / divergent_throw).
-            push!(stmt_bytes, Opcode.I32_CONST)
-            push!(stmt_bytes, (isempty(stmt.args) || stmt.args[1] !== false) ? 0x01 : 0x00)
+            local _bcb = InstrBuilder(; func_name="compile_statement", strict=false)
+            i32_const!(_bcb, (isempty(stmt.args) || stmt.args[1] !== false) ? 1 : 0)
+            append!(stmt_bytes, builder_code(_bcb))
         elseif stmt.head === :foreigncall
             # Handle foreign calls - specifically for Vector allocation
             stmt_bytes = compile_foreigncall(stmt, idx, ctx)
@@ -701,8 +686,9 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
             # We stash exception values into a (mut anyref) global before throw,
             # and retrieve them here with global.get.
             exn_global = ensure_exception_global!(ctx.mod)
-            push!(stmt_bytes, Opcode.GLOBAL_GET)
-            append!(stmt_bytes, encode_leb128_unsigned(exn_global))
+            local _exb = InstrBuilder(; func_name="compile_statement", strict=false)
+            global_get!(_exb, exn_global, AnyRef)
+            append!(stmt_bytes, builder_code(_exb))
             # The global is anyref but the SSA local may be structref (for Union{ErrorException, BoundsError}).
             # Downcast anyref → structref so the local.set is type-valid.
             local _exn_local_wasm = nothing
@@ -714,15 +700,15 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                 end
             end
             if _exn_local_wasm === StructRef
-                # anyref → structref via ref.cast null struct
-                push!(stmt_bytes, Opcode.GC_PREFIX)
-                push!(stmt_bytes, Opcode.REF_CAST_NULL)
-                push!(stmt_bytes, UInt8(StructRef))
+                # anyref → structref via ref.cast null struct (typed; byte-identical)
+                local _ecb = InstrBuilder(; func_name="compile_statement", strict=false)
+                ref_cast!(_ecb, StructRef, true)
+                append!(stmt_bytes, builder_code(_ecb))
             elseif _exn_local_wasm isa ConcreteRef
-                # anyref → concrete ref via ref.cast null $type
-                push!(stmt_bytes, Opcode.GC_PREFIX)
-                push!(stmt_bytes, Opcode.REF_CAST_NULL)
-                append!(stmt_bytes, encode_leb128_signed(Int64(_exn_local_wasm.type_idx)))
+                # anyref → concrete ref via ref.cast null $type (typed; byte-identical)
+                local _ecb = InstrBuilder(; func_name="compile_statement", strict=false)
+                ref_cast!(_ecb, Int64(_exn_local_wasm.type_idx), true)
+                append!(stmt_bytes, builder_code(_ecb))
             end
         elseif stmt.head === :leave
             # Exception handling: Leave try block — no-op in WASM
@@ -1079,7 +1065,9 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                             else
                                 # Insert: any_convert_extern (externref→anyref) + ref.cast null <type>
                                 needs_ref_cast_local = local_wasm_type
-                                append!(stmt_bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                                local _aceb = InstrBuilder(; func_name="compile_statement", strict=false)
+                                any_convert_extern!(_aceb)
+                                append!(stmt_bytes, builder_code(_aceb))
                             end
                         elseif (ssa_wasm_type === StructRef || ssa_wasm_type === ArrayRef) && local_wasm_type isa ConcreteRef
                             # SSA produces abstract structref/arrayref, local expects concrete ref
@@ -1270,18 +1258,21 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                                 end
                             end
                         end
+                        # any.convert_extern (optional) + ref.cast null <type_idx>, typed; byte-identical.
+                        local _rcb = InstrBuilder(; func_name="compile_statement", strict=false)
                         if needs_any_convert_extern
-                            append!(stmt_bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                            any_convert_extern!(_rcb)
                         end
-                        # Append ref.cast null <type_idx> to stmt_bytes
-                        append!(stmt_bytes, UInt8[Opcode.GC_PREFIX, Opcode.REF_CAST_NULL])
-                        append!(stmt_bytes, encode_leb128_signed(Int64(needs_ref_cast_local.type_idx)))
+                        ref_cast!(_rcb, Int64(needs_ref_cast_local.type_idx), true)
+                        append!(stmt_bytes, builder_code(_rcb))
                     end
                 end
 
                 # PURE-913: ref → externref conversion (e.g., compilerbarrier returning struct into Any local)
                 if needs_extern_convert_any
-                    append!(stmt_bytes, UInt8[Opcode.GC_PREFIX, Opcode.EXTERN_CONVERT_ANY])
+                    local _ecab = InstrBuilder(; func_name="compile_statement", strict=false)
+                    extern_convert_any!(_ecab)
+                    append!(stmt_bytes, builder_code(_ecab))
                 end
 
                 # PURE-3111: Final catch-all for phantom type returns (Nothing/Type{T}).
@@ -1313,43 +1304,12 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     haskey(ENV, "WT_TRACE_NULLDEF") && println(stderr,
                         "NULLDEF idx=$idx local_type=$local_wasm_type stmt=", repr(stmt)[1:min(end,120)])
                     ssa_type_mismatch = true
-                    # Emit type-safe default instead of the incompatible value
-                    if local_wasm_type isa ConcreteRef
-                        push!(bytes, Opcode.REF_NULL)
-                        append!(bytes, encode_leb128_signed(Int64(local_wasm_type.type_idx)))
-                    elseif local_wasm_type === ExternRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ExternRef))
-                    elseif local_wasm_type === StructRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(StructRef))
-                    elseif local_wasm_type === ArrayRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ArrayRef))
-                    elseif local_wasm_type === AnyRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(AnyRef))
-                    elseif local_wasm_type === EqRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(EqRef))
-                    elseif local_wasm_type === I64
-                        push!(bytes, Opcode.I64_CONST)
-                        push!(bytes, 0x00)
-                    elseif local_wasm_type === I32
-                        push!(bytes, Opcode.I32_CONST)
-                        push!(bytes, 0x00)
-                    elseif local_wasm_type === F64
-                        push!(bytes, Opcode.F64_CONST)
-                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-                    elseif local_wasm_type === F32
-                        push!(bytes, Opcode.F32_CONST)
-                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
-                    else
-                        push!(bytes, Opcode.I32_CONST)
-                        push!(bytes, 0x00)
-                    end
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(local_idx))
+                    # Emit type-safe default instead of the incompatible value (typed via
+                    # _append_default!; byte-identical), then local.set via a temp builder.
+                    _append_default!(bytes, local_wasm_type)
+                    local _tsb = InstrBuilder(; func_name="compile_statement", strict=false)
+                    local_set!(_tsb, local_idx)
+                    append!(bytes, builder_code(_tsb))
                 end
             end
         end
@@ -1400,42 +1360,11 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                         local_array_idx = local_idx - ctx.n_params + 1
                         local_wasm_type = local_array_idx >= 1 && local_array_idx <= length(ctx.locals) ? ctx.locals[local_array_idx] : nothing
                         if local_wasm_type !== nothing
-                            if local_wasm_type isa ConcreteRef
-                                push!(bytes, Opcode.REF_NULL)
-                                append!(bytes, encode_leb128_signed(Int64(local_wasm_type.type_idx)))
-                            elseif local_wasm_type === ExternRef
-                                push!(bytes, Opcode.REF_NULL)
-                                push!(bytes, UInt8(ExternRef))
-                            elseif local_wasm_type === StructRef
-                                push!(bytes, Opcode.REF_NULL)
-                                push!(bytes, UInt8(StructRef))
-                            elseif local_wasm_type === ArrayRef
-                                push!(bytes, Opcode.REF_NULL)
-                                push!(bytes, UInt8(ArrayRef))
-                            elseif local_wasm_type === AnyRef
-                                push!(bytes, Opcode.REF_NULL)
-                                push!(bytes, UInt8(AnyRef))
-                            elseif local_wasm_type === EqRef
-                                push!(bytes, Opcode.REF_NULL)
-                                push!(bytes, UInt8(EqRef))
-                            elseif local_wasm_type === I64
-                                push!(bytes, Opcode.I64_CONST)
-                                push!(bytes, 0x00)
-                            elseif local_wasm_type === I32
-                                push!(bytes, Opcode.I32_CONST)
-                                push!(bytes, 0x00)
-                            elseif local_wasm_type === F64
-                                push!(bytes, Opcode.F64_CONST)
-                                append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-                            elseif local_wasm_type === F32
-                                push!(bytes, Opcode.F32_CONST)
-                                append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
-                            else
-                                push!(bytes, Opcode.I32_CONST)
-                                push!(bytes, 0x00)
-                            end
-                            push!(bytes, Opcode.LOCAL_SET)
-                            append!(bytes, encode_leb128_unsigned(local_idx))
+                            # Type-safe default + local.set (typed; byte-identical).
+                            _append_default!(bytes, local_wasm_type)
+                            local _msb = InstrBuilder(; func_name="compile_statement", strict=false)
+                            local_set!(_msb, local_idx)
+                            append!(bytes, builder_code(_msb))
                         end
                         ssa_type_mismatch = true  # Prevent double local_set
                     end
@@ -1503,8 +1432,10 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     (ssa_type.name.name === :MemoryRef && length(ssa_type.parameters) >= 1 && ssa_type.parameters[1] === Nothing) ||
                     (ssa_type.name.name === :GenericMemoryRef && length(ssa_type.parameters) >= 2 && ssa_type.parameters[2] === Nothing))
                 if is_nothing_ref
-                    push!(bytes, Opcode.DROP)  # drop i32_index
-                    push!(bytes, Opcode.DROP)  # drop array_ref
+                    local _drb = InstrBuilder(; func_name="compile_statement", strict=false)
+                    drop!(_drb)  # drop i32_index
+                    drop!(_drb)  # drop array_ref
+                    append!(bytes, builder_code(_drb))
                 end
             end
         end
@@ -1515,7 +1446,9 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
         stmt_type_check = get(ctx.ssa_types, idx, Any)
         if stmt_type_check === Union{} && !isempty(stmt_bytes) &&
            !(length(stmt_bytes) >= 1 && stmt_bytes[end] == Opcode.UNREACHABLE)
-            push!(bytes, Opcode.UNREACHABLE)
+            local _urb = InstrBuilder(; func_name="compile_statement", strict=false)
+            unreachable!(_urb)
+            append!(bytes, builder_code(_urb))
         end
 
         # If this SSA value needs a local, store it (and remove from stack)
@@ -1558,38 +1491,20 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                 if local_type !== nothing && !wasm_types_compatible(local_type, value_wasm_type)
                     # PURE-908: externref↔anyref conversion instead of drop+default
                     if value_wasm_type === ExternRef && local_type === AnyRef
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.ANY_CONVERT_EXTERN)
+                        local _cvb = InstrBuilder(; func_name="compile_statement", strict=false)
+                        any_convert_extern!(_cvb)
+                        append!(bytes, builder_code(_cvb))
                     elseif value_wasm_type === AnyRef && local_type === ExternRef
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        local _cvb = InstrBuilder(; func_name="compile_statement", strict=false)
+                        extern_convert_any!(_cvb)
+                        append!(bytes, builder_code(_cvb))
                     else
-                    # Type mismatch: drop the value and emit type-safe default
-                    push!(bytes, Opcode.DROP)
-                    if local_type isa ConcreteRef
-                        push!(bytes, Opcode.REF_NULL)
-                        append!(bytes, encode_leb128_signed(Int64(local_type.type_idx)))
-                    elseif local_type === StructRef
-                        push!(bytes, Opcode.REF_NULL, UInt8(StructRef))
-                    elseif local_type === ArrayRef
-                        push!(bytes, Opcode.REF_NULL, UInt8(ArrayRef))
-                    elseif local_type === ExternRef
-                        push!(bytes, Opcode.REF_NULL, UInt8(ExternRef))
-                    elseif local_type === AnyRef
-                        push!(bytes, Opcode.REF_NULL, UInt8(AnyRef))
-                    elseif local_type === I64
-                        push!(bytes, Opcode.I64_CONST, 0x00)
-                    elseif local_type === I32
-                        push!(bytes, Opcode.I32_CONST, 0x00)
-                    elseif local_type === F64
-                        push!(bytes, Opcode.F64_CONST)
-                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-                    elseif local_type === F32
-                        push!(bytes, Opcode.F32_CONST)
-                        append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
-                    else
-                        push!(bytes, Opcode.I32_CONST, 0x00)
-                    end
+                    # Type mismatch: drop the value and emit type-safe default (typed;
+                    # byte-identical; this site has no EqRef arm → eqref=false).
+                    local _dvb = InstrBuilder(; func_name="compile_statement", strict=false)
+                    drop!(_dvb)
+                    append!(bytes, builder_code(_dvb))
+                    _append_default!(bytes, local_type; eqref=false)
                     end  # close else from PURE-908 externref↔anyref check
                 end
                 # CS-004: Cross-function calls may return anyref/structref even when
@@ -1612,22 +1527,20 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                             if haskey(ctx.func_registry.by_ref, _cs4_func_val)
                                 for _fi in ctx.func_registry.by_ref[_cs4_func_val]
                                     _cs4_ret = julia_to_wasm_type(_fi.return_type)
+                                    # Cross-function return-type fixups, typed; byte-identical
+                                    # (0x6B = UInt8(StructRef) → ref.cast null struct).
+                                    local _csb = InstrBuilder(; func_name="compile_statement", strict=false)
                                     if local_type isa ConcreteRef
                                         if _cs4_ret === AnyRef || _cs4_ret === StructRef || _cs4_ret === ArrayRef
-                                            push!(bytes, Opcode.GC_PREFIX)
-                                            push!(bytes, Opcode.REF_CAST_NULL)
-                                            append!(bytes, encode_leb128_signed(Int64(local_type.type_idx)))
+                                            ref_cast!(_csb, Int64(local_type.type_idx), true)
                                         elseif _cs4_ret === ExternRef
-                                            append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
-                                            push!(bytes, Opcode.GC_PREFIX)
-                                            push!(bytes, Opcode.REF_CAST_NULL)
-                                            append!(bytes, encode_leb128_signed(Int64(local_type.type_idx)))
+                                            any_convert_extern!(_csb)
+                                            ref_cast!(_csb, Int64(local_type.type_idx), true)
                                         end
                                     elseif local_type === StructRef && _cs4_ret === AnyRef
-                                        push!(bytes, Opcode.GC_PREFIX)
-                                        push!(bytes, Opcode.REF_CAST_NULL)
-                                        push!(bytes, 0x6B)  # structref heap type
+                                        ref_cast!(_csb, StructRef, true)  # structref heap type
                                     end
+                                    append!(bytes, builder_code(_csb))
                                     break  # Use first matching overload
                                 end
                             end
@@ -1637,22 +1550,23 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                 end
 
                 # PURE-6024: If this is a slot assignment, TEE to slot local first
-                # (leaves value on stack for the SSA local.set below)
+                # (leaves value on stack for the SSA local.set below). Typed; byte-identical.
+                local _slb = InstrBuilder(; func_name="compile_statement", strict=false)
                 if _slot_assign_id > 0 && haskey(ctx.slot_locals, _slot_assign_id)
-                    push!(bytes, Opcode.LOCAL_TEE)
-                    append!(bytes, encode_leb128_unsigned(ctx.slot_locals[_slot_assign_id]))
+                    local_tee!(_slb, ctx.slot_locals[_slot_assign_id])
                 end
-                push!(bytes, Opcode.LOCAL_SET)
-                append!(bytes, encode_leb128_unsigned(local_idx))
+                local_set!(_slb, local_idx)
+                append!(bytes, builder_code(_slb))
             end
         end
     end
 
     # PURE-6024: If this is a slot assignment but there's NO SSA local to store to,
-    # the value is still on the stack — store it to the slot local directly.
+    # the value is still on the stack — store it to the slot local directly. Typed.
     if _slot_assign_id > 0 && haskey(ctx.slot_locals, _slot_assign_id) && !haskey(ctx.ssa_locals, idx)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(ctx.slot_locals[_slot_assign_id]))
+        local _slb2 = InstrBuilder(; func_name="compile_statement", strict=false)
+        local_set!(_slb2, ctx.slot_locals[_slot_assign_id])
+        append!(bytes, builder_code(_slb2))
     end
 
     # TRACE: Find double-DROP in compiled output for func 8
@@ -1703,6 +1617,42 @@ function _exn_field_null_or_zero!(b::InstrBuilder, fwasm)
         ref_null!(b, StructRef)
     end
     return b
+end
+
+# MIGRATED helper: emit the type-safe default (ref.null / zero-const) for `wasm_type`
+# into the byte-INSPECTING accumulator `buf` via a throwaway typed InstrBuilder, then
+# splice. Byte-identical to the old hand-rolled ref.null/const accumulator blocks:
+#   ConcreteRef → D0 leb_s(idx) · abstract ref → D0 heaptype-byte ·
+#   i32/i64.const 0 → 41/42 00 · f32/f64.const 0 → const-op + 4/8 zero bytes.
+# `eqref` toggles whether EqRef gets an explicit ref.null (some sites had no EqRef arm and
+# fell through to the i32.const-0 else — pass eqref=false to reproduce that exactly).
+function _append_default!(buf::Vector{UInt8}, wasm_type; eqref::Bool=true)
+    tb = InstrBuilder(; func_name="_append_default", strict=false)
+    if wasm_type isa ConcreteRef
+        ref_null!(tb, Int64(wasm_type.type_idx), wasm_type)
+    elseif wasm_type === ExternRef
+        ref_null!(tb, ExternRef)
+    elseif wasm_type === StructRef
+        ref_null!(tb, StructRef)
+    elseif wasm_type === ArrayRef
+        ref_null!(tb, ArrayRef)
+    elseif wasm_type === AnyRef
+        ref_null!(tb, AnyRef)
+    elseif eqref && wasm_type === EqRef
+        ref_null!(tb, EqRef)
+    elseif wasm_type === I64
+        i64_const!(tb, 0)
+    elseif wasm_type === I32
+        i32_const!(tb, 0)
+    elseif wasm_type === F64
+        f64_const!(tb, 0.0)
+    elseif wasm_type === F32
+        f32_const!(tb, 0.0f0)
+    else
+        i32_const!(tb, 0)
+    end
+    append!(buf, builder_code(tb))
+    return buf
 end
 
 function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}

@@ -1985,40 +1985,34 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
             param_type = param_types[arg_idx]
             wasm_type = julia_to_wasm_type_concrete(param_type, ctx)
             # Emit the appropriate null/zero value based on the wasm type
+            _nb = InstrBuilder(; func_name="compile_invoke", strict=false)
             if wasm_type isa ConcreteRef
-                push!(bytes, Opcode.REF_NULL)
-                append!(bytes, encode_leb128_signed(Int64(wasm_type.type_idx)))
+                ref_null!(_nb, Int64(wasm_type.type_idx), ConcreteRef(UInt32(wasm_type.type_idx), true))
             elseif wasm_type === ExternRef
-                push!(bytes, Opcode.REF_NULL)
-                push!(bytes, UInt8(ExternRef))
+                ref_null!(_nb, ExternRef)
             elseif wasm_type === AnyRef
-                push!(bytes, Opcode.REF_NULL)
-                push!(bytes, UInt8(AnyRef))
+                ref_null!(_nb, AnyRef)
             elseif wasm_type === StructRef
-                push!(bytes, Opcode.REF_NULL)
-                push!(bytes, UInt8(StructRef))
+                ref_null!(_nb, StructRef)
             elseif wasm_type === ArrayRef
-                push!(bytes, Opcode.REF_NULL)
-                push!(bytes, UInt8(ArrayRef))
+                ref_null!(_nb, ArrayRef)
             elseif wasm_type === I64
-                push!(bytes, Opcode.I64_CONST)
-                push!(bytes, 0x00)
+                i64_const!(_nb, 0)
             elseif wasm_type === F32
-                push!(bytes, Opcode.F32_CONST)
-                append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+                f32_const!(_nb, 0.0)
             elseif wasm_type === F64
-                push!(bytes, Opcode.F64_CONST)
-                append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                f64_const!(_nb, 0.0)
             else
                 # I32 or other — push i32(0)
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
+                i32_const!(_nb, 0)
             end
+            append!(bytes, builder_code(_nb))
         elseif is_nothing_arg
             # Nothing arg without param_types — emit ref.null anyref as safe default
             # PURE-9022: Use anyref (not externref) for internal polymorphic positions
-            push!(bytes, Opcode.REF_NULL)
-            push!(bytes, UInt8(AnyRef))
+            _nb2 = InstrBuilder(; func_name="compile_invoke", strict=false)
+            ref_null!(_nb2, AnyRef)
+            append!(bytes, builder_code(_nb2))
         else
             arg_bytes = compile_value(arg, ctx)
             # P6-ioprint: function/type singleton args compile to EMPTY bytes, but
@@ -2031,12 +2025,13 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     local _sp_pt = param_types[arg_idx]
                     local _sp_w = get_concrete_wasm_type(_sp_pt isa Type ? _sp_pt : _sp_jt,
                                                          ctx.mod, ctx.type_registry)
+                    local _spb = InstrBuilder(; func_name="compile_invoke", strict=false)
                     if _sp_w isa ConcreteRef
-                        push!(bytes, Opcode.REF_NULL)
-                        append!(bytes, encode_leb128_signed(Int64(_sp_w.type_idx)))
+                        ref_null!(_spb, Int64(_sp_w.type_idx), ConcreteRef(UInt32(_sp_w.type_idx), true))
+                        append!(bytes, builder_code(_spb))
                     elseif _sp_w === AnyRef || _sp_w === StructRef || _sp_w === ExternRef || _sp_w === EqRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(_sp_w))
+                        ref_null!(_spb, _sp_w)
+                        append!(bytes, builder_code(_spb))
                     end
                 end
             end
@@ -2078,12 +2073,13 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                                 pop!(bytes)
                             end
                             # Emit ref.null with the expected type
-                            push!(bytes, Opcode.REF_NULL)
+                            local _phb = InstrBuilder(; func_name="compile_invoke", strict=false)
                             if expected_wasm isa ConcreteRef
-                                append!(bytes, encode_leb128_signed(Int64(expected_wasm.type_idx)))
+                                ref_null!(_phb, Int64(expected_wasm.type_idx), ConcreteRef(UInt32(expected_wasm.type_idx), true))
                             else
-                                push!(bytes, UInt8(expected_wasm))
+                                ref_null!(_phb, expected_wasm)
                             end
+                            append!(bytes, builder_code(_phb))
                             # Update actual_wasm so bridging logic below is a no-op
                             actual_wasm = expected_wasm
                         end
@@ -2092,15 +2088,15 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     if expected_wasm isa ConcreteRef && actual_wasm isa ConcreteRef
                         if expected_wasm.type_idx != actual_wasm.type_idx
                             # Different ref types — insert ref.cast null to expected type
-                            push!(bytes, Opcode.GC_PREFIX)
-                            push!(bytes, Opcode.REF_CAST_NULL)
-                            append!(bytes, encode_leb128_signed(Int64(expected_wasm.type_idx)))
+                            local _cvb = InstrBuilder(; func_name="compile_invoke", strict=false)
+                            ref_cast!(_cvb, Int64(expected_wasm.type_idx), true)
+                            append!(bytes, builder_code(_cvb))
                         end
                     elseif expected_wasm isa ConcreteRef && (actual_wasm === StructRef || actual_wasm === ArrayRef || actual_wasm === AnyRef)
                         # Abstract ref to concrete ref — insert ref.cast null
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.REF_CAST_NULL)
-                        append!(bytes, encode_leb128_signed(Int64(expected_wasm.type_idx)))
+                        local _cvb = InstrBuilder(; func_name="compile_invoke", strict=false)
+                        ref_cast!(_cvb, Int64(expected_wasm.type_idx), true)
+                        append!(bytes, builder_code(_cvb))
                     elseif expected_wasm isa ConcreteRef && (actual_wasm === I32 || actual_wasm === I64 || actual_wasm === F32 || actual_wasm === F64)
                         # PURE-6025: Numeric value to tagged union struct — wrap via emit_wrap_union_value.
                         # This happens when a function expects a Union param (represented as tagged union struct)
@@ -2109,69 +2105,76 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                             append!(bytes, emit_wrap_union_value(ctx, actual_julia_type, expected_julia_type))
                         else
                             # ConcreteRef expected but not a union — box numeric to ref via ref.i31
+                            local _cvb = InstrBuilder(; func_name="compile_invoke", strict=false)
                             if actual_wasm === I32
-                                push!(bytes, Opcode.GC_PREFIX)
-                                push!(bytes, Opcode.REF_I31)
+                                ref_i31!(_cvb)
                             elseif actual_wasm === I64
-                                push!(bytes, Opcode.I32_WRAP_I64)
-                                push!(bytes, Opcode.GC_PREFIX)
-                                push!(bytes, Opcode.REF_I31)
+                                num!(_cvb, Opcode.I32_WRAP_I64)
+                                ref_i31!(_cvb)
                             end
                             # Cast to expected concrete ref type
-                            push!(bytes, Opcode.GC_PREFIX)
-                            push!(bytes, Opcode.REF_CAST_NULL)
-                            append!(bytes, encode_leb128_signed(Int64(expected_wasm.type_idx)))
+                            ref_cast!(_cvb, Int64(expected_wasm.type_idx), true)
+                            append!(bytes, builder_code(_cvb))
                         end
                     elseif expected_wasm === I32 && actual_wasm === I64
                         # i64 to i32 — insert i32.wrap_i64
-                        push!(bytes, Opcode.I32_WRAP_I64)
+                        local _cvb = InstrBuilder(; func_name="compile_invoke", strict=false)
+                        num!(_cvb, Opcode.I32_WRAP_I64)
+                        append!(bytes, builder_code(_cvb))
                     elseif expected_wasm === I64 && actual_wasm === I32
                         # i32 to i64 — insert i64.extend_i32_s
-                        push!(bytes, Opcode.I64_EXTEND_I32_S)
+                        local _cvb = InstrBuilder(; func_name="compile_invoke", strict=false)
+                        num!(_cvb, Opcode.I64_EXTEND_I32_S)
+                        append!(bytes, builder_code(_cvb))
                     elseif expected_wasm === F32 && actual_wasm === F64
                         # f64 to f32 — insert f32.demote_f64
-                        push!(bytes, Opcode.F32_DEMOTE_F64)
+                        local _cvb = InstrBuilder(; func_name="compile_invoke", strict=false)
+                        num!(_cvb, Opcode.F32_DEMOTE_F64)
+                        append!(bytes, builder_code(_cvb))
                     elseif expected_wasm === F64 && actual_wasm === F32
                         # f32 to f64 — insert f64.promote_f32
-                        push!(bytes, Opcode.F64_PROMOTE_F32)
+                        local _cvb = InstrBuilder(; func_name="compile_invoke", strict=false)
+                        num!(_cvb, Opcode.F64_PROMOTE_F32)
+                        append!(bytes, builder_code(_cvb))
                     elseif (expected_wasm === I32 || expected_wasm === I64 || expected_wasm === F32 || expected_wasm === F64) &&
                            (actual_wasm === AnyRef || actual_wasm === ExternRef)
                         # P4-stdlib (Random hash_seed): boxed numeric in anyref/
                         # externref consumed as a number — UNBOX via the numeric
                         # box (was: drop + zero, silently wrong on live paths;
                         # a null ref traps loud on the cast instead).
+                        local _cvb = InstrBuilder(; func_name="compile_invoke", strict=false)
                         if actual_wasm === ExternRef
-                            append!(bytes, UInt8[Opcode.GC_PREFIX, Opcode.ANY_CONVERT_EXTERN])
+                            any_convert_extern!(_cvb)
                         end
                         local _ub_box = get_numeric_box_type!(ctx.mod, ctx.type_registry, expected_wasm)
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.REF_CAST_NULL)
-                        append!(bytes, encode_leb128_signed(Int64(_ub_box)))
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.STRUCT_GET)
-                        append!(bytes, encode_leb128_unsigned(_ub_box))
-                        append!(bytes, encode_leb128_unsigned(UInt32(1)))  # field 1 = value
+                        ref_cast!(_cvb, Int64(_ub_box), true)
+                        struct_get!(_cvb, _ub_box, UInt32(1), expected_wasm)  # field 1 = value
+                        append!(bytes, builder_code(_cvb))
                     elseif expected_wasm === I32 && (actual_wasm isa ConcreteRef || actual_wasm === StructRef || actual_wasm === ArrayRef)
                         # ref to i32 — drop and push 0 (type mismatch, likely dead code)
-                        push!(bytes, Opcode.DROP)
-                        push!(bytes, Opcode.I32_CONST)
-                        push!(bytes, 0x00)
+                        local _cvb = InstrBuilder(; func_name="compile_invoke", strict=false)
+                        drop!(_cvb)
+                        i32_const!(_cvb, 0)
+                        append!(bytes, builder_code(_cvb))
                     elseif expected_wasm === I64 && (actual_wasm isa ConcreteRef || actual_wasm === StructRef || actual_wasm === ArrayRef)
                         # ref to i64 — drop and push 0 (type mismatch, likely dead code)
-                        push!(bytes, Opcode.DROP)
-                        push!(bytes, Opcode.I64_CONST)
-                        push!(bytes, 0x00)
+                        local _cvb = InstrBuilder(; func_name="compile_invoke", strict=false)
+                        drop!(_cvb)
+                        i64_const!(_cvb, 0)
+                        append!(bytes, builder_code(_cvb))
                     elseif expected_wasm === ExternRef && (actual_wasm isa ConcreteRef || actual_wasm === StructRef || actual_wasm === ArrayRef || actual_wasm === AnyRef)
                         # Concrete or abstract ref to externref — insert extern.convert_any
                         # extern.convert_any converts anyref → externref (concrete refs are subtypes of anyref)
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        local _cvb = InstrBuilder(; func_name="compile_invoke", strict=false)
+                        extern_convert_any!(_cvb)
+                        append!(bytes, builder_code(_cvb))
                         extern_convert_emitted = true
                     elseif expected_wasm === AnyRef && actual_wasm === ExternRef
                         # PURE-9022: externref to anyref — insert any.convert_extern
                         # Occurs when JS import returns externref but internal code expects anyref
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.ANY_CONVERT_EXTERN)
+                        local _cvb = InstrBuilder(; func_name="compile_invoke", strict=false)
+                        any_convert_extern!(_cvb)
+                        append!(bytes, builder_code(_cvb))
                     elseif expected_wasm === AnyRef && (actual_wasm === I32 || actual_wasm === I64 || actual_wasm === F32 || actual_wasm === F64)
                         # PURE-9022: Numeric value to anyref — box via struct_new (no extern.convert needed)
                         # PURE-9028: Insert correct DFS typeId before the value already on the stack
@@ -2180,9 +2183,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         emit_box_type_id!(_tid_bytes_any, ctx.type_registry, actual_wasm)
                         splice!(bytes, box_insert_pos_any:box_insert_pos_any-1, _tid_bytes_any)
                         local box_type_idx_any = get_numeric_box_type!(ctx.mod, ctx.type_registry, actual_wasm)
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.STRUCT_NEW)
-                        append!(bytes, encode_leb128_unsigned(box_type_idx_any))
+                        local _bxa = InstrBuilder(; func_name="compile_invoke", strict=false)
+                        struct_new!(_bxa, box_type_idx_any, WasmValType[])
+                        append!(bytes, builder_code(_bxa))
                     elseif expected_wasm === ExternRef && (actual_wasm === I32 || actual_wasm === I64 || actual_wasm === F32 || actual_wasm === F64)
                         # PURE-6025: Numeric value to externref — box via struct_new then extern.convert_any.
                         # PURE-9028: Insert correct DFS typeId before the value already on the stack
@@ -2191,11 +2194,10 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         emit_box_type_id!(_tid_bytes_inv, ctx.type_registry, actual_wasm)
                         splice!(bytes, box_insert_pos_inv:box_insert_pos_inv-1, _tid_bytes_inv)
                         local box_type_idx_inv = get_numeric_box_type!(ctx.mod, ctx.type_registry, actual_wasm)
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.STRUCT_NEW)
-                        append!(bytes, encode_leb128_unsigned(box_type_idx_inv))
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        local _bxi = InstrBuilder(; func_name="compile_invoke", strict=false)
+                        struct_new!(_bxi, box_type_idx_inv, WasmValType[])
+                        extern_convert_any!(_bxi)
+                        append!(bytes, builder_code(_bxi))
                         extern_convert_emitted = true
                     elseif expected_wasm === ExternRef && actual_wasm === ExternRef
                         # PURE-036z: Julia type inference says Any→ExternRef for both, but the actual
@@ -2216,8 +2218,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                                 actual_local_wasm = ctx.locals[local_arr_idx]
                                 if actual_local_wasm isa ConcreteRef || actual_local_wasm === StructRef || actual_local_wasm === ArrayRef || actual_local_wasm === AnyRef
                                     # Actual local is a ref type but not externref — insert conversion
-                                    push!(bytes, Opcode.GC_PREFIX)
-                                    push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                    local _eca = InstrBuilder(; func_name="compile_invoke", strict=false)
+                                    extern_convert_any!(_eca)
+                                    append!(bytes, builder_code(_eca))
                                     extern_convert_emitted = true
                                 end
                             elseif local_idx < ctx.n_params
@@ -2226,8 +2229,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                                     param_julia_type = ctx.arg_types[local_idx + 1]
                                     param_wasm = get_concrete_wasm_type(param_julia_type, ctx.mod, ctx.type_registry)
                                     if param_wasm isa ConcreteRef || param_wasm === StructRef || param_wasm === ArrayRef || param_wasm === AnyRef
-                                        push!(bytes, Opcode.GC_PREFIX)
-                                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                        local _eca = InstrBuilder(; func_name="compile_invoke", strict=false)
+                                        extern_convert_any!(_eca)
+                                        append!(bytes, builder_code(_eca))
                                         extern_convert_emitted = true
                                     end
                                 end
@@ -2259,22 +2263,25 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         if local_arr_idx >= 1 && local_arr_idx <= length(ctx.locals)
                             actual_local_wasm = ctx.locals[local_arr_idx]
                             if actual_local_wasm isa ConcreteRef || actual_local_wasm === StructRef || actual_local_wasm === ArrayRef || actual_local_wasm === AnyRef
-                                push!(bytes, Opcode.GC_PREFIX)
-                                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                local _eca = InstrBuilder(; func_name="compile_invoke", strict=false)
+                                extern_convert_any!(_eca)
+                                append!(bytes, builder_code(_eca))
                                 extern_convert_emitted = true
                             end
                         elseif local_idx < ctx.n_params && local_idx + 1 <= length(ctx.arg_types)
                             param_wasm = get_concrete_wasm_type(ctx.arg_types[local_idx + 1], ctx.mod, ctx.type_registry)
                             if param_wasm isa ConcreteRef || param_wasm === StructRef || param_wasm === ArrayRef || param_wasm === AnyRef
-                                push!(bytes, Opcode.GC_PREFIX)
-                                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                local _eca = InstrBuilder(; func_name="compile_invoke", strict=false)
+                                extern_convert_any!(_eca)
+                                append!(bytes, builder_code(_eca))
                                 extern_convert_emitted = true
                             end
                         end
                     elseif length(arg_bytes) >= 3 && arg_bytes[1] == 0xfb && (arg_bytes[2] == 0x00 || arg_bytes[2] == 0x01)
                         # struct_new or struct_new_default — produces a ConcreteRef, needs conversion
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        local _eca = InstrBuilder(; func_name="compile_invoke", strict=false)
+                        extern_convert_any!(_eca)
+                        append!(bytes, builder_code(_eca))
                         extern_convert_emitted = true
                     end
                 end
