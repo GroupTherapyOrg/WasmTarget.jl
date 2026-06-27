@@ -289,6 +289,23 @@ function ref_cast!(b::InstrBuilder, type_idx::Integer, nullable::Bool)
 end
 any_convert_extern!(b::InstrBuilder) = (_op!(b, Opcode.GC_PREFIX); _op!(b, Opcode.ANY_CONVERT_EXTERN); validate_gc_instruction!(b.v, Opcode.ANY_CONVERT_EXTERN); _check!(b))
 extern_convert_any!(b::InstrBuilder) = (_op!(b, Opcode.GC_PREFIX); _op!(b, Opcode.EXTERN_CONVERT_ANY); validate_gc_instruction!(b.v, Opcode.EXTERN_CONVERT_ANY); _check!(b))
+select!(b::InstrBuilder) = (_op!(b, Opcode.SELECT); validate_instruction!(b.v, Opcode.SELECT); _check!(b))
+function ref_test!(b::InstrBuilder, type_idx::Integer, nullable::Bool)
+    op = nullable ? Opcode.REF_TEST_NULL : Opcode.REF_TEST
+    _op!(b, Opcode.GC_PREFIX); _op!(b, op); _leb_s!(b, type_idx)
+    validate_gc_instruction!(b.v, op); _check!(b)
+end
+ref_i31!(b::InstrBuilder) = (_op!(b, Opcode.GC_PREFIX); _op!(b, Opcode.REF_I31); validate_gc_instruction!(b.v, Opcode.REF_I31); _check!(b))
+i31_get_s!(b::InstrBuilder) = (_op!(b, Opcode.GC_PREFIX); _op!(b, Opcode.I31_GET_S); validate_gc_instruction!(b.v, Opcode.I31_GET_S); _check!(b))
+i31_get_u!(b::InstrBuilder) = (_op!(b, Opcode.GC_PREFIX); _op!(b, Opcode.I31_GET_U); validate_gc_instruction!(b.v, Opcode.I31_GET_U); _check!(b))
+function array_copy!(b::InstrBuilder, dst_type_idx::Integer, src_type_idx::Integer)
+    _op!(b, Opcode.GC_PREFIX); _op!(b, Opcode.ARRAY_COPY); _leb_u!(b, dst_type_idx); _leb_u!(b, src_type_idx)
+    validate_gc_instruction!(b.v, Opcode.ARRAY_COPY, (dst_type_idx, src_type_idx)); _check!(b)
+end
+function array_fill!(b::InstrBuilder, type_idx::Integer, elem_type::WasmValType)
+    _op!(b, Opcode.GC_PREFIX); _op!(b, Opcode.ARRAY_FILL); _leb_u!(b, type_idx)
+    validate_gc_instruction!(b.v, Opcode.ARRAY_FILL, (type_idx, elem_type)); _check!(b)
+end
 
 # ════════════════════════════════════════════════════════════════════════════════
 # Transitional bridge: splice already-built raw bytes from an un-migrated callee,

@@ -303,8 +303,8 @@ function validate_instruction!(v::WasmStackValidator, opcode::UInt8, type_info=n
     # --- Parametric ---
     elseif opcode == Opcode.DROP
         validate_pop_any!(v)
-    elseif opcode == Opcode.SELECT
-        # select: pop i32 condition, pop T, pop T, push T
+    elseif opcode == Opcode.SELECT || opcode == Opcode.SELECT_T
+        # select / select (typed): pop i32 condition, pop T, pop T, push T
         validate_pop!(v, I32)  # condition
         val2 = validate_pop_any!(v)
         validate_pop_any!(v)
@@ -719,6 +719,18 @@ function validate_gc_instruction!(v::WasmStackValidator, gc_opcode::UInt8, type_
         # extern.convert_any: pop anyref, push externref
         validate_pop_any!(v)  # any anyref subtype
         validate_push!(v, ExternRef)
+
+    elseif gc_opcode == Opcode.REF_TEST || gc_opcode == Opcode.REF_TEST_NULL
+        # ref.test (ref $t): pop ref, push i32
+        validate_pop_any!(v); validate_push!(v, I32)
+
+    elseif gc_opcode == Opcode.REF_I31
+        # ref.i31: pop i32, push (ref i31)
+        validate_pop!(v, I32); validate_push!(v, I31Ref)
+
+    elseif gc_opcode == Opcode.I31_GET_S || gc_opcode == Opcode.I31_GET_U
+        # i31.get_s/u: pop (ref null i31), push i32
+        validate_pop_any!(v); validate_push!(v, I32)
 
     # Unknown GC opcode — skip silently
     end
