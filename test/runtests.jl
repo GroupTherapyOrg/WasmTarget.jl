@@ -1401,6 +1401,13 @@ begin
             WT.set_context!(b5, "stmt-X")
             err = try; WT.drop!(b5); nothing; catch e; e; end
             @test err isa WT.StackImbalanceError && occursin("stmt-X", sprint(showerror, err))
+            # blocktype encoding: value-type/void immediates are SINGLE on-wire bytes
+            # (regression guard — block!/if_!/loop! must NOT LEB-encode 0x40/0x7F)
+            bbt = WT.InstrBuilder(; func_name="bt"); WT.block!(bbt); WT.end_block!(bbt)
+            @test WT.builder_code(bbt) == UInt8[WT.Opcode.BLOCK, 0x40, WT.Opcode.END]
+            bbi = WT.InstrBuilder(; func_name="bti"); WT.i32_const!(bbi, 1)
+            WT.if_!(bbi, 0x7F; results=WT.WasmValType[WT.I32]); WT.i32_const!(bbi, 0); WT.end_block!(bbi)
+            @test WT.builder_code(bbi) == UInt8[WT.Opcode.I32_CONST, 0x01, WT.Opcode.IF, 0x7F, WT.Opcode.I32_CONST, 0x00, WT.Opcode.END]
         end
 
         @testset "LEB128 Encoding" begin
