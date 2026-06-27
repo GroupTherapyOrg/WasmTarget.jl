@@ -178,3 +178,33 @@ emit bugs surface at the emit layer with clarity.)
 the flow generators (conditionals.jl/flow.jl/stackified.jl — these reach the 1.13
 Vector-state ODE acceptance gate). The `emit_*!(bytes,…)` helpers (types.jl/strings.jl)
 are NOT standalone leaves — delete them top-down as their callers migrate.
+
+## Instruction-IR ADT landed (dart2wasm ir/ + serialize/ — the missing layer)
+
+The builder was emitting bytes directly, collapsing dart2wasm's 3 layers into 1. Now
+faithful: `src/builder/instr_ir.jl` defines a sealed `WasmInstr` ADT (submodule
+`InstrIR`), ONE struct per wasm instruction, with per-class `encode!` (= dart2wasm
+`serialize`) + `mnemonic` (= `printTo`) by native multiple dispatch. NATIVE, not Moshi:
+dart2wasm uses per-class virtual methods whose 1:1 Julia map is dispatch, and it's
+dependency-free (freeze/notarize story). `InstrBuilder` records `Vector{WasmInstr}`
+(ir/), `builder_code` serializes it (serialize/). Typed-method API + all validation
+UNCHANGED → the 3 migrated files needed no edits. `builder_disasm`/`builder_diagnose`
+now emit symbolic WAT. Verified BYTE-IDENTICAL to the original raw-emission baseline;
+strict-mode agrees through the IR path. THIS is the dart2wasm-architecture gap, closed.
+
+## compile_value (values.jl) — deferred to a DEDICATED pass (not a budget-end rush)
+
+WHY care: it's the central value emitter (~1100 lines, 216 sites, ~25 value-kind
+branches) AND it BRANCHES ON THE RAW BYTES of recursive results
+(`any(b==GC_PREFIX for b in elem_bytes)`, `elem_bytes[1]==I32_CONST`,
+`elem_bytes[end]==UInt8(ExternRef)`), has nested `bytes`-helpers (`emit_array_default!`,
+`compile_memory_elements!`), external `bytes`-helpers (`emit_type_id!`,
+`_narrow_generic_local!`), a depth-guard try/finally, and rare branches (Dict/Vector/
+Memory/struct constants, primitive bitcast, TypeName/Module/Function-singleton) that a
+mini-digest can't exercise. Migration plan: (1) give the external bytes-helpers an
+`InstrBuilder` form (or bridge via emit_raw with known stack effect); (2) the
+byte-inspection stays (compile_value still RETURNS bytes via builder_code, so callers'
+inspection works); (3) verify against the BROAD corpus `/tmp/cv_digest.jl` (20 value
+kinds: Char, all int widths, Int128/UInt128, floats, strings, Symbol, Tuple, unions,
+loops) AND run the full test suite (the real oracle for the rare branches). Baseline
+captured in `/tmp/cv_baseline.txt`.
