@@ -67,6 +67,7 @@ struct StructSet <: WasmInstr; idx::UInt32; field::UInt32; end
 struct ArrayNew        <: WasmInstr; idx::UInt32; end
 struct ArrayNewDefault <: WasmInstr; idx::UInt32; end
 struct ArrayNewFixed   <: WasmInstr; idx::UInt32; n::UInt32; end
+struct ArrayNewData    <: WasmInstr; idx::UInt32; seg::UInt32; end
 struct ArrayGet <: WasmInstr; idx::UInt32; op::UInt8; end   # op = ARRAY_GET/_S/_U
 struct ArraySet <: WasmInstr; idx::UInt32; end
 struct ArrayLen  <: WasmInstr; end
@@ -96,7 +97,7 @@ import .InstrIR: WasmInstr,
     Unreachable, Nop, Block, Loop, If, Else, End, Br, BrIf, BrTable, Return, Call,
     RefNullAbstract, RefNullConcrete, RefFunc, RefIsNull, RefAsNonNull,
     StructNew, StructNewDefault, StructGet, StructSet,
-    ArrayNew, ArrayNewDefault, ArrayNewFixed, ArrayGet, ArraySet, ArrayLen, ArrayCopy, ArrayFill,
+    ArrayNew, ArrayNewDefault, ArrayNewFixed, ArrayNewData, ArrayGet, ArraySet, ArrayLen, ArrayCopy, ArrayFill,
     RefCastConcrete, RefCastAbstract, RefTest, AnyConvertExtern, ExternConvertAny,
     RefI31, I31GetS, I31GetU, RawBytes
 
@@ -144,6 +145,7 @@ encode!(c::Vector{UInt8}, i::StructSet) = (push!(c, Opcode.GC_PREFIX); push!(c, 
 encode!(c::Vector{UInt8}, i::ArrayNew)        = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.ARRAY_NEW); _u!(c, i.idx))
 encode!(c::Vector{UInt8}, i::ArrayNewDefault) = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.ARRAY_NEW_DEFAULT); _u!(c, i.idx))
 encode!(c::Vector{UInt8}, i::ArrayNewFixed)   = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.ARRAY_NEW_FIXED); _u!(c, i.idx); _u!(c, i.n))
+encode!(c::Vector{UInt8}, i::ArrayNewData)    = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.ARRAY_NEW_DATA); _u!(c, i.idx); _u!(c, i.seg))
 encode!(c::Vector{UInt8}, i::ArrayGet) = (push!(c, Opcode.GC_PREFIX); push!(c, i.op); _u!(c, i.idx))
 encode!(c::Vector{UInt8}, i::ArraySet) = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.ARRAY_SET); _u!(c, i.idx))
 encode!(c::Vector{UInt8}, ::ArrayLen)  = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.ARRAY_LEN))
@@ -197,6 +199,7 @@ mnemonic(i::StructSet) = "struct.set \$$(i.idx) $(i.field)"
 mnemonic(i::ArrayNew)        = "array.new \$$(i.idx)"
 mnemonic(i::ArrayNewDefault) = "array.new_default \$$(i.idx)"
 mnemonic(i::ArrayNewFixed)   = "array.new_fixed \$$(i.idx) $(i.n)"
+mnemonic(i::ArrayNewData)    = "array.new_data \$$(i.idx) $(i.seg)"
 mnemonic(i::ArrayGet) = "array.get \$$(i.idx)"
 mnemonic(i::ArraySet) = "array.set \$$(i.idx)"
 mnemonic(::ArrayLen)  = "array.len"

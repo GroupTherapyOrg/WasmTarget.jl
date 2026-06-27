@@ -279,6 +279,14 @@ function array_new_fixed!(b::InstrBuilder, type_idx::Integer, n::Integer, elem_t
     validate_gc_instruction!(b.v, Opcode.ARRAY_NEW_FIXED, (type_idx, elem_type, n))
     _emit!(b, InstrIR.ArrayNewFixed(UInt32(type_idx), UInt32(n)))
 end
+# array.new_data $type $seg : [offset:i32, length:i32] -> [(ref $type)]
+function array_new_data!(b::InstrBuilder, type_idx::Integer, seg_idx::Integer)
+    if b.v.reachable
+        validate_pop!(b.v, I32); validate_pop!(b.v, I32)
+        validate_push!(b.v, ConcreteRef(UInt32(type_idx), false))
+    end
+    _emit!(b, InstrIR.ArrayNewData(UInt32(type_idx), UInt32(seg_idx)))
+end
 function array_get!(b::InstrBuilder, type_idx::Integer, elem_type::WasmValType; signed::Union{Nothing,Bool}=nothing)
     op = signed === nothing ? Opcode.ARRAY_GET : (signed ? Opcode.ARRAY_GET_S : Opcode.ARRAY_GET_U)
     validate_gc_instruction!(b.v, op, (type_idx, elem_type))
