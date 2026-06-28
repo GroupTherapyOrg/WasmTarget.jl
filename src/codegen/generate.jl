@@ -244,6 +244,20 @@ function generate_body(ctx::AbstractCompilationContext)::Vector{UInt8}
     return bytes
 end
 
+# ── Discovery / cleanup instrument (default OFF → byte-identical behavior) ──────────
+# WT_NEUTRALIZE names fix_* passes to bypass (comma-separated, or "all"), turning each
+# post-emission byte-rewriter into a pass-through. The cleanup loop uses it to MEASURE
+# what each pass actually compensates for: neutralize one → recompile the corpus →
+# whatever bytes change (or stop validating) is exactly that pass's blast radius; a pass
+# that changes nothing on real code is provably dead. Unset → no pass is bypassed.
+@inline function _wt_neutralized(pass::String)::Bool
+    spec = get(ENV, "WT_NEUTRALIZE", "")
+    isempty(spec) && return false
+    spec == "all" && return true
+    for p in split(spec, ','); strip(p) == pass && return true; end
+    return false
+end
+
 """
 PURE-6022: Remove spurious i32_wrap_i64 after array_len.
 
@@ -253,6 +267,7 @@ Also handles: array_len followed by i64_extend_i32_s (0xAC) is redundant but val
 we leave those alone since they don't cause validation errors.
 """
 function fix_array_len_wrap(bytes::Vector{UInt8})::Vector{UInt8}
+    _wt_neutralized("array_len_wrap") && return bytes
     # Forward-parse INSTRUCTION boundaries (5th instance of the backward/raw
     # byte-scan class): the raw 3-byte match also fired when [0xFB 0x0F] was
     # the LEB immediate of another instruction — e.g. `local.get 2043` encodes
@@ -294,6 +309,7 @@ LEB128 skipping) to avoid false positives from operand bytes that happen to matc
 i32-producing opcodes.
 """
 function fix_i32_wrap_after_i32_ops(bytes::Vector{UInt8})::Vector{UInt8}
+    _wt_neutralized("i32_wrap_after_i32_ops") && return bytes
     # Track the opcode of the last fully-emitted instruction (not operand bytes).
     # Single-byte opcodes that produce i32:
     # 0x45-0x66 = all comparison ops (i32_eqz through f64_ge)
@@ -515,6 +531,7 @@ where is_32bit is determined from the first arg but the second arg is an Int64 l
 Fix: insert i32_wrap_i64 (0xa7) after the i64 value.
 """
 function fix_i64_local_in_i32_ops(bytes::Vector{UInt8}, all_local_types::Vector{WasmValType})::Vector{UInt8}
+    _wt_neutralized("i64_local_in_i32_ops") && return bytes
     result = UInt8[]
     sizehint!(result, length(bytes) + 64)
     i = 1
@@ -663,6 +680,7 @@ also local_set. local_tee stores to the local but KEEPS the value on the stack.
 Handles chains of any length: tee tee tee ... set.
 """
 function fix_consecutive_local_sets(bytes::Vector{UInt8}; local_types::Union{Nothing, Vector}=nothing, n_params::Int=0)::Vector{UInt8}
+    _wt_neutralized("consecutive_local_sets") && return bytes
     result = UInt8[]
     sizehint!(result, length(bytes))
     i = 1
@@ -966,6 +984,7 @@ where X has type i64 and Y has type i32 (or vice versa). Insert the appropriate
 conversion instruction between them.
 """
 function fix_local_get_set_type_mismatch(bytes::Vector{UInt8}, all_types::Vector{WasmValType})::Vector{UInt8}
+    _wt_neutralized("local_get_set_type_mismatch") && return bytes
     result = UInt8[]
     sizehint!(result, length(bytes) + 64)
     i = 1
@@ -1264,6 +1283,7 @@ For each broken SELECT found, remove the preceding struct.new and the SELECT,
 leaving only the first value (which becomes the result).
 """
 function fix_broken_select_instructions(bytes::Vector{UInt8})::Vector{UInt8}
+    _wt_neutralized("broken_select_instructions") && return bytes
     result = UInt8[]
     i = 1
     fixes = 0
@@ -1375,6 +1395,7 @@ This catches cases where Julia type inference says a value is a ref type
 is a numeric constant (e.g., ExternRef=0x6f=111 compiled as i32_const 111).
 """
 function fix_numeric_to_ref_local_stores(bytes::Vector{UInt8}, locals::Vector{WasmValType}, n_params::Int)::Vector{UInt8}
+    _wt_neutralized("numeric_to_ref_local_stores") && return bytes
     result = UInt8[]
     sizehint!(result, length(bytes))
     fixes = 0
