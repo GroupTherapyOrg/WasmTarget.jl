@@ -3189,8 +3189,6 @@ Generate code for a single basic block.
 
     for i in block.start_idx:block.end_idx
         stmt_bytes = compile_statement(code[i], i, ctx)
-        # PURE-414: Validate emitted bytes for stack type tracking
-        validate_emitted_bytes!(ctx, stmt_bytes, i)
         emit_raw!(b, stmt_bytes)
     end
 

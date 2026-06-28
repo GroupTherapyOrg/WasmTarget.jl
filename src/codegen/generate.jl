@@ -2,111 +2,6 @@
 # Code Generation
 # ============================================================================
 
-"""
-    validate_emitted_bytes!(ctx, bytes, stmt_idx)
-
-PURE-414: Scan emitted bytecode and validate stack effects for recognized opcodes.
-This is a MINIMAL first pass — validates constants, locals, drops, and GC ops.
-Runs in parallel with bytecode emission (doesn't modify bytes, just tracks stack state).
-
-Skips unknown multi-byte sequences silently — later passes will add more coverage.
-"""
-function validate_emitted_bytes!(ctx::AbstractCompilationContext, bytes::Vector{UInt8}, stmt_idx::Int)
-    ctx.validator.enabled || return
-    v = ctx.validator
-    # Reset stack for each statement in the minimal first pass.
-    # We don't track all opcodes yet, so inter-statement stack state
-    # would produce false positives. Each statement is validated independently.
-    empty!(v.stack)
-    has_unknown = false  # Track if we hit opcodes we don't validate
-    i = 1
-    while i <= length(bytes)
-        op = bytes[i]
-        if op == Opcode.I32_CONST
-            validate_instruction!(v, op)
-            i += 1
-            # Skip LEB128 immediate
-            while i <= length(bytes) && (bytes[i] & 0x80) != 0; i += 1; end
-            i <= length(bytes) && (i += 1)  # skip final byte of LEB128
-        elseif op == Opcode.I64_CONST
-            validate_instruction!(v, op)
-            i += 1
-            while i <= length(bytes) && (bytes[i] & 0x80) != 0; i += 1; end
-            i <= length(bytes) && (i += 1)
-        elseif op == Opcode.F32_CONST
-            validate_instruction!(v, op)
-            i += 1 + 4  # 4 bytes for f32
-        elseif op == Opcode.F64_CONST
-            validate_instruction!(v, op)
-            i += 1 + 8  # 8 bytes for f64
-        elseif op == Opcode.LOCAL_GET
-            # local.get pushes a value — determine type from ctx.locals
-            i += 1
-            local_idx_start = i
-            while i <= length(bytes) && (bytes[i] & 0x80) != 0; i += 1; end
-            if i <= length(bytes)
-                # Decode LEB128 local index
-                local_idx = 0
-                shift = 0
-                for j in local_idx_start:i
-                    local_idx |= (Int(bytes[j] & 0x7f) << shift)
-                    shift += 7
-                end
-                i += 1
-                # Determine type: params first, then locals
-                local_type = _get_local_type(ctx, local_idx)
-                if local_type !== nothing
-                    validate_push!(v, local_type)
-                end
-            end
-        elseif op == Opcode.LOCAL_SET
-            # local.set pops a value
-            i += 1
-            local_idx_start = i
-            while i <= length(bytes) && (bytes[i] & 0x80) != 0; i += 1; end
-            if i <= length(bytes)
-                local_idx = 0
-                shift = 0
-                for j in local_idx_start:i
-                    local_idx |= (Int(bytes[j] & 0x7f) << shift)
-                    shift += 7
-                end
-                i += 1
-                local_type = _get_local_type(ctx, local_idx)
-                if local_type !== nothing
-                    validate_pop!(v, local_type)
-                end
-            end
-        elseif op == Opcode.LOCAL_TEE
-            # local.tee pops then pushes (net effect: type stays, but validates)
-            i += 1
-            while i <= length(bytes) && (bytes[i] & 0x80) != 0; i += 1; end
-            i <= length(bytes) && (i += 1)
-        elseif op == Opcode.DROP
-            validate_instruction!(v, op)
-            i += 1
-        elseif op == Opcode.RETURN
-            # Return clears the stack — reset validator stack for this scope
-            empty!(v.stack)
-            i += 1
-        elseif op == Opcode.UNREACHABLE
-            empty!(v.stack)
-            v.reachable = false
-            i += 1
-        else
-            # Unknown/multi-byte opcode — skip without validating
-            # This includes control flow (block/loop/if/end/br), calls, GC prefix, etc.
-            # These will be added in future passes
-            has_unknown = true
-            i += 1
-        end
-    end
-    # If we hit unrecognized opcodes, filter out underflow errors (false positives)
-    # since we can't fully track stack state without complete opcode coverage
-    if has_unknown
-        filter!(e -> !contains(e, "stack underflow"), v.errors)
-    end
-end
 
 """
     _get_local_type(ctx, local_idx) -> Union{WasmValType, Nothing}
@@ -180,15 +75,6 @@ function generate_body(ctx::AbstractCompilationContext)::Vector{UInt8}
     # requires: func = locals* expr, where expr = instr* end. Any bytes after the
     # expression's closing `end` cause "operators remaining after end of function body."
     bytes = strip_excess_after_function_end(bytes)
-
-    # PURE-414: Check validator for errors after function body generation.
-    # The post-emission fix_* byte-rewriters were deleted (cleanup Loop 1, 2026-06-28):
-    # the migrated typed InstrBuilder emits correct bytes up front, so the rewriters were
-    # provably dead (WT_NEUTRALIZE=all full-suite GREEN). wasm-tools validate / wasm-opt are
-    # the source of truth; ctx.validator's collected errors are a developer diagnostic only.
-    if has_errors(ctx.validator)
-        @debug "Stack validator found $(length(ctx.validator.errors)) issue(s) in $(ctx.validator.func_name)" errors=ctx.validator.errors
-    end
 
     return bytes
 end
