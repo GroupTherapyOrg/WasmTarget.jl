@@ -168,6 +168,53 @@ function return_type_compatible(value_type::WasmValType, return_type::WasmValTyp
 end
 
 """
+    emit_return_coerced!(b, val, ctx)
+
+Emit a ReturnNode value `val` coerced to the function's wasm return type. Extracted from ~9
+identical copies (cleanup Loop 4). PURE-315: a numeric value into a ref return → synthesize
+ref.null / extern-box. Else if the value type cannot satisfy the return type → `unreachable`
+(trap). Else compile the value + the numeric-widening / extern-convert coercion ladder, then
+`return`. Byte-identical to the inlined blocks it replaces.
+"""
+function emit_return_coerced!(b::InstrBuilder, val, ctx::AbstractCompilationContext)
+    val_wasm_type = infer_value_wasm_type(val, ctx)
+    func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+    is_numeric_val = val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
+    is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
+    if is_numeric_val && is_ref_ret
+        if func_ret_wasm === ExternRef
+            tb = UInt8[]; emit_numeric_to_externref!(tb, val, val_wasm_type, ctx); emit_raw!(b, tb; pushes=WasmValType[ExternRef])
+        elseif func_ret_wasm isa ConcreteRef
+            ref_null!(b, Int64(func_ret_wasm.type_idx), func_ret_wasm)
+        else
+            ref_null!(b, func_ret_wasm)
+        end
+        return_!(b)
+    elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
+        unreachable!(b)
+    else
+        emit_raw!(b, compile_value(val, ctx); pushes=(val_wasm_type === nothing ? WasmValType[] : WasmValType[val_wasm_type]))
+        if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
+            extern_convert_any!(b)
+        elseif val_wasm_type === I32 && func_ret_wasm === I64
+            num!(b, Opcode.I64_EXTEND_I32_S)
+        elseif val_wasm_type === I64 && func_ret_wasm === F64
+            num!(b, Opcode.F64_CONVERT_I64_S)
+        elseif val_wasm_type === I32 && func_ret_wasm === F64
+            num!(b, Opcode.F64_CONVERT_I32_S)
+        elseif val_wasm_type === F32 && func_ret_wasm === F64
+            num!(b, Opcode.F64_PROMOTE_F32)
+        elseif val_wasm_type === I64 && func_ret_wasm === F32
+            num!(b, Opcode.F32_CONVERT_I64_S)
+        elseif val_wasm_type === I32 && func_ret_wasm === F32
+            num!(b, Opcode.F32_CONVERT_I32_S)
+        end
+        return_!(b)
+    end
+    return b
+end
+
+"""
 PURE-908: Compile a GotoIfNot condition to i32.
 When the condition SSA value has an anyref/externref local (because Julia typed it as Any),
 the raw compile_value would push anyref, but i32.eqz needs i32. This helper unboxes via

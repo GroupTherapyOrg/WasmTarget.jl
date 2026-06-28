@@ -126,11 +126,26 @@ patch becomes principled code + a guarding test.
 - ✅ Phase 0 DISCOVERY done (instrument WT_NEUTRALIZE [now removed with the passes], dynamic probe,
   11-agent census → `dev/cleanup_ledger.md`).
 - ✅ Soundness bug ROOT-FIXED: multivar if/else phi-merge → routed to stackifier (commit 70deff2).
-- ✅ Loop 1: the 7 dead `fix_*` passes + `_wt_neutralized` + `validate_emitted_bytes!`(L3.a, pending)
-  deletion in progress; the WT_NEUTRALIZE instrument is retired (passes gone).
-- ▶ NEXT: L3.a (validate_emitted_bytes!/ctx.validator) · L3 byte-inspection hacks · L4
-  return_type_compatible → WasmGC lattice + coerce! · L2 collapse flow generators → stackifier ·
-  L5 strict-by-default · L6 loud-reject diagnostics. Drive autonomously, triple-gated.
+- ✅ Loop 1 COMPLETE: the 7 dead `fix_*` passes + `_wt_neutralized` deleted, full suite GREEN (634f850).
+- ✅ L3.a COMPLETE: `validate_emitted_bytes!` byte-scanner deleted (270bdf9) + the orphaned
+  `ctx.validator` field/initializers removed (byte-identical). Checkpoint suite confirming.
+- ▶ NEXT (drive autonomously, triple-gated, commit only GREEN, revert RED):
+  - **L4 down-payment (SAFE, byte-identical): extract the duplicated ReturnNode-coercion block**
+    into ONE helper. The block (PURE-315 numeric→ref pre-check + `return_type_compatible` +
+    7-branch widening ladder I64_EXTEND/F64_CONVERT*/F64_PROMOTE/F32_CONVERT*) is copy-pasted at
+    ~10 sites — flow.jl:130-165, 225-259, +1256/1539/1704/2035; conditionals.jl:44-82;
+    stackified.jl:1348/1604 — varying only by builder var (`b`/`rb`) + a minor `ref_null!` form
+    (flow passes `func_ret_wasm`; conditionals reconstructs `ConcreteRef(type_idx,true)` — verify
+    equivalent or unify). Extract `emit_return_coerced!(b, val, ctx)`; replace all sites; gate
+    byte-identity + suite + fuzzer. Removes ~300 dup lines; the single home for the lattice.
+  - **L4 proper (BEHAVIOR-CHANGING, supervised-care): principled WasmGC HeapType lattice + coerce!**
+    replacing the special-case predicate. NOTE this is MORE permissive than the current asymmetric
+    rules (e.g. current `return AnyRef` omits EqRef — a gap) → NOT byte-identical → gate hard on
+    suite+fuzzer, watch for newly-enabled paths producing wrong values. Arms to preserve listed in
+    the ledger's L4 section.
+  - L3 byte-inspection hacks (~82 sites + the inline dead-return rewriter + strip_excess in
+    generate.jl) → typed-IR inspection. L2 collapse the 3 flow gens → stackifier (HIGH risk, DO
+    LAST, NOT byte-probe-covered). L5 strict-by-default (after L3). L6 loud-reject diagnostics.
 
 ## ▶▶ RESUME HERE
 Branch `wt-builder-cleanup`. Phase 0 + phi-fix + Loop-1 deletions landed (see STATUS + git log).

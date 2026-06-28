@@ -1340,38 +1340,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # PURE-315: Check numeric-to-ref BEFORE return_type_compatible
                     is_numeric_val = val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
                     is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
-                    if is_numeric_val && is_ref_ret
-                        # PURE-325: Box numeric value for ref return type
-                        if func_ret_wasm === ExternRef
-                            _eb0 = UInt8[]; emit_numeric_to_externref!(_eb0, stmt.val, val_wasm_type, ctx)
-                            emit_raw!(bb, _eb0; pushes=WasmValType[ExternRef])
-                        elseif func_ret_wasm isa ConcreteRef
-                            ref_null!(bb, Int64(func_ret_wasm.type_idx), ConcreteRef(UInt32(func_ret_wasm.type_idx), true))
-                        else
-                            ref_null!(bb, func_ret_wasm)
-                        end
-                        return_!(bb)
-                    elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
-                        unreachable!(bb)
-                    else
-                        emit_raw!(bb, compile_value(stmt.val, ctx); pushes=(val_wasm_type === nothing ? WasmValType[] : WasmValType[val_wasm_type]))
-                        if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
-                            extern_convert_any!(bb)
-                        elseif val_wasm_type === I32 && func_ret_wasm === I64
-                            num!(bb, Opcode.I64_EXTEND_I32_S)
-                        elseif val_wasm_type === I64 && func_ret_wasm === F64
-                            num!(bb, Opcode.F64_CONVERT_I64_S)
-                        elseif val_wasm_type === I32 && func_ret_wasm === F64
-                            num!(bb, Opcode.F64_CONVERT_I32_S)
-                        elseif val_wasm_type === F32 && func_ret_wasm === F64
-                            num!(bb, Opcode.F64_PROMOTE_F32)
-                        elseif val_wasm_type === I64 && func_ret_wasm === F32
-                            num!(bb, Opcode.F32_CONVERT_I64_S)
-                        elseif val_wasm_type === I32 && func_ret_wasm === F32
-                            num!(bb, Opcode.F32_CONVERT_I32_S)
-                        end
-                        return_!(bb)
-                    end
+                    bb = emit_return_coerced!(bb, stmt.val, ctx)
                 else
                     return_!(bb)
                 end
