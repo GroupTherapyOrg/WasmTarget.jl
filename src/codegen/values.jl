@@ -1170,7 +1170,7 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                    _cub_wfi <= length(struct_type_def.fields) &&
                    (struct_type_def.fields[_cub_wfi].valtype isa ConcreteRef) &&
                    Int(struct_type_def.fields[_cub_wfi].valtype.type_idx) == Int(_cub_info.wasm_type_idx) &&
-                   (has_ref_producing_gc_op(field_val_bytes) || field_val_bytes[1] == Opcode.REF_NULL)
+                   (_wt_is_ref(infer_value_wasm_type(field_val, ctx)) || field_val_bytes[1] == Opcode.REF_NULL)
                     _cub_boxed = UInt8[]
                     push!(_cub_boxed, Opcode.I32_CONST)
                     append!(_cub_boxed, encode_leb128_signed(Int64(0)))   # typeId
@@ -1246,7 +1246,7 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                         # which indicates a complex ref value (String, Symbol, struct), not a simple numeric.
                         # String constants start with i32.const (char 1) but end with array.new_fixed.
                         first_byte = field_val_bytes[1]
-                        ends_with_ref_producing_gc = has_ref_producing_gc_op(field_val_bytes)
+                        ends_with_ref_producing_gc = _wt_is_ref(infer_value_wasm_type(field_val, ctx))
                         if (first_byte == 0x41 || first_byte == 0x42) && !ends_with_ref_producing_gc  # I32_CONST or I64_CONST
                             need_replace = true
                         elseif first_byte == 0x20  # LOCAL_GET
@@ -1293,12 +1293,13 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                     already_extern = length(field_val_bytes) >= 2 &&
                                      field_val_bytes[end-1] == 0xFB &&
                                      field_val_bytes[end] == Opcode.EXTERN_CONVERT_ANY
-                    if !already_extern && has_ref_producing_gc_op(field_val_bytes)
+                    if !already_extern && _wt_is_ref(infer_value_wasm_type(field_val, ctx))
                         extern_convert_any!(b)
                     elseif !already_extern && length(field_val_bytes) >= 2 && field_val_bytes[1] == 0x23
                         # PURE-6025: global.get produces a concrete ref (e.g., Type constant)
                         # but field expects externref — need extern.convert_any.
-                        # global.get has no GC prefix, so has_ref_producing_gc_op misses it.
+                        # global.get has no GC prefix; the inferred-type check above may not
+                        # have flagged it as a ref, so handle the global.get case explicitly.
                         _g_idx = 0; _g_shift = 0
                         for _gbi in 2:length(field_val_bytes)
                             _gb = field_val_bytes[_gbi]

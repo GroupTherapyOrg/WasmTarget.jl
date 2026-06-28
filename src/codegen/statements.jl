@@ -528,7 +528,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                             first_op = val_bytes[1]
                             if first_op == Opcode.I32_CONST || first_op == Opcode.I64_CONST || first_op == Opcode.F32_CONST || first_op == Opcode.F64_CONST
                                 # PURE-318/PURE-325: Check for GC_PREFIX — struct/array ops produce refs, not numerics
-                                is_numeric_val = !has_ref_producing_gc_op(val_bytes)
+                                is_numeric_val = !_wt_is_ref(infer_value_wasm_type(stmt.val, ctx))
                             elseif first_op == 0x20  # LOCAL_GET
                                 # Decode local index, check type
                                 src_idx = 0; shift = 0; leb_end = 0
@@ -2223,7 +2223,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 # Legacy ExternRef path
                 val_bytes = compile_value(val, ctx)
                 is_numeric_local = false
-                ends_with_ref_producing_gc = has_ref_producing_gc_op(val_bytes)
+                ends_with_ref_producing_gc = _wt_is_ref(infer_value_wasm_type(val, ctx))
                 if length(val_bytes) >= 1 && (val_bytes[1] == 0x41 || val_bytes[1] == 0x42) && !ends_with_ref_producing_gc
                     is_numeric_local = true
                 elseif length(val_bytes) >= 2 && val_bytes[1] == 0x20
@@ -2598,7 +2598,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 first_is_numeric = !isempty(field_bytes) &&
                                    (field_bytes[1] == Opcode.I32_CONST || field_bytes[1] == Opcode.I64_CONST ||
                                     field_bytes[1] == Opcode.F32_CONST || field_bytes[1] == Opcode.F64_CONST) &&
-                                   !has_ref_producing_gc_op(field_bytes)
+                                   !_wt_is_ref(infer_value_wasm_type(val, ctx))
                 if !last_is_extern_convert && !first_is_ref_null_extern && !first_is_numeric
                     emit_raw!(b, field_bytes)
                     extern_convert_any!(b)

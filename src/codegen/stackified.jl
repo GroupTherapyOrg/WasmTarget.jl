@@ -71,52 +71,6 @@ Reference: https://labs.leaningtech.com/blog/control-flow
 """
 
 """
-PURE-325: Check if compiled bytecode contains a GC instruction that produces a ref value.
-Scans `val_bytes` for GC_PREFIX (0xFB) followed by a ref-producing sub-opcode.
-Properly skips LEB128 immediates of the first instruction to avoid false positives from
-i32.const/i64.const values that coincidentally contain 0xFB bytes in their LEB128 encoding.
-
-GC sub-opcodes recognized: 0x00 (struct.new), 0x06 (array.new), 0x07 (array.new_default),
-0x08 (array.new_fixed), 0x1A (any.convert_extern), 0x1B (extern.convert_any).
-"""
-function has_ref_producing_gc_op(val_bytes::Vector{UInt8})::Bool
-    isempty(val_bytes) && return false
-    # Determine scan start: skip past the first instruction's LEB128 immediate to avoid
-    # false positives from constants like i32.const 251 which encodes as 0x41 0xFB 0x01.
-    scan_start = 1
-    first_op = val_bytes[1]
-    if first_op == 0x41 || first_op == 0x42 || first_op == 0x20 || first_op == 0x21 || first_op == 0x22 || first_op == 0x23 || first_op == 0x24  # i32.const, i64.const, local.get/set/tee, global.get/set
-        # Skip LEB128 immediate
-        for bi in 2:length(val_bytes)
-            if (val_bytes[bi] & 0x80) == 0
-                scan_start = bi + 1
-                break
-            end
-        end
-    elseif first_op == 0x43  # f32.const: 4-byte immediate
-        scan_start = 6
-    elseif first_op == 0x44  # f64.const: 8-byte immediate
-        scan_start = 10
-    end
-    for scan_i in scan_start:(length(val_bytes)-1)
-        if val_bytes[scan_i] == 0xFB
-            gc_op = val_bytes[scan_i + 1]
-            # All ref-producing GC ops: struct.new (0x00), struct.new_default (0x01),
-            # array.new (0x06), array.new_default (0x07), array.new_fixed (0x08),
-            # array.new_data (0x09), array.new_elem (0x0A),
-            # ref.cast (0x14), ref.cast_null (0x17),
-            # any_convert_extern (0x1A), extern_convert_any (0x1B)
-            if gc_op == 0x00 || gc_op == 0x01 || gc_op == 0x06 || gc_op == 0x07 ||
-               gc_op == 0x08 || gc_op == 0x09 || gc_op == 0x0A ||
-               gc_op == 0x14 || gc_op == 0x17 || gc_op == 0x1A || gc_op == 0x1B
-                return true
-            end
-        end
-    end
-    return false
-end
-
-"""
 PURE-325: Emit boxing bytecode for a numeric value that needs to be returned as ExternRef.
 Handles the common pattern where a function returns ExternRef (Union type) but the actual
 value is numeric (I32/I64/F32/F64). Boxes the value in a WasmGC struct + extern_convert_any.

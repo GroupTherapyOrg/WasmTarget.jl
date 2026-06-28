@@ -2390,7 +2390,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     end
                 elseif length(item_bytes) >= 1 && (item_bytes[1] == Opcode.I32_CONST || item_bytes[1] == Opcode.I64_CONST || item_bytes[1] == Opcode.F32_CONST || item_bytes[1] == Opcode.F64_CONST)
                     # PURE-318/PURE-325: Check for GC_PREFIX (LEB128-safe scan)
-                    if !has_ref_producing_gc_op(item_bytes)
+                    if !_wt_is_ref(infer_value_wasm_type(item_arg, ctx))
                         push_src_wasm = I32  # treat constants as numeric
                     end
                 end
@@ -3235,7 +3235,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     end
                 end
             elseif length(mset_val_bytes) >= 1 && (mset_val_bytes[1] == Opcode.I32_CONST || mset_val_bytes[1] == Opcode.I64_CONST || mset_val_bytes[1] == Opcode.F32_CONST || mset_val_bytes[1] == Opcode.F64_CONST)
-                if !has_ref_producing_gc_op(mset_val_bytes)
+                if !_wt_is_ref(infer_value_wasm_type(value_arg, ctx))
                     # Detect actual constant type from opcode
                     if mset_val_bytes[1] == Opcode.I64_CONST
                         mset_src_wasm_any = I64
@@ -3286,7 +3286,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 end
             elseif length(mset_val_bytes) >= 1 && (mset_val_bytes[1] == Opcode.I32_CONST || mset_val_bytes[1] == Opcode.I64_CONST || mset_val_bytes[1] == Opcode.F32_CONST || mset_val_bytes[1] == Opcode.F64_CONST)
                 # PURE-318/PURE-325: Check for GC_PREFIX (LEB128-safe scan)
-                if !has_ref_producing_gc_op(mset_val_bytes)
+                if !_wt_is_ref(infer_value_wasm_type(value_arg, ctx))
                     mset_src_wasm = I32  # treat constants as numeric
                 end
             end
@@ -3309,7 +3309,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             local is_numeric_for_ref = false
             if length(mset_val_bytes) >= 1 && (mset_val_bytes[1] == Opcode.I32_CONST || mset_val_bytes[1] == Opcode.I64_CONST || mset_val_bytes[1] == Opcode.F32_CONST || mset_val_bytes[1] == Opcode.F64_CONST)
                 # PURE-318/PURE-325: Check for GC_PREFIX (LEB128-safe scan)
-                is_numeric_for_ref = !has_ref_producing_gc_op(mset_val_bytes)
+                is_numeric_for_ref = !_wt_is_ref(infer_value_wasm_type(value_arg, ctx))
             elseif length(mset_val_bytes) >= 2 && mset_val_bytes[1] == Opcode.LOCAL_GET
                 local src_idx_r = 0
                 local shift_r = 0
@@ -3364,9 +3364,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             # (e.g., Union{Nothing, Int64} element type), emit i64_const 0 instead.
             # compile_value(nothing) always produces i32_const 0, but array_set expects
             # the element type — i64 for Union{Nothing, Int64} arrays.
-            if wasm_elem_type === I64 && length(mset_val_bytes) >= 1 && mset_val_bytes[1] == Opcode.I32_CONST && !has_ref_producing_gc_op(mset_val_bytes)
+            if wasm_elem_type === I64 && length(mset_val_bytes) >= 1 && mset_val_bytes[1] == Opcode.I32_CONST && !_wt_is_ref(infer_value_wasm_type(value_arg, ctx))
                 i64_const!(_msb, 0)  # i64 value 0
-            elseif wasm_elem_type === F64 && length(mset_val_bytes) >= 1 && mset_val_bytes[1] == Opcode.I32_CONST && !has_ref_producing_gc_op(mset_val_bytes)
+            elseif wasm_elem_type === F64 && length(mset_val_bytes) >= 1 && mset_val_bytes[1] == Opcode.I32_CONST && !_wt_is_ref(infer_value_wasm_type(value_arg, ctx))
                 f64_const!(_msb, 0.0)
             else
                 emit_raw!(_msb, mset_val_bytes; pushes=WasmValType[infer_value_wasm_type(value_arg, ctx)])
@@ -3589,7 +3589,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     # PURE-220: But NOT if bytes contain GC instructions (struct.new, array.new_fixed)
                     # which indicate a complex ref value (String, Symbol), not a simple numeric.
                     is_numeric_arg = false
-                    ends_with_ref_producing_gc = has_ref_producing_gc_op(arg_bytes)
+                    ends_with_ref_producing_gc = _wt_is_ref(infer_value_wasm_type(arg, ctx))
                     if length(arg_bytes) >= 1 && (arg_bytes[1] == 0x41 || arg_bytes[1] == 0x42) && !ends_with_ref_producing_gc
                         is_numeric_arg = true
                     elseif length(arg_bytes) >= 2 && arg_bytes[1] == 0x20
@@ -3655,7 +3655,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     is_numeric_local = false  # TRUE-PARSE-002: distinguish local_get from constant
                     numeric_src_type = nothing  # TRUE-PARSE-002: for boxing
                     # SELFHOST-008: Check for numeric constants (i32.const 0 from nothing, etc.)
-                    ends_with_ref_producing_gc = has_ref_producing_gc_op(arg_bytes)
+                    ends_with_ref_producing_gc = _wt_is_ref(infer_value_wasm_type(arg, ctx))
                     if length(arg_bytes) >= 1 && (arg_bytes[1] == 0x41 || arg_bytes[1] == 0x42 || arg_bytes[1] == 0x43 || arg_bytes[1] == 0x44) && !ends_with_ref_producing_gc
                         is_numeric_arg = true
                     elseif length(arg_bytes) >= 2 && arg_bytes[1] == 0x20

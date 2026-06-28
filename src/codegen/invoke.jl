@@ -3177,7 +3177,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     elseif length(val_bytes) >= 1 && (val_bytes[1] == Opcode.I32_CONST || val_bytes[1] == Opcode.I64_CONST || val_bytes[1] == Opcode.F32_CONST || val_bytes[1] == Opcode.F64_CONST)
                         # PURE-318: Check for GC_PREFIX — struct/array constants produce refs, not numerics
                         # PURE-325: LEB128-safe GC detection
-                        if !has_ref_producing_gc_op(val_bytes)
+                        if !_wt_is_ref(infer_value_wasm_type(args[3], ctx))
                             arrset_src_wasm = I32  # treat constants as numeric
                         end
                     end
