@@ -1413,6 +1413,25 @@ begin
             @test WT.builder_disasm(bbi) == ["i32.const 1", "if 127", "i32.const 0", "end"]
         end
 
+        @testset "InstrBuilder migration invariant (no raw-emission regression)" begin
+            # All codegen function-body emission is migrated onto the typed InstrBuilder.
+            # The residual raw push!(bytes, Opcode.*) sites are out-of-scope module-section
+            # serialization (to_bytes_mvp / mini-constructors / encode_block_type) + intentional
+            # byte-inspecting/byte-exact local buffers. Lock the invariant so new code can't
+            # silently re-introduce blind raw emission — it must go through the builder.
+            cgdir = joinpath(dirname(pathof(WasmTarget)), "codegen")
+            countraw(p) = count(l -> occursin(r"push!\([a-z_]+, Opcode\.", l) ||
+                                     occursin(r"append!\([a-z_]+, encode_leb128", l), readlines(p))
+            total = sum(countraw(joinpath(cgdir, f)) for f in readdir(cgdir) if endswith(f, ".jl"))
+            # Baseline residual is ~50 (all out-of-scope). Ceiling catches any real regression;
+            # LOWER it as the residual is cleaned (it must only trend down).
+            @test total <= 60
+            # the three fully-migrated mega-dispatchers must STAY fully migrated:
+            for f in ("calls.jl", "invoke.jl", "statements.jl", "int128.jl")
+                @test countraw(joinpath(cgdir, f)) == 0
+            end
+        end
+
         @testset "LEB128 Encoding" begin
             # Test unsigned LEB128
             @test WasmTarget.encode_leb128_unsigned(0) == [0x00]
