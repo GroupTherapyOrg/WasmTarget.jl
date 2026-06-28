@@ -936,7 +936,7 @@ function _compile_call_egaleq(args, bytes::Vector{UInt8}, ctx::AbstractCompilati
             if length(args) >= 1 && (arg_type === Nothing || arg2_type === Nothing || arg_type === Any || arg1_is_ref)
                 local arg1_bytes = compile_value(args[1], ctx)
                 if length(arg1_bytes) >= 1
-                    if arg1_bytes[1] == Opcode.REF_NULL
+                    if is_nothing_value(args[1], ctx)
                         arg1_wasm_is_ref = true
                     elseif arg1_bytes[1] == Opcode.I32_CONST || arg1_bytes[1] == Opcode.I64_CONST ||
                            arg1_bytes[1] == Opcode.F32_CONST || arg1_bytes[1] == Opcode.F64_CONST
@@ -979,7 +979,7 @@ function _compile_call_egaleq(args, bytes::Vector{UInt8}, ctx::AbstractCompilati
             if length(args) >= 2 && (arg2_type === Nothing || arg_type === Nothing || arg2_type === Any || arg2_is_ref)
                 local arg2_bytes = compile_value(args[2], ctx)
                 if length(arg2_bytes) >= 1
-                    if arg2_bytes[1] == Opcode.REF_NULL
+                    if is_nothing_value(args[2], ctx)
                         arg2_wasm_is_ref = true
                     elseif arg2_bytes[1] == Opcode.I32_CONST || arg2_bytes[1] == Opcode.I64_CONST ||
                            arg2_bytes[1] == Opcode.F32_CONST || arg2_bytes[1] == Opcode.F64_CONST
@@ -5317,7 +5317,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 if length(args) >= 1 && arg_type === Nothing
                     local arg1_bytes = compile_value(args[1], ctx)
                     if length(arg1_bytes) >= 1
-                        if arg1_bytes[1] == Opcode.REF_NULL
+                        if is_nothing_value(args[1], ctx)
                             arg1_wasm_is_ref_ne = true
                         elseif arg1_bytes[1] == Opcode.LOCAL_GET && length(arg1_bytes) >= 2
                             local local_idx_ne1 = 0
@@ -5343,7 +5343,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 if length(args) >= 2 && arg2_type_ne === Nothing
                     local arg2_bytes = compile_value(args[2], ctx)
                     if length(arg2_bytes) >= 1
-                        if arg2_bytes[1] == Opcode.REF_NULL
+                        if is_nothing_value(args[2], ctx)
                             arg2_wasm_is_ref_ne = true
                         elseif arg2_bytes[1] == Opcode.LOCAL_GET && length(arg2_bytes) >= 2
                             local local_idx_ne2 = 0

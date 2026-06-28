@@ -1170,7 +1170,7 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                    _cub_wfi <= length(struct_type_def.fields) &&
                    (struct_type_def.fields[_cub_wfi].valtype isa ConcreteRef) &&
                    Int(struct_type_def.fields[_cub_wfi].valtype.type_idx) == Int(_cub_info.wasm_type_idx) &&
-                   (_wt_is_ref(infer_value_wasm_type(field_val, ctx)) || field_val_bytes[1] == Opcode.REF_NULL)
+                   (_wt_is_ref(infer_value_wasm_type(field_val, ctx)) || is_nothing_value(field_val, ctx))
                     _cub_boxed = UInt8[]
                     push!(_cub_boxed, Opcode.I32_CONST)
                     append!(_cub_boxed, encode_leb128_signed(Int64(0)))   # typeId

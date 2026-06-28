@@ -479,7 +479,7 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
             if !isempty(value_bytes)
                 emit_raw!(lb, value_bytes; pushes=(edge_val_type === nothing ? WasmValType[] : WasmValType[edge_val_type]))
                 # ref.null is already externref — don't wrap
-                if !(value_bytes[1] == Opcode.REF_NULL)
+                if !is_nothing_value(val, ctx)
                     extern_convert_any!(lb)
                 end
                 local_set!(lb, local_idx)
@@ -490,7 +490,7 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
             # AnyRef/EqRef/StructRef/ArrayRef → ConcreteRef: narrow with ref.cast_nullable
             value_bytes = compile_value(val, ctx)
             if !isempty(value_bytes)
-                if value_bytes[1] == Opcode.REF_NULL
+                if is_nothing_value(val, ctx)
                     # ref.null can't be cast — emit type-appropriate null instead
                     ref_null!(lb, Int64(phi_local_type.type_idx), phi_local_type)
                 else
@@ -684,7 +684,7 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
                 elseif phi_local_type === ExternRef && (actual_val_type isa ConcreteRef || actual_val_type === StructRef || actual_val_type === ArrayRef || actual_val_type === AnyRef)
                     # PURE-3113: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion
                     emit_raw!(lb, value_bytes; pushes=(actual_val_type === nothing ? WasmValType[] : WasmValType[actual_val_type]))
-                    if !(value_bytes[1] == Opcode.REF_NULL)
+                    if !is_nothing_value(val, ctx)
                         extern_convert_any!(lb)
                     end
                     local_set!(lb, local_idx)
