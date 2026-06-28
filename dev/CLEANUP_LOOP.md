@@ -129,23 +129,44 @@ patch becomes principled code + a guarding test.
 - ✅ Loop 1 COMPLETE: the 7 dead `fix_*` passes + `_wt_neutralized` deleted, full suite GREEN (634f850).
 - ✅ L3.a COMPLETE: `validate_emitted_bytes!` byte-scanner deleted (270bdf9) + the orphaned
   `ctx.validator` field/initializers removed (byte-identical). Checkpoint suite confirming.
-- ▶ NEXT (drive autonomously, triple-gated, commit only GREEN, revert RED):
-  - **L4 down-payment (SAFE, byte-identical): extract the duplicated ReturnNode-coercion block**
-    into ONE helper. The block (PURE-315 numeric→ref pre-check + `return_type_compatible` +
-    7-branch widening ladder I64_EXTEND/F64_CONVERT*/F64_PROMOTE/F32_CONVERT*) is copy-pasted at
-    ~10 sites — flow.jl:130-165, 225-259, +1256/1539/1704/2035; conditionals.jl:44-82;
-    stackified.jl:1348/1604 — varying only by builder var (`b`/`rb`) + a minor `ref_null!` form
-    (flow passes `func_ret_wasm`; conditionals reconstructs `ConcreteRef(type_idx,true)` — verify
-    equivalent or unify). Extract `emit_return_coerced!(b, val, ctx)`; replace all sites; gate
-    byte-identity + suite + fuzzer. Removes ~300 dup lines; the single home for the lattice.
-  - **L4 proper (BEHAVIOR-CHANGING, supervised-care): principled WasmGC HeapType lattice + coerce!**
-    replacing the special-case predicate. NOTE this is MORE permissive than the current asymmetric
-    rules (e.g. current `return AnyRef` omits EqRef — a gap) → NOT byte-identical → gate hard on
-    suite+fuzzer, watch for newly-enabled paths producing wrong values. Arms to preserve listed in
-    the ledger's L4 section.
-  - L3 byte-inspection hacks (~82 sites + the inline dead-return rewriter + strip_excess in
-    generate.jl) → typed-IR inspection. L2 collapse the 3 flow gens → stackifier (HIGH risk, DO
-    LAST, NOT byte-probe-covered). L5 strict-by-default (after L3). L6 loud-reject diagnostics.
+- ✅ L4 down-payment COMPLETE (byte-identical): extracted the ReturnNode coercion block into
+  `emit_return_coerced!(b, val, ctx)` (values.jl); replaced 8 of 9 sites (flow.jl ×6,
+  conditionals.jl ×1, stackified.jl ×1), −187 lines. The 9th site (stackified.jl ~1563,
+  generate_stackified_flow terminator) was LEFT inlined ON PURPOSE: its else-branch has extra
+  WBUILD-4000 ref.cast branches + a val_bytes byte-inspection that conditionally skips
+  extern_convert_any → NOT byte-identical → folds into L3/L4-proper. Byte-identical vs baseline;
+  full suite confirming.
+
+### ▶ REMAINING WORK — all DEEP/behavior-changing; do with the triple oracle, commit only GREEN
+The "cheap hacky ad-hoc fixes" (the 7 fix_* byte-rewriters + the dead byte-scan validator) are
+GONE. What remains is the deeper production-readiness refactoring — each is behavior-adjacent and
+warrants care (the worst failure mode is a silent wrong-value regression on a path the suite
+doesn't cover, so lean on the differential fuzzer + add targeted backfills for any newly-touched
+path):
+  - **L4 proper — principled WasmGC HeapType lattice + a single `coerce!`** replacing
+    `return_type_compatible`'s special-case pile (values.jl:136) AND `emit_return_coerced!`'s
+    else-branch ladder TOGETHER (you must only PERMIT a (value,return) pair if you also EMIT its
+    coercion, else invalid wasm). A true lattice is MORE permissive than today's asymmetric rules
+    (e.g. `return AnyRef` currently omits EqRef; ExternRef/AnyRef/StructRef sinks; PURE-207
+    I32→I64; PURE-6024 always key off func_ret_wasm; the stackified.jl:~1890 i64-phi false-trap).
+    NOT byte-identical → gate suite+fuzzer; resolve the `Incompatible` verdict into the L6
+    loud-reject path so p_unionvec/p_anyret become explicit rejects, not silent invalid modules.
+  - **L3 — kill byte-inspection hacks** (~82 `field_val_bytes[1]==Opcode.X` / LEB-decode sites +
+    `has_ref_producing_gc_op` (23 callers) + `_get_local_wasm_type` + the inline dead-return
+    rewriter + `strip_excess_after_function_end` in generate.jl + stackified.jl:1563's val_bytes
+    scan) → drive decisions off the typed `Vector{WasmInstr}` / pushed WasmValType instead of
+    scanning raw bytes. Behavior-preserving where possible (byte-identity-gate those); backfill the
+    boxing/coercion case each gated. TIP: reuse the discovery-instrument trick — env-gate a hack,
+    neutralize-probe across the suite; byte-identical-when-off ⇒ provably dead ⇒ delete.
+  - **L2 — collapse the 3 flow generators into `generate_stackified_flow`** (flow.jl
+    generate_if_then_else/generate_loop_code/generate_branched_loops + conditionals.jl
+    generate_nested_conditionals → the one CFG-driven lowering). HIGH risk, DO LAST; NOT covered by
+    the byte probe; FIRST wire `probe_digest`/`migration_digest` vs `dev/migration_baseline.txt`
+    into CI, then re-route one shape at a time gated on suite+fuzzer. (The phi-merge fix already
+    routes multi-phi merges here — a down-payment on this consolidation.)
+  - **L5 — strict-by-default** (arm WT_BUILDER_STRICT once L3 lands so all emitters have exact
+    stack models). **L6 — loud-reject diagnostics** for out-of-subset Julia (rides set_context! +
+    the L4 lattice's Incompatible verdict).
 
 ## ▶▶ RESUME HERE
 Branch `wt-builder-cleanup`. Phase 0 + phi-fix + Loop-1 deletions landed (see STATUS + git log).
