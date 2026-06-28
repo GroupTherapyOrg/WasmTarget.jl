@@ -114,6 +114,12 @@ _wt_shard0() && include("test_aqua.jl")
 include("utils.jl")
 include(joinpath(@__DIR__, "integration", "pi_islands.jl"))  # PlutoIslands island fixtures
 
+# Cleanup-loop regression guards (shard 0 only — node-differential, run once). The multivar
+# if/else phi-merge root fix + the Loop-1 fix_* deletion guards (migrated emitters are correct
+# for every case the deleted passes addressed). See dev/cleanup_ledger.md.
+_wt_shard0() && include(joinpath(@__DIR__, "fuzz", "repro_multivar_phi_merge.jl"))
+_wt_shard0() && include("cleanup_loop1_backfills.jl")
+
 # ── Parallel-phase infrastructure (process sharding) ─────────────────────────
 # Test fixtures hoisted from inside phase testsets — `struct`/`using` are illegal
 # inside the `if` block each phase now sits in (only top-level allows them).
@@ -10861,41 +10867,11 @@ console.log(JSON.stringify({
         @test compare_julia_wasm(_wt_ho_entry, 5).pass
     end
 
-    # Downstream regression (WasmMakie figure islands via Therapy): a byte-fixer
-    # pass must not corrupt a `select_t`/`if` REF type operand. Type index 167
-    # LEB128-encodes as `0xA7 0x01`, and 0xA7 is also `i32.wrap_i64`'s opcode, so
-    # fix_i32_wrap_after_i32_ops — which lacked select_t/ref-blocktype operand
-    # skipping — walked INTO the operand, saw 0xA7, and stripped it, rewriting
-    # `(ref null 167)` → `(ref null 1)`. That broke the 2×2 reactive dashboard
-    # island ("type mismatch: expected (ref null $A), found (ref null $B)").
-    @pphase "Phase 76: select_t / if-blocktype operand preservation (downstream)" begin
-        fixwrap = WasmTarget.fix_i32_wrap_after_i32_ops
-        SELECT_T = 0x1c; REF_NULL = 0x63; WRAP = 0xa7; IFOP = 0x04; ENDOP = 0x0b
-        leb167 = UInt8[0xa7, 0x01]  # unsigned LEB128 of type index 167
-
-        @testset "select_t (ref null 167) operand survives the wrap fixer" begin
-            # local.get 0/1/2 ; select_t 1 (ref null 167) ; ref.cast 167 ; end
-            sel = UInt8[0x20,0x00, 0x20,0x01, 0x20,0x02,
-                        SELECT_T, 0x01, REF_NULL, leb167...,
-                        0xfb, 0x17, leb167...,  # ref.cast 167
-                        ENDOP]
-            out = fixwrap(copy(sel))
-            @test out == sel                                  # untouched
-            si = findfirst(==(SELECT_T), out)
-            @test out[si:si+4] == UInt8[SELECT_T, 0x01, REF_NULL, 0xa7, 0x01]
-        end
-
-        @testset "if (ref null 167) blocktype operand survives" begin
-            blk = UInt8[IFOP, REF_NULL, leb167..., 0x20,0x00, ENDOP, ENDOP]
-            @test fixwrap(copy(blk)) == blk
-        end
-
-        @testset "a genuinely spurious i32.wrap_i64 is still stripped" begin
-            # i32.eq (i32-producing, 0x46) followed by i32.wrap_i64 → wrap removed
-            spur = UInt8[0x20,0x00, 0x20,0x01, 0x46, WRAP, ENDOP]
-            @test fixwrap(copy(spur)) == UInt8[0x20,0x00, 0x20,0x01, 0x46, ENDOP]
-        end
-    end
+    # (Phase 76 removed in cleanup Loop 1, 2026-06-28: it unit-tested the byte-fixer
+    # fix_i32_wrap_after_i32_ops, which has been DELETED — the typed InstrBuilder now emits
+    # correct wrap placement up front, so no post-emission rewrite exists to corrupt a
+    # select_t/if ref operand. The downstream-regression INTENT is preserved end-to-end by
+    # the Loop-1 backfills, e.g. _no_wrap_after_i32_op in test/cleanup_loop1_backfills.jl.)
 
     # Soundness guard (G1): a wrong-value stub buried in a DISCOVERED (non-entry)
     # function used to compile "clean" via the downgrade in diagnostics.jl, only

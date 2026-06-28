@@ -99,8 +99,41 @@ patch becomes principled code + a guarding test.
 - The CI invariant guard (don't let raw emission creep back).
 - The "independently re-verify before commit / revert offending file" round protocol.
 
-## ▶▶ RESUME HERE (post-compaction launch)
-You are on branch `wt-builder-cleanup`, nothing started yet. First action = **launch the DISCOVERY
-phase** (Phase 0): a Workflow that runs the strict-mode emission probe + the static patch census and
-writes `dev/cleanup_ledger.md`. THEN work the ledger via the cleanup loops above, triple-gated,
-committing green deltas. Memory: [[wt-builder-cleanup-loop]]. Migration record: [[wt-migration-loop]].
+## ⚙ OPERATIONAL PROTOCOL (learned 2026-06-28 — follow every round)
+1. **NEVER edit `src/` while a `Pkg.test()` suite is running.** Shards precompile/load WT at start;
+   editing mid-run contaminates the result (some shards load old, some new) and can race precompile
+   (it cost a wasted ~stalled run). Serialize: edit → fast-check → suite → wait → next edit.
+2. **Fast oracle BEFORE every expensive full suite** (~seconds vs ~15 min): `julia --project=. -e
+   'using WasmTarget'` (compile-check — catches undefined refs/syntax from deletions) → compile the
+   migration + `cleanup_probe_corpus.jl` corpora (no NEW `ERR`s; 2 pre-existing: p_unionvec/p_anyret)
+   → run `test/cleanup_loop1_backfills.jl` + `test/fuzz/repro_multivar_phi_merge.jl` standalone
+   (`include("test/utils.jl")` first). Only spend the full suite once these are green.
+3. **Full suite via `Pkg.test()`** (NOT `julia test/runtests.jl` — that lacks test-only deps like
+   Aqua and dies at line ~112). Background it; it's harness-tracked and re-invokes the loop on
+   completion. A trailing `echo` masks the real rc → grep the log for `tests passed` /
+   `Some tests did not pass`, don't trust the notification's exit code.
+4. **Delete whole functions** with a boundary-aware text script (def line → first col-0 `end`, plus
+   the preceding `"""docstring"""`/`#`-comment block); keep SHARED helpers. Verify no refs remain
+   (`grep`), incl. tests that directly call the deleted fn (e.g. a Phase-NN unit test of a byte-fixer
+   → delete it; its intent is covered e2e by the backfills).
+5. **Oracle choice:** byte-identity (vs `dev/migration_baseline.txt`) only for refactors that SHOULD
+   NOT change output; behavior-changing cleanups (deleting a live pass, the phi-merge fix) gate on
+   the suite + diff fuzzer. After a behavior change, REGENERATE the baseline.
+6. **ROOT-CAUSE MANDATE** (top of this file): a RED is a real emitter bug → fix at the source +
+   backfill (flip the @test_broken repro to @test); never workaround.
+
+## STATUS (2026-06-28, autonomous run)
+- ✅ Phase 0 DISCOVERY done (instrument WT_NEUTRALIZE [now removed with the passes], dynamic probe,
+  11-agent census → `dev/cleanup_ledger.md`).
+- ✅ Soundness bug ROOT-FIXED: multivar if/else phi-merge → routed to stackifier (commit 70deff2).
+- ✅ Loop 1: the 7 dead `fix_*` passes + `_wt_neutralized` + `validate_emitted_bytes!`(L3.a, pending)
+  deletion in progress; the WT_NEUTRALIZE instrument is retired (passes gone).
+- ▶ NEXT: L3.a (validate_emitted_bytes!/ctx.validator) · L3 byte-inspection hacks · L4
+  return_type_compatible → WasmGC lattice + coerce! · L2 collapse flow generators → stackifier ·
+  L5 strict-by-default · L6 loud-reject diagnostics. Drive autonomously, triple-gated.
+
+## ▶▶ RESUME HERE
+Branch `wt-builder-cleanup`. Phase 0 + phi-fix + Loop-1 deletions landed (see STATUS + git log).
+Continue the loop sequence above, triple-gated per the OPERATIONAL PROTOCOL, committing green deltas,
+root-fixing every RED. Memory: [[wt-builder-cleanup-loop]] · [[feedback-always-fix-root-cause]].
+Migration record: [[wt-migration-loop]].
