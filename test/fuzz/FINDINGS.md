@@ -6,6 +6,19 @@ across fuzzer re-records** by `Ledger.record_gap!`, so a fix loop's notes are ne
 clobbered. See `failures/INDEX.md` for the live list. This file holds only
 observations that don't map onto a single auto-generated gap.
 
+## ⚠ Union{Int,Float}-return representation is lossy + has a validation gap (2026-06-28)
+
+`f(x) = x>0 ? 1 : 2.5` (return `Union{Float64,Int64}`) fails wasm validation ("expected f64,
+found i64") AND, more deeply, WT represents `Union{Float64,Int64}` as **f64** — which cannot
+distinguish Int `1` from Float `1.0` at runtime (lossy). The immediate symptom: the i64 arm of
+the merge isn't `f64.convert`ed to the f64 union rep (generate_nested_conditionals / the phi
+result type for a numeric Union isn't driving the conversion). The deeper issue is the
+representation itself. **dart2wasm boxes union/dynamic values** (a common ref with a class-id
+tag) rather than collapsing to a single numeric — that is the principled fix (box numeric Union
+arms to a tagged ref), but it is a substantial change to WT's union model, NOT a quick coercion
+patch. Repro: `p_unionvec`/`p_anyret` in `test/fuzz/cleanup_probe_corpus.jl` (the 2 standing
+probe ERRs). Out of scope for the byte-identical cleanup; flagged for the union-model work.
+
 ## ✅ SOUNDNESS FIXED (2026-06-28, cleanup loop): multivar if/else phi-merge drops all-but-one
 
 A diamond merge (an `if/else` whose branches assign **≥2 variables still live after the merge**)

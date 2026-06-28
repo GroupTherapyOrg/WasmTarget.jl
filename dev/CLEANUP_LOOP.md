@@ -129,35 +129,29 @@ patch becomes principled code + a guarding test.
 - ✅ Loop 1 COMPLETE: the 7 dead `fix_*` passes + `_wt_neutralized` deleted, full suite GREEN (634f850).
 - ✅ L3.a COMPLETE: `validate_emitted_bytes!` byte-scanner deleted (270bdf9) + the orphaned
   `ctx.validator` field/initializers removed (byte-identical). Checkpoint suite confirming.
-- ✅ L4 down-payment COMPLETE (byte-identical): extracted the ReturnNode coercion block into
-  `emit_return_coerced!(b, val, ctx)` (values.jl); replaced 8 of 9 sites (flow.jl ×6,
-  conditionals.jl ×1, stackified.jl ×1), −187 lines. The 9th site (stackified.jl ~1563,
-  generate_stackified_flow terminator) was LEFT inlined ON PURPOSE: its else-branch has extra
-  WBUILD-4000 ref.cast branches + a val_bytes byte-inspection that conditionally skips
-  extern_convert_any → NOT byte-identical → folds into L3/L4-proper. Byte-identical vs baseline;
-  full suite confirming.
+- ✅ L4 down-payment COMPLETE (byte-identical, 991517f): extracted the ReturnNode coercion block
+  into `emit_return_coerced!` (values.jl); replaced 8 of 9 sites, −187 lines. 9th site
+  (stackified.jl ~1563) left inlined on purpose (extra WBUILD-4000 ref.cast + val_bytes scan).
+- ✅ L4 PROPER COMPLETE (f518d2a, dart2wasm-guided + full-suite+fuzzer GREEN): replaced
+  `return_type_compatible`'s special-case pile with `wasm_subtype` (WasmGC HeapType lattice
+  mirroring dart2wasm wasm_builder type.dart 1:1) + `emit_return_coerced!` doing dart2wasm
+  translator.dart `convertType` (upcast free / downcast ref.cast / extern↔any / numeric ladder).
+- ✅ L3 type-related byte-inspection COMPLETE (byte-identical): `has_ref_producing_gc_op` deleted,
+  22 sites → `_wt_is_ref(infer_value_wasm_type(...))` (d5f3c6e); 8 `_bytes[1]==REF_NULL` →
+  `is_nothing_value(...)` (dcbcc24). 30 byte-scans → typed checks.
 
-### ▶ REMAINING WORK — all DEEP/behavior-changing; do with the triple oracle, commit only GREEN
-The "cheap hacky ad-hoc fixes" (the 7 fix_* byte-rewriters + the dead byte-scan validator) are
-GONE. What remains is the deeper production-readiness refactoring — each is behavior-adjacent and
-warrants care (the worst failure mode is a silent wrong-value regression on a path the suite
-doesn't cover, so lean on the differential fuzzer + add targeted backfills for any newly-touched
-path):
-  - **L4 proper — principled WasmGC HeapType lattice + a single `coerce!`** replacing
-    `return_type_compatible`'s special-case pile (values.jl:136) AND `emit_return_coerced!`'s
-    else-branch ladder TOGETHER (you must only PERMIT a (value,return) pair if you also EMIT its
-    coercion, else invalid wasm). A true lattice is MORE permissive than today's asymmetric rules
-    (e.g. `return AnyRef` currently omits EqRef; ExternRef/AnyRef/StructRef sinks; PURE-207
-    I32→I64; PURE-6024 always key off func_ret_wasm; the stackified.jl:~1890 i64-phi false-trap).
-    NOT byte-identical → gate suite+fuzzer; resolve the `Incompatible` verdict into the L6
-    loud-reject path so p_unionvec/p_anyret become explicit rejects, not silent invalid modules.
-  - **L3 — kill byte-inspection hacks** (~82 `field_val_bytes[1]==Opcode.X` / LEB-decode sites +
-    `has_ref_producing_gc_op` (23 callers) + `_get_local_wasm_type` + the inline dead-return
-    rewriter + `strip_excess_after_function_end` in generate.jl + stackified.jl:1563's val_bytes
-    scan) → drive decisions off the typed `Vector{WasmInstr}` / pushed WasmValType instead of
-    scanning raw bytes. Behavior-preserving where possible (byte-identity-gate those); backfill the
-    boxing/coercion case each gated. TIP: reuse the discovery-instrument trick — env-gate a hack,
-    neutralize-probe across the suite; byte-identical-when-off ⇒ provably dead ⇒ delete.
+### ▶ REMAINING WORK — all DEEP/behavior-changing; SUPERVISED-warranting (the clean byte-identical
+### dart2wasm-aligned harvest above is DONE). Worst failure = silent wrong-value on an uncovered path.
+  - **Union representation** — WT collapses `Union{Int,Float}` to f64 (lossy: Int 1 vs Float 1.0
+    indistinguishable; also a validation gap, the i64 arm isn't f64.convert'd). dart2wasm BOXES
+    union/dynamic values (tagged ref). Principled fix = box numeric Union arms → substantial union-
+    model change. Repro: p_unionvec/p_anyret (the 2 standing probe ERRs). See FINDINGS.md.
+  - **L3 deep — kill the SHAPE/stub byte-inspection** (the remaining ~120 `_bytes[1]==LOCAL_GET`/
+    numeric-const, `_bytes[end]==UNREACHABLE` stub, `_bytes[end-1]==GC_PREFIX&&EXTERN_CONVERT_ANY`,
+    LEB-decode `_get_local_wasm_type`, inline dead-return rewriter, strip_excess). These check
+    compiled FORM not type, so they need the ROOT fix: give `compile_value` a TYPE CHANNEL (return
+    the pushed WasmValType alongside bytes, like dart2wasm's typed values) so callers stop scanning.
+    Big central refactor (compile_value is called everywhere) — supervised.
   - **L2 — collapse the 3 flow generators into `generate_stackified_flow`** (flow.jl
     generate_if_then_else/generate_loop_code/generate_branched_loops + conditionals.jl
     generate_nested_conditionals → the one CFG-driven lowering). HIGH risk, DO LAST; NOT covered by
