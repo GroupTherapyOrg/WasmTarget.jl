@@ -1835,6 +1835,15 @@ function is_simple_conditional(blocks::Vector{BasicBlock}, code)
         end
     end
 
+    # A merge with ≥2 phi nodes (an if/else assigning 2+ vars live past the merge) is NOT
+    # "simple": generate_if_then_else carries only ONE phi through the `if (result T)` block
+    # value and silently drops the rest (multivar phi-merge miscompile — see
+    # test/fuzz/repro_multivar_phi_merge.jl). Fall through to generate_complex_flow, which
+    # routes multi-phi merges to the stackifier (stores every live phi local at the edge).
+    if count(stmt isa Core.PhiNode for stmt in code) >= 2
+        return false
+    end
+
     return true
 end
 

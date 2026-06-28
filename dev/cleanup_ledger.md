@@ -577,25 +577,26 @@ behavior-identical by construction and shares the generate.jl byte-inspection fa
 
 ---
 
-## ⚠ CRITICAL FINDING (Loop-1 execution, 2026-06-28): multivar if/else phi-merge miscompile
+## ✅ CRITICAL FINDING — FIXED (Loop-1 execution, 2026-06-28): multivar if/else phi-merge miscompile
 
 Writing the L1.a backfill (the ledger-prescribed "multi-target-phi differential test") surfaced a
 real, pre-existing, **soundness-critical** miscompilation — exactly what the triple oracle exists
-to catch. An `if/else` whose branches assign **≥2 variables still live after the merge** keeps only
+to catch. An `if/else` whose branches assign **≥2 variables still live after the merge** kept only
 ONE (the value routed through the `if (result T)` block); the others silently read 0.
-`g1(7)`→8 (not 7008); `g3` keeps only the last of 3; `sort2`/`twoUse` drop one. Single-live-var and
-ternary forms are correct (why the 2679-test suite is green). Confirmed native-vs-Node + WAT.
-Repro: `test/fuzz/repro_multivar_phi_merge.jl` (`@test_broken` + controls). Root: a value-producing
-`if (result T)` block carries one value out of a diamond — shared by BOTH flow generators
-(`generate_if_then_else` first-phi `break` at flow.jl:1882-1888; the stackifier path g1 takes).
-**NOT** what `fix_consecutive_local_sets` did (the extra store is never emitted — that pass is still
-genuinely dead). Fix = store every live phi local at the merge edge (HIGH-risk flow work; the
-ledger's L2 dual-lowering + L4 merge-coercion territory; gate on the differential oracle, not
-byte-identity). **Impact on Loop 1:** the behavioral premise ("migrated emitters are correct, so the
-passes are dead") held for the 7 fix_* passes (suite green under WT_NEUTRALIZE=all), but the precise
-backfills revealed an INDEPENDENT flow-merge bug the passes never addressed. The simple deletions
-remain valid; this bug is a separate, higher-priority work item promoted ahead of the mechanical
-cleanup.
+`g1(7)`→8 (not 7008); `g3` kept only the last of 3; `sort2`/`twoUse` dropped one. Single-live-var
+and ternary forms were correct (why the 2679-test suite was green). Confirmed native-vs-Node + WAT.
+**ROOT FIX (Dale's root-cause mandate — commit pending):** route ANY merge with ≥2 phi nodes to
+`generate_stackified_flow`, which stores every live phi local at the edge via
+`set_phi_locals_for_edge!`, instead of the value-block generators (`generate_nested_conditionals` /
+`generate_if_then_else`) that carried only one. Closed BOTH dispatch paths: `generate_complex_flow`
+(stackified.jl `n_phi_nodes >= 2`) + `is_simple_conditional` (flow.jl). Full `Pkg.test()` + diff
+fuzzer GREEN; regression guard CI-wired (`test/fuzz/repro_multivar_phi_merge.jl`). **NOT** what
+`fix_consecutive_local_sets` did (the dropped store was never emitted — that pass is still genuinely
+dead). **Impact on Loop 1:** the behavioral premise ("migrated emitters are correct, so the passes
+are dead") held for the 7 fix_* passes (suite green under WT_NEUTRALIZE=all), and the precise
+backfills additionally caught this INDEPENDENT flow-merge bug — now root-fixed. The mechanical fix_*
+deletions resume on a now-correct foundation. (This is the ROOT-CAUSE MANDATE in action — see
+`dev/CLEANUP_LOOP.md`.)
 
 ## Side findings
 

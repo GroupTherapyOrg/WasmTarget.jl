@@ -6,17 +6,21 @@ across fuzzer re-records** by `Ledger.record_gap!`, so a fix loop's notes are ne
 clobbered. See `failures/INDEX.md` for the live list. This file holds only
 observations that don't map onto a single auto-generated gap.
 
-## ⚠ SOUNDNESS (2026-06-28, cleanup loop): multivar if/else phi-merge drops all-but-one
+## ✅ SOUNDNESS FIXED (2026-06-28, cleanup loop): multivar if/else phi-merge drops all-but-one
 
 A diamond merge (an `if/else` whose branches assign **≥2 variables still live after the merge**)
-is lowered as a value-producing `if (result T)` block that carries only ONE value out — so only
-one phi local is stored; the rest silently read back as 0. `g1(7)`=8 not 7008; `g3` keeps only
-the last of 3; `sort2`/`twoUse` drop one. SINGLE-live-var branches and the ternary form are fine,
-which is why the suite stayed green. Shared by BOTH flow generators (`generate_if_then_else`
-first-phi `break`, and the stackifier path g1 actually takes). Confirmed native-vs-Node + WAT.
-Repro + controls: `test/fuzz/repro_multivar_phi_merge.jl` (`@test_broken`, flips when fixed).
-NOT related to `fix_consecutive_local_sets` (the extra store is never emitted). Fix = store every
-live phi local at the merge edge instead of a single block result (HIGH-risk flow work).
+WAS lowered as a value-producing `if (result T)` block that carried only ONE value out — so only
+one phi local was stored; the rest silently read back as 0. `g1(7)`=8 not 7008; `g3` kept only
+the last of 3; `sort2`/`twoUse` dropped one. SINGLE-live-var branches and the ternary form were
+fine, which is why the suite stayed green. Confirmed native-vs-Node + WAT.
+**ROOT FIX (Dale's root-cause mandate):** route ANY merge with ≥2 phi nodes to
+`generate_stackified_flow`, which stores every live phi local at the edge via
+`set_phi_locals_for_edge!` — instead of the value-block generators (`generate_nested_conditionals`
+/ `generate_if_then_else`) that could carry only one. Closed BOTH dispatch paths:
+`generate_complex_flow` (stackified.jl, `n_phi_nodes >= 2`) + `is_simple_conditional` (flow.jl).
+Full `Pkg.test()` + differential fuzzer GREEN. Regression guard (now passing, CI-wired):
+`test/fuzz/repro_multivar_phi_merge.jl`. NOT related to `fix_consecutive_local_sets` (which stays
+genuinely dead — the dropped store was never emitted).
 
 ## Remaining 16 gaps (the deep/feature long tail) — all root-caused & triaged for Part 2
 

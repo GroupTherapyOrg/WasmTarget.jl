@@ -26,6 +26,7 @@ function generate_complex_flow(ctx::AbstractCompilationContext, blocks::Vector{B
     # but loops and multi-conditional patterns with phi nodes require the stackifier's
     # approach of emitting loop/br for backedges and storing to phi locals at each branch.
     has_phi_nodes = any(stmt isa Core.PhiNode for stmt in code)
+    n_phi_nodes = count(stmt isa Core.PhiNode for stmt in code)
     has_loops = any(ctx.loop_headers)
     # P2-batch14: an IR `unreachable` (ReturnNode with no value — the marker after
     # always-throwing calls) breaks the nested-conditionals generator: with two
@@ -34,8 +35,13 @@ function generate_complex_flow(ctx::AbstractCompilationContext, blocks::Vector{B
     # (`Int8(0) == Int8(x) ? 0 : x` unconditionally returned 0 — gap
     # 1bcb0e7214c3 family). The stackifier handles these shapes correctly.
     has_unreachable = any(stmt isa Core.ReturnNode && !isdefined(stmt, :val) for stmt in code)
+    # A merge with ≥2 phi nodes (an if/else assigning 2+ vars live past the merge) MUST use the
+    # stackifier: generate_nested_conditionals / generate_if_then_else lower the diamond as a
+    # single value-producing `if (result T)` block that carries only ONE phi value out and
+    # silently drops the rest (multivar phi-merge miscompile — test/fuzz/repro_multivar_phi_merge.jl).
+    # generate_stackified_flow stores EVERY live phi local at the edge via set_phi_locals_for_edge!.
     if has_loops || length(conditionals) > 2 || (length(conditionals) >= 2 && has_phi_nodes) ||
-       (length(conditionals) >= 2 && has_unreachable)
+       (length(conditionals) >= 2 && has_unreachable) || n_phi_nodes >= 2
         return generate_stackified_flow(ctx, blocks, code)
     end
 

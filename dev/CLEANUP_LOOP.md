@@ -10,6 +10,18 @@ removal safe with the **triple oracle**, backfilling a guarding test for every h
 End state: sound-by-construction emission + a principled type lattice = dart2wasm-level structural
 production readiness.
 
+## ⭐ ROOT-CAUSE MANDATE (Dale, 2026-06-28) — applies to EVERY loop, throughout
+**When the triple oracle surfaces a real bug, ALWAYS fix the ROOT CAUSE at the emit site — never
+defer, never work around, never paper over.** This is the loop's entire premise: a `fix_*` /
+post-emission hack is deletable BECAUSE the migrated emitter is correct; the moment the oracle shows
+an emitter is *wrong* (a `RED`), the deliverable becomes "make the emitter emit correct bytes by
+construction" (the right algorithm / representation / type), then backfill a regression so it can
+never silently return. A workaround that merely re-hides the symptom is the exact debt this loop
+exists to delete. Fixing the root is in-scope by default — it is not a detour from the cleanup, it
+IS the cleanup. (First instance: the multivar if/else phi-merge miscompile — routed to the
+stackifier's correct per-edge phi-store instead of the value-block generators that dropped phis;
+see the "CRITICAL FINDING" in `cleanup_ledger.md` + `test/fuzz/repro_multivar_phi_merge.jl`.)
+
 ## The triple oracle (why deletion is now safe)
 Every cleanup step runs all three; green on all = the hack is gone for good:
 1. **Strict model** (`WT_BUILDER_STRICT=1`) — structural/stack/type-balance breakage throws at the

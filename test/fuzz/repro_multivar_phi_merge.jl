@@ -1,8 +1,14 @@
-# REPRO — silent miscompilation: if/else merge with ≥2 live phi locals drops all but one.
+# REGRESSION GUARD — multivar if/else phi-merge (was: silent miscompile; FIXED 2026-06-28).
 #
-# Discovered 2026-06-28 by the cleanup loop (writing the fix_consecutive_local_sets backfill).
-# Native-vs-Node differential + WAT both confirm it. NOT a fuzzer gap (no hash id); a
-# cross-cutting flow-codegen bug → recorded here + pointer in FINDINGS.md.
+# Discovered 2026-06-28 by the cleanup loop (writing the fix_consecutive_local_sets backfill);
+# native-vs-Node differential + WAT confirmed it. FIXED the same day at the ROOT (per Dale's
+# root-cause mandate): the dispatcher routed multi-phi merges to value-block generators that
+# could only carry ONE phi out of an `if (result T)` block; now ANY merge with ≥2 phi nodes is
+# routed to generate_stackified_flow, which stores EVERY live phi local at the edge via
+# set_phi_locals_for_edge!. Guards both dispatch paths: generate_complex_flow (stackified.jl,
+# `n_phi_nodes >= 2`) and is_simple_conditional (flow.jl). Full suite + diff fuzzer GREEN.
+# The cases below now PASS (were @test_broken pre-fix); they stay as a permanent regression guard.
+# NOT a fuzzer gap (no hash id); a cross-cutting flow-codegen bug → also noted in FINDINGS.md.
 #
 # THE BUG
 # An `if/else` whose branches assign 2+ variables that are STILL LIVE after the merge keeps
@@ -60,12 +66,16 @@ twoUse(x::Int64) = (p = 0; q = 0; if x > 0; p = x; q = x * 2; else; p = -x; q = 
 pick1(x::Int64, y::Int64) = (m = 0; if x < y; m = y; else; m = x; end; m)
 ternary2(n::Int64) = (a = n > 0 ? n : -n; b = n > 0 ? n + 1 : -n - 1; a * 1000 + b)
 
-@testset "multivar phi-merge miscompilation (DOCUMENTS THE BUG — broken cases are @test_broken)" begin
-    @test_broken compare_julia_wasm(g1, Int64(7)).pass
-    @test_broken compare_julia_wasm(g3, Int64(7)).pass
-    @test_broken compare_julia_wasm(sort2, Int64(3), Int64(8)).pass
-    @test_broken compare_julia_wasm(twoUse, Int64(5)).pass
-    # controls (the loop's fix must keep these green):
+@testset "multivar phi-merge — FIXED (root-caused: multi-phi → stackifier per-edge phi store)" begin
+    @test compare_julia_wasm(g1, Int64(7)).pass
+    @test compare_julia_wasm(g1, Int64(-3)).pass
+    @test compare_julia_wasm(g3, Int64(7)).pass
+    @test compare_julia_wasm(g3, Int64(-2)).pass
+    @test compare_julia_wasm(sort2, Int64(3), Int64(8)).pass
+    @test compare_julia_wasm(sort2, Int64(9), Int64(2)).pass
+    @test compare_julia_wasm(twoUse, Int64(5)).pass
+    @test compare_julia_wasm(twoUse, Int64(-4)).pass
+    # controls (must stay green — single live var / ternary form, never miscompiled):
     @test compare_julia_wasm(pick1, Int64(3), Int64(8)).pass
     @test compare_julia_wasm(ternary2, Int64(7)).pass
 end
