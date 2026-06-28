@@ -44,10 +44,17 @@ modules** vs the active-passes baseline. This reconciles with the static census:
 typed InstrBuilder emits correct bytes UP FRONT, so these post-emission rewriters are provably
 dead on the corpus and deletable (triple-gated, with backfilled regressions).
 
-**Behavioral confirmation still pending:** a full 2679-test suite run under `WT_NEUTRALIZE=all`
-is IN PROGRESS. Do not land any Loop-1 deletion until that run is GREEN.
+**Behavioral confirmation — DONE (2026-06-28): GREEN.** The full suite (10 shards / diff fuzzer /
+stdlib catalogues / integration fixtures) ran under `WT_NEUTRALIZE=all` and produced **exactly ONE
+failure across all shards**, at `runtests.jl:10896` — the Phase-76 subtest "a genuinely spurious
+i32.wrap_i64 is still stripped", which DIRECTLY calls `fix_i32_wrap_after_i32_ops(spur)` and asserts
+the byte-rewrite fires. With the pass neutralized it is a no-op, so a *self-referential unit test of
+the neutralized pass* fails — NOT a codegen regression (the other two Phase-76 subtests, which assert
+the pass does not corrupt operands, pass trivially). This is precisely the L1.b "pins the rewriter's
+OWN behavior → deleted with the pass" case. **Conclusion: all 7 `fix_*` passes are behaviorally dead
+for real codegen; the lone failure is removed when the pass + its self-test are deleted.**
 
-<!-- SUITE: pending -->
+<!-- SUITE: GREEN modulo runtests.jl:10896 (Phase-76 self-test of the neutralized pass; retired with fix_i32_wrap_after_i32_ops) -->
 
 **Pre-existing failures (NOT caused by neutralization):** `p_unionvec` and `p_anyret` fail wasm
 validation EVEN WITH passes active — union/Any-return gaps that no `fix_*` rescues. These are
