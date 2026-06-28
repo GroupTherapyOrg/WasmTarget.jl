@@ -3170,7 +3170,6 @@ function ictx_prebaked(code_info, mod::WasmModule, reg::TypeRegistry)::InplaceCo
         Tuple{Tuple{Module, Symbol}, UInt32}[],  # module_globals
         nothing,                       # scratch_locals::Nothing
         nothing,                       # memoryref_offsets::Nothing
-        WasmStackValidator(enabled=true, func_name="func_0"),  # validator
         false,                         # last_stmt_was_stub::Bool
         nothing,                       # slot_locals::Nothing
         nothing,                       # dispatch_registry::Nothing
@@ -3214,7 +3213,6 @@ function run_direct(code_info)::Vector{UInt8}
         nothing, nothing, nothing, nothing,
         Tuple{Tuple{Module, Symbol}, UInt32}[],
         nothing, nothing,
-        WasmStackValidator(enabled=true, func_name="func_0"),
         false, nothing, nothing, nothing
     )
 
@@ -3348,7 +3346,6 @@ function run_e2e_inlined()::Vector{UInt8}
         nothing, nothing, nothing, nothing,
         Tuple{Tuple{Module, Symbol}, UInt32}[],
         nothing, nothing,
-        WasmStackValidator(enabled=true, func_name="func_0"),
         false, nothing, nothing, nothing
     )
 
@@ -3415,7 +3412,6 @@ function run_selfhost()::Vector{UInt8}
         nothing, nothing, nothing, nothing,
         Tuple{Tuple{Module, Symbol}, UInt32}[],
         nothing, nothing,
-        WasmStackValidator(enabled=true, func_name="func_0"),
         false, nothing, nothing, nothing
     )
 
@@ -3479,7 +3475,6 @@ function run_selfhost_v2()::Vector{UInt8}
         nothing, nothing, nothing, nothing,
         Tuple{Tuple{Module, Symbol}, UInt32}[],
         nothing, nothing,
-        WasmStackValidator(enabled=true, func_name="func_0"),
         false, nothing, nothing, nothing
     )
 
@@ -3564,7 +3559,6 @@ function run_selfhost_final()::Vector{UInt8}
         nothing, nothing, nothing, nothing,
         Tuple{Tuple{Module, Symbol}, UInt32}[],
         nothing, nothing,
-        WasmStackValidator(enabled=true, func_name="func_0"),
         false, nothing, nothing, nothing
     )
 
