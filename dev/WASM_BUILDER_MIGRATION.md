@@ -246,3 +246,33 @@ compile_new(~1080)/compile_foreigncall(~1080) · compile.jl(413) · flow.jl/cond
 stackified.jl (flow generators — 1.13 gate) · dispatch.jl(276, mostly emit_*!(bytes,…)
 buffer helpers — delete top-down) · types.jl/generate.jl/strings.jl(remaining helpers).
 Same chunked method; each mega-dispatcher is a compile_value-scale effort.
+
+## ✅ MIGRATION COMPLETE + VALIDATED (2026-06-27/28)
+
+All ~7,160 codegen function-body instruction-emission sites are on the typed InstrBuilder.
+Residual = 50 raw sites, ALL out-of-scope: module-section serialization (to_bytes_mvp,
+mini-constructors, encode_block_type) + intentional byte-inspecting/byte-exact local buffers.
+6 autonomous loop rounds (Workflow wt-builder-migration-loop) + manual foundation.
+**Validated: full `Pkg.test()` GREEN — 2679 tests / 10 shards (Aqua + Supposition differential
+fuzz), 0 fail / 0 error.** Byte-identical on the frozen corpus every round.
+Phase-6 invariant LOCKED in CI (runtests "InstrBuilder migration invariant": total raw <=60,
+calls/invoke/statements/int128 == 0).
+
+### CORRECTION to the original plan: validator + fix_* are NOT dead — they are ACTIVE
+`validate_emitted_bytes!` is CALLED (generate.jl + conditionals.jl). All 7 `fix_*` byte-rewrite
+passes are ACTIVELY invoked (4-6 call sites each) and still rewrite emitted bytes — that is WHY
+the migration stayed byte-identical (it kept them). So deleting them is the BEHAVIORAL cleanup
+loop, NOT a byte-identical freebie:
+
+### NEXT: the cleanup loops (same Workflow engine; oracle = strict model + full suite + diff fuzzer)
+1. Turn `WT_BUILDER_STRICT` ON in CI (now safe — model validated against 2679 green tests).
+2. Per `fix_*` pass: delete it → run suite+fuzzer → if green, the strict model proved it
+   redundant (the builder emits correct bytes without the post-rewrite); if red, the model
+   pinpoints what it was compensating for → fix at the emit site. NOT byte-identical (output
+   changes for affected fns) — suite/fuzzer is the oracle, not the frozen corpus.
+3. Pin + fix the 1.13 Vector-state ODE bug WITH strict mode → flip simplediffeq_diff.jl
+   @test_skip -> @test (the acceptance gate).
+4. Collapse the two flow generators (flow.jl + stackified) into one.
+5. Replace the ad-hoc return_type_compatible pile with a real WasmGC type lattice.
+6. User-facing loud-reject diagnostics (out-of-subset → precise "rewrite your Julia" errors),
+   riding on the builder's set_context! source tracking + the type model.
