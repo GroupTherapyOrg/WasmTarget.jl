@@ -4397,6 +4397,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     if (arg_type === Int128 || arg_type === UInt128) && func isa GlobalRef && func.name in
             (:checked_smul_int, :checked_umul_int, :checked_sadd_int, :checked_uadd_int,
              :checked_ssub_int, :checked_usub_int, :checked_sdiv_int, :checked_udiv_int,
+             :checked_srem_int, :checked_urem_int,
              :sdiv_int, :udiv_int, :srem_int, :urem_int)
         # 128-bit checked/div/rem arithmetic unsupported. Loud reject (returns a value natively).
         emit_unsupported_stub!(ctx, bytes, :unsupported_method,
@@ -5261,6 +5262,15 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     # Byte swap (used in Char ↔ codepoint conversion)
     # WebAssembly has no native bswap — implement with bit manipulation
     elseif is_func(func, :bswap_int)
+        if is_128bit
+            # 128-bit byte-swap is unsupported: the i64 reversal sequence below would run on a
+            # struct value → invalid wasm. Loud-reject (sound trap / strict reject) like the
+            # Int128 div/rem guard, rather than emitting an invalid module. (Full impl = reverse
+            # 16 bytes = bswap each i64 limb + swap lo/hi; deferred — niche op.)
+            emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+                "128-bit byte-swap (Int128/UInt128)"; idx=idx)
+            return bytes
+        end
         # Allocate a scratch local to hold the input value (need it 4 times)
         scratch_local = length(ctx.locals) + ctx.n_params
         push!(ctx.locals, is_32bit ? I32 : I64)

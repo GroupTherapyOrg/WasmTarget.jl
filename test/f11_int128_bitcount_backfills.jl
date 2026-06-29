@@ -30,3 +30,18 @@
     @test compare_julia_wasm(i128_not, Int64(5)).pass
     @test compare_julia_wasm(i128_not, Int64(0)).pass
 end
+
+@testset "F11b Int128 div/rem/bswap loud-reject (no invalid wasm)" begin
+    # div/rem/bswap on Int128 have no 128-bit emitter (long division needs a loop primitive WT
+    # lacks; bswap needs a 16-byte reverse). They must LOUD-REJECT (WasmCompileError), never
+    # emit invalid wasm. `rem`→checked_srem_int and bswap_int previously fell through to a
+    # single i64 op on a 128-bit struct → wasm-tools rejected the module. Now guarded.
+    mrem(a::Int64)::Int64   = Int64(rem(Int128(a) * Int128(1000), Int128(7)))
+    mdiv(a::Int64)::Int64   = Int64(div(Int128(a) * Int128(1000), Int128(7)))
+    mbswap(a::Int64)::Int64 = Int64(bswap(Int128(a)) >> 120)
+    murem(a::Int64)::Int64  = Int64(rem(UInt128(a) * UInt128(1000), UInt128(7)) % UInt128(7))
+    @test_throws WasmTarget.WasmCompileError WasmTarget.compile(mrem, (Int64,))
+    @test_throws WasmTarget.WasmCompileError WasmTarget.compile(mdiv, (Int64,))
+    @test_throws WasmTarget.WasmCompileError WasmTarget.compile(mbswap, (Int64,))
+    @test_throws WasmTarget.WasmCompileError WasmTarget.compile(murem, (Int64,))
+end
