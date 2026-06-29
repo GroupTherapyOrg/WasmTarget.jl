@@ -85,13 +85,25 @@ typeId at field 0. So WT ALREADY has dart's "field-0 i32 classId on everything +
 - **NOTE — do NOT delete F3's `box_types`/`get_box_type!`.** dart's value-box (immutable `[classId,value]`)
   and Julia's `Core.Box` (a MUTABLE captured-variable cell) are different concepts; F3's box needs a mutable
   field. `get_box_type!` is F3-L2's legitimate (dormant) infrastructure, NOT Loop B shadow. Leave it.
-- **B1 — REMOVE i31 boxing entirely (SOUNDNESS + adopt dart's no-i31).** (a) Fix the lossy/trapping paths
-  calls.jl:2851/2853/6145/6148 + invoke.jl:2110/2113 (unconditional ref.i31 of I64/I32 → truncate ≥2^30 +
-  cast-to-struct trap) → full-width numeric box (§2), as unions.jl already did. (b) Trace + convert the
-  "safe" sites stackified.jl:108/153 to the box too (VERIFY each site's CONSUMER first — there is NO i31.get_*
-  consumer in-tree, so confirm where each i31 value is read). (c) Delete the 3 dead helpers + `should_use_i31`
-  once unused. Real silent-miscompile fix. Gate: differential on a heterogeneous tuple / Any[…] carrying a
-  value ≥ 2^40 native-vs-wasm + full Pkg.test.
+- **B1 — fix the ONE clean reachable silent-truncation (calls.jl:2851/2853) [SCOPED DOWN after reading all
+  sites].** The het-tuple field → AnyRef path boxes I64/I32 via `ref_i31!` UNCONDITIONALLY (no width gate) →
+  TRUNCATES ≥2^30. The F32/F64 branch immediately below (calls.jl:2855-2861) already uses the numeric box —
+  route I64/I32 through the same numeric box (collapse all 4 numeric `fw` into one numeric-box branch). No
+  consumer breaks (no `i31.get_*` exists in-tree; consumers unbox via `ref.cast box; struct.get 1`).
+  **RED-TEST-FIRST (mandatory — verify the path is HIT, not fix-blind):** the lossy line only fires when
+  `union_wasm === AnyRef` (calls.jl:~2812 — the getfield SSA result type's wasm rep is AnyRef, NOT a registered
+  tagged-union ConcreteRef). Must construct a Julia fn whose runtime-indexed heterogeneous tuple field is an
+  Int64 ≥ 2^40 AND whose inferred result maps to AnyRef; confirm native-vs-wasm MISMATCHES before the fix and
+  MATCHES after. (`should_use_i31` = Bool/Int8/UInt8/Int16/UInt16 only, so Int64 never takes the "safe" path;
+  Vector{Any}-of-Int64 already uses the numeric box, NOT this i31 path — so the test must be the het-tuple-AnyRef
+  shape specifically.) Gate: that differential + full Pkg.test.
+  **DEFERRED to later sub-loops (entangled consumers — do NOT touch in B1):**
+  - calls.jl:6144-6151 + invoke.jl:2109-2116 (i31 then `ref_cast!` to a concrete struct = ALWAYS-TRAP + truncate)
+    → B3 (box unification clarifies what "numeric → a non-union concrete ref" should mean; today it traps = loud).
+  - stackified.jl:108/153 (the should_use_i31 "safe" Bool/Int8 paths) → B2/B4: Bool-vs-Int8 are BOTH i31ref =
+    indistinguishable (P1-in-i31-form), AND the comment relies on `ref.eq` for `===` → converting needs the
+    boxed-`===` consumer (classId+value compare, not ref.eq) handled together. Delete `should_use_i31` + the 3
+    dead helpers there.
 - **B2 — THE P1 FIX: store the REAL Julia-type classId (A) in the box, retire the collapse (B).** At every
   numeric-box wrap site write `get_type_id(actual_julia_type)` not `emit_box_type_id!(wasm_type)`; change the
   matching isa/unbox consumers together so Bool/Int8/Int16/Int32/Char become DISTINGUISHABLE. (The struct may
