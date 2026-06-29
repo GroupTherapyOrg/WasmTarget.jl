@@ -5151,6 +5151,10 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         if length(args) == 1 && is_boolean_value(args[1], ctx)
             # Boolean NOT: eqz turns 0->1, 1->0
             _op1!(Opcode.I32_EQZ)
+        elseif is_128bit
+            # F11: 128-bit bitwise NOT (xor each i64 limb with -1) — a single i64.xor on a
+            # 128-bit struct value was invalid wasm (surfaced via count_zeros = count_ones(~x)).
+            append!(bytes, emit_int128_not(ctx, arg_type))
         else
             # Bitwise NOT: x xor -1
             let ib = InstrBuilder(; func_name="compile_call", strict=false)
@@ -5240,11 +5244,19 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         end
 
     elseif is_func(func, :cttz_int)
-        _op1!(is_32bit ? Opcode.I32_CTZ : Opcode.I64_CTZ)
+        if is_128bit
+            append!(bytes, emit_int128_cttz(ctx, arg_type))
+        else
+            _op1!(is_32bit ? Opcode.I32_CTZ : Opcode.I64_CTZ)
+        end
 
     # PURE-9004: Population count (number of set bits)
     elseif is_func(func, :ctpop_int)
-        _op1!(is_32bit ? Opcode.I32_POPCNT : Opcode.I64_POPCNT)
+        if is_128bit
+            append!(bytes, emit_int128_ctpop(ctx, arg_type))
+        else
+            _op1!(is_32bit ? Opcode.I32_POPCNT : Opcode.I64_POPCNT)
+        end
 
     # Byte swap (used in Char ↔ codepoint conversion)
     # WebAssembly has no native bswap — implement with bit manipulation
