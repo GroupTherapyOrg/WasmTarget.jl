@@ -171,6 +171,32 @@ picks I32 over AnyRef) — likely `julia_to_wasm_type_concrete`/`get_concrete_wa
 the het-tuple getfield result store. Re-probe `htup_disc` (Int8→2, Int32→3) for green. This is a Loop C
 down-payment pulled forward BECAUSE it's the fundamental that unlocks B2 distinguishability + B′ collections.
 
+## ★★★ THE SINGLE-SOURCE FUNNEL (Dale's call 2026-06-29: "use robust single-source commands, not ad-hoc per-site")
+The wasm_builder lesson applied. The probe VALIDATED the mechanism (stay-boxed + real classId + read-classId →
+`htup_disc` green) but the impl was scattered (1 of ~41 producer sites hand-edited + 2 inlined isa copies) — REVERTED.
+Rebuild as ONE funnel + ONE discriminator, dart2wasm `convertType`-faithful:
+
+- **ONE producer = `convert_type!` gains the box/unbox arms** (values.jl:383; today it explicitly SKIPS them). Add
+  an optional `from_julia::Union{Type,Nothing}=nothing` so the box stores the REAL classId:
+  - numeric `from` → ref `to`  ⇒ **box**: `emit_classid_box!(b, ctx, from_wasm, from_julia)` then upcast the box ref
+    to `to` (the box subtypes `$JlBase`, so it's anyref-compatible).
+  - ref `from` → numeric `to`  ⇒ **unbox**: `ref.cast <numeric box>; struct.get 1`.
+- **ONE producer helper `emit_classid_box!(b, ctx, wasm_type, julia_type)`**: `get_numeric_box_type!(wasm_type)`;
+  store value in a scratch local; push classId = `julia_type===nothing ? emit_box_type_id!(wasm_type) [fallback] :
+  emit_type_id!(julia_type) [REAL]`; reload; `struct.new`. ALL boxing routes here → retires the ~41 scattered
+  `emit_box_type_id!`+`struct_new` sites + `emit_numeric_to_anyref!`/`_externref!`.
+- **ONE consumer helper `emit_isa_classid!(b, ctx, box_idx, check_type)`**: `tee tmp; ref.test(box_idx); if;
+  reload; ref.cast(box_idx); struct.get 0; i32.const(get_type_id(check_type)); i32.eq; else 0; end` (the safe
+  guarded pattern already used for structs at calls.jl:1407-1430). ALL `isa`/`typeof`/`===` on a boxed numeric
+  route here → retires the 2 inlined isa copies (calls.jl ExternRef + AnyRef paths) + same for typeof/===.
+- **`needs_anyref_boxing` (single-source already)**: keep the extension (same-wasm-rep Union ⇒ box) — but land it
+  TOGETHER with the funnel so consumers can distinguish (else suite breaks: more boxing, no discriminator).
+- **BUILD ORDER (each committed-green):** (F-i) add the helpers + convert_type! box/unbox arms ADDITIVE/dormant
+  (byte-identical, gate suite) → (F-ii) route the het-tuple producer + isa consumers through them + needs_anyref_boxing
+  extension; red-test `htup_disc` green (correctness gate) → (F-iii) progressively route the other producer/consumer
+  sites through the funnel + DELETE the scattered boxing (per batch: differential + suite) → (F-iv) the i31 family +
+  emit_box_type_id! collapse + union double-box fall out as the routing completes. This IS Loop C's convertType funnel.
+
 ## identityHash/objectid DECISION (locked): primitive box = `[i32 classId, payload]`, NO hash slot —
 objectid of a boxed primitive is value-derived (compute on demand). A hash slot, if ever needed for boxed
 MUTABLE objects, goes at field 1 on the Object-equivalent subtree only, never on primitive boxes (mirrors dart).
