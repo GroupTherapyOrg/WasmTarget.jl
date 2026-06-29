@@ -79,6 +79,39 @@ Float16 ops via Float32, so f32 — not f64 — intermediate is needed for bit-f
 DEFERRED as a focused feature sub-loop (rounding-sensitive; risky to patch piecemeal). Not a
 silent-soundness hole today (invalid wasm fails at validation). **Flag for Dale.**
 
+## 🔴 TOP PRIORITY — SILENT MISCOMPILE: filtered generator → reducer returns 0 (2026-06-29 probe)
+
+`sum(i for i in 1:n if iseven(i))` returns **0** instead of 120 (n=8) — a SILENT WRONG VALUE in a
+very common pattern. Confirmed across `sum`/`maximum` and both named (`iseven`) and anonymous
+(`i->i>5`) predicates (gen_filter_body/sq/gt/max all → 0). NOT invalid wasm, NOT a trap — it
+compiles to valid wasm that silently returns the empty/init value.
+
+Characterization (tight):
+  * `sum(i^2 for i in 1:n)` (UNfiltered generator) — WORKS (→30). So `_foldl_impl(BottomRF{add_sum},
+    _InitialValue(), range)` + the `Union{_InitialValue,Int}` accumulator is fine on its own.
+  * `sum([i^2 for i in 1:n if iseven(i)])` (materialized ARRAY comprehension) — WORKS (→120).
+  * Only the LAZY filtered generator consumed directly by a reducer fails. It lowers to
+    `Base._foldl_impl(Base.FilteringRF{pred, BottomRF{add_sum}}, Base._InitialValue(), 1:n)`
+    (verified via code_typed). The ONLY delta vs the working unfiltered case is the `FilteringRF`
+    wrapper: `(op)(acc,x) = op.flt(x) ? op.rf(acc,x) : acc`.
+BLAST RADIUS (2nd probe): the same silent-0 hits `mapreduce(f, +, Iterators.filter(...))`,
+`prod(i for i in 1:n if cond)`, AND `sum(Iterators.flatten(...))` — but NOT `sum(Iterators.takewhile(...))`,
+`sum(Iterators.map(...))`, nested generators `sum(i+j for i in 1:2 for j in 1:n)`, `count(pred, r)`,
+or `sum(collect(Iterators.filter(...)))`. The PASS/FAIL split is decisive: a fold whose steps can
+**skip updating the accumulator** (filter skips non-matches; flatten's inner range can be empty)
+FAILS; folds that update on every step (takewhile/imap/nested) PASS.
+
+Refined root cause: NOT the predicate call — `FnHolder(iseven)`/`FnHolder(closure)` field-calls
+both compile + run correctly (hypothesis refuted). It's the `acc::Union{_InitialValue, T}`
+accumulator PHI when a fold step leaves `acc` unchanged (still `_InitialValue`): the union-acc phi
+across skip-steps collapses (acc stuck at `_InitialValue` → reducer → 0). Unfiltered folds work
+because the `_InitialValue→T` transition happens exactly once on step 1, never persisting across
+steps. ADJACENT to the F31 phi-store work (2c2c704) but in the fold-LOOP acc phi. Reduce/fold
+HOT-PATH — a wrong fix silently miscompiles ALL reductions → focused full-suite+diff-fuzz-gated fix,
+NOT a blind patch (the F3 hot-path attempt already regressed the lattice tests). **Flag for Dale:
+#1 correctness priority.** Diff-fuzzer should grow a `reduce/sum/prod/mapreduce(... if ...)` +
+`flatten` family so this class can't regress silently.
+
 ## Parity probe sweep (2026-06-29) — surface is largely SOUND; remaining gaps triaged
 
 Two broad differential sweeps (~52 cases) across uint wraparound/overflow, bit-rotate,
