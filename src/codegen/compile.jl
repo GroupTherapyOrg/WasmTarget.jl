@@ -3170,7 +3170,6 @@ function ictx_prebaked(code_info, mod::WasmModule, reg::TypeRegistry)::InplaceCo
         Tuple{Tuple{Module, Symbol}, UInt32}[],  # module_globals
         nothing,                       # scratch_locals::Nothing
         nothing,                       # memoryref_offsets::Nothing
-        WasmStackValidator(enabled=true, func_name="func_0"),  # validator
         false,                         # last_stmt_was_stub::Bool
         nothing,                       # slot_locals::Nothing
         nothing,                       # dispatch_registry::Nothing
@@ -3214,7 +3213,6 @@ function run_direct(code_info)::Vector{UInt8}
         nothing, nothing, nothing, nothing,
         Tuple{Tuple{Module, Symbol}, UInt32}[],
         nothing, nothing,
-        WasmStackValidator(enabled=true, func_name="func_0"),
         false, nothing, nothing, nothing
     )
 
@@ -3223,26 +3221,9 @@ function run_direct(code_info)::Vector{UInt8}
     blocks = analyze_blocks(code)
     bytes = generate_structured(ctx, blocks)
 
-    # Apply fix passes (same as generate_body)
-    bytes = fix_broken_select_instructions(bytes)
-    bytes = fix_numeric_to_ref_local_stores(bytes, ctx.locals, ctx.n_params)
-    bytes = fix_consecutive_local_sets(bytes; local_types=ctx.locals, n_params=ctx.n_params)
+    # fix_* post-emission passes deleted (cleanup Loop 1) — the typed builder emits correct
+    # bytes up front. Strip any dead code after the function-end (same as generate_body).
     bytes = strip_excess_after_function_end(bytes)
-
-    # Build all_local_types for remaining passes: [param_types..., locals...]
-    # For MVP f(x::Int64)=x*x+1: param=I64, locals=[I64,I64] → [I64,I64,I64]
-    # TRUE-INT-002-impl2-impl: Pre-allocate to avoid push!→_growend! closure stubs in WASM
-    n_locals = length(ctx.locals)
-    all_local_types = Vector{WasmValType}(undef, 1 + n_locals)
-    all_local_types[1] = get_concrete_wasm_type(ctx.arg_types[1], ctx.mod, ctx.type_registry)
-    for i in 1:n_locals
-        all_local_types[1 + i] = ctx.locals[i]
-    end
-
-    bytes = fix_local_get_set_type_mismatch(bytes, all_local_types)
-    bytes = fix_array_len_wrap(bytes)
-    bytes = fix_i64_local_in_i32_ops(bytes, all_local_types)
-    bytes = fix_i32_wrap_after_i32_ops(bytes)
 
     # Serialize to WASM binary
     return to_bytes_mvp(bytes, ctx.locals)
@@ -3365,7 +3346,6 @@ function run_e2e_inlined()::Vector{UInt8}
         nothing, nothing, nothing, nothing,
         Tuple{Tuple{Module, Symbol}, UInt32}[],
         nothing, nothing,
-        WasmStackValidator(enabled=true, func_name="func_0"),
         false, nothing, nothing, nothing
     )
 
@@ -3374,22 +3354,8 @@ function run_e2e_inlined()::Vector{UInt8}
     blocks = analyze_blocks(code)
     bytes = generate_structured(ctx, blocks)
 
-    # Apply fix passes
-    bytes = fix_broken_select_instructions(bytes)
-    bytes = fix_numeric_to_ref_local_stores(bytes, ctx.locals, ctx.n_params)
-    bytes = fix_consecutive_local_sets(bytes; local_types=ctx.locals, n_params=ctx.n_params)
+    # fix_* post-emission passes deleted (cleanup Loop 1).
     bytes = strip_excess_after_function_end(bytes)
-
-    # Build all_local_types
-    all_local_types = WasmValType[get_concrete_wasm_type(ctx.arg_types[1], ctx.mod, ctx.type_registry)]
-    for l in ctx.locals
-        push!(all_local_types, l)
-    end
-
-    bytes = fix_local_get_set_type_mismatch(bytes, all_local_types)
-    bytes = fix_array_len_wrap(bytes)
-    bytes = fix_i64_local_in_i32_ops(bytes, all_local_types)
-    bytes = fix_i32_wrap_after_i32_ops(bytes)
 
     # Serialize to WASM binary
     return to_bytes_mvp(bytes, ctx.locals)
@@ -3446,7 +3412,6 @@ function run_selfhost()::Vector{UInt8}
         nothing, nothing, nothing, nothing,
         Tuple{Tuple{Module, Symbol}, UInt32}[],
         nothing, nothing,
-        WasmStackValidator(enabled=true, func_name="func_0"),
         false, nothing, nothing, nothing
     )
 
@@ -3454,23 +3419,8 @@ function run_selfhost()::Vector{UInt8}
     blocks = analyze_blocks(code)
     bytes = generate_structured(ctx, blocks)
 
-    # 6. Apply fix passes
-    bytes = fix_broken_select_instructions(bytes)
-    bytes = fix_numeric_to_ref_local_stores(bytes, ctx.locals, ctx.n_params)
-    bytes = fix_consecutive_local_sets(bytes; local_types=ctx.locals, n_params=ctx.n_params)
+    # 6. fix_* post-emission passes deleted (cleanup Loop 1).
     bytes = strip_excess_after_function_end(bytes)
-
-    n_locals = length(ctx.locals)
-    all_local_types = Vector{WasmValType}(undef, 1 + n_locals)
-    all_local_types[1] = get_concrete_wasm_type(ctx.arg_types[1], ctx.mod, ctx.type_registry)
-    for i in 1:n_locals
-        all_local_types[1 + i] = ctx.locals[i]
-    end
-
-    bytes = fix_local_get_set_type_mismatch(bytes, all_local_types)
-    bytes = fix_array_len_wrap(bytes)
-    bytes = fix_i64_local_in_i32_ops(bytes, all_local_types)
-    bytes = fix_i32_wrap_after_i32_ops(bytes)
 
     # 7. Serialize to WASM binary
     return to_bytes_mvp(bytes, ctx.locals)
@@ -3525,7 +3475,6 @@ function run_selfhost_v2()::Vector{UInt8}
         nothing, nothing, nothing, nothing,
         Tuple{Tuple{Module, Symbol}, UInt32}[],
         nothing, nothing,
-        WasmStackValidator(enabled=true, func_name="func_0"),
         false, nothing, nothing, nothing
     )
 
@@ -3610,7 +3559,6 @@ function run_selfhost_final()::Vector{UInt8}
         nothing, nothing, nothing, nothing,
         Tuple{Tuple{Module, Symbol}, UInt32}[],
         nothing, nothing,
-        WasmStackValidator(enabled=true, func_name="func_0"),
         false, nothing, nothing, nothing
     )
 

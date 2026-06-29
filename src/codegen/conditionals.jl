@@ -47,36 +47,7 @@ function generate_linear_flow(ctx::AbstractCompilationContext, blocks::Vector{Ba
                     # PURE-315: Check numeric-to-ref BEFORE return_type_compatible
                     is_numeric_val = val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
                     is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
-                    if is_numeric_val && is_ref_ret
-                        if func_ret_wasm === ExternRef
-                            nb = UInt8[]; emit_numeric_to_externref!(nb, stmt.val, val_wasm_type, ctx); emit_raw!(rb, nb; pushes=WasmValType[ExternRef])
-                        elseif func_ret_wasm isa ConcreteRef
-                            ref_null!(rb, Int64(func_ret_wasm.type_idx), ConcreteRef(UInt32(func_ret_wasm.type_idx), true))
-                        else
-                            ref_null!(rb, func_ret_wasm)
-                        end
-                        return_!(rb)
-                    elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
-                        unreachable!(rb)
-                    else
-                        emit_raw!(rb, compile_value(stmt.val, ctx); pushes=(val_wasm_type === nothing ? WasmValType[] : WasmValType[val_wasm_type]))
-                        if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
-                            extern_convert_any!(rb)
-                        elseif val_wasm_type === I32 && func_ret_wasm === I64
-                            num!(rb, Opcode.I64_EXTEND_I32_S)
-                        elseif val_wasm_type === I64 && func_ret_wasm === F64
-                            num!(rb, Opcode.F64_CONVERT_I64_S)
-                        elseif val_wasm_type === I32 && func_ret_wasm === F64
-                            num!(rb, Opcode.F64_CONVERT_I32_S)
-                        elseif val_wasm_type === F32 && func_ret_wasm === F64
-                            num!(rb, Opcode.F64_PROMOTE_F32)
-                        elseif val_wasm_type === I64 && func_ret_wasm === F32
-                            num!(rb, Opcode.F32_CONVERT_I64_S)
-                        elseif val_wasm_type === I32 && func_ret_wasm === F32
-                            num!(rb, Opcode.F32_CONVERT_I32_S)
-                        end
-                        return_!(rb)
-                    end
+                    rb = emit_return_coerced!(rb, stmt.val, ctx)
                 else
                     return_!(rb)
                 end
@@ -2305,7 +2276,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                    (phi_local_type isa ConcreteRef || phi_local_type === StructRef || phi_local_type === ArrayRef || phi_local_type === ExternRef || phi_local_type === AnyRef) &&
                                    length(val_bytes) >= 1 &&
                                    (val_bytes[1] == Opcode.I32_CONST || val_bytes[1] == Opcode.I64_CONST || val_bytes[1] == Opcode.F32_CONST || val_bytes[1] == Opcode.F64_CONST) &&
-                                   !has_ref_producing_gc_op(val_bytes)
+                                   !_wt_is_ref(infer_value_wasm_type(val, ctx))
                                     emit_raw!(ib, emit_phi_type_default(phi_local_type); pushes=WasmValType[AnyRef])
                                     type_mismatch_handled = true
                                 end
@@ -2359,7 +2330,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                            (phi_local_type isa ConcreteRef || phi_local_type === StructRef || phi_local_type === ArrayRef || phi_local_type === ExternRef || phi_local_type === AnyRef) &&
                                            length(val_bytes) >= 1 &&
                                            (val_bytes[1] == Opcode.I32_CONST || val_bytes[1] == Opcode.I64_CONST || val_bytes[1] == Opcode.F32_CONST || val_bytes[1] == Opcode.F64_CONST) &&
-                                           !has_ref_producing_gc_op(val_bytes)
+                                           !_wt_is_ref(infer_value_wasm_type(val, ctx))
                                             emit_raw!(ib, emit_phi_type_default(phi_local_type); pushes=WasmValType[AnyRef])
                                             type_mismatch_handled = true
                                         end
@@ -2438,7 +2409,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                        (phi_local_type isa ConcreteRef || phi_local_type === StructRef || phi_local_type === ArrayRef || phi_local_type === ExternRef || phi_local_type === AnyRef) &&
                                        length(val_bytes) >= 1 &&
                                        (val_bytes[1] == Opcode.I32_CONST || val_bytes[1] == Opcode.I64_CONST || val_bytes[1] == Opcode.F32_CONST || val_bytes[1] == Opcode.F64_CONST) &&
-                                       !has_ref_producing_gc_op(val_bytes)
+                                       !_wt_is_ref(infer_value_wasm_type(val, ctx))
                                         emit_raw!(ib, emit_phi_type_default(phi_local_type); pushes=WasmValType[AnyRef])
                                         type_mismatch_handled = true
                                     end
@@ -2492,7 +2463,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                                (phi_local_type isa ConcreteRef || phi_local_type === StructRef || phi_local_type === ArrayRef || phi_local_type === ExternRef || phi_local_type === AnyRef) &&
                                                length(val_bytes) >= 1 &&
                                                (val_bytes[1] == Opcode.I32_CONST || val_bytes[1] == Opcode.I64_CONST || val_bytes[1] == Opcode.F32_CONST || val_bytes[1] == Opcode.F64_CONST) &&
-                                               !has_ref_producing_gc_op(val_bytes)
+                                               !_wt_is_ref(infer_value_wasm_type(val, ctx))
                                                 emit_raw!(ib, emit_phi_type_default(phi_local_type); pushes=WasmValType[AnyRef])
                                                 type_mismatch_handled = true
                                             end
@@ -2633,7 +2604,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                         end
                     elseif !isempty(value_bytes) && (phi_wasm_type isa ConcreteRef || phi_wasm_type === StructRef || phi_wasm_type === ArrayRef || phi_wasm_type === AnyRef) &&
                            (value_bytes[1] == Opcode.I32_CONST || value_bytes[1] == Opcode.I64_CONST || value_bytes[1] == Opcode.F32_CONST || value_bytes[1] == Opcode.F64_CONST) &&
-                           !has_ref_producing_gc_op(value_bytes)
+                           !_wt_is_ref(infer_value_wasm_type(then_value, ctx))
                         # PURE-6025: Numeric constant but phi expects ref type — emit ref.null
                         # But NOT if the bytes contain a GC ref-producing op (e.g. array.new_data
                         # for string constants — those start with i32.const for the offset operand)
@@ -2708,7 +2679,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                             end
                         elseif !isempty(value_bytes) && (phi_wasm_type isa ConcreteRef || phi_wasm_type === StructRef || phi_wasm_type === ArrayRef || phi_wasm_type === AnyRef) &&
                                (value_bytes[1] == Opcode.I32_CONST || value_bytes[1] == Opcode.I64_CONST || value_bytes[1] == Opcode.F32_CONST || value_bytes[1] == Opcode.F64_CONST) &&
-                               !has_ref_producing_gc_op(value_bytes)
+                               !_wt_is_ref(infer_value_wasm_type(else_value, ctx))
                             # PURE-6025: Numeric constant in else-branch but phi expects ref type.
                             # This happens when a Union{ConcreteRef, UInt8} phi has a UInt8 constant
                             # (like ExternRef=0x6f=111) compiled as i32_const. Replace with ref.null.
@@ -3189,8 +3160,6 @@ Generate code for a single basic block.
 
     for i in block.start_idx:block.end_idx
         stmt_bytes = compile_statement(code[i], i, ctx)
-        # PURE-414: Validate emitted bytes for stack type tracking
-        validate_emitted_bytes!(ctx, stmt_bytes, i)
         emit_raw!(b, stmt_bytes)
     end
 

@@ -523,35 +523,9 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     # emit ref.null instead. This happens when val_wasm_type is nothing
                     # (can't determine source type) but the PiNode's target local is ref-typed.
                     elseif pi_local_type !== nothing && (pi_local_type isa ConcreteRef || pi_local_type === StructRef || pi_local_type === ArrayRef || pi_local_type === ExternRef || pi_local_type === AnyRef || pi_local_type === EqRef)
-                        is_numeric_val = false
-                        if !isempty(val_bytes)
-                            first_op = val_bytes[1]
-                            if first_op == Opcode.I32_CONST || first_op == Opcode.I64_CONST || first_op == Opcode.F32_CONST || first_op == Opcode.F64_CONST
-                                # PURE-318/PURE-325: Check for GC_PREFIX — struct/array ops produce refs, not numerics
-                                is_numeric_val = !has_ref_producing_gc_op(val_bytes)
-                            elseif first_op == 0x20  # LOCAL_GET
-                                # Decode local index, check type
-                                src_idx = 0; shift = 0; leb_end = 0
-                                for bi in 2:length(val_bytes)
-                                    byt = val_bytes[bi]
-                                    src_idx |= (Int(byt & 0x7f) << shift)
-                                    shift += 7
-                                    if (byt & 0x80) == 0
-                                        leb_end = bi
-                                        break
-                                    end
-                                end
-                                if leb_end == length(val_bytes)
-                                    arr_idx = src_idx - ctx.n_params + 1
-                                    if arr_idx >= 1 && arr_idx <= length(ctx.locals)
-                                        src_type = ctx.locals[arr_idx]
-                                        if src_type === I32 || src_type === I64 || src_type === F32 || src_type === F64
-                                            is_numeric_val = true
-                                        end
-                                    end
-                                end
-                            end
-                        end
+                        # dart2wasm carries the type with the value: the source is numeric
+                        # iff its inferred wasm type is not a ref (covers const and local.get).
+                        is_numeric_val = !isempty(val_bytes) && !_wt_is_ref(infer_value_wasm_type(stmt.val, ctx))
                         if is_numeric_val
                             # Replace with ref.null of the correct type
                             if pi_local_type isa ConcreteRef
@@ -2137,16 +2111,9 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                         end
                     end
                     if leb_end == length(val_bytes)  # Pure local.get
-                        src_type = nothing
-                        arr_idx_check = src_idx - ctx.n_params + 1
-                        if arr_idx_check >= 1 && arr_idx_check <= length(ctx.locals)
-                            src_type = ctx.locals[arr_idx_check]
-                        elseif src_idx < ctx.n_params
-                            param_idx = src_idx + 1
-                            if param_idx >= 1 && param_idx <= length(ctx.arg_types)
-                                src_type = get_concrete_wasm_type(ctx.arg_types[param_idx], ctx.mod, ctx.type_registry)
-                            end
-                        end
+                        # dart2wasm carries the type with the value: derive the source's
+                        # wasm type from the inferred value type rather than the local index.
+                        src_type = infer_value_wasm_type(val, ctx)
                         if src_type !== nothing && (src_type === I32 || src_type === I64 || src_type === F32 || src_type === F64)
                             # Numeric local used for ref-typed Union field — emit ref.null
                             if inner_type === String || inner_type === Symbol
@@ -2223,7 +2190,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 # Legacy ExternRef path
                 val_bytes = compile_value(val, ctx)
                 is_numeric_local = false
-                ends_with_ref_producing_gc = has_ref_producing_gc_op(val_bytes)
+                ends_with_ref_producing_gc = _wt_is_ref(infer_value_wasm_type(val, ctx))
                 if length(val_bytes) >= 1 && (val_bytes[1] == 0x41 || val_bytes[1] == 0x42) && !ends_with_ref_producing_gc
                     is_numeric_local = true
                 elseif length(val_bytes) >= 2 && val_bytes[1] == 0x20
@@ -2238,21 +2205,11 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                         end
                     end
                     if leb_end == length(val_bytes)
-                        if src_idx < ctx.n_params
-                            if src_idx + 1 <= length(ctx.arg_types)
-                                param_wasm = julia_to_wasm_type(ctx.arg_types[src_idx + 1])
-                                if param_wasm === I32 || param_wasm === I64 || param_wasm === F32 || param_wasm === F64
-                                    is_numeric_local = true
-                                end
-                            end
-                        else
-                            arr_idx = src_idx - ctx.n_params + 1
-                            if arr_idx >= 1 && arr_idx <= length(ctx.locals)
-                                src_type = ctx.locals[arr_idx]
-                                if src_type === I32 || src_type === I64 || src_type === F32 || src_type === F64
-                                    is_numeric_local = true
-                                end
-                            end
+                        # dart2wasm carries the type with the value: a pure local.get is
+                        # numeric iff the inferred value type is not a ref.
+                        local src_type = infer_value_wasm_type(val, ctx)
+                        if src_type === I32 || src_type === I64 || src_type === F32 || src_type === F64
+                            is_numeric_local = true
                         end
                     end
                 end
@@ -2273,18 +2230,9 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                             end
                         end
                         if leb_end2 == length(val_bytes)
-                            if src_idx2 < ctx.n_params
-                                if src_idx2 + 1 <= length(ctx.arg_types)
-                                    src_t = ctx.arg_types[src_idx2 + 1]
-                                    is_already_externref = (julia_to_wasm_type(src_t) === ExternRef)
-                                end
-                            else
-                                arr_idx2 = src_idx2 - ctx.n_params + 1
-                                if arr_idx2 >= 1 && arr_idx2 <= length(ctx.locals)
-                                    src_t = ctx.locals[arr_idx2]
-                                    is_already_externref = (src_t === ExternRef)
-                                end
-                            end
+                            # dart2wasm carries the type with the value: a pure local.get is
+                            # already externref iff the inferred value type is externref.
+                            is_already_externref = (infer_value_wasm_type(val, ctx) === ExternRef)
                         end
                     end
                     if !is_already_externref
@@ -2414,26 +2362,9 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 end
             end
             if actual_field_wasm !== nothing && (actual_field_wasm isa ConcreteRef || actual_field_wasm === StructRef || actual_field_wasm === ArrayRef || actual_field_wasm === AnyRef || actual_field_wasm === ExternRef) && length(field_bytes) >= 2 && field_bytes[1] == 0x20
-                # Decode source local index from LEB128
-                src_idx = 0; shift = 0
-                for bi in 2:length(field_bytes)
-                    byt = field_bytes[bi]
-                    src_idx |= (Int(byt & 0x7f) << shift)
-                    shift += 7
-                    (byt & 0x80) == 0 && break
-                end
-                # Determine source type: either from ctx.locals (SSA) or from params
-                src_type = nothing
-                arr_idx = src_idx - ctx.n_params + 1
-                if arr_idx >= 1 && arr_idx <= length(ctx.locals)
-                    src_type = ctx.locals[arr_idx]
-                elseif src_idx < ctx.n_params
-                    # Function parameter — get type from arg_types
-                    param_idx = src_idx + 1  # 0-based to 1-based
-                    if param_idx >= 1 && param_idx <= length(ctx.arg_types)
-                        src_type = get_concrete_wasm_type(ctx.arg_types[param_idx], ctx.mod, ctx.type_registry)
-                    end
-                end
+                # dart2wasm carries the type with the value: derive the source's wasm type
+                # from the inferred value type rather than decoding the local index out of bytes.
+                src_type = infer_value_wasm_type(val, ctx)
                 if src_type !== nothing && (src_type === I64 || src_type === I32 || src_type === F32 || src_type === F64)
                     # Source local is numeric but field expects ref — box or emit ref.null
                     # Use the ACTUAL field type from the struct definition
@@ -2559,16 +2490,9 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                     end
                 end
                 if leb_end_906 == length(field_bytes)  # Pure local.get
-                    src_type_906 = nothing
-                    arr_idx_906 = src_idx_906 - ctx.n_params + 1
-                    if arr_idx_906 >= 1 && arr_idx_906 <= length(ctx.locals)
-                        src_type_906 = ctx.locals[arr_idx_906]
-                    elseif src_idx_906 < ctx.n_params
-                        param_idx_906 = src_idx_906 + 1
-                        if param_idx_906 >= 1 && param_idx_906 <= length(ctx.arg_types)
-                            src_type_906 = get_concrete_wasm_type(ctx.arg_types[param_idx_906], ctx.mod, ctx.type_registry)
-                        end
-                    end
+                    # dart2wasm carries the type with the value: derive the source's wasm type
+                    # from the inferred value type rather than decoding the local index.
+                    src_type_906 = infer_value_wasm_type(val, ctx)
                     if src_type_906 !== nothing && (src_type_906 === ExternRef || src_type_906 === AnyRef || src_type_906 isa ConcreteRef || src_type_906 === StructRef)
                         # Source is ref-typed but field expects numeric — emit zero default
                         if actual_field_wasm === I32
@@ -2598,7 +2522,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 first_is_numeric = !isempty(field_bytes) &&
                                    (field_bytes[1] == Opcode.I32_CONST || field_bytes[1] == Opcode.I64_CONST ||
                                     field_bytes[1] == Opcode.F32_CONST || field_bytes[1] == Opcode.F64_CONST) &&
-                                   !has_ref_producing_gc_op(field_bytes)
+                                   !_wt_is_ref(infer_value_wasm_type(val, ctx))
                 if !last_is_extern_convert && !first_is_ref_null_extern && !first_is_numeric
                     emit_raw!(b, field_bytes)
                     extern_convert_any!(b)

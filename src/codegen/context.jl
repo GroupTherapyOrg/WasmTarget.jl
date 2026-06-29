@@ -45,9 +45,6 @@ mutable struct CompilationContext <: AbstractCompilationContext
     # MemoryRef offset tracking: maps SSA id -> index SSA/value for memoryrefnew(ref, index, bc)
     # Used by memoryrefoffset to get the offset. Fresh refs (not in this map) have offset 1.
     memoryref_offsets::Dict{Int, Any}
-    # Stack validator: tracks value stack types during bytecode emission (PURE-414)
-    # Advisory only — warns on type mismatches but doesn't prevent compilation
-    validator::WasmStackValidator
     # PURE-908: Set true by compile_call/compile_invoke when a stub emits UNREACHABLE.
     # compile_statement reads and resets this to skip LOCAL_SET in dead code.
     last_stmt_was_stub::Bool
@@ -112,7 +109,6 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         module_globals,         # Module-level globals (const mutable structs)
         nothing,                # scratch_locals (set by allocate_scratch_locals!)
         Dict{Int, Any}(),       # memoryref_offsets (populated during compilation)
-        WasmStackValidator(enabled=true, func_name="func_$(func_idx)"),  # PURE-414: stack validator
         false,                  # last_stmt_was_stub (PURE-908)
         Dict{Int, Int}(),       # slot_locals (PURE-6024: unoptimized IR slot variables)
         dispatch_registry,      # PURE-9060: Tier 2 hash dispatch
@@ -2470,7 +2466,6 @@ mutable struct InplaceCompilationContext <: AbstractCompilationContext
     module_globals::Vector{Tuple{Tuple{Module, Symbol}, UInt32}}
     scratch_locals::Nothing
     memoryref_offsets::Nothing
-    validator::WasmStackValidator
     last_stmt_was_stub::Bool
     slot_locals::Nothing
     dispatch_registry::Nothing
@@ -2497,7 +2492,6 @@ function InplaceCompilationContext(code_info, arg_types::Tuple, return_type, mod
         nothing, nothing, nothing, nothing,  # signal_ssa_getters/setters, captured_signal_fields, dom_bindings
         Tuple{Tuple{Module, Symbol}, UInt32}[],  # module_globals
         nothing, nothing,          # scratch_locals, memoryref_offsets
-        WasmStackValidator(enabled=true, func_name="func_$(func_idx)"),
         false, nothing, nothing, nothing,  # last_stmt_was_stub, slot_locals, dispatch_registry, typeof_scratch_local
         strict, WasmDiagnostic[]            # strict mode + diagnostics
     )

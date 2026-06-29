@@ -26,6 +26,7 @@ function generate_complex_flow(ctx::AbstractCompilationContext, blocks::Vector{B
     # but loops and multi-conditional patterns with phi nodes require the stackifier's
     # approach of emitting loop/br for backedges and storing to phi locals at each branch.
     has_phi_nodes = any(stmt isa Core.PhiNode for stmt in code)
+    n_phi_nodes = count(stmt isa Core.PhiNode for stmt in code)
     has_loops = any(ctx.loop_headers)
     # P2-batch14: an IR `unreachable` (ReturnNode with no value — the marker after
     # always-throwing calls) breaks the nested-conditionals generator: with two
@@ -34,8 +35,13 @@ function generate_complex_flow(ctx::AbstractCompilationContext, blocks::Vector{B
     # (`Int8(0) == Int8(x) ? 0 : x` unconditionally returned 0 — gap
     # 1bcb0e7214c3 family). The stackifier handles these shapes correctly.
     has_unreachable = any(stmt isa Core.ReturnNode && !isdefined(stmt, :val) for stmt in code)
+    # A merge with ≥2 phi nodes (an if/else assigning 2+ vars live past the merge) MUST use the
+    # stackifier: generate_nested_conditionals / generate_if_then_else lower the diamond as a
+    # single value-producing `if (result T)` block that carries only ONE phi value out and
+    # silently drops the rest (multivar phi-merge miscompile — test/fuzz/repro_multivar_phi_merge.jl).
+    # generate_stackified_flow stores EVERY live phi local at the edge via set_phi_locals_for_edge!.
     if has_loops || length(conditionals) > 2 || (length(conditionals) >= 2 && has_phi_nodes) ||
-       (length(conditionals) >= 2 && has_unreachable)
+       (length(conditionals) >= 2 && has_unreachable) || n_phi_nodes >= 2
         return generate_stackified_flow(ctx, blocks, code)
     end
 
@@ -63,52 +69,6 @@ Converts Julia IR CFG to WASM structured control flow by:
 Based on LLVM's WebAssembly backend stackifier and Cheerp's enhancements.
 Reference: https://labs.leaningtech.com/blog/control-flow
 """
-
-"""
-PURE-325: Check if compiled bytecode contains a GC instruction that produces a ref value.
-Scans `val_bytes` for GC_PREFIX (0xFB) followed by a ref-producing sub-opcode.
-Properly skips LEB128 immediates of the first instruction to avoid false positives from
-i32.const/i64.const values that coincidentally contain 0xFB bytes in their LEB128 encoding.
-
-GC sub-opcodes recognized: 0x00 (struct.new), 0x06 (array.new), 0x07 (array.new_default),
-0x08 (array.new_fixed), 0x1A (any.convert_extern), 0x1B (extern.convert_any).
-"""
-function has_ref_producing_gc_op(val_bytes::Vector{UInt8})::Bool
-    isempty(val_bytes) && return false
-    # Determine scan start: skip past the first instruction's LEB128 immediate to avoid
-    # false positives from constants like i32.const 251 which encodes as 0x41 0xFB 0x01.
-    scan_start = 1
-    first_op = val_bytes[1]
-    if first_op == 0x41 || first_op == 0x42 || first_op == 0x20 || first_op == 0x21 || first_op == 0x22 || first_op == 0x23 || first_op == 0x24  # i32.const, i64.const, local.get/set/tee, global.get/set
-        # Skip LEB128 immediate
-        for bi in 2:length(val_bytes)
-            if (val_bytes[bi] & 0x80) == 0
-                scan_start = bi + 1
-                break
-            end
-        end
-    elseif first_op == 0x43  # f32.const: 4-byte immediate
-        scan_start = 6
-    elseif first_op == 0x44  # f64.const: 8-byte immediate
-        scan_start = 10
-    end
-    for scan_i in scan_start:(length(val_bytes)-1)
-        if val_bytes[scan_i] == 0xFB
-            gc_op = val_bytes[scan_i + 1]
-            # All ref-producing GC ops: struct.new (0x00), struct.new_default (0x01),
-            # array.new (0x06), array.new_default (0x07), array.new_fixed (0x08),
-            # array.new_data (0x09), array.new_elem (0x0A),
-            # ref.cast (0x14), ref.cast_null (0x17),
-            # any_convert_extern (0x1A), extern_convert_any (0x1B)
-            if gc_op == 0x00 || gc_op == 0x01 || gc_op == 0x06 || gc_op == 0x07 ||
-               gc_op == 0x08 || gc_op == 0x09 || gc_op == 0x0A ||
-               gc_op == 0x14 || gc_op == 0x17 || gc_op == 0x1A || gc_op == 0x1B
-                return true
-            end
-        end
-    end
-    return false
-end
 
 """
 PURE-325: Emit boxing bytecode for a numeric value that needs to be returned as ExternRef.
@@ -1334,38 +1294,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # PURE-315: Check numeric-to-ref BEFORE return_type_compatible
                     is_numeric_val = val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
                     is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
-                    if is_numeric_val && is_ref_ret
-                        # PURE-325: Box numeric value for ref return type
-                        if func_ret_wasm === ExternRef
-                            _eb0 = UInt8[]; emit_numeric_to_externref!(_eb0, stmt.val, val_wasm_type, ctx)
-                            emit_raw!(bb, _eb0; pushes=WasmValType[ExternRef])
-                        elseif func_ret_wasm isa ConcreteRef
-                            ref_null!(bb, Int64(func_ret_wasm.type_idx), ConcreteRef(UInt32(func_ret_wasm.type_idx), true))
-                        else
-                            ref_null!(bb, func_ret_wasm)
-                        end
-                        return_!(bb)
-                    elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
-                        unreachable!(bb)
-                    else
-                        emit_raw!(bb, compile_value(stmt.val, ctx); pushes=(val_wasm_type === nothing ? WasmValType[] : WasmValType[val_wasm_type]))
-                        if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
-                            extern_convert_any!(bb)
-                        elseif val_wasm_type === I32 && func_ret_wasm === I64
-                            num!(bb, Opcode.I64_EXTEND_I32_S)
-                        elseif val_wasm_type === I64 && func_ret_wasm === F64
-                            num!(bb, Opcode.F64_CONVERT_I64_S)
-                        elseif val_wasm_type === I32 && func_ret_wasm === F64
-                            num!(bb, Opcode.F64_CONVERT_I32_S)
-                        elseif val_wasm_type === F32 && func_ret_wasm === F64
-                            num!(bb, Opcode.F64_PROMOTE_F32)
-                        elseif val_wasm_type === I64 && func_ret_wasm === F32
-                            num!(bb, Opcode.F32_CONVERT_I64_S)
-                        elseif val_wasm_type === I32 && func_ret_wasm === F32
-                            num!(bb, Opcode.F32_CONVERT_I32_S)
-                        end
-                        return_!(bb)
-                    end
+                    bb = emit_return_coerced!(bb, stmt.val, ctx)
                 else
                     return_!(bb)
                 end

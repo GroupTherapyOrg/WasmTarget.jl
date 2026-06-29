@@ -133,36 +133,7 @@ function generate_branched_loops(ctx::AbstractCompilationContext, first_header::
                 # PURE-315: Check numeric-to-ref BEFORE return_type_compatible
                 is_numeric_val = val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
                 is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
-                if is_numeric_val && is_ref_ret
-                    if func_ret_wasm === ExternRef
-                        tb = UInt8[]; emit_numeric_to_externref!(tb, stmt.val, val_wasm_type, ctx); emit_raw!(b, tb; pushes=WasmValType[ExternRef])
-                    elseif func_ret_wasm isa ConcreteRef
-                        ref_null!(b, Int64(func_ret_wasm.type_idx), func_ret_wasm)
-                    else
-                        ref_null!(b, func_ret_wasm)
-                    end
-                    return_!(b)
-                elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
-                    unreachable!(b)
-                else
-                    emit_raw!(b, compile_value(stmt.val, ctx); pushes=(val_wasm_type === nothing ? WasmValType[] : WasmValType[val_wasm_type]))
-                    if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
-                        extern_convert_any!(b)
-                    elseif val_wasm_type === I32 && func_ret_wasm === I64
-                        num!(b, Opcode.I64_EXTEND_I32_S)
-                    elseif val_wasm_type === I64 && func_ret_wasm === F64
-                        num!(b, Opcode.F64_CONVERT_I64_S)
-                    elseif val_wasm_type === I32 && func_ret_wasm === F64
-                        num!(b, Opcode.F64_CONVERT_I32_S)
-                    elseif val_wasm_type === F32 && func_ret_wasm === F64
-                        num!(b, Opcode.F64_PROMOTE_F32)
-                    elseif val_wasm_type === I64 && func_ret_wasm === F32
-                        num!(b, Opcode.F32_CONVERT_I64_S)
-                    elseif val_wasm_type === I32 && func_ret_wasm === F32
-                        num!(b, Opcode.F32_CONVERT_I32_S)
-                    end
-                    return_!(b)
-                end
+                b = emit_return_coerced!(b, stmt.val, ctx)
             else
                 unreachable!(b)
             end
@@ -228,36 +199,7 @@ function generate_branched_loops(ctx::AbstractCompilationContext, first_header::
                 # PURE-315: Check numeric-to-ref BEFORE return_type_compatible
                 is_numeric_val = val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
                 is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
-                if is_numeric_val && is_ref_ret
-                    if func_ret_wasm === ExternRef
-                        tb = UInt8[]; emit_numeric_to_externref!(tb, stmt.val, val_wasm_type, ctx); emit_raw!(b, tb; pushes=WasmValType[ExternRef])
-                    elseif func_ret_wasm isa ConcreteRef
-                        ref_null!(b, Int64(func_ret_wasm.type_idx), func_ret_wasm)
-                    else
-                        ref_null!(b, func_ret_wasm)
-                    end
-                    return_!(b)
-                elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
-                    unreachable!(b)
-                else
-                    emit_raw!(b, compile_value(stmt.val, ctx); pushes=(val_wasm_type === nothing ? WasmValType[] : WasmValType[val_wasm_type]))
-                    if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
-                        extern_convert_any!(b)
-                    elseif val_wasm_type === I32 && func_ret_wasm === I64
-                        num!(b, Opcode.I64_EXTEND_I32_S)
-                    elseif val_wasm_type === I64 && func_ret_wasm === F64
-                        num!(b, Opcode.F64_CONVERT_I64_S)
-                    elseif val_wasm_type === I32 && func_ret_wasm === F64
-                        num!(b, Opcode.F64_CONVERT_I32_S)
-                    elseif val_wasm_type === F32 && func_ret_wasm === F64
-                        num!(b, Opcode.F64_PROMOTE_F32)
-                    elseif val_wasm_type === I64 && func_ret_wasm === F32
-                        num!(b, Opcode.F32_CONVERT_I64_S)
-                    elseif val_wasm_type === I32 && func_ret_wasm === F32
-                        num!(b, Opcode.F32_CONVERT_I32_S)
-                    end
-                    return_!(b)
-                end
+                b = emit_return_coerced!(b, stmt.val, ctx)
             else
                 return_!(b)
             end
@@ -537,7 +479,7 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
             if !isempty(value_bytes)
                 emit_raw!(lb, value_bytes; pushes=(edge_val_type === nothing ? WasmValType[] : WasmValType[edge_val_type]))
                 # ref.null is already externref — don't wrap
-                if !(value_bytes[1] == Opcode.REF_NULL)
+                if !is_nothing_value(val, ctx)
                     extern_convert_any!(lb)
                 end
                 local_set!(lb, local_idx)
@@ -548,7 +490,7 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
             # AnyRef/EqRef/StructRef/ArrayRef → ConcreteRef: narrow with ref.cast_nullable
             value_bytes = compile_value(val, ctx)
             if !isempty(value_bytes)
-                if value_bytes[1] == Opcode.REF_NULL
+                if is_nothing_value(val, ctx)
                     # ref.null can't be cast — emit type-appropriate null instead
                     ref_null!(lb, Int64(phi_local_type.type_idx), phi_local_type)
                 else
@@ -742,7 +684,7 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
                 elseif phi_local_type === ExternRef && (actual_val_type isa ConcreteRef || actual_val_type === StructRef || actual_val_type === ArrayRef || actual_val_type === AnyRef)
                     # PURE-3113: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion
                     emit_raw!(lb, value_bytes; pushes=(actual_val_type === nothing ? WasmValType[] : WasmValType[actual_val_type]))
-                    if !(value_bytes[1] == Opcode.REF_NULL)
+                    if !is_nothing_value(val, ctx)
                         extern_convert_any!(lb)
                     end
                     local_set!(lb, local_idx)
@@ -1244,36 +1186,7 @@ function generate_loop_code(ctx::AbstractCompilationContext)::Vector{UInt8}
                     # PURE-315: Check numeric-to-ref BEFORE return_type_compatible
                     is_numeric_val = val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
                     is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
-                    if is_numeric_val && is_ref_ret
-                        if func_ret_wasm === ExternRef
-                            let tb=UInt8[]; emit_numeric_to_externref!(tb, stmt.val, val_wasm_type, ctx); emit_raw!(b, tb; pushes=WasmValType[ExternRef]); end
-                        elseif func_ret_wasm isa ConcreteRef
-                            ref_null!(b, Int64(func_ret_wasm.type_idx), func_ret_wasm)
-                        else
-                            ref_null!(b, func_ret_wasm)
-                        end
-                        return_!(b)
-                    elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
-                        unreachable!(b)
-                    else
-                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
-                        if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
-                            extern_convert_any!(b)
-                        elseif val_wasm_type === I32 && func_ret_wasm === I64
-                            num!(b, Opcode.I64_EXTEND_I32_S)
-                        elseif val_wasm_type === I64 && func_ret_wasm === F64
-                            num!(b, Opcode.F64_CONVERT_I64_S)
-                        elseif val_wasm_type === I32 && func_ret_wasm === F64
-                            num!(b, Opcode.F64_CONVERT_I32_S)
-                        elseif val_wasm_type === F32 && func_ret_wasm === F64
-                            num!(b, Opcode.F64_PROMOTE_F32)
-                        elseif val_wasm_type === I64 && func_ret_wasm === F32
-                            num!(b, Opcode.F32_CONVERT_I64_S)
-                        elseif val_wasm_type === I32 && func_ret_wasm === F32
-                            num!(b, Opcode.F32_CONVERT_I32_S)
-                        end
-                        return_!(b)
-                    end
+                    b = emit_return_coerced!(b, stmt.val, ctx)
                 else
                     return_!(b)
                 end
@@ -1527,36 +1440,7 @@ function generate_loop_code(ctx::AbstractCompilationContext)::Vector{UInt8}
                 # PURE-315: Check numeric-to-ref BEFORE return_type_compatible
                 is_numeric_val = val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
                 is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
-                if is_numeric_val && is_ref_ret
-                    if func_ret_wasm === ExternRef
-                        let tb=UInt8[]; emit_numeric_to_externref!(tb, stmt.val, val_wasm_type, ctx); emit_raw!(b, tb; pushes=WasmValType[ExternRef]); end
-                    elseif func_ret_wasm isa ConcreteRef
-                        ref_null!(b, Int64(func_ret_wasm.type_idx), func_ret_wasm)
-                    else
-                        ref_null!(b, func_ret_wasm)
-                    end
-                    return_!(b)
-                elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
-                    unreachable!(b)
-                else
-                    emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
-                    if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
-                        extern_convert_any!(b)
-                    elseif val_wasm_type === I32 && func_ret_wasm === I64
-                        num!(b, Opcode.I64_EXTEND_I32_S)
-                    elseif val_wasm_type === I64 && func_ret_wasm === F64
-                        num!(b, Opcode.F64_CONVERT_I64_S)
-                    elseif val_wasm_type === I32 && func_ret_wasm === F64
-                        num!(b, Opcode.F64_CONVERT_I32_S)
-                    elseif val_wasm_type === F32 && func_ret_wasm === F64
-                        num!(b, Opcode.F64_PROMOTE_F32)
-                    elseif val_wasm_type === I64 && func_ret_wasm === F32
-                        num!(b, Opcode.F32_CONVERT_I64_S)
-                    elseif val_wasm_type === I32 && func_ret_wasm === F32
-                        num!(b, Opcode.F32_CONVERT_I32_S)
-                    end
-                    return_!(b)
-                end
+                b = emit_return_coerced!(b, stmt.val, ctx)
             else
                 return_!(b)
             end
@@ -1692,36 +1576,7 @@ function generate_loop_code(ctx::AbstractCompilationContext)::Vector{UInt8}
                 # PURE-315: Check numeric-to-ref BEFORE return_type_compatible
                 is_numeric_val = val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
                 is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
-                if is_numeric_val && is_ref_ret
-                    if func_ret_wasm === ExternRef
-                        let tb=UInt8[]; emit_numeric_to_externref!(tb, stmt.val, val_wasm_type, ctx); emit_raw!(b, tb; pushes=WasmValType[ExternRef]); end
-                    elseif func_ret_wasm isa ConcreteRef
-                        ref_null!(b, Int64(func_ret_wasm.type_idx), func_ret_wasm)
-                    else
-                        ref_null!(b, func_ret_wasm)
-                    end
-                    return_!(b)
-                elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
-                    unreachable!(b)
-                else
-                    emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
-                    if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
-                        extern_convert_any!(b)
-                    elseif val_wasm_type === I32 && func_ret_wasm === I64
-                        num!(b, Opcode.I64_EXTEND_I32_S)
-                    elseif val_wasm_type === I64 && func_ret_wasm === F64
-                        num!(b, Opcode.F64_CONVERT_I64_S)
-                    elseif val_wasm_type === I32 && func_ret_wasm === F64
-                        num!(b, Opcode.F64_CONVERT_I32_S)
-                    elseif val_wasm_type === F32 && func_ret_wasm === F64
-                        num!(b, Opcode.F64_PROMOTE_F32)
-                    elseif val_wasm_type === I64 && func_ret_wasm === F32
-                        num!(b, Opcode.F32_CONVERT_I64_S)
-                    elseif val_wasm_type === I32 && func_ret_wasm === F32
-                        num!(b, Opcode.F32_CONVERT_I32_S)
-                    end
-                    return_!(b)
-                end
+                b = emit_return_coerced!(b, stmt.val, ctx)
             else
                 return_!(b)
             end
@@ -1833,6 +1688,15 @@ function is_simple_conditional(blocks::Vector{BasicBlock}, code)
         if blocks[i].terminator isa Core.GotoIfNot
             return false
         end
+    end
+
+    # A merge with ≥2 phi nodes (an if/else assigning 2+ vars live past the merge) is NOT
+    # "simple": generate_if_then_else carries only ONE phi through the `if (result T)` block
+    # value and silently drops the rest (multivar phi-merge miscompile — see
+    # test/fuzz/repro_multivar_phi_merge.jl). Fall through to generate_complex_flow, which
+    # routes multi-phi merges to the stackifier (stores every live phi local at the edge).
+    if count(stmt isa Core.PhiNode for stmt in code) >= 2
+        return false
     end
 
     return true
@@ -2023,36 +1887,7 @@ function generate_if_then_else(ctx::AbstractCompilationContext, blocks::Vector{B
                     # PURE-315: Check numeric-to-ref BEFORE return_type_compatible
                     is_numeric_val = val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
                     is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
-                    if is_numeric_val && is_ref_ret
-                        if func_ret_wasm === ExternRef
-                            let tb=UInt8[]; emit_numeric_to_externref!(tb, stmt.val, val_wasm_type, ctx); emit_raw!(b, tb; pushes=WasmValType[ExternRef]); end
-                        elseif func_ret_wasm isa ConcreteRef
-                            ref_null!(b, Int64(func_ret_wasm.type_idx), func_ret_wasm)
-                        else
-                            ref_null!(b, func_ret_wasm)
-                        end
-                        return_!(b)
-                    elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
-                        unreachable!(b)
-                    else
-                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
-                        if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
-                            extern_convert_any!(b)
-                        elseif val_wasm_type === I32 && func_ret_wasm === I64
-                            num!(b, Opcode.I64_EXTEND_I32_S)
-                        elseif val_wasm_type === I64 && func_ret_wasm === F64
-                            num!(b, Opcode.F64_CONVERT_I64_S)
-                        elseif val_wasm_type === I32 && func_ret_wasm === F64
-                            num!(b, Opcode.F64_CONVERT_I32_S)
-                        elseif val_wasm_type === F32 && func_ret_wasm === F64
-                            num!(b, Opcode.F64_PROMOTE_F32)
-                        elseif val_wasm_type === I64 && func_ret_wasm === F32
-                            num!(b, Opcode.F32_CONVERT_I64_S)
-                        elseif val_wasm_type === I32 && func_ret_wasm === F32
-                            num!(b, Opcode.F32_CONVERT_I32_S)
-                        end
-                        return_!(b)
-                    end
+                    b = emit_return_coerced!(b, stmt.val, ctx)
                 else
                     return_!(b)
                 end
