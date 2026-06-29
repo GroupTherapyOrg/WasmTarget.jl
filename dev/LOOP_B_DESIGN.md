@@ -153,6 +153,24 @@ value-channel (Loop C). Probe data (boxed i32-repped types discriminated by isa 
   discriminate. Re-probe `htup_disc` (Int8→2, Int32→3, not all→1) for the green.** This is a down-payment on
   Loop C, pulled in BECAUSE it's the fundamental that unlocks B2/B′ — not a detour.
 
+## ★★ PRECISE ROOT (traced 2026-06-29) — the eager-unbox is at SSA-LOCAL TYPING
+`v = t[i]` with `v::Union{Bool,Int8,Int32}` is stored in an SSA local **typed I32** — a multi-member Union is
+collapsed to a RAW NUMERIC local, unboxing the value + dropping its classId at allocation. Then
+`_compile_call_isa` (calls.jl:1323-1352, the `isconcretetype(check_type)` arm) reads `isa2_val_wasm` from
+`ctx.locals[…]` = I32 and hits the **"numeric value on stack → isa is always TRUE; drop + push 1"** shortcut
+(calls.jl:~1352) → every `v isa T` returns true → all match the first branch (`htup_disc` → act 1,1,1). The
+shortcut is correct ONLY for a SINGLE concrete static type; it's WRONG for a Union repped as a collapsed numeric.
+**THE FUNDAMENTAL FIX (channel-core, the next coding task):** a multi-type-Union SSA value must get a BOXED
+local (AnyRef carrying classId via the numeric box / canonical box), NOT a collapsed numeric local — so
+`isa2_val_wasm === AnyRef`, isa takes the ref path (ref.test/typeId on the box, calls.jl:~1370+), and reads the
+real classId (then the reverted producer "store real classId at the het-tuple box site" becomes value-verifiable).
+**WIDE BLAST RADIUS** — many Union values are currently numeric locals that "work" only because the shortcut +
+single-possible-type masks it; changing Union SSA-local typing to AnyRef must be done red-test-first (htup_disc),
+mechanically, full-suite-gated. Find the SSA-local type assignment for Union getfield results (the chokepoint that
+picks I32 over AnyRef) — likely `julia_to_wasm_type_concrete`/`get_concrete_wasm_type` collapsing the Union, +
+the het-tuple getfield result store. Re-probe `htup_disc` (Int8→2, Int32→3) for green. This is a Loop C
+down-payment pulled forward BECAUSE it's the fundamental that unlocks B2 distinguishability + B′ collections.
+
 ## identityHash/objectid DECISION (locked): primitive box = `[i32 classId, payload]`, NO hash slot —
 objectid of a boxed primitive is value-derived (compute on demand). A hash slot, if ever needed for boxed
 MUTABLE objects, goes at field 1 on the Object-equivalent subtree only, never on primitive boxes (mirrors dart).
