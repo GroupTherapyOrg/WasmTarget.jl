@@ -86,91 +86,72 @@ function create_utf8_to_js_helper!(mod::WasmModule, type_registry::TypeRegistry,
     # Locals: 0=param(i8arr), 1=len(i32), 2=i16arr(ref $i16arr), 3=i(i32)
     locals = WasmValType[I32, ConcreteRef(char_arr_type_idx, true), I32]
 
-    body = UInt8[]
     local_i8arr = UInt32(0)
     local_len = UInt32(1)
     local_i16arr = UInt32(2)
     local_i = UInt32(3)
 
+    # MIGRATED to InstrBuilder (typed). Full helper-function body: i8 UTF-8 array →
+    # i16 char array → fromCharCodeArray. Byte-identical to the raw emission below.
+    char_arr_ref = ConcreteRef(char_arr_type_idx, true)
+    b = InstrBuilder(WasmValType[i8arr_ref], WasmValType[NonNullExternRef];
+                     func_name="create_utf8_to_js_helper", strict=_wt_builder_strict())
+    builder_set_local_type!(b, local_len, I32)
+    builder_set_local_type!(b, local_i16arr, char_arr_ref)
+    builder_set_local_type!(b, local_i, I32)
+
     # len = i8arr.len
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(local_i8arr))
-    push!(body, Opcode.GC_PREFIX)
-    push!(body, Opcode.ARRAY_LEN)
-    push!(body, Opcode.LOCAL_TEE)
-    append!(body, encode_leb128_unsigned(local_len))
+    local_get!(b, local_i8arr)
+    array_len!(b)
+    local_tee!(b, local_len)
 
     # i16arr = array.new_default $i16arr len
-    push!(body, Opcode.GC_PREFIX)
-    push!(body, Opcode.ARRAY_NEW_DEFAULT)
-    append!(body, encode_leb128_unsigned(char_arr_type_idx))
-    push!(body, Opcode.LOCAL_SET)
-    append!(body, encode_leb128_unsigned(local_i16arr))
+    array_new_default!(b, char_arr_type_idx)
+    local_set!(b, local_i16arr)
 
     # i = 0
-    push!(body, Opcode.I32_CONST)
-    push!(body, 0x00)
-    push!(body, Opcode.LOCAL_SET)
-    append!(body, encode_leb128_unsigned(local_i))
+    i32_const!(b, 0)
+    local_set!(b, local_i)
 
     # block { loop {
-    push!(body, Opcode.BLOCK)
-    push!(body, 0x40)
-    push!(body, Opcode.LOOP)
-    push!(body, 0x40)
+    block!(b)
+    loop!(b)
 
     # if i >= len, break
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(local_i))
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(local_len))
-    push!(body, Opcode.I32_GE_U)
-    push!(body, Opcode.BR_IF)
-    push!(body, 0x01)
+    local_get!(b, local_i)
+    local_get!(b, local_len)
+    num!(b, Opcode.I32_GE_U)
+    br_if!(b, 1)
 
     # i16arr[i] = (i32)i8arr[i]  — array.get_u zero-extends, array.set truncates
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(local_i16arr))
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(local_i))
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(local_i8arr))
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(local_i))
-    push!(body, Opcode.GC_PREFIX)
-    push!(body, Opcode.ARRAY_GET_U)
-    append!(body, encode_leb128_unsigned(str_arr_type_idx))
-    push!(body, Opcode.GC_PREFIX)
-    push!(body, Opcode.ARRAY_SET)
-    append!(body, encode_leb128_unsigned(char_arr_type_idx))
+    local_get!(b, local_i16arr)
+    local_get!(b, local_i)
+    local_get!(b, local_i8arr)
+    local_get!(b, local_i)
+    array_get!(b, str_arr_type_idx, I32; signed=false)
+    array_set!(b, char_arr_type_idx, I32)
 
     # i++
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(local_i))
-    push!(body, Opcode.I32_CONST)
-    push!(body, 0x01)
-    push!(body, Opcode.I32_ADD)
-    push!(body, Opcode.LOCAL_SET)
-    append!(body, encode_leb128_unsigned(local_i))
+    local_get!(b, local_i)
+    i32_const!(b, 1)
+    num!(b, Opcode.I32_ADD)
+    local_set!(b, local_i)
 
     # br loop
-    push!(body, Opcode.BR)
-    push!(body, 0x00)
+    br!(b, 0)
 
-    push!(body, Opcode.END)  # end loop
-    push!(body, Opcode.END)  # end block
+    end_block!(b)  # end loop
+    end_block!(b)  # end block
 
     # return fromCharCodeArray(i16arr, 0, len)
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(local_i16arr))
-    push!(body, Opcode.I32_CONST)
-    push!(body, 0x00)
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(local_len))
-    push!(body, Opcode.CALL)
-    append!(body, encode_leb128_unsigned(decode_import_idx))
+    local_get!(b, local_i16arr)
+    i32_const!(b, 0)
+    local_get!(b, local_len)
+    call!(b, decode_import_idx,
+          WasmValType[char_arr_ref, I32, I32], WasmValType[NonNullExternRef])
 
-    push!(body, Opcode.END)  # end function
+    end_block!(b)  # end function
+    body = builder_code(b)
 
     func = WasmFunction(type_idx, locals, body)
     push!(mod.functions, func)
@@ -194,8 +175,13 @@ function emit_jl_string_to_js!(bytes::Vector{UInt8}, decode_func_idx::UInt32, tm
     end
     # Stack: [i8_arr_ref]
     # Call $utf8_to_js(i8_arr_ref) → (ref extern)
-    push!(bytes, Opcode.CALL)
-    append!(bytes, encode_leb128_unsigned(helper_idx))
+    # MIGRATED to InstrBuilder (typed). call! emits CALL + leb_u(helper_idx), byte-identical.
+    # This is an external emit_*!(bytes,...) helper that mutates the caller's buffer, so we
+    # build into a local collect-mode builder and splice the result (no seeding needed; the
+    # caller's bridge already declares the [i8_arr_ref] → [externref] stack effect).
+    ib = InstrBuilder(; func_name="emit_jl_string_to_js", strict=false)
+    call!(ib, helper_idx, WasmValType[], WasmValType[])
+    append!(bytes, builder_code(ib))
 end
 
 """
@@ -211,8 +197,12 @@ only the decode (Julia→JS) direction is needed for println output.
 function emit_js_to_jl_string!(bytes::Vector{UInt8}, encode_func_idx::UInt32)
     # Stack: [externref]
     # Call encodeStringToUTF8Array(externref) → (ref $str_arr)
-    push!(bytes, Opcode.CALL)
-    append!(bytes, encode_leb128_unsigned(encode_func_idx))
+    # MIGRATED to InstrBuilder (typed). call! emits CALL + leb_u(encode_func_idx), byte-identical.
+    # External emit_*!(bytes,...) helper that mutates the caller's buffer → build into a local
+    # collect-mode builder and splice (caller's bridge declares the [externref] → [str_arr] effect).
+    ib = InstrBuilder(; func_name="emit_js_to_jl_string", strict=false)
+    call!(ib, encode_func_idx, WasmValType[], WasmValType[])
+    append!(bytes, builder_code(ib))
 end
 
 # ============================================================================
@@ -424,10 +414,13 @@ function ensure_rng_globals!(mod::WasmModule)::RNGGlobals
 
     rng_indices = UInt32[]
     for seed in seeds
-        init = UInt8[]
-        push!(init, Opcode.I64_CONST)
-        append!(init, encode_leb128_signed(seed))
-        push!(init, Opcode.END)
+        # MIGRATED to InstrBuilder (typed). Const-expr init = (i64.const seed) (end).
+        # Byte-identical: i64_const! emits I64_CONST + leb_s(seed); the const-expr END
+        # terminator (0x0B) is bridged (no open block in a const expr to balance).
+        ib = InstrBuilder(; func_name="ensure_rng_globals!", strict=false)
+        i64_const!(ib, seed)
+        emit_raw!(ib, UInt8[Opcode.END])
+        init = builder_code(ib)
         push!(mod.globals, WasmGlobalDef(I64, true, init))
         push!(rng_indices, UInt32(length(mod.globals) - 1))
     end
@@ -468,77 +461,9 @@ Compile string concatenation (str1 * str2).
 Creates a new string array with combined contents.
 Uses locals for intermediate values.
 """
+# Thin delegator. The explicit-locals implementation below is the real one; the old
+# inline body here built a `bytes` vector then discarded it (dead bloat) — removed.
 function compile_string_concat(str1, str2, ctx::AbstractCompilationContext)::Vector{UInt8}
-    bytes = UInt8[]
-
-    # Get string array type index
-    str_type_idx = ctx.type_registry.string_array_idx
-
-    # We need 4 locals: str1_ref, str2_ref, len1, len2
-    # Allocate them (these are temporary locals for this operation)
-    base_local = length(ctx.code_info.slotnames) + length(ctx.ssa_locals) + length(ctx.phi_locals)
-    str1_local = base_local
-    str2_local = base_local + 1
-    len1_local = base_local + 2
-    len2_local = base_local + 3
-
-    # Add the locals to the function (string refs and i32s for lengths)
-    # Note: We're using ConcreteRef for string arrays
-    # For simplicity, we'll store lengths as i32 directly
-
-    # Compile str1, store in local
-    append!(bytes, compile_value(str1, ctx))
-    push!(bytes, Opcode.LOCAL_TEE)
-    append!(bytes, encode_leb128_unsigned(str1_local))
-
-    # Get len1
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_LEN)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(len1_local))
-
-    # Compile str2, store in local
-    append!(bytes, compile_value(str2, ctx))
-    push!(bytes, Opcode.LOCAL_TEE)
-    append!(bytes, encode_leb128_unsigned(str2_local))
-
-    # Get len2
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_LEN)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(len2_local))
-
-    # Create new array with len1 + len2 elements, initialized to 0
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(len1_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(len2_local))
-    push!(bytes, Opcode.I32_ADD)
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
-    # Now stack has: [new_array]
-
-    # Copy str1 to new_array at offset 0
-    # array.copy dst_type src_type : [dst_ref dst_offset src_ref src_offset len]
-    # dst = new_array (on stack), dst_offset = 0
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)  # dst_offset = 0
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(str1_local))  # src_ref
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)  # src_offset = 0
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(len1_local))  # len
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_COPY)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))  # dst type
-    append!(bytes, encode_leb128_unsigned(str_type_idx))  # src type
-    # Stack is empty now, we need to get new_array back
-    # Actually array.copy doesn't consume the dst ref... let me check
-    # Actually it does consume all arguments. We need to restructure.
-
-    # Let me use a different approach: store new_array in a local too
     return compile_string_concat_with_locals(str1, str2, ctx)
 end
 
@@ -546,9 +471,9 @@ end
 String concatenation implementation using explicit locals.
 Uses scratch locals allocated by allocate_scratch_locals!.
 """
+# MIGRATED to InstrBuilder (typed). Concatenates two char-arrays via scratch locals +
+# array.copy. Byte-identical to before.
 function compile_string_concat_with_locals(str1, str2, ctx::AbstractCompilationContext)::Vector{UInt8}
-    bytes = UInt8[]
-
     str_type_idx = ctx.type_registry.string_array_idx
 
     # Use scratch locals stored in context (allocated at compile context creation time)
@@ -557,82 +482,42 @@ function compile_string_concat_with_locals(str1, str2, ctx::AbstractCompilationC
     end
     result_local, str1_local, str2_local, len1_local, i_local = ctx.scratch_locals
 
-    # Store str1
-    append!(bytes, compile_value(str1, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(str1_local))
+    b = InstrBuilder(; func_name="compile_string_concat", strict=_wt_builder_strict())
+    set_context!(b, "string concat")
+    strref = ConcreteRef(UInt32(str_type_idx), true)
+    builder_set_local_type!(b, result_local, strref)
+    builder_set_local_type!(b, str1_local, strref)
+    builder_set_local_type!(b, str2_local, strref)
+    builder_set_local_type!(b, len1_local, I32)
 
-    # Store str2
-    append!(bytes, compile_value(str2, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(str2_local))
+    # Store str1, str2
+    emit_raw!(b, compile_value(str1, ctx); pushes=WasmValType[infer_value_wasm_type(str1, ctx)])
+    local_set!(b, str1_local)
+    emit_raw!(b, compile_value(str2, ctx); pushes=WasmValType[infer_value_wasm_type(str2, ctx)])
+    local_set!(b, str2_local)
 
-    # Get len1 and store
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(str1_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_LEN)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(len1_local))
+    # len1 = str1.len (stored); len2 = str2.len (left on stack)
+    local_get!(b, str1_local); array_len!(b); local_set!(b, len1_local)
+    local_get!(b, str2_local); array_len!(b)            # stack: [len2]
 
-    # Get len2
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(str2_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_LEN)
-    # Stack: [len2]
+    # Create result array of len1 + len2
+    local_get!(b, len1_local); num!(b, Opcode.I32_ADD)
+    array_new_default!(b, str_type_idx); local_set!(b, result_local)
 
-    # Create result array: len1 + len2
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(len1_local))
-    push!(bytes, Opcode.I32_ADD)  # len1 + len2
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_NEW_DEFAULT)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(result_local))
+    # Copy str1 → result[0:len1]   array.copy: [dst, dst_off, src, src_off, len]
+    local_get!(b, result_local); i32_const!(b, 0)
+    local_get!(b, str1_local); i32_const!(b, 0)
+    local_get!(b, len1_local)
+    array_copy!(b, str_type_idx, str_type_idx)
 
-    # Copy str1 to result[0:len1]
-    # array.copy: [dst, dst_off, src, src_off, len]
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)  # dst_off = 0
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(str1_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)  # src_off = 0
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(len1_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_COPY)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
+    # Copy str2 → result[len1:]
+    local_get!(b, result_local); local_get!(b, len1_local)  # dst_off = len1
+    local_get!(b, str2_local); i32_const!(b, 0)             # src_off = 0
+    local_get!(b, str2_local); array_len!(b)                # len = str2.len
+    array_copy!(b, str_type_idx, str_type_idx)
 
-    # Copy str2 to result[len1:]
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(len1_local))  # dst_off = len1
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(str2_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)  # src_off = 0
-    # len = str2.len
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(str2_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_LEN)
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_COPY)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
-
-    # Return result
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_local))
-
-    return bytes
+    local_get!(b, result_local)                             # return result
+    return builder_code(b)
 end
 
 """
@@ -640,9 +525,9 @@ Compile string equality comparison (str1 == str2).
 Returns i32 (0 or 1).
 Uses scratch locals allocated by allocate_scratch_locals!.
 """
+# MIGRATED to InstrBuilder (typed). Element-wise char-array equality with explicit
+# control flow (if/else over length mismatch, then a compare-loop). Byte-identical.
 function compile_string_equal(str1, str2, ctx::AbstractCompilationContext)::Vector{UInt8}
-    bytes = UInt8[]
-
     str_type_idx = ctx.type_registry.string_array_idx
 
     # Use scratch locals stored in context (allocated at compile context creation time)
@@ -651,121 +536,53 @@ function compile_string_equal(str1, str2, ctx::AbstractCompilationContext)::Vect
     end
     _, str1_local, str2_local, len_local, i_local = ctx.scratch_locals
 
+    b = InstrBuilder(; func_name="compile_string_equal", strict=_wt_builder_strict())
+    set_context!(b, "string ==")
+    strref = ConcreteRef(UInt32(str_type_idx), true)
+    builder_set_local_type!(b, str1_local, strref)
+    builder_set_local_type!(b, str2_local, strref)
+    builder_set_local_type!(b, len_local, I32)
+    builder_set_local_type!(b, i_local, I32)
+
     # Store str1 and str2
-    append!(bytes, compile_value(str1, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(str1_local))
+    emit_raw!(b, compile_value(str1, ctx); pushes=WasmValType[infer_value_wasm_type(str1, ctx)])
+    local_set!(b, str1_local)
+    emit_raw!(b, compile_value(str2, ctx); pushes=WasmValType[infer_value_wasm_type(str2, ctx)])
+    local_set!(b, str2_local)
 
-    append!(bytes, compile_value(str2, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(str2_local))
+    # len1 = str1.len (tee into len_local); compare with len2
+    local_get!(b, str1_local); array_len!(b); local_tee!(b, len_local)
+    local_get!(b, str2_local); array_len!(b); num!(b, Opcode.I32_NE)
 
-    # Compare lengths first
-    # Get len1, store in len_local
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(str1_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_LEN)
-    push!(bytes, Opcode.LOCAL_TEE)
-    append!(bytes, encode_leb128_unsigned(len_local))
+    # If lengths differ → 0; else compare elements
+    if_!(b, 0x7F; results=WasmValType[I32])
+        i32_const!(b, 0)                                   # lengths differ → not equal
+    else_!(b)
+        i32_const!(b, 0); local_set!(b, i_local)           # i = 0
+        block!(b, 0x7F; results=WasmValType[I32])          # break-with-result block
+            loop!(b, 0x40)                                 # void loop
+                # if i >= len → all matched, push 1 and break to block
+                local_get!(b, i_local); local_get!(b, len_local); num!(b, Opcode.I32_GE_S)
+                if_!(b, 0x40)
+                    i32_const!(b, 1); br!(b, 2)
+                end_block!(b)
+                # compare str1[i] vs str2[i] (unsigned packed-byte get)
+                local_get!(b, str1_local); local_get!(b, i_local)
+                array_get!(b, str_type_idx, I32; signed=false)
+                local_get!(b, str2_local); local_get!(b, i_local)
+                array_get!(b, str_type_idx, I32; signed=false)
+                num!(b, Opcode.I32_NE)
+                if_!(b, 0x40)
+                    i32_const!(b, 0); br!(b, 2)             # differ → not equal
+                end_block!(b)
+                # i += 1; continue
+                local_get!(b, i_local); i32_const!(b, 1); num!(b, Opcode.I32_ADD); local_set!(b, i_local)
+                br!(b, 0)
+            end_block!(b)                                  # end loop
+            unreachable!(b)                                # loop never falls through
+        end_block!(b)                                      # end result block
+    end_block!(b)                                          # end if-else
 
-    # Compare with len2
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(str2_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_LEN)
-    push!(bytes, Opcode.I32_NE)
-
-    # If lengths differ, result is 0; else compare elements
-    push!(bytes, Opcode.IF)
-    push!(bytes, 0x7F)  # result type i32
-
-    # Then: lengths differ -> not equal
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-
-    push!(bytes, Opcode.ELSE)
-
-    # Else: lengths equal, compare element by element
-    # Initialize i = 0
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-
-    # Block for breaking out of loop with result
-    push!(bytes, Opcode.BLOCK)
-    push!(bytes, 0x7F)  # result type i32
-
-    # Loop (void type - always exits via br)
-    push!(bytes, Opcode.LOOP)
-    push!(bytes, 0x40)  # void
-
-    # Check if i >= len (done comparing, all matched)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(len_local))
-    push!(bytes, Opcode.I32_GE_S)
-    push!(bytes, Opcode.IF)
-    push!(bytes, 0x40)  # void
-    # All elements matched -> push 1 and break
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.BR)
-    push!(bytes, 0x02)  # break to result block
-    push!(bytes, Opcode.END)  # end if (i >= len)
-
-    # Compare str1[i] vs str2[i]
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(str1_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_GET_U)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
-
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(str2_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_GET_U)
-    append!(bytes, encode_leb128_unsigned(str_type_idx))
-
-    push!(bytes, Opcode.I32_NE)
-
-    # If elements differ -> push 0 and break
-    push!(bytes, Opcode.IF)
-    push!(bytes, 0x40)  # void
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)
-    push!(bytes, Opcode.BR)
-    push!(bytes, 0x02)  # break to result block
-    push!(bytes, Opcode.END)  # end if (elements differ)
-
-    # Increment i
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.I32_ADD)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(i_local))
-
-    # Continue loop
-    push!(bytes, Opcode.BR)
-    push!(bytes, 0x00)  # br to loop
-
-    push!(bytes, Opcode.END)  # end loop
-
-    # Loop never falls through (always br), so this is unreachable
-    push!(bytes, Opcode.UNREACHABLE)
-
-    push!(bytes, Opcode.END)  # end result block
-
-    push!(bytes, Opcode.END)  # end if-else (lengths comparison)
-
-    return bytes
+    return builder_code(b)
 end
 

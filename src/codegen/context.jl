@@ -2084,19 +2084,16 @@ function emit_ref_cast_if_structref!(bytes::Vector{UInt8}, val, target_type_idx:
                 get_concrete_wasm_type(T, ctx.mod, ctx.type_registry)
         end
     end
+    b = InstrBuilder(; func_name="emit_ref_cast_if_structref!", strict=false)
+    seed_input!(b, WasmValType[AnyRef])  # consumes the ref the caller left on the stack
     if local_wasm_type === StructRef || local_wasm_type === AnyRef
         # Value on stack is structref/anyref, but struct_get/array_get needs (ref null $target_type_idx)
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.REF_CAST_NULL)
-        append!(bytes, encode_leb128_signed(Int64(target_type_idx)))
+        ref_cast!(b, Int64(target_type_idx), true)
     elseif local_wasm_type === ExternRef
         # PURE-6025: Value on stack is externref (from Any-typed local or Dict/Vector retrieval).
         # Must convert externref → anyref → (ref null $target_type_idx) for struct_get.
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ANY_CONVERT_EXTERN)
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.REF_CAST_NULL)
-        append!(bytes, encode_leb128_signed(Int64(target_type_idx)))
+        any_convert_extern!(b)
+        ref_cast!(b, Int64(target_type_idx), true)
     elseif local_wasm_type isa ConcreteRef && local_wasm_type.type_idx != UInt32(target_type_idx)
         # Local is a specific ConcreteRef but points to a DIFFERENT struct
         # type than the one struct_get/array_get wants. This happens when
@@ -2111,10 +2108,9 @@ function emit_ref_cast_if_structref!(bytes::Vector{UInt8}, val, target_type_idx:
         # the value is actually of type `$target_type_idx` or a subtype
         # it passes cleanly; if not, the cast traps (same semantics as
         # Julia's abstract-dispatch failure).
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.REF_CAST_NULL)
-        append!(bytes, encode_leb128_signed(Int64(target_type_idx)))
+        ref_cast!(b, Int64(target_type_idx), true)
     end
+    append!(bytes, builder_code(b))
     return bytes
 end
 
@@ -2203,14 +2199,14 @@ function _narrow_generic_local!(bytes::Vector{UInt8}, local_idx::Integer, ssa_id
     end
     concrete_wasm = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
     if concrete_wasm isa ConcreteRef
+        b = InstrBuilder(; func_name="_narrow_generic_local!", strict=false)
+        seed_input!(b, WasmValType[AnyRef])  # consumes the ref the caller left on the stack
         if local_wasm_type === ExternRef
             # PURE-6025: ExternRef needs any_convert_extern before ref.cast
-            push!(bytes, Opcode.GC_PREFIX)
-            push!(bytes, Opcode.ANY_CONVERT_EXTERN)
+            any_convert_extern!(b)
         end
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.REF_CAST_NULL)
-        append!(bytes, encode_leb128_signed(Int64(concrete_wasm.type_idx)))
+        ref_cast!(b, Int64(concrete_wasm.type_idx), true)
+        append!(bytes, builder_code(b))
     end
 end
 

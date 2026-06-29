@@ -1067,3 +1067,15 @@ not generic unused-result handling. Reduces no further than the full multi-stage
 `__solve` (plain Vector-copy-in-a-loop compiles clean on 1.13). Repro funcs export as
 `#__solve#NN`. Diagnostic: add an env-gated CodeInfo dump in compile.jl's function_data
 loop (`WT_DUMP_IR=__solve#`) to re-obtain the IR.
+
+## NONDETERMINISTIC CODEGEN — UInt128-max literal (found 2026-06-26, builder-migration verification)
+
+`()-> UInt128(0xffff...ffff)` (typemax) compiles to a module of STABLE length (5580 bytes)
+but DIFFERENT sha256 across repeated `compile` calls in the same session — i.e. the byte
+ORDER varies, not the content size. Surfaced while byte-diffing the compile_value
+migration (all other 19 value kinds in /tmp/cv_digest.jl are deterministic). Almost
+certainly Dict/Set iteration order (objectid-seeded) in type-registration or a constant
+pool reached only by the 128-bit-max path. NOT a regression (reproduces on pre-migration
+main too). Impact: breaks bit-exact reproducibility / notarization for modules that embed
+such constants. NEXT: bisect which registry (type_registry.structs vs unions vs a global
+pool) iterates in nondeterministic order for this input; sort by a stable key.

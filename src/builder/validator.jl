@@ -69,10 +69,15 @@ to `expected`. Returns the actual type found (or `expected` on underflow).
 
 Mirrors dart2wasm's _checkStackTypes + _stackTypes.length -= inputs.length.
 """
+# dart2wasm `_verifyTypes`: an instruction may not pop below the innermost block's
+# baseStackHeight — that would consume values belonging to an enclosing block, which
+# the wasm stack discipline forbids. `_base` returns that floor.
+@inline _base(v::WasmStackValidator) = isempty(v.labels) ? 0 : v.labels[end].stack_height_at_entry
+
 function validate_pop!(v::WasmStackValidator, expected::WasmValType)::WasmValType
     v.enabled || return expected
-    if isempty(v.stack)
-        push!(v.errors, "$(v.func_name): stack underflow — expected $(expected), stack empty")
+    if length(v.stack) <= _base(v)
+        push!(v.errors, "$(v.func_name): stack underflow (past block base) — expected $(expected)")
         return expected
     end
     actual = pop!(v.stack)
@@ -90,8 +95,8 @@ Returns `nothing` on underflow.
 """
 function validate_pop_any!(v::WasmStackValidator)::Union{WasmValType, Nothing}
     v.enabled || return nothing
-    if isempty(v.stack)
-        push!(v.errors, "$(v.func_name): stack underflow on pop_any")
+    if length(v.stack) <= _base(v)
+        push!(v.errors, "$(v.func_name): stack underflow on pop_any (past block base)")
         return nothing
     end
     return pop!(v.stack)
@@ -298,8 +303,8 @@ function validate_instruction!(v::WasmStackValidator, opcode::UInt8, type_info=n
     # --- Parametric ---
     elseif opcode == Opcode.DROP
         validate_pop_any!(v)
-    elseif opcode == Opcode.SELECT
-        # select: pop i32 condition, pop T, pop T, push T
+    elseif opcode == Opcode.SELECT || opcode == Opcode.SELECT_T
+        # select / select (typed): pop i32 condition, pop T, pop T, push T
         validate_pop!(v, I32)  # condition
         val2 = validate_pop_any!(v)
         validate_pop_any!(v)
@@ -714,6 +719,18 @@ function validate_gc_instruction!(v::WasmStackValidator, gc_opcode::UInt8, type_
         # extern.convert_any: pop anyref, push externref
         validate_pop_any!(v)  # any anyref subtype
         validate_push!(v, ExternRef)
+
+    elseif gc_opcode == Opcode.REF_TEST || gc_opcode == Opcode.REF_TEST_NULL
+        # ref.test (ref $t): pop ref, push i32
+        validate_pop_any!(v); validate_push!(v, I32)
+
+    elseif gc_opcode == Opcode.REF_I31
+        # ref.i31: pop i32, push (ref i31)
+        validate_pop!(v, I32); validate_push!(v, I31Ref)
+
+    elseif gc_opcode == Opcode.I31_GET_S || gc_opcode == Opcode.I31_GET_U
+        # i31.get_s/u: pop (ref null i31), push i32
+        validate_pop_any!(v); validate_push!(v, I32)
 
     # Unknown GC opcode — skip silently
     end

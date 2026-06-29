@@ -173,6 +173,9 @@ When the condition SSA value has an anyref/externref local (because Julia typed 
 the raw compile_value would push anyref, but i32.eqz needs i32. This helper unboxes via
 ref.cast + struct.get when needed.
 """
+# MIGRATED to InstrBuilder (Phase 1, dart2wasm-style typed emission). The shared
+# builder is threaded once the callers migrate; for now a fragment builder validates
+# this emitter's stack in isolation (compile_value bridged via its known pushed type).
 function compile_condition_to_i32(cond, ctx::AbstractCompilationContext)::Vector{UInt8}
     if haskey(ENV, "WT_TRACE_CONDSTUB") && ctx.last_stmt_was_stub
         println(stderr, "CONDSTUB cond=", first(repr(cond), 30))
@@ -180,7 +183,10 @@ function compile_condition_to_i32(cond, ctx::AbstractCompilationContext)::Vector
             println(stderr, "   ", fr)
         end
     end
-    bytes = compile_value(cond, ctx)
+    b = InstrBuilder(; func_name="compile_condition_to_i32", strict=_wt_builder_strict())
+    set_context!(b, "GotoIfNot cond → i32")
+    # bridge the (still-raw) compile_value with its known pushed type
+    emit_raw!(b, compile_value(cond, ctx); pushes=WasmValType[infer_value_wasm_type(cond, ctx)])
     # Check if the condition value is in a non-i32 local
     if cond isa Core.SSAValue
         local_idx = get(ctx.ssa_locals, cond.id, nothing)
@@ -192,54 +198,31 @@ function compile_condition_to_i32(cond, ctx::AbstractCompilationContext)::Vector
             if local_offset >= 0 && local_offset < length(ctx.locals)
                 local_type = ctx.locals[local_offset + 1]
                 if local_type === AnyRef || local_type === ExternRef
-                    # Value is anyref/externref but should be i32 (Bool).
-                    # Unbox: ref.cast (ref null $i32_box) → struct.get $i32_box 0
-                    if local_type === ExternRef
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.ANY_CONVERT_EXTERN)
-                    end
+                    # Value is anyref/externref but should be i32 (Bool). Unbox.
+                    local_type === ExternRef && any_convert_extern!(b)
                     box_type_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, I32)
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.REF_CAST_NULL)
-                    append!(bytes, encode_leb128_signed(Int64(box_type_idx)))
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.STRUCT_GET)
-                    append!(bytes, encode_leb128_unsigned(box_type_idx))
-                    append!(bytes, encode_leb128_unsigned(1))  # PURE-9024: field 1 (0=typeId, 1=value)
+                    ref_cast!(b, box_type_idx, true)
+                    struct_get!(b, box_type_idx, 1, I32)  # field 1 (0=typeId, 1=value)
                 elseif local_type isa ConcreteRef
-                    # PURE-6025: Value is a concrete ref (tagged union struct) but should
-                    # be i32 (Bool). This happens when a stubbed call's result local was
-                    # allocated as a tagged union (e.g., Union{Bool, Nothing} → struct{i32, anyref})
-                    # but the GotoIfNot condition expects i32. Extract i32 tag from field 0.
-                    # PURE-9024: Field 0 is now typeId. Tag is at field 1.
-                    # Check that the struct has at least 3 fields (typeId, tag, value = tagged union)
+                    # PURE-6025: tagged-union concrete ref → extract i32 tag from field 1.
                     type_idx = local_type.type_idx
                     if type_idx + 1 <= length(ctx.mod.types)
                         mod_type = ctx.mod.types[type_idx + 1]
                         if mod_type isa StructType && length(mod_type.fields) >= 3 && mod_type.fields[2].valtype === I32
-                            push!(bytes, Opcode.GC_PREFIX)
-                            push!(bytes, Opcode.STRUCT_GET)
-                            append!(bytes, encode_leb128_unsigned(type_idx))
-                            append!(bytes, encode_leb128_unsigned(1))  # field 1 (tag, after typeId at 0)
+                            struct_get!(b, type_idx, 1, I32)  # field 1 (tag, after typeId at 0)
                         else
-                            # Not a tagged union — drop the ref and push i32 default
-                            push!(bytes, Opcode.DROP)
-                            push!(bytes, Opcode.I32_CONST, 0x00)
+                            drop!(b); i32_const!(b, 0)        # not a tagged union — default
                         end
                     else
-                        # Unknown type — drop and push i32 default
-                        push!(bytes, Opcode.DROP)
-                        push!(bytes, Opcode.I32_CONST, 0x00)
+                        drop!(b); i32_const!(b, 0)            # unknown type — default
                     end
                 elseif local_type === StructRef || local_type === ArrayRef
-                    # PURE-6025: Abstract ref in condition — drop and push i32 default
-                    push!(bytes, Opcode.DROP)
-                    push!(bytes, Opcode.I32_CONST, 0x00)
+                    drop!(b); i32_const!(b, 0)                # abstract ref — default
                 end
             end
         end
     end
-    return bytes
+    return builder_code(b)
 end
 
 """
@@ -249,46 +232,50 @@ Compile a value reference (SSA, Argument, or Literal).
 const _VALUE_COMPILE_STACK = Vector{Any}()
 
 function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
-    bytes = UInt8[]
+    # MIGRATED to InstrBuilder. The main accumulator is the typed builder `b`; the
+    # byte-INSPECTING branches (struct/Dict/Vector/Memory constants) keep building
+    # local UInt8[] buffers (they LEB-decode + scan recursive results) and splice them
+    # into `b` via emit_raw! / RawBytes. Byte-identical to the prior raw emission.
+    b = InstrBuilder(; func_name="compile_value", strict=false)
+    # Bridge external byte-emitting helpers (their intermediate buffers stay bytes):
+    _emit_tid!(T) = (tb = UInt8[]; emit_type_id!(tb, ctx.type_registry, T); emit_raw!(b, tb; pushes=WasmValType[I32]))
+    _narrow!(li, sid) = (nb = UInt8[]; _narrow_generic_local!(nb, li, sid, ctx); isempty(nb) || emit_raw!(b, nb))
 
     # PURE-6022: If we're in dead code (previous sub-call was a stub), don't compile
     # more values. Emitting data after unreachable creates invalid WASM byte sequences
     # (e.g., array element i32_const values decode as block/loop instructions).
     if ctx.last_stmt_was_stub
         haskey(ENV, "WT_TRACE_DEADVAL") && println(stderr, "DEADVAL val=", first(repr(val), 60))
-        push!(bytes, 0x00)  # unreachable
-        return bytes
+        unreachable!(b)  # 0x00
+        return builder_code(b)
     end
 
     # Handle nothing explicitly - it's the Julia singleton
     if val === nothing
         # Nothing maps to i32 in WasmGC — push i32(0) as placeholder
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, 0x00)
-        return bytes
+        i32_const!(b, 0)
+        return builder_code(b)
     end
 
     if val isa Core.SSAValue
         # Check if this SSA has a local allocated (either regular or phi)
         if haskey(ctx.ssa_locals, val.id)
             local_idx = ctx.ssa_locals[val.id]
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(local_idx))
+            local_get!(b, local_idx)
             # PURE-901: Narrow generic locals (anyref/structref) to concrete type.
             # When SSA type is concrete but local was allocated as generic (due to Union/Any),
             # ref.cast ensures downstream struct_get/array_get see the correct type.
-            _narrow_generic_local!(bytes, local_idx, val.id, ctx)
+            _narrow!(local_idx, val.id)
         elseif haskey(ctx.phi_locals, val.id)
             # Phi node - load from phi local
             local_idx = ctx.phi_locals[val.id]
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(local_idx))
+            local_get!(b, local_idx)
         else
             # No local - check if this is a PiNode
             # PURE-6021: Guard against out-of-bounds SSAValue IDs (e.g. sentinel Core.SSAValue(-2)
             # that appear as constant literals in IR of compiler functions like construct_ssa!)
             if val.id < 1 || val.id > length(ctx.code_info.code)
-                return bytes  # Dead code - sentinel SSAValue with invalid id
+                return builder_code(b)  # Dead code - sentinel SSAValue with invalid id
             end
             stmt = ctx.code_info.code[val.id]
             if stmt isa Core.PiNode
@@ -304,21 +291,19 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                         if underlying_type !== Nothing && underlying_type !== Any
                             wasm_type = julia_to_wasm_type_concrete(underlying_type, ctx)
                             if wasm_type isa ConcreteRef
-                                push!(bytes, Opcode.REF_NULL)
-                                append!(bytes, encode_leb128_signed(Int64(wasm_type.type_idx)))
+                                ref_null!(b, Int64(wasm_type.type_idx), ConcreteRef(UInt32(wasm_type.type_idx), true))
                                 emitted_nothing = true
                             end
                         end
                     end
                     if !emitted_nothing
                         # Nothing is i32(0) as placeholder — this is what the callee expects
-                        push!(bytes, Opcode.I32_CONST)
-                        push!(bytes, 0x00)
+                        i32_const!(b, 0)
                     end
                 else
                     # Non-Nothing PiNode without local: re-emit the underlying value.
                     # Can't assume it's on the stack since block boundaries clear the stack.
-                    append!(bytes, compile_value(stmt.val, ctx))
+                    emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[infer_value_wasm_type(stmt.val, ctx)])
                     # PURE-9030: Unbox from anyref to numeric type when PiNode narrows
                     # a Union-typed anyref value to a concrete numeric type.
                     # e.g., π(x::Union{Int32,Float64}, Int32) → ref.cast $BoxedInt32 + struct.get 1
@@ -353,13 +338,8 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                         if _pi_src_wasm === AnyRef || _pi_src_wasm === StructRef || _pi_src_wasm isa ConcreteRef
                             # Value is boxed in anyref — unbox via ref.cast + struct.get
                             local _box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, _pi_target_wasm)
-                            push!(bytes, Opcode.GC_PREFIX)
-                            push!(bytes, Opcode.REF_CAST)  # non-null cast (inside isa-guarded branch)
-                            append!(bytes, encode_leb128_signed(Int64(_box_idx)))
-                            push!(bytes, Opcode.GC_PREFIX)
-                            push!(bytes, Opcode.STRUCT_GET)
-                            append!(bytes, encode_leb128_unsigned(_box_idx))
-                            append!(bytes, encode_leb128_unsigned(1))  # field 1 = value (field 0 = typeId)
+                            ref_cast!(b, Int64(_box_idx), false)  # non-null cast (inside isa-guarded branch)
+                            struct_get!(b, _box_idx, 1, _pi_target_wasm)  # field 1 = value (field 0 = typeId)
                         end
                     else
                         # CG-003d: PiNode narrows to a struct/ref type (not numeric).
@@ -379,13 +359,8 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                                 end
                             end
                             if _pi_src_wasm2 === EqRef || _pi_src_wasm2 === StructRef || _pi_src_wasm2 === AnyRef || _pi_src_wasm2 === ExternRef
-                                if _pi_src_wasm2 === ExternRef
-                                    push!(bytes, Opcode.GC_PREFIX)
-                                    push!(bytes, Opcode.ANY_CONVERT_EXTERN)
-                                end
-                                push!(bytes, Opcode.GC_PREFIX)
-                                push!(bytes, Opcode.REF_CAST_NULL)
-                                append!(bytes, encode_leb128_signed(Int64(_pi_concrete.type_idx)))
+                                _pi_src_wasm2 === ExternRef && any_convert_extern!(b)
+                                ref_cast!(b, Int64(_pi_concrete.type_idx), true)
                             end
                         end
                     end
@@ -394,20 +369,20 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                 # Non-PiNode SSA without local: re-compile the statement to reproduce its value.
                 if stmt isa Expr && stmt.head === :boundscheck
                     # P2-batch6: real value (true unless @inbounds) — see statements.jl
-                    push!(bytes, Opcode.I32_CONST)
-                    push!(bytes, (isempty(stmt.args) || stmt.args[1] !== false) ? 0x01 : 0x00)
+                    i32_const!(b, (isempty(stmt.args) || stmt.args[1] !== false) ? 1 : 0)
                 elseif stmt isa Expr && (stmt.head === :call || stmt.head === :invoke || stmt.head === :new || stmt.head === :foreigncall)
                     # Re-compile the expression to produce its value on the stack.
                     # Call the specific compiler directly to avoid compile_statement's
                     # orphan-prevention skip for multi-arg memoryrefnew.
+                    local _ssa_t = WasmValType[infer_value_wasm_type(val, ctx)]
                     if stmt.head === :call
-                        append!(bytes, compile_call(stmt, val.id, ctx))
+                        emit_raw!(b, compile_call(stmt, val.id, ctx); pushes=_ssa_t)
                     elseif stmt.head === :invoke
-                        append!(bytes, compile_invoke(stmt, val.id, ctx))
+                        emit_raw!(b, compile_invoke(stmt, val.id, ctx); pushes=_ssa_t)
                     elseif stmt.head === :new
-                        append!(bytes, compile_new(stmt, val.id, ctx))
+                        emit_raw!(b, compile_new(stmt, val.id, ctx); pushes=_ssa_t)
                     elseif stmt.head === :foreigncall
-                        append!(bytes, compile_foreigncall(stmt, val.id, ctx))
+                        emit_raw!(b, compile_foreigncall(stmt, val.id, ctx); pushes=_ssa_t)
                     end
                 end
             end
@@ -434,27 +409,23 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         elseif arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
             # Calculate local index: count non-WasmGlobal args before this one
             local_idx = count(i -> !(i in ctx.global_args), 1:arg_idx-1)
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(local_idx))
+            local_get!(b, local_idx)
         end
 
     elseif val isa Core.SlotNumber
         # PURE-6024: Check slot_locals first (for local variables in unoptimized IR),
         # then fall back to param mapping (slot 2 = param 0, slot 3 = param 1, etc.)
         if haskey(ctx.slot_locals, val.id)
-            push!(bytes, Opcode.LOCAL_GET)
-            append!(bytes, encode_leb128_unsigned(ctx.slot_locals[val.id]))
+            local_get!(b, ctx.slot_locals[val.id])
         else
             local_idx = val.id - 2
             if local_idx >= 0
-                push!(bytes, Opcode.LOCAL_GET)
-                append!(bytes, encode_leb128_unsigned(local_idx))
+                local_get!(b, local_idx)
             end
         end
 
     elseif val isa Bool
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, val ? 0x01 : 0x00)
+        i32_const!(b, val ? 1 : 0)
 
     elseif val isa Char
         # STACK-003: Char stored as Julia's internal representation (UTF-8 encoding
@@ -463,29 +434,23 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         # '+' (U+002B) → 0x2b000000, 'é' (U+00E9) → 0xc3a90000
         # JS callers must convert codepoints to Julia encoding before passing.
         raw = reinterpret(Int32, reinterpret(UInt32, val))
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(raw))
+        i32_const!(b, raw)
 
     elseif val isa Int8 || val isa UInt8 || val isa Int16 || val isa UInt16
         # Small integers - stored as i32 in WASM
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int32(val)))
+        i32_const!(b, Int32(val))
 
     elseif val isa Int32
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(val))
+        i32_const!(b, val)
 
     elseif val isa UInt32
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(reinterpret(Int32, val)))
+        i32_const!(b, reinterpret(Int32, val))
 
     elseif val isa Int64 || val isa Int
-        push!(bytes, Opcode.I64_CONST)
-        append!(bytes, encode_leb128_signed(Int64(val)))
+        i64_const!(b, Int64(val))
 
     elseif val isa UInt64
-        push!(bytes, Opcode.I64_CONST)
-        append!(bytes, encode_leb128_signed(reinterpret(Int64, val)))
+        i64_const!(b, reinterpret(Int64, val))
 
     elseif val isa Int128 || val isa UInt128
         # 128-bit integers are represented as WasmGC structs with (lo, hi) fields
@@ -497,28 +462,16 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         hi = UInt64((val >> 64) & 0xFFFFFFFFFFFFFFFF)
 
         # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
-        emit_type_id!(bytes, ctx.type_registry, result_type)
-
-        # Push lo value
-        push!(bytes, Opcode.I64_CONST)
-        append!(bytes, encode_leb128_signed(reinterpret(Int64, lo)))
-
-        # Push hi value
-        push!(bytes, Opcode.I64_CONST)
-        append!(bytes, encode_leb128_signed(reinterpret(Int64, hi)))
-
-        # Create struct
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_NEW)
-        append!(bytes, encode_leb128_unsigned(type_idx))
+        _emit_tid!(result_type)
+        i64_const!(b, reinterpret(Int64, lo))   # lo
+        i64_const!(b, reinterpret(Int64, hi))   # hi
+        struct_new!(b, type_idx, WasmValType[I32, I64, I64])
 
     elseif val isa Float32
-        push!(bytes, Opcode.F32_CONST)
-        append!(bytes, reinterpret(UInt8, [val]))
+        f32_const!(b, val)
 
     elseif val isa Float64
-        push!(bytes, Opcode.F64_CONST)
-        append!(bytes, reinterpret(UInt8, [val]))
+        f64_const!(b, val)
 
     elseif val isa String
         # PURE-9013: String constant via passive data segment + array.new_data
@@ -528,28 +481,20 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
 
         if n_bytes == 0
             # Empty string: use array.new_fixed with 0 elements (no data segment needed)
-            push!(bytes, Opcode.GC_PREFIX)
-            push!(bytes, Opcode.ARRAY_NEW_FIXED)
-            append!(bytes, encode_leb128_unsigned(type_idx))
-            append!(bytes, encode_leb128_unsigned(UInt32(0)))
+            array_new_fixed!(b, type_idx, 0, I32)
         else
             # Create a passive data segment with UTF-8 bytes
             utf8_bytes = Vector{UInt8}(codeunits(val))
             seg_idx = add_passive_data_segment!(ctx.mod, utf8_bytes)
 
             # array.new_data $type_idx $seg_idx : [offset, length] -> [(ref $type)]
-            push!(bytes, Opcode.I32_CONST)
-            push!(bytes, 0x00)  # offset 0 (start of segment)
-            push!(bytes, Opcode.I32_CONST)
+            i32_const!(b, 0)              # offset 0 (start of segment)
             # i32.const operands are SIGNED LEB128 — unsigned-encoding a length in
             # [64,127] (and other bands) decodes negative → array.new_data with a
             # huge unsigned length → "array too large" trap (medium-length string
             # literals, e.g. admonition HTML).
-            append!(bytes, encode_leb128_signed(Int32(n_bytes)))
-            push!(bytes, Opcode.GC_PREFIX)
-            push!(bytes, Opcode.ARRAY_NEW_DATA)
-            append!(bytes, encode_leb128_unsigned(type_idx))
-            append!(bytes, encode_leb128_unsigned(seg_idx))
+            i32_const!(b, Int32(n_bytes))  # length
+            array_new_data!(b, type_idx, seg_idx)
         end
 
     elseif val isa GlobalRef
@@ -557,13 +502,12 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         key = (val.mod, val.name)
         global_idx = _lookup_module_global(ctx.module_globals, key)
         if global_idx !== nothing
-            push!(bytes, Opcode.GLOBAL_GET)
-            append!(bytes, encode_leb128_unsigned(global_idx))
+            global_get!(b, global_idx, AnyRef)
         else
             # GlobalRef to a constant - evaluate and compile the value
             try
                 actual_val = getfield(val.mod, val.name)
-                append!(bytes, compile_value(actual_val, ctx))
+                emit_raw!(b, compile_value(actual_val, ctx); pushes=WasmValType[AnyRef])
             catch
                 # If we can't evaluate, might be a type reference (no runtime value)
             end
@@ -579,21 +523,18 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
             T = typeof(inner)
             info = register_struct_type!(ctx.mod, ctx.type_registry, T)
             type_idx = info.wasm_type_idx
-            emit_type_id!(bytes, ctx.type_registry, T)
+            _emit_tid!(T)
             for field_name in fieldnames(T)
                 field_val = getfield(inner, field_name)
                 if field_val isa Int
-                    push!(bytes, Opcode.I64_CONST)
-                    append!(bytes, encode_leb128_signed(Int64(field_val)))
+                    i64_const!(b, Int64(field_val))
                 else
-                    append!(bytes, compile_value(field_val, ctx))
+                    emit_raw!(b, compile_value(field_val, ctx); pushes=WasmValType[AnyRef])
                 end
             end
-            push!(bytes, Opcode.GC_PREFIX)
-            push!(bytes, Opcode.STRUCT_NEW)
-            append!(bytes, encode_leb128_unsigned(type_idx))
+            struct_new!(b, type_idx, WasmValType[])
         else
-            append!(bytes, compile_value(inner, ctx))
+            emit_raw!(b, compile_value(inner, ctx); pushes=WasmValType[AnyRef])
         end
 
     elseif isprimitivetype(typeof(val)) && !isa(val, Bool) && !isa(val, Char) &&
@@ -605,20 +546,16 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         sz = sizeof(T)
         if sz == 1
             int_val = Core.Intrinsics.bitcast(UInt8, val)
-            push!(bytes, Opcode.I32_CONST)
-            append!(bytes, encode_leb128_signed(Int32(int_val)))
+            i32_const!(b, Int32(int_val))
         elseif sz == 2
             int_val = Core.Intrinsics.bitcast(UInt16, val)
-            push!(bytes, Opcode.I32_CONST)
-            append!(bytes, encode_leb128_signed(Int32(int_val)))
+            i32_const!(b, Int32(int_val))
         elseif sz == 4
             int_val = Core.Intrinsics.bitcast(UInt32, val)
-            push!(bytes, Opcode.I32_CONST)
-            append!(bytes, encode_leb128_signed(Int32(int_val)))
+            i32_const!(b, Int32(int_val))
         elseif sz == 8
             int_val = Core.Intrinsics.bitcast(UInt64, val)
-            push!(bytes, Opcode.I64_CONST)
-            append!(bytes, encode_leb128_signed(Int64(int_val)))
+            i64_const!(b, Int64(int_val))
         else
             error("Primitive type with unsupported size for Wasm: $T ($sz bytes)")
         end
@@ -630,23 +567,15 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         n_bytes = ncodeunits(name_str)
 
         if n_bytes == 0
-            push!(bytes, Opcode.GC_PREFIX)
-            push!(bytes, Opcode.ARRAY_NEW_FIXED)
-            append!(bytes, encode_leb128_unsigned(type_idx))
-            append!(bytes, encode_leb128_unsigned(UInt32(0)))
+            array_new_fixed!(b, type_idx, 0, I32)
         else
             utf8_bytes = Vector{UInt8}(codeunits(name_str))
             seg_idx = add_passive_data_segment!(ctx.mod, utf8_bytes)
 
-            push!(bytes, Opcode.I32_CONST)
-            push!(bytes, 0x00)
-            push!(bytes, Opcode.I32_CONST)
+            i32_const!(b, 0)
             # i32.const operands are SIGNED LEB128 (see String path above).
-            append!(bytes, encode_leb128_signed(Int32(n_bytes)))
-            push!(bytes, Opcode.GC_PREFIX)
-            push!(bytes, Opcode.ARRAY_NEW_DATA)
-            append!(bytes, encode_leb128_unsigned(type_idx))
-            append!(bytes, encode_leb128_unsigned(seg_idx))
+            i32_const!(b, Int32(n_bytes))
+            array_new_data!(b, type_idx, seg_idx)
         end
 
     elseif typeof(val) <: Tuple
@@ -661,7 +590,7 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         struct_type_def = ctx.mod.types[type_idx + 1]
 
         # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
-        emit_type_id!(bytes, ctx.type_registry, T)
+        _emit_tid!(T)
 
         # Push field values (tuples use 1-based indexing)
         for i in 1:length(val)
@@ -678,46 +607,37 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                 expected_wasm === ArrayRef || expected_wasm === AnyRef || expected_wasm === ExternRef)
                 # Type value needs ref type - emit ref.null of expected type
                 if expected_wasm isa ConcreteRef
-                    push!(bytes, Opcode.REF_NULL)
-                    append!(bytes, encode_leb128_signed(Int64(expected_wasm.type_idx)))
+                    ref_null!(b, Int64(expected_wasm.type_idx), ConcreteRef(UInt32(expected_wasm.type_idx), true))
                 elseif expected_wasm === ArrayRef
-                    push!(bytes, Opcode.REF_NULL)
-                    push!(bytes, UInt8(ArrayRef))
+                    ref_null!(b, ArrayRef)
                 elseif expected_wasm === ExternRef
-                    push!(bytes, Opcode.REF_NULL)
-                    push!(bytes, UInt8(ExternRef))
+                    ref_null!(b, ExternRef)
                 elseif expected_wasm === AnyRef
-                    push!(bytes, Opcode.REF_NULL)
-                    push!(bytes, UInt8(AnyRef))
+                    ref_null!(b, AnyRef)
                 else
-                    push!(bytes, Opcode.REF_NULL)
-                    push!(bytes, UInt8(StructRef))
+                    ref_null!(b, StructRef)
                 end
             else
-                append!(bytes, compile_value(field_val, ctx))
+                emit_raw!(b, compile_value(field_val, ctx); pushes=WasmValType[AnyRef])
             end
         end
 
         # Create the struct
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_NEW)
-        append!(bytes, encode_leb128_unsigned(type_idx))
+        struct_new!(b, type_idx, WasmValType[])
 
     elseif val isa Type
         # PURE-4151: Type constant — each unique Type gets a unique Wasm global
         # so that ref.eq can distinguish different Type objects at runtime.
         # Previous behavior (i32.const 0) made all Types indistinguishable.
         global_idx = get_type_constant_global!(ctx.mod, ctx.type_registry, val)
-        push!(bytes, Opcode.GLOBAL_GET)
-        append!(bytes, encode_leb128_unsigned(global_idx))
+        global_get!(b, global_idx, AnyRef)
 
     elseif val isa Core.TypeName
         # PURE-9064: TypeName constant — look up or create the TypeName global.
         # TypeName objects have many undefined fields so the general struct constant
         # path would emit ref.null. Instead, use the dedicated TypeName global registry.
         tn_global_idx = get_typename_constant_global!(ctx.mod, ctx.type_registry, val)
-        push!(bytes, Opcode.GLOBAL_GET)
-        append!(bytes, encode_leb128_unsigned(tn_global_idx))
+        global_get!(b, tn_global_idx, AnyRef)
 
     elseif val isa Module
         # Module constant — empty struct (fieldcount=0), like Function singletons.
@@ -725,10 +645,8 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         info = register_struct_type!(ctx.mod, ctx.type_registry, Module)
         type_idx = info.wasm_type_idx
         # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
-        emit_type_id!(bytes, ctx.type_registry, Module)
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_NEW)
-        append!(bytes, encode_leb128_unsigned(type_idx))
+        _emit_tid!(Module)
+        struct_new!(b, type_idx, WasmValType[])
 
     elseif val isa Function && isstructtype(typeof(val)) && fieldcount(typeof(val)) == 0
         # Function singleton (e.g., typeof(some_function)) — empty struct with no fields
@@ -736,10 +654,8 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         info = register_struct_type!(ctx.mod, ctx.type_registry, T)
         type_idx = info.wasm_type_idx
         # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
-        emit_type_id!(bytes, ctx.type_registry, T)
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_NEW)
-        append!(bytes, encode_leb128_unsigned(type_idx))
+        _emit_tid!(T)
+        struct_new!(b, type_idx, WasmValType[])
 
     elseif val isa Function && isstructtype(typeof(val)) && fieldcount(typeof(val)) > 0
         # PURE-325: Function closure with captured fields (e.g., Fix2{typeof(isequal), Char})
@@ -750,22 +666,19 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
 
         has_undefined = any(!isdefined(val, fn) for fn in fieldnames(T))
         if has_undefined
-            push!(bytes, Opcode.REF_NULL)
-            append!(bytes, encode_leb128_signed(Int64(type_idx)))
-            return bytes
+            ref_null!(b, Int64(type_idx), ConcreteRef(UInt32(type_idx), true))
+            return builder_code(b)
         end
 
         struct_type_def = ctx.mod.types[type_idx + 1]
         # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
-        emit_type_id!(bytes, ctx.type_registry, T)
+        _emit_tid!(T)
         for (fi, field_name) in enumerate(fieldnames(T))
             field_val = getfield(val, field_name)
-            append!(bytes, compile_value(field_val, ctx))
+            emit_raw!(b, compile_value(field_val, ctx); pushes=WasmValType[AnyRef])
         end
 
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_NEW)
-        append!(bytes, encode_leb128_unsigned(type_idx))
+        struct_new!(b, type_idx, WasmValType[])
 
     elseif typeof(val) <: Dict
         # Dict constant with pre-populated data — materialize Memory fields as arrays
@@ -788,42 +701,35 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         dict_keys = getfield(val, :keys)
         dict_vals = getfield(val, :vals)
 
-        # Helper: emit default value for an array element type
-        function emit_array_default!(bytes, arr_type_idx, elem_type, ctx)
+        # Helper: emit default value for an array element type (captures `b`, `ctx`)
+        emit_array_default! = function(arr_type_idx, elem_type)
             wasm_et = julia_to_wasm_type(elem_type)
             if wasm_et === I32
-                push!(bytes, Opcode.I32_CONST)
-                push!(bytes, 0x00)
+                i32_const!(b, 0)
             elseif wasm_et === I64
-                push!(bytes, Opcode.I64_CONST)
-                push!(bytes, 0x00)
+                i64_const!(b, 0)
             elseif wasm_et === F32
-                push!(bytes, Opcode.F32_CONST)
-                append!(bytes, reinterpret(UInt8, [Float32(0)]))
+                f32_const!(b, Float32(0))
             elseif wasm_et === F64
-                push!(bytes, Opcode.F64_CONST)
-                append!(bytes, reinterpret(UInt8, [Float64(0)]))
+                f64_const!(b, Float64(0))
             else
                 # Ref type (String, struct, etc.) — look up concrete array element type
                 arr_type_def = ctx.mod.types[arr_type_idx + 1]
                 if arr_type_def isa ArrayType
                     evtype = arr_type_def.elem.valtype
                     if evtype isa ConcreteRef
-                        push!(bytes, Opcode.REF_NULL)
-                        append!(bytes, encode_leb128_signed(Int64(evtype.type_idx)))
+                        ref_null!(b, Int64(evtype.type_idx), ConcreteRef(UInt32(evtype.type_idx), true))
                     else
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(StructRef))
+                        ref_null!(b, StructRef)
                     end
                 else
-                    push!(bytes, Opcode.REF_NULL)
-                    push!(bytes, UInt8(StructRef))
+                    ref_null!(b, StructRef)
                 end
             end
         end
 
         # Helper: compile Memory elements, handling UndefRefError for ref-typed slots
-        function compile_memory_elements!(bytes, mem, arr_type_idx, elem_type, ctx)
+        compile_memory_elements! = function(mem, arr_type_idx, elem_type)
             for i in 1:length(mem)
                 # PURE-6022: Stop emitting elements after stub/unreachable
                 if ctx.last_stmt_was_stub
@@ -831,10 +737,10 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                 end
                 try
                     v = mem[i]
-                    append!(bytes, compile_value(v, ctx))
+                    emit_raw!(b, compile_value(v, ctx); pushes=WasmValType[AnyRef])
                 catch e
                     if e isa UndefRefError
-                        emit_array_default!(bytes, arr_type_idx, elem_type, ctx)
+                        emit_array_default!(arr_type_idx, elem_type)
                     else
                         rethrow()
                     end
@@ -843,56 +749,31 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         end
 
         # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
-        emit_type_id!(bytes, ctx.type_registry, T)
+        _emit_tid!(T)
 
         # field 1: slots — array of UInt8 (always defined, never throws)
         for i in 1:length(dict_slots)
-            push!(bytes, Opcode.I32_CONST)
-            append!(bytes, encode_leb128_signed(Int32(dict_slots[i])))
+            i32_const!(b, Int32(dict_slots[i]))
         end
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_NEW_FIXED)
-        append!(bytes, encode_leb128_unsigned(slots_arr_type))
-        append!(bytes, encode_leb128_unsigned(length(dict_slots)))
+        array_new_fixed!(b, slots_arr_type, length(dict_slots), I32)
 
         # field 2: keys — array of K (may have undef for ref-typed keys)
-        compile_memory_elements!(bytes, dict_keys, keys_arr_type, K, ctx)
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_NEW_FIXED)
-        append!(bytes, encode_leb128_unsigned(keys_arr_type))
-        append!(bytes, encode_leb128_unsigned(length(dict_keys)))
+        compile_memory_elements!(dict_keys, keys_arr_type, K)
+        array_new_fixed!(b, keys_arr_type, length(dict_keys), AnyRef)
 
         # field 3: vals — array of V (may have undef for ref-typed vals)
-        compile_memory_elements!(bytes, dict_vals, vals_arr_type, V, ctx)
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_NEW_FIXED)
-        append!(bytes, encode_leb128_unsigned(vals_arr_type))
-        append!(bytes, encode_leb128_unsigned(length(dict_vals)))
+        compile_memory_elements!(dict_vals, vals_arr_type, V)
+        array_new_fixed!(b, vals_arr_type, length(dict_vals), AnyRef)
 
-        # field 4: ndel (i64)
-        push!(bytes, Opcode.I64_CONST)
-        append!(bytes, encode_leb128_signed(Int64(getfield(val, :ndel))))
-
-        # field 5: count (i64)
-        push!(bytes, Opcode.I64_CONST)
-        append!(bytes, encode_leb128_signed(Int64(getfield(val, :count))))
-
-        # field 6: age (u64, stored as i64)
-        push!(bytes, Opcode.I64_CONST)
-        append!(bytes, encode_leb128_signed(Int64(getfield(val, :age))))
-
-        # field 7: idxfloor (i64)
-        push!(bytes, Opcode.I64_CONST)
-        append!(bytes, encode_leb128_signed(Int64(getfield(val, :idxfloor))))
-
-        # field 8: maxprobe (i64)
-        push!(bytes, Opcode.I64_CONST)
-        append!(bytes, encode_leb128_signed(Int64(getfield(val, :maxprobe))))
+        # fields 4-8: ndel, count, age, idxfloor, maxprobe (i64)
+        i64_const!(b, Int64(getfield(val, :ndel)))
+        i64_const!(b, Int64(getfield(val, :count)))
+        i64_const!(b, Int64(getfield(val, :age)))
+        i64_const!(b, Int64(getfield(val, :idxfloor)))
+        i64_const!(b, Int64(getfield(val, :maxprobe)))
 
         # struct.new
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_NEW)
-        append!(bytes, encode_leb128_unsigned(dict_info.wasm_type_idx))
+        struct_new!(b, dict_info.wasm_type_idx, WasmValType[])
 
     elseif typeof(val) <: AbstractVector && typeof(val) <: Vector
         # PURE-325: Constant Vector{T} — emit as struct{data_array, size_tuple}
@@ -911,7 +792,7 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
 
         # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID for Vector struct
-        emit_type_id!(bytes, ctx.type_registry, T)
+        _emit_tid!(T)
 
         # Field 1: data array — emit array.new_fixed with actual element values
         # Check if the array element type is externref — if so, each element needs
@@ -932,7 +813,7 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                 # IntrinsicFunction and other primitives compile to i32_const/i64_const.
                 # These cannot be passed to extern_convert_any (which expects anyref),
                 # so we must box them via struct_new first using emit_numeric_to_externref!.
-                has_gc_prefix = any(b == Opcode.GC_PREFIX for b in elem_bytes)
+                has_gc_prefix = any(byt == Opcode.GC_PREFIX for byt in elem_bytes)
                 is_numeric_elem = !has_gc_prefix && length(elem_bytes) >= 1 &&
                                   (elem_bytes[1] == Opcode.I32_CONST || elem_bytes[1] == Opcode.I64_CONST ||
                                    elem_bytes[1] == Opcode.F32_CONST || elem_bytes[1] == Opcode.F64_CONST)
@@ -941,25 +822,24 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                     val_wasm_elem = elem_bytes[1] == Opcode.I32_CONST ? I32 :
                                     elem_bytes[1] == Opcode.I64_CONST ? I64 :
                                     elem_bytes[1] == Opcode.F32_CONST ? F32 : F64
-                    emit_numeric_to_externref!(bytes, elem_val, val_wasm_elem, ctx)
+                    nb = UInt8[]; emit_numeric_to_externref!(nb, elem_val, val_wasm_elem, ctx)
+                    emit_raw!(b, nb; pushes=WasmValType[ExternRef])
                 elseif !isempty(elem_bytes) && elem_bytes[end] == UInt8(ExternRef) &&
                        length(elem_bytes) >= 2 && elem_bytes[end-1] == Opcode.REF_NULL
                     # Already externref (ref.null extern) — no conversion needed
-                    append!(bytes, elem_bytes)
+                    emit_raw!(b, elem_bytes; pushes=WasmValType[ExternRef])
                 else
-                    append!(bytes, elem_bytes)
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                    emit_raw!(b, elem_bytes; pushes=WasmValType[AnyRef])
+                    extern_convert_any!(b)
                 end
             else
                 elem_bytes_plain = compile_value(val[i], ctx)
                 if isempty(elem_bytes_plain)
                     # TRUE-INT-002-impl2-impl: compile_value returned empty bytes.
                     # Push ref.null as placeholder to maintain array_new_fixed stack balance.
-                    push!(bytes, Opcode.REF_NULL)
-                    push!(bytes, 0x6E)  # any heap type
+                    ref_null!(b, AnyRef)  # 0x6E any heap type
                 else
-                    append!(bytes, elem_bytes_plain)
+                    emit_raw!(b, elem_bytes_plain; pushes=WasmValType[AnyRef])
                 end
             end
             # PURE-6022: Check after each element in case compile_value hit a stub
@@ -969,10 +849,7 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         end
         # PURE-6022: Skip array_new_fixed if we're in dead code (stub was hit)
         if !ctx.last_stmt_was_stub
-            push!(bytes, Opcode.GC_PREFIX)
-            push!(bytes, Opcode.ARRAY_NEW_FIXED)
-            append!(bytes, encode_leb128_unsigned(array_type_idx))
-            append!(bytes, encode_leb128_unsigned(length(val)))
+            array_new_fixed!(b, array_type_idx, length(val), AnyRef)
         end
 
         # Field 2: size tuple — Tuple{Int64} with the length
@@ -982,17 +859,12 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         end
         size_info = ctx.type_registry.structs[size_tuple_type]
         # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID for size tuple
-        emit_type_id!(bytes, ctx.type_registry, Tuple{Int64})
-        push!(bytes, Opcode.I64_CONST)
-        append!(bytes, encode_leb128_signed(Int64(length(val))))
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_NEW)
-        append!(bytes, encode_leb128_unsigned(size_info.wasm_type_idx))
+        _emit_tid!(Tuple{Int64})
+        i64_const!(b, Int64(length(val)))
+        struct_new!(b, size_info.wasm_type_idx, WasmValType[])
 
         # struct.new for Vector{T}
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_NEW)
-        append!(bytes, encode_leb128_unsigned(vec_info.wasm_type_idx))
+        struct_new!(b, vec_info.wasm_type_idx, WasmValType[])
 
     elseif typeof(val) isa DataType && typeof(val).name.name in (:MemoryRef, :GenericMemoryRef, :Memory, :GenericMemory)
         # PURE-049: MemoryRef/Memory constants map to array types, not struct types.
@@ -1006,44 +878,39 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         n_mem = length(mem)
         if n_mem == 0 || n_mem > 4096
             n_mem > 4096 && @debug "Memory constant too large to materialize ($n_mem elements) — emitting null" T
-            push!(bytes, Opcode.REF_NULL)
-            append!(bytes, encode_leb128_signed(Int64(array_type_idx)))
+            ref_null!(b, Int64(array_type_idx), ConcreteRef(UInt32(array_type_idx), true))
         else
             arr_type_def = ctx.mod.types[array_type_idx + 1]
             for i in 1:n_mem
+                # el_bytes holds the recursive compile_value result and is INSPECTED
+                # via isempty below — keep it as a local buffer (byte-inspecting branch).
                 el_bytes = UInt8[]
                 defined = isassigned(mem, i)
                 if defined
                     el_bytes = compile_value(mem[i], ctx)
                 end
                 if !defined || isempty(el_bytes)
-                    # undef slot (or uncompilable element) — type-correct default
-                    empty!(el_bytes)
+                    # undef slot (or uncompilable element) — type-correct default.
+                    # Straight-line emission: emit the typed default directly on `b`.
                     evt = arr_type_def isa ArrayType ? arr_type_def.elem.valtype : nothing
                     if evt === I32
-                        push!(el_bytes, Opcode.I32_CONST, 0x00)
+                        i32_const!(b, 0)
                     elseif evt === I64
-                        push!(el_bytes, Opcode.I64_CONST, 0x00)
+                        i64_const!(b, 0)
                     elseif evt === F32
-                        push!(el_bytes, Opcode.F32_CONST)
-                        append!(el_bytes, reinterpret(UInt8, [Float32(0)]))
+                        f32_const!(b, Float32(0))
                     elseif evt === F64
-                        push!(el_bytes, Opcode.F64_CONST)
-                        append!(el_bytes, reinterpret(UInt8, [Float64(0)]))
+                        f64_const!(b, Float64(0))
                     elseif evt isa ConcreteRef
-                        push!(el_bytes, Opcode.REF_NULL)
-                        append!(el_bytes, encode_leb128_signed(Int64(evt.type_idx)))
+                        ref_null!(b, Int64(evt.type_idx), ConcreteRef(UInt32(evt.type_idx), true))
                     else
-                        push!(el_bytes, Opcode.REF_NULL)
-                        push!(el_bytes, 0x6E)  # any
+                        ref_null!(b, AnyRef)  # 0x6E any
                     end
+                else
+                    emit_raw!(b, el_bytes; pushes=WasmValType[AnyRef])
                 end
-                append!(bytes, el_bytes)
             end
-            push!(bytes, Opcode.GC_PREFIX)
-            push!(bytes, Opcode.ARRAY_NEW_FIXED)
-            append!(bytes, encode_leb128_unsigned(array_type_idx))
-            append!(bytes, encode_leb128_unsigned(n_mem))
+            array_new_fixed!(b, array_type_idx, n_mem, AnyRef)
         end
 
     elseif isstructtype(typeof(val)) && !isa(val, Function) && !isa(val, Module)
@@ -1078,15 +945,14 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         n_undefined = count(!isdefined(val, fn) for fn in fieldnames(T))
         if n_undefined == length(fieldnames(T))
             # Fully undefined struct - emit ref.null
-            push!(bytes, Opcode.REF_NULL)
-            append!(bytes, encode_leb128_signed(Int64(type_idx)))
-            return bytes
+            ref_null!(b, Int64(type_idx), ConcreteRef(UInt32(type_idx), true))
+            return builder_code(b)
         end
 
         # Push field values with type safety checks
         struct_type_def = ctx.mod.types[type_idx + 1]
         # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
-        emit_type_id!(bytes, ctx.type_registry, T)
+        _emit_tid!(T)
         for (fi, field_name) in enumerate(fieldnames(T))
             # TRUE-TI-001: Handle undefined fields with type-correct defaults
             if !isdefined(val, field_name)
@@ -1094,43 +960,31 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                 if struct_type_def isa StructType && _undef_wasm_fi <= length(struct_type_def.fields)
                     undef_field_type = struct_type_def.fields[_undef_wasm_fi].valtype
                     if undef_field_type isa ConcreteRef
-                        push!(bytes, Opcode.REF_NULL)
-                        append!(bytes, encode_leb128_signed(Int64(undef_field_type.type_idx)))
+                        ref_null!(b, Int64(undef_field_type.type_idx), ConcreteRef(UInt32(undef_field_type.type_idx), true))
                     elseif undef_field_type === AnyRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(AnyRef))
+                        ref_null!(b, AnyRef)
                     elseif undef_field_type === EqRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(EqRef))
+                        ref_null!(b, EqRef)
                     elseif undef_field_type === ExternRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ExternRef))
+                        ref_null!(b, ExternRef)
                     elseif undef_field_type === StructRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(StructRef))
+                        ref_null!(b, StructRef)
                     elseif undef_field_type === ArrayRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ArrayRef))
+                        ref_null!(b, ArrayRef)
                     elseif undef_field_type === I32
-                        push!(bytes, Opcode.I32_CONST)
-                        push!(bytes, 0x00)
+                        i32_const!(b, 0)
                     elseif undef_field_type === I64
-                        push!(bytes, Opcode.I64_CONST)
-                        push!(bytes, 0x00)
+                        i64_const!(b, 0)
                     elseif undef_field_type === F32
-                        push!(bytes, Opcode.F32_CONST)
-                        append!(bytes, reinterpret(UInt8, [Float32(0.0)]))
+                        f32_const!(b, Float32(0.0))
                     elseif undef_field_type === F64
-                        push!(bytes, Opcode.F64_CONST)
-                        append!(bytes, reinterpret(UInt8, [Float64(0.0)]))
+                        f64_const!(b, Float64(0.0))
                     else
                         # Fallback: try ref.null with the generic type
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(AnyRef))
+                        ref_null!(b, AnyRef)
                     end
                 else
-                    push!(bytes, Opcode.REF_NULL)
-                    push!(bytes, UInt8(AnyRef))
+                    ref_null!(b, AnyRef)
                 end
                 continue
             end
@@ -1167,23 +1021,17 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                 if struct_type_def isa StructType && _empty_fi <= length(struct_type_def.fields)
                     empty_field_type = struct_type_def.fields[_empty_fi].valtype
                     if empty_field_type isa ConcreteRef
-                        push!(bytes, Opcode.REF_NULL)
-                        append!(bytes, encode_leb128_signed(Int64(empty_field_type.type_idx)))
+                        ref_null!(b, Int64(empty_field_type.type_idx), ConcreteRef(UInt32(empty_field_type.type_idx), true))
                     elseif empty_field_type === AnyRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(AnyRef))
+                        ref_null!(b, AnyRef)
                     elseif empty_field_type === ExternRef
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(ExternRef))
+                        ref_null!(b, ExternRef)
                     elseif empty_field_type === I32
-                        push!(bytes, Opcode.I32_CONST)
-                        push!(bytes, 0x00)
+                        i32_const!(b, 0)
                     elseif empty_field_type === I64
-                        push!(bytes, Opcode.I64_CONST)
-                        push!(bytes, 0x00)
+                        i64_const!(b, 0)
                     else
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(AnyRef))
+                        ref_null!(b, AnyRef)
                     end
                     continue
                 end
@@ -1202,10 +1050,10 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                             if field_val_bytes[scan_pos] == 0xFB && field_val_bytes[scan_pos+1] == 0x00
                                 sn_type_idx = 0; sn_shift = 0
                                 for bi in (scan_pos+2):length(field_val_bytes)
-                                    b = field_val_bytes[bi]
-                                    sn_type_idx |= (Int(b & 0x7f) << sn_shift)
+                                    byt = field_val_bytes[bi]
+                                    sn_type_idx |= (Int(byt & 0x7f) << sn_shift)
                                     sn_shift += 7
-                                    if (b & 0x80) == 0
+                                    if (byt & 0x80) == 0
                                         if bi == length(field_val_bytes)
                                             if expected_wasm isa ConcreteRef && sn_type_idx != expected_wasm.type_idx
                                                 need_replace = true
@@ -1235,10 +1083,10 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                         elseif first_byte == 0x20  # LOCAL_GET
                             src_idx = 0; shift = 0
                             for bi in 2:length(field_val_bytes)
-                                b = field_val_bytes[bi]
-                                src_idx |= (Int(b & 0x7f) << shift)
+                                byt = field_val_bytes[bi]
+                                src_idx |= (Int(byt & 0x7f) << shift)
                                 shift += 7
-                                (b & 0x80) == 0 && break
+                                (byt & 0x80) == 0 && break
                             end
                             arr_idx = src_idx - ctx.n_params + 1
                             if arr_idx >= 1 && arr_idx <= length(ctx.locals)
@@ -1251,24 +1099,20 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                     end
                     if need_replace
                         if expected_wasm isa ConcreteRef
-                            push!(bytes, Opcode.REF_NULL)
-                            append!(bytes, encode_leb128_signed(Int64(expected_wasm.type_idx)))
+                            ref_null!(b, Int64(expected_wasm.type_idx), ConcreteRef(UInt32(expected_wasm.type_idx), true))
                         elseif expected_wasm === ArrayRef
-                            push!(bytes, Opcode.REF_NULL)
-                            push!(bytes, UInt8(ArrayRef))
+                            ref_null!(b, ArrayRef)
                         elseif expected_wasm === ExternRef
-                            push!(bytes, Opcode.REF_NULL)
-                            push!(bytes, UInt8(ExternRef))
+                            ref_null!(b, ExternRef)
                         else
-                            push!(bytes, Opcode.REF_NULL)
-                            push!(bytes, UInt8(StructRef))
+                            ref_null!(b, StructRef)
                         end
                         field_val_bytes = UInt8[]
                         replaced = true
                     end
                 end
             end
-            append!(bytes, field_val_bytes)
+            emit_raw!(b, field_val_bytes; pushes=WasmValType[AnyRef])
             # If field expects externref but we produced a GC-managed ref (anyref subtype, e.g.
             # string/symbol array or struct), emit extern.convert_any to bridge the two worlds.
             # (Strings/Symbols compile as ConcreteRef to char array; externref slots need conversion.)
@@ -1281,8 +1125,7 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                                      field_val_bytes[end-1] == 0xFB &&
                                      field_val_bytes[end] == Opcode.EXTERN_CONVERT_ANY
                     if !already_extern && has_ref_producing_gc_op(field_val_bytes)
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        extern_convert_any!(b)
                     elseif !already_extern && length(field_val_bytes) >= 2 && field_val_bytes[1] == 0x23
                         # PURE-6025: global.get produces a concrete ref (e.g., Type constant)
                         # but field expects externref — need extern.convert_any.
@@ -1297,13 +1140,11 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                         if _g_idx + 1 <= length(ctx.mod.globals)
                             _g_type = ctx.mod.globals[_g_idx + 1].valtype
                             if _g_type !== ExternRef
-                                push!(bytes, Opcode.GC_PREFIX)
-                                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                extern_convert_any!(b)
                             end
                         else
                             # Unknown global — conservatively emit conversion
-                            push!(bytes, Opcode.GC_PREFIX)
-                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                            extern_convert_any!(b)
                         end
                     end
                 end
@@ -1311,14 +1152,12 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         end
 
         # Create the struct
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_NEW)
-        append!(bytes, encode_leb128_unsigned(type_idx))
+        struct_new!(b, type_idx, WasmValType[])
         finally
             pop!(_VALUE_COMPILE_STACK)
         end
     end
 
-    return bytes
+    return builder_code(b)
 end
 

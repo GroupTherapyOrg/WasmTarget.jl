@@ -1375,6 +1375,63 @@ begin
     # ========================================================================
     @pphase "Phase 1: Test Harness Infrastructure" begin
 
+        @testset "InstrBuilder (typed wasm builder, dart2wasm-style)" begin
+            WT = WasmTarget
+            # function-end balance: x*x+1 leaves exactly the one f64 result
+            b = WT.InstrBuilder(WT.WasmValType[WT.F64], WT.WasmValType[WT.F64]; func_name="sq1", strict=true)
+            WT.local_get!(b, 0); WT.local_get!(b, 0); WT.num!(b, WT.Opcode.F64_MUL)
+            WT.f64_const!(b, 1.0); WT.num!(b, WT.Opcode.F64_ADD)
+            @test WT.stack_height(b.v) == 1
+            WT.end_block!(b)                       # balanced → no throw
+            @test length(WT.builder_code(b)) > 0
+            # strict imbalance throws at the emit site
+            b2 = WT.InstrBuilder(; func_name="bad", strict=true)
+            @test_throws WT.StackImbalanceError WT.num!(b2, WT.Opcode.I32_ADD)
+            # GC type-directed effect: struct.new consumes its N fields, pushes (ref t)
+            b3 = WT.InstrBuilder(; func_name="sn", strict=false)
+            WT.i32_const!(b3, 0); WT.i64_const!(b3, 7)
+            WT.struct_new!(b3, 2, WT.WasmValType[WT.I32, WT.I64])
+            @test WT.stack_height(b3.v) == 1 && !WT.has_errors(b3.v)
+            # dart2wasm base-guard: cannot pop past a block boundary
+            b4 = WT.InstrBuilder(; func_name="bg", strict=false)
+            WT.block!(b4); WT.drop!(b4)
+            @test WT.has_errors(b4.v)
+            # rich diagnostics carry the Julia-statement context
+            b5 = WT.InstrBuilder(; func_name="diag", strict=true)
+            WT.set_context!(b5, "stmt-X")
+            err = try; WT.drop!(b5); nothing; catch e; e; end
+            @test err isa WT.StackImbalanceError && occursin("stmt-X", sprint(showerror, err))
+            # blocktype encoding: value-type/void immediates are SINGLE on-wire bytes
+            # (regression guard — block!/if_!/loop! must NOT LEB-encode 0x40/0x7F)
+            bbt = WT.InstrBuilder(; func_name="bt"); WT.block!(bbt); WT.end_block!(bbt)
+            @test WT.builder_code(bbt) == UInt8[WT.Opcode.BLOCK, 0x40, WT.Opcode.END]
+            bbi = WT.InstrBuilder(; func_name="bti"); WT.i32_const!(bbi, 1)
+            WT.if_!(bbi, 0x7F; results=WT.WasmValType[WT.I32]); WT.i32_const!(bbi, 0); WT.end_block!(bbi)
+            @test WT.builder_code(bbi) == UInt8[WT.Opcode.I32_CONST, 0x01, WT.Opcode.IF, 0x7F, WT.Opcode.I32_CONST, 0x00, WT.Opcode.END]
+            # instruction-IR ADT (dart2wasm ir/ layer): records typed instrs + symbolic disasm
+            @test all(i -> i isa WT.InstrIR.WasmInstr, bbi.instrs)
+            @test WT.builder_disasm(bbi) == ["i32.const 1", "if 127", "i32.const 0", "end"]
+        end
+
+        @testset "InstrBuilder migration invariant (no raw-emission regression)" begin
+            # All codegen function-body emission is migrated onto the typed InstrBuilder.
+            # The residual raw push!(bytes, Opcode.*) sites are out-of-scope module-section
+            # serialization (to_bytes_mvp / mini-constructors / encode_block_type) + intentional
+            # byte-inspecting/byte-exact local buffers. Lock the invariant so new code can't
+            # silently re-introduce blind raw emission — it must go through the builder.
+            cgdir = joinpath(dirname(pathof(WasmTarget)), "codegen")
+            countraw(p) = count(l -> occursin(r"push!\([a-z_]+, Opcode\.", l) ||
+                                     occursin(r"append!\([a-z_]+, encode_leb128", l), readlines(p))
+            total = sum(countraw(joinpath(cgdir, f)) for f in readdir(cgdir) if endswith(f, ".jl"))
+            # Baseline residual is ~50 (all out-of-scope). Ceiling catches any real regression;
+            # LOWER it as the residual is cleaned (it must only trend down).
+            @test total <= 60
+            # the three fully-migrated mega-dispatchers must STAY fully migrated:
+            for f in ("calls.jl", "invoke.jl", "statements.jl", "int128.jl")
+                @test countraw(joinpath(cgdir, f)) == 0
+            end
+        end
+
         @testset "LEB128 Encoding" begin
             # Test unsigned LEB128
             @test WasmTarget.encode_leb128_unsigned(0) == [0x00]

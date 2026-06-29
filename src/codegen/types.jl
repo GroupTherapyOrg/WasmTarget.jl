@@ -359,8 +359,9 @@ function emit_type_id!(bytes::Vector{UInt8}, registry::TypeRegistry, T::Type)
     # (e.g., types appearing only in isa checks or struct constants) still get unique
     # typeIds that match between struct construction and isa dispatch.
     id = ensure_type_id!(registry, T)
-    push!(bytes, Opcode.I32_CONST)
-    append!(bytes, encode_leb128_signed(Int64(id)))
+    b = InstrBuilder(; func_name="emit_type_id!", strict=false)
+    i32_const!(b, Int64(id))
+    append!(bytes, builder_code(b))
 end
 
 """
@@ -391,8 +392,9 @@ Expects an i32 on the Wasm stack. Produces (ref i31) which is a subtype of anyre
 Use for Bool, Int8, UInt8, Int16, UInt16 — values that always fit in 31 bits.
 """
 function emit_box_i31!(bytes::Vector{UInt8})
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.REF_I31)
+    b = InstrBuilder(; func_name="emit_box_i31!", strict=false)
+    ref_i31!(b)
+    append!(bytes, builder_code(b))
 end
 
 """
@@ -400,8 +402,9 @@ PURE-9028: Unbox a ref.i31 value to i32 (signed extension).
 Expects (ref null i31) on the Wasm stack. Produces i32.
 """
 function emit_unbox_i31_s!(bytes::Vector{UInt8})
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.I31_GET_S)
+    b = InstrBuilder(; func_name="emit_unbox_i31_s!", strict=false)
+    i31_get_s!(b)
+    append!(bytes, builder_code(b))
 end
 
 """
@@ -410,8 +413,9 @@ Expects (ref null i31) on the Wasm stack. Produces i32.
 Use for UInt8, UInt16, Bool (non-negative values).
 """
 function emit_unbox_i31_u!(bytes::Vector{UInt8})
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.I31_GET_U)
+    b = InstrBuilder(; func_name="emit_unbox_i31_u!", strict=false)
+    i31_get_u!(b)
+    append!(bytes, builder_code(b))
 end
 
 """
@@ -447,15 +451,12 @@ Assumes the value on top of the stack is a struct ref (or anyref that can be cas
 Result: i32 typeId on the stack.
 """
 function emit_typeof!(bytes::Vector{UInt8}, base_idx::UInt32)
+    b = InstrBuilder(; func_name="emit_typeof!", strict=false)
     # ref.cast (ref $JlBase) — cast anyref/structref to base struct ref
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.REF_CAST)  # ref.cast non-null: immediate is just the heap type index
-    append!(bytes, encode_leb128_signed(Int64(base_idx)))
+    ref_cast!(b, Int64(base_idx), false)  # ref.cast non-null
     # struct.get $JlBase 0 — extract typeId field
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.STRUCT_GET)
-    append!(bytes, encode_leb128_unsigned(base_idx))
-    append!(bytes, encode_leb128_unsigned(UInt32(0)))
+    struct_get!(b, base_idx, UInt32(0), I32)
+    append!(bytes, builder_code(b))
 end
 
 # PURE-9063: Kind constants for $JlType.$kind field
@@ -849,23 +850,18 @@ Compile a constant value to WASM bytecode (for global initializers).
 This is a simplified version of compile_value for use in constant expressions.
 """
 function compile_const_value(val, mod::WasmModule, registry::TypeRegistry)::Vector{UInt8}
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="compile_const_value", strict=false)
 
     if val isa Int32
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(val))
+        i32_const!(b, val)
     elseif val isa Int64
-        push!(bytes, Opcode.I64_CONST)
-        append!(bytes, encode_leb128_signed(val))
+        i64_const!(b, val)
     elseif val isa Float32
-        push!(bytes, Opcode.F32_CONST)
-        append!(bytes, reinterpret(UInt8, [val]))
+        f32_const!(b, val)
     elseif val isa Float64
-        push!(bytes, Opcode.F64_CONST)
-        append!(bytes, reinterpret(UInt8, [val]))
+        f64_const!(b, val)
     elseif val isa Bool
-        push!(bytes, Opcode.I32_CONST)
-        push!(bytes, val ? 0x01 : 0x00)
+        i32_const!(b, val ? 1 : 0)
     elseif val isa String
         # Strings are compiled as WasmGC arrays of packed i8 (UTF-8 bytes)
         # Get or create string array type
@@ -874,15 +870,11 @@ function compile_const_value(val, mod::WasmModule, registry::TypeRegistry)::Vect
         # Push each UTF-8 byte as i32 (truncated to i8 by array.new_fixed on packed array)
         n_bytes = ncodeunits(val)
         for i in 1:n_bytes
-            push!(bytes, Opcode.I32_CONST)
-            append!(bytes, encode_leb128_signed(Int32(codeunit(val, i))))
+            i32_const!(b, Int32(codeunit(val, i)))
         end
 
         # array.new_fixed $type_idx $length
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_NEW_FIXED)
-        append!(bytes, encode_leb128_unsigned(str_type_idx))
-        append!(bytes, encode_leb128_unsigned(n_bytes))
+        array_new_fixed!(b, str_type_idx, n_bytes, I32)
     elseif val isa Vector{String}
         # Vector{String}: build the WasmGC struct { typeId:i32, data:ref(array), size:ref(tuple) }
         # struct.new pops in field order: typeId first (bottom), data, size (top)
@@ -898,60 +890,44 @@ function compile_const_value(val, mod::WasmModule, registry::TypeRegistry)::Vect
         size_tuple_idx = registry.structs[Tuple{Int64}].wasm_type_idx
 
         # Field 0: typeId = 0
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int32(0)))
+        i32_const!(b, Int32(0))
 
         # Field 1: data array — array of string refs
         for s in val
             nb = ncodeunits(s)
             for i in 1:nb
-                push!(bytes, Opcode.I32_CONST)
-                append!(bytes, encode_leb128_signed(Int32(codeunit(s, i))))
+                i32_const!(b, Int32(codeunit(s, i)))
             end
-            push!(bytes, Opcode.GC_PREFIX)
-            push!(bytes, Opcode.ARRAY_NEW_FIXED)
-            append!(bytes, encode_leb128_unsigned(str_type_idx))
-            append!(bytes, encode_leb128_unsigned(nb))
+            array_new_fixed!(b, str_type_idx, nb, I32)
         end
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_NEW_FIXED)
-        append!(bytes, encode_leb128_unsigned(arr_of_str_type_idx))
-        append!(bytes, encode_leb128_unsigned(n))
+        array_new_fixed!(b, arr_of_str_type_idx, n, ConcreteRef(str_type_idx, true))
 
         # Field 2: size tuple struct { typeId:i32, dim1:i64 }
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int32(0)))
-        push!(bytes, Opcode.I64_CONST)
-        append!(bytes, encode_leb128_signed(Int64(n)))
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_NEW)
-        append!(bytes, encode_leb128_unsigned(size_tuple_idx))
+        i32_const!(b, Int32(0))
+        i64_const!(b, Int64(n))
+        struct_new!(b, size_tuple_idx, WasmValType[I32, I64])
 
         # struct.new Vector{String}
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_NEW)
-        append!(bytes, encode_leb128_unsigned(vec_info.wasm_type_idx))
+        struct_new!(b, vec_info.wasm_type_idx, WasmValType[I32, ConcreteRef(arr_of_str_type_idx, true), ConcreteRef(size_tuple_idx, true)])
     elseif val === nothing
         # For Nothing type, we use ref.null none (bottom of any hierarchy)
-        push!(bytes, Opcode.REF_NULL)
-        push!(bytes, 0x71)  # none heap type (NOT 0x6E which is any)
+        # 0x71 = none heaptype (NOT 0x6E which is any); not a RefType enum value → bridge.
+        emit_raw!(b, UInt8[Opcode.REF_NULL, 0x71]; pushes=WasmValType[AnyRef])
     else
         # For other types, try to push as integer if small enough
         T = typeof(val)
         if isprimitivetype(T) && sizeof(T) <= 4
             int_val = Core.Intrinsics.bitcast(UInt32, val)
-            push!(bytes, Opcode.I32_CONST)
-            append!(bytes, encode_leb128_signed(Int32(int_val)))
+            i32_const!(b, Int32(int_val))
         elseif isprimitivetype(T) && sizeof(T) <= 8
             int_val = Core.Intrinsics.bitcast(UInt64, val)
-            push!(bytes, Opcode.I64_CONST)
-            append!(bytes, encode_leb128_signed(Int64(int_val)))
+            i64_const!(b, Int64(int_val))
         else
             error("Cannot compile constant value of type $(typeof(val)) for global initializer")
         end
     end
 
-    return bytes
+    return builder_code(b)
 end
 
 """
@@ -1038,110 +1014,83 @@ function get_or_create_string_hash_func!(mod::WasmModule, registry::TypeRegistry
     # Extra locals: 0=hash(i64), 1=i(i32), 2=array_len(i32)
     locals = WasmValType[I64, I32, I32]
 
-    body = UInt8[]
+    # Build the body via the typed InstrBuilder. Locals: params (ref,i64,i32) + extras (i64,i32,i32).
+    b = InstrBuilder(WasmValType[ConcreteRef(str_type_idx, true), I64, I32, I64, I32, I32],
+                     results; func_name="get_or_create_string_hash_func!", strict=false)
 
     # FNV-1a offset basis: 14695981039346656037 (0xcbf29ce484222325)
     # FNV-1a prime: 1099511628211 (0x00000100000001b3)
 
     # hash = FNV_OFFSET_BASIS XOR (i64.extend_i32_u seed)
-    push!(body, Opcode.I64_CONST)
-    append!(body, encode_leb128_signed(Int64(-3750763034362895579)))  # 14695981039346656037 as signed
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(UInt32(2)))  # param 2 = seed (i32)
-    push!(body, Opcode.I64_EXTEND_I32_U)
-    push!(body, Opcode.I64_XOR)
-    push!(body, Opcode.LOCAL_SET)
-    append!(body, encode_leb128_unsigned(UInt32(3)))  # local 0 (offset 3) = hash
+    i64_const!(b, Int64(-3750763034362895579))  # 14695981039346656037 as signed
+    local_get!(b, UInt32(2))  # param 2 = seed (i32)
+    num!(b, Opcode.I64_EXTEND_I32_U)
+    num!(b, Opcode.I64_XOR)
+    local_set!(b, UInt32(3))  # local 0 (offset 3) = hash
 
     # array_len = array.len(arr)
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(UInt32(0)))  # param 0 = arr
-    push!(body, Opcode.GC_PREFIX)
-    push!(body, Opcode.ARRAY_LEN)
-    push!(body, Opcode.LOCAL_SET)
-    append!(body, encode_leb128_unsigned(UInt32(5)))  # local 2 (offset 5) = array_len
+    local_get!(b, UInt32(0))  # param 0 = arr
+    array_len!(b)
+    local_set!(b, UInt32(5))  # local 2 (offset 5) = array_len
 
     # Clamp array_len to min(len, array_len)
     # if len < array_len (as unsigned): array_len = i32.wrap(len)
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(UInt32(1)))  # param 1 = len (i64)
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(UInt32(5)))  # array_len
-    push!(body, Opcode.I64_EXTEND_I32_U)
-    push!(body, Opcode.I64_LT_U)
-    push!(body, Opcode.IF)
-    push!(body, 0x40)  # void block
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(UInt32(1)))  # len
-    push!(body, Opcode.I32_WRAP_I64)
-    push!(body, Opcode.LOCAL_SET)
-    append!(body, encode_leb128_unsigned(UInt32(5)))  # array_len = i32(len)
-    push!(body, Opcode.END)
+    local_get!(b, UInt32(1))  # param 1 = len (i64)
+    local_get!(b, UInt32(5))  # array_len
+    num!(b, Opcode.I64_EXTEND_I32_U)
+    num!(b, Opcode.I64_LT_U)
+    if_!(b)  # void block
+    local_get!(b, UInt32(1))  # len
+    num!(b, Opcode.I32_WRAP_I64)
+    local_set!(b, UInt32(5))  # array_len = i32(len)
+    end_block!(b)
 
     # i = 0
-    push!(body, Opcode.I32_CONST)
-    push!(body, 0x00)
-    push!(body, Opcode.LOCAL_SET)
-    append!(body, encode_leb128_unsigned(UInt32(4)))  # local 1 (offset 4) = i
+    i32_const!(b, 0)
+    local_set!(b, UInt32(4))  # local 1 (offset 4) = i
 
     # block $break
-    push!(body, Opcode.BLOCK)
-    push!(body, 0x40)  # void
+    block!(b)  # void
 
     # loop $continue
-    push!(body, Opcode.LOOP)
-    push!(body, 0x40)  # void
+    loop!(b)  # void
 
     # if i >= array_len: br $break (label 1)
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(UInt32(4)))  # i
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(UInt32(5)))  # array_len
-    push!(body, Opcode.I32_GE_U)
-    push!(body, Opcode.BR_IF)
-    append!(body, encode_leb128_unsigned(UInt32(1)))  # br to block (break)
+    local_get!(b, UInt32(4))  # i
+    local_get!(b, UInt32(5))  # array_len
+    num!(b, Opcode.I32_GE_U)
+    br_if!(b, UInt32(1))  # br to block (break)
 
     # byte = array.get_u(arr, i)
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(UInt32(0)))  # arr
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(UInt32(4)))  # i
-    push!(body, Opcode.GC_PREFIX)
-    push!(body, Opcode.ARRAY_GET_U)
-    append!(body, encode_leb128_unsigned(str_type_idx))
+    local_get!(b, UInt32(0))  # arr
+    local_get!(b, UInt32(4))  # i
+    array_get!(b, str_type_idx, I32; signed=false)
 
     # hash = (hash XOR byte) * FNV_PRIME
-    push!(body, Opcode.I64_EXTEND_I32_U)  # byte → i64
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(UInt32(3)))  # hash
-    push!(body, Opcode.I64_XOR)
-    push!(body, Opcode.I64_CONST)
-    append!(body, encode_leb128_signed(Int64(1099511628211)))  # FNV prime
-    push!(body, Opcode.I64_MUL)
-    push!(body, Opcode.LOCAL_SET)
-    append!(body, encode_leb128_unsigned(UInt32(3)))  # hash = result
+    num!(b, Opcode.I64_EXTEND_I32_U)  # byte → i64
+    local_get!(b, UInt32(3))  # hash
+    num!(b, Opcode.I64_XOR)
+    i64_const!(b, Int64(1099511628211))  # FNV prime
+    num!(b, Opcode.I64_MUL)
+    local_set!(b, UInt32(3))  # hash = result
 
     # i++
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(UInt32(4)))  # i
-    push!(body, Opcode.I32_CONST)
-    push!(body, 0x01)
-    push!(body, Opcode.I32_ADD)
-    push!(body, Opcode.LOCAL_SET)
-    append!(body, encode_leb128_unsigned(UInt32(4)))  # i = i + 1
+    local_get!(b, UInt32(4))  # i
+    i32_const!(b, 1)
+    num!(b, Opcode.I32_ADD)
+    local_set!(b, UInt32(4))  # i = i + 1
 
     # br $continue (label 0 = loop)
-    push!(body, Opcode.BR)
-    append!(body, encode_leb128_unsigned(UInt32(0)))  # continue loop
+    br!(b, UInt32(0))  # continue loop
 
-    push!(body, Opcode.END)  # end loop
-    push!(body, Opcode.END)  # end block
+    end_block!(b)  # end loop
+    end_block!(b)  # end block
 
     # return hash
-    push!(body, Opcode.LOCAL_GET)
-    append!(body, encode_leb128_unsigned(UInt32(3)))  # hash
-    push!(body, Opcode.END)  # end function
+    local_get!(b, UInt32(3))  # hash
+    end_block!(b)  # end function
 
+    body = builder_code(b)
     func_idx = add_function!(mod, params, results, locals, body)
     registry.string_hash_func_idx = func_idx
     return func_idx
@@ -1189,11 +1138,13 @@ function get_nothing_global!(mod::WasmModule, registry::TypeRegistry)::UInt32
     end
     box_type = get_nothing_box_type!(mod, registry)
     # Create init expr: i32.const <typeId> → struct.new BoxedNothing (without END)
-    init_expr = UInt8[]
-    emit_type_id!(init_expr, registry, Nothing)
-    push!(init_expr, Opcode.GC_PREFIX)
-    push!(init_expr, Opcode.STRUCT_NEW)
-    append!(init_expr, encode_leb128_unsigned(box_type))
+    b = InstrBuilder(; func_name="get_nothing_global!", strict=false)
+    # emit_type_id! mutates a raw buffer (pushes 1 i32) — bridge it.
+    tb = UInt8[]
+    emit_type_id!(tb, registry, Nothing)
+    emit_raw!(b, tb; pushes=WasmValType[I32])
+    struct_new!(b, box_type, WasmValType[I32])
+    init_expr = builder_code(b)
     # Use add_global_ref! which handles non-null concrete ref type + END byte
     global_idx = add_global_ref!(mod, box_type, false, init_expr; nullable=false)
     registry.nothing_global_idx = global_idx
@@ -1229,10 +1180,9 @@ function get_type_constant_global!(mod::WasmModule, registry::TypeRegistry, @nos
     # Each struct.new_default creates a unique allocation with all fields zeroed.
     # ref.eq compares pointer identity, so different allocations are distinguishable.
     # Fields are populated later by populate_type_constant_globals!
-    init_bytes = UInt8[]
-    push!(init_bytes, Opcode.GC_PREFIX)
-    push!(init_bytes, Opcode.STRUCT_NEW_DEFAULT)
-    append!(init_bytes, encode_leb128_unsigned(dt_type_idx))
+    b = InstrBuilder(; func_name="get_type_constant_global!", strict=false)
+    struct_new_default!(b, dt_type_idx)
+    init_bytes = builder_code(b)
 
     # Create the global (mutable ref — needs patching by init function)
     global_idx = add_global_ref!(mod, dt_type_idx, true, init_bytes; nullable=false)
@@ -1287,10 +1237,9 @@ function get_typename_constant_global!(mod::WasmModule, registry::TypeRegistry, 
     end
 
     # Create with struct.new_default — fields populated later
-    init_bytes = UInt8[]
-    push!(init_bytes, Opcode.GC_PREFIX)
-    push!(init_bytes, Opcode.STRUCT_NEW_DEFAULT)
-    append!(init_bytes, encode_leb128_unsigned(tn_type_idx))
+    b = InstrBuilder(; func_name="get_typename_constant_global!", strict=false)
+    struct_new_default!(b, tn_type_idx)
+    init_bytes = builder_code(b)
 
     # Mutable global — needs patching by init function
     global_idx = add_global_ref!(mod, tn_type_idx, true, init_bytes; nullable=false)
@@ -1336,33 +1285,23 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
     jl_type_idx = registry.jl_type_idx
     str_arr_idx = get_string_array_type!(mod, registry)
 
-    body = UInt8[]
+    b = InstrBuilder(; func_name="_populate_jl_hierarchy!", strict=false)
 
     for (type_val, dt_global_idx) in registry.type_constant_globals
         type_val isa DataType || continue
 
         # Field 0: kind = TYPE_DATATYPE (0)
-        push!(body, Opcode.GLOBAL_GET)
-        append!(body, encode_leb128_unsigned(dt_global_idx))
-        push!(body, Opcode.I32_CONST)
-        append!(body, encode_leb128_signed(Int64(JL_TYPE_KIND_DATATYPE)))
-        push!(body, Opcode.GC_PREFIX)
-        push!(body, Opcode.STRUCT_SET)
-        append!(body, encode_leb128_unsigned(dt_type_idx))
-        append!(body, encode_leb128_unsigned(UInt32(0)))  # field 0 = kind
+        global_get!(b, dt_global_idx, AnyRef)
+        i32_const!(b, Int64(JL_TYPE_KIND_DATATYPE))
+        struct_set!(b, dt_type_idx, UInt32(0), I32)  # field 0 = kind
 
         # Field 1: name → $JlTypeName ref
         tn = type_val.name
         if haskey(registry.typename_constant_globals, tn)
             tn_global_idx = registry.typename_constant_globals[tn]
-            push!(body, Opcode.GLOBAL_GET)
-            append!(body, encode_leb128_unsigned(dt_global_idx))
-            push!(body, Opcode.GLOBAL_GET)
-            append!(body, encode_leb128_unsigned(tn_global_idx))
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.STRUCT_SET)
-            append!(body, encode_leb128_unsigned(dt_type_idx))
-            append!(body, encode_leb128_unsigned(UInt32(1)))  # field 1 = name
+            global_get!(b, dt_global_idx, AnyRef)
+            global_get!(b, tn_global_idx, AnyRef)
+            struct_set!(b, dt_type_idx, UInt32(1), ConcreteRef(tn_type_idx, true))  # field 1 = name
         end
 
         # Field 2: super → $JlType ref (parent DataType is a subtype of $JlType)
@@ -1370,81 +1309,49 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         if parent !== type_val
             if haskey(registry.type_constant_globals, parent)
                 parent_global_idx = registry.type_constant_globals[parent]
-                push!(body, Opcode.GLOBAL_GET)
-                append!(body, encode_leb128_unsigned(dt_global_idx))
-                push!(body, Opcode.GLOBAL_GET)
-                append!(body, encode_leb128_unsigned(parent_global_idx))
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_SET)
-                append!(body, encode_leb128_unsigned(dt_type_idx))
-                append!(body, encode_leb128_unsigned(UInt32(2)))  # field 2 = super
+                global_get!(b, dt_global_idx, AnyRef)
+                global_get!(b, parent_global_idx, AnyRef)
+                struct_set!(b, dt_type_idx, UInt32(2), ConcreteRef(jl_type_idx, true))  # field 2 = super
             end
         else
             # Any.super === Any (self-referential)
-            push!(body, Opcode.GLOBAL_GET)
-            append!(body, encode_leb128_unsigned(dt_global_idx))
-            push!(body, Opcode.GLOBAL_GET)
-            append!(body, encode_leb128_unsigned(dt_global_idx))
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.STRUCT_SET)
-            append!(body, encode_leb128_unsigned(dt_type_idx))
-            append!(body, encode_leb128_unsigned(UInt32(2)))  # field 2 = super
+            global_get!(b, dt_global_idx, AnyRef)
+            global_get!(b, dt_global_idx, AnyRef)
+            struct_set!(b, dt_type_idx, UInt32(2), ConcreteRef(jl_type_idx, true))  # field 2 = super
         end
 
         # Field 3: parameters → $JlSVec (array of ref null $JlType)
         params = type_val.parameters
         nparams = length(params)
-        push!(body, Opcode.GLOBAL_GET)
-        append!(body, encode_leb128_unsigned(dt_global_idx))
+        global_get!(b, dt_global_idx, AnyRef)
         if nparams == 0
-            push!(body, Opcode.I32_CONST)
-            push!(body, 0x00)
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.ARRAY_NEW_DEFAULT)
-            append!(body, encode_leb128_unsigned(svec_idx))
+            i32_const!(b, 0)
+            array_new_default!(b, svec_idx)
         else
             for i in 1:nparams
                 p = params[i]
                 if p isa DataType && haskey(registry.type_constant_globals, p)
                     p_global_idx = registry.type_constant_globals[p]
-                    push!(body, Opcode.GLOBAL_GET)
-                    append!(body, encode_leb128_unsigned(p_global_idx))
+                    global_get!(b, p_global_idx, AnyRef)
                     # $JlDataType is sub $JlType, so ref is already compatible
                 else
                     # Unknown parameter type → null ref
-                    push!(body, Opcode.REF_NULL)
-                    append!(body, encode_leb128_signed(Int64(jl_type_idx)))
+                    ref_null!(b, Int64(jl_type_idx), ConcreteRef(UInt32(jl_type_idx), true))
                 end
             end
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.ARRAY_NEW_FIXED)
-            append!(body, encode_leb128_unsigned(svec_idx))
-            append!(body, encode_leb128_unsigned(UInt32(nparams)))
+            array_new_fixed!(b, svec_idx, UInt32(nparams), ConcreteRef(jl_type_idx, true))
         end
-        push!(body, Opcode.GC_PREFIX)
-        push!(body, Opcode.STRUCT_SET)
-        append!(body, encode_leb128_unsigned(dt_type_idx))
-        append!(body, encode_leb128_unsigned(UInt32(3)))  # field 3 = parameters
+        struct_set!(b, dt_type_idx, UInt32(3), ConcreteRef(svec_idx, true))  # field 3 = parameters
 
         # Field 4: hash → i32 (use Julia's type hash)
-        push!(body, Opcode.GLOBAL_GET)
-        append!(body, encode_leb128_unsigned(dt_global_idx))
-        push!(body, Opcode.I32_CONST)
-        append!(body, encode_leb128_signed(Int64(Int32(hash(type_val) & 0x7FFFFFFF))))
-        push!(body, Opcode.GC_PREFIX)
-        push!(body, Opcode.STRUCT_SET)
-        append!(body, encode_leb128_unsigned(dt_type_idx))
-        append!(body, encode_leb128_unsigned(UInt32(4)))  # field 4 = hash
+        global_get!(b, dt_global_idx, AnyRef)
+        i32_const!(b, Int64(Int32(hash(type_val) & 0x7FFFFFFF)))
+        struct_set!(b, dt_type_idx, UInt32(4), I32)  # field 4 = hash
 
         # Field 5: abstract → i32 (1 if abstract, 0 if concrete)
-        push!(body, Opcode.GLOBAL_GET)
-        append!(body, encode_leb128_unsigned(dt_global_idx))
-        push!(body, Opcode.I32_CONST)
-        append!(body, encode_leb128_signed(Int64(isabstracttype(type_val) ? 1 : 0)))
-        push!(body, Opcode.GC_PREFIX)
-        push!(body, Opcode.STRUCT_SET)
-        append!(body, encode_leb128_unsigned(dt_type_idx))
-        append!(body, encode_leb128_unsigned(UInt32(5)))  # field 5 = abstract
+        global_get!(b, dt_global_idx, AnyRef)
+        i32_const!(b, Int64(isabstracttype(type_val) ? 1 : 0))
+        struct_set!(b, dt_type_idx, UInt32(5), I32)  # field 5 = abstract
 
         # Fields 6-7: dfs_low, dfs_high → DFS range for isa checks
         if haskey(registry.type_ranges, type_val)
@@ -1459,57 +1366,51 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         end
 
         # Field 6: dfs_low
-        push!(body, Opcode.GLOBAL_GET)
-        append!(body, encode_leb128_unsigned(dt_global_idx))
-        push!(body, Opcode.I32_CONST)
-        append!(body, encode_leb128_signed(Int64(dfs_low)))
-        push!(body, Opcode.GC_PREFIX)
-        push!(body, Opcode.STRUCT_SET)
-        append!(body, encode_leb128_unsigned(dt_type_idx))
-        append!(body, encode_leb128_unsigned(UInt32(6)))  # field 6 = dfs_low
+        global_get!(b, dt_global_idx, AnyRef)
+        i32_const!(b, Int64(dfs_low))
+        struct_set!(b, dt_type_idx, UInt32(6), I32)  # field 6 = dfs_low
 
         # Field 7: dfs_high
-        push!(body, Opcode.GLOBAL_GET)
-        append!(body, encode_leb128_unsigned(dt_global_idx))
-        push!(body, Opcode.I32_CONST)
-        append!(body, encode_leb128_signed(Int64(dfs_high)))
-        push!(body, Opcode.GC_PREFIX)
-        push!(body, Opcode.STRUCT_SET)
-        append!(body, encode_leb128_unsigned(dt_type_idx))
-        append!(body, encode_leb128_unsigned(UInt32(7)))  # field 7 = dfs_high
+        global_get!(b, dt_global_idx, AnyRef)
+        i32_const!(b, Int64(dfs_high))
+        struct_set!(b, dt_type_idx, UInt32(7), I32)  # field 7 = dfs_high
     end
 
     # Populate $JlTypeName fields
     for (tn, tn_global_idx) in registry.typename_constant_globals
         # Field 0: name → string (i8 array)
         name_str = string(tn.name)
-        _emit_typename_string_field!(body, tn_global_idx, tn_type_idx, str_arr_idx, UInt32(0), name_str)
+        # _emit_typename_string_field! mutates a raw buffer (net-0 stack) — bridge it.
+        tb0 = UInt8[]
+        _emit_typename_string_field!(tb0, tn_global_idx, tn_type_idx, str_arr_idx, UInt32(0), name_str)
+        emit_raw!(b, tb0)
 
         # Field 1: module_name → string (i8 array)
         mod_name = tn.module !== nothing ? string(nameof(tn.module)) : ""
-        _emit_typename_string_field!(body, tn_global_idx, tn_type_idx, str_arr_idx, UInt32(1), mod_name)
+        tb1 = UInt8[]
+        _emit_typename_string_field!(tb1, tn_global_idx, tn_type_idx, str_arr_idx, UInt32(1), mod_name)
+        emit_raw!(b, tb1)
 
         # Field 2: wrapper → $JlType ref
         wrapper = tn.wrapper
         if wrapper isa DataType && haskey(registry.type_constant_globals, wrapper)
             wrapper_global_idx = registry.type_constant_globals[wrapper]
-            push!(body, Opcode.GLOBAL_GET)
-            append!(body, encode_leb128_unsigned(tn_global_idx))
-            push!(body, Opcode.GLOBAL_GET)
-            append!(body, encode_leb128_unsigned(wrapper_global_idx))
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.STRUCT_SET)
-            append!(body, encode_leb128_unsigned(tn_type_idx))
-            append!(body, encode_leb128_unsigned(UInt32(2)))  # field 2 = wrapper
+            global_get!(b, tn_global_idx, AnyRef)
+            global_get!(b, wrapper_global_idx, AnyRef)
+            struct_set!(b, tn_type_idx, UInt32(2), ConcreteRef(jl_type_idx, true))  # field 2 = wrapper
         end
     end
 
     # PURE-9063: Populate the type lookup table (typeId → DataType struct ref)
-    populate_type_lookup_table!(body, registry)
+    # populate_type_lookup_table! mutates a raw buffer (net-0 stack) — bridge it.
+    tlt = UInt8[]
+    populate_type_lookup_table!(tlt, registry)
+    emit_raw!(b, tlt)
 
-    isempty(body) && return
+    isempty(builder_code(b)) && return
 
-    push!(body, Opcode.END)
+    end_block!(b)  # function-terminating END
+    body = builder_code(b)
     func_idx = add_function!(mod, WasmValType[], WasmValType[], WasmValType[], body)
     add_start_function!(mod, func_idx)
 end
@@ -1524,30 +1425,21 @@ function _emit_typename_string_field!(body::Vector{UInt8}, tn_global_idx::UInt32
     utf8 = Vector{UInt8}(str)
     n = length(utf8)
 
-    push!(body, Opcode.GLOBAL_GET)
-    append!(body, encode_leb128_unsigned(tn_global_idx))
+    b = InstrBuilder(; func_name="_emit_typename_string_field!", strict=false)
+    global_get!(b, tn_global_idx, AnyRef)
 
     if n == 0
-        push!(body, Opcode.I32_CONST)
-        push!(body, 0x00)
-        push!(body, Opcode.GC_PREFIX)
-        push!(body, Opcode.ARRAY_NEW_DEFAULT)
-        append!(body, encode_leb128_unsigned(str_arr_idx))
+        i32_const!(b, 0)
+        array_new_default!(b, str_arr_idx)
     else
-        for b in utf8
-            push!(body, Opcode.I32_CONST)
-            append!(body, encode_leb128_signed(Int64(b)))
+        for byt in utf8
+            i32_const!(b, Int64(byt))
         end
-        push!(body, Opcode.GC_PREFIX)
-        push!(body, Opcode.ARRAY_NEW_FIXED)
-        append!(body, encode_leb128_unsigned(str_arr_idx))
-        append!(body, encode_leb128_unsigned(UInt32(n)))
+        array_new_fixed!(b, str_arr_idx, UInt32(n), I32)
     end
 
-    push!(body, Opcode.GC_PREFIX)
-    push!(body, Opcode.STRUCT_SET)
-    append!(body, encode_leb128_unsigned(tn_type_idx))
-    append!(body, encode_leb128_unsigned(field_idx))
+    struct_set!(b, tn_type_idx, field_idx, ConcreteRef(str_arr_idx, true))
+    append!(body, builder_code(b))
 end
 
 """
@@ -1562,7 +1454,7 @@ function _populate_legacy_types!(mod::WasmModule, registry::TypeRegistry)
     svec_info = registry.structs[Core.SimpleVector]
     svec_arr_idx = svec_info.wasm_type_idx
 
-    body = UInt8[]
+    b = InstrBuilder(; func_name="_populate_legacy_types!", strict=false)
 
     for (type_val, dt_global_idx) in registry.type_constant_globals
         type_val isa DataType || continue
@@ -1571,14 +1463,9 @@ function _populate_legacy_types!(mod::WasmModule, registry::TypeRegistry)
         tn = type_val.name
         if haskey(registry.typename_constant_globals, tn)
             tn_global_idx = registry.typename_constant_globals[tn]
-            push!(body, Opcode.GLOBAL_GET)
-            append!(body, encode_leb128_unsigned(dt_global_idx))
-            push!(body, Opcode.GLOBAL_GET)
-            append!(body, encode_leb128_unsigned(tn_global_idx))
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.STRUCT_SET)
-            append!(body, encode_leb128_unsigned(dt_type_idx))
-            append!(body, encode_leb128_unsigned(wasm_field_idx(dt_info, 1)))
+            global_get!(b, dt_global_idx, AnyRef)
+            global_get!(b, tn_global_idx, AnyRef)
+            struct_set!(b, dt_type_idx, wasm_field_idx(dt_info, 1), ConcreteRef(tn_type_idx, true))
         end
 
         # 2. Set DataType.super → parent DataType ref
@@ -1586,60 +1473,37 @@ function _populate_legacy_types!(mod::WasmModule, registry::TypeRegistry)
         if parent !== type_val
             if haskey(registry.type_constant_globals, parent)
                 parent_global_idx = registry.type_constant_globals[parent]
-                push!(body, Opcode.GLOBAL_GET)
-                append!(body, encode_leb128_unsigned(dt_global_idx))
-                push!(body, Opcode.GLOBAL_GET)
-                append!(body, encode_leb128_unsigned(parent_global_idx))
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_SET)
-                append!(body, encode_leb128_unsigned(dt_type_idx))
-                append!(body, encode_leb128_unsigned(wasm_field_idx(dt_info, 2)))
+                global_get!(b, dt_global_idx, AnyRef)
+                global_get!(b, parent_global_idx, AnyRef)
+                struct_set!(b, dt_type_idx, wasm_field_idx(dt_info, 2), ConcreteRef(dt_type_idx, true))
             end
         else
-            push!(body, Opcode.GLOBAL_GET)
-            append!(body, encode_leb128_unsigned(dt_global_idx))
-            push!(body, Opcode.GLOBAL_GET)
-            append!(body, encode_leb128_unsigned(dt_global_idx))
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.STRUCT_SET)
-            append!(body, encode_leb128_unsigned(dt_type_idx))
-            append!(body, encode_leb128_unsigned(wasm_field_idx(dt_info, 2)))
+            global_get!(b, dt_global_idx, AnyRef)
+            global_get!(b, dt_global_idx, AnyRef)
+            struct_set!(b, dt_type_idx, wasm_field_idx(dt_info, 2), ConcreteRef(dt_type_idx, true))
         end
 
         # 3. Set DataType.parameters → SimpleVector (externref array)
         params = type_val.parameters
         nparams = length(params)
-        push!(body, Opcode.GLOBAL_GET)
-        append!(body, encode_leb128_unsigned(dt_global_idx))
+        global_get!(b, dt_global_idx, AnyRef)
         if nparams == 0
-            push!(body, Opcode.I32_CONST)
-            push!(body, 0x00)
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.ARRAY_NEW_DEFAULT)
-            append!(body, encode_leb128_unsigned(svec_arr_idx))
+            i32_const!(b, 0)
+            array_new_default!(b, svec_arr_idx)
         else
             for i in 1:nparams
                 p = params[i]
                 if p isa DataType && haskey(registry.type_constant_globals, p)
                     p_global_idx = registry.type_constant_globals[p]
-                    push!(body, Opcode.GLOBAL_GET)
-                    append!(body, encode_leb128_unsigned(p_global_idx))
-                    push!(body, Opcode.GC_PREFIX)
-                    push!(body, Opcode.EXTERN_CONVERT_ANY)
+                    global_get!(b, p_global_idx, AnyRef)
+                    extern_convert_any!(b)
                 else
-                    push!(body, Opcode.REF_NULL)
-                    push!(body, UInt8(ExternRef))
+                    ref_null!(b, ExternRef)
                 end
             end
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.ARRAY_NEW_FIXED)
-            append!(body, encode_leb128_unsigned(svec_arr_idx))
-            append!(body, encode_leb128_unsigned(UInt32(nparams)))
+            array_new_fixed!(b, svec_arr_idx, UInt32(nparams), ExternRef)
         end
-        push!(body, Opcode.GC_PREFIX)
-        push!(body, Opcode.STRUCT_SET)
-        append!(body, encode_leb128_unsigned(dt_type_idx))
-        append!(body, encode_leb128_unsigned(wasm_field_idx(dt_info, 3)))
+        struct_set!(b, dt_type_idx, wasm_field_idx(dt_info, 3), ConcreteRef(svec_arr_idx, true))
     end
 
     # Populate TypeName.wrapper field
@@ -1647,23 +1511,22 @@ function _populate_legacy_types!(mod::WasmModule, registry::TypeRegistry)
         wrapper = tn.wrapper
         if wrapper isa DataType && haskey(registry.type_constant_globals, wrapper)
             wrapper_global_idx = registry.type_constant_globals[wrapper]
-            push!(body, Opcode.GLOBAL_GET)
-            append!(body, encode_leb128_unsigned(tn_global_idx))
-            push!(body, Opcode.GLOBAL_GET)
-            append!(body, encode_leb128_unsigned(wrapper_global_idx))
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.STRUCT_SET)
-            append!(body, encode_leb128_unsigned(tn_type_idx))
-            append!(body, encode_leb128_unsigned(wasm_field_idx(tn_info, 7)))
+            global_get!(b, tn_global_idx, AnyRef)
+            global_get!(b, wrapper_global_idx, AnyRef)
+            struct_set!(b, tn_type_idx, wasm_field_idx(tn_info, 7), ConcreteRef(dt_type_idx, true))
         end
     end
 
     # Populate the type lookup table (typeId → DataType struct ref)
-    populate_type_lookup_table!(body, registry)
+    # populate_type_lookup_table! mutates a raw buffer (net-0 stack) — bridge it.
+    tlt = UInt8[]
+    populate_type_lookup_table!(tlt, registry)
+    emit_raw!(b, tlt)
 
-    isempty(body) && return
+    isempty(builder_code(b)) && return
 
-    push!(body, Opcode.END)
+    end_block!(b)  # function-terminating END
+    body = builder_code(b)
     func_idx = add_function!(mod, WasmValType[], WasmValType[], WasmValType[], body)
     add_start_function!(mod, func_idx)
 end
@@ -1736,12 +1599,10 @@ function create_type_lookup_table!(mod::WasmModule, registry::TypeRegistry)
 
     # Create the lookup array global initialized with null refs
     # Init expression: i32.const <size>, array.new_default $arr_type
-    init_bytes = UInt8[]
-    push!(init_bytes, Opcode.I32_CONST)
-    append!(init_bytes, encode_leb128_signed(Int64(table_size)))
-    push!(init_bytes, Opcode.GC_PREFIX)
-    push!(init_bytes, Opcode.ARRAY_NEW_DEFAULT)
-    append!(init_bytes, encode_leb128_unsigned(arr_type_idx))
+    b = InstrBuilder(; func_name="create_type_lookup_table!", strict=false)
+    i32_const!(b, Int64(table_size))
+    array_new_default!(b, arr_type_idx)
+    init_bytes = builder_code(b)
 
     global_idx = add_global_ref!(mod, arr_type_idx, true, init_bytes; nullable=false)
     registry.type_lookup_global = global_idx
@@ -1772,6 +1633,8 @@ function populate_type_lookup_table!(body::Vector{UInt8}, registry::TypeRegistry
     # compilation) may have IDs exceeding the table size — skip those to avoid OOB.
     table_size = registry.type_lookup_table_size
 
+    b = InstrBuilder(; func_name="populate_type_lookup_table!", strict=false)
+
     # For each concrete type with a DFS ID and a DataType global, populate the table
     for (T, type_id) in registry.type_ids
         T isa DataType || continue
@@ -1780,19 +1643,16 @@ function populate_type_lookup_table!(body::Vector{UInt8}, registry::TypeRegistry
         dt_global_idx = registry.type_constant_globals[T]
 
         # global.get $type_table
-        push!(body, Opcode.GLOBAL_GET)
-        append!(body, encode_leb128_unsigned(table_global))
+        global_get!(b, table_global, AnyRef)
         # i32.const <typeId>
-        push!(body, Opcode.I32_CONST)
-        append!(body, encode_leb128_signed(Int64(type_id)))
+        i32_const!(b, Int64(type_id))
         # global.get $dt_global
-        push!(body, Opcode.GLOBAL_GET)
-        append!(body, encode_leb128_unsigned(dt_global_idx))
+        global_get!(b, dt_global_idx, AnyRef)
         # array.set $arr_type
-        push!(body, Opcode.GC_PREFIX)
-        push!(body, Opcode.ARRAY_SET)
-        append!(body, encode_leb128_unsigned(arr_type_idx))
+        array_set!(b, arr_type_idx, AnyRef)
     end
+
+    append!(body, builder_code(b))
 end
 
 """
@@ -1852,22 +1712,16 @@ function emit_typeof_struct_with_local!(bytes::Vector{UInt8}, base_idx::UInt32,
     emit_typeof!(bytes, base_idx)
     # Stack: [typeId:i32]
 
+    b = InstrBuilder(; func_name="emit_typeof_struct_with_local!", strict=false)
     # Save typeId to scratch local
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(temp_local))
-
+    local_set!(b, temp_local)
     # Push type lookup array
-    push!(bytes, Opcode.GLOBAL_GET)
-    append!(bytes, encode_leb128_unsigned(registry.type_lookup_global))
-
+    global_get!(b, registry.type_lookup_global, AnyRef)
     # Push typeId back
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(temp_local))
-
+    local_get!(b, temp_local)
     # array.get $type_lookup_array → (ref null $DataType)
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_GET)
-    append!(bytes, encode_leb128_unsigned(registry.type_lookup_array_idx))
+    array_get!(b, registry.type_lookup_array_idx, AnyRef)
+    append!(bytes, builder_code(b))
 end
 
 """

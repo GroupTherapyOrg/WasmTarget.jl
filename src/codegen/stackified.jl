@@ -3,7 +3,10 @@ Generate code for more complex control flow patterns.
 Uses nested blocks with br instructions.
 """
 function generate_complex_flow(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
-    bytes = UInt8[]
+    # MIGRATED to InstrBuilder: this fn only splices whole-body sub-emitters via emit_raw!.
+    # strict=false (collect mode): the sub-emitters are full control-flow bodies whose
+    # operand-stack effect the fragment model can't track precisely, so we never gate.
+    b = InstrBuilder(; func_name="generate_complex_flow", strict=false)
 
     # For void return types WITHOUT loops (like event handlers), use a simpler approach:
     # just execute all statements in order and return at the end.
@@ -11,12 +14,12 @@ function generate_complex_flow(ctx::AbstractCompilationContext, blocks::Vector{B
     # generate_void_flow doesn't handle pre-loop phi initialization (single-edge phis
     # after if-then-else merge points stay at default 0, causing array bounds errors).
     if ctx.return_type === Nothing && !any(ctx.loop_headers)
-        append!(bytes, generate_void_flow(ctx, blocks, code))
-        return bytes
+        emit_raw!(b, generate_void_flow(ctx, blocks, code))
+        return builder_code(b)
     end
 
     # Count how many conditional branches we have
-    conditionals = [(i, b) for (i, b) in enumerate(blocks) if b.terminator isa Core.GotoIfNot]
+    conditionals = [(i, byt) for (i, byt) in enumerate(blocks) if byt.terminator isa Core.GotoIfNot]
 
     # For functions with loops or 3+ conditionals, use the stackifier algorithm.
     # The nested conditional generator handles simple if-else well (1 conditional),
@@ -38,15 +41,15 @@ function generate_complex_flow(ctx::AbstractCompilationContext, blocks::Vector{B
 
     # For simpler functions, use nested if-else (which works well for moderate complexity)
     if length(conditionals) >= 1
-        append!(bytes, generate_nested_conditionals(ctx, blocks, code, conditionals))
+        emit_raw!(b, generate_nested_conditionals(ctx, blocks, code, conditionals))
     else
         # Fallback: generate blocks sequentially
         for block in blocks
-            append!(bytes, generate_block_code(ctx, block))
+            emit_raw!(b, generate_block_code(ctx, block))
         end
     end
 
-    return bytes
+    return builder_code(b)
 end
 
 """
@@ -118,10 +121,14 @@ If `val` is a non-nothing numeric value, compiles + boxes it.
 `target_bytes` is the byte vector to append to (may be `bytes` or `inner_bytes`).
 """
 function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
+    # MIGRATED to InstrBuilder: straight-line emitter (no byte inspection). Build into a
+    # local builder, then append its code to the caller-supplied buffer (byte-identical).
+    # compile_value / emit_box_type_id! splices bridge in via emit_raw!. strict=false.
+    b = InstrBuilder(; func_name="emit_numeric_to_externref!", strict=false)
     if is_nothing_value(val, ctx)
         # return nothing → ref.null extern
-        push!(target_bytes, Opcode.REF_NULL)
-        push!(target_bytes, UInt8(ExternRef))
+        ref_null!(b, ExternRef)
+        append!(target_bytes, builder_code(b))
         return
     end
     # PURE-9029: Check if this value should use ref.i31 (Bool, Int8, UInt8)
@@ -137,23 +144,22 @@ function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::
         end
         if _jl_type !== nothing && should_use_i31(_jl_type)
             # ref.i31 path: compile i32 value → ref.i31 → extern.convert_any
-            append!(target_bytes, compile_value(val, ctx))
-            emit_box_i31!(target_bytes)
-            push!(target_bytes, Opcode.GC_PREFIX)
-            push!(target_bytes, Opcode.EXTERN_CONVERT_ANY)
+            emit_raw!(b, compile_value(val, ctx); pushes=WasmValType[I32])
+            ref_i31!(b)
+            extern_convert_any!(b)
+            append!(target_bytes, builder_code(b))
             return
         end
     end
     # Box: compile value → struct_new(box_type) → extern_convert_any
     # PURE-9028: Push correct DFS typeId as field 0 before the value
-    emit_box_type_id!(target_bytes, ctx.type_registry, val_wasm)
-    append!(target_bytes, compile_value(val, ctx))
+    _tid = UInt8[]; emit_box_type_id!(_tid, ctx.type_registry, val_wasm)
+    emit_raw!(b, _tid; pushes=WasmValType[I32])
+    emit_raw!(b, compile_value(val, ctx); pushes=WasmValType[val_wasm])
     box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-    push!(target_bytes, Opcode.GC_PREFIX)
-    push!(target_bytes, Opcode.STRUCT_NEW)
-    append!(target_bytes, encode_leb128_unsigned(box_type))
-    push!(target_bytes, Opcode.GC_PREFIX)
-    push!(target_bytes, Opcode.EXTERN_CONVERT_ANY)
+    struct_new!(b, box_type, WasmValType[])
+    extern_convert_any!(b)
+    append!(target_bytes, builder_code(b))
     return
 end
 
@@ -164,9 +170,12 @@ Like emit_numeric_to_externref! but produces anyref (no extern_convert_any).
 Used when storing into AnyRef-typed struct fields (JlType hierarchy active).
 """
 function emit_numeric_to_anyref!(target_bytes::Vector{UInt8}, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
+    # MIGRATED to InstrBuilder: straight-line emitter (no byte inspection). Build into a
+    # local builder, then append its code to the caller-supplied buffer (byte-identical).
+    b = InstrBuilder(; func_name="emit_numeric_to_anyref!", strict=false)
     if is_nothing_value(val, ctx)
-        push!(target_bytes, Opcode.REF_NULL)
-        push!(target_bytes, 0x6E)  # any heap type
+        ref_null!(b, AnyRef)  # any heap type (0x6E)
+        append!(target_bytes, builder_code(b))
         return
     end
     # ref.i31 path for Bool/Int8/UInt8 — ref.i31 is already a subtype of anyref
@@ -180,18 +189,19 @@ function emit_numeric_to_anyref!(target_bytes::Vector{UInt8}, val, val_wasm::Was
             _jl_type = ctx.arg_types[val.n]
         end
         if _jl_type !== nothing && should_use_i31(_jl_type)
-            append!(target_bytes, compile_value(val, ctx))
-            emit_box_i31!(target_bytes)
+            emit_raw!(b, compile_value(val, ctx); pushes=WasmValType[I32])
+            ref_i31!(b)
+            append!(target_bytes, builder_code(b))
             return  # ref.i31 is already anyref — no conversion needed
         end
     end
     # Box: compile value → struct_new(box_type) — struct ref is already a subtype of anyref
-    emit_box_type_id!(target_bytes, ctx.type_registry, val_wasm)
-    append!(target_bytes, compile_value(val, ctx))
+    _tid = UInt8[]; emit_box_type_id!(_tid, ctx.type_registry, val_wasm)
+    emit_raw!(b, _tid; pushes=WasmValType[I32])
+    emit_raw!(b, compile_value(val, ctx); pushes=WasmValType[val_wasm])
     box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-    push!(target_bytes, Opcode.GC_PREFIX)
-    push!(target_bytes, Opcode.STRUCT_NEW)
-    append!(target_bytes, encode_leb128_unsigned(box_type))
+    struct_new!(b, box_type, WasmValType[])
+    append!(target_bytes, builder_code(b))
     return  # No extern_convert_any — struct ref is already anyref
 end
 
@@ -363,260 +373,6 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     end
 
     # ========================================================================
-    # STEP 5: Generate Code Using Stackifier Strategy
-    # ========================================================================
-
-    # Helper to compile statements in a basic block
-    function compile_block_statements(block::BasicBlock, skip_terminator::Bool)::Vector{UInt8}
-        block_bytes = UInt8[]
-        # PURE-7001a: Reset dead code guard — this block is reachable
-        ctx.last_stmt_was_stub = false
-
-        for i in block.start_idx:block.end_idx
-            stmt = code[i]
-
-            # Skip terminator if requested (we handle control flow separately)
-            if skip_terminator && i == block.end_idx && (stmt isa Core.GotoIfNot || stmt isa Core.GotoNode || stmt isa Core.ReturnNode)
-                continue
-            end
-
-            if stmt isa Core.ReturnNode
-                if isdefined(stmt, :val)
-                    val_wasm_type = infer_value_wasm_type(stmt.val, ctx)
-                    ret_wasm_type = julia_to_wasm_type_concrete(ctx.return_type, ctx)
-                    func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
-                    # PURE-315: Check numeric-to-ref BEFORE return_type_compatible,
-                    # because I32 (nothing) is not "compatible" with ConcreteRef but
-                    # is correctly handled by emitting ref.null instead.
-                    is_numeric_val = val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
-                    is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
-                    if is_numeric_val && is_ref_ret
-                        # PURE-325: Box numeric value for ref return type
-                        if func_ret_wasm === ExternRef
-                            emit_numeric_to_externref!(block_bytes, stmt.val, val_wasm_type, ctx)
-                        elseif func_ret_wasm isa ConcreteRef
-                            push!(block_bytes, Opcode.REF_NULL)
-                            append!(block_bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
-                        else
-                            push!(block_bytes, Opcode.REF_NULL)
-                            push!(block_bytes, UInt8(func_ret_wasm))
-                        end
-                        push!(block_bytes, Opcode.RETURN)
-                    elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
-                        push!(block_bytes, Opcode.UNREACHABLE)
-                    else
-                        append!(block_bytes, compile_value(stmt.val, ctx))
-                        if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
-                            push!(block_bytes, Opcode.GC_PREFIX)
-                            push!(block_bytes, Opcode.EXTERN_CONVERT_ANY)
-                        elseif val_wasm_type === I32 && func_ret_wasm === I64
-                            push!(block_bytes, Opcode.I64_EXTEND_I32_S)
-                        elseif val_wasm_type === I64 && func_ret_wasm === F64
-                            push!(block_bytes, Opcode.F64_CONVERT_I64_S)
-                        elseif val_wasm_type === I32 && func_ret_wasm === F64
-                            push!(block_bytes, Opcode.F64_CONVERT_I32_S)
-                        elseif val_wasm_type === F32 && func_ret_wasm === F64
-                            push!(block_bytes, Opcode.F64_PROMOTE_F32)
-                        elseif val_wasm_type === I64 && func_ret_wasm === F32
-                            push!(block_bytes, Opcode.F32_CONVERT_I64_S)
-                        elseif val_wasm_type === I32 && func_ret_wasm === F32
-                            push!(block_bytes, Opcode.F32_CONVERT_I32_S)
-                        end
-                        push!(block_bytes, Opcode.RETURN)
-                    end
-                else
-                    push!(block_bytes, Opcode.RETURN)
-                end
-
-            elseif stmt isa Core.GotoIfNot
-                # GotoIfNot: handled by control flow structure
-                # Nothing to emit here
-
-            elseif stmt isa Core.GotoNode
-                # Unconditional goto: handled by control flow structure
-                # Nothing to emit here
-
-            elseif stmt isa Core.PhiNode
-                # Phi nodes: check if we're falling through from a previous statement
-                # in the same block that is an edge for this phi
-                if haskey(ctx.phi_locals, i)
-                    # Look for an edge from a previous statement in this block
-                    for (edge_idx, edge) in enumerate(stmt.edges)
-                        # Check if this edge is from within the same block (internal fallthrough)
-                        if edge >= block.start_idx && edge < i
-                            # This is an internal fallthrough edge - set the phi local
-                            if isassigned(stmt.values, edge_idx)
-                                val = stmt.values[edge_idx]
-                                # Check type compatibility before storing
-                                local_idx = ctx.phi_locals[i]
-                                phi_local_type = ctx.locals[local_idx - ctx.n_params + 1]
-                                edge_val_type = get_phi_edge_wasm_type(val)
-                                if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type) && !(phi_local_type === I64 && edge_val_type === I32)
-                                    if phi_local_type === ExternRef && (edge_val_type === I32 || edge_val_type === I64 || edge_val_type === F32 || edge_val_type === F64)
-                                        # PURE-325: Box numeric phi edge for ExternRef local
-                                        _pvb = compile_phi_value(val, i)
-                                        if !isempty(_pvb)
-                                            _pvb_boxed = length(_pvb) >= 2 && _pvb[end-1] == Opcode.GC_PREFIX && _pvb[end] == Opcode.EXTERN_CONVERT_ANY
-                                            # PURE-602: compile_phi_value may return ref.null extern for nothing values
-                                            # (already externref — don't try to box it as numeric)
-                                            _pvb_is_ref_null = length(_pvb) >= 1 && _pvb[1] == Opcode.REF_NULL
-                                            if !_pvb_boxed && !_pvb_is_ref_null
-                                                # PURE-9028: Push correct DFS typeId as field 0 before the value
-                                                emit_box_type_id!(block_bytes, ctx.type_registry, edge_val_type)
-                                                append!(block_bytes, _pvb)
-                                                _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
-                                                push!(block_bytes, Opcode.GC_PREFIX)
-                                                push!(block_bytes, Opcode.STRUCT_NEW)
-                                                append!(block_bytes, encode_leb128_unsigned(_box_t))
-                                                push!(block_bytes, Opcode.GC_PREFIX)
-                                                push!(block_bytes, Opcode.EXTERN_CONVERT_ANY)
-                                            else
-                                                append!(block_bytes, _pvb)
-                                            end
-                                            push!(block_bytes, Opcode.LOCAL_SET)
-                                            append!(block_bytes, encode_leb128_unsigned(local_idx))
-                                            break
-                                        end
-                                    end
-                                    # Type mismatch: emit type-safe default for the local's declared type.
-                                    append!(block_bytes, emit_phi_type_default(phi_local_type))
-                                    push!(block_bytes, Opcode.LOCAL_SET)
-                                    append!(block_bytes, encode_leb128_unsigned(local_idx))
-                                    break
-                                end
-                                phi_value_bytes = compile_phi_value(val, i)
-                                # Detect multi-value bytes (all local_gets, N>=2).
-                                if length(phi_value_bytes) >= 4
-                                    _pv_all3 = true; _pv_n3 = 0; _pv_p3 = 1
-                                    while _pv_p3 <= length(phi_value_bytes)
-                                        if phi_value_bytes[_pv_p3] != 0x20; _pv_all3 = false; break; end
-                                        _pv_n3 += 1; _pv_p3 += 1
-                                        while _pv_p3 <= length(phi_value_bytes) && (phi_value_bytes[_pv_p3] & 0x80) != 0; _pv_p3 += 1; end
-                                        _pv_p3 += 1
-                                    end
-                                    if _pv_all3 && _pv_p3 > length(phi_value_bytes) && _pv_n3 >= 2
-                                        phi_value_bytes = emit_phi_type_default(phi_local_type)
-                                    end
-                                end
-                                # Only emit local_set if we actually have a value on the stack
-                                if !isempty(phi_value_bytes)
-                                    # PURE-325: If compile_phi_value already boxed (contains GC_PREFIX),
-                                    # skip the safety check — it would undo the boxing
-                                    _already_boxed = length(phi_value_bytes) >= 2 && phi_value_bytes[end-1] == Opcode.GC_PREFIX && phi_value_bytes[end] == Opcode.EXTERN_CONVERT_ANY
-                                    # Safety check: verify actual local.get type matches phi local
-                                    actual_val_type = edge_val_type
-                                    if !_already_boxed && length(phi_value_bytes) >= 2 && phi_value_bytes[1] == Opcode.LOCAL_GET
-                                        got_local_idx = 0
-                                        shift = 0
-                                        for bi in 2:length(phi_value_bytes)
-                                            b = phi_value_bytes[bi]
-                                            got_local_idx |= (Int(b & 0x7f) << shift)
-                                            shift += 7
-                                            if (b & 0x80) == 0
-                                                break
-                                            end
-                                        end
-                                        got_local_array_idx = got_local_idx - ctx.n_params + 1
-                                        if got_local_array_idx >= 1 && got_local_array_idx <= length(ctx.locals)
-                                            actual_val_type = ctx.locals[got_local_array_idx]
-                                        elseif got_local_idx < ctx.n_params
-                                            # It's a parameter - get Wasm type from arg_types
-                                            param_julia_type = ctx.arg_types[got_local_idx + 1]  # Julia is 1-indexed
-                                            actual_val_type = get_concrete_wasm_type(param_julia_type, ctx.mod, ctx.type_registry)
-                                        end
-                                    end
-
-                                    if _already_boxed
-                                        append!(block_bytes, phi_value_bytes)
-                                    elseif actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type) && !(phi_local_type === I64 && actual_val_type === I32) && !(phi_local_type === F64 && (actual_val_type === I64 || actual_val_type === I32 || actual_val_type === F32)) && !(phi_local_type === F32 && (actual_val_type === I64 || actual_val_type === I32))
-                                        # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef:
-                                        # wrap with extern_convert_any instead of emitting null default
-                                        if phi_local_type === ExternRef && (actual_val_type isa ConcreteRef || actual_val_type === StructRef || actual_val_type === ArrayRef || actual_val_type === AnyRef)
-                                            append!(block_bytes, phi_value_bytes)
-                                            # PURE-803: ref.null extern is already externref — don't wrap with extern_convert_any
-                                            _is_ref_null = length(phi_value_bytes) >= 1 && phi_value_bytes[1] == Opcode.REF_NULL
-                                            if !_is_ref_null
-                                                push!(block_bytes, Opcode.GC_PREFIX)
-                                                push!(block_bytes, Opcode.EXTERN_CONVERT_ANY)
-                                            end
-                                        else
-                                            append!(block_bytes, emit_phi_type_default(phi_local_type))
-                                        end
-                                    elseif actual_val_type !== nothing && phi_local_type === I64 && actual_val_type === I32
-                                        append!(block_bytes, phi_value_bytes)
-                                        if isempty(phi_value_bytes) || phi_value_bytes[1] != Opcode.I64_CONST
-                                            push!(block_bytes, Opcode.I64_EXTEND_I32_S)
-                                        end
-                                    elseif actual_val_type !== nothing && phi_local_type === F64 && actual_val_type === I64
-                                        append!(block_bytes, phi_value_bytes)
-                                        push!(block_bytes, Opcode.F64_CONVERT_I64_S)
-                                    elseif actual_val_type !== nothing && phi_local_type === F64 && actual_val_type === I32
-                                        append!(block_bytes, phi_value_bytes)
-                                        push!(block_bytes, Opcode.F64_CONVERT_I32_S)
-                                    elseif actual_val_type !== nothing && phi_local_type === F64 && actual_val_type === F32
-                                        append!(block_bytes, phi_value_bytes)
-                                        push!(block_bytes, Opcode.F64_PROMOTE_F32)
-                                    elseif actual_val_type !== nothing && phi_local_type === F32 && (actual_val_type === I64 || actual_val_type === I32)
-                                        append!(block_bytes, phi_value_bytes)
-                                        push!(block_bytes, actual_val_type === I64 ? Opcode.F32_CONVERT_I64_S : Opcode.F32_CONVERT_I32_S)
-                                    else
-                                        append!(block_bytes, phi_value_bytes)
-                                    end
-                                    push!(block_bytes, Opcode.LOCAL_SET)
-                                    append!(block_bytes, encode_leb128_unsigned(local_idx))
-                                end
-                            end
-                            break
-                        end
-                    end
-                end
-                # No other code needed - phi result is read via LOCAL_GET
-
-            elseif stmt === nothing
-                # Nothing statement
-
-            else
-                # Regular statement - compile_statement handles local.set internally
-                # for statements that produce values and have ssa_locals allocated
-                stmt_bytes = compile_statement(stmt, i, ctx)
-                append!(block_bytes, stmt_bytes)
-
-                # PURE-6024: Skip remaining statements after unreachable.
-                # Dead code after unreachable leaves values on the stack causing
-                # "values remaining on stack at end of block" validation errors.
-                stmt_type = get(ctx.ssa_types, i, Any)
-                if stmt_type === Union{} || ctx.last_stmt_was_stub
-                    break
-                end
-
-                # NOTE: compile_statement already adds LOCAL_SET for SSA values
-                # that need storing. We don't add another one here to avoid
-                # duplicate stores that would cause "not enough arguments on stack" errors.
-
-                # Only drop unused values that don't have locals
-                if !haskey(ctx.ssa_locals, i) && stmt isa Expr && (stmt.head === :call || stmt.head === :invoke || stmt.head === :foreigncall)
-                    # PURE-220: Skip if compile_statement already emitted a DROP
-                    # PURE-6006: Guard against call instruction false-positive (func_idx 0x1a == DROP)
-                    already_dropped = !isempty(stmt_bytes) && stmt_bytes[end] == Opcode.DROP &&
-                                      !(length(stmt_bytes) >= 2 && stmt_bytes[end-1] == Opcode.CALL)
-                    # Use statement_produces_wasm_value to check if the call actually
-                    # produces a value on the stack (handles Any type correctly)
-                    if !already_dropped && !isempty(stmt_bytes) && statement_produces_wasm_value(stmt, i, ctx)
-                        if !haskey(ctx.phi_locals, i)
-                            use_count = get(ssa_use_count, i, 0)
-                            if use_count == 0
-                                push!(block_bytes, Opcode.DROP)
-                            end
-                        end
-                    end
-                end
-            end
-        end
-
-        return block_bytes
-    end
-
-    # ========================================================================
     # STEP 6: Main Code Generation
     # ========================================================================
     #
@@ -635,7 +391,14 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # - We use nested if/else for these patterns
     # - For more complex patterns, we use labeled blocks
 
-    bytes = UInt8[]
+    # MIGRATED to InstrBuilder: the main accumulator is the typed builder `b`. The
+    # byte-INSPECTING helper closures (set_phi_locals_for_edge!, compile_phi_value,
+    # emit_phi_type_default) keep building their own local
+    # UInt8[] buffers — they LEB-decode + scan recursive results — and splice them into
+    # `b` via emit_raw!. strict=false (collect mode): a full control-flow body's stack
+    # effect can't be tracked precisely by the fragment model, so we never gate.
+    # Byte-identical to the prior raw emission.
+    b = InstrBuilder(; func_name="generate_stackified_flow", strict=false)
 
     # For very complex functions, use a dispatcher-style approach
     # Create a big block structure with all targets as labeled positions
@@ -764,8 +527,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
 
     # Open blocks for OUTER forward jump targets only (outermost first = largest target)
     for target in outer_targets
-        push!(bytes, Opcode.BLOCK)
-        push!(bytes, 0x40)  # void
+        block!(b)  # void
     end
 
     # Helper function to get current label depth for a forward jump target
@@ -832,49 +594,44 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
 
     # Helper: emit a type-safe default value for a given WasmValType
     function emit_phi_type_default(wasm_type::WasmValType)::Vector{UInt8}
-        result = UInt8[]
+        # MIGRATED to InstrBuilder: pure straight-line value emission (no inspection).
+        # strict=false; byte-identical to the prior raw emission.
+        tb = InstrBuilder(; func_name="emit_phi_type_default", strict=false)
         if wasm_type isa ConcreteRef
-            push!(result, Opcode.REF_NULL)
-            append!(result, encode_leb128_signed(Int64(wasm_type.type_idx)))
+            ref_null!(tb, Int64(wasm_type.type_idx), ConcreteRef(UInt32(wasm_type.type_idx), true))
         elseif wasm_type === StructRef
-            push!(result, Opcode.REF_NULL)
-            push!(result, UInt8(StructRef))
+            ref_null!(tb, StructRef)
         elseif wasm_type === ArrayRef
-            push!(result, Opcode.REF_NULL)
-            push!(result, UInt8(ArrayRef))
+            ref_null!(tb, ArrayRef)
         elseif wasm_type === ExternRef
-            push!(result, Opcode.REF_NULL)
-            push!(result, UInt8(ExternRef))
+            ref_null!(tb, ExternRef)
         elseif wasm_type === AnyRef
-            push!(result, Opcode.REF_NULL)
-            push!(result, UInt8(AnyRef))
+            ref_null!(tb, AnyRef)
         elseif wasm_type === EqRef
-            push!(result, Opcode.REF_NULL)
-            push!(result, UInt8(EqRef))
+            ref_null!(tb, EqRef)
         elseif wasm_type === I64
-            push!(result, Opcode.I64_CONST)
-            push!(result, 0x00)
+            i64_const!(tb, 0)
         elseif wasm_type === I32
-            push!(result, Opcode.I32_CONST)
-            push!(result, 0x00)
+            i32_const!(tb, 0)
         elseif wasm_type === F64
-            push!(result, Opcode.F64_CONST)
-            append!(result, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+            f64_const!(tb, 0.0)
         elseif wasm_type === F32
-            push!(result, Opcode.F32_CONST)
-            append!(result, UInt8[0x00, 0x00, 0x00, 0x00])
+            f32_const!(tb, 0.0f0)
         else
-            push!(result, Opcode.I32_CONST)
-            push!(result, 0x00)
+            i32_const!(tb, 0)
         end
-        return result
+        return builder_code(tb)
     end
 
     # Helper to compile a value, ensuring it actually produces bytes
     # For SSAValues without locals, we need to recompute the value
     # phi_idx: the SSA index of the phi node we're setting (to get the phi's type)
     function compile_phi_value(val, phi_idx::Int)::Vector{UInt8}
-        result = UInt8[]
+        # MIGRATED to InstrBuilder: pure straight-line emission into `pvb` (no self-
+        # inspection; the OUTPUT is byte-inspected by callers, byte-identity preserved by
+        # builder_code). Recursive emitters (compile_value/compile_statement) + buffer
+        # helpers (emit_box_type_id!/emit_phi_type_default) bridge via emit_raw!. strict=false.
+        pvb = InstrBuilder(; func_name="compile_phi_value", strict=false)
         if val isa Core.SSAValue
             # Determine the phi local's wasm type for compatibility checking
             phi_local_wasm_type = nothing
@@ -892,33 +649,26 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 if phi_local_wasm_type !== nothing && ssa_local_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_local_type)
                     if phi_local_wasm_type === I64 && ssa_local_type === I32
                         # PURE-313: Return i32 local.get — caller handles i64 widening
-                        push!(result, Opcode.LOCAL_GET)
-                        append!(result, encode_leb128_unsigned(local_idx))
+                        local_get!(pvb, local_idx)
                     elseif phi_local_wasm_type === ExternRef && (ssa_local_type === I32 || ssa_local_type === I64 || ssa_local_type === F32 || ssa_local_type === F64)
                         # PURE-325: Box numeric local for ExternRef phi
                         # PURE-9028: Push correct DFS typeId as field 0
-                        emit_box_type_id!(result, ctx.type_registry, ssa_local_type)
-                        push!(result, Opcode.LOCAL_GET)
-                        append!(result, encode_leb128_unsigned(local_idx))
+                        _tid = UInt8[]; emit_box_type_id!(_tid, ctx.type_registry, ssa_local_type)
+                        emit_raw!(pvb, _tid; pushes=WasmValType[I32])
+                        local_get!(pvb, local_idx)
                         _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, ssa_local_type)
-                        push!(result, Opcode.GC_PREFIX)
-                        push!(result, Opcode.STRUCT_NEW)
-                        append!(result, encode_leb128_unsigned(_box_t))
-                        push!(result, Opcode.GC_PREFIX)
-                        push!(result, Opcode.EXTERN_CONVERT_ANY)
+                        struct_new!(pvb, _box_t, WasmValType[])
+                        extern_convert_any!(pvb)
                     elseif phi_local_wasm_type === ExternRef && (ssa_local_type isa ConcreteRef || ssa_local_type === StructRef || ssa_local_type === ArrayRef || ssa_local_type === AnyRef)
                         # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion
-                        push!(result, Opcode.LOCAL_GET)
-                        append!(result, encode_leb128_unsigned(local_idx))
-                        push!(result, Opcode.GC_PREFIX)
-                        push!(result, Opcode.EXTERN_CONVERT_ANY)
+                        local_get!(pvb, local_idx)
+                        extern_convert_any!(pvb)
                     else
                         # Type mismatch: emit type-safe default for the phi local's type
-                        append!(result, emit_phi_type_default(phi_local_wasm_type))
+                        emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type))
                     end
                 else
-                    push!(result, Opcode.LOCAL_GET)
-                    append!(result, encode_leb128_unsigned(local_idx))
+                    local_get!(pvb, local_idx)
                 end
             elseif haskey(ctx.phi_locals, val.id)
                 local_idx = ctx.phi_locals[val.id]
@@ -928,35 +678,29 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     if phi_local_wasm_type === ExternRef && (src_local_type === I32 || src_local_type === I64 || src_local_type === F32 || src_local_type === F64)
                         # PURE-325: Box numeric phi-to-phi for ExternRef
                         # PURE-9028: Push correct DFS typeId as field 0
-                        emit_box_type_id!(result, ctx.type_registry, src_local_type)
-                        push!(result, Opcode.LOCAL_GET)
-                        append!(result, encode_leb128_unsigned(local_idx))
+                        _tid = UInt8[]; emit_box_type_id!(_tid, ctx.type_registry, src_local_type)
+                        emit_raw!(pvb, _tid; pushes=WasmValType[I32])
+                        local_get!(pvb, local_idx)
                         _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, src_local_type)
-                        push!(result, Opcode.GC_PREFIX)
-                        push!(result, Opcode.STRUCT_NEW)
-                        append!(result, encode_leb128_unsigned(_box_t))
-                        push!(result, Opcode.GC_PREFIX)
-                        push!(result, Opcode.EXTERN_CONVERT_ANY)
+                        struct_new!(pvb, _box_t, WasmValType[])
+                        extern_convert_any!(pvb)
                     elseif phi_local_wasm_type === ExternRef && (src_local_type isa ConcreteRef || src_local_type === StructRef || src_local_type === ArrayRef || src_local_type === AnyRef)
                         # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion (phi-to-phi)
-                        push!(result, Opcode.LOCAL_GET)
-                        append!(result, encode_leb128_unsigned(local_idx))
-                        push!(result, Opcode.GC_PREFIX)
-                        push!(result, Opcode.EXTERN_CONVERT_ANY)
+                        local_get!(pvb, local_idx)
+                        extern_convert_any!(pvb)
                     else
-                        append!(result, emit_phi_type_default(phi_local_wasm_type))
+                        emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type))
                     end
                 else
-                    push!(result, Opcode.LOCAL_GET)
-                    append!(result, encode_leb128_unsigned(local_idx))
+                    local_get!(pvb, local_idx)
                 end
             else
                 # SSA without local - need to recompute the statement
                 # This should ideally not happen for phi values, but handle it
                 # PURE-6021: Guard against out-of-bounds SSAValue IDs (sentinel values)
                 if val.id < 1 || val.id > length(code)
-                    append!(result, emit_phi_type_default(phi_local_wasm_type))
-                    return result
+                    emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type))
+                    return builder_code(pvb)
                 end
                 stmt = code[val.id]
                 # PURE-036bg: Check type compatibility for recomputed SSA values
@@ -967,45 +711,42 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     if phi_local_wasm_type === ExternRef && (ssa_wasm_type === I32 || ssa_wasm_type === I64 || ssa_wasm_type === F32 || ssa_wasm_type === F64)
                         # PURE-325: Box recomputed numeric SSA for ExternRef phi
                         # PURE-9028: Push correct DFS typeId as field 0
-                        emit_box_type_id!(result, ctx.type_registry, ssa_wasm_type)
+                        _tid = UInt8[]; emit_box_type_id!(_tid, ctx.type_registry, ssa_wasm_type)
+                        emit_raw!(pvb, _tid; pushes=WasmValType[I32])
                         if stmt !== nothing && !(stmt isa Core.PhiNode)
-                            append!(result, compile_statement(stmt, val.id, ctx))
+                            emit_raw!(pvb, compile_statement(stmt, val.id, ctx))
                         else
-                            append!(result, compile_value(val, ctx))
+                            emit_raw!(pvb, compile_value(val, ctx))
                         end
                         _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, ssa_wasm_type)
-                        push!(result, Opcode.GC_PREFIX)
-                        push!(result, Opcode.STRUCT_NEW)
-                        append!(result, encode_leb128_unsigned(_box_t))
-                        push!(result, Opcode.GC_PREFIX)
-                        push!(result, Opcode.EXTERN_CONVERT_ANY)
+                        struct_new!(pvb, _box_t, WasmValType[])
+                        extern_convert_any!(pvb)
                     elseif phi_local_wasm_type === ExternRef && (ssa_wasm_type isa ConcreteRef || ssa_wasm_type === StructRef || ssa_wasm_type === ArrayRef || ssa_wasm_type === AnyRef)
                         # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion.
                         # PiNode narrows Any→Expr (ExternRef→ConcreteRef). Compile the value
                         # and wrap with extern_convert_any to get back to ExternRef.
                         @debug "PURE-325 FIX HIT: phi=$phi_idx val=$(val.id) ssa_wasm=$ssa_wasm_type phi_wasm=$phi_local_wasm_type stmt=$(typeof(stmt))"
                         if stmt !== nothing && !(stmt isa Core.PhiNode)
-                            append!(result, compile_statement(stmt, val.id, ctx))
+                            emit_raw!(pvb, compile_statement(stmt, val.id, ctx))
                         else
-                            append!(result, compile_value(val, ctx))
+                            emit_raw!(pvb, compile_value(val, ctx))
                         end
-                        push!(result, Opcode.GC_PREFIX)
-                        push!(result, Opcode.EXTERN_CONVERT_ANY)
+                        extern_convert_any!(pvb)
                     else
                         # Type mismatch: emit type-safe default instead of recomputing
                         @debug "PURE-325 NULL DEFAULT: phi=$phi_idx val=$(val.id) ssa_wasm=$ssa_wasm_type phi_wasm=$phi_local_wasm_type"
-                        append!(result, emit_phi_type_default(phi_local_wasm_type))
+                        emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type))
                     end
                 elseif phi_local_wasm_type !== nothing && phi_local_wasm_type === I64 && ssa_wasm_type === I32
                     # PURE-313: i32 → i64 widening for recomputed SSA without local.
                     # Compile the value as i32 and let the caller (set_phi_locals_for_edge!)
                     # handle the i64.extend_i32_s widening.
-                    append!(result, compile_value(val, ctx))
+                    emit_raw!(pvb, compile_value(val, ctx))
                 elseif stmt !== nothing && !(stmt isa Core.PhiNode)
-                    append!(result, compile_statement(stmt, val.id, ctx))
+                    emit_raw!(pvb, compile_statement(stmt, val.id, ctx))
                 else
                     # Can't recompute - try compile_value as fallback
-                    append!(result, compile_value(val, ctx))
+                    emit_raw!(pvb, compile_value(val, ctx))
                 end
             end
         elseif val === nothing || (val isa GlobalRef && val.name === :nothing)
@@ -1016,38 +757,28 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 local_idx = ctx.phi_locals[phi_idx]
                 local_wasm_type = ctx.locals[local_idx - ctx.n_params + 1]
                 if local_wasm_type isa ConcreteRef
-                    push!(result, Opcode.REF_NULL)
-                    append!(result, encode_leb128_signed(Int64(local_wasm_type.type_idx)))
+                    ref_null!(pvb, Int64(local_wasm_type.type_idx), ConcreteRef(UInt32(local_wasm_type.type_idx), true))
                 elseif local_wasm_type === ExternRef
-                    push!(result, Opcode.REF_NULL)
-                    push!(result, UInt8(ExternRef))
+                    ref_null!(pvb, ExternRef)
                 elseif local_wasm_type === StructRef
-                    push!(result, Opcode.REF_NULL)
-                    push!(result, UInt8(StructRef))
+                    ref_null!(pvb, StructRef)
                 elseif local_wasm_type === ArrayRef
-                    push!(result, Opcode.REF_NULL)
-                    push!(result, UInt8(ArrayRef))
+                    ref_null!(pvb, ArrayRef)
                 elseif local_wasm_type === AnyRef
-                    push!(result, Opcode.REF_NULL)
-                    push!(result, UInt8(AnyRef))
+                    ref_null!(pvb, AnyRef)
                 elseif local_wasm_type === I64
-                    push!(result, Opcode.I64_CONST)
-                    push!(result, 0x00)
+                    i64_const!(pvb, 0)
                 elseif local_wasm_type === F32
-                    push!(result, Opcode.F32_CONST)
-                    append!(result, UInt8[0x00, 0x00, 0x00, 0x00])
+                    f32_const!(pvb, 0.0f0)
                 elseif local_wasm_type === F64
-                    push!(result, Opcode.F64_CONST)
-                    append!(result, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                    f64_const!(pvb, 0.0)
                 else
                     # I32 default
-                    push!(result, Opcode.I32_CONST)
-                    push!(result, 0x00)
+                    i32_const!(pvb, 0)
                 end
             else
                 # No phi local found — emit i32(0) as placeholder
-                push!(result, Opcode.I32_CONST)
-                push!(result, 0x00)
+                i32_const!(pvb, 0)
             end
         else
             # Not an SSA and not nothing - just compile directly
@@ -1060,32 +791,29 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     if phi_local_type === ExternRef && (edge_val_type === I32 || edge_val_type === I64 || edge_val_type === F32 || edge_val_type === F64)
                         # PURE-325: Box numeric non-SSA value for ExternRef phi
                         # PURE-9028: Push correct DFS typeId as field 0
-                        emit_box_type_id!(result, ctx.type_registry, edge_val_type)
-                        append!(result, compile_value(val, ctx))
+                        _tid = UInt8[]; emit_box_type_id!(_tid, ctx.type_registry, edge_val_type)
+                        emit_raw!(pvb, _tid; pushes=WasmValType[I32])
+                        emit_raw!(pvb, compile_value(val, ctx))
                         _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
-                        push!(result, Opcode.GC_PREFIX)
-                        push!(result, Opcode.STRUCT_NEW)
-                        append!(result, encode_leb128_unsigned(_box_t))
-                        push!(result, Opcode.GC_PREFIX)
-                        push!(result, Opcode.EXTERN_CONVERT_ANY)
-                        return result
+                        struct_new!(pvb, _box_t, WasmValType[])
+                        extern_convert_any!(pvb)
+                        return builder_code(pvb)
                     elseif phi_local_type === ExternRef && (edge_val_type isa ConcreteRef || edge_val_type === StructRef || edge_val_type === ArrayRef || edge_val_type === AnyRef)
                         # PURE-4151: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef for non-SSA phi edges
                         # (e.g., Union{} literal in phi node produces global.get of DataType struct,
                         #  needs extern_convert_any to store in ExternRef phi local)
-                        append!(result, compile_value(val, ctx))
-                        push!(result, Opcode.GC_PREFIX)
-                        push!(result, Opcode.EXTERN_CONVERT_ANY)
-                        return result
+                        emit_raw!(pvb, compile_value(val, ctx))
+                        extern_convert_any!(pvb)
+                        return builder_code(pvb)
                     end
                     # Type mismatch: emit type-safe default instead
-                    append!(result, emit_phi_type_default(phi_local_type))
-                    return result
+                    emit_raw!(pvb, emit_phi_type_default(phi_local_type))
+                    return builder_code(pvb)
                 end
             end
-            append!(result, compile_value(val, ctx))
+            emit_raw!(pvb, compile_value(val, ctx))
         end
-        return result
+        return builder_code(pvb)
     end
 
     # Helper: determine the Wasm type that a phi edge value will produce on the stack
@@ -1221,7 +949,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # dest_block: the block index being jumped to
     # terminator_idx: the statement index of the terminator (edge in phi)
     # target_stmt: optional - the actual statement being jumped to (may differ from block start)
-    function set_phi_locals_for_edge!(bytes::Vector{UInt8}, dest_block::Int, terminator_idx::Int; target_stmt::Int=0)
+    # MIGRATED: emits phi-local stores directly into the outer typed builder `b`.
+    # Byte-inspecting branches keep their local UInt8[] scan of the recursive
+    # compile_phi_value result; only the EMISSION migrates to typed methods.
+    function set_phi_locals_for_edge!(b::InstrBuilder, dest_block::Int, terminator_idx::Int; target_stmt::Int=0)
         if dest_block < 1 || dest_block > length(blocks)
             return
         end
@@ -1266,10 +997,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     temp_local = allocate_local!(ctx, local_type)
                     needs_temp[read_local] = temp_local
                     # Save old value: local.get $orig → local.set $temp
-                    push!(bytes, Opcode.LOCAL_GET)
-                    append!(bytes, encode_leb128_unsigned(read_local))
-                    push!(bytes, Opcode.LOCAL_SET)
-                    append!(bytes, encode_leb128_unsigned(temp_local))
+                    local_get!(b, read_local)
+                    local_set!(b, temp_local)
                 end
             end
         end
@@ -1300,19 +1029,16 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                             _pvb2_is_ref_null = length(_pvb2) >= 1 && _pvb2[1] == Opcode.REF_NULL
                                             if !_pvb2_boxed && !_pvb2_is_ref_null
                                                 # PURE-9028: Push correct DFS typeId as field 0
-                                                emit_box_type_id!(bytes, ctx.type_registry, edge_val_type)
-                                                append!(bytes, _pvb2)
+                                                _tid2 = UInt8[]; emit_box_type_id!(_tid2, ctx.type_registry, edge_val_type)
+                                                emit_raw!(b, _tid2; pushes=WasmValType[I32])
+                                                emit_raw!(b, _pvb2; pushes=WasmValType[edge_val_type])
                                                 _box_t2 = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
-                                                push!(bytes, Opcode.GC_PREFIX)
-                                                push!(bytes, Opcode.STRUCT_NEW)
-                                                append!(bytes, encode_leb128_unsigned(_box_t2))
-                                                push!(bytes, Opcode.GC_PREFIX)
-                                                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                                struct_new!(b, _box_t2, WasmValType[])
+                                                extern_convert_any!(b)
                                             else
-                                                append!(bytes, _pvb2)
+                                                emit_raw!(b, _pvb2; pushes=WasmValType[ExternRef])
                                             end
-                                            push!(bytes, Opcode.LOCAL_SET)
-                                            append!(bytes, encode_leb128_unsigned(local_idx))
+                                            local_set!(b, local_idx)
                                             phi_count += 1
                                             found_edge = true
                                             break
@@ -1326,22 +1052,19 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                             # PURE-803: compile_phi_value may return ref.null extern for type-mismatch fallback
                                             # ref.null extern is already externref — extern_convert_any expects anyref input
                                             _pvb3_is_ref_null = length(_pvb3) >= 1 && _pvb3[1] == Opcode.REF_NULL
-                                            append!(bytes, _pvb3)
+                                            emit_raw!(b, _pvb3; pushes=WasmValType[edge_val_type])
                                             if !_pvb3_has_ecv && !_pvb3_is_ref_null
-                                                push!(bytes, Opcode.GC_PREFIX)
-                                                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                                extern_convert_any!(b)
                                             end
-                                            push!(bytes, Opcode.LOCAL_SET)
-                                            append!(bytes, encode_leb128_unsigned(local_idx))
+                                            local_set!(b, local_idx)
                                             phi_count += 1
                                             found_edge = true
                                             break
                                         end
                                     end
                                     # Type mismatch: emit type-safe default
-                                    append!(bytes, emit_phi_type_default(phi_local_type))
-                                    push!(bytes, Opcode.LOCAL_SET)
-                                    append!(bytes, encode_leb128_unsigned(local_idx))
+                                    emit_raw!(b, emit_phi_type_default(phi_local_type); pushes=WasmValType[phi_local_type])
+                                    local_set!(b, local_idx)
                                     phi_count += 1
                                     found_edge = true
                                     break
@@ -1352,10 +1075,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 if !isempty(needs_temp) && length(phi_value_bytes) >= 2 && phi_value_bytes[1] == Opcode.LOCAL_GET
                                     _got_idx = 0; _shift = 0
                                     for bi in 2:length(phi_value_bytes)
-                                        b = phi_value_bytes[bi]
-                                        _got_idx |= (Int(b & 0x7f) << _shift)
+                                        byt = phi_value_bytes[bi]
+                                        _got_idx |= (Int(byt & 0x7f) << _shift)
                                         _shift += 7
-                                        if (b & 0x80) == 0; break; end
+                                        if (byt & 0x80) == 0; break; end
                                     end
                                     if haskey(needs_temp, _got_idx)
                                         phi_value_bytes = UInt8[Opcode.LOCAL_GET]
@@ -1391,10 +1114,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                         got_local_idx = 0
                                         shift = 0
                                         for bi in 2:length(phi_value_bytes)
-                                            b = phi_value_bytes[bi]
-                                            got_local_idx |= (Int(b & 0x7f) << shift)
+                                            byt = phi_value_bytes[bi]
+                                            got_local_idx |= (Int(byt & 0x7f) << shift)
                                             shift += 7
-                                            if (b & 0x80) == 0
+                                            if (byt & 0x80) == 0
                                                 break
                                             end
                                         end
@@ -1408,54 +1131,57 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                         end
                                     end
                                     if _already_boxed2
-                                        append!(bytes, phi_value_bytes)
+                                        emit_raw!(b, phi_value_bytes; pushes=WasmValType[ExternRef])
                                     elseif actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type) && !(phi_local_type === I64 && actual_val_type === I32) && !(phi_local_type === F64 && (actual_val_type === I64 || actual_val_type === I32 || actual_val_type === F32)) && !(phi_local_type === F32 && (actual_val_type === I64 || actual_val_type === I32))
                                         # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef:
                                         # wrap with extern_convert_any instead of null default
                                         if phi_local_type === ExternRef && (actual_val_type isa ConcreteRef || actual_val_type === StructRef || actual_val_type === ArrayRef || actual_val_type === AnyRef)
-                                            append!(bytes, phi_value_bytes)
+                                            emit_raw!(b, phi_value_bytes; pushes=WasmValType[actual_val_type])
                                             # PURE-803: ref.null extern is already externref — don't wrap with extern_convert_any
                                             _is_ref_null2 = length(phi_value_bytes) >= 1 && phi_value_bytes[1] == Opcode.REF_NULL
                                             if !_is_ref_null2
-                                                push!(bytes, Opcode.GC_PREFIX)
-                                                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                                extern_convert_any!(b)
                                             end
                                         elseif phi_local_type isa ConcreteRef && (actual_val_type === AnyRef || actual_val_type === EqRef || actual_val_type === StructRef || actual_val_type === ArrayRef)
                                             # AnyRef/EqRef/StructRef/ArrayRef → ConcreteRef: narrow with ref.cast_nullable
                                             _is_ref_null_cast = length(phi_value_bytes) >= 1 && phi_value_bytes[1] == Opcode.REF_NULL
                                             if _is_ref_null_cast
                                                 # ref.null can't be cast — emit type-appropriate null instead
-                                                append!(bytes, emit_phi_type_default(phi_local_type))
+                                                emit_raw!(b, emit_phi_type_default(phi_local_type); pushes=WasmValType[phi_local_type])
                                             else
-                                                append!(bytes, phi_value_bytes)
-                                                push!(bytes, Opcode.GC_PREFIX)
-                                                push!(bytes, Opcode.REF_CAST_NULL)
-                                                append!(bytes, encode_leb128_unsigned(phi_local_type.type_idx))
+                                                emit_raw!(b, phi_value_bytes; pushes=WasmValType[actual_val_type])
+                                                # BRIDGE: original used encode_leb128_UNSIGNED for the
+                                                # ref.cast_null type index (ref_cast!/RefCastConcrete
+                                                # would emit signed LEB128 — differs for type_idx>=64).
+                                                # Preserve exact bytes via emit_raw!.
+                                                _rcb = UInt8[Opcode.GC_PREFIX, Opcode.REF_CAST_NULL]
+                                                append!(_rcb, encode_leb128_unsigned(phi_local_type.type_idx))
+                                                emit_raw!(b, _rcb; pops=1, pushes=WasmValType[phi_local_type])
                                             end
                                         else
                                             # Type mismatch detected at emit point: replace with default
-                                            append!(bytes, emit_phi_type_default(phi_local_type))
+                                            emit_raw!(b, emit_phi_type_default(phi_local_type); pushes=WasmValType[phi_local_type])
                                         end
                                     elseif actual_val_type !== nothing && phi_local_type === I64 && actual_val_type === I32
                                         # Numeric widening: i32 value into i64 local
                                         # PURE-324: Skip extend if compiled bytes are already i64
                                         # (happens when compile_phi_value emitted an i64 default)
-                                        append!(bytes, phi_value_bytes)
+                                        emit_raw!(b, phi_value_bytes; pushes=WasmValType[actual_val_type])
                                         if isempty(phi_value_bytes) || phi_value_bytes[1] != Opcode.I64_CONST
-                                            push!(bytes, Opcode.I64_EXTEND_I32_S)
+                                            num!(b, Opcode.I64_EXTEND_I32_S)
                                         end
                                     elseif actual_val_type !== nothing && phi_local_type === F64 && actual_val_type === I64
-                                        append!(bytes, phi_value_bytes)
-                                        push!(bytes, Opcode.F64_CONVERT_I64_S)
+                                        emit_raw!(b, phi_value_bytes; pushes=WasmValType[actual_val_type])
+                                        num!(b, Opcode.F64_CONVERT_I64_S)
                                     elseif actual_val_type !== nothing && phi_local_type === F64 && actual_val_type === I32
-                                        append!(bytes, phi_value_bytes)
-                                        push!(bytes, Opcode.F64_CONVERT_I32_S)
+                                        emit_raw!(b, phi_value_bytes; pushes=WasmValType[actual_val_type])
+                                        num!(b, Opcode.F64_CONVERT_I32_S)
                                     elseif actual_val_type !== nothing && phi_local_type === F64 && actual_val_type === F32
-                                        append!(bytes, phi_value_bytes)
-                                        push!(bytes, Opcode.F64_PROMOTE_F32)
+                                        emit_raw!(b, phi_value_bytes; pushes=WasmValType[actual_val_type])
+                                        num!(b, Opcode.F64_PROMOTE_F32)
                                     elseif actual_val_type !== nothing && phi_local_type === F32 && (actual_val_type === I64 || actual_val_type === I32)
-                                        append!(bytes, phi_value_bytes)
-                                        push!(bytes, actual_val_type === I64 ? Opcode.F32_CONVERT_I64_S : Opcode.F32_CONVERT_I32_S)
+                                        emit_raw!(b, phi_value_bytes; pushes=WasmValType[actual_val_type])
+                                        num!(b, actual_val_type === I64 ? Opcode.F32_CONVERT_I64_S : Opcode.F32_CONVERT_I32_S)
                                     else
                                         # PURE-6025: Final safety net — detect numeric constants
                                         # being stored to ref-typed locals. This happens when
@@ -1471,17 +1197,16 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                         # a GC instruction (e.g., array.new_data for Symbol constants
                                         # starts with i32.const for the offset argument but produces
                                         # a ref-typed value, not a numeric one).
-                                        if phi_val_is_numeric && any(b == Opcode.GC_PREFIX for b in phi_value_bytes)
+                                        if phi_val_is_numeric && any(byt == Opcode.GC_PREFIX for byt in phi_value_bytes)
                                             phi_val_is_numeric = false
                                         end
                                         if phi_is_ref && phi_val_is_numeric
-                                            append!(bytes, emit_phi_type_default(phi_local_type))
+                                            emit_raw!(b, emit_phi_type_default(phi_local_type); pushes=WasmValType[phi_local_type])
                                         else
-                                            append!(bytes, phi_value_bytes)
+                                            emit_raw!(b, phi_value_bytes; pushes=(actual_val_type === nothing ? WasmValType[] : WasmValType[actual_val_type]))
                                         end
                                     end
-                                    push!(bytes, Opcode.LOCAL_SET)
-                                    append!(bytes, encode_leb128_unsigned(local_idx))
+                                    local_set!(b, local_idx)
                                     phi_count += 1
                                 end
                             end
@@ -1514,16 +1239,15 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # ("values remaining at end of block"). Wrap the subset in an EXIT block:
     # out-of-subset forward branches br to it, landing exactly where the
     # caller's continuation (e.g. the try_table) begins.
-    _subset_end = isempty(blocks) ? 0 : maximum(b.end_idx for b in blocks)
+    _subset_end = isempty(blocks) ? 0 : maximum(byt.end_idx for byt in blocks)
     _term_dest(t) = t isa Core.GotoIfNot ? t.dest : t isa Core.GotoNode ? t.label : 0
     needs_exit_block = any(begin
-                               d = _term_dest(b.terminator)
+                               d = _term_dest(byt.terminator)
                                d > _subset_end && get(stmt_to_block, d, nothing) === nothing
-                           end for b in blocks)
+                           end for byt in blocks)
     _exit_depth() = length(open_blocks) + length(open_loops)
     if needs_exit_block
-        push!(bytes, Opcode.BLOCK)
-        push!(bytes, 0x40)
+        block!(b)
     end
 
     # Now generate code for each block in order
@@ -1532,9 +1256,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         # (We close BEFORE generating code for the target block)
         while !isempty(open_blocks) && last(open_blocks) == block_idx
             pop!(open_blocks)
-            push!(bytes, Opcode.END)  # End the block for this target
+            end_block!(b)  # End the block for this target
             if _debug_stackified
-                @warn "  CLOSE block for target $block_idx, open_blocks=$open_blocks, bytes_len=$(length(bytes))"
+                @warn "  CLOSE block for target $block_idx, open_blocks=$open_blocks, bytes_len=$(_byte_len(b))"
             end
         end
 
@@ -1547,23 +1271,21 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         end
 
         if _debug_stackified
-            @warn "  BLOCK $block_idx [$(block.start_idx):$(block.end_idx)] term=$(typeof(block.terminator)) bytes=$(length(bytes)) open_blocks=$open_blocks open_loops=$open_loops"
+            @warn "  BLOCK $block_idx [$(block.start_idx):$(block.end_idx)] term=$(typeof(block.terminator)) bytes=$(_byte_len(b)) open_blocks=$open_blocks open_loops=$open_loops"
         end
 
         # Check if we're entering a loop
         is_loop_header = block_idx in loop_headers
 
         if is_loop_header
-            push!(bytes, Opcode.LOOP)
-            push!(bytes, 0x40)  # void
+            loop!(b)  # void
             push!(open_loops, block_idx)
 
             # Open BLOCKs for forward-jump targets INSIDE this loop
             if haskey(loop_inner_targets, block_idx)
                 inner_targets = loop_inner_targets[block_idx]
                 for target in inner_targets  # already sorted desc (largest first = outermost)
-                    push!(bytes, Opcode.BLOCK)
-                    push!(bytes, 0x40)  # void
+                    block!(b)  # void
                 end
                 # Push inner targets onto open_blocks (smallest last = innermost at top)
                 append!(open_blocks, inner_targets)
@@ -1571,8 +1293,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         end
 
         # Compile the block's statements (not the terminator, we handle it separately)
-        # Skip any dead statements within the block
-        block_bytes = UInt8[]
+        # Skip any dead statements within the block.
+        # MIGRATED: block_bytes is now a sub-builder `bb`; straight-line emission uses
+        # typed methods, recursive sub-results (stmt_bytes/phi_value_bytes) bridge via
+        # emit_raw!, and the byte-INSPECTING DROP/box scans stay on those sub-results.
+        bb = InstrBuilder(; func_name="generate_stackified_flow.block", strict=false)
         # PURE-7001a: Reset dead code guard at block boundaries. Each non-dead block
         # is reachable via a different control flow path, so a stub flag from a previous
         # block must not cascade. Without this, compile_statement emits unreachable on
@@ -1612,39 +1337,37 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     if is_numeric_val && is_ref_ret
                         # PURE-325: Box numeric value for ref return type
                         if func_ret_wasm === ExternRef
-                            emit_numeric_to_externref!(block_bytes, stmt.val, val_wasm_type, ctx)
+                            _eb0 = UInt8[]; emit_numeric_to_externref!(_eb0, stmt.val, val_wasm_type, ctx)
+                            emit_raw!(bb, _eb0; pushes=WasmValType[ExternRef])
                         elseif func_ret_wasm isa ConcreteRef
-                            push!(block_bytes, Opcode.REF_NULL)
-                            append!(block_bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                            ref_null!(bb, Int64(func_ret_wasm.type_idx), ConcreteRef(UInt32(func_ret_wasm.type_idx), true))
                         else
-                            push!(block_bytes, Opcode.REF_NULL)
-                            push!(block_bytes, UInt8(func_ret_wasm))
+                            ref_null!(bb, func_ret_wasm)
                         end
-                        push!(block_bytes, Opcode.RETURN)
+                        return_!(bb)
                     elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
-                        push!(block_bytes, Opcode.UNREACHABLE)
+                        unreachable!(bb)
                     else
-                        append!(block_bytes, compile_value(stmt.val, ctx))
+                        emit_raw!(bb, compile_value(stmt.val, ctx); pushes=(val_wasm_type === nothing ? WasmValType[] : WasmValType[val_wasm_type]))
                         if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
-                            push!(block_bytes, Opcode.GC_PREFIX)
-                            push!(block_bytes, Opcode.EXTERN_CONVERT_ANY)
+                            extern_convert_any!(bb)
                         elseif val_wasm_type === I32 && func_ret_wasm === I64
-                            push!(block_bytes, Opcode.I64_EXTEND_I32_S)
+                            num!(bb, Opcode.I64_EXTEND_I32_S)
                         elseif val_wasm_type === I64 && func_ret_wasm === F64
-                            push!(block_bytes, Opcode.F64_CONVERT_I64_S)
+                            num!(bb, Opcode.F64_CONVERT_I64_S)
                         elseif val_wasm_type === I32 && func_ret_wasm === F64
-                            push!(block_bytes, Opcode.F64_CONVERT_I32_S)
+                            num!(bb, Opcode.F64_CONVERT_I32_S)
                         elseif val_wasm_type === F32 && func_ret_wasm === F64
-                            push!(block_bytes, Opcode.F64_PROMOTE_F32)
+                            num!(bb, Opcode.F64_PROMOTE_F32)
                         elseif val_wasm_type === I64 && func_ret_wasm === F32
-                            push!(block_bytes, Opcode.F32_CONVERT_I64_S)
+                            num!(bb, Opcode.F32_CONVERT_I64_S)
                         elseif val_wasm_type === I32 && func_ret_wasm === F32
-                            push!(block_bytes, Opcode.F32_CONVERT_I32_S)
+                            num!(bb, Opcode.F32_CONVERT_I32_S)
                         end
-                        push!(block_bytes, Opcode.RETURN)
+                        return_!(bb)
                     end
                 else
-                    push!(block_bytes, Opcode.RETURN)
+                    return_!(bb)
                 end
 
             elseif stmt isa Core.GotoIfNot
@@ -1676,26 +1399,22 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                             _pvb3_is_ref_null = length(_pvb3) >= 1 && _pvb3[1] == Opcode.REF_NULL
                                             if !_pvb3_boxed && !_pvb3_is_ref_null
                                                 # PURE-9028: Push correct DFS typeId as field 0
-                                                emit_box_type_id!(block_bytes, ctx.type_registry, edge_val_type)
-                                                append!(block_bytes, _pvb3)
+                                                _tid3 = UInt8[]; emit_box_type_id!(_tid3, ctx.type_registry, edge_val_type)
+                                                emit_raw!(bb, _tid3; pushes=WasmValType[I32])
+                                                emit_raw!(bb, _pvb3; pushes=WasmValType[edge_val_type])
                                                 _box_t3 = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
-                                                push!(block_bytes, Opcode.GC_PREFIX)
-                                                push!(block_bytes, Opcode.STRUCT_NEW)
-                                                append!(block_bytes, encode_leb128_unsigned(_box_t3))
-                                                push!(block_bytes, Opcode.GC_PREFIX)
-                                                push!(block_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                                struct_new!(bb, _box_t3, WasmValType[])
+                                                extern_convert_any!(bb)
                                             else
-                                                append!(block_bytes, _pvb3)
+                                                emit_raw!(bb, _pvb3; pushes=WasmValType[ExternRef])
                                             end
-                                            push!(block_bytes, Opcode.LOCAL_SET)
-                                            append!(block_bytes, encode_leb128_unsigned(local_idx))
+                                            local_set!(bb, local_idx)
                                             break
                                         end
                                     end
                                     # Type mismatch: emit type-safe default
-                                    append!(block_bytes, emit_phi_type_default(phi_local_type))
-                                    push!(block_bytes, Opcode.LOCAL_SET)
-                                    append!(block_bytes, encode_leb128_unsigned(local_idx))
+                                    emit_raw!(bb, emit_phi_type_default(phi_local_type); pushes=WasmValType[phi_local_type])
+                                    local_set!(bb, local_idx)
                                     break
                                 end
                                 phi_value_bytes = compile_phi_value(val, i)
@@ -1723,10 +1442,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                         got_local_idx = 0
                                         shift = 0
                                         for bi in 2:length(phi_value_bytes)
-                                            b = phi_value_bytes[bi]
-                                            got_local_idx |= (Int(b & 0x7f) << shift)
+                                            byt = phi_value_bytes[bi]
+                                            got_local_idx |= (Int(byt & 0x7f) << shift)
                                             shift += 7
-                                            if (b & 0x80) == 0
+                                            if (byt & 0x80) == 0
                                                 break
                                             end
                                         end
@@ -1741,43 +1460,41 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                     end
 
                                     if _already_boxed3
-                                        append!(block_bytes, phi_value_bytes)
+                                        emit_raw!(bb, phi_value_bytes; pushes=WasmValType[ExternRef])
                                     elseif actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type) && !(phi_local_type === I64 && actual_val_type === I32) && !(phi_local_type === F64 && (actual_val_type === I64 || actual_val_type === I32 || actual_val_type === F32)) && !(phi_local_type === F32 && (actual_val_type === I64 || actual_val_type === I32))
                                         # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef:
                                         # wrap with extern_convert_any instead of null default
                                         if phi_local_type === ExternRef && (actual_val_type isa ConcreteRef || actual_val_type === StructRef || actual_val_type === ArrayRef || actual_val_type === AnyRef)
-                                            append!(block_bytes, phi_value_bytes)
+                                            emit_raw!(bb, phi_value_bytes; pushes=WasmValType[actual_val_type])
                                             # PURE-803: ref.null extern is already externref — don't wrap with extern_convert_any
                                             _is_ref_null3 = length(phi_value_bytes) >= 1 && phi_value_bytes[1] == Opcode.REF_NULL
                                             if !_is_ref_null3
-                                                push!(block_bytes, Opcode.GC_PREFIX)
-                                                push!(block_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                                extern_convert_any!(bb)
                                             end
                                         else
-                                            append!(block_bytes, emit_phi_type_default(phi_local_type))
+                                            emit_raw!(bb, emit_phi_type_default(phi_local_type); pushes=WasmValType[phi_local_type])
                                         end
                                     elseif actual_val_type !== nothing && phi_local_type === I64 && actual_val_type === I32
-                                        append!(block_bytes, phi_value_bytes)
+                                        emit_raw!(bb, phi_value_bytes; pushes=WasmValType[actual_val_type])
                                         if isempty(phi_value_bytes) || phi_value_bytes[1] != Opcode.I64_CONST
-                                            push!(block_bytes, Opcode.I64_EXTEND_I32_S)
+                                            num!(bb, Opcode.I64_EXTEND_I32_S)
                                         end
                                     elseif actual_val_type !== nothing && phi_local_type === F64 && actual_val_type === I64
-                                        append!(block_bytes, phi_value_bytes)
-                                        push!(block_bytes, Opcode.F64_CONVERT_I64_S)
+                                        emit_raw!(bb, phi_value_bytes; pushes=WasmValType[actual_val_type])
+                                        num!(bb, Opcode.F64_CONVERT_I64_S)
                                     elseif actual_val_type !== nothing && phi_local_type === F64 && actual_val_type === I32
-                                        append!(block_bytes, phi_value_bytes)
-                                        push!(block_bytes, Opcode.F64_CONVERT_I32_S)
+                                        emit_raw!(bb, phi_value_bytes; pushes=WasmValType[actual_val_type])
+                                        num!(bb, Opcode.F64_CONVERT_I32_S)
                                     elseif actual_val_type !== nothing && phi_local_type === F64 && actual_val_type === F32
-                                        append!(block_bytes, phi_value_bytes)
-                                        push!(block_bytes, Opcode.F64_PROMOTE_F32)
+                                        emit_raw!(bb, phi_value_bytes; pushes=WasmValType[actual_val_type])
+                                        num!(bb, Opcode.F64_PROMOTE_F32)
                                     elseif actual_val_type !== nothing && phi_local_type === F32 && (actual_val_type === I64 || actual_val_type === I32)
-                                        append!(block_bytes, phi_value_bytes)
-                                        push!(block_bytes, actual_val_type === I64 ? Opcode.F32_CONVERT_I64_S : Opcode.F32_CONVERT_I32_S)
+                                        emit_raw!(bb, phi_value_bytes; pushes=WasmValType[actual_val_type])
+                                        num!(bb, actual_val_type === I64 ? Opcode.F32_CONVERT_I64_S : Opcode.F32_CONVERT_I32_S)
                                     else
-                                        append!(block_bytes, phi_value_bytes)
+                                        emit_raw!(bb, phi_value_bytes; pushes=(actual_val_type === nothing ? WasmValType[] : WasmValType[actual_val_type]))
                                     end
-                                    push!(block_bytes, Opcode.LOCAL_SET)
-                                    append!(block_bytes, encode_leb128_unsigned(local_idx))
+                                    local_set!(bb, local_idx)
                                 end
                             end
                             break
@@ -1790,12 +1507,12 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
 
             else
                 stmt_bytes = compile_statement(stmt, i, ctx)
-                append!(block_bytes, stmt_bytes)
+                emit_raw!(bb, stmt_bytes)
 
                 # DEBUG: trace DROP emissions
                 _dbg_fn = try string(ctx.func_name) catch; "" end
                 if contains(_dbg_fn, "test_if_call")
-                    _drop_count = count(b -> b == 0x1a, stmt_bytes)
+                    _drop_count = count(byt -> byt == 0x1a, stmt_bytes)
                     if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
                         @warn "STACKIFIED-DROP stmt=$i head=$(stmt.head) drops_in_stmt_bytes=$(_drop_count) stmt_bytes_len=$(length(stmt_bytes)) last2=$(length(stmt_bytes) >= 2 ? (stmt_bytes[end-1], stmt_bytes[end]) : ()) has_ssa=$(haskey(ctx.ssa_locals, i))" maxlog=20
                     end
@@ -1821,7 +1538,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                             if !haskey(ctx.phi_locals, i)
                                 use_count = get(ssa_use_count, i, 0)
                                 if use_count == 0
-                                    push!(block_bytes, Opcode.DROP)
+                                    drop!(bb)
                                     @debug "STACKIFIED-DROP ADDED extra drop for stmt=$i"
                                 end
                             end
@@ -1832,13 +1549,13 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         # the value via compile_phi_value, so this stack value is orphaned).
                         non_phi_uses = get(ssa_non_phi_uses, i, 0)
                         if non_phi_uses == 0
-                            push!(block_bytes, Opcode.DROP)
+                            drop!(bb)
                         end
                     end
                 end
             end
         end
-        append!(bytes, block_bytes)
+        emit_raw!(b, builder_code(bb))
 
         # Handle the terminator
         term = block.terminator
@@ -1850,8 +1567,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             dest_block = get(stmt_to_block, term.dest, nothing)
             if dest_block !== nothing && dest_block > block_idx && dest_block in non_trivial_targets
                 label_depth = get_forward_label_depth(dest_block)
-                push!(bytes, Opcode.BR)
-                append!(bytes, encode_leb128_unsigned(label_depth))
+                br!(b, label_depth)
             end
             # Otherwise, it's just a fall-through to a live block - nothing needed
 
@@ -1871,15 +1587,14 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
                 if is_numeric_val && is_ref_ret
                     if func_ret_wasm === ExternRef
-                        emit_numeric_to_externref!(bytes, term.val, val_wasm_type, ctx)
+                        _eb = UInt8[]; emit_numeric_to_externref!(_eb, term.val, val_wasm_type, ctx)
+                        emit_raw!(b, _eb; pushes=WasmValType[ExternRef])
                     elseif func_ret_wasm isa ConcreteRef
-                        push!(bytes, Opcode.REF_NULL)
-                        append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                        ref_null!(b, Int64(func_ret_wasm.type_idx), ConcreteRef(UInt32(func_ret_wasm.type_idx), true))
                     else
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(func_ret_wasm))
+                        ref_null!(b, func_ret_wasm)
                     end
-                    push!(bytes, Opcode.RETURN)
+                    return_!(b)
                 # PURE-6024: Use func_ret_wasm (actual WASM function signature type) for
                 # return type compatibility, not ret_wasm_type (julia_to_wasm_type_concrete).
                 # These disagree for Union types like Union{Int128, Int64, BigInt} where
@@ -1887,19 +1602,19 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # The phi local is correctly overridden to I64 (line 5196), so the value
                 # on the stack IS I64, but checking against ConcreteRef incorrectly fails.
                 elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
-                    push!(bytes, Opcode.UNREACHABLE)
+                    unreachable!(b)
                 else
                     val_bytes = compile_value(term.val, ctx)
-                    append!(bytes, val_bytes)
+                    emit_raw!(b, val_bytes; pushes=(val_wasm_type === nothing ? WasmValType[] : WasmValType[val_wasm_type]))
                     if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
                         is_externref_local = false
                         if length(val_bytes) >= 2 && val_bytes[1] == 0x20
                             src_idx = 0; shift = 0; leb_end = 0
                             for bi in 2:length(val_bytes)
-                                b = val_bytes[bi]
-                                src_idx |= (Int(b & 0x7f) << shift)
+                                byt = val_bytes[bi]
+                                src_idx |= (Int(byt & 0x7f) << shift)
                                 shift += 7
-                                if (b & 0x80) == 0
+                                if (byt & 0x80) == 0
                                     leb_end = bi
                                     break
                                 end
@@ -1920,35 +1635,30 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                             end
                         end
                         if !is_externref_local
-                            push!(bytes, Opcode.GC_PREFIX)
-                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                            extern_convert_any!(b)
                         end
                     elseif val_wasm_type === I32 && func_ret_wasm === I64
-                        push!(bytes, Opcode.I64_EXTEND_I32_S)
+                        num!(b, Opcode.I64_EXTEND_I32_S)
                     elseif val_wasm_type === I64 && func_ret_wasm === F64
-                        push!(bytes, Opcode.F64_CONVERT_I64_S)
+                        num!(b, Opcode.F64_CONVERT_I64_S)
                     elseif val_wasm_type === I32 && func_ret_wasm === F64
-                        push!(bytes, Opcode.F64_CONVERT_I32_S)
+                        num!(b, Opcode.F64_CONVERT_I32_S)
                     elseif val_wasm_type === F32 && func_ret_wasm === F64
-                        push!(bytes, Opcode.F64_PROMOTE_F32)
+                        num!(b, Opcode.F64_PROMOTE_F32)
                     elseif val_wasm_type === I64 && func_ret_wasm === F32
-                        push!(bytes, Opcode.F32_CONVERT_I64_S)
+                        num!(b, Opcode.F32_CONVERT_I64_S)
                     elseif val_wasm_type === I32 && func_ret_wasm === F32
-                        push!(bytes, Opcode.F32_CONVERT_I32_S)
+                        num!(b, Opcode.F32_CONVERT_I32_S)
                     # WBUILD-4000: Cast EqRef/StructRef to ConcreteRef for return
                     elseif (val_wasm_type === EqRef || val_wasm_type === StructRef || val_wasm_type === AnyRef) && func_ret_wasm isa ConcreteRef
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.REF_CAST_NULL)
-                        append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                        ref_cast!(b, Int64(func_ret_wasm.type_idx), true)
                     elseif val_wasm_type isa ConcreteRef && func_ret_wasm isa ConcreteRef && val_wasm_type != func_ret_wasm
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.REF_CAST_NULL)
-                        append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                        ref_cast!(b, Int64(func_ret_wasm.type_idx), true)
                     end
-                    push!(bytes, Opcode.RETURN)
+                    return_!(b)
                 end
             else
-                push!(bytes, Opcode.RETURN)
+                return_!(b)
             end
 
         elseif term isa Core.GotoIfNot
@@ -1963,12 +1673,12 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             has_phi = dest_block !== nothing && dest_has_phi_from_edge(dest_block, terminator_idx)
 
             if _debug_stackified
-                @warn "  GIN blk=$block_idx term_idx=$terminator_idx dest=$(term.dest) dest_block=$dest_block has_phi=$has_phi nontrivial=$(dest_block in non_trivial_targets) bytes=$(length(bytes))"
+                @warn "  GIN blk=$block_idx term_idx=$terminator_idx dest=$(term.dest) dest_block=$dest_block has_phi=$has_phi nontrivial=$(dest_block in non_trivial_targets) bytes=$(_byte_len(b))"
             end
 
             # Compile condition
             cond_bytes = compile_condition_to_i32(term.cond, ctx)
-            append!(bytes, cond_bytes)
+            emit_raw!(b, cond_bytes; pushes=WasmValType[I32])
 
             # If condition is TRUE, fall through to next block
             # If condition is FALSE, jump to dest
@@ -1978,67 +1688,58 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 if dest_block in non_trivial_targets
                     if has_phi
                         # Need to set phi values before jumping - use if/else
-                        push!(bytes, Opcode.IF)
-                        push!(bytes, 0x40)  # void
+                        if_!(b)  # void
                         # Then branch: condition true, fall through (empty)
-                        push!(bytes, Opcode.ELSE)
+                        else_!(b)
                         # Else branch: condition false, set all phi locals and jump
-                        set_phi_locals_for_edge!(bytes, dest_block, terminator_idx; target_stmt=term.dest)
+                        set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.dest)
                         # Jump to destination (account for the if block we're inside)
                         label_depth = get_forward_label_depth(dest_block) + 1
-                        push!(bytes, Opcode.BR)
-                        append!(bytes, encode_leb128_unsigned(label_depth))
-                        push!(bytes, Opcode.END)
+                        br!(b, label_depth)
+                        end_block!(b)
                     else
                         # No phi - use br_if
                         label_depth = get_forward_label_depth(dest_block)
-                        push!(bytes, Opcode.I32_EQZ)  # Invert the condition
-                        push!(bytes, Opcode.BR_IF)
-                        append!(bytes, encode_leb128_unsigned(label_depth))
+                        num!(b, Opcode.I32_EQZ)  # Invert the condition
+                        br_if!(b, label_depth)
                     end
                 else
                     # Simple fall-through pattern - condition true continues, false skips
                     if has_phi
-                        push!(bytes, Opcode.IF)
-                        push!(bytes, 0x40)
-                        push!(bytes, Opcode.ELSE)
-                        set_phi_locals_for_edge!(bytes, dest_block, terminator_idx; target_stmt=term.dest)
-                        push!(bytes, Opcode.END)
+                        if_!(b)
+                        else_!(b)
+                        set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.dest)
+                        end_block!(b)
                     else
-                        push!(bytes, Opcode.IF)
-                        push!(bytes, 0x40)
-                        push!(bytes, Opcode.END)
+                        if_!(b)
+                        end_block!(b)
                     end
                 end
             elseif dest_block !== nothing && dest_block <= block_idx
                 # Back edge (loop continuation condition)
                 if dest_block in loop_headers
                     if has_phi
-                        push!(bytes, Opcode.IF)
-                        push!(bytes, 0x40)
-                        push!(bytes, Opcode.ELSE)
-                        set_phi_locals_for_edge!(bytes, dest_block, terminator_idx; target_stmt=term.dest)
+                        if_!(b)
+                        else_!(b)
+                        set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.dest)
                         label_depth = get_loop_label_depth(dest_block) + 1
-                        push!(bytes, Opcode.BR)
-                        append!(bytes, encode_leb128_unsigned(label_depth))
-                        push!(bytes, Opcode.END)
+                        br!(b, label_depth)
+                        end_block!(b)
                     else
                         label_depth = get_loop_label_depth(dest_block)
-                        push!(bytes, Opcode.I32_EQZ)
-                        push!(bytes, Opcode.BR_IF)
-                        append!(bytes, encode_leb128_unsigned(label_depth))
+                        num!(b, Opcode.I32_EQZ)
+                        br_if!(b, label_depth)
                     end
                 end
             elseif dest_block === nothing && needs_exit_block && term.dest > _subset_end
                 # P2-batch23: dest is beyond the compiled subset — branch to the
                 # exit block (the caller's continuation begins right after it).
-                push!(bytes, Opcode.I32_EQZ)
-                push!(bytes, Opcode.BR_IF)
-                append!(bytes, encode_leb128_unsigned(_exit_depth()))
+                num!(b, Opcode.I32_EQZ)
+                br_if!(b, _exit_depth())
             elseif dest_block === nothing
                 # Unresolvable dest: drop the compiled condition rather than
                 # orphaning it on the operand stack.
-                push!(bytes, Opcode.DROP)
+                drop!(b)
             end
 
             # PURE-314: GotoIfNot fall-through phi locals
@@ -2050,7 +1751,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             if next_fall_block <= length(blocks)
                 fall_has_phi = dest_has_phi_from_edge(next_fall_block, terminator_idx)
                 if fall_has_phi
-                    set_phi_locals_for_edge!(bytes, next_fall_block, terminator_idx)
+                    set_phi_locals_for_edge!(b, next_fall_block, terminator_idx)
                 end
             end
 
@@ -2067,7 +1768,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             # Set all phi values before jumping
             # Pass the actual target statement to find phi nodes (might be inside the block)
             if dest_block !== nothing
-                set_phi_locals_for_edge!(bytes, dest_block, terminator_idx; target_stmt=term.label)
+                set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.label)
             end
 
             if dest_block !== nothing && dest_block > block_idx
@@ -2107,12 +1808,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                             end
                         end
                         if ret_local !== nothing
-                            push!(bytes, Opcode.LOCAL_GET)
-                            append!(bytes, encode_leb128_unsigned(ret_local))
+                            local_get!(b, ret_local)
                             if func_ret_wasm isa ConcreteRef
-                                push!(bytes, Opcode.GC_PREFIX)
-                                push!(bytes, Opcode.REF_CAST_NULL)
-                                append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                                ref_cast!(b, Int64(func_ret_wasm.type_idx), true)
                             else
                                 # P2-batch24 (gap dc4aaea42654): the local can be
                                 # narrower than the function result (Int32 return
@@ -2123,23 +1821,21 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 _rl_wasm = _rl_arr >= 1 && _rl_arr <= length(ctx.locals) ?
                                            ctx.locals[_rl_arr] : nothing
                                 if _rl_wasm === I32 && func_ret_wasm === I64
-                                    push!(bytes, Opcode.I64_EXTEND_I32_S)
+                                    num!(b, Opcode.I64_EXTEND_I32_S)
                                 elseif _rl_wasm === I64 && func_ret_wasm === F64
-                                    push!(bytes, Opcode.F64_CONVERT_I64_S)
+                                    num!(b, Opcode.F64_CONVERT_I64_S)
                                 elseif _rl_wasm === I32 && func_ret_wasm === F64
-                                    push!(bytes, Opcode.F64_CONVERT_I32_S)
+                                    num!(b, Opcode.F64_CONVERT_I32_S)
                                 elseif _rl_wasm === F32 && func_ret_wasm === F64
-                                    push!(bytes, Opcode.F64_PROMOTE_F32)
+                                    num!(b, Opcode.F64_PROMOTE_F32)
                                 end
                             end
-                            push!(bytes, Opcode.RETURN)
+                            return_!(b)
                         else
-                            push!(bytes, Opcode.BR)
-                            append!(bytes, encode_leb128_unsigned(label_depth))
+                            br!(b, label_depth)
                         end
                     else
-                        push!(bytes, Opcode.BR)
-                        append!(bytes, encode_leb128_unsigned(label_depth))
+                        br!(b, label_depth)
                     end
                 end
                 # Otherwise, simple fall through - implicit
@@ -2147,14 +1843,12 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # Back edge (loop)
                 if dest_block in loop_headers
                     label_depth = get_loop_label_depth(dest_block)
-                    push!(bytes, Opcode.BR)
-                    append!(bytes, encode_leb128_unsigned(label_depth))
+                    br!(b, label_depth)
                 end
             elseif dest_block === nothing && needs_exit_block && term.label > _subset_end
                 # P2-batch23: unconditional jump beyond the compiled subset —
                 # branch to the exit block (the caller's continuation).
-                push!(bytes, Opcode.BR)
-                append!(bytes, encode_leb128_unsigned(_exit_depth()))
+                br!(b, _exit_depth())
             end
         else
             # No explicit terminator (GotoNode, GotoIfNot, ReturnNode)
@@ -2164,7 +1858,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             if next_block_idx <= length(blocks)
                 # The edge for fallthrough is the last statement of this block
                 terminator_idx = block.end_idx
-                set_phi_locals_for_edge!(bytes, next_block_idx, terminator_idx)
+                set_phi_locals_for_edge!(b, next_block_idx, terminator_idx)
             end
         end
 
@@ -2176,11 +1870,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     for target in loop_inner_targets[dst]
                         if target in open_blocks
                             filter!(t -> t != target, open_blocks)
-                            push!(bytes, Opcode.END)  # End inner target block
+                            end_block!(b)  # End inner target block
                         end
                     end
                 end
-                push!(bytes, Opcode.END)  # End of loop
+                end_block!(b)  # End of loop
                 # Remove from open_loops
                 filter!(h -> h != dst, open_loops)
             end
@@ -2190,7 +1884,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # Close any remaining open blocks
     while !isempty(open_blocks)
         pop!(open_blocks)
-        push!(bytes, Opcode.END)
+        end_block!(b)
     end
 
     # WBUILD-3001: After all blocks close, control may reach here when a `br`
@@ -2200,12 +1894,12 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # to ensure br to the outermost block uses `return` instead of `br`.
     # P2-batch19: callers compiling a FALL-THROUGH region (the pre-branch code
     # of an exit-branch try/catch) opt out — for them this guard is live code.
-    trailing_unreachable && push!(bytes, Opcode.UNREACHABLE)
+    trailing_unreachable && unreachable!(b)
 
     # P2-batch23: close the subset exit block — out-of-subset branches land
     # here, i.e. exactly at the caller's continuation.
-    needs_exit_block && push!(bytes, Opcode.END)
+    needs_exit_block && end_block!(b)
 
-    return bytes
+    return builder_code(b)
 end
 

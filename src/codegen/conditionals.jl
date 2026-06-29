@@ -4,7 +4,7 @@ Compiles each basic block exactly once using structured control flow.
 This is a simpler approach than full Stackifier, suitable for moderate complexity.
 """
 function generate_linear_flow(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code, conditionals)::Vector{UInt8}
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="generate_linear_flow", strict=false)
     result_type = julia_to_wasm_type_concrete(ctx.return_type, ctx)
 
     # Count SSA uses for drop logic
@@ -29,7 +29,7 @@ function generate_linear_flow(ctx::AbstractCompilationContext, blocks::Vector{Ba
 
     # Helper to compile a range of statements
     function compile_range(start_idx::Int, end_idx::Int)::Vector{UInt8}
-        range_bytes = UInt8[]
+        rb = InstrBuilder(; func_name="generate_linear_flow.compile_range", strict=false)
 
         for i in start_idx:min(end_idx, length(code))
             if i in compiled
@@ -49,75 +49,71 @@ function generate_linear_flow(ctx::AbstractCompilationContext, blocks::Vector{Ba
                     is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
                     if is_numeric_val && is_ref_ret
                         if func_ret_wasm === ExternRef
-                            emit_numeric_to_externref!(range_bytes, stmt.val, val_wasm_type, ctx)
+                            nb = UInt8[]; emit_numeric_to_externref!(nb, stmt.val, val_wasm_type, ctx); emit_raw!(rb, nb; pushes=WasmValType[ExternRef])
                         elseif func_ret_wasm isa ConcreteRef
-                            push!(range_bytes, Opcode.REF_NULL)
-                            append!(range_bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                            ref_null!(rb, Int64(func_ret_wasm.type_idx), ConcreteRef(UInt32(func_ret_wasm.type_idx), true))
                         else
-                            push!(range_bytes, Opcode.REF_NULL)
-                            push!(range_bytes, UInt8(func_ret_wasm))
+                            ref_null!(rb, func_ret_wasm)
                         end
-                        push!(range_bytes, Opcode.RETURN)
+                        return_!(rb)
                     elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
-                        push!(range_bytes, Opcode.UNREACHABLE)
+                        unreachable!(rb)
                     else
-                        append!(range_bytes, compile_value(stmt.val, ctx))
+                        emit_raw!(rb, compile_value(stmt.val, ctx); pushes=(val_wasm_type === nothing ? WasmValType[] : WasmValType[val_wasm_type]))
                         if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
-                            push!(range_bytes, Opcode.GC_PREFIX)
-                            push!(range_bytes, Opcode.EXTERN_CONVERT_ANY)
+                            extern_convert_any!(rb)
                         elseif val_wasm_type === I32 && func_ret_wasm === I64
-                            push!(range_bytes, Opcode.I64_EXTEND_I32_S)
+                            num!(rb, Opcode.I64_EXTEND_I32_S)
                         elseif val_wasm_type === I64 && func_ret_wasm === F64
-                            push!(range_bytes, Opcode.F64_CONVERT_I64_S)
+                            num!(rb, Opcode.F64_CONVERT_I64_S)
                         elseif val_wasm_type === I32 && func_ret_wasm === F64
-                            push!(range_bytes, Opcode.F64_CONVERT_I32_S)
+                            num!(rb, Opcode.F64_CONVERT_I32_S)
                         elseif val_wasm_type === F32 && func_ret_wasm === F64
-                            push!(range_bytes, Opcode.F64_PROMOTE_F32)
+                            num!(rb, Opcode.F64_PROMOTE_F32)
                         elseif val_wasm_type === I64 && func_ret_wasm === F32
-                            push!(range_bytes, Opcode.F32_CONVERT_I64_S)
+                            num!(rb, Opcode.F32_CONVERT_I64_S)
                         elseif val_wasm_type === I32 && func_ret_wasm === F32
-                            push!(range_bytes, Opcode.F32_CONVERT_I32_S)
+                            num!(rb, Opcode.F32_CONVERT_I32_S)
                         end
-                        push!(range_bytes, Opcode.RETURN)
+                        return_!(rb)
                     end
                 else
-                    push!(range_bytes, Opcode.RETURN)
+                    return_!(rb)
                 end
-                return range_bytes  # Return immediately
+                return builder_code(rb)  # Return immediately
 
             elseif stmt isa Core.GotoIfNot
                 push!(compiled, i)
                 # Compile condition
-                append!(range_bytes, compile_condition_to_i32(stmt.cond, ctx))
+                emit_raw!(rb, compile_condition_to_i32(stmt.cond, ctx); pushes=WasmValType[I32])
 
                 # Check if then branch has a return
                 then_end = stmt.dest - 1
                 then_has_return = any(code[j] isa Core.ReturnNode for j in (i+1):min(then_end, length(code)))
 
                 # Create if/else for the branch
-                push!(range_bytes, Opcode.IF)
-                push!(range_bytes, 0x40)  # void
+                if_!(rb)  # void
 
                 # Then branch: condition true, continue to next line
-                append!(range_bytes, compile_range(i + 1, then_end))
+                emit_raw!(rb, compile_range(i + 1, then_end))
 
-                push!(range_bytes, Opcode.ELSE)
+                else_!(rb)
 
                 # Else branch: condition false, jump to dest
                 # If then branch returns, else branch handles the rest
                 # Otherwise, both branches should reach the merge point
                 if then_has_return
                     # Else branch handles all remaining code
-                    append!(range_bytes, compile_range(stmt.dest, end_idx))
+                    emit_raw!(rb, compile_range(stmt.dest, end_idx))
                 else
                     # Both branches continue to merge point
                     # Else is empty (code at dest will be compiled after END)
                 end
 
-                push!(range_bytes, Opcode.END)
+                end_block!(rb)
 
                 if then_has_return
-                    return range_bytes  # Else already handled the rest
+                    return builder_code(rb)  # Else already handled the rest
                 end
                 # Otherwise continue - code at merge point follows
 
@@ -136,7 +132,7 @@ function generate_linear_flow(ctx::AbstractCompilationContext, blocks::Vector{Ba
             else
                 push!(compiled, i)
                 stmt_bytes = compile_statement(stmt, i, ctx)
-                append!(range_bytes, stmt_bytes)
+                emit_raw!(rb, stmt_bytes)
 
                 # PURE-6024: Skip remaining statements after unreachable.
                 # P4-stdlib (Statistics median on 1.13, e1cc class): the rest
@@ -158,7 +154,7 @@ function generate_linear_flow(ctx::AbstractCompilationContext, blocks::Vector{Ba
                             _rw_resume = _rw_d
                         end
                     end
-                    _rw_resume == 0 && return range_bytes
+                    _rw_resume == 0 && return builder_code(rb)
                     for _rw_j in (i+1):(_rw_resume-1)
                         push!(compiled, _rw_j)
                     end
@@ -175,7 +171,7 @@ function generate_linear_flow(ctx::AbstractCompilationContext, blocks::Vector{Ba
                             if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                                 use_count = get(ssa_use_count, i, 0)
                                 if use_count == 0
-                                    push!(range_bytes, Opcode.DROP)
+                                    drop!(rb)
                                 end
                             end
                         end
@@ -184,16 +180,16 @@ function generate_linear_flow(ctx::AbstractCompilationContext, blocks::Vector{Ba
             end
         end
 
-        return range_bytes
+        return builder_code(rb)
     end
 
     # Compile all code starting from line 1
-    append!(bytes, compile_range(1, length(code)))
+    emit_raw!(b, compile_range(1, length(code)))
 
     # The code should always end with a return, but add unreachable as safety
-    push!(bytes, Opcode.UNREACHABLE)
+    unreachable!(b)
 
-    return bytes
+    return builder_code(b)
 end
 
 """
@@ -201,7 +197,7 @@ Generate code for void functions (no return value).
 Compiles all statements sequentially, using structured control flow for conditionals.
 """
 function generate_void_flow(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="generate_void_flow", strict=false)
 
     # Track which statements we've already compiled
     compiled = Set{Int}()
@@ -237,33 +233,28 @@ function generate_void_flow(ctx::AbstractCompilationContext, blocks::Vector{Basi
                 is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
 
                 if func_ret_wasm === ExternRef && is_numeric_val
-                    emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
+                    nb = UInt8[]; emit_numeric_to_externref!(nb, stmt.val, val_wasm, ctx); emit_raw!(b, nb; pushes=WasmValType[ExternRef])
                 elseif func_ret_wasm isa ConcreteRef && is_numeric_val
                     # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
-                    push!(bytes, Opcode.REF_NULL)
-                    append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                    ref_null!(b, Int64(func_ret_wasm.type_idx), ConcreteRef(UInt32(func_ret_wasm.type_idx), true))
                 elseif func_ret_wasm === AnyRef && is_numeric_val
                     # PURE-9030: Box numeric value for AnyRef return
                     local _ret_box_c1 = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-                    emit_box_type_id!(bytes, ctx.type_registry, val_wasm)
-                    append!(bytes, compile_value(stmt.val, ctx))
-                    push!(bytes, Opcode.GC_PREFIX)
-                    push!(bytes, Opcode.STRUCT_NEW)
-                    append!(bytes, encode_leb128_unsigned(_ret_box_c1))
+                    tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, val_wasm); emit_raw!(b, tb; pushes=WasmValType[I32])
+                    emit_raw!(b, compile_value(stmt.val, ctx); pushes=(val_wasm === nothing ? WasmValType[] : WasmValType[val_wasm]))
+                    struct_new!(b, _ret_box_c1, WasmValType[])
                 elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                     # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
-                    push!(bytes, Opcode.REF_NULL)
-                    push!(bytes, UInt8(func_ret_wasm))
+                    ref_null!(b, func_ret_wasm)
                 else
-                    append!(bytes, compile_value(stmt.val, ctx))
+                    emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm === nothing ? AnyRef : val_wasm])
                     # If function returns externref but value is a concrete ref, convert
                     if func_ret_wasm === ExternRef && val_wasm !== ExternRef
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        extern_convert_any!(b)
                     end
                 end
             end
-            push!(bytes, Opcode.RETURN)
+            return_!(b)
             push!(compiled, i)
             i += 1
             continue
@@ -306,12 +297,11 @@ function generate_void_flow(ctx::AbstractCompilationContext, blocks::Vector{Basi
             end
 
             # Push condition
-            append!(bytes, compile_condition_to_i32(goto_if_not.cond, ctx))
+            emit_raw!(b, compile_condition_to_i32(goto_if_not.cond, ctx); pushes=WasmValType[I32])
             push!(compiled, i)
 
             # Start void if block
-            push!(bytes, Opcode.IF)
-            push!(bytes, 0x40)
+            if_!(b)
 
             # Compile then-branch (i+1 to else_target-1)
             for j in (i+1):(else_target-1)
@@ -332,19 +322,18 @@ function generate_void_flow(ctx::AbstractCompilationContext, blocks::Vector{Basi
                         is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
 
                         if func_ret_wasm === ExternRef && is_numeric_val
-                            emit_numeric_to_externref!(bytes, inner.val, val_wasm, ctx)
+                            nb = UInt8[]; emit_numeric_to_externref!(nb, inner.val, val_wasm, ctx); emit_raw!(b, nb; pushes=WasmValType[ExternRef])
                         else
-                            append!(bytes, compile_value(inner.val, ctx))
+                            emit_raw!(b, compile_value(inner.val, ctx); pushes=WasmValType[val_wasm === nothing ? AnyRef : val_wasm])
                             if func_ret_wasm === ExternRef && val_wasm !== ExternRef
-                                push!(bytes, Opcode.GC_PREFIX)
-                                push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                extern_convert_any!(b)
                             end
                         end
                     end
                     # BUT: If the return type is Union{} (unreachable), don't emit RETURN
                     stmt_type = get(ctx.ssa_types, j, Any)
                     if stmt_type !== Union{}
-                        push!(bytes, Opcode.RETURN)
+                        return_!(b)
                     end
                     push!(compiled, j)
                 elseif inner isa Core.GotoIfNot
@@ -367,10 +356,10 @@ function generate_void_flow(ctx::AbstractCompilationContext, blocks::Vector{Basi
 
                     if phi_idx_for_ternary !== nothing && haskey(ctx.phi_locals, phi_idx_for_ternary)
                         # This is a ternary pattern - use compile_ternary_for_phi
-                        append!(bytes, compile_ternary_for_phi(ctx, code, j, compiled))
+                        emit_raw!(b, compile_ternary_for_phi(ctx, code, j, compiled))
                     else
                         # Regular nested conditional in void context (from && operator)
-                        append!(bytes, compile_void_nested_conditional(ctx, code, j, compiled, ssa_use_count))
+                        emit_raw!(b, compile_void_nested_conditional(ctx, code, j, compiled, ssa_use_count))
                     end
                 elseif inner isa Core.PhiNode
                     # Phi already handled by compile_ternary_for_phi if it was part of a ternary
@@ -378,7 +367,7 @@ function generate_void_flow(ctx::AbstractCompilationContext, blocks::Vector{Basi
                     push!(compiled, j)
                 else
                     compiled_bytes = compile_statement(inner, j, ctx)
-                    append!(bytes, compiled_bytes)
+                    emit_raw!(b, compiled_bytes)
                     push!(compiled, j)
 
                     # Check if this statement produces Union{} (never returns, e.g., throw)
@@ -412,14 +401,14 @@ function generate_void_flow(ctx::AbstractCompilationContext, blocks::Vector{Basi
                             # Signal setters push a return value that won't be used
                             # THERAPY-2401: Skip DROP if compile_statement already stored
                             # the value to an ssa_local via LOCAL_SET (which consumed the stack value)
-                            push!(bytes, Opcode.DROP)
+                            drop!(b)
                         elseif !already_has_drop
                             # For other calls, check if statement produces a value and use count
                             if statement_produces_wasm_value(inner, j, ctx)
                                 if !haskey(ctx.ssa_locals, j) && !haskey(ctx.phi_locals, j)
                                     use_count = get(ssa_use_count, j, 0)
                                     if use_count == 0
-                                        push!(bytes, Opcode.DROP)
+                                        drop!(b)
                                     end
                                 end
                             end
@@ -430,7 +419,7 @@ function generate_void_flow(ctx::AbstractCompilationContext, blocks::Vector{Basi
 
             if has_else_branch
                 # Else branch - only emit when there's actual else code
-                push!(bytes, Opcode.ELSE)
+                else_!(b)
 
                 # Find where the else branch ends (the merge point from the GotoNode)
                 else_end = length(code)
@@ -462,16 +451,15 @@ function generate_void_flow(ctx::AbstractCompilationContext, blocks::Vector{Basi
                                 is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
 
                                 if func_ret_wasm === ExternRef && is_numeric_val
-                                    emit_numeric_to_externref!(bytes, inner.val, val_wasm, ctx)
+                                    nb = UInt8[]; emit_numeric_to_externref!(nb, inner.val, val_wasm, ctx); emit_raw!(b, nb; pushes=WasmValType[ExternRef])
                                 else
-                                    append!(bytes, compile_value(inner.val, ctx))
+                                    emit_raw!(b, compile_value(inner.val, ctx); pushes=WasmValType[val_wasm === nothing ? AnyRef : val_wasm])
                                     if func_ret_wasm === ExternRef && val_wasm !== ExternRef
-                                        push!(bytes, Opcode.GC_PREFIX)
-                                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                                        extern_convert_any!(b)
                                     end
                                 end
                             end
-                            push!(bytes, Opcode.RETURN)
+                            return_!(b)
                         end
                         push!(compiled, j)
                     elseif inner isa Core.GotoNode
@@ -493,15 +481,15 @@ function generate_void_flow(ctx::AbstractCompilationContext, blocks::Vector{Basi
                         end
 
                         if phi_idx_for_ternary !== nothing && haskey(ctx.phi_locals, phi_idx_for_ternary)
-                            append!(bytes, compile_ternary_for_phi(ctx, code, j, compiled))
+                            emit_raw!(b, compile_ternary_for_phi(ctx, code, j, compiled))
                         else
-                            append!(bytes, compile_void_nested_conditional(ctx, code, j, compiled, ssa_use_count))
+                            emit_raw!(b, compile_void_nested_conditional(ctx, code, j, compiled, ssa_use_count))
                         end
                     elseif inner isa Core.PhiNode
                         # Phi already handled by compile_ternary_for_phi
                         push!(compiled, j)
                     else
-                        append!(bytes, compile_statement(inner, j, ctx))
+                        emit_raw!(b, compile_statement(inner, j, ctx))
                         push!(compiled, j)
 
                         # Check if this statement produces Union{} (never returns, e.g., throw)
@@ -520,7 +508,7 @@ function generate_void_flow(ctx::AbstractCompilationContext, blocks::Vector{Basi
                                     if !haskey(ctx.ssa_locals, j) && !haskey(ctx.phi_locals, j)
                                         use_count = get(ssa_use_count, j, 0)
                                         if use_count == 0
-                                            push!(bytes, Opcode.DROP)
+                                            drop!(b)
                                         end
                                     end
                                 end
@@ -534,7 +522,7 @@ function generate_void_flow(ctx::AbstractCompilationContext, blocks::Vector{Basi
                     push!(compiled, j)
                 end
 
-                push!(bytes, Opcode.END)
+                end_block!(b)
                 i = else_end + 1
             else
                 # No else branch - just end the if block and continue from else_target
@@ -544,14 +532,14 @@ function generate_void_flow(ctx::AbstractCompilationContext, blocks::Vector{Basi
                     push!(compiled, j)
                 end
 
-                push!(bytes, Opcode.END)
+                end_block!(b)
                 i = else_target
             end
             continue
         end
 
         # Regular statement
-        append!(bytes, compile_statement(stmt, i, ctx))
+        emit_raw!(b, compile_statement(stmt, i, ctx))
         push!(compiled, i)
 
         # Check if this statement produces Union{} (never returns, e.g., throw)
@@ -560,7 +548,7 @@ function generate_void_flow(ctx::AbstractCompilationContext, blocks::Vector{Basi
         if stmt_type === Union{}
             # Don't add more code, just return what we have
             # The function ends with unreachable code path
-            return bytes
+            return builder_code(b)
         end
 
         # Drop unused values from statements that produce values
@@ -572,7 +560,7 @@ function generate_void_flow(ctx::AbstractCompilationContext, blocks::Vector{Basi
                     if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                         use_count = get(ssa_use_count, i, 0)
                         if use_count == 0
-                            push!(bytes, Opcode.DROP)
+                            drop!(b)
                         end
                     end
                 end
@@ -584,7 +572,7 @@ function generate_void_flow(ctx::AbstractCompilationContext, blocks::Vector{Basi
                 if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                     use_count = get(ssa_use_count, i, 0)
                     if use_count == 0
-                        push!(bytes, Opcode.DROP)
+                        drop!(b)
                     end
                 end
             end
@@ -594,9 +582,9 @@ function generate_void_flow(ctx::AbstractCompilationContext, blocks::Vector{Basi
     end
 
     # Final return (in case we didn't hit one)
-    push!(bytes, Opcode.RETURN)
+    return_!(b)
 
-    return bytes
+    return builder_code(b)
 end
 
 """
@@ -621,18 +609,17 @@ Compiles to:
   end
 """
 function compile_void_nested_conditional(ctx::AbstractCompilationContext, code, start_idx::Int, compiled::Set{Int}, ssa_use_count::Dict{Int,Int})::Vector{UInt8}
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="compile_void_nested_conditional", strict=false)
 
     goto_if_not = code[start_idx]::Core.GotoIfNot
     end_target = goto_if_not.dest
 
     # Push condition
-    append!(bytes, compile_condition_to_i32(goto_if_not.cond, ctx))
+    emit_raw!(b, compile_condition_to_i32(goto_if_not.cond, ctx); pushes=WasmValType[I32])
     push!(compiled, start_idx)
 
     # Start void if block
-    push!(bytes, Opcode.IF)
-    push!(bytes, 0x40)  # void block type
+    if_!(b)  # void block type
 
     # Process statements in the then-branch (start_idx+1 to end_target-1)
     for j in (start_idx+1):(end_target-1)
@@ -657,16 +644,15 @@ function compile_void_nested_conditional(ctx::AbstractCompilationContext, code, 
                     is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
 
                     if func_ret_wasm === ExternRef && is_numeric_val
-                        emit_numeric_to_externref!(bytes, inner.val, val_wasm, ctx)
+                        nb = UInt8[]; emit_numeric_to_externref!(nb, inner.val, val_wasm, ctx); emit_raw!(b, nb; pushes=WasmValType[ExternRef])
                     else
-                        append!(bytes, compile_value(inner.val, ctx))
+                        emit_raw!(b, compile_value(inner.val, ctx); pushes=WasmValType[val_wasm === nothing ? AnyRef : val_wasm])
                         if func_ret_wasm === ExternRef && val_wasm !== ExternRef
-                            push!(bytes, Opcode.GC_PREFIX)
-                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                            extern_convert_any!(b)
                         end
                     end
                 end
-                push!(bytes, Opcode.RETURN)
+                return_!(b)
             end
             push!(compiled, j)
         elseif inner isa Core.GotoIfNot
@@ -687,17 +673,17 @@ function compile_void_nested_conditional(ctx::AbstractCompilationContext, code, 
 
             if phi_idx_for_ternary !== nothing && haskey(ctx.phi_locals, phi_idx_for_ternary)
                 # This is a ternary pattern - use compile_ternary_for_phi
-                append!(bytes, compile_ternary_for_phi(ctx, code, j, compiled))
+                emit_raw!(b, compile_ternary_for_phi(ctx, code, j, compiled))
             else
                 # RECURSION: Another conditional (from && chain)
-                append!(bytes, compile_void_nested_conditional(ctx, code, j, compiled, ssa_use_count))
+                emit_raw!(b, compile_void_nested_conditional(ctx, code, j, compiled, ssa_use_count))
             end
         elseif inner isa Core.PhiNode
             # Phi already handled by compile_ternary_for_phi if it was part of a ternary
             push!(compiled, j)
         else
             # Regular statement (including setter calls)
-            append!(bytes, compile_statement(inner, j, ctx))
+            emit_raw!(b, compile_statement(inner, j, ctx))
             push!(compiled, j)
 
             # Check if this statement produces Union{} (never returns, e.g., throw)
@@ -720,7 +706,7 @@ function compile_void_nested_conditional(ctx::AbstractCompilationContext, code, 
                 if is_setter_call && !haskey(ctx.ssa_locals, j)
                     # THERAPY-2401: Skip DROP if compile_statement already stored
                     # the value to an ssa_local via LOCAL_SET (which consumed the stack value)
-                    push!(bytes, Opcode.DROP)
+                    drop!(b)
                 else
                     stmt_type = get(ctx.ssa_types, j, Nothing)
                     if stmt_type !== Nothing  # Only skip if type is definitely Nothing
@@ -729,7 +715,7 @@ function compile_void_nested_conditional(ctx::AbstractCompilationContext, code, 
                             if !haskey(ctx.ssa_locals, j) && !haskey(ctx.phi_locals, j)
                                 use_count = get(ssa_use_count, j, 0)
                                 if use_count == 0
-                                    push!(bytes, Opcode.DROP)
+                                    drop!(b)
                                 end
                             end
                         end
@@ -740,9 +726,9 @@ function compile_void_nested_conditional(ctx::AbstractCompilationContext, code, 
     end
 
     # End if block (no else for && pattern - false case just skips)
-    push!(bytes, Opcode.END)
+    end_block!(b)
 
-    return bytes
+    return builder_code(b)
 end
 
 """
@@ -750,7 +736,7 @@ Compile a ternary expression (if-then-else with phi) that produces a value.
 Returns bytecode that computes the ternary and stores to the phi local.
 """
 function compile_ternary_for_phi(ctx::AbstractCompilationContext, code, cond_idx::Int, compiled::Set{Int})::Vector{UInt8}
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="compile_ternary_for_phi", strict=false)
 
     goto_if_not = code[cond_idx]::Core.GotoIfNot
     else_target = goto_if_not.dest
@@ -770,7 +756,7 @@ function compile_ternary_for_phi(ctx::AbstractCompilationContext, code, cond_idx
     if phi_idx === nothing
         # No phi - this might be a void conditional inside, just skip
         push!(compiled, cond_idx)
-        return bytes
+        return builder_code(b)
     end
 
     phi_node = code[phi_idx]::Core.PhiNode
@@ -779,7 +765,7 @@ function compile_ternary_for_phi(ctx::AbstractCompilationContext, code, cond_idx
     if !haskey(ctx.phi_locals, phi_idx)
         push!(compiled, cond_idx)
         push!(compiled, phi_idx)
-        return bytes
+        return builder_code(b)
     end
 
     local_idx = ctx.phi_locals[phi_idx]
@@ -792,12 +778,11 @@ function compile_ternary_for_phi(ctx::AbstractCompilationContext, code, cond_idx
     wasm_type = julia_to_wasm_type_concrete(phi_type, ctx)
 
     # Push condition
-    append!(bytes, compile_condition_to_i32(goto_if_not.cond, ctx))
+    emit_raw!(b, compile_condition_to_i32(goto_if_not.cond, ctx); pushes=WasmValType[I32])
     push!(compiled, cond_idx)
 
     # Start if block with result type
-    push!(bytes, Opcode.IF)
-    append!(bytes, encode_block_type(wasm_type))
+    if_!(b, wasm_type)
 
     # Get then-value from phi
     then_value = nothing
@@ -820,10 +805,10 @@ function compile_ternary_for_phi(ctx::AbstractCompilationContext, code, cond_idx
             # Decode local index
             src_idx = 0; shift = 0
             for bi in 2:length(value_bytes)
-                b = value_bytes[bi]
-                src_idx |= (Int(b & 0x7f) << shift)
+                byt = value_bytes[bi]
+                src_idx |= (Int(byt & 0x7f) << shift)
                 shift += 7
-                (b & 0x80) == 0 && break
+                (byt & 0x80) == 0 && break
             end
             src_arr_idx = src_idx - ctx.n_params + 1
             if src_arr_idx >= 1 && src_arr_idx <= length(ctx.locals)
@@ -837,42 +822,35 @@ function compile_ternary_for_phi(ctx::AbstractCompilationContext, code, cond_idx
         end
         if actual_type_mismatch
             # Local type doesn't match expected - emit ref.null of expected type
-            push!(bytes, Opcode.REF_NULL)
-            append!(bytes, encode_leb128_signed(Int64(wasm_type.type_idx)))
+            ref_null!(b, Int64(wasm_type.type_idx), ConcreteRef(UInt32(wasm_type.type_idx), true))
         else
-            append!(bytes, value_bytes)
+            emit_raw!(b, value_bytes; pushes=(wasm_type === nothing ? WasmValType[] : WasmValType[wasm_type]))
             # Ensure value matches block type
             if wasm_type === I32 && !isempty(value_bytes) && value_bytes[1] == Opcode.I64_CONST
-                push!(bytes, Opcode.I32_WRAP_I64)
+                num!(b, Opcode.I32_WRAP_I64)
             elseif wasm_type === I64 && !isempty(value_bytes) && value_bytes[1] == Opcode.I32_CONST
-                push!(bytes, Opcode.I64_EXTEND_I32_S)
+                num!(b, Opcode.I64_EXTEND_I32_S)
             end
         end
     else
         # Fallback: emit type-safe default matching the block type
         if wasm_type === I32
-            push!(bytes, Opcode.I32_CONST)
-            push!(bytes, 0x00)
+            i32_const!(b, 0)
         elseif wasm_type === F64
-            push!(bytes, Opcode.F64_CONST)
-            append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+            f64_const!(b, 0.0)
         elseif wasm_type === F32
-            push!(bytes, Opcode.F32_CONST)
-            append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+            f32_const!(b, 0.0f0)
         elseif wasm_type isa ConcreteRef
-            push!(bytes, Opcode.REF_NULL)
-            append!(bytes, encode_leb128_signed(Int64(wasm_type.type_idx)))
+            ref_null!(b, Int64(wasm_type.type_idx), ConcreteRef(UInt32(wasm_type.type_idx), true))
         elseif wasm_type === StructRef || wasm_type === ArrayRef || wasm_type === ExternRef || wasm_type === AnyRef
-            push!(bytes, Opcode.REF_NULL)
-            push!(bytes, UInt8(wasm_type))
+            ref_null!(b, wasm_type)
         else
-            push!(bytes, Opcode.I64_CONST)
-            push!(bytes, 0x00)
+            i64_const!(b, 0)
         end
     end
 
     # Else branch
-    push!(bytes, Opcode.ELSE)
+    else_!(b)
 
     # Else branch - push value
     if else_value !== nothing
@@ -884,10 +862,10 @@ function compile_ternary_for_phi(ctx::AbstractCompilationContext, code, cond_idx
             # Decode local index
             src_idx = 0; shift = 0
             for bi in 2:length(value_bytes)
-                b = value_bytes[bi]
-                src_idx |= (Int(b & 0x7f) << shift)
+                byt = value_bytes[bi]
+                src_idx |= (Int(byt & 0x7f) << shift)
                 shift += 7
-                (b & 0x80) == 0 && break
+                (byt & 0x80) == 0 && break
             end
             src_arr_idx = src_idx - ctx.n_params + 1
             if src_arr_idx >= 1 && src_arr_idx <= length(ctx.locals)
@@ -901,52 +879,44 @@ function compile_ternary_for_phi(ctx::AbstractCompilationContext, code, cond_idx
         end
         if actual_type_mismatch
             # Local type doesn't match expected - emit ref.null of expected type
-            push!(bytes, Opcode.REF_NULL)
-            append!(bytes, encode_leb128_signed(Int64(wasm_type.type_idx)))
+            ref_null!(b, Int64(wasm_type.type_idx), ConcreteRef(UInt32(wasm_type.type_idx), true))
         else
-            append!(bytes, value_bytes)
+            emit_raw!(b, value_bytes; pushes=(wasm_type === nothing ? WasmValType[] : WasmValType[wasm_type]))
             # Ensure value matches block type
             if wasm_type === I32 && !isempty(value_bytes) && value_bytes[1] == Opcode.I64_CONST
-                push!(bytes, Opcode.I32_WRAP_I64)
+                num!(b, Opcode.I32_WRAP_I64)
             elseif wasm_type === I64 && !isempty(value_bytes) && value_bytes[1] == Opcode.I32_CONST
-                push!(bytes, Opcode.I64_EXTEND_I32_S)
+                num!(b, Opcode.I64_EXTEND_I32_S)
             end
         end
     else
         # Fallback: emit type-safe default matching the block type
         if wasm_type === I32
-            push!(bytes, Opcode.I32_CONST)
-            push!(bytes, 0x00)
+            i32_const!(b, 0)
         elseif wasm_type === F64
-            push!(bytes, Opcode.F64_CONST)
-            append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+            f64_const!(b, 0.0)
         elseif wasm_type === F32
-            push!(bytes, Opcode.F32_CONST)
-            append!(bytes, UInt8[0x00, 0x00, 0x00, 0x00])
+            f32_const!(b, 0.0f0)
         elseif wasm_type isa ConcreteRef
-            push!(bytes, Opcode.REF_NULL)
-            append!(bytes, encode_leb128_signed(Int64(wasm_type.type_idx)))
+            ref_null!(b, Int64(wasm_type.type_idx), ConcreteRef(UInt32(wasm_type.type_idx), true))
         elseif wasm_type === StructRef || wasm_type === ArrayRef || wasm_type === ExternRef || wasm_type === AnyRef
-            push!(bytes, Opcode.REF_NULL)
-            push!(bytes, UInt8(wasm_type))
+            ref_null!(b, wasm_type)
         else
-            push!(bytes, Opcode.I64_CONST)
-            push!(bytes, 0x00)
+            i64_const!(b, 0)
         end
     end
 
-    push!(bytes, Opcode.END)
+    end_block!(b)
 
     # Store result to phi local
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(local_idx))
+    local_set!(b, local_idx)
 
     # Mark the GotoNode, nothing, and phi as compiled
     for j in cond_idx+1:phi_idx
         push!(compiled, j)
     end
 
-    return bytes
+    return builder_code(b)
 end
 
 """
@@ -962,15 +932,13 @@ Uses block/br_if structure:
   end
 """
 function generate_and_pattern(ctx::AbstractCompilationContext, blocks, code, conditionals, result_type, else_target, ssa_use_count)::Vector{UInt8}
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="generate_and_pattern", strict=false)
 
     # Outer block for result
-    push!(bytes, Opcode.BLOCK)
-    append!(bytes, encode_block_type(result_type))
+    block!(b, result_type)
 
     # Inner block for else jump target (void result)
-    push!(bytes, Opcode.BLOCK)
-    push!(bytes, 0x40)  # void result type
+    block!(b)  # void result type
 
     # Generate each condition with br_if to else
     for (i, (block_idx, block)) in enumerate(conditionals)
@@ -978,7 +946,7 @@ function generate_and_pattern(ctx::AbstractCompilationContext, blocks, code, con
 
         # Generate statements before condition
         for j in block.start_idx:block.end_idx-1
-            append!(bytes, compile_statement(code[j], j, ctx))
+            emit_raw!(b, compile_statement(code[j], j, ctx))
 
             # Drop unused values
             stmt = code[j]
@@ -990,7 +958,7 @@ function generate_and_pattern(ctx::AbstractCompilationContext, blocks, code, con
                         if !haskey(ctx.ssa_locals, j) && !haskey(ctx.phi_locals, j)
                             use_count = get(ssa_use_count, j, 0)
                             if use_count == 0
-                                push!(bytes, Opcode.DROP)
+                                drop!(b)
                             end
                         end
                     end
@@ -999,10 +967,9 @@ function generate_and_pattern(ctx::AbstractCompilationContext, blocks, code, con
         end
 
         # Push condition and test for false (invert condition)
-        append!(bytes, compile_condition_to_i32(goto_if_not.cond, ctx))
-        push!(bytes, Opcode.I32_EQZ)  # invert: GotoIfNot jumps when false, so we br when !cond
-        push!(bytes, Opcode.BR_IF)
-        append!(bytes, encode_leb128_unsigned(0))  # br to inner block (else)
+        emit_raw!(b, compile_condition_to_i32(goto_if_not.cond, ctx); pushes=WasmValType[I32])
+        num!(b, Opcode.I32_EQZ)  # invert: GotoIfNot jumps when false, so we br when !cond
+        br_if!(b, 0)  # br to inner block (else)
     end
 
     # All conditions passed - generate then code
@@ -1018,18 +985,17 @@ function generate_and_pattern(ctx::AbstractCompilationContext, blocks, code, con
                 is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
 
                 if func_ret_wasm === ExternRef && is_numeric_val
-                    emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
+                    nb = UInt8[]; emit_numeric_to_externref!(nb, stmt.val, val_wasm, ctx); emit_raw!(b, nb; pushes=WasmValType[ExternRef])
                 else
-                    append!(bytes, compile_value(stmt.val, ctx))
+                    emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm === nothing ? AnyRef : val_wasm])
                     if func_ret_wasm === ExternRef && val_wasm !== ExternRef
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        extern_convert_any!(b)
                     end
                 end
             end
             break
         elseif stmt !== nothing && !(stmt isa Core.GotoIfNot) && !(stmt isa Core.GotoNode)
-            append!(bytes, compile_statement(stmt, i, ctx))
+            emit_raw!(b, compile_statement(stmt, i, ctx))
 
             # Drop unused values
             if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
@@ -1040,7 +1006,7 @@ function generate_and_pattern(ctx::AbstractCompilationContext, blocks, code, con
                         if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                             use_count = get(ssa_use_count, i, 0)
                             if use_count == 0
-                                push!(bytes, Opcode.DROP)
+                                drop!(b)
                             end
                         end
                     end
@@ -1071,12 +1037,11 @@ function generate_and_pattern(ctx::AbstractCompilationContext, blocks, code, con
                 val_wasm = get_phi_edge_wasm_type(val, ctx)
                 is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                 if func_ret_wasm === ExternRef && is_numeric_val
-                    emit_numeric_to_externref!(bytes, val, val_wasm, ctx)
+                    nb = UInt8[]; emit_numeric_to_externref!(nb, val, val_wasm, ctx); emit_raw!(b, nb; pushes=WasmValType[ExternRef])
                 else
-                    append!(bytes, compile_value(val, ctx))
+                    emit_raw!(b, compile_value(val, ctx); pushes=WasmValType[val_wasm === nothing ? AnyRef : val_wasm])
                     if func_ret_wasm === ExternRef && val_wasm !== ExternRef && val_wasm !== nothing
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        extern_convert_any!(b)
                     end
                 end
                 break
@@ -1085,11 +1050,10 @@ function generate_and_pattern(ctx::AbstractCompilationContext, blocks, code, con
     end
 
     # br past else to outer block end
-    push!(bytes, Opcode.BR)
-    append!(bytes, encode_leb128_unsigned(1))  # br to outer block (depth 1)
+    br!(b, 1)  # br to outer block (depth 1)
 
     # End inner block (else target)
-    push!(bytes, Opcode.END)
+    end_block!(b)
 
     # Generate else code - if there's a phi, push its else-value directly
     if phi_node !== nothing
@@ -1108,12 +1072,11 @@ function generate_and_pattern(ctx::AbstractCompilationContext, blocks, code, con
                 val_wasm = get_phi_edge_wasm_type(val, ctx)
                 is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                 if func_ret_wasm === ExternRef && is_numeric_val
-                    emit_numeric_to_externref!(bytes, val, val_wasm, ctx)
+                    nb = UInt8[]; emit_numeric_to_externref!(nb, val, val_wasm, ctx); emit_raw!(b, nb; pushes=WasmValType[ExternRef])
                 else
-                    append!(bytes, compile_value(val, ctx))
+                    emit_raw!(b, compile_value(val, ctx); pushes=WasmValType[val_wasm === nothing ? AnyRef : val_wasm])
                     if func_ret_wasm === ExternRef && val_wasm !== ExternRef && val_wasm !== nothing
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        extern_convert_any!(b)
                     end
                 end
                 else_value_pushed = true
@@ -1129,12 +1092,11 @@ function generate_and_pattern(ctx::AbstractCompilationContext, blocks, code, con
                     val_wasm = get_phi_edge_wasm_type(val, ctx)
                     is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                     if func_ret_wasm === ExternRef && is_numeric_val
-                        emit_numeric_to_externref!(bytes, val, val_wasm, ctx)
+                        nb = UInt8[]; emit_numeric_to_externref!(nb, val, val_wasm, ctx); emit_raw!(b, nb; pushes=WasmValType[ExternRef])
                     else
-                        append!(bytes, compile_value(val, ctx))
+                        emit_raw!(b, compile_value(val, ctx); pushes=WasmValType[val_wasm === nothing ? AnyRef : val_wasm])
                         if func_ret_wasm === ExternRef && val_wasm !== ExternRef && val_wasm !== nothing
-                            push!(bytes, Opcode.GC_PREFIX)
-                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                            extern_convert_any!(b)
                         end
                     end
                     break
@@ -1153,18 +1115,17 @@ function generate_and_pattern(ctx::AbstractCompilationContext, blocks, code, con
                     is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
 
                     if func_ret_wasm === ExternRef && is_numeric_val
-                        emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
+                        nb = UInt8[]; emit_numeric_to_externref!(nb, stmt.val, val_wasm, ctx); emit_raw!(b, nb; pushes=WasmValType[ExternRef])
                     else
-                        append!(bytes, compile_value(stmt.val, ctx))
+                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm === nothing ? AnyRef : val_wasm])
                         if func_ret_wasm === ExternRef && val_wasm !== ExternRef
-                            push!(bytes, Opcode.GC_PREFIX)
-                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                            extern_convert_any!(b)
                         end
                     end
                 end
                 break
             elseif stmt !== nothing && !(stmt isa Core.GotoIfNot) && !(stmt isa Core.GotoNode)
-                append!(bytes, compile_statement(stmt, i, ctx))
+                emit_raw!(b, compile_statement(stmt, i, ctx))
 
                 # Drop unused values
                 if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
@@ -1175,7 +1136,7 @@ function generate_and_pattern(ctx::AbstractCompilationContext, blocks, code, con
                             if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                                 use_count = get(ssa_use_count, i, 0)
                                 if use_count == 0
-                                    push!(bytes, Opcode.DROP)
+                                    drop!(b)
                                 end
                             end
                         end
@@ -1186,12 +1147,12 @@ function generate_and_pattern(ctx::AbstractCompilationContext, blocks, code, con
     end
 
     # End outer block
-    push!(bytes, Opcode.END)
+    end_block!(b)
 
     # Add RETURN after the block
-    push!(bytes, Opcode.RETURN)
+    return_!(b)
 
-    return bytes
+    return builder_code(b)
 end
 
 """
@@ -1309,7 +1270,7 @@ Generate code for switch pattern using nested if-else with proper stack handling
 Each case returns independently, so we don't need phi handling for the switch itself.
 """
 function generate_switch_pattern(ctx::AbstractCompilationContext, blocks, code, conditionals, result_type, switch_pattern, ssa_use_count)::Vector{UInt8}
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="generate_switch_pattern", strict=false)
     switch_value_ssa, cases = switch_pattern
 
     # First, compile any statements before the switch (up to the first case condition)
@@ -1321,7 +1282,7 @@ function generate_switch_pattern(ctx::AbstractCompilationContext, blocks, code, 
     for i in 1:first_cond_idx-1
         stmt = code[i]
         if stmt !== nothing && !(stmt isa Core.GotoIfNot) && !(stmt isa Core.GotoNode) && !(stmt isa Core.PhiNode)
-            append!(bytes, compile_statement(stmt, i, ctx))
+            emit_raw!(b, compile_statement(stmt, i, ctx))
 
             # Handle SSA storage and drops
             if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
@@ -1332,7 +1293,7 @@ function generate_switch_pattern(ctx::AbstractCompilationContext, blocks, code, 
                         if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                             use_count = get(ssa_use_count, i, 0)
                             if use_count == 0
-                                push!(bytes, Opcode.DROP)
+                                drop!(b)
                             end
                         end
                     end
@@ -1344,7 +1305,7 @@ function generate_switch_pattern(ctx::AbstractCompilationContext, blocks, code, 
     # Generate switch as nested if-else, but with each case having its own return
     # This ensures no code duplication - each case is visited exactly once
     function gen_case(case_idx::Int)::Vector{UInt8}
-        inner_bytes = UInt8[]
+        ib = InstrBuilder(; func_name="generate_switch_pattern.gen_case", strict=false)
 
         if case_idx > length(cases)
             # Default case: code after all switch cases
@@ -1363,12 +1324,11 @@ function generate_switch_pattern(ctx::AbstractCompilationContext, blocks, code, 
                         val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                         is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                         if func_ret_wasm === ExternRef && is_numeric_val
-                            emit_numeric_to_externref!(inner_bytes, stmt.val, val_wasm, ctx)
+                            nb = UInt8[]; emit_numeric_to_externref!(nb, stmt.val, val_wasm, ctx); emit_raw!(ib, nb; pushes=WasmValType[ExternRef])
                         else
-                            append!(inner_bytes, compile_value(stmt.val, ctx))
+                            emit_raw!(ib, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm === nothing ? AnyRef : val_wasm])
                             if func_ret_wasm === ExternRef && val_wasm !== ExternRef
-                                push!(inner_bytes, Opcode.GC_PREFIX)
-                                push!(inner_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                extern_convert_any!(ib)
                             end
                         end
                     end
@@ -1376,7 +1336,7 @@ function generate_switch_pattern(ctx::AbstractCompilationContext, blocks, code, 
                 elseif stmt === nothing || stmt isa Core.PhiNode || stmt isa Core.GotoIfNot || stmt isa Core.GotoNode
                     continue
                 else
-                    append!(inner_bytes, compile_statement(stmt, i, ctx))
+                    emit_raw!(ib, compile_statement(stmt, i, ctx))
 
                     if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
                         stmt_type = get(ctx.ssa_types, i, Any)
@@ -1386,7 +1346,7 @@ function generate_switch_pattern(ctx::AbstractCompilationContext, blocks, code, 
                                 if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                                     use_count = get(ssa_use_count, i, 0)
                                     if use_count == 0
-                                        push!(inner_bytes, Opcode.DROP)
+                                        drop!(ib)
                                     end
                                 end
                             end
@@ -1395,7 +1355,7 @@ function generate_switch_pattern(ctx::AbstractCompilationContext, blocks, code, 
                 end
             end
 
-            return inner_bytes
+            return builder_code(ib)
         end
 
         cond_idx, const_val, case_start, case_end = cases[case_idx]
@@ -1406,7 +1366,7 @@ function generate_switch_pattern(ctx::AbstractCompilationContext, blocks, code, 
         for i in block.start_idx:block.end_idx-1
             stmt = code[i]
             if stmt !== nothing && !(stmt isa Core.GotoIfNot) && !(stmt isa Core.GotoNode) && !(stmt isa Core.PhiNode)
-                append!(inner_bytes, compile_statement(stmt, i, ctx))
+                emit_raw!(ib, compile_statement(stmt, i, ctx))
 
                 if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
                     stmt_type = get(ctx.ssa_types, i, Any)
@@ -1416,7 +1376,7 @@ function generate_switch_pattern(ctx::AbstractCompilationContext, blocks, code, 
                             if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                                 use_count = get(ssa_use_count, i, 0)
                                 if use_count == 0
-                                    push!(inner_bytes, Opcode.DROP)
+                                    drop!(ib)
                                 end
                             end
                         end
@@ -1426,11 +1386,10 @@ function generate_switch_pattern(ctx::AbstractCompilationContext, blocks, code, 
         end
 
         # Compile the condition
-        append!(inner_bytes, compile_condition_to_i32(gin.cond, ctx))
+        emit_raw!(ib, compile_condition_to_i32(gin.cond, ctx); pushes=WasmValType[I32])
 
         # IF with result type (since each case returns a value)
-        push!(inner_bytes, Opcode.IF)
-        append!(inner_bytes, encode_block_type(result_type))
+        if_!(ib, result_type)
 
         # Then branch: this case's code (should end with return value on stack)
         for i in case_start:min(case_end, length(code))
@@ -1442,12 +1401,11 @@ function generate_switch_pattern(ctx::AbstractCompilationContext, blocks, code, 
                     val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                     is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                     if func_ret_wasm === ExternRef && is_numeric_val
-                        emit_numeric_to_externref!(inner_bytes, stmt.val, val_wasm, ctx)
+                        nb = UInt8[]; emit_numeric_to_externref!(nb, stmt.val, val_wasm, ctx); emit_raw!(ib, nb; pushes=WasmValType[ExternRef])
                     else
-                        append!(inner_bytes, compile_value(stmt.val, ctx))
+                        emit_raw!(ib, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm === nothing ? AnyRef : val_wasm])
                         if func_ret_wasm === ExternRef && val_wasm !== ExternRef
-                            push!(inner_bytes, Opcode.GC_PREFIX)
-                            push!(inner_bytes, Opcode.EXTERN_CONVERT_ANY)
+                            extern_convert_any!(ib)
                         end
                     end
                 end
@@ -1455,7 +1413,7 @@ function generate_switch_pattern(ctx::AbstractCompilationContext, blocks, code, 
             elseif stmt === nothing || stmt isa Core.PhiNode || stmt isa Core.GotoIfNot || stmt isa Core.GotoNode
                 continue
             else
-                append!(inner_bytes, compile_statement(stmt, i, ctx))
+                emit_raw!(ib, compile_statement(stmt, i, ctx))
 
                 if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
                     stmt_type = get(ctx.ssa_types, i, Any)
@@ -1465,7 +1423,7 @@ function generate_switch_pattern(ctx::AbstractCompilationContext, blocks, code, 
                             if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                                 use_count = get(ssa_use_count, i, 0)
                                 if use_count == 0
-                                    push!(inner_bytes, Opcode.DROP)
+                                    drop!(ib)
                                 end
                             end
                         end
@@ -1475,18 +1433,18 @@ function generate_switch_pattern(ctx::AbstractCompilationContext, blocks, code, 
         end
 
         # Else branch: recurse to next case
-        push!(inner_bytes, Opcode.ELSE)
-        append!(inner_bytes, gen_case(case_idx + 1))
+        else_!(ib)
+        emit_raw!(ib, gen_case(case_idx + 1); pushes=(result_type === nothing ? WasmValType[] : WasmValType[result_type]))
 
-        push!(inner_bytes, Opcode.END)
+        end_block!(ib)
 
-        return inner_bytes
+        return builder_code(ib)
     end
 
-    append!(bytes, gen_case(1))
-    push!(bytes, Opcode.RETURN)
+    emit_raw!(b, gen_case(1); pushes=(result_type === nothing ? WasmValType[] : WasmValType[result_type]))
+    return_!(b)
 
-    return bytes
+    return builder_code(b)
 end
 
 """
@@ -1586,7 +1544,7 @@ Generate code for OR pattern (a || b || c producing boolean phi).
 Creates nested if-else structure that evaluates each condition.
 """
 function generate_or_pattern(ctx::AbstractCompilationContext, blocks, code, conditionals, result_type, or_pattern, ssa_use_count)::Vector{UInt8}
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="generate_or_pattern", strict=false)
     phi_idx, cond_infos, next_cond_idx = or_pattern
     phi_stmt = code[phi_idx]::Core.PhiNode
 
@@ -1595,7 +1553,7 @@ function generate_or_pattern(ctx::AbstractCompilationContext, blocks, code, cond
 
     # Helper to generate code for OR condition at index i
     function gen_or_cond(idx::Int)::Vector{UInt8}
-        inner_bytes = UInt8[]
+        ib = InstrBuilder(; func_name="generate_or_pattern.gen_or_cond", strict=false)
 
         if idx > length(sorted_conds)
             # Last condition (the one without a GotoNode in then-branch)
@@ -1618,19 +1576,18 @@ function generate_or_pattern(ctx::AbstractCompilationContext, blocks, code, cond
                     # Compile the statement for this SSA value
                     stmt = code[last_val.id]
                     if stmt !== nothing
-                        append!(inner_bytes, compile_statement(stmt, last_val.id, ctx))
+                        emit_raw!(ib, compile_statement(stmt, last_val.id, ctx); pushes=WasmValType[I32])
                     end
                 else
                     # Has a local or is not SSAValue - use compile_value
-                    append!(inner_bytes, compile_value(last_val, ctx))
+                    emit_raw!(ib, compile_value(last_val, ctx); pushes=WasmValType[I32])
                 end
             else
                 # Fallback - push false
-                push!(inner_bytes, Opcode.I32_CONST)
-                append!(inner_bytes, encode_leb128_signed(0))
+                i32_const!(ib, 0)
             end
 
-            return inner_bytes
+            return builder_code(ib)
         end
 
         cond_idx, goto_line = sorted_conds[idx]
@@ -1642,40 +1599,37 @@ function generate_or_pattern(ctx::AbstractCompilationContext, blocks, code, cond
         for j in block.start_idx:block.end_idx-1
             stmt = code[j]
             if stmt !== nothing && !(stmt isa Core.GotoIfNot) && !(stmt isa Core.GotoNode) && !(stmt isa Core.PhiNode)
-                append!(inner_bytes, compile_statement(stmt, j, ctx))
+                emit_raw!(ib, compile_statement(stmt, j, ctx))
             end
         end
 
         # Push condition (will load from local if multi-use, or assume on stack if single-use)
-        append!(inner_bytes, compile_condition_to_i32(goto_if_not.cond, ctx))
+        emit_raw!(ib, compile_condition_to_i32(goto_if_not.cond, ctx); pushes=WasmValType[I32])
 
         # IF with i32 result (for the phi value)
-        push!(inner_bytes, Opcode.IF)
-        push!(inner_bytes, 0x7f)  # i32 result type
+        if_!(ib, 0x7f)  # i32 result type
 
         # Then-branch: condition was true
         # For || pattern, phi value = condition = true = 1
         # We push constant 1 instead of trying to re-compile the condition
-        push!(inner_bytes, Opcode.I32_CONST)
-        append!(inner_bytes, encode_leb128_signed(1))
+        i32_const!(ib, 1)
 
         # Else-branch: condition was false, evaluate next condition
-        push!(inner_bytes, Opcode.ELSE)
-        append!(inner_bytes, gen_or_cond(idx + 1))
+        else_!(ib)
+        emit_raw!(ib, gen_or_cond(idx + 1); pushes=WasmValType[I32])
 
-        push!(inner_bytes, Opcode.END)
+        end_block!(ib)
 
-        return inner_bytes
+        return builder_code(ib)
     end
 
     # Generate the nested OR conditions
-    append!(bytes, gen_or_cond(1))
+    emit_raw!(b, gen_or_cond(1); pushes=WasmValType[I32])
 
     # Store result in phi local
     if haskey(ctx.phi_locals, phi_idx)
         local_idx = ctx.phi_locals[phi_idx]
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(local_idx))
+        local_set!(b, local_idx)
     end
 
     # Now continue with the conditional that uses the phi
@@ -1684,32 +1638,31 @@ function generate_or_pattern(ctx::AbstractCompilationContext, blocks, code, cond
         remaining_conds = [(i, conditionals[i]) for i in next_cond_idx:length(conditionals)]
         if !isempty(remaining_conds)
             # Generate remaining conditionals recursively
-            append!(bytes, generate_remaining_conditionals(ctx, blocks, code, remaining_conds, result_type, ssa_use_count))
+            emit_raw!(b, generate_remaining_conditionals(ctx, blocks, code, remaining_conds, result_type, ssa_use_count))
         end
     end
 
-    return bytes
+    return builder_code(b)
 end
 
 """
 Generate code for remaining conditionals after OR pattern.
 """
 function generate_remaining_conditionals(ctx::AbstractCompilationContext, blocks, code, remaining_conds, result_type, ssa_use_count)::Vector{UInt8}
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="generate_remaining_conditionals", strict=false)
 
     if isempty(remaining_conds)
-        return bytes
+        return builder_code(b)
     end
 
     _, (block_idx, block) = remaining_conds[1]
     goto_if_not = block.terminator::Core.GotoIfNot
 
     # Push condition (which might be a phi local)
-    append!(bytes, compile_condition_to_i32(goto_if_not.cond, ctx))
+    emit_raw!(b, compile_condition_to_i32(goto_if_not.cond, ctx); pushes=WasmValType[I32])
 
     # Generate IF
-    push!(bytes, Opcode.IF)
-    append!(bytes, encode_block_type(result_type))
+    if_!(b, result_type)
 
     # Then-branch: generate code from block.end_idx + 1 to goto_if_not.dest - 1
     then_start = block.end_idx + 1
@@ -1724,12 +1677,11 @@ function generate_remaining_conditionals(ctx::AbstractCompilationContext, blocks
                 val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                 is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                 if func_ret_wasm === ExternRef && is_numeric_val
-                    emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
+                    nb = UInt8[]; emit_numeric_to_externref!(nb, stmt.val, val_wasm, ctx); emit_raw!(b, nb; pushes=WasmValType[ExternRef])
                 else
-                    append!(bytes, compile_value(stmt.val, ctx))
+                    emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm === nothing ? AnyRef : val_wasm])
                     if func_ret_wasm === ExternRef && val_wasm !== ExternRef
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                        extern_convert_any!(b)
                     end
                 end
             end
@@ -1737,18 +1689,18 @@ function generate_remaining_conditionals(ctx::AbstractCompilationContext, blocks
         elseif stmt === nothing
             # Skip
         elseif !(stmt isa Core.GotoIfNot) && !(stmt isa Core.GotoNode) && !(stmt isa Core.PhiNode)
-            append!(bytes, compile_statement(stmt, i, ctx))
+            emit_raw!(b, compile_statement(stmt, i, ctx))
         end
     end
 
     # Else-branch
-    push!(bytes, Opcode.ELSE)
+    else_!(b)
 
     # Check for more conditionals in else branch
     rest_conds = remaining_conds[2:end]
     if !isempty(rest_conds)
         # Recurse for remaining conditionals
-        append!(bytes, generate_remaining_conditionals(ctx, blocks, code, rest_conds, result_type, ssa_use_count))
+        emit_raw!(b, generate_remaining_conditionals(ctx, blocks, code, rest_conds, result_type, ssa_use_count))
     else
         # Generate code from goto_if_not.dest to end (else branch)
         for i in goto_if_not.dest:length(code)
@@ -1760,12 +1712,11 @@ function generate_remaining_conditionals(ctx::AbstractCompilationContext, blocks
                     val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                     is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                     if func_ret_wasm === ExternRef && is_numeric_val
-                        emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
+                        nb = UInt8[]; emit_numeric_to_externref!(nb, stmt.val, val_wasm, ctx); emit_raw!(b, nb; pushes=WasmValType[ExternRef])
                     else
-                        append!(bytes, compile_value(stmt.val, ctx))
+                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm === nothing ? AnyRef : val_wasm])
                         if func_ret_wasm === ExternRef && val_wasm !== ExternRef
-                            push!(bytes, Opcode.GC_PREFIX)
-                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                            extern_convert_any!(b)
                         end
                     end
                 end
@@ -1773,21 +1724,21 @@ function generate_remaining_conditionals(ctx::AbstractCompilationContext, blocks
             elseif stmt === nothing
                 # Skip
             elseif !(stmt isa Core.GotoIfNot) && !(stmt isa Core.GotoNode) && !(stmt isa Core.PhiNode)
-                append!(bytes, compile_statement(stmt, i, ctx))
+                emit_raw!(b, compile_statement(stmt, i, ctx))
             end
         end
     end
 
-    push!(bytes, Opcode.END)
+    end_block!(b)
 
-    return bytes
+    return builder_code(b)
 end
 
 """
 Generate nested if-else for multiple conditionals.
 """
 function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, code, conditionals)::Vector{UInt8}
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="generate_nested_conditionals", strict=false)
     result_type = julia_to_wasm_type_concrete(ctx.return_type, ctx)
 
     # Count SSA uses for drop logic
@@ -1871,33 +1822,28 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                     val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                     is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                     if func_ret_wasm === ExternRef && is_numeric_val
-                        emit_numeric_to_externref!(bytes, stmt.val, val_wasm, ctx)
+                        nb = UInt8[]; emit_numeric_to_externref!(nb, stmt.val, val_wasm, ctx); emit_raw!(b, nb; pushes=WasmValType[ExternRef])
                     elseif func_ret_wasm isa ConcreteRef && is_numeric_val
                         # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
-                        push!(bytes, Opcode.REF_NULL)
-                        append!(bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                        ref_null!(b, Int64(func_ret_wasm.type_idx), ConcreteRef(UInt32(func_ret_wasm.type_idx), true))
                     elseif func_ret_wasm === AnyRef && is_numeric_val
                         # PURE-9030: Box numeric value for AnyRef return
                         local _ret_box_c2 = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-                        emit_box_type_id!(bytes, ctx.type_registry, val_wasm)
-                        append!(bytes, compile_value(stmt.val, ctx))
-                        push!(bytes, Opcode.GC_PREFIX)
-                        push!(bytes, Opcode.STRUCT_NEW)
-                        append!(bytes, encode_leb128_unsigned(_ret_box_c2))
+                        tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, val_wasm); emit_raw!(b, tb; pushes=WasmValType[I32])
+                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=(val_wasm === nothing ? WasmValType[] : WasmValType[val_wasm]))
+                        struct_new!(b, _ret_box_c2, WasmValType[])
                     elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                         # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
-                        push!(bytes, Opcode.REF_NULL)
-                        push!(bytes, UInt8(func_ret_wasm))
+                        ref_null!(b, func_ret_wasm)
                     else
-                        append!(bytes, compile_value(stmt.val, ctx))
+                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm === nothing ? AnyRef : val_wasm])
                         # If function returns externref but value is concrete ref, convert
                         if func_ret_wasm === ExternRef && val_wasm !== ExternRef
-                            push!(bytes, Opcode.GC_PREFIX)
-                            push!(bytes, Opcode.EXTERN_CONVERT_ANY)
+                            extern_convert_any!(b)
                         end
                     end
                 end
-                push!(bytes, Opcode.RETURN)
+                return_!(b)
             elseif stmt === nothing
                 # Skip
             elseif stmt isa Core.GotoNode
@@ -1905,7 +1851,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
             elseif stmt isa Core.GotoIfNot
                 # Skip conditionals that are part of dead structure
             else
-                append!(bytes, compile_statement(stmt, i, ctx))
+                emit_raw!(b, compile_statement(stmt, i, ctx))
 
                 # Drop unused values
                 if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
@@ -1916,7 +1862,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                             if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                                 use_count = get(ssa_use_count, i, 0)
                                 if use_count == 0
-                                    push!(bytes, Opcode.DROP)
+                                    drop!(b)
                                 end
                             end
                         end
@@ -1925,7 +1871,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
             end
         end
 
-        return bytes
+        return builder_code(b)
     end
 
     # Use real_conditionals for the rest of the function
@@ -1978,7 +1924,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
     # Build a recursive if-else structure
     # target_idx tracks where to generate code when no more conditionals
     function gen_conditional(cond_idx::Int; target_idx::Int=0)::Vector{UInt8}
-        inner_bytes = UInt8[]
+        ib = InstrBuilder(; func_name="generate_nested_conditionals.gen_conditional", strict=false)
 
         if cond_idx > length(conditionals)
             # No more conditionals - generate code starting from target_idx
@@ -1997,39 +1943,34 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                             val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                             is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                             if func_ret_wasm === ExternRef && is_numeric_val
-                                emit_numeric_to_externref!(inner_bytes, stmt.val, val_wasm, ctx)
+                                nb = UInt8[]; emit_numeric_to_externref!(nb, stmt.val, val_wasm, ctx); emit_raw!(ib, nb; pushes=WasmValType[ExternRef])
                             elseif func_ret_wasm isa ConcreteRef && is_numeric_val
                                 # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
-                                push!(inner_bytes, Opcode.REF_NULL)
-                                append!(inner_bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                                ref_null!(ib, Int64(func_ret_wasm.type_idx), ConcreteRef(UInt32(func_ret_wasm.type_idx), true))
                             elseif func_ret_wasm === AnyRef && is_numeric_val
                                 # PURE-9030: Box numeric value for AnyRef return
                                 local _ret_box_c3 = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-                                emit_box_type_id!(inner_bytes, ctx.type_registry, val_wasm)
-                                append!(inner_bytes, compile_value(stmt.val, ctx))
-                                push!(inner_bytes, Opcode.GC_PREFIX)
-                                push!(inner_bytes, Opcode.STRUCT_NEW)
-                                append!(inner_bytes, encode_leb128_unsigned(_ret_box_c3))
+                                tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, val_wasm); emit_raw!(ib, tb; pushes=WasmValType[I32])
+                                emit_raw!(ib, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
+                                struct_new!(ib, _ret_box_c3, WasmValType[])
                             elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                                 # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
-                                push!(inner_bytes, Opcode.REF_NULL)
-                                push!(inner_bytes, UInt8(func_ret_wasm))
+                                ref_null!(ib, func_ret_wasm)
                             else
-                                append!(inner_bytes, compile_value(stmt.val, ctx))
+                                emit_raw!(ib, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
                                 if func_ret_wasm === ExternRef && val_wasm !== ExternRef
-                                    push!(inner_bytes, Opcode.GC_PREFIX)
-                                    push!(inner_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                    extern_convert_any!(ib)
                                 end
                             end
                         else
-                            push!(inner_bytes, Opcode.UNREACHABLE)
+                            unreachable!(ib)
                         end
-                        push!(inner_bytes, Opcode.RETURN)
+                        return_!(ib)
                         break
                     elseif stmt === nothing || stmt isa Core.GotoNode || stmt isa Core.GotoIfNot
                         # Skip control flow (already handled by structure)
                     else
-                        append!(inner_bytes, compile_statement(stmt, i, ctx))
+                        emit_raw!(ib, compile_statement(stmt, i, ctx))
 
                         # Drop unused values (but NOT for Union{} which never returns)
                         if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
@@ -2040,7 +1981,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                     if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                                         use_count = get(ssa_use_count, i, 0)
                                         if use_count == 0
-                                            push!(inner_bytes, Opcode.DROP)
+                                            drop!(ib)
                                         end
                                     end
                                 end
@@ -2048,7 +1989,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                         end
                     end
                 end
-                return inner_bytes
+                return builder_code(ib)
             end
 
             for block in blocks
@@ -2063,40 +2004,35 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                 val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                                 is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                                 if func_ret_wasm === ExternRef && is_numeric_val
-                                    emit_numeric_to_externref!(inner_bytes, stmt.val, val_wasm, ctx)
+                                    nb = UInt8[]; emit_numeric_to_externref!(nb, stmt.val, val_wasm, ctx); emit_raw!(ib, nb; pushes=WasmValType[ExternRef])
                                 elseif func_ret_wasm isa ConcreteRef && is_numeric_val
                                     # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
-                                    push!(inner_bytes, Opcode.REF_NULL)
-                                    append!(inner_bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                                    ref_null!(ib, Int64(func_ret_wasm.type_idx), ConcreteRef(UInt32(func_ret_wasm.type_idx), true))
                                 elseif func_ret_wasm === AnyRef && is_numeric_val
                                     # PURE-9030: Box numeric value for AnyRef return
                                     local _ret_box_c4 = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-                                    emit_box_type_id!(inner_bytes, ctx.type_registry, val_wasm)
-                                    append!(inner_bytes, compile_value(stmt.val, ctx))
-                                    push!(inner_bytes, Opcode.GC_PREFIX)
-                                    push!(inner_bytes, Opcode.STRUCT_NEW)
-                                    append!(inner_bytes, encode_leb128_unsigned(_ret_box_c4))
+                                    tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, val_wasm); emit_raw!(ib, tb; pushes=WasmValType[I32])
+                                    emit_raw!(ib, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
+                                    struct_new!(ib, _ret_box_c4, WasmValType[])
                                 elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                                     # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
-                                    push!(inner_bytes, Opcode.REF_NULL)
-                                    push!(inner_bytes, UInt8(func_ret_wasm))
+                                    ref_null!(ib, func_ret_wasm)
                                 else
-                                    append!(inner_bytes, compile_value(stmt.val, ctx))
+                                    emit_raw!(ib, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
                                     if func_ret_wasm === ExternRef && val_wasm !== ExternRef
-                                        push!(inner_bytes, Opcode.GC_PREFIX)
-                                        push!(inner_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                        extern_convert_any!(ib)
                                     end
                                 end
                             end
-                            push!(inner_bytes, Opcode.RETURN)
+                            return_!(ib)
                         elseif !(stmt isa Core.GotoIfNot)
-                            append!(inner_bytes, compile_statement(stmt, i, ctx))
+                            emit_raw!(ib, compile_statement(stmt, i, ctx))
                         end
                     end
                     break
                 end
             end
-            return inner_bytes
+            return builder_code(ib)
         end
 
         block_idx, block = conditionals[cond_idx]
@@ -2112,7 +2048,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                 if stmt === nothing || stmt isa Core.GotoNode || stmt isa Core.GotoIfNot || stmt isa Core.PhiNode
                     # Skip control flow (already handled by structure)
                 else
-                    append!(inner_bytes, compile_statement(stmt, i, ctx))
+                    emit_raw!(ib, compile_statement(stmt, i, ctx))
 
                     # Drop unused values
                     if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
@@ -2123,7 +2059,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                 if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                                     use_count = get(ssa_use_count, i, 0)
                                     if use_count == 0
-                                        push!(inner_bytes, Opcode.DROP)
+                                        drop!(ib)
                                     end
                                 end
                             end
@@ -2135,7 +2071,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
 
         # Generate statements before condition
         for i in block.start_idx:block.end_idx-1
-            append!(inner_bytes, compile_statement(code[i], i, ctx))
+            emit_raw!(ib, compile_statement(code[i], i, ctx))
 
             # Drop unused values
             stmt = code[i]
@@ -2147,7 +2083,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                         if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                             use_count = get(ssa_use_count, i, 0)
                             if use_count == 0
-                                push!(inner_bytes, Opcode.DROP)
+                                drop!(ib)
                             end
                         end
                     end
@@ -2221,15 +2157,14 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
 
             if is_boolean_phi
                 # Boolean && pattern: generates IF with i32 result, else = 0
-                append!(inner_bytes, compile_condition_to_i32(goto_if_not.cond, ctx))
-                push!(inner_bytes, Opcode.IF)
-                push!(inner_bytes, 0x7f)  # i32 result type
+                emit_raw!(ib, compile_condition_to_i32(goto_if_not.cond, ctx); pushes=WasmValType[I32])
+                if_!(ib, 0x7f)  # i32 result type
 
                 # Then-branch: compute cond2 (the expression before the goto)
                 for i in then_start:goto_idx-1
                     stmt = code[i]
                     if stmt !== nothing && !(stmt isa Core.GotoIfNot) && !(stmt isa Core.GotoNode)
-                        append!(inner_bytes, compile_statement(stmt, i, ctx))
+                        emit_raw!(ib, compile_statement(stmt, i, ctx))
                     end
                 end
 
@@ -2238,7 +2173,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                 # Find which phi edge corresponds to goto_idx and compile that value.
                 for (edge_idx, edge) in enumerate(phi_node.edges)
                     if edge == goto_idx
-                        append!(inner_bytes, compile_value(phi_node.values[edge_idx], ctx))
+                        emit_raw!(ib, compile_value(phi_node.values[edge_idx], ctx); pushes=WasmValType[AnyRef])
                         break
                     end
                 end
@@ -2246,7 +2181,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                 # Else-branch: compute else-path value (PURE-505)
                 # For &&: else is short-circuit false (no stmts, value=false)
                 # For ||: else computes second condition (stmts from dest to phi, value=%6)
-                push!(inner_bytes, Opcode.ELSE)
+                else_!(ib)
 
                 # Find the else phi edge (the one NOT matching goto_idx)
                 else_edge_val = nothing
@@ -2262,31 +2197,27 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                 for i in else_start:(phi_idx - 1)
                     stmt = code[i]
                     if stmt !== nothing && !(stmt isa Core.PhiNode) && !(stmt isa Core.GotoIfNot) && !(stmt isa Core.GotoNode)
-                        append!(inner_bytes, compile_statement(stmt, i, ctx))
+                        emit_raw!(ib, compile_statement(stmt, i, ctx))
                     end
                 end
 
                 # Push the else phi value
                 if else_edge_val === false
-                    push!(inner_bytes, Opcode.I32_CONST)
-                    append!(inner_bytes, encode_leb128_signed(0))
+                    i32_const!(ib, 0)
                 elseif else_edge_val === true
-                    push!(inner_bytes, Opcode.I32_CONST)
-                    append!(inner_bytes, encode_leb128_signed(1))
+                    i32_const!(ib, 1)
                 elseif else_edge_val !== nothing
-                    append!(inner_bytes, compile_value(else_edge_val, ctx))
+                    emit_raw!(ib, compile_value(else_edge_val, ctx); pushes=WasmValType[AnyRef])
                 else
-                    push!(inner_bytes, Opcode.I32_CONST)
-                    append!(inner_bytes, encode_leb128_signed(0))
+                    i32_const!(ib, 0)
                 end
 
-                push!(inner_bytes, Opcode.END)
+                end_block!(ib)
 
                 # Store to phi local if we have one
                 if haskey(ctx.phi_locals, phi_idx)
                     local_idx = ctx.phi_locals[phi_idx]
-                    push!(inner_bytes, Opcode.LOCAL_SET)
-                    append!(inner_bytes, encode_leb128_unsigned(local_idx))
+                    local_set!(ib, local_idx)
                 end
 
                 # Continue with conditionals after the phi, or compile tail statements
@@ -2294,7 +2225,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                 for (j, (_, b)) in enumerate(conditionals)
                     goto_if_not = b.terminator::Core.GotoIfNot
                     if goto_if_not.cond isa Core.SSAValue && goto_if_not.cond.id == phi_idx
-                        append!(inner_bytes, gen_conditional(j; target_idx=0))
+                        emit_raw!(ib, gen_conditional(j; target_idx=0))
                         found_next_cond = true
                         break
                     end
@@ -2306,16 +2237,16 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                         stmt = code[i]
                         if stmt isa Core.ReturnNode
                             if isdefined(stmt, :val)
-                                append!(inner_bytes, compile_value(stmt.val, ctx))
+                                emit_raw!(ib, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
                             end
-                            push!(inner_bytes, Opcode.RETURN)
+                            return_!(ib)
                         elseif stmt !== nothing
-                            append!(inner_bytes, compile_statement(stmt, i, ctx))
+                            emit_raw!(ib, compile_statement(stmt, i, ctx))
                         end
                     end
                 end
 
-                return inner_bytes
+                return builder_code(ib)
             else
                 # Multi-edge phi pattern - need to handle each branch separately
                 # For phis with >2 edges, we can't use simple if/else result type
@@ -2327,15 +2258,14 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                     # We need to recurse and let each branch store to the phi local
 
                     # Compile then-branch statements and store value to phi local
-                    append!(inner_bytes, compile_condition_to_i32(goto_if_not.cond, ctx))
-                    push!(inner_bytes, Opcode.IF)
-                    push!(inner_bytes, 0x40)  # void - we'll use locals
+                    emit_raw!(ib, compile_condition_to_i32(goto_if_not.cond, ctx); pushes=WasmValType[I32])
+                    if_!(ib)  # void - we will use locals
 
                     # Then-branch: compile statements and store to phi local
                     for i in then_start:goto_idx-1
                         stmt = code[i]
                         if stmt !== nothing && !(stmt isa Core.GotoIfNot) && !(stmt isa Core.GotoNode) && !(stmt isa Core.PhiNode)
-                            append!(inner_bytes, compile_statement(stmt, i, ctx))
+                            emit_raw!(ib, compile_statement(stmt, i, ctx))
                         end
                     end
 
@@ -2354,10 +2284,10 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                     got_local_idx = 0
                                     shift = 0
                                     for bi in 2:length(val_bytes)
-                                        b = val_bytes[bi]
-                                        got_local_idx |= (Int(b & 0x7f) << shift)
+                                        byt = val_bytes[bi]
+                                        got_local_idx |= (Int(byt & 0x7f) << shift)
                                         shift += 7
-                                        if (b & 0x80) == 0
+                                        if (byt & 0x80) == 0
                                             break
                                         end
                                     end
@@ -2365,7 +2295,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                         param_julia_type = ctx.arg_types[got_local_idx + 1]
                                         actual_val_type = get_concrete_wasm_type(param_julia_type, ctx.mod, ctx.type_registry)
                                         if !wasm_types_compatible(phi_local_type, actual_val_type)
-                                            append!(inner_bytes, emit_phi_type_default(phi_local_type))
+                                            emit_raw!(ib, emit_phi_type_default(phi_local_type); pushes=WasmValType[AnyRef])
                                             type_mismatch_handled = true
                                         end
                                     end
@@ -2376,16 +2306,15 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                    length(val_bytes) >= 1 &&
                                    (val_bytes[1] == Opcode.I32_CONST || val_bytes[1] == Opcode.I64_CONST || val_bytes[1] == Opcode.F32_CONST || val_bytes[1] == Opcode.F64_CONST) &&
                                    !has_ref_producing_gc_op(val_bytes)
-                                    append!(inner_bytes, emit_phi_type_default(phi_local_type))
+                                    emit_raw!(ib, emit_phi_type_default(phi_local_type); pushes=WasmValType[AnyRef])
                                     type_mismatch_handled = true
                                 end
                                 if !type_mismatch_handled
-                                    append!(inner_bytes, val_bytes)
+                                    emit_raw!(ib, val_bytes; pushes=WasmValType[AnyRef])
                                 end
-                                push!(inner_bytes, Opcode.LOCAL_SET)
-                                append!(inner_bytes, encode_leb128_unsigned(local_idx))
+                                local_set!(ib, local_idx)
                             else
-                                append!(inner_bytes, val_bytes)
+                                emit_raw!(ib, val_bytes; pushes=WasmValType[AnyRef])
                             end
                             break
                         end
@@ -2409,10 +2338,10 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                             got_local_idx = 0
                                             shift = 0
                                             for bi in 2:length(val_bytes)
-                                                b = val_bytes[bi]
-                                                got_local_idx |= (Int(b & 0x7f) << shift)
+                                                byt = val_bytes[bi]
+                                                got_local_idx |= (Int(byt & 0x7f) << shift)
                                                 shift += 7
-                                                if (b & 0x80) == 0
+                                                if (byt & 0x80) == 0
                                                     break
                                                 end
                                             end
@@ -2420,7 +2349,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                                 param_julia_type = ctx.arg_types[got_local_idx + 1]
                                                 actual_val_type = get_concrete_wasm_type(param_julia_type, ctx.mod, ctx.type_registry)
                                                 if !wasm_types_compatible(phi_local_type, actual_val_type)
-                                                    append!(inner_bytes, emit_phi_type_default(phi_local_type))
+                                                    emit_raw!(ib, emit_phi_type_default(phi_local_type); pushes=WasmValType[AnyRef])
                                                     type_mismatch_handled = true
                                                 end
                                             end
@@ -2431,16 +2360,15 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                            length(val_bytes) >= 1 &&
                                            (val_bytes[1] == Opcode.I32_CONST || val_bytes[1] == Opcode.I64_CONST || val_bytes[1] == Opcode.F32_CONST || val_bytes[1] == Opcode.F64_CONST) &&
                                            !has_ref_producing_gc_op(val_bytes)
-                                            append!(inner_bytes, emit_phi_type_default(phi_local_type))
+                                            emit_raw!(ib, emit_phi_type_default(phi_local_type); pushes=WasmValType[AnyRef])
                                             type_mismatch_handled = true
                                         end
                                         if !type_mismatch_handled
-                                            append!(inner_bytes, val_bytes)
+                                            emit_raw!(ib, val_bytes; pushes=WasmValType[AnyRef])
                                         end
-                                        push!(inner_bytes, Opcode.LOCAL_SET)
-                                        append!(inner_bytes, encode_leb128_unsigned(local_idx))
+                                        local_set!(ib, local_idx)
                                     else
-                                        append!(inner_bytes, val_bytes)
+                                        emit_raw!(ib, val_bytes; pushes=WasmValType[AnyRef])
                                     end
                                     break
                                 end
@@ -2451,12 +2379,12 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                     end
 
                     # Else-branch: recurse for remaining conditionals
-                    push!(inner_bytes, Opcode.ELSE)
+                    else_!(ib)
 
                     # Find next conditional in the else branch
                     next_cond_idx = cond_idx + 1
                     if next_cond_idx <= length(conditionals)
-                        append!(inner_bytes, gen_conditional(next_cond_idx; target_idx=phi_idx))
+                        emit_raw!(ib, gen_conditional(next_cond_idx; target_idx=phi_idx))
                     else
                         # No more conditionals - this is the final else branch
                         # Find the edge that corresponds to this fallthrough path
@@ -2468,7 +2396,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                 # There's another conditional - this shouldn't happen if we're at the end
                                 continue
                             else
-                                append!(inner_bytes, compile_statement(stmt, i, ctx))
+                                emit_raw!(ib, compile_statement(stmt, i, ctx))
                             end
                         end
 
@@ -2489,10 +2417,10 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                         got_local_idx = 0
                                         shift = 0
                                         for bi in 2:length(val_bytes)
-                                            b = val_bytes[bi]
-                                            got_local_idx |= (Int(b & 0x7f) << shift)
+                                            byt = val_bytes[bi]
+                                            got_local_idx |= (Int(byt & 0x7f) << shift)
                                             shift += 7
-                                            if (b & 0x80) == 0
+                                            if (byt & 0x80) == 0
                                                 break
                                             end
                                         end
@@ -2500,7 +2428,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                             param_julia_type = ctx.arg_types[got_local_idx + 1]
                                             actual_val_type = get_concrete_wasm_type(param_julia_type, ctx.mod, ctx.type_registry)
                                             if !wasm_types_compatible(phi_local_type, actual_val_type)
-                                                append!(inner_bytes, emit_phi_type_default(phi_local_type))
+                                                emit_raw!(ib, emit_phi_type_default(phi_local_type); pushes=WasmValType[AnyRef])
                                                 type_mismatch_handled = true
                                             end
                                         end
@@ -2511,16 +2439,15 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                        length(val_bytes) >= 1 &&
                                        (val_bytes[1] == Opcode.I32_CONST || val_bytes[1] == Opcode.I64_CONST || val_bytes[1] == Opcode.F32_CONST || val_bytes[1] == Opcode.F64_CONST) &&
                                        !has_ref_producing_gc_op(val_bytes)
-                                        append!(inner_bytes, emit_phi_type_default(phi_local_type))
+                                        emit_raw!(ib, emit_phi_type_default(phi_local_type); pushes=WasmValType[AnyRef])
                                         type_mismatch_handled = true
                                     end
                                     if !type_mismatch_handled
-                                        append!(inner_bytes, val_bytes)
+                                        emit_raw!(ib, val_bytes; pushes=WasmValType[AnyRef])
                                     end
-                                    push!(inner_bytes, Opcode.LOCAL_SET)
-                                    append!(inner_bytes, encode_leb128_unsigned(local_idx))
+                                    local_set!(ib, local_idx)
                                 else
-                                    append!(inner_bytes, val_bytes)
+                                    emit_raw!(ib, val_bytes; pushes=WasmValType[AnyRef])
                                 end
                                 break
                             end
@@ -2544,10 +2471,10 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                                 got_local_idx = 0
                                                 shift = 0
                                                 for bi in 2:length(val_bytes)
-                                                    b = val_bytes[bi]
-                                                    got_local_idx |= (Int(b & 0x7f) << shift)
+                                                    byt = val_bytes[bi]
+                                                    got_local_idx |= (Int(byt & 0x7f) << shift)
                                                     shift += 7
-                                                    if (b & 0x80) == 0
+                                                    if (byt & 0x80) == 0
                                                         break
                                                     end
                                                 end
@@ -2555,7 +2482,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                                     param_julia_type = ctx.arg_types[got_local_idx + 1]
                                                     actual_val_type = get_concrete_wasm_type(param_julia_type, ctx.mod, ctx.type_registry)
                                                     if !wasm_types_compatible(phi_local_type, actual_val_type)
-                                                        append!(inner_bytes, emit_phi_type_default(phi_local_type))
+                                                        emit_raw!(ib, emit_phi_type_default(phi_local_type); pushes=WasmValType[AnyRef])
                                                         type_mismatch_handled = true
                                                     end
                                                 end
@@ -2566,16 +2493,15 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                                length(val_bytes) >= 1 &&
                                                (val_bytes[1] == Opcode.I32_CONST || val_bytes[1] == Opcode.I64_CONST || val_bytes[1] == Opcode.F32_CONST || val_bytes[1] == Opcode.F64_CONST) &&
                                                !has_ref_producing_gc_op(val_bytes)
-                                                append!(inner_bytes, emit_phi_type_default(phi_local_type))
+                                                emit_raw!(ib, emit_phi_type_default(phi_local_type); pushes=WasmValType[AnyRef])
                                                 type_mismatch_handled = true
                                             end
                                             if !type_mismatch_handled
-                                                append!(inner_bytes, val_bytes)
+                                                emit_raw!(ib, val_bytes; pushes=WasmValType[AnyRef])
                                             end
-                                            push!(inner_bytes, Opcode.LOCAL_SET)
-                                            append!(inner_bytes, encode_leb128_unsigned(local_idx))
+                                            local_set!(ib, local_idx)
                                         else
-                                            append!(inner_bytes, val_bytes)
+                                            emit_raw!(ib, val_bytes; pushes=WasmValType[AnyRef])
                                         end
                                         break
                                     end
@@ -2586,7 +2512,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                         end
                     end
 
-                    push!(inner_bytes, Opcode.END)
+                    end_block!(ib)
 
                     # Only generate code after the phi nodes at the outermost level
                     # (when target_idx == 0, meaning this is not a recursive call)
@@ -2610,42 +2536,37 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                     val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                                     is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                                     if func_ret_wasm === ExternRef && is_numeric_val
-                                        emit_numeric_to_externref!(inner_bytes, stmt.val, val_wasm, ctx)
+                                        nb = UInt8[]; emit_numeric_to_externref!(nb, stmt.val, val_wasm, ctx); emit_raw!(ib, nb; pushes=WasmValType[ExternRef])
                                     elseif func_ret_wasm isa ConcreteRef && is_numeric_val
                                         # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
-                                        push!(inner_bytes, Opcode.REF_NULL)
-                                        append!(inner_bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                                        ref_null!(ib, Int64(func_ret_wasm.type_idx), ConcreteRef(UInt32(func_ret_wasm.type_idx), true))
                                     elseif func_ret_wasm === AnyRef && is_numeric_val
                                         # PURE-9030: Box numeric value for AnyRef return
                                         local _ret_box_c5 = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-                                        emit_box_type_id!(inner_bytes, ctx.type_registry, val_wasm)
-                                        append!(inner_bytes, compile_value(stmt.val, ctx))
-                                        push!(inner_bytes, Opcode.GC_PREFIX)
-                                        push!(inner_bytes, Opcode.STRUCT_NEW)
-                                        append!(inner_bytes, encode_leb128_unsigned(_ret_box_c5))
+                                        tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, val_wasm); emit_raw!(ib, tb; pushes=WasmValType[I32])
+                                        emit_raw!(ib, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
+                                        struct_new!(ib, _ret_box_c5, WasmValType[])
                                     elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                                         # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
-                                        push!(inner_bytes, Opcode.REF_NULL)
-                                        push!(inner_bytes, UInt8(func_ret_wasm))
+                                        ref_null!(ib, func_ret_wasm)
                                     else
-                                        append!(inner_bytes, compile_value(stmt.val, ctx))
+                                        emit_raw!(ib, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
                                         if func_ret_wasm === ExternRef && val_wasm !== ExternRef
-                                            push!(inner_bytes, Opcode.GC_PREFIX)
-                                            push!(inner_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                            extern_convert_any!(ib)
                                         end
                                     end
                                 end
-                                push!(inner_bytes, Opcode.RETURN)
+                                return_!(ib)
                                 break
                             elseif stmt === nothing || stmt isa Core.PhiNode
                                 continue
                             else
-                                append!(inner_bytes, compile_statement(stmt, i, ctx))
+                                emit_raw!(ib, compile_statement(stmt, i, ctx))
                             end
                         end
                     end
 
-                    return inner_bytes
+                    return builder_code(ib)
                 end
 
                 # Simple 2-edge ternary pattern
@@ -2666,11 +2587,10 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                 end
 
                 # Push condition
-                append!(inner_bytes, compile_condition_to_i32(goto_if_not.cond, ctx))
+                emit_raw!(ib, compile_condition_to_i32(goto_if_not.cond, ctx); pushes=WasmValType[I32])
 
                 # IF block with phi's result type
-                push!(inner_bytes, Opcode.IF)
-                append!(inner_bytes, encode_block_type(phi_wasm_type))
+                if_!(ib, phi_wasm_type)
 
                 # Then-branch: compile any statements, then push the value
                 then_hit_unreachable = false
@@ -2678,7 +2598,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                     stmt = code[i]
                     if stmt !== nothing && !(stmt isa Core.GotoIfNot) && !(stmt isa Core.GotoNode) && !(stmt isa Core.PhiNode)
                         _then_stmt_bytes = compile_statement(stmt, i, ctx)
-                        append!(inner_bytes, _then_stmt_bytes)
+                        emit_raw!(ib, _then_stmt_bytes)
                         # PURE-908: If statement emitted unreachable, skip phi value
                         if !isempty(_then_stmt_bytes) && _then_stmt_bytes[end] == Opcode.UNREACHABLE
                             then_hit_unreachable = true
@@ -2697,11 +2617,9 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                 elseif then_value === nothing
                     # Phi value is Julia's nothing - emit ref.null if ref type expected
                     if phi_wasm_type isa ConcreteRef
-                        push!(inner_bytes, Opcode.REF_NULL)
-                        append!(inner_bytes, encode_leb128_signed(Int64(phi_wasm_type.type_idx)))
+                        ref_null!(ib, Int64(phi_wasm_type.type_idx), ConcreteRef(UInt32(phi_wasm_type.type_idx), true))
                     elseif phi_wasm_type === ExternRef
-                        push!(inner_bytes, Opcode.REF_NULL)
-                        push!(inner_bytes, UInt8(ExternRef))
+                        ref_null!(ib, ExternRef)
                     end
                     # For non-ref types, nothing produces no value (shouldn't happen for valid code)
                 elseif then_value !== nothing
@@ -2709,11 +2627,9 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                     if isempty(value_bytes) && (phi_wasm_type isa ConcreteRef || phi_wasm_type === StructRef || phi_wasm_type === ArrayRef || phi_wasm_type === AnyRef || phi_wasm_type === ExternRef)
                         # Value compiled to nothing but we need a ref type - emit ref.null
                         if phi_wasm_type isa ConcreteRef
-                            push!(inner_bytes, Opcode.REF_NULL)
-                            append!(inner_bytes, encode_leb128_signed(Int64(phi_wasm_type.type_idx)))
+                            ref_null!(ib, Int64(phi_wasm_type.type_idx), ConcreteRef(UInt32(phi_wasm_type.type_idx), true))
                         else
-                            push!(inner_bytes, Opcode.REF_NULL)
-                            push!(inner_bytes, UInt8(phi_wasm_type))
+                            ref_null!(ib, phi_wasm_type)
                         end
                     elseif !isempty(value_bytes) && (phi_wasm_type isa ConcreteRef || phi_wasm_type === StructRef || phi_wasm_type === ArrayRef || phi_wasm_type === AnyRef) &&
                            (value_bytes[1] == Opcode.I32_CONST || value_bytes[1] == Opcode.I64_CONST || value_bytes[1] == Opcode.F32_CONST || value_bytes[1] == Opcode.F64_CONST) &&
@@ -2722,27 +2638,24 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                         # But NOT if the bytes contain a GC ref-producing op (e.g. array.new_data
                         # for string constants — those start with i32.const for the offset operand)
                         if phi_wasm_type isa ConcreteRef
-                            push!(inner_bytes, Opcode.REF_NULL)
-                            append!(inner_bytes, encode_leb128_signed(Int64(phi_wasm_type.type_idx)))
+                            ref_null!(ib, Int64(phi_wasm_type.type_idx), ConcreteRef(UInt32(phi_wasm_type.type_idx), true))
                         else
-                            push!(inner_bytes, Opcode.REF_NULL)
-                            push!(inner_bytes, UInt8(phi_wasm_type))
+                            ref_null!(ib, phi_wasm_type)
                         end
                     else
-                        append!(inner_bytes, value_bytes)
+                        emit_raw!(ib, value_bytes; pushes=WasmValType[AnyRef])
                         # PURE-303: Convert concrete/any ref to externref when phi expects externref
                         if phi_wasm_type === ExternRef
                             val_wasm = infer_value_wasm_type(then_value, ctx)
                             if val_wasm !== ExternRef && (val_wasm isa ConcreteRef || val_wasm === StructRef || val_wasm === ArrayRef || val_wasm === AnyRef)
-                                push!(inner_bytes, Opcode.GC_PREFIX)
-                                push!(inner_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                extern_convert_any!(ib)
                             end
                         end
                     end
                 end
 
                 # Else-branch: compile statements from dest to else_edge, then push the value
-                push!(inner_bytes, Opcode.ELSE)
+                else_!(ib)
 
                 # Check if the GotoIfNot's type is Union{} (bottom type) - this means the else branch is dead code
                 # The type of the GotoIfNot is stored at block.end_idx (the line with the conditional)
@@ -2751,7 +2664,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
 
                 if is_else_unreachable
                     # Else branch is dead code - just emit unreachable
-                    push!(inner_bytes, Opcode.UNREACHABLE)
+                    unreachable!(ib)
                 elseif else_edge !== nothing
                     for i in goto_if_not.dest:else_edge
                         stmt = code[i]
@@ -2763,7 +2676,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                             continue
                         else
                             _else_stmt_bytes = compile_statement(stmt, i, ctx)
-                            append!(inner_bytes, _else_stmt_bytes)
+                            emit_raw!(ib, _else_stmt_bytes)
                             # PURE-908: If statement emitted unreachable (stub call),
                             # mark else as unreachable and stop emitting dead code.
                             if !isempty(_else_stmt_bytes) && _else_stmt_bytes[end] == Opcode.UNREACHABLE
@@ -2780,22 +2693,18 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                     if else_value === nothing
                         # Phi value is Julia's nothing - emit ref.null if ref type expected
                         if phi_wasm_type isa ConcreteRef
-                            push!(inner_bytes, Opcode.REF_NULL)
-                            append!(inner_bytes, encode_leb128_signed(Int64(phi_wasm_type.type_idx)))
+                            ref_null!(ib, Int64(phi_wasm_type.type_idx), ConcreteRef(UInt32(phi_wasm_type.type_idx), true))
                         elseif phi_wasm_type === ExternRef
-                            push!(inner_bytes, Opcode.REF_NULL)
-                            push!(inner_bytes, UInt8(ExternRef))
+                            ref_null!(ib, ExternRef)
                         end
                     elseif else_value !== nothing
                         value_bytes = compile_value(else_value, ctx)
                         if isempty(value_bytes) && (phi_wasm_type isa ConcreteRef || phi_wasm_type === StructRef || phi_wasm_type === ArrayRef || phi_wasm_type === AnyRef || phi_wasm_type === ExternRef)
                             # Value compiled to nothing but we need a ref type - emit ref.null
                             if phi_wasm_type isa ConcreteRef
-                                push!(inner_bytes, Opcode.REF_NULL)
-                                append!(inner_bytes, encode_leb128_signed(Int64(phi_wasm_type.type_idx)))
+                                ref_null!(ib, Int64(phi_wasm_type.type_idx), ConcreteRef(UInt32(phi_wasm_type.type_idx), true))
                             else
-                                push!(inner_bytes, Opcode.REF_NULL)
-                                push!(inner_bytes, UInt8(phi_wasm_type))
+                                ref_null!(ib, phi_wasm_type)
                             end
                         elseif !isempty(value_bytes) && (phi_wasm_type isa ConcreteRef || phi_wasm_type === StructRef || phi_wasm_type === ArrayRef || phi_wasm_type === AnyRef) &&
                                (value_bytes[1] == Opcode.I32_CONST || value_bytes[1] == Opcode.I64_CONST || value_bytes[1] == Opcode.F32_CONST || value_bytes[1] == Opcode.F64_CONST) &&
@@ -2805,33 +2714,29 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                             # (like ExternRef=0x6f=111) compiled as i32_const. Replace with ref.null.
                             # But NOT if the bytes contain a GC ref-producing op (e.g. array.new_data).
                             if phi_wasm_type isa ConcreteRef
-                                push!(inner_bytes, Opcode.REF_NULL)
-                                append!(inner_bytes, encode_leb128_signed(Int64(phi_wasm_type.type_idx)))
+                                ref_null!(ib, Int64(phi_wasm_type.type_idx), ConcreteRef(UInt32(phi_wasm_type.type_idx), true))
                             else
-                                push!(inner_bytes, Opcode.REF_NULL)
-                                push!(inner_bytes, UInt8(phi_wasm_type))
+                                ref_null!(ib, phi_wasm_type)
                             end
                         else
-                            append!(inner_bytes, value_bytes)
+                            emit_raw!(ib, value_bytes; pushes=WasmValType[AnyRef])
                             # PURE-303: Convert concrete/any ref to externref when phi expects externref
                             if phi_wasm_type === ExternRef
                                 val_wasm = infer_value_wasm_type(else_value, ctx)
                                 if val_wasm !== ExternRef && (val_wasm isa ConcreteRef || val_wasm === StructRef || val_wasm === ArrayRef || val_wasm === AnyRef)
-                                    push!(inner_bytes, Opcode.GC_PREFIX)
-                                    push!(inner_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                    extern_convert_any!(ib)
                                 end
                             end
                         end
                     end
                 end
 
-                push!(inner_bytes, Opcode.END)
+                end_block!(ib)
 
                 # Store to phi local if we have one
                 if haskey(ctx.phi_locals, phi_idx)
                     local_idx = ctx.phi_locals[phi_idx]
-                    push!(inner_bytes, Opcode.LOCAL_SET)
-                    append!(inner_bytes, encode_leb128_unsigned(local_idx))
+                    local_set!(ib, local_idx)
                 end
 
                 # After the phi, continue generating code from phi_idx+1 to the return
@@ -2844,12 +2749,11 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                             val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                             is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                             if func_ret_wasm === ExternRef && is_numeric_val
-                                emit_numeric_to_externref!(inner_bytes, stmt.val, val_wasm, ctx)
+                                nb = UInt8[]; emit_numeric_to_externref!(nb, stmt.val, val_wasm, ctx); emit_raw!(ib, nb; pushes=WasmValType[ExternRef])
                             else
-                                append!(inner_bytes, compile_value(stmt.val, ctx))
+                                emit_raw!(ib, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
                                 if func_ret_wasm === ExternRef && val_wasm !== ExternRef
-                                    push!(inner_bytes, Opcode.GC_PREFIX)
-                                    push!(inner_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                    extern_convert_any!(ib)
                                 end
                             end
                         end
@@ -2857,16 +2761,16 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                     elseif stmt === nothing || stmt isa Core.GotoNode || stmt isa Core.PhiNode
                         continue
                     else
-                        append!(inner_bytes, compile_statement(stmt, i, ctx))
+                        emit_raw!(ib, compile_statement(stmt, i, ctx))
                     end
                 end
 
-                return inner_bytes
+                return builder_code(ib)
             end
         end
 
         # Push condition for normal pattern
-        append!(inner_bytes, compile_condition_to_i32(goto_if_not.cond, ctx))
+        emit_raw!(ib, compile_condition_to_i32(goto_if_not.cond, ctx); pushes=WasmValType[I32])
 
         # Check if both branches terminate (then: return, else: unreachable or return)
         # If so, use void result type for IF block
@@ -2917,31 +2821,30 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
         end
 
         # if block
-        push!(inner_bytes, Opcode.IF)
         if found_forward_goto !== nothing && else_terminates
             # Both branches terminate - use void result type
-            push!(inner_bytes, 0x40)  # void block type
+            if_!(ib)  # void block type
         elseif found_base_closure_invoke && !then_has_return_stmt
             # PURE-220: Base closure invoke (e.g. _growend!) with no return in then-branch.
             # The closure handler emits side-effect code (array growth) that does NOT
             # produce a wasm value. Use void block type and emit continuation after END.
-            push!(inner_bytes, 0x40)  # void block type
+            if_!(ib)  # void block type
         elseif then_ends_unreachable
             # PURE-317: Then-branch throws (unreachable). Use void block type.
             # The then-branch never produces a value (unreachable is polymorphic),
             # and the else-branch may contain nested conditionals with returns that
             # don't leave a value on the stack for the outer IF block. Using void
             # avoids "expected type but nothing on stack" validation errors.
-            push!(inner_bytes, 0x40)  # void block type
+            if_!(ib)  # void block type
         elseif then_has_return_stmt
             # PURE-325: Then-branch has explicit return. Use void block type so the
             # then-branch can emit RETURN directly. The else-branch (which recurses
             # into gen_conditional) will also use RETURN in its branches. With all
             # branches using RETURN, the IF block is void and code after END is
             # unreachable (UNREACHABLE at function end is correct).
-            push!(inner_bytes, 0x40)  # void block type
+            if_!(ib)  # void block type
         else
-            append!(inner_bytes, encode_block_type(result_type))
+            if_!(ib, result_type)
             used_typed_if[] = true  # PURE-506: mark that IF block has typed result
         end
 
@@ -2980,40 +2883,35 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                         val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                         is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                         if func_ret_wasm === ExternRef && is_numeric_val
-                            emit_numeric_to_externref!(inner_bytes, stmt.val, val_wasm, ctx)
+                            nb = UInt8[]; emit_numeric_to_externref!(nb, stmt.val, val_wasm, ctx); emit_raw!(ib, nb; pushes=WasmValType[ExternRef])
                         elseif func_ret_wasm isa ConcreteRef && is_numeric_val
                             # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
-                            push!(inner_bytes, Opcode.REF_NULL)
-                            append!(inner_bytes, encode_leb128_signed(Int64(func_ret_wasm.type_idx)))
+                            ref_null!(ib, Int64(func_ret_wasm.type_idx), ConcreteRef(UInt32(func_ret_wasm.type_idx), true))
                         elseif func_ret_wasm === AnyRef && is_numeric_val
                             # PURE-9030: Box numeric value for AnyRef return
                             local _ret_box_c6 = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-                            emit_box_type_id!(inner_bytes, ctx.type_registry, val_wasm)
-                            append!(inner_bytes, compile_value(stmt.val, ctx))
-                            push!(inner_bytes, Opcode.GC_PREFIX)
-                            push!(inner_bytes, Opcode.STRUCT_NEW)
-                            append!(inner_bytes, encode_leb128_unsigned(_ret_box_c6))
+                            tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, val_wasm); emit_raw!(ib, tb; pushes=WasmValType[I32])
+                            emit_raw!(ib, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
+                            struct_new!(ib, _ret_box_c6, WasmValType[])
                         elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                             # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
-                            push!(inner_bytes, Opcode.REF_NULL)
-                            push!(inner_bytes, UInt8(func_ret_wasm))
+                            ref_null!(ib, func_ret_wasm)
                         else
-                            append!(inner_bytes, compile_value(stmt.val, ctx))
+                            emit_raw!(ib, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
                             if func_ret_wasm === ExternRef && val_wasm !== ExternRef
-                                push!(inner_bytes, Opcode.GC_PREFIX)
-                                push!(inner_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                extern_convert_any!(ib)
                             end
                         end
                     end
                     # Emit RETURN since we're in a void IF block
                     if else_terminates
-                        push!(inner_bytes, Opcode.RETURN)
+                        return_!(ib)
                     end
                     break
                 elseif stmt === nothing
                     # Skip nothing statements
                 elseif !(stmt isa Core.GotoIfNot) && !(stmt isa Core.GotoNode)
-                    append!(inner_bytes, compile_statement(stmt, i, ctx))
+                    emit_raw!(ib, compile_statement(stmt, i, ctx))
 
                     # Drop unused values (only if not going to return)
                     if !else_terminates
@@ -3025,7 +2923,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                     if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                                         use_count = get(ssa_use_count, i, 0)
                                         if use_count == 0
-                                            push!(inner_bytes, Opcode.DROP)
+                                            drop!(ib)
                                         end
                                     end
                                 end
@@ -3045,25 +2943,24 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                         val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                         is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                         if func_ret_wasm === ExternRef && is_numeric_val
-                            emit_numeric_to_externref!(inner_bytes, stmt.val, val_wasm, ctx)
+                            nb = UInt8[]; emit_numeric_to_externref!(nb, stmt.val, val_wasm, ctx); emit_raw!(ib, nb; pushes=WasmValType[ExternRef])
                         else
-                            append!(inner_bytes, compile_value(stmt.val, ctx))
+                            emit_raw!(ib, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
                             if func_ret_wasm === ExternRef && val_wasm !== ExternRef
-                                push!(inner_bytes, Opcode.GC_PREFIX)
-                                push!(inner_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                extern_convert_any!(ib)
                             end
                         end
                     end
                     # PURE-325: Emit explicit RETURN so the then-branch is self-contained.
                     # The IF block is void (0x40) when then_has_return_stmt is true.
-                    push!(inner_bytes, Opcode.RETURN)
+                    return_!(ib)
                     found_return = true
                     break
                 elseif stmt === nothing
                     # Skip nothing statements
                 else
                     stmt_bytes = compile_statement(stmt, i, ctx)
-                    append!(inner_bytes, stmt_bytes)
+                    emit_raw!(ib, stmt_bytes)
 
                     # Drop unused values (but NOT if statement emitted UNREACHABLE)
                     # Check if the last opcode is UNREACHABLE (0x00) - if so, no value to drop
@@ -3076,7 +2973,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                 if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                                     use_count = get(ssa_use_count, i, 0)
                                     if use_count == 0
-                                        push!(inner_bytes, Opcode.DROP)
+                                        drop!(ib)
                                     end
                                 end
                             end
@@ -3093,12 +2990,12 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
         elseif found_nested_cond
             # Then branch has a nested conditional - recurse to handle it
             # This handles short-circuit && patterns
-            append!(inner_bytes, gen_conditional(cond_idx + 1))
+            emit_raw!(ib, gen_conditional(cond_idx + 1))
         elseif !found_return
             # PURE-220: If the then-branch is a side-effect-only closure (like _growend!),
             # the IF block is void. Close it with END and emit continuation AFTER the block.
             if found_base_closure_invoke && !then_has_return_stmt
-                push!(inner_bytes, Opcode.END)  # Close void IF block
+                end_block!(ib)  # Close void IF block
 
                 # Find the conditional at dest (if any)
                 dest_cond_idx = nothing
@@ -3120,7 +3017,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                             # Skip control flow (gotos handled by structure)
                         else
                             stmt_bytes = compile_statement(stmt, i, ctx)
-                            append!(inner_bytes, stmt_bytes)
+                            emit_raw!(ib, stmt_bytes)
 
                             # Drop unused call results
                             if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
@@ -3131,7 +3028,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                         if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                                             use_count = get(ssa_use_count, i, 0)
                                             if use_count == 0
-                                                push!(inner_bytes, Opcode.DROP)
+                                                drop!(ib)
                                             end
                                         end
                                     end
@@ -3140,12 +3037,12 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                         end
                     end
                     # Now generate the next conditional
-                    append!(inner_bytes, gen_conditional(dest_cond_idx; target_idx=goto_if_not.dest))
+                    emit_raw!(ib, gen_conditional(dest_cond_idx; target_idx=goto_if_not.dest))
                 else
-                    append!(inner_bytes, gen_conditional(length(conditionals) + 1; target_idx=goto_if_not.dest))
+                    emit_raw!(ib, gen_conditional(length(conditionals) + 1; target_idx=goto_if_not.dest))
                 end
 
-                return inner_bytes
+                return builder_code(ib)
             end
 
             # Then branch doesn't return and has no nested conditionals
@@ -3160,12 +3057,11 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                         val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
                         is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
                         if func_ret_wasm === ExternRef && is_numeric_val
-                            emit_numeric_to_externref!(inner_bytes, stmt.val, val_wasm, ctx)
+                            nb = UInt8[]; emit_numeric_to_externref!(nb, stmt.val, val_wasm, ctx); emit_raw!(ib, nb; pushes=WasmValType[ExternRef])
                         else
-                            append!(inner_bytes, compile_value(stmt.val, ctx))
+                            emit_raw!(ib, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
                             if func_ret_wasm === ExternRef && val_wasm !== ExternRef
-                                push!(inner_bytes, Opcode.GC_PREFIX)
-                                push!(inner_bytes, Opcode.EXTERN_CONVERT_ANY)
+                                extern_convert_any!(ib)
                             end
                         end
                     end
@@ -3180,7 +3076,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                 elseif stmt === nothing
                     # Skip nothing statements
                 else
-                    append!(inner_bytes, compile_statement(stmt, i, ctx))
+                    emit_raw!(ib, compile_statement(stmt, i, ctx))
 
                     # Drop unused values
                     if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
@@ -3191,7 +3087,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                 if !haskey(ctx.ssa_locals, i) && !haskey(ctx.phi_locals, i)
                                     use_count = get(ssa_use_count, i, 0)
                                     if use_count == 0
-                                        push!(inner_bytes, Opcode.DROP)
+                                        drop!(ib)
                                     end
                                 end
                             end
@@ -3202,7 +3098,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
         end
 
         # Else branch
-        push!(inner_bytes, Opcode.ELSE)
+        else_!(ib)
 
         # Find the conditional at dest (if any)
         # This handles the case where multiple conditionals jump to the same target
@@ -3216,10 +3112,10 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
 
         # Recurse to the conditional at dest, or generate final block
         if dest_cond_idx !== nothing
-            append!(inner_bytes, gen_conditional(dest_cond_idx; target_idx=goto_if_not.dest))
+            emit_raw!(ib, gen_conditional(dest_cond_idx; target_idx=goto_if_not.dest))
         else
             # No conditional at dest - generate the code at dest directly
-            append!(inner_bytes, gen_conditional(length(conditionals) + 1; target_idx=goto_if_not.dest))
+            emit_raw!(ib, gen_conditional(length(conditionals) + 1; target_idx=goto_if_not.dest))
         end
 
         # PURE-3111: If the outer IF has a typed result but the else branch only
@@ -3227,15 +3123,15 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
         # a value for the IF block. Emit unreachable to satisfy the typed result —
         # unreachable is polymorphic and satisfies any expected type.
         if used_typed_if[] && else_terminates
-            push!(inner_bytes, Opcode.UNREACHABLE)
+            unreachable!(ib)
         end
 
-        push!(inner_bytes, Opcode.END)
+        end_block!(ib)
 
-        return inner_bytes
+        return builder_code(ib)
     end
 
-    append!(bytes, gen_conditional(1))
+    emit_raw!(b, gen_conditional(1))
 
     # Check if all code paths terminate inside the conditionals
     # This is the case when:
@@ -3249,7 +3145,7 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
     # For void IF blocks where branches use RETURN, code after IF is unreachable.
     #
     # Count actual return blocks vs total blocks
-    return_blocks = count(b -> b.terminator isa Core.ReturnNode, blocks)
+    return_blocks = count(blk -> blk.terminator isa Core.ReturnNode, blocks)
     total_blocks = length(blocks)
 
     # Check if we're using typed IF blocks (branches produce values)
@@ -3267,37 +3163,37 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
     elseif return_blocks >= 2
         # Void IF blocks: all code paths return inside the conditionals via explicit RETURN,
         # so this point is truly unreachable
-        push!(bytes, Opcode.UNREACHABLE)
+        unreachable!(b)
     elseif result_type isa ConcreteRef || result_type === I32 || result_type === I64 ||
        result_type === F32 || result_type === F64
         # Typed result but void IF blocks — fall through needs a value
         # This shouldn't normally happen, but as a safety net:
-        push!(bytes, Opcode.RETURN)
+        return_!(b)
     elseif result_type === ExternRef
         # ExternRef result - IF produces void, need ref.null extern before RETURN
-        push!(bytes, Opcode.REF_NULL, UInt8(ExternRef))
-        push!(bytes, Opcode.RETURN)
+        ref_null!(b, ExternRef)
+        return_!(b)
     else
-        push!(bytes, Opcode.RETURN)
+        return_!(b)
     end
 
-    return bytes
+    return builder_code(b)
 end
 
 """
 Generate code for a single basic block.
 """
 @inline function generate_block_code(ctx::AbstractCompilationContext, block::BasicBlock)::Vector{UInt8}
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="generate_block_code", strict=false)
     code = ctx.code_info.code
 
     for i in block.start_idx:block.end_idx
         stmt_bytes = compile_statement(code[i], i, ctx)
         # PURE-414: Validate emitted bytes for stack type tracking
         validate_emitted_bytes!(ctx, stmt_bytes, i)
-        append!(bytes, stmt_bytes)
+        emit_raw!(b, stmt_bytes)
     end
 
-    return bytes
+    return builder_code(b)
 end
 

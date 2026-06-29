@@ -272,7 +272,7 @@ function emit_dispatch_wrappers!(mod::WasmModule,
 
         wrapper_indices = UInt32[]
         for (entry_i, entry) in enumerate(dt.entries)
-            body = UInt8[]
+            b = InstrBuilder(; func_name="emit_dispatch_wrappers!", strict=false)
 
             # For each parameter: local.get + unbox/cast to concrete type
             for (j, tid) in enumerate(entry.type_ids)
@@ -285,34 +285,25 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                     end
                 end
 
-                push!(body, Opcode.LOCAL_GET)
-                append!(body, encode_leb128_unsigned(UInt32(j - 1)))
+                local_get!(b, UInt32(j - 1))
 
                 if concrete_type !== nothing
                     arg_wasm_type = julia_to_wasm_type(concrete_type)
                     if arg_wasm_type in (I32, I64, F32, F64) && haskey(type_registry.numeric_boxes, arg_wasm_type)
                         # Unbox: ref.cast to box struct, struct.get field 1 (the numeric value)
                         box_idx = type_registry.numeric_boxes[arg_wasm_type]
-                        push!(body, Opcode.GC_PREFIX)
-                        push!(body, Opcode.REF_CAST)
-                        append!(body, encode_leb128_signed(Int64(box_idx)))
-                        push!(body, Opcode.GC_PREFIX)
-                        push!(body, Opcode.STRUCT_GET)
-                        append!(body, encode_leb128_unsigned(box_idx))
-                        append!(body, encode_leb128_unsigned(UInt32(1)))  # field 1 = value
+                        ref_cast!(b, Int64(box_idx), false)
+                        struct_get!(b, box_idx, UInt32(1), arg_wasm_type)  # field 1 = value
                     elseif haskey(type_registry.structs, concrete_type)
                         # Cast to concrete struct type
                         struct_info = type_registry.structs[concrete_type]
-                        push!(body, Opcode.GC_PREFIX)
-                        push!(body, Opcode.REF_CAST)
-                        append!(body, encode_leb128_signed(Int64(struct_info.wasm_type_idx)))
+                        ref_cast!(b, Int64(struct_info.wasm_type_idx), false)
                     end
                 end
             end
 
             # call $target — target_idx is correct because actual functions were added first
-            push!(body, Opcode.CALL)
-            append!(body, encode_leb128_unsigned(entry.target_idx))
+            call!(b, entry.target_idx, WasmValType[], WasmValType[])
 
             # PURE-9061: Box numeric results when dispatch table uses anyref return
             if is_anyref_return
@@ -320,27 +311,22 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                 if entry.return_type === Nothing || entry.return_type === Union{}
                     # WBUILD-4000: Target function returns void (Nothing/Union{}).
                     # Push ref.null none as the anyref return value.
-                    push!(body, Opcode.REF_NULL)
-                    push!(body, UInt8(AnyRef))  # ref.null any → (ref null any) = anyref
+                    ref_null!(b, AnyRef)  # ref.null any → (ref null any) = anyref
                 elseif entry_wasm_type in (I32, I64, F32, F64)
                     # Box numeric result into a WasmGC struct: (struct (field typeId:i32) (field val:T))
                     box_idx = get_numeric_box_type!(mod, type_registry, entry_wasm_type)
                     # Stack has the numeric value; emit struct.new with typeId=0 + value
                     # Need to reorder: value is on stack, but struct.new expects (typeId, value)
                     # Use a local to save the value
-                    push!(body, Opcode.LOCAL_SET)
-                    append!(body, encode_leb128_unsigned(UInt32(Int(dt.arity))))  # first extra local
-                    push!(body, Opcode.I32_CONST)
-                    push!(body, 0x00)  # typeId = 0 (generic box)
-                    push!(body, Opcode.LOCAL_GET)
-                    append!(body, encode_leb128_unsigned(UInt32(Int(dt.arity))))
-                    push!(body, Opcode.GC_PREFIX)
-                    push!(body, Opcode.STRUCT_NEW)
-                    append!(body, encode_leb128_unsigned(box_idx))
+                    local_set!(b, UInt32(Int(dt.arity)))  # first extra local
+                    i32_const!(b, 0)  # typeId = 0 (generic box)
+                    local_get!(b, UInt32(Int(dt.arity)))
+                    struct_new!(b, box_idx, WasmValType[])
                 end
             end
 
-            push!(body, Opcode.END)
+            end_block!(b)
+            body = builder_code(b)
 
             # Wrapper needs an extra local for boxing when mixed returns
             wrapper_locals = WasmValType[]
@@ -371,30 +357,22 @@ Uses array.new_fixed for small arrays, or array.new + array.set for larger ones.
 Returns bytecode WITHOUT the trailing END byte (add_global_ref! adds it).
 """
 function emit_i32_array_init(array_type_idx::UInt32, values::AbstractVector)::Vector{UInt8}
-    bytes = UInt8[]
+    b = InstrBuilder(; func_name="emit_i32_array_init", strict=false)
     n = length(values)
 
     if n <= 128
         # array.new_fixed: push all elements, then array.new_fixed type_idx count
         for v in values
-            push!(bytes, Opcode.I32_CONST)
             # Safely convert to signed i32 for LEB128 encoding (handles UInt32 > 2^31)
             signed_v = reinterpret(Int32, UInt32(v & 0xFFFFFFFF))
-            append!(bytes, encode_leb128_signed(signed_v))
+            i32_const!(b, signed_v)
         end
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_NEW_FIXED)
-        append!(bytes, encode_leb128_unsigned(array_type_idx))
-        append!(bytes, encode_leb128_unsigned(UInt32(n)))
+        array_new_fixed!(b, array_type_idx, UInt32(n), I32)
     else
         # For large arrays: array.new (default 0) then array.set for non-zero elements
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int32(0)))  # default value
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(Int32(n)))  # length (i32.const → signed LEB)
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_NEW)
-        append!(bytes, encode_leb128_unsigned(array_type_idx))
+        i32_const!(b, Int32(0))  # default value
+        i32_const!(b, Int32(n))  # length (i32.const → signed LEB)
+        array_new!(b, array_type_idx, I32)
 
         # Set non-zero elements
         for (i, v) in enumerate(values)
@@ -408,7 +386,7 @@ function emit_i32_array_init(array_type_idx::UInt32, values::AbstractVector)::Ve
         end
     end
 
-    return bytes
+    return builder_code(b)
 end
 
 # ==================== Dispatch Call Emission ====================
@@ -442,41 +420,34 @@ function emit_dispatch_call!(bytes::Vector{UInt8},
     key_local = extra_locals[arity + 3]
     func_idx_local = extra_locals[arity + 4]
 
+    b = InstrBuilder(; func_name="emit_dispatch_call!", strict=false)
+
     # --- Step 1: Extract typeIds from arguments ---
     for (j, arg_local) in enumerate(arg_locals)
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(arg_local))
-        # emit_typeof!: ref.cast to $JlBase, struct.get field 0
-        emit_typeof!(bytes, base_struct_idx)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(type_id_locals[j]))
+        local_get!(b, arg_local)
+        # emit_typeof!: ref.cast to $JlBase, struct.get field 0 (net: anyref -> i32)
+        tb = UInt8[]; emit_typeof!(tb, base_struct_idx); emit_raw!(b, tb; pops=1, pushes=WasmValType[I32])
+        local_set!(b, type_id_locals[j])
     end
 
     # --- Step 2: FNV-1a hash ---
     # hash = FNV_OFFSET_BASIS
-    push!(bytes, Opcode.I32_CONST)
-    append!(bytes, encode_leb128_signed(reinterpret(Int32, FNV_OFFSET_BASIS)))
+    i32_const!(b, reinterpret(Int32, FNV_OFFSET_BASIS))
 
     for j in 1:arity
         # hash = (hash ^ typeId_j) * FNV_PRIME
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(type_id_locals[j]))
-        push!(bytes, Opcode.I32_XOR)
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(reinterpret(Int32, FNV_PRIME)))
-        push!(bytes, Opcode.I32_MUL)
+        local_get!(b, type_id_locals[j])
+        num!(b, Opcode.I32_XOR)
+        i32_const!(b, reinterpret(Int32, FNV_PRIME))
+        num!(b, Opcode.I32_MUL)
     end
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(hash_local))
+    local_set!(b, hash_local)
 
     # --- Step 3: slot = hash & mask ---
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(hash_local))
-    push!(bytes, Opcode.I32_CONST)
-    append!(bytes, encode_leb128_signed(dt.mask))
-    push!(bytes, Opcode.I32_AND)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(slot_local))
+    local_get!(b, hash_local)
+    i32_const!(b, dt.mask)
+    num!(b, Opcode.I32_AND)
+    local_set!(b, slot_local)
 
     # --- Step 4: Linear probe loop ---
     # block $found
@@ -493,147 +464,118 @@ function emit_dispatch_call!(bytes::Vector{UInt8},
     result_block_type = dt.result_wasm_type
 
     # block $done (result <return_type>)
-    push!(bytes, Opcode.BLOCK)
-    if result_block_type == I32
-        push!(bytes, 0x7F)  # i32
+    done_bt = if result_block_type == I32
+        0x7F  # i32
     elseif result_block_type == I64
-        push!(bytes, 0x7E)  # i64
+        0x7E  # i64
     elseif result_block_type == F32
-        push!(bytes, 0x7D)  # f32
+        0x7D  # f32
     elseif result_block_type == F64
-        push!(bytes, 0x7C)  # f64
+        0x7C  # f64
     elseif result_block_type == AnyRef
-        push!(bytes, 0x6E)  # anyref
+        0x6E  # anyref
     else
-        push!(bytes, 0x40)  # void
+        0x40  # void
     end
+    block!(b, done_bt)
 
     # block $not_found (void)
-    push!(bytes, Opcode.BLOCK)
-    push!(bytes, 0x40)  # void
+    block!(b, 0x40)
 
     # loop $probe (void)
-    push!(bytes, Opcode.LOOP)
-    push!(bytes, 0x40)  # void
+    loop!(b, 0x40)
 
     # Load key at slot: global.get $keys_array, local.get $slot, array.get
-    push!(bytes, Opcode.GLOBAL_GET)
-    append!(bytes, encode_leb128_unsigned(dt.keys_global_idx))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(slot_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_GET)
-    append!(bytes, encode_leb128_unsigned(dt.i32_array_type_idx))
-    push!(bytes, Opcode.LOCAL_TEE)
-    append!(bytes, encode_leb128_unsigned(key_local))
+    global_get!(b, dt.keys_global_idx, AnyRef)
+    local_get!(b, slot_local)
+    array_get!(b, dt.i32_array_type_idx, I32)
+    local_tee!(b, key_local)
 
     # Empty slot check: key == 0 → br $not_found (label 1)
-    push!(bytes, Opcode.I32_EQZ)
-    push!(bytes, Opcode.BR_IF)
-    append!(bytes, encode_leb128_unsigned(UInt32(1)))  # br to $not_found
+    num!(b, Opcode.I32_EQZ)
+    br_if!(b, UInt32(1))  # br to $not_found
 
     # Check key matches hash
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(key_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(hash_local))
-    push!(bytes, Opcode.I32_EQ)
-    push!(bytes, Opcode.IF)
-    push!(bytes, 0x40)  # void
+    local_get!(b, key_local)
+    local_get!(b, hash_local)
+    num!(b, Opcode.I32_EQ)
+    if_!(b, 0x40)
 
     # Verify typeIds match (for collision resolution)
     # For each argument, check type_ids_flat[slot * arity + j] == typeId_j
     type_ids_match = true
     for j in 1:arity
         # global.get $typeids_array
-        push!(bytes, Opcode.GLOBAL_GET)
-        append!(bytes, encode_leb128_unsigned(dt.typeids_global_idx))
+        global_get!(b, dt.typeids_global_idx, AnyRef)
         # index = slot * arity + j - 1
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(slot_local))
+        local_get!(b, slot_local)
         if arity > 1
-            push!(bytes, Opcode.I32_CONST)
-            append!(bytes, encode_leb128_signed(dt.arity))
-            push!(bytes, Opcode.I32_MUL)
-            push!(bytes, Opcode.I32_CONST)
-            append!(bytes, encode_leb128_signed(Int32(j - 1)))
-            push!(bytes, Opcode.I32_ADD)
+            i32_const!(b, dt.arity)
+            num!(b, Opcode.I32_MUL)
+            i32_const!(b, Int32(j - 1))
+            num!(b, Opcode.I32_ADD)
         end
         # array.get
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_GET)
-        append!(bytes, encode_leb128_unsigned(dt.i32_array_type_idx))
+        array_get!(b, dt.i32_array_type_idx, I32)
         # Compare with extracted typeId
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(type_id_locals[j]))
-        push!(bytes, Opcode.I32_EQ)
+        local_get!(b, type_id_locals[j])
+        num!(b, Opcode.I32_EQ)
 
         # For multi-arg: AND all comparisons
         if j > 1
-            push!(bytes, Opcode.I32_AND)
+            num!(b, Opcode.I32_AND)
         end
     end
 
     # If all typeIds match: load func_idx, push args, call_indirect, br $done
-    push!(bytes, Opcode.IF)
-    push!(bytes, 0x40)  # void
+    if_!(b, 0x40)
 
     # Load funcref table index from values array
-    push!(bytes, Opcode.GLOBAL_GET)
-    append!(bytes, encode_leb128_unsigned(dt.values_global_idx))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(slot_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_GET)
-    append!(bytes, encode_leb128_unsigned(dt.i32_array_type_idx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(func_idx_local))
+    global_get!(b, dt.values_global_idx, AnyRef)
+    local_get!(b, slot_local)
+    array_get!(b, dt.i32_array_type_idx, I32)
+    local_set!(b, func_idx_local)
 
     # Push arguments for call_indirect (anyref params)
     for arg_local in arg_locals
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(arg_local))
+        local_get!(b, arg_local)
     end
 
     # Push funcref table element index
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(func_idx_local))
+    local_get!(b, func_idx_local)
 
     # call_indirect type_idx table_idx
-    push!(bytes, Opcode.CALL_INDIRECT)
-    append!(bytes, encode_leb128_unsigned(dt.dispatch_sig_idx))
-    append!(bytes, encode_leb128_unsigned(dt.func_table_idx))
+    ci_params = fill(AnyRef, arity)
+    ci_results = result_block_type in (I32, I64, F32, F64) ? WasmValType[result_block_type] :
+                 (result_block_type == AnyRef ? WasmValType[AnyRef] : WasmValType[])
+    call_indirect!(b, dt.dispatch_sig_idx, dt.func_table_idx, ci_params, ci_results)
 
     # br $done (label 4: past typeIds-if, hash-if, loop, not_found, to done block)
-    push!(bytes, Opcode.BR)
-    append!(bytes, encode_leb128_unsigned(UInt32(4)))
+    br!(b, UInt32(4))
 
-    push!(bytes, Opcode.END)  # end typeIds match if
-    push!(bytes, Opcode.END)  # end hash match if
+    end_block!(b)  # end typeIds match if
+    end_block!(b)  # end hash match if
 
     # Next slot: (slot + 1) & mask
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(slot_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.I32_ADD)
-    push!(bytes, Opcode.I32_CONST)
-    append!(bytes, encode_leb128_signed(dt.mask))
-    push!(bytes, Opcode.I32_AND)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(slot_local))
+    local_get!(b, slot_local)
+    i32_const!(b, 1)
+    num!(b, Opcode.I32_ADD)
+    i32_const!(b, dt.mask)
+    num!(b, Opcode.I32_AND)
+    local_set!(b, slot_local)
 
     # br $probe (label 0: loop)
-    push!(bytes, Opcode.BR)
-    append!(bytes, encode_leb128_unsigned(UInt32(0)))
+    br!(b, UInt32(0))
 
-    push!(bytes, Opcode.END)  # end loop $probe
+    end_block!(b)  # end loop $probe
 
-    push!(bytes, Opcode.END)  # end block $not_found
+    end_block!(b)  # end block $not_found
     # Dispatch failed — unreachable
-    push!(bytes, Opcode.UNREACHABLE)
+    unreachable!(b)
 
-    push!(bytes, Opcode.END)  # end block $done
+    end_block!(b)  # end block $done
+
+    append!(bytes, builder_code(b))
 end
 
 """
@@ -645,7 +587,7 @@ function generate_dispatch_caller_body(dt::DispatchTable,
                                         n_params::Int,
                                         base_struct_idx::UInt32,
                                         type_registry)
-    body = UInt8[]
+    b = InstrBuilder(; func_name="generate_dispatch_caller_body", strict=false)
     locals = WasmValType[]
     arity = Int(dt.arity)
 
@@ -659,10 +601,8 @@ function generate_dispatch_caller_body(dt::DispatchTable,
 
     # Store params as anyref in arg_locals
     for (j, arg_local) in enumerate(arg_locals)
-        push!(body, Opcode.LOCAL_GET)
-        append!(body, encode_leb128_unsigned(UInt32(j - 1)))  # param j-1
-        push!(body, Opcode.LOCAL_SET)
-        append!(body, encode_leb128_unsigned(arg_local))
+        local_get!(b, UInt32(j - 1))  # param j-1
+        local_set!(b, arg_local)
     end
 
     # Allocate i32 locals for dispatch (typeIds + hash/slot/key/func_idx)
@@ -673,14 +613,19 @@ function generate_dispatch_caller_body(dt::DispatchTable,
         push!(dispatch_locals, local_idx)
     end
 
-    # Emit the dispatch probe + call_indirect (leaves result on stack)
-    emit_dispatch_call!(body, dt, arg_locals, base_struct_idx, dispatch_locals)
+    # Emit the dispatch probe + call_indirect (leaves result on stack).
+    # emit_dispatch_call! mutates a raw buffer; splice via the bridge.
+    dispatch_buf = UInt8[]
+    emit_dispatch_call!(dispatch_buf, dt, arg_locals, base_struct_idx, dispatch_locals)
+    dispatch_pushes = dt.result_wasm_type in (I32, I64, F32, F64, AnyRef) ?
+        WasmValType[dt.result_wasm_type] : WasmValType[]
+    emit_raw!(b, dispatch_buf; pushes=dispatch_pushes)
 
     # Return the dispatch result and end function
-    push!(body, Opcode.RETURN)
-    push!(body, Opcode.END)
+    return_!(b)
+    end_block!(b)
 
-    return (body, locals)
+    return (builder_code(b), locals)
 end
 
 """
@@ -990,7 +935,7 @@ function _emit_table_wrappers!(mod::WasmModule,
 
     wrapper_indices = UInt32[]
     for (entry_i, entry) in enumerate(dt.entries)
-        body = UInt8[]
+        b = InstrBuilder(; func_name="_emit_table_wrappers!", strict=false)
 
         # For each parameter: local.get + unbox/cast to concrete type
         for (j, tid) in enumerate(entry.type_ids)
@@ -1002,54 +947,40 @@ function _emit_table_wrappers!(mod::WasmModule,
                 end
             end
 
-            push!(body, Opcode.LOCAL_GET)
-            append!(body, encode_leb128_unsigned(UInt32(j - 1)))
+            local_get!(b, UInt32(j - 1))
 
             if concrete_type !== nothing
                 arg_wasm_type = julia_to_wasm_type(concrete_type)
                 if arg_wasm_type in (I32, I64, F32, F64) && haskey(type_registry.numeric_boxes, arg_wasm_type)
                     box_idx = type_registry.numeric_boxes[arg_wasm_type]
-                    push!(body, Opcode.GC_PREFIX)
-                    push!(body, Opcode.REF_CAST)
-                    append!(body, encode_leb128_signed(Int64(box_idx)))
-                    push!(body, Opcode.GC_PREFIX)
-                    push!(body, Opcode.STRUCT_GET)
-                    append!(body, encode_leb128_unsigned(box_idx))
-                    append!(body, encode_leb128_unsigned(UInt32(1)))
+                    ref_cast!(b, Int64(box_idx), false)
+                    struct_get!(b, box_idx, UInt32(1), arg_wasm_type)
                 elseif haskey(type_registry.structs, concrete_type)
                     struct_info = type_registry.structs[concrete_type]
-                    push!(body, Opcode.GC_PREFIX)
-                    push!(body, Opcode.REF_CAST)
-                    append!(body, encode_leb128_signed(Int64(struct_info.wasm_type_idx)))
+                    ref_cast!(b, Int64(struct_info.wasm_type_idx), false)
                 end
             end
         end
 
-        push!(body, Opcode.CALL)
-        append!(body, encode_leb128_unsigned(entry.target_idx))
+        call!(b, entry.target_idx, WasmValType[], WasmValType[])
 
         # Box numeric results when dispatch table uses anyref return
         if is_anyref_return
             entry_wasm_type = julia_to_wasm_type(entry.return_type)
             if entry.return_type === Nothing || entry.return_type === Union{}
                 # WBUILD-4000: Target function returns void — push null anyref
-                push!(body, Opcode.REF_NULL)
-                push!(body, UInt8(AnyRef))
+                ref_null!(b, AnyRef)
             elseif entry_wasm_type in (I32, I64, F32, F64)
                 box_idx = get_numeric_box_type!(mod, type_registry, entry_wasm_type)
-                push!(body, Opcode.LOCAL_SET)
-                append!(body, encode_leb128_unsigned(UInt32(Int(dt.arity))))
-                push!(body, Opcode.I32_CONST)
-                push!(body, 0x00)
-                push!(body, Opcode.LOCAL_GET)
-                append!(body, encode_leb128_unsigned(UInt32(Int(dt.arity))))
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_NEW)
-                append!(body, encode_leb128_unsigned(box_idx))
+                local_set!(b, UInt32(Int(dt.arity)))
+                i32_const!(b, 0)
+                local_get!(b, UInt32(Int(dt.arity)))
+                struct_new!(b, box_idx, WasmValType[])
             end
         end
 
-        push!(body, Opcode.END)
+        end_block!(b)
+        body = builder_code(b)
 
         wrapper_locals = WasmValType[]
         if is_anyref_return
@@ -1113,107 +1044,110 @@ function emit_overlay_dispatch_call!(bytes::Vector{UInt8},
     key_local = extra_locals[arity + 3]
     func_idx_local = extra_locals[arity + 4]
 
+    b = InstrBuilder(; func_name="emit_overlay_dispatch_call!", strict=false)
+
     # --- Step 1: Extract typeIds from arguments ---
     for (j, arg_local) in enumerate(arg_locals)
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(arg_local))
-        emit_typeof!(bytes, base_struct_idx)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(type_id_locals[j]))
+        local_get!(b, arg_local)
+        tb = UInt8[]; emit_typeof!(tb, base_struct_idx); emit_raw!(b, tb; pops=1, pushes=WasmValType[I32])
+        local_set!(b, type_id_locals[j])
     end
 
     # --- Step 2: FNV-1a hash ---
-    push!(bytes, Opcode.I32_CONST)
-    append!(bytes, encode_leb128_signed(reinterpret(Int32, FNV_OFFSET_BASIS)))
+    i32_const!(b, reinterpret(Int32, FNV_OFFSET_BASIS))
     for j in 1:arity
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(type_id_locals[j]))
-        push!(bytes, Opcode.I32_XOR)
-        push!(bytes, Opcode.I32_CONST)
-        append!(bytes, encode_leb128_signed(reinterpret(Int32, FNV_PRIME)))
-        push!(bytes, Opcode.I32_MUL)
+        local_get!(b, type_id_locals[j])
+        num!(b, Opcode.I32_XOR)
+        i32_const!(b, reinterpret(Int32, FNV_PRIME))
+        num!(b, Opcode.I32_MUL)
     end
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(hash_local))
+    local_set!(b, hash_local)
 
     # --- Determine result block type ---
     result_block_type = overlay_dt.result_wasm_type
+    done_bt = if result_block_type == I32
+        0x7F
+    elseif result_block_type == I64
+        0x7E
+    elseif result_block_type == F32
+        0x7D
+    elseif result_block_type == F64
+        0x7C
+    elseif result_block_type == AnyRef
+        0x6E
+    else
+        0x40
+    end
 
     # block $done (result <return_type>)
-    push!(bytes, Opcode.BLOCK)
-    _emit_block_type!(bytes, result_block_type)
+    block!(b, done_bt)
 
     # ======== OVERLAY PROBE ========
     # block $overlay_miss
-    push!(bytes, Opcode.BLOCK)
-    push!(bytes, 0x40)  # void
+    block!(b, 0x40)
 
     # slot = hash & overlay_mask
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(hash_local))
-    push!(bytes, Opcode.I32_CONST)
-    append!(bytes, encode_leb128_signed(overlay_dt.mask))
-    push!(bytes, Opcode.I32_AND)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(slot_local))
+    local_get!(b, hash_local)
+    i32_const!(b, overlay_dt.mask)
+    num!(b, Opcode.I32_AND)
+    local_set!(b, slot_local)
 
     # loop $overlay_probe
-    push!(bytes, Opcode.LOOP)
-    push!(bytes, 0x40)  # void
+    loop!(b, 0x40)
 
     # Load key: global.get overlay_keys, local.get slot, array.get
-    _emit_table_probe_body!(bytes, overlay_dt, type_id_locals, hash_local,
+    # _emit_table_probe_body! mutates a raw buffer; net stack effect is 0 here.
+    pb = UInt8[]
+    _emit_table_probe_body!(pb, overlay_dt, type_id_locals, hash_local,
                              slot_local, key_local, func_idx_local, arg_locals,
                              arity,
                              UInt32(3),  # br depth to $done (past: overlay_probe, overlay_miss, done)
                              UInt32(1))  # br depth to $overlay_miss (past: overlay_probe)
+    emit_raw!(b, pb)
 
     # Next slot: (slot + 1) & mask
-    _emit_next_slot!(bytes, slot_local, overlay_dt.mask)
+    nb = UInt8[]; _emit_next_slot!(nb, slot_local, overlay_dt.mask); emit_raw!(b, nb)
 
     # br $overlay_probe (label 0: loop)
-    push!(bytes, Opcode.BR)
-    append!(bytes, encode_leb128_unsigned(UInt32(0)))
+    br!(b, UInt32(0))
 
-    push!(bytes, Opcode.END)  # end loop $overlay_probe
-    push!(bytes, Opcode.END)  # end block $overlay_miss
+    end_block!(b)  # end loop $overlay_probe
+    end_block!(b)  # end block $overlay_miss
 
     # ======== BASE FALLBACK PROBE ========
     # block $base_miss
-    push!(bytes, Opcode.BLOCK)
-    push!(bytes, 0x40)  # void
+    block!(b, 0x40)
 
     # slot = hash & base_mask
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(hash_local))
-    push!(bytes, Opcode.I32_CONST)
-    append!(bytes, encode_leb128_signed(base_dt.mask))
-    push!(bytes, Opcode.I32_AND)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(slot_local))
+    local_get!(b, hash_local)
+    i32_const!(b, base_dt.mask)
+    num!(b, Opcode.I32_AND)
+    local_set!(b, slot_local)
 
     # loop $base_probe
-    push!(bytes, Opcode.LOOP)
-    push!(bytes, 0x40)  # void
+    loop!(b, 0x40)
 
-    _emit_table_probe_body!(bytes, base_dt, type_id_locals, hash_local,
+    pb2 = UInt8[]
+    _emit_table_probe_body!(pb2, base_dt, type_id_locals, hash_local,
                              slot_local, key_local, func_idx_local, arg_locals,
                              arity,
                              UInt32(3),  # br depth to $done (past: base_probe, base_miss, done)
                              UInt32(1))  # br depth to $base_miss (past: base_probe)
+    emit_raw!(b, pb2)
 
-    _emit_next_slot!(bytes, slot_local, base_dt.mask)
+    nb2 = UInt8[]; _emit_next_slot!(nb2, slot_local, base_dt.mask); emit_raw!(b, nb2)
 
-    push!(bytes, Opcode.BR)
-    append!(bytes, encode_leb128_unsigned(UInt32(0)))
+    br!(b, UInt32(0))
 
-    push!(bytes, Opcode.END)  # end loop $base_probe
-    push!(bytes, Opcode.END)  # end block $base_miss
+    end_block!(b)  # end loop $base_probe
+    end_block!(b)  # end block $base_miss
 
     # Both tables missed — unreachable
-    push!(bytes, Opcode.UNREACHABLE)
+    unreachable!(b)
 
-    push!(bytes, Opcode.END)  # end block $done
+    end_block!(b)  # end block $done
+
+    append!(bytes, builder_code(b))
 end
 
 """Emit block type byte for a given WasmValType."""
@@ -1245,105 +1179,83 @@ function _emit_table_probe_body!(bytes::Vector{UInt8},
                                    arity::Int,
                                    br_done_depth::UInt32,
                                    br_miss_depth::UInt32)
+    b = InstrBuilder(; func_name="_emit_table_probe_body!", strict=false)
+
     # Load key at slot
-    push!(bytes, Opcode.GLOBAL_GET)
-    append!(bytes, encode_leb128_unsigned(dt.keys_global_idx))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(slot_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_GET)
-    append!(bytes, encode_leb128_unsigned(dt.i32_array_type_idx))
-    push!(bytes, Opcode.LOCAL_TEE)
-    append!(bytes, encode_leb128_unsigned(key_local))
+    global_get!(b, dt.keys_global_idx, AnyRef)
+    local_get!(b, slot_local)
+    array_get!(b, dt.i32_array_type_idx, I32)
+    local_tee!(b, key_local)
 
     # Empty slot → br $miss
-    push!(bytes, Opcode.I32_EQZ)
-    push!(bytes, Opcode.BR_IF)
-    append!(bytes, encode_leb128_unsigned(br_miss_depth))
+    num!(b, Opcode.I32_EQZ)
+    br_if!(b, br_miss_depth)
 
     # Check key matches hash
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(key_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(hash_local))
-    push!(bytes, Opcode.I32_EQ)
-    push!(bytes, Opcode.IF)
-    push!(bytes, 0x40)  # void
+    local_get!(b, key_local)
+    local_get!(b, hash_local)
+    num!(b, Opcode.I32_EQ)
+    if_!(b, 0x40)
 
     # Verify typeIds match
     for j in 1:arity
-        push!(bytes, Opcode.GLOBAL_GET)
-        append!(bytes, encode_leb128_unsigned(dt.typeids_global_idx))
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(slot_local))
+        global_get!(b, dt.typeids_global_idx, AnyRef)
+        local_get!(b, slot_local)
         if arity > 1
-            push!(bytes, Opcode.I32_CONST)
-            append!(bytes, encode_leb128_signed(dt.arity))
-            push!(bytes, Opcode.I32_MUL)
-            push!(bytes, Opcode.I32_CONST)
-            append!(bytes, encode_leb128_signed(Int32(j - 1)))
-            push!(bytes, Opcode.I32_ADD)
+            i32_const!(b, dt.arity)
+            num!(b, Opcode.I32_MUL)
+            i32_const!(b, Int32(j - 1))
+            num!(b, Opcode.I32_ADD)
         end
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.ARRAY_GET)
-        append!(bytes, encode_leb128_unsigned(dt.i32_array_type_idx))
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(type_id_locals[j]))
-        push!(bytes, Opcode.I32_EQ)
+        array_get!(b, dt.i32_array_type_idx, I32)
+        local_get!(b, type_id_locals[j])
+        num!(b, Opcode.I32_EQ)
         if j > 1
-            push!(bytes, Opcode.I32_AND)
+            num!(b, Opcode.I32_AND)
         end
     end
 
     # If all typeIds match: load func_idx, push args, call_indirect, br $done
-    push!(bytes, Opcode.IF)
-    push!(bytes, 0x40)  # void
+    if_!(b, 0x40)
 
-    push!(bytes, Opcode.GLOBAL_GET)
-    append!(bytes, encode_leb128_unsigned(dt.values_global_idx))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(slot_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.ARRAY_GET)
-    append!(bytes, encode_leb128_unsigned(dt.i32_array_type_idx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(func_idx_local))
+    global_get!(b, dt.values_global_idx, AnyRef)
+    local_get!(b, slot_local)
+    array_get!(b, dt.i32_array_type_idx, I32)
+    local_set!(b, func_idx_local)
 
     # Push args
     for arg_local in arg_locals
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(arg_local))
+        local_get!(b, arg_local)
     end
 
     # Push funcref table element index
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(func_idx_local))
+    local_get!(b, func_idx_local)
 
     # call_indirect type_idx table_idx
-    push!(bytes, Opcode.CALL_INDIRECT)
-    append!(bytes, encode_leb128_unsigned(dt.dispatch_sig_idx))
-    append!(bytes, encode_leb128_unsigned(dt.func_table_idx))
+    ci_params = fill(AnyRef, arity)
+    ci_results = dt.result_wasm_type in (I32, I64, F32, F64) ? WasmValType[dt.result_wasm_type] :
+                 (dt.result_wasm_type == AnyRef ? WasmValType[AnyRef] : WasmValType[])
+    call_indirect!(b, dt.dispatch_sig_idx, dt.func_table_idx, ci_params, ci_results)
 
     # br $done (needs to account for: typeIds-if, hash-if, loop, miss-block, done)
-    push!(bytes, Opcode.BR)
-    append!(bytes, encode_leb128_unsigned(br_done_depth + UInt32(1)))  # +1 for the two inner if blocks
+    br!(b, br_done_depth + UInt32(1))  # +1 for the two inner if blocks
 
-    push!(bytes, Opcode.END)  # end typeIds match if
-    push!(bytes, Opcode.END)  # end hash match if
+    end_block!(b)  # end typeIds match if
+    end_block!(b)  # end hash match if
+
+    append!(bytes, builder_code(b))
 end
 
 """Emit slot increment: slot = (slot + 1) & mask."""
 function _emit_next_slot!(bytes::Vector{UInt8}, slot_local::UInt32, mask::Int32)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(slot_local))
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.I32_ADD)
-    push!(bytes, Opcode.I32_CONST)
-    append!(bytes, encode_leb128_signed(mask))
-    push!(bytes, Opcode.I32_AND)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(slot_local))
+    b = InstrBuilder(; func_name="_emit_next_slot!", strict=false)
+    local_get!(b, slot_local)
+    i32_const!(b, 1)              # push!(I32_CONST); push!(0x01)
+    num!(b, Opcode.I32_ADD)
+    i32_const!(b, mask)
+    num!(b, Opcode.I32_AND)
+    local_set!(b, slot_local)
+    append!(bytes, builder_code(b))
 end
 
 """
@@ -1355,7 +1267,7 @@ function generate_overlay_dispatch_caller_body(overlay_dt::DispatchTable,
                                                 n_params::Int,
                                                 base_struct_idx::UInt32,
                                                 type_registry)
-    body = UInt8[]
+    b = InstrBuilder(; func_name="generate_overlay_dispatch_caller_body", strict=false)
     locals = WasmValType[]
     arity = Int(overlay_dt.arity)
 
@@ -1369,10 +1281,8 @@ function generate_overlay_dispatch_caller_body(overlay_dt::DispatchTable,
 
     # Store params as anyref
     for (j, arg_local) in enumerate(arg_locals)
-        push!(body, Opcode.LOCAL_GET)
-        append!(body, encode_leb128_unsigned(UInt32(j - 1)))
-        push!(body, Opcode.LOCAL_SET)
-        append!(body, encode_leb128_unsigned(arg_local))
+        local_get!(b, UInt32(j - 1))
+        local_set!(b, arg_local)
     end
 
     # Allocate i32 locals for dispatch (typeIds + hash/slot/key/func_idx)
@@ -1383,14 +1293,19 @@ function generate_overlay_dispatch_caller_body(overlay_dt::DispatchTable,
         push!(dispatch_locals, local_idx)
     end
 
-    # Emit dual-probe: overlay → base
-    emit_overlay_dispatch_call!(body, overlay_dt, base_dt, arg_locals,
+    # Emit dual-probe: overlay → base. emit_overlay_dispatch_call! mutates a raw
+    # buffer (leaves the dispatch result on the stack); splice via the bridge.
+    dispatch_buf = UInt8[]
+    emit_overlay_dispatch_call!(dispatch_buf, overlay_dt, base_dt, arg_locals,
                                  base_struct_idx, dispatch_locals)
+    dispatch_pushes = overlay_dt.result_wasm_type in (I32, I64, F32, F64, AnyRef) ?
+        WasmValType[overlay_dt.result_wasm_type] : WasmValType[]
+    emit_raw!(b, dispatch_buf; pushes=dispatch_pushes)
 
-    push!(body, Opcode.RETURN)
-    push!(body, Opcode.END)
+    return_!(b)
+    end_block!(b)
 
-    return (body, locals)
+    return (builder_code(b), locals)
 end
 
 """

@@ -9,124 +9,54 @@ Emit bytecode for 128-bit addition.
 Stack: [a_struct, b_struct] -> [result_struct]
 Algorithm: result_lo = a_lo + b_lo; carry = (result_lo < a_lo); result_hi = a_hi + b_hi + carry
 """
+# MIGRATED to InstrBuilder. Consumes [a_struct, b_struct], pushes result struct.
 function emit_int128_add(ctx, result_type::Type)::Vector{UInt8}
-    bytes = UInt8[]
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
+    structref = julia_to_wasm_type_concrete(result_type, ctx)
+    b = InstrBuilder(; func_name="emit_int128_add", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, structref])
 
-    # We need locals to hold extracted values and struct refs
-    # Allocate them dynamically
+    # struct locals (pop from stack) then i64 locals for extracted values
+    b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    a_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    a_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    a_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    result_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    for (i, t) in ((b_struct_local, structref), (a_struct_local, structref), (a_lo_local, I64),
+                   (a_hi_local, I64), (b_lo_local, I64), (b_hi_local, I64), (result_lo_local, I64))
+        builder_set_local_type!(b, i, t)
+    end
 
-    # First allocate struct locals so we can pop from stack
-    b_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(result_type, ctx))
-    a_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(result_type, ctx))
+    # Pop b_struct (top) then a_struct
+    local_set!(b, b_struct_local)
+    local_set!(b, a_struct_local)
 
-    # Then allocate i64 locals for extracted values
-    a_lo_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    a_hi_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    b_lo_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    b_hi_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    result_lo_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
+    # Extract a_lo, a_hi, b_lo, b_hi (lo=field 1, hi=field 2)
+    local_get!(b, a_struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, a_lo_local)
+    local_get!(b, a_struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, a_hi_local)
+    local_get!(b, b_struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, b_lo_local)
+    local_get!(b, b_struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, b_hi_local)
 
-    # Stack: [a_struct, b_struct]
-    # Pop b_struct to a local (b_struct is on top)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(b_struct_local))
+    # result_lo = a_lo + b_lo
+    local_get!(b, a_lo_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_ADD)
+    local_tee!(b, result_lo_local)
+    # carry = (result_lo <_u a_lo) ? 1 : 0  → i64
+    local_get!(b, a_lo_local); num!(b, Opcode.I64_LT_U); num!(b, Opcode.I64_EXTEND_I32_U)
+    # result_hi = a_hi + carry + b_hi
+    local_get!(b, a_hi_local); num!(b, Opcode.I64_ADD)
+    local_get!(b, b_hi_local); num!(b, Opcode.I64_ADD)
 
-    # Now stack: [a_struct]
-    # Pop a_struct to a local
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(a_struct_local))
-
-    # Extract a_lo, a_hi
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_struct_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.STRUCT_GET)
-    append!(bytes, encode_leb128_unsigned(type_idx))
-    append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(a_lo_local))
-
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_struct_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.STRUCT_GET)
-    append!(bytes, encode_leb128_unsigned(type_idx))
-    append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(a_hi_local))
-
-    # Extract b_lo, b_hi
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_struct_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.STRUCT_GET)
-    append!(bytes, encode_leb128_unsigned(type_idx))
-    append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(b_lo_local))
-
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_struct_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.STRUCT_GET)
-    append!(bytes, encode_leb128_unsigned(type_idx))
-    append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(b_hi_local))
-
-    # Compute result_lo = a_lo + b_lo
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_lo_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_lo_local))
-    push!(bytes, Opcode.I64_ADD)
-    push!(bytes, Opcode.LOCAL_TEE)
-    append!(bytes, encode_leb128_unsigned(result_lo_local))
-
-    # Compute carry = (result_lo < a_lo) ? 1 : 0  (unsigned comparison)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_lo_local))
-    push!(bytes, Opcode.I64_LT_U)
-    push!(bytes, Opcode.I64_EXTEND_I32_U)  # Convert i32 bool to i64
-
-    # Compute result_hi = a_hi + b_hi + carry
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_hi_local))
-    push!(bytes, Opcode.I64_ADD)  # a_hi + carry
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_hi_local))
-    push!(bytes, Opcode.I64_ADD)  # + b_hi
-
-    # Stack: [result_hi]
-    # Need: [result_lo, result_hi] for struct.new
-    # Save result_hi to local, then push lo, then hi
-    hi_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(hi_local))
-
-    # Stack: [] — push in struct field order: typeId first, then lo, then hi
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)  # typeId = 0
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_lo_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(hi_local))
-
-    # Create result struct
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.STRUCT_NEW)
-    append!(bytes, encode_leb128_unsigned(type_idx))
-
-    return bytes
+    # Save result_hi, then push fields in order (typeId, lo, hi)
+    hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    builder_set_local_type!(b, hi_local, I64)
+    local_set!(b, hi_local)
+    i32_const!(b, 0)  # typeId = 0
+    local_get!(b, result_lo_local)
+    local_get!(b, hi_local)
+    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return builder_code(b)
 end
 
 """
@@ -134,103 +64,52 @@ Emit bytecode for 128-bit subtraction.
 Stack: [a_struct, b_struct] -> [result_struct]
 Algorithm: result_lo = a_lo - b_lo; borrow = (a_lo < b_lo); result_hi = a_hi - b_hi - borrow
 """
+# MIGRATED to InstrBuilder. Consumes [a_struct, b_struct], pushes result struct.
 function emit_int128_sub(ctx, result_type::Type)::Vector{UInt8}
-    bytes = UInt8[]
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
+    structref = julia_to_wasm_type_concrete(result_type, ctx)
+    b = InstrBuilder(; func_name="emit_int128_sub", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, structref])
 
-    # First allocate struct locals so we can pop from stack
-    b_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(result_type, ctx))
-    a_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(result_type, ctx))
+    b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    a_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    a_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    a_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    result_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    result_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    borrow_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    for (i, t) in ((b_struct_local, structref), (a_struct_local, structref), (a_lo_local, I64),
+                   (a_hi_local, I64), (b_lo_local, I64), (b_hi_local, I64),
+                   (result_lo_local, I64), (result_hi_local, I64), (borrow_local, I64))
+        builder_set_local_type!(b, i, t)
+    end
 
-    # Allocate i64 locals for extracted values and results
-    a_lo_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    a_hi_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    b_lo_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    b_hi_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    result_lo_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    result_hi_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    borrow_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
+    # Pop structs to locals (b_struct on top)
+    local_set!(b, b_struct_local)
+    local_set!(b, a_struct_local)
 
-    # Pop structs to locals (b_struct is on top of stack)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(b_struct_local))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(a_struct_local))
-
-    # Extract fields
+    # Extract fields (lo=field 1, hi=field 2)
     for (struct_local, lo_local, hi_local) in [(a_struct_local, a_lo_local, a_hi_local),
                                                 (b_struct_local, b_lo_local, b_hi_local)]
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(struct_local))
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_GET)
-        append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(lo_local))
-
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(struct_local))
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_GET)
-        append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(hi_local))
+        local_get!(b, struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, lo_local)
+        local_get!(b, struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, hi_local)
     end
 
     # result_lo = a_lo - b_lo
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_lo_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_lo_local))
-    push!(bytes, Opcode.I64_SUB)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(result_lo_local))
-
-    # borrow = (a_lo < b_lo) ? 1 : 0
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_lo_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_lo_local))
-    push!(bytes, Opcode.I64_LT_U)
-    push!(bytes, Opcode.I64_EXTEND_I32_U)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(borrow_local))
-
+    local_get!(b, a_lo_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_SUB); local_set!(b, result_lo_local)
+    # borrow = (a_lo <_u b_lo) ? 1 : 0  → i64
+    local_get!(b, a_lo_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_LT_U); num!(b, Opcode.I64_EXTEND_I32_U); local_set!(b, borrow_local)
     # result_hi = a_hi - b_hi - borrow
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_hi_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_hi_local))
-    push!(bytes, Opcode.I64_SUB)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(borrow_local))
-    push!(bytes, Opcode.I64_SUB)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(result_hi_local))
+    local_get!(b, a_hi_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_SUB)
+    local_get!(b, borrow_local); num!(b, Opcode.I64_SUB); local_set!(b, result_hi_local)
 
-    # Create result struct: (typeId, result_lo, result_hi)
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)  # typeId = 0
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_lo_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_hi_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.STRUCT_NEW)
-    append!(bytes, encode_leb128_unsigned(type_idx))
-
-    return bytes
+    # Create result struct (typeId, lo, hi)
+    i32_const!(b, 0)
+    local_get!(b, result_lo_local); local_get!(b, result_hi_local)
+    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return builder_code(b)
 end
 
 """
@@ -240,69 +119,20 @@ Uses the identity: (a_lo + a_hi*2^64) * (b_lo + b_hi*2^64)
 = a_lo*b_lo + (a_lo*b_hi + a_hi*b_lo)*2^64 + a_hi*b_hi*2^128
 Since we only need low 128 bits: result_lo = low64(a_lo*b_lo), result_hi = high64(a_lo*b_lo) + low64(a_lo*b_hi) + low64(a_hi*b_lo)
 """
+# MIGRATED to InstrBuilder. Consumes [a_struct, b_struct], pushes a*b (low 128 bits).
 function emit_int128_mul(ctx, result_type::Type)::Vector{UInt8}
-    bytes = UInt8[]
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
+    structref = julia_to_wasm_type_concrete(result_type, ctx)
+    b = InstrBuilder(; func_name="emit_int128_mul", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, structref])
 
-    # Allocate locals
-    a_lo_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    a_hi_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    b_lo_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    b_hi_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-
-    # Pop structs to locals
-    b_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(result_type, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(b_struct_local))
-
-    a_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(result_type, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(a_struct_local))
-
-    # Extract fields
-    for (struct_local, lo_local, hi_local) in [(a_struct_local, a_lo_local, a_hi_local),
-                                                (b_struct_local, b_lo_local, b_hi_local)]
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(struct_local))
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_GET)
-        append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(lo_local))
-
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(struct_local))
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_GET)
-        append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(hi_local))
-    end
-
-    # WBUILD-5001: Full 128-bit multiplication with carry from lo*lo.
-    # WASM has no 64x64→128 multiply, so we use Knuth's Algorithm M with 32-bit halves
-    # to compute the upper 64 bits of (a_lo * b_lo). This "carry" was previously missing,
-    # causing widemul(UInt64, UInt64) to always return 0 in the hi word.
-    #
-    # Algorithm (Knuth vol 2, sec 4.3.1):
-    #   a0 = a_lo & 0xFFFFFFFF; a1 = a_lo >> 32
-    #   b0 = b_lo & 0xFFFFFFFF; b1 = b_lo >> 32
-    #   t = a0*b0; k = t >> 32
-    #   t = a1*b0 + k; w1 = t & 0xFFFFFFFF; w2 = t >> 32
-    #   t = a0*b1 + w1; k = t >> 32
-    #   carry = a1*b1 + w2 + k
-    #   result_lo = a_lo * b_lo (i64.mul gives low 64 bits)
-    #   result_hi = a_lo*b_hi + a_hi*b_lo + carry
-
-    # Extra locals for 32-bit decomposition
+    a_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    a_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    a_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    # Extra locals for 32-bit decomposition (Knuth Algorithm M for the lo*lo carry)
     a0_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     a1_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     b0_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
@@ -312,370 +142,182 @@ function emit_int128_mul(ctx, result_type::Type)::Vector{UInt8}
     w2_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     result_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     result_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    for i in (a_lo_local, a_hi_local, b_lo_local, b_hi_local, a0_local, a1_local, b0_local,
+              b1_local, t_local, w1_local, w2_local, result_lo_local, result_hi_local)
+        builder_set_local_type!(b, i, I64)
+    end
+    builder_set_local_type!(b, b_struct_local, structref); builder_set_local_type!(b, a_struct_local, structref)
+
+    # Pop structs; extract fields (lo=field 1, hi=field 2)
+    local_set!(b, b_struct_local)
+    local_set!(b, a_struct_local)
+    for (struct_local, lo_local, hi_local) in [(a_struct_local, a_lo_local, a_hi_local),
+                                                (b_struct_local, b_lo_local, b_hi_local)]
+        local_get!(b, struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, lo_local)
+        local_get!(b, struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, hi_local)
+    end
 
     mask32 = Int64(0xFFFFFFFF)
+    # a0 = a_lo & mask ; a1 = a_lo >>u 32 ; b0 = b_lo & mask ; b1 = b_lo >>u 32
+    local_get!(b, a_lo_local); i64_const!(b, mask32); num!(b, Opcode.I64_AND); local_set!(b, a0_local)
+    local_get!(b, a_lo_local); i64_const!(b, 32); num!(b, Opcode.I64_SHR_U); local_set!(b, a1_local)
+    local_get!(b, b_lo_local); i64_const!(b, mask32); num!(b, Opcode.I64_AND); local_set!(b, b0_local)
+    local_get!(b, b_lo_local); i64_const!(b, 32); num!(b, Opcode.I64_SHR_U); local_set!(b, b1_local)
+    # t = (a0*b0) >>u 32   (k)
+    local_get!(b, a0_local); local_get!(b, b0_local); num!(b, Opcode.I64_MUL)
+    i64_const!(b, 32); num!(b, Opcode.I64_SHR_U); local_set!(b, t_local)
+    # t = a1*b0 + k
+    local_get!(b, a1_local); local_get!(b, b0_local); num!(b, Opcode.I64_MUL)
+    local_get!(b, t_local); num!(b, Opcode.I64_ADD); local_set!(b, t_local)
+    # w1 = t & mask ; w2 = t >>u 32
+    local_get!(b, t_local); i64_const!(b, mask32); num!(b, Opcode.I64_AND); local_set!(b, w1_local)
+    local_get!(b, t_local); i64_const!(b, 32); num!(b, Opcode.I64_SHR_U); local_set!(b, w2_local)
+    # t = (a0*b1 + w1) >>u 32   (k)
+    local_get!(b, a0_local); local_get!(b, b1_local); num!(b, Opcode.I64_MUL)
+    local_get!(b, w1_local); num!(b, Opcode.I64_ADD)
+    i64_const!(b, 32); num!(b, Opcode.I64_SHR_U); local_set!(b, t_local)
+    # carry = a1*b1 + w2 + k  (left ON STACK)
+    local_get!(b, a1_local); local_get!(b, b1_local); num!(b, Opcode.I64_MUL)
+    local_get!(b, w2_local); num!(b, Opcode.I64_ADD)
+    local_get!(b, t_local); num!(b, Opcode.I64_ADD)
+    # result_lo = a_lo * b_lo
+    local_get!(b, a_lo_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_MUL); local_set!(b, result_lo_local)
+    # result_hi = a_lo*b_hi + carry + a_hi*b_lo   (carry still on stack)
+    local_get!(b, a_lo_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_MUL); num!(b, Opcode.I64_ADD)
+    local_get!(b, a_hi_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_MUL); num!(b, Opcode.I64_ADD)
+    local_set!(b, result_hi_local)
 
-    # a0 = a_lo & 0xFFFFFFFF
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(a_lo_local))
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(mask32))
-    push!(bytes, Opcode.I64_AND)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(a0_local))
-
-    # a1 = a_lo >> 32 (unsigned)
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(a_lo_local))
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(32))
-    push!(bytes, Opcode.I64_SHR_U)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(a1_local))
-
-    # b0 = b_lo & 0xFFFFFFFF
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(b_lo_local))
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(mask32))
-    push!(bytes, Opcode.I64_AND)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(b0_local))
-
-    # b1 = b_lo >> 32 (unsigned)
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(b_lo_local))
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(32))
-    push!(bytes, Opcode.I64_SHR_U)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(b1_local))
-
-    # t = a0 * b0; k = t >> 32
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(a0_local))
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(b0_local))
-    push!(bytes, Opcode.I64_MUL)
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(32))
-    push!(bytes, Opcode.I64_SHR_U)  # k = (a0*b0) >> 32
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(t_local))  # reuse t for k
-
-    # t = a1 * b0 + k
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(a1_local))
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(b0_local))
-    push!(bytes, Opcode.I64_MUL)
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(t_local))  # k
-    push!(bytes, Opcode.I64_ADD)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(t_local))
-
-    # w1 = t & 0xFFFFFFFF
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(t_local))
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(mask32))
-    push!(bytes, Opcode.I64_AND)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(w1_local))
-
-    # w2 = t >> 32
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(t_local))
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(32))
-    push!(bytes, Opcode.I64_SHR_U)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(w2_local))
-
-    # t = a0 * b1 + w1; k = t >> 32
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(a0_local))
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(b1_local))
-    push!(bytes, Opcode.I64_MUL)
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(w1_local))
-    push!(bytes, Opcode.I64_ADD)
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(32))
-    push!(bytes, Opcode.I64_SHR_U)  # k = (a0*b1 + w1) >> 32
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(t_local))  # reuse t for k
-
-    # carry = a1*b1 + w2 + k  (upper 64 bits of a_lo*b_lo)
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(a1_local))
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(b1_local))
-    push!(bytes, Opcode.I64_MUL)
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(w2_local))
-    push!(bytes, Opcode.I64_ADD)
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(t_local))  # k
-    push!(bytes, Opcode.I64_ADD)
-    # carry is now on the stack
-
-    # result_lo = a_lo * b_lo (i64.mul gives low 64 bits)
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(a_lo_local))
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(b_lo_local))
-    push!(bytes, Opcode.I64_MUL)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(result_lo_local))
-
-    # result_hi = a_lo*b_hi + a_hi*b_lo + carry
-    # carry is still on stack from above
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(a_lo_local))
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(b_hi_local))
-    push!(bytes, Opcode.I64_MUL)
-    push!(bytes, Opcode.I64_ADD)
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(a_hi_local))
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(b_lo_local))
-    push!(bytes, Opcode.I64_MUL)
-    push!(bytes, Opcode.I64_ADD)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(result_hi_local))
-
-    # Create result struct
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)  # typeId = 0
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_lo_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_hi_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.STRUCT_NEW)
-    append!(bytes, encode_leb128_unsigned(type_idx))
-
-    return bytes
+    # Create result struct (typeId, lo, hi)
+    i32_const!(b, 0)
+    local_get!(b, result_lo_local); local_get!(b, result_hi_local)
+    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return builder_code(b)
 end
 
 """
 Emit 128-bit negation: -x = ~x + 1 = (0, 0) - x
 Stack: [x_struct] -> [result_struct]
 """
+# MIGRATED to InstrBuilder. Consumes [x_struct], pushes -x struct (two's complement).
 function emit_int128_neg(ctx, result_type::Type)::Vector{UInt8}
-    bytes = UInt8[]
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
+    structref = julia_to_wasm_type_concrete(result_type, ctx)
+    b = InstrBuilder(; func_name="emit_int128_neg", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref])
 
-    # Allocate locals
-    x_lo_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    x_hi_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
+    x_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    x_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    x_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    result_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    result_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    for (i, t) in ((x_lo_local, I64), (x_hi_local, I64), (x_struct_local, structref),
+                   (result_lo_local, I64), (result_hi_local, I64))
+        builder_set_local_type!(b, i, t)
+    end
 
-    # Pop struct to local
-    x_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(result_type, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(x_struct_local))
+    # Pop struct to local; extract lo (field 1), hi (field 2)
+    local_set!(b, x_struct_local)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, x_lo_local)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, x_hi_local)
 
-    # Extract fields
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(x_struct_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.STRUCT_GET)
-    append!(bytes, encode_leb128_unsigned(type_idx))
-    append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(x_lo_local))
+    # Two's complement: result_lo = ~x_lo + 1 ; result_hi = ~x_hi + (x_lo==0 ? 1 : 0)
+    local_get!(b, x_lo_local); i64_const!(b, -1); num!(b, Opcode.I64_XOR)
+    i64_const!(b, 1); num!(b, Opcode.I64_ADD); local_set!(b, result_lo_local)
+    local_get!(b, x_hi_local); i64_const!(b, -1); num!(b, Opcode.I64_XOR)
+    local_get!(b, x_lo_local); num!(b, Opcode.I64_EQZ); num!(b, Opcode.I64_EXTEND_I32_U)
+    num!(b, Opcode.I64_ADD); local_set!(b, result_hi_local)
 
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(x_struct_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.STRUCT_GET)
-    append!(bytes, encode_leb128_unsigned(type_idx))
-    append!(bytes, encode_leb128_unsigned(2))  # hi (offset by 1 for typeId at field 0)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(x_hi_local))
-
-    # Two's complement negation: -x = ~x + 1
-    # result_lo = ~x_lo + 1
-    # result_hi = ~x_hi + carry
-    # where carry = 1 if ~x_lo overflows when adding 1 (i.e., x_lo == 0)
-
-    result_lo_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    result_hi_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-
-    # ~x_lo
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(x_lo_local))
-    push!(bytes, Opcode.I64_CONST)
-    push!(bytes, 0x7F)  # -1 in LEB128
-    push!(bytes, Opcode.I64_XOR)
-
-    # +1
-    push!(bytes, Opcode.I64_CONST)
-    push!(bytes, 0x01)
-    push!(bytes, Opcode.I64_ADD)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(result_lo_local))
-
-    # carry = (x_lo == 0) ? 1 : 0
-    # ~x_hi + carry
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(x_hi_local))
-    push!(bytes, Opcode.I64_CONST)
-    push!(bytes, 0x7F)  # -1
-    push!(bytes, Opcode.I64_XOR)
-
-    # Add carry if x_lo was 0
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(x_lo_local))
-    push!(bytes, Opcode.I64_EQZ)
-    push!(bytes, Opcode.I64_EXTEND_I32_U)  # Convert i32 bool to i64
-    push!(bytes, Opcode.I64_ADD)
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(result_hi_local))
-
-    # Create result struct
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)  # typeId = 0
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_lo_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(result_hi_local))
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.STRUCT_NEW)
-    append!(bytes, encode_leb128_unsigned(type_idx))
-
-    return bytes
+    # Create result struct (typeId, lo, hi)
+    i32_const!(b, 0)
+    local_get!(b, result_lo_local); local_get!(b, result_hi_local)
+    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return builder_code(b)
 end
 
 """
 Emit 128-bit signed less than: a < b (signed)
 Stack: [a_struct, b_struct] -> [i32 result (0 or 1)]
 """
+# MIGRATED to InstrBuilder. Consumes [a_struct, b_struct] from the stack, pushes i32.
 function emit_int128_slt(ctx, arg_type::Type)::Vector{UInt8}
-    bytes = UInt8[]
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
+    structref = julia_to_wasm_type_concrete(arg_type, ctx)
+    b = InstrBuilder(; func_name="emit_int128_slt", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, structref])
 
     # Allocate locals
-    a_lo_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    a_hi_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    b_lo_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    b_hi_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-
-    # Pop structs to locals
-    b_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(b_struct_local))
-
-    a_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(a_struct_local))
-
-    # Extract fields
-    for (struct_local, lo_local, hi_local) in [(a_struct_local, a_lo_local, a_hi_local),
-                                                (b_struct_local, b_lo_local, b_hi_local)]
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(struct_local))
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_GET)
-        append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(lo_local))
-
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(struct_local))
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_GET)
-        append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(hi_local))
+    a_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    a_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    a_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    for (i, t) in ((a_lo_local, I64), (a_hi_local, I64), (b_lo_local, I64), (b_hi_local, I64),
+                   (b_struct_local, structref), (a_struct_local, structref))
+        builder_set_local_type!(b, i, t)
     end
 
-    # Signed 128-bit comparison: a < b
-    # if a_hi < b_hi (signed): true
-    # if a_hi > b_hi (signed): false
-    # if a_hi == b_hi: a_lo < b_lo (unsigned, since lo is always unsigned)
+    # Pop structs to locals
+    local_set!(b, b_struct_local)
+    local_set!(b, a_struct_local)
 
-    # (a_hi < b_hi) || (a_hi == b_hi && a_lo < b_lo)
-    # Using: (a_hi <_s b_hi) | ((a_hi == b_hi) & (a_lo <_u b_lo))
+    # Extract fields (lo=field 1, hi=field 2; typeId at field 0)
+    for (struct_local, lo_local, hi_local) in [(a_struct_local, a_lo_local, a_hi_local),
+                                                (b_struct_local, b_lo_local, b_hi_local)]
+        local_get!(b, struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, lo_local)
+        local_get!(b, struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, hi_local)
+    end
 
-    # a_hi < b_hi (signed)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_hi_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_hi_local))
-    push!(bytes, Opcode.I64_LT_S)
-
-    # a_hi == b_hi
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_hi_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_hi_local))
-    push!(bytes, Opcode.I64_EQ)
-
-    # a_lo < b_lo (unsigned)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_lo_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_lo_local))
-    push!(bytes, Opcode.I64_LT_U)
-
-    # (a_hi == b_hi) && (a_lo < b_lo)
-    push!(bytes, Opcode.I32_AND)
-
-    # (a_hi < b_hi) || ((a_hi == b_hi) && (a_lo < b_lo))
-    push!(bytes, Opcode.I32_OR)
-
-    return bytes
+    # Signed 128-bit a < b: (a_hi <_s b_hi) | ((a_hi == b_hi) & (a_lo <_u b_lo))
+    local_get!(b, a_hi_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_LT_S)
+    local_get!(b, a_hi_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_EQ)
+    local_get!(b, a_lo_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_LT_U)
+    num!(b, Opcode.I32_AND)
+    num!(b, Opcode.I32_OR)
+    return builder_code(b)
 end
 
 """
 Emit 128-bit unsigned less than: a < b (unsigned)
 Stack: [a_struct, b_struct] -> [i32 result (0 or 1)]
 """
+# MIGRATED to InstrBuilder. Consumes [a_struct, b_struct] from the stack, pushes i32.
 function emit_int128_ult(ctx, arg_type::Type)::Vector{UInt8}
-    bytes = UInt8[]
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
+    structref = julia_to_wasm_type_concrete(arg_type, ctx)
+    b = InstrBuilder(; func_name="emit_int128_ult", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, structref])
 
     # Allocate locals
-    a_lo_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    a_hi_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    b_lo_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    b_hi_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-
-    # Pop structs to locals
-    b_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(b_struct_local))
-
-    a_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(a_struct_local))
-
-    # Extract fields
-    for (struct_local, lo_local, hi_local) in [(a_struct_local, a_lo_local, a_hi_local),
-                                                (b_struct_local, b_lo_local, b_hi_local)]
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(struct_local))
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_GET)
-        append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(lo_local))
-
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(struct_local))
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_GET)
-        append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(hi_local))
+    a_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    a_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    a_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    for (i, t) in ((a_lo_local, I64), (a_hi_local, I64), (b_lo_local, I64), (b_hi_local, I64),
+                   (b_struct_local, structref), (a_struct_local, structref))
+        builder_set_local_type!(b, i, t)
     end
 
-    # Unsigned comparison: (a_hi < b_hi) || (a_hi == b_hi && a_lo < b_lo)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_hi_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_hi_local))
-    push!(bytes, Opcode.I64_LT_U)
+    # Pop structs to locals
+    local_set!(b, b_struct_local)
+    local_set!(b, a_struct_local)
 
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_hi_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_hi_local))
-    push!(bytes, Opcode.I64_EQ)
+    # Extract fields (lo=field 1, hi=field 2; typeId at field 0)
+    for (struct_local, lo_local, hi_local) in [(a_struct_local, a_lo_local, a_hi_local),
+                                                (b_struct_local, b_lo_local, b_hi_local)]
+        local_get!(b, struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, lo_local)
+        local_get!(b, struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, hi_local)
+    end
 
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_lo_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_lo_local))
-    push!(bytes, Opcode.I64_LT_U)
-
-    push!(bytes, Opcode.I32_AND)
-    push!(bytes, Opcode.I32_OR)
-
-    return bytes
+    # Unsigned a < b: (a_hi <_u b_hi) | ((a_hi == b_hi) & (a_lo <_u b_lo))
+    local_get!(b, a_hi_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_LT_U)
+    local_get!(b, a_hi_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_EQ)
+    local_get!(b, a_lo_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_LT_U)
+    num!(b, Opcode.I32_AND)
+    num!(b, Opcode.I32_OR)
+    return builder_code(b)
 end
 
 """
@@ -683,43 +325,28 @@ Emit 128-bit signed less-or-equal: a <=_s b
 Stack: [a_struct, b_struct] -> [i32 result (0 or 1)]
 Implementation: (a <_s b) || (a == b)
 """
+# MIGRATED to InstrBuilder. (a <_s b) || (a == b); composes slt + eq via emit_raw!.
 function emit_int128_sle(ctx, arg_type::Type)::Vector{UInt8}
-    bytes = UInt8[]
-    type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
+    structref = julia_to_wasm_type_concrete(arg_type, ctx)
+    b = InstrBuilder(; func_name="emit_int128_sle", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, structref])
 
     # Pop b and a to struct locals (so we can use each twice)
-    b_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(b_struct_local))
+    b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    a_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    builder_set_local_type!(b, b_struct_local, structref); builder_set_local_type!(b, a_struct_local, structref)
+    local_set!(b, b_struct_local)
+    local_set!(b, a_struct_local)
 
-    a_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(a_struct_local))
-
-    # Push a and b for slt check
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_struct_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_struct_local))
-
-    # a <_s b (reuse emit_int128_slt)
-    append!(bytes, emit_int128_slt(ctx, arg_type))
-
-    # Push a and b for eq check
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_struct_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_struct_local))
-
+    # a <_s b (reuse emit_int128_slt, which consumes the two structs)
+    local_get!(b, a_struct_local); local_get!(b, b_struct_local)
+    emit_raw!(b, emit_int128_slt(ctx, arg_type); pops=2, pushes=WasmValType[I32])
     # a == b (reuse emit_int128_eq)
-    append!(bytes, emit_int128_eq(ctx, arg_type))
-
+    local_get!(b, a_struct_local); local_get!(b, b_struct_local)
+    emit_raw!(b, emit_int128_eq(ctx, arg_type); pops=2, pushes=WasmValType[I32])
     # (a < b) || (a == b)
-    push!(bytes, Opcode.I32_OR)
-
-    return bytes
+    num!(b, Opcode.I32_OR)
+    return builder_code(b)
 end
 
 """
@@ -727,43 +354,28 @@ Emit 128-bit unsigned less-or-equal: a <=_u b
 Stack: [a_struct, b_struct] -> [i32 result (0 or 1)]
 Implementation: (a <_u b) || (a == b)
 """
+# MIGRATED to InstrBuilder. (a <_u b) || (a == b); composes ult + eq via emit_raw!.
 function emit_int128_ule(ctx, arg_type::Type)::Vector{UInt8}
-    bytes = UInt8[]
-    type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
+    structref = julia_to_wasm_type_concrete(arg_type, ctx)
+    b = InstrBuilder(; func_name="emit_int128_ule", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, structref])
 
     # Pop b and a to struct locals (so we can use each twice)
-    b_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(b_struct_local))
+    b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    a_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    builder_set_local_type!(b, b_struct_local, structref); builder_set_local_type!(b, a_struct_local, structref)
+    local_set!(b, b_struct_local)
+    local_set!(b, a_struct_local)
 
-    a_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(a_struct_local))
-
-    # Push a and b for ult check
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_struct_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_struct_local))
-
-    # a <_u b (reuse emit_int128_ult)
-    append!(bytes, emit_int128_ult(ctx, arg_type))
-
-    # Push a and b for eq check
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_struct_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_struct_local))
-
+    # a <_u b (reuse emit_int128_ult, which consumes the two structs)
+    local_get!(b, a_struct_local); local_get!(b, b_struct_local)
+    emit_raw!(b, emit_int128_ult(ctx, arg_type); pops=2, pushes=WasmValType[I32])
     # a == b (reuse emit_int128_eq)
-    append!(bytes, emit_int128_eq(ctx, arg_type))
-
+    local_get!(b, a_struct_local); local_get!(b, b_struct_local)
+    emit_raw!(b, emit_int128_eq(ctx, arg_type); pops=2, pushes=WasmValType[I32])
     # (a < b) || (a == b)
-    push!(bytes, Opcode.I32_OR)
-
-    return bytes
+    num!(b, Opcode.I32_OR)
+    return builder_code(b)
 end
 
 """
@@ -775,124 +387,60 @@ Must handle n >= 64 and n == 0 edge cases with select.
 
 select(val1, val2, cond): cond != 0 → val1 (deeper), cond == 0 → val2 (shallower)
 """
+# MIGRATED to InstrBuilder. Consumes [x_struct, n_i64], pushes x<<n (mod-64 edge-safe).
 function emit_int128_shl(ctx, result_type::Type)::Vector{UInt8}
-    bytes = UInt8[]
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
+    structref = julia_to_wasm_type_concrete(result_type, ctx)
+    b = InstrBuilder(; func_name="emit_int128_shl", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, I64])
 
     n_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    x_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, julia_to_wasm_type_concrete(result_type, ctx))
+    x_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
     x_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     x_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     n_mod_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     result_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     result_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     cross_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    builder_set_local_type!(b, x_struct_local, structref)
+    for i in (n_local, x_lo_local, x_hi_local, n_mod_local, result_lo_local, result_hi_local, cross_local)
+        builder_set_local_type!(b, i, I64)
+    end
 
-    # Pop n and x_struct
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(n_local))
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(x_struct_local))
-
-    # Extract x fields
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(x_struct_local))
-    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
-    append!(bytes, encode_leb128_unsigned(type_idx)); append!(bytes, encode_leb128_unsigned(1))
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(x_lo_local))
-
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(x_struct_local))
-    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
-    append!(bytes, encode_leb128_unsigned(type_idx)); append!(bytes, encode_leb128_unsigned(2))
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(x_hi_local))
+    # Pop n (top) and x_struct; extract lo (field 1), hi (field 2)
+    local_set!(b, n_local); local_set!(b, x_struct_local)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, x_lo_local)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, x_hi_local)
 
     # n_mod = n & 63
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(n_local))
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(63))
-    push!(bytes, Opcode.I64_AND)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(n_mod_local))
+    local_get!(b, n_local); i64_const!(b, 63); num!(b, Opcode.I64_AND); local_set!(b, n_mod_local)
 
-    # --- result_lo = n >= 64 ? 0 : (x_lo << n_mod) ---
-    # select(val1=0, val2=x_lo<<n_mod, cond=n>=64) → n>=64 ? 0 : x_lo<<n_mod
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(0))  # val1: 0
+    # result_lo = n>=64 ? 0 : (x_lo << n_mod)   via select(0, x_lo<<n_mod, n>=64)
+    i64_const!(b, 0)
+    local_get!(b, x_lo_local); local_get!(b, n_mod_local); num!(b, Opcode.I64_SHL)
+    local_get!(b, n_local); i64_const!(b, 64); num!(b, Opcode.I64_GE_U)
+    select!(b); local_set!(b, result_lo_local)
 
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(x_lo_local))
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(n_mod_local))
-    push!(bytes, Opcode.I64_SHL)  # val2: x_lo << n_mod
+    # cross = n_mod==0 ? 0 : x_lo >> (64 - n_mod)   via select(0, x_lo>>(64-n_mod), n_mod==0)
+    i64_const!(b, 0)
+    local_get!(b, x_lo_local); i64_const!(b, 64); local_get!(b, n_mod_local); num!(b, Opcode.I64_SUB); num!(b, Opcode.I64_SHR_U)
+    local_get!(b, n_mod_local); num!(b, Opcode.I64_EQZ)
+    select!(b); local_set!(b, cross_local)
 
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(n_local))
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(64))
-    push!(bytes, Opcode.I64_GE_U)  # cond: n >= 64
+    # hi_normal = (x_hi << n_mod) | cross   (left on stack)
+    local_get!(b, x_hi_local); local_get!(b, n_mod_local); num!(b, Opcode.I64_SHL)
+    local_get!(b, cross_local); num!(b, Opcode.I64_OR)
+    # hi_ge64 = x_lo << n_mod   (left on stack above hi_normal)
+    local_get!(b, x_lo_local); local_get!(b, n_mod_local); num!(b, Opcode.I64_SHL)
+    # result_hi = n<64 ? hi_normal : hi_ge64   (negated cond so select args line up)
+    local_get!(b, n_local); i64_const!(b, 64); num!(b, Opcode.I64_LT_U)
+    select!(b); local_set!(b, result_hi_local)
 
-    push!(bytes, Opcode.SELECT)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(result_lo_local))
-
-    # --- cross = n_mod == 0 ? 0 : x_lo >> (64 - n_mod) ---
-    # When n_mod=0, (64-n_mod)=64 which wraps to 0 in WASM, giving x_lo instead of 0
-    # select(val1=0, val2=x_lo>>(64-n_mod), cond=n_mod==0)
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(0))  # val1: 0
-
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(x_lo_local))
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(64))
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(n_mod_local))
-    push!(bytes, Opcode.I64_SUB)
-    push!(bytes, Opcode.I64_SHR_U)  # val2: x_lo >> (64 - n_mod)
-
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(n_mod_local))
-    push!(bytes, Opcode.I64_EQZ)  # cond: n_mod == 0
-
-    push!(bytes, Opcode.SELECT)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(cross_local))
-
-    # --- hi_normal = (x_hi << n_mod) | cross ---
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(x_hi_local))
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(n_mod_local))
-    push!(bytes, Opcode.I64_SHL)
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(cross_local))
-    push!(bytes, Opcode.I64_OR)
-    # hi_normal is on stack
-
-    # --- hi_ge64 = x_lo << n_mod ---
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(x_lo_local))
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(n_mod_local))
-    push!(bytes, Opcode.I64_SHL)
-    # hi_ge64 is on stack
-
-    # --- result_hi = n >= 64 ? hi_ge64 : hi_normal ---
-    # Stack: [hi_normal, hi_ge64]
-    # select(val1=hi_normal, val2=hi_ge64, cond) — but we need val1=hi_ge64 when cond true
-    # Swap: push hi_ge64 first (val1), then hi_normal (val2)
-    # But stack already has [hi_normal, hi_ge64] — need to use locals
-    # Save hi_ge64 and hi_normal to rearrange
-    # Actually easier: save hi_normal before computing hi_ge64
-
-    # Let me redo: save hi_normal to a local first
-    bytes_len = length(bytes)  # checkpoint
-    # Undo the last few pushes — we need to restructure
-    # Actually I can't easily undo bytecode. Let me use a temporary local.
-
-    # hi_ge64 is on top of stack, hi_normal is below it. I need:
-    # select(val1=hi_ge64, val2=hi_normal, cond=n>=64) → n>=64 ? hi_ge64 : hi_normal
-    # But stack order is [hi_normal, hi_ge64, ...]. After pushing cond:
-    # [hi_normal, hi_ge64, cond] → select returns cond!=0 ? hi_normal : hi_ge64
-    # That's backwards! We want n>=64 ? hi_ge64 : hi_normal
-    # But select gives us n>=64 ? hi_normal (val1=deeper) : hi_ge64 (val2=shallower)
-    # So we need to swap the stack order, or negate the condition.
-
-    # Easiest: negate the condition. n < 64 instead of n >= 64.
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(n_local))
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(64))
-    push!(bytes, Opcode.I64_LT_U)  # cond: n < 64
-
-    # select(val1=hi_normal, val2=hi_ge64, cond=n<64) → n<64 ? hi_normal : hi_ge64 ✓
-    push!(bytes, Opcode.SELECT)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(result_hi_local))
-
-    # Create result struct
-    push!(bytes, Opcode.I32_CONST); push!(bytes, 0x00)
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(result_lo_local))
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(result_hi_local))
-    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_NEW)
-    append!(bytes, encode_leb128_unsigned(type_idx))
-
-    return bytes
+    # Create result struct (typeId, lo, hi)
+    i32_const!(b, 0)
+    local_get!(b, result_lo_local); local_get!(b, result_hi_local)
+    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return builder_code(b)
 end
 
 """
@@ -901,101 +449,59 @@ Stack: [x_struct, n_i64] -> [result_struct]
 
 WBUILD-5001: Same mod-64 edge case handling as emit_int128_shl.
 """
+# MIGRATED to InstrBuilder. Consumes [x_struct, n_i64], pushes x >>u n (mod-64 edge-safe).
 function emit_int128_lshr(ctx, result_type::Type)::Vector{UInt8}
-    bytes = UInt8[]
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
+    structref = julia_to_wasm_type_concrete(result_type, ctx)
+    b = InstrBuilder(; func_name="emit_int128_lshr", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, I64])
 
     n_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    x_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, julia_to_wasm_type_concrete(result_type, ctx))
+    x_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
     x_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     x_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     n_mod_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     result_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     result_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     cross_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    builder_set_local_type!(b, x_struct_local, structref)
+    for i in (n_local, x_lo_local, x_hi_local, n_mod_local, result_lo_local, result_hi_local, cross_local)
+        builder_set_local_type!(b, i, I64)
+    end
 
-    # Pop n and x_struct
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(n_local))
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(x_struct_local))
-
-    # Extract x fields
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(x_struct_local))
-    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
-    append!(bytes, encode_leb128_unsigned(type_idx)); append!(bytes, encode_leb128_unsigned(1))
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(x_lo_local))
-
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(x_struct_local))
-    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
-    append!(bytes, encode_leb128_unsigned(type_idx)); append!(bytes, encode_leb128_unsigned(2))
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(x_hi_local))
+    # Pop n (top), x_struct; extract lo (field 1), hi (field 2)
+    local_set!(b, n_local); local_set!(b, x_struct_local)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, x_lo_local)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, x_hi_local)
 
     # n_mod = n & 63
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(n_local))
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(63))
-    push!(bytes, Opcode.I64_AND)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(n_mod_local))
+    local_get!(b, n_local); i64_const!(b, 63); num!(b, Opcode.I64_AND); local_set!(b, n_mod_local)
 
-    # --- result_hi = n >= 64 ? 0 : (x_hi >> n_mod) ---
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(0))  # val1: 0
+    # result_hi = n>=64 ? 0 : (x_hi >>u n_mod)
+    i64_const!(b, 0)
+    local_get!(b, x_hi_local); local_get!(b, n_mod_local); num!(b, Opcode.I64_SHR_U)
+    local_get!(b, n_local); i64_const!(b, 64); num!(b, Opcode.I64_GE_U)
+    select!(b); local_set!(b, result_hi_local)
 
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(x_hi_local))
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(n_mod_local))
-    push!(bytes, Opcode.I64_SHR_U)  # val2: x_hi >> n_mod
+    # cross = n_mod==0 ? 0 : x_hi << (64 - n_mod)
+    i64_const!(b, 0)
+    local_get!(b, x_hi_local); i64_const!(b, 64); local_get!(b, n_mod_local); num!(b, Opcode.I64_SUB); num!(b, Opcode.I64_SHL)
+    local_get!(b, n_mod_local); num!(b, Opcode.I64_EQZ)
+    select!(b); local_set!(b, cross_local)
 
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(n_local))
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(64))
-    push!(bytes, Opcode.I64_GE_U)  # cond: n >= 64
+    # lo_normal = (x_lo >>u n_mod) | cross  (on stack); lo_ge64 = x_hi >>u n_mod (on stack)
+    local_get!(b, x_lo_local); local_get!(b, n_mod_local); num!(b, Opcode.I64_SHR_U)
+    local_get!(b, cross_local); num!(b, Opcode.I64_OR)
+    local_get!(b, x_hi_local); local_get!(b, n_mod_local); num!(b, Opcode.I64_SHR_U)
+    # result_lo = n<64 ? lo_normal : lo_ge64
+    local_get!(b, n_local); i64_const!(b, 64); num!(b, Opcode.I64_LT_U)
+    select!(b); local_set!(b, result_lo_local)
 
-    push!(bytes, Opcode.SELECT)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(result_hi_local))
-
-    # --- cross = n_mod == 0 ? 0 : x_hi << (64 - n_mod) ---
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(0))  # val1: 0
-
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(x_hi_local))
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(64))
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(n_mod_local))
-    push!(bytes, Opcode.I64_SUB)
-    push!(bytes, Opcode.I64_SHL)  # val2: x_hi << (64 - n_mod)
-
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(n_mod_local))
-    push!(bytes, Opcode.I64_EQZ)  # cond: n_mod == 0
-
-    push!(bytes, Opcode.SELECT)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(cross_local))
-
-    # --- lo_normal = (x_lo >> n_mod) | cross ---
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(x_lo_local))
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(n_mod_local))
-    push!(bytes, Opcode.I64_SHR_U)
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(cross_local))
-    push!(bytes, Opcode.I64_OR)
-    # lo_normal on stack
-
-    # --- lo_ge64 = x_hi >> n_mod ---
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(x_hi_local))
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(n_mod_local))
-    push!(bytes, Opcode.I64_SHR_U)
-    # lo_ge64 on stack
-
-    # --- result_lo = n < 64 ? lo_normal : lo_ge64 ---
-    # Stack: [lo_normal, lo_ge64]. select(val1=lo_normal, val2=lo_ge64, cond)
-    # cond = n < 64 → returns lo_normal when true, lo_ge64 when false ✓
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(n_local))
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(64))
-    push!(bytes, Opcode.I64_LT_U)
-
-    push!(bytes, Opcode.SELECT)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(result_lo_local))
-
-    # Create result struct
-    push!(bytes, Opcode.I32_CONST); push!(bytes, 0x00)
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(result_lo_local))
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(result_hi_local))
-    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_NEW)
-    append!(bytes, encode_leb128_unsigned(type_idx))
-
-    return bytes
+    # Create result struct (typeId, lo, hi)
+    i32_const!(b, 0)
+    local_get!(b, result_lo_local); local_get!(b, result_hi_local)
+    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return builder_code(b)
 end
 
 """
@@ -1010,12 +516,15 @@ the high word (cross / the n>=64 lo) carry the sign. Was MISSING — signed
 `Int128 >>` fell through to the i64 guard (`i64.shr_s` on the struct ref →
 validation failure; WasmMakie TwicePrecision range/tick widemul path).
 """
+# MIGRATED to InstrBuilder. Consumes [x_struct, n_i64], pushes x >>s n (sign-filled).
 function emit_int128_ashr(ctx, result_type::Type)::Vector{UInt8}
-    bytes = UInt8[]
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
+    structref = julia_to_wasm_type_concrete(result_type, ctx)
+    b = InstrBuilder(; func_name="emit_int128_ashr", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, I64])
 
     n_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    x_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, julia_to_wasm_type_concrete(result_type, ctx))
+    x_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
     x_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     x_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     n_mod_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
@@ -1023,93 +532,45 @@ function emit_int128_ashr(ctx, result_type::Type)::Vector{UInt8}
     result_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     result_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     cross_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    builder_set_local_type!(b, x_struct_local, structref)
+    for i in (n_local, x_lo_local, x_hi_local, n_mod_local, sign_local, result_lo_local, result_hi_local, cross_local)
+        builder_set_local_type!(b, i, I64)
+    end
 
-    # Pop n and x_struct
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(n_local))
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(x_struct_local))
+    # Pop n (top), x_struct; extract lo (field 1), hi (field 2)
+    local_set!(b, n_local); local_set!(b, x_struct_local)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, x_lo_local)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, x_hi_local)
 
-    # Extract x fields
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(x_struct_local))
-    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
-    append!(bytes, encode_leb128_unsigned(type_idx)); append!(bytes, encode_leb128_unsigned(1))
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(x_lo_local))
+    # n_mod = n & 63 ; sign = x_hi >>s 63 (all-1s if negative)
+    local_get!(b, n_local); i64_const!(b, 63); num!(b, Opcode.I64_AND); local_set!(b, n_mod_local)
+    local_get!(b, x_hi_local); i64_const!(b, 63); num!(b, Opcode.I64_SHR_S); local_set!(b, sign_local)
 
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(x_struct_local))
-    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
-    append!(bytes, encode_leb128_unsigned(type_idx)); append!(bytes, encode_leb128_unsigned(2))
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(x_hi_local))
+    # result_hi = n>=64 ? sign : (x_hi >>s n_mod)
+    local_get!(b, sign_local)
+    local_get!(b, x_hi_local); local_get!(b, n_mod_local); num!(b, Opcode.I64_SHR_S)
+    local_get!(b, n_local); i64_const!(b, 64); num!(b, Opcode.I64_GE_U)
+    select!(b); local_set!(b, result_hi_local)
 
-    # n_mod = n & 63
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(n_local))
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(63))
-    push!(bytes, Opcode.I64_AND)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(n_mod_local))
+    # cross = n_mod==0 ? 0 : x_hi << (64 - n_mod)
+    i64_const!(b, 0)
+    local_get!(b, x_hi_local); i64_const!(b, 64); local_get!(b, n_mod_local); num!(b, Opcode.I64_SUB); num!(b, Opcode.I64_SHL)
+    local_get!(b, n_mod_local); num!(b, Opcode.I64_EQZ)
+    select!(b); local_set!(b, cross_local)
 
-    # sign = x_hi >>s 63  (all-1s if hi negative, else 0)
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(x_hi_local))
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(63))
-    push!(bytes, Opcode.I64_SHR_S)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(sign_local))
+    # lo_normal = (x_lo >>u n_mod) | cross (stack); lo_ge64 = x_hi >>s n_mod (stack)
+    local_get!(b, x_lo_local); local_get!(b, n_mod_local); num!(b, Opcode.I64_SHR_U)
+    local_get!(b, cross_local); num!(b, Opcode.I64_OR)
+    local_get!(b, x_hi_local); local_get!(b, n_mod_local); num!(b, Opcode.I64_SHR_S)
+    # result_lo = n<64 ? lo_normal : lo_ge64
+    local_get!(b, n_local); i64_const!(b, 64); num!(b, Opcode.I64_LT_U)
+    select!(b); local_set!(b, result_lo_local)
 
-    # --- result_hi = n >= 64 ? sign : (x_hi >>s n_mod) ---
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(sign_local))  # val1: sign
-
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(x_hi_local))
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(n_mod_local))
-    push!(bytes, Opcode.I64_SHR_S)  # val2: x_hi >>s n_mod
-
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(n_local))
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(64))
-    push!(bytes, Opcode.I64_GE_U)  # cond: n >= 64
-
-    push!(bytes, Opcode.SELECT)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(result_hi_local))
-
-    # --- cross = n_mod == 0 ? 0 : x_hi << (64 - n_mod) ---  (raw hi bits into lo)
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(0))  # val1: 0
-
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(x_hi_local))
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(64))
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(n_mod_local))
-    push!(bytes, Opcode.I64_SUB)
-    push!(bytes, Opcode.I64_SHL)  # val2: x_hi << (64 - n_mod)
-
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(n_mod_local))
-    push!(bytes, Opcode.I64_EQZ)  # cond: n_mod == 0
-
-    push!(bytes, Opcode.SELECT)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(cross_local))
-
-    # --- lo_normal = (x_lo >>u n_mod) | cross ---  (lo's own bits are logical)
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(x_lo_local))
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(n_mod_local))
-    push!(bytes, Opcode.I64_SHR_U)
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(cross_local))
-    push!(bytes, Opcode.I64_OR)
-    # lo_normal on stack
-
-    # --- lo_ge64 = x_hi >>s n_mod ---  (arithmetic: hi word shifted into lo)
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(x_hi_local))
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(n_mod_local))
-    push!(bytes, Opcode.I64_SHR_S)
-    # lo_ge64 on stack
-
-    # --- result_lo = n < 64 ? lo_normal : lo_ge64 ---
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(n_local))
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(64))
-    push!(bytes, Opcode.I64_LT_U)
-
-    push!(bytes, Opcode.SELECT)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(result_lo_local))
-
-    # Create result struct
-    push!(bytes, Opcode.I32_CONST); push!(bytes, 0x00)
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(result_lo_local))
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(result_hi_local))
-    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_NEW)
-    append!(bytes, encode_leb128_unsigned(type_idx))
-
-    return bytes
+    # Create result struct (typeId, lo, hi)
+    i32_const!(b, 0)
+    local_get!(b, result_lo_local); local_get!(b, result_hi_local)
+    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return builder_code(b)
 end
 
 """
@@ -1118,427 +579,250 @@ Stack: [x_struct] -> [result_struct (UInt128)]
 
 WBUILD-5001: Cleaned up dead code from first attempt that wasted 3 locals.
 """
+# MIGRATED to InstrBuilder. Consumes [x_struct], pushes ctlz(x) as a UInt128 struct.
 function emit_int128_ctlz(ctx, arg_type::Type)::Vector{UInt8}
-    bytes = UInt8[]
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
+    structref = julia_to_wasm_type_concrete(arg_type, ctx)
+    b = InstrBuilder(; func_name="emit_int128_ctlz", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref])
 
     x_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     x_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     clz_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    x_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    for i in (x_lo_local, x_hi_local, clz_hi_local); builder_set_local_type!(b, i, I64); end
+    builder_set_local_type!(b, x_struct_local, structref)
 
-    x_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(x_struct_local))
+    # Pop x_struct; extract lo (field 1), hi (field 2)
+    local_set!(b, x_struct_local)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, x_lo_local)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, x_hi_local)
 
-    # Extract x fields
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(x_struct_local))
-    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
-    append!(bytes, encode_leb128_unsigned(type_idx)); append!(bytes, encode_leb128_unsigned(1))
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(x_lo_local))
+    # clz_hi = clz(x_hi)
+    local_get!(b, x_hi_local); num!(b, Opcode.I64_CLZ); local_set!(b, clz_hi_local)
 
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(x_struct_local))
-    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_GET)
-    append!(bytes, encode_leb128_unsigned(type_idx)); append!(bytes, encode_leb128_unsigned(2))
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(x_hi_local))
-
-    # clz(x_hi) → store
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(x_hi_local))
-    push!(bytes, Opcode.I64_CLZ)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(clz_hi_local))
-
-    # select(val1=64+clz(lo), val2=clz(hi), cond=hi==0)
-    # → hi==0 ? 64+clz(lo) : clz(hi) ✓
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(64))
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(x_lo_local))
-    push!(bytes, Opcode.I64_CLZ)
-    push!(bytes, Opcode.I64_ADD)  # val1: 64 + clz(lo)
-
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(clz_hi_local))  # val2: clz(hi)
-
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(x_hi_local))
-    push!(bytes, Opcode.I64_EQZ)  # cond: hi == 0
-
-    push!(bytes, Opcode.SELECT)
+    # hi==0 ? 64+clz(lo) : clz(hi)   via select(64+clz(lo), clz(hi), hi==0)
+    i64_const!(b, 64); local_get!(b, x_lo_local); num!(b, Opcode.I64_CLZ); num!(b, Opcode.I64_ADD)
+    local_get!(b, clz_hi_local)
+    local_get!(b, x_hi_local); num!(b, Opcode.I64_EQZ)
+    select!(b)
 
     # Wrap i64 result in UInt128 struct (lo=clz_result, hi=0)
     result_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    push!(bytes, Opcode.LOCAL_SET); append!(bytes, encode_leb128_unsigned(result_local))
-
-    push!(bytes, Opcode.I32_CONST); push!(bytes, 0x00)
-    push!(bytes, Opcode.LOCAL_GET); append!(bytes, encode_leb128_unsigned(result_local))
-    push!(bytes, Opcode.I64_CONST); append!(bytes, encode_leb128_signed(0))
-    push!(bytes, Opcode.GC_PREFIX); push!(bytes, Opcode.STRUCT_NEW)
-    append!(bytes, encode_leb128_unsigned(type_idx))
-
-    return bytes
+    builder_set_local_type!(b, result_local, I64)
+    local_set!(b, result_local)
+    i32_const!(b, 0)
+    local_get!(b, result_local)
+    i64_const!(b, 0)
+    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return builder_code(b)
 end
 
 """
 Emit 128-bit bitwise AND
 Stack: [a_struct, b_struct] -> [result_struct]
 """
+# MIGRATED to InstrBuilder. Consumes [a_struct, b_struct], pushes result struct.
 function emit_int128_and(ctx, result_type::Type)::Vector{UInt8}
-    bytes = UInt8[]
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
+    structref = julia_to_wasm_type_concrete(result_type, ctx)
+    b = InstrBuilder(; func_name="emit_int128_and", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, structref])
 
     # Allocate locals
-    a_lo_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    a_hi_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    b_lo_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    b_hi_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-
-    # Pop structs to locals
-    b_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(result_type, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(b_struct_local))
-
-    a_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(result_type, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(a_struct_local))
-
-    # Extract fields
-    for (struct_local, lo_local, hi_local) in [(a_struct_local, a_lo_local, a_hi_local),
-                                                (b_struct_local, b_lo_local, b_hi_local)]
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(struct_local))
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_GET)
-        append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(lo_local))
-
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(struct_local))
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_GET)
-        append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(hi_local))
+    a_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    a_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    a_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    for (i, t) in ((a_lo_local, I64), (a_hi_local, I64), (b_lo_local, I64), (b_hi_local, I64),
+                   (b_struct_local, structref), (a_struct_local, structref))
+        builder_set_local_type!(b, i, t)
     end
 
-    # typeId for struct
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)  # typeId = 0
+    # Pop structs to locals
+    local_set!(b, b_struct_local)
+    local_set!(b, a_struct_local)
 
-    # result_lo = a_lo & b_lo
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_lo_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_lo_local))
-    push!(bytes, Opcode.I64_AND)
+    # Extract fields (lo=field 1, hi=field 2; typeId at field 0)
+    for (struct_local, lo_local, hi_local) in [(a_struct_local, a_lo_local, a_hi_local),
+                                                (b_struct_local, b_lo_local, b_hi_local)]
+        local_get!(b, struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, lo_local)
+        local_get!(b, struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, hi_local)
+    end
 
-    # result_hi = a_hi & b_hi
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_hi_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_hi_local))
-    push!(bytes, Opcode.I64_AND)
-
-    # Create result struct
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.STRUCT_NEW)
-    append!(bytes, encode_leb128_unsigned(type_idx))
-
-    return bytes
+    i32_const!(b, 0)  # typeId = 0
+    # result_lo = a_lo & b_lo ; result_hi = a_hi & b_hi
+    local_get!(b, a_lo_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_AND)
+    local_get!(b, a_hi_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_AND)
+    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return builder_code(b)
 end
 
 """
 Emit 128-bit bitwise OR
 Stack: [a_struct, b_struct] -> [result_struct]
 """
+# MIGRATED to InstrBuilder. Consumes [a_struct, b_struct], pushes result struct.
 function emit_int128_or(ctx, result_type::Type)::Vector{UInt8}
-    bytes = UInt8[]
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
+    structref = julia_to_wasm_type_concrete(result_type, ctx)
+    b = InstrBuilder(; func_name="emit_int128_or", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, structref])
 
     # Allocate locals
-    a_lo_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    a_hi_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    b_lo_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    b_hi_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-
-    # Pop structs to locals
-    b_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(result_type, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(b_struct_local))
-
-    a_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(result_type, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(a_struct_local))
-
-    # Extract fields
-    for (struct_local, lo_local, hi_local) in [(a_struct_local, a_lo_local, a_hi_local),
-                                                (b_struct_local, b_lo_local, b_hi_local)]
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(struct_local))
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_GET)
-        append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(lo_local))
-
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(struct_local))
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_GET)
-        append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(hi_local))
+    a_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    a_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    a_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    for (i, t) in ((a_lo_local, I64), (a_hi_local, I64), (b_lo_local, I64), (b_hi_local, I64),
+                   (b_struct_local, structref), (a_struct_local, structref))
+        builder_set_local_type!(b, i, t)
     end
 
-    # typeId for struct
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)  # typeId = 0
+    # Pop structs to locals
+    local_set!(b, b_struct_local)
+    local_set!(b, a_struct_local)
 
-    # result_lo = a_lo | b_lo
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_lo_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_lo_local))
-    push!(bytes, Opcode.I64_OR)
+    # Extract fields (lo=field 1, hi=field 2; typeId at field 0)
+    for (struct_local, lo_local, hi_local) in [(a_struct_local, a_lo_local, a_hi_local),
+                                                (b_struct_local, b_lo_local, b_hi_local)]
+        local_get!(b, struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, lo_local)
+        local_get!(b, struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, hi_local)
+    end
 
-    # result_hi = a_hi | b_hi
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_hi_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_hi_local))
-    push!(bytes, Opcode.I64_OR)
-
-    # Create result struct
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.STRUCT_NEW)
-    append!(bytes, encode_leb128_unsigned(type_idx))
-
-    return bytes
+    i32_const!(b, 0)  # typeId = 0
+    # result_lo = a_lo | b_lo ; result_hi = a_hi | b_hi
+    local_get!(b, a_lo_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_OR)
+    local_get!(b, a_hi_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_OR)
+    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return builder_code(b)
 end
 
 """
 Emit 128-bit bitwise XOR
 Stack: [a_struct, b_struct] -> [result_struct]
 """
+# MIGRATED to InstrBuilder. Consumes [a_struct, b_struct], pushes result struct.
 function emit_int128_xor(ctx, result_type::Type)::Vector{UInt8}
-    bytes = UInt8[]
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
+    structref = julia_to_wasm_type_concrete(result_type, ctx)
+    b = InstrBuilder(; func_name="emit_int128_xor", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, structref])
 
     # Allocate locals
-    a_lo_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    a_hi_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    b_lo_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    b_hi_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-
-    # Pop structs to locals
-    b_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(result_type, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(b_struct_local))
-
-    a_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(result_type, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(a_struct_local))
-
-    # Extract fields
-    for (struct_local, lo_local, hi_local) in [(a_struct_local, a_lo_local, a_hi_local),
-                                                (b_struct_local, b_lo_local, b_hi_local)]
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(struct_local))
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_GET)
-        append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(lo_local))
-
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(struct_local))
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_GET)
-        append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(hi_local))
+    a_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    a_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    a_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    for (i, t) in ((a_lo_local, I64), (a_hi_local, I64), (b_lo_local, I64), (b_hi_local, I64),
+                   (b_struct_local, structref), (a_struct_local, structref))
+        builder_set_local_type!(b, i, t)
     end
 
-    # typeId for struct
-    push!(bytes, Opcode.I32_CONST)
-    push!(bytes, 0x00)  # typeId = 0
+    # Pop structs to locals
+    local_set!(b, b_struct_local)
+    local_set!(b, a_struct_local)
 
-    # result_lo = a_lo ^ b_lo
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_lo_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_lo_local))
-    push!(bytes, Opcode.I64_XOR)
+    # Extract fields (lo=field 1, hi=field 2; typeId at field 0)
+    for (struct_local, lo_local, hi_local) in [(a_struct_local, a_lo_local, a_hi_local),
+                                                (b_struct_local, b_lo_local, b_hi_local)]
+        local_get!(b, struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, lo_local)
+        local_get!(b, struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, hi_local)
+    end
 
-    # result_hi = a_hi ^ b_hi
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_hi_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_hi_local))
-    push!(bytes, Opcode.I64_XOR)
-
-    # Create result struct
-    push!(bytes, Opcode.GC_PREFIX)
-    push!(bytes, Opcode.STRUCT_NEW)
-    append!(bytes, encode_leb128_unsigned(type_idx))
-
-    return bytes
+    i32_const!(b, 0)  # typeId = 0
+    # result_lo = a_lo ^ b_lo ; result_hi = a_hi ^ b_hi
+    local_get!(b, a_lo_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_XOR)
+    local_get!(b, a_hi_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_XOR)
+    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return builder_code(b)
 end
 
 """
 Emit 128-bit equality comparison
 Stack: [a_struct, b_struct] -> [i32 result (0 or 1)]
 """
+# MIGRATED to InstrBuilder. Consumes [a_struct, b_struct] from the stack, pushes i32.
 function emit_int128_eq(ctx, arg_type::Type)::Vector{UInt8}
-    bytes = UInt8[]
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
+    structref = julia_to_wasm_type_concrete(arg_type, ctx)
+    b = InstrBuilder(; func_name="emit_int128_eq", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, structref])
 
     # Allocate locals
-    a_lo_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    a_hi_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    b_lo_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    b_hi_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
+    a_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    a_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    a_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    for (i, t) in ((a_lo_local, I64), (a_hi_local, I64), (b_lo_local, I64), (b_hi_local, I64),
+                   (b_struct_local, structref), (a_struct_local, structref))
+        builder_set_local_type!(b, i, t)
+    end
 
     # Pop structs to locals
-    b_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(b_struct_local))
+    local_set!(b, b_struct_local)
+    local_set!(b, a_struct_local)
 
-    a_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(a_struct_local))
-
-    # Extract fields
+    # Extract fields (lo=field 1, hi=field 2; typeId at field 0)
     for (struct_local, lo_local, hi_local) in [(a_struct_local, a_lo_local, a_hi_local),
                                                 (b_struct_local, b_lo_local, b_hi_local)]
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(struct_local))
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_GET)
-        append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(lo_local))
-
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(struct_local))
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_GET)
-        append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(hi_local))
+        local_get!(b, struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, lo_local)
+        local_get!(b, struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, hi_local)
     end
 
     # (a_lo == b_lo) && (a_hi == b_hi)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_lo_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_lo_local))
-    push!(bytes, Opcode.I64_EQ)
-
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_hi_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_hi_local))
-    push!(bytes, Opcode.I64_EQ)
-
-    push!(bytes, Opcode.I32_AND)
-
-    return bytes
+    local_get!(b, a_lo_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_EQ)
+    local_get!(b, a_hi_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_EQ)
+    num!(b, Opcode.I32_AND)
+    return builder_code(b)
 end
 
 """
 Emit 128-bit not-equal comparison
 Stack: [a_struct, b_struct] -> [i32 result (0 or 1)]
 """
+# MIGRATED to InstrBuilder. Consumes [a_struct, b_struct] from the stack, pushes i32.
 function emit_int128_ne(ctx, arg_type::Type)::Vector{UInt8}
-    bytes = UInt8[]
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
+    structref = julia_to_wasm_type_concrete(arg_type, ctx)
+    b = InstrBuilder(; func_name="emit_int128_ne", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, structref])
 
     # Allocate locals
-    a_lo_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    a_hi_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    b_lo_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
-    b_hi_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
+    a_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    a_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    a_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    for (i, t) in ((a_lo_local, I64), (a_hi_local, I64), (b_lo_local, I64), (b_hi_local, I64),
+                   (b_struct_local, structref), (a_struct_local, structref))
+        builder_set_local_type!(b, i, t)
+    end
 
     # Pop structs to locals
-    b_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(b_struct_local))
+    local_set!(b, b_struct_local)
+    local_set!(b, a_struct_local)
 
-    a_struct_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
-    push!(bytes, Opcode.LOCAL_SET)
-    append!(bytes, encode_leb128_unsigned(a_struct_local))
-
-    # Extract fields
+    # Extract fields (lo=field 1, hi=field 2; typeId at field 0)
     for (struct_local, lo_local, hi_local) in [(a_struct_local, a_lo_local, a_hi_local),
                                                 (b_struct_local, b_lo_local, b_hi_local)]
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(struct_local))
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_GET)
-        append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(1))  # lo field (offset by 1 for typeId at field 0)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(lo_local))
-
-        push!(bytes, Opcode.LOCAL_GET)
-        append!(bytes, encode_leb128_unsigned(struct_local))
-        push!(bytes, Opcode.GC_PREFIX)
-        push!(bytes, Opcode.STRUCT_GET)
-        append!(bytes, encode_leb128_unsigned(type_idx))
-        append!(bytes, encode_leb128_unsigned(2))  # hi field (offset by 1 for typeId at field 0)
-        push!(bytes, Opcode.LOCAL_SET)
-        append!(bytes, encode_leb128_unsigned(hi_local))
+        local_get!(b, struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, lo_local)
+        local_get!(b, struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, hi_local)
     end
 
     # (a_lo != b_lo) || (a_hi != b_hi)
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_lo_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_lo_local))
-    push!(bytes, Opcode.I64_NE)
-
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(a_hi_local))
-    push!(bytes, Opcode.LOCAL_GET)
-    append!(bytes, encode_leb128_unsigned(b_hi_local))
-    push!(bytes, Opcode.I64_NE)
-
-    push!(bytes, Opcode.I32_OR)
-
-    return bytes
+    local_get!(b, a_lo_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_NE)
+    local_get!(b, a_hi_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_NE)
+    num!(b, Opcode.I32_OR)
+    return builder_code(b)
 end
 
