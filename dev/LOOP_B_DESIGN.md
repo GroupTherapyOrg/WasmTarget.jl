@@ -120,6 +120,39 @@ typeId at field 0. So WT ALREADY has dart's "field-0 i32 classId on everything +
   canonical box (dart uses NO i31), delete `should_use_i31` + `ref_i31!`/`i31.get` if fully unused. Restore/
   extend the distinguishability + boxed-===/objectid tests as a CI-wired shard. Full adversarial gate. Mark B done.
 
+## ★ B2 INVESTIGATION FINDINGS (2026-06-29, probe-driven — RE-SEQUENCES Loop B)
+**The P1 collapse IS observable + reachable**, but NOT where expected, and its fix is ENTANGLED with the
+value-channel (Loop C). Probe data (boxed i32-repped types discriminated by isa at runtime):
+- **Scalar `v::Any = literal; v isa T` — ALL CORRECT.** Inference keeps the static type; no box classId is
+  consulted, so the collapse is masked. (So B2 has NO observable scalar red test — like Int128-div, sound there.)
+- **Heterogeneous tuple, runtime index — P1 REPRODUCED:** `(true, Int8(7), Int32(9))[i] isa {Bool,Int8,Int32}`
+  → Int8 and Int32 are BOTH misclassified as Bool (all return the first branch). Different-WIDTH types
+  (Int32/Int64/Float64) already work (distinct box structs).
+- **Vector{Any} — MORE broken:** every isa falls through to 0 (no type matches at all) — deeper, this is B′.
+- **DECISIVE: storing the REAL classId in the box (at the het-tuple producer site) had ZERO effect on the
+  consumer.** ⇒ the consumer does NOT read the box's field-0 classId — the het-tuple value is UNBOXED to a raw
+  i32 BEFORE `isa` runs (isa then defaults to the first branch). Root structural facts: `get_numeric_box_type!`
+  creates the box with NO `$JlBase` supertype (types.jl:1116, `add_struct_type!` no super), so `emit_typeof!`'s
+  `ref.cast $JlBase; struct.get 0` can't uniformly read it; AND the value doesn't STAY boxed to the consumer.
+- **STRUCTURAL HALF IS ALREADY DONE.** `set_struct_supertypes!` (types.jl:614) sets EVERY StructType with
+  `supertype_idx===nothing` (incl. the numeric box) to subtype `$JlBase` — only the JlType hierarchy
+  (jl_type_idx/jl_typename_idx) is excluded. So the box DOES subtype `$JlBase` and `emit_typeof!` CAN read its
+  field-0 classId. ⇒ the reason storing the real classId had zero effect is **purely the CHANNEL: the value is
+  eagerly UNBOXED to a raw i32 before `isa`, so the box is never consulted.**
+- **CONCLUSION / RE-SEQUENCE (with Dale's "fundamental-first / combine-loops" steer 2026-06-29):** the fundamental
+  blocker is NOT Loop B's box-rep (box exists, subtypes `$JlBase`, has the classId field — B1 fixed truncation) —
+  it is **the typed VALUE CHANNEL (Loop C core): WT eagerly unboxes dynamic/Union values, dropping the
+  discriminant before the consumer.** dart2wasm NEVER does this — a dynamic value stays a boxed ref (subtyping
+  Top) until `convertType` coerces it at a boundary; a type-test reads classId off the still-boxed ref. So **the
+  remaining Loop B distinguishability work COMBINES with Loop C's channel-core** — they are one fix: *keep dynamic
+  values boxed-with-real-classId until a genuine convertType boundary; isa/typeof read the classId off the box.*
+  Storing the real classId (the reverted producer edit) is a trivial sub-part that becomes value-verifiable ONLY
+  once the value stays boxed. **NEXT (the minimal value-verifiable channel increment): trace WHERE the het-tuple
+  `t[i]` union value is unboxed before `isa` (_compile_call_isa / the getfield-result SSA store), stop the eager
+  unbox so the value reaches isa as the boxed ref, store the real classId at the producer, and let `emit_typeof!`
+  discriminate. Re-probe `htup_disc` (Int8→2, Int32→3, not all→1) for the green.** This is a down-payment on
+  Loop C, pulled in BECAUSE it's the fundamental that unlocks B2/B′ — not a detour.
+
 ## identityHash/objectid DECISION (locked): primitive box = `[i32 classId, payload]`, NO hash slot —
 objectid of a boxed primitive is value-derived (compute on demand). A hash slot, if ever needed for boxed
 MUTABLE objects, goes at field 1 on the Object-equivalent subtree only, never on primitive boxes (mirrors dart).
