@@ -151,76 +151,146 @@ _wt_is_ref(t::WasmValType)::Bool =
 _wt_gc_refkind(t::RefType)::Bool =
     t === AnyRef || t === EqRef || t === StructRef || t === ArrayRef || t === I31Ref
 
+# --- nullability (P2) ---------------------------------------------------------
+# Mirrors dart2wasm RefType.nullable. In WT only ConcreteRef carries a real bit;
+# the RefType @enum values are nullable-shorthand (always nullable) and
+# NonNullAbstractRef is the explicit non-null abstract variant. Numerics/packed
+# are not refs (caller gates on _wt_is_ref first).
+_wt_ref_nullable(t::ConcreteRef)::Bool = t.nullable
+_wt_ref_nullable(::NonNullAbstractRef)::Bool = false
+_wt_ref_nullable(::RefType)::Bool = true  # enum refs are nullable shorthand
+
+# dart2wasm RefType.withNullability(false): the non-null variant of a ref type.
+# ConcreteRef flips its bit; a nullable-shorthand RefType becomes the matching
+# NonNullAbstractRef (same heap byte, non-null). Numerics/packed pass through.
+_wt_drop_nullable(t::ConcreteRef)::WasmValType = ConcreteRef(t.type_idx, false)
+_wt_drop_nullable(t::RefType)::WasmValType = NonNullAbstractRef(UInt8(t))
+_wt_drop_nullable(t::NonNullAbstractRef)::WasmValType = t
+_wt_drop_nullable(t::WasmValType)::WasmValType = t  # NumType / packed UInt8
+
+# --- heap-type resolution (B6) ------------------------------------------------
+# Resolve any ref-ish WasmValType to its abstract heap kind in
+#   {:any,:eq,:struct,:array,:i31,:none, :extern,:noextern, :func,:nofunc, :exn,
+#    :concrete_struct,:concrete_array, :unknown}.
+# NonNullAbstractRef resolves via its heaptype_byte (which equals the RefType enum
+# byte) so it participates by heap type rather than hitting a conservative-false.
+function _wt_heap_kind(t, mod)::Symbol
+    if t isa ConcreteRef
+        idx = Int(t.type_idx)
+        if idx + 1 >= 1 && idx + 1 <= length(mod.types) && mod.types[idx + 1] isa ArrayType
+            return :concrete_array
+        else
+            return :concrete_struct  # default concrete kind (struct; also for out-of-range)
+        end
+    elseif t isa NonNullAbstractRef
+        # Resolve the byte to its abstract heap kind (same bytes as the RefType enum).
+        return _wt_heap_kind_of_byte(t.heaptype_byte)
+    elseif t isa RefType
+        return _wt_heap_kind_of_byte(UInt8(t))
+    else
+        return :unknown
+    end
+end
+
+function _wt_heap_kind_of_byte(byte::UInt8)::Symbol
+    byte == UInt8(AnyRef)    ? :any    :
+    byte == UInt8(EqRef)     ? :eq     :
+    byte == UInt8(StructRef) ? :struct :
+    byte == UInt8(ArrayRef)  ? :array  :
+    byte == UInt8(I31Ref)    ? :i31    :
+    byte == UInt8(ExternRef) ? :extern :
+    byte == UInt8(FuncRef)   ? :func   :
+    byte == UInt8(ExnRef)    ? :exn    : :unknown
+end
+
+# The declared supertype index of a ConcreteRef's type, or `nothing`. Only
+# StructType carries a supertype_idx in WT (set by set_struct_supertypes! /
+# create_jl_type_hierarchy!); arrays never declare one.
+function _wt_concrete_supertype_idx(idx::Integer, mod)
+    i = Int(idx) + 1
+    (i >= 1 && i <= length(mod.types)) || return nothing
+    ct = mod.types[i]
+    ct isa StructType ? ct.supertype_idx : nothing
+end
+
+# dart2wasm DefType.isSubtypeOf: walk the DECLARED supertype chain of a concrete
+# ConcreteRef `a` and return true iff a concrete `b` (same type_idx) is reached.
+# Pure nominal walk — does NOT consult the abstract super (that's handled by the
+# heap-kind lattice in wasm_subtype). Depth-guarded against malformed cycles.
+function _wt_concrete_chain_reaches(a_idx::Integer, b_idx::Integer, mod)::Bool
+    a_idx == b_idx && return true
+    cur = _wt_concrete_supertype_idx(a_idx, mod)
+    depth = 0
+    while cur !== nothing && depth < 256
+        cur == UInt32(b_idx) && return true
+        cur = _wt_concrete_supertype_idx(cur, mod)
+        depth += 1
+    end
+    return false
+end
+
 """
     wasm_subtype(a, b, mod) -> Bool
 
 Whether a value of WasmGC type `a` may be used where `b` is expected (an UPCAST,
-which is free / requires no instruction). Mirrors dart2wasm's `HeapType.isSubtypeOf`
-exactly. `mod.types[idx+1] isa ArrayType` distinguishes a ConcreteRef's
-struct-vs-array kind. ConcreteRef <: ConcreteRef only if the same `type_idx`.
-AnyRef / ExternRef / FuncRef are their own hierarchy tops. NonNullAbstractRef is
-conservatively only `===`-equal (false otherwise). Any numeric/packed involvement
-(unless `a === b`) ⇒ false.
+which is free / requires no instruction). Mirrors dart2wasm's
+`RefType.isSubtypeOf` + `DefType.isSubtypeOf` + `HeapType.isSubtypeOf` exactly:
+
+  * **Nullability (P2):** a nullable ref is NOT a subtype of a non-null target —
+    `nullable(a) && !nullable(b) ⇒ false` (dart2wasm RefType.isSubtypeOf L202).
+  * **Supertype chain (F4):** a concrete `a` walks its DECLARED `supertype_idx`
+    chain (StructType) and is `<:` any concrete `b` on that chain
+    (dart2wasm DefType.isSubtypeOf L621-624). When the nominal chain runs out it
+    falls to the abstract super (struct/array) ⇒ eq ⇒ any.
+  * **Abstract lattice:** any > eq > {struct, array, i31}; extern/func own tops;
+    exn is its own thing.
+  * **B6:** NonNullAbstractRef participates by its resolved heap byte (no longer a
+    conservative-false / MethodError path).
+
+`mod.types[idx+1] isa ArrayType` distinguishes a ConcreteRef's struct-vs-array
+kind. Any numeric/packed involvement (unless `a === b`) ⇒ false.
 """
 function wasm_subtype(a::WasmValType, b::WasmValType, mod)::Bool
     a === b && return true
     # Numerics/packed are invariant: anything not caught by === above is not a subtype.
     (!_wt_is_ref(a) || !_wt_is_ref(b)) && return false
-    # NonNullAbstractRef: conservative — only the === case above counts.
-    (a isa NonNullAbstractRef || b isa NonNullAbstractRef) && return false
 
-    # --- extern hierarchy (its own top) ---
-    if a === ExternRef
-        return b === ExternRef
-    end
-    b === ExternRef && return false  # nothing GC/func is <: extern
+    # --- nullability (P2): dart2wasm RefType.isSubtypeOf — a nullable source is
+    # never a subtype of a non-null target (the null value could not inhabit it). ---
+    (_wt_ref_nullable(a) && !_wt_ref_nullable(b)) && return false
 
-    # --- func hierarchy (its own top) ---
-    if a === FuncRef
-        return b === FuncRef
-    end
-    b === FuncRef && return false  # nothing GC/extern is <: func
-
-    # ExnRef: its own thing — only the === case (handled above) counts.
-    (a === ExnRef || b === ExnRef) && return false
-
-    # --- the `any` GC hierarchy: any > eq > {struct, array, i31}; concrete <: abstract super <: eq <: any ---
-    # Compute, for each operand, its abstract kind in {:any, :eq, :struct, :array, :i31}.
-    function _gc_kind(t)::Symbol
-        if t isa ConcreteRef
-            idx = Int(t.type_idx)
-            if idx + 1 >= 1 && idx + 1 <= length(mod.types) && mod.types[idx + 1] isa ArrayType
-                return :array
-            else
-                return :struct  # default concrete kind (struct; also for out-of-range)
-            end
-        elseif t === AnyRef
-            return :any
-        elseif t === EqRef
-            return :eq
-        elseif t === StructRef
-            return :struct
-        elseif t === ArrayRef
-            return :array
-        elseif t === I31Ref
-            return :i31
-        else
-            return :unknown
-        end
-    end
-    ka = _gc_kind(a); kb = _gc_kind(b)
+    # --- heap-type comparison (the rest of dart2wasm's RefType.isSubtypeOf is
+    # heapType.isSubtypeOf, nullability already handled). ---
+    ka = _wt_heap_kind(a, mod)
+    kb = _wt_heap_kind(b, mod)
     (ka === :unknown || kb === :unknown) && return false
 
+    # --- extern hierarchy (its own top: only extern <: extern) ---
+    (ka === :extern || kb === :extern) && return ka === :extern && kb === :extern
+    # --- func hierarchy (its own top) ---
+    (ka === :func || kb === :func) && return ka === :func && kb === :func
+    # --- exn: its own thing (only the === case, already handled) ---
+    (ka === :exn || kb === :exn) && return false
+
+    # --- the `any` GC hierarchy ---
+    # Concrete b: a must be a concrete on b's declared supertype chain (F4).
+    if kb === :concrete_struct || kb === :concrete_array
+        (ka === :concrete_struct || ka === :concrete_array) || return false
+        return _wt_concrete_chain_reaches(Int(a.type_idx), Int(b.type_idx), mod)
+    end
+    # Map a concrete a to its abstract kind for the abstract-target comparison.
+    ka_abs = ka === :concrete_struct ? :struct :
+             ka === :concrete_array  ? :array  : ka
     # b === any  : everything in this hierarchy is <: any.
     kb === :any && return true
-    # b === eq   : eq's subtypes are eq, struct, array, i31 (and concretes thereof) — all but `any`.
-    kb === :eq  && return ka !== :any
+    # b === eq   : eq's subtypes are eq, struct, array, i31 (and concretes) — all but `any`.
+    kb === :eq  && return ka_abs !== :any
     # b is struct: only struct (abstract or concrete-struct) is <: struct.
-    kb === :struct && return ka === :struct
+    kb === :struct && return ka_abs === :struct
     # b is array : only array (abstract or concrete-array) is <: array.
-    kb === :array  && return ka === :array
+    kb === :array  && return ka_abs === :array
     # b is i31   : only i31 is <: i31 (concretes are struct/array, never i31).
-    kb === :i31    && return ka === :i31
+    kb === :i31    && return ka_abs === :i31
     return false
 end
 
@@ -306,6 +376,11 @@ function emit_return_coerced!(b::InstrBuilder, val, ctx::AbstractCompilationCont
                 end
             elseif wasm_subtype(val_wasm_type, func_ret_wasm, ctx.mod)
                 # Upcast is free — emit nothing.
+            elseif wasm_subtype(_wt_drop_nullable(val_wasm_type), func_ret_wasm, ctx.mod)
+                # dart2wasm convertType L847-849: the ONLY thing blocking the upcast is
+                # nullability (heap types compatible, source nullable → non-null target).
+                # A null-check (ref.as_non_null) suffices — cheaper than a full ref.cast (P9).
+                ref_as_non_null!(b)
             else
                 # Downcast.
                 if func_ret_wasm isa ConcreteRef
