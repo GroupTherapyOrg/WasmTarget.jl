@@ -60,6 +60,43 @@ ints). Regression guard: `test/f31_union_value_backfills.jl` (CI-wired, shard 0)
 worth a v0.4.1 patch once merged — large-int tagged/heterogeneous unions silently truncated in
 0.4.0.**
 
+## ⚠ Float16 is mis-represented end-to-end (F26) — DEFERRED feature (2026-06-29, parity probe)
+
+A broad differential probe (26 cases across uint wraparound, bit-rotate, div/rem/fld/cld/mod,
+gcd/lcm, NaN/Inf, ldexp, modf, hypot, cbrt, expm1, Char) found the surface largely sound — the
+ONE gap was Float16 arithmetic. Characterization:
+  * `add_float`/`sub_float`/`mul_float`/`div_float` pick `arg_type===Float32 ? F32_* : F64_*`, so
+    a Float16 operand (represented as its i32 bit-pattern) gets an `f64.*` op on an i32 → INVALID
+    wasm (caught loudly at validation — not a silent miscompile).
+  * Worse, `fptrunc` (calls.jl ~5660) hard-assumes "source Float64 → target Float32" and emits a
+    bare `f32.demote_f64`; it does NOT encode to Float16 bits. So `Float16(x)` mis-produces an f32,
+    inconsistent with `_compile_call_fpext`'s Float16→Float64 path (which correctly decodes i32
+    half-float bits). Float16 is mis-typed coming AND going.
+Proper fix = a Float16 representation overhaul: pick ONE rep (i16/i32 bits), implement faithful
+f16↔f32 conversions (fptrunc target-f16 encode w/ round-to-nearest-even incl. subnormal/inf/nan;
+fpext source-f16 — exists), and route arithmetic through promote→f32-op→demote (Julia computes
+Float16 ops via Float32, so f32 — not f64 — intermediate is needed for bit-faithful division).
+DEFERRED as a focused feature sub-loop (rounding-sensitive; risky to patch piecemeal). Not a
+silent-soundness hole today (invalid wasm fails at validation). **Flag for Dale.**
+
+## Parity probe sweep (2026-06-29) — surface is largely SOUND; remaining gaps triaged
+
+Two broad differential sweeps (~52 cases) across uint wraparound/overflow, bit-rotate,
+leading/trailing-zeros, div/rem/fld/cld/mod, gcd/lcm, Float NaN/Inf, f32 round, ldexp, modf,
+hypot, cbrt, expm1, Char, complex, rational, ranges, arrays (sum/sort/find/filter/map/reverse/
+comprehension/matmul), tuples, namedtuples, dict, set, and string ops — **all pass** except the
+documented deferred gaps. Net: WT's core+stdlib codegen is in strong shape; remaining gaps are
+niche features or stdlib-overlay candidates, none a silent miscompile.
+
+Triaged remaining gaps:
+  * Int128/UInt128 div/rem + bswap — loud-reject (F11b, fixed this session). Full impl deferred.
+  * Float16 arithmetic + fptrunc-to-f16 — invalid-wasm-at-validation; deferred feature (F26, above).
+  * `string(::String, ::Int)` and `repr(::Int)` — sound `unreachable` trap. `string(::Int)`,
+    `"$x"` interpolation, `string(::Float64)`, `string(::String,::String)` all WORK; only the
+    generic multi-arg-MIXED `print_to_string`/IOBuffer path traps. This is a **stdlib-overlay
+    candidate** (overlay `string`/`print` for mixed args, per [[wt-genericlinearalgebra-overlay-lever]]
+    pattern) → Dale's lane (#4 stdlib expansion), not the codegen-soundness lane.
+
 ## Remaining 16 gaps (the deep/feature long tail) — all root-caused & triaged for Part 2
 
 Every tractable gap is fixed (see "Fixed" below). The 16 that remain each need real
