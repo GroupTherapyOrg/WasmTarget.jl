@@ -101,7 +101,11 @@ end
         alg::Base.Sort.Algorithm=Base.Sort.InsertionSort,
         order::Base.Order.Ordering=Base.Order.Forward)
     result = copy(v)
-    sort!(result, rev=rev)
+    # SILENT-WRONG FIX: forward ALL comparator kwargs to sort!, not just `rev` — the
+    # previous `sort!(result, rev=rev)` silently dropped `by`/`lt`/`order`, so
+    # `sort(v, by=f)` / `sort(v, lt=cmp)` returned the DEFAULT-`isless` order (the
+    # sort! overlay's body already honors lt/by/rev correctly).
+    sort!(result; lt=lt, by=by, rev=rev, alg=alg, order=order)
     return result
 end
 

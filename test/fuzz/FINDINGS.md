@@ -112,6 +112,27 @@ NOT a blind patch (the F3 hot-path attempt already regressed the lattice tests).
 #1 correctness priority.** Diff-fuzzer should grow a `reduce/sum/prod/mapreduce(... if ...)` +
 `flatten` family so this class can't regress silently.
 
+## ✅ FIXED (2026-06-29 probe): sort(v, by=f) / sort(v, lt=cmp) silently dropped the comparator
+
+Another SILENT MISCOMPILE (common pattern): `sort(v, by=f)` returned the default-`isless` order
+(e.g. `sort([3,1,5,2], by=x->-x)[1]` → 1 instead of 5; `lt=` likewise). `rev=true` worked. Root:
+the non-mutating `Base.sort` overlay (`src/codegen/interpreter.jl`) did `sort!(result, rev=rev)` —
+forwarding ONLY `rev`, silently dropping `by`/`lt`/`order`. The `sort!` overlay body already honors
+lt/by/rev correctly; the bug was purely the forwarding. Fixed to forward all comparator kwargs.
+Backfill `test/sort_comparator_backfills.jl` (CI-wired shard 0). NOTE: `sortperm` is ALSO wrong
+(separate path, not this overlay — returns wrong permutation) — still open, characterize next.
+
+## ⛔ F3 (Core.Box mutable capture) — ATTEMPTED ×2, REVERTED both times (2026-06-29)
+
+Closures that MUTATE a captured var still emit invalid wasm — DEFERRED. A delegated agent's
+scalarization-rebox approach (rebox numeric→Any in `compile_statement`) passed its narrow backfill
+AND the full suite, but independent adversarial re-verification exposed it as fundamentally
+incomplete: two-closures-sharing-a-box → trap, conditional mutation `iseven(i)&&(c+=i)` → silently 0
+(new silent-wrong), read-after-mutate → trap, escaping closure → loud-reject, and returning a mutated
+capture without a `::T` annotation returns a boxed anyref (no return-unbox). It only handles trivial
+accumulator loops. Proper F3 = heap-`Core.Box`-as-struct + cross-closure box SHARING + conditional
+phi + return-unbox + escaping capture — a real feature, not a `compile_statement` rebox hack.
+
 ## Parity probe sweep (2026-06-29) — surface is largely SOUND; remaining gaps triaged
 
 Two broad differential sweeps (~52 cases) across uint wraparound/overflow, bit-rotate,

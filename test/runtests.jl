@@ -129,6 +129,9 @@ _wt_shard0() && include("f31_union_value_backfills.jl")
 # Parity Loop 0: F11 Int128 bit-counting intrinsics (cttz/ctpop/not_int now handle is_128bit;
 # a single i64 op on a 128-bit value was invalid wasm). See dev/PARITY_LEDGER.md.
 _wt_shard0() && include("f11_int128_bitcount_backfills.jl")
+# Parity probe: sort comparator kwargs (by/lt) were silently dropped by the non-mutating sort
+# overlay (only rev was forwarded to sort!) → sort(v, by=f) returned default order. See FINDINGS.md.
+_wt_shard0() && include("sort_comparator_backfills.jl")
 
 # ── Parallel-phase infrastructure (process sharding) ─────────────────────────
 # Test fixtures hoisted from inside phase testsets — `struct`/`using` are illegal
