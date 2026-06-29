@@ -188,6 +188,16 @@ _wt_htup(a::Int64)::Int64 = begin
     end
     s
 end
+# WASMTARGET-FUZZ (Loop B/B1): a het-tuple field whose result-union maps to AnyRef
+# (Union{Int64,Float64} — all-numeric, NOT a registered tagged union) boxed the Int64
+# field via ref.i31, SILENTLY TRUNCATING any value ≥ 2^30. A field ≥ 2^40 came back
+# WRONG (the truncated box then failed `isa Int64` → -1). Now routed through the
+# full-width numeric box, exactly like the F64 field beside it. (i=1 → the Int64 element.)
+_wt_htup_i64f64_big(i::Int64)::Int64 = begin
+    t = ((Int64(1) << 40) + 7, 3.5)
+    v = t[i]
+    v isa Int64 ? v : Int64(-1)
+end
 _wt_anyvec_len(a::Int64)::Int64 = Int64(length(Any[a, "x", a]))
 # WASMTARGET-FUZZ: abstract/UnionAll `::Vector` struct FIELD (like
 # Markdown.Admonition.content). A Vector{T} value is a vector-STRUCT, not the raw
@@ -7729,6 +7739,9 @@ console.log(JSON.stringify({
             # all-struct element union → StructRef canonical rep (not tagged union)
             @test compare_julia_wasm(_wt_anystruct, Int64(5)).pass   # 6+7+16 = 29
             @test compare_julia_wasm(_wt_anystruct, Int64(2)).pass
+            # Loop B/B1: an AnyRef-union (Union{Int64,Float64}) Int64 field ≥ 2^40 was
+            # i31-TRUNCATED → returned -1; now full-width numeric box → 2^40+7 exactly.
+            @test compare_julia_wasm(_wt_htup_i64f64_big, Int64(1)).pass  # = (1<<40)+7
         end
 
         @testset "Inline typeId dynamic dispatch (WASMTARGET-FUZZ)" begin

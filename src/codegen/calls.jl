@@ -2847,11 +2847,12 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                                     # Coerce the raw field value to U's canonical wasm rep.
                                     fw = julia_to_wasm_type_concrete(elem_types[i + 1], ctx)
                                     if union_wasm === AnyRef
-                                        if fw === I64
-                                            num!(_hetb, Opcode.I32_WRAP_I64); ref_i31!(_hetb)
-                                        elseif fw === I32
-                                            ref_i31!(_hetb)
-                                        elseif fw === F32 || fw === F64
+                                        if fw === I64 || fw === I32 || fw === F32 || fw === F64
+                                            # B1: ALL numerics → full-width numeric box (was: I64/I32
+                                            # via ref.i31, which SILENTLY TRUNCATED any value ≥ 2^30 —
+                                            # e.g. an Int64 field ≥ 2^40 came back wrong). The box keeps
+                                            # the value at its real width; the consumer unboxes via
+                                            # ref.cast box; struct.get 1 (same path the F64 field used).
                                             box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, fw)
                                             sc = length(ctx.locals) + ctx.n_params
                                             push!(ctx.locals, fw)
