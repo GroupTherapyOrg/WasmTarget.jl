@@ -134,6 +134,8 @@ _wt_shard0() && include("f11_int128_bitcount_backfills.jl")
 _wt_shard0() && include("sort_comparator_backfills.jl")
 # F3 sub-loop L0 (dev/F3_LOOP.md): Core.Box contents-type inference (dormant analysis, byte-identical).
 _wt_shard0() && include("f3_box_capture_l0.jl")
+# F3 sub-loop L1 (dev/F3_LOOP.md): specialized mutable Box{contents} struct registry (dormant).
+_wt_shard0() && include("f3_box_capture_l1.jl")
 
 # ── Parallel-phase infrastructure (process sharding) ─────────────────────────
 # Test fixtures hoisted from inside phase testsets — `struct`/`using` are illegal

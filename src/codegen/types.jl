@@ -79,6 +79,10 @@ mutable struct TypeRegistry
     jl_svec_idx::Union{Nothing, UInt32}       # $JlSVec = (array (mut (ref null $JlType)))
     # PURE-9065: String hash helper function index for Dict{String,...} support
     string_hash_func_idx::Union{Nothing, UInt32}
+    # F3 (dev/F3_LOOP.md): specialized Core.Box struct types, keyed by contents WASM type.
+    # Distinct from numeric_boxes — the contents field is MUTABLE (written via struct.set), so a
+    # Box{i64} is a different struct than the immutable {typeId,value} numeric box.
+    box_types::Union{Nothing, Dict{WasmValType, UInt32}}
 end
 
 TypeRegistry() = TypeRegistry(
@@ -88,7 +92,8 @@ TypeRegistry() = TypeRegistry(
     Dict{Type, Int32}(), Dict{Type, Tuple{Int32, Int32}}(),
     nothing, nothing, nothing, nothing, nothing, Int32(0),
     nothing, nothing, nothing, nothing, nothing, nothing, nothing,
-    nothing  # string_hash_func_idx
+    nothing,  # string_hash_func_idx
+    Dict{WasmValType, UInt32}()  # box_types (F3)
 )
 
 # TRUE-INT-002: Dict-free constructor for WASM self-hosting.
@@ -101,7 +106,8 @@ TypeRegistry(::Val{:minimal}) = TypeRegistry(
     nothing, nothing,            # type_ids, type_ranges
     nothing, nothing, nothing, nothing, nothing,
     nothing, nothing, nothing, nothing, nothing, nothing, nothing,
-    nothing  # string_hash_func_idx
+    nothing,  # string_hash_func_idx
+    nothing   # box_types (F3)
 )
 
 """
@@ -1110,6 +1116,29 @@ function get_numeric_box_type!(mod::WasmModule, registry::TypeRegistry, wasm_typ
     fields = [FieldType(I32, false), FieldType(wasm_type, false)]  # typeId + value
     type_idx = add_struct_type!(mod, fields)
     registry.numeric_boxes[wasm_type] = type_idx
+    return type_idx
+end
+
+"""
+    get_box_type!(mod, registry, contents_wasm_type) -> UInt32
+
+F3 (dev/F3_LOOP.md): get/create the specialized `Core.Box` struct for a box whose contents have
+concrete wasm type `contents_wasm_type` — `(struct (field \$typeId i32) (field \$contents (mut T)))`.
+The contents field is MUTABLE (a captured variable is written via `struct.set`), so a `Box{i64}` is
+a DIFFERENT struct than the immutable `{typeId,value}` numeric box. Cached in `registry.box_types`
+so the enclosing fn's `%new`, the closure's captured-box field, and setfield!/getfield all share ONE
+type. dart2wasm-aligned (a typed context-struct field, not a boxed `Any`).
+
+L1 — DORMANT (no codegen call sites yet); wired through the live sites in L2.
+"""
+function get_box_type!(mod::WasmModule, registry::TypeRegistry, contents_wasm_type::WasmValType)::UInt32
+    if registry.box_types !== nothing && haskey(registry.box_types, contents_wasm_type)
+        return registry.box_types[contents_wasm_type]
+    end
+    # typeId (i32, immutable) + contents (T, MUTABLE)
+    fields = [FieldType(I32, false), FieldType(contents_wasm_type, true)]
+    type_idx = add_struct_type!(mod, fields)
+    registry.box_types === nothing || (registry.box_types[contents_wasm_type] = type_idx)
     return type_idx
 end
 

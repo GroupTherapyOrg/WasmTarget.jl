@@ -2766,7 +2766,8 @@ function copy_type_registry(src::TypeRegistry)::TypeRegistry
         src.jl_typevar_idx,
         src.jl_typename_idx,
         src.jl_svec_idx,
-        src.string_hash_func_idx
+        src.string_hash_func_idx,
+        src.box_types === nothing ? nothing : copy(src.box_types)  # F3 box_types
     )
 end
 
