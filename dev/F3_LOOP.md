@@ -5,6 +5,19 @@ Part of the dart2wasm production-parity mission (branch `wt-dart2wasm-parity`). 
 **committed, GREEN, non-breaking** step; the infrastructure PERSISTS and the behavior change
 comes last, on a foundation that's already in place and tested.
 
+## THE PURE PRINCIPLE (anchor on dart2wasm — re-read before any L2+ change)
+dart2wasm (`closures.dart:1102-1115`) types a captured cell by `translateTypeOfLocalVariable(variable)`
+— the VARIABLE'S OWN TYPE. `int`→`i64` field; `dynamic`→top type (boxed). **Type the cell by the
+variable's actual type; box only genuinely-dynamic ones.** Julia erases this (reifies as
+`Core.Box{contents::Any}`), so the pure equivalent is to RECOMPUTE the variable's inferred type =
+the **join (typejoin/Union) of ALL its assignments** (enclosing init + every closure write, each
+write's result type computed via `Core.Compiler.return_type` past the box's `Any`-erasure), to a
+fixed point. CONCRETE result → typed `Box{i64}`; `Union`/abstract/`Any` → anyref `Box` (dart2wasm's
+top-type field). This is reconstructing what dart2wasm gets for free — NOT a heuristic. **Anti-cheap-hack
+rule: never "type by init and hope", never guess, never loud-fail-as-a-substitute-for-analysis. Compute
+the variable's type; box honestly when it's polymorphic.** ("single-pass verify write==init" is a
+shortcut for the join — acceptable only because it yields the SAME box decision; prefer the real join.)
+
 ## Goal
 A closure that MUTATES a captured variable (`c=0; f=()->(c+=1); …; c`) compiles to FAITHFUL
 wasm. Today it emits invalid wasm (`expected anyref, found i64`). The fix is dart2wasm's, not
@@ -28,15 +41,18 @@ setfield boxes by the inferred type (Any → "don't box") → stores raw i64 int
 Approach A (typed contents) SIDESTEPS B1 entirely: the field is i64, the value is i64, no boxing.
 
 ## The loops (each committed green, non-breaking until L2)
-- **L0 — contents-type inference (additive, byte-identical, UNIT-tested).** A pure analysis
-  `box_contents_type(code, box_ssa)` that returns the concrete Julia type a `Core.Box` holds, read
-  off its `setfield!(box,:contents,v)` value type(s) in the IR (consistent ⇒ that type; else
-  `nothing` = dynamic). NOT wired into codegen → byte-identical. Unit tests assert it returns
-  `Int64`/`Float64`/`nothing` on counter/accum/heterogeneous IR. Commit.
-- **L1 — specialized box registry (additive, dormant).** `registry.boxes::Dict{Type,BoxInfo}` +
-  `get_box_type!(mod,reg,contents_type)` → a struct `{typeId:i32, contents:(mut <wasm of contents>)}`
-  keyed by `contents_type` (NOT `registry.structs[Core.Box]` — that's one-type-per-Julia-type and
-  would collide). No call sites yet → byte-identical. Unit-test the struct shape. Commit.
+- **L0 — PURE contents-type inference (additive, byte-identical, UNIT-tested).** ✅ DONE.
+  `box_contents_type(code, ssa_types, box_id)` (src/codegen/box_capture.jl) recomputes the variable's
+  REAL type = the JOIN of all writes: the enclosing init + every closure write's COMPUTED result type
+  (`Core.Compiler.return_type` with box-reads typed as the estimate; closure bodies retrieved from the
+  enclosing `invoke`'s CodeInstance/specTypes — robust, not type-guessing). Concrete join → that type;
+  Union/abstract/Any → `nothing` (anyref-boxed = dart2wasm top-type field). Validated: counter/accum/
+  faccum→Int64/Int64/Float64, widen(`c*1.5`)/hetero(`Int|String`)→nothing. (FIXED a real bug the cheap
+  init-only draft had: it wrongly typed hetero `Int64`.) Not wired into codegen → byte-identical. Commit.
+- **L1 — specialized mutable Box{contents} registry (additive, dormant).** ✅ DONE (`b317175`):
+  `get_box_type!(mod,reg,contents_wasm)` → cached `(struct (field $typeId i32) (field $contents (mut T)))`
+  keyed by contents wasm type in the new `TypeRegistry.box_types` field (contents MUTABLE; NOT
+  `registry.structs[Core.Box]`, which is one-type-per-Julia-type and would collide). Unit-tested.
 - **L2 — specialize the live sites (FIRST behavior change, hard-gated).** IMPLEMENTATION-READY MECHANISM
   (refined 2026-06-29 after the L2 investigation):
   - **KEY FINDING:** Julia ERASES the type — `c+=1` is a dynamic `Any + 1 :: Any` in the IR (no

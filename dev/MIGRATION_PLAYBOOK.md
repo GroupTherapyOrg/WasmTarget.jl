@@ -1,5 +1,9 @@
 # InstrBuilder Migration Playbook (the loop's brain)
 
+> **▶ The migration is COMPLETE (shipped in v0.4.0, FULLY LANDED) and folded into the dart2wasm-parity
+> march** (`dev/PARITY_LEDGER.md`). This playbook is retained as the byte-identical transform
+> reference for any residual / future emit-site work onto the typed builder.
+
 Goal: migrate ONE codegen function from raw `push!(bytes, Opcode.X)` emission onto the
 typed `InstrBuilder`, **byte-for-byte identical**. This is mechanical. Follow exactly.
 

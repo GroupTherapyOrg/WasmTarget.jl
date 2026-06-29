@@ -47,7 +47,17 @@ funnel (convertType), both validated by ONE subtype relation WT has (`wasm_subty
   (B7/P4/P8 — seeded by Loop 0's P7) · F30 linear memory (by-design out-of-subset) · F8/F22/F23 deeper
   lattice completeness · F12/F13 multi-arg + classId-table dispatch (fold into Loop E).
 
+## THE ETHOS (re-read every step — do NOT get off track)
+dart2wasm is the oracle; the real Julia compiler (differential native-vs-wasm + full Pkg.test) is the
+verification. **PURE not cheap:** carry the real type, box only genuinely-dynamic — no type-by-init/hope,
+no guessing, no loud-fail-as-substitute, no defer/settle. **Wire fixes THROUGHOUT + RETIRE the old code**
+(the scattered anyref-boxing + ~120 byte-inspection sites = the `compile_value` type-channel debt B1 — the
+pure typed-value approach lets it be DELETED, not patched around). Mechanistic, one site at a time, gated.
+Goal: REAL dart2wasm parity AND same-or-way-more Julia coverage. Verify the VALUE, not just "compiles".
+
 ## ▶▶ RESUME HERE
-On `wt-dart2wasm-parity`. Work the loops in order (0 → A → B → C → D → E), triple-gated, commit green.
-Memory: [[wt-dart2wasm-parity-loop]]. Ledger: `dev/PARITY_LEDGER.md`. (v0.4.0 release lands on its own
-watcher track on `main`; register via @JuliaRegistrator when its CI greens.)
+On `wt-dart2wasm-parity`. v0.4.0 ✅ LANDED (General #159556 merged + tag + GH release). Committed: Loops A
+(lattice), B (numeric-Union box), C-B1 (convert_type! funnel), F31/F-i31, F11/F11b, sort/sortperm. ACTIVE =
+the F3 pure sub-loop (`dev/F3_LOOP.md`: L0 pure join + L1 registry done → L2 wire the 4 sites). Then the #1
+filtered-fold silent-wrong, then propagate the type-channel (B1) pure-typing compiler-wide (retiring boxing/
+byte-inspection). Memory: [[wt-dart2wasm-parity-loop]]. Ledger: `dev/PARITY_LEDGER.md`. FINDINGS: `test/fuzz/FINDINGS.md`.

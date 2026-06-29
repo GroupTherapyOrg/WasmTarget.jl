@@ -1,5 +1,11 @@
 # WasmTarget Cleanup — Phase-0 Discovery Ledger
 
+> **▶▶ FOLDED INTO the dart2wasm-parity march (2026-06-29).** The InstrBuilder migration + the early
+> fix_*/validator deletions catalogued here shipped in **v0.4.0** (FULLY LANDED: registry + git tag +
+> GH release). The deep remainders (compile_value type-channel, union-boxing, flow-generator collapse)
+> are now parity-march work — current authoritative ledger is `dev/PARITY_LEDGER.md`. This file is the
+> historical Phase-0 discovery record.
+
 Branch: `wt-builder-cleanup` (off `wt-wasm-builder` = PR #70, migration, do not merge yet).
 Date: 2026-06-28.
 Prereq DONE: the typed-InstrBuilder migration is complete + validated (`Pkg.test()` GREEN, 2679
