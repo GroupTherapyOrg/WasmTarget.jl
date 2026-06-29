@@ -15,6 +15,7 @@
 
 using WasmTarget   # linalg_diff.jl references WasmTarget.Bridge at include time
 using LinearAlgebra, Statistics, Dates, Random, SparseArrays, ForwardDiff
+using StaticArrays, SimpleDiffEq, SciMLBase, DiffEqBase
 const _SCDIR = @__DIR__
 include(joinpath(_SCDIR, "catalogue.jl"));   using .FuzzCatalogue
 include(joinpath(_SCDIR, "linalg_diff.jl"))   # → LINALG_VERIFIED
@@ -22,7 +23,9 @@ include(joinpath(_SCDIR, "dates_diff.jl"))    # → DATES_VERIFIED
 include(joinpath(_SCDIR, "random_diff.jl"))   # → RANDOM_VERIFIED
 include(joinpath(_SCDIR, "stats_diff.jl"))    # → STATS_VERIFIED
 include(joinpath(_SCDIR, "sparse_diff.jl"))   # → SPARSE_VERIFIED
-include(joinpath(_SCDIR, "forwarddiff_diff.jl"))  # → FORWARDDIFF_VERIFIED
+include(joinpath(_SCDIR, "forwarddiff_diff.jl"))    # → FORWARDDIFF_VERIFIED
+include(joinpath(_SCDIR, "staticarrays_diff.jl"))   # → STATICARRAYS_VERIFIED
+include(joinpath(_SCDIR, "simplediffeq_diff.jl"))   # → SIMPLEDIFFEQ_VERIFIED
 
 # ── catalogue-verified names, grouped by the Base module a `mod` tag maps to ──
 const _CAT_BY_MOD = let d = Dict{Symbol,Set{Symbol}}()
@@ -103,6 +106,20 @@ const SPECS = StdSpec[
         Set{Symbol}(),
         "FIRST SciML library. Forward-mode autodiff in the browser — EXACT derivatives, no host, no finite differences. `names(ForwardDiff)` is empty (the API is qualified-access only), so the surface below is ForwardDiff's documented public AD operations, each a wasm-vs-native differential sweep in test/fuzz/forwarddiff_diff.jl. `derivative` compiles straight from the real impl (single-partial `Dual` seed). `gradient`/`jacobian`/`hessian` (+ the in-place `!` forms) are ext overlays: native routes them through the chunk/`Config` machinery, which embeds a cyclic `Method` constant WT can't emit — so we reuse the working single-partial `Dual` seed one input direction at a time (Partials{1} × N), BIT-IDENTICAL to native's Partials{N} vector mode (forward-mode partials never cross slots); `hessian` is forward-over-forward with two distinct tags. The whole value path is unlocked by a narrow `is_struct_type` carve-out (src/codegen/structs.jl) registering `Dual`/`Partials` as their real structs — without it `<:Number` routes them to `structref` and a `Dual[…]` array literal fails wasm validation (a systemic core fix: every custom `<:Number` struct benefits). The `Dual` number interface (value/partials) is exercised in every sweep; COMBOS verified too (‖∇f‖, J·x, a hand 2×2 Newton step J⁻¹F, gradient through a named helper). OUT-OF-SCOPE: the `GradientConfig`/`JacobianConfig`/`HessianConfig`/`Chunk` preallocation API (advanced chunk-size tuning — the cyclic-`Method` `@generated` seeder; unnecessary, the standard API covers the same results).",
         [:derivative, :derivative!, :gradient, :gradient!, :jacobian, :jacobian!, :hessian, :hessian!]),
+    StdSpec("StaticArrays", StaticArrays,
+        STATICARRAYS_VERIFIED,
+        # 2-D / mutable static arrays are a separate codegen surface (their own
+        # @generated unrolling); out of scope for this SVector round.
+        Set([:SMatrix, :MMatrix, :MArray, :MVector, :SizedArray, :SHermitianCompact, :FieldVector]),
+        "StaticArrays SUPPORT for the 1-D `SVector` surface — the static vector type the SciML ecosystem builds on (SimpleDiffEq's SimpleTsit5 Butcher tableau, static-vector ODE state). `SVector{N,T} === SArray{Tuple{N},T,1,N}` is NOT a heap array but a struct over a single `NTuple{L,T}` field; two fixes in ext/WasmTargetStaticArraysExt.jl unlock the whole value path: (1) register `:SArray` in the `is_struct_type` carve-out (src/codegen/structs.jl) so WT lays it out as the concrete NTuple-backed struct it is, not the generic 2-field array layout (the SparseMatrixCSC / ForwardDiff-Dual lever); (2) overlay `StaticArrays.construct_type` for an already-parameterized `SArray` to the identity — native folds construct_type's pure type-level machinery (adapt_size/adapt_eltype/typeintersect/has_size) to the concrete `Type{SVector{N,T}}`, but WT's interpreter (concrete-eval disabled to protect overlays) infers `Any`, boxing the whole SVector and every getindex off it. Each operation is a wasm-vs-native differential sweep in test/fuzz/staticarrays_diff.jl: construction (positional / single-Tuple / converting-eltype, ALL N≥1 including the degenerate single-element vector), getindex, iterate/destructure/for-loop, reductions (sum/prod/maximum/minimum), arithmetic (+/-/scalar-*), dot, broadcast, and Vector output via collect. OUT-OF-SCOPE (this round): SMatrix / MArray / MVector / SizedArray (2-D + mutable static arrays — a distinct @generated codegen surface).",
+        [:SVector, :SArray, :getindex, :iterate, :length, :sum, :prod, :dot, :map, :broadcast]),
+    StdSpec("SimpleDiffEq", SimpleDiffEq,
+        SIMPLEDIFFEQ_VERIFIED,
+        # adaptive step-size control + dense interpolation + events/callbacks are a
+        # separate solver surface (error estimators, root-finding) — out of scope.
+        Set([:SimpleATsit5, :GPUSimpleTsit5, :LoopRK45, :SimpleFunctionMap]),
+        "SimpleDiffEq (+ SciMLBase / DiffEqBase) — solve ordinary differential equations INSIDE a frozen wasm module, no host, no Julia runtime. Every FIXED-STEP solver — SimpleEuler, SimpleRK4, SimpleTsit5, LoopEuler, LoopRK4 — is a wasm-vs-native differential sweep in test/fuzz/simplediffeq_diff.jl over scalar (decay/logistic), Vector-state (harmonic oscillator / Lotka–Volterra / nonlinear pendulum) AND SVector-state ODEs (NOTHING DROPPED — SimpleTsit5's Butcher tableau lives in SVector{6/21/22} caches, unblocked by the StaticArrays support above). The wall is the SciMLBase ABSTRACTION the user touches; three pure levers clear it: (1) a curated type-level concrete-eval fold (src/codegen/interpreter.jl) re-enables folding for apply_type/_compute_sparams/eltype/isinplace-type-param/… so ODEProblem/ODEFunction construction infers concretely instead of `Any`; (2) an `ODEProblem(f,u0,tspan)` overlay builds the ODEFunction CONCRETELY, bypassing the `isinplace` method-arity reflection on a raw function; (3) a `solve(prob, alg; dt)` overlay calls `DiffEqBase.__solve` directly, bypassing the runtime kwarg-Pairs machinery. The SciML solution types (ODESolution/LinearInterpolation/DiffEqArray/VectorOfArray) are registered in the is_struct_type carve-out so `sol.u`/`sol.t` are reachable, not dynamic. KNOWN 1.13 GAP (gated, loud/sound): ODE solving over a `Vector{Float64}` state emits invalid wasm on Julia ≥1.13 for the multi-stage solvers (SimpleRK4/SimpleTsit5/LoopRK4) — a WT-CORE codegen bug: a Vector `.ref`-write result memref that WT stack-threads into a following `array.set` (no IR-level use) orphans when 1.13's tighter IR doesn't consume it (a compile-time validation error, never a silent miscompile; sub-IR so it needs a WT codegen stack-model fix, not an IR guard). Tracked in FINDINGS for a focused follow-up; scalar/SVector/parameterized ODE solving + all of 1.12 pass. OUT-OF-SCOPE: adaptive solvers (SimpleATsit5 — error-control + dense interpolation), GPU solvers, callbacks/events (root-finding).",
+        [:solve, :ODEProblem, :ODEFunction, :SimpleEuler, :SimpleRK4, :SimpleTsit5, :LoopEuler, :LoopRK4]),
 ]
 
 # is `nm` a Type / a Function / other, in module `M`?

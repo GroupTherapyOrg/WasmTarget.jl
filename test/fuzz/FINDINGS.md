@@ -964,3 +964,106 @@ NB this does NOT reach the SciML/SimpleDiffEq `ODEProblem` construction: its
 `isinplace` is kwarg METHOD-ARITY reflection whose args aren't const, so
 concrete-eval can't fold it even when forced. That needs a concrete-construction
 ext overlay (sparse-style) — a separate effort.
+
+## SciMLBase + SimpleDiffEq + StaticArrays — SHIPPED (2026-06-26, branch wt-sciml-simplediffeq)
+Real SciML ODE solve runs in wasm, bit/tolerance-identical to native, for EVERY
+fixed-step solver and EVERY state representation — nothing dropped. Four libraries
+landed together (DiffEqBase, SciMLBase, SimpleDiffEq, StaticArrays); exts
+`WasmTargetSimpleDiffEqExt` + `WasmTargetStaticArraysExt`; harnesses
+`test/fuzz/simplediffeq_diff.jl` (5 solvers × {scalar, Vector, SVector} ODEs) +
+`test/fuzz/staticarrays_diff.jl` (the SVector surface). Coverage: both 100% in-scope.
+
+THREE LEVERS for the SciMLBase abstraction (the user-facing `ODEProblem`/`solve`):
+
+  1. CORE FOLD (src/codegen/interpreter.jl): a curated whitelist re-enables
+     concrete-eval for pure type-level fns (`apply_type`/`_compute_sparams`/`_svec_ref`/
+     `eltype`/`_compute_eltype`/`isinplace`-type-param/…) that WT had left as `dynamic`
+     Type-value dispatch (concrete-eval is globally off in WT to protect overlays).
+     Folds the ODEProblem/ODEFunction type computations native folds away.
+
+  2. OVERLAY ODEProblem(f,u0,tspan) → CONCRETE construction (ext): the OUTER ctor runs
+     `isinplace(f)` on a RAW function (kwarg method-arity reflection the fold can't
+     reach). Build the ODEFunction explicitly (19 field args, no reflection) then
+     `ODEProblem{false}(odef, …)` — the inner ctor's `isinplace(::ODEFunction{false})`
+     is just the type-param `iip`, which the fold handles. Byte-identical to native's.
+
+  3. OVERLAY solve(prob, alg; dt) → `DiffEqBase.__solve` directly (ext): bypasses the
+     get_concrete_problem/solve_call kwarg-Pairs machinery (a Pairs type from a RUNTIME
+     kwargs NamedTuple → unfoldable). `__solve` is the clean integrator and — unlike the
+     full `solve` (which native ALSO infers `Any`) — infers a CONCRETE ODESolution, so
+     `sol.u[end]` returns an unboxed value at the wasm boundary.
+
+  Plus `_ARRAY_STRUCT_CARVEOUT` (an extensible registry added to is_struct_type): the
+  SciML solution types (ODESolution/LinearInterpolation/DiffEqArray/VectorOfArray) are
+  `<:AbstractArray` but real multi-field structs, so without it `sol.u`/`sol.t` lower to
+  DYNAMIC getfield (the original vector-system blocker). Same lever fixes StaticArrays.
+
+STATICARRAYS (what unblocked SimpleTsit5 — its Butcher tableau is in SVector{6/21/22}):
+  `SVector{N,T} === SArray{Tuple{N},T,1,N}` is an NTuple-backed struct, not a heap array.
+  (a) register `:SArray` in `_ARRAY_STRUCT_CARVEOUT` → concrete struct layout, not the
+      generic 2-field array layout (else `.data` NTuple unreachable → getindex traps);
+  (b) overlay `StaticArrays.construct_type` for an already-parameterized `SArray` to the
+      IDENTITY. Native folds construct_type's type-level machinery (adapt_size/
+      adapt_eltype/typeintersect/has_size) to the concrete `Type{SVector{N,T}}`; WT's
+      interpreter infers `Any`, boxing the whole SVector and every getindex off it. The
+      identity overlay re-concretises it for ALL N (incl. degenerate SVector{1}). NB the
+      construct_type overlay is what makes N=1 work — an alternate invoke-based ctor
+      overlay traps at N=1 (the `Vararg{Any,1}` self-collides on the recursive call).
+
+VERIFIED: 5 solvers (SimpleEuler/SimpleRK4/SimpleTsit5/LoopEuler/LoopRK4) × scalar
+(decay/logistic) + Vector-state (oscillator/Lotka-Volterra/pendulum) + SVector-state,
+all wasm==native within the tolerance oracle (the @muladd/FMA fuse drifts ~1-2 ULP/step,
+well inside ORACLE tolerance for the bounded non-chaotic integrations used).
+
+PARAMETERIZED ODEs: `ODEProblem(f, u0, tspan, p)` (4-arg) is overlaid too, so a
+top-level rhs `f(u,p,t)` gets its coefficients through `p` instead of closure capture
+(a param-capturing rhs CLOSURE traps as an ODEFunction field — WT can't lower it).
+`p` must be a SCALAR or NTuple — a Vector `p` fails wasm validation (`expected i64,
+found ref` threading the Vector through ODEProblem.p); NTuple `p=(σ,ρ,β)` is the
+supported form (verified across all 5 solvers in simplediffeq_diff.jl). This is what
+the docs homepage Lorenz island uses (σ/ρ sliders → re-solve in wasm → WasmMakie).
+
+COMPAT NOTE: the ODEFunction is constructed by CONCRETE field layout (21 type params),
+so the ext is version-sensitive to SciMLBase — re-verify the construction on bumps
+(compat pinned SciMLBase="2,3"). SCOPE: fixed-step solvers only; adaptive SimpleATsit5
+(error-control + dense interp), Vector-typed `p`, and SMatrix/MArray are future scope.
+
+## Vector-state ODE solving — WT-CORE 1.13 codegen bug (OPEN, gated; 2026-06-26)
+Compiling a SimpleDiffEq solve over a `Vector{Float64}` state, e.g.
+`solve(ODEProblem((u,p,t)->[-u[2],u[1]], [a,0.0], (0.0,1.0)), SimpleRK4(); dt=0.05)`,
+emits INVALID wasm on Julia ≥1.13: `wasm-tools` → "type mismatch: values remaining on
+stack at end of block". On 1.12 it compiles + runs bit-correct. Affects the MULTI-STAGE
+solvers (SimpleRK4 / SimpleTsit5 / LoopRK4 — many Vector temporaries); single-stage
+SimpleEuler/LoopEuler dodge it. Scalar / SVector-state / parameterized ODE solving all
+pass on 1.13. LOUD/SOUND — a compile-time validation error, never a silent miscompile
+(the cardinal invariant holds). The 1.13 matrix caught it; gated in
+test/fuzz/simplediffeq_diff.jl (`VERSION >= v"1.13.0-"`) pending the WT-core fix.
+
+ROOT CAUSE — DEFINITIVE (via `WT_DUMP_IR` of `#__solve#NN` + hand-traced wasm stack
+through the failing block, both Julia versions): a Vector `.ref` field write
+(`struct.set 15 1`, type 15 = the `Vector{Float64}` wrapper {typeId, mut f64-array, mut
+size}) returns the just-set memref, and WT's codegen STACK-THREADS that memref directly
+into a FOLLOWING `array.set` as its array operand — a reuse optimization with NO
+IR-level representation (the array.set does not reference the setfield!'s SSA). 1.13's
+tighter optimizer (≈540 fewer stmts / 30 fewer `Core.tuple` than 1.12, identical
+mutation-op counts) reorders this block so that in one case the threaded value is NOT
+consumed → it orphans at the block `end`.
+
+WHY IT IS SUB-IR (proven — three IR-level fixes all fail; for the follow-up): guarding
+the setfield! result-push on `haskey(ssa_locals,idx)` (memoryrefset!'s working PURE-6024
+pattern), OR `haskey OR count_ssa_uses!`, OR doing it only for the Vector `.ref`/`.size`
+handlers, ALL flip the error OVERFLOW ("values remaining") → UNDERFLOW ("expected a type
+but nothing on stack") at the very next `array.set` — because that array.set consumes
+the threaded memref with NO IR use, so `haskey`/`count_ssa_uses` cannot distinguish
+"threaded into the next op (KEEP)" from "genuinely orphaned (DROP)" — both are
+`haskey=false, uses=0`. memoryrefset! gets away with its `haskey` guard because its
+results are never threaded this way; setfield!-`:ref` results are. THE FIX must live in
+WT's codegen stack model: either make `array.set`/`memoryrefset!` take its array operand
+from a real local/IR-ref instead of the threaded setfield! result (so the result is
+freely droppable when unused), or add a real stack-height/balance pass that drops
+block-end excess. Not an IR-use heuristic. WT already drops the 40+ other unused
+`memoryrefset!` results in this same func fine — so it's a narrow threading interaction,
+not generic unused-result handling. Reduces no further than the full multi-stage
+`__solve` (plain Vector-copy-in-a-loop compiles clean on 1.13). Repro funcs export as
+`#__solve#NN`. Diagnostic: add an env-gated CodeInfo dump in compile.jl's function_data
+loop (`WT_DUMP_IR=__solve#`) to re-obtain the IR.

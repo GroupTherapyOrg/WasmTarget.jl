@@ -294,6 +294,42 @@ Functions: **8 supported**, 0 boundary, 0 out-of-scope (8 total). Types: 0/0 wit
 | `jacobian` | ✅ supported |
 | `jacobian!` | ✅ supported |
 
+## StaticArrays — 100% of in-scope functions supported
+
+StaticArrays SUPPORT for the 1-D `SVector` surface — the static vector type the SciML ecosystem builds on (SimpleDiffEq's SimpleTsit5 Butcher tableau, static-vector ODE state). `SVector{N,T} === SArray{Tuple{N},T,1,N}` is NOT a heap array but a struct over a single `NTuple{L,T}` field; two fixes in ext/WasmTargetStaticArraysExt.jl unlock the whole value path: (1) register `:SArray` in the `is_struct_type` carve-out (src/codegen/structs.jl) so WT lays it out as the concrete NTuple-backed struct it is, not the generic 2-field array layout (the SparseMatrixCSC / ForwardDiff-Dual lever); (2) overlay `StaticArrays.construct_type` for an already-parameterized `SArray` to the identity — native folds construct_type's pure type-level machinery (adapt_size/adapt_eltype/typeintersect/has_size) to the concrete `Type{SVector{N,T}}`, but WT's interpreter (concrete-eval disabled to protect overlays) infers `Any`, boxing the whole SVector and every getindex off it. Each operation is a wasm-vs-native differential sweep in test/fuzz/staticarrays_diff.jl: construction (positional / single-Tuple / converting-eltype, ALL N≥1 including the degenerate single-element vector), getindex, iterate/destructure/for-loop, reductions (sum/prod/maximum/minimum), arithmetic (+/-/scalar-*), dot, broadcast, and Vector output via collect. OUT-OF-SCOPE (this round): SMatrix / MArray / MVector / SizedArray (2-D + mutable static arrays — a distinct @generated codegen surface).
+
+Functions: **10 supported**, 0 boundary, 0 out-of-scope (10 total). Types: 0/0 with verified construction/ops.
+
+| function | status |
+|---|---|
+| `SArray` | ✅ supported |
+| `SVector` | ✅ supported |
+| `broadcast` | ✅ supported |
+| `dot` | ✅ supported |
+| `getindex` | ✅ supported |
+| `iterate` | ✅ supported |
+| `length` | ✅ supported |
+| `map` | ✅ supported |
+| `prod` | ✅ supported |
+| `sum` | ✅ supported |
+
+## SimpleDiffEq — 100% of in-scope functions supported
+
+SimpleDiffEq (+ SciMLBase / DiffEqBase) — solve ordinary differential equations INSIDE a frozen wasm module, no host, no Julia runtime. Every FIXED-STEP solver — SimpleEuler, SimpleRK4, SimpleTsit5, LoopEuler, LoopRK4 — is a wasm-vs-native differential sweep in test/fuzz/simplediffeq_diff.jl over scalar (decay/logistic), Vector-state (harmonic oscillator / Lotka–Volterra / nonlinear pendulum) AND SVector-state ODEs (NOTHING DROPPED — SimpleTsit5's Butcher tableau lives in SVector{6/21/22} caches, unblocked by the StaticArrays support above). The wall is the SciMLBase ABSTRACTION the user touches; three pure levers clear it: (1) a curated type-level concrete-eval fold (src/codegen/interpreter.jl) re-enables folding for apply_type/_compute_sparams/eltype/isinplace-type-param/… so ODEProblem/ODEFunction construction infers concretely instead of `Any`; (2) an `ODEProblem(f,u0,tspan)` overlay builds the ODEFunction CONCRETELY, bypassing the `isinplace` method-arity reflection on a raw function; (3) a `solve(prob, alg; dt)` overlay calls `DiffEqBase.__solve` directly, bypassing the runtime kwarg-Pairs machinery. The SciML solution types (ODESolution/LinearInterpolation/DiffEqArray/VectorOfArray) are registered in the is_struct_type carve-out so `sol.u`/`sol.t` are reachable, not dynamic. OUT-OF-SCOPE: adaptive solvers (SimpleATsit5 — error-control + dense interpolation), GPU solvers, callbacks/events (root-finding).
+
+Functions: **8 supported**, 0 boundary, 0 out-of-scope (8 total). Types: 0/0 with verified construction/ops.
+
+| function | status |
+|---|---|
+| `LoopEuler` | ✅ supported |
+| `LoopRK4` | ✅ supported |
+| `ODEFunction` | ✅ supported |
+| `ODEProblem` | ✅ supported |
+| `SimpleEuler` | ✅ supported |
+| `SimpleRK4` | ✅ supported |
+| `SimpleTsit5` | ✅ supported |
+| `solve` | ✅ supported |
+
 ## Summary
 
 | stdlib | % in-scope supported | supported | boundary | out-of-scope |
@@ -304,3 +340,5 @@ Functions: **8 supported**, 0 boundary, 0 out-of-scope (8 total). Types: 0/0 wit
 | Random | **100%** | 11 | 0 | 5 |
 | SparseArrays | **100%** | 20 | 0 | 2 |
 | ForwardDiff | **100%** | 8 | 0 | 0 |
+| StaticArrays | **100%** | 10 | 0 | 0 |
+| SimpleDiffEq | **100%** | 8 | 0 | 0 |

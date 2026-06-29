@@ -24,6 +24,16 @@ using Therapy
 using Statistics
 using LinearAlgebra
 using ForwardDiff
+using StaticArrays
+using SimpleDiffEq
+using SciMLBase
+using WasmMakie
+
+# The homepage Lorenz island draws through WasmMakie's Canvas2D import surface —
+# register the provider so Therapy backs the island's `render!` canvas ops with
+# WasmMakie's JS glue + the host <canvas> (the generic provider contract, E-002).
+Therapy.register_canvas_provider!(name = "WasmMakie",
+    import_specs = WasmMakie.import_specs, js_glue = WasmMakie.js_glue)
 
 cd(@__DIR__)
 

@@ -1,7 +1,20 @@
 """
 Check if a type is a user-defined struct (not a primitive or special type).
 """
+# Extensible carve-out: type-NAMES of `<:AbstractArray` (or `<:Number`) structs
+# that are REAL multi-field structs and must register with their actual fields
+# (not WT's 2-field wasm-array layout). Package extensions populate this — e.g.
+# the SciML ext registers `:ODESolution`/interpolation types (an ODESolution
+# `<:AbstractArray` whose `.u`/`.t`/… fields would otherwise be unreachable →
+# dynamic getfield). Same mechanism as the hardcoded SparseMatrixCSC/Dual
+# carve-outs below, but ext-extensible so core stays library-agnostic.
+const _ARRAY_STRUCT_CARVEOUT = Set{Symbol}()
+
 function is_struct_type(T::Type)::Bool
+    # Ext-registered AbstractArray/Number struct carve-outs (SciML solutions, …).
+    if T isa DataType && T.name.name in _ARRAY_STRUCT_CARVEOUT
+        return isconcretetype(T) && isstructtype(T)
+    end
     # ForwardDiff.Dual / Partials are real multi-field structs that merely happen
     # to be `<: Number` / `<: AbstractVector`. Like the SparseMatrixCSC carve-out
     # below, they must register with their REAL fields (concrete struct refs).
