@@ -3324,9 +3324,9 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
         # performance.now() returns f64 milliseconds → multiply by 1e6 for nanoseconds
         f64_const!(b, 1.0e6)
         num!(b, Opcode.F64_MUL)
-        # Convert f64 → i64 (unsigned — trunc_sat to handle large values)
-        # 0xFC 0x07 = i64.trunc_sat_f64_u (saturating-truncation prefix; no typed method → bridge)
-        emit_raw!(b, UInt8[0xFC, 0x07]; pops=1, pushes=WasmValType[I64])
+        # Convert f64 → i64 (unsigned — trunc_sat to handle large values).
+        # Typed builder emitter (was a raw 0xFC 0x07 splice — F17 retired it).
+        trunc_sat!(b, Opcode.I64_TRUNC_SAT_F64_U)
         return builder_code(b)
     end
 

@@ -274,6 +274,18 @@ module Opcode
     const ANY_CONVERT_EXTERN = 0x1A  # any.convert_extern
     const EXTERN_CONVERT_ANY = 0x1B  # extern.convert_any
 
+    # Saturating truncation (0xFC prefix, sub-ops 0x00–0x07): float → int, clamping
+    # out-of-range / NaN to the int min/max/0 instead of trapping (the non-saturating
+    # 0xA8–0xB1 family traps on overflow).
+    const I32_TRUNC_SAT_F32_S = 0x00
+    const I32_TRUNC_SAT_F32_U = 0x01
+    const I32_TRUNC_SAT_F64_S = 0x02
+    const I32_TRUNC_SAT_F64_U = 0x03
+    const I64_TRUNC_SAT_F32_S = 0x04
+    const I64_TRUNC_SAT_F32_U = 0x05
+    const I64_TRUNC_SAT_F64_S = 0x06
+    const I64_TRUNC_SAT_F64_U = 0x07
+
     # Bulk memory operations (0xFC prefix)
     const FC_PREFIX = 0xFC
     const MEMORY_INIT = 0x08    # memory.init seg_idx mem_idx
