@@ -132,6 +132,8 @@ _wt_shard0() && include("f11_int128_bitcount_backfills.jl")
 # Parity probe: sort comparator kwargs (by/lt) were silently dropped by the non-mutating sort
 # overlay (only rev was forwarded to sort!) → sort(v, by=f) returned default order. See FINDINGS.md.
 _wt_shard0() && include("sort_comparator_backfills.jl")
+# F3 sub-loop L0 (dev/F3_LOOP.md): Core.Box contents-type inference (dormant analysis, byte-identical).
+_wt_shard0() && include("f3_box_capture_l0.jl")
 
 # ── Parallel-phase infrastructure (process sharding) ─────────────────────────
 # Test fixtures hoisted from inside phase testsets — `struct`/`using` are illegal
