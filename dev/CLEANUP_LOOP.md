@@ -136,9 +136,16 @@ patch becomes principled code + a guarding test.
   `return_type_compatible`'s special-case pile with `wasm_subtype` (WasmGC HeapType lattice
   mirroring dart2wasm wasm_builder type.dart 1:1) + `emit_return_coerced!` doing dart2wasm
   translator.dart `convertType` (upcast free / downcast ref.cast / extern↔any / numeric ladder).
-- ✅ L3 type-related byte-inspection COMPLETE (byte-identical): `has_ref_producing_gc_op` deleted,
-  22 sites → `_wt_is_ref(infer_value_wasm_type(...))` (d5f3c6e); 8 `_bytes[1]==REF_NULL` →
-  `is_nothing_value(...)` (dcbcc24). 30 byte-scans → typed checks.
+- ✅ L3 type-determination byte-inspection COMPLETE (byte-identical, dart2wasm-aligned): the entire
+  "is-it-a-ref / what-wasm-type" byte-scanning harvest is done — `has_ref_producing_gc_op` deleted +
+  22 sites (d5f3c6e); 8 `_bytes[1]==REF_NULL`→`is_nothing_value` (dcbcc24); and the big sweep
+  (76b0d07) collapsing the const-check + LOCAL_GET-decode + type-lookup CHAINS across
+  calls/invoke/statements/values → `infer_value_wasm_type` (**−502 lines**). ~121 byte-inspection
+  sites remain but they are NOT type-determination — they're instruction-operand decodes (struct_get
+  type/field idx, global/local idx for a cast), both-Nothing egal forms (compile_value(nothing)→
+  i32.const 0 diverges from is_nothing_value), `_bytes[end]==UNREACHABLE` stub detection, mutated
+  buffers, and flow-gen bridges (L2). Those need the ROOT fix (compile_value type channel) or the L2
+  work; NOT safe byte-identical swaps.
 
 ### ▶ REMAINING WORK — all DEEP/behavior-changing; SUPERVISED-warranting (the clean byte-identical
 ### dart2wasm-aligned harvest above is DONE). Worst failure = silent wrong-value on an uncovered path.
