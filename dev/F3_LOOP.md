@@ -37,13 +37,29 @@ Approach A (typed contents) SIDESTEPS B1 entirely: the field is i64, the value i
   `get_box_type!(mod,reg,contents_type)` → a struct `{typeId:i32, contents:(mut <wasm of contents>)}`
   keyed by `contents_type` (NOT `registry.structs[Core.Box]` — that's one-type-per-Julia-type and
   would collide). No call sites yet → byte-identical. Unit-test the struct shape. Commit.
-- **L2 — specialize the live sites (FIRST behavior change, hard-gated).** When a closure captures a
-  `Core.Box` whose contents type is concrete+monomorphic, thread the specialized `Box{contents}`
-  type CONSISTENTLY through the 4 sites that must agree: closure captured-box field
-  (`register_closure_type!`, structs.jl:121), `%new(Core.Box)` (compile_new, statements.jl:1632),
-  `setfield!`/`getfield` (calls.jl). Contents type is inferred at the closure-CREATION site in the
-  enclosing fn (IR available) and recorded so the separately-compiled closure body agrees. Gate:
-  counter + accumulator green + full `Pkg.test()` + migration byte-identity. Commit.
+- **L2 — specialize the live sites (FIRST behavior change, hard-gated).** IMPLEMENTATION-READY MECHANISM
+  (refined 2026-06-29 after the L2 investigation):
+  - **KEY FINDING:** Julia ERASES the type — `c+=1` is a dynamic `Any + 1 :: Any` in the IR (no
+    `add_int`), so you CANNOT verify the contents type from inference (a wrong turn — the L2a
+    type-verification attempt was reverted). BUT WT already does `struct.get → i64; i64.const 1` — it
+    computes reads + arithmetic at the OPERAND's real width; the ONLY failure is storing that i64 into
+    the `Any` contents field. So: **type the contents field `i64` from the one reliable signal — the
+    enclosing init (`c=0`→Int64, which `box_contents_type` gives) — and WT's existing typed arithmetic
+    + the i64→i64 store just work.** No closure-body verification needed.
+  - **4 sites, all → `get_box_type!(contents_wasm)` (same struct, keyed by contents wasm in box_types):**
+    (1) `%new(Core.Box)` (compile_new, statements.jl:1632) → struct.new of get_box_type!(box_contents_type
+    of THIS box in the enclosing IR). (2) setfield!(box,:contents,v) + (3) getfield(box,:contents)
+    (calls.jl) → read the contents type OFF the box's now-typed struct (field 1) → plain struct.set/get,
+    no box/unbox. (4) closure captured-box FIELD (`register_closure_type!`, structs.jl:121) — the ONLY
+    site that can't see the contents type locally (only `Core.Box`).
+  - **Cross-function glue (only for site 4):** a side-table `registry.box_contents_types::Dict{Type,
+    WasmValType}` (closure_T → box-field contents wasm), POPULATED by a pre-pass over the enclosing fn's
+    IR at compile-start (scan %new(Core.Box)+setfield init → box_contents_type; map the closure capturing
+    it). register_closure_type! consults it (Core.Box field + entry present → get_box_type!(wasm); else
+    anyref FALLBACK = current behavior, no regression). Natural compile order (entry before its closure
+    body) keeps it populated before the closure struct is registered.
+  - Gate: **counter** green first, then accumulator, then full `Pkg.test()` + migration byte-identity.
+    Independent adversarial re-verify. Commit.
 - **L3 — edge cases.** float accumulator, conditional mutation (`iseven(i)&&(c+=i)`), read-after,
   two-closures-SHARING-one-box, escaping closure (returned), return-unbox/narrowing; anyref-box
   FALLBACK for genuinely-dynamic contents (`box_contents_type`→nothing). Gate full adversarial set.
