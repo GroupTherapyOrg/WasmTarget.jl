@@ -1250,19 +1250,11 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                         if (first_byte == 0x41 || first_byte == 0x42) && !ends_with_ref_producing_gc  # I32_CONST or I64_CONST
                             need_replace = true
                         elseif first_byte == 0x20  # LOCAL_GET
-                            src_idx = 0; shift = 0
-                            for bi in 2:length(field_val_bytes)
-                                byt = field_val_bytes[bi]
-                                src_idx |= (Int(byt & 0x7f) << shift)
-                                shift += 7
-                                (byt & 0x80) == 0 && break
-                            end
-                            arr_idx = src_idx - ctx.n_params + 1
-                            if arr_idx >= 1 && arr_idx <= length(ctx.locals)
-                                src_type = ctx.locals[arr_idx]
-                                if src_type === I64 || src_type === I32
-                                    need_replace = true
-                                end
+                            # dart2wasm carries the type with the value: derive the source's
+                            # wasm type from the inferred value type rather than decoding the local.
+                            local src_type = infer_value_wasm_type(field_val, ctx)
+                            if src_type === I64 || src_type === I32
+                                need_replace = true
                             end
                         end
                     end
