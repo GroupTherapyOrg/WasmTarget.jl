@@ -2283,9 +2283,49 @@ CC.codegen_cache(interp::WasmInterpreter) = interp.codegen
 # IR shapes). Reverted to the blanket `:none`; the cor root cause + the type-level
 # fold approach are recorded in test/fuzz/failures/3fd2f07bfc5c.md — re-attempt only
 # with a Julia 1.13 environment available to verify against.
+# A CURATED set of pure TYPE-LEVEL functions that concrete-eval may fold. They
+# produce Types (or values trivially derived from Types) that WT fundamentally
+# cannot lower as runtime values — so folding them is MANDATORY, not an
+# optimization. They have no value-level overlays to bypass, and strings never
+# call them, so re-enabling eval for ONLY these can't perturb WT's
+# version-specific string IR (the failure mode that reverted the prior blanket
+# `all-Type-args` attempts — see test/fuzz/failures/3fd2f07bfc5c.md). This is the
+# `cor`/SparseArrays insight generalized: route the runtime type-machinery to its
+# known compile-time constant, scoped surgically. MUST be total (runs during
+# inference of arbitrary code).
+function _is_typelevel_foldable(@nospecialize(f))::Bool
+    f === Core.apply_type && return true
+    (isdefined(Core, :_compute_sparams) && f === Core._compute_sparams) && return true
+    (isdefined(Core, :_svec_ref)        && f === Core._svec_ref)        && return true
+    (isdefined(Core, :_typevar)         && f === Core._typevar)         && return true
+    f === Base.nonmissingtype && return true
+    f === Base.promote_type   && return true
+    (isdefined(Base, :typesplit) && f === Base.typesplit) && return true
+    f === Base.eltype && return true
+    # float/one fold only on a Type arg — concrete-eval fires ONLY on constant
+    # args, so the value forms (one(::Float64)) never reach the fold here.
+    f === Base.float && return true
+    f === Base.one   && return true
+    # SciML in-place detection (ODEProblem/ODEFunction): a Bool from method arity,
+    # feeding apply_type. Match `isinplace` AND its kwarg body `#isinplace#NN`.
+    # `nameof` throws for some callables (Base.BottomRF) — guard it.
+    if f isa Function
+        nm = try string(nameof(f)) catch; "" end
+        (startswith(nm, "isinplace") || startswith(nm, "#isinplace#")) && return true
+    end
+    return false
+end
+
 function CC.concrete_eval_eligible(interp::WasmInterpreter,
         @nospecialize(f), result::CC.MethodCallResult, arginfo::CC.ArgInfo,
         sv::Union{CC.InferenceState, CC.IRInterpretationState})
+    # Delegate to the normal effect-based eligibility ONLY for whitelisted pure
+    # type-level functions; everything else stays disabled (overlays win, and
+    # value-level/string codegen is byte-for-byte unchanged).
+    if _is_typelevel_foldable(f)
+        return @invoke CC.concrete_eval_eligible(interp::CC.AbstractInterpreter,
+                                                 f, result, arginfo, sv)
+    end
     return :none
 end
 

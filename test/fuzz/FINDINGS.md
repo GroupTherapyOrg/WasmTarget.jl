@@ -932,3 +932,35 @@ OUT-OF-SCOPE: the `GradientConfig`/`JacobianConfig`/`HessianConfig`/`Chunk`
 preallocation API (chunk-size tuning — the cyclic-`Method` `@generated` seeder;
 unnecessary, the standard API yields the same results). Future: nested/higher-order
 beyond Hessian; `Dual` over non-Float64 value types at the bridge boundary.
+
+## Type-level concrete-eval fold (core, 2026-06-26) — closes the cor cluster
+WT's `WasmInterpreter` disables concrete-eval globally (`concrete_eval_eligible
+→ :none`) so overlays aren't bypassed. Side effect: pure TYPE-LEVEL calls (e.g.
+`one(float(nonmissingtype(eltype)))` in `Statistics.cor`) stay as runtime
+`dynamic` dispatch on Type VALUES that WT can't lower → `unreachable` stub /
+validation error (the `cor` cluster, gap 3fd2f07bfc5c — 1-arg `cor` was left
+unfixed because it genuinely needs the type-level path, not a value reroute).
+
+FIX (`src/codegen/interpreter.jl`): re-enable concrete-eval for a CURATED
+whitelist of pure type-level functions ONLY — `Core.apply_type`/`_compute_sparams`/
+`_svec_ref`/`_typevar`, `nonmissingtype`/`promote_type`/`typesplit`/`eltype`,
+`float`/`one` (which fold only on a Type arg since concrete-eval fires only on
+const args), and `isinplace`. These produce Types WT fundamentally cannot lower
+as runtime values (so folding is MANDATORY, not an optimization), have no
+value-level overlays to bypass, and strings never call them — so re-enabling eval
+for ONLY these can't perturb WT's version-specific string IR. That string-IR
+perturbation is exactly what reverted the prior TWO blanket `all-Type-args`
+attempts (see the doc); the surgical whitelist is the difference. Delegates to the
+normal effect-based eligibility for the whitelisted fns (keeps `:none` for all
+else), so overlays still win and value/string codegen is byte-identical.
+
+Verified: 1-arg `cor` (the open gap) + 2-arg `cor` now differential (wasm==native,
+test/fuzz/stats_diff.jl "cor (type-level concrete-eval fold)"); full Pkg.test green
+on 1.12; every string op that broke the prior attempts (repeat/lpad/rpad/chop/
+split/string/string-chains) still compiles. ⚠ MUST clear the full 1.12+1.13 CI
+matrix before trusting (the prior reverts passed 1.12-local but broke 1.13-rc1).
+
+NB this does NOT reach the SciML/SimpleDiffEq `ODEProblem` construction: its
+`isinplace` is kwarg METHOD-ARITY reflection whose args aren't const, so
+concrete-eval can't fold it even when forced. That needs a concrete-construction
+ext overlay (sparse-style) — a separate effort.
