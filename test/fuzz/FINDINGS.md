@@ -119,8 +119,10 @@ Another SILENT MISCOMPILE (common pattern): `sort(v, by=f)` returned the default
 the non-mutating `Base.sort` overlay (`src/codegen/interpreter.jl`) did `sort!(result, rev=rev)` —
 forwarding ONLY `rev`, silently dropping `by`/`lt`/`order`. The `sort!` overlay body already honors
 lt/by/rev correctly; the bug was purely the forwarding. Fixed to forward all comparator kwargs.
-Backfill `test/sort_comparator_backfills.jl` (CI-wired shard 0). NOTE: `sortperm` is ALSO wrong
-(separate path, not this overlay — returns wrong permutation) — still open, characterize next.
+Backfill `test/sort_comparator_backfills.jl` (CI-wired shard 0). `sortperm` was ALSO wrong (no
+overlay → generic Base.sortperm mis-compiled to the IDENTITY permutation, silent-wrong) — FIXED
+with a sortperm overlay (stable insertion sort on the index vector comparing by v[idx], honors
+by/lt/rev), same backfill file.
 
 ## ⛔ F3 (Core.Box mutable capture) — ATTEMPTED ×2, REVERTED both times (2026-06-29)
 

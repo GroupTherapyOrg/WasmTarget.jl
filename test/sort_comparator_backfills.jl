@@ -20,3 +20,18 @@
     @test compare_julia_wasm(slt, Int64(5)).pass
     @test compare_julia_wasm(sbr, Int64(5)).pass
 end
+
+@testset "sortperm overlay (was identity permutation / silent-wrong)" begin
+    # generic Base.sortperm mis-compiled to the IDENTITY permutation; new overlay does a stable
+    # insertion sort on the index vector comparing by v[idx]. Verified native-vs-wasm.
+    spmin(n::Int64)  = sortperm([3, 1, n, 2])[1]                 # min=1 at idx 2
+    splast(n::Int64) = sortperm([3, 1, n, 2])[end]               # max=5 at idx 3
+    spby(n::Int64)   = sortperm([3, 1, n, 2]; by=x -> -x)[1]     # descending → idx 3
+    sprev(n::Int64)  = sortperm([3, 1, n, 2]; rev=true)[1]       # descending → idx 3
+    spfull(n::Int64) = Int64(sum(sortperm([3, 1, n, 2]) .* [1, 2, 3, 4]))  # whole permutation
+    @test compare_julia_wasm(spmin,  Int64(5)).pass
+    @test compare_julia_wasm(splast, Int64(5)).pass
+    @test compare_julia_wasm(spby,   Int64(5)).pass
+    @test compare_julia_wasm(sprev,  Int64(5)).pass
+    @test compare_julia_wasm(spfull, Int64(5)).pass
+end

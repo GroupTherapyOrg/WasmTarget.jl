@@ -109,6 +109,31 @@ end
     return result
 end
 
+# ─── sortperm Overlay ──────────────────────────────────────────────────────
+# Why: generic Base.sortperm dispatches through deep Ordering/algorithm chains that WT
+#      mis-compiled to a no-op → it returned the IDENTITY permutation (silent-wrong),
+#      and loud-rejected with kwargs. Stable insertion sort on the index vector, comparing
+#      by v[index], mirroring the sort! overlay. Strict `lt` only → stable (ties keep order).
+@overlay WASM_METHOD_TABLE function Base.sortperm(v::AbstractVector;
+        lt=isless, by=identity, rev::Bool=false,
+        alg::Base.Sort.Algorithm=Base.Sort.InsertionSort,
+        order::Base.Order.Ordering=Base.Order.Forward)
+    n = length(v)
+    p = collect(1:n)
+    for i in 2:n
+        key = p[i]
+        j = i - 1
+        while j >= 1
+            should_shift = rev ? lt(by(v[p[j]]), by(v[key])) : lt(by(v[key]), by(v[p[j]]))
+            !should_shift && break
+            p[j + 1] = p[j]
+            j -= 1
+        end
+        p[j + 1] = key
+    end
+    return p
+end
+
 # ─── String Concatenation Overlays ────────────────────────────────────────
 # Why: Base.*(::String, ::String) calls string() which uses print_to_string/IOBuffer
 #      with deep dispatch chains and foreigncalls. Pure Julia byte-copy works in WASM.
