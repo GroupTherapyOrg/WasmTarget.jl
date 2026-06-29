@@ -35,6 +35,31 @@ Full `Pkg.test()` + differential fuzzer GREEN. Regression guard (now passing, CI
 `test/fuzz/repro_multivar_phi_merge.jl`. NOT related to `fix_consecutive_local_sets` (which stays
 genuinely dead — the dropped store was never emitted).
 
+## ✅ SOUNDNESS FIXED (2026-06-29, parity loop): heterogeneous-Union value extraction (F31) + i31 int-box truncation (F-i31)
+
+`a = x>0 ? 42 : "neg"; Int(a)` (heterogeneous `Union{Int64,String}`) compiled, but reading the
+value TRAPPED on a null deref — the live arm flowing into the tagged-union phi-local was dummied
+to `ref.null` (`emit_phi_type_default` / `set_phi_locals_for_edge!` line-1100 fallback +
+`compile_phi_value`'s literal/SSA/recompute mismatch fallbacks). The `isa` tag survived only via
+branch-folding (it never read the value), which masked the gap. **ROOT FIX:** the phi-store now
+CONSTRUCTS the tagged-union struct (`emit_wrap_union_value`) when a concrete variant (`vt <: uT`)
+flows into a registered tagged-union phi-local — `phi_tagged_union_wrap` in `src/codegen/unions.jl`
+gates it; wired into all phi-store dispatches (compile_phi_value ×4 incl. the literal + Core.Argument
+edge, set_phi_locals_for_edge! routing). `p_anyret` (a standing probe ERR) now compiles AND is
+value-faithful → probe ERRs = 0.
+
+**F-i31 (deeper, a SILENT MISCOMPILE that shipped in v0.4.0):** the tagged-union value field
+boxed ints via `ref.i31` (31-bit) → any int ≥ 2^30 was SILENTLY TRUNCATED (verified
+`typemax(Int64)` → -1, `2^31` → 0, `3e9` → 852516352). Floats were already boxed full-width into
+the `{typeId,value}` numeric box; ints were not. **ROOT FIX:** box ALL numerics full-width into
+the numeric box in `emit_wrap_union_value` + read them back symmetrically in
+`emit_unwrap_union_value` (the i31-vs-struct split named in PARITY_LEDGER F31). Loop B's numeric
+`Union{Int,Float}` AnyRef path was already full-width (unaffected). Verified faithful across the
+full Int64 range native-vs-wasm. Migration corpus BYTE-IDENTICAL (no corpus fn used tagged-union
+ints). Regression guard: `test/f31_union_value_backfills.jl` (CI-wired, shard 0). **Flag for Dale:
+worth a v0.4.1 patch once merged — large-int tagged/heterogeneous unions silently truncated in
+0.4.0.**
+
 ## Remaining 16 gaps (the deep/feature long tail) — all root-caused & triaged for Part 2
 
 Every tractable gap is fixed (see "Fixed" below). The 16 that remain each need real

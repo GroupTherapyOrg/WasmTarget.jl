@@ -171,6 +171,64 @@ function get_union_tag(info::UnionInfo, T::Type)::Int32
 end
 
 """
+Reverse-map a wasm struct type index to the registered tagged-union Julia type whose
+wrapper struct it is, or `nothing`. (The phi machinery only knows the ConcreteRef type
+index; emit_wrap_union_value needs the Julia Union to look up the variant tag.)
+"""
+function tagged_union_type_for_idx(ctx, idx)::Union{Type,Nothing}
+    for (T, info) in ctx.type_registry.unions
+        info.wasm_type_idx == idx && return T
+    end
+    return nothing
+end
+
+"""
+Resolve a phi/flow edge `val` (SSAValue, literal, QuoteNode) to its concrete Julia variant
+type for tagged-union wrapping, or `nothing` when it can't be pinned to a concrete DataType.
+"""
+function phi_edge_variant_julia(ctx, val)::Union{Type,Nothing}
+    if val isa Core.SSAValue
+        t = get(ctx.ssa_types, val.id, nothing)
+        return t === nothing ? nothing : Core.Compiler.widenconst(t)
+    elseif val isa Core.Argument
+        # `_2`→arg_types[1], … (Julia IR `_1` is the function, not in arg_types).
+        idx = val.n - 1
+        return (idx >= 1 && idx <= length(ctx.arg_types)) ? Core.Compiler.widenconst(ctx.arg_types[idx]) : nothing
+    elseif val isa QuoteNode
+        return phi_edge_variant_julia(ctx, val.value)
+    elseif val isa Core.SlotNumber || val isa GlobalRef
+        return nothing
+    else
+        return val isa Type ? nothing : Core.Compiler.widenconst(typeof(val))
+    end
+end
+
+# Nullability-insensitive wasm-type match (a String literal's edge rep is non-nullable while
+# julia_to_wasm_type_concrete may report nullable — same struct index, same box shape).
+_wt_box_type_match(a, b)::Bool =
+    a === b || (a isa ConcreteRef && b isa ConcreteRef && a.type_idx == b.type_idx)
+
+"""
+F31: decide whether a phi/flow edge value should be CONSTRUCTED into a tagged-union struct
+(via `emit_wrap_union_value`) rather than dummied to `ref.null`. Returns `(union_T,
+variant_T)` when (a) the phi-local is a registered tagged-union struct, (b) the edge value
+resolves to a concrete variant that is a member of the union (`vt <: uT`), and (c) the
+variant's wasm box-shape matches `val_wasm` (the type actually on the stack). Else `nothing`
+(caller keeps its prior behavior). Surfaced by heterogeneous Union value extraction
+(e.g. `a = x>0 ? 42 : "neg"; Int(a)`), which previously stored ref.null → trapped on read.
+"""
+function phi_tagged_union_wrap(ctx, phi_local_wasm_type, val, val_wasm)::Union{Tuple{Type,Type},Nothing}
+    phi_local_wasm_type isa ConcreteRef || return nothing
+    uT = tagged_union_type_for_idx(ctx, phi_local_wasm_type.type_idx)
+    (uT === nothing || !(uT isa Union)) && return nothing
+    vt = phi_edge_variant_julia(ctx, val)
+    (vt === nothing || !(vt isa DataType) || !isconcretetype(vt)) && return nothing
+    vt <: uT || return nothing
+    _wt_box_type_match(julia_to_wasm_type_concrete(vt, ctx), val_wasm) || return nothing
+    return (uT, vt)
+end
+
+"""
 Emit bytecode to wrap a value on the stack in a tagged union struct.
 Stack: [value] -> [tagged_union_struct]
 
@@ -229,12 +287,12 @@ function emit_wrap_union_value(ctx, value_type::Type, union_type::Union)::Vector
         local_get!(b, scratch_local) # reload value
 
         # Convert to anyref if needed
-        if value_wasm_type === I32
-            ref_i31!(b)                                  # PURE-6024: box i32 → i31ref
-        elseif value_wasm_type === I64
-            num!(b, Opcode.I32_WRAP_I64); ref_i31!(b)    # PURE-6024: trunc then box
-        elseif value_wasm_type === F32 || value_wasm_type === F64
-            # PURE-701d: float can't go in i31ref → box into {typeId,value} numeric box.
+        if value_wasm_type === I32 || value_wasm_type === I64 || value_wasm_type === F32 || value_wasm_type === F64
+            # F-i31/F31: i31ref holds only 31 bits → boxing i32/i64 via ref.i31 SILENTLY
+            # TRUNCATES any value ≥ 2^30 (verified: typemax(Int64) → -1, 2^31 → 0). Box ALL
+            # numerics full-width into the {typeId,value} numeric box (the same rep Loop B's
+            # numeric-Union AnyRef path uses), preserving every bit. emit_unwrap_union_value
+            # reads it back symmetrically. dart2wasm likewise boxes large ints (no bare i31).
             drop!(b)
             box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, value_wasm_type)
             i32_const!(b, 0)                             # box typeId
@@ -288,14 +346,9 @@ function emit_unwrap_union_value(ctx, union_type::Union, target_type::Type)::Vec
     elseif target_wasm_type === ArrayRef || target_wasm_type === StructRef
         # PURE-6024: cast anyref → abstract arrayref/structref (e.g. AbstractString → ArrayRef)
         ref_cast!(b, target_wasm_type, true)
-    elseif target_wasm_type === I32
-        # PURE-6025: unbox i31ref → i32 (boxed via ref.i31 in emit_wrap_union_value)
-        ref_cast!(b, I31Ref, true); i31_get_s!(b)
-    elseif target_wasm_type === I64
-        # PURE-6025: unbox i31ref → i32 → i64 (boxed via i32.wrap_i64 + ref.i31)
-        ref_cast!(b, I31Ref, true); i31_get_s!(b); num!(b, Opcode.I64_EXTEND_I32_S)
-    elseif target_wasm_type === F64 || target_wasm_type === F32
-        # PURE-701d: float boxed into a {typeId,value} numeric box → unbox symmetrically.
+    elseif target_wasm_type === I32 || target_wasm_type === I64 || target_wasm_type === F32 || target_wasm_type === F64
+        # F-i31/F31: numerics are boxed FULL-WIDTH into the {typeId,value} numeric box by
+        # emit_wrap_union_value (was lossy i31 for ints) — read field 1 back symmetrically.
         box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, target_wasm_type)
         ref_cast!(b, box_idx, true)
         struct_get!(b, box_idx, 1, target_wasm_type)  # field 1 = value (0=typeId)

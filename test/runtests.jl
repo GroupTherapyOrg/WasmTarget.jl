@@ -122,6 +122,10 @@ _wt_shard0() && include("cleanup_loop1_backfills.jl")
 # Parity Loop A: the WasmGC subtype lattice (wasm_subtype) — supertype-chain + nullability aware,
 # mirroring dart2wasm HeapType.isSubtypeOf. See dev/PARITY_LEDGER.md (F4/P2/B6).
 _wt_shard0() && include("test_wasm_subtype_lattice.jl")
+# Parity Loop C: F31 heterogeneous-Union value extraction + F-i31 full-width int box (the
+# phi-store now CONSTRUCTS the tagged-union struct instead of dummying to ref.null, and ints
+# are boxed full-width, not via lossy i31). See dev/PARITY_LEDGER.md.
+_wt_shard0() && include("f31_union_value_backfills.jl")
 
 # ── Parallel-phase infrastructure (process sharding) ─────────────────────────
 # Test fixtures hoisted from inside phase testsets — `struct`/`using` are illegal
