@@ -4372,15 +4372,15 @@ begin
 
         @testset "externref-vs-anyref mismatch (PURE-323 pattern)" begin
             v = WasmStackValidator(func_name="test_externref_anyref")
-            # Push ExternRef (what codegen actually produces for Any-typed values)
+            # Push ExternRef (a live Any rep). A ref.cast to a GC struct is the PURE-323
+            # pattern: externref and the GC `any` hierarchy are DISJOINT tops, so the cast
+            # cannot be expressed — codegen must emit extern.convert_any FIRST (it does, at
+            # every real GC-cast site). Loop A/P13: the validator now CATCHES this
+            # cross-hierarchy cast (it used to be permissively — and wrongly — accepted).
             validate_push!(v, ExternRef)
-            # ref_cast expects anyref — this is the PURE-323 bug pattern:
-            # codegen emits externref but GC instructions need anyref
             validate_gc_instruction!(v, Opcode.REF_CAST, ConcreteRef(UInt32(5)))
-            # The ref_cast pops any ref (permissive) so it won't error on that,
-            # but the key test is that the validator tracks the type correctly
-            @test !has_errors(v)
-            @test stack_height(v) == 1
+            @test has_errors(v)          # P13: cross-hierarchy ref.cast is flagged
+            @test stack_height(v) == 1   # still pops the operand + pushes the target
 
             # Now test the REAL mismatch: push externref, try any_convert_extern
             # which expects externref (correct), then push result as anyref

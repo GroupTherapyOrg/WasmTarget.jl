@@ -206,6 +206,36 @@ function _wt_heap_kind_of_byte(byte::UInt8)::Symbol
     byte == UInt8(ExnRef)    ? :exn    : :unknown
 end
 
+# The disjoint top of a heap kind's hierarchy. WasmGC has four independent reference
+# hierarchies — `any` (eq/struct/array/i31 + all concrete structs/arrays), `func`,
+# `extern`, `exn` — that share no common supertype. Used by `_wt_same_hierarchy` for
+# `ref.cast` plausibility (P13).
+function _wt_hierarchy_top(kind::Symbol)::Symbol
+    kind === :func   ? :func   :
+    kind === :extern ? :extern :
+    kind === :exn    ? :exn    :
+    (kind === :any || kind === :eq || kind === :struct || kind === :array ||
+     kind === :i31 || kind === :concrete_struct || kind === :concrete_array) ? :any :
+    :unknown
+end
+
+"""
+    _wt_same_hierarchy(a, b, mod) -> Bool
+
+Whether two ref types live in the SAME WasmGC reference hierarchy (share a top:
+any / func / extern / exn). This is the validity condition for `ref.cast` (P13): a
+cross-hierarchy cast (e.g. funcref → structref, or externref → a GC struct without an
+`extern.convert_any` first) can never be expressed and is a validation error. NOTE this
+is deliberately NOT a subtype check — a within-`any` cast between two unrelated concrete
+structs is VALID wasm (it just always traps at runtime), so `wasm_subtype` either-way
+would wrongly reject it. dart2wasm verifies cast plausibility the same way (one
+hierarchy), leaving always-trapping casts to the runtime.
+"""
+function _wt_same_hierarchy(a, b, mod)::Bool
+    ta = _wt_hierarchy_top(_wt_heap_kind(a, mod))
+    ta !== :unknown && ta === _wt_hierarchy_top(_wt_heap_kind(b, mod))
+end
+
 # The declared supertype index of a ConcreteRef's type, or `nothing`. Only
 # StructType carries a supertype_idx in WT (set by set_struct_supertypes! /
 # create_jl_type_hierarchy!); arrays never declare one.

@@ -171,3 +171,37 @@ end
     WT.validate_pop!(vno, cref(0, false))           # mod===nothing ⇒ chain unresolved ⇒ spurious error
     @test WT.has_errors(vno)
 end
+
+# ── Loop 0 / P13 — `ref.cast` plausibility = SAME hierarchy (not a subtype check).
+@testset "P13 — _wt_same_hierarchy (ref.cast plausibility)" begin
+    mod = _build_chain_module()
+
+    # Within the `any` hierarchy: abstract↔abstract, abstract↔concrete, and two UNRELATED
+    # concretes are all same-hierarchy (the last is a valid-but-always-trapping cast — the
+    # key case a subtype check would wrongly reject).
+    @test  WT._wt_same_hierarchy(WT.AnyRef, WT.StructRef, mod)
+    @test  WT._wt_same_hierarchy(WT.AnyRef, cref(2), mod)
+    @test  WT._wt_same_hierarchy(cref(2), cref(3), mod)      # $Leaf vs unrelated $Other — same hierarchy
+    @test  WT._wt_same_hierarchy(cref(2), cref(4), mod)      # struct vs array — both under `any`
+    @test  WT._wt_same_hierarchy(WT.EqRef, WT.I31Ref, mod)
+    # Cross-hierarchy: any/func/extern/exn are disjoint tops.
+    @test !WT._wt_same_hierarchy(WT.AnyRef, WT.ExternRef, mod)
+    @test !WT._wt_same_hierarchy(WT.AnyRef, WT.FuncRef, mod)
+    @test !WT._wt_same_hierarchy(WT.FuncRef, WT.ExternRef, mod)
+    @test !WT._wt_same_hierarchy(cref(2), WT.FuncRef, mod)   # GC struct vs func
+    @test !WT._wt_same_hierarchy(WT.ExnRef, WT.AnyRef, mod)
+    # Numerics aren't ref types — never same-hierarchy.
+    @test !WT._wt_same_hierarchy(WT.I32, WT.AnyRef, mod)
+
+    # Validator integration: a cross-hierarchy ref.cast is REJECTED (the externref → GC
+    # struct PURE-323 pattern — codegen must extern.convert_any first); a within-hierarchy
+    # downcast (anyref → concrete struct) is accepted.
+    vbad = WT.WasmStackValidator(; func_name="p13-bad", mod=mod)
+    WT.validate_push!(vbad, WT.ExternRef)
+    WT.validate_gc_instruction!(vbad, WT.Opcode.REF_CAST, cref(2, false))
+    @test WT.has_errors(vbad)
+    vok = WT.WasmStackValidator(; func_name="p13-ok", mod=mod)
+    WT.validate_push!(vok, WT.AnyRef)
+    WT.validate_gc_instruction!(vok, WT.Opcode.REF_CAST, cref(2, false))
+    @test !WT.has_errors(vok)
+end

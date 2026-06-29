@@ -689,13 +689,23 @@ function validate_gc_instruction!(v::WasmStackValidator, gc_opcode::UInt8, type_
     elseif gc_opcode == Opcode.REF_CAST
         # ref.cast (ref $t): pop ref, push (ref $t) non-nullable
         target_type = type_info
-        validate_pop_any!(v)
+        actual = validate_pop_any!(v)
+        # P13: a ref.cast is only valid WITHIN one reference hierarchy — the operand and
+        # the target must share a top (any / func / extern / exn). A cross-hierarchy cast
+        # (e.g. externref → a GC struct) can never be expressed; codegen must emit an
+        # extern.convert_any first. (Within-hierarchy always-trapping casts stay valid.)
+        if actual !== nothing && !_wt_same_hierarchy(actual, target_type, v.mod)
+            push!(v.errors, "$(v.func_name): ref.cast target $(target_type) is in a different hierarchy than the operand $(actual)")
+        end
         validate_push!(v, target_type)
 
     elseif gc_opcode == Opcode.REF_CAST_NULL
         # ref.cast null (ref null $t): pop ref, push (ref null $t) nullable
         target_type = type_info
-        validate_pop_any!(v)
+        actual = validate_pop_any!(v)
+        if actual !== nothing && !_wt_same_hierarchy(actual, target_type, v.mod)
+            push!(v.errors, "$(v.func_name): ref.cast null target $(target_type) is in a different hierarchy than the operand $(actual)")
+        end
         validate_push!(v, target_type)
 
     elseif gc_opcode == Opcode.ANY_CONVERT_EXTERN
