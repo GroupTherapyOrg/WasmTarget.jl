@@ -133,3 +133,41 @@ cref(i, nullable=true) = WT.ConcreteRef(UInt32(i), nullable)
         @test !WT.wasm_subtype(nn_struct, WT.NonNullAbstractRef(UInt8(WT.ArrayRef)), mod)  # struct ⊄ array
     end
 end
+
+# ── Loop A (FINISH) GATE: the LIVE operand-stack validator now uses `wasm_subtype`
+#    (not the deleted permissive `wasm_types_assignable`) with the threaded `mod`.
+#    Byte-identity can't catch this — the validator records errors silently in non-strict
+#    mode — so this test asserts the relation actually fires at a `validate_pop!`, AND
+#    proves WHY `mod` must be threaded (the `mod===nothing` path FALSE-REJECTS valid
+#    concrete upcasts, which is the silent degradation the reorientation critique flagged).
+@testset "Loop A — validator uses wasm_subtype with threaded mod" begin
+    mod = _build_chain_module()
+
+    # A bad ConcreteRef flow is REJECTED (records an error). $Other (idx 3) ⊄ $Base (idx 0).
+    v = WT.WasmStackValidator(; func_name="gate", mod=mod)
+    WT.validate_push!(v, cref(3, false))            # push $Other (non-null)
+    WT.validate_pop!(v, cref(0, false))             # expect $Base — Other ⊄ Base ⇒ error
+    @test WT.has_errors(v)
+
+    # A valid upcast is ACCEPTED (no error). $Leaf (idx 2) <: $Base (idx 0).
+    v2 = WT.WasmStackValidator(; func_name="gate", mod=mod)
+    WT.validate_push!(v2, cref(2, false))           # push $Leaf
+    WT.validate_pop!(v2, cref(0, false))            # expect $Base — Leaf <: Base ⇒ OK
+    @test !WT.has_errors(v2)
+
+    # Cross-kind reject: a concrete array (idx 4) is not a struct.
+    v3 = WT.WasmStackValidator(; func_name="gate", mod=mod)
+    WT.validate_push!(v3, cref(4, false))           # push $Arr
+    WT.validate_pop!(v3, WT.StructRef)              # array ⊄ struct ⇒ error
+    @test WT.has_errors(v3)
+
+    # WHY mod must be threaded: with mod===nothing the concrete supertype chain can't be
+    # resolved, so the SAME valid Leaf<:Base upcast is FALSE-REJECTED (spurious error).
+    # Sound (never a false-accept) but noisy — hence the codegen ref-flowing builders
+    # (compile_statement / generate_*_flow) pass ctx.mod. Numeric-only builders (int128)
+    # never push a ConcreteRef, so their mod===nothing validators never hit this path.
+    vno = WT.WasmStackValidator(; func_name="gate-no-mod", mod=nothing)
+    WT.validate_push!(vno, cref(2, false))          # push $Leaf
+    WT.validate_pop!(vno, cref(0, false))           # mod===nothing ⇒ chain unresolved ⇒ spurious error
+    @test WT.has_errors(vno)
+end

@@ -6,7 +6,7 @@ function generate_complex_flow(ctx::AbstractCompilationContext, blocks::Vector{B
     # MIGRATED to InstrBuilder: this fn only splices whole-body sub-emitters via emit_raw!.
     # strict=false (collect mode): the sub-emitters are full control-flow bodies whose
     # operand-stack effect the fragment model can't track precisely, so we never gate.
-    b = InstrBuilder(; func_name="generate_complex_flow", strict=false)
+    b = InstrBuilder(; func_name="generate_complex_flow", strict=false, mod=ctx.mod)
 
     # For void return types WITHOUT loops (like event handlers), use a simpler approach:
     # just execute all statements in order and return at the end.
@@ -358,7 +358,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # `b` via emit_raw!. strict=false (collect mode): a full control-flow body's stack
     # effect can't be tracked precisely by the fragment model, so we never gate.
     # Byte-identical to the prior raw emission.
-    b = InstrBuilder(; func_name="generate_stackified_flow", strict=false)
+    b = InstrBuilder(; func_name="generate_stackified_flow", strict=false, mod=ctx.mod)
 
     # For very complex functions, use a dispatcher-style approach
     # Create a big block structure with all targets as labeled positions

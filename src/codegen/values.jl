@@ -177,10 +177,13 @@ _wt_drop_nullable(t::WasmValType)::WasmValType = t  # NumType / packed UInt8
 function _wt_heap_kind(t, mod)::Symbol
     if t isa ConcreteRef
         idx = Int(t.type_idx)
-        if idx + 1 >= 1 && idx + 1 <= length(mod.types) && mod.types[idx + 1] isa ArrayType
+        # `mod === nothing` only happens for the numeric-only builders (int128 etc.) whose
+        # validators never see a ConcreteRef — but guard it anyway so a stray concrete ref
+        # degrades to the default struct kind instead of crashing on `length(nothing.types)`.
+        if mod !== nothing && idx + 1 >= 1 && idx + 1 <= length(mod.types) && mod.types[idx + 1] isa ArrayType
             return :concrete_array
         else
-            return :concrete_struct  # default concrete kind (struct; also for out-of-range)
+            return :concrete_struct  # default concrete kind (struct; also for out-of-range / no-mod)
         end
     elseif t isa NonNullAbstractRef
         # Resolve the byte to its abstract heap kind (same bytes as the RefType enum).
@@ -207,6 +210,7 @@ end
 # StructType carries a supertype_idx in WT (set by set_struct_supertypes! /
 # create_jl_type_hierarchy!); arrays never declare one.
 function _wt_concrete_supertype_idx(idx::Integer, mod)
+    mod === nothing && return nothing
     i = Int(idx) + 1
     (i >= 1 && i <= length(mod.types)) || return nothing
     ct = mod.types[i]

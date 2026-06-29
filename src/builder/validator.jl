@@ -46,10 +46,17 @@ mutable struct WasmStackValidator
     func_name::String                   # For error messages
     labels::Vector{ValidatorLabel}      # Label stack for control flow (PURE-412)
     reachable::Bool                     # Whether current code is reachable (PURE-412)
+    # The WasmModule being built — `wasm_subtype` needs it to resolve a ConcreteRef's
+    # declared supertype chain (struct-vs-array kind + nominal `<:`). Held untyped to
+    # avoid an include-order/layer dependency on WasmModule (the builder layer is below
+    # codegen); `wasm_subtype`/`_wt_heap_kind` already take `mod` duck-typed. `nothing`
+    # when unavailable — e.g. the numeric-only int128 builders, where no ConcreteRef ever
+    # reaches the heap-kind branch, so the degraded relation is never exercised (Loop A).
+    mod::Any
 end
 
-WasmStackValidator(; enabled=true, func_name="") =
-    WasmStackValidator(WasmValType[], String[], enabled, func_name, ValidatorLabel[], true)
+WasmStackValidator(; enabled=true, func_name="", mod=nothing) =
+    WasmStackValidator(WasmValType[], String[], enabled, func_name, ValidatorLabel[], true, mod)
 
 """
     validate_push!(v, typ)
@@ -81,7 +88,7 @@ function validate_pop!(v::WasmStackValidator, expected::WasmValType)::WasmValTyp
         return expected
     end
     actual = pop!(v.stack)
-    if !wasm_types_assignable(actual, expected)
+    if !wasm_subtype(actual, expected, v.mod)
         push!(v.errors, "$(v.func_name): type mismatch — expected $(expected), found $(actual)")
     end
     return actual
@@ -132,32 +139,13 @@ end
 # Type Assignability
 # ============================================================================
 
-"""
-    wasm_types_assignable(actual, expected) -> Bool
-
-Check if `actual` type is usable where `expected` type is needed.
-Mirrors Wasm's type hierarchy for validation purposes.
-
-Rules:
-- Exact match always works
-- Any ref type is assignable to any other ref type (permissive for now)
-  This will be tightened in PURE-413 when we add WasmGC-specific validation.
-- Numeric types must match exactly (i32 ≠ i64 ≠ f32 ≠ f64)
-"""
-function wasm_types_assignable(actual::WasmValType, expected::WasmValType)::Bool
-    actual == expected && return true
-    # Permissive ref-to-ref: anyref ↔ externref, ConcreteRef ↔ AnyRef, etc.
-    # PURE-9023: anyref is accepted in all polymorphic positions (replacing externref)
-    # dart2wasm uses isSubtypeOf() for full hierarchy; we start permissive.
-    _is_ref_type(actual) && _is_ref_type(expected) && return true
-    return false
-end
-
-# Internal helpers — underscore-prefixed to avoid polluting the namespace
-_is_ref_type(::NumType) = false
-_is_ref_type(::RefType) = true
-_is_ref_type(::ConcreteRef) = true
-_is_ref_type(::UInt8) = false  # Packed types (i8=0x78, i16=0x77) are not ref types
+# Type assignability is now the precise dart2wasm-faithful `wasm_subtype` lattice
+# (src/codegen/values.jl `isSubtypeOf`): nullability-aware, walks a ConcreteRef's
+# declared supertype chain, and respects the abstract any/eq/struct/array/i31/func/
+# extern/exn hierarchy. The old permissive `wasm_types_assignable` (any-ref ↔ any-ref ⇒
+# true) + `_is_ref_type` shim were a deliberate "start permissive, tighten later"
+# placeholder (PURE-413) — DELETED here (Loop A): the validator calls `wasm_subtype`
+# directly at every pop/branch/block-result check, with `v.mod` for the concrete chain.
 
 # ============================================================================
 # Opcode Sets for Instruction Validation
@@ -438,7 +426,7 @@ function validate_block_end!(v::WasmStackValidator)
             idx = label.stack_height_at_entry + i
             if idx <= length(v.stack)
                 actual = v.stack[idx]
-                if !wasm_types_assignable(actual, expected)
+                if !wasm_subtype(actual, expected, v.mod)
                     push!(v.errors, "$(v.func_name): block result type mismatch at position $i — expected $(expected), found $(actual)")
                 end
             end
@@ -488,7 +476,7 @@ function validate_br!(v::WasmStackValidator, label_depth::Int)
         # Check types of top-of-stack values
         for (i, expected) in enumerate(target_types)
             actual = v.stack[end - needed + i]
-            if !wasm_types_assignable(actual, expected)
+            if !wasm_subtype(actual, expected, v.mod)
                 push!(v.errors, "$(v.func_name): br type mismatch at position $i — expected $(expected), found $(actual)")
             end
         end
@@ -527,7 +515,7 @@ function validate_br_if!(v::WasmStackValidator, label_depth::Int)
     else
         for (i, expected) in enumerate(target_types)
             actual = v.stack[end - needed + i]
-            if !wasm_types_assignable(actual, expected)
+            if !wasm_subtype(actual, expected, v.mod)
                 push!(v.errors, "$(v.func_name): br_if type mismatch at position $i — expected $(expected), found $(actual)")
             end
         end

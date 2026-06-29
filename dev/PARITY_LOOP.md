@@ -6,9 +6,16 @@ parity, no gaps.** Autonomous, aggressive, undoable (isolated branch). Driven by
 ## Two oracles (every change)
 - **dart2wasm = HOW** (`/Users/daleblack/Documents/sdk` pkg/{wasm_builder,dart2wasm}): the design oracle
   for the right shape (convertType, isSubtypeOf, classId+offset dispatch, typed Instruction hierarchy).
-- **Julia compiler = VERIFICATION**: the triple oracle — (1) `WT_BUILDER_STRICT` stack model, (2) full
-  `Pkg.test()` (2679 tests/10 shards + Aqua), (3) differential fuzzer (native-vs-wasm). + byte-identity
-  corpus (`migration_corpus.jl` vs `dev/migration_baseline.txt`) for refactors that should not change output.
+- **Julia compiler = VERIFICATION = CORRECTNESS**: the triple oracle — (1) `WT_BUILDER_STRICT` stack model,
+  (2) full `Pkg.test()` (2679 tests/10 shards + Aqua), (3) differential fuzzer (native-vs-wasm).
+
+> **⚠ BYTE-IDENTITY IS NOT THE PARITY GATE (Dale, 2026-06-29).** The `migration_corpus.jl` vs
+> `dev/migration_baseline.txt` byte-identity check was a *migration-loop* safety net — valid ONLY for
+> refactors that genuinely shouldn't change output. The old WT path is brittle/finnicky; REPLACING it with
+> the dart2wasm design SHOULD change the bytes. **Don't preserve brittle code to keep bytes stable — DELETE
+> it and verify the replacement by CORRECTNESS (differential native-vs-wasm + Pkg.test + adversarial sets).**
+> Use byte-identity only as a convenience signal for a deliberately-output-preserving step, never as a reason
+> to keep an off-ethos path alive.
 
 ## Discipline (from `dev/CLEANUP_LOOP.md` OPERATIONAL PROTOCOL — reuse it all)
 Never edit src/ while a suite runs · `Pkg.test` not `runtests.jl` · run_in_background with NO inner `&` ·
@@ -54,6 +61,8 @@ no guessing, no loud-fail-as-substitute, no defer/settle. **Wire fixes THROUGHOU
 (the scattered anyref-boxing + ~120 byte-inspection sites = the `compile_value` type-channel debt B1 — the
 pure typed-value approach lets it be DELETED, not patched around). Mechanistic, one site at a time, gated.
 Goal: REAL dart2wasm parity AND same-or-way-more Julia coverage. Verify the VALUE, not just "compiles".
+**The old approach is brittle — DON'T over-preserve it. Byte-identity is NOT the gate (see "Two oracles");
+deleting off-ethos brittle code and re-verifying by correctness IS the ethos, not a deviation from it.**
 
 ## ▶▶ RESUME HERE
 On `wt-dart2wasm-parity`. v0.4.0 ✅ LANDED (General #159556 merged + tag + GH release). Committed: Loops A

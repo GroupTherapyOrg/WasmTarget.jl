@@ -157,7 +157,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
     # the trailing-local.get type checks, the DROP+UNREACHABLE bytecode probe) and
     # external emit_*! helpers mutate it. Only the FINAL splice goes through the typed
     # builder via emit_raw!, so the output is byte-identical. Stays strict=false.
-    b = InstrBuilder(; func_name="compile_statement", strict=false)
+    b = InstrBuilder(; func_name="compile_statement", strict=false, mod=ctx.mod)
     bytes = UInt8[]
 
     # PURE-6027: Reset dead code guard at basic block boundaries.

@@ -59,7 +59,10 @@ throws on numeric→numeric) → split into `coerce_numeric!`.
   `pushes=[infer...]` bridges (partition the 828 emit_raw! first) + the 4-way "MUST agree" resolver dup + 5 coercion
   ladders + 11 flow generators + 3 phi-byte-inspection copies + manual br-depths (→ symbolic Labels) + compile_value's
   byte-inspecting constant emitters. convert_type! gains the NET-NEW box/unbox arms (needs B's rep); numeric widening
-  splits into `coerce_numeric!`. Gate: byte-identity per migrated site + fuzzer (Union/heterogeneous-tuple/interp/branch-heavy).
+  splits into `coerce_numeric!`. **Gate = CORRECTNESS (differential native-vs-wasm + Pkg.test + fuzzer: Union/
+  heterogeneous-tuple/interp/branch-heavy) — NOT byte-identity.** This loop DELETES the brittle byte-inspecting path;
+  the output bytes SHOULD change. Don't preserve `compile_value`'s old shape to keep the migration baseline stable
+  (Dale 2026-06-29: byte-identity was a migration-loop net, not the parity gate — delete brittle code, verify by correctness).
 - **Loop D — strict-by-default + total loud-reject + builder-parity finish.** Delete the 2 escape hatches
   (entry-permissive + must-execute, diagnostics.jl) → strict ON (P12/P15); typed emitters → delete RawBytes.
   PREREQ: throw-arms compile to CATCHABLE wasm exceptions (Loop 0's payload tag) or must-execute deletion
